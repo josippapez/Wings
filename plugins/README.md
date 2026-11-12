@@ -77,7 +77,7 @@ Rust is how new plugins here are meant to be written, and the TypeScript ones ar
 - `sh build-rust.sh` in `plugins/` builds every frame the manifests name into `<plugin>/dist/native/`, and those modules are committed like the TypeScript plugins' `dist/`. `sh build-rust.sh --check` fails when a committed module differs from what its crate builds. It needs `rustup target add wasm32-unknown-unknown`.
 - `apps/native/src/page/plugin/shipped.rs` runs the committed modules against a fake app, as it runs the TypeScript plugins.
 
-`dev-servers/` is the smallest one to read, and `hud/` has a main script and a page: a crate with two frames, unit tests that run with `cargo test` (`pnpm test` runs them), and `apps/native/examples/shot_plugins.rs --hud` to render its sidebar.
+`dev-servers/` is the smallest one to read, and `hud/` has a main script and a page: a crate with two frames, unit tests that run with `cargo test` (`pnpm test` runs them), and `apps/native/examples/shot_plugins.rs --hud` to render its sidebar. `worktrees/` is a page that runs git and searches the disks. Its tests answer the plugin's calls with a made-up git (`host::testing::answer`), and `shot_plugins.rs` with no flag renders it over a repo it makes.
 
 ## Writing a plugin
 
@@ -243,8 +243,8 @@ Reach for these before writing your own. Each is a module of `wings-plugin-sdk`:
 | `wings-plugin-sdk/github` | `githubPulls()`: the open PRs of GitHub repositories, one `gh api graphql` for every repository asked at once | `pr-tracker/src/lib/forges/github.ts` |
 | `wings-plugin-sdk/git` | `git`, `gitOk`, `repoRoot`, `parseRemote`, `onGitChange` and more: read a repo through `wings.exec`, and hear it change | `changes/src/lib/changes.ts` |
 | `wings-plugin-sdk/poll` | `pollWhileFocused()`: a timer that runs only while Wings is in front | `work-item/src/main/badge.ts` |
-| `wings-plugin-sdk/async` | `cached`, `batched`, `serial`, `singleFlight`, `mapLimit`, `latestOnly`, `openDiffWhile`, `openLiveDiff`, `refreshLiveDiffs` and `errorMessage` | `work-item/src/main/sections.ts` (`cached`, `singleFlight`), `worktrees/src/lib/git.ts` (`mapLimit`) |
-| `wings-plugin-sdk/format` | `ago`, `plural`, `basename`, `truncate`, `tokens` and `clock` | `worktrees/src/pages/sidebar.tsx` |
+| `wings-plugin-sdk/async` | `cached`, `batched`, `serial`, `singleFlight`, `mapLimit`, `latestOnly`, `openDiffWhile`, `openLiveDiff`, `refreshLiveDiffs` and `errorMessage` | `work-item/src/main/sections.ts` (`cached`, `singleFlight`), `disk/src/main/actions.ts` (`mapLimit`) |
+| `wings-plugin-sdk/format` | `ago`, `plural`, `basename`, `truncate`, `tokens` and `clock` | `work-item/src/pages/sprint.tsx` |
 | `wings-plugin-sdk/shell` | `mountShell()`: the frame of a page that builds its own DOM | `changes/src/pages/graph.ts` |
 | `wings-plugin-ui` | The components, the page hooks (`useProject`, `useAction`, `usePoll` and more) and the `show*` functions | `tasks/src/pages/block.tsx` |
 

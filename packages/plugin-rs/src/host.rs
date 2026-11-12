@@ -97,6 +97,27 @@ thread_local! {
     static SENT_STATUSES: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
     static ON_TRANSCRIPT: RefCell<Vec<Rc<dyn Fn(&Value)>>> = const { RefCell::new(Vec::new()) };
     static ON_ACTION: RefCell<Vec<Action>> = const { RefCell::new(Vec::new()) };
+    /// Who hears the lines a call sends before its answer, by the call's id.
+    static OUTPUTS: RefCell<HashMap<u32, Rc<dyn Fn(&Value)>>> = RefCell::new(HashMap::new());
+}
+
+/// A stand-in for Wings in a plugin's own tests, which run on this computer where nothing answers a call.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod testing {
+    use serde_json::Value;
+    use std::{cell::RefCell, rc::Rc};
+
+    type Answer = Rc<dyn Fn(&str, &Value) -> Result<Value, String>>;
+
+    thread_local! {
+        pub(super) static ANSWER: RefCell<Option<Answer>> = const { RefCell::new(None) };
+    }
+
+    /// From now on, on this thread, every `call` is answered at once with what `answer` gives for its method and
+    /// params.
+    pub fn answer(answer: impl Fn(&str, &Value) -> Result<Value, String> + 'static) {
+        ANSWER.with(|slot| *slot.borrow_mut() = Some(Rc::new(answer)));
+    }
 }
 
 type Action = Rc<dyn Fn(Value) -> Pin<Box<dyn Future<Output = Result<(), String>>>>>;
@@ -112,8 +133,16 @@ fn next_id() -> u32 {
 /// A call of `wings.<method>` with the params the JS frame's wrapper would send. It goes out now, so calls made one
 /// after another and then awaited run side by side.
 pub fn call(method: &str, params: Value) -> Pending<Result<Value, String>> {
-    let id = next_id();
+    call_as(next_id(), method, params)
+}
+
+fn call_as(id: u32, method: &str, params: Value) -> Pending<Result<Value, String>> {
     let wait = Rc::new(RefCell::new(Wait { done: None, waker: None }));
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(answer) = testing::ANSWER.with(|slot| slot.borrow().clone()) {
+        wait.borrow_mut().done = Some(answer(method, &params));
+        return Pending(wait);
+    }
     CALLS.with(|calls| calls.borrow_mut().insert(id, wait.clone()));
     let params = params.to_string();
     // SAFETY: both are live strings, which the host copies before this returns.
@@ -142,6 +171,7 @@ pub(crate) fn fired(id: u32) {
 pub(crate) fn deliver(kind: &str, id: u32, text: String) {
     match kind {
         "resolve" | "reject" => {
+            OUTPUTS.with(|outputs| outputs.borrow_mut().remove(&id));
             let Some(wait) = CALLS.with(|calls| calls.borrow_mut().remove(&id)) else {
                 return;
             };
@@ -149,6 +179,11 @@ pub(crate) fn deliver(kind: &str, id: u32, text: String) {
                 &wait,
                 if kind == "resolve" { Ok(serde_json::from_str(&text).unwrap_or(Value::Null)) } else { Err(text) },
             );
+        }
+        "output" => {
+            if let Some(listener) = OUTPUTS.with(|outputs| outputs.borrow().get(&id).cloned()) {
+                listener(&serde_json::from_str(&text).unwrap_or(Value::Null));
+            }
         }
         "broadcast" => {
             let message = serde_json::from_str(&text).unwrap_or(Value::Null);
@@ -261,6 +296,72 @@ pub fn statusline() -> Pending<Result<Value, String>> {
 /// `wings.exec`: runs a program the manifest allows and answers `{ code, stdout, stderr }`.
 pub fn exec(program: &str, args: &[&str]) -> Pending<Result<Value, String>> {
     call("exec", json!({ "program": program, "args": args, "cwd": null, "timeoutMs": null, "stream": false }))
+}
+
+/// `wings.exec` in the folder `cwd`.
+pub fn exec_in(cwd: &str, program: &str, args: &[&str]) -> Pending<Result<Value, String>> {
+    call("exec", json!({ "program": program, "args": args, "cwd": cwd, "timeoutMs": null, "stream": false }))
+}
+
+/// `wings.projects`: every project, each with its `id`, `path` and `name`.
+pub fn projects() -> Pending<Result<Value, String>> {
+    call("projects", json!({}))
+}
+
+/// `wings.onProjects`: the projects, on every change. Ask for it when the frame starts: the first list comes right
+/// after.
+pub fn on_projects(listener: impl Fn(&[Value]) + 'static) {
+    on("projects", move |_, list| listener(list.as_array().map_or(&[], Vec::as_slice)));
+}
+
+/// `wings.openPane`: a new terminal tab in the folder `cwd`, which has to be in one of your projects.
+pub fn open_pane(cwd: &str) -> Pending<Result<Value, String>> {
+    call("openPane", json!({ "command": null, "args": [], "cwd": cwd, "placement": "tab" }))
+}
+
+/// `wings.disks`: the disks Finder shows, each with its `name`, `mount`, `total` and `free`.
+pub fn disks() -> Pending<Result<Value, String>> {
+    call("disks", json!({}))
+}
+
+/// A search of a disk that is running. Letting go of it doesn't stop the search.
+pub struct Search {
+    token: String,
+    answer: Pending<Result<Value, String>>,
+}
+
+impl Search {
+    /// What stops this search, to keep where a Stop button reaches it.
+    pub fn stopper(&self) -> Stopper {
+        Stopper(self.token.clone())
+    }
+}
+
+impl Future for Search {
+    type Output = Result<Value, String>;
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.answer).poll(cx)
+    }
+}
+
+#[derive(Clone)]
+pub struct Stopper(String);
+
+impl Stopper {
+    /// Stops the search, which then fails with "The scan was stopped".
+    pub fn stop(&self) {
+        drop(call("diskUsageCancel", json!({ "token": self.0 })));
+    }
+}
+
+/// `wings.diskFind`: the files and folders under `path` called one of `names`, as `{ paths, entries }`, without going
+/// into a folder called one of `skip`. `on_progress` hears how far it is, as `{ entries, path }`, while it runs.
+pub fn disk_find(path: &str, names: &[&str], skip: &[&str], on_progress: impl Fn(&Value) + 'static) -> Search {
+    let id = next_id();
+    let token = format!("find-{id}");
+    OUTPUTS.with(|outputs| outputs.borrow_mut().insert(id, Rc::new(on_progress)));
+    let answer = call_as(id, "diskFind", json!({ "path": path, "names": names, "skip": skip, "token": token, "stream": true }));
+    Search { token, answer }
 }
 
 /// `wings.transcript`: the entries of a Claude session's transcript of the `kinds` the manifest allows, oldest

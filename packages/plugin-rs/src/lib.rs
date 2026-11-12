@@ -8,6 +8,7 @@
 //! app when it differs from the last one.
 
 pub mod format;
+pub mod git;
 pub mod host;
 pub mod messages;
 pub mod poll;

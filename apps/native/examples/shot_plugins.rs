@@ -1,5 +1,5 @@
-//! Renders Worktrees' installed native sidebar offscreen at 1000 and 640 points wide. The plugin installation and
-//! project are made up in a temporary desktop data folder, never the user's. With `--changes` it renders Changes' built
+//! Renders Worktrees' sidebar, which is written in Rust, offscreen at 1000 and 640 points wide, over a made-up repo in
+//! the output folder, never the user's. With `--changes` it renders Changes' built
 //! pages, with `--schedules` Schedules' list and forms, with `--session-detail` Session detail's sidebar, and with
 //! `--hud` the HUD's sidebar, with
 //! `--disk` Disk usage's overview and the map of a folder of made-up files it scans, with `--work-item` Work item's tab
@@ -20,9 +20,7 @@ use gpui::{AnyWindowHandle, AppContext, VisualTestAppContext, px, size};
 use serde_json::json;
 use wings_native::{
     actions,
-    host::Config,
     icons::Assets,
-    installed::fixture::Data,
     page::{
         PageView,
         plugin::{
@@ -30,14 +28,10 @@ use wings_native::{
             ui::{Badge, PaneStatus},
         },
     },
-    workspace::Workspace,
 };
 
 #[path = "shot_plugins/external.rs"]
 mod external;
-
-const WORKTREES_MAIN: &str = "wings.openView('worktrees', { as: 'sidebar' });";
-const WORKTREES_PAGE: &str = include_str!("../../../plugins/worktrees/dist/native/sidebar.js");
 
 fn wait(cx: &mut VisualTestAppContext, window: AnyWindowHandle, duration: Duration) {
     let until = Instant::now() + duration;
@@ -114,56 +108,7 @@ fn main() {
         tasks(out);
         return;
     }
-    let data = Data::temp();
-    data.install_script(
-        "worktrees",
-        json!({
-            "icon": "icon.svg",
-            "permissions": {
-                "exec": [
-                    "git rev-parse [--show-toplevel --abbrev-ref --verify --quiet]",
-                    "git worktree list [--porcelain]",
-                    "git status [--porcelain]",
-                    "git log [--max-count --format]",
-                    "git branch --list [--list --merged --format]"
-                ],
-                "panes": [],
-                "diskUsage": true
-            },
-            "contributes": { "sidebars": [{ "id": "worktrees", "title": "Worktrees", "page": "dist/sidebar.html" }] },
-        }),
-        WORKTREES_MAIN,
-        &[("sidebar", WORKTREES_PAGE)],
-        "shot",
-    );
-    let project = std::env::temp_dir().join("wings-native-shot-plugins-project");
-    std::fs::create_dir_all(&project).expect("make a project folder");
-    let args = ["--project".into(), project.clone().into_os_string()];
-    let mut config = Config::parse(args, &project)
-        .expect("parse the options")
-        .expect("options, not --help");
-    config.state = None;
-    config.ai = None;
-    config.projects = None;
-    config.agents = None;
-    config.plugins = Some(data.paths());
-    let mut cx = app();
-    for width in [1000.0, 640.0] {
-        let config = config.clone();
-        let handle = cx
-            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
-                cx.new(|cx| Workspace::new(config, window, cx))
-            })
-            .expect("open an offscreen window");
-        let window: AnyWindowHandle = handle.into();
-        wait(&mut cx, window, Duration::from_secs(3));
-        save(
-            &mut cx,
-            window,
-            out.join(format!("worktrees-sidebar-{width}.png")),
-        );
-        let _ = cx.update_window(window, |_, window, _| window.remove_window());
-    }
+    worktrees(out);
 }
 
 /// An app with one project, which does nothing for a plugin.
@@ -564,6 +509,95 @@ fn schedules(out: PathBuf) {
 /// Session detail's real main and built sidebar over a made-up Claude Code session, whose transcript is written to a
 /// folder of its own, and a made-up OpenCode one. It shows the session working, with rows opened, then the OpenCode
 /// session, then no session at all.
+/// The Worktrees sidebar, which is written in Rust (`plugins/worktrees/rust`), over a repo made for it: worktrees that
+/// are merged, changed, locked, detached and gone. Then the card that asks before the merged one is removed.
+fn worktrees(out: PathBuf) {
+    let dev = out.join("fixture-worktrees");
+    let _ = std::fs::remove_dir_all(&dev);
+    let root = dev.join("acme-web");
+    std::fs::create_dir_all(&root).unwrap();
+    let dev = dev.canonicalize().unwrap();
+    let root = root.canonicalize().unwrap();
+    let git = |dir: &std::path::Path, days_ago: u64, args: &[&str]| {
+        let date = format!("{} +0000", now_ms() / 1000 - days_ago * 86_400);
+        let done = std::process::Command::new("git")
+            .args(["-c", "user.email=test@example.com", "-c", "user.name=Wings", "-c", "commit.gpgsign=false"])
+            .args(args)
+            .current_dir(dir)
+            .envs([("GIT_AUTHOR_DATE", &date), ("GIT_COMMITTER_DATE", &date)])
+            .output()
+            .unwrap();
+        assert!(done.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&done.stderr));
+    };
+    let commit = |dir: &std::path::Path, days_ago: u64, file: &str| {
+        std::fs::write(dir.join(file), file).unwrap();
+        git(dir, days_ago, &["add", file]);
+        git(dir, days_ago, &["commit", "-qm", file]);
+    };
+    git(&root, 0, &["init", "-q", "-b", "main"]);
+    commit(&root, 60, "README.md");
+    let linked = |name: &str, branch: &str| {
+        let path = dev.join(name);
+        git(&root, 0, &["worktree", "add", "-q", "-b", branch, path.to_str().unwrap()]);
+        path
+    };
+    let search = linked("acme-web-search", "feature/search");
+    commit(&search, 5, "search.ts");
+    git(&root, 5, &["merge", "-q", "feature/search"]);
+    commit(&root, 1, "CHANGELOG.md");
+    let checkout = linked("acme-web-checkout", "feature/checkout");
+    commit(&checkout, 2, "checkout.ts");
+    std::fs::write(checkout.join("cart.ts"), "not committed").unwrap();
+    let hotfix = linked("acme-web-hotfix", "fix/cart-total");
+    commit(&hotfix, 12, "cart.ts");
+    git(&root, 0, &["worktree", "lock", "--reason", "release freeze", hotfix.to_str().unwrap()]);
+    let bisect = dev.join("acme-web-bisect");
+    git(&root, 0, &["worktree", "add", "-q", "--detach", bisect.to_str().unwrap()]);
+    std::fs::remove_dir_all(linked("acme-web-old", "experiment/old")).unwrap();
+
+    let manifest = serde_json::from_str(include_str!("../../../plugins/worktrees/wings-plugin.json")).unwrap();
+    let storage = out.join("fixture-storage-worktrees");
+    let _ = std::fs::remove_dir_all(&storage);
+    let host = PluginHost::with_access(
+        PluginConfig { id: "worktrees".into(), root: storage, scope: "shot".into() },
+        Access {
+            plugin: wings_plugins::manifest::Plugin { manifest, dir: root.clone(), icon_svg: None },
+            builtin: true,
+            env: std::sync::Arc::new(FixtureEnv(dev.clone())),
+        },
+    );
+    host.publish_projects(vec![wings_native::page::plugin::Project {
+        id: root.to_string_lossy().into(),
+        path: root.to_string_lossy().into(),
+        name: "acme-web".into(),
+        parent_id: None,
+    }]);
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/worktrees/dist/native/sidebar.wasm");
+    let source = format!("{}{}", wings_native::page::runtime::wasm::MARKER, path.canonicalize().expect("sh build-rust.sh worktrees, in plugins/").display());
+    let mut cx = app();
+    for width in [1000.0, 640.0, 360.0] {
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(1100.0)), |_, cx| cx.new(|cx| PageView::in_plugin(&host, &source, cx)))
+            .unwrap();
+        let window = handle.into();
+        handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
+        let shown = |cx: &mut VisualTestAppContext, expected: &str, name: &str| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !handle.read_with(cx, |view, _| view.text().contains(expected)).unwrap() {
+                assert!(Instant::now() < deadline, "page did not show {expected:?}: {}", handle.read_with(cx, |view, _| view.text()).unwrap());
+                wait(cx, window, Duration::from_millis(20));
+            }
+            wait(cx, window, Duration::from_millis(300));
+            save(cx, window, out.join(format!("worktrees-{name}-{width}.png")));
+        };
+        shown(&mut cx, "uncommitted", "list");
+        assert!(handle.read_with(&cx, |view, _| view.press("Remove 1 merged & clean", 0)).unwrap());
+        shown(&mut cx, "Also delete their branches", "confirm");
+        assert!(handle.read_with(&cx, |view, _| view.text().contains("1 worktree merged and clean")).unwrap());
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+    }
+}
+
 /// The HUD's sidebar, which is written in Rust (`plugins/hud/rust`): two Claude sessions on two accounts, with the
 /// second one's pane selected, then no session at all.
 fn hud(out: PathBuf) {
@@ -645,8 +679,11 @@ fn hud(out: PathBuf) {
     let mut cx = app();
     let source = module("sidebar");
     // The second session's pane is selected, so its session shows and its account's limits come first.
-    let views: [(&str, Vec<PaneEntry>, &str); 2] =
-        [("selected", both, "46k of 200k tokens"), ("none", vec![], "No Claude session in your panes.")];
+    // Last, the first session's pane: Claude Code never reported that session, which the page says once it has had
+    // the time to.
+    let unreported = vec![pane("1", FIRST, "web", "checkout redesign", true), pane("2", SECOND, "api", "invoice export", false)];
+    let views: [(&str, Vec<PaneEntry>, &str); 3] =
+        [("selected", both, "46k of 200k tokens"), ("none", vec![], "No Claude session in your panes."), ("unreported", unreported, "isn't connected to Wings")];
     for width in [1000.0, 640.0, 360.0] {
         for (name, panes, expected) in &views {
             host.publish_panes(panes.clone());
@@ -655,7 +692,7 @@ fn hud(out: PathBuf) {
                 .unwrap();
             let window = handle.into();
             handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
-            let deadline = Instant::now() + Duration::from_secs(10);
+            let deadline = Instant::now() + Duration::from_secs(30);
             while !handle.read_with(&cx, |view, _| view.text().contains(expected)).unwrap() {
                 assert!(Instant::now() < deadline, "page did not show {expected:?}: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
                 wait(&mut cx, window, Duration::from_millis(20));

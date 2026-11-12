@@ -189,6 +189,44 @@ pub fn empty(title: &str, description: &str) -> Node {
     Node::new("Empty").child(Node::new("Slot").prop("name", "title").text(title)).child(Node::new("Slot").prop("name", "description").text(description))
 }
 
+/// A page that fills its frame: a `toolbar` over the `body`.
+pub fn page(toolbar: Node, body: impl IntoIterator<Item = Node>) -> Node {
+    Node::new("Page").child(slot("toolbar", toolbar)).child(Node::new("Slot").prop("name", "body").children(body))
+}
+
+/// A page's top row: its `title` on the left and `actions` on the right.
+pub fn toolbar(title: &str, actions: Option<Node>) -> Node {
+    Node::new("Toolbar").child(Node::new("Slot").prop("name", "title").text(title)).maybe(actions.map(|actions| slot("actions", actions)))
+}
+
+/// A line that tells what happened, in the tone `success`, `warn` or `danger`.
+pub fn notice(tone: &str, text: impl Into<String>) -> Node {
+    Node::new("Notice").prop("tone", tone).text(text)
+}
+
+/// A small label, like a branch's state. With a tone it is filled, without one outlined.
+pub fn badge(label: impl Into<String>, tone: Option<&str>) -> Node {
+    match tone {
+        Some(tone) => Node::new("Badge").prop("tone", tone),
+        None => Node::new("Badge").prop("variant", "outline"),
+    }
+    .text(label)
+}
+
+/// A checkbox with its label. `on_change` hears its next state.
+pub fn checkbox(label: impl Into<String>, checked: bool, on_change: impl Fn(bool) + 'static) -> Node {
+    Node::new("Checkbox").prop("checked", checked).on("onChange", move |event| on_change(event["checked"] == true)).text(label)
+}
+
+/// A card in the page that asks before something is done: its `title`, a `body`, and `actions`, the buttons that do
+/// it or cancel.
+pub fn confirm(title: impl Into<String>, body: impl IntoIterator<Item = Node>, actions: impl IntoIterator<Item = Node>) -> Node {
+    Node::new("Confirm")
+        .child(Node::new("Slot").prop("name", "title").text(title))
+        .child(Node::new("Slot").prop("name", "body").children(body))
+        .child(Node::new("Slot").prop("name", "actions").children(actions))
+}
+
 /// What shows before the first data comes: "Loading…".
 pub fn loading() -> Node {
     Node::new("Loading")

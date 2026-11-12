@@ -1,7 +1,7 @@
 # The plugins written in Rust: one crate each, in `<plugin>/rust/`, built to WebAssembly by `sh build-rust.sh`.
 [workspace]
 resolver = "3"
-members = ["dev-servers/rust", "hud/rust"]
+members = ["dev-servers/rust", "hud/rust", "worktrees/rust"]
 
 [profile.release]
 opt-level = "s"

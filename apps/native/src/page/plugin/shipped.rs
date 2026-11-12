@@ -171,7 +171,7 @@ fn worktrees_sidebar_loads_the_actual_native_bundle_refreshes_on_git_and_opens_a
     rig.host
         .publish_panes(vec![pane("1", &root.to_string_lossy())]);
 
-    let (page, events) = open_page(&rig.host, &native("worktrees", "sidebar.js"));
+    let (page, events) = open_page(&rig.host, &module("worktrees", "sidebar"));
     tree(&events, "the initial main worktree", |tree| {
         let text = tree.text();
         text.contains("Worktrees") && text.contains("main") && text.contains("Open in new pane")
@@ -226,7 +226,7 @@ fn worktrees_sidebar_loads_the_actual_native_bundle_refreshes_on_git_and_opens_a
 #[test]
 fn worktrees_sidebar_shows_the_native_empty_state_without_repos() {
     let rig = Rig::with(load("worktrees"), true, vec![]);
-    let (_page, events) = open_page(&rig.host, &native("worktrees", "sidebar.js"));
+    let (_page, events) = open_page(&rig.host, &module("worktrees", "sidebar"));
     let empty = tree(&events, "the empty state", |tree| {
         tree.text().contains("None of your projects is a git repo.")
     });
@@ -238,7 +238,7 @@ fn worktrees_sidebar_reports_a_denied_scan_without_walking_any_disk() {
     let mut plugin = load("worktrees");
     plugin.manifest.permissions.disk_usage = false;
     let rig = Rig::with(plugin, true, vec![]);
-    let (page, events) = open_page(&rig.host, &native("worktrees", "sidebar.js"));
+    let (page, events) = open_page(&rig.host, &module("worktrees", "sidebar"));
     let initial = tree(&events, "the scan action", |tree| {
         tree.text().contains("Scan this Mac")
     });
@@ -265,7 +265,7 @@ fn worktrees_native_sidebar_bundle_draws_the_empty_state_in_a_native_window() {
 
     let rig = Rig::with(load("worktrees"), true, vec![]);
     let host = std::sync::Arc::new(rig.host);
-    let source: &'static str = Box::leak(native("worktrees", "sidebar.js").into_boxed_str());
+    let source: &'static str = Box::leak(module("worktrees", "sidebar").into_boxed_str());
     let mut app = TestApp::new();
     app.background_executor().allow_parking();
     let page_host = Arc::clone(&host);

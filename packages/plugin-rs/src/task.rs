@@ -123,3 +123,102 @@ pub async fn join_all<T>(futures: Vec<Pin<Box<dyn Future<Output = T>>>>) -> Vec<
     })
     .await
 }
+
+/// Runs `a` and `b` side by side and gives both results.
+pub async fn join<A, B>(a: impl Future<Output = A>, b: impl Future<Output = B>) -> (A, B) {
+    let (mut a, mut b) = (Box::pin(a), Box::pin(b));
+    let (mut left, mut right) = (None, None);
+    std::future::poll_fn(move |cx| {
+        if left.is_none()
+            && let Poll::Ready(value) = a.as_mut().poll(cx)
+        {
+            left = Some(value);
+        }
+        if right.is_none()
+            && let Poll::Ready(value) = b.as_mut().poll(cx)
+        {
+            right = Some(value);
+        }
+        if left.is_some() && right.is_some() { Poll::Ready((left.take().unwrap(), right.take().unwrap())) } else { Poll::Pending }
+    })
+    .await
+}
+
+/// Runs `run` over `items`, at most `limit` at a time, and gives the results in the order of `items`.
+pub async fn map_limit<I, T, Fut>(items: Vec<I>, limit: usize, run: impl Fn(I) -> Fut) -> Vec<T>
+where
+    Fut: Future<Output = T>,
+{
+    let mut results: Vec<Option<T>> = items.iter().map(|_| None).collect();
+    let mut waiting = items.into_iter().enumerate();
+    let mut running: Vec<(usize, Pin<Box<Fut>>)> = Vec::new();
+    std::future::poll_fn(move |cx| {
+        loop {
+            while running.len() < limit.max(1)
+                && let Some((index, item)) = waiting.next()
+            {
+                running.push((index, Box::pin(run(item))));
+            }
+            let before = running.len();
+            running.retain_mut(|(index, future)| match future.as_mut().poll(cx) {
+                Poll::Ready(value) => {
+                    results[*index] = Some(value);
+                    false
+                }
+                Poll::Pending => true,
+            });
+            if running.is_empty() && waiting.len() == 0 {
+                return Poll::Ready(results.drain(..).flatten().collect());
+            }
+            // One that finished made room: start the next before waiting.
+            if running.len() == before || waiting.len() == 0 {
+                return Poll::Pending;
+            }
+        }
+    })
+    .await
+}
+
+/// Runs `future` to its end, for a plugin's own tests. Panics when it waits for something that never comes.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn block_on<T: 'static>(future: impl Future<Output = T> + 'static) -> T {
+    let done = Rc::new(RefCell::new(None));
+    let slot = done.clone();
+    spawn(async move { *slot.borrow_mut() = Some(future.await) });
+    run_ready();
+    done.borrow_mut().take().expect("the future waits for something that never comes")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn map_limit_keeps_the_order_and_never_runs_more_than_the_limit() {
+        let (running, most) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+        let (r, m) = (running.clone(), most.clone());
+        let out = block_on(map_limit((0..7).collect(), 3, move |n: u32| {
+            let (r, m) = (r.clone(), m.clone());
+            async move {
+                r.set(r.get() + 1);
+                m.set(m.get().max(r.get()));
+                // One turn of waiting, so the others get to start.
+                let mut waited = false;
+                std::future::poll_fn(|cx| {
+                    if std::mem::replace(&mut waited, true) {
+                        Poll::Ready(())
+                    } else {
+                        cx.waker().wake_by_ref();
+                        Poll::Pending
+                    }
+                })
+                .await;
+                r.set(r.get() - 1);
+                n * 2
+            }
+        }));
+        assert_eq!(out, [0, 2, 4, 6, 8, 10, 12]);
+        assert_eq!(most.get(), 3);
+        assert!(block_on(map_limit(Vec::<u32>::new(), 3, |n| async move { n })).is_empty());
+    }
+}

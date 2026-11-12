@@ -157,9 +157,10 @@ fn load(engine: &wasmtime::Engine, bytes: &[u8], kept: Option<&std::path::Path>)
 }
 
 /// The compiler and its settings, one for every page: compiling is what a page's start costs, so a module's code is
-/// kept by its file and that file's size and time, for the next page of it.
+/// kept by its file and that file's size and time, for the next page of it. Two pages of one module compile it once,
+/// and pages of different modules compile side by side.
 fn compiled(path: &str) -> wasmtime::Result<(wasmtime::Engine, Module)> {
-    type Compiled = HashMap<(PathBuf, u64, Option<SystemTime>), Module>;
+    type Compiled = HashMap<(PathBuf, u64, Option<SystemTime>), Arc<Mutex<Option<Module>>>>;
     static ENGINE: OnceLock<(wasmtime::Engine, Mutex<Compiled>)> = OnceLock::new();
     let engine = match ENGINE.get() {
         Some(engine) => engine,
@@ -170,14 +171,13 @@ fn compiled(path: &str) -> wasmtime::Result<(wasmtime::Engine, Module)> {
     };
     let file = std::fs::metadata(path)?;
     let key = (PathBuf::from(path), file.len(), file.modified().ok());
-    let mut modules = engine.1.lock().unwrap();
-    let module = match modules.get(&key) {
+    let slot = engine.1.lock().unwrap().entry(key).or_default().clone();
+    let mut slot = slot.lock().unwrap();
+    let module = match &*slot {
         Some(module) => module.clone(),
         None => {
             let bytes = std::fs::read(path)?;
-            let module = load(&engine.0, &bytes, kept_file(&bytes).as_deref())?;
-            modules.insert(key, module.clone());
-            module
+            slot.insert(load(&engine.0, &bytes, kept_file(&bytes).as_deref())?).clone()
         }
     };
     Ok((engine.0.clone(), module))
