@@ -2,6 +2,13 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.18 · 2026-11-12
+
+- **Terminals look right after a restart.** After Wings restarted or updated, a terminal could show lines its program had already erased, until the program drew again, and some needed closing and reopening. It happened to a terminal whose pane had changed size while it ran, as when a sidebar opened. Wings now redraws each part of a terminal's output at the size the pane had when it was printed. Terminals already open keep the old behaviour until you reopen them, and the top of a very long session can still be off.
+- **Plugin updates no longer hit GitHub's limit.** Updating a plugin could say "GitHub's rate limit was hit" although you're signed in with `gh`. Right after a restart Wings could miss your sign-in and stayed signed out until it quit. It now looks for it again.
+- **The HUD follows the pane you select.** The HUD sidebar shows the session in the selected pane, and the limits of the account that session runs as come first. Needs HUD 0.8.3.
+- **Dev servers is written in Rust.** It works as before. Needs Dev servers 0.5.0.
+
 ## 0.2.17 · 2026-11-12
 
 - **Plugins can be written in Rust.** A plugin's background script and its pages can each be a WebAssembly module built from Rust. Wings runs it sandboxed, draws its pages with the same controls, and gives it the same permissions as a TypeScript plugin. It installs from GitHub the same way. This is a first version: a Rust plugin runs with the default time and memory limits, and each of its parts on a thread of its own.
