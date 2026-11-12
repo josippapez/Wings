@@ -223,6 +223,38 @@ fn worktrees_sidebar_loads_the_actual_native_bundle_refreshes_on_git_and_opens_a
     assert_eq!(plan.placement, "tab");
 }
 
+/// With one project the page's lookups never wait on each other. With many they do, and a page that wakes a waiting
+/// task once for every time it was polled runs out of its turn.
+#[test]
+fn worktrees_sidebar_loads_forty_projects_within_its_turns() {
+    let rig = Rig::with(load("worktrees"), true, vec![]);
+    let base = rig.root.config("worktrees").root.join("many");
+    let roots: Vec<PathBuf> = (0..40)
+        .map(|n| {
+            let root = base.join(format!("repo-{n:02}"));
+            fs::create_dir_all(&root).unwrap();
+            git(&root, &["init", "-q", "-b", "main"]);
+            root
+        })
+        .collect();
+    *rig.env.projects.lock().unwrap() = roots.clone();
+    rig.host.publish_projects(
+        roots
+            .iter()
+            .map(|root| Project {
+                id: root.to_string_lossy().into(),
+                path: root.to_string_lossy().into(),
+                name: root.file_name().unwrap().to_string_lossy().into(),
+                parent_id: None,
+            })
+            .collect(),
+    );
+    rig.host.publish_panes(roots.iter().take(10).enumerate().map(|(n, root)| pane(&n.to_string(), &root.to_string_lossy())).collect());
+    let (_page, events) = open_page(&rig.host, &module("worktrees", "sidebar"));
+    let loaded = tree(&events, "forty repos", |tree| tree.text().contains("repo-39"));
+    assert!(loaded.text().contains("repo-00"));
+}
+
 #[test]
 fn worktrees_sidebar_shows_the_native_empty_state_without_repos() {
     let rig = Rig::with(load("worktrees"), true, vec![]);

@@ -99,7 +99,7 @@ async fn kept(cache: &'static std::thread::LocalKey<Kept>, arg: &str, look: impl
                 std::future::poll_fn(|cx| {
                     cache.with(|kept| match kept.slots.borrow_mut().get_mut(arg) {
                         Some(Slot::Loading(waiting)) => {
-                            waiting.push(cx.waker().clone());
+                            crate::task::wait_once(waiting, cx.waker());
                             Poll::Pending
                         }
                         _ => Poll::Ready(()),

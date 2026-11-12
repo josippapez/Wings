@@ -13,7 +13,10 @@ use std::{
 type Task = Pin<Box<dyn Future<Output = ()>>>;
 
 thread_local! {
-    static TASKS: RefCell<HashMap<u32, Task>> = RefCell::new(HashMap::new());
+    /// Each task with its waker, which is one for the task's life: a wait that is polled again can tell it already
+    /// holds it (`Waker::will_wake`).
+    static TASKS: RefCell<HashMap<u32, (Task, Waker)>> = RefCell::new(HashMap::new());
+    /// The tasks to run, each once however many times it was woken.
     static READY: RefCell<VecDeque<u32>> = const { RefCell::new(VecDeque::new()) };
     static NEXT: RefCell<u32> = const { RefCell::new(1) };
 }
@@ -22,7 +25,20 @@ struct Ready(u32);
 
 impl Wake for Ready {
     fn wake(self: Arc<Self>) {
-        READY.with(|ready| ready.borrow_mut().push_back(self.0));
+        READY.with(|ready| {
+            let mut ready = ready.borrow_mut();
+            if !ready.contains(&self.0) {
+                ready.push_back(self.0);
+            }
+        });
+    }
+}
+
+/// Keeps `waker` among `waiting` unless it is there already: a wait is polled every time its task runs, whatever woke
+/// the task, and a waker kept each time made the list, and the wakes when it ended, grow with every poll.
+pub(crate) fn wait_once(waiting: &mut Vec<Waker>, waker: &Waker) {
+    if !waiting.iter().any(|kept| kept.will_wake(waker)) {
+        waiting.push(waker.clone());
     }
 }
 
@@ -33,19 +49,18 @@ pub fn spawn(future: impl Future<Output = ()> + 'static) {
         *next.borrow_mut() = id.wrapping_add(1);
         id
     });
-    TASKS.with(|tasks| tasks.borrow_mut().insert(id, Box::pin(future)));
+    TASKS.with(|tasks| tasks.borrow_mut().insert(id, (Box::pin(future), Waker::from(Arc::new(Ready(id))))));
     READY.with(|ready| ready.borrow_mut().push_back(id));
 }
 
 pub(crate) fn run_ready() {
     while let Some(id) = READY.with(|ready| ready.borrow_mut().pop_front()) {
         // Out of the table while it runs, so it can spawn.
-        let Some(mut task) = TASKS.with(|tasks| tasks.borrow_mut().remove(&id)) else {
+        let Some((mut task, waker)) = TASKS.with(|tasks| tasks.borrow_mut().remove(&id)) else {
             continue;
         };
-        let waker = Waker::from(Arc::new(Ready(id)));
         if task.as_mut().poll(&mut Context::from_waker(&waker)) == Poll::Pending {
-            TASKS.with(|tasks| tasks.borrow_mut().insert(id, task));
+            TASKS.with(|tasks| tasks.borrow_mut().insert(id, (task, waker)));
         }
     }
 }
@@ -97,7 +112,7 @@ impl SingleFlight {
         }
         std::future::poll_fn(move |cx| {
             if flight.running.get() {
-                flight.waiting.borrow_mut().push(cx.waker().clone());
+                wait_once(&mut flight.waiting.borrow_mut(), cx.waker());
                 Poll::Pending
             } else {
                 Poll::Ready(())
@@ -192,6 +207,26 @@ pub fn block_on<T: 'static>(future: impl Future<Output = T> + 'static) -> T {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_task_woken_many_times_runs_once_and_a_wait_keeps_its_waker_once() {
+        let (polls, waiting) = (Rc::new(Cell::new(0)), Rc::new(RefCell::new(Vec::<Waker>::new())));
+        let (count, held) = (polls.clone(), waiting.clone());
+        spawn(std::future::poll_fn(move |cx| {
+            count.set(count.get() + 1);
+            wait_once(&mut held.borrow_mut(), cx.waker());
+            if count.get() < 3 { Poll::Pending } else { Poll::Ready(()) }
+        }));
+        run_ready();
+        for _ in 0..2 {
+            let wakers = waiting.borrow().clone();
+            assert_eq!(wakers.len(), 1);
+            // Woken three times before its turn: it runs once.
+            wakers.iter().chain(&wakers).chain(&wakers).for_each(Waker::wake_by_ref);
+            run_ready();
+        }
+        assert_eq!(polls.get(), 3);
+    }
 
     #[test]
     fn map_limit_keeps_the_order_and_never_runs_more_than_the_limit() {
