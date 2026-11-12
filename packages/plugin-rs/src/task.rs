@@ -1,10 +1,11 @@
 //! Tasks: futures that run on the page's one thread, between the host's turns.
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{HashMap, VecDeque},
     future::Future,
     pin::Pin,
+    rc::Rc,
     sync::Arc,
     task::{Context, Poll, Wake, Waker},
 };
@@ -46,6 +47,62 @@ pub(crate) fn run_ready() {
         if task.as_mut().poll(&mut Context::from_waker(&waker)) == Poll::Pending {
             TASKS.with(|tasks| tasks.borrow_mut().insert(id, task));
         }
+    }
+}
+
+type Run = Box<dyn Fn() -> Pin<Box<dyn Future<Output = ()>>>>;
+
+struct Flight {
+    run: Run,
+    running: Cell<bool>,
+    again: Cell<bool>,
+    waiting: RefCell<Vec<Waker>>,
+}
+
+/// `wings-plugin-sdk/async`'s `singleFlight`: a function made to run once at a time. Calling it while it runs doesn't
+/// start a second run: it makes it run once more when this one is done, however many calls came meanwhile.
+#[derive(Clone)]
+pub struct SingleFlight(Rc<Flight>);
+
+impl SingleFlight {
+    pub fn new<F, Fut>(run: F) -> Self
+    where
+        F: Fn() -> Fut + 'static,
+        Fut: Future<Output = ()> + 'static,
+    {
+        Self(Rc::new(Flight { run: Box::new(move || Box::pin(run())), running: Cell::new(false), again: Cell::new(false), waiting: RefCell::new(Vec::new()) }))
+    }
+
+    /// Starts a run now, or has the one that is running go once more. What it returns is done when that run, and any
+    /// rerun, is, and can be let go of by a caller that doesn't wait.
+    pub fn call(&self) -> impl Future<Output = ()> + use<> {
+        let flight = self.0.clone();
+        if flight.running.replace(true) {
+            flight.again.set(true);
+        } else {
+            let flight = flight.clone();
+            spawn(async move {
+                loop {
+                    flight.again.set(false);
+                    (flight.run)().await;
+                    if !flight.again.get() {
+                        break;
+                    }
+                }
+                flight.running.set(false);
+                for waker in flight.waiting.borrow_mut().drain(..) {
+                    waker.wake();
+                }
+            });
+        }
+        std::future::poll_fn(move |cx| {
+            if flight.running.get() {
+                flight.waiting.borrow_mut().push(cx.waker().clone());
+                Poll::Pending
+            } else {
+                Poll::Ready(())
+            }
+        })
     }
 }
 

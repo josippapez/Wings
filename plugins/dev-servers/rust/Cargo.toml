@@ -1,0 +1,16 @@
+[package]
+name = "dev-servers"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wings-plugin = { path = "../../../packages/plugin-rs" }
+serde_json = "1"
+
+[features]
+# The frame this module is. `build-rust.sh` builds each one the manifest names.
+main = []

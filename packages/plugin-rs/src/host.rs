@@ -66,7 +66,16 @@ thread_local! {
     static ON_BROADCAST: RefCell<Vec<Rc<dyn Fn(&Value)>>> = const { RefCell::new(Vec::new()) };
     static ON_FOCUS: RefCell<Vec<Rc<dyn Fn(bool)>>> = const { RefCell::new(Vec::new()) };
     static ON_MESSAGE: RefCell<HashMap<&'static str, Vec<Rc<dyn Fn(u32, &Value)>>>> = RefCell::new(HashMap::new());
+    /// The panes as last heard, once `watch_panes` listens.
+    static PANES: RefCell<Option<Vec<Value>>> = const { RefCell::new(None) };
+    static WATCHING_PANES: RefCell<bool> = const { RefCell::new(false) };
+    static ON_PANES: RefCell<Vec<Rc<dyn Fn(&[Value])>>> = const { RefCell::new(Vec::new()) };
+    /// The badge last sent for each pane, as JSON, so one a pane already shows isn't sent again.
+    static SENT_BADGES: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+    static ON_ACTION: RefCell<Vec<Action>> = const { RefCell::new(Vec::new()) };
 }
+
+type Action = Rc<dyn Fn(Value) -> Pin<Box<dyn Future<Output = Result<(), String>>>>>;
 
 fn next_id() -> u32 {
     NEXT.with(|next| {
@@ -149,6 +158,88 @@ pub(crate) fn deliver(kind: &str, id: u32, text: String) {
 /// that id as `token`, an `action` by `actionDone`.
 pub fn on(kind: &'static str, listener: impl Fn(u32, &Value) + 'static) {
     ON_MESSAGE.with(|map| map.borrow_mut().entry(kind).or_default().push(Rc::new(listener)));
+}
+
+/// Keeps the pane list as the host sends it, and forgets the badge of a pane that closed, as the host does.
+fn watch_panes() {
+    if WATCHING_PANES.with(|watching| watching.replace(true)) {
+        return;
+    }
+    on("panes", |_, list| {
+        let list = list.as_array().cloned().unwrap_or_default();
+        SENT_BADGES.with(|sent| sent.borrow_mut().retain(|pane, _| list.iter().any(|open| open["paneId"] == pane.as_str())));
+        PANES.with(|panes| *panes.borrow_mut() = Some(list.clone()));
+        for listener in ON_PANES.with(|listeners| listeners.borrow().clone()) {
+            listener(&list);
+        }
+    });
+}
+
+/// `wings.onPanes`: every terminal pane, on every change, each with its `paneId`, `cwd`, `command` and project. Ask
+/// for it when the frame starts: the first list comes right after.
+pub fn on_panes(listener: impl Fn(&[Value]) + 'static) {
+    watch_panes();
+    let listener: Rc<dyn Fn(&[Value])> = Rc::new(listener);
+    ON_PANES.with(|listeners| listeners.borrow_mut().push(listener.clone()));
+    // Once more for a listener that comes after the first list.
+    if let Some(list) = PANES.with(|panes| panes.borrow().clone()) {
+        crate::task::spawn(async move { listener(&list) });
+    }
+}
+
+/// `wings.setBadge`: the badge the pane `pane` shows for this plugin, or none for null. One the pane already shows
+/// isn't sent again, so a plugin can set every pane's badge on every look.
+pub async fn set_badge(pane: &str, badge: &Value) -> Result<(), String> {
+    watch_panes();
+    let sent = badge.to_string();
+    if SENT_BADGES.with(|badges| badges.borrow_mut().insert(pane.to_owned(), sent.clone())).as_ref() == Some(&sent) {
+        return Ok(());
+    }
+    let answer = call("setBadge", json!({ "paneId": pane, "badge": badge })).await;
+    // Refused: not shown, so the same badge is sent again next time.
+    if answer.is_err() {
+        SENT_BADGES.with(|badges| {
+            let mut badges = badges.borrow_mut();
+            if badges.get(pane) == Some(&sent) {
+                badges.remove(pane);
+            }
+        });
+    }
+    answer.map(drop)
+}
+
+/// `wings.onAction`: a button of one of this plugin's badges was clicked. `listener` gets `{ paneId, actionId }`, and
+/// the button shows progress until it is done. Its error shows by the button.
+pub fn on_action<F, Fut>(listener: F)
+where
+    F: Fn(Value) -> Fut + 'static,
+    Fut: Future<Output = Result<(), String>> + 'static,
+{
+    let first = ON_ACTION.with(|listeners| {
+        let mut listeners = listeners.borrow_mut();
+        listeners.push(Rc::new(move |action| Box::pin(listener(action))));
+        listeners.len() == 1
+    });
+    if first {
+        on("action", |token, action| {
+            let action = action.clone();
+            crate::task::spawn(async move {
+                let mut error = None;
+                for listener in ON_ACTION.with(|listeners| listeners.borrow().clone()) {
+                    if let Err(message) = listener(action.clone()).await {
+                        error = Some(message);
+                    }
+                }
+                drop(call("actionDone", json!({ "token": token, "error": error })));
+            });
+        });
+    }
+}
+
+/// `wings.ports`: the programs in terminal panes that listen on a local port, each with its `paneId`, `name`, `port`
+/// and `startedAt`.
+pub fn ports() -> Pending<Result<Value, String>> {
+    call("ports", json!({}))
 }
 
 /// `wings.storage`: what the plugin keeps between runs, shared by its frames. Answered at once.

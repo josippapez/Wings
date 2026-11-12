@@ -44,6 +44,14 @@ fn native(name: &str, file: &str) -> String {
     })
 }
 
+/// A frame of a plugin written in Rust, as the app runs it: its committed module, which `sh build-rust.sh` in `plugins/`
+/// builds.
+fn module(name: &str, frame: &str) -> String {
+    let path = repo_plugin(name).join("dist/native").join(format!("{frame}.wasm"));
+    assert!(path.is_file(), "{}: build the plugin: cd plugins && sh build-rust.sh {name}", path.display());
+    format!("{}{}", crate::page::runtime::wasm::MARKER, path.display())
+}
+
 /// What a plugin's main reported: its errors, which a test of a working plugin expects none of.
 fn errors() -> (impl FnMut(Event) + Send + 'static, mpsc::Receiver<String>) {
     let (sender, received) = mpsc::channel();
@@ -290,7 +298,7 @@ fn dev_servers_badges_the_pane_with_a_listening_port_and_its_button_opens_the_br
     *rig.env.ports.lock().unwrap() = Ok(vec![node("1", 5173), node("1", 3000)]);
     let (on_event, main_errors) = errors();
     rig.host
-        .start_main(&native("dev-servers", "main.js"), on_event)
+        .start_main(&module("dev-servers", "main"), on_event)
         .unwrap();
 
     // main looks as soon as it hears the panes: pane 1 gets a badge, and pane 2, which listens to nothing, none.
