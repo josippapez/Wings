@@ -313,7 +313,7 @@ export async function buildPlugin(dir, { check = false, banner = BANNER, outDir 
 }
 
 /** Files at the top of a plugin folder that are for building it, not for Wings. The README stays: Wings shows it in Settings. */
-const SOURCE_ONLY = /^(src|preview|node_modules|package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|tsconfig.*\.json|HANDOVER.*|.*\.wings-plugin)$/;
+const SOURCE_ONLY = /^(src|preview|node_modules|package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|tsconfig.*\.json|HANDOVER.*|.*\.wings-plugin|rust|target|Cargo\.(toml|lock))$/;
 
 /** Copies what the plugin ships from `from` to `to`: everything but its source, dependencies and dotfiles. */
 function copyShipped(from, to, top = true) {
@@ -341,13 +341,17 @@ function filesIn(dir, prefix = "") {
  * Builds the plugin in `dir` into a temporary folder with the files it ships, and zips that as `<id>.wings-plugin`
  * in `out` (the plugin folder by default), the file Wings installs. Resolves the package's path. The plugin's
  * folder gets no built files, so a plugin's own repo doesn't commit them.
+ *
+ * A plugin written in Rust alone has no `src/`: there is nothing here to build, and its package is what it ships,
+ * with the WebAssembly frames its own build put in `dist/native/`. Its Rust source and build folder stay out.
  */
 export async function pack(dir, { out = dir } = {}) {
-  const { id } = JSON.parse(readFileSync(join(dir, "wings-plugin.json"), "utf8"));
+  const { id, main } = JSON.parse(readFileSync(join(dir, "wings-plugin.json"), "utf8"));
   const tmp = mkdtempSync(join(tmpdir(), "wings-plugin-"));
   try {
     copyShipped(dir, tmp);
-    await buildPlugin(dir, { outDir: join(tmp, OUT), manifestDir: tmp });
+    if (existsSync(join(dir, "src"))) await buildPlugin(dir, { outDir: join(tmp, OUT), manifestDir: tmp });
+    else if (!existsSync(join(tmp, main))) throw new Error(`${main} is missing. Build the plugin's Rust frames first.`);
     const file = join(out, `${id}.wings-plugin`);
     writeFileSync(file, zipSync(filesIn(tmp), { level: 9 }));
     return file;

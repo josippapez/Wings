@@ -167,6 +167,40 @@ impl Data {
         dir
     }
 
+    /// Installs the plugin whose files are the folder `from`, as a package unpacks: its manifest at the top and what
+    /// it ships beside it. It is turned on, with what its manifest asks for approved, and `scope` is its storage scope.
+    pub fn install_folder(&self, from: &Path, scope: &str) -> PathBuf {
+        fn copy(from: &Path, to: &Path) {
+            fs::create_dir_all(to).unwrap();
+            for entry in fs::read_dir(from).unwrap() {
+                let entry = entry.unwrap();
+                let target = to.join(entry.file_name());
+                if entry.file_type().unwrap().is_dir() {
+                    copy(&entry.path(), &target);
+                } else {
+                    fs::copy(entry.path(), target).unwrap();
+                }
+            }
+        }
+        let granted: Manifest =
+            serde_json::from_slice(&fs::read(from.join("wings-plugin.json")).unwrap()).unwrap();
+        let dir = self.paths().dir.join(&granted.id);
+        copy(from, &dir);
+        let approved =
+            json!({ "permissions": granted.permissions, "contributes": granted.contributes });
+        let mut entries = self.entries.borrow_mut();
+        entries.insert(
+            granted.id,
+            json!({ "enabled": true, "approved": approved, "source": { "kind": "file" }, "secrets": [], "scope": scope }),
+        );
+        fs::write(
+            &self.paths().state,
+            serde_json::to_vec_pretty(&*entries).unwrap(),
+        )
+        .unwrap();
+        dir
+    }
+
     /// What `wings.storage` of `plugin` holds under `key`, read the way the desktop reads it.
     pub fn saved(&self, plugin: &str, scope: &str, key: &str) -> Option<serde_json::Value> {
         wings_plugin_storage::Storage::new(self.paths().storage)

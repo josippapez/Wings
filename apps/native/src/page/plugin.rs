@@ -972,4 +972,4 @@ mod testing;
 #[cfg(test)]
 pub(super) mod tests;
 #[cfg(test)]
-mod wasm_tests;
+pub(crate) mod wasm_tests;

@@ -637,8 +637,14 @@ npx wings-plugin pack   # writes hello-wings.wings-plugin and prints its path
 The package holds `wings-plugin.json` at its top, the build in `dist/` (every entry, the generated pages and CSS),
 and the files your plugin ships, like its icon, its own `.html`, `.css` and images, and its `README.md`, which
 Wings shows in Settings. It leaves out `src/`, `preview/`, `node_modules`, `package.json` and lock files,
-`tsconfig*.json`, `HANDOVER*`, dotfiles and other `.wings-plugin` files. Your folder gets no built files. From a
-script, `pack(dir, { out })` in `wings-plugin-sdk/build` does the same and resolves the package's path.
+`tsconfig*.json`, `HANDOVER*`, dotfiles and other `.wings-plugin` files, and a plugin's Rust source: `rust/`,
+`target/`, `Cargo.toml` and `Cargo.lock`. Your folder gets no built files. From a script, `pack(dir, { out })` in
+`wings-plugin-sdk/build` does the same and resolves the package's path.
+
+A plugin written in Rust alone has no `src/`, and `pack` builds nothing for it. Its manifest names its WebAssembly
+modules as its `main` and its pages, like `dist/native/main.wasm` and `dist/native/sidebar.wasm`. Build them
+yourself first: `pack` zips them with the rest of what the plugin ships, and stops if the `main` isn't there. It
+ships whatever else is in `dist/`, so clear that folder of an older build's files.
 
 ## Shot
 

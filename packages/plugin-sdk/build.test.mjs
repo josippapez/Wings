@@ -365,3 +365,25 @@ test("a native page that isn't a React page, and a native that isn't true or fal
     await assert.rejects(buildPlugin(dir), message);
   }
 });
+
+test("pack of a plugin written in Rust alone ships its WebAssembly frames and builds nothing", async (t) => {
+  const rust = { main: "dist/native/main.wasm", contributes: { sidebars: [{ id: "demo", title: "Demo", icon: "list", page: "dist/native/sidebar.wasm" }] } };
+  const files = { "src/main.ts": null, "src/pages/sidebar.ts": null, "src/pages/sidebar.css": null, "README.md": "x", "dist/native/main.wasm": "wasm", "dist/native/sidebar.wasm": "wasm", "rust/Cargo.toml": "x", "rust/src/lib.rs": "x", "rust/target/release/big": "x", "Cargo.lock": "x", "target/debug/big": "x" };
+  const dir = plugin(files, rust);
+  t.after(() => rmSync(dir, { recursive: true }));
+  const zip = unzipSync(new Uint8Array(readFileSync(await pack(dir))));
+  assert.deepEqual(Object.keys(zip).sort(), ["README.md", "dist/native/main.wasm", "dist/native/sidebar.wasm", "wings-plugin.json"]);
+
+  // Before its frames are built there is nothing to ship.
+  const unbuilt = plugin({ ...files, "dist/native/main.wasm": null }, rust);
+  t.after(() => rmSync(unbuilt, { recursive: true }));
+  await assert.rejects(pack(unbuilt), /dist\/native\/main\.wasm is missing\. Build the plugin's Rust frames first\./);
+});
+
+test("pack leaves a plugin's Rust source and build folder out when it has both TypeScript and Rust", async (t) => {
+  const dir = plugin({ "rust/Cargo.toml": "x", "rust/target/release/big": "x", "dist/native/main.wasm": "wasm" });
+  t.after(() => rmSync(dir, { recursive: true }));
+  const names = Object.keys(unzipSync(new Uint8Array(readFileSync(await pack(dir)))));
+  assert.deepEqual(names.filter((name) => name.startsWith("rust/")), []);
+  assert.ok(names.includes("dist/native/main.wasm") && names.includes("dist/main.js"), names.join(", "));
+});

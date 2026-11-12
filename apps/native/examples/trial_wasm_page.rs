@@ -189,25 +189,36 @@ enum Step {
     Type(Option<&'static str>, &'static str),
 }
 
-/// Cyclops installed in a made-up data folder: its TypeScript build over made-up answers, or with `rust` its three
-/// modules built over the same ones (`sh rust/build.sh fake`), which run in place of the scripts.
+/// Cyclops installed in a made-up data folder, over made-up answers. With `rust` it is the plugin as its package has
+/// it: the manifest and the three modules (`sh rust/build.sh fake`), and no JavaScript. Without, it is the TypeScript
+/// build Cyclops had up to 0.9.7, for comparing the two, read from a `dist/` that build left in the repo's folder.
 fn install(repo: &Path, rust: bool) -> Data {
+    let mut manifest: serde_json::Value = serde_json::from_str(&read(repo.join("wings-plugin.json"))).unwrap();
+    manifest.as_object_mut().unwrap().remove("minWingsVersion");
+    let data = Data::temp();
+    if rust {
+        let package = tempfile::tempdir().expect("a folder for the package");
+        std::fs::create_dir_all(package.path().join("dist/native")).unwrap();
+        std::fs::write(package.path().join("wings-plugin.json"), manifest.to_string()).unwrap();
+        for frame in ["main", "sidebar", "popover"] {
+            let module = repo.join(format!("rust/target/fake/native/{frame}.wasm"));
+            std::fs::copy(&module, package.path().join(format!("dist/native/{frame}.wasm")))
+                .unwrap_or_else(|error| panic!("{}: {error}. Run sh rust/build.sh fake", module.display()));
+        }
+        data.install_folder(package.path(), "shot");
+        return data;
+    }
     let fake = |page: &str| {
         let source = read(repo.join(format!("dist/native/{page}.js")))
             .replace("wings.fetch(", "globalThis.__shot.fetch(")
             .replace("wings.secrets.has(", "globalThis.__shot.has(");
         format!("{CYCLOPS}\n{source}")
     };
-    let mut manifest: serde_json::Value = serde_json::from_str(&read(repo.join("wings-plugin.json"))).unwrap();
-    manifest.as_object_mut().unwrap().remove("minWingsVersion");
-    let data = Data::temp();
-    let dir = data.install_script("cyclops", manifest, &fake("main"), &[("sidebar", &fake("sidebar")), ("popover", &fake("popover"))], "shot");
-    if rust {
-        for frame in ["main", "sidebar", "popover"] {
-            let module = repo.join(format!("rust/target/fake/native/{frame}.wasm"));
-            std::fs::copy(&module, dir.join(format!("dist/native/{frame}.wasm"))).unwrap_or_else(|error| panic!("{}: {error}. Run sh rust/build.sh fake", module.display()));
-        }
-    }
+    // The manifest as the TypeScript build had it.
+    manifest["main"] = "dist/main.js".into();
+    manifest["contributes"]["sidebars"][0]["page"] = "dist/sidebar.html".into();
+    manifest["contributes"]["sidebars"][0]["popover"]["page"] = "dist/popover.html".into();
+    data.install_script("cyclops", manifest, &fake("main"), &[("sidebar", &fake("sidebar")), ("popover", &fake("popover"))], "shot");
     data
 }
 
@@ -237,6 +248,7 @@ fn tools(repo: &Path) {
         ("stop_timer", serde_json::json!({})),
         ("start_timer", serde_json::json!({ "projectId": "p1" })),
         ("start_timer", serde_json::json!({ "projectId": id, "task": "  Write the port  " })),
+        ("list_entries", serde_json::json!({})),
         ("list_entries", serde_json::json!({ "from": "2026-02-30" })),
         ("list_entries", serde_json::json!({ "from": "2999-01-02", "to": "2999-01-01" })),
         ("update_entry", serde_json::json!({ "entryId": id })),

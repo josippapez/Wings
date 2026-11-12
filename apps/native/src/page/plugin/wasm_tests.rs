@@ -20,7 +20,7 @@ use crate::page::{
 
 /// The module `file` of the fixture crate `pages/<name>`, built once for the tests that run it, as a frame's source.
 /// It needs the `wasm32-unknown-unknown` target (`rustup target add wasm32-unknown-unknown`).
-fn module(name: &str, file: &str, built: &'static OnceLock<PathBuf>) -> String {
+pub(crate) fn module(name: &str, file: &str, built: &'static OnceLock<PathBuf>) -> String {
     let module = built.get_or_init(|| {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("pages").join(name);
         let built = Command::new("cargo")

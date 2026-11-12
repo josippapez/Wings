@@ -260,3 +260,40 @@ fn a_frame_with_only_a_webassembly_build_is_found_by_it() {
     std::fs::write(native.join("main.js"), "").unwrap();
     assert!(frame_file(dir.path(), "main").unwrap().ends_with("main.js"));
 }
+
+/// A plugin written in Rust alone ships no JavaScript at all: its manifest names its main and its pages by their
+/// modules, which the desktop's loading takes as the files they are, and those are the frames that run.
+#[test]
+fn a_plugin_with_no_javascript_is_loaded_and_its_frames_are_its_modules() {
+    use crate::page::{plugin::wasm_tests::module, runtime::wasm::MARKER};
+    use std::{path::PathBuf, sync::OnceLock};
+    static MAIN: OnceLock<PathBuf> = OnceLock::new();
+    static PAGE: OnceLock<PathBuf> = OnceLock::new();
+    let built = |source: String| PathBuf::from(source.strip_prefix(MARKER).unwrap());
+    let package = tempfile::tempdir().unwrap();
+    let native = package.path().join("dist/native");
+    fs::create_dir_all(&native).unwrap();
+    fs::copy(built(module("fixture-wasm", "fixture_main.wasm", &MAIN)), native.join("main.wasm")).unwrap();
+    fs::copy(built(module("fixture-wasm-page", "fixture_page.wasm", &PAGE)), native.join("side.wasm")).unwrap();
+    fs::write(
+        package.path().join("wings-plugin.json"),
+        serde_json::json!({
+            "id": "rusty", "name": "Rusty", "version": "1.0.0", "api": 1, "main": "dist/native/main.wasm",
+            "contributes": { "sidebars": [{ "id": "side", "title": "Side", "icon": "clock", "page": "dist/native/side.wasm" }] },
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let data = Data::temp();
+    let dir = data.install_folder(package.path(), "scope");
+    let found = discover(&data.paths());
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].main.ends_with("dist/native/main.wasm"), "{:?}", found[0].main);
+    let [side] = &found[0].sidebars[..] else { panic!("{found:?}") };
+    assert!(side.bundle.ends_with("dist/native/side.wasm"), "{:?}", side.bundle);
+    for frame in [&found[0].main, &side.bundle] {
+        let source = page_source(&dir, frame, None).unwrap();
+        assert!(source.starts_with(MARKER) && source.ends_with(".wasm"), "{source}");
+    }
+}
