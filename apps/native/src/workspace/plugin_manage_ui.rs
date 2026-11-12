@@ -1,6 +1,6 @@
 //! Settings, Plugins and the dialog that asks before a plugin runs, laid out like the desktop's `plugins-section.tsx`:
-//! install from a GitHub link or a file at the top, the installed plugins below, and the selected one's page under its
-//! row. The desktop shows the list and the page side by side; Settings here is too narrow for two columns.
+//! install from a GitHub link or a file at the top, and the installed plugins below. A row says what the plugin does and
+//! flags only what needs you (approval, an update). Clicking it opens its page under it, and clicking again closes it.
 
 use gpui::{
     AnimationExt, AnyElement, Context, ExternalPaths, FontWeight, KeyDownEvent, MouseButton, Role,
@@ -148,6 +148,20 @@ fn muted(text: impl Into<SharedString>) -> gpui::Div {
         .child(text.into())
 }
 
+/// A small amber label by a plugin's name, for a row that needs you.
+fn flag(text: impl Into<SharedString>) -> gpui::Div {
+    div()
+        .flex_none()
+        .px(px(6.0))
+        .py(px(1.0))
+        .rounded(px(6.0))
+        .bg(rgba(0xe9b65f26))
+        .text_size(px(11.0))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(theme::WORKING))
+        .child(text.into())
+}
+
 /// The groups of `access_groups`, each a title over its items as small code chips.
 fn access_list(manifest: &Manifest) -> AnyElement {
     let groups = access_groups(manifest);
@@ -203,7 +217,8 @@ fn source_line(view: &PluginView) -> String {
     }
 }
 
-/// The desktop's `PluginIcon`: the plugin's own SVG (`own`), else a puzzle piece.
+/// The plugin's own SVG (`own`), else a puzzle piece, dimmed for a plugin that is off. It has no colour of its own:
+/// amber is the page's one accent, for what needs you.
 fn plugin_icon(on: bool, own: Option<&str>, side: f32) -> gpui::Div {
     div()
         .size(px(side))
@@ -212,13 +227,13 @@ fn plugin_icon(on: bool, own: Option<&str>, side: f32) -> gpui::Div {
         .items_center()
         .justify_center()
         .rounded(px(8.0))
-        .bg(rgba(if on { 0xb392f026 } else { 0xffffff0f }))
+        .bg(rgba(0xffffff0f))
         .child(plugin_glyph(
             "",
             own,
             side / 2.0,
             if on {
-                0xc9b2f7
+                theme::FOREGROUND
             } else {
                 theme::MUTED_FOREGROUND
             },
@@ -262,12 +277,13 @@ impl Workspace {
                 .child(
                     div()
                         .flex()
+                        .flex_wrap()
                         .items_center()
                         .gap(px(8.0))
                         .child(
                             div()
                                 .flex_1()
-                                .min_w_0()
+                                .min_w(px(220.0))
                                 .child(ui::input(dialog.link.clone())),
                         )
                         .child(
@@ -308,10 +324,7 @@ impl Workspace {
                         ),
                 )
                 .child(muted(
-                    "A GitHub repo or plugin folder link, or a .wings-plugin file.",
-                ))
-                .child(muted(
-                    "You can also drop a .wings-plugin file on the window.",
+                    "Paste a GitHub repo or plugin folder link, or choose or drop a .wings-plugin file.",
                 ))
                 .when_some(manage.error.clone(), |column, error| {
                     column.child(
@@ -329,12 +342,13 @@ impl Workspace {
             .map(|view| view.manifest.id.clone())
             .collect();
         let updating = updatable.iter().any(|id| manage.busy.contains(id));
+        let installed = format!("{} installed", views.len());
         let header = div()
             .flex()
             .items_center()
             .justify_between()
             .gap(px(8.0))
-            .child(muted("Installed").font_weight(FontWeight::MEDIUM))
+            .child(muted(installed).font_weight(FontWeight::MEDIUM))
             .child(
                 div()
                     .flex()
@@ -378,12 +392,7 @@ impl Workspace {
             .filter(|plugin| !views.iter().any(|view| view.manifest.id == plugin.id))
             .cloned()
             .collect();
-        let selected = manage.selected.clone().or_else(|| {
-            views
-                .first()
-                .filter(|_| !manage.browsing_available)
-                .map(|view| view.manifest.id.clone())
-        });
+        let selected = manage.selected.clone();
         let rows: Vec<AnyElement> = views
             .into_iter()
             .enumerate()
@@ -467,7 +476,12 @@ impl Workspace {
         let on = view.enabled && view.approved;
         let busy = manage.busy.contains(&id);
         let update = manage.updates.get(&id).cloned();
-        let status = self.plugin_status(&view);
+        let runs = self.plugin_runs(&id);
+        // What it does, or its state when it doesn't say.
+        let about = match view.manifest.description.trim() {
+            "" => self.plugin_status(&view),
+            description => description.to_owned(),
+        };
         let select = id.clone();
         let toggled = view.clone();
         let row = div()
@@ -483,11 +497,12 @@ impl Workspace {
             .cursor_pointer()
             .hover(|style| style.bg(rgba(theme::HOVER)))
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.manage.selected = Some(select.clone());
+                this.manage.selected = (!open).then(|| select.clone());
                 this.manage.browsing_available = false;
                 this.manage.removing = None;
                 cx.notify();
             }))
+            .children(ui::spot(move || format!("plugin-row-{index}")))
             .child(plugin_icon(on, view.icon_svg.as_deref(), 32.0))
             .child(
                 div()
@@ -499,8 +514,10 @@ impl Workspace {
                     .child(
                         div()
                             .flex()
+                            .flex_wrap()
                             .items_baseline()
-                            .gap(px(8.0))
+                            .gap_x(px(8.0))
+                            .gap_y(px(2.0))
                             .child(
                                 div()
                                     .truncate()
@@ -512,32 +529,33 @@ impl Workspace {
                                 muted(view.manifest.version.clone())
                                     .text_size(px(11.0))
                                     .flex_none(),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .min_w_0()
-                            .text_size(px(12.0))
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_color(rgb(if view.approved {
-                                        theme::MUTED_FOREGROUND
-                                    } else {
-                                        theme::WORKING
-                                    }))
-                                    .child(status),
                             )
-                            .when(update.is_some(), |text| {
-                                text.child(
-                                    div()
-                                        .flex_none()
-                                        .text_color(rgb(theme::WORKING))
-                                        .child("\u{a0}· Update available"),
-                                )
-                            }),
-                    ),
+                            .when(!view.approved, |name| name.child(flag("Needs approval")))
+                            .when_some(update.clone(), |name, version| {
+                                name.child(flag(format!("Update {version}")))
+                            })
+                            .when(on && !runs, |name| name.child(flag("No native build"))),
+                    )
+                    // Whole while its page is open, which then doesn't repeat it.
+                    .child(muted(about).when(!open, |about| about.truncate()))
+                    // In the row, where the switch that failed is, whether or not its page is open.
+                    .when_some(manage.row_error.get(&id).cloned(), |text, error| {
+                        text.child(
+                            div()
+                                .relative()
+                                .text_size(px(12.0))
+                                .text_color(rgb(theme::DANGER))
+                                .child(error)
+                                .children(ui::spot(move || format!("plugin-row-error-{index}"))),
+                        )
+                    }),
+            )
+            .child(
+                icon(
+                    if open { Icon::ChevronDown } else { Icon::ChevronRight },
+                    14.0,
+                    theme::MUTED_FOREGROUND,
+                ),
             )
             .child(
                 ui::switch(("plugin-on", index), on)
@@ -574,6 +592,24 @@ impl Workspace {
         let update = manage.updates.get(&id).cloned();
         let github = matches!(view.source, Some(Source::Github { .. })) && !view.dev;
         let mut buttons = div().flex().flex_wrap().gap(px(8.0));
+        if !view.approved {
+            let review = view.clone();
+            buttons = buttons.child(
+                ui::button(
+                    ("plugin-review", index),
+                    "Review access to turn it on",
+                    Variant::Outline,
+                    false,
+                    div()
+                        .text_color(rgb(theme::WORKING))
+                        .child("Review access to turn it on"),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.queue_reviews([review.clone()], cx);
+                    cx.notify();
+                })),
+            );
+        }
         if let Some(version) = update {
             let ids = vec![id.clone()];
             buttons = buttons.child(
@@ -658,51 +694,16 @@ impl Workspace {
                 );
             }
         }
-        let review = view.clone();
         div()
             .flex()
             .flex_col()
-            .gap(px(16.0))
-            .px(px(16.0))
-            .pt(px(4.0))
+            .gap(px(14.0))
+            // Under the name, past the icon, so it reads as this row's.
+            .pl(px(60.0))
+            .pr(px(16.0))
             .pb(px(16.0))
             .child(muted(source_line(&view)))
-            .when(!view.manifest.description.is_empty(), |page| {
-                page.child(
-                    div()
-                        .text_size(px(13.0))
-                        .child(view.manifest.description.clone()),
-                )
-            })
-            .when(!view.approved, |page| {
-                // In a row of its own, so it is as wide as its label, as the desktop's `w-fit`.
-                page.child(
-                    div().flex().child(
-                        ui::button(
-                            ("plugin-review", index),
-                            "Review access to turn it on",
-                            Variant::Outline,
-                            false,
-                            div()
-                                .text_color(rgb(theme::WORKING))
-                                .child("Review access to turn it on"),
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.queue_reviews([review.clone()], cx);
-                            cx.notify();
-                        })),
-                    ),
-                )
-            })
             .child(buttons)
-            .when_some(manage.row_error.get(&id).cloned(), |page, error| {
-                page.child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(rgb(theme::DANGER))
-                        .child(error),
-                )
-            })
             .child(
                 div()
                     .flex()

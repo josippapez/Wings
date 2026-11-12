@@ -312,6 +312,32 @@ fn plugin_updates_timer_is_launch_anchored_defers_until_focus_and_stops_on_drop(
 }
 
 #[test]
+fn a_plugins_page_opens_when_its_row_is_clicked_and_closes_when_it_is_clicked_again() {
+    let data = Data::temp();
+    let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    install(&mut window, package("demo", "1.0.0", &[]), github(), None).unwrap();
+    window.update(|w, window, cx| {
+        w.show_plugins("demo", &[], window, cx);
+        w.manage.selected = None;
+        cx.notify();
+    });
+    for open in [Some("demo"), None] {
+        window.draw();
+        window.simulate_click(crate::ui::spot_at("plugin-row-0").unwrap().center(), gpui::MouseButton::Left);
+        assert_eq!(window.read(|w, _| w.manage.selected.clone()).as_deref(), open);
+    }
+    // What went wrong with a plugin shows in its row, where its switch is, while its page is closed.
+    assert!(crate::ui::spot_at("plugin-row-error-0").is_none());
+    window.update(|w, _, cx| {
+        w.manage.row_error.insert("demo".into(), "It couldn't be turned on".into());
+        cx.notify();
+    });
+    window.draw();
+    assert!(window.read(|w, _| w.manage.selected.is_none()));
+    assert!(crate::ui::spot_at("plugin-row-error-0").is_some());
+}
+
+#[test]
 fn plugin_updates_review_opens_the_plugin_or_available_without_approving() {
     let data = Data::temp();
     let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
