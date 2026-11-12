@@ -1,6 +1,7 @@
 //! Renders Worktrees' installed native sidebar offscreen at 1000 and 640 points wide. The plugin installation and
 //! project are made up in a temporary desktop data folder, never the user's. With `--changes` it renders Changes' built
 //! pages, with `--schedules` Schedules' list and forms, with `--session-detail` Session detail's sidebar, and with
+//! `--hud` the HUD's sidebar, with
 //! `--disk` Disk usage's overview and the map of a folder of made-up files it scans, with `--work-item` Work item's tab
 //! and Sprint block, and with `--tasks` the Issues board, list, issue and block, each over made-up data. With
 //! `--external <folder>` it renders the separately shipped Sprint board, Cyclops and Claude accounts plugins from their
@@ -90,6 +91,10 @@ fn main() {
         session_detail(out);
         return;
     }
+    if std::env::args().any(|arg| arg == "--hud") {
+        hud(out);
+        return;
+    }
     if std::env::args().any(|arg| arg == "--disk") {
         disk(out);
         return;
@@ -162,8 +167,14 @@ fn main() {
 }
 
 /// An app with one project, which does nothing for a plugin.
+/// What Claude Code told `wings statusline`, for the HUD.
+static STATUSLINE: std::sync::Mutex<Option<serde_json::Value>> = std::sync::Mutex::new(None);
+
 struct FixtureEnv(PathBuf);
 impl Env for FixtureEnv {
+    fn statusline(&self) -> serde_json::Value {
+        STATUSLINE.lock().unwrap().clone().unwrap_or_else(|| json!({ "rateLimits": [], "sessions": {} }))
+    }
     fn projects(&self) -> Vec<PathBuf> {
         vec![self.0.clone()]
     }
@@ -553,6 +564,109 @@ fn schedules(out: PathBuf) {
 /// Session detail's real main and built sidebar over a made-up Claude Code session, whose transcript is written to a
 /// folder of its own, and a made-up OpenCode one. It shows the session working, with rows opened, then the OpenCode
 /// session, then no session at all.
+/// The HUD's sidebar, which is written in Rust (`plugins/hud/rust`): two Claude sessions on two accounts, with the
+/// second one's pane selected, then no session at all.
+fn hud(out: PathBuf) {
+    const FIRST: &str = "3c21b0c5-8113-4f55-9493-fa156c3fa369";
+    const SECOND: &str = "7d0e4a11-52c6-4b7e-9d57-0c2f6a1b9e44";
+    let root = out.join("fixture-hud");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("projects/-work-web")).unwrap();
+    let transcript = |tokens: u64, servers: &[&str], failed: serde_json::Value, skills: &[&str]| {
+        let at = iso(60_000);
+        let lines = [
+            json!({ "type": "attachment", "uuid": "a1", "timestamp": at, "attachment": { "type": "model", "identity": { "modelId": "claude-opus-5-5" } } }),
+            json!({ "type": "attachment", "uuid": "a2", "timestamp": at, "attachment": { "type": "deferred_tools_delta",
+                "addedNames": servers.iter().flat_map(|server| [format!("mcp__{server}__read"), format!("mcp__{server}__write")]).collect::<Vec<_>>(),
+                "removedNames": [], "failedMcpServers": failed, "pendingMcpServers": ["sentry"] } }),
+            json!({ "type": "attachment", "uuid": "a3", "timestamp": at, "attachment": { "type": "invoked_skills",
+                "skills": skills.iter().map(|name| json!({ "name": name })).collect::<Vec<_>>() } }),
+            json!({ "type": "assistant", "uuid": "r1", "timestamp": at, "message": {
+                "usage": { "input_tokens": 1000, "cache_creation_input_tokens": 2000, "cache_read_input_tokens": tokens },
+                "content": [{ "type": "tool_use", "id": "t1", "name": format!("mcp__{}__read", servers[0]), "input": {} }] } }),
+        ];
+        lines.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n")
+    };
+    std::fs::write(
+        root.join(format!("projects/-work-web/{FIRST}.jsonl")),
+        transcript(113_000, &["github", "linear"], json!([{ "name": "postgres", "error": "connection refused: 127.0.0.1:5432" }]), &["wings-page-design", "wings-plugin"]),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join(format!("projects/-work-web/{SECOND}.jsonl")),
+        transcript(43_000, &["github", "playwright-browser-automation-with-a-long-name"], json!([]), &["dev-core:opensrc", "verified:verified-replay-with-a-very-long-skill-name"]),
+    )
+    .unwrap();
+    let hours = |n: u64| (now_ms() / 1000 + n * 3600) as f64;
+    let limits = |account: serde_json::Value, five: u64, week: u64| {
+        json!({ "account": account, "at": now_ms(),
+            "fiveHour": { "usedPercentage": five, "resetsAt": hours(2) }, "sevenDay": { "usedPercentage": week, "resetsAt": hours(60) } })
+    };
+    *STATUSLINE.lock().unwrap() = Some(json!({
+        "rateLimits": [limits(serde_json::Value::Null, 12, 61), limits("work".into(), 88, 34)],
+        "sessions": { SECOND: { "account": "work", "model": "Opus 5.5", "contextWindowSize": 200_000, "usedPercentage": 23,
+            "totalInputTokens": null, "totalOutputTokens": null, "currentUsage": null,
+            "promptCache": { "warm": true, "ttl": "1h", "expiresAt": hours(1) }, "at": now_ms() } },
+    }));
+
+    let manifest = serde_json::from_str(include_str!("../../../plugins/hud/wings-plugin.json")).unwrap();
+    let storage = out.join("fixture-storage-hud");
+    let _ = std::fs::remove_dir_all(&storage);
+    let host = PluginHost::with_access(
+        PluginConfig { id: "hud".into(), root: storage, scope: "shot".into() },
+        Access {
+            plugin: wings_plugins::manifest::Plugin { manifest, dir: root.clone(), icon_svg: None },
+            builtin: false,
+            env: std::sync::Arc::new(FixtureEnv(root.clone())),
+        },
+    );
+    let started_at = now_ms() - 10 * 60_000;
+    let pane = |id: &str, session: &str, project: &str, name: &str, focused: bool| PaneEntry {
+        pane_id: id.into(),
+        cwd: "/work/web".into(),
+        command: "claude".into(),
+        project: project.into(),
+        project_id: "/work/web".into(),
+        session: Some(SessionEntry { session_id: session.into(), kind: "claude".into(), name: Some(name.into()), state: "idle".into(), started_at }),
+        focused,
+    };
+    let both = vec![pane("1", FIRST, "web", "checkout redesign", false), pane("2", SECOND, "api", "invoice export", true)];
+    let module = |frame: &str| {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../plugins/hud/dist/native/{frame}.wasm"));
+        format!("{}{}", wings_native::page::runtime::wasm::MARKER, path.canonicalize().expect("sh build-rust.sh hud, in plugins/").display())
+    };
+    host.publish_panes(both.clone());
+    host.start_main(&module("main"), |event| {
+        if let wings_native::page::runtime::Event::Error { message, .. } = event {
+            panic!("{message}");
+        }
+    })
+    .unwrap();
+    let mut cx = app();
+    let source = module("sidebar");
+    // The second session's pane is selected, so its session shows and its account's limits come first.
+    let views: [(&str, Vec<PaneEntry>, &str); 2] =
+        [("selected", both, "46k of 200k tokens"), ("none", vec![], "No Claude session in your panes.")];
+    for width in [1000.0, 640.0, 360.0] {
+        for (name, panes, expected) in &views {
+            host.publish_panes(panes.clone());
+            let handle = cx
+                .open_offscreen_window(size(px(width), px(900.0)), |_, cx| cx.new(|cx| PageView::in_plugin(&host, &source, cx)))
+                .unwrap();
+            let window = handle.into();
+            handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !handle.read_with(&cx, |view, _| view.text().contains(expected)).unwrap() {
+                assert!(Instant::now() < deadline, "page did not show {expected:?}: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
+                wait(&mut cx, window, Duration::from_millis(20));
+            }
+            wait(&mut cx, window, Duration::from_millis(300));
+            save(&mut cx, window, out.join(format!("hud-{name}-{width}.png")));
+            let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        }
+    }
+}
+
 fn session_detail(out: PathBuf) {
     const SESSION: &str = "3c21b0c5-8113-4f55-9493-fa156c3fa369";
     let root = out.join("fixture-session-detail");

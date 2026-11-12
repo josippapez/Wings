@@ -165,6 +165,45 @@ pub fn button(label: impl Into<String>, variant: &str, busy: bool, on_click: imp
     if busy { button.prop("disabled", true).child(spinner()).text(label) } else { button.text(label) }
 }
 
+/// What a component takes by name, like a gauge's `note` or a disclosure's `summary`.
+pub fn slot(name: &str, node: Node) -> Node {
+    Node::new("Slot").prop("name", name).child(node)
+}
+
+/// A labelled bar with its percentage. `levels` are where it turns amber and red, and `note` goes under it.
+pub fn gauge(label: impl Into<String>, percent: f64, levels: (u32, u32), note: Option<String>) -> Node {
+    Node::new("Gauge")
+        .prop("label", label.into())
+        .prop("percent", percent)
+        .prop("levels", json!([levels.0, levels.1]))
+        .maybe(note.filter(|note| !note.is_empty()).map(|note| Node::new("Slot").prop("name", "note").text(note)))
+}
+
+/// More behind a `summary` line that opens it. The app folds and unfolds it on its own.
+pub fn disclosure(summary: impl Into<String>, body: Node) -> Node {
+    Node::new("Disclosure").child(Node::new("Slot").prop("name", "summary").text(summary)).child(slot("body", body))
+}
+
+/// What a page shows when it has nothing to list.
+pub fn empty(title: &str, description: &str) -> Node {
+    Node::new("Empty").child(Node::new("Slot").prop("name", "title").text(title)).child(Node::new("Slot").prop("name", "description").text(description))
+}
+
+/// What shows before the first data comes: "Loading…".
+pub fn loading() -> Node {
+    Node::new("Loading")
+}
+
+/// One of `options`, as `(value, label)`, picked from a menu named `label`. `on_change` hears the value picked.
+pub fn select(label: &str, options: &[(String, String)], value: &str, on_change: impl Fn(&str) + 'static) -> Node {
+    let options: Vec<Value> = options.iter().map(|(value, label)| json!({ "value": value, "label": label })).collect();
+    Node::new("Select")
+        .prop("label", label)
+        .prop("options", options)
+        .prop("value", value)
+        .on("onChange", move |event| on_change(event["value"].as_str().unwrap_or_default()))
+}
+
 /// A small quiet button that is on or off, drawn as one of `chips` is.
 pub fn chip(label: impl Into<String>, pressed: bool, on_click: impl Fn() + 'static) -> Node {
     Node::new("Button").prop("chip", true).prop("pressed", pressed).on("onClick", move |_| on_click()).text(label)

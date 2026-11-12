@@ -1,13 +1,12 @@
 {
   "id": "hud",
   "name": "HUD",
-  "version": "0.8.3",
-  "minWingsVersion": "0.1.124",
+  "version": "0.9.0",
+  "minWingsVersion": "0.2.17",
   "icon": "icon.svg",
   "description": "Your Claude usage limits and each session's context and failed MCP servers in a strip under its terminal, and memory, MCP servers and skills in a sidebar, so you can turn off a terminal status line like claude-hud.",
   "api": 1,
-  "main": "dist/main.js",
-  "native": true,
+  "main": "dist/native/main.wasm",
   "permissions": {
     "exec": [
       "vm_stat []",
@@ -31,7 +30,7 @@
       {
         "id": "hud",
         "title": "HUD",
-        "page": "dist/sidebar.html"
+        "page": "dist/native/sidebar.wasm"
       }
     ]
   }

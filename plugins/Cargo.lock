@@ -11,6 +11,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hud"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
+ "wings-plugin",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"

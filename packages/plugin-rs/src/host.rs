@@ -11,6 +11,7 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
+#[cfg(target_arch = "wasm32")]
 pub(crate) mod ffi {
     #[link(wasm_import_module = "wings")]
     unsafe extern "C" {
@@ -22,6 +23,26 @@ pub(crate) mod ffi {
         pub fn now() -> f64;
         pub fn utc_offset(ms: f64) -> i32;
         pub fn focused() -> i32;
+    }
+}
+
+/// Outside Wings there is no host: a plugin's own tests, built for this computer, run what doesn't reach for one.
+/// Nothing is drawn or sent, a call is never answered, the clock stands at 0 and the timezone is UTC.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::missing_safety_doc)]
+pub(crate) mod ffi {
+    pub unsafe fn render(_: *const u8, _: usize) {}
+    pub unsafe fn call(_: u32, _: *const u8, _: usize, _: *const u8, _: usize) {}
+    pub unsafe fn broadcast(_: *const u8, _: usize) {}
+    pub unsafe fn timer(_: u32, _: u32) {}
+    pub unsafe fn now() -> f64 {
+        0.0
+    }
+    pub unsafe fn utc_offset(_: f64) -> i32 {
+        0
+    }
+    pub unsafe fn focused() -> i32 {
+        1
     }
 }
 
@@ -72,6 +93,9 @@ thread_local! {
     static ON_PANES: RefCell<Vec<Rc<dyn Fn(&[Value])>>> = const { RefCell::new(Vec::new()) };
     /// The badge last sent for each pane, as JSON, so one a pane already shows isn't sent again.
     static SENT_BADGES: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+    /// The same for each pane's status strip.
+    static SENT_STATUSES: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+    static ON_TRANSCRIPT: RefCell<Vec<Rc<dyn Fn(&Value)>>> = const { RefCell::new(Vec::new()) };
     static ON_ACTION: RefCell<Vec<Action>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -167,7 +191,9 @@ fn watch_panes() {
     }
     on("panes", |_, list| {
         let list = list.as_array().cloned().unwrap_or_default();
-        SENT_BADGES.with(|sent| sent.borrow_mut().retain(|pane, _| list.iter().any(|open| open["paneId"] == pane.as_str())));
+        for sent in [&SENT_BADGES, &SENT_STATUSES] {
+            sent.with(|sent| sent.borrow_mut().retain(|pane, _| list.iter().any(|open| open["paneId"] == pane.as_str())));
+        }
         PANES.with(|panes| *panes.borrow_mut() = Some(list.clone()));
         for listener in ON_PANES.with(|listeners| listeners.borrow().clone()) {
             listener(&list);
@@ -187,25 +213,77 @@ pub fn on_panes(listener: impl Fn(&[Value]) + 'static) {
     }
 }
 
-/// `wings.setBadge`: the badge the pane `pane` shows for this plugin, or none for null. One the pane already shows
-/// isn't sent again, so a plugin can set every pane's badge on every look.
-pub async fn set_badge(pane: &str, badge: &Value) -> Result<(), String> {
+type Sent = std::thread::LocalKey<RefCell<HashMap<String, String>>>;
+
+/// Sends `value` for the pane only when it differs from the last one sent, which `sent` keeps. One the host refuses
+/// is forgotten, so the next call sends it again.
+async fn send_changed(sent: &'static Sent, method: &str, pane: &str, name: &str, value: &Value) -> Result<(), String> {
     watch_panes();
-    let sent = badge.to_string();
-    if SENT_BADGES.with(|badges| badges.borrow_mut().insert(pane.to_owned(), sent.clone())).as_ref() == Some(&sent) {
+    let now = value.to_string();
+    if sent.with(|sent| sent.borrow_mut().insert(pane.to_owned(), now.clone())).as_ref() == Some(&now) {
         return Ok(());
     }
-    let answer = call("setBadge", json!({ "paneId": pane, "badge": badge })).await;
-    // Refused: not shown, so the same badge is sent again next time.
+    let answer = call(method, json!({ "paneId": pane, name: value })).await;
     if answer.is_err() {
-        SENT_BADGES.with(|badges| {
-            let mut badges = badges.borrow_mut();
-            if badges.get(pane) == Some(&sent) {
-                badges.remove(pane);
+        sent.with(|sent| {
+            let mut sent = sent.borrow_mut();
+            if sent.get(pane) == Some(&now) {
+                sent.remove(pane);
             }
         });
     }
     answer.map(drop)
+}
+
+/// `wings.setBadge`: the badge the pane `pane` shows for this plugin, or none for null. One the pane already shows
+/// isn't sent again, so a plugin can set every pane's badge on every look.
+pub async fn set_badge(pane: &str, badge: &Value) -> Result<(), String> {
+    send_changed(&SENT_BADGES, "setBadge", pane, "badge", badge).await
+}
+
+/// `wings.setPaneStatus`: the strip under the pane's terminal, with up to 4 figures and the lines of the card shown
+/// when you point at it, or none for null. One the pane already shows isn't sent again.
+pub async fn set_pane_status(pane: &str, status: &Value) -> Result<(), String> {
+    send_changed(&SENT_STATUSES, "setPaneStatus", pane, "status", status).await
+}
+
+/// `wings.notify`: a notification with this title and body.
+pub fn notify(title: &str, body: &str) -> Pending<Result<Value, String>> {
+    call("notify", json!({ "title": title, "body": body }))
+}
+
+/// `wings.statusline`: what Claude Code last told `wings statusline`: each account's limits, and each session's
+/// context.
+pub fn statusline() -> Pending<Result<Value, String>> {
+    call("statusline", json!({}))
+}
+
+/// `wings.exec`: runs a program the manifest allows and answers `{ code, stdout, stderr }`.
+pub fn exec(program: &str, args: &[&str]) -> Pending<Result<Value, String>> {
+    call("exec", json!({ "program": program, "args": args, "cwd": null, "timeoutMs": null, "stream": false }))
+}
+
+/// `wings.transcript`: the entries of a Claude session's transcript of the `kinds` the manifest allows, oldest
+/// first; with `last`, only that many of the newest.
+pub fn transcript(session: &str, kinds: &[&str], last: Option<u32>) -> Pending<Result<Value, String>> {
+    call("transcript", json!({ "sessionId": session, "types": kinds, "last": last }))
+}
+
+/// `wings.onTranscript`: each entry Claude Code appends to the transcript of a session in a pane, as
+/// `{ sessionId, entry }`.
+pub fn on_transcript(listener: impl Fn(&Value) + 'static) {
+    let first = ON_TRANSCRIPT.with(|listeners| {
+        let mut listeners = listeners.borrow_mut();
+        listeners.push(Rc::new(listener));
+        listeners.len() == 1
+    });
+    if first {
+        on("transcript", |_, entry| {
+            for listener in ON_TRANSCRIPT.with(|listeners| listeners.borrow().clone()) {
+                listener(entry);
+            }
+        });
+    }
 }
 
 /// `wings.onAction`: a button of one of this plugin's badges was clicked. `listener` gets `{ paneId, actionId }`, and
@@ -244,9 +322,17 @@ pub fn ports() -> Pending<Result<Value, String>> {
 
 /// `wings.storage`: what the plugin keeps between runs, shared by its frames. Answered at once.
 pub mod storage {
+    #[cfg(target_arch = "wasm32")]
     use super::ffi;
     use serde_json::Value;
 
+    /// Outside Wings nothing is kept: every key reads as null.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn ask(_: &str, _: &str, _: &str) -> Result<Value, String> {
+        Ok(Value::Null)
+    }
+
+    #[cfg(target_arch = "wasm32")]
     fn ask(op: &str, key: &str, json: &str) -> Result<Value, String> {
         // SAFETY: the three are live strings, which the host copies before this returns.
         let packed = unsafe { ffi::storage(op.as_ptr(), op.len(), key.as_ptr(), key.len(), json.as_ptr(), json.len()) };

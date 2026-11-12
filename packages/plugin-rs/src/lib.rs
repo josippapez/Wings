@@ -7,9 +7,11 @@
 //! in handlers and tasks. The page is built again after every turn (an event, an answer, a timer), and sent to the
 //! app when it differs from the last one.
 
+pub mod format;
 pub mod host;
 pub mod messages;
 pub mod poll;
+pub mod sessions;
 pub mod task;
 pub mod tools;
 pub mod ui;

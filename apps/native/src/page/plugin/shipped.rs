@@ -489,7 +489,7 @@ fn hud_draws_a_strip_under_a_claude_session_from_its_transcript() {
     *rig.env.claude.lock().unwrap() = vec![claude.clone()];
     let (on_event, main_errors) = errors();
     rig.host
-        .start_main(&native("hud", "main.js"), on_event)
+        .start_main(&module("hud", "main"), on_event)
         .unwrap();
 
     let seen = rig.env.wait("the strip", |seen| {
@@ -548,13 +548,13 @@ fn hud_sidebar_page_shows_what_main_read_and_each_frame_is_checked_against_hud_s
     *rig.env.claude.lock().unwrap() = vec![claude.clone()];
     let (on_event, main_errors) = errors();
     rig.host
-        .start_main(&native("hud", "main.js"), on_event)
+        .start_main(&module("hud", "main"), on_event)
         .unwrap();
 
     let (sender, events) = mpsc::channel();
     let page = rig
         .host
-        .open_page(&native("hud", "sidebar.js"), move |event| {
+        .open_page(&module("hud", "sidebar"), move |event| {
             let _ = sender.send(event);
         })
         .unwrap();
