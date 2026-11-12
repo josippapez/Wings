@@ -120,8 +120,19 @@ pub fn pane_dir(spaces: &[Space], project_id: &str) -> Option<PathBuf> {
 
 /// The accounts Wings connects itself to: the default and each one a project uses.
 pub fn connect_targets(spaces: &[Space]) -> Vec<Option<String>> {
-    let names: BTreeSet<&str> = assigned(spaces).map(|(_, name)| name).collect();
-    std::iter::once(None).chain(names.into_iter().map(|name| Some(name.to_string()))).collect()
+    connect_targets_with(spaces, BTreeSet::new())
+}
+
+/// `connect_targets`, and the accounts `others` too: those you are signed in to that no project uses, which you still
+/// start Claude as in a pane. Left out, such an account's sessions told Wings nothing.
+pub fn connect_targets_with(spaces: &[Space], others: BTreeSet<String>) -> Vec<Option<String>> {
+    let names: BTreeSet<String> = assigned(spaces).map(|(_, name)| name.to_string()).chain(others).collect();
+    std::iter::once(None).chain(names.into_iter().map(Some)).collect()
+}
+
+/// The named accounts whose config names who signed in, as the accounts list shows them.
+pub fn signed_in_names() -> BTreeSet<String> {
+    existing_names().into_iter().filter(|name| signed_in_as(&user_config(Some(name))).1).collect()
 }
 
 /// The folder for `CLAUDE_CONFIG_DIR` in a pane that was asked for an account of its own: `None` for the default account,
@@ -676,6 +687,9 @@ mod tests {
         let spaces = [space("/a", Some("work")), space("/b", Some("work")), space("/c", Some("home")), space("/d", None)];
         assert_eq!(connect_targets(&spaces), [None, Some("home".to_string()), Some("work".to_string())]);
         assert_eq!(connect_targets(&[]), [None]);
+        // An account no project uses, and one a project uses too.
+        let others = BTreeSet::from(["personal".to_string(), "work".to_string()]);
+        assert_eq!(connect_targets_with(&spaces, others), [None, Some("home".to_string()), Some("personal".to_string()), Some("work".to_string())]);
     }
 
     #[test]

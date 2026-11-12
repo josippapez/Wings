@@ -740,14 +740,14 @@ pub(super) fn disconnected_marker(state: &Path) -> PathBuf {
 }
 
 /// What starting the app does, as the desktop does: in a release build of the installed app, unless you disconnected
-/// it, Claude Code gets Wings in the default account and in each one a project uses. Runs `claude`, so off the window's
+/// it, Claude Code gets Wings in the default account, in each one a project uses and in each one you are signed in to. Runs `claude`, so off the window's
 /// thread.
 pub(super) fn connect_on_start(socket: PathBuf, state: Option<PathBuf>, spaces: Vec<Space>) {
     let Some((claude, exe)) = to_connect(state.as_deref()) else {
         return;
     };
     std::thread::spawn(move || {
-        for account in claude_accounts::connect_targets(&spaces) {
+        for account in claude_accounts::connect_targets_with(&spaces, claude_accounts::signed_in_names()) {
             if let Err(error) =
                 register::ensure_connected(&claude, &exe, &socket, account.as_deref())
             {
@@ -915,7 +915,7 @@ impl Workspace {
                 Some(Change::Connect(always_load)) => (|| {
                     let claude = claude.as_deref().ok_or("Claude Code isn't installed, or `claude` isn't on your PATH")?;
                     let exe = wings_program().ok_or("The `wings` program isn't beside this app, so Claude Code would have nothing to run")?;
-                    register::connect(claude, &exe, &socket, &claude_accounts::connect_targets(&spaces), always_load)?;
+                    register::connect(claude, &exe, &socket, &claude_accounts::connect_targets_with(&spaces, claude_accounts::signed_in_names()), always_load)?;
                     if let Some(marker) = &marker {
                         let _ = std::fs::remove_file(marker);
                     }
