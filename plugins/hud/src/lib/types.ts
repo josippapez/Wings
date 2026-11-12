@@ -36,6 +36,10 @@ export interface SessionView {
   id: string;
   project: string;
   name: string | null;
+  /** Its pane is the selected one. */
+  focused: boolean;
+  /** The Claude Code account it runs as, null for the default one. Left out until Claude Code has reported the session. */
+  account?: string | null;
   context: { percent: number; tokens: number; window: number; cache: string | null } | null;
   servers: Server[];
   skills: string[];

@@ -1,7 +1,7 @@
 // The HUD sidebar page: usage limits and memory, then one session's context, MCP servers and skills. The plugin's
 // main script keeps the state and shares it here.
 
-import { Fragment, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import { tokens } from "wings-plugin-sdk/format";
 import { useQuery } from "wings-plugin-sdk/react";
 import { Card, Disclosure, Dot, Empty, Gauge, Heading, List, ListItem, Loading, Row, Select, Stack, Text } from "wings-plugin-ui";
@@ -9,6 +9,7 @@ import { Card, Disclosure, Dot, Empty, Gauge, Heading, List, ListItem, Loading, 
 import { gb } from "../lib/format";
 import { CONTEXT_CRITICAL, CONTEXT_WARN, LIMIT_CRITICAL, LIMIT_WARN } from "../lib/levels";
 import { ch } from "../lib/messages";
+import { limitsFor, shown } from "../lib/view";
 import "./sidebar.css";
 import type { Server, ServerState } from "../lib/types";
 
@@ -49,17 +50,28 @@ function ServerRow({ server }: { server: Server }) {
 
 export default function Hud() {
   const { data: hud } = useQuery(ch, "hud", undefined);
-  /** The session you picked; otherwise the first. */
-  const [picked, setPicked] = useState<string | null>(null);
+  /** The session you picked from the list, until you select another pane. */
+  const [picked, setPicked] = useState<{ id: string; over: string | null } | null>(null);
+  /** The session of the pane selected last, which the page follows. */
+  const followed = useRef<string | null>(null);
 
   if (hud === null) return <Loading />;
   const { overview: o, sessions } = hud;
+  followed.current = sessions.find((x) => x.focused)?.id ?? followed.current;
+  const s = shown(sessions, followed.current, picked);
+  // The limits of the account the shown session runs as come first.
+  const { limits, missing } = limitsFor(o.limits, s?.account);
   const usage = (
     <>
       <Heading>Usage</Heading>
       <Card>
-        {o.limits.map((a) => {
-          const of = o.limits.length > 1 ? ` · ${a.account ?? "default"}` : "";
+        {missing && (
+          <Text as="p" tone="muted">
+            {`This session runs as the ${s?.account ?? "default"} account, which hasn't reported its limits yet.`}
+          </Text>
+        )}
+        {limits.map((a) => {
+          const of = o.limits.length > 1 || missing ? ` · ${a.account ?? "default"}` : "";
           return (
             <Fragment key={a.account ?? ""}>
               {a.fiveHour && <Gauge label={`5-hour limit${of}`} percent={a.fiveHour.percent} note={a.fiveHour.resets && `Resets in ${a.fiveHour.resets}`} levels={limitLevels} />}
@@ -77,7 +89,7 @@ export default function Hud() {
     </>
   );
 
-  if (sessions.length === 0) {
+  if (!s) {
     return (
       <>
         {usage}
@@ -85,13 +97,12 @@ export default function Hud() {
       </>
     );
   }
-  const s = sessions.find((x) => x.id === picked) ?? sessions[0];
   const servers = s.servers.filter((x) => x.state !== "sign-in");
   const signIn = s.servers.filter((x) => x.state === "sign-in");
   return (
     <>
       {usage}
-      {sessions.length > 1 && <Select label="Session" value={s.id} onChange={setPicked} options={sessions.map((x) => ({ value: x.id, label: `${x.project} · ${x.name ?? x.id.slice(0, 8)}` }))} />}
+      {sessions.length > 1 && <Select label="Session" value={s.id} onChange={(id) => setPicked({ id, over: followed.current })} options={sessions.map((x) => ({ value: x.id, label: `${x.project} · ${x.name ?? x.id.slice(0, 8)}` }))} />}
       <Heading>Context</Heading>
       <Card>
         {s.context ? (

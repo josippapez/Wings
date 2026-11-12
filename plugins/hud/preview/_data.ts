@@ -19,6 +19,7 @@ export const session = (s: Partial<SessionView> = {}): SessionView => ({
   id: "s1-aaaa",
   project: "web",
   name: "checkout redesign",
+  focused: false,
   context: { percent: 58, tokens: 116_000, window: 200_000, cache: "Warm" },
   servers: [
     { name: "github", state: "connected", tools: 41, used: true, lastFailed: false },

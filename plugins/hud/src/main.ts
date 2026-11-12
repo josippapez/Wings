@@ -42,7 +42,7 @@ let statusTimer: ReturnType<typeof setTimeout> | undefined;
 
 const follow = followSessions({
   create: session,
-  pane: (s, pane) => void Object.assign(s, { paneId: pane.paneId, project: pane.project, name: pane.session.name }),
+  pane: (s, pane) => void Object.assign(s, { paneId: pane.paneId, project: pane.project, name: pane.session.name, focused: pane.focused }),
   startRun: (s, run) => startRun(s, run.startedAt),
   async backlog(s) {
     // These attachment kinds are about 340 KB of a 44 MB transcript and tell what this run connected to,

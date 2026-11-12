@@ -124,6 +124,26 @@ export function overview(now = Date.now()): Overview {
   };
 }
 
+/**
+ * The session the sidebar shows: the one in the selected pane, which it follows from pane to pane. `followed` is the
+ * last such session, kept while the selected pane runs no Claude. A session picked from the list shows in its place
+ * until another pane is selected: `picked.over` is what was followed when it was picked.
+ */
+export function shown<S extends { id: string }>(sessions: S[], followed: string | null, picked: { id: string; over: string | null } | null): S | undefined {
+  const choice = picked && picked.over === followed ? picked.id : followed;
+  return sessions.find((s) => s.id === choice) ?? sessions[0];
+}
+
+/**
+ * The accounts' limits with the shown session's account first, and whether that account has any: before a session's
+ * account has reported its limits, another account's must not pass for them.
+ */
+export function limitsFor(limits: AccountLimits[], account: string | null | undefined): { limits: AccountLimits[]; missing: boolean } {
+  if (account === undefined) return { limits, missing: false };
+  const own = limits.filter((l) => l.account === account);
+  return { limits: [...own, ...limits.filter((l) => l.account !== account)], missing: own.length === 0 && limits.length > 0 };
+}
+
 /** What the sidebar shows for the sessions that run in panes, kept well under the 64 KB a broadcast may carry. */
 export function snapshot(sessions: Session[]): Snapshot {
   const shown = [...sessions].sort((a, b) => a.project.localeCompare(b.project));
@@ -135,6 +155,8 @@ export function snapshot(sessions: Session[]): Snapshot {
         id: s.id,
         project: s.project,
         name: s.name,
+        focused: s.focused,
+        account: state.reported?.sessions?.[s.id]?.account,
         context: ctx && { percent: ctx.percent, tokens: ctx.tokens, window: ctx.window, cache: cacheText(ctx.cache) },
         servers: servers(s).slice(0, 80),
         skills: [...s.skills].slice(0, 60),

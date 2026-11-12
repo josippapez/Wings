@@ -28,6 +28,8 @@ export interface Session extends Run {
   paneId: string;
   project: string;
   name: string | null;
+  /** Its pane is the selected one: the focused pane of the tab on screen. */
+  focused: boolean;
   /** When this run's `claude` started, in ms. What Claude Code reported before that isn't this run's. */
   startedAt: number;
 }
@@ -44,7 +46,7 @@ const newRun = (): Run => ({
   skills: new Set(),
 });
 
-export const session = (id: string): Session => ({ id, paneId: "", project: "", name: null, startedAt: 0, ...newRun() });
+export const session = (id: string): Session => ({ id, paneId: "", project: "", name: null, focused: false, startedAt: 0, ...newRun() });
 
 /** A new `claude` process runs the session, so what the last one knew is dropped. */
 export const startRun = (s: Session, startedAt: number) => void Object.assign(s, newRun(), { startedAt });
