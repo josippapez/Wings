@@ -16,6 +16,7 @@ pub(crate) mod ffi {
     unsafe extern "C" {
         pub fn render(at: *const u8, len: usize);
         pub fn call(id: u32, method: *const u8, method_len: usize, params: *const u8, params_len: usize);
+        pub fn storage(op: *const u8, op_len: usize, key: *const u8, key_len: usize, json: *const u8, json_len: usize) -> u64;
         pub fn broadcast(at: *const u8, len: usize);
         pub fn timer(id: u32, ms: u32);
         pub fn now() -> f64;
@@ -64,6 +65,7 @@ thread_local! {
     static FOCUSED: RefCell<Option<bool>> = const { RefCell::new(None) };
     static ON_BROADCAST: RefCell<Vec<Rc<dyn Fn(&Value)>>> = const { RefCell::new(Vec::new()) };
     static ON_FOCUS: RefCell<Vec<Rc<dyn Fn(bool)>>> = const { RefCell::new(Vec::new()) };
+    static ON_MESSAGE: RefCell<HashMap<&'static str, Vec<Rc<dyn Fn(u32, &Value)>>>> = RefCell::new(HashMap::new());
 }
 
 fn next_id() -> u32 {
@@ -102,8 +104,8 @@ pub(crate) fn fired(id: u32) {
     }
 }
 
-/// What the host tells the page: an answer to a call, a broadcast, or the window's focus. The rest of what a JS frame
-/// hears (panes, projects, git) has no listener here yet.
+/// What the host tells the frame: an answer to a call, a broadcast, the window's focus, or one of the rest of what a
+/// JS frame hears (panes, a tool call, an action, projects, git), which goes to who asked for it with `on`.
 pub(crate) fn deliver(kind: &str, id: u32, text: String) {
     match kind {
         "resolve" | "reject" => {
@@ -130,7 +132,62 @@ pub(crate) fn deliver(kind: &str, id: u32, text: String) {
                 listener(value);
             }
         }
-        _ => {}
+        _ => {
+            let Some(listeners) = ON_MESSAGE.with(|map| map.borrow().get(kind).cloned()) else {
+                return;
+            };
+            let data = serde_json::from_str(&text).unwrap_or(Value::Null);
+            for listener in listeners {
+                listener(id, &data);
+            }
+        }
+    }
+}
+
+/// Hears each message of `kind` the host sends this frame, as the host names it (`panes`, `tool`, `action`,
+/// `projects`, `git`, ...), with the id it came with and its JSON. A `tool` is answered by calling `toolDone` with
+/// that id as `token`, an `action` by `actionDone`.
+pub fn on(kind: &'static str, listener: impl Fn(u32, &Value) + 'static) {
+    ON_MESSAGE.with(|map| map.borrow_mut().entry(kind).or_default().push(Rc::new(listener)));
+}
+
+/// `wings.storage`: what the plugin keeps between runs, shared by its frames. Answered at once.
+pub mod storage {
+    use super::ffi;
+    use serde_json::Value;
+
+    fn ask(op: &str, key: &str, json: &str) -> Result<Value, String> {
+        // SAFETY: the three are live strings, which the host copies before this returns.
+        let packed = unsafe { ffi::storage(op.as_ptr(), op.len(), key.as_ptr(), key.len(), json.as_ptr(), json.len()) };
+        // SAFETY: the host wrote its answer into `wings_alloc` memory and returned where, and how long it is.
+        let answer = unsafe { crate::taken((packed >> 32) as usize as *mut u8, (packed & 0xffff_ffff) as usize) };
+        let mut answer: Value = serde_json::from_str(&answer).map_err(|error| error.to_string())?;
+        match answer.get("error").and_then(Value::as_str) {
+            Some(error) => Err(error.to_owned()),
+            None => Ok(answer["ok"].take()),
+        }
+    }
+
+    /// The value kept under `key`, or null.
+    pub fn get(key: &str) -> Result<Value, String> {
+        ask("get", key, "")
+    }
+
+    pub fn set(key: &str, value: &Value) -> Result<(), String> {
+        ask("set", key, &value.to_string()).map(drop)
+    }
+
+    pub fn delete(key: &str) -> Result<(), String> {
+        ask("delete", key, "").map(drop)
+    }
+
+    pub fn keys() -> Result<Value, String> {
+        ask("keys", "", "")
+    }
+
+    /// The `[key, value]` pairs whose key starts with `prefix`.
+    pub fn entries(prefix: &str) -> Result<Value, String> {
+        ask("entries", prefix, "")
     }
 }
 

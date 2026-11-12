@@ -971,3 +971,5 @@ mod shipped;
 mod testing;
 #[cfg(test)]
 pub(super) mod tests;
+#[cfg(test)]
+mod wasm_tests;

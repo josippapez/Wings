@@ -44,7 +44,7 @@ fn settle() {
 }
 
 /// A string the host wrote into memory `wings_alloc` gave it.
-unsafe fn taken(at: *mut u8, len: usize) -> String {
+pub(crate) unsafe fn taken(at: *mut u8, len: usize) -> String {
     // SAFETY: `at` came from `wings_alloc(len)`, a `Vec` of that capacity, and the host filled all of it with UTF-8.
     unsafe { String::from_utf8_unchecked(Vec::from_raw_parts(at, len, len)) }
 }

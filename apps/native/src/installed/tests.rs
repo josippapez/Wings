@@ -5,7 +5,7 @@ use std::fs;
 use super::{
     DEV_SCOPE, FoundPage, WINGS_VERSION, discover,
     fixture::{Approval::*, Data},
-    library, page_source,
+    frame_file, library, page_source,
 };
 use crate::{host::PluginPaths, page::runtime};
 
@@ -231,4 +231,32 @@ fn only_a_module_in_the_plugin_folder_runs_as_a_webassembly_page() {
     std::fs::write(native.join("built.wasm"), b"\0asm\x01\0\0\0").unwrap();
     let source = page_source(dir.path(), &built, None).unwrap();
     assert!(source.starts_with(MARKER) && source.ends_with("built.wasm"), "{source}");
+}
+
+/// A plugin written in Rust alone ships `main.wasm` and no `main.js`: it is found by that file, which is what runs. A
+/// `main.wasm` that is a link out of the plugin's folder is no build at all.
+#[cfg(unix)]
+#[test]
+fn a_frame_with_only_a_webassembly_build_is_found_by_it() {
+    use crate::page::runtime::wasm::MARKER;
+    let dir = tempfile::tempdir().unwrap();
+    let native = dir.path().join("dist/native");
+    std::fs::create_dir_all(&native).unwrap();
+    assert_eq!(frame_file(dir.path(), "main"), None);
+
+    let outside = tempfile::tempdir().unwrap();
+    let elsewhere = outside.path().join("main.wasm");
+    std::fs::write(&elsewhere, b"\0asm\x01\0\0\0").unwrap();
+    std::os::unix::fs::symlink(&elsewhere, native.join("main.wasm")).unwrap();
+    assert_eq!(frame_file(dir.path(), "main"), None);
+
+    std::fs::remove_file(native.join("main.wasm")).unwrap();
+    std::fs::write(native.join("main.wasm"), b"\0asm\x01\0\0\0").unwrap();
+    let main = frame_file(dir.path(), "main").expect("the module");
+    let source = page_source(dir.path(), &main, None).unwrap();
+    assert!(source.starts_with(MARKER) && source.ends_with("main.wasm"), "{source}");
+
+    // With both builds there, the bundle names the frame and the module still runs.
+    std::fs::write(native.join("main.js"), "").unwrap();
+    assert!(frame_file(dir.path(), "main").unwrap().ends_with("main.js"));
 }

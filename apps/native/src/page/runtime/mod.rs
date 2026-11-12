@@ -466,7 +466,7 @@ impl PageRuntime {
     ) -> Self {
         let source = source.into();
         if let Some(path) = source.strip_prefix(wasm::MARKER) {
-            return wasm::open(path, link, on_event);
+            return wasm::open(path, role, link, on_event);
         }
         let services = Services {
             render: role == Role::Page,

@@ -1,9 +1,12 @@
-//! A plugin page built to WebAssembly, the trial of plugins written in Rust: the page is a module that hands over the
-//! same tree a JS page gives `wings.render`, hears the same events, and reaches the host through the same `Link`. So
-//! the view, the plugin's permissions and its other frames can't tell it from a JS page.
+//! A plugin frame built to WebAssembly, for plugins written in Rust: a page is a module that hands over the same tree
+//! a JS page gives `wings.render` and hears the same events, a main is one that only runs, and both reach the host
+//! through the same `Link`. So the view, the plugin's permissions and its other frames can't tell it from a JS frame.
 //!
-//! The module imports, from `wings`: `render(ptr, len)` with the tree's JSON, `call(id, method, params)` for a host
-//! call that is answered later, `broadcast(ptr, len)`, `timer(id, ms)`, `now()` in ms since the epoch,
+//! The module imports, from `wings`: `render(ptr, len)` with the tree's JSON (a page's alone: a main that calls it
+//! stops), `call(id, method, params)` for a host call that is answered later, `storage(op, key, json)` for one of
+//! `wings.storage`'s (`get`, `set`, `delete`, `keys`, `entries`), answered at once with the pointer and length, packed
+//! in an i64, of `{"ok": <answer>}` or `{"error": "<message>"}` in memory it asked `wings_alloc` for,
+//! `broadcast(ptr, len)`, `timer(id, ms)`, `now()` in ms since the epoch,
 //! `utc_offset(ms)` in minutes for this Mac's timezone at that instant, and `focused()`. It exports its `memory`,
 //! `wings_alloc(len)` for the host to write a string into, `wings_start()`, `wings_event(handler, payload)`,
 //! `wings_deliver(kind, id, text)` (see `Message`) and `wings_timer(id)`. Strings are UTF-8, as a pointer and a length;
@@ -16,7 +19,7 @@
 
 use super::{
     Command, Engine, Event, Inbox, Job, Limits, Link, PageRuntime, QUEUED_COMMANDS, Queue,
-    Reply, THREAD_STACK_BYTES, Tree, message, overran,
+    Reply, Role, THREAD_STACK_BYTES, Tree, message, overran,
 };
 use std::{
     cell::RefCell,
@@ -31,6 +34,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     path::PathBuf,
 };
+use super::Store as StorageCall;
 use wasmtime::{Caller, Config, Extern, Instance, Linker, Module, Store, StoreLimits, StoreLimitsBuilder, Trap, TypedFunc};
 
 /// The first line of the source of a page that is a WebAssembly module, before the module's path.
@@ -42,6 +46,8 @@ const TURN_FUEL: u64 = 1_000_000_000;
 type Emit = Rc<RefCell<Box<dyn FnMut(Event)>>>;
 
 struct Host {
+    /// A page's: a main draws nothing.
+    render: bool,
     link: Arc<dyn Link>,
     queue: Queue,
     emit: Emit,
@@ -50,9 +56,10 @@ struct Host {
     limits: StoreLimits,
 }
 
-/// Starts the page whose module is the file at `path`. `on_event` is called from the page's thread.
+/// Starts the frame whose module is the file at `path`. `on_event` is called from the frame's thread.
 pub(super) fn open(
     path: &str,
+    role: Role,
     link: Arc<dyn Link>,
     on_event: impl FnMut(Event) + Send + 'static,
 ) -> PageRuntime {
@@ -74,6 +81,7 @@ pub(super) fn open(
             move || {
                 let emit: Emit = Rc::new(RefCell::new(Box::new(on_event)));
                 let host = Host {
+                    render: role == Role::Page,
                     link,
                     queue,
                     emit: emit.clone(),
@@ -321,6 +329,9 @@ fn text(caller: &mut Caller<'_, Host>, at: u32, len: u32) -> wasmtime::Result<St
 fn imports(engine: &wasmtime::Engine) -> wasmtime::Result<Linker<Host>> {
     let mut linker = Linker::new(engine);
     linker.func_wrap("wings", "render", |mut caller: Caller<'_, Host>, at: u32, len: u32| {
+        if !caller.data().render {
+            return Err(wasmtime::Error::msg("a plugin's main can't render"));
+        }
         let json = text(&mut caller, at, len)?;
         let event = match Tree::parse(&json) {
             Ok(tree) => Event::Tree(tree),
@@ -348,6 +359,40 @@ fn imports(engine: &wasmtime::Engine) -> wasmtime::Result<Linker<Host>> {
                 },
             );
             Ok(())
+        },
+    )?;
+    linker.func_wrap(
+        "wings",
+        "storage",
+        |mut caller: Caller<'_, Host>, op: u32, op_len: u32, key: u32, key_len: u32, json: u32, json_len: u32| {
+            let op = text(&mut caller, op, op_len)?;
+            let key = text(&mut caller, key, key_len)?;
+            let json = text(&mut caller, json, json_len)?;
+            let call = match op.as_str() {
+                "get" => StorageCall::Get(key),
+                "set" => StorageCall::Set(key, json),
+                "delete" => StorageCall::Delete(key),
+                "keys" => StorageCall::Keys,
+                "entries" => StorageCall::Entries(key),
+                _ => return Err(wasmtime::Error::msg("unknown storage call")),
+            };
+            let answer = match caller.data().link.storage(call) {
+                Ok(json) => format!("{{\"ok\":{json}}}"),
+                Err(error) => serde_json::json!({ "error": error }).to_string(),
+            };
+            let len = u32::try_from(answer.len())?;
+            let alloc = caller
+                .get_export("wings_alloc")
+                .and_then(Extern::into_func)
+                .ok_or_else(|| wasmtime::Error::msg("the frame exports no wings_alloc"))?
+                .typed::<u32, u32>(&caller)?;
+            let at = alloc.call(&mut caller, len)?;
+            let memory = caller
+                .get_export("memory")
+                .and_then(Extern::into_memory)
+                .ok_or_else(|| wasmtime::Error::msg("the page exports no memory"))?;
+            memory.write(&mut caller, at as usize, answer.as_bytes())?;
+            Ok(u64::from(at) << 32 | u64::from(len))
         },
     )?;
     linker.func_wrap("wings", "broadcast", |mut caller: Caller<'_, Host>, at: u32, len: u32| {
