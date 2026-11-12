@@ -29,6 +29,9 @@ pub struct Window {
 pub struct Limits {
     /// The Claude Code account, `None` being the default one.
     pub account: Option<String>,
+    /// Who is signed in to it, when known. Two accounts signed in to one login have one set of limits.
+    #[serde(skip)]
+    login: Option<String>,
     pub five_hour: Option<Window>,
     pub seven_day: Option<Window>,
     /// When Wings got them, in ms.
@@ -105,8 +108,9 @@ fn session_id(v: &Value) -> Option<&str> {
 }
 
 impl Statusline {
-    /// Keeps what one status line run of `account` reported, at `now` in ms.
-    pub fn record(&mut self, status: &Value, account: &Value, now: u64) {
+    /// Keeps what one status line run of `account` reported, at `now` in ms. `login` is who is signed in to that
+    /// account, when known.
+    pub fn record(&mut self, status: &Value, account: &Value, login: Option<&str>, now: u64) {
         let account = account.as_str().filter(|name| wings_spaces::claude_accounts::valid_name(name)).map(str::to_string);
         let limits = &status["rate_limits"];
         let (five_hour, seven_day) = (window(&limits["five_hour"]), window(&limits["seven_day"]));
@@ -114,7 +118,7 @@ impl Statusline {
         if five_hour.is_some() || seven_day.is_some() {
             self.limits.retain(|l| l.account != account);
             // Newest first. Names are checked, and there are only as many as you made.
-            self.limits.insert(0, Limits { account: account.clone(), five_hour, seven_day, at: now });
+            self.limits.insert(0, Limits { account: account.clone(), login: login.map(str::to_string), five_hour, seven_day, at: now });
             self.limits.truncate(ACCOUNTS_MAX);
         }
         let Some(id) = session_id(&status["session_id"]) else { return };
@@ -153,7 +157,17 @@ impl Statusline {
 
     /// What `wings.statusline()` resolves.
     pub fn view(&self) -> Value {
-        serde_json::json!({ "rateLimits": self.limits, "sessions": self.sessions })
+        // An account signed in to the same login as one that reported later has that one's limits: they are one
+        // login's limits, and an account whose sessions report none would keep showing old ones.
+        let limits: Vec<Limits> = self
+            .limits
+            .iter()
+            .map(|own| {
+                let newest = self.limits.iter().find(|other| own.login.is_some() && other.login == own.login).unwrap_or(own);
+                Limits { account: own.account.clone(), ..newest.clone() }
+            })
+            .collect();
+        serde_json::json!({ "rateLimits": limits, "sessions": self.sessions })
     }
 }
 
@@ -187,7 +201,7 @@ mod tests {
     #[test]
     fn keeps_the_limits_and_each_sessions_context_and_cache() {
         let mut s = Statusline::default();
-        s.record(&status(ID), &Value::Null, 1000);
+        s.record(&status(ID), &Value::Null, None, 1000);
         let view = s.view();
         assert_eq!(view["rateLimits"], json!([{ "account": null, "fiveHour": { "usedPercentage": 23.5, "resetsAt": 1738425600 }, "sevenDay": { "usedPercentage": 41.2, "resetsAt": 1738857600 }, "at": 1000 }]));
         assert_eq!(
@@ -207,16 +221,16 @@ mod tests {
     #[test]
     fn a_status_without_limits_keeps_the_last_ones() {
         let mut s = Statusline::default();
-        s.record(&status(ID), &Value::Null, 1000);
+        s.record(&status(ID), &Value::Null, None, 1000);
         // A new session before its first response: no limits, and no context yet.
         let other = "4c21b0c5-8113-4f55-9493-fa156c3fa369";
-        s.record(&json!({ "session_id": other, "context_window": { "context_window_size": 200000, "used_percentage": null, "current_usage": null } }), &Value::Null, 2000);
+        s.record(&json!({ "session_id": other, "context_window": { "context_window_size": 200000, "used_percentage": null, "current_usage": null } }), &Value::Null, None, 2000);
         let view = s.view();
         assert_eq!(view["rateLimits"][0]["at"], 1000);
         assert_eq!(view["sessions"][other]["usedPercentage"], Value::Null);
         assert_eq!(view["sessions"][other]["currentUsage"], Value::Null);
         // Claude Code drops a window once it resets; the newest report wins.
-        s.record(&json!({ "session_id": ID, "rate_limits": { "five_hour": { "used_percentage": 1, "resets_at": 1738443600 } } }), &Value::Null, 3000);
+        s.record(&json!({ "session_id": ID, "rate_limits": { "five_hour": { "used_percentage": 1, "resets_at": 1738443600 } } }), &Value::Null, None, 3000);
         assert_eq!(s.view()["rateLimits"], json!([{ "account": null, "fiveHour": { "usedPercentage": 1.0, "resetsAt": 1738443600 }, "sevenDay": null, "at": 3000 }]));
     }
 
@@ -225,25 +239,50 @@ mod tests {
     fn keeps_each_accounts_limits() {
         let mut s = Statusline::default();
         let other = "4c21b0c5-8113-4f55-9493-fa156c3fa369";
-        s.record(&status(ID), &Value::Null, 1000);
+        s.record(&status(ID), &Value::Null, None, 1000);
         let mut work = status(other);
         work["rate_limits"]["five_hour"] = json!({ "used_percentage": 90, "resets_at": 1738420000 });
-        s.record(&work, &json!("work"), 2000);
-        s.record(&status(ID), &Value::Null, 3000);
+        s.record(&work, &json!("work"), None, 2000);
+        s.record(&status(ID), &Value::Null, None, 3000);
         let view = s.view();
         let accounts: Vec<_> = view["rateLimits"].as_array().unwrap().iter().map(|l| (l["account"].clone(), l["fiveHour"]["usedPercentage"].clone())).collect();
         assert_eq!(accounts, [(Value::Null, json!(23.5)), (json!("work"), json!(90.0))]);
         assert_eq!((view["sessions"][ID]["account"].clone(), view["sessions"][other]["account"].clone()), (Value::Null, json!("work")));
         // A name that couldn't be an account's folder counts as the default account.
-        s.record(&status(ID), &json!("../x"), 4000);
+        s.record(&status(ID), &json!("../x"), None, 4000);
         assert_eq!(s.view()["rateLimits"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn accounts_signed_in_to_one_login_share_its_newest_limits() {
+        let limits = |percent: u64| json!({ "session_id": ID, "rate_limits": { "five_hour": { "used_percentage": percent, "resets_at": 1738443600 } } });
+        let mut s = Statusline::default();
+        s.record(&limits(16), &Value::Null, Some("me"), 1000);
+        s.record(&limits(90), &json!("work"), Some("them"), 2000);
+        s.record(&limits(41), &json!("personal"), Some("me"), 3000);
+        // An account whose login isn't known keeps its own.
+        s.record(&limits(5), &json!("other"), None, 4000);
+        s.record(&limits(7), &json!("another"), None, 5000);
+        let view = s.view();
+        let shown: Vec<_> = view["rateLimits"].as_array().unwrap().iter().map(|l| (l["account"].clone(), l["fiveHour"]["usedPercentage"].clone(), l["at"].clone())).collect();
+        assert_eq!(
+            shown,
+            [
+                (json!("another"), json!(7.0), json!(5000)),
+                (json!("other"), json!(5.0), json!(4000)),
+                (json!("personal"), json!(41.0), json!(3000)),
+                (json!("work"), json!(90.0), json!(2000)),
+                (Value::Null, json!(41.0), json!(3000)),
+            ]
+        );
+        assert!(view["rateLimits"][0].get("login").is_none());
     }
 
     #[test]
     fn untrusted_input_is_checked_and_bounded() {
         let mut s = Statusline::default();
         for bad in [json!(null), json!("x"), json!({ "session_id": "../../etc" }), json!({ "session_id": 7 })] {
-            s.record(&bad, &Value::Null, 1);
+            s.record(&bad, &Value::Null, None, 1);
         }
         assert_eq!(s.view(), json!({ "rateLimits": [], "sessions": {} }));
         s.record(
@@ -255,6 +294,7 @@ mod tests {
                 "rate_limits": { "five_hour": { "used_percentage": "lots" }, "seven_day": { "used_percentage": -3 } }
             }),
             &Value::Null,
+            None,
             1,
         );
         let view = s.view();
@@ -270,7 +310,7 @@ mod tests {
     fn keeps_only_the_newest_sessions() {
         let mut s = Statusline::default();
         for i in 0..SESSIONS_MAX as u64 + 5 {
-            s.record(&status(&format!("{i:08x}-8113-4f55-9493-fa156c3fa369")), &Value::Null, i);
+            s.record(&status(&format!("{i:08x}-8113-4f55-9493-fa156c3fa369")), &Value::Null, None, i);
         }
         assert_eq!(s.sessions.len(), SESSIONS_MAX);
         assert!(!s.sessions.contains_key("00000000-8113-4f55-9493-fa156c3fa369"));

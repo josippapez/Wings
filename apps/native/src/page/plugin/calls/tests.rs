@@ -866,6 +866,7 @@ fn statusline_has_what_claude_code_last_reported_and_needs_its_permission() {
     rig.env.statusline.lock().unwrap().record(
         &json!({ "session_id": id, "rate_limits": { "five_hour": { "used_percentage": 23.5, "resets_at": 1738425600 } }, "context_window": { "used_percentage": 8 } }),
         &json!("work"),
+        None,
         1000,
     );
     let status = rig.allowed("return await wings.statusline();");

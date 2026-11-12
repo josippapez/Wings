@@ -196,6 +196,18 @@ fn signed_in_as(config: &Path) -> (Option<String>, bool) {
     (oauth.and_then(|oauth| oauth.get("emailAddress")).and_then(Value::as_str).map(String::from), oauth.is_some())
 }
 
+/// Who is signed in to an account, as Claude's id for that login, else its email: the same in every account folder
+/// signed in to it. `None` when nobody is.
+pub fn login(name: Option<&str>) -> Option<String> {
+    login_in(&user_config(name))
+}
+
+fn login_in(config: &Path) -> Option<String> {
+    let config: Value = serde_json::from_str(&std::fs::read_to_string(config).ok()?).ok()?;
+    let oauth = config.get("oauthAccount")?;
+    ["accountUuid", "emailAddress"].iter().find_map(|key| oauth.get(key)?.as_str().filter(|id| !id.is_empty()).map(String::from))
+}
+
 /// An account with the email its config names and `auth`'s answer for whether it is signed in. `auth` runs `claude`, so it takes a while.
 fn account(name: Option<&str>, auth: &(impl Fn(Option<&str>) -> AuthStatus + Sync)) -> Account {
     let (email, _) = signed_in_as(&user_config(name));
@@ -1246,6 +1258,16 @@ mod tests {
         };
         assert_eq!(read(r#"{"oauthAccount":{"emailAddress":"me@example.com"}}"#), (Some("me@example.com".into()), true));
         assert_eq!(read(r#"{"oauthAccount":{}}"#), (None, true));
+        // The login is Claude's id for it, which two folders signed in to one login share, else the email.
+        for (config, login) in [
+            (r#"{"oauthAccount":{"accountUuid":"u-1","emailAddress":"me@example.com"}}"#, Some("u-1")),
+            (r#"{"oauthAccount":{"emailAddress":"me@example.com"}}"#, Some("me@example.com")),
+            (r#"{"oauthAccount":{}}"#, None),
+            ("{}", None),
+        ] {
+            std::fs::write(dir.join(".claude.json"), config).unwrap();
+            assert_eq!(login_in(&dir.join(".claude.json")).as_deref(), login, "{config}");
+        }
         assert_eq!(read(r#"{"numStartups":3}"#), (None, false));
         assert_eq!(read("not json"), (None, false));
         assert_eq!(signed_in_as(&dir.join("missing.json")), (None, false));

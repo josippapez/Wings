@@ -443,9 +443,11 @@ impl Handler for Server {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |d| d.as_millis() as u64);
+                let account = request.get("account").unwrap_or(&Value::Null);
                 self.env.statusline.lock().unwrap().record(
                     request.get("status").unwrap_or(&Value::Null),
-                    request.get("account").unwrap_or(&Value::Null),
+                    account,
+                    login_of(account.as_str()).as_deref(),
                     now,
                 );
                 Ok(Value::Null)
@@ -732,6 +734,21 @@ impl Host for NativeHost<'_> {
 pub(super) fn wings_program() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     Some(exe.with_file_name("wings")).filter(|wings| wings.is_file())
+}
+
+/// Who is signed in to the account a status line came from. A status comes every few seconds from every session and
+/// the config it is read from is some hundred KB, so it is read again only when the file changed.
+fn login_of(account: Option<&str>) -> Option<String> {
+    type Read = (Option<std::time::SystemTime>, Option<String>);
+    static KNOWN: std::sync::Mutex<Option<std::collections::HashMap<Option<String>, Read>>> = std::sync::Mutex::new(None);
+    let account = account.filter(|name| claude_accounts::valid_name(name));
+    let changed = std::fs::metadata(claude_accounts::user_config(account)).and_then(|file| file.modified()).ok();
+    let mut known = KNOWN.lock().unwrap();
+    let read = known.get_or_insert_with(Default::default).entry(account.map(str::to_string)).or_insert((None, None));
+    if read.0 != changed || changed.is_none() {
+        *read = (changed, claude_accounts::login(account));
+    }
+    read.1.clone()
 }
 
 /// The file that says you disconnected Claude Code, beside the app's own state, so it isn't connected again on start.
