@@ -6,7 +6,7 @@ use std::{
     fs,
     io::{Cursor, Read},
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
+    sync::Mutex,
     time::{Duration, Instant},
 };
 
@@ -485,11 +485,32 @@ fn get(url: &str, accept: &str, token: Option<&str>) -> Result<ureq::http::Respo
     }
 }
 
-/// Your `gh` sign-in, read once, for every API call: signed in, GitHub allows 5,000 calls an hour instead of 60
-/// for the whole address, and private repos work too. Without one, public repos still do.
+/// Your `gh` sign-in, for every API call: signed in, GitHub allows 5,000 calls an hour instead of 60 for the whole
+/// address, and private repos work too. Without one, public repos still do.
 fn access() -> Option<String> {
-    static TOKEN: OnceLock<Option<String>> = OnceLock::new();
-    TOKEN.get_or_init(gh_token).clone()
+    static TOKEN: Mutex<Token> = Mutex::new(Token { found: None, tried: None });
+    TOKEN.lock().unwrap().get(std::time::Instant::now(), gh_token)
+}
+
+/// How long a sign-in that wasn't found waits before it's looked for again.
+const TOKEN_RETRY: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The sign-in once found, kept for the run. One that wasn't found is looked for again after `TOKEN_RETRY`: right
+/// after the app starts the login shell's PATH can still be missing, so `gh` isn't found, and keeping that answer left
+/// every call signed out, on 60 an hour, until Wings quit.
+struct Token {
+    found: Option<String>,
+    tried: Option<std::time::Instant>,
+}
+
+impl Token {
+    fn get(&mut self, now: std::time::Instant, read: impl FnOnce() -> Option<String>) -> Option<String> {
+        if self.found.is_none() && self.tried.is_none_or(|at| now.duration_since(at) >= TOKEN_RETRY) {
+            self.tried = Some(now);
+            self.found = read();
+        }
+        self.found.clone()
+    }
 }
 
 fn gh_token() -> Option<String> {
@@ -964,6 +985,23 @@ mod tests {
         let outside = serde_json::json!({ "views": [{ "id": "board", "title": "Board", "icon": "list", "page": "../page.html" }] });
         assert!(s.install(&with(outside), Source::File, None).unwrap_err().contains("isn't in the plugin folder"));
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_sign_in_that_was_not_found_is_looked_for_again_and_a_found_one_is_kept() {
+        let start = std::time::Instant::now();
+        let mut token = Token { found: None, tried: None };
+        let mut reads = 0;
+        let mut read = |answer: Option<&str>| {
+            reads += 1;
+            answer.map(str::to_owned)
+        };
+        assert_eq!(token.get(start, || read(None)), None);
+        // Not on every call: each look runs `gh`.
+        assert_eq!(token.get(start + TOKEN_RETRY / 2, || read(Some("late"))), None);
+        assert_eq!(token.get(start + TOKEN_RETRY, || read(Some("late"))), Some("late".into()));
+        assert_eq!(token.get(start + TOKEN_RETRY * 3, || read(Some("other"))), Some("late".into()));
+        assert_eq!(reads, 2);
     }
 
     #[test]
