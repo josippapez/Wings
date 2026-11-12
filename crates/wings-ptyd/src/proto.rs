@@ -242,6 +242,10 @@ pub struct Attached {
     pub cols: u16,
     #[serde(default)]
     pub rows: u16,
+    /// The sizes the pane had while it printed a replay that is everything kept (`output::pieces`). None from a
+    /// server that doesn't say.
+    #[serde(default)]
+    pub sizes: crate::output::Sizes,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]

@@ -210,7 +210,8 @@ impl Output {
 
     /// Under the same lock as `push`, so the new terminal gets every byte once and in order.
     fn attach(&mut self, channel: Channel<InvokeResponseBody>) -> anyhow::Result<()> {
-        let replay = self.kept.replay();
+        // The sizes the pane had go unused: this terminal is drawn by xterm.js, which the desktop never resizes to them.
+        let (replay, _) = self.kept.replay();
         if !replay.is_empty() {
             channel.send(InvokeResponseBody::Raw(replay))?;
         }

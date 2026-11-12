@@ -82,7 +82,8 @@ pub(super) enum Command {
     /// Stores the scrollback as text if the pane is still hidden.
     Unload,
     /// Everything the terminal server kept of the pane, drawn on a fresh screen.
-    Replay(Vec<u8>),
+    /// The server's replay, and the sizes the pane had while it printed it.
+    Replay(Vec<u8>, wings_ptyd::output::Sizes),
     Eof(Option<String>),
 }
 
@@ -326,8 +327,8 @@ pub(super) fn start_remote(
                             return;
                         }
                     }
-                    client::Event::Replay(bytes) => {
-                        if commands.send_blocking(Command::Replay(bytes)).is_err() {
+                    client::Event::Replay(bytes, sizes) => {
+                        if commands.send_blocking(Command::Replay(bytes, sizes)).is_err() {
                             return;
                         }
                     }
@@ -479,7 +480,7 @@ fn run_model(
         while let Some(next) = command.take() {
             moved |= matches!(
                 next,
-                Command::Output | Command::Resize(_) | Command::Unload | Command::Replay(_)
+                Command::Output | Command::Resize(_) | Command::Unload | Command::Replay(..)
             );
             let result = match next {
                 Command::Output => {
@@ -574,12 +575,20 @@ fn run_model(
                     }
                     Ok(())
                 }
-                Command::Replay(bytes) => {
+                Command::Replay(bytes, sizes) => {
                     pane = GridPane::new(geometry.cols as usize, geometry.rows as usize);
                     pane.set_cell_size(geometry.cell_width, geometry.cell_height);
                     pane.set_options(options.cursor, options.scrollback);
                     pane.set_images(options.images);
-                    pane.feed(&bytes);
+                    // Each piece at the size the pane had while it was printed, then back to the size it has now: so
+                    // lines wrap, and are erased, as they were when the program drew them.
+                    for (size, piece) in wings_ptyd::output::pieces(&bytes, &sizes) {
+                        if let Some((cols, rows)) = size {
+                            pane.resize(cols as usize, rows as usize);
+                        }
+                        pane.feed(piece);
+                    }
+                    pane.resize(geometry.cols as usize, geometry.rows as usize);
                     // Replies and clipboard writes answered a terminal long gone. Only the title still holds.
                     for event in pane.take_events() {
                         if let Event::Title(text) = event {

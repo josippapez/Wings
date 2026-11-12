@@ -218,3 +218,37 @@ fn bench_replay_of_a_full_ring() {
         times[9]
     );
 }
+
+/// A pane that changed size while it ran shows the same after the app comes back as it did before. Its output from
+/// before the change was drawn for the old size: a line as wide as the pane then, which the program erased by going up
+/// one row. Replayed at the new, narrower size that line takes two rows, and the erase missed the first of them, which
+/// stayed on screen until the program drew again. Claude Code redraws its lines this way, and Wings resizes a pane
+/// whenever a sidebar opens.
+#[test]
+fn a_server_pane_resized_while_it_ran_reattaches_as_it_looked() {
+    let (path, _host) = test_host(Config::default());
+    let (pane, events) = Pane::spawn(&path, spawn_request(), b"").unwrap();
+    let (runtime, latest, _updates) =
+        start_remote(pane, events, (80, 24), Vec::new(), worker::Options::default()).unwrap();
+    let send = |text: &str| runtime.commands.send_blocking(Command::Input(text.as_bytes().to_vec())).unwrap();
+    // 73 zeros on one row of 80, then up a row, erase it and write over it.
+    send("printf '%073d\\n\\033[1A\\033[2Kstatus-o''ne\\n' 0\r");
+    thread::sleep(Duration::from_secs(4));
+    eprintln!("FIRST: {:?}", visible_text(&latest.lock().unwrap().clone()).trim_end());
+    wait_snapshot(&latest, |frame| visible_text(frame).contains("status-one"));
+    let narrow = worker::Geometry { cols: 40, rows: 24, cell_width: 8, cell_height: 16 };
+    runtime.commands.send_blocking(Command::Resize(narrow)).unwrap();
+    send("echo re''sized\r");
+    let before = wait_snapshot(&latest, |frame| visible_text(frame).contains("resized"));
+    assert!(!visible_text(&before).contains("0000000000"), "the erased line is gone while the app runs");
+    runtime.detach();
+    drop(runtime);
+
+    let info = Control::connect(&path).unwrap().list().unwrap().remove(0);
+    let (pane, events, attached) = Pane::attach(&path, &info).unwrap();
+    assert_eq!((attached.cols, attached.rows), (40, 24));
+    let (_runtime, latest, _updates) =
+        start_remote(pane, events, (attached.cols, attached.rows), Vec::new(), worker::Options::default()).unwrap();
+    let after = wait_snapshot(&latest, |frame| visible_text(frame).contains("resized"));
+    assert!(!visible_text(&after).contains("0000000000"), "the erased line came back: {:?}", visible_text(&after));
+}

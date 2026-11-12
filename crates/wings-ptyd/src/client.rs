@@ -156,7 +156,9 @@ pub enum Event {
     Output(Vec<u8>),
     /// Everything the server kept, to draw on a fresh screen: on attaching, and after falling so far behind that the
     /// server no longer had the bytes in between.
-    Replay(Vec<u8>),
+    /// Everything the server kept, for a terminal that starts again, and the sizes the pane had while it printed it
+    /// (`output::pieces`).
+    Replay(Vec<u8>, crate::output::Sizes),
     /// The pane's program ended.
     Exited,
     /// The connection ended: the server stopped, or `Pane::detach`.
@@ -185,7 +187,7 @@ impl Pane {
         stream.set_read_timeout(None)?;
         let pane = Pane::new(info.pane, info.shell_pid, info.fg, stream)?;
         let mut events = Events::new(info.pane, 0, reader);
-        events.replay = Some((attached.seq, Vec::new()));
+        events.replay = Some((attached.seq, Vec::new(), attached.sizes.clone()));
         Ok((pane, events, attached))
     }
 
@@ -243,7 +245,7 @@ pub struct Events {
     /// Where the output received so far ends.
     seq: u64,
     /// A replay being received: where it ends, and its bytes so far.
-    replay: Option<(u64, Vec<u8>)>,
+    replay: Option<(u64, Vec<u8>, crate::output::Sizes)>,
     /// The request that attaches again after a lag.
     reattach: Option<u32>,
 }
@@ -262,12 +264,12 @@ impl Events {
             };
             match frame {
                 Frame::Out { pane: number, seq_end, data } if number == self.number => {
-                    if let Some((end, bytes)) = &mut self.replay {
+                    if let Some((end, bytes, _)) = &mut self.replay {
                         bytes.extend_from_slice(&data);
                         if seq_end >= *end {
                             self.seq = seq_end;
-                            let (_, bytes) = self.replay.take().expect("a replay");
-                            return Event::Replay(bytes);
+                            let (_, bytes, sizes) = self.replay.take().expect("a replay");
+                            return Event::Replay(bytes, sizes);
                         }
                         continue;
                     }
@@ -303,7 +305,7 @@ impl Events {
                             // A reset means the bytes in between are gone: the terminal starts again from all the
                             // server kept. Otherwise the stream just goes on from `seq`.
                             if attached.reset {
-                                self.replay = Some((attached.seq, Vec::new()));
+                                self.replay = Some((attached.seq, Vec::new(), attached.sizes));
                             }
                         }
                         _ => {}
@@ -354,7 +356,7 @@ mod tests {
             let event =
                 rx.recv_timeout(deadline.saturating_duration_since(Instant::now())).unwrap_or_else(|_| panic!("timed out waiting for {text:?} in {seen:?}"));
             match &event {
-                Event::Output(bytes) | Event::Replay(bytes) => seen.push_str(&String::from_utf8_lossy(bytes)),
+                Event::Output(bytes) | Event::Replay(bytes, _) => seen.push_str(&String::from_utf8_lossy(bytes)),
                 end => panic!("{end:?} before {text:?}"),
             }
             events.push(event);
@@ -389,7 +391,7 @@ mod tests {
         let again = std::sync::Arc::new(again);
         let rx = read_events(again.clone(), events);
         let (seen, events) = until(&rx, "meanwhile");
-        assert!(matches!(events[0], Event::Replay(_)), "starts with a replay: {events:?}");
+        assert!(matches!(events[0], Event::Replay(..)), "starts with a replay: {events:?}");
         assert!(seen.contains("before"));
         again.write(b"echo af''ter\r").unwrap();
         until(&rx, "after");
@@ -416,7 +418,7 @@ mod tests {
         let info = Control::connect(&path).unwrap().list().unwrap().remove(0);
         if info.seq == 0 {
             let (attached, mut events, _) = Pane::attach(&path, &info).unwrap();
-            assert_eq!(events.next(&attached), Event::Replay(Vec::new()));
+            assert_eq!(events.next(&attached), Event::Replay(Vec::new(), vec![(0, 80, 24)]));
         }
         pane.kill().unwrap();
     }
@@ -440,7 +442,7 @@ mod tests {
         while !String::from_utf8_lossy(&got).contains("done") {
             match events.next(&pane) {
                 Event::Output(bytes) => got.extend(bytes),
-                Event::Replay(bytes) => {
+                Event::Replay(bytes, _) => {
                     replays += 1;
                     got = bytes;
                 }

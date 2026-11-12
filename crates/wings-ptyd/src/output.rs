@@ -99,19 +99,58 @@ pub struct Kept {
     /// Latest root Codex status, kept even when no UI is attached.
     pub codex_status: Option<CodexReport>,
     codex_generation: u64,
+    /// How many bytes were pushed, all of them.
+    pushed: u64,
+    /// Each size the pane took, as columns and rows, with how many bytes it had printed by then. The ones from before
+    /// the oldest byte the ring holds are dropped, but for the last, which is the size that byte was drawn at.
+    sizes: Vec<(u64, u16, u16)>,
 }
 
 impl Default for Kept {
     fn default() -> Kept {
         // Only the cursor (25) starts on, as in a fresh xterm.
-        Kept { ring: Ring::new(REPLAY_BYTES), modes: MODES.map(|m| m == 25), codex_status: None, codex_generation: 0 }
+        Kept { ring: Ring::new(REPLAY_BYTES), modes: MODES.map(|m| m == 25), codex_status: None, codex_generation: 0, pushed: 0, sizes: Vec::new() }
     }
+}
+
+/// Where a pane's size changed in a replay: how many of its bytes come before, then the columns and rows from there.
+pub type Sizes = Vec<(usize, u16, u16)>;
+
+/// A replay in the pieces it was drawn in: each with the pane's size while it was printed, as columns and rows, or
+/// none for bytes before the first size (a server that doesn't say sends none). A terminal that takes each size before
+/// it reads its piece ends up as one that was there all along, which a replay read at the last size alone doesn't: a
+/// line as wide as the pane was, wrapped by a narrower one, takes rows the program never knew of, and what it erased
+/// by going up a row stays.
+pub fn pieces<'a>(replay: &'a [u8], sizes: &[(usize, u16, u16)]) -> Vec<(Option<(u16, u16)>, &'a [u8])> {
+    let mut pieces = Vec::new();
+    let (mut size, mut done) = (None, 0);
+    for &(at, cols, rows) in sizes {
+        let at = at.clamp(done, replay.len());
+        if at > done {
+            pieces.push((size, &replay[done..at]));
+        }
+        (size, done) = (Some((cols, rows)), at);
+    }
+    pieces.push((size, &replay[done..]));
+    pieces
 }
 
 impl Kept {
     pub fn push(&mut self, parser: &mut vte::Parser, title: &Mutex<String>, chunk: &[u8]) {
         parser.advance(&mut Tap { title, modes: &mut self.modes, codex_status: &mut self.codex_status, codex_generation: &mut self.codex_generation }, chunk);
         self.ring.push(chunk);
+        self.pushed += chunk.len() as u64;
+    }
+
+    /// The pane is `cols` by `rows` from here on: at its start, and each time it is resized.
+    pub fn resized(&mut self, cols: u16, rows: u16) {
+        // Only the last size taken before the ring's oldest byte still matters.
+        let oldest = self.pushed - self.ring.buf.len() as u64;
+        if let Some(last) = self.sizes.iter().rposition(|(at, ..)| *at <= oldest) {
+            self.sizes.drain(..last);
+        }
+        self.sizes.retain(|(at, ..)| *at != self.pushed);
+        self.sizes.push((self.pushed, cols, rows));
     }
 
     /// Ends output from before a restart: the modes it left on go off, so the new shell starts as in a fresh terminal.
@@ -127,8 +166,8 @@ impl Kept {
     }
 
     /// What a fresh terminal needs to catch up: the modes in force if the ring has dropped where they were set,
-    /// then the output kept.
-    pub fn replay(&self) -> Vec<u8> {
+    /// then the output kept. With it, the sizes the pane had while it printed that (see `pieces`).
+    pub fn replay(&self) -> (Vec<u8>, Sizes) {
         let mut out = Vec::new();
         if self.ring.wrapped {
             for (mode, on) in MODES.iter().zip(self.modes) {
@@ -137,8 +176,18 @@ impl Kept {
                 }
             }
         }
-        out.extend(self.ring.contents());
-        out
+        let kept = self.ring.contents();
+        let oldest = self.pushed - kept.len() as u64;
+        let sizes = self
+            .sizes
+            .iter()
+            .enumerate()
+            // A size the next one replaced before the oldest byte kept was never drawn at.
+            .filter(|(at, _)| !self.sizes.get(at + 1).is_some_and(|(next, ..)| *next <= oldest))
+            .map(|(_, &(taken, cols, rows))| (out.len() + (taken.saturating_sub(oldest) as usize).min(kept.len()), cols, rows))
+            .collect();
+        out.extend(kept);
+        (out, sizes)
     }
 }
 
@@ -246,15 +295,45 @@ mod tests {
     }
 
     #[test]
+    fn a_replay_says_each_size_the_pane_had_and_where_its_bytes_start() {
+        let (title, mut parser, mut kept) = (Mutex::new(String::new()), vte::Parser::new(), Kept::default());
+        // A pane nobody gave a size has none to say.
+        kept.push(&mut parser, &title, b"old");
+        assert_eq!(kept.replay(), (b"old".to_vec(), vec![]));
+        assert_eq!(pieces(b"old", &[]), [(None, &b"old"[..])]);
+
+        let mut kept = Kept::default();
+        kept.resized(80, 24);
+        kept.push(&mut parser, &title, b"wide");
+        kept.resized(40, 24);
+        // Resized twice with nothing printed between: only the last counts.
+        kept.resized(60, 30);
+        kept.push(&mut parser, &title, b"narrow");
+        let (replay, sizes) = kept.replay();
+        assert_eq!((&replay[..], &sizes[..]), (&b"widenarrow"[..], &[(0, 80, 24), (4, 60, 30)][..]));
+        assert_eq!(pieces(&replay, &sizes), [(Some((80, 24)), &b"wide"[..]), (Some((60, 30)), &b"narrow"[..])]);
+
+        // Once the ring has dropped the bytes of the first sizes, the replay starts at the size its oldest byte had.
+        kept.push(&mut parser, &title, &b"x\n".repeat(REPLAY_BYTES / 2));
+        kept.resized(100, 50);
+        kept.push(&mut parser, &title, b"end");
+        let (replay, sizes) = kept.replay();
+        let drawn = pieces(&replay, &sizes);
+        assert_eq!(drawn.iter().map(|(size, _)| *size).collect::<Vec<_>>(), [Some((60, 30)), Some((100, 50))]);
+        assert_eq!(drawn[1].1, b"end");
+        assert_eq!(kept.sizes.len(), 2, "the sizes from before the ring's oldest byte are dropped");
+    }
+
+    #[test]
     fn a_wrapped_replay_restores_modes_set_before_it() {
         let title = Mutex::new(String::new());
         let mut parser = vte::Parser::new();
         let mut kept = Kept::default();
         kept.push(&mut parser, &title, b"\x1b[?2004h\x1b[?1000;1006h\x1b[?25l\x1b[?1000l");
-        assert!(kept.replay().starts_with(b"\x1b[?2004h"), "not wrapped: the modes are in the replay itself");
+        assert!(kept.replay().0.starts_with(b"\x1b[?2004h"), "not wrapped: the modes are in the replay itself");
         kept.push(&mut parser, &title, &vec![b'y'; REPLAY_BYTES]);
         kept.push(&mut parser, &title, b"\nprompt");
-        assert_eq!(kept.replay(), b"\x1b[?25l\x1b[?1006h\x1b[?2004hprompt");
+        assert_eq!(kept.replay().0, b"\x1b[?25l\x1b[?1006h\x1b[?2004hprompt");
     }
     #[test]
     fn codex_status_survives_split_osc_sequences_and_ring_wraps_and_clear() {

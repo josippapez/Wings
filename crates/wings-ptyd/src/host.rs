@@ -389,7 +389,11 @@ impl Host {
             master: Mutex::new(pair.master),
             child: Mutex::new(child),
             out: Mutex::new(PaneOut {
-                kept: Kept::default(),
+                kept: {
+                    let mut kept = Kept::default();
+                    kept.resized(spawn.cols, spawn.rows);
+                    kept
+                },
                 seq: 0,
                 attached: vec![client.clone()],
                 sent_title: String::new(),
@@ -581,6 +585,8 @@ impl HostPane {
     fn resize(&self, cols: u16, rows: u16) -> anyhow::Result<()> {
         self.master.lock().unwrap().resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })?;
         *self.size.lock().unwrap() = (cols, rows);
+        // What it prints from here is drawn at this size, which a replay says (`Kept::replay`).
+        self.out.lock().unwrap().kept.resized(cols, rows);
         Ok(())
     }
 
@@ -592,9 +598,9 @@ impl HostPane {
         client.drop_output(self.id);
         let delta = from_seq.filter(|&from| from <= out.seq).and_then(|from| out.kept.ring.tail((out.seq - from) as usize));
         let reset = delta.is_none();
-        let bytes = delta.unwrap_or_else(|| out.kept.replay());
+        let (bytes, sizes) = delta.map(|bytes| (bytes, Vec::new())).unwrap_or_else(|| out.kept.replay());
         let (cols, rows) = *self.size.lock().unwrap();
-        reply(client, id, Ok(serde_json::to_value(Attached { pane: self.id, reset, seq: out.seq, cols, rows }).expect("serializes")));
+        reply(client, id, Ok(serde_json::to_value(Attached { pane: self.id, reset, seq: out.seq, cols, rows, sizes }).expect("serializes")));
         // A reset replay starts with the modes in force and loses part of its first line, but it always ends where
         // the ring does, so each piece's `seq_end` counts back from there.
         // An empty replay is still one frame, so the client can tell where the replay ends.

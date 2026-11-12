@@ -99,7 +99,7 @@ fn wait_for(pane: &Pane, events: &mut wings_ptyd::client::Events, text: &str) {
     let mut seen = String::new();
     while !seen.contains(text) {
         match events.next(pane) {
-            Event::Output(bytes) | Event::Replay(bytes) => {
+            Event::Output(bytes) | Event::Replay(bytes, _) => {
                 seen.push_str(&String::from_utf8_lossy(&bytes))
             }
             other => panic!("{other:?} before {text:?}: {seen:?}"),
