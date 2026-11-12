@@ -1581,6 +1581,14 @@ impl Workspace {
             .cloned()
     }
 
+    /// A running plugin's host, to call its tools as Claude does.
+    pub fn plugin_host(&self, plugin: &str) -> Option<std::sync::Arc<crate::page::plugin::PluginHost>> {
+        self.plugins
+            .iter()
+            .find(|installed| installed.id == plugin)
+            .map(|installed| installed.host.clone())
+    }
+
     pub fn popover_page(&self, plugin: &str, sidebar: &str) -> Option<Entity<PageView>> {
         let key = (plugin.to_owned(), sidebar.to_owned());
         self.plugin_ui
