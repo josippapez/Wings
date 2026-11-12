@@ -2,6 +2,13 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.19 · 2026-11-12
+
+- **Settings, Plugins is easier to read.** Each plugin's row says what it does, and an amber label marks only what needs you: approval, an update, or no native build. No plugin's page is open to begin with. Click a row to open its page and click it again to close it. When a plugin can't be turned on or updated, the reason shows in its row.
+- **Claude Code is connected in every account you're signed in to.** Wings connected itself to the default account and to accounts a project uses. An account you only start Claude as from a pane was left out, so its sessions could report no usage limits. Wings now connects those too, on start and from Connect.
+- **The HUD says when a session's account isn't connected.** Such a session showed another account's limits as its own. Its strip now shows no limits and says why, and the sidebar names the account of each limit. Needs HUD 0.9.1.
+- **Worktrees is written in Rust.** It works as before. Needs Worktrees 0.7.0.
+
 ## 0.2.18 · 2026-11-12
 
 - **Terminals look right after a restart.** After Wings restarted or updated, a terminal could show lines its program had already erased, until the program drew again, and some needed closing and reopening. It happened to a terminal whose pane had changed size while it ran, as when a sidebar opened. Wings now redraws each part of a terminal's output at the size the pane had when it was printed. Terminals already open keep the old behaviour until you reopen them, and the top of a very long session can still be off.
