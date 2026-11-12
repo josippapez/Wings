@@ -3,7 +3,7 @@ name = "wings-plugin"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "Trial: write a Wings plugin page in Rust, built to WebAssembly."
+description = "Write a Wings plugin in Rust, built to WebAssembly."
 
 [dependencies]
 serde_json = "1"

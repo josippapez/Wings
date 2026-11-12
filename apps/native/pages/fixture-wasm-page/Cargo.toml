@@ -1,0 +1,20 @@
+[package]
+name = "fixture-page"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "A plugin page written in Rust, for the native app's tests of the WebAssembly engine."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wings-plugin = { path = "../../../../packages/plugin-rs" }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -165,12 +165,28 @@ pub fn button(label: impl Into<String>, variant: &str, busy: bool, on_click: imp
     if busy { button.prop("disabled", true).child(spinner()).text(label) } else { button.text(label) }
 }
 
+/// A small quiet button that is on or off, drawn as one of `chips` is.
+pub fn chip(label: impl Into<String>, pressed: bool, on_click: impl Fn() + 'static) -> Node {
+    Node::new("Button").prop("chip", true).prop("pressed", pressed).on("onClick", move |_| on_click()).text(label)
+}
+
+/// One of `options`, as `(value, label)`, picked from a row of chips named `label`. `on_change` hears the value picked.
+pub fn chips(label: &str, options: &[(&str, &str)], value: &str, on_change: impl Fn(&str) + 'static) -> Node {
+    let options: Vec<Value> = options.iter().map(|(value, label)| json!({ "value": value, "label": label })).collect();
+    Node::new("Chips")
+        .prop("label", label)
+        .prop("options", options)
+        .prop("value", value)
+        .on("onChange", move |event| on_change(event["value"].as_str().unwrap_or_default()))
+}
+
 /// A row of a `List`: `children`, and `actions` that show over its end while you point at it or tab into them.
 pub fn list_item(children: impl IntoIterator<Item = Node>, actions: Node) -> Node {
     Node::new("ListItem").children(children).child(Node::new("Slot").prop("name", "actions").child(actions))
 }
 
-/// A one-line text field. `on_change` hears the text after each change.
+/// A one-line text field. `on_change` hears the text after each change. With `.prop("type", "time")` it takes a time
+/// as HH:MM, and with `"password"` it shows dots.
 pub fn text_input(label: &str, value: &str, on_change: impl Fn(String) + 'static) -> Node {
     Node::new("TextInput")
         .prop("label", label)

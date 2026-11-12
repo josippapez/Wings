@@ -1,13 +1,17 @@
-//! Trial: a Wings plugin page written in Rust and built to `wasm32-unknown-unknown`. The native app runs the module
-//! and draws the tree it renders with its own controls (`apps/native/src/page/runtime/wasm.rs` has the imports and
-//! exports this file is the other side of).
+//! A Wings plugin written in Rust and built to `wasm32-unknown-unknown`: its main, which only runs, and its pages. The
+//! native app runs each as a module, and draws the tree a page renders with its own controls
+//! (`apps/native/src/page/runtime/wasm.rs` has the imports and exports this file is the other side of).
 //!
-//! A page keeps its state where it likes, gives `run` a function that builds the page from it, and changes the state
+//! A main defines `start`, and there sets up what it listens to (`host`, `messages`, `tools`, `poll`). A page does
+//! the same and calls `run`. It keeps its state where it likes, gives `run` a function that builds the page from it, and changes the state
 //! in handlers and tasks. The page is built again after every turn (an event, an answer, a timer), and sent to the
 //! app when it differs from the last one.
 
 pub mod host;
+pub mod messages;
+pub mod poll;
 pub mod task;
+pub mod tools;
 pub mod ui;
 
 use serde_json::Value;

@@ -260,6 +260,38 @@ pub async fn secret_delete(name: &str) -> Result<(), String> {
     call("secretDelete", json!({ "name": name })).await.map(drop)
 }
 
+thread_local! {
+    static SENT_LABELS: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+}
+
+/// `wings.setSidebarLabel`: the text by the title bar button of the plugin's sidebar or view `sidebar`, or none, and
+/// the `(label, value)` rows shown when you point at it. A label that is the one last sent isn't sent again.
+pub fn set_sidebar_label(sidebar: &str, label: Option<&str>, rows: &[(&str, &str)]) {
+    let rows: Vec<Value> = rows.iter().map(|(label, value)| json!({ "label": label, "value": value })).collect();
+    let sent = json!([label, rows]).to_string();
+    if SENT_LABELS.with(|labels| labels.borrow_mut().insert(sidebar.to_owned(), sent.clone())).as_ref() == Some(&sent) {
+        return;
+    }
+    let answer = call("setSidebarLabel", json!({ "sidebarId": sidebar, "label": label, "rows": rows }));
+    let sidebar = sidebar.to_owned();
+    crate::task::spawn(async move {
+        // Refused: not shown, so the same label is sent again next time.
+        if answer.await.is_err() {
+            SENT_LABELS.with(|labels| {
+                let mut labels = labels.borrow_mut();
+                if labels.get(&sidebar) == Some(&sent) {
+                    labels.remove(&sidebar);
+                }
+            });
+        }
+    });
+}
+
+/// `wings.openView`: shows the plugin's sidebar or view `id`. Nobody waits for it.
+pub fn open_view(id: &str) {
+    drop(call("openView", json!({ "id": id, "newTab": false })));
+}
+
 /// Opens `url` in the browser. Nobody waits for it.
 pub fn open_url(url: &str) {
     drop(call("openUrl", json!({ "url": url })));
