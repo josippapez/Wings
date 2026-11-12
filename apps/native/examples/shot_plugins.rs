@@ -1,6 +1,6 @@
 //! Renders Worktrees' sidebar, which is written in Rust, offscreen at 1000 and 640 points wide, over a made-up repo in
 //! the output folder, never the user's. With `--changes` it renders Changes' built
-//! pages, with `--schedules` Schedules' list and forms, with `--session-detail` Session detail's sidebar, and with
+//! pages, with `--schedules` Schedules' list and forms, and with
 //! `--hud` the HUD's sidebar, with
 //! `--disk` Disk usage's overview and the map of a folder of made-up files it scans, with `--work-item` Work item's tab
 //! and Sprint block, and with `--tasks` the Issues board, list, issue and block, each over made-up data. With
@@ -81,10 +81,6 @@ fn main() {
         pr_tracker(out);
         return;
     }
-    if std::env::args().any(|arg| arg == "--session-detail") {
-        session_detail(out);
-        return;
-    }
     if std::env::args().any(|arg| arg == "--hud") {
         hud(out);
         return;
@@ -128,36 +124,6 @@ impl Env for FixtureEnv {
     }
     fn claude_dirs(&self) -> Vec<PathBuf> {
         vec![self.0.clone()]
-    }
-    /// The OpenCode session of `session_detail`.
-    fn agent_activity(&self, _: &str) -> Result<serde_json::Value, String> {
-        let info = json!({ "location": { "directory": "/work/api" }, "model": { "id": "gpt-5.1-codex" }, "cost": 0.42,
-            "tokens": { "input": 12_000, "output": 3_100, "reasoning": 900, "cache": { "read": 88_000, "write": 4_000 } } });
-        let now = now_ms();
-        // A call that is still running has no time it completed.
-        let tool = |id: &str, name: &str, ago: u64, took: Option<u64>, state: serde_json::Value| {
-            let mut time = json!({ "created": now - ago });
-            if let Some(took) = took {
-                time["completed"] = (now - ago + took).into();
-            }
-            json!({ "type": "tool", "id": id, "name": name, "state": state, "time": time })
-        };
-        // The service sends the newest message first.
-        let messages = [
-            json!({ "id": "m3", "type": "assistant", "model": { "id": "gpt-5.1-codex" },
-                "tokens": { "input": 2_000, "output": 300, "cache": { "read": 60_000, "write": 0 } }, "content": [
-                // Older than the Claude session's last call, so the sidebar opens on that session.
-                tool("c3", "shell", 60_000, None, json!({ "status": "running", "input": { "command": "cargo test" }, "metadata": {} })),
-                tool("c2", "shell", 90_000, Some(1_200), json!({ "status": "completed", "input": { "command": "git commit -m 'Cache the shipping rates'" },
-                    "content": [{ "type": "text", "text": "[main 4f2a9c1] Cache the shipping rates\n 2 files changed" }], "metadata": {} })),
-                tool("c1", "patch", 300_000, Some(80), json!({ "status": "completed", "input": { "patchText": "*** Update File: src/rates.rs" },
-                    "content": [{ "type": "text", "text": "Success. Updated the following files:\nM src/rates.rs" }],
-                    "metadata": { "files": [{ "file": "src/rates.rs" }, { "file": "src/cache.rs" }] } })),
-            ] }),
-            json!({ "id": "m1", "type": "user", "text": "Cache the shipping rates so the cart stops asking for them twice", "time": { "created": now - 330_000 } }),
-        ];
-        serde_json::to_value(wings_agents::agent_activity::normalize(&info, &messages))
-            .map_err(|error| error.to_string())
     }
     fn ports(&self) -> Result<Vec<PanePort>, String> {
         Ok(vec![])
@@ -506,9 +472,6 @@ fn schedules(out: PathBuf) {
     }
 }
 
-/// Session detail's real main and built sidebar over a made-up Claude Code session, whose transcript is written to a
-/// folder of its own, and a made-up OpenCode one. It shows the session working, with rows opened, then the OpenCode
-/// session, then no session at all.
 /// The Worktrees sidebar, which is written in Rust (`plugins/worktrees/rust`), over a repo made for it: worktrees that
 /// are merged, changed, locked, detached and gone. Then the card that asks before the merged one is removed.
 fn worktrees(out: PathBuf) {
@@ -699,253 +662,6 @@ fn hud(out: PathBuf) {
             }
             wait(&mut cx, window, Duration::from_millis(300));
             save(&mut cx, window, out.join(format!("hud-{name}-{width}.png")));
-            let _ = cx.update_window(window, |_, window, _| window.remove_window());
-        }
-    }
-}
-
-fn session_detail(out: PathBuf) {
-    const SESSION: &str = "3c21b0c5-8113-4f55-9493-fa156c3fa369";
-    let root = out.join("fixture-session-detail");
-    let minute = 60_000;
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(root.join("projects/-work-web")).unwrap();
-    let read = |id: &str, name: &str, ago: u64, input: serde_json::Value| {
-        json!({ "type": "assistant", "uuid": format!("a-{id}"), "timestamp": iso(ago), "message": { "id": format!("m-{id}"), "model": "claude-sonnet-5-5",
-            "usage": { "input_tokens": 4_200, "output_tokens": 800, "cache_read_input_tokens": 110_000, "cache_creation_input_tokens": 1_800 },
-            "content": [{ "type": "tool_use", "id": id, "name": name, "input": input }] } })
-    };
-    let result = |id: &str, ago: u64, text: &str, error: bool| {
-        json!({ "type": "user", "uuid": format!("r-{id}"), "timestamp": iso(ago), "message": { "content": [
-            { "type": "tool_result", "tool_use_id": id, "content": text, "is_error": error }] } })
-    };
-    let lines = [
-        json!({ "type": "user", "uuid": "p1", "timestamp": iso(42 * minute), "message": { "content":
-            "Rework the checkout page so the coupon field sits under the order summary, and keep the totals in sync with the cart." } }),
-        read(
-            "t1",
-            "Read",
-            41 * minute,
-            json!({ "file_path": "/work/web/src/features/checkout/CheckoutPage.tsx" }),
-        ),
-        result(
-            "t1",
-            41 * minute - 120,
-            "import { useCoupon } from '../coupons';",
-            false,
-        ),
-        read(
-            "t2",
-            "Grep",
-            40 * minute,
-            json!({ "pattern": "useCoupon", "path": "src/" }),
-        ),
-        result(
-            "t2",
-            40 * minute - 340,
-            "src/features/checkout/CheckoutPage.tsx:3",
-            false,
-        ),
-        json!({ "type": "assistant", "uuid": "a-t3", "timestamp": iso(38 * minute), "message": { "id": "m-t3", "model": "claude-sonnet-5-5",
-            "usage": { "input_tokens": 4_200, "output_tokens": 1_600, "cache_read_input_tokens": 110_000, "cache_creation_input_tokens": 1_800 },
-            "content": [
-                { "type": "tool_use", "id": "t3", "name": "Edit", "input": { "file_path": "/work/web/src/features/checkout/CheckoutSummary.tsx",
-                    "old_string": "<Total value={subtotal} />", "new_string": "<Total value={subtotal - discount} />" } },
-                { "type": "tool_use", "id": "w1", "name": "TodoWrite", "input": { "todos": [
-                    { "content": "Move the coupon field under the summary", "activeForm": "Moving the coupon field", "status": "completed" },
-                    { "content": "Subtract the discount from the total", "activeForm": "Subtracting the discount", "status": "completed" },
-                    { "content": "Show the discount in the cart", "activeForm": "Showing the discount in the cart", "status": "in_progress" },
-                    { "content": "Update the checkout snapshots", "activeForm": "Updating the snapshots", "status": "pending" }] } }] } }),
-        result(
-            "t3",
-            38 * minute - 42,
-            "The file src/features/checkout/CheckoutSummary.tsx has been updated.",
-            false,
-        ),
-        read(
-            "t4",
-            "Bash",
-            30 * minute,
-            json!({ "command": "git commit -m 'Add a coupon field to the checkout summary'" }),
-        ),
-        result(
-            "t4",
-            30 * minute - 880,
-            "[feature/checkout 9b1c2d3] Add a coupon field to the checkout summary",
-            false,
-        ),
-        read(
-            "t5",
-            "Bash",
-            29 * minute,
-            json!({ "command": "git push origin feature/checkout-redesign" }),
-        ),
-        result(
-            "t5",
-            29 * minute - 2_400,
-            "To github.com:example/shop.git",
-            false,
-        ),
-        read(
-            "t6",
-            "Bash",
-            12 * minute,
-            json!({ "command": "pnpm test -- checkout" }),
-        ),
-        result(
-            "t6",
-            12 * minute - 18_400,
-            "FAIL src/features/checkout/CheckoutSummary.test.tsx\n  ● coupon › keeps the totals in sync\n\n    Expected: 41.2\n    Received: 45",
-            true,
-        ),
-        json!({ "type": "attachment", "uuid": "q1", "timestamp": iso(5 * minute), "attachment": { "type": "queued_command", "humanTurn": true,
-            "prompt": "Also make the coupon discount show in the cart" } }),
-        read(
-            "t7",
-            "Edit",
-            minute,
-            json!({ "file_path": "/work/web/src/routes/cart.tsx", "old_string": "<Total value={subtotal} />", "new_string": "<Total value={subtotal - discount} />" }),
-        ),
-        read(
-            "t8",
-            "Bash",
-            20_000,
-            json!({ "command": "pnpm test -- cart" }),
-        ),
-    ];
-    let text: Vec<String> = lines.iter().map(ToString::to_string).collect();
-    std::fs::write(
-        root.join(format!("projects/-work-web/{SESSION}.jsonl")),
-        text.join("\n"),
-    )
-    .unwrap();
-
-    let manifest = serde_json::from_str(include_str!(
-        "../../../plugins/session-detail/wings-plugin.json"
-    ))
-    .unwrap();
-    let storage = out.join("fixture-storage-session-detail");
-    let _ = std::fs::remove_dir_all(&storage);
-    let host = PluginHost::with_access(
-        PluginConfig {
-            id: "session-detail".into(),
-            root: storage,
-            scope: "shot".into(),
-        },
-        Access {
-            plugin: wings_plugins::manifest::Plugin {
-                manifest,
-                dir: root.clone(),
-                icon_svg: None,
-            },
-            builtin: false,
-            env: std::sync::Arc::new(FixtureEnv(root.clone())),
-        },
-    );
-    let started_at = now_ms() - 60 * minute;
-    let pane = |id: &str, kind: &str, session: &str, name: &str, state: &str| PaneEntry {
-        pane_id: id.into(),
-        cwd: "/work/web".into(),
-        command: kind.into(),
-        project: "web".into(),
-        project_id: "/work/web".into(),
-        session: Some(SessionEntry {
-            session_id: session.into(),
-            kind: kind.into(),
-            name: Some(name.into()),
-            state: state.into(),
-            started_at,
-        }),
-        focused: false,
-    };
-    let claude = pane("1", "claude", SESSION, "checkout redesign", "working");
-    let opencode = pane("2", "opencode", "ses_shot1", "shipping rates", "working");
-    host.publish_panes(vec![claude, opencode.clone()]);
-    host.start_main(
-        include_str!("../../../plugins/session-detail/dist/native/main.js"),
-        |event| {
-            if let wings_native::page::runtime::Event::Error { message, .. } = event {
-                panic!("{message}");
-            }
-        },
-    )
-    .unwrap();
-    let mut cx = app();
-    let source = include_str!("../../../plugins/session-detail/dist/native/sidebar.js");
-    // What the panes are, the rows to open, and a text the page shows once it has drawn it. 360 is the sidebar's own width.
-    let views: [(&str, Vec<PaneEntry>, &[&str], &str); 4] = [
-        (
-            "claude",
-            vec![
-                pane("1", "claude", SESSION, "checkout redesign", "working"),
-                opencode.clone(),
-            ],
-            &[],
-            "Showing the discount in the cart",
-        ),
-        (
-            "opened",
-            vec![
-                pane("1", "claude", SESSION, "checkout redesign", "working"),
-                opencode.clone(),
-            ],
-            &[
-                "Rework the checkout",
-                "CheckoutSummary.tsx",
-                "pnpm test -- checkout",
-            ],
-            "Expected: 41.2",
-        ),
-        (
-            "opencode",
-            vec![opencode],
-            &[],
-            "Cache the shipping rates so",
-        ),
-        ("none", vec![], &[], "No agent session in your panes."),
-    ];
-    for width in [1000.0, 640.0, 360.0] {
-        for (name, panes, rows, expected) in &views {
-            host.publish_panes(panes.clone());
-            let handle = cx
-                .open_offscreen_window(size(px(width), px(900.0)), |_, cx| {
-                    cx.new(|cx| PageView::in_plugin(&host, source, cx))
-                })
-                .unwrap();
-            let window = handle.into();
-            // A page starts hidden and loads once its tab is shown.
-            handle
-                .read_with(&cx, |view, _| view.set_visible(true))
-                .unwrap();
-            let until = |cx: &mut VisualTestAppContext, text: &str| {
-                let deadline = Instant::now() + Duration::from_secs(10);
-                while !handle
-                    .read_with(cx, |view, _| view.text().contains(text))
-                    .unwrap()
-                {
-                    assert!(
-                        Instant::now() < deadline,
-                        "page did not show {text:?}: {}",
-                        handle.read_with(cx, |view, _| view.text()).unwrap()
-                    );
-                    wait(cx, window, Duration::from_millis(20));
-                }
-            };
-            for row in rows.iter() {
-                until(&mut cx, row);
-                let pressed = handle
-                    .read_with(&cx, |view, _| view.press_row(row, 0))
-                    .unwrap();
-                assert!(pressed, "no row {row}");
-                wait(&mut cx, window, Duration::from_millis(300));
-            }
-            until(&mut cx, expected);
-            wait(&mut cx, window, Duration::from_millis(300));
-            save(
-                &mut cx,
-                window,
-                out.join(format!("session-detail-{name}-{width}.png")),
-            );
             let _ = cx.update_window(window, |_, window, _| window.remove_window());
         }
     }

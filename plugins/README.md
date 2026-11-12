@@ -36,7 +36,6 @@ The plugins in this folder install the same way:
 | HUD | `github.com/josippapez/Wings/plugins/hud` |
 | Issues | `github.com/josippapez/Wings/plugins/tasks` |
 | PR tracker | `github.com/josippapez/Wings/plugins/pr-tracker` |
-| Session detail | `github.com/josippapez/Wings/plugins/session-detail` |
 | Work item | `github.com/josippapez/Wings/plugins/work-item` |
 | Worktrees | `github.com/josippapez/Wings/plugins/worktrees` |
 
@@ -236,7 +235,7 @@ Reach for these before writing your own. Each is a module of `wings-plugin-sdk`:
 | `wings-plugin-sdk/messages` | `channel()`: questions, events and queries between main and the pages | `tasks/src/lib/messages.ts`, answered in `tasks/src/main.ts` |
 | `wings-plugin-sdk/react` | `useQuery`, `useSetting` and `useBroadcast`, for a page | `changes/src/pages/sidebar.tsx` |
 | `wings-plugin-sdk/settings` | `setting()`: a stored value that every frame reads and hears change | `tasks/src/lib/view-setting.ts` |
-| `wings-plugin-sdk/sessions` | `followSessions()`: the Claude sessions in panes, each run's older entries and then its live ones | `session-detail/src/main.ts` |
+| `wings-plugin-sdk/sessions` | `followSessions()`: the Claude sessions in panes, each run's older entries and then its live ones | `hud/rust/src/main_frame.rs`, with the Rust SDK's `sessions::follow` |
 | `wings-plugin-sdk/tools` | `tool()`, `s` and `registerTools()`: Claude's tools, defined once in `src/tools.ts` | `changes/src/tools.ts` |
 | `wings-plugin-sdk/cli` | `cli()`: `gh`, `glab` and `az` calls that tell "not installed" and "signed out" from a failure, and the badge with Install, Sign in and Try again | `work-item/src/lib/az.ts` |
 | `wings-plugin-sdk/azure` | `workItems()`: Azure DevOps work items, one `az rest` for every id asked at once | `work-item/src/main/badge.ts` |

@@ -52,7 +52,7 @@ A plugin adds badges, sidebars, tabs, blocks and actions to Wings, and can answe
 - Issues: the tracker above.
 - PR tracker: the pull request for each pane's branch with its checks, each project's open pull requests in the sidebar, and a tab to read and reply to its review comments.
 - Schedules: starts an agent with a prompt on a schedule, and offers to start one in a new worktree for each ticket assigned to you.
-- Session detail, Work item and Worktrees.
+- Work item and Worktrees.
 
 ## Install
 

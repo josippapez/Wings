@@ -393,19 +393,6 @@ fn schedules_calls_pass_its_own_manifest() {
 }
 
 #[test]
-fn session_detail_calls_pass_its_own_manifest() {
-    let p = own_plugin("session-detail");
-    assert_calls_pass(
-        &p,
-        &[
-            ("git", &["diff", "HEAD", "--no-color", "--no-ext-diff"]),
-            ("git", &["diff", "HEAD", "--no-color", "--no-ext-diff", "--", "src/a.ts"]),
-            ("git", &["ls-files", "--error-unmatch", "--", "src/a.ts"]),
-        ],
-    );
-}
-
-#[test]
 fn tasks_calls_pass_its_own_manifest() {
     let p = own_plugin("tasks");
     let org = "https://dev.azure.com/contoso";
