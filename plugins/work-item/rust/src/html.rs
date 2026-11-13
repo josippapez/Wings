@@ -180,7 +180,8 @@ impl Block {
 }
 
 fn href_of(attrs: &str) -> Option<String> {
-    let at = attrs.to_lowercase().find("href")?;
+    // ASCII only: `to_lowercase` can change a letter's length, and `at` is used on `attrs` itself.
+    let at = attrs.to_ascii_lowercase().find("href")?;
     let rest = attrs[at + 4..].trim_start().strip_prefix('=')?.trim_start();
     let raw = match rest.chars().next()? {
         quote @ ('"' | '\'') => rest[1..].split(quote).next()?,
@@ -188,11 +189,12 @@ fn href_of(attrs: &str) -> Option<String> {
     };
     let url = decode(raw);
     let url = url.trim();
-    (url.len() > OPENABLE.len() && url[..OPENABLE.len()].eq_ignore_ascii_case(OPENABLE)).then(|| format!("{OPENABLE}{}", &url[OPENABLE.len()..]))
+    let path = url.get(OPENABLE.len()..).filter(|path| !path.is_empty())?;
+    url.get(..OPENABLE.len())?.eq_ignore_ascii_case(OPENABLE).then(|| format!("{OPENABLE}{path}"))
 }
 
 fn alt_of(attrs: &str) -> Option<String> {
-    let at = attrs.to_lowercase().find("alt")?;
+    let at = attrs.to_ascii_lowercase().find("alt")?;
     let rest = attrs[at + 3..].trim_start().strip_prefix('=')?.trim_start().strip_prefix('"')?;
     Some(decode(rest.split('"').next()?))
 }
@@ -328,6 +330,15 @@ mod tests {
 
     fn lines(html: &str) -> Vec<(Kind, usize, Option<String>, String)> {
         blocks_of(html).iter().map(|b| (b.kind, b.depth, b.marker.clone(), b.text())).collect()
+    }
+
+    /// A description is someone else's text. Lowercasing with `to_lowercase` moved the byte offsets ("İ" grows by a
+    /// byte), and a link was cut at a fixed byte, so text like this stopped the page.
+    #[test]
+    fn attributes_with_letters_that_change_length_in_lowercase_or_end_mid_letter_are_read_without_a_panic() {
+        assert_eq!(href_of("title=\"İİİİé\" href=\"https://dev.azure.com/acme\""), Some("https://dev.azure.com/acme".to_owned()));
+        assert_eq!(href_of("href=\"https://dev.azure.comé\""), None);
+        assert_eq!(alt_of("title=\"İİİé\" alt=\"Chart\""), Some("Chart".to_owned()));
     }
 
     #[test]
