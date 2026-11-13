@@ -40,22 +40,23 @@ if (command !== "build" && command !== "pack" && command !== "dev") {
   process.exit(2);
 }
 const dir = process.cwd();
-if (!entries(dir).length) {
-  console.error(`No plugin to ${command} here: wings-plugin ${command} runs next to wings-plugin.json, with the code in src/main.ts and src/pages/.`);
-  process.exit(1);
-}
 const fail = (error) => {
   console.error(error.message);
   process.exit(1);
 };
+// A plugin written in Rust has no src/ to build, only its committed modules to pack.
+if (command === "pack") {
+  console.log(relative(dir, await pack(dir).catch(fail)));
+  process.exit(0);
+}
+if (!entries(dir).length) {
+  console.error(`No plugin to ${command} here: wings-plugin ${command} runs next to wings-plugin.json, with the code in src/main.ts and src/pages/.`);
+  process.exit(1);
+}
 if (command === "dev") {
   // The watcher keeps the process alive. Ctrl+C leaves the plugin linked in Wings.
   await dev(dir);
   await new Promise(() => {});
-}
-if (command === "pack") {
-  console.log(relative(dir, await pack(dir).catch(fail)));
-  process.exit(0);
 }
 const check = flags.includes("--check");
 const { built, stale } = await buildPlugin(dir, { check }).catch(fail);
