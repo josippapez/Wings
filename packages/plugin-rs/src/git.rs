@@ -322,4 +322,35 @@ mod tests {
         fake(&[]);
         assert_eq!(block_on(default_branch("/c")), None);
     }
+
+    #[test]
+    fn a_change_is_held_while_wings_is_in_the_background_and_handled_once_when_it_is_back() {
+        forget_repo_roots();
+        host::testing::answer(|method, params| match method {
+            "projects" => Ok(json!([{ "id": "one", "path": "/r1" }, { "id": "two", "path": "/r2" }])),
+            _ => Ok(json!({ "code": 0, "stdout": format!("{}\n", params["cwd"].as_str().unwrap()), "stderr": "" })),
+        });
+        let handled: Rc<RefCell<Vec<(Vec<String>, Vec<String>)>>> = Rc::default();
+        let seen = handled.clone();
+        on_change(move |ids, roots| {
+            seen.borrow_mut().push((ids, roots));
+            async {}
+        });
+        host::deliver("focus", 0, r#"{"focused":true}"#.into());
+        host::deliver("git", 0, r#"{"projectIds":["one"]}"#.into());
+        crate::task::run_ready();
+        assert_eq!(*handled.borrow(), [(vec!["one".to_owned()], vec!["/r1".to_owned()])]);
+
+        host::deliver("focus", 0, r#"{"focused":false}"#.into());
+        host::deliver("git", 0, r#"{"projectIds":["two"]}"#.into());
+        host::deliver("git", 0, r#"{"projectIds":["one"]}"#.into());
+        crate::task::run_ready();
+        assert_eq!(handled.borrow().len(), 1);
+        host::deliver("focus", 0, r#"{"focused":true}"#.into());
+        crate::task::run_ready();
+        assert_eq!(
+            handled.borrow()[1],
+            (vec!["one".to_owned(), "two".to_owned()], vec!["/r1".to_owned(), "/r2".to_owned()])
+        );
+    }
 }

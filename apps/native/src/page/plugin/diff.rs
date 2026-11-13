@@ -205,31 +205,129 @@ impl PluginHost {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::page::plugin::testing::{Frame, PRELUDE, Rig, Seen, WAIT};
+    use crate::page::{
+        plugin::testing::{Caller, Frame, Rig, Seen, WAIT, echoes, idle},
+        runtime::fake::{self, Cx, Guest},
+    };
+    use std::collections::HashMap;
     const PATCH: &str = "diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-old\n+new\n";
+
+    /// What a main does with what it hears about the viewer it opened.
+    #[derive(Clone, Copy)]
+    enum Then {
+        Nothing,
+        /// Posts a reply, or fails it when it says "fail".
+        Replies,
+        /// Reloads the viewer when it is refreshed.
+        Reloads,
+        /// Fails when it is refreshed.
+        Throws,
+        /// Is stopped a moment after it opened the viewer.
+        Stops,
+    }
+
+    /// A main that opens a viewer with `params`, broadcasts what the host answered, and then does `then`.
+    struct Opens {
+        params: Value,
+        then: Then,
+        opened: u32,
+        /// The refresh each `updateDiff` of a reload is for.
+        reloads: HashMap<u32, u32>,
+    }
+
+    impl Guest for Opens {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            self.opened = cx.call("openDiff", self.params.clone());
+        }
+
+        fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, id: u32, text: &str) {
+            let heard: Value = serde_json::from_str(text).unwrap_or_default();
+            match (kind, self.then) {
+                ("resolve", then) if id == self.opened => {
+                    cx.link().broadcast(text.into()).unwrap();
+                    if matches!(then, Then::Stops) {
+                        cx.later(0);
+                    }
+                }
+                ("resolve", _) => {
+                    if let Some(token) = self.reloads.remove(&id) {
+                        cx.call("actionDone", json!({ "token": token, "error": null }));
+                    }
+                }
+                ("reject", _) => {
+                    if let Some(token) = self.reloads.remove(&id) {
+                        cx.call("actionDone", json!({ "token": token, "error": text }));
+                    }
+                }
+                ("diffRefresh", Then::Reloads) => {
+                    let call = cx.call(
+                        "updateDiff",
+                        json!({ "id": heard["diffId"], "error": "reloaded" }),
+                    );
+                    self.reloads.insert(call, id);
+                }
+                ("diffRefresh", Then::Throws) => {
+                    cx.call(
+                        "actionDone",
+                        json!({ "token": id, "error": "Refresh failed" }),
+                    );
+                }
+                ("diffClosed", Then::Reloads) => {
+                    cx.link()
+                        .broadcast(json!({ "closed": heard["diffId"] }).to_string())
+                        .unwrap();
+                }
+                ("reply", Then::Replies) => {
+                    let error = (heard["body"] == "fail").then_some("GitHub refused it");
+                    if error.is_none() {
+                        cx.link()
+                            .broadcast(json!({ "reply": heard }).to_string())
+                            .unwrap();
+                    }
+                    cx.call("actionDone", json!({ "token": id, "error": error }));
+                }
+                _ => {}
+            }
+        }
+
+        fn timer(&mut self, cx: &mut Cx<'_>, _id: u32) {
+            cx.stop("the main ran for too long and was stopped");
+        }
+    }
+
+    fn opens(params: Value, then: Then) -> String {
+        fake::source("main", move || {
+            Box::new(Opens {
+                params: params.clone(),
+                then,
+                opened: 0,
+                reloads: HashMap::new(),
+            })
+        })
+    }
 
     #[test]
     fn diff_calls_require_permission_title_and_valid_bounded_patch() {
         let denied = Rig::new(json!({}), vec![]);
         assert_eq!(
-            denied.refused("await wings.openDiff({ title: 'Test' });"),
+            denied.refuses("openDiff", json!({ "title": "Test" })),
             "probe must declare \"diff\" in contributes.ui"
         );
         let rig = Rig::new(json!({ "contributes": { "ui": ["diff"] } }), vec![]);
-        assert_eq!(
-            rig.refused("await wings.openDiff({});"),
-            "openDiff needs a title"
-        );
+        assert_eq!(rig.refuses("openDiff", json!({})), "openDiff needs a title");
         assert!(
-            rig.refused("await wings.openDiff({ title:'x', patch:'bad' });")
+            rig.refuses("openDiff", json!({ "title": "x", "patch": "bad" }))
                 .contains("patch")
         );
         assert!(
-            rig.refused("await wings.openDiff({ title:'x', patch:'x'.repeat(8*1024*1024+1) });")
-                .contains("8")
+            rig.refuses(
+                "openDiff",
+                json!({ "title": "x", "patch": "x".repeat(8 * 1024 * 1024 + 1) })
+            )
+            .contains("8")
         );
         assert_eq!(
-            rig.refused("await wings.openDiff({ title:'x', comments:'review' });"),
+            rig.refuses("openDiff", json!({ "title": "x", "comments": "review" })),
             "comments must be a list"
         );
     }
@@ -239,8 +337,18 @@ mod tests {
     #[test]
     fn replies_reach_the_main_handler_and_its_errors_come_back() {
         let rig = Rig::new(json!({ "contributes": { "ui": ["diff"] } }), vec![]);
-        let reporter = Frame::start(&rig.host, &format!("{PRELUDE} wings.onBroadcast(show);"));
-        rig.host.start_main("wings.onReply(async (reply) => { if (reply.body === 'fail') throw new Error('GitHub refused it'); wings.broadcast({ reply }); }); wings.openDiff({title:'PR', comments:[{ id: 7, replyTo: null, path: 'a', line: 1, canReply: true }]}).then(value=>wings.broadcast(value));", |_| {}).unwrap();
+        let reporter = Frame::start(&rig.host, &echoes());
+        let comments =
+            json!([{ "id": 7, "replyTo": null, "path": "a", "line": 1, "canReply": true }]);
+        rig.host
+            .start_main(
+                &opens(
+                    json!({ "title": "PR", "comments": comments }),
+                    Then::Replies,
+                ),
+                |_| {},
+            )
+            .unwrap();
         let id = reporter.report("viewer", |r| r["id"].is_string())["id"]
             .as_str()
             .unwrap()
@@ -262,7 +370,20 @@ mod tests {
         });
         assert_eq!(reply("fail"), Err("GitHub refused it".into()));
         // A plugin without `onReply` says so.
-        rig.host.start_main("", |_| {}).unwrap();
+        struct Declines;
+        impl Guest for Declines {
+            fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, id: u32, _text: &str) {
+                if kind == "reply" {
+                    cx.call(
+                        "actionDone",
+                        json!({ "token": id, "error": "This plugin doesn't take replies" }),
+                    );
+                }
+            }
+        }
+        rig.host
+            .start_main(&fake::source("main", || Box::new(Declines)), |_| {})
+            .unwrap();
         assert_eq!(
             reply("hello"),
             Err("This plugin doesn't take replies".into())
@@ -272,22 +393,15 @@ mod tests {
     #[test]
     fn loading_diff_updates_only_its_plugin_and_closed_updates_are_ignored() {
         let rig = Rig::new(json!({ "contributes": { "ui": ["diff"] } }), vec![]);
-        let opener = Frame::start(
-            &rig.host,
-            &format!(
-                "{PRELUDE} attempt(async()=>await wings.openDiff({{title:'Changes', refresh:true}}));"
-            ),
-        );
-        let id = opener.report("open viewer", |r| r["ok"]["id"].is_string())["ok"]["id"]
+        let opener = Caller::start(&rig.host);
+        let id = opener
+            .call("openDiff", json!({ "title": "Changes", "refresh": true }))
+            .unwrap()["id"]
             .as_str()
             .unwrap()
             .to_owned();
         assert!(id.starts_with("probe:"));
-        rig.allowed(&format!(
-            "await wings.updateDiff({}, {{patch:{}}}); return 1;",
-            json!(id),
-            json!(PATCH)
-        ));
+        rig.allows("updateDiff", json!({ "id": id, "patch": PATCH }));
         let log = rig.env.seen();
         let Seen::DiffOpen(view) = &log[0] else {
             panic!("missing viewer")
@@ -297,13 +411,13 @@ mod tests {
             panic!("missing update")
         };
         assert_eq!(update.patch.as_ref().unwrap().files.len(), 1);
-        rig.allowed("await wings.updateDiff('other:1', {error:'wrong plugin'}); return 1;");
+        rig.allows(
+            "updateDiff",
+            json!({ "id": "other:1", "error": "wrong plugin" }),
+        );
         assert_eq!(rig.env.seen().len(), 2);
         rig.host.diff_closed(&id);
-        rig.allowed(&format!(
-            "await wings.updateDiff({}, {{error:'late'}}); return 1;",
-            json!(id)
-        ));
+        rig.allows("updateDiff", json!({ "id": id, "error": "late" }));
         assert_eq!(rig.env.seen().len(), 2);
         drop(opener);
     }
@@ -311,8 +425,13 @@ mod tests {
     #[test]
     fn refresh_waits_for_the_main_handler_and_closing_notifies_it() {
         let rig = Rig::new(json!({ "contributes": { "ui": ["diff"] } }), vec![]);
-        let reporter = Frame::start(&rig.host, &format!("{PRELUDE} wings.onBroadcast(show);"));
-        rig.host.start_main("wings.onDiffRefresh(async ({diffId})=>{ await wings.updateDiff(diffId,{error:'reloaded'}); }); wings.onDiffClosed(value=>wings.broadcast({closed:value.diffId})); wings.openDiff({title:'Live',refresh:true}).then(value=>wings.broadcast(value));", |_| {}).unwrap();
+        let reporter = Frame::start(&rig.host, &echoes());
+        rig.host
+            .start_main(
+                &opens(json!({ "title": "Live", "refresh": true }), Then::Reloads),
+                |_| {},
+            )
+            .unwrap();
         let id = reporter.report("main opens diff", |r| r["id"].is_string())["id"]
             .as_str()
             .unwrap()
@@ -330,11 +449,8 @@ mod tests {
     #[test]
     fn disposing_an_opener_or_replacing_main_closes_its_viewers() {
         let rig = Rig::new(json!({ "contributes": { "ui": ["diff"] } }), vec![]);
-        let opener = Frame::start(
-            &rig.host,
-            &format!("{PRELUDE} attempt(async()=>await wings.openDiff({{title:'Page'}}));"),
-        );
-        let id = opener.report("page diff", |r| r["ok"]["id"].is_string())["ok"]["id"]
+        let opener = Caller::start(&rig.host);
+        let id = opener.call("openDiff", json!({ "title": "Page" })).unwrap()["id"]
             .as_str()
             .unwrap()
             .to_owned();
@@ -344,18 +460,15 @@ mod tests {
                 .seen()
                 .contains(&Seen::DiffClose("probe".into(), id))
         );
-        let reporter = Frame::start(&rig.host, &format!("{PRELUDE} wings.onBroadcast(show);"));
+        let reporter = Frame::start(&rig.host, &echoes());
         rig.host
-            .start_main(
-                "wings.openDiff({title:'Main'}).then(value=>wings.broadcast(value));",
-                |_| {},
-            )
+            .start_main(&opens(json!({ "title": "Main" }), Then::Nothing), |_| {})
             .unwrap();
         let id = reporter.report("main diff", |r| r["id"].is_string())["id"]
             .as_str()
             .unwrap()
             .to_owned();
-        rig.host.start_main("", |_| {}).unwrap();
+        rig.host.start_main(&idle("main"), |_| {}).unwrap();
         assert!(
             rig.env
                 .seen()
@@ -366,8 +479,10 @@ mod tests {
     #[test]
     fn fatal_frame_failure_closes_the_viewer_and_refresh_errors_reach_the_host() {
         let rig = Rig::new(json!({ "contributes": { "ui": ["diff"] } }), vec![]);
-        let reporter = Frame::start(&rig.host, &format!("{PRELUDE} wings.onBroadcast(show);"));
-        rig.host.start_main("wings.onDiffRefresh(()=>{throw new Error('Refresh failed');}); wings.openDiff({title:'Failure'}).then(value=>wings.broadcast(value));", |_| {}).unwrap();
+        let reporter = Frame::start(&rig.host, &echoes());
+        rig.host
+            .start_main(&opens(json!({ "title": "Failure" }), Then::Throws), |_| {})
+            .unwrap();
         let id = reporter.report("viewer", |r| r["id"].is_string())["id"]
             .as_str()
             .unwrap()
@@ -377,7 +492,9 @@ mod tests {
             let _ = tx.send(result);
         });
         assert_eq!(rx.recv_timeout(WAIT).unwrap(), Err("Refresh failed".into()));
-        rig.host.start_main("wings.openDiff({title:'Fatal'}).then(value=>{wings.broadcast(value);setTimeout(()=>{while(true){}},0);});", |_| {}).unwrap();
+        rig.host
+            .start_main(&opens(json!({ "title": "Fatal" }), Then::Stops), |_| {})
+            .unwrap();
         let id = reporter.report("fatal viewer", |r| r["id"].is_string())["id"]
             .as_str()
             .unwrap()
@@ -386,43 +503,5 @@ mod tests {
             log.contains(&Seen::DiffClose("probe".into(), id.clone()))
         });
         assert!(rig.host.shared.diffs.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn real_live_diff_helper_loads_refreshes_and_stops_after_close() {
-        let sdk = [
-            include_str!("../../../../../packages/plugin-sdk/poll.js"),
-            include_str!("../../../../../packages/plugin-sdk/async.js"),
-        ]
-        .into_iter()
-        .flat_map(|source| source.lines())
-        .filter(|line| !line.starts_with("import "))
-        .collect::<Vec<_>>()
-        .join("\n")
-        .replace("export ", "");
-        let rig = Rig::new(json!({ "contributes": { "ui": ["diff"] } }), vec![]);
-        let reporter = Frame::start(&rig.host, &format!("{PRELUDE} wings.onBroadcast(show);"));
-        rig.host.start_main(&format!("{sdk}\nlet loads=0; wings.onBroadcast(async()=>{{await refreshLiveDiffs();wings.broadcast({{loads}});}}); openLiveDiff({{title:'Live'}},async()=>{{loads++;return {{patch:{}}};}}).then(value=>wings.broadcast(value));",json!(PATCH)), |_| {}).unwrap();
-        let id = reporter.report("SDK opened diff", |r| r["id"].is_string())["id"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        let (tx, rx) = std::sync::mpsc::channel();
-        rig.host.send_diff_refresh(&id, move |result| {
-            let _ = tx.send(result);
-        });
-        assert_eq!(rx.recv_timeout(WAIT).unwrap(), Ok(()));
-        rig.host.diff_closed(&id);
-        let barrier = Frame::start(&rig.host, "wings.broadcast({});");
-        reporter.report("closed SDK viewer stopped loading", |r| r["loads"] == 2);
-        let updates = rig
-            .env
-            .seen()
-            .iter()
-            .filter(|seen| matches!(seen, Seen::DiffUpdate(..)))
-            .count();
-        // The SDK skips an unchanged refresh update, but still invokes its loader.
-        assert_eq!(updates, 1);
-        drop(barrier);
     }
 }

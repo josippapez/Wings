@@ -1,5 +1,9 @@
+use super::testing::show;
 use super::*;
-use crate::page::tree::{Node, Tree};
+use crate::page::{
+    runtime::fake::{self, Cx, Guest},
+    tree::{Node, Tree},
+};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -7,161 +11,148 @@ use std::{
     time::{Duration, Instant},
 };
 
-const MAIN: &str = include_str!("../../../pages/dist/fixture-main.js");
-const PAGE: &str = include_str!("../../../pages/dist/fixture-page.js");
-const BIG_PAGE: &str = include_str!("../../../pages/dist/fixture-big-page.js");
 const WAIT: Duration = Duration::from_secs(10);
 const SCOPE: &str = "test-scope";
 
-/// A bare page that shows what it heard and what became of what it sent. An event's payload is the message it
+/// A page that shows what it heard and what became of what it sent. An event's payload is the message it
 /// broadcasts: `{ value }`, or a text that is `chars` JSON characters long, or `emoji` emoji (2 JS string units each).
-const PROBE: &str = r#"
-const heard = [];
-const results = [];
-const show = () => wings.render(JSON.stringify({ id: 0, type: '#root', props: {}, children: [
-  { id: 1, type: '#text', text: JSON.stringify({ heard, results }) }] }));
-wings.onBroadcast((message) => {
-  heard.push(typeof message === 'string' && message.length > 50 ? `text of ${message.length}` : message);
-  show();
-});
-globalThis.__wingsEvent = (_handler, payload) => {
-  const { value, chars, emoji } = JSON.parse(payload);
-  const message = chars !== undefined ? 'x'.repeat(chars - 2) : emoji !== undefined ? '😀'.repeat(emoji) : value;
-  wings.broadcast(message).then(() => results.push('sent'), (error) => results.push(error.message)).then(show);
-  return true;
-};
-show();
-"#;
+fn probe() -> String {
+    struct Probe {
+        heard: Vec<Value>,
+        results: Vec<String>,
+    }
+    impl Probe {
+        fn show(&self, cx: &mut Cx<'_>) {
+            show(cx, json!({ "heard": self.heard, "results": self.results }));
+        }
+    }
+    impl Guest for Probe {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            self.show(cx);
+        }
+        fn event(&mut self, cx: &mut Cx<'_>, _handler: &str, payload: &Value) {
+            let message = if let Some(chars) = payload["chars"].as_u64() {
+                json!("x".repeat(chars as usize - 2))
+            } else if let Some(emoji) = payload["emoji"].as_u64() {
+                json!("😀".repeat(emoji as usize))
+            } else {
+                payload["value"].clone()
+            };
+            self.results
+                .push(match cx.link().broadcast(message.to_string()) {
+                    Ok(()) => "sent".into(),
+                    Err(error) => error,
+                });
+            self.show(cx);
+        }
+        fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, _id: u32, text: &str) {
+            if kind != "broadcast" {
+                return;
+            }
+            let message: Value = serde_json::from_str(text).unwrap();
+            self.heard.push(match message.as_str() {
+                Some(text) if text.encode_utf16().count() > 50 => {
+                    json!(format!("text of {}", text.encode_utf16().count()))
+                }
+                _ => message,
+            });
+            self.show(cx);
+        }
+    }
+    fake::source("probe", || {
+        Box::new(Probe {
+            heard: Vec::new(),
+            results: Vec::new(),
+        })
+    })
+}
 
-/// Everything a plugin frame has on `wings`, sorted: broadcast, storage and focus, and the calls the host answers
-/// (`calls`). A page has `render` too.
-const WINGS_CALLS: &[&str] = &[
-    "agentActivity",
-    "blockState",
-    "broadcast",
-    "callTool",
-    "claudeAccounts",
-    "closeView",
-    "copyText",
-    "createWorktree",
-    "diskFind",
-    "diskUsage",
-    "disks",
-    "emit",
-    "exec",
-    "fetch",
-    "focusPane",
-    "focused",
-    "notify",
-    "onAction",
-    "onAgentActivity",
-    "onBroadcast",
-    "onDiffClosed",
-    "onDiffRefresh",
-    "onEvent",
-    "onFocus",
-    "onGitChange",
-    "onHook",
-    "onPanes",
-    "onProject",
-    "onProjects",
-    "onReply",
-    "onSectionSort",
-    "onTool",
-    "onTranscript",
-    "openDiff",
-    "openPane",
-    "openSettings",
-    "openUrl",
-    "openView",
-    "ports",
-    "post",
-    "project",
-    "projects",
-    "secrets",
-    "sendToAgent",
-    "setBadge",
-    "setBlockState",
-    "setClaudeAccount",
-    "setPaneStatus",
-    "setProjectSection",
-    "setSectionSort",
-    "setSidebarLabel",
-    "setTabState",
-    "setWorktreeSetup",
-    "shareClaudeSetup",
-    "statusline",
-    "storage",
-    "tabState",
-    "transcript",
-    "updateDiff",
-    "viewArgs",
-    "worktreeSetup",
-];
-const WINGS_CALLS_AND_RENDER: &[&str] = &[
-    "agentActivity",
-    "blockState",
-    "broadcast",
-    "callTool",
-    "claudeAccounts",
-    "closeView",
-    "copyText",
-    "createWorktree",
-    "diskFind",
-    "diskUsage",
-    "disks",
-    "emit",
-    "exec",
-    "fetch",
-    "focusPane",
-    "focused",
-    "notify",
-    "onAction",
-    "onAgentActivity",
-    "onBroadcast",
-    "onDiffClosed",
-    "onDiffRefresh",
-    "onEvent",
-    "onFocus",
-    "onGitChange",
-    "onHook",
-    "onPanes",
-    "onProject",
-    "onProjects",
-    "onReply",
-    "onSectionSort",
-    "onTool",
-    "onTranscript",
-    "openDiff",
-    "openPane",
-    "openSettings",
-    "openUrl",
-    "openView",
-    "ports",
-    "post",
-    "project",
-    "projects",
-    "render",
-    "secrets",
-    "sendToAgent",
-    "setBadge",
-    "setBlockState",
-    "setClaudeAccount",
-    "setPaneStatus",
-    "setProjectSection",
-    "setSectionSort",
-    "setSidebarLabel",
-    "setTabState",
-    "setWorktreeSetup",
-    "shareClaudeSetup",
-    "statusline",
-    "storage",
-    "tabState",
-    "transcript",
-    "updateDiff",
-    "viewArgs",
-    "worktreeSetup",
-];
+/// A text node.
+fn text_node(id: usize, text: &str) -> Value {
+    json!({ "id": id, "type": "#text", "text": text })
+}
+
+/// The fixture plugin's page: the count its main keeps, and a button that asks main to add one.
+fn fixture_page() -> String {
+    struct Page(Option<u64>);
+    impl Page {
+        fn draw(&self, cx: &mut Cx<'_>) {
+            let count = self
+                .0
+                .map_or("Loading…".to_owned(), |count| format!("Count: {count}"));
+            cx.render(&json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+                { "id": 15, "type": "Page", "props": {}, "children": [
+                    { "id": 7, "type": "Slot", "props": { "name": "toolbar" }, "children": [
+                        { "id": 6, "type": "Toolbar", "props": {}, "children": [
+                            { "id": 2, "type": "Slot", "props": { "name": "title" }, "children": [text_node(1, "Fixture")] },
+                            { "id": 5, "type": "Slot", "props": { "name": "actions" }, "children": [
+                                { "id": 4, "type": "Badge", "props": { "tone": "success" }, "children": [text_node(3, "Plugin")] }] }] }] },
+                    { "id": 14, "type": "Slot", "props": { "name": "body" }, "children": [
+                        { "id": 13, "type": "Stack", "props": { "gap": "l" }, "children": [
+                            { "id": 12, "type": "Row", "props": { "gap": "m" }, "children": [
+                                { "id": 9, "type": "Button", "props": { "onClick": "9:onClick" }, "children": [text_node(8, "Increment")] },
+                                { "id": 11, "type": "Text", "props": { "weight": "medium" }, "children": [text_node(10, &count)] }] }] }] }] }] }));
+        }
+    }
+    impl Guest for Page {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            self.draw(cx);
+            cx.link()
+                .broadcast(json!({ "ask": "count" }).to_string())
+                .unwrap();
+        }
+        fn event(&mut self, cx: &mut Cx<'_>, _handler: &str, _payload: &Value) {
+            cx.link()
+                .broadcast(json!({ "ask": "increment" }).to_string())
+                .unwrap();
+        }
+        fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, _id: u32, text: &str) {
+            let heard: Value = serde_json::from_str(text).unwrap_or_default();
+            if let (true, Some(count)) = (kind == "broadcast", heard["count"].as_u64()) {
+                self.0 = Some(count);
+                self.draw(cx);
+            }
+        }
+    }
+    fake::source("page", || Box::new(Page(None)))
+}
+
+/// The fixture plugin's main: a count kept in storage, which it broadcasts when asked for it or to add one to it.
+fn fixture_main() -> String {
+    struct Main;
+    impl Guest for Main {
+        fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, _id: u32, text: &str) {
+            let heard: Value = serde_json::from_str(text).unwrap_or_default();
+            if kind != "broadcast" || heard["ask"].is_null() {
+                return;
+            }
+            let link = cx.link();
+            let saved: Value =
+                serde_json::from_str(&link.storage(Store::Get("count".into())).unwrap()).unwrap();
+            let mut count = saved.as_u64().unwrap_or(0);
+            if heard["ask"] == "increment" {
+                count += 1;
+                link.storage(Store::Set("count".into(), count.to_string()))
+                    .unwrap();
+            }
+            link.broadcast(json!({ "count": count }).to_string())
+                .unwrap();
+        }
+    }
+    fake::source("main", || Box::new(Main))
+}
+
+/// A frame that spins for `spin`, as a busy loop does, and then stops as a trap does, with `message`.
+fn stopping(spin: Duration, message: &'static str) -> String {
+    struct Stops(Duration, &'static str);
+    impl Guest for Stops {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            std::thread::sleep(self.0);
+            cx.stop(self.1);
+        }
+    }
+    fake::source("main", move || Box::new(Stops(spin, message)))
+}
 
 /// A folder for a plugin's storage, removed when the test ends.
 pub(in crate::page) struct Root(PathBuf);
@@ -197,7 +188,9 @@ impl Root {
 
     /// Stores `value` as the plugin `id` kept it, before its main starts.
     pub(in crate::page) fn save(&self, id: &str, key: &str, value: Value) {
-        Storage::new(self.0.clone()).set(id, SCOPE, key, value).unwrap();
+        Storage::new(self.0.clone())
+            .set(id, SCOPE, key, value)
+            .unwrap();
     }
 }
 
@@ -278,7 +271,7 @@ fn button(nodes: &[Node]) -> Option<String> {
 
 /// Opens the fixture's page and returns it with the id of its button, once it shows `count`.
 fn counter(host: &PluginHost, count: u32) -> (Frame, String) {
-    let page = open(host, PAGE);
+    let page = open(host, &fixture_page());
     let tree = page.shows(&format!("Count: {count}"));
     let handler = button(&tree.children).expect("the page's button has a handler");
     (page, handler)
@@ -289,7 +282,7 @@ fn a_click_asks_main_which_saves_the_count_and_the_page_shows_what_main_pushed()
     let root = Root::new();
     let host = PluginHost::new(root.config("fixture"));
     let (on_event, main_events) = events();
-    host.start_main(MAIN, on_event).unwrap();
+    host.start_main(&fixture_main(), on_event).unwrap();
     let started = Instant::now();
     let (page, handler) = counter(&host, 0);
     let first = started.elapsed();
@@ -318,7 +311,7 @@ fn a_click_asks_main_which_saves_the_count_and_the_page_shows_what_main_pushed()
 fn every_page_of_the_plugin_shows_the_count_one_of_them_raised() {
     let root = Root::new();
     let host = PluginHost::new(root.config("fixture"));
-    host.start_main(MAIN, events().0).unwrap();
+    host.start_main(&fixture_main(), events().0).unwrap();
     let (first, handler) = counter(&host, 0);
     let (second, _) = counter(&host, 0);
     assert!(first.runtime.dispatch(&handler, None));
@@ -331,7 +324,7 @@ fn the_count_survives_a_new_host_over_the_same_storage_root_but_not_another_scop
     let root = Root::new();
     {
         let host = PluginHost::new(root.config("fixture"));
-        host.start_main(MAIN, events().0).unwrap();
+        host.start_main(&fixture_main(), events().0).unwrap();
         let (page, handler) = counter(&host, 0);
         for count in 1..=2 {
             assert!(page.runtime.dispatch(&handler, None));
@@ -339,14 +332,14 @@ fn the_count_survives_a_new_host_over_the_same_storage_root_but_not_another_scop
         }
     }
     let host = PluginHost::new(root.config("fixture"));
-    host.start_main(MAIN, events().0).unwrap();
+    host.start_main(&fixture_main(), events().0).unwrap();
     let (page, handler) = counter(&host, 2);
     assert!(page.runtime.dispatch(&handler, None));
     page.shows("Count: 3");
 
     // An install of the same plugin that came after it was removed has a scope of its own, so it starts empty.
     let other = PluginHost::new(root.scoped("fixture", "another-install"));
-    other.start_main(MAIN, events().0).unwrap();
+    other.start_main(&fixture_main(), events().0).unwrap();
     counter(&other, 0);
 }
 
@@ -355,9 +348,13 @@ fn a_broadcast_reaches_the_other_frames_of_its_plugin_in_order_and_never_the_sen
  {
     let root = Root::new();
     let host = PluginHost::new(root.config("fixture"));
-    let (sender, first, second) = (open(&host, PROBE), open(&host, PROBE), open(&host, PROBE));
+    let (sender, first, second) = (
+        open(&host, &probe()),
+        open(&host, &probe()),
+        open(&host, &probe()),
+    );
     let stranger = PluginHost::new(root.config("other"));
-    let (other_sender, other) = (open(&stranger, PROBE), open(&stranger, PROBE));
+    let (other_sender, other) = (open(&stranger, &probe()), open(&stranger, &probe()));
     for frame in [&sender, &first, &second, &other_sender, &other] {
         frame.report("the probe to start", |_| true);
     }
@@ -398,7 +395,7 @@ fn a_broadcast_reaches_the_other_frames_of_its_plugin_in_order_and_never_the_sen
 fn a_broadcast_over_64000_characters_of_json_is_refused_and_one_of_64000_goes_through() {
     let root = Root::new();
     let host = PluginHost::new(root.config("fixture"));
-    let (sender, listener) = (open(&host, PROBE), open(&host, PROBE));
+    let (sender, listener) = (open(&host, &probe()), open(&host, &probe()));
     sender.send(json!({ "chars": 64_000 }));
     // JS string units, as on the desktop: 31,999 emoji and two quotes are 64,000, one more is not.
     sender.send(json!({ "emoji": 31_999 }));
@@ -422,33 +419,22 @@ fn a_broadcast_over_64000_characters_of_json_is_refused_and_one_of_64000_goes_th
 }
 
 #[test]
-fn a_message_too_big_for_one_broadcast_goes_to_main_in_parts_and_back_as_the_answer() {
-    let root = Root::new();
-    let host = PluginHost::new(root.config("fixture"));
-    host.start_main(MAIN, events().0).unwrap();
-    let page = open(&host, BIG_PAGE);
-    page.shows("ready");
-    let started = Instant::now();
-    page.send(json!({ "size": 300_000 }));
-    page.shows("echo 300000");
-    eprintln!(
-        "300,000 characters asked of main in parts and answered: {:?}",
-        started.elapsed()
-    );
-}
-
-#[test]
 fn a_main_that_throws_or_loops_leaves_the_pages_and_their_talk_alone() {
-    for source in ["throw new Error('boom');", "while (true) {}"] {
+    for (what, spin) in [
+        ("boom", Duration::ZERO),
+        (
+            "the main ran for too long and was stopped",
+            Duration::from_millis(300),
+        ),
+    ] {
         let root = Root::new();
-        // The default budget: the page boots React, which a busy machine can take a while over.
         let host = PluginHost::new(root.config("fixture"));
         let (on_event, main_events) = events();
-        let fixture_page = open(&host, PAGE);
+        let fixture_page = open(&host, &fixture_page());
         let handler = button(&fixture_page.shows("Loading").children).unwrap();
-        let (a, b) = (open(&host, PROBE), open(&host, PROBE));
+        let (a, b) = (open(&host, &probe()), open(&host, &probe()));
         let started = Instant::now();
-        host.start_main(source, on_event).unwrap();
+        host.start_main(&stopping(spin, what), on_event).unwrap();
 
         // Main is told about the page's ask and the probes' message while it spins or after it has stopped: neither
         // the sender nor the page waits for it.
@@ -461,7 +447,7 @@ fn a_main_that_throws_or_loops_leaves_the_pages_and_their_talk_alone() {
         // Main's one and last event: it never started, or it was stopped.
         match main_events.recv_timeout(WAIT).expect("main's end") {
             Event::Error { message, fatal } => {
-                eprintln!("`{source}`: {message}, after {:?}", started.elapsed());
+                eprintln!("`{what}`: {message}, after {:?}", started.elapsed());
                 assert!(fatal, "{message}");
             }
             Event::Tree(_) => panic!("main drew a tree"),
@@ -478,17 +464,24 @@ fn a_main_that_throws_or_loops_leaves_the_pages_and_their_talk_alone() {
 
 #[test]
 fn a_page_that_loops_in_a_broadcast_stops_alone() {
+    /// A page that draws nothing and is stopped by the first message it hears, as a loop in its listener is.
+    struct Stuck;
+    impl Guest for Stuck {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            cx.render(&json!({ "id": 0, "type": "#root", "props": {}, "children": [] }));
+        }
+        fn deliver(&mut self, cx: &mut Cx<'_>, _kind: &str, _id: u32, _text: &str) {
+            cx.stop("the page ran for too long and was stopped");
+        }
+    }
     let root = Root::new();
     let limits = Limits {
         turn: Duration::from_millis(300),
         ..Limits::default()
     };
     let host = PluginHost::with_limits(root.config("fixture"), limits);
-    let stuck = open(
-        &host,
-        "wings.onBroadcast(() => { for (;;) {} }); wings.render('{\"id\":0,\"type\":\"#root\",\"props\":{},\"children\":[]}');",
-    );
-    let (a, b) = (open(&host, PROBE), open(&host, PROBE));
+    let stuck = open(&host, &fake::source("stuck", || Box::new(Stuck)));
+    let (a, b) = (open(&host, &probe()), open(&host, &probe()));
     a.send(json!({ "value": 1 }));
     loop {
         match stuck.next() {
@@ -514,8 +507,8 @@ fn a_page_that_loops_in_a_broadcast_stops_alone() {
 fn a_frame_that_is_dropped_leaves_the_plugin_and_its_thread_ends() {
     let root = Root::new();
     let host = PluginHost::new(root.config("fixture"));
-    let kept = open(&host, PROBE);
-    let gone = open(&host, PROBE);
+    let kept = open(&host, &probe());
+    let gone = open(&host, &probe());
     // The host, and a link and a place in the list for each frame.
     assert_eq!(Arc::strong_count(&host.shared), 5);
     assert_eq!(host.shared.frames.lock().unwrap().len(), 2);
@@ -534,37 +527,59 @@ fn a_frame_that_is_dropped_leaves_the_plugin_and_its_thread_ends() {
 }
 
 /// A page that stores, reads and removes values, and shows how each call went.
-const STORAGE_PAGE: &str = r#"
-(async () => {
-  const out = {};
-  const trying = async (name, call) => { try { const value = await call(); out[name] = value === undefined ? 'ok' : value; } catch (error) { out[name] = `refused: ${error.message}`; } };
-  await wings.storage.set('a/1', { x: [1, 2], y: 'é' });
-  await wings.storage.set('a/2', 'two');
-  await wings.storage.set('b', null);
-  await trying('get', () => wings.storage.get('a/1'));
-  await trying('missing', () => wings.storage.get('nope'));
-  await trying('null', () => wings.storage.get('b'));
-  await trying('keys', () => wings.storage.keys());
-  await trying('prefix', () => wings.storage.entries('a/'));
-  await trying('all', async () => (await wings.storage.entries()).length);
-  await wings.storage.delete('a/2');
-  await wings.storage.delete('never-set');
-  await trying('after', () => wings.storage.keys());
-  await trying('number key', async () => { await wings.storage.set(5, 'five'); return wings.storage.get('5'); });
-  await trying('bad key', () => wings.storage.set('bad key!', 1));
-  await trying('empty key', () => wings.storage.get(''));
-  await trying('nothing to store', () => wings.storage.set('k', undefined));
-  await trying('big', () => wings.storage.set('k', 'x'.repeat(1024 * 1024)));
-  await trying('just fits', () => wings.storage.set('k', 'x'.repeat(1024 * 1024 - 2)));
-  wings.render(JSON.stringify({ id: 0, type: '#root', props: {}, children: [{ id: 1, type: '#text', text: JSON.stringify(out) }] }));
-})();
-"#;
+fn storing() -> String {
+    struct Storing;
+    impl Guest for Storing {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            let link = cx.link().clone();
+            let ask = |call: Store| {
+                link.storage(call)
+                    .map(|json| serde_json::from_str::<Value>(&json).unwrap())
+            };
+            let set = |key: &str, value: Value| ask(Store::Set(key.into(), value.to_string()));
+            let get = |key: &str| ask(Store::Get(key.into()));
+            let mut out = serde_json::Map::new();
+            let mut trying = |name: &str, result: Result<Value, String>| {
+                out.insert(
+                    name.into(),
+                    result.unwrap_or_else(|why| json!(format!("refused: {why}"))),
+                );
+            };
+            let done = |result: Result<Value, String>| result.map(|_| json!("ok"));
+            set("a/1", json!({ "x": [1, 2], "y": "é" })).unwrap();
+            set("a/2", json!("two")).unwrap();
+            set("b", Value::Null).unwrap();
+            trying("get", get("a/1"));
+            trying("missing", get("nope"));
+            trying("null", get("b"));
+            trying("keys", ask(Store::Keys));
+            trying("prefix", ask(Store::Entries("a/".into())));
+            trying(
+                "all",
+                ask(Store::Entries(String::new())).map(|all| json!(all.as_array().unwrap().len())),
+            );
+            ask(Store::Delete("a/2".into())).unwrap();
+            ask(Store::Delete("never-set".into())).unwrap();
+            trying("after", ask(Store::Keys));
+            trying("number key", set("5", json!("five")).and_then(|_| get("5")));
+            trying("bad key", done(set("bad key!", json!(1))));
+            trying("empty key", get(""));
+            trying("big", done(set("k", json!("x".repeat(1024 * 1024)))));
+            trying(
+                "just fits",
+                done(set("k", json!("x".repeat(1024 * 1024 - 2)))),
+            );
+            show(cx, Value::Object(out));
+        }
+    }
+    fake::source("page", || Box::new(Storing))
+}
 
 #[test]
 fn storage_keeps_json_by_key_for_this_plugin_and_scope_with_the_desktops_limits() {
     let root = Root::new();
     let host = PluginHost::new(root.config("fixture"));
-    let page = open(&host, STORAGE_PAGE);
+    let page = open(&host, &storing());
     let seen = report_of(&page.until("the storage calls", |_| true));
     let refused = |why: &str| json!(format!("refused: {why}"));
     assert_eq!(seen["get"], json!({ "x": [1, 2], "y": "é" }));
@@ -581,11 +596,15 @@ fn storage_keeps_json_by_key_for_this_plugin_and_scope_with_the_desktops_limits(
     let key = "A storage key is 1 to 128 letters, digits and - _ . : /";
     assert_eq!(seen["bad key"], refused(key));
     assert_eq!(seen["empty key"], refused(key));
-    assert_eq!(
-        seen["nothing to store"],
-        refused("wings.storage.set needs a JSON value. Use delete to remove a key")
+    // The storage says how big the value was, which the JS glue's own check didn't.
+    assert!(
+        seen["big"]
+            .as_str()
+            .unwrap()
+            .starts_with("refused: A stored value is limited to 1 MB"),
+        "{}",
+        seen["big"]
     );
-    assert_eq!(seen["big"], refused("A stored value is limited to 1 MB"));
     assert_eq!(seen["just fits"], "ok");
 
     // The same files the desktop app reads, under this plugin's id and scope only.
@@ -601,123 +620,80 @@ fn storage_keeps_json_by_key_for_this_plugin_and_scope_with_the_desktops_limits(
     );
 }
 
+/// A module that imports `wings.exec`, which the host never gave a frame: the header, a type of `() -> ()`, and that
+/// import. A frame reaches the host through the imports in `wasm::imports` alone, and the linker refuses any other.
 #[test]
-fn a_frame_has_the_wings_calls_the_host_answers_and_the_timers_and_nothing_else_of_the_host() {
+fn a_module_that_imports_anything_but_the_wings_functions_does_not_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let module = dir.path().join("page.wasm");
+    fs::write(
+        &module,
+        b"\0asm\x01\0\0\0\x01\x04\x01\x60\0\0\x02\x0e\x01\x05wings\x04exec\0\0",
+    )
+    .unwrap();
     let root = Root::new();
     let host = PluginHost::new(root.config("fixture"));
     let page = open(
         &host,
-        r#"
-        const denied = ['fetch', 'require', 'process', 'std', 'os', 'XMLHttpRequest', 'WebSocket', 'window', 'document', 'Worker',
-          'setImmediate', 'print', 'Deno', 'Bun'].filter((name) => typeof globalThis[name] !== 'undefined');
-        const names = Object.getOwnPropertyNames(globalThis).filter((name) => /^(wings|console|set|clear|__)/.test(name)).sort();
-        let replaced = true;
-        try { globalThis.wings = {}; } catch (_) { replaced = false; }
-        let storageReplaced = true;
-        try { wings.storage.get = null; } catch (_) { storageReplaced = false; }
-        wings.render(JSON.stringify({ id: 0, type: '#root', props: {}, children: [{ id: 1, type: '#text', text: JSON.stringify({
-          denied, names, replaced, storageReplaced, wings: Object.keys(wings).sort(), storage: Object.keys(wings.storage).sort(),
-          frozen: Object.isFrozen(wings) && Object.isFrozen(wings.storage), focused: wings.focused,
-          console: Object.keys(console).sort(), logged: console.error(new Error('x')) ?? 'nothing' }) }] }));
-        "#,
+        &format!("{}{}", crate::page::runtime::wasm::MARKER, module.display()),
     );
-    let seen = report_of(&page.until("the report", |_| true));
-    assert_eq!(seen["denied"], json!([]));
-    assert_eq!(
-        seen["names"],
-        json!([
-            "clearInterval",
-            "clearTimeout",
-            "console",
-            "setInterval",
-            "setTimeout",
-            "wings"
-        ])
-    );
-    assert_eq!(seen["wings"], json!(WINGS_CALLS_AND_RENDER));
-    assert_eq!(
-        seen["storage"],
-        json!(["delete", "entries", "get", "keys", "set"])
-    );
-    assert_eq!(
-        seen["console"],
-        json!(["debug", "error", "info", "log", "warn"])
-    );
-    assert_eq!(seen["logged"], "nothing");
-    assert_eq!(seen["replaced"], false);
-    assert_eq!(seen["storageReplaced"], false);
-    assert_eq!(seen["frozen"], true);
-    assert_eq!(seen["focused"], true);
-}
-
-#[test]
-fn main_has_the_same_wings_less_render() {
-    let root = Root::new();
-    let host = PluginHost::new(root.config("fixture"));
-    let listener = open(&host, PROBE);
-    listener.report("the probe", |_| true);
-    host.start_main(
-        "wings.broadcast({ wings: Object.keys(wings).sort(), render: typeof wings.render, \
-         timers: [typeof setInterval, typeof clearInterval] });",
-        events().0,
-    )
-    .unwrap();
-    let report = listener.report("main's message", |r| {
-        !r["heard"].as_array().unwrap().is_empty()
-    });
-    assert_eq!(
-        report["heard"][0],
-        json!({ "wings": WINGS_CALLS, "render": "undefined", "timers": ["function", "function"] })
-    );
+    match page.next() {
+        Event::Error { message, fatal } => assert!(fatal && message.contains("exec"), "{message}"),
+        Event::Tree(tree) => panic!("the module drew {}", tree.text()),
+    }
 }
 
 #[test]
 fn starting_main_again_replaces_it_and_the_old_one_stops() {
+    /// A main that broadcasts `what` as it starts.
+    fn says(what: &'static str) -> String {
+        struct Says(&'static str);
+        impl Guest for Says {
+            fn start(&mut self, cx: &mut Cx<'_>) {
+                cx.link().broadcast(json!(self.0).to_string()).unwrap();
+            }
+        }
+        fake::source("main", move || Box::new(Says(what)))
+    }
     let root = Root::new();
     let host = PluginHost::new(root.config("fixture"));
-    let listener = open(&host, PROBE);
-    host.start_main("wings.broadcast('first');", events().0)
-        .unwrap();
+    let listener = open(&host, &probe());
+    host.start_main(&says("first"), events().0).unwrap();
     listener.report("first", |r| r["heard"] == json!(["first"]));
-    host.start_main("wings.broadcast('second');", events().0)
-        .unwrap();
+    host.start_main(&says("second"), events().0).unwrap();
     listener.report("second", |r| r["heard"] == json!(["first", "second"]));
     assert_eq!(host.shared.frames.lock().unwrap().len(), 2);
-}
-
-#[test]
-fn a_plugins_pages_share_one_engine_which_ends_with_the_last_page_and_main_keeps_its_own() {
-    let root = Root::new();
-    let host = PluginHost::new(root.config("fixture"));
-    host.start_main("", |_| {}).unwrap();
-    // Main started no engine for pages.
-    assert!(host.pages.lock().unwrap().upgrade().is_none());
-    let first = open(&host, PROBE);
-    let engine = host.pages.lock().unwrap().upgrade().unwrap();
-    let second = open(&host, PROBE);
-    assert!(Arc::ptr_eq(&engine, &super::page_engine(&host.pages, host.limits).unwrap()));
-    second.report("the second page", |_| true);
-    drop(engine);
-    drop((first, second));
-    assert!(host.pages.lock().unwrap().upgrade().is_none());
-    open(&host, PROBE).report("a page on a new engine", |_| true);
 }
 
 /// A main that stops for good is started again, so its badges, tools and actions come back without restarting Wings:
 /// Changes' and Tasks' mains stopped on a busy Mac and stayed stopped. Once the plugin is dropped, nothing restarts.
 #[test]
 fn a_main_that_stops_is_started_again_until_its_plugin_is_dropped() {
+    /// Counts its starts, then is stopped a moment later, as a loop is.
+    struct Counts;
+    impl Guest for Counts {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            let link = cx.link();
+            let before: Value =
+                serde_json::from_str(&link.storage(Store::Get("starts".into())).unwrap()).unwrap();
+            let starts = before.as_u64().unwrap_or(0) + 1;
+            link.storage(Store::Set("starts".into(), starts.to_string()))
+                .unwrap();
+            cx.later(50);
+        }
+        fn timer(&mut self, cx: &mut Cx<'_>, _id: u32) {
+            cx.stop("the main ran for too long and was stopped");
+        }
+    }
     let root = Root::new();
     let limits = Limits {
         turn: Duration::from_millis(100),
         ..Limits::default()
     };
     let host = Arc::new(PluginHost::with_limits(root.config("fixture"), limits));
-    // Counts its starts, then loops until it is stopped.
-    let main = "wings.storage.get('starts').then((n) => wings.storage.set('starts', (n ?? 0) + 1)).then(() => setTimeout(() => { for (;;) {} }, 50));";
     let (stops, stopped) = mpsc::channel();
     host.keep_main(
-        main.into(),
+        fake::source("main", || Box::new(Counts)).into(),
         Arc::new(move |event| {
             if matches!(event, Event::Error { fatal: true, .. }) {
                 let _ = stops.send(());
@@ -725,9 +701,15 @@ fn a_main_that_stops_is_started_again_until_its_plugin_is_dropped() {
         }),
     )
     .unwrap();
-    let starts = |root: &Root| root.saved("fixture", "starts").and_then(|n| n.as_u64()).unwrap_or(0);
+    let starts = |root: &Root| {
+        root.saved("fixture", "starts")
+            .and_then(|n| n.as_u64())
+            .unwrap_or(0)
+    };
     stopped.recv_timeout(WAIT).expect("the first main to stop");
-    stopped.recv_timeout(WAIT).expect("the main started again, and stopped again");
+    stopped
+        .recv_timeout(WAIT)
+        .expect("the main started again, and stopped again");
     assert_eq!(starts(&root), 2);
     drop(host);
     // The next restart would have come 4 s after that stop.

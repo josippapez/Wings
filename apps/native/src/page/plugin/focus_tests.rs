@@ -1,24 +1,67 @@
-use super::testing::{Frame, PRELUDE, Rig};
+use super::testing::{Frame, Rig, barrier, echoes, show};
+use crate::page::runtime::fake::{self, Cx, Guest};
 use serde_json::json;
 
-fn focus_source() -> String {
-    format!(
-        "{PRELUDE} const initial = wings.focused; const states = []; wings.onFocus(value => {{ states.push(value.focused); show({{initial, states}}); }}); wings.onBroadcast(() => show({{initial, states}}));"
-    )
+/// A frame that follows the window's focus as `wings.onFocus` hands it over: the first message always counts, and after
+/// that only a change does. `main` broadcasts the states it has seen, and a page shows them, with the focus it started with.
+fn follows_focus(main: bool) -> String {
+    struct Follows {
+        main: bool,
+        initial: bool,
+        states: Vec<bool>,
+    }
+    impl Guest for Follows {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            self.initial = cx.link().focused();
+        }
+        fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, _id: u32, text: &str) {
+            let focused = match kind {
+                "focus" => {
+                    serde_json::from_str::<serde_json::Value>(text).unwrap()["focused"] == true
+                }
+                "broadcast" if !self.main => {
+                    return show(
+                        cx,
+                        json!({ "initial": self.initial, "states": self.states }),
+                    );
+                }
+                _ => return,
+            };
+            if Some(&focused) == self.states.last() {
+                return;
+            }
+            self.states.push(focused);
+            if self.main {
+                cx.link().broadcast(json!(self.states).to_string()).unwrap();
+            } else {
+                show(
+                    cx,
+                    json!({ "initial": self.initial, "states": self.states }),
+                );
+            }
+        }
+    }
+    fake::source("focus", move || {
+        Box::new(Follows {
+            main,
+            initial: false,
+            states: Vec::new(),
+        })
+    })
 }
 
 #[test]
 fn auxiliary_window_focus_is_local_to_its_page_but_keeps_main_active() {
     let rig = Rig::new(json!({}), vec![]);
-    let primary = Frame::start(&rig.host, &focus_source());
+    let primary = Frame::start(&rig.host, &follows_focus(false));
     primary.report("primary starts focused", |r| r["states"] == json!([true]));
     let auxiliary = rig.host.register_window();
-    let page = Frame::in_window(&rig.host, auxiliary.id, &focus_source());
+    let page = Frame::in_window(&rig.host, auxiliary.id, &follows_focus(false));
     page.report("auxiliary starts inactive", |r| {
         r["states"] == json!([false])
     });
-    let reporter = Frame::hidden(&rig.host, &format!("{PRELUDE} wings.onBroadcast(show);"));
-    rig.host.start_main("const states=[]; wings.onFocus(({focused})=>{states.push(focused); wings.broadcast(states);});", |_| {}).unwrap();
+    let reporter = Frame::hidden(&rig.host, &echoes());
+    rig.host.start_main(&follows_focus(true), |_| {}).unwrap();
     reporter.report("main starts focused", |r| r == &json!([true]));
     auxiliary.set_active(true);
     rig.host.publish_focus(false);
@@ -44,8 +87,8 @@ fn auxiliary_window_focus_is_local_to_its_page_but_keeps_main_active() {
 #[test]
 fn page_focus_combines_window_activation_with_each_frames_visibility() {
     let rig = Rig::new(json!({}), vec![]);
-    let first = Frame::hidden(&rig.host, &focus_source());
-    let second = Frame::hidden(&rig.host, &focus_source());
+    let first = Frame::hidden(&rig.host, &follows_focus(false));
+    let second = Frame::hidden(&rig.host, &follows_focus(false));
     for frame in [&first, &second] {
         assert_eq!(
             frame.report("hidden startup", |r| r["states"] == json!([false]))["initial"],
@@ -70,7 +113,7 @@ fn page_focus_combines_window_activation_with_each_frames_visibility() {
     first.report("only visible frame regains focus", |r| {
         r["states"] == json!([false, true, false, true])
     });
-    let barrier = Frame::start(&rig.host, "wings.broadcast({});");
+    let barrier = Frame::start(&rig.host, &barrier());
     assert_eq!(
         second.report("hidden frame stayed unfocused", |r| r["states"].is_array())["states"],
         json!([false, true, false])
@@ -78,7 +121,7 @@ fn page_focus_combines_window_activation_with_each_frames_visibility() {
     drop(barrier);
     drop(first);
     assert_eq!(rig.host.shared.frames.lock().unwrap().len(), 1);
-    let replacement = Frame::hidden(&rig.host, &focus_source());
+    let replacement = Frame::hidden(&rig.host, &follows_focus(false));
     replacement.report("replacement starts hidden", |r| {
         r["initial"] == false && r["states"] == json!([false])
     });
@@ -87,55 +130,11 @@ fn page_focus_combines_window_activation_with_each_frames_visibility() {
 #[test]
 fn main_follows_window_focus_even_when_every_page_is_hidden() {
     let rig = Rig::new(json!({}), vec![]);
-    let reporter = Frame::hidden(&rig.host, &format!("{PRELUDE} wings.onBroadcast(show);"));
-    rig.host.start_main("const states = []; wings.onFocus(value => { states.push(value.focused); wings.broadcast(states); });", |_| {}).unwrap();
+    let reporter = Frame::hidden(&rig.host, &echoes());
+    rig.host.start_main(&follows_focus(true), |_| {}).unwrap();
     reporter.report("main initially focused", |r| r == &json!([true]));
     rig.host.publish_focus(false);
     reporter.report("main backgrounded", |r| r == &json!([true, false]));
     rig.host.publish_focus(true);
     reporter.report("main foregrounded", |r| r == &json!([true, false, true]));
-}
-
-#[test]
-fn real_sdk_git_helper_defers_hidden_and_background_events_until_visible_focus() {
-    // These modules have only named imports/exports. Keep the shipped helper bodies, without module linkage.
-    let sdk = [
-        include_str!("../../../../../packages/plugin-sdk/poll.js"),
-        include_str!("../../../../../packages/plugin-sdk/async.js"),
-        include_str!("../../../../../packages/plugin-sdk/git.js"),
-    ]
-    .into_iter()
-    .flat_map(|source| source.lines())
-    .filter(|line| !line.starts_with("import "))
-    .collect::<Vec<_>>()
-    .join("\n")
-    .replace("export ", "");
-    let rig = Rig::new(json!({ "permissions": { "exec": ["git"] } }), vec![]);
-    let source = format!(
-        "{PRELUDE}\n{sdk}\nlet calls = 0; let batches = []; onGitChange(async ids => {{ calls++; batches.push(ids); show({{calls, batches}}); }}); let barriers = 0; wings.onBroadcast(() => show({{calls, barriers: ++barriers}})); show({{ready:true}});"
-    );
-    let page = Frame::hidden(&rig.host, &source);
-    page.report("git helper ready", |r| r["ready"] == true);
-    rig.host.publish_git(&["one".into()]);
-    let barrier = Frame::start(&rig.host, "wings.broadcast({});");
-    assert_eq!(
-        page.report("hidden git barrier", |r| r["barriers"] == 1)["calls"],
-        0
-    );
-    page.set_visible(true);
-    page.report("visible git flush", |r| {
-        r["calls"] == 1 && r["batches"] == json!([["one"]])
-    });
-    rig.host.publish_focus(false);
-    rig.host.publish_git(&["two".into()]);
-    let second = Frame::start(&rig.host, "wings.broadcast({});");
-    assert_eq!(
-        page.report("background git barrier", |r| r["barriers"] == 2)["calls"],
-        1
-    );
-    rig.host.publish_focus(true);
-    page.report("foreground git flush", |r| {
-        r["calls"] == 2 && r["batches"] == json!([["one"], ["two"]])
-    });
-    drop((barrier, second));
 }

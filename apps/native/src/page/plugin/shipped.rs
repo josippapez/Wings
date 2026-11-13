@@ -13,11 +13,14 @@ use wings_plugins::{loading, manifest::Plugin};
 
 use super::{
     PanePort, Project, SessionEntry,
-    testing::{Frame, Rig, Seen, WAIT, pane},
+    testing::{Rig, Seen, WAIT, pane},
     ui::Tone,
 };
 use crate::page::{
-    runtime::{Event, PageRuntime, Reply},
+    runtime::{
+        Event, PageRuntime, Reply, Store,
+        fake::{self, Cx, Guest},
+    },
     tree::{Node, Tree, plain_text},
 };
 
@@ -467,24 +470,16 @@ fn dev_servers_cannot_reach_what_its_manifest_does_not_grant() {
     plugin.manifest.permissions.open_url.clear();
     let rig = Rig::with(plugin, false, vec![pane("1", "/work")]);
     *rig.env.ports.lock().unwrap() = Ok(vec![node("1", 5173)]);
-    let frame = Frame::start(
-        &rig.host,
-        r#"
-        const results = [];
-        const show = () => wings.render(JSON.stringify({ id: 0, type: '#root', props: {}, children: [{ id: 1, type: '#text', text: JSON.stringify({ results }) }] }));
-        wings.ports().catch((error) => error.message).then((m) => { results.push(m); return wings.openUrl('http://localhost:5173/'); })
-          .catch((error) => error.message).then((m) => { results.push(m); show(); });
-        "#,
-    );
-    let report = frame.report("both refusals", |r| {
-        r["results"].as_array().is_some_and(|r| r.len() == 2)
-    });
+    let results = [
+        rig.refuses("ports", json!({})),
+        rig.refuses("openUrl", json!({ "url": "http://localhost:5173/" })),
+    ];
     assert_eq!(
-        report["results"],
-        json!([
+        results,
+        [
             "dev-servers may not read listening ports",
             "dev-servers may not open http://localhost:5173/"
-        ])
+        ]
     );
     assert!(rig.env.seen().is_empty());
 }
@@ -680,11 +675,19 @@ fn hud_reads_the_transcript_only_for_the_types_its_manifest_names() {
     let claude = claude_with_session();
     let rig = Rig::with(load("hud"), false, vec![claude_pane()]);
     *rig.env.claude.lock().unwrap() = vec![claude.clone()];
-    let result = rig.allowed(&format!(
-        "const read = (types) => wings.transcript('{SESSION}', types).then((entries) => entries.length, (error) => error.message);
-         return {{ attachments: await read(['attachment:model']), assistant: await read(['assistant']),
-                  system: await read(['system']), status: await wings.statusline() }};"
-    ));
+    let read = |types: &[&str]| match rig.call(
+        "transcript",
+        json!({ "sessionId": SESSION, "types": types, "last": null }),
+    ) {
+        Ok(entries) => json!(entries.as_array().unwrap().len()),
+        Err(error) => json!(error),
+    };
+    let result = json!({
+        "attachments": read(&["attachment:model"]),
+        "assistant": read(&["assistant"]),
+        "system": read(&["system"]),
+        "status": rig.allows("statusline", json!({})),
+    });
     assert_eq!(result["attachments"], 1);
     assert_eq!(result["assistant"], 1);
     assert_eq!(
@@ -1838,19 +1841,37 @@ fn tasks_board_search_narrows_the_issues_as_you_type() {
 #[test]
 fn tasks_board_with_500_issues_draws_and_searches_within_a_turn() {
     let rig = tasks_rig();
-    let seed = r##"
-        const slot = "c10b05ffeab5d23e"; // the slot of /work/web
-        const now = Date.now();
-        const statuses = ["todo", "in_progress", "in_review", "done"];
-        const sets = [];
-        for (let i = 1; i <= 500; i++) {
-            sets.push(wings.storage.set(`issues/${slot}/WEB-${i}`, { key: `WEB-${i}`, title: `Item ${i} of the made-up backlog`, status: statuses[i % 4], type: "task", sessions: [], log: [{ at: now, by: "you", kind: "created", text: "Created" }], createdAt: now, updatedAt: now - i * 1000 }));
+    /// A page that stores 500 issues and the project's counter, as an older build left them, and then says so.
+    struct Seeds;
+    impl Guest for Seeds {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            let slot = "c10b05ffeab5d23e"; // the slot of /work/web
+            let now = now_ms();
+            let statuses = ["todo", "in_progress", "in_review", "done"];
+            let set = |key: String, value: serde_json::Value| {
+                cx.link()
+                    .storage(Store::Set(key, value.to_string()))
+                    .unwrap();
+            };
+            for i in 1..=500u64 {
+                set(
+                    format!("issues/{slot}/WEB-{i}"),
+                    json!({ "key": format!("WEB-{i}"), "title": format!("Item {i} of the made-up backlog"), "status": statuses[i as usize % 4],
+                        "type": "task", "sessions": [], "log": [{ "at": now, "by": "you", "kind": "created", "text": "Created" }],
+                        "createdAt": now, "updatedAt": now - i * 1000 }),
+                );
+            }
+            set(
+                format!("issues/{slot}"),
+                json!({ "v": 3, "path": "/work/web", "prefix": "WEB", "next": 501 }),
+            );
+            cx.render(&json!({ "id": 0, "type": "#root", "props": {}, "children": [{ "id": 1, "type": "#text", "text": "Seeded" }] }));
         }
-        sets.push(wings.storage.set(`issues/${slot}`, { v: 3, path: "/work/web", prefix: "WEB", next: 501 }));
-        Promise.all(sets).then(() => wings.render(JSON.stringify({ id: 0, type: "#root", props: {}, children: [{ id: 1, type: "#text", text: "Seeded" }] })));
-    "##;
-    let (_seeding, seeded) = open_page(&rig.host, seed);
-    tree(&seeded, "the seeded issues", |tree| tree.text().contains("Seeded"));
+    }
+    let (_seeding, seeded) = open_page(&rig.host, &fake::source("seed", || Box::new(Seeds)));
+    tree(&seeded, "the seeded issues", |tree| {
+        tree.text().contains("Seeded")
+    });
     let started = std::time::Instant::now();
     let (page, events, _saved) = open_with_state(
         &rig.host,

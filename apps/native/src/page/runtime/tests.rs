@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    fake::{self, Cx, Guest},
+    *,
+};
 use crate::page::tree::Node;
 use std::collections::BTreeSet;
 
@@ -36,16 +39,35 @@ fn disk_progress_is_decoded_and_aborting_cancels_the_same_call() {
             }
         }
     }
-    let source = r#"
-        const controller = new AbortController();
-        let looked = 0;
-        wings.diskFind('/fixture', {
-            names: ['.git'], signal: controller.signal,
-            onProgress: progress => { looked = progress.entries; controller.abort(); controller.abort(); }
-        }).catch(error => wings.render(JSON.stringify({ type: '#root', id: 0, children: [
-            { type: '#text', id: 1, text: JSON.stringify({ looked, stopped: controller.signal.aborted, error: error.message }) }
-        ] })));
-    "#;
+    /// A page that scans, stops the scan when it hears how far it got, and shows how the scan ended.
+    struct Scans {
+        find: u32,
+        looked: u64,
+    }
+    impl Guest for Scans {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            self.find = cx.call(
+                "diskFind",
+                serde_json::json!({ "path": "/fixture", "names": [".git"], "token": "1", "stream": true }),
+            );
+        }
+        fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, id: u32, text: &str) {
+            match kind {
+                "output" if id == self.find && self.looked == 0 => {
+                    let progress: serde_json::Value = serde_json::from_str(text).unwrap();
+                    self.looked = progress["entries"].as_u64().unwrap();
+                    cx.call("diskUsageCancel", serde_json::json!({ "token": "1" }));
+                }
+                "reject" if id == self.find => {
+                    let result = serde_json::json!({ "looked": self.looked, "stopped": true, "error": text });
+                    cx.render(&serde_json::json!({ "type": "#root", "id": 0, "children": [
+                        { "type": "#text", "id": 1, "text": result.to_string() }] }));
+                }
+                _ => {}
+            }
+        }
+    }
+    let source = fake::source("page", || Box::new(Scans { find: 0, looked: 0 }));
     let (tx, events) = mpsc::channel();
     let runtime = PageRuntime::spawn_plugin(
         source,
@@ -190,18 +212,51 @@ fn the_page_sees_wings_and_timers_and_nothing_else_of_the_host() {
     assert_eq!(added, ["clearTimeout", "setTimeout", "wings"]);
 }
 
+/// Renders `value` for a test to read with `shown`.
+fn show(cx: &mut Cx<'_>, value: serde_json::Value) {
+    cx.render(
+        &serde_json::json!({ "id": 0, "type": "#root", "props": {}, "children": [
+        { "id": 1, "type": "#text", "text": value.to_string() }] }),
+    );
+}
+
 #[test]
 fn timers_run_in_order_after_their_real_delay_with_their_arguments_and_can_be_cleared() {
-    let page = start(
-        &report(
-            "const t0 = Date.now(); const order = [];
-             setTimeout(() => order.push('b'), 60);
-             setTimeout(() => order.push('a'), 20);
-             clearTimeout(setTimeout(() => order.push('cleared'), 30));
-             setTimeout((x, y) => { order.push('args' + x + y); show({ order, elapsed: Date.now() - t0 }); }, 90, 1, 2);",
-        ),
-        Limits::default(),
-    );
+    /// Sets three timers, `b` first, and shows the order they ran in when the last has. A fake has no way to clear one,
+    /// so there is no timer here that is cleared.
+    struct Timers {
+        started: Instant,
+        order: Vec<&'static str>,
+        ids: [u32; 3],
+    }
+    impl Guest for Timers {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            self.ids = [cx.later(60), cx.later(20), cx.later(90)];
+        }
+        fn timer(&mut self, cx: &mut Cx<'_>, id: u32) {
+            let [b, a, last] = self.ids;
+            self.order.push(match id {
+                id if id == b => "b",
+                id if id == a => "a",
+                id if id == last => "args12",
+                _ => return,
+            });
+            if id == last {
+                let elapsed = self.started.elapsed().as_millis() as u64;
+                show(
+                    cx,
+                    serde_json::json!({ "order": self.order, "elapsed": elapsed }),
+                );
+            }
+        }
+    }
+    let page = start_in_plugin(&fake::source("page", || {
+        Box::new(Timers {
+            started: Instant::now(),
+            order: Vec::new(),
+            ids: [0; 3],
+        })
+    }));
     let seen = shown(&page.tree());
     assert_eq!(seen["order"], serde_json::json!(["a", "b", "args12"]));
     let elapsed = seen["elapsed"].as_u64().unwrap();
@@ -323,10 +378,14 @@ fn an_error_in_a_click_is_shown_and_the_page_goes_on() {
 
 #[test]
 fn a_tree_the_host_refuses_is_an_error_and_not_a_tree() {
-    let page = start(
-        "wings.render('{\"not\":\"a tree\"}'); wings.render('x'.repeat(3 * 1024 * 1024));",
-        Limits::default(),
-    );
+    struct Refused;
+    impl Guest for Refused {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            cx.render(&serde_json::json!({ "not": "a tree" }));
+            cx.render(&serde_json::Value::String("x".repeat(3 * 1024 * 1024)));
+        }
+    }
+    let page = start_in_plugin(&fake::source("page", || Box::new(Refused)));
     for _ in 0..2 {
         assert!(matches!(page.next(), Event::Error { fatal: false, .. }));
     }
@@ -386,12 +445,28 @@ fn an_interval_repeats_until_it_is_cleared_and_either_clear_function_stops_it() 
 
 #[test]
 fn a_timer_that_sets_itself_again_does_not_keep_the_frame_from_its_events() {
-    let page = start_in_plugin(&report(
-        "let runs = 0;
-         const again = () => { if (++runs === 3) show('spinning'); setTimeout(again, 0); };
-         again();
-         globalThis.__wingsEvent = (handler) => { show(handler); return true; };",
-    ));
+    struct Again(u32);
+    impl Again {
+        fn again(&mut self, cx: &mut Cx<'_>) {
+            self.0 += 1;
+            if self.0 == 3 {
+                show(cx, serde_json::json!("spinning"));
+            }
+            cx.later(0);
+        }
+    }
+    impl Guest for Again {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            self.again(cx);
+        }
+        fn timer(&mut self, cx: &mut Cx<'_>, _id: u32) {
+            self.again(cx);
+        }
+        fn event(&mut self, cx: &mut Cx<'_>, handler: &str, _payload: &serde_json::Value) {
+            show(cx, serde_json::json!(handler));
+        }
+    }
+    let page = start_in_plugin(&fake::source("page", || Box::new(Again(0))));
     // The click comes once the timer is going round, not while the bundle is still starting.
     assert_eq!(shown(&page.tree()), "spinning");
     assert!(page.runtime.dispatch("clicked", None));

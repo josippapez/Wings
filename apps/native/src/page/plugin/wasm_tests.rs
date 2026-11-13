@@ -11,10 +11,14 @@ use serde_json::{Value, json};
 
 use super::{
     PluginHost,
-    testing::{Rig, Seen, WAIT, pane},
+    testing::{Frame, Rig, Seen, WAIT, pane, show},
 };
 use crate::page::{
-    runtime::{Event, Reply, wasm::MARKER},
+    runtime::{
+        Event, Reply,
+        fake::{self, Cx, Guest},
+        wasm::MARKER,
+    },
     tree::{Node, Tree},
 };
 
@@ -195,20 +199,36 @@ fn a_rust_main_sets_its_sidebars_label_once_and_takes_it_away() {
     assert!(opened.as_deref().is_some_and(|view| view.contains("side")), "{opened:?}");
 }
 
-/// The Rust SDK's `messages`: a tell from a TypeScript frame reaches the Rust main, whose own tell reaches that frame.
+/// A page that tells the main `ping` as it starts, and shows the first broadcast it hears.
+fn tells() -> String {
+    struct Tells;
+    impl Guest for Tells {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            let ping =
+                json!({ "wings:sdk": 1, "kind": "tell", "name": "ping", "payload": { "n": 5 } });
+            cx.link().broadcast(ping.to_string()).unwrap();
+        }
+        fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, _id: u32, text: &str) {
+            if kind == "broadcast" {
+                show(cx, serde_json::from_str(text).unwrap());
+            }
+        }
+    }
+    fake::source("page", || Box::new(Tells))
+}
+
+/// The Rust SDK's `messages`: a tell from another frame reaches the Rust main, whose own tell reaches that frame.
 #[test]
 fn a_rust_main_and_a_js_page_tell_each_other() {
     let rig = Rig::new(json!({}), vec![]);
     rig.host.start_main(&fixture(), |_| {}).unwrap();
     // The main is listening once it has answered a tool.
     tool(&rig.host, "greet", json!({ "name": "Ada" }));
-    let heard = rig.run(
-        "return await new Promise((resolve) => {
-            wings.onBroadcast(resolve);
-            wings.broadcast({ 'wings:sdk': 1, kind: 'tell', name: 'ping', payload: { n: 5 } });
-        });",
+    let heard = Frame::start(&rig.host, &tells()).report("the main's tell", |_| true);
+    assert_eq!(
+        heard,
+        json!({ "wings:sdk": 1, "kind": "tell", "name": "pong", "payload": { "n": 5 } })
     );
-    assert_eq!(heard["ok"], json!({ "wings:sdk": 1, "kind": "tell", "name": "pong", "payload": { "n": 5 } }));
 }
 
 /// The Rust SDK's `poll::while_focused`: it ticks while Wings is in front, stops when it isn't, and goes on when it

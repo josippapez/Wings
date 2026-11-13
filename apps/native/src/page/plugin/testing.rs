@@ -1,5 +1,5 @@
-//! Fakes for the host's tests: an app that records what plugins did to it, and frames that run a snippet of `wings` code
-//! and report what it came to.
+//! Fakes for the host's tests: an app that records what plugins did to it, and frames that make the calls a test asks for
+//! and report what came of them.
 
 use std::{
     path::PathBuf,
@@ -416,15 +416,6 @@ impl Rig {
         Self { host, env, root }
     }
 
-    /// Runs `body` as an async function in a page of the plugin and returns `{ ok }` or `{ err }`: what it returned,
-    /// or the message it was rejected with.
-    pub fn run(&self, body: &str) -> Value {
-        let frame = Frame::start(&self.host, &script(body));
-        frame.report("the call to finish", |report| {
-            report.get("ok").is_some() || report.get("err").is_some()
-        })
-    }
-
     /// A page of the plugin that makes the call `method` with `params`, and what it came to: the result, or the error.
     pub fn call(&self, method: &str, params: Value) -> Result<Value, String> {
         Caller::start(&self.host).call(method, params)
@@ -445,40 +436,7 @@ impl Rig {
             Err(error) => panic!("expected a result, got the error {error}"),
         }
     }
-
-    /// The call's error, which the test expects.
-    pub fn refused(&self, body: &str) -> String {
-        match self.run(body) {
-            Value::Object(report) => match report.get("err") {
-                Some(Value::String(err)) => err.clone(),
-                _ => panic!("expected an error, got {report:?}"),
-            },
-            other => panic!("{other}"),
-        }
-    }
-
-    /// The call's result, which the test expects.
-    pub fn allowed(&self, body: &str) -> Value {
-        let report = self.run(body);
-        match report.get("ok") {
-            Some(ok) => ok.clone(),
-            None => panic!("expected a result, got {report}"),
-        }
-    }
 }
-
-/// The shell of a probe page: `show` renders any JSON, and `attempt` shows what an async function returns.
-fn script(body: &str) -> String {
-    format!("{PRELUDE}\nattempt(async () => {{ {body} }});")
-}
-
-pub(super) const PRELUDE: &str = r#"
-const show = (value) => wings.render(JSON.stringify({ id: 0, type: '#root', props: {}, children: [
-  { id: 1, type: '#text', text: JSON.stringify(value) }] }));
-const attempt = async (work) => {
-  try { show({ ok: (await work()) ?? null }); } catch (error) { show({ err: String(error?.message ?? error) }); }
-};
-"#;
 
 /// A page of the plugin that makes the calls it is asked to, and hands the answers to the test.
 pub(super) struct Caller {
@@ -629,6 +587,19 @@ pub(super) fn hears(kind: &'static str) -> String {
         }
     }
     fake::source("hears", move || Box::new(Hears(kind, Vec::new())))
+}
+
+/// A page that shows each message another frame broadcasts, as JSON.
+pub(super) fn echoes() -> String {
+    struct Echoes;
+    impl Guest for Echoes {
+        fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, _id: u32, text: &str) {
+            if kind == "broadcast" {
+                show(cx, serde_json::from_str(text).unwrap());
+            }
+        }
+    }
+    fake::source("echoes", || Box::new(Echoes))
 }
 
 /// Renders `value` for a test to read with `Frame::report`.
