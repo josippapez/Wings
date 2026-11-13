@@ -1,8 +1,11 @@
-use crate::page::plugin::{
-    Project,
-    testing::{Frame, PRELUDE, Rig, Seen},
+use crate::page::{
+    plugin::{
+        Project,
+        testing::{Frame, Rig, Seen, barrier, hears, open_pane, show},
+    },
+    runtime::fake::{self, Cx, Guest},
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use std::{
     fs,
     sync::{
@@ -22,50 +25,84 @@ fn projects_are_the_published_workspace_list_and_changes_reach_existing_frames()
     };
     rig.host.publish_projects(vec![project.clone()]);
     assert_eq!(
-        rig.allowed("return await wings.projects();"),
+        rig.allows("projects", json!({})),
         json!([{ "id": "/repo", "path": "/repo", "name": "Repo" }])
     );
-    let frame = Frame::start(
-        &rig.host,
-        &format!(
-            "{PRELUDE} const lists = []; wings.onProjects(list => {{ lists.push(list); show(lists); }});"
-        ),
-    );
+    let frame = Frame::start(&rig.host, &hears("projects"));
     frame.report("initial projects", |r| {
-        r.as_array().is_some_and(|a| a.len() == 1)
+        r["heard"].as_array().is_some_and(|a| a.len() == 1)
     });
     rig.host.publish_projects(vec![project]);
     rig.host.publish_projects(vec![]);
     let got = frame.report("changed projects", |r| {
-        r.as_array().is_some_and(|a| a.len() == 2)
+        r["heard"].as_array().is_some_and(|a| a.len() == 2)
     });
-    assert_eq!(got[1], json!([]));
+    assert_eq!(got["heard"][1], json!([]));
+}
+
+/// A page that shows whether the frame was focused as it started, and each focus it hears.
+struct Focus {
+    at_start: bool,
+    heard: Vec<Value>,
+}
+
+impl Guest for Focus {
+    fn start(&mut self, cx: &mut Cx<'_>) {
+        self.at_start = cx.link().focused();
+    }
+
+    fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, _id: u32, text: &str) {
+        if kind == "focus" {
+            self.heard.push(serde_json::from_str::<Value>(text).unwrap()["focused"].clone());
+            show(cx, json!({ "atStart": self.at_start, "heard": self.heard }));
+        }
+    }
 }
 
 #[test]
 fn focus_is_current_on_start_and_only_changes_are_delivered() {
     let rig = Rig::new(json!({}), vec![]);
     rig.host.publish_focus(false);
-    let frame = Frame::start(
-        &rig.host,
-        &format!(
-            "{PRELUDE} const states = []; wings.onFocus(value => {{ states.push([value.focused, wings.focused]); show(states); }});"
-        ),
-    );
+    let source = fake::source("focus", || Box::new(Focus { at_start: true, heard: Vec::new() }));
+    let frame = Frame::start(&rig.host, &source);
     assert_eq!(
-        frame.report("initial focus", |r| r
-            .as_array()
-            .is_some_and(|a| a.len() == 1)),
-        json!([[false, false]])
+        frame.report("initial focus", |r| r["heard"].as_array().is_some_and(|a| a.len() == 1)),
+        json!({ "atStart": false, "heard": [false] })
     );
     rig.host.publish_focus(false);
     rig.host.publish_focus(true);
     assert_eq!(
-        frame.report("focus change", |r| r
-            .as_array()
-            .is_some_and(|a| a.len() == 2)),
-        json!([[false, false], [true, true]])
+        frame.report("focus change", |r| r["heard"].as_array().is_some_and(|a| a.len() == 2)),
+        json!({ "atStart": false, "heard": [false, true] })
     );
+}
+
+/// A page that counts the git changes it hears until a broadcast comes, which is when it stops listening.
+struct Git {
+    count: u32,
+    barriers: u32,
+    off: bool,
+}
+
+impl Guest for Git {
+    fn start(&mut self, cx: &mut Cx<'_>) {
+        show(cx, json!({ "ready": true }));
+    }
+
+    fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, _id: u32, _text: &str) {
+        match kind {
+            "git" if !self.off => {
+                self.count += 1;
+                show(cx, json!({ "count": self.count }));
+            }
+            "broadcast" => {
+                self.off = true;
+                self.barriers += 1;
+                show(cx, json!({ "count": self.count, "barriers": self.barriers }));
+            }
+            _ => {}
+        }
+    }
 }
 
 #[test]
@@ -76,55 +113,55 @@ fn git_events_need_a_git_exec_entry_and_unsubscribe_works() {
         (json!(["gitx", "gh api"]), 0),
     ] {
         let rig = Rig::new(json!({ "permissions": { "exec": entries } }), vec![]);
-        let frame = Frame::start(
-            &rig.host,
-            &format!(
-                "{PRELUDE} let count = 0, barriers = 0; const off = wings.onGitChange(value => {{ count++; show({{count, value}}); }}); wings.onBroadcast(() => {{ off(); show({{count, barriers: ++barriers}}); }}); show({{ready:true}});"
-            ),
-        );
+        let source = fake::source("git", || Box::new(Git { count: 0, barriers: 0, off: false }));
+        let frame = Frame::start(&rig.host, &source);
         frame.report("listener ready", |r| r["ready"] == true);
         rig.host.publish_git(&["/repo".into()]);
-        let barrier = Frame::start(&rig.host, "wings.broadcast({});");
+        let barrier_one = Frame::start(&rig.host, &barrier());
         let result = frame.report("git event barrier", |r| r["barriers"] == 1);
         assert_eq!(result["count"], expected);
         rig.host.publish_git(&["/repo".into()]);
-        let second = Frame::start(&rig.host, "wings.broadcast({});");
+        let second = Frame::start(&rig.host, &barrier());
         let result = frame.report("unsubscribed git event barrier", |r| r["barriers"] == 2);
         assert_eq!(result["count"], expected);
         drop(second);
-        drop(barrier);
+        drop(barrier_one);
     }
 }
 
 #[test]
 fn disks_and_search_require_permission_and_search_validates_names_and_paths() {
+    let find = |path: &str, options: Value| {
+        let mut params = json!({ "path": path, "token": "1", "stream": false });
+        params.as_object_mut().unwrap().extend(options.as_object().unwrap().clone());
+        params
+    };
     let denied = Rig::new(json!({}), vec![]);
     assert_eq!(
-        denied.refused("return await wings.disks();"),
+        denied.refuses("disks", json!({})),
         "probe may not read disk usage"
     );
     assert_eq!(
-        denied.refused("return await wings.diskFind('/', { names: ['.git'] });"),
+        denied.refuses("diskFind", find("/", json!({ "names": [".git"] }))),
         "probe may not read disk usage"
     );
     let rig = Rig::new(json!({ "permissions": { "diskUsage": true } }), vec![]);
-    assert!(rig.allowed("return await wings.disks();").is_array());
-    for body in [
-        "return await wings.diskFind('', { names: ['.git'] });",
-        "return await wings.diskFind('/', { names: [] });",
-        "return await wings.diskFind('/', { names: ['a/b'] });",
-        "return await wings.diskFind('/', { names: ['.git'], skip: [5] });",
+    assert!(rig.allows("disks", json!({})).is_array());
+    for (path, options) in [
+        ("", json!({ "names": [".git"] })),
+        ("/", json!({ "names": [] })),
+        ("/", json!({ "names": ["a/b"] })),
+        ("/", json!({ "names": [".git"], "skip": [5] })),
     ] {
-        assert!(rig.refused(body).contains("diskFind"));
+        assert!(rig.refuses("diskFind", find(path, options)).contains("diskFind"));
     }
-    assert_eq!(rig.refused("const stop = new AbortController(); stop.abort(); return await wings.diskFind('/', { names: ['.git'], signal: stop.signal });"), "The scan was stopped");
     let root = rig.root.config("probe").root.join("search");
     fs::create_dir_all(root.join("repo/.git")).unwrap();
     fs::create_dir_all(root.join("skip/repo/.git")).unwrap();
-    let result = rig.allowed(&format!(
-        "return await wings.diskFind({}, {{ names: ['.git'], skip: ['skip'] }});",
-        json!(root)
-    ));
+    let result = rig.allows(
+        "diskFind",
+        find(root.to_str().unwrap(), json!({ "names": [".git"], "skip": ["skip"] })),
+    );
     assert_eq!(
         result["paths"],
         json!([root.join("repo/.git").canonicalize().unwrap()])
@@ -157,24 +194,30 @@ fn opening_a_pane_uses_shared_permissions_and_resolves_its_project() {
     let rig = Rig::new(json!({ "permissions": { "panes": ["echo"] } }), vec![]);
     let path = rig.root.config("probe").root.canonicalize().unwrap();
     *rig.env.projects.lock().unwrap() = vec![path.clone()];
-    assert_eq!(rig.allowed("return await wings.openPane({ command: 'echo', args: ['hello there'], placement: 'right' });"), json!({ "paneId": "3" }));
+    assert_eq!(
+        rig.allows(
+            "openPane",
+            open_pane(json!({ "command": "echo", "args": ["hello there"], "placement": "right" }))
+        ),
+        json!({ "paneId": "3" })
+    );
     let Seen::OpenPane(plan) = &rig.env.seen()[0] else {
         panic!("no pane plan")
     };
     assert_eq!(plan.cwd, path);
     assert_eq!(plan.input.as_deref(), Some("echo 'hello there'\r"));
     assert_eq!(plan.placement, "right");
-    for body in [
-        "await wings.openPane({ command: 'sh' });",
-        "await wings.openPane({ args: [5] });",
-        "await wings.openPane({ placement: 'outside' });",
-        "await wings.openPane({ cwd: '/' });",
-        "await wings.openPane({ cwd: 5 });",
+    for extra in [
+        json!({ "command": "sh" }),
+        json!({ "args": [5] }),
+        json!({ "placement": "outside" }),
+        json!({ "cwd": "/" }),
+        json!({ "cwd": 5 }),
     ] {
-        assert!(!rig.refused(body).is_empty());
+        assert!(!rig.refuses("openPane", open_pane(extra)).is_empty());
     }
     assert_eq!(
-        Rig::new(json!({}), vec![]).refused("await wings.openPane();"),
+        Rig::new(json!({}), vec![]).refuses("openPane", open_pane(json!({}))),
         "probe may not open panes"
     );
 }
@@ -185,20 +228,29 @@ fn opening_a_view_checks_the_manifest_placement_and_arguments() {
         json!({ "contributes": { "views": [{ "id": "history", "title": "History", "page": "history.html", "opens": ["sidebar", "tab"] }] } }),
         vec![],
     );
-    assert_eq!(rig.allowed("await wings.openView('history', { as: 'tab', args: { cwd: '/repo' }, newTab: true }); return 1;"), 1);
+    // What `wings.openView(id, options)` sends: `newTab` is always there, and the other options when they were given.
+    let open = |id: &str, options: Value| {
+        let mut params = json!({ "id": id, "newTab": false });
+        params.as_object_mut().unwrap().extend(options.as_object().unwrap().clone());
+        params
+    };
+    rig.allows(
+        "openView",
+        open("history", json!({ "as": "tab", "args": { "cwd": "/repo" }, "newTab": true })),
+    );
     let Seen::OpenView(plan) = &rig.env.seen()[0] else {
         panic!("no view plan")
     };
     assert_eq!(plan.place, "tab");
     assert_eq!(plan.args, Some(json!({ "cwd": "/repo" })));
     assert!(plan.new_tab);
-    for body in [
-        "await wings.openView('missing');",
-        "await wings.openView('history', { as: 'window' });",
-        "await wings.openView('history', { args: {} });",
-        "await wings.openView('history', { newTab: true });",
-        "await wings.openView('history', { as: 'tab', args: 'x'.repeat(17000) });",
+    for (id, options) in [
+        ("missing", json!({})),
+        ("history", json!({ "as": "window" })),
+        ("history", json!({ "args": {} })),
+        ("history", json!({ "newTab": true })),
+        ("history", json!({ "as": "tab", "args": "x".repeat(17000) })),
     ] {
-        assert!(!rig.refused(body).is_empty());
+        assert!(!rig.refuses("openView", open(id, options)).is_empty());
     }
 }

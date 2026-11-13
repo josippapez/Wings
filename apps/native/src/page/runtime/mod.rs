@@ -19,6 +19,8 @@
 //! keeps for such pages, where the library's code is compiled once: each such page calls it for an instance of its
 //! own, so its React state, scheduler and roots are its own, and its globals are an object of its own (`Shared`).
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod fake;
 mod script;
 mod timers;
 pub mod wasm;

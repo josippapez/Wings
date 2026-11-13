@@ -17,7 +17,10 @@ use super::{
     ui::{Badge, PaneStatus, SidebarLabel},
 };
 use crate::{
-    page::runtime::{Event, PageRuntime},
+    page::runtime::{
+        Event, PageRuntime,
+        fake::{self, Cx, Guest},
+    },
     projects::Projects,
 };
 
@@ -422,6 +425,27 @@ impl Rig {
         })
     }
 
+    /// A page of the plugin that makes the call `method` with `params`, and what it came to: the result, or the error.
+    pub fn call(&self, method: &str, params: Value) -> Result<Value, String> {
+        Caller::start(&self.host).call(method, params)
+    }
+
+    /// The call's error, which the test expects.
+    pub fn refuses(&self, method: &str, params: Value) -> String {
+        match self.call(method, params) {
+            Err(error) => error,
+            Ok(result) => panic!("expected an error, got {result}"),
+        }
+    }
+
+    /// The call's result, which the test expects.
+    pub fn allows(&self, method: &str, params: Value) -> Value {
+        match self.call(method, params) {
+            Ok(result) => result,
+            Err(error) => panic!("expected a result, got the error {error}"),
+        }
+    }
+
     /// The call's error, which the test expects.
     pub fn refused(&self, body: &str) -> String {
         match self.run(body) {
@@ -456,6 +480,163 @@ const attempt = async (work) => {
 };
 "#;
 
+/// A page of the plugin that makes the calls it is asked to, and hands the answers to the test.
+pub(super) struct Caller {
+    frame: Frame,
+    answers: std::sync::mpsc::Receiver<Heard>,
+}
+
+enum Heard {
+    Line(String),
+    Done(Result<Value, String>),
+}
+
+/// A frame that calls `first` when it starts, if it has one, and a `call` event's method after, and tells `heard` what comes back.
+struct Calls {
+    first: Option<(String, Value)>,
+    heard: std::sync::mpsc::Sender<Heard>,
+}
+
+impl Guest for Calls {
+    fn start(&mut self, cx: &mut Cx<'_>) {
+        if let Some((method, params)) = self.first.take() {
+            cx.call(&method, params);
+        }
+    }
+
+    fn event(&mut self, cx: &mut Cx<'_>, handler: &str, payload: &Value) {
+        if handler == "call" {
+            cx.call(payload["method"].as_str().unwrap(), payload["params"].clone());
+        }
+    }
+
+    fn deliver(&mut self, _cx: &mut Cx<'_>, kind: &str, _id: u32, text: &str) {
+        let _ = self.heard.send(match kind {
+            "resolve" => Heard::Done(Ok(serde_json::from_str(text).unwrap())),
+            "reject" => Heard::Done(Err(text.into())),
+            "output" => Heard::Line(text.into()),
+            _ => return,
+        });
+    }
+}
+
+fn calls(first: Option<(String, Value)>) -> (String, std::sync::mpsc::Receiver<Heard>) {
+    let (heard, answers) = std::sync::mpsc::channel();
+    let source = fake::source("caller", move || {
+        Box::new(Calls { first: first.clone(), heard: heard.clone() })
+    });
+    (source, answers)
+}
+
+impl Caller {
+    pub fn start(host: &PluginHost) -> Self {
+        let (source, answers) = calls(None);
+        Self { frame: Frame::start(host, &source), answers }
+    }
+
+    /// The call `method`, and what it came to.
+    pub fn call(&self, method: &str, params: Value) -> Result<Value, String> {
+        self.streamed(method, params).0
+    }
+
+    /// The call, and the lines it printed while it ran.
+    pub fn streamed(&self, method: &str, params: Value) -> (Result<Value, String>, Vec<String>) {
+        assert!(self.frame._runtime.dispatch("call", Some(&json!({ "method": method, "params": params }))));
+        self.finish()
+    }
+
+    /// The call, made right after a click of yours, as a page may copy.
+    pub fn call_after_click(&self, method: &str, params: Value) -> Result<Value, String> {
+        assert!(self.frame._runtime.dispatch_gesture("call", Some(&json!({ "method": method, "params": params }))));
+        self.finish().0
+    }
+
+    fn finish(&self) -> (Result<Value, String>, Vec<String>) {
+        let mut lines = Vec::new();
+        loop {
+            match self.answers.recv_timeout(WAIT) {
+                Ok(Heard::Line(line)) => lines.push(line),
+                Ok(Heard::Done(result)) => return (result, lines),
+                Err(_) => panic!("waiting for the call to finish"),
+            }
+        }
+    }
+}
+
+/// The call `method`, made by the plugin's main, which is the only frame some calls are for.
+pub(super) fn call_from_main(host: &PluginHost, method: &str, params: Value) -> Result<Value, String> {
+    let (source, answers) = calls(Some((method.into(), params)));
+    host.start_main(&source, |_| {}).unwrap();
+    first_answer(&answers)
+}
+
+/// The call `method`, made by a page of the plugin as it starts, before anything of yours.
+pub(super) fn call_at_start(host: &PluginHost, method: &str, params: Value) -> Result<Value, String> {
+    let (source, answers) = calls(Some((method.into(), params)));
+    let _page = Frame::start(host, &source);
+    first_answer(&answers)
+}
+
+fn first_answer(answers: &std::sync::mpsc::Receiver<Heard>) -> Result<Value, String> {
+    match answers.recv_timeout(WAIT) {
+        Ok(Heard::Done(result)) => result,
+        _ => panic!("waiting for the first call to finish"),
+    }
+}
+
+/// What `wings.exec(program, args)` sends the host.
+pub(super) fn exec(program: &str, args: &[&str]) -> Value {
+    json!({ "program": program, "args": args, "cwd": null, "timeoutMs": null, "stream": false })
+}
+
+/// What `wings.openPane(options)` sends the host: the defaults it fills in, and `extra` over them.
+pub(super) fn open_pane(extra: Value) -> Value {
+    let mut params = json!({ "command": null, "args": [], "cwd": null, "placement": "tab" });
+    params.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+    params
+}
+
+/// A page that broadcasts as it starts, which is how a test waits for the frames it started before to have heard what was sent.
+pub(super) fn barrier() -> String {
+    struct Barrier;
+    impl Guest for Barrier {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            cx.link().broadcast("{}".into()).unwrap();
+        }
+    }
+    fake::source("barrier", || Box::new(Barrier))
+}
+
+/// A frame that does nothing: a main that never answers what it is told.
+pub(super) fn idle(name: &str) -> String {
+    struct Idle;
+    impl Guest for Idle {}
+    fake::source(name, || Box::new(Idle))
+}
+
+/// A page that shows `{ heard }`, every message of the kind `kind` the host told it, as JSON, from the start.
+pub(super) fn hears(kind: &'static str) -> String {
+    struct Hears(&'static str, Vec<Value>);
+    impl Guest for Hears {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            show(cx, json!({ "heard": self.1 }));
+        }
+        fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, _id: u32, text: &str) {
+            if kind == self.0 {
+                self.1.push(serde_json::from_str(text).unwrap());
+                show(cx, json!({ "heard": self.1 }));
+            }
+        }
+    }
+    fake::source("hears", move || Box::new(Hears(kind, Vec::new())))
+}
+
+/// Renders `value` for a test to read with `Frame::report`.
+pub(super) fn show(cx: &mut Cx<'_>, value: Value) {
+    cx.render(&json!({ "id": 0, "type": "#root", "props": {}, "children": [
+        { "id": 1, "type": "#text", "text": value.to_string() }] }));
+}
+
 /// A page of the plugin and what it has shown.
 pub(super) struct Frame {
     /// The page runs while this is held.
@@ -482,16 +663,6 @@ impl Frame {
 
     pub fn hidden(host: &PluginHost, source: &str) -> Self {
         Self::with_visibility(host, source, false)
-    }
-
-    /// Hands the page an event for `handler` that isn't a gesture, like a hover or a blur.
-    pub fn dispatch(&self, handler: &str) -> bool {
-        self._runtime.dispatch(handler, None)
-    }
-
-    /// Hands the page a click of yours for `handler`.
-    pub fn click(&self, handler: &str) -> bool {
-        self._runtime.dispatch_gesture(handler, None)
     }
 
     pub fn set_visible(&self, visible: bool) {

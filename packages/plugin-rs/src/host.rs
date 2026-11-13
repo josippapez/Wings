@@ -649,3 +649,78 @@ pub fn exec_lines(program: &str, args: &[&str], timeout_ms: u32, on_line: impl F
     OUTPUTS.with(|outputs| outputs.borrow_mut().insert(id, Rc::new(move |line| on_line(line.as_str().unwrap_or_default()))));
     call_as(id, "exec", json!({ "program": program, "args": args, "cwd": null, "timeoutMs": timeout_ms, "stream": true }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::task::{block_on, run_ready};
+
+    /// Answers every call with `Ok(null)` and keeps what was called, in order. A method in `fail` is refused once.
+    fn record(fail: &'static [&'static str]) -> Rc<RefCell<Vec<(String, Value)>>> {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let kept = calls.clone();
+        let refused = RefCell::new(fail.to_vec());
+        testing::answer(move |method, params| {
+            kept.borrow_mut().push((method.to_owned(), params.clone()));
+            let mut refused = refused.borrow_mut();
+            match refused.iter().position(|name| *name == method) {
+                Some(at) => {
+                    refused.remove(at);
+                    Err("no pane".into())
+                }
+                None => Ok(Value::Null),
+            }
+        });
+        calls
+    }
+
+    #[test]
+    fn a_pane_listener_that_comes_late_hears_the_last_list() {
+        let heard = Rc::new(RefCell::new(Vec::new()));
+        let listen = |name: &'static str| {
+            let heard = heard.clone();
+            on_panes(move |list| heard.borrow_mut().push((name, list.len())));
+        };
+        listen("first");
+        deliver("panes", 0, r#"[{"paneId":"1"},{"paneId":"2"}]"#.into());
+        listen("late");
+        run_ready();
+        assert_eq!(*heard.borrow(), [("first", 2), ("late", 2)]);
+    }
+
+    #[test]
+    fn a_badge_a_pane_already_shows_is_not_sent_again_and_one_the_host_refused_is() {
+        let calls = record(&["setBadge"]);
+        let badge = json!({ "label": "x" });
+        let set = |badge: Value| block_on(async move { set_badge("9", &badge).await });
+        assert_eq!(set(badge.clone()), Err("no pane".into()));
+        assert_eq!(set(badge.clone()), Ok(()));
+        assert_eq!(set(badge.clone()), Ok(()));
+        assert_eq!(set(Value::Null), Ok(()));
+        assert_eq!(set(Value::Null), Ok(()));
+        let sent: Vec<Value> = calls.borrow().iter().map(|(_, params)| params["badge"].clone()).collect();
+        assert_eq!(sent, [badge.clone(), badge, Value::Null]);
+    }
+
+    #[test]
+    fn a_sidebar_label_that_is_the_one_last_sent_is_not_sent_again() {
+        let calls = record(&[]);
+        set_sidebar_label("tracker", Some("same"), &[]);
+        set_sidebar_label("tracker", Some("same"), &[]);
+        set_sidebar_label("tracker", None, &[]);
+        run_ready();
+        let sent: Vec<Value> = calls.borrow().iter().map(|(_, params)| params["label"].clone()).collect();
+        assert_eq!(sent, [json!("same"), Value::Null]);
+    }
+
+    #[test]
+    fn a_click_settles_when_every_action_listener_has_with_the_last_error() {
+        let calls = record(&[]);
+        on_action(|_| async { Err("first".into()) });
+        on_action(|_| async { Err("second".into()) });
+        on_action(|_| async { Ok(()) });
+        deliver("action", 7, r#"{"paneId":"1","actionId":"open"}"#.into());
+        run_ready();
+        assert_eq!(*calls.borrow(), [("actionDone".to_owned(), json!({ "token": 7, "error": "second" }))]);
+    }
+}

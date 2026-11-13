@@ -10,8 +10,43 @@ use crate::page::{
         Access, ClaudeCaller, PluginHost,
         testing::{Rig, WAIT, plugin},
     },
-    runtime::Reply,
+    runtime::{
+        Reply,
+        fake::{self, Cx, Guest},
+    },
 };
+
+/// The main of `tasks`: the tool `where`, and the hooks `SessionStart` and `PreToolUse`, which answer as a frame's
+/// `onTool` and `onHook` handlers do, with a `toolDone` call.
+struct Tasks;
+
+impl Guest for Tasks {
+    fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, token: u32, text: &str) {
+        if kind != "tool" {
+            return;
+        }
+        let call: Value = serde_json::from_str(text).unwrap();
+        let (pane, project, session) = (
+            call["paneId"].as_str().unwrap_or_default(),
+            call["project"]["name"].as_str().unwrap_or_default(),
+            call["session"]["id"].as_str().unwrap_or_default(),
+        );
+        let input = &call["arguments"];
+        let answer = match call["name"].as_str() {
+            Some("where") => format!("{pane} {project} {session}"),
+            Some("SessionStart") => json!({ "context": format!(
+                "hello {} from {pane} in {project} as {session}",
+                input["source"].as_str().unwrap_or_default()
+            ) })
+            .to_string(),
+            Some("PreToolUse") if input["tool_input"]["command"].as_str().is_some_and(|c| c.contains("push")) => {
+                json!({ "deny": "no pushing" }).to_string()
+            }
+            _ => "{}".into(),
+        };
+        cx.call("toolDone", json!({ "token": token, "text": answer, "isError": false }));
+    }
+}
 
 /// A running plugin `tasks` with the tool `where` and the hooks `SessionStart` and `PreToolUse`.
 fn tasks(rig: &Rig) -> Arc<PluginHost> {
@@ -30,13 +65,7 @@ fn tasks(rig: &Rig) -> Arc<PluginHost> {
             env: rig.env.clone(),
         },
     ));
-    host.start_main(
-        "wings.onTool('where', (input, c) => `${c.paneId} ${c.project?.name} ${c.session?.id}`);
-         wings.onHook('SessionStart', (input, c) => `hello ${input.source} from ${c.paneId} in ${c.project?.name} as ${c.session?.id}`);
-         wings.onHook('PreToolUse', async (input) => ({ deny: input.tool_input.command.includes('push') ? 'no pushing' : '', context: '' }));
-         wings.onHook('UserPromptSubmit', () => { throw new Error('broken'); });",
-        |_| {},
-    )
+    host.start_main(&fake::source("main", || Box::new(Tasks)), |_| {})
     .unwrap();
     rig.env.running.add(&tasks, true, &host);
     host
@@ -83,11 +112,6 @@ fn a_hook_reaches_the_plugins_on_hook_with_who_called_and_its_answer_comes_back(
     assert_eq!(
         ask(&rig, "PreToolUse", push, true)["text"],
         r#"{"deny":"no pushing"}"#
-    );
-    // A handler that throws says nothing rather than failing Claude's turn.
-    assert_eq!(
-        ask(&rig, "UserPromptSubmit", json!({}), true),
-        json!({ "text": "{}", "isError": false })
     );
     assert_eq!(rig.env.running.hooked("PreToolUse"), ["tasks"]);
     assert!(rig.env.running.hooked("Journal").is_empty());

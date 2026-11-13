@@ -46,15 +46,72 @@ const TURN_FUEL: u64 = 1_000_000_000;
 
 type Emit = Rc<RefCell<Box<dyn FnMut(Event)>>>;
 
-struct Host {
+pub(super) struct Host {
     /// A page's: a main draws nothing.
     render: bool,
-    link: Arc<dyn Link>,
+    pub(super) link: Arc<dyn Link>,
     queue: Queue,
     emit: Emit,
     /// When each timer the page set is due, with the id it gave it.
-    timers: Vec<(Instant, u32)>,
+    pub(super) timers: Vec<(Instant, u32)>,
     limits: StoreLimits,
+}
+
+impl Host {
+    pub(super) fn new(render: bool, link: Arc<dyn Link>, queue: Queue, emit: Emit) -> Self {
+        Self {
+            render,
+            link,
+            queue,
+            emit,
+            timers: Vec::new(),
+            limits: StoreLimitsBuilder::new()
+                .memory_size(Limits::default().heap_bytes)
+                .build(),
+        }
+    }
+
+    /// The `render` import: the page's tree as JSON.
+    pub(super) fn render(&self, json: &str) -> wasmtime::Result<()> {
+        if !self.render {
+            return Err(wasmtime::Error::msg("a plugin's main can't render"));
+        }
+        let event = match Tree::parse(json) {
+            Ok(tree) => Event::Tree(tree),
+            Err(error) => Event::Error {
+                message: error.to_string(),
+                fatal: false,
+            },
+        };
+        (self.emit.borrow_mut())(event);
+        Ok(())
+    }
+
+    /// The `call` import: a host call the frame named `id`, answered later through its queue.
+    pub(super) fn call(&self, id: u32, method: &str, params: &str) -> wasmtime::Result<()> {
+        self.link.call(
+            method,
+            serde_json::from_str(params)?,
+            Reply {
+                call: id,
+                queue: self.queue.clone(),
+            },
+        );
+        Ok(())
+    }
+
+    /// The `timer` import.
+    pub(super) fn timer(&mut self, id: u32, ms: u32) {
+        let due = Instant::now() + Duration::from_millis(ms.into());
+        self.timers.push((due, id));
+    }
+}
+
+/// A frame the serve loop runs: a module, or a test's stand-in for one.
+pub(super) trait Frame {
+    fn timers(&mut self) -> &mut Vec<(Instant, u32)>;
+    fn command(&mut self, command: Command) -> wasmtime::Result<()>;
+    fn fire(&mut self, id: u32) -> wasmtime::Result<()>;
 }
 
 /// Starts the frame whose module is the file at `path`. `on_event` is called from the frame's thread.
@@ -81,16 +138,7 @@ pub(super) fn open(
             let (link, queue) = (link.clone(), queue.clone());
             move || {
                 let emit: Emit = Rc::new(RefCell::new(Box::new(on_event)));
-                let host = Host {
-                    render: role == Role::Page,
-                    link,
-                    queue,
-                    emit: emit.clone(),
-                    timers: Vec::new(),
-                    limits: StoreLimitsBuilder::new()
-                        .memory_size(Limits::default().heap_bytes)
-                        .build(),
-                };
+                let host = Host::new(role == Role::Page, link, queue, emit.clone());
                 serve(&path, host, &emit, &received, &quit, &closed, &stopped)
             }
         });
@@ -186,7 +234,7 @@ fn compiled(path: &str) -> wasmtime::Result<(wasmtime::Engine, Module)> {
 
 /// Compiles the module at `path` now, and waits for it. A test build compiles a large module for minutes, far past what
 /// a test waits for a page to draw, and a test that gave up left nothing kept for the next one.
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 pub fn compile_now(path: &str) -> wasmtime::Result<()> {
     compiled(path).map(|_| ())
 }
@@ -231,6 +279,12 @@ impl Page {
             .ok_or_else(|| wasmtime::Error::msg("the page exports no memory"))?;
         memory.write(&mut self.store, at as usize, text.as_bytes())?;
         Ok((at, len))
+    }
+}
+
+impl Frame for Page {
+    fn timers(&mut self) -> &mut Vec<(Instant, u32)> {
+        &mut self.store.data_mut().timers
     }
 
     fn command(&mut self, command: Command) -> wasmtime::Result<()> {
@@ -278,15 +332,29 @@ fn serve(
             fatal: true,
         });
     };
-    let mut page = match Page::start(path, host) {
-        Ok(page) => page,
-        Err(error) => return fail(error),
-    };
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(guest) = super::fake::claim(path) {
+        return match super::fake::start(guest, host) {
+            Ok(frame) => run(frame, jobs, quit, closed, fail),
+            Err(error) => fail(error),
+        };
+    }
+    match Page::start(path, host) {
+        Ok(page) => run(page, jobs, quit, closed, fail),
+        Err(error) => fail(error),
+    }
+}
+
+fn run(
+    mut page: impl Frame,
+    jobs: &mpsc::Receiver<Job>,
+    quit: &AtomicBool,
+    closed: &AtomicBool,
+    fail: impl Fn(wasmtime::Error),
+) {
     loop {
         let wait = page
-            .store
-            .data()
-            .timers
+            .timers()
             .iter()
             .map(|(due, _)| due.saturating_duration_since(Instant::now()))
             .min();
@@ -310,7 +378,7 @@ fn serve(
             return fail(error);
         }
         let now = Instant::now();
-        let timers = &mut page.store.data_mut().timers;
+        let timers = page.timers();
         let due: Vec<u32> = timers.iter().filter(|(at, _)| *at <= now).map(|(_, id)| *id).collect();
         timers.retain(|(at, _)| *at > now);
         for id in due {
@@ -355,36 +423,16 @@ fn hand(caller: &mut Caller<'_, Host>, text: &str) -> wasmtime::Result<u64> {
 fn imports(engine: &wasmtime::Engine) -> wasmtime::Result<Linker<Host>> {
     let mut linker = Linker::new(engine);
     linker.func_wrap("wings", "render", |mut caller: Caller<'_, Host>, at: u32, len: u32| {
-        if !caller.data().render {
-            return Err(wasmtime::Error::msg("a plugin's main can't render"));
-        }
         let json = text(&mut caller, at, len)?;
-        let event = match Tree::parse(&json) {
-            Ok(tree) => Event::Tree(tree),
-            Err(error) => Event::Error {
-                message: error.to_string(),
-                fatal: false,
-            },
-        };
-        (caller.data().emit.borrow_mut())(event);
-        Ok(())
+        caller.data().render(&json)
     })?;
     linker.func_wrap(
         "wings",
         "call",
         |mut caller: Caller<'_, Host>, id: u32, method: u32, method_len: u32, params: u32, params_len: u32| {
             let method = text(&mut caller, method, method_len)?;
-            let params = serde_json::from_str(&text(&mut caller, params, params_len)?)?;
-            let host = caller.data();
-            host.link.call(
-                &method,
-                params,
-                Reply {
-                    call: id,
-                    queue: host.queue.clone(),
-                },
-            );
-            Ok(())
+            let params = text(&mut caller, params, params_len)?;
+            caller.data().call(id, &method, &params)
         },
     )?;
     linker.func_wrap(
@@ -421,8 +469,7 @@ fn imports(engine: &wasmtime::Engine) -> wasmtime::Result<Linker<Host>> {
         Ok(())
     })?;
     linker.func_wrap("wings", "timer", |mut caller: Caller<'_, Host>, id: u32, ms: u32| {
-        let due = Instant::now() + Duration::from_millis(ms.into());
-        caller.data_mut().timers.push((due, id));
+        caller.data_mut().timer(id, ms);
     })?;
     linker.func_wrap("wings", "now", || {
         SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |since| since.as_secs_f64() * 1000.0)

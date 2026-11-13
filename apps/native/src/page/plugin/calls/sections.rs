@@ -298,21 +298,31 @@ mod tests {
         rig
     }
 
+    /// What `wings.setProjectSection(projectId, sectionId, rows)` sends: no `rows` when none was given.
+    fn section(project: &str, section: &str, rows: Option<Value>) -> Value {
+        let mut params = json!({ "projectId": project, "sectionId": section });
+        if let Some(rows) = rows {
+            params["rows"] = rows;
+        }
+        params
+    }
+
     #[test]
     fn set_project_section_hands_the_app_the_cleaned_rows_and_null_takes_the_section_away() {
         let rig = plugin_with_sections();
         assert_eq!(
-            rig.allowed(
-                "return await wings.setProjectSection('/work', 'issues', [{ id: 'r1', label: 'First', open: { view: 'board', args: { n: 1 } } }]);"
+            rig.allows(
+                "setProjectSection",
+                section("/work", "issues", Some(json!([{ "id": "r1", "label": "First", "open": { "view": "board", "args": { "n": 1 } } }])))
             ),
             json!(null)
         );
-        let Some(Seen::ProjectSection(plugin, project, section, Some(rows))) = rig.env.seen().pop()
+        let Some(Seen::ProjectSection(plugin, project, section_id, Some(rows))) = rig.env.seen().pop()
         else {
             panic!("the app was not given the section");
         };
         assert_eq!(
-            (plugin.as_str(), project.as_str(), section.as_str()),
+            (plugin.as_str(), project.as_str(), section_id.as_str()),
             ("probe", "/work", "issues")
         );
         assert_eq!(
@@ -321,7 +331,7 @@ mod tests {
         );
         assert_eq!(rows[0].args, Some(json!({ "n": 1 })));
 
-        rig.allowed("return await wings.setProjectSection('/work', 'issues', null);");
+        rig.allows("setProjectSection", section("/work", "issues", Some(json!(null))));
         assert_eq!(
             rig.env.seen().pop(),
             Some(Seen::ProjectSection(
@@ -336,34 +346,35 @@ mod tests {
     #[test]
     fn set_project_section_is_refused_for_an_undeclared_section_an_unknown_project_and_bad_rows() {
         let rig = plugin_with_sections();
+        let refused = |project: &str, id: &str, rows: Option<Value>| {
+            rig.refuses("setProjectSection", section(project, id, rows))
+        };
         assert_eq!(
-            rig.refused("return await wings.setProjectSection('/work', 'nope', null);"),
+            refused("/work", "nope", Some(json!(null))),
             "probe has no project section nope. Declare it in contributes.projectSections"
         );
         assert_eq!(
-            rig.refused("return await wings.setProjectSection('/elsewhere', 'issues', null);"),
+            refused("/elsewhere", "issues", Some(json!(null))),
             "no project /elsewhere"
         );
-        for rows in ["'text'", "{}", "undefined"] {
+        for rows in [Some(json!("text")), Some(json!({})), None] {
             assert_eq!(
-                rig.refused(&format!(
-                    "return await wings.setProjectSection('/work', 'issues', {rows});"
-                )),
+                refused("/work", "issues", rows.clone()),
                 "setProjectSection rows must be a list, or null to remove the section",
-                "{rows}"
+                "{rows:?}"
             );
         }
         // A row opens only a view that opens as a tab.
         assert_eq!(
-            rig.refused("return await wings.setProjectSection('/work', 'issues', [{ id: 'r1', label: 'L', open: { view: 'side' } }]);"),
+            refused("/work", "issues", Some(json!([{ "id": "r1", "label": "L", "open": { "view": "side" } }]))),
             "Row r1 opens side, which isn't one of the plugin's views that open as a tab"
         );
         assert_eq!(
-            rig.refused("return await wings.setProjectSection('/work', 'issues', [{ id: 'r1', label: 'L' }]);"),
+            refused("/work", "issues", Some(json!([{ "id": "r1", "label": "L" }]))),
             "Row r1 opens undefined, which isn't one of the plugin's views that open as a tab"
         );
         assert_eq!(
-            rig.refused("return await wings.setProjectSection('/work', 'issues', [{ id: 'r1', label: 'L', open: { view: 'board', args: 'x'.repeat(17000) } }]);"),
+            refused("/work", "issues", Some(json!([{ "id": "r1", "label": "L", "open": { "view": "board", "args": "x".repeat(17000) } }]))),
             "Row args is limited to 16 KB"
         );
         assert!(
@@ -378,7 +389,8 @@ mod tests {
     #[test]
     fn set_section_sort_accepts_a_declared_sort_and_refuses_the_rest() {
         let rig = plugin_with_sections();
-        rig.allowed("return await wings.setSectionSort('issues', 'date');");
+        let sort = |id: &str, sort: &str| json!({ "sectionId": id, "sort": sort });
+        rig.allows("setSectionSort", sort("issues", "date"));
         assert_eq!(
             rig.env.seen().pop(),
             Some(Seen::SectionSort(
@@ -388,16 +400,16 @@ mod tests {
             ))
         );
         assert_eq!(
-            rig.refused("return await wings.setSectionSort('issues', 'nope');"),
+            rig.refuses("setSectionSort", sort("issues", "nope")),
             "probe's project section issues has no sort nope. Declare it in its sorts"
         );
         // A section that declares no sorts has none to confirm, and neither has one that isn't declared.
         assert_eq!(
-            rig.refused("return await wings.setSectionSort('plain', 'date');"),
+            rig.refuses("setSectionSort", sort("plain", "date")),
             "probe's project section plain has no sort date. Declare it in its sorts"
         );
         assert_eq!(
-            rig.refused("return await wings.setSectionSort('nope', 'date');"),
+            rig.refuses("setSectionSort", sort("nope", "date")),
             "probe's project section nope has no sort date. Declare it in its sorts"
         );
     }

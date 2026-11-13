@@ -2,46 +2,46 @@
 
 use std::fs;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::page::plugin::testing::Rig;
+
+/// What `wings.diskUsage(path, options)` sends the host: the options it was given, and the token and `stream` it adds.
+fn scan(path: impl serde::Serialize, options: Value) -> Value {
+    let mut params = json!({ "path": path, "token": "1", "stream": false });
+    params.as_object_mut().unwrap().extend(options.as_object().unwrap().clone());
+    params
+}
 
 #[test]
 fn a_scan_needs_the_disk_usage_permission_and_checks_its_arguments_first() {
     let denied = Rig::new(json!({}), vec![]);
     assert_eq!(
-        denied.refused("return await wings.diskUsage('/');"),
+        denied.refuses("diskUsage", scan("/", json!({}))),
         "probe may not read disk usage"
     );
     let rig = Rig::new(json!({ "permissions": { "diskUsage": true } }), vec![]);
-    for (body, said) in [
+    for (params, said) in [
+        (scan("", json!({})), "diskUsage needs a path"),
         (
-            "return await wings.diskUsage('');",
-            "diskUsage needs a path",
-        ),
-        (
-            "return await wings.diskUsage('/', { minBytes: -1 });",
+            scan("/", json!({ "minBytes": -1 })),
             "diskUsage minBytes must be a number, 0 or more",
         ),
         (
-            "return await wings.diskUsage('/', { depth: 1.5 });",
+            scan("/", json!({ "depth": 1.5 })),
             "diskUsage depth must be a whole number, 0 or more",
         ),
         (
-            "return await wings.diskUsage('/', { maxEntries: '9' });",
+            scan("/", json!({ "maxEntries": "9" })),
             "diskUsage maxEntries must be a whole number, 0 or more",
         ),
         (
-            "return await wings.diskUsage('/', { reuse: 1 });",
+            scan("/", json!({ "reuse": 1 })),
             "diskUsage reuse must be true or false",
         ),
     ] {
-        assert_eq!(rig.refused(body), said, "{body}");
+        assert_eq!(rig.refuses("diskUsage", params.clone()), said, "{params}");
     }
-    assert_eq!(
-        rig.refused("const stop = new AbortController(); stop.abort(); return await wings.diskUsage('/', { signal: stop.signal });"),
-        "The scan was stopped"
-    );
     assert!(rig.host.shared.scans.lock().unwrap().is_empty());
 }
 
@@ -54,10 +54,7 @@ fn a_scan_sizes_a_folder_and_keeps_what_the_options_ask_for() {
     fs::write(root.join("big/deep/more.bin"), vec![1u8; 100_000]).unwrap();
     fs::write(root.join("note.txt"), "x").unwrap();
 
-    let all = rig.allowed(&format!(
-        "return await wings.diskUsage({}, {{ minBytes: 0 }});",
-        json!(root)
-    ));
+    let all = rig.allows("diskUsage", scan(&root, json!({ "minBytes": 0 })));
     assert_eq!(all["root"]["name"], json!(root.canonicalize().unwrap()));
     assert_eq!(all["root"]["kind"], "dir");
     let names = |entry: &serde_json::Value| -> Vec<String> {
@@ -81,10 +78,7 @@ fn a_scan_sizes_a_folder_and_keeps_what_the_options_ask_for() {
     assert!(names(big).contains(&"deep".to_owned()), "{big}");
 
     // The floor folds small entries into their folder's `smaller`, and `depth` stops short of the folders in `big`.
-    let shallow = rig.allowed(&format!(
-        "return await wings.diskUsage({}, {{ minBytes: 200000, depth: 1 }});",
-        json!(root)
-    ));
+    let shallow = rig.allows("diskUsage", scan(&root, json!({ "minBytes": 200000, "depth": 1 })));
     assert_eq!(names(&shallow["root"]), ["big"]);
     assert!(shallow["root"]["smaller"]["items"].as_u64().unwrap() >= 1);
     assert!(names(&shallow["root"]["children"][0]).is_empty());

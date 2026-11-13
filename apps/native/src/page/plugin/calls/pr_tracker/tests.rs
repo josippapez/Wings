@@ -4,11 +4,14 @@
 
 use std::{sync::Arc, time::Instant};
 
-use serde_json::json;
+use serde_json::{Value, json};
 
-use crate::page::plugin::{
-    Access, PluginHost,
-    testing::{Frame, PRELUDE, Rig, Seen, WAIT, plugin},
+use crate::page::{
+    plugin::{
+        Access, PluginHost,
+        testing::{Frame, Rig, Seen, WAIT, plugin, show},
+    },
+    runtime::fake::{self, Cx, Guest},
 };
 
 const API: &str = "https://api.example.test/v1/";
@@ -33,33 +36,31 @@ fn banked(builtin: bool) -> Rig {
 #[test]
 fn fetch_says_what_the_desktop_says_before_it_reaches_for_the_network() {
     let rig = banked(false);
+    // What `wings.fetch(url, options)` sends: only the options that were given.
+    let fetch = |url: &str, options: Value| {
+        let mut params = json!({ "url": url });
+        params.as_object_mut().unwrap().extend(options.as_object().unwrap().clone());
+        params
+    };
     assert_eq!(
-        rig.refused("return await wings.fetch('https://example.com/x');"),
+        rig.refuses("fetch", fetch("https://example.com/x", json!({}))),
         "probe may not GET https://example.com/x"
     );
     assert_eq!(
-        rig.refused(&format!(
-            "return await wings.fetch('{API}x', {{ method: 'post', body: '{{}}' }});"
-        )),
+        rig.refuses("fetch", fetch(&format!("{API}x"), json!({ "method": "post", "body": "{}" }))),
         format!("probe may not POST {API}x")
     );
     assert_eq!(
-        rig.refused(&format!(
-            "return await wings.fetch('{API}x', {{ headers: {{ Host: 'evil.test' }} }});"
-        )),
+        rig.refuses("fetch", fetch(&format!("{API}x"), json!({ "headers": { "Host": "evil.test" } }))),
         "probe may not set the Host header"
     );
     // A secret goes only under the prefix the manifest binds it to.
     assert_eq!(
-        rig.refused(
-            "return await wings.fetch('https://other.example.test/x', { bearer: 'bank' });"
-        ),
+        rig.refuses("fetch", fetch("https://other.example.test/x", json!({ "bearer": "bank" }))),
         "probe may not send the bank secret to https://other.example.test/x"
     );
     assert_eq!(
-        rig.refused(&format!(
-            "return await wings.fetch('{API}x', {{ bearer: 'bank' }});"
-        )),
+        rig.refuses("fetch", fetch(&format!("{API}x"), json!({ "bearer": "bank" }))),
         "no secret named bank"
     );
 }
@@ -67,16 +68,10 @@ fn fetch_says_what_the_desktop_says_before_it_reaches_for_the_network() {
 #[test]
 fn a_secret_is_kept_under_the_plugin_and_its_scope_and_never_read_back() {
     let rig = banked(false);
-    assert_eq!(
-        rig.allowed("return await wings.secrets.has('bank');"),
-        json!(false)
-    );
-    assert_eq!(
-        rig.allowed(
-            "await wings.secrets.set('bank', 'abc'); return await wings.secrets.has('bank');"
-        ),
-        json!(true)
-    );
+    let name = |name: &str| json!({ "name": name });
+    assert_eq!(rig.allows("secretHas", name("bank")), json!(false));
+    rig.allows("secretSet", json!({ "name": "bank", "value": "abc" }));
+    assert_eq!(rig.allows("secretHas", name("bank")), json!(true));
     let scope = rig.root.config("probe").scope;
     let key = ("probe".to_owned(), scope, "bank".to_owned());
     assert_eq!(
@@ -88,18 +83,16 @@ fn a_secret_is_kept_under_the_plugin_and_its_scope_and_never_read_back() {
             .map(String::as_str),
         Some("abc")
     );
-    assert_eq!(
-        rig.allowed("await wings.secrets.delete('bank'); return await wings.secrets.has('bank');"),
-        json!(false)
-    );
+    rig.allows("secretDelete", name("bank"));
+    assert_eq!(rig.allows("secretHas", name("bank")), json!(false));
     assert!(rig.env.secrets.lock().unwrap().is_empty());
     assert_eq!(
-        rig.refused("return await wings.secrets.set('elsewhere', 'abc');"),
+        rig.refuses("secretSet", json!({ "name": "elsewhere", "value": "abc" })),
         "probe has no secret named elsewhere in permissions.secrets"
     );
-    for value in ["''", "'x'.repeat(8193)"] {
+    for value in ["".to_owned(), "x".repeat(8193)] {
         assert_eq!(
-            rig.refused(&format!("return await wings.secrets.set('bank', {value});")),
+            rig.refuses("secretSet", json!({ "name": "bank", "value": value })),
             "A secret needs a name of letters, digits, - and _, and a value up to 8 KB"
         );
     }
@@ -109,11 +102,11 @@ fn a_secret_is_kept_under_the_plugin_and_its_scope_and_never_read_back() {
 fn a_write_through_a_cli_needs_the_manifest_to_list_the_path() {
     let rig = banked(false);
     assert_eq!(
-        rig.refused("return await wings.post('gh', 'repos/o/r/pulls/1/reviews', { body: 'x' });"),
+        rig.refuses("post", json!({ "program": "gh", "url": "repos/o/r/pulls/1/reviews", "fields": { "body": "x" } })),
         "probe may not post to gh repos/o/r/pulls/1/reviews"
     );
     assert_eq!(
-        rig.refused("return await wings.post('gh', 'repos/o/r/pulls/1/comments/2/replies', {});"),
+        rig.refuses("post", json!({ "program": "gh", "url": "repos/o/r/pulls/1/comments/2/replies", "fields": {} })),
         "a post needs 1 to 10 fields"
     );
 }
@@ -122,7 +115,7 @@ fn a_write_through_a_cli_needs_the_manifest_to_list_the_path() {
 fn a_message_reaches_the_agent_in_a_pane_with_the_plugins_name_when_the_plugin_may() {
     let rig = banked(false);
     assert_eq!(
-        rig.allowed("return await wings.sendToAgent('3', '  Checks failed.\\nLook at them.  ');"),
+        rig.allows("sendToAgent", json!({ "paneId": "3", "text": "  Checks failed.\nLook at them.  " })),
         json!({ "submitted": false })
     );
     assert_eq!(
@@ -134,22 +127,22 @@ fn a_message_reaches_the_agent_in_a_pane_with_the_plugins_name_when_the_plugin_m
         )]
     );
     for (text, why) in [
-        ("''", "sendToAgent needs a message"),
-        ("'  '", "sendToAgent needs a message"),
-        ("'x'.repeat(8193)", "A message is up to 8 KB"),
+        ("".to_owned(), "sendToAgent needs a message"),
+        ("  ".to_owned(), "sendToAgent needs a message"),
+        ("x".repeat(8193), "A message is up to 8 KB"),
         (
-            "'a\\u001b[201~b'",
+            "a\u{1b}[201~b".to_owned(),
             "A message can't hold control characters other than newlines and tabs",
         ),
     ] {
         assert_eq!(
-            rig.refused(&format!("return await wings.sendToAgent('3', {text});")),
+            rig.refuses("sendToAgent", json!({ "paneId": "3", "text": text })),
             why
         );
     }
     let rig = Rig::new(json!({}), vec![]);
     assert_eq!(
-        rig.refused("return await wings.sendToAgent('3', 'hi');"),
+        rig.refuses("sendToAgent", json!({ "paneId": "3", "text": "hi" })),
         "probe may not send messages to agents"
     );
     assert!(rig.env.seen().is_empty());
@@ -158,15 +151,26 @@ fn a_message_reaches_the_agent_in_a_pane_with_the_plugins_name_when_the_plugin_m
 #[test]
 fn the_settings_page_opens_only_for_a_plugin_that_has_one() {
     assert_eq!(
-        banked(false).allowed("return await wings.openSettings();"),
+        banked(false).allows("openSettings", json!({})),
         json!(null)
     );
     let rig = Rig::new(json!({}), vec![]);
     assert_eq!(
-        rig.refused("return await wings.openSettings();"),
+        rig.refuses("openSettings", json!({})),
         "probe has no settings page. Add contributes.settings to its manifest"
     );
     assert!(rig.env.seen().is_empty());
+}
+
+/// A main that keeps the last plugin event it hears, in its storage.
+struct Heard;
+
+impl Guest for Heard {
+    fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, _id: u32, text: &str) {
+        if kind == "pluginEvent" {
+            cx.link().storage(crate::page::runtime::Store::Set("heard".into(), text.into())).unwrap();
+        }
+    }
 }
 
 /// A plugin `listener` that keeps the last event its main heard, in its storage.
@@ -180,11 +184,7 @@ fn listener(rig: &Rig, builtin: bool, events: &[&str]) -> Arc<PluginHost> {
             env: rig.env.clone(),
         },
     ));
-    host.start_main(
-        "wings.onEvent((event) => wings.storage.set('heard', event));",
-        |_| {},
-    )
-    .unwrap();
+    host.start_main(&fake::source("main", || Box::new(Heard)), |_| {}).unwrap();
     rig.env.running.add(&listener, builtin, &host);
     host
 }
@@ -215,7 +215,7 @@ fn an_event_reaches_the_main_of_each_builtin_plugin_that_declared_it() {
     );
     let _listener = listener(&rig, true, &["probe pr-state"]);
     assert_eq!(
-        rig.allowed("return await wings.emit('pr-state', { state: 'merged' });"),
+        rig.allows("emit", json!({ "name": "pr-state", "data": { "state": "merged" } })),
         json!(null)
     );
     assert_eq!(
@@ -234,7 +234,7 @@ fn an_event_is_dropped_for_a_plugin_that_did_not_declare_it_and_by_one_that_is_n
     );
     let _listener = listener(&rig, true, &["probe other-event"]);
     assert_eq!(
-        rig.allowed("return await wings.emit('pr-state', null);"),
+        rig.allows("emit", json!({ "name": "pr-state", "data": null })),
         json!(null)
     );
     assert_eq!(heard(&rig), None);
@@ -247,7 +247,7 @@ fn an_event_is_dropped_for_a_plugin_that_did_not_declare_it_and_by_one_that_is_n
     );
     let _listener = listener(&stranger, true, &["probe pr-state"]);
     assert_eq!(
-        stranger.allowed("return await wings.emit('pr-state', null);"),
+        stranger.allows("emit", json!({ "name": "pr-state", "data": null })),
         json!(null)
     );
     assert_eq!(heard(&stranger), None);
@@ -256,28 +256,33 @@ fn an_event_is_dropped_for_a_plugin_that_did_not_declare_it_and_by_one_that_is_n
 #[test]
 fn an_event_has_a_plain_name_and_up_to_16_kb() {
     let rig = Rig::with(plugin(json!({})), true, vec![]);
-    for name in ["''", "'Upper'", "'-x'", "'a_b'", "'x'.repeat(65)"] {
+    for name in ["", "Upper", "-x", "a_b", &"x".repeat(65)] {
         assert_eq!(
-            rig.refused(&format!("return await wings.emit({name}, null);")),
+            rig.refuses("emit", json!({ "name": name, "data": null })),
             "emit takes an event name of lowercase letters, digits and dashes",
             "{name}"
         );
     }
     assert_eq!(
-        rig.refused("return await wings.emit('big', 'x'.repeat(16 * 1024));"),
+        rig.refuses("emit", json!({ "name": "big", "data": "x".repeat(16 * 1024) })),
         "emit data is up to 16 KB of JSON"
     );
+}
+
+/// A page that shows what its tab was opened with, as the module's `view_args` import hands it over.
+struct ViewArgs;
+
+impl Guest for ViewArgs {
+    fn start(&mut self, cx: &mut Cx<'_>) {
+        let args = cx.link().view_args().map_or(Value::Null, |args| serde_json::from_str(&args).unwrap());
+        show(cx, json!({ "args": args }));
+    }
 }
 
 #[test]
 fn a_page_reads_what_openview_opened_it_with_as_a_copy_and_a_page_without_args_reads_null() {
     let rig = Rig::new(json!({}), vec![]);
-    let source = format!(
-        "{PRELUDE}
-        const first = wings.viewArgs();
-        first.url = 'changed';
-        show({{ first, again: wings.viewArgs() }});"
-    );
+    let source = fake::source("view", || Box::new(ViewArgs));
     let args = json!({ "url": "https://example.test/pull/1", "number": 1 });
     let (sender, events) = std::sync::mpsc::channel();
     let page = rig
@@ -294,14 +299,9 @@ fn a_page_reads_what_openview_opened_it_with_as_a_copy_and_a_page_without_args_r
         }
     };
     let shown: serde_json::Value = serde_json::from_str(&tree.text()).unwrap();
-    assert_eq!(shown["first"]["url"], "changed");
-    assert_eq!(shown["again"], args);
+    assert_eq!(shown["args"], args);
     assert_eq!(
-        Frame::start(
-            &rig.host,
-            &format!("{PRELUDE}\nshow({{ args: wings.viewArgs() }});")
-        )
-        .report("a page", |r| r.get("args").is_some()),
+        Frame::start(&rig.host, &source).report("a page", |r| r.get("args").is_some()),
         json!({ "args": null })
     );
 }
