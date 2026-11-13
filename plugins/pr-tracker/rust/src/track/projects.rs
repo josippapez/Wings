@@ -28,12 +28,15 @@ pub struct Project {
     pub id: String,
     pub path: String,
     pub name: String,
+    /// The user turned the Pull requests section off for it in the sidebar; an older Wings never says so.
+    pub off: bool,
 }
 
 impl Project {
     fn from_json(project: &Value) -> Option<Self> {
         let text = |name: &str| project[name].as_str().map(str::to_owned);
-        Some(Self { id: text("id")?, path: text("path")?, name: text("name").unwrap_or_default() })
+        let off = project["hiddenSections"].as_array().is_some_and(|keys| keys.iter().any(|key| key == "pr-tracker:pulls"));
+        Some(Self { id: text("id")?, path: text("path")?, name: text("name").unwrap_or_default(), off })
     }
 }
 
@@ -225,7 +228,7 @@ async fn run_project(project: Project, remote: Remote, fresh: bool, sidebar: &'s
 async fn run_projects() {
     let fresh = WANT_FRESH.replace(false);
     let sidebar = SIDEBAR.get();
-    let projects: Vec<Project> = host::projects().await.ok().and_then(|list| list.as_array().map(|list| list.iter().filter_map(Project::from_json).collect())).unwrap_or_default();
+    let projects: Vec<Project> = host::projects().await.ok().and_then(|list| list.as_array().map(|list| list.iter().filter_map(Project::from_json).filter(|project| !project.off).collect())).unwrap_or_default();
     let live = Rc::new(RefCell::new(HashSet::new()));
     // Every remote is read before any list is asked for, so the lists of all the projects are asked in one turn and a forge that batches reads them in one call.
     let remotes = join_all(projects.iter().map(|project| {
@@ -377,4 +380,61 @@ pub async fn pulls_for(path: &str) -> Result<Value, String> {
         })
         .collect();
     answer(PullsAnswer { rows: Some(order_pulls(&rows).into_iter().take(BLOCK_ROWS).collect()), ..PullsAnswer::default() })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wings_plugin::task::block_on;
+
+    /// Wings with two GitHub projects, the second with the section off; every `exec` is kept as `program cwd args`.
+    fn wings(second_off: bool) -> Rc<RefCell<Vec<String>>> {
+        let asked: Rc<RefCell<Vec<String>>> = Rc::default();
+        let kept = asked.clone();
+        let off = if second_off { json!(["pr-tracker:pulls"]) } else { Value::Null };
+        host::testing::answer(move |method, params| match method {
+            "projects" => Ok(json!([
+                { "id": "/a", "path": "/a", "name": "a" },
+                { "id": "/b", "path": "/b", "name": "b", "hiddenSections": off },
+            ])),
+            "exec" => {
+                let args: Vec<&str> = params["args"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+                kept.borrow_mut().push(format!("{} {} {}", params["program"].as_str().unwrap(), params["cwd"].as_str().unwrap_or(""), args.join(" ")));
+                let cwd = params["cwd"].as_str().unwrap_or("");
+                let stdout = match (params["program"].as_str().unwrap(), args.first()) {
+                    ("git", _) => format!("git@github.com:o{cwd}.git"),
+                    ("gh", Some(&"api")) if args.contains(&"user") => "me".to_owned(),
+                    _ => "[]".to_owned(),
+                };
+                Ok(json!({ "code": 0, "stdout": stdout, "stderr": "" }))
+            }
+            "post" => {
+                kept.borrow_mut().push(format!("post {params}"));
+                Ok(Value::Null)
+            }
+            _ => Ok(Value::Null),
+        });
+        asked
+    }
+
+    /// What the calls say of the repo `o/<name>`: its `git` run and its place in the batched list.
+    fn about(asked: &[String], name: &str) -> usize {
+        asked.iter().filter(|call| call.contains(&format!(" /{name} ")) || call.contains(&format!(r#"name: \"{name}\""#))).count()
+    }
+
+    #[test]
+    fn a_project_with_the_section_off_gets_no_lookup() {
+        let asked = wings(true);
+        block_on(run_projects());
+        let asked = asked.borrow();
+        assert_eq!((about(&asked, "a"), about(&asked, "b")), (2, 0), "{asked:?}");
+    }
+
+    #[test]
+    fn a_project_with_the_section_on_is_looked_up() {
+        let asked = wings(false);
+        block_on(run_projects());
+        let asked = asked.borrow();
+        assert_eq!((about(&asked, "a"), about(&asked, "b")), (2, 2), "{asked:?}");
+    }
 }
