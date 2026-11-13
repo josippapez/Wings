@@ -210,6 +210,97 @@ impl Cli {
     }
 }
 
+/// What a program that ran printed, whatever its exit code.
+#[derive(Clone, Debug)]
+pub struct Exec {
+    pub code: i64,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// What `Cli::post` fails with: the error, and all of what the program printed to stdout before it failed, which holds
+/// the data of a GraphQL answer that came with errors.
+#[derive(Clone, Debug)]
+pub struct PostFailure {
+    pub error: CliError,
+    pub stdout: String,
+}
+
+impl Cli {
+    /// The kind and message of the problem recorded for `key`, for a plugin's own badges.
+    pub fn problem(&self, key: &str) -> Option<(Kind, String)> {
+        self.0.problems.borrow().get(key).map(|problem| (problem.kind, problem.message.clone()))
+    }
+
+    fn not_run(&self, message: String, key: &str, quiet: bool) -> CliError {
+        let missing = message.contains(NOT_INSTALLED);
+        if missing && !quiet {
+            self.record(key, Problem { kind: Kind::Missing, message: message.clone() });
+        }
+        CliError { kind: if missing { Kind::Missing } else { Kind::Failed }, message }
+    }
+
+    /// Runs the program and gives `{ code, stdout, stderr }` whatever the exit code, for a command whose output matters
+    /// when it fails, like `gh auth status`. Records and clears no sign-in problem. It fails only when the program didn't
+    /// run: `Missing` when it isn't installed (recorded unless `quiet`), else `Failed`.
+    pub async fn exec(&self, args: &[String], key: &str, quiet: bool) -> Result<Exec, CliError> {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let out = host::exec(self.0.program, &args).await.map_err(|message| self.not_run(message, key, quiet))?;
+        Ok(Exec {
+            code: out["code"].as_i64().unwrap_or(-1),
+            stdout: out["stdout"].as_str().unwrap_or_default().to_owned(),
+            stderr: out["stderr"].as_str().unwrap_or_default().to_owned(),
+        })
+    }
+
+    /// `wings.post` through this CLI, for a call `permissions.post` names, with the failure handling of `run`. `host`
+    /// names a GitHub Enterprise host.
+    pub async fn post(&self, url: &str, fields: &Value, host: Option<&str>, key: &str, quiet: bool) -> Result<String, PostFailure> {
+        let program = self.0.program;
+        let params = json!({ "program": program, "url": url, "host": host, "fields": fields });
+        let out = host::call("post", params).await.map_err(|message| PostFailure { error: self.not_run(message, key, quiet), stdout: String::new() })?;
+        if out["code"] == 0 {
+            if !quiet {
+                self.forget(key);
+            }
+            return Ok(out["stdout"].as_str().unwrap_or_default().to_owned());
+        }
+        let stderr = out["stderr"].as_str().unwrap_or_default();
+        let text = stderr.trim();
+        let signed_out = (self.0.signed_out)(stderr);
+        if signed_out && !quiet {
+            let message = last_line(text);
+            self.record(key, Problem { kind: Kind::SignedOut, message: if message.is_empty() { format!("{program} failed") } else { message.to_owned() } });
+        }
+        Err(PostFailure {
+            error: CliError { kind: if signed_out { Kind::SignedOut } else { Kind::Failed }, message: if text.is_empty() { format!("{program} failed") } else { text.to_owned() } },
+            stdout: out["stdout"].as_str().unwrap_or_default().to_owned(),
+        })
+    }
+
+    /// `sign_in` that also hands `on_line` each line the login prints, for one that prints a code to show.
+    pub async fn sign_in_with(&self, key: Option<&str>, on_line: impl Fn(&str) + 'static) -> Result<(), String> {
+        if self.0.signing.borrow().is_some() {
+            return Ok(());
+        }
+        *self.0.signing.borrow_mut() = Some(key.map(str::to_owned));
+        self.changed();
+        let out = host::exec_lines(self.0.program, self.0.sign_in, SIGN_IN_TIMEOUT_MS, on_line).await;
+        let failed = match out {
+            Ok(out) if out["code"] == 0 => None,
+            Ok(out) => Some(Some(last_line(out["stderr"].as_str().unwrap_or_default()).to_owned()).filter(|line| !line.is_empty()).unwrap_or_else(|| "Sign-in failed".to_owned())),
+            Err(error) => Some(error),
+        };
+        *self.0.signing.borrow_mut() = None;
+        if let Some(error) = failed {
+            self.changed();
+            return Err(error);
+        }
+        self.retry().await;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,5 +363,70 @@ mod tests {
         block_on({ let cli = cli.clone(); async move { cli.sign_in(None).await } }).unwrap();
         assert_eq!(*retried.borrow(), 1);
         assert!(cli.problem_badge("org", &text).is_none());
+    }
+}
+
+impl Cli {
+    /// `run` in the folder `cwd`, for a command that finds its repository there, like `gh pr list`.
+    pub async fn run_in(&self, cwd: Option<&str>, args: &[String], key: &str, quiet: bool) -> Result<String, CliError> {
+        let Some(cwd) = cwd else {
+            return self.run(args, key, quiet).await;
+        };
+        let program = self.0.program;
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let out = host::exec_in(cwd, program, &refs).await.map_err(|message| self.not_run(message, key, quiet))?;
+        if out["code"] == 0 {
+            if !quiet {
+                self.forget(key);
+            }
+            return Ok(out["stdout"].as_str().unwrap_or_default().to_owned());
+        }
+        let stderr = out["stderr"].as_str().unwrap_or_default();
+        let text = stderr.trim();
+        let signed_out = (self.0.signed_out)(stderr);
+        if signed_out && !quiet {
+            let message = last_line(text);
+            self.record(key, Problem { kind: Kind::SignedOut, message: if message.is_empty() { format!("{program} failed") } else { message.to_owned() } });
+        }
+        Err(CliError { kind: if signed_out { Kind::SignedOut } else { Kind::Failed }, message: if text.is_empty() { format!("{program} failed") } else { text.to_owned() } })
+    }
+
+    /// `json` for `run_in`.
+    pub async fn json_in(&self, cwd: Option<&str>, args: &[String], key: &str, quiet: bool, empty: Option<Value>) -> Result<Value, CliError> {
+        let text = self.run_in(cwd, args, key, quiet).await?;
+        if text.trim().is_empty() {
+            return empty.ok_or_else(|| CliError { kind: Kind::Failed, message: format!("{} printed nothing", self.0.program) });
+        }
+        serde_json::from_str(&text).map_err(|error| CliError { kind: Kind::Failed, message: error.to_string() })
+    }
+
+    /// Records that `key` is signed out, for a plugin that tells so from more than stderr.
+    pub fn record_signed_out(&self, key: &str, message: &str) {
+        self.record(key, Problem { kind: Kind::SignedOut, message: message.to_owned() });
+    }
+}
+
+impl Cli {
+    /// `sign_in_with` for a login whose arguments depend on the host (`--hostname`), which `Cli::new` can't hold.
+    pub async fn sign_in_args(&self, key: Option<&str>, args: &[String], on_line: impl Fn(&str) + 'static) -> Result<(), String> {
+        if self.0.signing.borrow().is_some() {
+            return Ok(());
+        }
+        *self.0.signing.borrow_mut() = Some(key.map(str::to_owned));
+        self.changed();
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let out = host::exec_lines(self.0.program, &refs, SIGN_IN_TIMEOUT_MS, on_line).await;
+        let failed = match out {
+            Ok(out) if out["code"] == 0 => None,
+            Ok(out) => Some(Some(last_line(out["stderr"].as_str().unwrap_or_default()).to_owned()).filter(|line| !line.is_empty()).unwrap_or_else(|| "Sign-in failed".to_owned())),
+            Err(error) => Some(error),
+        };
+        *self.0.signing.borrow_mut() = None;
+        if let Some(error) = failed {
+            self.changed();
+            return Err(error);
+        }
+        self.retry().await;
+        Ok(())
     }
 }

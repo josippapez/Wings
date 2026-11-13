@@ -28,7 +28,7 @@ pub(crate) mod ffi {
 }
 
 /// Outside Wings there is no host: a plugin's own tests, built for this computer, run what doesn't reach for one.
-/// Nothing is drawn or sent, a call is never answered, the clock stands at 0 and the timezone is UTC.
+/// Nothing is drawn or sent, a call is never answered, the clock stands at 0 (`testing::set_now` moves it) and the timezone is UTC.
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::missing_safety_doc)]
 pub(crate) mod ffi {
@@ -37,7 +37,7 @@ pub(crate) mod ffi {
     pub unsafe fn broadcast(_: *const u8, _: usize) {}
     pub unsafe fn timer(_: u32, _: u32) {}
     pub unsafe fn now() -> f64 {
-        0.0
+        super::testing::NOW.with(std::cell::Cell::get)
     }
     pub unsafe fn utc_offset(_: f64) -> i32 {
         0
@@ -115,6 +115,12 @@ pub mod testing {
 
     thread_local! {
         pub(super) static ANSWER: RefCell<Option<Answer>> = const { RefCell::new(None) };
+        pub(super) static NOW: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
+    }
+
+    /// From now on, on this thread, the clock stands at `ms`.
+    pub fn set_now(ms: f64) {
+        NOW.with(|now| now.set(ms));
     }
 
     /// From now on, on this thread, every `call` is answered at once with what `answer` gives for its method and

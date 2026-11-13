@@ -1,19 +1,71 @@
-//! Which forge a git remote URL points at, as `wings-plugin-sdk/git`'s `parseRemote` tells it for the forges whose CLIs a
-//! plugin runs: Azure DevOps (`azure::parse_remote`), GitHub, and GitLab (gitlab.com, or a host with "gitlab" in its
-//! name). Any other host, and what isn't a remote URL, is `Other`.
+//! Which forge a git remote URL points at, as `wings-plugin-sdk/git`'s `parseRemote` tells.
 
-use crate::azure::{AzureRemote, parse_remote as parse_azure};
+use crate::azure::{self, AzureRemote};
+use serde_json::{Value, json};
 
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum Forge {
+/// Hosts of Gitea and Forgejo that are known by name.
+const GITEA_HOSTS: &[&str] = &["codeberg.org"];
+
+/// Where a git remote is. `path` is `owner/repo`. A host that no provider's name gives away is `Unknown`, which a
+/// signed-in `gh` or `glab` can settle; what isn't a remote URL is `None`.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum Remote {
+    Github { host: String, path: String },
     Azure(AzureRemote),
-    GitHub { host: String, path: String },
-    GitLab { host: String, path: String },
-    Other,
+    Gitlab { host: String, path: String },
+    Bitbucket { workspace: String, repo: String },
+    Gitea { host: String, owner: String, repo: String },
+    Unknown { host: String, path: String },
+    None { host: Option<String> },
 }
 
-fn host_ok(name: &str) -> bool {
-    if name.starts_with('[') && name.ends_with(']') && name.len() > 2 {
+impl Remote {
+    /// The remote as the TypeScript's `Remote` object, the form kept in a tab's args.
+    pub fn to_json(&self) -> Value {
+        match self {
+            Self::Github { host, path } => json!({ "kind": "github", "host": host, "path": path }),
+            Self::Azure(a) => json!({ "kind": "azure", "org": a.org, "project": a.project, "repo": a.repo }),
+            Self::Gitlab { host, path } => json!({ "kind": "gitlab", "host": host, "path": path }),
+            Self::Bitbucket { workspace, repo } => json!({ "kind": "bitbucket", "workspace": workspace, "repo": repo }),
+            Self::Gitea { host, owner, repo } => json!({ "kind": "gitea", "host": host, "owner": owner, "repo": repo }),
+            Self::Unknown { host, path } => json!({ "kind": "unknown", "host": host, "path": path }),
+            Self::None { host: Some(host) } => json!({ "kind": "none", "host": host }),
+            Self::None { host: None } => json!({ "kind": "none" }),
+        }
+    }
+
+    /// The remote `to_json` wrote, or none for anything that isn't one.
+    pub fn from_json(value: &Value) -> Option<Self> {
+        let text = |name: &str| value[name].as_str().map(str::to_owned);
+        Some(match value["kind"].as_str()? {
+            "github" => Self::Github { host: text("host")?, path: text("path")? },
+            "azure" => Self::Azure(AzureRemote { org: text("org")?, project: text("project")?, repo: text("repo")? }),
+            "gitlab" => Self::Gitlab { host: text("host")?, path: text("path")? },
+            "bitbucket" => Self::Bitbucket { workspace: text("workspace")?, repo: text("repo")? },
+            "gitea" => Self::Gitea { host: text("host")?, owner: text("owner")?, repo: text("repo")? },
+            "unknown" => Self::Unknown { host: text("host")?, path: text("path")? },
+            "none" => Self::None { host: text("host") },
+            _ => return None,
+        })
+    }
+}
+
+/// Bitbucket workspace and repository slugs, which the API takes in the path as they are.
+fn is_slug(text: &str) -> bool {
+    let mut chars = text.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphanumeric()) && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// Whether `text` starts with `scheme://`.
+fn scheme_of(text: &str) -> Option<&str> {
+    let (scheme, _) = text.split_once("://")?;
+    let mut chars = scheme.chars();
+    (chars.next()?.is_ascii_alphabetic() && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))).then_some(scheme)
+}
+
+/// A host name or a bracketed address: letters and digits with dots and dashes inside.
+fn is_host(name: &str) -> bool {
+    if name.len() > 2 && name.starts_with('[') && name.ends_with(']') {
         return true;
     }
     let bytes = name.as_bytes();
@@ -25,60 +77,77 @@ fn host_ok(name: &str) -> bool {
 
 /// The host and repository path of an https, ssh or git URL, or scp-style `user@host:path`. A port is dropped: an ssh
 /// port is the git server's, not the web server's that the CLIs and APIs talk to.
-fn split(text: &str) -> Option<(String, String)> {
-    let scheme = text.find("://").filter(|at| {
-        let scheme = &text[..*at];
-        scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))
-    });
-    let (host, path) = if let Some(at) = scheme {
-        let rest = &text[at + 3..];
-        let rest = match rest.split_once('@') {
-            Some((user, after)) if !user.is_empty() && !user.contains('/') => after,
-            _ => rest,
-        };
+fn split_remote(text: &str) -> Option<(String, String)> {
+    let (scheme, name, path) = if let Some(scheme) = scheme_of(text) {
+        let rest = &text[scheme.len() + 3..];
         let (authority, path) = rest.split_once('/')?;
-        let host = if authority.starts_with('[') {
-            authority.find(']').map(|end| &authority[..=end])?
+        let hostport = match authority.rsplit_once('@') {
+            Some((user, hostport)) if !user.is_empty() => hostport,
+            Some(_) => return None,
+            None => authority,
+        };
+        let name = if hostport.starts_with('[') {
+            let end = hostport.find(']')?;
+            let (name, after) = hostport.split_at(end + 1);
+            (after.is_empty() || (after.starts_with(':') && after.len() > 1 && after[1..].bytes().all(|b| b.is_ascii_digit()))).then_some(name)?
         } else {
-            authority.split(':').next().unwrap_or_default()
+            match hostport.split_once(':') {
+                Some((name, port)) => (!port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())).then_some(name)?,
+                None => hostport,
+            }
         };
-        if text[..at].eq_ignore_ascii_case("file") {
-            return None;
-        }
-        (host, path)
+        (Some(scheme), name, path)
     } else {
-        let rest = match text.split_once('@') {
-            Some((user, after)) if !user.is_empty() && !user.contains(['/', ':']) => after,
-            _ => text,
+        // scp-style `[user@]host:path`: what follows the colon is a path even when it starts with digits.
+        let (front, path) = text.split_once(':')?;
+        let name = match front.split_once('@') {
+            Some((user, name)) if !user.is_empty() && !user.contains('/') => name,
+            Some(_) => return None,
+            None => front,
         };
-        let (host, path) = rest.split_once(':')?;
-        if host.is_empty() || host.contains('/') || path.starts_with('/') {
+        if name.is_empty() || name.contains('/') || path.is_empty() || path.starts_with('/') {
             return None;
         }
-        (host, path)
+        (None, name, path)
     };
-    if path.is_empty() || !host_ok(host) {
+    if path.is_empty() || scheme.is_some_and(|scheme| scheme.eq_ignore_ascii_case("file")) || !is_host(name) {
         return None;
     }
-    let path = path.trim_end_matches('/');
-    Some((host.to_lowercase(), path.strip_suffix(".git").unwrap_or(path).to_owned()))
+    let trimmed = path.trim_end_matches('/');
+    let trimmed = trimmed.strip_suffix(".git").unwrap_or(trimmed);
+    Some((name.to_lowercase(), trimmed.to_owned()))
 }
 
-pub fn parse_remote(url: &str) -> Forge {
-    if let Some(azure) = parse_azure(url) {
-        return Forge::Azure(azure);
+/// Which forge a remote URL points at, from its form: Azure DevOps (ssh.dev.azure.com, dev.azure.com, `{org}.visualstudio.com`
+/// and vs-ssh.visualstudio.com), github.com, gitlab.com and hosts with "gitlab" in their name, Bitbucket Cloud and
+/// Codeberg. Any other host is `Unknown`, and what isn't a remote URL is `None`.
+pub fn parse_remote(url: &str) -> Remote {
+    if let Some(remote) = azure::parse_remote(url) {
+        return Remote::Azure(remote);
     }
-    let Some((host, path)) = split(url.trim()) else {
-        return Forge::Other;
+    let Some((host, path)) = split_remote(url.trim()) else {
+        return Remote::None { host: None };
     };
     // ssh.github.com on port 443 is github.com's ssh over the https port.
     if host == "github.com" || host == "ssh.github.com" {
-        return Forge::GitHub { host: "github.com".into(), path };
+        return Remote::Github { host: "github.com".into(), path };
     }
+    let segments: Vec<&str> = path.split('/').collect();
+    if host == "bitbucket.org" {
+        return if segments.len() == 2 && segments.iter().all(|segment| is_slug(segment)) {
+            Remote::Bitbucket { workspace: segments[0].into(), repo: segments[1].into() }
+        } else {
+            Remote::None { host: Some(host) }
+        };
+    }
+    if GITEA_HOSTS.contains(&host.as_str()) {
+        return if segments.len() == 2 { Remote::Gitea { host, owner: segments[0].into(), repo: segments[1].into() } } else { Remote::None { host: Some(host) } };
+    }
+    // gitlab.com, or a self-managed server with "gitlab" in its host name.
     if host.contains("gitlab") {
-        return Forge::GitLab { host, path };
+        return Remote::Gitlab { host, path };
     }
-    Forge::Other
+    Remote::Unknown { host, path }
 }
 
 #[cfg(test)]
@@ -86,16 +155,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn github_and_gitlab_come_from_https_ssh_and_scp_remotes_and_other_hosts_are_other() {
-        let github = Forge::GitHub { host: "github.com".into(), path: "acme/web".into() };
-        for url in ["https://github.com/acme/web.git", "git@github.com:acme/web.git", "ssh://git@ssh.github.com:443/acme/web", "https://token@github.com/acme/web/\n"] {
-            assert_eq!(parse_remote(url), github, "{url}");
+    fn a_remote_is_told_from_its_form() {
+        assert_eq!(parse_remote("git@github.com:acme/widgets.git"), Remote::Github { host: "github.com".into(), path: "acme/widgets".into() });
+        assert_eq!(parse_remote("ssh://git@ssh.github.com:443/acme/widgets.git"), Remote::Github { host: "github.com".into(), path: "acme/widgets".into() });
+        assert_eq!(parse_remote("https://gitlab.example.com/group/sub/app.git"), Remote::Gitlab { host: "gitlab.example.com".into(), path: "group/sub/app".into() });
+        assert_eq!(parse_remote("git@bitbucket.org:team/app.git"), Remote::Bitbucket { workspace: "team".into(), repo: "app".into() });
+        assert_eq!(parse_remote("https://codeberg.org/someone/app"), Remote::Gitea { host: "codeberg.org".into(), owner: "someone".into(), repo: "app".into() });
+        assert_eq!(parse_remote("https://git.corp.example/team/app.git/"), Remote::Unknown { host: "git.corp.example".into(), path: "team/app".into() });
+        assert!(matches!(parse_remote("https://dev.azure.com/acme/Proj/_git/app"), Remote::Azure(_)));
+    }
+
+    #[test]
+    fn what_is_not_a_remote_is_none_and_a_bitbucket_or_codeberg_path_of_another_shape_keeps_only_its_host() {
+        assert_eq!(parse_remote("/home/me/app"), Remote::None { host: None });
+        assert_eq!(parse_remote("file:///home/me/app"), Remote::None { host: None });
+        assert_eq!(parse_remote(""), Remote::None { host: None });
+        assert_eq!(parse_remote("https://bitbucket.org/team"), Remote::None { host: Some("bitbucket.org".into()) });
+        assert_eq!(parse_remote("https://codeberg.org/a/b/c"), Remote::None { host: Some("codeberg.org".into()) });
+        // A port is the git server's, not the web server's.
+        assert_eq!(parse_remote("ssh://git@git.example.com:2222/team/app.git"), Remote::Unknown { host: "git.example.com".into(), path: "team/app".into() });
+        // scp-style: what follows the colon is a path even when it starts with digits.
+        assert_eq!(parse_remote("git@git.example.com:1234/app.git"), Remote::Unknown { host: "git.example.com".into(), path: "1234/app".into() });
+    }
+
+    #[test]
+    fn a_remote_survives_json() {
+        for url in ["git@github.com:acme/w.git", "https://dev.azure.com/o/P/_git/r", "git@bitbucket.org:t/a", "https://codeberg.org/a/b", "https://gitlab.com/g/a"] {
+            let remote = parse_remote(url);
+            assert_eq!(Remote::from_json(&remote.to_json()), Some(remote));
         }
-        assert_eq!(parse_remote("git@gitlab.com:acme/group/web.git"), Forge::GitLab { host: "gitlab.com".into(), path: "acme/group/web".into() });
-        assert_eq!(parse_remote("https://gitlab.corp.example:8443/a/b.git"), Forge::GitLab { host: "gitlab.corp.example".into(), path: "a/b".into() });
-        for url in ["https://bitbucket.org/acme/web.git", "git@git.corp.example:acme/web.git", "file:///repo", "/local/path", "", "git@github.com:/x"] {
-            assert_eq!(parse_remote(url), Forge::Other, "{url}");
-        }
-        assert!(matches!(parse_remote("git@ssh.dev.azure.com:v3/acme/Shop/web"), Forge::Azure(a) if a.project == "Shop"));
     }
 }

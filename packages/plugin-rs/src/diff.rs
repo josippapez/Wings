@@ -85,7 +85,7 @@ fn id_of(key: &str) -> Value {
 /// button, and `load` runs again every 15 s while Wings is in front. An update the viewer already shows isn't sent
 /// again, and nothing runs once it's closed. `load` gets whether to skip a cache, which the Refresh button asks for.
 /// `key` names what it shows, like a repo folder, for `refresh_live`.
-pub async fn open_live<F, Fut>(mut diff: Value, key: &str, load: F) -> Result<(), String>
+pub async fn open_live_id<F, Fut>(mut diff: Value, key: &str, load: F) -> Result<Value, String>
 where
     F: Fn(bool) -> Fut + 'static,
     Fut: Future<Output = Result<Value, String>> + 'static,
@@ -109,8 +109,17 @@ where
     let id = open(diff).await?;
     let viewer = Rc::new(Viewer { load: Box::new(move |fresh| Box::pin(load(fresh))), key: key.to_owned(), shown: RefCell::new(None), running: Cell::new(false), again: Cell::new(None) });
     LIVE.with(|live| live.borrow_mut().insert(id.to_string(), viewer.clone()));
-    reload(id, viewer, false).await;
-    Ok(())
+    reload(id.clone(), viewer, false).await;
+    Ok(id)
+}
+
+/// `open_live_id`, without the id.
+pub async fn open_live<F, Fut>(diff: Value, key: &str, load: F) -> Result<(), String>
+where
+    F: Fn(bool) -> Fut + 'static,
+    Fut: Future<Output = Result<Value, String>> + 'static,
+{
+    open_live_id(diff, key, load).await.map(drop)
 }
 
 /// Loads the open live viewers again now, or only those whose key is in `keys`, like after a git change.

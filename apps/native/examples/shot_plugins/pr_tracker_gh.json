@@ -1,0 +1,401 @@
+{
+  "_comment": "Made-up answers of `gh` for the native app's tests and screenshots of the PR tracker plugin (apps/native/examples/shot_plugins.rs --pr-tracker and the pr_tracker tests of src/page/plugin/shipped.rs), by the words in the call. The first key a call has the words of answers it, so the specific ones come first. A string is printed as it is, anything else as JSON.",
+  "auth status": {
+    "hosts": {
+      "github.com": []
+    }
+  },
+  "api user": "Ada Lovelace\n",
+  "POST graphql": {
+    "data": {
+      "r0": {
+        "pullRequests": {
+          "nodes": [
+            {
+              "number": 482,
+              "title": "Add retry with backoff to the sync client",
+              "state": "OPEN",
+              "isDraft": false,
+              "reviewDecision": "CHANGES_REQUESTED",
+              "mergeable": "MERGEABLE",
+              "additions": 212,
+              "deletions": 48,
+              "changedFiles": 9,
+              "headRefName": "ada/sync-retry",
+              "baseRefName": "main",
+              "url": "https://github.com/acme/web/pull/482",
+              "updatedAt": "2026-11-12T09:05:00Z",
+              "author": {
+                "login": "Ada Lovelace"
+              },
+              "comments": {
+                "totalCount": 2
+              },
+              "reviews": {
+                "totalCount": 2
+              },
+              "statusCheckRollup": {
+                "contexts": {
+                  "nodes": [
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Unit tests",
+                      "status": "COMPLETED",
+                      "conclusion": "FAILURE",
+                      "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/1",
+                      "startedAt": "2026-11-12T09:00:00Z",
+                      "completedAt": "2026-11-12T09:03:34Z",
+                      "checkSuite": {
+                        "workflowRun": {
+                          "workflow": {
+                            "name": "Workflow"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "End-to-end",
+                      "status": "IN_PROGRESS",
+                      "conclusion": null,
+                      "detailsUrl": null,
+                      "startedAt": "2026-11-12T09:04:00Z",
+                      "completedAt": null,
+                      "checkSuite": {
+                        "workflowRun": {
+                          "workflow": {
+                            "name": "Workflow"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Lint",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS",
+                      "detailsUrl": null,
+                      "startedAt": "2026-11-12T09:00:00Z",
+                      "completedAt": "2026-11-12T09:00:52Z",
+                      "checkSuite": {
+                        "workflowRun": {
+                          "workflow": {
+                            "name": "Workflow"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "number": 479,
+              "title": "[web] Fix the date picker on small screens",
+              "state": "OPEN",
+              "isDraft": true,
+              "reviewDecision": null,
+              "mergeable": "MERGEABLE",
+              "additions": 212,
+              "deletions": 48,
+              "changedFiles": 9,
+              "headRefName": "ada/date-picker",
+              "baseRefName": "main",
+              "url": "https://github.com/acme/web/pull/479",
+              "updatedAt": "2026-11-12T09:05:00Z",
+              "author": {
+                "login": "Ada Lovelace"
+              },
+              "comments": {
+                "totalCount": 0
+              },
+              "reviews": {
+                "totalCount": 0
+              },
+              "statusCheckRollup": {
+                "contexts": {
+                  "nodes": []
+                }
+              }
+            },
+            {
+              "number": 475,
+              "title": "Migrate the settings page to the new form components",
+              "state": "OPEN",
+              "isDraft": false,
+              "reviewDecision": "REVIEW_REQUIRED",
+              "mergeable": "MERGEABLE",
+              "additions": 212,
+              "deletions": 48,
+              "changedFiles": 9,
+              "headRefName": "grace/settings-forms",
+              "baseRefName": "main",
+              "url": "https://github.com/acme/web/pull/475",
+              "updatedAt": "2026-11-12T01:00:00Z",
+              "author": {
+                "login": "Grace Hopper"
+              },
+              "comments": {
+                "totalCount": 1
+              },
+              "reviews": {
+                "totalCount": 0
+              },
+              "statusCheckRollup": {
+                "contexts": {
+                  "nodes": [
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Lint",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS",
+                      "detailsUrl": null,
+                      "startedAt": "2026-11-12T09:00:00Z",
+                      "completedAt": "2026-11-12T09:03:34Z",
+                      "checkSuite": {
+                        "workflowRun": {
+                          "workflow": {
+                            "name": "Workflow"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "number": 470,
+              "title": "Bump the build toolchain",
+              "state": "OPEN",
+              "isDraft": false,
+              "reviewDecision": null,
+              "mergeable": "MERGEABLE",
+              "additions": 212,
+              "deletions": 48,
+              "changedFiles": 9,
+              "headRefName": "alan/toolchain",
+              "baseRefName": "main",
+              "url": "https://github.com/acme/web/pull/470",
+              "updatedAt": "2026-11-12T00:30:00Z",
+              "author": {
+                "login": "Alan Turing"
+              },
+              "comments": {
+                "totalCount": 1
+              },
+              "reviews": {
+                "totalCount": 0
+              },
+              "statusCheckRollup": {
+                "contexts": {
+                  "nodes": [
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Build",
+                      "status": "IN_PROGRESS",
+                      "conclusion": null,
+                      "detailsUrl": null,
+                      "startedAt": "2026-11-12T09:00:00Z",
+                      "completedAt": null,
+                      "checkSuite": {
+                        "workflowRun": {
+                          "workflow": {
+                            "name": "Workflow"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "asked": {
+        "nodes": [
+          {
+            "number": 475,
+            "repository": {
+              "nameWithOwner": "acme/web"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "--json comments,reviews": {
+    "comments": [
+      {
+        "author": {
+          "login": "ci-bot[bot]"
+        },
+        "body": "Coverage is 91.2%, down 0.1% from main.",
+        "createdAt": "2026-11-12T04:00:00Z",
+        "url": "https://github.com/acme/web/pull/482#c3"
+      }
+    ],
+    "reviews": []
+  },
+  "pr view https://github.com/acme/web/pull/482": {
+    "number": 482,
+    "title": "Add retry with backoff to the sync client",
+    "state": "OPEN",
+    "isDraft": false,
+    "reviewDecision": "CHANGES_REQUESTED",
+    "mergeable": "MERGEABLE",
+    "additions": 212,
+    "deletions": 48,
+    "changedFiles": 9,
+    "headRefName": "ada/sync-retry",
+    "baseRefName": "main",
+    "url": "https://github.com/acme/web/pull/482",
+    "updatedAt": "2026-11-12T09:05:00Z",
+    "statusCheckRollup": [
+      {
+        "__typename": "CheckRun",
+        "name": "Unit tests",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "detailsUrl": "https://github.com/acme/web/actions/runs/1/job/1",
+        "startedAt": "2026-11-12T09:00:00Z",
+        "completedAt": "2026-11-12T09:03:34Z",
+        "checkSuite": {
+          "workflowRun": {
+            "workflow": {
+              "name": "Workflow"
+            }
+          }
+        }
+      },
+      {
+        "__typename": "CheckRun",
+        "name": "End-to-end",
+        "status": "IN_PROGRESS",
+        "conclusion": null,
+        "detailsUrl": null,
+        "startedAt": "2026-11-12T09:04:00Z",
+        "completedAt": null,
+        "checkSuite": {
+          "workflowRun": {
+            "workflow": {
+              "name": "Workflow"
+            }
+          }
+        }
+      },
+      {
+        "__typename": "CheckRun",
+        "name": "Lint",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS",
+        "detailsUrl": null,
+        "startedAt": "2026-11-12T09:00:00Z",
+        "completedAt": "2026-11-12T09:00:52Z",
+        "checkSuite": {
+          "workflowRun": {
+            "workflow": {
+              "name": "Workflow"
+            }
+          }
+        }
+      }
+    ],
+    "author": {
+      "login": "Ada Lovelace"
+    },
+    "createdAt": "2026-11-11T07:00:00Z",
+    "latestReviews": [
+      {
+        "author": {
+          "login": "Grace Hopper"
+        },
+        "state": "APPROVED"
+      },
+      {
+        "author": {
+          "login": "Alan Turing"
+        },
+        "state": "CHANGES_REQUESTED"
+      }
+    ],
+    "body": "## What\n\nThe sync client gave up on the first failed request. It now retries with **exponential backoff**, see [the guide](https://example.com/retries).\n\n- `SyncClient.send` retries up to 5 times\n- Delay doubles from 200 ms\n\n```ts\nconst delay = Math.min(base * 2 ** attempt, 30_000);\n```\n\n| Setting | Default |\n| --- | --- |\n| base | 200 ms |\n"
+  },
+  "pr list": [
+    {
+      "url": "https://github.com/acme/web/pull/482",
+      "number": 482
+    }
+  ],
+  "pr diff": "diff --git a/src/sync/client.ts b/src/sync/client.ts\nindex 1111111..2222222 100644\n--- a/src/sync/client.ts\n+++ b/src/sync/client.ts\n@@ -80,7 +80,10 @@ export class SyncClient {\n   async send(request: Request, attempt = 0): Promise<Response> {\n     const res = await fetch(request);\n     if (res.status < 500 || attempt >= 5) return res;\n-    const wait = this.base * 2 ** attempt;\n-    await delay(wait);\n+    const wait = Math.min(this.base * 2 ** attempt, 30_000);\n+    const jitter = wait * (0.5 + Math.random() / 2);\n+    await delay(jitter);\n     return this.send(request, attempt + 1);\n",
+  "pulls/482/comments": [
+    [
+      {
+        "id": 1,
+        "path": "src/sync/client.ts",
+        "line": 85,
+        "side": "RIGHT",
+        "original_line": 85,
+        "diff_hunk": "@@ -80,7 +80,10 @@ export class SyncClient {\n   async send(request: Request, attempt = 0): Promise<Response> {\n     const res = await fetch(request);\n     if (res.status < 500 || attempt >= 5) return res;\n-    const wait = this.base * 2 ** attempt;\n-    await delay(wait);\n+    const wait = Math.min(this.base * 2 ** attempt, 30_000);\n+    const jitter = wait * (0.5 + Math.random() / 2);\n+    await delay(jitter);\n     return this.send(request, attempt + 1);",
+        "user": {
+          "login": "Alan Turing"
+        },
+        "body": "Should the jitter be full or equal?",
+        "created_at": "2026-11-11T13:00:00Z",
+        "html_url": "https://github.com/acme/web/pull/482#c1"
+      },
+      {
+        "id": 2,
+        "path": "src/sync/client.ts",
+        "line": 85,
+        "side": "RIGHT",
+        "original_line": 85,
+        "diff_hunk": "@@ -80,7 +80,10 @@ export class SyncClient {\n   async send(request: Request, attempt = 0): Promise<Response> {\n     const res = await fetch(request);\n     if (res.status < 500 || attempt >= 5) return res;\n-    const wait = this.base * 2 ** attempt;\n-    await delay(wait);\n+    const wait = Math.min(this.base * 2 ** attempt, 30_000);\n+    const jitter = wait * (0.5 + Math.random() / 2);\n+    await delay(jitter);\n     return this.send(request, attempt + 1);",
+        "user": {
+          "login": "Ada Lovelace"
+        },
+        "body": "Equal jitter keeps a floor on the delay.",
+        "created_at": "2026-11-11T14:00:00Z",
+        "html_url": "https://github.com/acme/web/pull/482#c2",
+        "in_reply_to_id": 1
+      }
+    ]
+  ],
+  "actions/jobs/1/logs": "2026-11-12T09:00:00.000Z ##[group]Run pnpm install --frozen-lockfile\n2026-11-12T09:00:00.000Z pnpm install --frozen-lockfile\n2026-11-12T09:00:00.000Z ##[endgroup]\n2026-11-12T09:00:00.000Z Lockfile is up to date, resolution step is skipped\n2026-11-12T09:00:30.000Z Packages: +812\n2026-11-12T09:00:39.000Z Done in 41.2s\n2026-11-12T09:01:00.000Z ##[group]Run pnpm test\n2026-11-12T09:01:00.000Z pnpm test sync\n2026-11-12T09:01:00.000Z ##[endgroup]\n2026-11-12T09:01:00.000Z ==============================================================================\n2026-11-12T09:01:00.000Z Task         : Command line\n2026-11-12T09:01:00.000Z Description  : Run a command line script using Bash on Linux and macOS and cmd.exe on Windows\n2026-11-12T09:01:00.000Z Version      : 2.250.1\n2026-11-12T09:01:00.000Z ==============================================================================\n2026-11-12T09:01:00.000Z Generating script.\n2026-11-12T09:01:01.000Z ##[group]Install dependencies\n2026-11-12T09:01:01.000Z Progress: resolved 9, reused 9, downloaded 0, added 0\n2026-11-12T09:01:01.000Z Progress: resolved 18, reused 18, downloaded 0, added 9\n2026-11-12T09:01:01.000Z Progress: resolved 27, reused 27, downloaded 0, added 18\n2026-11-12T09:01:01.000Z Progress: resolved 36, reused 36, downloaded 0, added 27\n2026-11-12T09:01:01.000Z Progress: resolved 45, reused 45, downloaded 0, added 36\n2026-11-12T09:01:01.000Z Progress: resolved 54, reused 54, downloaded 0, added 45\n2026-11-12T09:01:01.000Z Progress: resolved 63, reused 63, downloaded 0, added 54\n2026-11-12T09:01:01.000Z Progress: resolved 72, reused 72, downloaded 0, added 63\n2026-11-12T09:01:02.000Z Progress: resolved 81, reused 81, downloaded 0, added 72\n2026-11-12T09:01:02.000Z Progress: resolved 90, reused 90, downloaded 0, added 81\n2026-11-12T09:01:02.000Z Progress: resolved 99, reused 99, downloaded 0, added 90\n2026-11-12T09:01:02.000Z Progress: resolved 108, reused 108, downloaded 0, added 99\n2026-11-12T09:01:02.000Z Progress: resolved 117, reused 117, downloaded 0, added 108\n2026-11-12T09:01:02.000Z Progress: resolved 126, reused 126, downloaded 0, added 117\n2026-11-12T09:01:02.000Z Progress: resolved 135, reused 135, downloaded 0, added 126\n2026-11-12T09:01:02.000Z Progress: resolved 144, reused 144, downloaded 0, added 135\n2026-11-12T09:01:03.000Z Progress: resolved 153, reused 153, downloaded 0, added 144\n2026-11-12T09:01:03.000Z Progress: resolved 162, reused 162, downloaded 0, added 153\n2026-11-12T09:01:03.000Z Progress: resolved 171, reused 171, downloaded 0, added 162\n2026-11-12T09:01:03.000Z Progress: resolved 180, reused 180, downloaded 0, added 171\n2026-11-12T09:01:03.000Z Progress: resolved 189, reused 189, downloaded 0, added 180\n2026-11-12T09:01:03.000Z Progress: resolved 198, reused 198, downloaded 0, added 189\n2026-11-12T09:01:03.000Z Progress: resolved 207, reused 207, downloaded 0, added 198\n2026-11-12T09:01:03.000Z Progress: resolved 216, reused 216, downloaded 0, added 207\n2026-11-12T09:01:04.000Z Progress: resolved 225, reused 225, downloaded 0, added 216\n2026-11-12T09:01:04.000Z Progress: resolved 234, reused 234, downloaded 0, added 225\n2026-11-12T09:01:04.000Z Progress: resolved 243, reused 243, downloaded 0, added 234\n2026-11-12T09:01:04.000Z Progress: resolved 252, reused 252, downloaded 0, added 243\n2026-11-12T09:01:04.000Z Progress: resolved 261, reused 261, downloaded 0, added 252\n2026-11-12T09:01:04.000Z Progress: resolved 270, reused 270, downloaded 0, added 261\n2026-11-12T09:01:04.000Z Progress: resolved 279, reused 279, downloaded 0, added 270\n2026-11-12T09:01:04.000Z Progress: resolved 288, reused 288, downloaded 0, added 279\n2026-11-12T09:01:05.000Z Progress: resolved 297, reused 297, downloaded 0, added 288\n2026-11-12T09:01:05.000Z Progress: resolved 306, reused 306, downloaded 0, added 297\n2026-11-12T09:01:05.000Z Progress: resolved 315, reused 315, downloaded 0, added 306\n2026-11-12T09:01:05.000Z Progress: resolved 324, reused 324, downloaded 0, added 315\n2026-11-12T09:01:05.000Z Progress: resolved 333, reused 333, downloaded 0, added 324\n2026-11-12T09:01:05.000Z Progress: resolved 342, reused 342, downloaded 0, added 333\n2026-11-12T09:01:05.000Z Progress: resolved 351, reused 351, downloaded 0, added 342\n2026-11-12T09:01:05.000Z Progress: resolved 360, reused 360, downloaded 0, added 351\n2026-11-12T09:01:06.000Z Progress: resolved 369, reused 369, downloaded 0, added 360\n2026-11-12T09:01:06.000Z Progress: resolved 378, reused 378, downloaded 0, added 369\n2026-11-12T09:01:06.000Z Progress: resolved 387, reused 387, downloaded 0, added 378\n2026-11-12T09:01:06.000Z Progress: resolved 396, reused 396, downloaded 0, added 387\n2026-11-12T09:01:06.000Z Progress: resolved 405, reused 405, downloaded 0, added 396\n2026-11-12T09:01:06.000Z Progress: resolved 414, reused 414, downloaded 0, added 405\n2026-11-12T09:01:06.000Z Progress: resolved 423, reused 423, downloaded 0, added 414\n2026-11-12T09:01:06.000Z Progress: resolved 432, reused 432, downloaded 0, added 423\n2026-11-12T09:01:07.000Z Progress: resolved 441, reused 441, downloaded 0, added 432\n2026-11-12T09:01:07.000Z Progress: resolved 450, reused 450, downloaded 0, added 441\n2026-11-12T09:01:07.000Z Progress: resolved 459, reused 459, downloaded 0, added 450\n2026-11-12T09:01:07.000Z Progress: resolved 468, reused 468, downloaded 0, added 459\n2026-11-12T09:01:07.000Z Progress: resolved 477, reused 477, downloaded 0, added 468\n2026-11-12T09:01:07.000Z Progress: resolved 486, reused 486, downloaded 0, added 477\n2026-11-12T09:01:07.000Z Progress: resolved 495, reused 495, downloaded 0, added 486\n2026-11-12T09:01:07.000Z Progress: resolved 504, reused 504, downloaded 0, added 495\n2026-11-12T09:01:08.000Z Progress: resolved 513, reused 513, downloaded 0, added 504\n2026-11-12T09:01:08.000Z Progress: resolved 522, reused 522, downloaded 0, added 513\n2026-11-12T09:01:08.000Z Progress: resolved 531, reused 531, downloaded 0, added 522\n2026-11-12T09:01:08.000Z Progress: resolved 540, reused 540, downloaded 0, added 531\n2026-11-12T09:01:08.000Z Progress: resolved 549, reused 549, downloaded 0, added 540\n2026-11-12T09:01:08.000Z Progress: resolved 558, reused 558, downloaded 0, added 549\n2026-11-12T09:01:08.000Z Progress: resolved 567, reused 567, downloaded 0, added 558\n2026-11-12T09:01:08.000Z Progress: resolved 576, reused 576, downloaded 0, added 567\n2026-11-12T09:01:09.000Z Progress: resolved 585, reused 585, downloaded 0, added 576\n2026-11-12T09:01:09.000Z Progress: resolved 594, reused 594, downloaded 0, added 585\n2026-11-12T09:01:09.000Z Progress: resolved 603, reused 603, downloaded 0, added 594\n2026-11-12T09:01:09.000Z Progress: resolved 612, reused 612, downloaded 0, added 603\n2026-11-12T09:01:09.000Z Progress: resolved 621, reused 621, downloaded 0, added 612\n2026-11-12T09:01:09.000Z Progress: resolved 630, reused 630, downloaded 0, added 621\n2026-11-12T09:01:09.000Z Progress: resolved 639, reused 639, downloaded 0, added 630\n2026-11-12T09:01:09.000Z Progress: resolved 648, reused 648, downloaded 0, added 639\n2026-11-12T09:01:10.000Z Progress: resolved 657, reused 657, downloaded 0, added 648\n2026-11-12T09:01:10.000Z Progress: resolved 666, reused 666, downloaded 0, added 657\n2026-11-12T09:01:10.000Z Progress: resolved 675, reused 675, downloaded 0, added 666\n2026-11-12T09:01:10.000Z Progress: resolved 684, reused 684, downloaded 0, added 675\n2026-11-12T09:01:10.000Z Progress: resolved 693, reused 693, downloaded 0, added 684\n2026-11-12T09:01:10.000Z Progress: resolved 702, reused 702, downloaded 0, added 693\n2026-11-12T09:01:10.000Z Progress: resolved 711, reused 711, downloaded 0, added 702\n2026-11-12T09:01:10.000Z Progress: resolved 720, reused 720, downloaded 0, added 711\n2026-11-12T09:01:11.000Z Progress: resolved 729, reused 729, downloaded 0, added 720\n2026-11-12T09:01:11.000Z Progress: resolved 738, reused 738, downloaded 0, added 729\n2026-11-12T09:01:11.000Z Progress: resolved 747, reused 747, downloaded 0, added 738\n2026-11-12T09:01:11.000Z Progress: resolved 756, reused 756, downloaded 0, added 747\n2026-11-12T09:01:11.000Z Progress: resolved 765, reused 765, downloaded 0, added 756\n2026-11-12T09:01:11.000Z Progress: resolved 774, reused 774, downloaded 0, added 765\n2026-11-12T09:01:11.000Z Progress: resolved 783, reused 783, downloaded 0, added 774\n2026-11-12T09:01:11.000Z Progress: resolved 792, reused 792, downloaded 0, added 783\n2026-11-12T09:01:12.000Z Progress: resolved 801, reused 801, downloaded 0, added 792\n2026-11-12T09:01:12.000Z Progress: resolved 810, reused 810, downloaded 0, added 801\n2026-11-12T09:01:12.000Z Progress: resolved 819, reused 819, downloaded 0, added 810\n2026-11-12T09:01:12.000Z Progress: resolved 828, reused 828, downloaded 0, added 819\n2026-11-12T09:01:12.000Z Progress: resolved 837, reused 837, downloaded 0, added 828\n2026-11-12T09:01:12.000Z Progress: resolved 846, reused 846, downloaded 0, added 837\n2026-11-12T09:01:15.000Z ##[endgroup]\n2026-11-12T09:01:15.000Z > web@0.0.0 test /home/runner/work/web/web\n2026-11-12T09:01:15.000Z > vitest run --reporter=verbose --coverage.enabled=true src/sync\n2026-11-12T09:01:16.000Z  \u001b[32m✓\u001b[0m src/sync/module-1.test.ts (8 tests) \u001b[33m120ms\u001b[0m\n2026-11-12T09:01:17.000Z  \u001b[32m✓\u001b[0m src/sync/module-2.test.ts (9 tests) \u001b[33m127ms\u001b[0m\n2026-11-12T09:01:18.000Z  \u001b[32m✓\u001b[0m src/sync/module-3.test.ts (10 tests) \u001b[33m134ms\u001b[0m\n2026-11-12T09:01:19.000Z  \u001b[32m✓\u001b[0m src/sync/module-4.test.ts (11 tests) \u001b[33m141ms\u001b[0m\n2026-11-12T09:01:20.000Z  \u001b[32m✓\u001b[0m src/sync/module-5.test.ts (12 tests) \u001b[33m148ms\u001b[0m\n2026-11-12T09:01:21.000Z  \u001b[32m✓\u001b[0m src/sync/module-6.test.ts (13 tests) \u001b[33m155ms\u001b[0m\n2026-11-12T09:01:22.000Z  \u001b[32m✓\u001b[0m src/sync/module-7.test.ts (14 tests) \u001b[33m162ms\u001b[0m\n2026-11-12T09:01:23.000Z  \u001b[32m✓\u001b[0m src/sync/module-8.test.ts (15 tests) \u001b[33m169ms\u001b[0m\n2026-11-12T09:01:24.000Z  \u001b[32m✓\u001b[0m src/sync/module-9.test.ts (16 tests) \u001b[33m176ms\u001b[0m\n2026-11-12T09:01:25.000Z  \u001b[32m✓\u001b[0m src/sync/module-10.test.ts (17 tests) \u001b[33m183ms\u001b[0m\n2026-11-12T09:01:26.000Z  \u001b[32m✓\u001b[0m src/sync/module-11.test.ts (18 tests) \u001b[33m190ms\u001b[0m\n2026-11-12T09:01:27.000Z  \u001b[32m✓\u001b[0m src/sync/module-12.test.ts (19 tests) \u001b[33m197ms\u001b[0m\n2026-11-12T09:01:40.000Z  \u001b[31m✗\u001b[0m src/sync/client.test.ts (14 tests | 3 failed)\n2026-11-12T09:01:40.000Z    \u001b[31m✗\u001b[0m retries with backoff > waits for Retry-After\n2026-11-12T09:01:40.000Z      \u001b[31mAssertionError: expected 1200 to be 30000 // Object.is equality\u001b[0m\n2026-11-12T09:01:40.000Z        at processTicksAndRejections (node:internal/process/task_queues:95:5) at runTest (file:///home/runner/work/web/web/node_modules/@vitest/runner/dist/index.js:781:11)\n2026-11-12T09:01:41.000Z ======================================================================================================================================================\n2026-11-12T09:01:41.000Z Coverage: https://github.com/acme/web/actions/runs/16893571234/artifacts/3720129876?check_suite_focus=true&pr=482&lines=covered,uncovered,partial\n2026-11-12T09:01:41.000Z ##[error]Process completed with exit code 1.\n",
+  "actions/jobs/1": {
+    "id": 1,
+    "name": "Tests",
+    "status": "completed",
+    "conclusion": "failure",
+    "started_at": "2026-11-12T09:00:00Z",
+    "completed_at": "2026-11-12T09:03:34Z",
+    "html_url": "https://github.com/acme/web/actions/runs/1/job/1",
+    "steps": [
+      {
+        "number": 1,
+        "name": "Install dependencies",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-12T09:00:00Z",
+        "completed_at": "2026-11-12T09:00:41Z"
+      },
+      {
+        "number": 2,
+        "name": "Unit tests",
+        "status": "completed",
+        "conclusion": "failure",
+        "started_at": "2026-11-12T09:01:00Z",
+        "completed_at": "2026-11-12T09:03:00Z"
+      },
+      {
+        "number": 3,
+        "name": "Publish coverage",
+        "status": "completed",
+        "conclusion": "skipped",
+        "started_at": null,
+        "completed_at": null
+      }
+    ]
+  }
+}

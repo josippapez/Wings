@@ -4,7 +4,7 @@
 use crate::schedule::{Agent, Run, clean_prompt, int, text};
 use serde_json::{Map, Value, json};
 use std::collections::HashSet;
-use wings_plugin::remote::{Forge, parse_remote};
+use wings_plugin::remote::{Remote, parse_remote};
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Source {
@@ -361,9 +361,9 @@ const GB: f64 = 1_073_741_824.0;
 
 pub fn source_of(remote_url: Option<&str>) -> Source {
     match remote_url.map(parse_remote) {
-        Some(Forge::Azure(azure)) => Source::Azure { org: azure.org, project: azure.project },
-        Some(Forge::GitHub { host, path }) => Source::GitHub { host, path },
-        Some(Forge::GitLab { host, path }) => Source::GitLab { host, path },
+        Some(Remote::Azure(azure)) => Source::Azure { org: azure.org, project: azure.project },
+        Some(Remote::Github { host, path }) => Source::GitHub { host, path },
+        Some(Remote::Gitlab { host, path }) => Source::GitLab { host, path },
         _ => Source::Unsupported,
     }
 }

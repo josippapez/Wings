@@ -125,3 +125,33 @@ mod tests {
         assert_eq!(day(951_782_400_000.0), "Feb 29, 2000");
     }
 }
+
+/// `ms` since the epoch as `new Date(ms).toISOString()` writes it: UTC, to the millisecond, like `2026-11-13T09:05:00.000Z`.
+pub fn iso_of(ms: f64) -> String {
+    let total = ms.floor() as i64;
+    let (days, in_day) = (total.div_euclid(86_400_000), total.rem_euclid(86_400_000));
+    // Days since the epoch to a calendar date: the days-to-civil algorithm.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    let (h, m, s, milli) = (in_day / 3_600_000, in_day / 60_000 % 60, in_day / 1000 % 60, in_day % 1000);
+    format!("{year:04}-{month:02}-{day:02}T{h:02}:{m:02}:{s:02}.{milli:03}Z")
+}
+
+#[cfg(test)]
+mod iso_tests {
+    use super::iso_of;
+
+    #[test]
+    fn a_time_is_written_as_to_iso_string_writes_it() {
+        assert_eq!(iso_of(0.0), "1970-01-01T00:00:00.000Z");
+        assert_eq!(iso_of(1_700_000_000_123.0), "2023-11-14T22:13:20.123Z");
+        assert_eq!(iso_of(951_782_400_000.0), "2000-02-29T00:00:00.000Z");
+    }
+}

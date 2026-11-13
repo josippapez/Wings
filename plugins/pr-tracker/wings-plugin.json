@@ -1,13 +1,12 @@
 {
   "id": "pr-tracker",
   "name": "PR tracker",
-  "version": "0.28.5",
-  "minWingsVersion": "0.1.113",
+  "version": "0.29.0",
+  "minWingsVersion": "0.2.21",
   "icon": "icon.svg",
   "description": "Shows the pull request for each pane's branch (GitHub and GitHub Enterprise, GitLab and self-managed GitLab, Azure DevOps, Bitbucket Cloud and Codeberg), with live status, every check and policy and why it failed, the diff and review comments. Lists each project's pull requests in the sidebar (yours and the ones waiting for your review, or every open one), can notify you when a new one opens or asks for your review, or when someone mentions you or replies to you, and, in a tab or a block on the Project page, every open one with filters, and opens one as a tab to read, reply to and send to an agent.",
   "api": 1,
-  "native": true,
-  "main": "dist/main.js",
+  "main": "dist/native/main.wasm",
   "permissions": {
     "exec": [
       "git remote get-url []",
@@ -86,7 +85,7 @@
         "id": "pr",
         "title": "Pull request",
         "icon": "git-compare",
-        "page": "dist/pr.html",
+        "page": "dist/native/pr.wasm",
         "opens": [
           "tab"
         ],
@@ -98,7 +97,7 @@
         "id": "pulls",
         "title": "Pull requests",
         "icon": "git-compare",
-        "page": "dist/pulls.html",
+        "page": "dist/native/pulls.wasm",
         "minHeight": 120
       }
     ],
@@ -111,7 +110,7 @@
       }
     ],
     "settings": {
-      "page": "dist/settings.html"
+      "page": "dist/native/settings.wasm"
     }
   }
 }

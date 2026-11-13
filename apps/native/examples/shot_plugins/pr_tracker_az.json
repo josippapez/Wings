@@ -1,0 +1,378 @@
+{
+  "_comment": "Made-up answers of `az` for the native app's tests and screenshots of the PR tracker plugin (apps/native/examples/shot_plugins.rs --pr-tracker and the pr_tracker tests of src/page/plugin/shipped.rs), by the words in the call. The first key a call has the words of answers it. A string is printed as it is, anything else as JSON.",
+  "account show": "ada@example.com\n",
+  "repos pr policy list": [
+    {
+      "status": "rejected",
+      "configuration": {
+        "isEnabled": true,
+        "isBlocking": true,
+        "type": {
+          "id": "t",
+          "displayName": "Build"
+        },
+        "settings": {
+          "displayName": "web-ci"
+        }
+      },
+      "context": {
+        "buildId": 9001
+      },
+      "startedDate": "2026-11-12T08:00:00Z",
+      "completedDate": "2026-11-12T08:06:42Z"
+    },
+    {
+      "status": "running",
+      "configuration": {
+        "isEnabled": true,
+        "isBlocking": true,
+        "type": {
+          "id": "t",
+          "displayName": "Required reviewers"
+        },
+        "settings": {}
+      }
+    },
+    {
+      "status": "running",
+      "configuration": {
+        "isEnabled": true,
+        "isBlocking": true,
+        "type": {
+          "id": "t",
+          "displayName": "Build"
+        },
+        "settings": {
+          "displayName": "web-e2e"
+        }
+      },
+      "context": {
+        "buildId": 9002
+      },
+      "startedDate": "2026-11-12T08:55:00Z"
+    },
+    {
+      "status": "queued",
+      "configuration": {
+        "isEnabled": true,
+        "isBlocking": true,
+        "type": {
+          "id": "fa4e907d-c16b-4a4c-9dfa-4906e5d171dd",
+          "displayName": "Minimum number of reviewers"
+        },
+        "settings": {
+          "minimumApproverCount": 2
+        }
+      }
+    },
+    {
+      "status": "queued",
+      "configuration": {
+        "isEnabled": true,
+        "isBlocking": true,
+        "type": {
+          "id": "t",
+          "displayName": "Work item linking"
+        },
+        "settings": {}
+      }
+    },
+    {
+      "status": "queued",
+      "configuration": {
+        "isEnabled": true,
+        "isBlocking": false,
+        "type": {
+          "id": "t",
+          "displayName": "Build"
+        },
+        "settings": {
+          "displayName": "web-storybook"
+        }
+      },
+      "context": {
+        "buildId": 9003
+      }
+    },
+    {
+      "status": "approved",
+      "configuration": {
+        "isEnabled": true,
+        "isBlocking": true,
+        "type": {
+          "id": "t",
+          "displayName": "Comment requirements"
+        },
+        "settings": {}
+      }
+    },
+    {
+      "status": "notApplicable",
+      "configuration": {
+        "isEnabled": true,
+        "isBlocking": false,
+        "type": {
+          "id": "t",
+          "displayName": "Status"
+        },
+        "settings": {
+          "statusName": "docs/preview"
+        }
+      }
+    }
+  ],
+  "repos pr show": {
+    "pullRequestId": 482,
+    "status": "active",
+    "title": "Add retry with backoff to the sync client",
+    "isDraft": false,
+    "mergeStatus": "succeeded",
+    "creationDate": "2026-11-11T07:00:00Z",
+    "createdBy": {
+      "id": "u-ada",
+      "displayName": "Ada Lovelace",
+      "uniqueName": "ada@example.com"
+    },
+    "reviewers": [
+      {
+        "id": "u-grace",
+        "displayName": "Grace Hopper",
+        "uniqueName": "grace@example.com",
+        "vote": 0,
+        "isRequired": true
+      },
+      {
+        "id": "u-alan",
+        "displayName": "Alan Turing",
+        "uniqueName": "alan@example.com",
+        "vote": 10,
+        "isRequired": true
+      }
+    ],
+    "repository": {
+      "webUrl": "https://dev.azure.com/acme/Web/_git/web"
+    },
+    "sourceRefName": "refs/heads/ada/sync-retry",
+    "targetRefName": "refs/heads/main",
+    "lastMergeSourceCommit": {
+      "commitId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "lastMergeTargetCommit": {
+      "commitId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "description": "## What\n\nThe sync client gave up on the first failed request. It now retries with **exponential backoff**, see [the guide](https://example.com/retries).\n\n- `SyncClient.send` retries up to 5 times\n- Delay doubles from 200 ms\n\n```ts\nconst delay = Math.min(base * 2 ** attempt, 30_000);\n```\n"
+  },
+  "--resource pullRequestThreads": {
+    "value": [
+      {
+        "id": 1,
+        "status": "active",
+        "threadContext": {
+          "filePath": "/src/sync/client.ts",
+          "rightFileStart": {
+            "line": 88
+          },
+          "rightFileEnd": {
+            "line": 88
+          }
+        },
+        "pullRequestThreadContext": {
+          "iterationContext": {
+            "secondComparingIteration": 2
+          }
+        },
+        "comments": [
+          {
+            "id": 1,
+            "parentCommentId": 0,
+            "commentType": "text",
+            "author": {
+              "displayName": "Alan Turing"
+            },
+            "content": "Should the jitter be full or equal?",
+            "publishedDate": "2026-11-11T13:00:00Z"
+          },
+          {
+            "id": 2,
+            "parentCommentId": 1,
+            "commentType": "text",
+            "author": {
+              "displayName": "Ada Lovelace"
+            },
+            "content": "Equal jitter keeps a floor on the delay.",
+            "publishedDate": "2026-11-11T14:00:00Z"
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "status": "fixed",
+        "threadContext": {
+          "filePath": "/src/sync/client.test.ts",
+          "rightFileStart": {
+            "line": 14
+          },
+          "rightFileEnd": {
+            "line": 14
+          }
+        },
+        "pullRequestThreadContext": {
+          "iterationContext": {
+            "secondComparingIteration": 1
+          }
+        },
+        "comments": [
+          {
+            "id": 1,
+            "parentCommentId": 0,
+            "commentType": "text",
+            "author": {
+              "displayName": "Grace Hopper"
+            },
+            "content": "Nit: name this retries on 503.",
+            "publishedDate": "2026-11-11T15:00:00Z"
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "comments": [
+          {
+            "id": 1,
+            "parentCommentId": 0,
+            "commentType": "text",
+            "author": {
+              "displayName": "ci-bot[bot]"
+            },
+            "content": "Coverage is 91.2%, down 0.1% from main.",
+            "publishedDate": "2026-11-12T04:00:00Z"
+          }
+        ]
+      }
+    ]
+  },
+  "--resource pullRequestIterations": {
+    "value": [
+      {
+        "id": 1,
+        "author": {
+          "displayName": "Ada Lovelace"
+        },
+        "createdDate": "2026-11-11T07:00:00Z",
+        "reason": "create",
+        "sourceRefCommit": {
+          "commitId": "cccccccccccccccccccccccccccccccccccccccc"
+        },
+        "commonRefCommit": {
+          "commitId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "commits": [
+          {
+            "commitId": "2e70136000000000000000000000000000000000",
+            "comment": "feat(sync): retry with exponential backoff",
+            "author": {
+              "name": "Ada Lovelace",
+              "date": "2026-11-11T07:00:00Z"
+            }
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "author": {
+          "displayName": "Ada Lovelace"
+        },
+        "createdDate": "2026-11-12T06:00:00Z",
+        "reason": "push",
+        "sourceRefCommit": {
+          "commitId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "commonRefCommit": {
+          "commitId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "commits": [
+          {
+            "commitId": "929d227000000000000000000000000000000000",
+            "comment": "fix(sync): cap the delay at 30 s",
+            "author": {
+              "name": "Ada Lovelace",
+              "date": "2026-11-12T06:00:00Z"
+            }
+          },
+          {
+            "commitId": "0c11d9e000000000000000000000000000000000",
+            "comment": "test(sync): cover the Retry-After header",
+            "author": {
+              "name": "Ada Lovelace",
+              "date": "2026-11-12T05:50:00Z"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "--resource timeline": {
+    "records": [
+      {
+        "id": "j1",
+        "type": "Job",
+        "name": "Build and test",
+        "parentId": null,
+        "order": 1,
+        "result": "failed",
+        "state": "completed",
+        "startTime": "2026-11-12T08:00:00Z",
+        "finishTime": "2026-11-12T08:06:42Z"
+      },
+      {
+        "id": "t1",
+        "type": "Task",
+        "name": "Checkout",
+        "parentId": "j1",
+        "order": 1,
+        "result": "succeeded",
+        "state": "completed",
+        "startTime": "2026-11-12T08:00:00Z",
+        "finishTime": "2026-11-12T08:00:20Z",
+        "log": {
+          "id": 1
+        }
+      },
+      {
+        "id": "t2",
+        "type": "Task",
+        "name": "Install dependencies",
+        "parentId": "j1",
+        "order": 2,
+        "result": "succeeded",
+        "state": "completed",
+        "startTime": "2026-11-12T08:01:00Z",
+        "finishTime": "2026-11-12T08:02:00Z",
+        "log": {
+          "id": 2
+        }
+      },
+      {
+        "id": "t3",
+        "type": "Task",
+        "name": "Unit tests",
+        "parentId": "j1",
+        "order": 3,
+        "result": "failed",
+        "state": "completed",
+        "startTime": "2026-11-12T08:03:00Z",
+        "finishTime": "2026-11-12T08:06:00Z",
+        "log": {
+          "id": 3
+        }
+      }
+    ]
+  },
+  "--resource logs": {
+    "value": [
+      "Starting: Unit tests",
+      "3 tests failed in src/sync/client.test.ts",
+      "##[error]Process completed with exit code 1."
+    ]
+  }
+}

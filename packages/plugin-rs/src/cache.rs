@@ -175,6 +175,16 @@ impl<K: Eq + Clone + 'static, V: Clone + 'static> Batch<K, V> {
     }
 }
 
+impl<K: Hash + Eq + Clone + 'static, V: Clone + 'static> Cached<K, V> {
+    /// What was kept for `key` whatever its age, or none when it was never loaded, is loading or was forgotten.
+    pub fn peek(&self, key: &K) -> Option<Result<V, String>> {
+        match self.0.entries.borrow().get(key) {
+            Some(Entry::Done(_, answer)) => Some(answer.clone()),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,5 +235,12 @@ mod tests {
         assert_eq!(block_on(join_all(asked)), [Ok(10), Ok(20), Ok(20), Ok(30)]);
         assert_eq!(*calls.borrow(), [vec![1, 2], vec![3]]);
         assert_eq!(block_on(batch.get(9)), Err("nine".into()));
+    }
+}
+
+impl<K: Hash + Eq + Clone + 'static, V: Clone + 'static> Cached<K, V> {
+    /// Forgets one key, so the next `get` of it loads again.
+    pub fn forget(&self, key: &K) {
+        self.0.entries.borrow_mut().remove(key);
     }
 }
