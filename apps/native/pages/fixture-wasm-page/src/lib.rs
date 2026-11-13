@@ -21,10 +21,12 @@ fn change(change: impl FnOnce(&mut State)) {
 #[unsafe(no_mangle)]
 pub fn start() {
     wings_plugin::run(|| {
+        let args = wings_plugin::host::view_args();
         STATE.with(|state| {
             let state = state.borrow();
             vec![
-                ui::chips("Range", &[("week", "Week"), ("month", "Month")], &state.range, |value| {
+                // Named by what its tab was opened with, when it was.
+                ui::chips(args.as_ref().and_then(|args| args["label"].as_str()).unwrap_or("Range"), &[("week", "Week"), ("month", "Month")], &state.range, |value| {
                     let value = value.to_owned();
                     change(|state| state.range = value);
                 }),

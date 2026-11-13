@@ -1,13 +1,12 @@
 {
   "id": "changes",
   "name": "Changes",
-  "version": "0.8.1",
-  "minWingsVersion": "0.1.113",
+  "version": "0.9.0",
+  "minWingsVersion": "0.2.17",
   "icon": "icon.svg",
   "description": "Shows what changed in each pane's git repo: a badge with the counts, a sidebar with the changed files as a tree and the commit history, a commit graph, and their diffs.",
   "api": 1,
-  "native": true,
-  "main": "dist/main.js",
+  "main": "dist/native/main.wasm",
   "permissions": {
     "exec": [
       "git rev-parse [--show-toplevel --abbrev-ref --verify --quiet]",
@@ -30,7 +29,7 @@
       {
         "id": "changes",
         "title": "Changes",
-        "page": "dist/sidebar.html"
+        "page": "dist/native/sidebar.wasm"
       }
     ],
     "views": [
@@ -38,7 +37,7 @@
         "id": "graph",
         "title": "Commit graph",
         "icon": "git-graph",
-        "page": "dist/graph.html",
+        "page": "dist/native/graph.wasm",
         "opens": ["window", "modal"],
         "width": 1100,
         "height": 760

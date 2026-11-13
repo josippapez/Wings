@@ -7,6 +7,10 @@
 //! in handlers and tasks. The page is built again after every turn (an event, an answer, a timer), and sent to the
 //! app when it differs from the last one.
 
+pub mod azure;
+pub mod cache;
+pub mod cli;
+pub mod diff;
 pub mod format;
 pub mod git;
 pub mod host;
@@ -28,6 +32,12 @@ thread_local! {
 /// Shows what `view` builds as the page. Call it once, from `start`.
 pub fn run(view: fn() -> Vec<ui::Node>) {
     VIEW.with(|slot| *slot.borrow_mut() = Some(view));
+}
+
+/// `run`, for a page that fills its tab edge to edge, so its toolbar runs to the tab's edges.
+pub fn run_filled(view: fn() -> Vec<ui::Node>) {
+    ui::fill();
+    run(view);
 }
 
 /// Runs the tasks that can go on, then builds the page and sends it if it changed.

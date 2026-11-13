@@ -34,11 +34,26 @@ fn error_line(stderr: &str) -> Option<&str> {
 /// Runs `git args` in `cwd` and gives its stdout with the whitespace around it trimmed. A non-zero exit is an error
 /// of git's first line of stderr, or `git <command> failed`.
 pub async fn git(cwd: &str, args: &[&str]) -> Result<String, String> {
+    raw(cwd, args).await.map(|stdout| stdout.trim().to_owned())
+}
+
+/// `git`, with stdout exactly as git printed it, for a patch or a `-z` list.
+pub async fn raw(cwd: &str, args: &[&str]) -> Result<String, String> {
     let output = run(cwd, args).await?;
     if output.code != 0 {
         return Err(error_line(&output.stderr).map_or_else(|| format!("git {} failed", args.first().copied().unwrap_or_default()), str::to_owned));
     }
-    Ok(output.stdout.trim().to_owned())
+    Ok(output.stdout)
+}
+
+/// What to call a checkout: its branch, else "detached at" and its short commit, else "no commits". `head` is
+/// `git rev-parse --verify --quiet HEAD`, none in a repo with no commits.
+pub fn branch_label(branch: Option<&str>, head: Option<&str>) -> String {
+    match (branch.filter(|branch| !branch.is_empty()), head.filter(|head| !head.is_empty())) {
+        (Some(branch), _) => branch.to_owned(),
+        (None, Some(head)) => format!("detached at {}", head.chars().take(7).collect::<String>()),
+        (None, None) => "no commits".into(),
+    }
 }
 
 /// Runs `git args` in `cwd` and gives its trimmed stdout, or none when git exits non-zero or Wings refuses the call.
@@ -148,6 +163,18 @@ pub async fn repo_root(cwd: &str) -> Option<String> {
         Ok((output.code == 0).then(|| output.stdout.trim().to_owned()).filter(|root| !root.is_empty()))
     })
     .await
+}
+
+/// The id of the project whose repo `cwd` is in, or none when no project has that repo, which means Wings isn't
+/// watching it and the caller keeps polling. `projects` is what `host::projects` answers.
+pub async fn watched_project(cwd: &str, projects: &Value) -> Option<String> {
+    let root = repo_root(cwd).await?;
+    for project in projects.as_array().into_iter().flatten() {
+        if repo_root(project["path"].as_str().unwrap_or_default()).await.as_deref() == Some(root.as_str()) {
+            return project["id"].as_str().map(str::to_owned);
+        }
+    }
+    None
 }
 
 /// Forgets every repo root, for a Refresh button: a new repo shows at once.

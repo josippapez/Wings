@@ -1,13 +1,12 @@
 {
   "id": "work-item",
   "name": "Work item",
-  "version": "0.11.2",
-  "minWingsVersion": "0.1.108",
+  "version": "0.12.0",
+  "minWingsVersion": "0.2.21",
   "icon": "icon.svg",
   "description": "Shows the Azure Boards work item named in each pane's branch, like feature/1234-login, with its state, sprint and parent, and moves it to its next state. Opens a work item in a tab with its description, comments and linked pull requests, and lists the work items assigned to you in the current sprint under each project.",
   "api": 1,
-  "native": true,
-  "main": "dist/main.js",
+  "main": "dist/native/main.wasm",
   "permissions": {
     "exec": [
       "git remote get-url []",
@@ -34,7 +33,7 @@
         "title": "Work item",
         "button": false,
         "icon": "kanban",
-        "page": "dist/item.html",
+        "page": "dist/native/item.wasm",
         "opens": [
           "tab"
         ]
@@ -45,7 +44,7 @@
         "id": "sprint",
         "title": "Sprint",
         "icon": "kanban",
-        "page": "dist/sprint.html",
+        "page": "dist/native/sprint.wasm",
         "minHeight": 160
       }
     ],

@@ -23,6 +23,7 @@ pub(crate) mod ffi {
         pub fn now() -> f64;
         pub fn utc_offset(ms: f64) -> i32;
         pub fn focused() -> i32;
+        pub fn view_args() -> u64;
     }
 }
 
@@ -43,6 +44,9 @@ pub(crate) mod ffi {
     }
     pub unsafe fn focused() -> i32 {
         1
+    }
+    pub unsafe fn view_args() -> u64 {
+        0
     }
 }
 
@@ -303,6 +307,11 @@ pub fn exec_in(cwd: &str, program: &str, args: &[&str]) -> Pending<Result<Value,
     call("exec", json!({ "program": program, "args": args, "cwd": cwd, "timeoutMs": null, "stream": false }))
 }
 
+/// `wings.exec` that Wings stops after `timeout_ms`, for a program that waits on you, like a sign-in in a browser.
+pub fn exec_timeout(program: &str, args: &[&str], timeout_ms: u32) -> Pending<Result<Value, String>> {
+    call("exec", json!({ "program": program, "args": args, "cwd": null, "timeoutMs": timeout_ms, "stream": false }))
+}
+
 /// `wings.projects`: every project, each with its `id`, `path` and `name`.
 pub fn projects() -> Pending<Result<Value, String>> {
     call("projects", json!({}))
@@ -486,6 +495,19 @@ pub fn focused() -> bool {
     FOCUSED.with(|focused| *focused.borrow()).unwrap_or_else(|| unsafe { ffi::focused() } != 0)
 }
 
+/// `wings.viewArgs`: what `open_view` opened this page's tab with, or none for a page opened without args. Needs
+/// Wings 0.2.21: on an older one a module that calls this doesn't load.
+pub fn view_args() -> Option<Value> {
+    // SAFETY: takes nothing.
+    let packed = unsafe { ffi::view_args() };
+    let len = (packed & 0xffff_ffff) as usize;
+    if len == 0 {
+        return None;
+    }
+    // SAFETY: the host wrote the args into `wings_alloc` memory and returned where, and how long they are.
+    serde_json::from_str(&unsafe { crate::taken((packed >> 32) as usize as *mut u8, len) }).ok()
+}
+
 /// Hears each change of `focused`.
 pub fn on_focus(listener: impl Fn(bool) + 'static) {
     ON_FOCUS.with(|list| list.borrow_mut().push(Rc::new(listener)));
@@ -568,6 +590,28 @@ pub fn set_sidebar_label(sidebar: &str, label: Option<&str>, rows: &[(&str, &str
 /// `wings.openView`: shows the plugin's sidebar or view `id`. Nobody waits for it.
 pub fn open_view(id: &str) {
     drop(call("openView", json!({ "id": id, "newTab": false })));
+}
+
+/// `wings.openView` with `as` ("tab", ...) and the `args` the view reads with `view_args`. A tab that is open with equal
+/// args is shown rather than opened again.
+pub fn open_view_with(id: &str, place: &str, args: &Value) -> Pending<Result<Value, String>> {
+    call("openView", json!({ "id": id, "as": place, "args": args, "newTab": false }))
+}
+
+/// `wings.setProjectSection`: the rows of the plugin's section `section` under the project `project` in the sidebar, or
+/// none for null to take the section away.
+pub fn set_project_section(project: &str, section: &str, rows: &Value) -> Pending<Result<Value, String>> {
+    call("setProjectSection", json!({ "projectId": project, "sectionId": section, "rows": rows }))
+}
+
+/// `wings.blockState`: what the block saved with `set_block_state`, or null.
+pub fn block_state() -> Pending<Result<Value, String>> {
+    call("blockState", json!({}))
+}
+
+/// `wings.setBlockState`: saves any JSON for the block.
+pub fn set_block_state(state: &Value) -> Pending<Result<Value, String>> {
+    call("setBlockState", json!({ "state": state }))
 }
 
 /// Opens `url` in the browser. Nobody waits for it.

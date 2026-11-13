@@ -9,7 +9,7 @@ Don't write the sign-in handling by hand. `cli()` from `wings-plugin-sdk/cli` ru
 
 Examples in this repo:
 
-- `plugins/work-item/src/lib/az.ts` makes the handle, and `plugins/work-item/src/main/badge.ts` (`badgeOf`, `showBadges`) draws the badge and answers its actions.
+- `plugins/work-item/rust/src/az.rs` makes the handle (`cli::Cli` of the Rust SDK), and `plugins/work-item/rust/src/main_frame.rs` (`badge_of`, `act`) draws the badge and answers its actions. A TypeScript plugin uses `cli()` of `wings-plugin-sdk/cli`, as `plugins/pr-tracker/src/main/badges.ts` does.
 - `plugins/pr-tracker/src/lib/forges/` has `gh`, `glab` and `az` handles for three hosts: `github.ts` for a login that prints a one-time code, `gitlab.ts` for a signed-out signal that needs a second command.
 
 ## Steps

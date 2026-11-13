@@ -76,7 +76,7 @@ Rust is how new plugins here are meant to be written, and the TypeScript ones ar
 - `sh build-rust.sh` in `plugins/` builds every frame the manifests name into `<plugin>/dist/native/`, and those modules are committed like the TypeScript plugins' `dist/`. `sh build-rust.sh --check` fails when a committed module differs from what its crate builds. It needs `rustup target add wasm32-unknown-unknown`.
 - `apps/native/src/page/plugin/shipped.rs` runs the committed modules against a fake app, as it runs the TypeScript plugins.
 
-`dev-servers/` is the smallest one to read, and `hud/` has a main script and a page: a crate with two frames, unit tests that run with `cargo test` (`pnpm test` runs them), and `apps/native/examples/shot_plugins.rs --hud` to render its sidebar. `worktrees/` is a page that runs git and searches the disks. Its tests answer the plugin's calls with a made-up git (`host::testing::answer`), and `shot_plugins.rs` with no flag renders it over a repo it makes.
+`dev-servers/` is the smallest one to read, and `hud/` has a main script and a page: a crate with two frames, unit tests that run with `cargo test` (`pnpm test` runs them), and `apps/native/examples/shot_plugins.rs --hud` to render its sidebar. `changes/` has three frames and the diff viewer: its pages run git themselves and ask its main to open a diff. `worktrees/` is a page that runs git and searches the disks. Its tests answer the plugin's calls with a made-up git (`host::testing::answer`), and `shot_plugins.rs` with no flag renders it over a repo it makes. `work-item/` is the one that runs `az`: its main badges panes and fills each project's Work items section, and its item tab (it reads what it was opened with by `host::view_args`, so it needs Wings 0.2.21) and Sprint block run `az` themselves. The SDK has what it needed: `cli::Cli` runs `az`, `gh` or `glab` and tells a missing program and a signed-out one from a failure (with the badge for either, Sign in and Try again), `azure::parse_remote` and `azure::work_items` (the work items asked together are one `az rest`), `cache::Cached` (a value per key, with a TTL and a TTL for a failure) and `cache::Batch`, `git::watched_project`, `host::open_view_with`, `host::set_project_section`, `host::block_state`, and `run_filled` for a page that fills its tab edge to edge. Its tests in `shipped.rs` run in a process of their own where `az` is a fake script, which answers from `apps/native/examples/shot_plugins/work_item_az.json`, so no test reaches Azure DevOps even when the Mac has `az` installed.
 
 ## Writing a plugin
 
@@ -233,18 +233,18 @@ Reach for these before writing your own. Each is a module of `wings-plugin-sdk`:
 | Module | For | A plugin that uses it |
 |---|---|---|
 | `wings-plugin-sdk/messages` | `channel()`: questions, events and queries between main and the pages | `tasks/src/lib/messages.ts`, answered in `tasks/src/main.ts` |
-| `wings-plugin-sdk/react` | `useQuery`, `useSetting` and `useBroadcast`, for a page | `changes/src/pages/sidebar.tsx` |
+| `wings-plugin-sdk/react` | `useQuery`, `useSetting` and `useBroadcast`, for a page | `schedules/src/pages/schedules.tsx` |
 | `wings-plugin-sdk/settings` | `setting()`: a stored value that every frame reads and hears change | `tasks/src/lib/view-setting.ts` |
 | `wings-plugin-sdk/sessions` | `followSessions()`: the Claude sessions in panes, each run's older entries and then its live ones | `hud/rust/src/main_frame.rs`, with the Rust SDK's `sessions::follow` |
-| `wings-plugin-sdk/tools` | `tool()`, `s` and `registerTools()`: Claude's tools, defined once in `src/tools.ts` | `changes/src/tools.ts` |
-| `wings-plugin-sdk/cli` | `cli()`: `gh`, `glab` and `az` calls that tell "not installed" and "signed out" from a failure, and the badge with Install, Sign in and Try again | `work-item/src/lib/az.ts` |
-| `wings-plugin-sdk/azure` | `workItems()`: Azure DevOps work items, one `az rest` for every id asked at once | `work-item/src/main/badge.ts` |
+| `wings-plugin-sdk/tools` | `tool()`, `s` and `registerTools()`: Claude's tools, defined once in `src/tools.ts` | `schedules/src/tools.ts` |
+| `wings-plugin-sdk/cli` | `cli()`: `gh`, `glab` and `az` calls that tell "not installed" and "signed out" from a failure, and the badge with Install, Sign in and Try again | `pr-tracker/src/main/badges.ts` |
+| `wings-plugin-sdk/azure` | `workItems()`: Azure DevOps work items, one `az rest` for every id asked at once | no TypeScript plugin now; Work item, written in Rust, uses `azure::work_items` of the Rust SDK |
 | `wings-plugin-sdk/github` | `githubPulls()`: the open PRs of GitHub repositories, one `gh api graphql` for every repository asked at once | `pr-tracker/src/lib/forges/github.ts` |
-| `wings-plugin-sdk/git` | `git`, `gitOk`, `repoRoot`, `parseRemote`, `onGitChange` and more: read a repo through `wings.exec`, and hear it change | `changes/src/lib/changes.ts` |
-| `wings-plugin-sdk/poll` | `pollWhileFocused()`: a timer that runs only while Wings is in front | `work-item/src/main/badge.ts` |
-| `wings-plugin-sdk/async` | `cached`, `batched`, `serial`, `singleFlight`, `mapLimit`, `latestOnly`, `openDiffWhile`, `openLiveDiff`, `refreshLiveDiffs` and `errorMessage` | `work-item/src/main/sections.ts` (`cached`, `singleFlight`), `disk/src/main/actions.ts` (`mapLimit`) |
-| `wings-plugin-sdk/format` | `ago`, `plural`, `basename`, `truncate`, `tokens` and `clock` | `work-item/src/pages/sprint.tsx` |
-| `wings-plugin-sdk/shell` | `mountShell()`: the frame of a page that builds its own DOM | `changes/src/pages/graph.ts` |
+| `wings-plugin-sdk/git` | `git`, `gitOk`, `repoRoot`, `parseRemote`, `onGitChange` and more: read a repo through `wings.exec`, and hear it change | `pr-tracker/src/main/remote.ts` |
+| `wings-plugin-sdk/poll` | `pollWhileFocused()`: a timer that runs only while Wings is in front | `pr-tracker/src/main.ts` |
+| `wings-plugin-sdk/async` | `cached`, `batched`, `serial`, `singleFlight`, `mapLimit`, `latestOnly`, `openDiffWhile`, `openLiveDiff`, `refreshLiveDiffs` and `errorMessage` | `schedules/src/main/assigned.ts`, `disk/src/main/actions.ts` (`mapLimit`) |
+| `wings-plugin-sdk/format` | `ago`, `plural`, `basename`, `truncate`, `tokens` and `clock` | `disk/src/lib/df.ts` |
+| `wings-plugin-sdk/shell` | `mountShell()`: the frame of a page that builds its own DOM | none here now |
 | `wings-plugin-ui` | The components, the page hooks (`useProject`, `useAction`, `usePoll` and more) and the `show*` functions | `tasks/src/pages/block.tsx` |
 
 ### Tools
@@ -544,7 +544,7 @@ Wings is in the background most of the day, and a timer that runs `git`, `gh` or
 
 A plugin needs the GitHub CLI (`gh`), the GitLab CLI (`glab`) or the Azure CLI (`az`) when its `exec` or `post` entries name it. Its page in Plugins lists them under Needs, each Installed or not. A missing one has a button: on a Mac with Homebrew, Wings asks, then opens a tab in the project on screen and runs the vendor's own Homebrew command there (`brew install gh`, `brew install glab`, `brew update && brew install azure-cli`), so you see its output and can answer it. Without Homebrew, or off macOS, it links to the vendor's install page and to brew.sh. When the command is done, Wings checks again, says so, and restarts the plugins that run it.
 
-`exec` rejects with `<program> is not installed or not on PATH` for a missing program. Don't match on that text or write the sign-in handling by hand: `cli()` from `wings-plugin-sdk/cli` runs `az`, `gh` or `glab`, tells a missing program and a signed-out one from a failed call, and `problemBadge` gives the badge with Install, Sign in and Try again. Its actions call `install()`, which asks Wings through `wings.installTool(program)`, `signIn()` and `retry()`. List each command in `permissions.exec`, `az login` and `gh auth login` included. `work-item/src/lib/az.ts` makes the handle and `work-item/src/main/badge.ts` draws the badge and answers its actions. The commands come from Wings' own table, so a plugin only names the program: one in its manifest and in that table, and Wings always asks first.
+`exec` rejects with `<program> is not installed or not on PATH` for a missing program. Don't match on that text or write the sign-in handling by hand: `cli()` from `wings-plugin-sdk/cli` runs `az`, `gh` or `glab`, tells a missing program and a signed-out one from a failed call, and `problemBadge` gives the badge with Install, Sign in and Try again. Its actions call `install()`, which asks Wings through `wings.installTool(program)`, `signIn()` and `retry()`. List each command in `permissions.exec`, `az login` and `gh auth login` included. `pr-tracker/src/main/badges.ts` draws the badge and answers its actions. A plugin in Rust uses `cli::Cli` of the Rust SDK, as `work-item/rust/src/az.rs` and `main_frame.rs` do. The commands come from Wings' own table, so a plugin only names the program: one in its manifest and in that table, and Wings always asks first.
 
 ## Views
 

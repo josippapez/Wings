@@ -7,7 +7,8 @@
 //! `wings.storage`'s (`get`, `set`, `delete`, `keys`, `entries`), answered at once with the pointer and length, packed
 //! in an i64, of `{"ok": <answer>}` or `{"error": "<message>"}` in memory it asked `wings_alloc` for,
 //! `broadcast(ptr, len)`, `timer(id, ms)`, `now()` in ms since the epoch,
-//! `utc_offset(ms)` in minutes for this Mac's timezone at that instant, and `focused()`. It exports its `memory`,
+//! `utc_offset(ms)` in minutes for this Mac's timezone at that instant, `focused()`, and `view_args()`, the JSON its tab
+//! was opened with, handed over as `storage`'s answer is. It exports its `memory`,
 //! `wings_alloc(len)` for the host to write a string into, `wings_start()`, `wings_event(handler, payload)`,
 //! `wings_deliver(kind, id, text)` (see `Message`) and `wings_timer(id)`. Strings are UTF-8, as a pointer and a length;
 //! one the host wrote is the module's to free.
@@ -326,6 +327,24 @@ fn text(caller: &mut Caller<'_, Host>, at: u32, len: u32) -> wasmtime::Result<St
     Ok(std::str::from_utf8(bytes)?.to_owned())
 }
 
+/// Writes `text` into memory the frame allocates for it, and gives where it is: the pointer in the high half, the
+/// length in the low. The frame frees it.
+fn hand(caller: &mut Caller<'_, Host>, text: &str) -> wasmtime::Result<u64> {
+    let len = u32::try_from(text.len())?;
+    let alloc = caller
+        .get_export("wings_alloc")
+        .and_then(Extern::into_func)
+        .ok_or_else(|| wasmtime::Error::msg("the frame exports no wings_alloc"))?
+        .typed::<u32, u32>(&*caller)?;
+    let at = alloc.call(&mut *caller, len)?;
+    let memory = caller
+        .get_export("memory")
+        .and_then(Extern::into_memory)
+        .ok_or_else(|| wasmtime::Error::msg("the page exports no memory"))?;
+    memory.write(&mut *caller, at as usize, text.as_bytes())?;
+    Ok(u64::from(at) << 32 | u64::from(len))
+}
+
 fn imports(engine: &wasmtime::Engine) -> wasmtime::Result<Linker<Host>> {
     let mut linker = Linker::new(engine);
     linker.func_wrap("wings", "render", |mut caller: Caller<'_, Host>, at: u32, len: u32| {
@@ -380,21 +399,14 @@ fn imports(engine: &wasmtime::Engine) -> wasmtime::Result<Linker<Host>> {
                 Ok(json) => format!("{{\"ok\":{json}}}"),
                 Err(error) => serde_json::json!({ "error": error }).to_string(),
             };
-            let len = u32::try_from(answer.len())?;
-            let alloc = caller
-                .get_export("wings_alloc")
-                .and_then(Extern::into_func)
-                .ok_or_else(|| wasmtime::Error::msg("the frame exports no wings_alloc"))?
-                .typed::<u32, u32>(&caller)?;
-            let at = alloc.call(&mut caller, len)?;
-            let memory = caller
-                .get_export("memory")
-                .and_then(Extern::into_memory)
-                .ok_or_else(|| wasmtime::Error::msg("the page exports no memory"))?;
-            memory.write(&mut caller, at as usize, answer.as_bytes())?;
-            Ok(u64::from(at) << 32 | u64::from(len))
+            hand(&mut caller, &answer)
         },
     )?;
+    // What the page's tab was opened with, as JSON. Nothing (a length of 0) for a page opened without args.
+    linker.func_wrap("wings", "view_args", |mut caller: Caller<'_, Host>| match caller.data().link.view_args() {
+        Some(args) => hand(&mut caller, &args),
+        None => Ok(0),
+    })?;
     linker.func_wrap("wings", "broadcast", |mut caller: Caller<'_, Host>, at: u32, len: u32| {
         let json = text(&mut caller, at, len)?;
         // A broadcast the host refuses (too long) is the page's loss, as a JS page's rejected promise nobody awaits.

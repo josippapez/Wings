@@ -265,3 +265,25 @@ fn a_rust_page_shows_chips_a_chip_and_a_time_field_and_hears_them() {
     assert!(page.dispatch_gesture(&chip.on_click.unwrap(), None));
     assert!(parts(&next()).1.pressed);
 }
+
+/// A Rust page reads what its tab was opened with (`host::view_args`), as a JS page does with `wings.viewArgs`: it had
+/// no way to, so a page that shows one item out of many couldn't be written in Rust.
+#[test]
+fn a_rust_page_reads_what_its_tab_was_opened_with() {
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
+    let rig = Rig::new(json!({}), vec![]);
+    let (trees, shown) = mpsc::channel();
+    let _page = rig
+        .host
+        .open_hidden_page_with_args(&module("fixture-wasm-page", "fixture_page.wasm", &BUILT), Some(&json!({ "label": "Item 7" })), move |event| {
+            let _ = trees.send(event);
+        })
+        .unwrap();
+    match shown.recv_timeout(WAIT).expect("the page to render") {
+        Event::Tree(tree) => match &tree.children[0] {
+            Node::Chips(chips) => assert_eq!(chips.label, "Item 7"),
+            other => panic!("{other:?}"),
+        },
+        Event::Error { message, .. } => panic!("{message}"),
+    }
+}

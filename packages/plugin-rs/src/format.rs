@@ -52,6 +52,11 @@ pub fn plural(n: usize, one: &str) -> String {
     if n == 1 { format!("1 {one}") } else { format!("{n} {one}s") }
 }
 
+/// `text` cut to `max` characters, ending in "…" when it was longer.
+pub fn truncate(text: &str, max: usize) -> String {
+    if text.chars().count() > max { format!("{}…", text.chars().take(max.saturating_sub(1)).collect::<String>()) } else { text.to_owned() }
+}
+
 /// `1234567` as `1,234,567`.
 pub fn grouped(n: u64) -> String {
     let digits = n.to_string();

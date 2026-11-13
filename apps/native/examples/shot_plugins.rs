@@ -73,6 +73,10 @@ fn main() {
         changes(out);
         return;
     }
+    if std::env::args().any(|arg| arg == "--stopped") {
+        stopped(out);
+        return;
+    }
     if std::env::args().any(|arg| arg == "--schedules") {
         schedules(out);
         return;
@@ -173,163 +177,115 @@ fn iso(ago_ms: u64) -> String {
 
 /// Actual built pages in a fixture host. This does not exercise workspace openView/window routing.
 fn changes(out: PathBuf) {
-    let root = out.join("fixture-repo");
-    std::fs::create_dir_all(&root).unwrap();
-    let git = |args: &[&str]| {
-        let result = std::process::Command::new("git")
+    let dev = out.join("fixture-changes");
+    let _ = std::fs::remove_dir_all(&dev);
+    let root = dev.join("acme-web");
+    std::fs::create_dir_all(root.join("src/cart")).unwrap();
+    let root = root.canonicalize().unwrap();
+    let git = |days_ago: u64, args: &[&str]| {
+        let date = format!("{} +0000", now_ms() / 1000 - days_ago * 86_400);
+        let done = std::process::Command::new("git")
+            .args(["-c", "user.email=ana@example.com", "-c", "user.name=Ana Kovač", "-c", "commit.gpgsign=false"])
             .args(args)
             .current_dir(&root)
-            .env("GIT_AUTHOR_NAME", "Ada Lovelace")
-            .env("GIT_AUTHOR_EMAIL", "ada@example.invalid")
-            .env("GIT_COMMITTER_NAME", "Ada Lovelace")
-            .env("GIT_COMMITTER_EMAIL", "ada@example.invalid")
+            .envs([("GIT_AUTHOR_DATE", &date), ("GIT_COMMITTER_DATE", &date)])
             .output()
             .unwrap();
-        assert!(
-            result.status.success(),
-            "{}",
-            String::from_utf8_lossy(&result.stderr)
-        );
+        assert!(done.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&done.stderr));
     };
-    if !root.join(".git").exists() {
-        git(&["init", "-q", "-b", "main"]);
-        git(&["commit", "-q", "--allow-empty", "-m", "Initial checkout"]);
-        git(&["checkout", "-q", "-b", "feature/coupon"]);
-        git(&[
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "Add a coupon field to checkout",
-        ]);
-        git(&[
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "Validate coupon codes",
-        ]);
-        git(&["checkout", "-q", "main"]);
-        git(&[
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "Round shipping rates",
-        ]);
-        git(&[
-            "merge",
-            "-q",
-            "--no-ff",
-            "feature/coupon",
-            "-m",
-            "Merge checkout coupon field",
-        ]);
-        git(&["tag", "v2.14.0"]);
-    }
-    let manifest =
-        serde_json::from_str(include_str!("../../../plugins/changes/wings-plugin.json")).unwrap();
+    let commit = |days_ago: u64, file: &str, text: &str, subject: &str| {
+        std::fs::write(root.join(file), text).unwrap();
+        git(days_ago, &["add", file]);
+        git(days_ago, &["commit", "-qm", subject]);
+    };
+    git(0, &["init", "-q", "-b", "main"]);
+    commit(30, "README.md", "acme-web\n", "Start the web shop");
+    commit(12, "src/cart/total.ts", "export const total = 0;\n", "Add the cart total");
+    git(0, &["tag", "v1.0"]);
+    git(0, &["checkout", "-q", "-b", "feature/coupons"]);
+    commit(3, "src/cart/coupon.ts", "export const coupon = null;\n", "Add coupon validation");
+    git(0, &["checkout", "-q", "main"]);
+    commit(2, "src/cart/total.ts", "export const total = 1;\n", "Count the first item");
+    git(1, &["merge", "-q", "--no-ff", "-m", "Merge feature/coupons", "feature/coupons"]);
+    // What isn't committed: a changed file, a deleted one, a new one and a binary.
+    std::fs::write(root.join("src/cart/total.ts"), "export const total = 2;\nexport const tax = 0.25;\n").unwrap();
+    std::fs::remove_file(root.join("README.md")).unwrap();
+    std::fs::write(root.join("src/cart/shipping.ts"), "export const shipping = 5;\n").unwrap();
+    std::fs::write(root.join("logo.png"), [0u8, 159, 146, 150, 0, 1, 2]).unwrap();
+
+    let manifest = serde_json::from_str(include_str!("../../../plugins/changes/wings-plugin.json")).unwrap();
+    let storage = out.join("fixture-storage-changes");
+    let _ = std::fs::remove_dir_all(&storage);
     let host = PluginHost::with_access(
-        PluginConfig {
-            id: "changes".into(),
-            root: out.join("fixture-storage"),
-            scope: "shot".into(),
-        },
+        PluginConfig { id: "changes".into(), root: storage, scope: "shot".into() },
         Access {
-            plugin: wings_plugins::manifest::Plugin {
-                manifest,
-                dir: root.clone(),
-                icon_svg: None,
-            },
+            plugin: wings_plugins::manifest::Plugin { manifest, dir: root.clone(), icon_svg: None },
             builtin: false,
             env: std::sync::Arc::new(FixtureEnv(root.clone())),
         },
     );
-    let fixture = include_str!("../../../plugins/changes/preview/native-host.js")
-        .replace("__ROOT__", &root.to_string_lossy());
-    host.start_main(&fixture, |event| {
+    host.publish_panes(vec![PaneEntry {
+        pane_id: "1".into(),
+        cwd: root.to_string_lossy().into(),
+        command: "zsh".into(),
+        project: "acme-web".into(),
+        project_id: root.to_string_lossy().into(),
+        session: None,
+        focused: true,
+    }]);
+    let module = |frame: &str| {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../plugins/changes/dist/native/{frame}.wasm"));
+        format!("{}{}", wings_native::page::runtime::wasm::MARKER, path.canonicalize().expect("sh build-rust.sh changes, in plugins/").display())
+    };
+    host.start_main(&module("main"), |event| {
         if let wings_native::page::runtime::Event::Error { message, .. } = event {
             panic!("{message}");
         }
     })
     .unwrap();
     let mut cx = app();
-    for (name, source) in [
-        (
-            "sidebar",
-            include_str!("../../../plugins/changes/dist/native/sidebar.js"),
-        ),
-        (
-            "graph",
-            include_str!("../../../plugins/changes/dist/native/graph.js"),
-        ),
-    ] {
-        for width in [1000.0, 640.0] {
-            let handle = cx
-                .open_offscreen_window(size(px(width), px(640.0)), |_, cx| {
-                    cx.new(|cx| PageView::in_plugin(&host, source, cx))
-                })
-                .unwrap();
-            let window = handle.into();
-            let expected = if name == "graph" {
-                "commits on every branch"
-            } else {
-                "Coupon.tsx"
-            };
+    for (frame, width, height) in [("sidebar", 1000.0, 760.0), ("sidebar", 640.0, 760.0), ("sidebar", 360.0, 760.0), ("graph", 1100.0, 420.0)] {
+        let source = module(frame);
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(height)), |_, cx| cx.new(|cx| PageView::in_plugin(&host, &source, cx)))
+            .unwrap();
+        let window = handle.into();
+        handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
+        let shown = |cx: &mut VisualTestAppContext, expected: &str, name: &str| {
             let deadline = Instant::now() + Duration::from_secs(10);
-            while !handle
-                .read_with(&cx, |view, _| view.text().contains(expected))
-                .unwrap()
-            {
-                assert!(
-                    Instant::now() < deadline,
-                    "page did not load: {}",
-                    handle.read_with(&cx, |view, _| view.text()).unwrap()
-                );
-                wait(&mut cx, window, Duration::from_millis(20));
+            while !handle.read_with(cx, |view, _| view.text().contains(expected)).unwrap() {
+                assert!(Instant::now() < deadline, "page did not show {expected:?}: {}", handle.read_with(cx, |view, _| view.text()).unwrap());
+                wait(cx, window, Duration::from_millis(20));
             }
-            save(
-                &mut cx,
-                window,
-                out.join(format!("changes-{name}-{width}.png")),
-            );
-            if name == "sidebar" {
-                let position = gpui::point(px(205.0), px(78.0));
-                cx.simulate_event(
-                    window,
-                    gpui::MouseDownEvent {
-                        position,
-                        button: gpui::MouseButton::Left,
-                        modifiers: gpui::Modifiers::default(),
-                        click_count: 1,
-                        first_mouse: false,
-                    },
-                );
-                cx.simulate_event(
-                    window,
-                    gpui::MouseUpEvent {
-                        position,
-                        button: gpui::MouseButton::Left,
-                        modifiers: gpui::Modifiers::default(),
-                        click_count: 1,
-                    },
-                );
-                let deadline = Instant::now() + Duration::from_secs(10);
-                while !handle
-                    .read_with(&cx, |view, _| view.text().contains("Add coupon validation"))
-                    .unwrap()
-                {
-                    assert!(Instant::now() < deadline, "history did not load");
-                    wait(&mut cx, window, Duration::from_millis(20));
-                }
-                save(
-                    &mut cx,
-                    window,
-                    out.join(format!("changes-history-{width}.png")),
-                );
-            }
-            let _ = cx.update_window(window, |_, window, _| window.remove_window());
+            wait(cx, window, Duration::from_millis(300));
+            save(cx, window, out.join(format!("changes-{name}-{width}.png")));
+        };
+        if frame == "graph" {
+            shown(&mut cx, "5 commits on every branch", "graph");
+        } else {
+            shown(&mut cx, "shipping.ts", "files");
+            assert!(handle.read_with(&cx, |view, _| view.press_chip("History")).unwrap());
+            shown(&mut cx, "Add coupon validation", "history");
         }
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+    }
+}
+
+/// A page that stopped, with its error and Reload, at a tab's widths and a popover's.
+fn stopped(out: PathBuf) {
+    const SOURCE: &str = "wings.render(JSON.stringify({id:0,type:'#root',children:[{id:1,type:'Text',children:[{id:2,type:'#text',text:'Up'}]}]}));
+        setTimeout(() => { for (;;) {} }, 100);";
+    let mut cx = app();
+    for width in [1000.0, 640.0, 320.0] {
+        let handle = cx.open_offscreen_window(size(px(width), px(240.0)), |_, cx| cx.new(|cx| PageView::new(SOURCE, cx))).unwrap();
+        let window = handle.into();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !handle.read_with(&cx, |view, _| view.stopped()).unwrap() {
+            assert!(Instant::now() < deadline, "the page never stopped");
+            wait(&mut cx, window, Duration::from_millis(20));
+        }
+        save(&mut cx, window, out.join(format!("stopped-{width}.png")));
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
     }
 }
 
@@ -1072,22 +1028,15 @@ fn fail_on_error(event: wings_native::page::runtime::Event) {
     }
 }
 
-/// Work item's built tab and Sprint block. The tab calls `az` itself, so the shots run an `az` of their own, first on
-/// PATH, that answers from `plugins/work-item/preview/native-az.json`; the block's main is the fixture main
-/// `plugins/work-item/preview/native-host.js`.
+/// Work item's built tab and Sprint block. The pages call `az` themselves, so the shots run an `az` of their own, first on
+/// PATH, that answers from `shot_plugins/work_item_az.json`, in a project folder that is a git repo with an Azure DevOps
+/// origin, which is how a page knows what to ask for.
 fn work_item(out: PathBuf) {
-    let answers: serde_json::Map<String, serde_json::Value> = serde_json::from_str(include_str!(
-        "../../../plugins/work-item/preview/native-az.json"
-    ))
-    .unwrap();
+    let answers: serde_json::Map<String, serde_json::Value> = serde_json::from_str(include_str!("shot_plugins/work_item_az.json")).unwrap();
     let bin = out.join("fake-az");
     std::fs::create_dir_all(&bin).unwrap();
     let mut script = String::from("#!/bin/sh\ncase \"$*\" in\n");
-    for (index, (words, answer)) in answers
-        .iter()
-        .filter(|(words, _)| !words.starts_with('_'))
-        .enumerate()
-    {
+    for (index, (words, answer)) in answers.iter().filter(|(words, _)| !words.starts_with('_')).enumerate() {
         let file = bin.join(format!("{index}.json"));
         std::fs::write(&file, answer.to_string()).unwrap();
         script += &format!("  *'{words}'*) cat '{}' ;;\n", file.display());
@@ -1095,67 +1044,43 @@ fn work_item(out: PathBuf) {
     script += "  *) echo \"no made-up answer for az $*\" >&2; exit 1 ;;\nesac\n";
     let az = bin.join("az");
     std::fs::write(&az, script).unwrap();
-    std::process::Command::new("chmod")
-        .arg("+x")
-        .arg(&az)
-        .status()
-        .unwrap();
+    std::process::Command::new("chmod").arg("+x").arg(&az).status().unwrap();
     // Programs are found on the login shell's PATH, then this process's: no login shell leaves this one.
     unsafe {
         std::env::set_var("SHELL", "/nonexistent-shell");
-        std::env::set_var(
-            "PATH",
-            format!(
-                "{}:{}",
-                bin.display(),
-                std::env::var("PATH").unwrap_or_default()
-            ),
-        );
+        std::env::set_var("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default()));
     }
-    let (host, _) = repo_host(
-        &out,
-        "work-item",
-        include_str!("../../../plugins/work-item/wings-plugin.json"),
-    );
-    host.start_main(
-        include_str!("../../../plugins/work-item/preview/native-host.js"),
-        fail_on_error,
-    )
-    .unwrap();
-    let item = include_str!("../../../plugins/work-item/dist/native/item.js");
-    let sprint = include_str!("../../../plugins/work-item/dist/native/sprint.js");
+    let (host, project) = repo_host(&out, "work-item", include_str!("../../../plugins/work-item/wings-plugin.json"));
+    let git = |args: &[&str]| {
+        let done = std::process::Command::new("git").args(args).current_dir(&project).output().unwrap();
+        assert!(done.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&done.stderr));
+    };
+    git(&["init", "-q"]);
+    let _ = std::process::Command::new("git").args(["remote", "remove", "origin"]).current_dir(&project).output();
+    git(&["remote", "add", "origin", "git@ssh.dev.azure.com:v3/acme/Web/web"]);
+    // The project on screen, which the app always says and the Sprint block follows.
+    host.publish_project(Some(std::path::Path::new(&project)));
+    let module = |frame: &str| {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../plugins/work-item/dist/native/{frame}.wasm"));
+        format!("{}{}", wings_native::page::runtime::wasm::MARKER, path.canonicalize().expect("sh build-rust.sh work-item, in plugins/").display())
+    };
+    let (item, sprint) = (module("item"), module("sprint"));
     let args = json!({ "id": 1432, "org": "https://dev.azure.com/acme" });
+    // The fake `az` has no work item 9999.
+    let missing = json!({ "id": 9999, "org": "https://dev.azure.com/acme" });
     use wings_native::page::plugin::StatePlace::{Block, Tab};
     shoot_pages(
         &out,
         &host,
         "work-item",
         &[
-            (
-                "overview",
-                item,
-                Some(&args),
-                Tab,
-                &[],
-                "Pull request is up",
-            ),
-            (
-                "links",
-                item,
-                Some(&args),
-                Tab,
-                &["Links"],
-                "Make the sync client reliable",
-            ),
-            (
-                "history",
-                item,
-                Some(&args),
-                Tab,
-                &["History"],
-                "Remaining work",
-            ),
-            ("sprint", sprint, None, Block, &[], "Add retry with backoff"),
+            ("no-item", &item, None, Tab, &[], "Open a work item from a pane's badge"),
+            ("missing", &item, Some(&missing), Tab, &[], "doesn't exist, or you can't see it"),
+            ("overview", &item, Some(&args), Tab, &[], "Pull request is up"),
+            ("links", &item, Some(&args), Tab, &["Links"], "Make the sync client reliable"),
+            ("history", &item, Some(&args), Tab, &["History"], "Remaining work"),
+            ("sprint", &sprint, None, Block, &[], "Add retry with backoff"),
+            ("sprint-all", &sprint, None, Block, &["Whole sprint"], "Show a notice while retrying"),
         ],
     );
 }

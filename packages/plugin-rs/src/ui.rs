@@ -4,7 +4,7 @@
 //! next as long as it stays where it is, and a row of a list keeps them when it is keyed.
 
 use serde_json::{Map, Value, json};
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::{Cell, RefCell}, collections::HashMap, rc::Rc};
 
 type Handler = Rc<dyn Fn(&Value)>;
 
@@ -70,6 +70,12 @@ impl Node {
 
 thread_local! {
     static HANDLERS: RefCell<HashMap<String, Handler>> = RefCell::new(HashMap::new());
+    static FILL: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Has the page laid out edge to edge with no padding round it, as `showTab(element, { fill: true })` does.
+pub(crate) fn fill() {
+    FILL.with(|fill| fill.set(true));
 }
 
 /// FNV-1a over the parent's id and the node's place, kept under 2^53 so it is a whole number anywhere JSON goes.
@@ -117,7 +123,8 @@ pub(crate) fn render(page: Vec<Node>) -> String {
     let mut handlers = HashMap::new();
     let children = build(page.into_iter().map(Child::Node).collect(), 0, &mut handlers);
     HANDLERS.with(|slot| *slot.borrow_mut() = handlers);
-    json!({ "id": 0, "type": "#root", "props": {}, "children": children }).to_string()
+    let props = if FILL.with(Cell::get) { json!({ "fill": true }) } else { json!({}) };
+    json!({ "id": 0, "type": "#root", "props": props, "children": children }).to_string()
 }
 
 pub(crate) fn dispatch(handler: &str, payload: Value) {
@@ -197,6 +204,59 @@ pub fn page(toolbar: Node, body: impl IntoIterator<Item = Node>) -> Node {
 /// A page's top row: its `title` on the left and `actions` on the right.
 pub fn toolbar(title: &str, actions: Option<Node>) -> Node {
     Node::new("Toolbar").child(Node::new("Slot").prop("name", "title").text(title)).maybe(actions.map(|actions| slot("actions", actions)))
+}
+
+/// A page's top row with `children` after its title, like the branch a repo is on.
+pub fn toolbar_with(title: &str, children: Node, actions: Option<Node>) -> Node {
+    Node::new("Toolbar")
+        .child(Node::new("Slot").prop("name", "title").text(title))
+        .child(slot("children", children))
+        .maybe(actions.map(|actions| slot("actions", actions)))
+}
+
+/// A button that is a whole row of a `List`, to put in a `list_row`: `children` side by side, or one under the other
+/// with `.prop("layout", "column")`. `.prop("indent", n)` moves it in by `n` points.
+pub fn list_button(children: impl IntoIterator<Item = Node>, on_click: impl Fn() + 'static) -> Node {
+    Node::new("ListButton").on("onClick", move |_| on_click()).children(children)
+}
+
+/// A row of a `List` holding `content`, named `key` among the rows.
+pub fn list_row(key: impl Into<String>, content: Node) -> Node {
+    Node::new("ListItem").key(key).child(content)
+}
+
+/// A search box. The app keeps its text: `on_input` hears it after each change, and `text` is only what it starts with.
+pub fn search_field(label: &str, text: &str, on_input: impl Fn(&str) + 'static) -> Node {
+    Node::new("SearchField")
+        .prop("label", label)
+        .prop("placeholder", label)
+        .prop("defaultValue", text)
+        .on("onInput", move |event| on_input(event["value"].as_str().unwrap_or_default()))
+}
+
+/// What a `graph` is given: the rows from `offset` on that the app last asked for, of `total`.
+pub struct Graph {
+    pub total: usize,
+    pub lanes: usize,
+    /// The row that is selected, or -1.
+    pub selected: i64,
+    pub offset: usize,
+    /// Each `{ hash, subject, author, date, refs, lane, color, merge, lines }`.
+    pub rows: Vec<Value>,
+}
+
+/// A commit graph, which the app scrolls on its own: only the rows it shows cross over. `on_range` hears the rows it
+/// wants next, as `(start, end)`, and `on_select` the row that was clicked.
+pub fn graph(g: Graph, on_range: impl Fn(usize, usize) + 'static, on_select: impl Fn(usize) + 'static) -> Node {
+    let index = |value: &Value| value.as_u64().unwrap_or(0) as usize;
+    Node::new("Graph")
+        .prop("total", g.total)
+        .prop("lanes", g.lanes)
+        .prop("selected", g.selected)
+        .prop("offset", g.offset)
+        .prop("rows", g.rows)
+        .on("onRangeChange", move |event| on_range(index(&event["start"]), index(&event["end"])))
+        .on("onSelect", move |event| on_select(index(&event["index"])))
 }
 
 /// A line that tells what happened, in the tone `success`, `warn` or `danger`.
