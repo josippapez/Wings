@@ -196,17 +196,15 @@ fn only_a_module_in_the_plugin_folder_runs_as_a_webassembly_page() {
 
     let faked = native.join("faked.js");
     std::fs::write(&faked, format!("{MARKER}{}", elsewhere.display())).unwrap();
-    assert!(page_source(dir.path(), &faked, None).is_err());
+    assert!(page_source(dir.path(), &faked).is_err());
 
-    let linked = native.join("linked.js");
-    std::fs::write(&linked, "wings.render('{}');").unwrap();
-    std::os::unix::fs::symlink(&elsewhere, native.join("linked.wasm")).unwrap();
-    assert_eq!(page_source(dir.path(), &linked, None).unwrap(), "wings.render('{}');");
+    let linked = native.join("linked.wasm");
+    std::os::unix::fs::symlink(&elsewhere, &linked).unwrap();
+    assert!(page_source(dir.path(), &linked).is_err());
 
-    let built = native.join("built.js");
-    std::fs::write(&built, "").unwrap();
-    std::fs::write(native.join("built.wasm"), b"\0asm\x01\0\0\0").unwrap();
-    let source = page_source(dir.path(), &built, None).unwrap();
+    let built = native.join("built.wasm");
+    std::fs::write(&built, b"\0asm\x01\0\0\0").unwrap();
+    let source = page_source(dir.path(), &built).unwrap();
     assert!(source.starts_with(MARKER) && source.ends_with("built.wasm"), "{source}");
 }
 
@@ -230,12 +228,23 @@ fn a_frame_with_only_a_webassembly_build_is_found_by_it() {
     std::fs::remove_file(native.join("main.wasm")).unwrap();
     std::fs::write(native.join("main.wasm"), b"\0asm\x01\0\0\0").unwrap();
     let main = frame_file(dir.path(), "main").expect("the module");
-    let source = page_source(dir.path(), &main, None).unwrap();
+    let source = page_source(dir.path(), &main).unwrap();
     assert!(source.starts_with(MARKER) && source.ends_with("main.wasm"), "{source}");
 
-    // With both builds there, the bundle names the frame and the module still runs.
+    // A script beside it is no frame.
     std::fs::write(native.join("main.js"), "").unwrap();
-    assert!(frame_file(dir.path(), "main").unwrap().ends_with("main.js"));
+    assert!(frame_file(dir.path(), "main").unwrap().ends_with("main.wasm"));
+    std::fs::remove_file(native.join("main.wasm")).unwrap();
+    assert_eq!(frame_file(dir.path(), "main"), None);
+}
+
+/// A plugin with only `dist/native/main.js` is not found, and so starts no frame.
+#[test]
+fn a_plugin_with_only_a_javascript_build_is_not_found() {
+    let data = Data::temp();
+    let dir = data.install("old", WINGS_VERSION, false, true, Current, "scope");
+    fs::write(dir.join("dist/native/main.js"), "wings.render('{}');").unwrap();
+    assert!(discover(&data.paths()).is_empty());
 }
 
 /// A plugin written in Rust alone ships no JavaScript at all: its manifest names its main and its pages by their
@@ -270,7 +279,7 @@ fn a_plugin_with_no_javascript_is_loaded_and_its_frames_are_its_modules() {
     let [side] = &found[0].sidebars[..] else { panic!("{found:?}") };
     assert!(side.bundle.ends_with("dist/native/side.wasm"), "{:?}", side.bundle);
     for frame in [&found[0].main, &side.bundle] {
-        let source = page_source(&dir, frame, None).unwrap();
+        let source = page_source(&dir, frame).unwrap();
         assert!(source.starts_with(MARKER) && source.ends_with(".wasm"), "{source}");
     }
 }

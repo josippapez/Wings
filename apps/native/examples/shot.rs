@@ -2175,6 +2175,19 @@ fn plugins_install(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         &[("notes", &fake::idle("notes"))],
         "notes-scope",
     );
+    // Built for JavaScript: a main and a page that are scripts, which Wings no longer runs.
+    let old = data.install_script(
+        "old-board",
+        serde_json::json!({ "name": "Old board", "version": "0.4.0", "description": "A board written in JavaScript.",
+            "contributes": { "sidebars": [{ "id": "side", "title": "Board", "page": "dist/side.html" }] } }),
+        &fake::idle("main"),
+        &[("side", &fake::idle("side"))],
+        "old-board-scope",
+    );
+    for stem in ["main", "side"] {
+        let _ = std::fs::remove_file(old.join(format!("dist/native/{stem}.wasm")));
+        std::fs::write(old.join(format!("dist/native/{stem}.js")), "wings.render('{}');").unwrap();
+    }
     // The tracker came from GitHub, and Notes was never approved.
     let state = data.paths().state;
     let mut entries: serde_json::Value =
@@ -2237,6 +2250,11 @@ fn plugins_install(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             .unwrap();
         wait(cx, window, Duration::from_millis(1300));
         save(cx, window, &name("setup-approval"));
+        show(cx, "old-board");
+        save(cx, window, &name("plugins-javascript"));
+        handle.update(cx, |w, _, cx| w.close_dialogs(cx)).unwrap();
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("plugins-javascript-sidebar"));
         show(cx, "demo");
         let left = (width - 820.0f32.min(width * 0.92)) / 2.0;
         click(cx, window, point(px(left + 70.0), px(150.0 + 34.0 * 6.0)));

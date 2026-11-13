@@ -141,6 +141,9 @@ pub(super) fn access_groups(manifest: &Manifest) -> Vec<(&'static str, Vec<Strin
     .collect()
 }
 
+/// What a plugin built for JavaScript says in its page in Settings.
+const BUILT_FOR_JAVASCRIPT: &str = "Wings runs plugins built to WebAssembly. This version is written in JavaScript, so it doesn't run. Install an update if one is offered, or ask its author for a version written in Rust.";
+
 fn muted(text: impl Into<SharedString>) -> gpui::Div {
     div()
         .text_size(px(12.0))
@@ -255,6 +258,9 @@ impl Workspace {
             self.plugin_runs(&view.manifest.id),
         ) {
             (true, true) => format!("{state} · Runs here"),
+            (true, false) if self.built_for_javascript(view) => {
+                format!("{state} · Built for JavaScript")
+            }
             (true, false) => format!("{state} · No native build"),
             _ => state.to_owned(),
         }
@@ -477,6 +483,7 @@ impl Workspace {
         let busy = manage.busy.contains(&id);
         let update = manage.updates.get(&id).cloned();
         let runs = self.plugin_runs(&id);
+        let javascript = self.built_for_javascript(&view);
         // What it does, or its state when it doesn't say.
         let about = match view.manifest.description.trim() {
             "" => self.plugin_status(&view),
@@ -534,7 +541,10 @@ impl Workspace {
                             .when_some(update.clone(), |name, version| {
                                 name.child(flag(format!("Update {version}")))
                             })
-                            .when(on && !runs, |name| name.child(flag("No native build"))),
+                            .when(javascript, |name| name.child(flag("Built for JavaScript")))
+                            .when(on && !runs && !javascript, |name| {
+                                name.child(flag("No native build"))
+                            }),
                     )
                     // Whole while its page is open, which then doesn't repeat it.
                     .child(muted(about).when(!open, |about| about.truncate()))
@@ -703,6 +713,9 @@ impl Workspace {
             .pr(px(16.0))
             .pb(px(16.0))
             .child(muted(source_line(&view)))
+            .when(self.built_for_javascript(&view), |details| {
+                details.child(muted(BUILT_FOR_JAVASCRIPT))
+            })
             .child(buttons)
             .child(
                 div()

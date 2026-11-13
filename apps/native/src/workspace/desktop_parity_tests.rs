@@ -207,7 +207,7 @@ fn the_plugins_section_lists_the_plugins_and_writes_plugins_json_only_for_a_chan
     window.draw();
     // Looking writes nothing.
     assert_eq!(std::fs::read(data.paths().state).unwrap(), before);
-    // Turning one on writes it, as the desktop's switch does; without a native build it is on but doesn't run here.
+    // Turning one on writes it, as the desktop's switch does; built for JavaScript it is on but doesn't run here.
     window.update(|w, window, cx| {
         let idle = w
             .plugin_views()
@@ -216,7 +216,7 @@ fn the_plugins_section_lists_the_plugins_and_writes_plugins_json_only_for_a_chan
             .unwrap();
         w.toggle_plugin(idle, true, window, cx);
     });
-    assert_eq!(rows(&window)[1].1, "On · No native build");
+    assert_eq!(rows(&window)[1].1, "On · Built for JavaScript");
     let saved: serde_json::Value =
         serde_json::from_slice(&std::fs::read(data.paths().state).unwrap()).unwrap();
     assert_eq!(saved["idle"]["enabled"], true);

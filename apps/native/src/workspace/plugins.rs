@@ -1,5 +1,6 @@
 //! Pages of the desktop's plugins as tabs. Each one open runs a frame of its plugin until the tab closes. A plugin that
-//! is on but has no native build is listed in the sidebar, as needing an update for the native app.
+//! is on but has no native build is listed in the sidebar, as needing an update for the native app, or, when it is written
+//! in JavaScript, which no longer runs, as needing an update.
 
 use gpui::{
     AnyElement, Context, Entity, FocusHandle, FontWeight, Role, SharedString, Window, div,
@@ -228,9 +229,9 @@ impl Workspace {
     }
 
     /// The plugins that are on and approved but don't run here, which the desktop runs: they have no native build. As
-    /// `(id, name)`. Kept until `plugins.json` or the running plugins change, since listing the store takes about half a
+    /// `(id, name, built for JavaScript)`. Kept until `plugins.json` or the running plugins change, since listing the store takes about half a
     /// millisecond for a dozen plugins and the sidebar draws every frame.
-    pub(super) fn plugins_without_native_build(&self) -> Vec<(String, String)> {
+    pub(super) fn plugins_without_native_build(&self) -> Vec<(String, String, bool)> {
         let written = self
             .config
             .plugins
@@ -251,7 +252,10 @@ impl Workspace {
                 .filter(|view| {
                     view.enabled && view.approved && !self.plugin_runs(&view.manifest.id)
                 })
-                .map(|view| (view.manifest.id, view.manifest.name))
+                .map(|view| {
+                    let javascript = self.built_for_javascript(&view);
+                    (view.manifest.id, view.manifest.name, javascript)
+                })
                 .collect();
             *cached = (Some(key), list);
         }
@@ -265,16 +269,21 @@ impl Workspace {
         // rather than missing, and opens its entry in Settings → Plugins. More than two take one row, so a dozen
         // desktop-only plugins don't push the projects off the sidebar.
         let mut waiting = self.plugins_without_native_build();
-        let mut needs = "Needs an update for the native app";
-        if waiting.len() > 2 {
-            let first = waiting[0].0.clone();
-            waiting = vec![(first, format!("{} plugins", waiting.len()))];
-            needs = "Need an update for the native app";
+        let many = waiting.len() > 2;
+        if many {
+            let (first, javascript) = (waiting[0].0.clone(), waiting.iter().all(|(.., js)| *js));
+            waiting = vec![(first, format!("{} plugins", waiting.len()), javascript)];
         }
         let waiting: Vec<_> = waiting
             .into_iter()
             .enumerate()
-            .map(|(index, (id, name))| {
+            .map(|(index, (id, name, javascript))| {
+                let needs = match (javascript, many) {
+                    (true, false) => "Written in JavaScript: needs an update",
+                    (true, true) => "Need an update",
+                    (false, false) => "Needs an update for the native app",
+                    (false, true) => "Need an update for the native app",
+                };
                 div()
                     .id(("plugin-needs-update", index))
                     .role(Role::Button)

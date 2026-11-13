@@ -68,10 +68,10 @@ fn dropping_plugin_ui_stops_its_git_watcher() {
         .expect("the watcher thread outlived the workspace's plugin UI");
 }
 
-/// The plugins that need a native build, as `(id, name)`, for `plugins.json` as written then and the plugins running.
+/// The plugins that need a native build, as `(id, name, built for JavaScript)`, for `plugins.json` as written then and the plugins running.
 pub(super) type NeedsUpdate = (
     Option<(Option<std::time::SystemTime>, Vec<String>)>,
-    Vec<(String, String)>,
+    Vec<(String, String, bool)>,
 );
 
 /// Work for the window's thread, with the window.

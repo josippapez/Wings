@@ -7,20 +7,18 @@
 //! desktop's data too: its main and pages get the desktop's storage root and the install scope `plugins.json` names,
 //! so what the desktop saved for it is what it reads.
 //!
-//! A plugin runs here only if it ships a native build, which sits beside its web one in `dist/native/`: `main.js` is
-//! its main, and a view that opens as a tab and sets `newTab` (what the desktop's + menu lists) has a page at
-//! `<page>.js` for the page file its manifest names, `dist/board.html` being `board.js`; so does each of its sidebars
-//! (`contributes.sidebars`), which opens in the right-hand panel. A frame written in Rust is `<name>.wasm` there
-//! (`runtime::wasm`), with or without a `.js` beside it. A plugin with neither `dist/native/main.js` nor `main.wasm`
-//! isn't ported yet and is skipped without a word. A plugin built since its pages share one React (`runtime::Library`) also has
-//! `dist/native/shared.js` and each page again in `dist/native/shared/`, which run in its place (`page_source`).
+//! A plugin runs here only if it ships a native build, which sits beside its web one in `dist/native/` and is
+//! WebAssembly, written in Rust: `main.wasm` is its main, and a view that opens as a tab and sets `newTab` (what the
+//! desktop's + menu lists) has a page at `<page>.wasm` for the page file its manifest names, `dist/board.html` being
+//! `board.wasm`; so does each of its sidebars (`contributes.sidebars`), which opens in the right-hand panel. A plugin
+//! built for JavaScript (`dist/native/main.js`, or a main that isn't a `.wasm`) isn't started and isn't found here;
+//! Settings → Plugins says it needs an update (`Workspace::built_for_javascript`).
 //!
 //! A debug build can also run the plugins of a folder it is given (`--plugins-dev-root`), as the desktop's debug builds
 //! run the repo's `plugins/`: they are always on and approved, and one the desktop has never run stores what it saves
 //! under the scope `dev`, since this never writes `plugins.json` to give it one.
 
 use std::{
-    fs,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -31,7 +29,7 @@ use crate::{
     host::PluginPaths,
     page::{
         plugin::{Access, Env, PluginConfig, PluginHost},
-        runtime::{Event, Library},
+        runtime::Event,
     },
 };
 
@@ -122,56 +120,27 @@ pub struct Page {
     pub source: Arc<str>,
 }
 
-/// `dist/native/<name>.js` of the plugin in `dir`, if that file is there and inside the plugin folder.
-fn native_file(dir: &Path, name: &str) -> Option<PathBuf> {
-    loading::resolve(dir, &format!("{NATIVE_DIR}/{name}.js")).filter(|file| file.is_file())
-}
-
-/// A frame's native build in the plugin in `dir`: `dist/native/<name>.js`, or for one written in Rust alone
-/// `dist/native/<name>.wasm`. `page_source` says which of the two runs.
+/// A frame's native build in the plugin in `dir`: `dist/native/<name>.wasm`, if that file is there and inside the
+/// plugin folder, links followed.
 pub(crate) fn frame_file(dir: &Path, name: &str) -> Option<PathBuf> {
-    native_file(dir, name).or_else(|| {
-        loading::resolve(dir, &format!("{NATIVE_DIR}/{name}.wasm")).filter(|file| file.is_file())
-    })
+    loading::resolve(dir, &format!("{NATIVE_DIR}/{name}.wasm")).filter(|file| file.is_file())
 }
 
-/// The plugin's `dist/native/shared.js`: the React and `wings-plugin-ui` its pages built to share them run on.
-pub fn library(dir: &Path) -> Option<Arc<Library>> {
-    Some(Library::new(fs::read_to_string(native_file(dir, "shared")?).ok()?))
-}
-
-/// The source of the frame whose own build is `bundle` (`dist/native/<page>.js`, or `main.js`) in the plugin in `dir`:
-/// its module built to WebAssembly, `dist/native/<page>.wasm`, when there is one, and otherwise its build that
-/// shares `library`, `dist/native/shared/<page>.js`, if it was built with that library, and otherwise `bundle`, which
-/// carries its own React, as every page did before.
-pub fn page_source(dir: &Path, bundle: &Path, library: Option<&Library>) -> std::io::Result<String> {
+/// The source of the frame whose own build is `bundle` (`dist/native/<page>.wasm`, or `main.wasm`) in the plugin in
+/// `dir`: its module (`runtime::wasm`), only if that file is inside the plugin's folder. A script is no frame source.
+pub fn page_source(dir: &Path, bundle: &Path) -> std::io::Result<String> {
     use crate::page::runtime::wasm::MARKER;
-    // A page built to WebAssembly, `dist/native/<page>.wasm`, runs in place of its JS build (`runtime::wasm`): only a
-    // file inside the plugin's folder, links followed.
-    let stem = bundle.file_stem().and_then(|stem| stem.to_str());
-    let module = stem
-        .and_then(|stem| loading::resolve(dir, &format!("{NATIVE_DIR}/{stem}.wasm")))
-        .filter(|module| module.is_file());
-    if let Some(module) = module {
-        return Ok(format!("{MARKER}{}", module.display()));
+    let module = bundle
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .and_then(|stem| frame_file(dir, stem));
+    match module {
+        Some(module) => Ok(format!("{MARKER}{}", module.display())),
+        None => Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "the frame has no WebAssembly module in the plugin's folder",
+        )),
     }
-    let shared = library.and_then(|library| {
-        let file = native_file(dir, &format!("shared/{}", stem?))?;
-        let source = fs::read_to_string(file).ok()?;
-        (Library::needed_by(&source) == Some(library.hash())).then_some(source)
-    });
-    let source = match shared {
-        Some(source) => source,
-        None => fs::read_to_string(bundle)?,
-    };
-    // The marker is how this says "the module at this path", so a script of the plugin's can't say it for itself.
-    if source.starts_with(MARKER) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "a page script can't start with the WebAssembly marker",
-        ));
-    }
-    Ok(source)
 }
 
 /// The plugins that are installed, turned on, approved and have a native build, by name. Plugins the desktop skips
@@ -264,14 +233,12 @@ pub fn start(found: Vec<Found>, paths: &PluginPaths, env: &Arc<dyn Env>) -> Vec<
         .filter_map(|found| {
             let id = found.id;
             let dir = &found.plugin.dir;
-            let shared = library(dir);
             let read_page = |bundle: &Path| {
-                page_source(dir, bundle, shared.as_deref())
+                page_source(dir, bundle)
                     .inspect_err(|error| eprintln!("[plugins] {id}: {}: {error}", bundle.display()))
                     .ok()
             };
-            // A main shares no library. `main.wasm` runs in place of `main.js`, as a page's module does.
-            let main = page_source(dir, &found.main, None)
+            let main = page_source(dir, &found.main)
                 .inspect_err(|error| eprintln!("[plugins] {id}: {}: {error}", found.main.display()))
                 .ok()?;
             let host = Arc::new(PluginHost::with_access(
@@ -286,7 +253,6 @@ pub fn start(found: Vec<Found>, paths: &PluginPaths, env: &Arc<dyn Env>) -> Vec<
                     env: env.clone(),
                 },
             ));
-            host.set_library(shared.clone());
             let reported = id.clone();
             host.keep_main(
                 main.into(),
@@ -358,7 +324,7 @@ pub struct BlockPage {
     pub source: Arc<str>,
 }
 
-/// The blocks of `installed` that have a native build (`dist/native/<page>.js`), read now.
+/// The blocks of `installed` that have a native build (`dist/native/<page>.wasm`), read now.
 pub fn blocks(installed: &Installed) -> Vec<BlockPage> {
     let (least, most) = wings_plugins::manifest::BLOCK_MIN_HEIGHT;
     installed
@@ -378,7 +344,7 @@ pub fn blocks(installed: &Installed) -> Vec<BlockPage> {
                 icon_svg: installed.plugin.icon_svg.clone(),
                 min_height: block.min_height.unwrap_or(160).clamp(least, most),
                 host: installed.host.clone(),
-                source: page_source(&installed.plugin.dir, &file, installed.host.library().as_deref())
+                source: page_source(&installed.plugin.dir, &file)
                     .ok()?
                     .into(),
             })
@@ -387,7 +353,7 @@ pub fn blocks(installed: &Installed) -> Vec<BlockPage> {
 }
 
 /// The popover page of `installed`'s sidebar `sidebar`, shown under its title bar button: its native build
-/// (`dist/native/<page>.js`), read now, and its size in points.
+/// (`dist/native/<page>.wasm`), read now, and its size in points.
 pub fn popover(installed: &Installed, sidebar: &str) -> Option<(Arc<str>, u32, u32)> {
     let contributes = &installed.plugin.manifest.contributes;
     let popover = contributes
@@ -398,8 +364,7 @@ pub fn popover(installed: &Installed, sidebar: &str) -> Option<(Arc<str>, u32, u
         .as_ref()?;
     let stem = Path::new(&popover.page).file_stem()?.to_str()?;
     let file = frame_file(&installed.plugin.dir, stem)?;
-    let source =
-        page_source(&installed.plugin.dir, &file, installed.host.library().as_deref()).ok()?;
+    let source = page_source(&installed.plugin.dir, &file).ok()?;
     Some((source.into(), popover.width, popover.height))
 }
 

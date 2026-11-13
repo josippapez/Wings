@@ -67,7 +67,7 @@ impl Workspace {
             .ok_or("The view has no native page")?;
         let file = crate::installed::frame_file(&installed.plugin.dir, stem)
             .ok_or("The view has no native window page")?;
-        let source = crate::installed::page_source(&installed.plugin.dir, &file, None)
+        let source = crate::installed::page_source(&installed.plugin.dir, &file)
             .map_err(|error| error.to_string())?;
         let title = view.title.clone();
         let (width, height) = (view.width.unwrap_or(1100), view.height.unwrap_or(760));

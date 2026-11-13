@@ -223,6 +223,15 @@ impl Workspace {
             .unwrap_or_default()
     }
 
+    /// Whether the plugin is on and approved, so the desktop runs it, and can't run here because it is built for
+    /// JavaScript: its main isn't a `.wasm` and it has no module to run.
+    pub(super) fn built_for_javascript(&self, view: &PluginView) -> bool {
+        view.enabled
+            && view.approved
+            && !self.plugin_runs(&view.manifest.id)
+            && !view.manifest.main.ends_with(".wasm")
+    }
+
     /// Whether the plugin's main runs in this window.
     pub(super) fn plugin_runs(&self, id: &str) -> bool {
         self.plugins.iter().any(|installed| installed.id == id)

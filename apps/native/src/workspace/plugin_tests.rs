@@ -1594,13 +1594,44 @@ fn a_plugin_on_without_a_native_build_is_listed_in_the_sidebar_as_needing_an_upd
         let waiting: Vec<_> = w
             .plugins_without_native_build()
             .into_iter()
-            .map(|(id, _)| id)
+            .map(|(id, ..)| id)
             .collect();
         assert_eq!(waiting, ["desktop-only"]);
         assert!(
             w.plugin_list(cx).is_some(),
             "the Plugins section shows for it"
         );
+    });
+    window.draw();
+}
+
+/// A plugin built for JavaScript, with only `dist/native/main.js`, starts no frame: Settings → Plugins labels it and the
+/// sidebar says it needs an update.
+#[test]
+fn a_plugin_with_only_a_javascript_build_starts_nothing_and_says_it_needs_an_update() {
+    let data = Data::temp();
+    let dir = data.install_script(
+        "js-only",
+        json!({ "contributes": { "sidebars": [{ "id": "s", "title": "S", "page": "dist/s.html" }] } }),
+        &idle("main"),
+        &[("s", &idle("page"))],
+        "js-only-scope",
+    );
+    for stem in ["main", "s"] {
+        fs::remove_file(dir.join(format!("dist/native/{stem}.wasm"))).unwrap();
+        fs::write(dir.join(format!("dist/native/{stem}.js")), "wings.render('{}');").unwrap();
+    }
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    app.run_until_parked();
+    window.update(|w, _, cx| {
+        assert!(w.plugins.is_empty(), "no frame starts");
+        assert_eq!(
+            w.plugins_without_native_build(),
+            [("js-only".to_owned(), "Plugin js-only".to_owned(), true)]
+        );
+        let view = w.plugin_views().remove(0);
+        assert_eq!(w.plugin_status(&view), "On · Built for JavaScript");
+        assert!(w.plugin_list(cx).is_some());
     });
     window.draw();
 }
