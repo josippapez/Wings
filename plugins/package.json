@@ -1,21 +1,9 @@
 {
   "name": "wings-plugins",
   "private": true,
-  "type": "module",
   "scripts": {
-    "deps": "pnpm -C ../packages/plugin-sdk install --frozen-lockfile && pnpm -C ../packages/plugin-ui install --frozen-lockfile && pnpm install --frozen-lockfile",
-    "build": "node build.mjs",
-    "shot": "node shot.mjs",
-    "check": "node build.mjs --check && sh build-rust.sh --check",
+    "shot": "cargo run --manifest-path ../apps/native/Cargo.toml --example shot_plugins --features test-support --",
+    "check": "sh build-rust.sh --check",
     "test": "cargo test --workspace --quiet"
-  },
-  "devDependencies": {
-    "@types/react": "^19.1.8",
-    "@types/react-dom": "^19.1.6",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "typescript": "~6.0.3",
-    "wings-plugin-sdk": "link:../packages/plugin-sdk",
-    "wings-plugin-ui": "link:../packages/plugin-ui"
   }
 }

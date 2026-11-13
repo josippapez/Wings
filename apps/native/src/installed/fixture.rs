@@ -1,5 +1,5 @@
-//! The desktop's plugin folders in a temp dir, for tests and the screenshot scenes: plugins installed from `pages/fixture`
-//! the way the desktop installs them, and a `plugins.json` that turns them on.
+//! The desktop's plugin folders in a temp dir, for tests and the screenshot scenes: plugins installed
+//! the way the desktop installs them, with stand-in frames, and a `plugins.json` that turns them on.
 
 use std::{
     fs,
