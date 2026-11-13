@@ -186,7 +186,8 @@ pub(crate) fn deliver(kind: &str, id: u32, text: String) {
         }
         "output" => {
             if let Some(listener) = OUTPUTS.with(|outputs| outputs.borrow().get(&id).cloned()) {
-                listener(&serde_json::from_str(&text).unwrap_or(Value::Null));
+                // A line a program printed isn't JSON: it comes as the text it is.
+                listener(&serde_json::from_str(&text).unwrap_or(Value::String(text)));
             }
         }
         "broadcast" => {
@@ -633,4 +634,12 @@ pub fn disk_usage(path: &str, options: &Value, on_progress: Option<Rc<dyn Fn(&Va
         OUTPUTS.with(|outputs| outputs.borrow_mut().insert(id, on_progress));
     }
     Search { token, answer: call_as(id, "diskUsage", params) }
+}
+
+/// `wings.exec` with `onOutput`: `on_line` hears each line the program prints while it runs, and Wings stops it after
+/// `timeout_ms`.
+pub fn exec_lines(program: &str, args: &[&str], timeout_ms: u32, on_line: impl Fn(&str) + 'static) -> Pending<Result<Value, String>> {
+    let id = next_id();
+    OUTPUTS.with(|outputs| outputs.borrow_mut().insert(id, Rc::new(move |line| on_line(line.as_str().unwrap_or_default()))));
+    call_as(id, "exec", json!({ "program": program, "args": args, "cwd": null, "timeoutMs": timeout_ms, "stream": true }))
 }

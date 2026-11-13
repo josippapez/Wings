@@ -289,8 +289,9 @@ fn stopped(out: PathBuf) {
     }
 }
 
-/// Schedules' real main over made-up schedules and one paused "assigned" entry with tickets, and its built page. The
-/// entries are kept in a storage folder of their own, so nothing runs: no schedule is due, and the entry is paused.
+/// Schedules' real main (`plugins/schedules/rust`) over made-up schedules and one paused "assigned" entry with tickets,
+/// and its pages. The entries are kept in a storage folder of their own, so nothing runs: no schedule is due, and the
+/// entry is paused. Then the same pages over nothing at all, and the modal that asks to allow a schedule an agent adds.
 fn schedules(out: PathBuf) {
     let project = out.join("fixture-project");
     std::fs::create_dir_all(&project).unwrap();
@@ -300,9 +301,28 @@ fn schedules(out: PathBuf) {
         .unwrap()
         .as_millis() as u64;
     let hour = 3_600_000;
-    let storage = out.join("fixture-storage-schedules");
-    let _ = std::fs::remove_dir_all(&storage);
-    let store = wings_plugin_storage::Storage::new(storage.clone());
+    let manifest: wings_plugins::manifest::Manifest =
+        serde_json::from_str(include_str!("../../../plugins/schedules/wings-plugin.json")).unwrap();
+    let module = |frame: &str| {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../plugins/schedules/dist/native/{frame}.wasm"));
+        format!("{}{}", wings_native::page::runtime::wasm::MARKER, path.canonicalize().expect("sh build-rust.sh schedules, in plugins/").display())
+    };
+    // A host over its own storage folder, with the project published.
+    let host_over = |folder: &str| {
+        let storage = out.join(folder);
+        let _ = std::fs::remove_dir_all(&storage);
+        let host = PluginHost::with_access(
+            PluginConfig { id: "schedules".into(), root: storage.clone(), scope: "shot".into() },
+            Access {
+                plugin: wings_plugins::manifest::Plugin { manifest: manifest.clone(), dir: project.clone(), icon_svg: None },
+                builtin: true,
+                env: std::sync::Arc::new(FixtureEnv(project.clone())),
+            },
+        );
+        host.publish_projects(vec![wings_native::page::plugin::Project { id: id.clone(), name: "shop".into(), parent_id: None, path: id.clone() }]);
+        (host, wings_plugin_storage::Storage::new(storage))
+    };
+    let (host, store) = host_over("fixture-storage-schedules");
     store
         .set(
             "schedules",
@@ -342,52 +362,32 @@ fn schedules(out: PathBuf) {
             }]),
         )
         .unwrap();
-    let manifest: wings_plugins::manifest::Manifest =
-        serde_json::from_str(include_str!("../../../plugins/schedules/wings-plugin.json")).unwrap();
-    let host = PluginHost::with_access(
-        PluginConfig {
-            id: "schedules".into(),
-            root: storage,
-            scope: "shot".into(),
-        },
-        Access {
-            plugin: wings_plugins::manifest::Plugin {
-                manifest,
-                dir: project.clone(),
-                icon_svg: None,
-            },
-            builtin: true,
-            env: std::sync::Arc::new(FixtureEnv(project.clone())),
-        },
-    );
-    host.publish_projects(vec![wings_native::page::plugin::Project {
-        id: id.clone(),
-        name: "shop".into(),
-        parent_id: None,
-        path: id,
-    }]);
-    host.start_main(
-        include_str!("../../../plugins/schedules/dist/native/main.js"),
-        |event| {
-            if let wings_native::page::runtime::Event::Error { message, .. } = event {
-                panic!("{message}");
-            }
-        },
-    )
+    host.start_main(&module("main"), |event| {
+        if let wings_native::page::runtime::Event::Error { message, .. } = event {
+            panic!("{message}");
+        }
+    })
     .unwrap();
+    let (empty_host, _) = host_over("fixture-storage-schedules-empty");
     let mut cx = app();
-    let source = include_str!("../../../plugins/schedules/dist/native/schedules.js");
+    let source = module("schedules");
     // What to press to reach each view, and a text it shows.
-    let views = [
-        ("list", None, "Frontend tickets"),
-        ("new", Some(("Add entry", 0)), "Start an agent"),
-        ("edit-entry", Some(("Edit", 2)), "Keep free"),
+    let views: [(&str, &PluginHost, &str, Option<(&str, usize)>, &str); 6] = [
+        ("list", &host, &source, None, "Frontend tickets"),
+        ("new", &host, &source, Some(("Add entry", 0)), "Start an agent"),
+        ("edit-schedule", &host, &source, Some(("Edit", 0)), "Prompt"),
+        ("edit-entry", &host, &source, Some(("Edit", 2)), "Keep free"),
+        ("empty", &empty_host, &source, None, "Nothing set up yet"),
+        ("approve", &host, &module("approve"), None, "asks to add a schedule"),
     ];
+    // An agent asks to add a schedule, which waits for the user in the modal.
+    let (reply, _answer) = wings_native::page::runtime::Reply::channel();
+    host.run_tool("add", json!({ "prompt": "Summarize last week's merged pull requests.", "project": "shop", "time": "08:30", "days": ["mon", "fri"] }), None, reply);
     for width in [1000.0, 640.0] {
-        for (name, press, expected) in views {
+        for (name, host, source, press, expected) in views {
             let handle = cx
-                .open_offscreen_window(size(px(width), px(900.0)), |_, cx| {
-                    cx.new(|cx| PageView::in_plugin(&host, source, cx))
+                .open_offscreen_window(size(px(width), px(if name == "approve" { 420.0 } else { 900.0 })), |_, cx| {
+                    cx.new(|cx| PageView::in_plugin(host, source, cx))
                 })
                 .unwrap();
             let window = handle.into();
@@ -409,7 +409,7 @@ fn schedules(out: PathBuf) {
                     wait(cx, window, Duration::from_millis(20));
                 }
             };
-            until(&mut cx, "Frontend tickets");
+            until(&mut cx, if name == "approve" || name == "empty" { expected } else { "Frontend tickets" });
             if let Some((label, nth)) = press {
                 let pressed = handle
                     .read_with(&cx, |view, _| view.press(label, nth))
@@ -417,7 +417,8 @@ fn schedules(out: PathBuf) {
                 assert!(pressed, "no button {label}");
             }
             until(&mut cx, expected);
-            wait(&mut cx, window, Duration::from_millis(300));
+            // Allow waits a second after the ask shows.
+            wait(&mut cx, window, Duration::from_millis(if name == "approve" { 1300 } else { 300 }));
             save(
                 &mut cx,
                 window,

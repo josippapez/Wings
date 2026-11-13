@@ -17,7 +17,7 @@ use super::{
     ui::Tone,
 };
 use crate::page::{
-    runtime::{Event, PageRuntime},
+    runtime::{Event, PageRuntime, Reply},
     tree::{Node, Tree, plain_text},
 };
 
@@ -712,9 +712,10 @@ fn hud_reads_the_transcript_only_for_the_types_its_manifest_names() {
     let _ = fs::remove_dir_all(claude);
 }
 
-#[test]
-fn schedules_main_serves_its_native_page_and_a_schedule_added_in_the_form_is_listed() {
-    let rig = Rig::with(load("schedules"), true, vec![]);
+/// Schedules with its real main and the project `/work/api`, named Api.
+fn schedules_rig() -> (Rig, mpsc::Receiver<String>) {
+    // Needs Wings 0.2.21, for `host::view_args`: use `load` once the app's version is bumped.
+    let rig = Rig::with(load_unreleased("schedules"), true, vec![]);
     let work = PathBuf::from("/work/api");
     *rig.env.projects.lock().unwrap() = vec![work.clone()];
     rig.host.publish_projects(vec![Project {
@@ -725,10 +726,23 @@ fn schedules_main_serves_its_native_page_and_a_schedule_added_in_the_form_is_lis
     }]);
     let (on_event, main_errors) = errors();
     rig.host
-        .start_main(&native("schedules", "main.js"), on_event)
+        .start_main(&module("schedules", "main"), on_event)
         .unwrap();
+    // A tool call that comes before main has set up what it listens to gets no answer: ask until it has.
+    let started = (0..40).any(|_| {
+        let (reply, answer) = Reply::channel();
+        rig.host.run_tool("list", json!({}), None, reply);
+        answer.wait(std::time::Duration::from_millis(500)).is_some()
+    });
+    assert!(started, "main never answered the list tool");
+    (rig, main_errors)
+}
 
-    let (page, events) = open_page(&rig.host, &native("schedules", "schedules.js"));
+#[test]
+fn schedules_main_serves_its_native_page_and_a_schedule_added_in_the_form_is_listed() {
+    let (rig, main_errors) = schedules_rig();
+
+    let (page, events) = open_page(&rig.host, &module("schedules", "schedules"));
     let empty = tree(&events, "the empty list", |tree| {
         tree.text().contains("Nothing set up yet")
     });
@@ -772,11 +786,76 @@ fn schedules_main_serves_its_native_page_and_a_schedule_added_in_the_form_is_lis
         "{}",
         listed.text()
     );
+    // It is kept under the keys the TypeScript plugin used, which a saved schedule still reads.
+    let saved = rig.root.saved("schedules", "schedules").unwrap();
+    assert_eq!(saved[0]["name"], "Morning review");
+    assert_eq!(saved[0]["when"], json!({ "kind": "daily", "time": "09:00", "days": [1, 2, 3, 4, 5] }));
+    assert_eq!(saved[0]["agent"], "claude");
     assert!(
         main_errors.try_recv().is_err(),
         "main reported {:?}",
         main_errors.try_recv()
     );
+}
+
+#[test]
+fn schedules_add_tool_waits_for_the_users_allow_in_the_modal_and_saves_nothing_when_denied() {
+    let (rig, main_errors) = schedules_rig();
+    let ask = |input: serde_json::Value| {
+        let (reply, answer) = Reply::channel();
+        rig.host.run_tool("add", input, None, reply);
+        answer
+    };
+    let finished = |answer: crate::page::runtime::Answer| {
+        let answer: serde_json::Value = serde_json::from_str(&answer.wait(super::testing::WAIT).expect("the tool's answer").expect("an answer")).unwrap();
+        (answer["text"].as_str().unwrap().to_owned(), answer["isError"] == true)
+    };
+    // The tool's input is checked before anything is asked.
+    let (bad, was_error) = finished(ask(json!({ "prompt": "Check CI", "project": "Api", "time": "9:00" })));
+    assert!(was_error && bad.starts_with("time must match the pattern"), "{bad}");
+
+    let first = ask(json!({ "prompt": "Check yesterday's CI", "project": "Api", "time": "08:30", "days": ["mon", "fri"] }));
+    rig.env.wait("the modal", |seen| seen.iter().any(|seen| matches!(seen, Seen::OpenView(open) if open.id == "approve")));
+    let (page, events) = open_page(&rig.host, &module("schedules", "approve"));
+    let ask_shown = tree(&events, "the ask", |tree| tree.text().contains("asks to add a schedule in Api"));
+    let text = ask_shown.text();
+    for shown in ["Mon, Fri at 08:30", "Claude Code", "Check yesterday's CI"] {
+        assert!(text.contains(shown), "{shown:?} in {text:?}");
+    }
+    // Allow waits a second after the ask shows, so a click meant for something else can't land on it.
+    let armed = tree(&events, "Allow", |tree| {
+        let mut allow = Vec::new();
+        buttons_named(&tree.children, "Allow", &mut allow);
+        !allow.is_empty()
+    });
+    let mut deny = Vec::new();
+    buttons_named(&armed.children, "Deny", &mut deny);
+    assert!(page.dispatch(&deny[0], None));
+    let (denied, was_error) = finished(first);
+    assert!(was_error && denied.starts_with("The user denied it in Wings"), "{denied}");
+    rig.env.wait("the modal to close", |seen| seen.iter().any(|seen| matches!(seen, Seen::CloseView(_, view) if view == "approve")));
+    assert_eq!(rig.root.saved("schedules", "schedules"), None);
+
+    let second = ask(json!({ "prompt": "Check yesterday's CI", "project": "Api", "every_hours": 6 }));
+    let again = tree(&events, "the second ask", |tree| {
+        let mut allow = Vec::new();
+        buttons_named(&tree.children, "Allow", &mut allow);
+        tree.text().contains("Every 6 hours") && !allow.is_empty()
+    });
+    let mut allow = Vec::new();
+    buttons_named(&again.children, "Allow", &mut allow);
+    assert!(page.dispatch(&allow[0], None));
+    let (added, was_error) = finished(second);
+    assert!(!was_error && added.contains("in Api: Every 6 hours, next run"), "{added}");
+    assert_eq!(rig.root.saved("schedules", "schedules").unwrap()[0]["when"], json!({ "kind": "every", "hours": 6 }));
+    assert!(main_errors.try_recv().is_err(), "main reported {:?}", main_errors.try_recv());
+}
+
+#[test]
+fn schedules_approve_modal_with_nothing_waiting_says_so() {
+    let (rig, _) = schedules_rig();
+    let (_page, events) = open_page(&rig.host, &module("schedules", "approve"));
+    tree(&events, "the empty modal", |tree| tree.text().contains("Nothing is waiting"));
 }
 
 /// The handler of the button whose accessible name is `label`.
@@ -1813,5 +1892,5 @@ fn each_page_built_to_share_react_draws_what_its_own_build_draws() {
         }
     }
     // The pages still written in TypeScript: it goes down as plugins move to Rust.
-    assert!(checked >= 9, "only {checked} pages");
+    assert!(checked >= 7, "only {checked} pages");
 }

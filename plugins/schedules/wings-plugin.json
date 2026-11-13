@@ -1,14 +1,14 @@
 {
   "id": "schedules",
   "name": "Schedules",
-  "version": "0.6.2",
-  "minWingsVersion": "0.1.108",
+  "version": "0.7.0",
+  "minWingsVersion": "0.2.21",
   "icon": "icon.svg",
   "description": "Starts a coding agent (Claude Code or OpenCode) with a prompt in one of your projects by itself: every few hours, or at a set time on the days you pick. It can also watch a project's Azure DevOps, GitHub or GitLab for tickets assigned to you, and offer to start an agent on each in a new worktree. Each run opens in a new tab and you get a notification. Wings has to be running, and a run missed while it was closed isn't made up.",
   "api": 1,
   "native": true,
   "mcpInstructions": "Schedules (schedules__*): add starts an agent with a prompt in a project every few hours or at a set time on chosen days, once the user allows it in Wings; add_assigned watches a project for tickets assigned to the user and offers to start an agent on each; list shows both, with the tickets and their state; update changes one; remove deletes one. Use them when the user wants an agent run on a schedule or asks what is assigned to them.",
-  "main": "dist/main.js",
+  "main": "dist/native/main.wasm",
   "permissions": {
     "panes": [
       "claude",
@@ -45,7 +45,7 @@
       {
         "id": "schedules",
         "title": "Schedules",
-        "page": "dist/schedules.html",
+        "page": "dist/native/schedules.wasm",
         "opens": [
           "tab"
         ],
@@ -55,7 +55,7 @@
       {
         "id": "approve",
         "title": "Allow this schedule?",
-        "page": "dist/approve.html",
+        "page": "dist/native/approve.wasm",
         "opens": [
           "modal"
         ],
