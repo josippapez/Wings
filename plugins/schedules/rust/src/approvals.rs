@@ -1,7 +1,11 @@
-//! An agent asks to add or change a timed schedule: the "Allow this schedule?" modal shows it, and the tool call waits for
+//! An agent asks to add or change a timed schedule, or to start an agent on a ticket: the "Allow this?" modal shows it, and the tool call waits for
 //! the user's answer. Asks live only while their call waits, so one nobody answers is gone with it.
 
-use crate::{approval::Approval, main_frame::changed, schedule::Draft};
+use crate::{
+    approval::{Approval, StartAsk, What},
+    main_frame::changed,
+    schedule::Draft,
+};
 use serde_json::{Value, json};
 use std::{
     cell::{Cell, RefCell},
@@ -67,15 +71,24 @@ pub fn answer(id: &str, allow: bool) -> Result<(), String> {
     if settle(id, if allow { Answer::Allow } else { Answer::Deny }) { Ok(()) } else { Err("That request is gone: the agent stopped waiting.".into()) }
 }
 
-/// Shows the ask in the modal, and gives the user's answer, or `Timeout`.
+/// Shows the schedule ask in the modal, and gives the user's answer, or `Timeout`.
 pub async fn ask_approval(asker: Option<String>, project_name: &str, current: Option<Draft>, proposed: Draft, project_id: &str) -> Answer {
+    let title = if current.is_some() { "An agent asks to change a schedule" } else { "An agent asks to add a schedule" };
+    wait_for(asker, project_name, What::Schedule { current, proposed }, project_id, title).await
+}
+
+/// Shows the start ask in the modal, and gives the user's answer, or `Timeout`.
+pub async fn ask_start(asker: Option<String>, project_name: &str, start: StartAsk, project_id: &str) -> Answer {
+    wait_for(asker, project_name, What::Start(start), project_id, "An agent asks to start a ticket").await
+}
+
+async fn wait_for(asker: Option<String>, project_name: &str, what: What, project_id: &str, title: &str) -> Answer {
     let id = NEXT.with(|next| {
         next.set(next.get() + 1);
         next.get().to_string()
     });
-    let changing = current.is_some();
     let slot = Rc::new(RefCell::new(Slot::default()));
-    PENDING.with(|pending| pending.borrow_mut().push(Ask { approval: Approval { id: id.clone(), asker, project_name: project_name.to_owned(), current, proposed }, slot: slot.clone() }));
+    PENDING.with(|pending| pending.borrow_mut().push(Ask { approval: Approval { id: id.clone(), asker, project_name: project_name.to_owned(), what }, slot: slot.clone() }));
     let late = id.clone();
     spawn(async move {
         host::sleep(WAIT_MS).await;
@@ -84,7 +97,6 @@ pub async fn ask_approval(asker: Option<String>, project_name: &str, current: Op
     changed();
     drop(host::open_view_with(VIEW, "modal", &Value::Null));
     if !host::focused() {
-        let title = if changing { "An agent asks to change a schedule" } else { "An agent asks to add a schedule" };
         drop(host::call("notify", json!({ "title": title, "body": format!("In {project_name}. Allow or deny it in Wings."), "projectId": project_id })));
     }
     poll_fn(|cx| {

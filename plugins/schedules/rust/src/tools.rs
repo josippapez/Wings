@@ -2,14 +2,14 @@
 //! has for it.
 
 use crate::{
-    approval::{WhenInput, needs_approval, when_from},
-    approvals::{Answer, ask_approval},
-    assigned::{DEFAULT_MIN_FREE_GB, DEFAULT_PROMPT, Project, WatchDraft, describe_check, resolve_project},
+    approval::{StartAsk, WhenInput, needs_approval, when_from},
+    approvals::{Answer, ask_approval, ask_start},
+    assigned::{DEFAULT_MIN_FREE_GB, DEFAULT_PROMPT, Project, WatchDraft, describe_check, fill_prompt, resolve_project},
     list::format_list,
     main_frame::{remove_schedule, save_schedule},
     schedule::{Agent, Draft, Schedule, clean_draft, describe_next, describe_when, next_run, time_ok},
     store::{read_schedules, read_watches},
-    watches::{add_watch, check_one, remove_watch, save_watch, start_ticket},
+    watches::{add_watch, check_one, plan_start, remove_watch, save_watch, start_ticket},
 };
 use serde_json::Value;
 use std::future::Future;
@@ -56,12 +56,12 @@ fn check_time(input: &Value) -> Result<(), String> {
     }
 }
 
-/// Fails when the user didn't allow it.
-fn allowed(answer: Answer) -> Result<(), String> {
+/// Fails when the user didn't allow it. `none` says what didn't happen.
+fn allowed(answer: Answer, none: &str) -> Result<(), String> {
     match answer {
         Answer::Allow => Ok(()),
-        Answer::Deny => Err("The user denied it in Wings. Nothing changed.".into()),
-        Answer::Timeout => Err("The user didn't answer in Wings within 100 seconds. Nothing changed. Ask them before you try again.".into()),
+        Answer::Deny => Err(format!("The user denied it in Wings. {none}")),
+        Answer::Timeout => Err(format!("The user didn't answer in Wings within 100 seconds. {none} Ask them before you try again.")),
     }
 }
 
@@ -101,7 +101,7 @@ pub fn register_all() {
         let when = when_from(&WhenInput::of(&input), None)?.ok_or("Give every_hours, or time with days.")?;
         let agent = input["agent"].as_str().and_then(Agent::from_id).unwrap_or(Agent::Claude);
         let draft = clean_draft(&Draft { name: input["name"].as_str().unwrap_or_default().to_owned(), project_id: found.id.clone(), agent, prompt: input["prompt"].as_str().unwrap_or_default().to_owned(), when })?;
-        allowed(ask_approval(context["session"]["name"].as_str().map(str::to_owned), &found.name, None, draft.clone(), &found.id).await)?;
+        allowed(ask_approval(context["session"]["name"].as_str().map(str::to_owned), &found.name, None, draft.clone(), &found.id).await, "Nothing changed.")?;
         let saved = save_schedule(None, &draft)?;
         text(format!("Added {} in {}: {}.", saved.id, found.name, describe_schedule(&saved)))
     });
@@ -118,6 +118,8 @@ pub fn register_all() {
             states: strings(&input["states"]),
             prefixes: strings(&input["title_prefixes"]).unwrap_or_default(),
             base: input["base"].as_str().map(str::to_owned),
+            // Only the user turns this on, on the Schedules page.
+            agents_start: false,
         };
         let saved = add_watch(&draft, true)?;
         check_one(&saved.id).await;
@@ -157,13 +159,27 @@ pub fn register_all() {
         text(lines.join("\n"))
     });
 
-    register("start", |input, _| async move {
+    register("start", |input, context| async move {
         let project_id = match input["project"].as_str() {
             Some(wanted) => Some(resolve_project(&projects().await?, wanted)?.id.clone()),
             None => None,
         };
         let ticket = input["ticket"].as_str().unwrap_or_default();
-        let (title, target) = start_ticket(input["id"].as_str().unwrap_or_default(), ticket.strip_prefix('#').unwrap_or(ticket), input["force"] == true, project_id.as_deref()).await?;
+        let (id, ticket, force) = (input["id"].as_str().unwrap_or_default(), ticket.strip_prefix('#').unwrap_or(ticket), input["force"] == true);
+        let plan = plan_start(id, ticket, force, project_id.as_deref()).await?;
+        // The plan refused what would fail first, so the user isn't asked about a start that couldn't happen.
+        if !plan.w.agents_start {
+            let entry_project = projects().await?.into_iter().find(|p| p.id == plan.w.project_id).map_or_else(|| "missing project".into(), |p| p.name);
+            let start = StartAsk {
+                ticket_id: plan.ticket.id.clone(),
+                title: plan.ticket.title.clone(),
+                starts_in: (plan.project.id != plan.w.project_id).then(|| plan.project.name.clone()),
+                agent: plan.w.agent,
+                prompt: fill_prompt(&plan.w.prompt, &plan.ticket)?,
+            };
+            allowed(ask_start(context["session"]["name"].as_str().map(str::to_owned), &entry_project, start, &plan.w.project_id).await, "Nothing started.")?;
+        }
+        let (title, target) = start_ticket(id, ticket, force, project_id.as_deref()).await?;
         text(format!("Started {title} on {target}."))
     });
 
@@ -185,7 +201,7 @@ pub fn register_all() {
             })?;
             if needs_approval(&current, &proposed) {
                 let project_name = projects().await?.into_iter().find(|p| p.id == schedule.project_id).map_or_else(|| "missing project".into(), |p| p.name);
-                allowed(ask_approval(context["session"]["name"].as_str().map(str::to_owned), &project_name, Some(current), proposed.clone(), &schedule.project_id).await)?;
+                allowed(ask_approval(context["session"]["name"].as_str().map(str::to_owned), &project_name, Some(current), proposed.clone(), &schedule.project_id).await, "Nothing changed.")?;
             }
             let saved = save_schedule(Some(&id), &proposed)?;
             return text(format!("Updated {id}: {}.", describe_schedule(&saved)));
@@ -205,6 +221,7 @@ pub fn register_all() {
                 states: strings(&input["states"]).or(w.states.clone()),
                 prefixes: strings(&input["title_prefixes"]).or(w.prefixes.clone()).unwrap_or_default(),
                 base: input["base"].as_str().map(str::to_owned).or(w.base.clone()),
+                agents_start: w.agents_start,
             },
         )?;
         let states = match &saved.states {

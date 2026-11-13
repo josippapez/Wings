@@ -1,9 +1,9 @@
-//! "Allow this schedule?": an agent asks to add or change a timed schedule, which then starts agents by itself. Main opens
-//! this modal for each ask and closes it once none is left.
+//! "Allow this?": an agent asks to add or change a timed schedule, which then starts agents by itself, or to start an agent
+//! on a ticket. Main opens this modal for each ask and closes it once none is left.
 
 use crate::{
     STATE, WANT,
-    approval::Approval,
+    approval::{Approval, StartAsk, What},
     page_ask::{ask, busy, error, listen},
     schedule::describe_when,
     view::{button, properties},
@@ -45,17 +45,31 @@ fn changed(now: String, was: Option<String>) -> Node {
 }
 
 fn details(a: &Approval) -> Node {
-    let (p, c) = (&a.proposed, a.current.as_ref());
-    let mut items = vec![
-        ("Project".to_owned(), text(a.project_name.as_str()).prop("size", "small")),
-        ("Runs".to_owned(), changed(describe_when(&p.when), c.map(|c| describe_when(&c.when)))),
-        ("Agent".to_owned(), changed(p.agent.label().to_owned(), c.map(|c| c.agent.label().to_owned()))),
-    ];
-    if !p.name.is_empty() {
-        items.push(("Name".to_owned(), changed(p.name.clone(), c.map(|c| c.name.clone()).filter(|name| !name.is_empty()))));
+    let mut items = vec![("Project".to_owned(), text(a.project_name.as_str()).prop("size", "small"))];
+    match &a.what {
+        What::Schedule { current, proposed: p } => {
+            let c = current.as_ref();
+            items.push(("Runs".to_owned(), changed(describe_when(&p.when), c.map(|c| describe_when(&c.when)))));
+            items.push(("Agent".to_owned(), changed(p.agent.label().to_owned(), c.map(|c| c.agent.label().to_owned()))));
+            if !p.name.is_empty() {
+                items.push(("Name".to_owned(), changed(p.name.clone(), c.map(|c| c.name.clone()).filter(|name| !name.is_empty()))));
+            }
+            items.push(("Prompt".to_owned(), changed(p.prompt.clone(), c.map(|c| c.prompt.clone()))));
+        }
+        What::Start(s) => {
+            items.push(("Ticket".to_owned(), text(ticket_line(s)).prop("size", "small")));
+            if let Some(project) = &s.starts_in {
+                items.push(("Starts in".to_owned(), text(project.as_str()).prop("size", "small")));
+            }
+            items.push(("Agent".to_owned(), text(s.agent.label()).prop("size", "small")));
+            items.push(("Prompt".to_owned(), text(s.prompt.as_str()).prop("size", "small")));
+        }
     }
-    items.push(("Prompt".to_owned(), changed(p.prompt.clone(), c.map(|c| c.prompt.clone()))));
     properties(items)
+}
+
+fn ticket_line(s: &StartAsk) -> String {
+    format!("#{} {}", s.ticket_id, s.title)
 }
 
 fn view() -> Vec<Node> {
@@ -69,14 +83,23 @@ fn view() -> Vec<Node> {
         };
         let more = approvals.len() - 1;
         let who = first.asker.as_ref().map_or("An agent".to_owned(), |asker| format!("\"{asker}\""));
-        let what = if first.current.is_some() { "change a schedule" } else { "add a schedule" };
+        let (what, note) = match &first.what {
+            What::Schedule { current, .. } => (
+                format!("{} a schedule in {}", if current.is_some() { "change" } else { "add" }, first.project_name),
+                "It starts the agent with this prompt by itself, without asking again, while Wings runs.",
+            ),
+            What::Start(s) => (
+                format!("start an agent on {} in {}", ticket_line(s), first.project_name),
+                "It makes a worktree and opens the agent with this prompt. To let agents start this entry's tickets without asking, turn that on in the entry on the Schedules page.",
+            ),
+        };
         let (deny, allow) = (first.id.clone(), first.id.clone());
         let working = busy();
         let body = stack()
             .prop("gap", "m")
-            .child(text(format!("{who} asks to {what} in {}.{}", first.project_name, if more > 0 { format!(" {more} more waiting.") } else { String::new() })))
+            .child(text(format!("{who} asks to {what}.{}", if more > 0 { format!(" {more} more waiting.") } else { String::new() })))
             .child(card().child(details(first)))
-            .child(muted("It starts the agent with this prompt by itself, without asking again, while Wings runs.").prop("size", "small"))
+            .child(muted(note).prop("size", "small"))
             .maybe(error().map(|error| notice("danger", error)))
             .child(
                 row()

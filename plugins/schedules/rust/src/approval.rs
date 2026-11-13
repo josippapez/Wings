@@ -2,7 +2,7 @@
 //! allow. A timed schedule starts an agent by itself, so an agent can't add one, or change what or when it runs, unless the
 //! user allows it.
 
-use crate::schedule::{Draft, EVERY_HOURS, When};
+use crate::schedule::{Agent, Draft, EVERY_HOURS, When};
 use serde_json::{Value, json};
 
 /// The tools' day names, at their weekday number.
@@ -55,31 +55,62 @@ pub fn when_from(input: &WhenInput, current: Option<&When>) -> Result<Option<Whe
     Ok(Some(When::Daily { time, days }))
 }
 
+/// A start the user is asked to allow: the ticket, the agent and the prompt it gets once filled in.
+#[derive(Clone, PartialEq, Debug)]
+pub struct StartAsk {
+    pub ticket_id: String,
+    pub title: String,
+    /// The project it starts in, when that isn't the entry's.
+    pub starts_in: Option<String>,
+    pub agent: Agent,
+    pub prompt: String,
+}
+
+#[derive(Clone)]
+pub enum What {
+    /// A schedule as it is, for a change; none for a new one, and the schedule it would be.
+    Schedule { current: Option<Draft>, proposed: Draft },
+    Start(StartAsk),
+}
+
 /// What the user is asked to allow.
 #[derive(Clone)]
 pub struct Approval {
     pub id: String,
     /// The agent session that asks, or its pane's project, or none when neither is known.
     pub asker: Option<String>,
+    /// The project of the schedule, or of the assigned entry.
     pub project_name: String,
-    /// The schedule as it is, for a change; none for a new one.
-    pub current: Option<Draft>,
-    pub proposed: Draft,
+    pub what: What,
 }
 
 impl Approval {
     pub fn from_json(value: &Value) -> Option<Self> {
-        Some(Approval {
-            id: value["id"].as_str()?.to_owned(),
-            asker: value["asker"].as_str().map(str::to_owned),
-            project_name: value["projectName"].as_str()?.to_owned(),
-            current: Draft::from_json(&value["current"]),
-            proposed: Draft::from_json(&value["proposed"])?,
-        })
+        let start = &value["start"];
+        let what = if start.is_object() {
+            What::Start(StartAsk {
+                ticket_id: start["ticketId"].as_str()?.to_owned(),
+                title: start["title"].as_str()?.to_owned(),
+                starts_in: start["startsIn"].as_str().map(str::to_owned),
+                agent: Agent::from_id(start["agent"].as_str()?)?,
+                prompt: start["prompt"].as_str()?.to_owned(),
+            })
+        } else {
+            What::Schedule { current: Draft::from_json(&value["current"]), proposed: Draft::from_json(&value["proposed"])? }
+        };
+        Some(Approval { id: value["id"].as_str()?.to_owned(), asker: value["asker"].as_str().map(str::to_owned), project_name: value["projectName"].as_str()?.to_owned(), what })
     }
 
     pub fn to_json(&self) -> Value {
-        json!({ "id": self.id, "asker": self.asker, "projectName": self.project_name, "current": self.current.as_ref().map(Draft::to_json), "proposed": self.proposed.to_json() })
+        let mut out = json!({ "id": self.id, "asker": self.asker, "projectName": self.project_name });
+        match &self.what {
+            What::Schedule { current, proposed } => {
+                out["current"] = json!(current.as_ref().map(Draft::to_json));
+                out["proposed"] = proposed.to_json();
+            }
+            What::Start(s) => out["start"] = json!({ "ticketId": s.ticket_id, "title": s.title, "startsIn": s.starts_in, "agent": s.agent.id(), "prompt": s.prompt }),
+        }
+        out
     }
 }
 
@@ -132,5 +163,18 @@ mod tests {
         assert!(with(&|d| d.prompt = "Delete the board.".into()));
         assert!(with(&|d| d.agent = Agent::OpenCode));
         assert!(with(&|d| d.when = When::Daily { time: "03:00".into(), days: vec![1, 2, 3, 4, 5] }));
+    }
+
+    #[test]
+    fn an_ask_to_add_or_to_start_reads_back_as_it_was_told_and_a_schedule_ask_keeps_its_old_shape() {
+        let draft = Draft { name: String::new(), project_id: "p1".into(), agent: Agent::Claude, prompt: "Check the board.".into(), when: daily() };
+        let schedule = Approval { id: "1".into(), asker: Some("api".into()), project_name: "web".into(), what: What::Schedule { current: None, proposed: draft.clone() } };
+        let json = schedule.to_json();
+        assert!(json.get("start").is_none());
+        assert_eq!(json["proposed"], draft.to_json());
+        assert!(matches!(Approval::from_json(&json).unwrap().what, What::Schedule { current: None, proposed } if proposed.prompt == "Check the board."));
+        let start = StartAsk { ticket_id: "42".into(), title: "Fix totals".into(), starts_in: Some("web-2".into()), agent: Agent::OpenCode, prompt: "Work on 42.".into() };
+        let ask = Approval { id: "2".into(), asker: None, project_name: "web".into(), what: What::Start(start.clone()) };
+        assert!(matches!(Approval::from_json(&ask.to_json()).unwrap().what, What::Start(back) if back == start));
     }
 }

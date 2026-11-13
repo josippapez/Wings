@@ -197,6 +197,8 @@ pub struct Watch {
     pub prefixes: Option<Vec<String>>,
     /// The branch a ticket's branch starts from in the entry's project, like origin/develop. Unset is the repo's default branch.
     pub base: Option<String>,
+    /// Whether an agent's start tool starts this entry's tickets without asking the user. Only the Schedules page sets it.
+    pub agents_start: bool,
     /// Tickets an agent was started on, with when, oldest first.
     pub started: Vec<(String, i64)>,
     /// What the last check that worked found.
@@ -228,6 +230,7 @@ impl Watch {
             states: strings(&value["states"]),
             prefixes: strings(&value["prefixes"]),
             base: value["base"].as_str().map(str::to_owned),
+            agents_start: value["agentsStart"] == true,
             started,
             tickets: value["tickets"].as_array().map(|list| list.iter().filter_map(AssignedTicket::from_json).collect()),
             source: Source::from_json(&value["source"]),
@@ -263,6 +266,9 @@ impl Watch {
         if let Some(base) = &self.base {
             put("base", base.clone().into());
         }
+        if self.agents_start {
+            put("agentsStart", true.into());
+        }
         if !self.started.is_empty() {
             put("started", Value::Object(self.started.iter().map(|(id, at)| (id.clone(), (*at).into())).collect()));
         }
@@ -295,6 +301,7 @@ impl Watch {
             states: self.states.clone(),
             prefixes: self.prefixes.clone().unwrap_or_default(),
             base: self.base.clone(),
+            agents_start: self.agents_start,
         }
     }
 }
@@ -310,6 +317,7 @@ pub struct WatchDraft {
     pub states: Option<Vec<String>>,
     pub prefixes: Vec<String>,
     pub base: Option<String>,
+    pub agents_start: bool,
 }
 
 impl WatchDraft {
@@ -323,11 +331,12 @@ impl WatchDraft {
             states: strings(&value["states"]),
             prefixes: strings(&value["prefixes"]).unwrap_or_default(),
             base: value["base"].as_str().map(str::to_owned),
+            agents_start: value["agentsStart"] == true,
         })
     }
 
     pub fn to_json(&self) -> Value {
-        let mut out = json!({ "name": self.name, "projectId": self.project_id, "agent": self.agent.id(), "prompt": self.prompt, "minFreeGb": self.min_free_gb, "prefixes": self.prefixes, "base": self.base });
+        let mut out = json!({ "name": self.name, "projectId": self.project_id, "agent": self.agent.id(), "prompt": self.prompt, "minFreeGb": self.min_free_gb, "prefixes": self.prefixes, "base": self.base, "agentsStart": self.agents_start });
         if let Some(states) = &self.states {
             out["states"] = json!(states);
         }
@@ -646,6 +655,7 @@ pub fn clean_watch_draft(d: &WatchDraft) -> Result<WatchDraft, String> {
         states: d.states.as_ref().map(|states| dedupe(states.iter().map(|x| words(x, 100))).into_iter().take(FETCH_LIMIT).collect()),
         prefixes: dedupe(d.prefixes.iter().map(|x| words(x, 40))).into_iter().take(20).collect(),
         base: Some(words(d.base.as_deref().unwrap_or_default(), 200)).filter(|base| !base.is_empty()),
+        agents_start: d.agents_start,
     })
 }
 
@@ -1027,7 +1037,7 @@ mod tests {
 
     #[test]
     fn an_entrys_name_is_trimmed_and_an_empty_one_clears_the_saved_name_so_the_list_says_what_it_does() {
-        let draft = |name: &str| WatchDraft { name: Some(name.into()), project_id: "p".into(), agent: Agent::Claude, prompt: "x".into(), min_free_gb: 10.0, states: None, prefixes: vec![], base: None };
+        let draft = |name: &str| WatchDraft { name: Some(name.into()), project_id: "p".into(), agent: Agent::Claude, prompt: "x".into(), min_free_gb: 10.0, states: None, prefixes: vec![], base: None, agents_start: false };
         assert_eq!(clean_watch_draft(&draft("  Frontend tickets  ")).unwrap().name.as_deref(), Some("Frontend tickets"));
         assert_eq!(clean_watch_draft(&draft(" ")).unwrap().name, None);
         assert_eq!(watch_name(None), "When something is assigned to me");
@@ -1044,5 +1054,20 @@ mod tests {
             "source": { "kind": "github", "host": "github.com", "path": "a/b" }, "lastCheck": { "at": 9, "ok": false, "error": "Sign in", "problem": "signed-out" }, "lastRun": { "at": 8, "ok": true, "paneId": "3" },
         });
         assert_eq!(Watch::from_json(&stored).unwrap().to_json(), stored);
+    }
+
+    #[test]
+    fn an_entry_lets_agents_start_only_when_it_says_so_and_one_without_the_field_is_not_rewritten_with_it() {
+        let stored = json!({ "id": "w1", "projectId": "p", "agent": "claude", "prompt": "x", "minFreeGb": 10, "enabled": true, "primed": false, "seen": [], "waiting": [] });
+        let off = Watch::from_json(&stored).unwrap();
+        assert!(!off.agents_start);
+        assert_eq!(off.to_json(), stored);
+        let on = Watch::from_json(&json!({ "id": "w1", "projectId": "p", "agent": "claude", "prompt": "x", "minFreeGb": 10, "enabled": true, "primed": false, "seen": [], "waiting": [], "agentsStart": true })).unwrap();
+        assert!(on.agents_start);
+        assert_eq!(on.to_json()["agentsStart"], true);
+        assert!(on.draft().agents_start);
+        assert!(!off.draft().agents_start);
+        assert!(!WatchDraft::from_json(&off.draft().to_json()).unwrap().agents_start);
+        assert!(WatchDraft::from_json(&on.draft().to_json()).unwrap().agents_start);
     }
 }

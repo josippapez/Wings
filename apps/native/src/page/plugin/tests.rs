@@ -194,6 +194,11 @@ impl Root {
     pub(in crate::page) fn saved(&self, id: &str, key: &str) -> Option<Value> {
         Storage::new(self.0.clone()).get(id, SCOPE, key).unwrap()
     }
+
+    /// Stores `value` as the plugin `id` kept it, before its main starts.
+    pub(in crate::page) fn save(&self, id: &str, key: &str, value: Value) {
+        Storage::new(self.0.clone()).set(id, SCOPE, key, value).unwrap();
+    }
 }
 
 impl Drop for Root {

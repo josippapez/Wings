@@ -54,7 +54,7 @@
       },
       {
         "id": "approve",
-        "title": "Allow this schedule?",
+        "title": "Allow this?",
         "page": "dist/native/approve.wasm",
         "opens": [
           "modal"
@@ -149,7 +149,7 @@
       },
       {
         "name": "add_assigned",
-        "description": "Adds an entry that watches a project's Azure DevOps, GitHub or GitLab for tickets assigned to the user and offers to start an agent on each in a new worktree. It checks once and returns what it found. One entry per project. Nothing starts until the user presses Start on the Schedules page.",
+        "description": "Adds an entry that watches a project's Azure DevOps, GitHub or GitLab for tickets assigned to the user and offers to start an agent on each in a new worktree. It checks once and returns what it found. One entry per project. Nothing starts until the user presses Start on the Schedules page or allows the start tool in a dialog: the entry never lets agents start without asking until the user turns that on.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -230,7 +230,7 @@
       },
       {
         "name": "start",
-        "description": "Starts an agent on one assigned ticket: makes a worktree on a feature branch and opens the agent in it, in the entry's project or another project of the same repo host and project. The ticket must be waiting, or listed by the last check in a state the entry asks about, and not started before. One that already has a branch, or was started before, needs force.",
+        "description": "Starts an agent on one assigned ticket: makes a worktree on a feature branch and opens the agent in it, in the entry's project or another project of the same repo host and project. The ticket must be waiting, or listed by the last check in a state the entry asks about, and not started before. One that already has a branch, or was started before, needs force. It waits up to 100 seconds for the user to allow it in a dialog in Wings, and fails, starting nothing, when they deny or don't answer, unless the user turned on, for this entry on the Schedules page, that agents can start its tickets without asking.",
         "inputSchema": {
           "type": "object",
           "properties": {

@@ -303,6 +303,7 @@ pub fn add_watch(draft: &WatchDraft, only_one: bool) -> Result<Watch, String> {
         states: clean.states,
         prefixes: Some(clean.prefixes),
         base: clean.base,
+        agents_start: clean.agents_start,
         started: Vec::new(),
         tickets: None,
         source: None,
@@ -334,6 +335,7 @@ pub fn save_watch(id: &str, draft: &WatchDraft) -> Result<Watch, String> {
         states: clean.states,
         prefixes: Some(clean.prefixes),
         base: clean.base,
+        agents_start: clean.agents_start,
         ..old
     };
     if moved {
@@ -385,8 +387,8 @@ pub async fn start_ticket(id: &str, ticket_id: &str, force: bool, project_id: Op
     done
 }
 
-async fn start_ticket_once(id: &str, ticket_id: &str, force: bool, project_id: Option<&str>) -> Result<(String, String), String> {
-    let w = find(id)?;
+/// The ticket to start and its kind, or why it isn't one that starts: the refusals that come before anything is made.
+fn startable(w: &Watch, ticket_id: &str, force: bool) -> Result<(Ticket, Option<String>), String> {
     if w.started.iter().any(|(started, _)| started == ticket_id) && !force {
         return Err("That ticket was already started. Pass force=true to start it again.".into());
     }
@@ -407,19 +409,43 @@ async fn start_ticket_once(id: &str, ticket_id: &str, force: bool, project_id: O
         };
         return Err(format!("This entry doesn't ask about tickets in {}{titles}. Pass force=true to start it anyway.", listed.state));
     }
+    Ok((ticket, listed.and_then(|t| t.kind.clone())))
+}
+
+/// The project a ticket starts in: `project_id`, one of the entry's `targets_of`, or the entry's own.
+async fn start_project(w: &Watch, project_id: Option<&str>) -> Result<Project, String> {
+    let projects = Project::list(&host::projects().await?);
+    let want = project_id.unwrap_or(&w.project_id);
+    if !targets_of(w, &projects).await.iter().any(|p| p.id == want) {
+        return Err("That project isn't one this entry's tickets can start in.".to_owned());
+    }
+    projects.into_iter().find(|p| p.id == want).ok_or_else(|| "The project is no longer in Wings.".to_owned())
+}
+
+/// A start that passes the refusals that need no side effect: the entry, the ticket and the project it starts in.
+pub struct StartPlan {
+    pub w: Watch,
+    pub ticket: Ticket,
+    pub project: Project,
+}
+
+pub async fn plan_start(id: &str, ticket_id: &str, force: bool, project_id: Option<&str>) -> Result<StartPlan, String> {
+    let w = find(id)?;
+    let (ticket, _) = startable(&w, ticket_id, force)?;
+    let project = start_project(&w, project_id).await?;
+    Ok(StartPlan { w, ticket, project })
+}
+
+async fn start_ticket_once(id: &str, ticket_id: &str, force: bool, project_id: Option<&str>) -> Result<(String, String), String> {
+    let w = find(id)?;
+    let (ticket, kind) = startable(&w, ticket_id, force)?;
     let at = host::now() as i64;
-    let kind = listed.and_then(|t| t.kind.clone());
     let mut made_worktree = false;
     let mut target = String::new();
     let mut made_in: Option<String> = None;
     let mut issue_problem: Option<String> = None;
     let started = async {
-        let projects = Project::list(&host::projects().await?);
-        let want = project_id.unwrap_or(&w.project_id);
-        if !targets_of(&w, &projects).await.iter().any(|p| p.id == want) {
-            return Err("That project isn't one this entry's tickets can start in.".to_owned());
-        }
-        let project = projects.iter().find(|p| p.id == want).ok_or("The project is no longer in Wings.")?;
+        let project = &start_project(&w, project_id).await?;
         if let Some(problem) = disk_problem(&Disk::list(&host::disks().await?), &project.path, w.min_free_gb) {
             return Err(problem);
         }

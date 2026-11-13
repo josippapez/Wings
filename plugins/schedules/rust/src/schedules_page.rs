@@ -16,7 +16,7 @@ use wings_plugin::{
     format::ago,
     git, host, messages, poll,
     task::spawn,
-    ui::{Choice, Combobox, Node, card, chip, chips, combobox, confirm, disclosure, empty, heading, list, list_row, loading, muted, notice, page, row, select, slot, stack, text, text_input, title, toolbar, toolbar_with},
+    ui::{Choice, Combobox, Node, card, checkbox, chip, chips, combobox, confirm, disclosure, empty, heading, list, list_row, loading, muted, notice, page, row, select, slot, stack, text, text_input, title, toolbar, toolbar_with},
 };
 
 /// How often "in 2 h" is worked out again.
@@ -66,6 +66,7 @@ struct Form {
     states: Option<Vec<String>>,
     prefixes: String,
     base: String,
+    agents_start: bool,
     branches: Vec<String>,
     /// The project's worktree setting, loaded for the project picked.
     loaded: Option<(String, WorktreeSetup)>,
@@ -93,6 +94,7 @@ impl Form {
             states: watch.and_then(|w| w.states.clone()),
             prefixes: watch.and_then(|w| w.prefixes.clone()).unwrap_or_default().join(", "),
             base: watch.and_then(|w| w.base.clone()).unwrap_or_default(),
+            agents_start: watch.is_some_and(|w| w.agents_start),
             branches: Vec::new(),
             loaded: None,
             include_field: String::new(),
@@ -234,6 +236,7 @@ fn save() {
             states: if moved { None } else { f.states.clone() },
             prefixes: f.prefixes.split(',').map(|prefix| prefix.trim().to_owned()).collect(),
             base: Some(f.base.clone()),
+            agents_start: f.agents_start,
         };
         let mut args = json!({ "entry": editing, "draft": draft.to_json() });
         if let Some((project, setup)) = &f.loaded
@@ -334,6 +337,7 @@ fn watch_fields(f: &Form, watch: Option<&Watch>) -> Vec<Node> {
             Some("Optional, separated by commas, like FE or BE. Other tickets are listed as for another project and not asked about. Empty asks about every title.".into()),
             text_input("Only titles starting with", &f.prefixes, |prefixes| with(|p| p.form.prefixes = prefixes)).prop("placeholder", "FE, BE").prop("maxLength", 200),
         ),
+        stack().prop("gap", "s").child(checkbox("Agents can start tickets without asking", f.agents_start, |on| with(|p| p.form.agents_start = on))).child(muted("An agent's start tool then makes the worktree and opens the agent without a dialog.").prop("size", "field")),
         field_group(
             "New worktrees",
             Some("The project's own settings, shared with Worktree setup in the sidebar: a change here changes it there too.".into()),
