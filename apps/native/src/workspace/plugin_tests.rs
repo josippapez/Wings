@@ -17,7 +17,14 @@ use super::{
     plugin_env::System,
     tests::{open_sized, press, wait_for},
 };
-use crate::{host::Config, installed::fixture::Data};
+use crate::{
+    host::Config,
+    installed::fixture::Data,
+    page::runtime::{
+        Store,
+        fake::{self, Cx, Guest, Hear, Pending, idle},
+    },
+};
 
 /// What the system was asked to do, instead of doing it.
 #[derive(Default)]
@@ -99,27 +106,105 @@ pub(super) fn until(
     }
 }
 
-const BADGER: &str = r#"
-wings.onPanes(async (panes) => {
-  for (const p of panes) {
-    await wings.setBadge(p.paneId, { label: 'hello', tone: 'success', title: 'Hi', actions: [{ id: 'go', label: 'Go', primary: true }, { id: 'bad', label: 'Bad' }] });
-    await wings.setPaneStatus(p.paneId, { items: [{ label: 'cpu', value: '12%', percent: 12, tone: 'warning' }], rows: [{ label: 'Load', value: 'low' }] });
-  }
-});
-wings.onAction(async ({ paneId, actionId }) => {
-  await wings.storage.set('clicked', { paneId, actionId });
-  if (actionId === 'bad') throw new Error('It broke');
-});
-"#;
+/// What the host told a frame, as JSON.
+fn said(text: &str) -> Value {
+    serde_json::from_str(text).unwrap()
+}
+
+/// Tells the host an action, reply or refresh the frame was told of (`token`) is over, with `error` if it failed.
+fn settled(cx: &mut Cx<'_>, token: u32, error: Option<String>) {
+    cx.call("actionDone", json!({ "token": token, "error": error }));
+}
+
+/// The focus a frame is told of in `text`, when it differs from the last it heard of.
+fn focus_change(known: &mut Option<bool>, text: &str) -> Option<bool> {
+    let focused = said(text)["focused"] == true;
+    (known.replace(focused) != Some(focused)).then_some(focused)
+}
+
+/// A main that badges each pane with two buttons and a status strip, and saves the click it hears. Its button `bad` fails.
+fn badger() -> String {
+    fake::script("main", || {
+        |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+            Hear::Deliver("panes", _, text) => {
+                for pane in said(text).as_array().unwrap() {
+                    cx.call("setBadge", json!({ "paneId": pane["paneId"], "badge": {
+                        "label": "hello", "tone": "success", "title": "Hi",
+                        "actions": [{ "id": "go", "label": "Go", "primary": true }, { "id": "bad", "label": "Bad" }] } }));
+                    cx.call("setPaneStatus", json!({ "paneId": pane["paneId"], "status": {
+                        "items": [{ "label": "cpu", "value": "12%", "percent": 12, "tone": "warning" }],
+                        "rows": [{ "label": "Load", "value": "low" }] } }));
+                }
+            }
+            Hear::Deliver("action", token, text) => {
+                let click = said(text);
+                cx.save(
+                    "clicked",
+                    &json!({ "paneId": click["paneId"], "actionId": click["actionId"] }),
+                );
+                settled(
+                    cx,
+                    token,
+                    (click["actionId"] == "bad").then(|| "It broke".to_owned()),
+                );
+            }
+            _ => {}
+        }
+    })
+}
 
 fn install_badger(data: &Data) {
     data.install_script(
         "badger",
         json!({ "contributes": { "ui": ["badges", "status"] } }),
-        BADGER,
+        &badger(),
         &[],
         "badger-scope",
     );
+}
+
+/// A page that saves whether it is focused under `key`.
+fn saves_focus(key: &'static str) -> String {
+    fake::script("page", move || {
+        let mut known = None;
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            if let Hear::Deliver("focus", _, text) = hear
+                && let Some(focused) = focus_change(&mut known, text)
+            {
+                cx.save(key, &json!(focused));
+            }
+        }
+    })
+}
+
+/// A main that saves whether it is focused, and opens the graph when it hears an action, counting how often it did.
+fn graph_main() -> String {
+    fake::script("main", || {
+        let (mut known, mut opened, mut wait) = (None, 0, Pending::default());
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+            Hear::Deliver("focus", _, text) => {
+                if let Some(focused) = focus_change(&mut known, text) {
+                    cx.save("main", &json!(focused));
+                }
+            }
+            Hear::Deliver("action", token, _) => wait.call(
+                cx,
+                "openView",
+                json!({ "id": "graph", "newTab": false }),
+                token,
+            ),
+            Hear::Deliver(kind, id, text) => {
+                if let Some((token, answer)) = wait.answered(kind, id, text) {
+                    if answer.is_ok() {
+                        opened += 1;
+                        cx.save("opened", &json!(opened));
+                    }
+                    settled(cx, token, answer.err());
+                }
+            }
+            _ => {}
+        }
+    })
 }
 
 #[test]
@@ -128,8 +213,9 @@ fn graph_default_open_view_uses_an_owned_native_window_with_local_focus_and_clea
     data.install_script("graph-window", json!({ "contributes": {
         "views": [{ "id":"graph", "title":"Commit graph", "page":"dist/graph.html", "opens":["window","modal"], "width":1100, "height":760 }],
         "sidebars": [{"id":"changes","title":"Changes","page":"dist/sidebar.html"}]
-    } }), "let opened=0; wings.onFocus(({focused})=>wings.storage.set('main',focused)); wings.onAction(async()=>{await wings.openView('graph'); wings.storage.set('opened',++opened);});",
-        &[("graph", "wings.onFocus(({focused})=>wings.storage.set('graph',focused));"), ("sidebar", "wings.onFocus(({focused})=>wings.storage.set('sidebar',focused));")], "graph-scope");
+    } }), &graph_main(),
+        // A window's page is read from `dist/native/graph.js` alone (`plugin_windows.rs`), so this one stays a script.
+        &[("graph", "wings.onFocus(({focused})=>wings.storage.set('graph',focused));"), ("sidebar", &saves_focus("sidebar"))], "graph-scope");
     let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
     window.update(|w, window, cx| {
         window.activate_window();
@@ -188,17 +274,73 @@ fn graph_default_open_view_uses_an_owned_native_window_with_local_focus_and_clea
     );
 }
 
+/// A main that opens a diff when it hears of a pane, fills it on an action and when asked to refresh, and saves that and
+/// the close it hears of.
+fn differ(patch: &'static str) -> String {
+    enum Next {
+        Opened,
+        Refreshed(u32),
+        Filled(u32),
+    }
+    fake::script("main", move || {
+        let (mut wait, mut diff, mut started) = (Pending::default(), Value::Null, false);
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+            Hear::Deliver("diffRefresh", token, text) => wait.call(
+                cx,
+                "updateDiff",
+                json!({ "id": said(text)["diffId"], "patch": patch }),
+                Next::Refreshed(token),
+            ),
+            Hear::Deliver("diffClosed", _, text) => cx.save("closed", &said(text)["diffId"]),
+            Hear::Deliver("action", token, _) => wait.call(
+                cx,
+                "updateDiff",
+                json!({ "id": diff, "patch": patch }),
+                Next::Filled(token),
+            ),
+            Hear::Deliver("panes", _, text) => {
+                if !started && !said(text).as_array().unwrap().is_empty() {
+                    started = true;
+                    let opening =
+                        json!({ "title": "Changes", "subtitle": "Working tree", "refresh": true });
+                    wait.call(cx, "openDiff", opening, Next::Opened);
+                }
+            }
+            Hear::Deliver(kind, id, text) => {
+                let Some((next, answer)) = wait.answered(kind, id, text) else {
+                    return;
+                };
+                match next {
+                    Next::Opened => diff = answer.unwrap()["id"].clone(),
+                    Next::Refreshed(token) | Next::Filled(token) => {
+                        if answer.is_ok() {
+                            let key = if matches!(next, Next::Refreshed(_)) {
+                                "refreshed"
+                            } else {
+                                "filled"
+                            };
+                            cx.save(key, &json!(true));
+                        }
+                        settled(cx, token, answer.err());
+                    }
+                }
+            }
+            _ => {}
+        }
+    })
+}
+
 #[test]
 fn central_diff_loads_selects_files_refreshes_and_closes_through_the_plugin_api() {
     let data = Data::temp();
     let patch = "diff --git a/one b/one\n--- a/one\n+++ b/one\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/two b/two\nnew file mode 100644\n";
-    data.install_script("differ", json!({ "contributes": { "ui": ["diff"] } }), &format!(r#"
-        let id, started = false;
-        wings.onDiffRefresh(async ({{diffId}}) => {{ await wings.updateDiff(diffId, {{patch:{}}}); await wings.storage.set('refreshed', true); }});
-        wings.onDiffClosed(async value => {{ await wings.storage.set('closed', value.diffId); }});
-        wings.onAction(async () => {{ await wings.updateDiff(id, {{patch:{}}}); await wings.storage.set('filled',true); }});
-        wings.onPanes(async list => {{ if (!list.length || started) return; started=true; id=(await wings.openDiff({{title:'Changes',subtitle:'Working tree',refresh:true}})).id; }});
-    "#, json!(patch), json!(patch)), &[], "diff-scope");
+    data.install_script(
+        "differ",
+        json!({ "contributes": { "ui": ["diff"] } }),
+        &differ(patch),
+        &[],
+        "diff-scope",
+    );
     let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
     until(&app, &mut window, "loading diff never opened", |w| {
         w.plugin_ui.diff.is_some()
@@ -273,23 +415,85 @@ fn central_diff_loads_selects_files_refreshes_and_closes_through_the_plugin_api(
     }));
 }
 
+/// A main that opens a diff of `patch` with a review comment when it hears of a pane, and answers a reply typed under it by
+/// adding it, or by failing when the reply is `fail`.
+fn replier(patch: &'static str) -> String {
+    enum Next {
+        Opened,
+        Replied(u32),
+    }
+    fn comment(
+        id: u32,
+        reply_to: Value,
+        author: &str,
+        body: Value,
+        at: &str,
+        can_reply: bool,
+    ) -> Value {
+        json!({ "id": id, "replyTo": reply_to, "path": "one", "line": 1, "side": "additions", "author": author,
+            "body": body, "createdAt": at, "url": "", "canReply": can_reply })
+    }
+    fake::script("main", move || {
+        let mut comments = vec![comment(
+            1,
+            Value::Null,
+            "maria",
+            json!("Why new?"),
+            "2026-11-01T10:00:00Z",
+            true,
+        )];
+        let (mut wait, mut started) = (Pending::default(), false);
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+            Hear::Deliver("reply", token, text) => {
+                let reply = said(text);
+                if reply["body"] == "fail" {
+                    return settled(cx, token, Some("GitHub refused it".into()));
+                }
+                cx.save(
+                    "reply",
+                    &json!({ "replyTo": reply["replyTo"], "body": reply["body"] }),
+                );
+                comments.push(comment(
+                    2,
+                    reply["replyTo"].clone(),
+                    "you",
+                    reply["body"].clone(),
+                    "2026-11-01T11:00:00Z",
+                    false,
+                ));
+                let update = json!({ "id": reply["diffId"], "comments": comments });
+                wait.call(cx, "updateDiff", update, Next::Replied(token));
+            }
+            Hear::Deliver("panes", _, text) => {
+                if !started && !said(text).as_array().unwrap().is_empty() {
+                    started = true;
+                    let opening = json!({ "title": "PR", "patch": patch, "comments": comments });
+                    wait.call(cx, "openDiff", opening, Next::Opened);
+                }
+            }
+            Hear::Deliver(kind, id, text) => {
+                if let Some((Next::Replied(token), answer)) = wait.answered(kind, id, text) {
+                    settled(cx, token, answer.err());
+                }
+            }
+            _ => {}
+        }
+    })
+}
+
 /// The desktop's review threads: a plugin's diff with comments opens with them, and a reply typed under one reaches the
 /// plugin's `onReply`, whose error shows under the box with the text kept, and whose `updateDiff` adds the reply.
 #[test]
 fn a_reply_typed_under_a_review_comment_reaches_the_plugin() {
     let data = Data::temp();
     let patch = "diff --git a/one b/one\n--- a/one\n+++ b/one\n@@ -1 +1 @@\n-old\n+new\n";
-    data.install_script("differ", json!({ "contributes": { "ui": ["diff"] } }), &format!(r#"
-        const comments = [{{ id: 1, replyTo: null, path: 'one', line: 1, side: 'additions', author: 'maria', body: 'Why new?', createdAt: '2026-11-01T10:00:00Z', url: '', canReply: true }}];
-        let started = false;
-        wings.onReply(async ({{ diffId, replyTo, body }}) => {{
-            if (body === 'fail') throw new Error('GitHub refused it');
-            await wings.storage.set('reply', {{ replyTo, body }});
-            comments.push({{ id: 2, replyTo, path: 'one', line: 1, side: 'additions', author: 'you', body, createdAt: '2026-11-01T11:00:00Z', url: '', canReply: false }});
-            await wings.updateDiff(diffId, {{ comments }});
-        }});
-        wings.onPanes(async list => {{ if (!list.length || started) return; started = true; await wings.openDiff({{ title: 'PR', patch: {}, comments }}); }});
-    "#, json!(patch)), &[], "diff-scope");
+    data.install_script(
+        "differ",
+        json!({ "contributes": { "ui": ["diff"] } }),
+        &replier(patch),
+        &[],
+        "diff-scope",
+    );
     let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
     until(
         &app,
@@ -339,7 +543,7 @@ fn install_differ(data: &Data) {
     data.install_script(
         "differ",
         json!({ "contributes": { "ui": ["diff"] } }),
-        "",
+        &idle("main"),
         &[],
         "differ-scope",
     );
@@ -606,6 +810,26 @@ fn dragging_the_docked_diffs_edge_resizes_the_terminal_once_when_it_settles() {
     );
 }
 
+/// A frame that saves what it knew of its focus when it started and every change of it since, under `key`.
+fn tracks_focus(name: &'static str, key: &'static str) -> String {
+    fake::script(name, move || {
+        let (mut initial, mut known, mut states) = (false, None, Vec::new());
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+            Hear::Start => initial = cx.link().focused(),
+            Hear::Deliver("focus", _, text) => {
+                if let Some(focused) = focus_change(&mut known, text) {
+                    states.push(focused);
+                    cx.save(
+                        key,
+                        &json!({ "initial": initial, "focused": focused, "states": states }),
+                    );
+                }
+            }
+            _ => {}
+        }
+    })
+}
+
 #[test]
 fn plugin_frame_focus_follows_tabs_sidebars_projects_and_window_activation() {
     let data = Data::temp();
@@ -623,17 +847,12 @@ fn plugin_frame_focus_follows_tabs_sidebars_projects_and_window_activation() {
         .to_string(),
     )
     .unwrap();
-    let source = |key: &str| {
-        format!(
-            "const states = []; const initial = wings.focused; wings.onFocus(({{focused}}) => {{ states.push(focused); wings.storage.set('{key}', {{initial, focused, states}}); }});"
-        )
-    };
     let (one, two, side, other, main) = (
-        source("one"),
-        source("two"),
-        source("side"),
-        source("other"),
-        source("main"),
+        tracks_focus("page", "one"),
+        tracks_focus("page", "two"),
+        tracks_focus("page", "side"),
+        tracks_focus("page", "other"),
+        tracks_focus("main", "main"),
     );
     data.install_script("visibility", json!({ "contributes": {
         "views": [
@@ -721,21 +940,31 @@ fn plugin_frame_focus_follows_tabs_sidebars_projects_and_window_activation() {
     focused(&app, &mut window, "one", true);
 }
 
+/// A page that shows `text`, in the tree Cyclops' pages draw.
+fn text_page(text: &str) -> String {
+    let text = text.to_owned();
+    fake::page("page", move |_| {
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "Text", "children": [{ "id": 2, "type": "#text", "text": text }] }] })
+    })
+}
+
 /// Cyclops' title bar button: its running timer as a label by the button, and its popover page while you point at it.
 #[test]
 fn a_sidebar_shows_its_label_and_its_popover_page_while_you_point_at_its_button() {
     let data = Data::temp();
-    let page = |text: &str| {
-        format!(
-            "wings.render(JSON.stringify({{id:0,type:'#root',children:[{{id:1,type:'Text',children:[{{id:2,type:'#text',text:'{text}'}}]}}]}}));"
-        )
-    };
-    let (sidebar, popover) = (page("In the sidebar"), page("In the popover"));
+    let (sidebar, popover) = (text_page("In the sidebar"), text_page("In the popover"));
     data.install_script(
         "timer",
         json!({ "contributes": { "sidebars": [{ "id": "tracker", "title": "Cyclops", "page": "dist/sidebar.html",
             "popover": { "page": "dist/popover.html", "width": 360, "height": 240 } }] } }),
-        "wings.setSidebarLabel('tracker', '1:05:00', { tone: 'warning' });",
+        &fake::script("main", || {
+            |cx: &mut Cx<'_>, hear: Hear<'_>| {
+                if let Hear::Start = hear {
+                    cx.call("setSidebarLabel", json!({ "sidebarId": "tracker", "label": "1:05:00", "tone": "warning" }));
+                }
+            }
+        }),
         &[("sidebar", &sidebar), ("popover", &popover)],
         "timer-scope",
     );
@@ -787,19 +1016,33 @@ fn a_sidebar_shows_its_label_and_its_popover_page_while_you_point_at_its_button(
     window.read(|w, _| assert!(!w.plugin_ui.popover.pages.contains_key(&key)));
 }
 
+/// Draws, then loops until it is stopped.
+fn stops() -> String {
+    struct Stops;
+    impl Guest for Stops {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            cx.render(&json!({ "id": 0, "type": "#root", "children": [
+                { "id": 1, "type": "Text", "children": [{ "id": 2, "type": "#text", "text": "Up" }] }] }));
+            cx.later(300);
+        }
+        fn timer(&mut self, cx: &mut Cx<'_>, _id: u32) {
+            cx.stop("the page ran for too long and was stopped");
+        }
+    }
+    fake::source("page", || Box::new(Stops))
+}
+
 /// A sidebar's page is kept for as long as the app runs, so one that stopped stayed stopped, its buttons dead, as
 /// Cyclops' did. It starts again in the panel by itself.
 #[test]
 fn a_sidebar_page_that_stopped_starts_again_in_the_panel_by_itself() {
     let data = Data::temp();
-    // Draws, then loops until it is stopped.
-    let sidebar = "wings.render(JSON.stringify({id:0,type:'#root',children:[{id:1,type:'Text',children:[{id:2,type:'#text',text:'Up'}]}]}));
-        setTimeout(() => { for (;;) {} }, 300);";
+    let sidebar = stops();
     data.install_script(
         "timer",
         json!({ "contributes": { "sidebars": [{ "id": "tracker", "title": "Cyclops", "page": "dist/sidebar.html" }] } }),
-        "",
-        &[("sidebar", sidebar)],
+        &idle("main"),
+        &[("sidebar", &sidebar)],
         "timer-scope",
     );
     let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
@@ -824,30 +1067,48 @@ fn a_sidebar_page_that_stopped_starts_again_in_the_panel_by_itself() {
     window.read(|w, _| assert_eq!(w.right.as_ref(), Some(&key)));
 }
 
+/// One of the tasks Cyclops' task field offers, as a chip.
+fn chip(task: &str) -> Value {
+    let id = task.len();
+    json!({ "id": id, "type": "Button", "props": { "chip": true, "pressed": false, "onClick": format!("{id}:onClick") },
+        "children": [{ "id": 100 + id, "type": "#text", "text": task }] })
+}
+
+/// Cyclops' popover: a project select over a task field, whose chips set the task, and what it holds.
+fn popover_page() -> String {
+    let mut text = String::new();
+    fake::page("page", move |event| {
+        if let Some((handler, payload)) = event {
+            text = match handler {
+                "3:onChange" => payload["value"].as_str().unwrap_or_default().to_owned(),
+                _ => "Checkout redesign".into(),
+            };
+        }
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 9, "type": "Text", "children": [{ "id": 10, "type": "#text", "text": "No timer running" }] },
+            { "id": 4, "type": "Select", "props": { "label": "Project", "value": "a",
+                "options": [{ "value": "a", "label": "Alpha" }, { "value": "b", "label": "Beta" }] } },
+            { "id": 1, "type": "Stack", "props": { "gap": "s" }, "children": [
+                { "id": 3, "type": "TextInput", "props": { "label": "Task", "value": text, "onChange": "3:onChange" } },
+                { "id": 5, "type": "Row", "props": { "gap": "s", "wrap": true },
+                    "children": [chip("Code review"), chip("Checkout redesign")] }] },
+            { "id": 7, "type": "Text", "children": [{ "id": 8, "type": "#text", "text": format!("Task={text}.") }] }] })
+    })
+}
+
 /// Typing in Cyclops' popover, or picking from a list or menu in it, keeps it open: gpui reads a key press as the
 /// pointer leaving, and a field or menu in use holds it even once the pointer goes, as does a press on a list drawn past
 /// the card. It goes when the keyboard leaves it with the pointer away, or on a press elsewhere.
 #[test]
 fn a_popover_stays_open_while_you_type_in_it_or_use_its_menu() {
     let data = Data::temp();
-    let page = r#"
-let text = '';
-function render(){
-  wings.render(JSON.stringify({id:0,type:'#root',children:[
-    {id:9,type:'Text',children:[{id:10,type:'#text',text:'No timer running'}]},
-    {id:4,type:'Select',props:{label:'Project',value:'a',options:[{value:'a',label:'Alpha'},{value:'b',label:'Beta'}]}},
-    {id:1,type:'Stack',props:{gap:'s'},children:[{id:3,type:'TextInput',props:{label:'Task',value:text,onChange:'3:onChange'}},
-      {id:5,type:'Row',props:{gap:'s',wrap:true},children:['Code review','Checkout redesign'].map(t=>({id:t.length,type:'Button',props:{chip:true,pressed:false,onClick:t.length+':onClick'},children:[{id:100+t.length,type:'#text',text:t}]}))}]},
-    {id:7,type:'Text',children:[{id:8,type:'#text',text:'Task='+text+'.'}]}]}));
-}
-globalThis.__wingsEvent=(h,json)=>{ text = h==='3:onChange' ? JSON.parse(json).value : 'Checkout redesign'; render(); return true; };
-render();"#;
+    let page = popover_page();
     data.install_script(
         "timer",
         json!({ "contributes": { "sidebars": [{ "id": "tracker", "title": "Cyclops", "page": "dist/sidebar.html",
             "popover": { "page": "dist/popover.html", "width": 360, "height": 160 } }] } }),
-        "",
-        &[("sidebar", page), ("popover", page)],
+        &idle("main"),
+        &[("sidebar", &page), ("popover", &page)],
         "timer-scope",
     );
     let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
@@ -945,30 +1206,48 @@ render();"#;
     assert!(!open(&mut window), "a press elsewhere left it open");
 }
 
+/// What wings-plugin-ui/native's `Combobox` renders: the field, and the tasks that match it as chips.
+fn combobox_page() -> String {
+    let mut text = String::new();
+    fake::page("page", move |event| {
+        match event {
+            Some(("3:onChange", payload)) => {
+                text = payload["value"].as_str().unwrap_or_default().to_owned()
+            }
+            Some((handler, _)) => {
+                text = if handler.starts_with("11:") {
+                    "Code review"
+                } else {
+                    "Checkout redesign"
+                }
+                .to_owned()
+            }
+            None => {}
+        }
+        let tasks = ["Code review", "Checkout redesign"]
+            .into_iter()
+            .filter(|task| task.to_lowercase().contains(&text.to_lowercase()));
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "Stack", "props": { "gap": "s" }, "children": [
+                { "id": 3, "type": "TextInput", "props": { "label": "Task", "value": text, "onChange": "3:onChange" } },
+                { "id": 4, "type": "Row", "props": { "gap": "s", "wrap": true }, "children": tasks.map(chip).collect::<Vec<_>>() }] },
+            { "id": 7, "type": "Text", "children": [{ "id": 8, "type": "#text", "text": format!("Task={text}.") }] }] })
+    })
+}
+
 /// Cyclops' task field, which lists recent tasks over the page as you type. In the popover under the title bar button,
 /// itself a card drawn over the window, the list is drawn over the card and a click on it picks a task. On the right,
 /// where a page is drawn again only when it changes, Escape takes the list away and Down and Enter pick.
 #[test]
 fn a_combobox_lists_its_options_over_the_popover_and_the_sidebar_page() {
     let data = Data::temp();
-    // What wings-plugin-ui/native's `Combobox` renders: the field, and the tasks that match it as chips.
-    let page = r#"
-let text = '';
-function render(){
-  const tasks = ['Code review', 'Checkout redesign'].filter(t => t.toLowerCase().includes(text.toLowerCase()));
-  wings.render(JSON.stringify({id:0,type:'#root',children:[
-    {id:1,type:'Stack',props:{gap:'s'},children:[{id:3,type:'TextInput',props:{label:'Task',value:text,onChange:'3:onChange'}},
-      {id:4,type:'Row',props:{gap:'s',wrap:true},children:tasks.map(t=>({id:t.length,type:'Button',props:{chip:true,pressed:false,onClick:t.length+':onClick'},children:[{id:100+t.length,type:'#text',text:t}]}))}]},
-    {id:7,type:'Text',children:[{id:8,type:'#text',text:'Task='+text+'.'}]}]}));
-}
-globalThis.__wingsEvent=(h,json)=>{ text = h==='3:onChange' ? JSON.parse(json).value : (h.startsWith('11:') ? 'Code review' : 'Checkout redesign'); render(); return true; };
-render();"#;
+    let page = combobox_page();
     data.install_script(
         "timer",
         json!({ "contributes": { "sidebars": [{ "id": "tracker", "title": "Cyclops", "page": "dist/sidebar.html",
             "popover": { "page": "dist/popover.html", "width": 360, "height": 300 } }] } }),
-        "",
-        &[("sidebar", page), ("popover", page)],
+        &idle("main"),
+        &[("sidebar", &page), ("popover", &page)],
         "timer-scope",
     );
     let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
@@ -1037,15 +1316,17 @@ render();"#;
 #[test]
 fn tab_goes_round_a_popovers_fields_and_stays_in_it() {
     let data = Data::temp();
-    let page = r#"wings.render(JSON.stringify({id:0,type:'#root',children:[
-      {id:3,type:'TextInput',props:{label:'Start',type:'time',value:''}},
-      {id:4,type:'TextInput',props:{label:'End',type:'time',value:''}}]}));"#;
+    let page = fake::page("page", |_| {
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 3, "type": "TextInput", "props": { "label": "Start", "type": "time", "value": "" } },
+            { "id": 4, "type": "TextInput", "props": { "label": "End", "type": "time", "value": "" } }] })
+    });
     data.install_script(
         "timer",
         json!({ "contributes": { "sidebars": [{ "id": "tracker", "title": "Cyclops", "page": "dist/sidebar.html",
             "popover": { "page": "dist/popover.html", "width": 360, "height": 300 } }] } }),
-        "",
-        &[("sidebar", page), ("popover", page)],
+        &idle("main"),
+        &[("sidebar", &page), ("popover", &page)],
         "timer-scope",
     );
     let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
@@ -1083,6 +1364,56 @@ fn tab_goes_round_a_popovers_fields_and_stays_in_it() {
     }
 }
 
+/// A main that, on an action, picks an account for `project`, turns another's shared setup off and opens a pane in a third,
+/// and saves that it did or what refused it.
+fn picker(project: PathBuf) -> String {
+    #[derive(Clone, Copy)]
+    enum Step {
+        Pick,
+        Share,
+        Open,
+    }
+    fake::script("main", move || {
+        let (project, mut wait) = (project.clone(), Pending::default());
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+            Hear::Deliver("action", token, _) => wait.call(
+                cx,
+                "setClaudeAccount",
+                json!({ "projectId": project, "name": "wings-picked" }),
+                (Step::Pick, token),
+            ),
+            Hear::Deliver(kind, id, text) => {
+                let Some(((step, token), answer)) = wait.answered(kind, id, text) else {
+                    return;
+                };
+                match (answer, step) {
+                    (Err(error), _) => {
+                        cx.save("failed", &json!(error));
+                        settled(cx, token, None);
+                    }
+                    (Ok(_), Step::Pick) => wait.call(
+                        cx,
+                        "shareClaudeSetup",
+                        json!({ "name": "wings-shared", "on": false }),
+                        (Step::Share, token),
+                    ),
+                    (Ok(_), Step::Share) => wait.call(
+                        cx,
+                        "openPane",
+                        json!({ "command": null, "args": [], "cwd": null, "placement": "tab", "claudeAccount": "wings-started" }),
+                        (Step::Open, token),
+                    ),
+                    (Ok(_), Step::Open) => {
+                        cx.save("done", &json!(true));
+                        settled(cx, token, None);
+                    }
+                }
+            }
+            _ => {}
+        }
+    })
+}
+
 /// As on the desktop, Wings goes into a named account's Claude Code when a plugin picks the account for a project, opens
 /// a pane in it, or turns its shared setup on or off. Whether Wings may (you didn't disconnect it) is the system's.
 #[test]
@@ -1090,21 +1421,10 @@ fn picking_a_claude_account_connects_wings_into_it() {
     let data = Data::temp();
     let project = data.root.join("project");
     fs::create_dir_all(&project).unwrap();
-    let main = r#"
-        wings.onAction(async () => {
-            try {
-                await wings.setClaudeAccount(PROJECT, 'wings-picked');
-                await wings.shareClaudeSetup('wings-shared', false);
-                await wings.openPane({ claudeAccount: 'wings-started' });
-                await wings.storage.set('done', true);
-            } catch (error) { await wings.storage.set('failed', error.message); }
-        });
-    "#
-    .replace("PROJECT", &json!(project).to_string());
     data.install_script(
         "picker",
         json!({ "permissions": { "panes": [], "claudeAccounts": true } }),
-        &main,
+        &picker(project.clone()),
         &[],
         "picker-scope",
     );
@@ -1128,6 +1448,34 @@ fn picking_a_claude_account_connects_wings_into_it() {
     );
 }
 
+/// A main that, on an action, opens a pane in the Claude account `wings-native-test` and saves the pane or what refused it.
+/// On an action, which the test sends once the fake system is in place: never the real one, which makes the folder.
+fn starter() -> String {
+    fake::script("main", || {
+        let mut wait = Pending::default();
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            match hear {
+            Hear::Deliver("action", token, _) => wait.call(
+                cx,
+                "openPane",
+                json!({ "command": null, "args": [], "cwd": null, "placement": "tab", "claudeAccount": "wings-native-test" }),
+                token,
+            ),
+            Hear::Deliver(kind, id, text) => {
+                if let Some((token, answer)) = wait.answered(kind, id, text) {
+                    match answer {
+                        Ok(pane) => cx.save("opened", &pane),
+                        Err(error) => cx.save("failed", &json!(error)),
+                    }
+                    settled(cx, token, None);
+                }
+            }
+            _ => {}
+        }
+        }
+    })
+}
+
 /// The Claude accounts plugin's "Start Claude as": the pane's shell runs under the account picked, not the project's.
 #[test]
 fn a_pane_opened_with_a_claude_account_runs_its_shell_under_that_account() {
@@ -1137,14 +1485,7 @@ fn a_pane_opened_with_a_claude_account_runs_its_shell_under_that_account() {
     data.install_script(
         "starter",
         json!({ "permissions": { "panes": [], "claudeAccounts": true } }),
-        // On an action, which the test sends once the fake system is in place: never the real one, which makes the folder.
-        r#"
-            wings.onAction(async () => {
-                try {
-                    await wings.storage.set('opened', await wings.openPane({ claudeAccount: 'wings-native-test' }));
-                } catch (error) { await wings.storage.set('failed', error.message); }
-            });
-        "#,
+        &starter(),
         &[],
         "starter-scope",
     );
@@ -1242,8 +1583,8 @@ fn a_plugin_on_without_a_native_build_is_listed_in_the_sidebar_as_needing_an_upd
     data.install_script(
         "desktop-only",
         json!({ "contributes": { "sidebars": [{ "id": "s", "title": "S", "page": "dist/s.html" }] } }),
-        "",
-        &[("s", "")],
+        &idle("main"),
+        &[("s", &idle("page"))],
         "desktop-only-scope",
     );
     fs::remove_dir_all(data.paths().dir.join("desktop-only/dist/native")).unwrap();
@@ -1265,6 +1606,45 @@ fn a_plugin_on_without_a_native_build_is_listed_in_the_sidebar_as_needing_an_upd
     window.draw();
 }
 
+/// Saves `error` as the reason a main failed.
+fn failed(cx: &Cx<'_>, error: String) {
+    cx.save("failed", &json!(error));
+}
+
+/// A main that saves the projects it hears of, and opens a pane in `cwd` on the right when it hears of a pane, badges it
+/// and saves it, or what refused it.
+fn opener(cwd: PathBuf) -> String {
+    #[derive(Clone)]
+    enum Step {
+        Open,
+        Badge(Value),
+    }
+    fake::script("main", move || {
+        let (cwd, mut opened, mut wait) = (cwd.clone(), false, Pending::default());
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+            Hear::Deliver("projects", _, text) => cx.save("projects", &said(text)),
+            Hear::Deliver("panes", _, text) => {
+                if !said(text).as_array().unwrap().is_empty() && !opened {
+                    opened = true;
+                    let plan =
+                        json!({ "command": null, "args": [], "cwd": cwd, "placement": "right" });
+                    wait.call(cx, "openPane", plan, Step::Open);
+                }
+            }
+            Hear::Deliver(kind, id, text) => match wait.answered(kind, id, text) {
+                Some((Step::Open, Ok(pane))) => {
+                    let badge = json!({ "paneId": pane["paneId"], "badge": { "label": "Opened" } });
+                    wait.call(cx, "setBadge", badge, Step::Badge(pane));
+                }
+                Some((Step::Badge(pane), Ok(_))) => cx.save("opened", &json!({ "pane": pane })),
+                Some((_, Err(error))) => failed(cx, error),
+                None => {}
+            },
+            _ => {}
+        }
+    })
+}
+
 #[test]
 fn a_plugin_opens_a_real_pane_and_hears_the_workspace_projects() {
     let data = Data::temp();
@@ -1274,22 +1654,7 @@ fn a_plugin_opens_a_real_pane_and_hears_the_workspace_projects() {
     data.install_script(
         "opener",
         json!({ "permissions": { "panes": [] }, "contributes": { "ui": ["badges"] } }),
-        &format!(
-            r#"
-            let opened = false;
-            wings.onProjects(list => wings.storage.set('projects', list));
-            wings.onPanes(async list => {{
-                if (!list.length || opened) return;
-                opened = true;
-                try {{
-                    const pane = await wings.openPane({{ cwd: {}, placement: 'right' }});
-                    await wings.setBadge(pane.paneId, {{ label: 'Opened' }});
-                    await wings.storage.set('opened', {{ pane }});
-                }} catch (error) {{ await wings.storage.set('failed', error.message); }}
-            }});
-        "#,
-            json!(cwd)
-        ),
+        &opener(cwd.clone()),
         &[],
         "opener-scope",
     );
@@ -1322,6 +1687,43 @@ fn a_plugin_opens_a_real_pane_and_hears_the_workspace_projects() {
     );
 }
 
+/// A main that makes a worktree when it hears of a pane, opens a pane in it and saves both, or what refused it.
+fn maker() -> String {
+    #[derive(Clone)]
+    enum Step {
+        Make,
+        Open(Value),
+    }
+    fake::script("main", || {
+        let (mut started, mut wait) = (false, Pending::default());
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+            Hear::Deliver("panes", _, text) => {
+                if !said(text).as_array().unwrap().is_empty() && !started {
+                    started = true;
+                    wait.call(
+                        cx,
+                        "createWorktree",
+                        json!({ "branch": "wings/one" }),
+                        Step::Make,
+                    );
+                }
+            }
+            Hear::Deliver(kind, id, text) => match wait.answered(kind, id, text) {
+                Some((Step::Make, Ok(made))) => {
+                    let plan = json!({ "command": null, "args": [], "cwd": made["path"], "placement": "tab" });
+                    wait.call(cx, "openPane", plan, Step::Open(made));
+                }
+                Some((Step::Open(made), Ok(pane))) => {
+                    cx.save("made", &json!({ "made": made, "pane": pane }))
+                }
+                Some((_, Err(error))) => failed(cx, error),
+                None => {}
+            },
+            _ => {}
+        }
+    })
+}
+
 #[test]
 fn a_worktree_a_plugin_makes_is_listed_under_its_project_and_is_a_project_the_next_pane_can_open_in()
  {
@@ -1334,18 +1736,7 @@ fn a_worktree_a_plugin_makes_is_listed_under_its_project_and_is_a_project_the_ne
     data.install_script(
         "maker",
         json!({ "permissions": { "panes": [], "worktrees": true } }),
-        r#"
-        let started = false;
-        wings.onPanes(async list => {
-            if (!list.length || started) return;
-            started = true;
-            try {
-                const made = await wings.createWorktree({ branch: 'wings/one' });
-                const pane = await wings.openPane({ cwd: made.path });
-                await wings.storage.set('made', { made, pane });
-            } catch (error) { await wings.storage.set('failed', error.message); }
-        });
-        "#,
+        &maker(),
         &[],
         "maker-scope",
     );
@@ -1491,15 +1882,23 @@ fn a_closed_panes_badge_strip_and_card_go_with_it() {
     });
 }
 
-const SHELL: &str = r#"
-const heard = [];
-wings.onPanes((panes) => { heard.push(panes); wings.storage.set('panes', heard); });
-"#;
+/// A main that saves every list of panes it is told of.
+fn watcher() -> String {
+    fake::script("main", || {
+        let mut heard = Vec::new();
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            if let Hear::Deliver("panes", _, text) = hear {
+                heard.push(said(text));
+                cx.save("panes", &json!(heard));
+            }
+        }
+    })
+}
 
 #[test]
 fn plugins_are_told_the_panes_as_the_desktop_lists_them_when_they_change() {
     let data = Data::temp();
-    data.install_script("watcher", json!({}), SHELL, &[], "watcher-scope");
+    data.install_script("watcher", json!({}), &watcher(), &[], "watcher-scope");
     let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
     let saved = || {
         data.saved("watcher", "watcher-scope", "panes")
@@ -1547,20 +1946,63 @@ fn plugins_are_told_the_panes_as_the_desktop_lists_them_when_they_change() {
 
 // Notifications, URLs.
 
-const REACTOR: &str = r#"
-wings.onPanes(async (panes) => { for (const p of panes) await wings.setBadge(p.paneId, { label: 'x', actions: [{ id: 'notify', label: 'Notify' }, { id: 'open', label: 'Open' }, { id: 'refused', label: 'Refused' }] }); });
-wings.onAction(async ({ actionId }) => {
-  if (actionId === 'notify') await wings.notify({ title: ' Done ', body: 'all green' });
-  if (actionId === 'open') await wings.openUrl('http://localhost:5173/');
-  if (actionId === 'refused') await wings.openUrl('https://evil.example/');
-});
-"#;
+/// A main that badges each pane with the buttons `buttons` and, on one, makes the call that button `id` stands for.
+fn buttoned(buttons: Value, calls: Vec<(&'static str, &'static str, Value)>) -> String {
+    fake::script("main", move || {
+        let (buttons, calls, mut wait) = (buttons.clone(), calls.clone(), Pending::default());
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+            Hear::Deliver("panes", _, text) => {
+                for pane in said(text).as_array().unwrap() {
+                    let badge = json!({ "paneId": pane["paneId"], "badge": { "label": "x", "actions": buttons } });
+                    cx.call("setBadge", badge);
+                }
+            }
+            Hear::Deliver("action", token, text) => {
+                let click = said(text);
+                match calls.iter().find(|(id, _, _)| click["actionId"] == *id) {
+                    Some((_, method, params)) => wait.call(cx, method, params.clone(), token),
+                    None => settled(cx, token, None),
+                }
+            }
+            Hear::Deliver(kind, id, text) => {
+                if let Some((token, answer)) = wait.answered(kind, id, text) {
+                    settled(cx, token, answer.err());
+                }
+            }
+            _ => {}
+        }
+    })
+}
+
+/// A main with a button to notify, one to open a link it may open and one to open a link it may not.
+fn reactor() -> String {
+    buttoned(
+        json!([{ "id": "notify", "label": "Notify" }, { "id": "open", "label": "Open" }, { "id": "refused", "label": "Refused" }]),
+        vec![
+            (
+                "notify",
+                "notify",
+                json!({ "title": " Done ", "body": "all green" }),
+            ),
+            (
+                "open",
+                "openUrl",
+                json!({ "url": "http://localhost:5173/" }),
+            ),
+            (
+                "refused",
+                "openUrl",
+                json!({ "url": "https://evil.example/" }),
+            ),
+        ],
+    )
+}
 
 fn install_reactor(data: &Data) {
     data.install_script(
         "reactor",
         json!({ "contributes": { "ui": ["badges"] }, "permissions": { "notify": true, "openUrl": ["http://localhost:"] } }),
-        REACTOR,
+        &reactor(),
         &[],
         "reactor-scope",
     );
@@ -1616,18 +2058,24 @@ fn a_notification_goes_to_the_system_with_the_plugins_name_and_a_url_opens_in_th
     assert_eq!(system.opened.lock().unwrap().len(), 1);
 }
 
-const NOTIFIER: &str = r#"
-wings.onPanes(async (panes) => { for (const p of panes) await wings.setBadge(p.paneId, { label: 'x', actions: [{ id: 'notify', label: 'Notify' }] }); });
-wings.onAction(async ({ actionId }) => {
-  if (actionId === 'notify') await wings.notify({ title: 'Build passed', body: 'main is green', actions: [{ label: 'Open run', url: 'https://ci.example/run/1' }, { label: 'Elsewhere', url: 'https://evil.example/' }] });
-});
-"#;
+/// A main with a button to notify, with a link it may open and one it may not.
+fn notifier() -> String {
+    buttoned(
+        json!([{ "id": "notify", "label": "Notify" }]),
+        vec![(
+            "notify",
+            "notify",
+            json!({ "title": "Build passed", "body": "main is green",
+            "actions": [{ "label": "Open run", "url": "https://ci.example/run/1" }, { "label": "Elsewhere", "url": "https://evil.example/" }] }),
+        )],
+    )
+}
 
 fn install_notifier(data: &Data) {
     data.install_script(
         "reactor",
         json!({ "contributes": { "ui": ["badges"] }, "permissions": { "notify": true, "openUrl": ["https://ci.example/"] } }),
-        NOTIFIER,
+        &notifier(),
         &[],
         "reactor-scope",
     );
@@ -1724,22 +2172,38 @@ fn a_notification_the_system_cannot_show_is_shown_in_the_window_and_goes_away() 
 
 // Sidebars.
 
-const SIDEBAR_PAGE: &str = r#"
-wings.render(JSON.stringify({ id: 0, type: '#root', props: {}, children: [{ id: 1, type: '#text', text: 'Side page' }] }));
-"#;
+/// A page that shows "Side page".
+fn side_page() -> String {
+    fake::page(
+        "page",
+        |_| json!({ "id": 0, "type": "#root", "props": {}, "children": [{ "id": 1, "type": "#text", "text": "Side page" }] }),
+    )
+}
 
-const SIDEBAR_MAIN: &str = r#"
-wings.onPanes(async (panes) => {
-  for (const p of panes) await wings.setPaneStatus(p.paneId, { items: [{ label: 'ctx', value: '10%' }], open: 'side' });
-});
-"#;
+/// A main that shows a strip on each pane, which opens the sidebar `side`.
+fn side_main() -> String {
+    fake::script("main", || {
+        |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            if let Hear::Deliver("panes", _, text) = hear {
+                for pane in said(text).as_array().unwrap() {
+                    let status =
+                        json!({ "items": [{ "label": "ctx", "value": "10%" }], "open": "side" });
+                    cx.call(
+                        "setPaneStatus",
+                        json!({ "paneId": pane["paneId"], "status": status }),
+                    );
+                }
+            }
+        }
+    })
+}
 
 fn install_sider(data: &Data) {
     data.install_script(
         "sider",
         json!({ "contributes": { "ui": ["status"], "sidebars": [{ "id": "side", "title": "Side", "page": "dist/side.html" }] } }),
-        SIDEBAR_MAIN,
-        &[("side", SIDEBAR_PAGE)],
+        &side_main(),
+        &[("side", &side_page())],
         "sider-scope",
     );
 }
@@ -2022,8 +2486,8 @@ fn a_sidebar_shows_the_icon_its_manifest_names_on_its_button_and_over_its_panel(
     data.install_script(
         "timer",
         json!({ "contributes": { "sidebars": [{ "id": "side", "title": "Side", "page": "dist/side.html", "icon": "clock" }] } }),
-        "",
-        &[("side", SIDEBAR_PAGE)],
+        &idle("main"),
+        &[("side", &side_page())],
         "timer-scope",
     );
     let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
@@ -2055,7 +2519,7 @@ fn settings_shows_a_plugins_own_icon_on_its_row() {
     data.install_script(
         "drawn",
         json!({ "icon": "icon.svg" }),
-        "",
+        &idle("main"),
         &[],
         "drawn-scope",
     );
@@ -2074,11 +2538,24 @@ fn settings_shows_a_plugins_own_icon_on_its_row() {
 }
 
 /// A settings page that counts its loads in the plugin's storage, and keeps whether it is focused there.
-const SETTINGS_PAGE: &str = r#"
-wings.storage.get('loads').then((n) => wings.storage.set('loads', (n ?? 0) + 1));
-wings.onFocus(({ focused }) => wings.storage.set('focused', focused));
-wings.render(JSON.stringify({ id: 0, type: '#root', props: {}, children: [{ id: 1, type: '#text', text: 'Tuner options' }] }));
-"#;
+fn settings_page() -> String {
+    fake::script("page", || {
+        let mut known = None;
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+            Hear::Start => {
+                let loads = said(&cx.link().storage(Store::Get("loads".into())).unwrap());
+                cx.save("loads", &json!(loads.as_u64().unwrap_or(0) + 1));
+                cx.render(&json!({ "id": 0, "type": "#root", "props": {}, "children": [{ "id": 1, "type": "#text", "text": "Tuner options" }] }));
+            }
+            Hear::Deliver("focus", _, text) => {
+                if let Some(focused) = focus_change(&mut known, text) {
+                    cx.save("focused", &json!(focused));
+                }
+            }
+            _ => {}
+        }
+    })
+}
 
 /// "Plugin tuner", with `main` and a settings page.
 pub(super) fn install_tuner(data: &Data, main: &str) {
@@ -2086,7 +2563,7 @@ pub(super) fn install_tuner(data: &Data, main: &str) {
         "tuner",
         json!({ "contributes": { "settings": { "page": "dist/settings.html" } } }),
         main,
-        &[("settings", SETTINGS_PAGE)],
+        &[("settings", &settings_page())],
         "tuner-scope",
     );
 }
@@ -2105,7 +2582,7 @@ pub(super) fn click_spot(window: &mut TestAppWindow<Workspace>, name: &str) {
 #[test]
 fn a_plugins_settings_page_shows_in_settings_and_stops_when_left() {
     let data = Data::temp();
-    install_tuner(&data, "");
+    install_tuner(&data, &idle("main"));
     let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
     window.update(|_, window, _| window.activate_window());
     let frames = |w: &Workspace| w.plugins[0].host.frames();
@@ -2163,7 +2640,19 @@ fn a_plugins_settings_page_shows_in_settings_and_stops_when_left() {
 #[test]
 fn open_settings_from_a_plugin_shows_its_section_in_settings() {
     let data = Data::temp();
-    install_tuner(&data, "wings.onAction(() => wings.openSettings());");
+    let main = fake::script("main", || {
+        let mut wait = Pending::default();
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+            Hear::Deliver("action", token, _) => wait.call(cx, "openSettings", json!({}), token),
+            Hear::Deliver(kind, id, text) => {
+                if let Some((token, answer)) = wait.answered(kind, id, text) {
+                    settled(cx, token, answer.err());
+                }
+            }
+            _ => {}
+        }
+    });
+    install_tuner(&data, &main);
     let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
     window.update(|_, window, _| window.activate_window());
     let host = window.read(|w, _| w.plugins[0].host.clone());
@@ -2188,7 +2677,7 @@ fn open_settings_from_a_plugin_shows_its_section_in_settings() {
 #[test]
 fn a_shown_settings_page_loads_again_when_its_plugin_restarts() {
     let data = Data::temp();
-    install_tuner(&data, "");
+    install_tuner(&data, &idle("main"));
     let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
     window.update(|w, window, cx| w.open_plugin_settings("tuner", window, cx));
     until(&app, &mut window, "the page never loaded", |_| {
@@ -2226,8 +2715,8 @@ fn the_sidebar_lists_no_plugin_pages() {
             { "id": "pr", "title": "Pull request", "page": "dist/pr.html", "opens": ["tab"], "newTab": true, "icon": "git-compare" },
             { "id": "list", "title": "List", "page": "dist/list.html", "opens": ["tab"], "newTab": true },
         ] } }),
-        "",
-        &[("pr", SIDEBAR_PAGE), ("list", SIDEBAR_PAGE)],
+        &idle("main"),
+        &[("pr", &side_page()), ("list", &side_page())],
         "reviews-scope",
     );
     let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
@@ -2247,14 +2736,30 @@ fn the_sidebar_lists_no_plugin_pages() {
 
 // Transcripts.
 
-const READER: &str = r#"
-wings.onPanes((panes) => wings.storage.set('session', panes[0]?.session ?? null));
-wings.onTranscript((event) => wings.storage.set(`heard-${event.entry.n}`, event));
-"#;
+/// A main that saves the session of the first pane, and each transcript entry it hears of under `heard-<n>`.
+fn reader() -> String {
+    fake::script("main", || {
+        |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+            Hear::Deliver("panes", _, text) => cx.save("session", &said(text)[0]["session"]),
+            Hear::Deliver("transcript", _, text) => {
+                let event = said(text);
+                cx.save(&format!("heard-{}", event["entry"]["n"]), &event);
+            }
+            _ => {}
+        }
+    })
+}
 
-const DEAF: &str = r#"
-wings.onTranscript((event) => wings.storage.set('deaf', event));
-"#;
+/// A main that saves the transcript entry it hears of.
+fn deaf() -> String {
+    fake::script("main", || {
+        |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            if let Hear::Deliver("transcript", _, text) = hear {
+                cx.save("deaf", &said(text));
+            }
+        }
+    })
+}
 
 const SESSION: &str = "3c21b0c5-8113-4f55-9493-fa156c3fa369";
 
@@ -2264,11 +2769,11 @@ fn claude_writing_a_transcript_in_a_pane_reaches_only_the_plugins_that_may_read_
     data.install_script(
         "reader",
         json!({ "permissions": { "transcript": ["assistant"] } }),
-        READER,
+        &reader(),
         &[],
         "reader-scope",
     );
-    data.install_script("deaf", json!({}), DEAF, &[], "deaf-scope");
+    data.install_script("deaf", json!({}), &deaf(), &[], "deaf-scope");
     let dir = std::env::temp_dir().join(format!("wings-native-transcripts-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     let claude = dir.join("claude");
@@ -2375,11 +2880,11 @@ fn transcript_entries_are_handed_only_to_plugins_whose_manifest_names_the_type()
     data.install_script(
         "reader",
         json!({ "permissions": { "transcript": ["assistant"] } }),
-        READER,
+        &reader(),
         &[],
         "reader-scope",
     );
-    data.install_script("deaf", json!({}), DEAF, &[], "deaf-scope");
+    data.install_script("deaf", json!({}), &deaf(), &[], "deaf-scope");
     let (app, window) = open_plugins(&data, &Arc::default(), |_| {});
     let line = |entry: Value| Line {
         pane_id: "0".into(),
@@ -2523,18 +3028,32 @@ fn dev_servers_from_the_dev_root_badges_a_pane_that_listens_and_its_button_opens
     window.simulate_keystroke("ctrl-c");
 }
 
+/// A page that saves the args it was opened with under `key`.
+fn reads_args(key: &'static str) -> String {
+    fake::script("page", move || {
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            if let Hear::Start = hear {
+                let seen = cx
+                    .link()
+                    .view_args()
+                    .map_or(Value::Null, |args| said(&args));
+                cx.save(key, &json!({ "seen": seen }));
+            }
+        }
+    })
+}
+
 #[test]
 fn a_tab_opened_with_args_reads_them_and_takes_new_ones_by_starting_over() {
     let data = Data::temp();
-    let page = |key: &str| format!("wings.storage.set('{key}', {{ seen: wings.viewArgs() }});");
-    let (one, many) = (page("one"), page("many"));
+    let (one, many) = (reads_args("one"), reads_args("many"));
     data.install_script(
         "argsy",
         json!({ "contributes": { "views": [
             { "id": "one", "title": "One", "page": "dist/one.html", "opens": ["tab"], "newTab": true },
             { "id": "many", "title": "Many", "page": "dist/many.html", "opens": ["tab"], "newTab": true, "multiple": true }
         ] } }),
-        "",
+        &idle("main"),
         &[("one", &one), ("many", &many)],
         "args-scope",
     );
@@ -2587,6 +3106,34 @@ fn a_tab_opened_with_args_reads_them_and_takes_new_ones_by_starting_over() {
     }
 }
 
+/// A page that saves the state it finds for its tab, sets `{ n: 1 }` if it found none, and saves that it did.
+fn keeps_tab_state() -> String {
+    #[derive(Clone)]
+    enum Step {
+        Read,
+        Set,
+    }
+    fake::script("page", || {
+        let mut wait = Pending::default();
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+            Hear::Start => wait.call(cx, "tabState", json!({}), Step::Read),
+            Hear::Deliver(kind, id, text) => match wait.answered(kind, id, text) {
+                Some((Step::Read, Ok(state))) => {
+                    cx.save("seen", &state);
+                    if state.is_null() {
+                        wait.call(cx, "setTabState", json!({ "state": { "n": 1 } }), Step::Set);
+                    } else {
+                        cx.save("set", &json!(true));
+                    }
+                }
+                Some((Step::Set, Ok(_))) => cx.save("set", &json!(true)),
+                _ => {}
+            },
+            _ => {}
+        }
+    })
+}
+
 #[test]
 fn a_plugin_tabs_saved_state_comes_back_after_a_relaunch() {
     let dir = std::env::temp_dir().join(format!("wings-native-tab-state-{}", std::process::id()));
@@ -2596,8 +3143,8 @@ fn a_plugin_tabs_saved_state_comes_back_after_a_relaunch() {
     data.install_script(
         "keeper",
         json!({ "contributes": { "views": [{ "id": "page", "title": "Keeper", "page": "dist/page.html", "opens": ["tab"], "newTab": true }] } }),
-        "",
-        &[("page", "wings.tabState().then(async (s) => { await wings.storage.set('seen', s); if (s == null) await wings.setTabState({ n: 1 }); await wings.storage.set('set', true); });")],
+        &idle("main"),
+        &[("page", &keeps_tab_state())],
         "keeper-scope",
     );
     {
@@ -2624,6 +3171,33 @@ fn a_plugin_tabs_saved_state_comes_back_after_a_relaunch() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+/// A main that, once it hears of two panes, focuses the first and saves its id.
+fn focuser() -> String {
+    fake::script("main", || {
+        let (mut done, mut wait) = (false, Pending::default());
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+            Hear::Deliver("panes", _, text) => {
+                let panes = said(text);
+                if panes.as_array().unwrap().len() >= 2 && !done {
+                    done = true;
+                    wait.call(
+                        cx,
+                        "focusPane",
+                        json!({ "paneId": panes[0]["paneId"] }),
+                        panes[0]["paneId"].clone(),
+                    );
+                }
+            }
+            Hear::Deliver(kind, id, text) => {
+                if let Some((pane, Ok(_))) = wait.answered(kind, id, text) {
+                    cx.save("focused", &pane);
+                }
+            }
+            _ => {}
+        }
+    })
+}
+
 #[test]
 fn a_plugin_focusing_a_pane_shows_the_tab_it_is_in() {
     use super::Active::Terminal;
@@ -2631,7 +3205,7 @@ fn a_plugin_focusing_a_pane_shows_the_tab_it_is_in() {
     data.install_script(
         "focuser",
         json!({ "permissions": { "panes": [] } }),
-        "let done = false; wings.onPanes(async (panes) => { if (panes.length < 2 || done) return; done = true; await wings.focusPane(panes[0].paneId); await wings.storage.set('focused', panes[0].paneId); });",
+        &focuser(),
         &[],
         "focuser-scope",
     );
@@ -2676,14 +3250,38 @@ fn ask_socket(
     answer.lock().unwrap().take().unwrap()
 }
 
+/// A main with the hook `SessionStart`, which greets the session's source and project, and the tool `hi`.
+fn hooker() -> String {
+    fake::script("main", || {
+        |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            let Hear::Deliver("tool", token, text) = hear else {
+                return;
+            };
+            let call = said(text);
+            let text = if call["hook"] == true {
+                let project = call["project"]["name"].as_str().unwrap_or("no project");
+                json!({ "context": format!("hello {} in {project}", call["arguments"]["source"].as_str().unwrap_or("undefined")) }).to_string()
+            } else {
+                format!(
+                    "hi {}",
+                    call["arguments"]["name"].as_str().unwrap_or("undefined")
+                )
+            };
+            cx.call(
+                "toolDone",
+                json!({ "token": token, "text": text, "isError": false }),
+            );
+        }
+    })
+}
+
 #[test]
 fn claude_code_reaches_the_app_through_its_socket_and_a_hook_reaches_the_plugin() {
     let data = Data::temp();
     data.install_script(
         "hooker",
         json!({ "contributes": { "hooks": ["SessionStart"], "mcpTools": [{ "name": "hi", "description": "Says hi", "inputSchema": { "type": "object" } }], "mcpInstructions": "Hooker (hooker__*): says hi." } }),
-        "wings.onHook('SessionStart', (input, c) => `hello ${input.source} in ${c.project?.name ?? 'no project'}`);
-         wings.onTool('hi', (input) => `hi ${input.name}`);",
+        &hooker(),
         &[],
         "hooker-scope",
     );
@@ -2769,19 +3367,16 @@ fn claude_code_reaches_the_app_through_its_socket_and_a_hook_reaches_the_plugin(
     assert_eq!(view["rateLimits"][0]["account"], "work");
 }
 
-/// A page with a button in its bottom right corner that counts its presses. `PROPS` is what `mount` puts on the root.
-macro_rules! corner_page {
-    ($props:literal) => {
-        concat!(
-            "let n = 0;\n",
-            "function render(){wings.render(JSON.stringify({id:0,type:'#root',props:",
-            $props,
-            ",children:[{id:1,type:'Stack',props:{grow:true},children:[{id:2,type:'#text',text:'Pressed '+n+'.'}]},",
-            "{id:3,type:'Row',props:{justify:'end'},children:[",
-            "{id:4,type:'Button',props:{onClick:'4:click'},children:[{id:5,type:'#text',text:'Corner'}]}]}]}));}\n",
-            "globalThis.__wingsEvent=()=>{n++;render();return true;};render();",
-        )
-    };
+/// A page with a button in its bottom right corner that counts its presses. `props` is what `mount` puts on the root.
+fn corner_page(props: Value) -> String {
+    let mut pressed = 0;
+    fake::page("page", move |event| {
+        pressed += usize::from(event.is_some());
+        json!({ "id": 0, "type": "#root", "props": props, "children": [
+            { "id": 1, "type": "Stack", "props": { "grow": true }, "children": [{ "id": 2, "type": "#text", "text": format!("Pressed {pressed}.") }] },
+            { "id": 3, "type": "Row", "props": { "justify": "end" }, "children": [
+                { "id": 4, "type": "Button", "props": { "onClick": "4:click" }, "children": [{ "id": 5, "type": "#text", "text": "Corner" }] }] }] })
+    })
 }
 
 #[test]
@@ -2793,10 +3388,10 @@ fn a_fill_tab_page_reaches_its_cards_edges_and_one_that_does_not_fill_keeps_its_
             { "id": "filled", "title": "Filled", "page": "dist/filled.html", "opens": ["tab"], "newTab": true },
             { "id": "padded", "title": "Padded", "page": "dist/padded.html", "opens": ["tab"], "newTab": true }
         ] } }),
-        "",
+        &idle("main"),
         &[
-            ("filled", corner_page!("{fill:true}")),
-            ("padded", corner_page!("{}")),
+            ("filled", &corner_page(json!({ "fill": true }))),
+            ("padded", &corner_page(json!({}))),
         ],
         "framed-scope",
     );

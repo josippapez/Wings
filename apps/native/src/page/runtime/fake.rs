@@ -4,11 +4,12 @@
 //! functions, so the host can't tell which one it is talking to. It has no fuel, as it has no WebAssembly to run out.
 
 use super::{
-    Command, Link,
+    Command, Link, Store,
     wasm::{self, Frame, Host},
 };
 use serde_json::Value;
 use std::{
+    collections::HashMap,
     fs,
     io::Read,
     sync::{Arc, Mutex},
@@ -52,6 +53,12 @@ impl Cx<'_> {
     /// What storage, `broadcast`, `view_args` and `focused` are.
     pub fn link(&self) -> &Arc<dyn Link> {
         &self.host.link
+    }
+
+    /// `wings.storage.set` of `value`.
+    pub fn save(&self, key: &str, value: &Value) {
+        let set = Store::Set(key.into(), value.to_string());
+        self.link().storage(set).unwrap();
     }
 
     /// The `timer` import: `Guest::timer` is called with the id in `ms`.
@@ -109,6 +116,70 @@ pub fn page(
         }
     }
     source(name, move || Box::new(Drawn(render.clone())))
+}
+
+/// What a `script` hears: the turns of a `Guest`.
+pub enum Hear<'a> {
+    Start,
+    Event(&'a str, &'a Value),
+    Deliver(&'a str, u32, &'a str),
+}
+
+/// A frame that is one closure, which `make` returns anew each time the frame starts, and which hears each turn.
+pub fn script<F>(name: &str, make: impl Fn() -> F + Send + Sync + 'static) -> String
+where
+    F: FnMut(&mut Cx<'_>, Hear<'_>) + Send + 'static,
+{
+    struct Script<F>(F);
+    impl<F: FnMut(&mut Cx<'_>, Hear<'_>) + Send + 'static> Guest for Script<F> {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            (self.0)(cx, Hear::Start);
+        }
+        fn event(&mut self, cx: &mut Cx<'_>, handler: &str, payload: &Value) {
+            (self.0)(cx, Hear::Event(handler, payload));
+        }
+        fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, id: u32, text: &str) {
+            (self.0)(cx, Hear::Deliver(kind, id, text));
+        }
+    }
+    source(name, move || Box::new(Script(make())))
+}
+
+/// A frame that does nothing: a main that never answers what it is told.
+pub fn idle(name: &str) -> String {
+    script(name, || |_: &mut Cx<'_>, _: Hear<'_>| {})
+}
+
+/// The calls a script is waiting on, each with the `N` it goes on to when answered, as an `await` goes on.
+pub struct Pending<N>(HashMap<u32, N>);
+
+impl<N> Default for Pending<N> {
+    fn default() -> Self {
+        Self(HashMap::new())
+    }
+}
+
+impl<N> Pending<N> {
+    /// Makes the call `method`, to go on with `next` once it is answered.
+    pub fn call(&mut self, cx: &mut Cx<'_>, method: &str, params: Value, next: N) {
+        let id = cx.call(method, params);
+        self.0.insert(id, next);
+    }
+
+    /// What `Hear::Deliver(kind, id, text)` answers: the `N` of that call, and its result or its error.
+    pub fn answered(
+        &mut self,
+        kind: &str,
+        id: u32,
+        text: &str,
+    ) -> Option<(N, Result<Value, String>)> {
+        let answer = match kind {
+            "resolve" => Ok(serde_json::from_str(text).unwrap()),
+            "reject" => Err(text.to_owned()),
+            _ => return None,
+        };
+        Some((self.0.remove(&id)?, answer))
+    }
 }
 
 /// The guest for the file at `path`, when it is a fake's. A module starts with `\0asm`, so it never is.

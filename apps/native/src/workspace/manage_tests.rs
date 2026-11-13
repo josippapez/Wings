@@ -15,22 +15,38 @@ use super::{
     Workspace,
     plugin_tests::{open_plugins, until},
 };
-use crate::installed::fixture::Data;
+use crate::{
+    installed::fixture::Data,
+    page::runtime::{
+        fake::{self, Cx, Hear},
+        wasm::MARKER,
+    },
+};
 
 /// A `.wings-plugin` of plugin `id` whose native main saves `version` under `started`, asking to run `exec`.
 fn package(id: &str, version: &str, exec: &[&str]) -> Vec<u8> {
     let manifest = json!({ "id": id, "name": format!("Plugin {id}"), "version": version, "api": 1,
         "main": "dist/main.js", "permissions": { "exec": exec } });
-    let main = format!("wings.storage.set('started', '{version}');");
+    let version = version.to_owned();
+    let main = fake::script("main", move || {
+        let version = version.clone();
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            if let Hear::Start = hear {
+                cx.save("started", &json!(version));
+            }
+        }
+    });
+    // The stand-in's file is what the package ships as the main's module.
+    let main = std::fs::read(main.strip_prefix(MARKER).unwrap()).unwrap();
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for (name, body) in [
-        ("wings-plugin.json", manifest.to_string()),
-        ("dist/main.js", String::new()),
-        ("dist/native/main.js", main),
+        ("wings-plugin.json", manifest.to_string().into_bytes()),
+        ("dist/main.js", Vec::new()),
+        ("dist/native/main.wasm", main),
     ] {
         zip.start_file(name, zip::write::SimpleFileOptions::default())
             .unwrap();
-        zip.write_all(body.as_bytes()).unwrap();
+        zip.write_all(&body).unwrap();
     }
     zip.finish().unwrap().into_inner()
 }

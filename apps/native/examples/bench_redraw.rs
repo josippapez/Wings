@@ -14,7 +14,7 @@ use wings_native::{
     actions,
     host::Config,
     icons::Assets,
-    installed::fixture::{Data, FIXTURE_MAIN},
+    installed::fixture::{Data, fixture_main},
     terminal_view::TerminalView,
     workspace::Workspace,
 };
@@ -54,7 +54,7 @@ fn main() {
     data.install_script(
         "side",
         serde_json::json!({ "contributes": { "sidebars": [{ "id": "side", "title": "Side", "page": "dist/side.html" }] } }),
-        FIXTURE_MAIN,
+        &fixture_main(),
         &[("side", include_str!("../pages/dist/components-page.js"))],
         "bench",
     );

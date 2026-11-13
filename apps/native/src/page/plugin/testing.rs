@@ -565,12 +565,7 @@ pub(super) fn barrier() -> String {
     fake::source("barrier", || Box::new(Barrier))
 }
 
-/// A frame that does nothing: a main that never answers what it is told.
-pub(super) fn idle(name: &str) -> String {
-    struct Idle;
-    impl Guest for Idle {}
-    fake::source(name, || Box::new(Idle))
-}
+pub(super) use crate::page::runtime::fake::idle;
 
 /// A page that shows `{ heard }`, every message of the kind `kind` the host told it, as JSON, from the start.
 pub(super) fn hears(kind: &'static str) -> String {

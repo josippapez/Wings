@@ -4,40 +4,72 @@
 use std::time::{Duration, Instant};
 
 use gpui::{TestApp, TestAppWindow, px, size};
-use serde_json::json;
+use serde_json::{Value, json};
 use wings_spaces::project_info::{Item, Op, Place, Who};
 
 use super::{Added, InfoStore};
 use crate::{
     installed::fixture::Data,
+    page::runtime::fake::{self, Cx, Hear, Pending, idle},
     workspace::{Active, Workspace, tests::open_sized},
 };
 
-const LISTER: &str = r#"
-wings.onProjects(async (projects) => {
-  for (const project of projects) {
-    await wings.setProjectSection(project.id, 'issues', [
-      { id: 'r1', label: '[ui] First issue', detail: '#12 · open', badge: { text: 'open', tone: 'success' }, icon: 'todo',
-        open: { view: 'board', args: { id: 'r1' } } },
-      { id: 'r2', label: 'Second', parent: 'r1', open: { view: 'board' } },
-    ]);
-  }
-});
-wings.onSectionSort(async ({ sectionId, sort }) => {
-  await wings.setSectionSort(sectionId, sort);
-  await wings.storage.set('sorted', sort);
-});
-"#;
+/// A main that sets two issues as a section under each project it hears of, and sets the sort the window confirms.
+fn lister() -> String {
+    fake::script("main", || {
+        let mut wait = Pending::default();
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+            Hear::Deliver("projects", _, text) => {
+                for project in serde_json::from_str::<Value>(text)
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                {
+                    let rows = json!([
+                        { "id": "r1", "label": "[ui] First issue", "detail": "#12 · open", "badge": { "text": "open", "tone": "success" },
+                          "icon": "todo", "open": { "view": "board", "args": { "id": "r1" } } },
+                        { "id": "r2", "label": "Second", "parent": "r1", "open": { "view": "board" } },
+                    ]);
+                    cx.call(
+                        "setProjectSection",
+                        json!({ "projectId": project["id"], "sectionId": "issues", "rows": rows }),
+                    );
+                }
+            }
+            Hear::Deliver("sectionSort", _, text) => {
+                let sorted: Value = serde_json::from_str(text).unwrap();
+                let params = json!({ "sectionId": sorted["sectionId"], "sort": sorted["sort"] });
+                wait.call(cx, "setSectionSort", params, sorted["sort"].clone());
+            }
+            Hear::Deliver(kind, id, text) => {
+                if let Some((sort, Ok(_))) = wait.answered(kind, id, text) {
+                    cx.save("sorted", &sort);
+                }
+            }
+            _ => {}
+        }
+    })
+}
 
-const BOARD: &str = r#"
-wings.render(JSON.stringify({ id: 0, type: '#root', props: {}, children: [
-  { id: 1, type: '#text', text: 'Board ' + JSON.stringify(wings.viewArgs()) }] }));
-"#;
+/// A page that shows the args it was opened with.
+fn board() -> String {
+    fake::script("page", || {
+        |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            if let Hear::Start = hear {
+                let args = cx.link().view_args().unwrap_or_else(|| "null".into());
+                cx.render(&json!({ "id": 0, "type": "#root", "props": {}, "children": [{ "id": 1, "type": "#text", "text": format!("Board {args}") }] }));
+            }
+        }
+    })
+}
 
-const NOTES: &str = r#"
-wings.render(JSON.stringify({ id: 0, type: '#root', props: {}, children: [
-  { id: 1, type: '#text', text: 'Block page' }] }));
-"#;
+/// A page that shows "Block page".
+fn notes() -> String {
+    fake::page(
+        "page",
+        |_| json!({ "id": 0, "type": "#root", "props": {}, "children": [{ "id": 1, "type": "#text", "text": "Block page" }] }),
+    )
+}
 
 /// Runs the window, and the clock the page's timers read, until `done`.
 fn until(
@@ -93,8 +125,8 @@ fn a_plugins_section_lists_under_the_project_and_the_project_page_opens_over_the
                 "sorts": [{ "id": "status", "label": "Status" }, { "id": "date", "label": "Latest" }] }],
             "blocks": [{ "id": "notes", "title": "Notes block", "page": "dist/notes.html", "minHeight": 100 }],
         } }),
-        LISTER,
-        &[("board", BOARD), ("notes", NOTES)],
+        &lister(),
+        &[("board", &board()), ("notes", &notes())],
         "lister-scope",
     );
     let (app, mut window) = open_sized(Some(size(px(1000.0), px(640.0))), |config| {
@@ -266,6 +298,41 @@ fn a_plugins_section_lists_under_the_project_and_the_project_page_opens_over_the
     });
 }
 
+/// A block page that finds its state, sets `{ n: 1 }` if it found none, and shows what it found.
+fn keeps_block_state() -> String {
+    #[derive(Clone)]
+    enum Step {
+        Read,
+        Set,
+    }
+    fake::script("page", || {
+        let (mut wait, mut found) = (Pending::default(), Value::Null);
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+            Hear::Start => wait.call(cx, "blockState", json!({}), Step::Read),
+            Hear::Deliver(kind, id, text) => {
+                let show = |cx: &mut Cx<'_>, state: &Value| {
+                    cx.render(&json!({ "id": 0, "type": "#root", "props": {}, "children": [{ "id": 1, "type": "#text", "text": format!("State {state}") }] }));
+                };
+                match wait.answered(kind, id, text) {
+                    Some((Step::Read, Ok(state))) if state.is_null() => {
+                        found = state;
+                        wait.call(
+                            cx,
+                            "setBlockState",
+                            json!({ "state": { "n": 1 } }),
+                            Step::Set,
+                        );
+                    }
+                    Some((Step::Read, Ok(state))) => show(cx, &state),
+                    Some((Step::Set, Ok(_))) => show(cx, &found),
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    })
+}
+
 #[test]
 fn a_plugins_block_keeps_the_state_it_saved_with_the_project_page() {
     let data = Data::temp();
@@ -277,11 +344,8 @@ fn a_plugins_block_keeps_the_state_it_saved_with_the_project_page() {
     data.install_script(
         "keeper",
         json!({ "contributes": { "blocks": [{ "id": "kept", "title": "Kept", "page": "dist/kept.html" }] } }),
-        "",
-        &[("kept", r#"wings.blockState().then(async (s) => {
-            if (s == null) await wings.setBlockState({ n: 1 });
-            wings.render(JSON.stringify({ id: 0, type: '#root', props: {}, children: [{ id: 1, type: '#text', text: 'State ' + JSON.stringify(s) }] }));
-        });"#)],
+        &idle("main"),
+        &[("kept", &keeps_block_state())],
         "keeper-scope",
     );
     let (app, mut window) = open_sized(Some(size(px(1000.0), px(640.0))), |config| {
@@ -340,8 +404,8 @@ fn a_plugins_block_shows_the_icon_its_manifest_names_over_it_and_in_the_add_menu
     data.install_script(
         "sprints",
         json!({ "contributes": { "blocks": [{ "id": "sprint", "title": "Sprint", "page": "dist/sprint.html", "icon": "kanban" }] } }),
-        "",
-        &[("sprint", NOTES)],
+        &idle("main"),
+        &[("sprint", &notes())],
         "sprints-scope",
     );
     let (app, mut window) = open_sized(Some(size(px(1000.0), px(640.0))), |config| {

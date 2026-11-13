@@ -1,5 +1,6 @@
 use super::testing::show;
 use super::*;
+use crate::installed::fixture::{fixture_main, fixture_page};
 use crate::page::{
     runtime::fake::{self, Cx, Guest},
     tree::{Node, Tree},
@@ -65,81 +66,6 @@ fn probe() -> String {
             results: Vec::new(),
         })
     })
-}
-
-/// A text node.
-fn text_node(id: usize, text: &str) -> Value {
-    json!({ "id": id, "type": "#text", "text": text })
-}
-
-/// The fixture plugin's page: the count its main keeps, and a button that asks main to add one.
-fn fixture_page() -> String {
-    struct Page(Option<u64>);
-    impl Page {
-        fn draw(&self, cx: &mut Cx<'_>) {
-            let count = self
-                .0
-                .map_or("Loading…".to_owned(), |count| format!("Count: {count}"));
-            cx.render(&json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
-                { "id": 15, "type": "Page", "props": {}, "children": [
-                    { "id": 7, "type": "Slot", "props": { "name": "toolbar" }, "children": [
-                        { "id": 6, "type": "Toolbar", "props": {}, "children": [
-                            { "id": 2, "type": "Slot", "props": { "name": "title" }, "children": [text_node(1, "Fixture")] },
-                            { "id": 5, "type": "Slot", "props": { "name": "actions" }, "children": [
-                                { "id": 4, "type": "Badge", "props": { "tone": "success" }, "children": [text_node(3, "Plugin")] }] }] }] },
-                    { "id": 14, "type": "Slot", "props": { "name": "body" }, "children": [
-                        { "id": 13, "type": "Stack", "props": { "gap": "l" }, "children": [
-                            { "id": 12, "type": "Row", "props": { "gap": "m" }, "children": [
-                                { "id": 9, "type": "Button", "props": { "onClick": "9:onClick" }, "children": [text_node(8, "Increment")] },
-                                { "id": 11, "type": "Text", "props": { "weight": "medium" }, "children": [text_node(10, &count)] }] }] }] }] }] }));
-        }
-    }
-    impl Guest for Page {
-        fn start(&mut self, cx: &mut Cx<'_>) {
-            self.draw(cx);
-            cx.link()
-                .broadcast(json!({ "ask": "count" }).to_string())
-                .unwrap();
-        }
-        fn event(&mut self, cx: &mut Cx<'_>, _handler: &str, _payload: &Value) {
-            cx.link()
-                .broadcast(json!({ "ask": "increment" }).to_string())
-                .unwrap();
-        }
-        fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, _id: u32, text: &str) {
-            let heard: Value = serde_json::from_str(text).unwrap_or_default();
-            if let (true, Some(count)) = (kind == "broadcast", heard["count"].as_u64()) {
-                self.0 = Some(count);
-                self.draw(cx);
-            }
-        }
-    }
-    fake::source("page", || Box::new(Page(None)))
-}
-
-/// The fixture plugin's main: a count kept in storage, which it broadcasts when asked for it or to add one to it.
-fn fixture_main() -> String {
-    struct Main;
-    impl Guest for Main {
-        fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, _id: u32, text: &str) {
-            let heard: Value = serde_json::from_str(text).unwrap_or_default();
-            if kind != "broadcast" || heard["ask"].is_null() {
-                return;
-            }
-            let link = cx.link();
-            let saved: Value =
-                serde_json::from_str(&link.storage(Store::Get("count".into())).unwrap()).unwrap();
-            let mut count = saved.as_u64().unwrap_or(0);
-            if heard["ask"] == "increment" {
-                count += 1;
-                link.storage(Store::Set("count".into(), count.to_string()))
-                    .unwrap();
-            }
-            link.broadcast(json!({ "count": count }).to_string())
-                .unwrap();
-        }
-    }
-    fake::source("main", || Box::new(Main))
 }
 
 /// A frame that spins for `spin`, as a busy loop does, and then stops as a trap does, with `message`.

@@ -1679,12 +1679,7 @@ mod bar_tests {
 
     use super::super::plugin_tests::open_plugins;
     use super::Kind;
-    use crate::installed::fixture::Data;
-
-    const PAGE: &str = r#"
-const { h, mount } = wings.ui;
-mount(h('Page', null, h('Text', null, 'A page')));
-"#;
+    use crate::{installed::fixture::Data, page::runtime::fake::idle};
 
     /// As the desktop's bar: a plugin's pages that open as a tab or a window get a button beside its sidebars, unless
     /// the manifest says `button: false`, and a tab page's button opens it as a tab.
@@ -1700,8 +1695,8 @@ mount(h('Page', null, h('Text', null, 'A page')));
                     { "id": "one", "title": "One item", "page": "dist/one.html", "opens": ["tab"], "button": false },
                 ],
             } }),
-            "",
-            &[("side", PAGE), ("map", PAGE), ("one", PAGE)],
+            &idle("main"),
+            &[("side", &idle("page")), ("map", &idle("page")), ("one", &idle("page"))],
             "disk-scope",
         );
         let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});

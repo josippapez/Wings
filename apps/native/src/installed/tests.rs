@@ -5,9 +5,9 @@ use std::fs;
 use super::{
     DEV_SCOPE, FoundPage, WINGS_VERSION, discover,
     fixture::{Approval::*, Data},
-    frame_file, library, page_source,
+    frame_file, page_source,
 };
-use crate::{host::PluginPaths, page::runtime};
+use crate::host::PluginPaths;
 
 /// `WINGS_VERSION` with its last number raised by one: a plugin that needs a newer desktop than this one.
 fn newer() -> String {
@@ -51,7 +51,7 @@ fn only_plugins_that_are_on_approved_and_built_for_native_are_found() {
     );
     // The desktop's scope, so the storage is the desktop's.
     assert_eq!(ready.scope, "scope-ready");
-    assert!(ready.main.ends_with("plugins/ready/dist/native/main.js"));
+    assert!(ready.main.ends_with("plugins/ready/dist/native/main.wasm"));
     // Every view that opens as a tab and has a native page can open; only one that sets `newTab` is offered as a new tab.
     assert_eq!(
         ready.pages,
@@ -59,14 +59,14 @@ fn only_plugins_that_are_on_approved_and_built_for_native_are_found() {
             FoundPage {
                 id: "fixture".into(),
                 title: "Fixture".into(),
-                bundle: ready.main.with_file_name("fixture.js"),
+                bundle: ready.main.with_file_name("fixture.wasm"),
                 multiple: false,
                 new_tab: true,
             },
             FoundPage {
                 id: "plain".into(),
                 title: "Plain".into(),
-                bundle: ready.main.with_file_name("plain.js"),
+                bundle: ready.main.with_file_name("plain.wasm"),
                 multiple: false,
                 new_tab: false,
             }
@@ -104,7 +104,7 @@ fn dev_plugin(root: &std::path::Path, id: &str, sidebars: &[&str]) {
     });
     fs::write(dir.join("wings-plugin.json"), manifest.to_string()).unwrap();
     fs::write(dir.join("dist/main.js"), "").unwrap();
-    fs::write(dir.join("dist/native/main.js"), "").unwrap();
+    fs::write(dir.join("dist/native/main.wasm"), b"\0asm\x01\0\0\0").unwrap();
     for name in sidebars {
         fs::write(dir.join("dist").join(format!("{name}.html")), "").unwrap();
     }
@@ -160,48 +160,25 @@ fn a_plugin_that_ships_native_builds_of_its_sidebars_has_them_found_and_one_with
     let data = Data::temp();
     let dev = data.path().join("dev-plugins");
     dev_plugin(&dev, "sided", &["board", "hud"]);
-    fs::remove_file(dev.join("sided/dist/native/hud.js")).ok();
-    fs::write(dev.join("sided/dist/native/board.js"), "").unwrap();
+    fs::remove_file(dev.join("sided/dist/native/hud.wasm")).ok();
+    fs::write(dev.join("sided/dist/native/board.wasm"), b"\0asm\x01\0\0\0").unwrap();
     let found = discover(&PluginPaths {
         dev: Some(dev.clone()),
         ..data.paths()
     });
     assert_eq!(found.len(), 1);
-    // `dist/board.html` is `board.js` beside the main, as for a view; `hud` has none and is skipped.
+    // `dist/board.html` is `board.wasm` beside the main, as for a view; `hud` has none and is skipped.
     assert_eq!(
         found[0].sidebars,
         [FoundPage {
             id: "board".into(),
             title: "BOARD".into(),
-            bundle: found[0].main.with_file_name("board.js"),
+            bundle: found[0].main.with_file_name("board.wasm"),
             multiple: false,
             new_tab: false,
         }]
     );
     assert!(found[0].pages.is_empty());
-}
-
-#[test]
-fn a_page_runs_its_build_that_shares_react_only_when_that_was_built_with_the_plugins_library() {
-    let dir = tempfile::tempdir().unwrap();
-    let native = dir.path().join("dist/native");
-    fs::create_dir_all(native.join("shared")).unwrap();
-    let bundle = native.join("board.js");
-    fs::write(&bundle, "own React").unwrap();
-    // A plugin built before pages shared React has no library, and its pages run as they are.
-    assert!(library(dir.path()).is_none());
-    assert_eq!(page_source(dir.path(), &bundle, None).unwrap(), "own React");
-
-    fs::write(native.join("shared.js"), "var __wingsLib = {};").unwrap();
-    let shared = library(dir.path()).unwrap();
-    let lean = format!("{}{}\nshared React", runtime::SHARED_MARKER, shared.hash());
-    fs::write(native.join("shared/board.js"), &lean).unwrap();
-    assert_eq!(page_source(dir.path(), &bundle, Some(&shared)).unwrap(), lean);
-    // From another build of the library, or with none on file, the page brings its own React again.
-    let other = runtime::Library::new("var __wingsLib = { other: true };");
-    assert_eq!(page_source(dir.path(), &bundle, Some(&other)).unwrap(), "own React");
-    fs::remove_file(native.join("shared/board.js")).unwrap();
-    assert_eq!(page_source(dir.path(), &bundle, Some(&shared)).unwrap(), "own React");
 }
 
 /// A page is a WebAssembly module only when its `.wasm` is in the plugin's folder: a script that starts with the marker,

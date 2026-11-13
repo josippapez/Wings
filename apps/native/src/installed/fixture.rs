@@ -7,13 +7,111 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use serde_json::json;
+use serde_json::{Value, json};
 use wings_plugins::manifest::Manifest;
 
-use crate::host::PluginPaths;
+use crate::{
+    host::PluginPaths,
+    page::runtime::{
+        Store,
+        fake::{self, Cx, Guest},
+        wasm::MARKER,
+    },
+};
 
-pub const FIXTURE_MAIN: &str = include_str!("../../pages/dist/fixture-main.js");
-pub const FIXTURE_PAGE: &str = include_str!("../../pages/dist/fixture-page.js");
+/// A text node.
+fn text_node(id: usize, text: &str) -> Value {
+    json!({ "id": id, "type": "#text", "text": text })
+}
+
+/// The fixture plugin's page: the count its main keeps, and a button that asks main to add one.
+pub fn fixture_page() -> String {
+    struct Page(Option<u64>);
+    impl Page {
+        fn draw(&self, cx: &mut Cx<'_>) {
+            let count = self
+                .0
+                .map_or("Loading…".to_owned(), |count| format!("Count: {count}"));
+            cx.render(&json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+                { "id": 15, "type": "Page", "props": {}, "children": [
+                    { "id": 7, "type": "Slot", "props": { "name": "toolbar" }, "children": [
+                        { "id": 6, "type": "Toolbar", "props": {}, "children": [
+                            { "id": 2, "type": "Slot", "props": { "name": "title" }, "children": [text_node(1, "Fixture")] },
+                            { "id": 5, "type": "Slot", "props": { "name": "actions" }, "children": [
+                                { "id": 4, "type": "Badge", "props": { "tone": "success" }, "children": [text_node(3, "Plugin")] }] }] }] },
+                    { "id": 14, "type": "Slot", "props": { "name": "body" }, "children": [
+                        { "id": 13, "type": "Stack", "props": { "gap": "l" }, "children": [
+                            { "id": 12, "type": "Row", "props": { "gap": "m" }, "children": [
+                                { "id": 9, "type": "Button", "props": { "onClick": "9:onClick" }, "children": [text_node(8, "Increment")] },
+                                { "id": 11, "type": "Text", "props": { "weight": "medium" }, "children": [text_node(10, &count)] }] }] }] }] }] }));
+        }
+    }
+    impl Guest for Page {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            self.draw(cx);
+            cx.link()
+                .broadcast(json!({ "ask": "count" }).to_string())
+                .unwrap();
+        }
+        fn event(&mut self, cx: &mut Cx<'_>, _handler: &str, _payload: &Value) {
+            cx.link()
+                .broadcast(json!({ "ask": "increment" }).to_string())
+                .unwrap();
+        }
+        fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, _id: u32, text: &str) {
+            let heard: Value = serde_json::from_str(text).unwrap_or_default();
+            if let (true, Some(count)) = (kind == "broadcast", heard["count"].as_u64()) {
+                self.0 = Some(count);
+                self.draw(cx);
+            }
+        }
+    }
+    fake::source("page", || Box::new(Page(None)))
+}
+
+/// The fixture plugin's main: a count kept in storage, which it broadcasts as it starts, when asked for it, and
+/// when asked to add one to it.
+pub fn fixture_main() -> String {
+    struct Main;
+    impl Main {
+        fn send(cx: &mut Cx<'_>, add: bool) {
+            let link = cx.link();
+            let saved: Value =
+                serde_json::from_str(&link.storage(Store::Get("count".into())).unwrap()).unwrap();
+            let mut count = saved.as_u64().unwrap_or(0);
+            if add {
+                count += 1;
+                link.storage(Store::Set("count".into(), count.to_string()))
+                    .unwrap();
+            }
+            link.broadcast(json!({ "count": count }).to_string())
+                .unwrap();
+        }
+    }
+    impl Guest for Main {
+        // A page that asked before main was up went unheard, as a broadcast reaches only the frames running then.
+        // The SDK's main says it's up for the same reason.
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            Self::send(cx, false);
+        }
+        fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, _id: u32, text: &str) {
+            let heard: Value = serde_json::from_str(text).unwrap_or_default();
+            if kind == "broadcast" && !heard["ask"].is_null() {
+                Self::send(cx, heard["ask"] == "increment");
+            }
+        }
+    }
+    fake::source("main", || Box::new(Main))
+}
+
+/// Puts the frame `source` in `native` as a build is: `<stem>.wasm` for a stand-in, `<stem>.js` for a script.
+fn put_frame(native: &Path, stem: &str, source: &str) {
+    match source.strip_prefix(MARKER) {
+        Some(stand_in) => fs::copy(stand_in, native.join(format!("{stem}.wasm"))).map(drop),
+        None => fs::write(native.join(format!("{stem}.js")), source),
+    }
+    .unwrap();
+}
 
 const GAUGE: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 14 4-4" /><path d="M3.34 19a10 10 0 1 1 17.32 0" /></svg>"#;
 
@@ -88,9 +186,9 @@ impl Data {
         }
         if native {
             let native = dir.join("dist/native");
-            fs::write(native.join("main.js"), FIXTURE_MAIN).unwrap();
-            fs::write(native.join("fixture.js"), FIXTURE_PAGE).unwrap();
-            fs::write(native.join("plain.js"), FIXTURE_PAGE).unwrap();
+            put_frame(&native, "main", &fixture_main());
+            put_frame(&native, "fixture", &fixture_page());
+            put_frame(&native, "plain", &fixture_page());
         }
         let approved = match approval {
             Approval::Never => serde_json::Value::Null,
@@ -142,14 +240,14 @@ impl Data {
         )
         .unwrap();
         fs::write(dir.join("dist/main.js"), "").unwrap();
-        fs::write(dir.join("dist/native/main.js"), main).unwrap();
+        put_frame(&dir.join("dist/native"), "main", main);
         // A manifest that names an icon gets a Lucide "gauge" (ISC) of that name.
         if let Some(icon) = whole.get("icon").and_then(|icon| icon.as_str()) {
             fs::write(dir.join(icon), GAUGE).unwrap();
         }
         for (stem, source) in pages {
             fs::write(dir.join("dist").join(format!("{stem}.html")), "").unwrap();
-            fs::write(dir.join("dist/native").join(format!("{stem}.js")), source).unwrap();
+            put_frame(&dir.join("dist/native"), stem, source);
         }
         let granted: Manifest = serde_json::from_value(whole).unwrap();
         let approved =

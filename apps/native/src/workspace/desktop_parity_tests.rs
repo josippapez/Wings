@@ -125,8 +125,9 @@ fn the_new_settings_are_saved_and_come_back() {
 #[test]
 fn settings_is_the_desktops_size_for_each_section() {
     use super::plugin_tests::{click_spot, install_tuner};
+    use crate::page::runtime::fake::idle;
     let data = Data::temp();
-    install_tuner(&data, "");
+    install_tuner(&data, &idle("main"));
     let (app, mut window) = super::tests::open_sized(
         Some(gpui::size(gpui::px(1280.0), gpui::px(900.0))),
         |config| config.plugins = Some(data.paths()),
