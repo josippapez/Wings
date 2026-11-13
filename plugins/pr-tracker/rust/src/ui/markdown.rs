@@ -166,7 +166,8 @@ pub fn parse_blocks(src: &str, depth: usize) -> Vec<Block> {
             i += 1;
             continue;
         }
-        let lower = line.to_lowercase();
+        // ASCII only: `to_lowercase` can change a letter's length, and these offsets are used on the text itself.
+        let lower = line.to_ascii_lowercase();
         let tag_at = if depth < MAX_DETAILS_DEPTH { lower.find("<details") } else { None };
         if let Some(at) = tag_at.filter(|at| *at > 0 && !line[..*at].trim().is_empty() && line[..*at].matches('`').count() % 2 == 0) {
             paragraph.push(line[..at].trim().to_owned());
@@ -186,11 +187,11 @@ pub fn parse_blocks(src: &str, depth: usize) -> Vec<Block> {
             }
             let mut inner = body.join("\n");
             if open <= 0
-                && let Some(close) = inner.to_lowercase().rfind("</details>")
+                && let Some(close) = inner.to_ascii_lowercase().rfind("</details>")
             {
                 inner.truncate(close);
             }
-            let low = inner.to_lowercase();
+            let low = inner.to_ascii_lowercase();
             let mut summary = "Details".to_owned();
             if let Some(start) = low.find("<summary").filter(|s| low[*s..].contains('>'))
                 && let Some(end) = low[start..].find("</summary>")
@@ -454,6 +455,16 @@ pub fn markdown(source: &str) -> Node {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A description is someone else's text. A fold was looked for in a lowercased copy and cut in the original, and
+    /// lowercasing can change a letter's length ("İ" grows by a byte), so text like this stopped the page.
+    #[test]
+    fn a_fold_after_letters_that_change_length_in_lowercase_is_read_without_a_panic() {
+        assert_eq!(
+            parse_blocks("İİİé <details><summary>İİ More</summary>\nBody é\n</details>", 0),
+            [Block::Paragraph("İİİé".into()), Block::Details { summary: "İİ More".into(), blocks: vec![Block::Paragraph("Body é".into())] }]
+        );
+    }
 
     #[test]
     fn blocks_are_read_as_the_desktop_parser_reads_them() {
