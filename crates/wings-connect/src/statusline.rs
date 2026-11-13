@@ -73,6 +73,9 @@ pub struct Session {
     pub prompt_cache: Option<Cache>,
     /// When Wings got it, in ms.
     pub at: u64,
+    /// The limits it last sent, to tell a status that repeats them from one with news.
+    #[serde(skip)]
+    limits: (Option<Window>, Option<Window>),
 }
 
 #[derive(Debug, Default)]
@@ -114,14 +117,7 @@ impl Statusline {
         let account = account.as_str().filter(|name| wings_spaces::claude_accounts::valid_name(name)).map(str::to_string);
         let limits = &status["rate_limits"];
         let (five_hour, seven_day) = (window(&limits["five_hour"]), window(&limits["seven_day"]));
-        // Absent before a session's first response, so that says nothing about the account.
-        if five_hour.is_some() || seven_day.is_some() {
-            self.limits.retain(|l| l.account != account);
-            // Newest first. Names are checked, and there are only as many as you made.
-            self.limits.insert(0, Limits { account: account.clone(), login: login.map(str::to_string), five_hour, seven_day, at: now });
-            self.limits.truncate(ACCOUNTS_MAX);
-        }
-        let Some(id) = session_id(&status["session_id"]) else { return };
+        let id = session_id(&status["session_id"]);
         let context = &status["context_window"];
         let usage = &context["current_usage"];
         let current_usage = usage.is_object().then(|| Usage {
@@ -130,6 +126,23 @@ impl Statusline {
             cache_creation_input_tokens: count(&usage["cache_creation_input_tokens"]).unwrap_or(0),
             cache_read_input_tokens: count(&usage["cache_read_input_tokens"]).unwrap_or(0),
         });
+        let (total_input_tokens, total_output_tokens) = (count(&context["total_input_tokens"]), count(&context["total_output_tokens"]));
+        // A session's limits are from its own last response, and its status line can run on a timer, so an idle
+        // session sends the same old numbers again and again. One that sends what it sent before, with no tokens
+        // used since, has no news: taking it would put old limits over a working session's new ones.
+        let repeats = id.and_then(|id| self.sessions.get(id)).is_some_and(|last| {
+            last.limits == (five_hour.clone(), seven_day.clone())
+                && (last.total_input_tokens, last.total_output_tokens) == (total_input_tokens, total_output_tokens)
+                && last.current_usage == current_usage
+        });
+        // Absent before a session's first response, so that says nothing about the account.
+        if (five_hour.is_some() || seven_day.is_some()) && !repeats {
+            self.limits.retain(|l| l.account != account);
+            // Newest first. Names are checked, and there are only as many as you made.
+            self.limits.insert(0, Limits { account: account.clone(), login: login.map(str::to_string), five_hour: five_hour.clone(), seven_day: seven_day.clone(), at: now });
+            self.limits.truncate(ACCOUNTS_MAX);
+        }
+        let Some(id) = id else { return };
         let cache = &status["prompt_cache"];
         let prompt_cache = cache.is_object().then(|| Cache {
             warm: cache["warm"].as_bool().unwrap_or(false),
@@ -142,11 +155,12 @@ impl Statusline {
             model,
             context_window_size: count(&context["context_window_size"]),
             used_percentage: percent(&context["used_percentage"]),
-            total_input_tokens: count(&context["total_input_tokens"]),
-            total_output_tokens: count(&context["total_output_tokens"]),
+            total_input_tokens,
+            total_output_tokens,
             current_usage,
             prompt_cache,
             at: now,
+            limits: (five_hour, seven_day),
         };
         self.sessions.insert(id.to_string(), session);
         if self.sessions.len() > SESSIONS_MAX {
@@ -218,6 +232,33 @@ mod tests {
         assert!(!view.to_string().contains("transcript") && !view.to_string().contains("cost"));
     }
 
+    /// Every open session's status line can run every few seconds. One that has been idle since the limits were reset
+    /// kept sending the old numbers, which replaced a working session's new ones each time.
+    #[test]
+    fn a_session_that_repeats_its_old_limits_does_not_replace_a_working_sessions_new_ones() {
+        let limits = |five: f64, week: f64| json!({ "five_hour": { "used_percentage": five, "resets_at": 1738425600 }, "seven_day": { "used_percentage": week, "resets_at": 1738857600 } });
+        let shown = |s: &Statusline| (s.view()["rateLimits"][0]["fiveHour"]["usedPercentage"].clone(), s.view()["rateLimits"][0]["sevenDay"]["usedPercentage"].clone());
+        let (idle, working) = (status(ID), status("4c21b0c5-8113-4f55-9493-fa156c3fa369"));
+        let mut s = Statusline::default();
+        let mut old = idle.clone();
+        old["rate_limits"] = limits(93.0, 38.0);
+        s.record(&old, &Value::Null, None, 1000);
+        let mut new = working.clone();
+        new["rate_limits"] = limits(1.0, 11.0);
+        s.record(&new, &Value::Null, None, 2000);
+        s.record(&old, &Value::Null, None, 3000);
+        assert_eq!(shown(&s), (json!(1.0), json!(11.0)));
+        // The working session's next response has the same numbers and more tokens: still its, and still the newest.
+        new["context_window"]["total_output_tokens"] = json!(1300);
+        s.record(&new, &Value::Null, None, 4000);
+        assert_eq!(s.view()["rateLimits"][0]["at"], 4000);
+        // The idle one answers again: it has news now.
+        old["context_window"]["total_output_tokens"] = json!(1300);
+        old["rate_limits"] = limits(2.0, 11.0);
+        s.record(&old, &Value::Null, None, 5000);
+        assert_eq!(shown(&s), (json!(2.0), json!(11.0)));
+    }
+
     #[test]
     fn a_status_without_limits_keeps_the_last_ones() {
         let mut s = Statusline::default();
@@ -243,7 +284,10 @@ mod tests {
         let mut work = status(other);
         work["rate_limits"]["five_hour"] = json!({ "used_percentage": 90, "resets_at": 1738420000 });
         s.record(&work, &json!("work"), None, 2000);
-        s.record(&status(ID), &Value::Null, None, 3000);
+        // After another response, or it would be a repeat with no news.
+        let mut again = status(ID);
+        again["context_window"]["total_output_tokens"] = json!(1300);
+        s.record(&again, &Value::Null, None, 3000);
         let view = s.view();
         let accounts: Vec<_> = view["rateLimits"].as_array().unwrap().iter().map(|l| (l["account"].clone(), l["fiveHour"]["usedPercentage"].clone())).collect();
         assert_eq!(accounts, [(Value::Null, json!(23.5)), (json!("work"), json!(90.0))]);
