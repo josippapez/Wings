@@ -44,7 +44,7 @@ From a terminal or a script, use the `wings plugin` command while Wings is open:
 ```sh
 wings plugin install ~/Downloads/cyclops.wings-plugin   # or github.com/owner/name
 wings plugin list            # --json for scripts
-wings plugin link ~/code/my-plugin   # load a plugin folder in place, for development: `wings-plugin dev` does it on each save
+wings plugin link ~/code/my-plugin   # load a plugin folder in place, for development
 wings plugin enable cyclops  # also update, disable, remove
 ```
 
@@ -58,243 +58,102 @@ Plugins start and stop as you turn them on and off, with no restart. Installed p
 
 ## Packaging
 
-A `.wings-plugin` file is a zip of the plugin folder, with `wings-plugin.json` at its root or one folder down. A plugin written in TypeScript makes one with `wings-plugin pack` from `wings-plugin-sdk`, which builds `src/` and packs the built files in `dist/` with the manifest and the files the plugin ships. A plain JavaScript plugin can zip its git repo:
+A `.wings-plugin` file is a zip of the plugin folder, with `wings-plugin.json` at its root or one folder down and the built modules in `dist/native/`. A repo that commits its modules makes one with:
 
 ```sh
-npx wings-plugin pack                                          # TypeScript: writes <id>.wings-plugin
-git archive --format=zip --output my-plugin.wings-plugin HEAD  # plain JavaScript
+git archive --format=zip --output my-plugin.wings-plugin HEAD
 ```
 
-`wings-plugin init <folder>` makes a starter repo with the SDK and a workflow that builds and attaches the package to a GitHub release when you push a version tag, so the repo holds only source. Wings installs a repo's release package. A TypeScript repo with no release yet can't be installed from its link, since its source has no built files.
+Wings installs a repo from its link too: the repo, its release's `.wings-plugin`, or a plugin folder in a repo. The modules have to be committed, because the install has no build step.
 
-## Plugins written in Rust
+## Writing a plugin
 
-Rust is how new plugins here are meant to be written, and the TypeScript ones are being moved over one at a time. Wings 0.2.17 and later runs a plugin's frames (its main and each page) as WebAssembly modules, sandboxed, with the same permissions and the same controls on its pages as a TypeScript plugin's. The rest of this page still describes the TypeScript way.
+A plugin is Rust built to WebAssembly. Wings 0.2.17 and later runs each frame (its main and each page) as a sandboxed module, with the permissions its manifest asks for. There is no JavaScript and no `src/`.
 
-- The plugin's crate is `<plugin>/rust/`, a `cdylib` that uses the Rust SDK in `packages/plugin-rs` (`wings-plugin`). Each frame is one module, built from the crate with the feature of the frame's name, like `main` or `sidebar`. All the crates are members of the workspace in `plugins/Cargo.toml`.
-- The manifest names the modules: `"main": "dist/native/main.wasm"`, and a page as `"page": "dist/native/sidebar.wasm"`. There is no `src/` and no JavaScript.
-- `sh build-rust.sh` in `plugins/` builds every frame the manifests name into `<plugin>/dist/native/`, and those modules are committed like the TypeScript plugins' `dist/`. `sh build-rust.sh --check` fails when a committed module differs from what its crate builds. It needs `rustup target add wasm32-unknown-unknown`.
-- `apps/native/src/page/plugin/shipped.rs` runs the committed modules against a fake app, as it runs the TypeScript plugins.
+### Layout
+
+```
+my-plugin/
+  wings-plugin.json     the manifest
+  icon.svg
+  rust/                 the crate: Cargo.toml, src/lib.rs, one file per frame
+  dist/native/          the built modules, committed: main.wasm, <page>.wasm
+```
+
+- The crate is `<plugin>/rust/`, a `cdylib` that depends on `wings-plugin` (`packages/plugin-rs`). Add it to `members` in `plugins/Cargo.toml`.
+- One Cargo feature per frame, named like the frame: `main`, `sidebar`, `graph`. `lib.rs` pulls in a frame's module with `#[cfg(feature = "<frame>")]`, and the module defines `#[unsafe(no_mangle)] pub fn start()`.
+- The manifest names the modules: `"main": "dist/native/main.wasm"` and a page as `"page": "dist/native/sidebar.wasm"`. The frame is found by the file's name.
+- A main only runs: its UI is badges, pane status, the diff viewer, project sections and its pages. A page calls `wings_plugin::run(view)` (or `run_filled` for a page that fills its tab edge to edge) in `start`. `view` returns the page's nodes from the page's state. It runs again after every turn (an event, an answer, a timer), and the app gets the tree when it changed.
+
+### Build and check
+
+```sh
+rustup target add wasm32-unknown-unknown   # once
+sh build-rust.sh                           # every plugin; `sh build-rust.sh <plugin>` for one
+sh build-rust.sh --check                   # fails when a committed module differs from what rust/ builds
+pnpm test                                  # cargo test --workspace: the plugins' own tests
+```
+
+Run `sh build-rust.sh` from `plugins/` and commit the `.wasm` files with the source. Debug builds of the app load this repo's `plugins/` folder at startup, always on (`cargo run --manifest-path apps/native/Cargo.toml -- --plugins-dev-root plugins`), and a release app takes `wings plugin link <folder>`.
+
+### Building a page
+
+`wings_plugin::ui` has the components, by the names and props the app reads: `page`, `toolbar`, `row`, `stack`, `card`, `list`, `list_row`, `button`, `text`, `muted`, `title`, `heading`, `badge`, `chips`, `select`, `checkbox`, `text_input`, `search_field`, `combobox`, `gauge`, `graph`, `empty`, `loading`, `notice`, `confirm`, `icon` and more. Anything else is `Node::new("<kind>")` with `.prop`, `.on` and `.child`. Give a row of a list a `key`, so it keeps its state between builds. A button or a text takes a `title` prop that the app shows as a tooltip on hover (`.prop("title", "...")`). `plugins/changes/rust/src/sidebar.rs` is a page to copy from.
+
+The page's own state lives in a `thread_local!` that handlers and tasks change. `wings_plugin::task::spawn` runs an async task (a `host::exec`, a `cli` call) and the page is built again when it has made progress.
+
+### Talking to main
+
+Main and each page are separate frames, and they talk through messages (`messages::tell` and `messages::on`, JSON of at most 64,000 characters, to the other frames of the plugin). Don't write request ids or timeouts by hand. A page tells main what it wants (`open`, `commit`) with an `id`, and main tells back `{ id, error }` under a `done` message, as `changes/rust/src/lib.rs` does. `ipc.rs` of `pr-tracker` sends long messages in parts. A value every frame reads and hears change is a `settings::Setting`. What a plugin keeps is `host` storage, which every frame shares.
+
+### Helpers
+
+Reach for these before writing your own. Each is a module of `wings-plugin`. The last column is a plugin here that uses it, by its path under `plugins/`.
+
+| Module | For | A plugin that uses it |
+|---|---|---|
+| `ui` | The components and `Node` | `changes/rust/src/sidebar.rs` |
+| `host` | The `wings.*` calls: `exec`, `exec_stream`, `exec_lines`, `on_panes`, `set_project_section`, `block_state`, `open_view_with`, `view_args`, `disk_usage`, timers, focus | `hud/rust/src/main_frame.rs` |
+| `messages` | `tell` and `on`: messages between frames | `schedules/rust/src` |
+| `settings` | `Setting`: a stored value that every frame reads and hears change | `pr-tracker/rust/src` |
+| `task` | `spawn`, `join_all`: async tasks the page waits on | `changes/rust/src/sidebar.rs` |
+| `tools` | `register(name, schema, run)`: Claude's tools, with the input checked against the manifest's schema | `schedules/rust/src` |
+| `hooks` | `on_hook`: the Claude Code hooks a main answers. Call `tools::register` in the same main | `tasks/rust/src` |
+| `sessions` | `follow`: the Claude sessions in panes, each run's older entries and then its live ones | `hud/rust/src/main_frame.rs` |
+| `cli` | `Cli`: `gh`, `glab` and `az` calls that tell "not installed" and "signed out" from a failure, and the badge with Install, Sign in and Try again | `work-item/rust/src/az.rs` |
+| `azure`, `github`, `remote` | `az rest` work items, one `gh` call for many repos, and which forge a remote URL is | `work-item/rust`, `pr-tracker/rust` |
+| `git` | `repo_root`, `watched_project`, `default_branch`, `on_change` and more: read a repo through `host::exec` and hear it change | `changes/rust/src` |
+| `cache` | `Cached` (a value per key, with a TTL) and `Batch` | `work-item/rust/src` |
+| `poll` | `while_focused`: a timer that runs only while Wings is in front | `changes/rust/src/main_frame.rs` |
+| `format`, `local_time` | Numbers, times and the Mac's wall clock | `schedules/rust/src` |
+| `diff` | The diff viewer, from a main, with live updates | `changes/rust/src/diff.rs` |
+
+### Tools
+
+Claude's tools, which are also `wings <plugin> <tool>` commands, are declared in the manifest's `contributes.mcpTools` (name, description, input schema) and answered in main with `tools::register(name, schema, run)`. The input is checked against the schema before `run`, so a wrong one comes back to Claude as an error that names the field. A schema with a `pattern` can't be registered: register it without the pattern and check the field by hand. Claude sees only the tool names and the `mcpInstructions` line (up to 500 characters) at the start of a session.
+
+### Tests
+
+- The plugin's own tests run with `cargo test` (`pnpm test`). Built for this computer, the SDK has no host: nothing is drawn or sent, a call is never answered, the clock stands at 0 and the zone is UTC. `host::testing::answer` answers the plugin's calls with made-up output, `host::testing::set_now` moves the clock and `local_time::testing::zone` sets a zone.
+- `apps/native/src/page/plugin/shipped.rs` runs the committed modules against a fake app and the manifest they declare, so a call a plugin makes meets the permission its manifest grants. It rebuilds nothing: run `sh build-rust.sh` first.
+- The app's own tests use Rust fakes (`src/page/runtime/fake.rs`) or a real module built from `apps/native/pages/fixture-wasm*`.
+
+### Screenshots
+
+A page is looked at before it ships. `apps/native/examples/shot_plugins.rs` renders plugins offscreen with real rendering, over made-up data, at 1000 and 640 points wide, and prints each PNG's path. macOS only. The first run after a module changes compiles it, and a page that takes over 10 seconds to show fails with `page did not show ...`: run it again.
+
+```sh
+pnpm --dir plugins shot <out-dir> --changes
+# the same: cargo run --manifest-path apps/native/Cargo.toml --example shot_plugins --features test-support -- <out-dir> --changes
+```
+
+The flags are `--changes`, `--schedules`, `--hud`, `--disk`, `--work-item`, `--tasks`, `--pr-tracker` and `--stopped`. With no flag it renders Worktrees' sidebar over a repo it makes. `--external <folder>` renders the plugins shipped from their own repos. `--tooltips` points at a titled Button and Text until their tooltips show. A new plugin or page gets a scene in `shot_plugins.rs` that builds the committed module over made-up data: copy the one for the plugin nearest to it.
 
 `dev-servers/` is the smallest one to read, and `hud/` has a main script and a page: a crate with two frames, unit tests that run with `cargo test` (`pnpm test` runs them), and `apps/native/examples/shot_plugins.rs --hud` to render its sidebar. `changes/` has three frames and the diff viewer: its pages run git themselves and ask its main to open a diff. `worktrees/` is a page that runs git and searches the disks. Its tests answer the plugin's calls with a made-up git (`host::testing::answer`), and `shot_plugins.rs` with no flag renders it over a repo it makes. `work-item/` is the one that runs `az`: its main badges panes and fills each project's Work items section, and its item tab (it reads what it was opened with by `host::view_args`, so it needs Wings 0.2.21) and Sprint block run `az` themselves. The SDK has what it needed: `cli::Cli` runs `az`, `gh` or `glab` and tells a missing program and a signed-out one from a failure (with the badge for either, Sign in and Try again), `azure::parse_remote` and `azure::work_items` (the work items asked together are one `az rest`), `cache::Cached` (a value per key, with a TTL and a TTL for a failure) and `cache::Batch`, `git::watched_project`, `host::open_view_with`, `host::set_project_section`, `host::block_state`, and `run_filled` for a page that fills its tab edge to edge. Its tests in `shipped.rs` run in a process of their own where `az` is a fake script, which answers from `apps/native/examples/shot_plugins/work_item_az.json`, so no test reaches Azure DevOps even when the Mac has `az` installed. `schedules/` has a main that keeps the timers and makes every change, and two pages (the Schedules tab and the "Allow this schedule?" modal) that read what main saved themselves and ask it for a change with `messages::tell`, which it answers with a `done` message. It needed `local_time` (the Mac's wall clock as JS `Date` has it, through a change to summer time; `local_time::testing::zone` sets a zone for a test), `remote::parse_remote` (the forge a git remote names: Azure DevOps, GitHub or GitLab) and `host::exec_lines` (`wings.exec` with `onOutput`, for a login that prints a code). A tool whose manifest schema has a `pattern` can't register that schema, so Schedules registers it without the pattern and checks `time` by hand. `tasks/` (Issues) has a main and four pages, and answers Claude Code's hooks with `wings_plugin::hooks::on_hook`, which needs `tools::register` called in the same main, since the host sends a hook to the same message a tool call comes in; its pages read the issues from storage and ask its main to change them with a message and an answer.
 
 `disk/` is the one that scans disks. Its main runs every scan with `host::disk_usage` (which streams the scan's progress and has a `stopper`) and keeps the Collector, and tells its tab what describes each scan over the plugin's messages (`ask.rs` is a tab's ask-and-wait over them), never a tree: Wings keeps the trees of the scans it ran for `reuse`, so the tab asks for the folder in the middle of its map down six rings, and a tool for the folder it answers about, with `wings.diskUsage` and `reuse: true`, a few thousand entries at most. A scan's own answer asks for one entry. Its tests need no disk: `cargo test` runs them, and its page is rendered over a folder of made-up files by `shot_plugins.rs --disk`.
 
-`pr-tracker/` has four frames: its main badges the panes and fills each project's Pull requests section, opens the diff viewer and posts the replies typed in it, and answers `failing_checks`; the PR tab, the Pull requests block and the Settings page run `gh`, `glab`, `az` and the API calls themselves (`forges/` has one module per provider), and ask main (`ipc.rs`: messages, in parts when long) for what only it can do or already holds: the lists the sidebar loads, the diff viewer, the agent on a branch. A poll costs the processes the TypeScript's did: panes on one repo and branch share one lookup, and the lists of every project are one GraphQL call on GitHub (`track/budget.rs` counts them). It added to the SDK: `remote::parse_remote` (which forge a remote URL is), `github::github_pulls` (one `gh` call for many repos), `settings::Setting` (a value every frame hears change), `Cli::exec`, `Cli::post` and `Cli::sign_in_with` (the login's output, for gh's one-time code), `host::exec_stream`, `diff::open_live_id`, `cache::Cached::peek`, `format::iso_of` and `host::testing::set_now`. Its tests in `shipped.rs` run in a process where `gh` and `az` are fake scripts that answer from `apps/native/examples/shot_plugins/pr_tracker_gh.json` and `pr_tracker_az.json`.
-
-## Writing a plugin
-
-Wings runs plain JavaScript: `main` and each page's `<script>`. You write TypeScript and React, and `wings-plugin build` from the `wings-plugin-sdk` npm package bundles it into those files. The package also has the types of `wings` and the helpers below. `npx wings-plugin-sdk init <folder>` starts a plugin with the SDK set up (its starter is `packages/plugin-sdk/template/`).
-
-Every `wings.on*` call returns a function that removes the listener, so a React effect can return it as its cleanup.
-
-### Layout
-
-```
-<id>/
-  wings-plugin.json
-  icon.svg
-  README.md        Wings shows it on the plugin's Settings page
-  src/
-    main.ts        the main script, which runs hidden
-    pages/         one file per page: sidebar.tsx, board.tsx, ...
-    main/          the modules a large main script splits into
-    ui/            React components the pages share
-    lib/           logic with no UI, messages and settings, and their tests
-    tools.ts       the tools Claude gets, if the plugin has any
-  preview/         fixtures that `wings-plugin shot` draws
-  dist/            what the build writes
-```
-
-The entries are `src/main.ts` and each file in `src/pages/`. Everything else in `src/` is a module they import. Each entry builds into `dist/` under its own name: `src/main.ts` becomes `dist/main.js` and `src/pages/sidebar.tsx` becomes `dist/sidebar.js`, so the manifest says `"main": "dist/main.js"` and `"page": "dist/sidebar.html"`. A plugin with no `src/main.ts` gets an empty `dist/main.js`, since Wings needs a main.
-
-A page default-exports its component and says where it shows with `export const page = { place: "sidebar" }`. `place` is `sidebar`, `popover`, `view`, `block`, `tab` or `settings`, and `fill: true` lays the page out edge to edge. A page built from `src/pages` mounts in one place, so a page that shows as a view and as a block is two files. It builds from `wings-plugin-ui`, and Wings' `plugin-ui.css` styles the components, so a Wings update restyles every plugin. The build writes the mount, which calls the matching `showSidebar`, `showView`, `showBlock` or other function, and the page's HTML. A `dist/<page>.html` of your own wins over the generated one. A page can bring its own components and CSS (`import "./sidebar.css"`, next to the page). A page that draws its own DOM, without React, is a `.ts` file, and gets its frame from `mountShell` in `wings-plugin-sdk/shell`. See the [README](../packages/plugin-ui/README.md) of `wings-plugin-ui` for the components, the `w-*` class contract and the `--wings-*` variables.
-
-### Build and check
-
-```sh
-cd plugins
-pnpm run deps   # installs plugin-sdk, plugin-ui and the plugins, each has its own lockfile
-pnpm build   # writes each plugin's dist/
-pnpm check   # type-checks, and fails if a committed file in dist/ is out of date
-pnpm test    # runs the tests in every plugin's src/, which can import any module there
-```
-
-`dist/` is committed, because Wings installs a plugin folder straight from `main`. Commit it with the source change: `pnpm check` compares the content of each built file with the one on disk and fails when they differ, and a release stops on that. A plugin in its own repo commits only source and ships with `wings-plugin pack`.
-
-The build also checks the manifest against what it built, and fails with a line for each place they disagree, so a typo doesn't wait for Wings to load the plugin. It catches a `main` that isn't `dist/main.js`; a page the build doesn't write and the folder doesn't have; an `icon` that isn't a file; a `wings.onTool("name")` with no `mcpTools` entry, or the reverse; a `wings.onHook("event")` with no `hooks` entry, or the reverse; a call of `wings.setBadge`, `setPaneStatus`, `setPaneRail`, `openDiff` or `updateDiff` without `badges`, `status`, `rail` or `diff` in `contributes.ui`; a `wings.openView("id")` that no sidebar or view has; and an id in an `open` of a pane status or rail, a project section row or a notification button that names no view it can open. The bundles are searched as text, so a name the code computes, like `wings.openView(id)`, is skipped.
-
-While you work, `wings-plugin dev` in the plugin's folder builds on each save and has the running Wings restart the plugin. `wings-plugin shot` draws the pages (see Fixtures); in this repo, `pnpm --dir plugins shot` does it for every plugin.
-
-### Talking to main
-
-The main script and each page are separate frames, and they talk through `wings.broadcast`. Don't write request ids, timeouts or a hello message for that. Make a `channel` from `wings-plugin-sdk/messages` once, in a module that main and every page import, and give it the types of what it carries. A channel carries three kinds of message:
-
-- **Queries** are data. Main `serve`s a value for a key, and every page that shows the key gets the same copy and each update. Main loads a key once, however many pages show it, and reloads it only while one does. A page that fetched something on its own can `put` it, and every other part gets it too. Reach for a query first: it replaces a page that polls main on its own schedule.
-- **Questions** are commands and one-off reads: a page `ask`s, and main `answer`s, like checking out a branch or signing in.
-- **Events** carry no data: a frame `tell`s, the others `on` it.
-
-A value that a settings page saves and other frames read is a `setting()` from `wings-plugin-sdk/settings`, declared once the same way.
-
-```ts
-// src/lib/messages.ts
-import { channel } from "wings-plugin-sdk/messages";
-import { setting } from "wings-plugin-sdk/settings";
-
-export const ch = channel<
-  // Questions: a page asks, main answers.
-  { checkout: { request: { cwd: string; branch: string }; response: void } },
-  // Events: one frame tells, the others listen. `void` is no payload.
-  { "branch-changed": void },
-  // Queries: main serves a value for each key. A `void` key holds one value.
-  { branches: { key: { cwd: string }; value: string[] } }
->();
-
-/** A value in `wings.storage` that every frame reads and hears change. */
-export const interval = setting("interval", { default: 60 });
-```
-
-Main serves the query and answers the question, and refreshes the query when something changes:
-
-```ts
-// src/main.ts
-import { git, gitOk, onGitChange } from "wings-plugin-sdk/git";
-import { ch } from "./lib/messages";
-
-// `load` runs only in main. A page that shows a key gets the kept value, and main reloads it while one does.
-ch.serve(
-  "branches",
-  async ({ cwd }) => {
-    const out = await gitOk(cwd, ["for-each-ref", "--format=%(refname:short)", "refs/heads"]);
-    return out ? out.split("\n") : [];
-  },
-  { staleMs: 20_000 },
-);
-
-ch.answer("checkout", async ({ cwd, branch }) => {
-  await git(cwd, ["switch", branch]);
-  ch.refresh("branches"); // reloads every key a page shows, and sends the new list to all of them
-  await ch.tell("branch-changed");
-});
-
-// A commit or checkout from anywhere reloads the list too.
-onGitChange(() => ch.refresh("branches"));
-```
-
-A page reads the query, and asks for the command:
-
-```tsx
-// src/pages/branches.tsx
-import { useQuery } from "wings-plugin-sdk/react";
-import { Empty, Heading, List, ListButton, ListItem, Loading, ProjectGate } from "wings-plugin-ui";
-import { ch } from "../lib/messages";
-
-export const page = { place: "sidebar" };
-
-export default function Page() {
-  return <ProjectGate>{(project) => <Branches cwd={project.path} />}</ProjectGate>;
-}
-
-function Branches({ cwd }: { cwd: string }) {
-  const { data, error } = useQuery(ch, "branches", { cwd }); // `data` is null until main has sent the first value
-  if (data === null && !error) return <Loading />;
-  if (error) return <Empty title="Couldn't list the branches" description={error.message} />;
-  return (
-    <>
-      <Heading>Branches</Heading>
-      <List>
-        {data?.map((branch) => (
-          <ListItem key={branch}>
-            <ListButton onClick={() => void ch.ask("checkout", { cwd, branch })}>{branch}</ListButton>
-          </ListItem>
-        ))}
-      </List>
-    </>
-  );
-}
-```
-
-| Call | Does |
-|---|---|
-| `ch.ask(name, request, { timeoutMs? })` | Asks whichever frame answers `name` and resolves its answer. It rejects with the answerer's error message, or with "Wings didn't answer. Try again." after 30 s |
-| `ch.answer(name, handler)` | Answers `name` in this frame, usually main. A thrown error reaches the asker. One handler per name: a second call replaces the first |
-| `ch.tell(name, payload?)`, `ch.on(name, listener)` | An event for every other frame that listens to `name` |
-| `ch.serve(name, load?, { refetchMs, staleMs, throttleMs })` | Main: serves a query. `load(key)` runs only in main, one load per key at a time. `refetchMs` reloads a key that long after its last value, while a page shows it and Wings is in front. A page that starts to show a key gets the kept value, then a reload if it is older than `staleMs`. `throttleMs` folds the refreshes asked for within it into one load. Without `load`, main keeps what frames `put` |
-| `ch.get(name, key, { maxAgeMs? })`, `ch.peek(name, key?)`, `ch.watching(name)` | Main: the kept value or one load, what is kept for a key without loading, and the keys some page shows now |
-| `ch.put(name, key, value)` | Any frame: sets a key's value for every frame at once. For a page that fetched something itself |
-| `ch.refresh(name, key?)` | Any frame: reloads a key now, or every key a page shows when you leave the key out |
-| `ch.subscribe(name, key, listener)` | Any frame: calls `listener({ data, error, at, loading })` as the value changes, for a page without React |
-| `useQuery(ch, name, key, { skip?, keepData?, timeoutMs? })` | In a page: `{ data, error, loading, at, refresh }`. `keepData` keeps the last key's value while a new key loads. `loading` is true only before the first value and while this hook's own `refresh()` waits, so a refetch in main never blinks |
-| `setting(key, { default, check? })` | `get()` reads it from `wings.storage`, or gives `default` when nothing valid is stored (`check` turns what is stored into the value, or `undefined` for what isn't one). `set(value)` stores it and tells the other frames. `onChange(listener)` hears a `set` from any frame. Declare it once: two objects for one key in one frame don't hear each other |
-| `useSetting(setting)` | In a page: `[value, set]`, with `value` `null` until it is read |
-
-A message is JSON that goes over `wings.broadcast`, and it reaches every other frame, never the one that sent it. Messages are marked, so they never mix with your own `broadcast` calls. One that is too big for a broadcast (64,000 characters) is split and joined again, so a value of any size arrives whole. Every frame gets every broadcast, so keep a query to what the pages show. A page that loads before main, or while main reloads, gets its value once main serves. A failed load keeps the last value and reaches every page as `error` until the next good load.
-
-### Helpers
-
-Reach for these before writing your own. Each is a module of `wings-plugin-sdk`: its `.d.ts` says what every call does, and the [README](../packages/plugin-sdk/README.md) has the setup and an example of each. The last column is a plugin here that uses it, by its path under `plugins/`.
-
-| Module | For | A plugin that uses it |
-|---|---|---|
-| `wings-plugin-sdk/messages` | `channel()`: questions, events and queries between main and the pages | `packages/plugin-sdk/messages.js` |
-| `wings-plugin-sdk/react` | `useQuery`, `useSetting` and `useBroadcast`, for a page | `schedules/src/pages/schedules.tsx` |
-| `wings-plugin-sdk/settings` | `setting()`: a stored value that every frame reads and hears change | `packages/plugin-sdk/settings.js` |
-| `wings-plugin-sdk/sessions` | `followSessions()`: the Claude sessions in panes, each run's older entries and then its live ones | `hud/rust/src/main_frame.rs`, with the Rust SDK's `sessions::follow` |
-| `wings-plugin-sdk/tools` | `tool()`, `s` and `registerTools()`: Claude's tools, defined once in `src/tools.ts` | `schedules/src/tools.ts` |
-| `wings-plugin-sdk/cli` | `cli()`: `gh`, `glab` and `az` calls that tell "not installed" and "signed out" from a failure, and the badge with Install, Sign in and Try again | `pr-tracker/src/main/badges.ts` |
-| `wings-plugin-sdk/azure` | `workItems()`: Azure DevOps work items, one `az rest` for every id asked at once | no TypeScript plugin now; Work item, written in Rust, uses `azure::work_items` of the Rust SDK |
-| `wings-plugin-sdk/github` | `githubPulls()`: the open PRs of GitHub repositories, one `gh api graphql` for every repository asked at once | `pr-tracker/src/lib/forges/github.ts` |
-| `wings-plugin-sdk/git` | `git`, `gitOk`, `repoRoot`, `parseRemote`, `onGitChange` and more: read a repo through `wings.exec`, and hear it change | `pr-tracker/src/main/remote.ts` |
-| `wings-plugin-sdk/poll` | `pollWhileFocused()`: a timer that runs only while Wings is in front | `pr-tracker/src/main.ts` |
-| `wings-plugin-sdk/async` | `cached`, `batched`, `serial`, `singleFlight`, `mapLimit`, `latestOnly`, `openDiffWhile`, `openLiveDiff`, `refreshLiveDiffs` and `errorMessage` | `schedules/src/main/assigned.ts`, `disk/src/main/actions.ts` (`mapLimit`) |
-| `wings-plugin-sdk/format` | `ago`, `plural`, `basename`, `truncate`, `tokens` and `clock` | `disk/src/lib/df.ts` |
-| `wings-plugin-sdk/shell` | `mountShell()`: the frame of a page that builds its own DOM | none here now |
-| `wings-plugin-ui` | The components, the page hooks (`useProject`, `useAction`, `usePoll` and more) and the `show*` functions | `packages/plugin-ui/ui.js` |
-
-### Tools
-
-Claude's tools, which are also `wings <plugin> <tool>` commands, are written once, in `src/tools.ts`, which exports `tools`: an object of `tool()` definitions keyed by the tool's name. `s` builds the input's schema, which is plain JSON Schema, and the type of `input` comes from it. The main script answers all of them with `registerTools(tools)` from `wings-plugin-sdk/tools`. The build writes `contributes.mcpTools` of the manifest from `tools`, so the two can't differ. `mcpInstructions`, the line that says when Claude should reach for them, stays in the manifest.
-
-```ts
-// src/tools.ts
-import { git } from "wings-plugin-sdk/git";
-import { s, tool } from "wings-plugin-sdk/tools";
-
-export const tools = {
-  list_branches: tool({
-    description: "Lists the branches of this session's project, newest commit first.",
-    input: s.object({ remote: s.boolean().describe("Include the remote branches.").optional() }),
-    // Needs "git for-each-ref" in permissions.exec.
-    async run({ remote }, { project }) {
-      if (!project) throw new Error("This call didn't come from a pane in Wings.");
-      const out = await git(project.path, ["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", remote ? "refs" : "refs/heads"]);
-      return out.split("\n");
-    },
-  }),
-};
-```
-
-A call's input is checked against its schema before `run`, so a wrong one comes back to Claude as an error that names the field. `run(input, { paneId, project, session })` also says who called, as `wings.onTool` does. `src/tools.ts` and what it imports run in Node while the manifest is built, with a `wings` that does nothing, so nothing at their top level may need Wings.
-
-### Fixtures
-
-A page is looked at before it ships. A file in `preview/` renders a page with made-up data, and `wings-plugin shot` in the plugin's folder (in this repo, `pnpm --dir plugins shot <plugin>`) draws every one in headless Chrome, 1000 and 640 px wide, and prints the PNG paths. It needs Chrome or Chromium (`CHROME=/path/to/chrome` if it isn't in the usual place), Node 22.4 or newer, and `wings-plugin-ui` and React installed in the plugin. `--width`, `--height` and `--out <dir>` change the sizes and where the PNGs go. `<plugin>/<file>` or `<plugin>/<file>/<state>` picks fewer, with the plugin's folder name for `<plugin>`. A file that exports `states` makes one screenshot for each, and a state sets what the page gets from Wings. Its fields go over the ones the file exports, so a state gives only what differs. They are `page`, `props`, `queries` (what main serves a `useQuery` with: a function of the key, or a value for every key), `answers` (what main answers an `ask` with), `storage`, `project`, `args`, `focused` (what `wings.focused` and `onFocus` say, true by default), `panes` and `projects` (what `onPanes` and `onProjects` hand their listener once, and `projects()` answers: none by default). A file that starts with `_` is shared data, not a fixture.
-
-```tsx
-// preview/branches.tsx
-export { default, page } from "../src/pages/branches";
-
-// Main serves two branches for any folder, and the page is the project "web".
-export const queries = { branches: () => ["main", "fix-login"] };
-
-export const states = {
-  branches: {},
-  // A folder with no branches.
-  empty: { queries: { branches: () => [] } },
-};
-```
-
-The header of [`shot.mjs`](../packages/plugin-sdk/shot.mjs) in the SDK lists every field and is where to look for the rest.
+`pr-tracker/` has four frames: its main badges the panes and fills each project's Pull requests section, opens the diff viewer and posts the replies typed in it, and answers `failing_checks`; the PR tab, the Pull requests block and the Settings page run `gh`, `glab`, `az` and the API calls themselves (`forges/` has one module per provider), and ask main (`ipc.rs`: messages, in parts when long) for what only it can do or already holds: the lists the sidebar loads, the diff viewer, the agent on a branch. A poll costs few processes: panes on one repo and branch share one lookup, and the lists of every project are one GraphQL call on GitHub (`track/budget.rs` counts them). It added to the SDK: `remote::parse_remote` (which forge a remote URL is), `github::github_pulls` (one `gh` call for many repos), `settings::Setting` (a value every frame hears change), `Cli::exec`, `Cli::post` and `Cli::sign_in_with` (the login's output, for gh's one-time code), `host::exec_stream`, `diff::open_live_id`, `cache::Cached::peek`, `format::iso_of` and `host::testing::set_now`. Its tests in `shipped.rs` run in a process where `gh` and `az` are fake scripts that answer from `apps/native/examples/shot_plugins/pr_tracker_gh.json` and `pr_tracker_az.json`.
 
 ## Manifest
 
@@ -330,7 +189,7 @@ The header of [`shot.mjs`](../packages/plugin-sdk/shot.mjs) in the SDK lists eve
 
 | Permission | Allows |
 |---|---|
-| `exec` | Running these commands, with no shell and no stdin, 30 s timeout by default. Each entry is a program and the subcommand the arguments must start with, so `gh pr view` allows `gh pr view <url> --json title`. A bare program name allows any arguments. An entry can end with the only flags it allows, like `az boards work-item update [--id --state]`, which refuses `--title` or any other flag. Only flag names are listed; their values, and arguments that don't start with `-`, stay free. A flag in the command itself is listed too, like `git branch --show-current [--show-current]`. `[]` allows no flags at all, like `git remote get-url []` (Wings 0.1.108; older Wings refuse the plugin, so set `"minWingsVersion": "0.1.108"`). Give every entry a list: one without lets the plugin pass any flag Wings doesn't refuse outright, so list exactly the flags its calls pass, including the ones a helper adds, like `-o json` and `--organization` from `wings-plugin-sdk/cli` callers |
+| `exec` | Running these commands, with no shell and no stdin, 30 s timeout by default. Each entry is a program and the subcommand the arguments must start with, so `gh pr view` allows `gh pr view <url> --json title`. A bare program name allows any arguments. An entry can end with the only flags it allows, like `az boards work-item update [--id --state]`, which refuses `--title` or any other flag. Only flag names are listed; their values, and arguments that don't start with `-`, stay free. A flag in the command itself is listed too, like `git branch --show-current [--show-current]`. `[]` allows no flags at all, like `git remote get-url []` (Wings 0.1.108; older Wings refuse the plugin, so set `"minWingsVersion": "0.1.108"`). Give every entry a list: one without lets the plugin pass any flag Wings doesn't refuse outright, so list exactly the flags its calls pass, including the ones a helper adds, like `-o json` and `--organization` that `cli::Cli` callers pass |
 | `post` | POSTing to these API paths through a signed-in CLI with `wings.post`. Each entry is `gh`, `glab` or `az` and a path where `*` stands for one segment, like `gh repos/*/*/pulls/*/comments/*/replies`. `az` paths are full `https://` URLs. An entry may end with ` {field=a\|b}`, which pins that body field to one of those values, like `gh repos/*/*/pulls/*/reviews {event=APPROVE}` (an approval that can't be turned into a "request changes"); a request whose field has another value, or none, is refused. A `gh` or `glab` entry is a plain path, with no query, `=` or empty or `.` segment, and a post whose path ends in `graphql` may only read: a `mutation` or `subscription` is refused. `exec` refuses the write flags of `gh api` and `glab api` |
 | `transcript` | Reading these Claude Code transcript entry types. `attachment:<kind>`, like `attachment:model`, allows one kind of attachment entry: attachments include whole files and hook output, so ask for the kinds you need rather than `attachment` |
 | `openUrl` | Opening URLs that start with these prefixes: `https://` for any page, an https prefix whose host ends with `/` like `https://dev.azure.com/`, or http to this computer only (`localhost`, `127.0.0.1`, `[::1]`, without credentials) with a port or path next, like `http://localhost:`. Any other entry is refused when the plugin loads, since `https://dev.azure.com` would also match `https://dev.azure.com.example.com/` |
@@ -352,7 +211,7 @@ The header of [`shot.mjs`](../packages/plugin-sdk/shot.mjs) in the SDK lists eve
 
 `minWingsVersion`, optional, is the oldest Wings that can run the plugin, like `"0.1.13"`. Set it when the plugin uses something an older Wings doesn't have. An older Wings refuses to install it and doesn't offer it as an update.
 
-`native`, optional, is `true` for a plugin that also runs in the native Wings app, which has no browser: the build then writes `dist/native/main.js` and a `dist/native/<page>.js` for each page next to the browser files, with `wings-plugin-ui` swapped for its smaller native set of components (see Native build in the wings-plugin-sdk README). Wings in the browser ignores it. Plugins that leave it out build as before.
+`native`, optional, is a leftover of the JavaScript build, which wrote `dist/native/*.js` for the app. A Rust plugin leaves it out: its `main` and pages are `.wasm` files.
 
 `contributes` lists what the plugin adds, which the manager shows next to it:
 
@@ -606,16 +465,16 @@ A block is a plugin page the user places on a project's Project page, between it
 }
 ```
 
-A page built from `src/pages` mounts in one place, so give a block its own page, `src/pages/block.tsx` with `export const page = { place: "block" }`, and share the components it draws from `src/ui/`. A block's `page` can be the HTML of a view when you write it yourself, and then `wings.placement()` says `"block"` where a compact version is wanted. Declaring a block adds nothing to the sidebar or the + menu: it shows only in the Project page's "+ Add" menu, for plugins that are on and approved.
+Give a block its own page, a `.wasm` frame that `contributes.blocks` names. `wings.placement()` says `"block"` where a compact version is wanted. Declaring a block adds nothing to the sidebar or the + menu: it shows only in the Project page's "+ Add" menu, for plugins that are on and approved.
 
 In a block:
 
 - `wings.project()` is the Project page's project, and never changes.
 - `wings.blockState()` and `wings.setBlockState(state)` keep a small JSON value (up to 16 KB) per block, like the filter it shows. Two blocks of the same page have their own state. Wings saves it with the Project page.
-- `wings.setHeight(px)` sizes the block to its content, within `minHeight` and 1200. A page of your own that measures itself can call it from a `ResizeObserver` (`showBlock` does this for a `wings-plugin-ui` page); Wings applies the height without reloading the page, and the call returns at once.
+- `wings.setHeight(px)` sizes the block to its content, within `minHeight` and 1200. Wings applies the height without reloading the page, and the call returns at once.
 - Outside a block, `blockState()` gives `null`, and `setBlockState` and `setHeight` fail with a message saying so.
 
-Blocks cost a frame each, so Wings loads one only when it scrolls into view, unloads it after 5 minutes out of view (a page that saved its state with `setBlockState` comes back as it was) and shows at most 8 at once on a Project page. While a block is out of view, or its project's tab is hidden, its `wings.focused` is false from the first line of the page (not only after the first `onFocus`) and `onFocus` reports each change, so `pollWhileFocused` pauses its polling and checks once when the block is back. Gate polling on `wings.focused`, not `document.visibilityState`: a frame scrolled out of view or in a hidden tab still reports `"visible"`, because the browser only reports the state of the whole Wings window. The build mounts a block page with `showBlock` from `wings-plugin-ui`, which also keeps the block as tall as the page with `wings.setHeight`. Don't poll from a block's page faster than you would from a sidebar.
+Blocks cost a frame each, so Wings loads one only when it scrolls into view, unloads it after 5 minutes out of view (a page that saved its state with `setBlockState` comes back as it was) and shows at most 8 at once on a Project page. While a block is out of view, or its project's tab is hidden, its `wings.focused` is false from the first line of the page (not only after the first `onFocus`) and `onFocus` reports each change, so `pollWhileFocused` pauses its polling and checks once when the block is back. Gate polling on `wings.focused`, not `document.visibilityState`: a frame scrolled out of view or in a hidden tab still reports `"visible"`, because the browser only reports the state of the whole Wings window. Don't poll from a block's page faster than you would from a sidebar.
 
 Blocks, `"block"` and the three calls need Wings 0.1.24, so set `"minWingsVersion": "0.1.24"`. Older Wings ignore `contributes.blocks`.
 
