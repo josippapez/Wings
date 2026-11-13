@@ -1,12 +1,11 @@
 //! The trial of plugins written in Rust: Cyclops' main script, sidebar and popover as WebAssembly modules
-//! (`wings-cyclops/rust`) beside its TypeScript build, both over made-up Cyclops answers, never the network or your
-//! account.
+//! (`wings-cyclops/rust`), over made-up Cyclops answers, never the network or your account.
 //!
 //! `shot <out-dir> <wings-cyclops>` shows each in the app offscreen at 1000 and 640 points wide, presses Stop, Edit,
-//! Save and Start in the sidebar and adds an entry in the popover, and prints what the page shows after, so the two
-//! can be compared line by line. `tools <wings-cyclops>` calls each of the main script's tools as Claude does and
-//! prints both answers. `bench <wings-cyclops> [cache-folder]` starts each page alone, as `bench_plugins` does, and
-//! prints the memory the process grew by and the time to its first tree.
+//! Save and Start in the sidebar and adds an entry in the popover, and prints what the page shows after. `tools
+//! <wings-cyclops>` calls each of the main script's tools as Claude does and prints the answers. `bench <wings-cyclops>
+//! [cache-folder]` starts each page alone, as `bench_plugins` does, and prints the memory the process grew by and the
+//! time to its first tree.
 //!
 //! Build the modules first, in `wings-cyclops`: `sh rust/build.sh fake` for `shot` and `tools`, and `sh rust/build.sh`
 //! for `bench`.
@@ -25,7 +24,7 @@ use wings_native::{
     actions,
     host::Config,
     icons::Assets,
-    installed::{fixture::Data, library, page_source},
+    installed::fixture::Data,
     page::{
         PageView,
         plugin::{PluginConfig, PluginHost},
@@ -33,74 +32,6 @@ use wings_native::{
     },
     workspace::Workspace,
 };
-
-/// The answers `wings-cyclops/rust/src/fake.rs` makes up, for the TypeScript page.
-const CYCLOPS: &str = r#"
-globalThis.__shot = (() => {
-  const now = Date.now(), minute = 60e3;
-  const iso = (t) => new Date(t).toISOString();
-  const pad = (n) => String(n).padStart(2, '0');
-  const local = (t) => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
-  const projects = [{ id: 'p1', name: 'Wings', clientName: 'Prototyp' }, { id: 'p2', name: 'Website', clientName: 'Acme' },
-    { id: 'p3', name: 'Storefront rebuild for the spring launch', clientName: 'Northwind Traders' }];
-  const timer = (id, projectId, task, minutes) => ({ id, projectId, task, startedAt: iso(now - minutes * minute), endedAt: null, entryDate: local(now) });
-  let timers = [timer('t1', 'p1', 'Timer one', 65), timer('t2', 'p2', 'Timer two', 20)];
-  const entry = (id, projectId, task, days, hoursAgo, minutes) => {
-    const start = Math.floor((now - days * 24 * 60 * minute - hoursAgo * 60 * minute) / minute) * minute;
-    return { id, projectId, task, startedAt: iso(start), endedAt: iso(start + minutes * minute), entryDate: local(start), durationMinutes: minutes };
-  };
-  let entries = [
-    entry('e1', 'p1', 'Code review', 0, 3, 45),
-    entry('e6', 'p2', 'Report table keeps the "Unassigned" group last when sorted ascending', 0, 5, 60),
-    entry('e2', 'p2', 'Checkout redesign', 1, 3, 210),
-  ];
-  const answer = (body) => ({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
-  return {
-    has: async () => true,
-    fetch: async (url, options = {}) => {
-      const path = String(url).replace('https://cyclops-api.prototyp.digital/api', '');
-      const method = options.method ?? 'GET';
-      const one = path.startsWith('/time-entries/') ? path.slice('/time-entries/'.length) : null;
-      if (method === 'POST' && one === 'timer') {
-        const timer = { ...JSON.parse(options.body), id: `t${Date.now()}`, startedAt: iso(Date.now()), endedAt: null, entryDate: local(Date.now()) };
-        timers.push(timer);
-        return answer(timer);
-      }
-      // A manual entry, with its start and end.
-      if (method === 'POST' && path === '/time-entries') {
-        const body = JSON.parse(options.body);
-        const start = Date.parse(body.startedAt);
-        const added = { ...body, id: `e${Date.now()}`, entryDate: local(start), durationMinutes: Math.round((Date.parse(body.endedAt) - start) / minute) };
-        entries = [added, ...entries];
-        return answer(added);
-      }
-      if (method === 'POST' && one?.endsWith('/stop')) {
-        const stopped = timers.find((t) => t.id === one.slice(0, -'/stop'.length));
-        if (stopped) {
-          timers = timers.filter((t) => t !== stopped);
-          entries = [{ ...stopped, endedAt: iso(Date.now()), durationMinutes: Math.round((Date.now() - Date.parse(stopped.startedAt)) / minute) }, ...entries];
-        }
-        return answer({});
-      }
-      if (method === 'PATCH' && one) {
-        const patch = (e) => (e.id === one ? { ...e, ...JSON.parse(options.body) } : e);
-        timers = timers.map(patch);
-        entries = entries.map(patch);
-        return answer([...timers, ...entries].find((e) => e.id === one) ?? {});
-      }
-      if (method === 'DELETE' && one) {
-        timers = timers.filter((e) => e.id !== one);
-        entries = entries.filter((e) => e.id !== one);
-        return answer({});
-      }
-      if (path.startsWith('/auth/me')) return answer({ name: 'Ada Lovelace', timezone: 'Europe/Zagreb' });
-      if (path.startsWith('/projects')) return answer(projects);
-      if (path.startsWith('/time-entries/timers')) return answer(timers);
-      return answer(entries);
-    },
-  };
-})();
-"#;
 
 fn read(path: PathBuf) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
@@ -135,22 +66,16 @@ fn footprint() -> i64 {
 fn bench(repo: &Path) {
     let storage = tempfile::tempdir().expect("a storage folder");
     let module = repo.join("rust/target/sidebar/wasm32-unknown-unknown/release/cyclops.wasm");
-    let bundle = repo.join("dist/native/sidebar.js");
-    let shared = library(repo);
     let wasm = format!("{}{}", wasm::MARKER, module.display());
-    let rows: [(&str, String, bool, u64); 5] = [
-        ("TypeScript, own React", read(bundle.clone()), false, bundle.metadata().unwrap().len()),
-        ("TypeScript, shared React", page_source(repo, &bundle, shared.as_deref()).unwrap(), true, 0),
-        ("TypeScript, shared, 2nd page", page_source(repo, &bundle, shared.as_deref()).unwrap(), true, 0),
-        ("Rust (WebAssembly)", wasm.clone(), false, module.metadata().unwrap().len()),
-        ("Rust (WebAssembly), 2nd page", wasm, false, module.metadata().unwrap().len()),
+    let rows: [(&str, String, u64); 2] = [
+        ("Rust (WebAssembly)", wasm.clone(), module.metadata().unwrap().len()),
+        ("Rust (WebAssembly), 2nd page", wasm, module.metadata().unwrap().len()),
     ];
     println!("{:<30} {:>8} {:>8} {:>12}", "page", "file KB", "+MB", "first tree");
     let mut kept = Vec::new();
-    for (name, source, shares, bytes) in rows {
+    for (name, source, bytes) in rows {
         // No access and no data, as `bench_plugins`: each page's floor, which is its first, loading, tree.
         let host = PluginHost::new(PluginConfig { id: "cyclops".into(), root: storage.path().to_owned(), scope: "bench".into() });
-        host.set_library(shares.then(|| shared.clone()).flatten());
         let (tx, events) = mpsc::channel();
         let before = footprint();
         let started = Instant::now();
@@ -164,7 +89,6 @@ fn bench(repo: &Path) {
             }
         };
         thread::sleep(Duration::from_millis(300));
-        let bytes = if bytes == 0 { source.len() as u64 } else { bytes };
         println!("{:<30} {:>8} {:>8.1} {:>12}", name, bytes / 1024, (footprint() - before) as f64 / 1_048_576.0, first);
         kept.push((host, page, events));
     }
@@ -189,36 +113,21 @@ enum Step {
     Type(Option<&'static str>, &'static str),
 }
 
-/// Cyclops installed in a made-up data folder, over made-up answers. With `rust` it is the plugin as its package has
-/// it: the manifest and the three modules (`sh rust/build.sh fake`), and no JavaScript. Without, it is the TypeScript
-/// build Cyclops had up to 0.9.7, for comparing the two, read from a `dist/` that build left in the repo's folder.
-fn install(repo: &Path, rust: bool) -> Data {
+/// Cyclops installed in a made-up data folder, over made-up answers, as its package has it: the manifest and the three
+/// modules (`sh rust/build.sh fake`).
+fn install(repo: &Path) -> Data {
     let mut manifest: serde_json::Value = serde_json::from_str(&read(repo.join("wings-plugin.json"))).unwrap();
     manifest.as_object_mut().unwrap().remove("minWingsVersion");
     let data = Data::temp();
-    if rust {
-        let package = tempfile::tempdir().expect("a folder for the package");
-        std::fs::create_dir_all(package.path().join("dist/native")).unwrap();
-        std::fs::write(package.path().join("wings-plugin.json"), manifest.to_string()).unwrap();
-        for frame in ["main", "sidebar", "popover"] {
-            let module = repo.join(format!("rust/target/fake/native/{frame}.wasm"));
-            std::fs::copy(&module, package.path().join(format!("dist/native/{frame}.wasm")))
-                .unwrap_or_else(|error| panic!("{}: {error}. Run sh rust/build.sh fake", module.display()));
-        }
-        data.install_folder(package.path(), "shot");
-        return data;
+    let package = tempfile::tempdir().expect("a folder for the package");
+    std::fs::create_dir_all(package.path().join("dist/native")).unwrap();
+    std::fs::write(package.path().join("wings-plugin.json"), manifest.to_string()).unwrap();
+    for frame in ["main", "sidebar", "popover"] {
+        let module = repo.join(format!("rust/target/fake/native/{frame}.wasm"));
+        std::fs::copy(&module, package.path().join(format!("dist/native/{frame}.wasm")))
+            .unwrap_or_else(|error| panic!("{}: {error}. Run sh rust/build.sh fake", module.display()));
     }
-    let fake = |page: &str| {
-        let source = read(repo.join(format!("dist/native/{page}.js")))
-            .replace("wings.fetch(", "globalThis.__shot.fetch(")
-            .replace("wings.secrets.has(", "globalThis.__shot.has(");
-        format!("{CYCLOPS}\n{source}")
-    };
-    // The manifest as the TypeScript build had it.
-    manifest["main"] = "dist/main.js".into();
-    manifest["contributes"]["sidebars"][0]["page"] = "dist/sidebar.html".into();
-    manifest["contributes"]["sidebars"][0]["popover"]["page"] = "dist/popover.html".into();
-    data.install_script("cyclops", manifest, &fake("main"), &[("sidebar", &fake("sidebar")), ("popover", &fake("popover"))], "shot");
+    data.install_folder(package.path(), "shot");
     data
 }
 
@@ -256,47 +165,21 @@ fn tools(repo: &Path) {
         ("delete_entry", serde_json::json!({ "entryId": id })),
         ("delete_entry", serde_json::json!({ "entry": id })),
     ];
-    let mut answers: Vec<Vec<String>> = Vec::new();
-    for rust in [false, true] {
-        let data = install(repo, rust);
-        let handle = window(&mut cx, &data, project.path(), 1000.0);
-        wait(&mut cx, handle.into(), Duration::from_millis(1500));
-        let host = handle.read_with(&cx, |w, _| w.plugin_host("cyclops")).unwrap().expect("Cyclops running");
-        answers.push(
-            calls
-                .iter()
-                .map(|(name, input)| {
-                    let (reply, answer) = Reply::channel();
-                    host.run_tool(name, input.clone(), None, reply);
-                    match answer.wait(Duration::from_secs(10)) {
-                        Some(Ok(answer)) => answer,
-                        Some(Err(error)) => format!("failed: {error}"),
-                        None => "no answer in 10 s".into(),
-                    }
-                })
-                .collect(),
-        );
-        let _ = cx.update_window(handle.into(), |_, window, _| window.remove_window());
+    let data = install(repo);
+    let handle = window(&mut cx, &data, project.path(), 1000.0);
+    wait(&mut cx, handle.into(), Duration::from_millis(1500));
+    let host = handle.read_with(&cx, |w, _| w.plugin_host("cyclops")).unwrap().expect("Cyclops running");
+    for (name, input) in &calls {
+        let (reply, answer) = Reply::channel();
+        host.run_tool(name, input.clone(), None, reply);
+        let answer = match answer.wait(Duration::from_secs(10)) {
+            Some(Ok(answer)) => answer,
+            Some(Err(error)) => format!("failed: {error}"),
+            None => "no answer in 10 s".into(),
+        };
+        println!("{name} {input}\n  {answer}");
     }
-    // The made-up answers hold times and ids made from the clock, which differ between two runs.
-    let steady = |answer: &str| {
-        let mut out = String::new();
-        let mut rest = answer;
-        while let Some(at) = rest.find(|c: char| c.is_ascii_digit()) {
-            out.push_str(&rest[..at]);
-            out.push('#');
-            rest = rest[at..].trim_start_matches(|c: char| c.is_ascii_digit());
-        }
-        out + rest
-    };
-    let mut different = 0;
-    for (at, (name, input)) in calls.iter().enumerate() {
-        let (ts, rust) = (&answers[0][at], &answers[1][at]);
-        let same = steady(ts) == steady(rust);
-        different += usize::from(!same);
-        println!("{} {name} {input}\n  ts:   {ts}\n  rust: {rust}", if same { "same" } else { "DIFF" });
-    }
-    println!("{} of {} answers differ", different, calls.len());
+    let _ = cx.update_window(handle.into(), |_, window, _| window.remove_window());
 }
 
 fn shot(out: PathBuf, repo: PathBuf) {
@@ -329,55 +212,52 @@ fn shot(out: PathBuf, repo: PathBuf) {
         ("week", 1000.0, &[Step::Press("Week")]),
     ];
     for (name, width, steps) in scenarios {
-        for rust in [false, true] {
-            let kind = if rust { "rust" } else { "ts" };
-            let data = install(&repo, rust);
-            let handle = window(&mut cx, &data, &project, *width);
-            let window: AnyWindowHandle = handle.into();
-            wait(&mut cx, window, Duration::from_millis(500));
-            let in_popover = name.starts_with("popover");
-            handle.update(&mut cx, |w, _, cx| if in_popover { w.shot_popover("cyclops", "tracker", cx) } else { w.shot_sidebar("cyclops", "tracker", cx) }).unwrap();
-            wait(&mut cx, window, Duration::from_millis(200));
-            let page: Entity<PageView> = handle
-                .read_with(&cx, |w, _| if in_popover { w.popover_page("cyclops", "tracker") } else { w.sidebar_page("cyclops", "tracker") })
-                .unwrap()
-                .expect("the page");
-            let deadline = Instant::now() + Duration::from_secs(10);
-            while !cx.read(|cx| page.read(cx).text()).contains("Timer one") && Instant::now() < deadline {
-                wait(&mut cx, window, Duration::from_millis(50));
-            }
-            for step in *steps {
-                match step {
-                    Step::Press(label) | Step::Chip(label) => {
-                        let chip = matches!(step, Step::Chip(_));
-                        let deadline = Instant::now() + Duration::from_secs(3);
-                        while !cx.read(|cx| if chip { page.read(cx).press_chip(label) } else { page.read(cx).press(label, 0) }) {
-                            if Instant::now() > deadline {
-                                println!("{kind} {name}: NOTHING TO PRESS for {label}");
-                                break;
-                            }
-                            wait(&mut cx, window, Duration::from_millis(50));
-                        }
-                    }
-                    Step::Type(field, text) => match cx.read(|cx| match field {
-                        Some(label) => page.read(cx).input_focus(label, cx),
-                        None => page.read(cx).first_input_focus(cx),
-                    }) {
-                        Some(focus) => {
-                            let _ = cx.update_window(window, |_, window, cx| focus.focus(window, cx));
-                            wait(&mut cx, window, Duration::from_millis(100));
-                            cx.simulate_input(window, text);
-                        }
-                        None => println!("{kind} {name}: NO FIELD {field:?}"),
-                    },
-                }
-                wait(&mut cx, window, Duration::from_millis(600));
-            }
-            wait(&mut cx, window, Duration::from_millis(300));
-            println!("{kind:<4} {name}-{width}: {}", cx.read(|cx| page.read(cx).text()));
-            let _ = cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx));
-            cx.capture_screenshot(window).expect("render the window").save(out.join(format!("{name}-{width}-{kind}.png"))).expect("save the PNG");
-            let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        let data = install(&repo);
+        let handle = window(&mut cx, &data, &project, *width);
+        let window: AnyWindowHandle = handle.into();
+        wait(&mut cx, window, Duration::from_millis(500));
+        let in_popover = name.starts_with("popover");
+        handle.update(&mut cx, |w, _, cx| if in_popover { w.shot_popover("cyclops", "tracker", cx) } else { w.shot_sidebar("cyclops", "tracker", cx) }).unwrap();
+        wait(&mut cx, window, Duration::from_millis(200));
+        let page: Entity<PageView> = handle
+            .read_with(&cx, |w, _| if in_popover { w.popover_page("cyclops", "tracker") } else { w.sidebar_page("cyclops", "tracker") })
+            .unwrap()
+            .expect("the page");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !cx.read(|cx| page.read(cx).text()).contains("Timer one") && Instant::now() < deadline {
+            wait(&mut cx, window, Duration::from_millis(50));
         }
+        for step in *steps {
+            match step {
+                Step::Press(label) | Step::Chip(label) => {
+                    let chip = matches!(step, Step::Chip(_));
+                    let deadline = Instant::now() + Duration::from_secs(3);
+                    while !cx.read(|cx| if chip { page.read(cx).press_chip(label) } else { page.read(cx).press(label, 0) }) {
+                        if Instant::now() > deadline {
+                            println!("{name}: NOTHING TO PRESS for {label}");
+                            break;
+                        }
+                        wait(&mut cx, window, Duration::from_millis(50));
+                    }
+                }
+                Step::Type(field, text) => match cx.read(|cx| match field {
+                    Some(label) => page.read(cx).input_focus(label, cx),
+                    None => page.read(cx).first_input_focus(cx),
+                }) {
+                    Some(focus) => {
+                        let _ = cx.update_window(window, |_, window, cx| focus.focus(window, cx));
+                        wait(&mut cx, window, Duration::from_millis(100));
+                        cx.simulate_input(window, text);
+                    }
+                    None => println!("{name}: NO FIELD {field:?}"),
+                },
+            }
+            wait(&mut cx, window, Duration::from_millis(600));
+        }
+        wait(&mut cx, window, Duration::from_millis(300));
+        println!("{name}-{width}: {}", cx.read(|cx| page.read(cx).text()));
+        let _ = cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx));
+        cx.capture_screenshot(window).expect("render the window").save(out.join(format!("{name}-{width}.png"))).expect("save the PNG");
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
     }
 }

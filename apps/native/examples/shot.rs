@@ -1,6 +1,6 @@
 //! Renders the native window offscreen at 1000 and 640 points wide and saves each state as a PNG:
 //! tabs and dragging one, a terminal's colors and a selection, splits, renaming a pane, a zoomed pane, find, Issues, a
-//! plugin page, agents and Settings, and the pages of `pages/` on their own: the pilot and the components page.
+//! plugin page, agents and Settings, and the pilot and components pages on their own, drawn from the trees React made of them.
 //! Nothing shows on screen and focus doesn't move. macOS only (real Metal rendering).
 //!
 //! cargo run --manifest-path apps/native/Cargo.toml --example shot --features test-support -- <out-dir>
@@ -23,9 +23,108 @@ use wings_native::{
         WINGS_VERSION,
         fixture::{Approval, Data},
     },
-    page::PageView,
+    page::{
+        PageView,
+        plugin::{PluginConfig, PluginHost},
+        runtime::fake::{self, Cx, Guest, Hear},
+    },
     workspace::{AccountStatus, Workspace},
 };
+
+/// The node `id` of `tree`.
+fn node(tree: &mut serde_json::Value, id: u64) -> &mut serde_json::Value {
+    fn find(tree: &mut serde_json::Value, id: u64) -> Option<&mut serde_json::Value> {
+        if tree["id"] == id {
+            return Some(tree);
+        }
+        tree.get_mut("children")?
+            .as_array_mut()?
+            .iter_mut()
+            .find_map(|child| find(child, id))
+    }
+    find(tree, id).unwrap()
+}
+
+/// The pilot page as React drew it (`src/page/trees/pilot.json`): "Starting" at first, then "Ready" once it had mounted,
+/// and a count that its button adds one to.
+fn pilot() -> String {
+    struct Pilot {
+        ready: bool,
+        count: u32,
+    }
+    impl Pilot {
+        fn draw(&self, cx: &mut Cx<'_>) {
+            let mut tree: serde_json::Value =
+                serde_json::from_str(include_str!("../src/page/trees/pilot.json")).unwrap();
+            node(&mut tree, 10)["text"] = format!("Count: {}", self.count).into();
+            if self.ready {
+                node(&mut tree, 3)["text"] = "Ready".into();
+                node(&mut tree, 4)["props"]["tone"] = "success".into();
+            }
+            cx.render(&tree);
+        }
+    }
+    impl Guest for Pilot {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            self.draw(cx);
+            cx.later(1);
+        }
+        fn event(&mut self, cx: &mut Cx<'_>, _handler: &str, _payload: &serde_json::Value) {
+            self.count += 1;
+            self.draw(cx);
+        }
+        fn timer(&mut self, cx: &mut Cx<'_>, _id: u32) {
+            self.ready = true;
+            self.draw(cx);
+        }
+    }
+    fake::source("page", || {
+        Box::new(Pilot {
+            ready: false,
+            count: 0,
+        })
+    })
+}
+
+/// The components page as React drew it (`src/page/trees/components.json`), with what its two buttons have counted and
+/// what its select was set to.
+fn components() -> String {
+    let (mut session, mut refreshed, mut retried) = ("web".to_owned(), 0, 0);
+    fake::page("page", move |event| {
+        match event {
+            Some(("9:onClick", _)) => refreshed += 1,
+            Some(("30:onClick", _)) => retried += 1,
+            Some(("13:onChange", change)) => {
+                session = change["value"].as_str().unwrap_or_default().to_owned()
+            }
+            _ => {}
+        }
+        let mut tree: serde_json::Value =
+            serde_json::from_str(include_str!("../src/page/trees/components.json")).unwrap();
+        node(&mut tree, 10)["text"] =
+            format!("Session {session}, refreshed {refreshed}, retried {retried}").into();
+        node(&mut tree, 13)["props"]["value"] = session.clone().into();
+        tree
+    })
+}
+
+/// A page that is the text `text` and nothing else.
+fn words(text: &str) -> String {
+    let text = text.to_owned();
+    fake::page("page", move |_| {
+        serde_json::json!({ "id": 0, "type": "#root", "props": {}, "children": [{ "id": 1, "type": "#text", "text": text }] })
+    })
+}
+
+/// The page `frame` of this repo's plugin `plugin`, as its build left it (`sh build-rust.sh <plugin>`, in `plugins/`).
+fn built(plugin: &str, frame: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("../../plugins/{plugin}/dist/native/{frame}.wasm"));
+    let path = path
+        .canonicalize()
+        .unwrap_or_else(|_| panic!("sh build-rust.sh {plugin}, in plugins/"));
+    format!("{}{}", wings_native::page::runtime::wasm::MARKER, path.display())
+}
 
 /// Real shells print on their own time, so this waits in real time while the test clock keeps up.
 fn wait(cx: &mut VisualTestAppContext, window: AnyWindowHandle, duration: Duration) {
@@ -326,11 +425,17 @@ fn main() {
     if std::env::args().nth(2).as_deref() == Some("plugin-settings") {
         return plugin_settings(&mut cx, &config, &out);
     }
+    // A page runs in a plugin's host, which these two have none of: an empty one stands for it.
+    let pages = PluginHost::new(PluginConfig {
+        id: "pages".into(),
+        root: out.join("fixture-storage-pages"),
+        scope: "shot".into(),
+    });
     // The pilot React page, drawn with the native controls, before and after a click on its button.
     for width in [1000.0, 640.0] {
         let handle = cx
             .open_offscreen_window(size(px(width), px(320.0)), |_, cx| {
-                cx.new(|cx| PageView::new(include_str!("../pages/dist/pilot.js"), cx))
+                cx.new(|cx| PageView::in_plugin(&pages, &pilot(), cx))
             })
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
@@ -351,7 +456,7 @@ fn main() {
     for width in [1000.0, 640.0, 260.0] {
         let handle = cx
             .open_offscreen_window(size(px(width), px(900.0)), |_, cx| {
-                cx.new(|cx| PageView::new(include_str!("../pages/dist/components-page.js"), cx))
+                cx.new(|cx| PageView::in_plugin(&pages, &components(), cx))
             })
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
@@ -1612,16 +1717,11 @@ fn restored(
 /// `git-compare` for one page, and its own SVG (the fixture's gauge) stands for the other.
 fn icons(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     let data = Data::temp();
-    let page = |text: &str| {
-        format!(
-            "wings.render(JSON.stringify({{ id: 0, type: '#root', props: {{}}, children: [{{ id: 1, type: '#text', text: '{text}' }}] }}));"
-        )
-    };
     let (side, pr, list, sprint) = (
-        page("The board"),
-        page("A pull request"),
-        page("A list"),
-        page("This sprint"),
+        words("The board"),
+        words("A pull request"),
+        words("A list"),
+        words("This sprint"),
     );
     data.install_script(
         "board",
@@ -1633,7 +1733,7 @@ fn icons(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             ],
             "blocks": [{ "id": "sprint", "title": "Sprint", "page": "dist/sprint.html", "icon": "kanban" }],
         } }),
-        "",
+        &fake::idle("main"),
         &[("side", &side), ("pr", &pr), ("list", &list), ("sprint", &sprint)],
         "board-scope",
     );
@@ -1694,11 +1794,8 @@ fn plugin_settings(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     data.install_script(
         "issues",
         serde_json::json!({ "name": "Issues", "contributes": settings }),
-        "",
-        &[(
-            "settings",
-            include_str!("../../../plugins/tasks/dist/native/settings.js"),
-        )],
+        &fake::idle("main"),
+        &[("settings", &built("tasks", "settings"))],
         "shot",
     );
     let pr: serde_json::Value = serde_json::from_str(include_str!(
@@ -1709,11 +1806,8 @@ fn plugin_settings(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         "pr-tracker",
         serde_json::json!({ "name": "PR tracker", "permissions": { "secrets": pr["permissions"]["secrets"] },
                             "contributes": settings }),
-        "",
-        &[(
-            "settings",
-            include_str!("../../../plugins/pr-tracker/dist/native/settings.js"),
-        )],
+        &fake::idle("main"),
+        &[("settings", &built("pr-tracker", "settings"))],
         "shot",
     );
     let mut config = base.clone();
@@ -1735,7 +1829,8 @@ fn plugin_settings(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             ("plugin-pr-tracker", "PR tracker"),
         ] {
             click(cx, window, spot(&format!("settings-nav:{row}")));
-            wait(cx, window, Duration::from_millis(800));
+            // The page's module is compiled the first time it starts, which takes seconds in a debug build.
+            wait(cx, window, Duration::from_millis(5000));
             save(cx, window, &name(state));
         }
         // The resize draws a frame every 16ms for its 200ms: the median of what each takes, against frames with nothing
@@ -1873,6 +1968,24 @@ fn agent_terminals(
     }
 }
 
+/// A main that opens the diff viewer with `diff` the first time it hears of a pane, and refuses each reply typed in it
+/// with `refusal`.
+fn differ(diff: serde_json::Value, refusal: &'static str) -> String {
+    fake::script("main", move || {
+        let (diff, mut opened) = (diff.clone(), false);
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+            Hear::Deliver("panes", _, panes) if !opened && panes != "[]" => {
+                opened = true;
+                cx.call("openDiff", diff.clone());
+            }
+            Hear::Deliver("reply", id, _) => {
+                cx.call("actionDone", serde_json::json!({ "token": id, "error": refusal }));
+            }
+            _ => {}
+        }
+    })
+}
+
 /// The made-up pull request of `diff-dock` and `diff-comments`: three files.
 const DOCK_PATCH: &str = "diff --git a/src/config.rs b/src/config.rs\n--- a/src/config.rs\n+++ b/src/config.rs\n@@ -1,8 +1,10 @@\n use std::time::Duration;\n \n pub fn load() -> Config {\n-    let timeout = 10;\n+    // A slow network gets room to answer before the client gives up.\n+    let timeout = 30;\n+    validate(timeout);\n     Config {\n         timeout: Duration::from_secs(timeout),\n-        retries: 1,\n+        retries: 3,\n     }\n }\ndiff --git a/src/client/retry.rs b/src/client/retry.rs\nnew file mode 100644\n--- /dev/null\n+++ b/src/client/retry.rs\n@@ -0,0 +1,4 @@\n+pub fn backoff(attempt: u32) -> u64 {\n+    200 * 2u64.pow(attempt)\n+}\n+\ndiff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -3,3 +3,3 @@\n ## Configuration\n-The client waits 10 seconds.\n+The client waits 30 seconds and retries three times.\n \n";
 
@@ -1881,9 +1994,9 @@ fn diff_dock(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     data.install_script(
         "differ",
         serde_json::json!({ "name": "Changes", "contributes": { "ui": ["diff"] } }),
-        &format!(
-            "let opened = false; wings.onPanes(async (list) => {{ if (!list.length || opened) return; opened = true; await wings.openDiff({{ title: 'Fix the client timeout', subtitle: 'acme-web #42 · fix-timeout into main', patch: {} }}); }});",
-            serde_json::json!(DOCK_PATCH)
+        &differ(
+            serde_json::json!({ "title": "Fix the client timeout", "subtitle": "acme-web #42 · fix-timeout into main", "patch": DOCK_PATCH }),
+            "This plugin doesn't take replies",
         ),
         &[],
         "differ-scope",
@@ -1984,10 +2097,9 @@ fn diff_comments(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     data.install_script(
         "differ",
         serde_json::json!({ "name": "Changes", "contributes": { "ui": ["diff"] } }),
-        &format!(
-            "let opened = false; wings.onReply(async () => {{ throw new Error('GitHub refused the reply: you are not signed in.'); }}); wings.onPanes(async (list) => {{ if (!list.length || opened) return; opened = true; await wings.openDiff({{ title: 'Fix the client timeout', subtitle: 'acme-web #42 · fix-timeout into main', patch: {}, comments: {} }}); }});",
-            serde_json::json!(DOCK_PATCH),
-            comments
+        &differ(
+            serde_json::json!({ "title": "Fix the client timeout", "subtitle": "acme-web #42 · fix-timeout into main", "patch": DOCK_PATCH, "comments": comments }),
+            "GitHub refused the reply: you are not signed in.",
         ),
         &[],
         "differ-scope",
@@ -2040,7 +2152,7 @@ fn plugins_install(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         serde_json::json!({ "name": "Pull requests", "version": "1.2.0", "description": "Shows each pane's pull request and its checks.",
             "permissions": { "exec": ["gh pr view", "gh pr checks"], "notify": true, "fetch": ["https://api.github.com/"] },
             "contributes": { "ui": ["badges"], "mcpTools": [{ "name": "pr_status" }] } }),
-        "",
+        &fake::idle("main"),
         &[],
         "tracker-scope",
     );
@@ -2049,8 +2161,8 @@ fn plugins_install(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         serde_json::json!({ "name": "Notes", "version": "0.3.0", "description": "Keeps notes beside each project.",
             "permissions": { "panes": [], "sendToAgents": true, "secrets": { "notes-token": "https://notes.example.com/" } },
             "contributes": { "sidebars": [{ "id": "notes", "title": "Notes", "page": "dist/notes.html" }] } }),
-        "",
-        &[("notes", "")],
+        &fake::idle("main"),
+        &[("notes", &fake::idle("notes"))],
         "notes-scope",
     );
     // The tracker came from GitHub, and Notes was never approved.
@@ -2135,7 +2247,7 @@ fn plugins_drop(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         serde_json::json!({ "name": "Pull requests", "version": "1.2.0", "description": "Shows each pane's pull request and its checks.",
             "permissions": { "exec": ["gh pr view", "gh pr checks"], "notify": true },
             "contributes": { "ui": ["badges"] } }),
-        "",
+        &fake::idle("main"),
         &[],
         "tracker-scope",
     );

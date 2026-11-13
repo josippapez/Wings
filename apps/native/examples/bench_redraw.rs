@@ -15,6 +15,7 @@ use wings_native::{
     host::Config,
     icons::Assets,
     installed::fixture::{Data, fixture_main},
+    page::runtime::fake,
     terminal_view::TerminalView,
     workspace::Workspace,
 };
@@ -51,11 +52,15 @@ fn main() {
     std::os::unix::fs::symlink("/bin/sleep", &fake_claude).unwrap();
     config.agents = Some(claude.clone());
     let data = Data::temp();
+    // The components page as React drew it (`src/page/trees/components.json`).
+    let components = fake::page("page", |_| {
+        serde_json::from_str(include_str!("../src/page/trees/components.json")).unwrap()
+    });
     data.install_script(
         "side",
         serde_json::json!({ "contributes": { "sidebars": [{ "id": "side", "title": "Side", "page": "dist/side.html" }] } }),
         &fixture_main(),
-        &[("side", include_str!("../pages/dist/components-page.js"))],
+        &[("side", &components)],
         "bench",
     );
     config.plugins = Some(data.paths());

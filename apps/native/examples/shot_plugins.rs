@@ -27,6 +27,7 @@ use wings_native::{
             Access, Env, PaneEntry, PanePort, PluginConfig, PluginHost, SessionEntry,
             ui::{Badge, PaneStatus},
         },
+        runtime::fake::{self, Cx, Guest, Hear},
     },
 };
 
@@ -273,11 +274,22 @@ fn changes(out: PathBuf) {
 
 /// A page that stopped, with its error and Reload, at a tab's widths and a popover's.
 fn stopped(out: PathBuf) {
-    const SOURCE: &str = "wings.render(JSON.stringify({id:0,type:'#root',children:[{id:1,type:'Text',children:[{id:2,type:'#text',text:'Up'}]}]}));
-        setTimeout(() => { for (;;) {} }, 100);";
+    // Shows "Up", then stops a moment later as a page that never gives the turn back is stopped.
+    struct Hangs;
+    impl Guest for Hangs {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            cx.render(&json!({ "id": 0, "type": "#root", "children": [{ "id": 1, "type": "Text", "children": [{ "id": 2, "type": "#text", "text": "Up" }] }] }));
+            cx.later(100);
+        }
+        fn timer(&mut self, cx: &mut Cx<'_>, _id: u32) {
+            cx.stop("the page ran for too long and was stopped");
+        }
+    }
+    let source = fake::source("page", || Box::new(Hangs));
+    let host = PluginHost::new(PluginConfig { id: "stopped".into(), root: out.join("fixture-storage-stopped"), scope: "shot".into() });
     let mut cx = app();
     for width in [1000.0, 640.0, 320.0] {
-        let handle = cx.open_offscreen_window(size(px(width), px(240.0)), |_, cx| cx.new(|cx| PageView::new(SOURCE, cx))).unwrap();
+        let handle = cx.open_offscreen_window(size(px(width), px(240.0)), |_, cx| cx.new(|cx| PageView::in_plugin(&host, &source, cx))).unwrap();
         let window = handle.into();
         let deadline = Instant::now() + Duration::from_secs(10);
         while !handle.read_with(&cx, |view, _| view.stopped()).unwrap() {
@@ -695,7 +707,7 @@ fn disk(out: PathBuf) {
     // The other states of the tab, which a scan of a few files is too quick to show: a main that says what the page
     // hears, as the real one does, for a scan in progress, one that failed and one that has not begun.
     let states = disk_host(&out, "fixture-storage-disk-states", &folder, vec![project("Slow", "/fixture/slow".into()), project("Broken", "/fixture/broken".into()), project("Quiet", "/fixture/quiet".into())]);
-    states.start_main(include_str!("shot_plugins/disk_states_main.js"), fail).unwrap();
+    states.start_main(&disk_states_main(), fail).unwrap();
     let views: [(&str, Steps, Steps); 3] = [
         ("scanning", vec![("Scan", scan, "Found so far")], vec![]),
         ("error", vec![("Scan", scan + 1, "Try again")], vec![]),
@@ -703,6 +715,45 @@ fn disk(out: PathBuf) {
     ];
     shoot_disk(&mut cx, &states, &source, &out, &views);
     let _ = std::fs::remove_dir_all(&folder);
+}
+
+/// A stand-in for Disk usage's main that tells its page what the real one tells it, for the states a scan of a few files
+/// is too quick to show: a scan in progress (the "Slow" project), one that failed ("Broken"), and one that is asked for and
+/// not begun ("Quiet"), which main neither shows nor answers.
+fn disk_states_main() -> String {
+    fn tell(cx: &mut Cx<'_>, name: &str, payload: serde_json::Value) {
+        let message = json!({ "wings:sdk": 1, "kind": "tell", "name": name, "payload": payload });
+        cx.link().broadcast(message.to_string()).unwrap();
+    }
+    fake::script("main", || {
+        let mut scans = json!([]);
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            let Hear::Deliver("broadcast", _, text) = hear else { return };
+            let message: serde_json::Value = serde_json::from_str(text).unwrap_or_default();
+            if message["wings:sdk"] != 1 || message["kind"] != "tell" {
+                return;
+            }
+            let state = |scans: &serde_json::Value| json!({ "scans": scans, "collector": { "items": [], "total": 0 } });
+            if message["name"] == "disk-want" {
+                tell(cx, "disk-state", state(&scans));
+            }
+            if message["name"] != "disk-ask" || message["payload"]["op"] != "scan" {
+                return;
+            }
+            let (id, root) = (&message["payload"]["id"], message["payload"]["root"].as_str().unwrap_or_default());
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+            scans = if root.ends_with("/slow") {
+                json!([{ "root": root, "state": "scanning", "expected": 8_000_000_000u64, "startedAt": now - 83_000, "stamp": now,
+                         "progress": { "entries": 48213, "bytes": 3_100_000_000u64, "path": format!("{root}/node_modules/react/cjs") } }])
+            } else if root.ends_with("/broken") {
+                json!([{ "root": root, "state": "error", "message": format!("There's no file or folder at {root}"), "stamp": now }])
+            } else {
+                return;
+            };
+            tell(cx, "disk-state", state(&scans));
+            tell(cx, "disk-done", json!({ "id": id, "result": null }));
+        }
+    })
 }
 
 /// What to press to reach a view of Disk usage, with the text each press shows.
@@ -1104,7 +1155,7 @@ fn work_item(out: PathBuf) {
 }
 
 /// The Issues plugin's board, list, issue tab and block with its real main, over the made-up issues
-/// `shot_plugins/tasks_seed.js` stores first.
+/// `tasks_seed` stores first.
 fn tasks(out: PathBuf) {
     let _ = std::fs::remove_dir_all(out.join("fixture-storage-tasks"));
     let (host, project) = repo_host(
@@ -1117,7 +1168,7 @@ fn tasks(out: PathBuf) {
     let (seeded, done) = std::sync::mpsc::channel();
     let seed = host
         .open_page(
-            &include_str!("shot_plugins/tasks_seed.js").replace("__PROJECT__", &project),
+            &tasks_seed(&project),
             move |event| match event {
                 wings_native::page::runtime::Event::Tree(tree)
                     if tree.text().contains("Seeded") =>
@@ -1200,4 +1251,71 @@ fn tasks(out: PathBuf) {
             "No parent",
         )],
     );
+}
+
+/// The slot the plugin keeps a project under (`plugins/tasks/rust/src/storage.rs` `slot_of`).
+fn slot_of(project_id: &str) -> String {
+    let (mut h1, mut h2) = (0xdead_beef_u32, 0x41c6_ce57_u32);
+    for unit in project_id.encode_utf16() {
+        let c = u32::from(unit);
+        h1 = (h1 ^ c).wrapping_mul(2_654_435_761);
+        h2 = (h2 ^ c).wrapping_mul(1_597_334_677);
+    }
+    h1 = (h1 ^ (h1 >> 16)).wrapping_mul(2_246_822_507) ^ (h2 ^ (h2 >> 13)).wrapping_mul(3_266_489_909);
+    h2 = (h2 ^ (h2 >> 16)).wrapping_mul(2_246_822_507) ^ (h1 ^ (h1 >> 13)).wrapping_mul(3_266_489_909);
+    format!("{h2:08x}{h1:08x}")
+}
+
+/// Made-up issues for the screenshots of Issues: run as a page of the plugin before its main starts, it writes them to
+/// storage the way `plugins/tasks/rust/src/storage.rs` keeps them, for the project `project`, then shows "Seeded".
+fn tasks_seed(project: &str) -> String {
+    struct Seed(String);
+    impl Guest for Seed {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+            let ago = |hours: u64| now - hours * 3_600_000;
+            let agent = |seen: u64| json!({ "id": "6f1c2a90-3b7e-4d51-9a02-5c8e1d4b7a11", "name": "checkout summary", "seen": seen });
+            let created = |hours: u64| json!({ "at": ago(hours), "by": "you", "kind": "created", "text": "Created" });
+            let issue = |key: &str, title: &str, status: &str, kind: &str, hours: u64, more: serde_json::Value| {
+                let mut issue = json!({ "key": key, "title": title, "status": status, "type": kind, "sessions": [], "log": [created(hours)],
+                                        "createdAt": ago(hours), "updatedAt": ago(hours / 2) });
+                issue.as_object_mut().unwrap().extend(more.as_object().unwrap().clone());
+                issue
+            };
+            let by = json!({ "id": "6f1c2a90-3b7e-4d51-9a02-5c8e1d4b7a11", "name": "checkout summary" });
+            let issues = [
+                issue("WEB-1", "Show the delivery estimate under the cart total", "todo", "task", 30, json!({ "parent": "WEB-10", "priority": "medium", "description": "## Goal\nShow when the order arrives, under the total.\n\n## Done when\n- [ ] The estimate shows for a saved address\n- [ ] A cart with no address shows the default" })),
+                issue("WEB-2", "Fix the focus ring on the promo code field", "todo", "bug", 28, json!({ "priority": "high", "links": { "branch": "fix/promo-focus" } })),
+                issue("WEB-3", "Backfill order totals for rows created before the currency column existed", "in_progress", "task", 20, json!({ "parent": "WEB-10", "sessions": [agent(ago(2))] })),
+                issue("WEB-4", "Checkout summary card", "in_review", "feature", 52, json!({
+                    "parent": "WEB-10",
+                    "priority": "urgent",
+                    "description": "## Goal\nShow the buyer what they are about to pay for in one place, right above the pay button.\n\n## Scope\n- One card built from `useCart()`, no new data fetching\n- Rounding happens once, on the sum\n\n## Done when\n- [x] The card shows items, shipping, tax and total\n- [ ] An empty cart hides the card",
+                    "related": ["WEB-8"],
+                    "blockedBy": ["WEB-3"],
+                    "links": { "branch": "feature/checkout-summary", "pr": "https://example.com/acme/web/pull/412", "commits": ["3fa91c2", "8b27de0"] },
+                    "sessions": [agent(ago(3))],
+                    "log": [
+                        created(52),
+                        { "at": ago(50), "by": by, "kind": "note", "text": "Read the cart code. Plan: one card with items, shipping, tax and a total, no new data fetching." },
+                        { "at": ago(26), "by": by, "kind": "status", "text": "In progress → In review" },
+                        { "at": ago(5), "by": "you", "kind": "note", "text": "Approved. Waiting on the release branch." },
+                    ],
+                })),
+                issue("WEB-5", "Rename the cart store to match the checkout naming", "done", "task", 60, json!({})),
+                issue("WEB-7", "Hide the summary card for an empty cart", "todo", "task", 20, json!({ "parent": "WEB-4", "priority": "low" })),
+                issue("WEB-8", "Order history landing page: tabs, design alignment, page and tab events", "todo", "feature", 18, json!({ "parent": "WEB-10" })),
+                issue("WEB-6", "Upgrade the date picker", "done", "task", 70, json!({ "parent": "WEB-10" })),
+                issue("WEB-10", "Checkout redesign", "in_progress", "epic", 80, json!({ "description": "The checkout pages on the new design system." })),
+            ];
+            let slot = slot_of(&self.0);
+            for issue in &issues {
+                cx.save(&format!("issues/{slot}/{}", issue["key"].as_str().unwrap()), issue);
+            }
+            cx.save(&format!("issues/{slot}"), &json!({ "v": 3, "path": self.0, "prefix": "WEB", "next": 11 }));
+            cx.render(&json!({ "id": 0, "type": "#root", "props": {}, "children": [{ "id": 1, "type": "#text", "text": "Seeded" }] }));
+        }
+    }
+    let project = project.to_owned();
+    fake::source("page", move || Box::new(Seed(project.clone())))
 }
