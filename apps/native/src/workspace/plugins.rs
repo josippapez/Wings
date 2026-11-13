@@ -279,7 +279,8 @@ impl Workspace {
             .enumerate()
             .map(|(index, (id, name, javascript))| {
                 let needs = match (javascript, many) {
-                    (true, false) => "Written in JavaScript: needs an update",
+                    // Settings says what to do; a longer line was cut off at the sidebar's width.
+                    (true, false) => "Built for JavaScript",
                     (true, true) => "Need an update",
                     (false, false) => "Needs an update for the native app",
                     (false, true) => "Need an update for the native app",
