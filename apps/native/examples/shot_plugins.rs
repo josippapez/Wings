@@ -371,7 +371,7 @@ fn schedules(out: PathBuf) {
                 env: std::sync::Arc::new(FixtureEnv(project.clone())),
             },
         );
-        host.publish_projects(vec![wings_native::page::plugin::Project { id: id.clone(), name: "shop".into(), parent_id: None, path: id.clone() }]);
+        host.publish_projects(vec![wings_native::page::plugin::Project { hidden_sections: Vec::new(), id: id.clone(), name: "shop".into(), parent_id: None, path: id.clone() }]);
         (host, wings_plugin_storage::Storage::new(storage))
     };
     let (host, store) = host_over("fixture-storage-schedules");
@@ -545,7 +545,7 @@ fn worktrees(out: PathBuf) {
             env: std::sync::Arc::new(FixtureEnv(dev.clone())),
         },
     );
-    host.publish_projects(vec![wings_native::page::plugin::Project {
+    host.publish_projects(vec![wings_native::page::plugin::Project { hidden_sections: Vec::new(),
         id: root.to_string_lossy().into(),
         path: root.to_string_lossy().into(),
         name: "acme-web".into(),
@@ -718,7 +718,7 @@ fn disk(out: PathBuf) {
             panic!("{message}");
         }
     };
-    let project = |name: &str, path: String| wings_native::page::plugin::Project { id: path.clone(), name: name.into(), parent_id: None, path };
+    let project = |name: &str, path: String| wings_native::page::plugin::Project { hidden_sections: Vec::new(), id: path.clone(), name: name.into(), parent_id: None, path };
     let host = disk_host(&out, "fixture-storage-disk", &folder, vec![project("Fixture", id)]);
     host.start_main(&module("main"), fail).unwrap();
     let mut cx = app();
@@ -951,8 +951,8 @@ fn pr_tracker(out: PathBuf) {
     pr_tracker_repo(&empty, "git@github.com:acme/empty.git", "main");
     let empty_path = empty.to_string_lossy().into_owned();
     host.publish_projects(vec![
-        wings_native::page::plugin::Project { id: project.clone(), name: "web".into(), parent_id: None, path: project.clone() },
-        wings_native::page::plugin::Project { id: empty_path.clone(), name: "empty".into(), parent_id: None, path: empty_path.clone() },
+        wings_native::page::plugin::Project { hidden_sections: Vec::new(), id: project.clone(), name: "web".into(), parent_id: None, path: project.clone() },
+        wings_native::page::plugin::Project { hidden_sections: Vec::new(), id: empty_path.clone(), name: "empty".into(), parent_id: None, path: empty_path.clone() },
     ]);
     // The project on screen, which the app always says and the block and the picker follow.
     host.publish_project(Some(std::path::Path::new(&project)));
@@ -1122,7 +1122,7 @@ fn repo_host(out: &std::path::Path, id: &str, manifest: &str) -> (PluginHost, St
             env: std::sync::Arc::new(FixtureEnv(project)),
         },
     );
-    host.publish_projects(vec![wings_native::page::plugin::Project {
+    host.publish_projects(vec![wings_native::page::plugin::Project { hidden_sections: Vec::new(),
         id: path.clone(),
         name: "web".into(),
         parent_id: None,
