@@ -148,6 +148,8 @@ pub(super) struct Prefs {
     pub(super) terminal_server: Option<bool>,
     /// Wings asked once to turn on other apps' data for its terminals (`disk_access`).
     pub(super) app_data_asked: bool,
+    /// Wings asked once whether to install the official plugins (`first_launch_plugins`).
+    pub(super) official_plugins_asked: bool,
 }
 
 impl Default for Prefs {
@@ -169,6 +171,7 @@ impl Default for Prefs {
             global_hotkey: Default::default(),
             terminal_server: None,
             app_data_asked: false,
+            official_plugins_asked: false,
         }
     }
 }

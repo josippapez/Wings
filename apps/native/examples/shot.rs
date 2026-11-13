@@ -385,6 +385,10 @@ fn main() {
     if std::env::args().nth(2).as_deref() == Some("disk-access") {
         return disk_access(&mut cx, &config, &fake, &out);
     }
+    // `-- <out-dir> first-launch` renders only the first launch's question about the official plugins.
+    if std::env::args().nth(2).as_deref() == Some("first-launch") {
+        return first_launch(&mut cx, &config, &out);
+    }
     // `-- <out-dir> older-servers` renders only a pane on a terminal server from before an update, the servers in
     // Settings, General, and the dialog that stops the older one.
     if std::env::args().nth(2).as_deref() == Some("older-servers") {
@@ -1461,6 +1465,45 @@ fn accounts(cx: &mut VisualTestAppContext, base: &Config, fake_claude: &Path, ou
         let _ = std::process::Command::new("pkill")
             .args(["-f", &fake_claude.display().to_string()])
             .status();
+        wait(cx, window, Duration::from_millis(300));
+    }
+}
+
+/// The question a first launch asks, over a made-up list of the official plugins: never the real catalogue.
+fn first_launch(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+    let plugin = |id: &str, name: &str, description: &str| wings_plugins::store::Available {
+        id: id.into(),
+        name: name.into(),
+        description: description.into(),
+        version: "1.0.0".into(),
+        link: format!("https://github.com/example/{id}"),
+    };
+    let list = vec![
+        plugin("issues", "Issues", "A board of the project's issues, with the agent's work on each."),
+        plugin("changes", "Changes", "What changed in the repo, file by file, with line counts."),
+        plugin("pr-tracker", "PR tracker", "Open pull requests and whether their checks pass."),
+        plugin("disk", "Disk usage", "What takes space on a disk or in a folder."),
+        plugin("hud", "HUD", "Agent status in the title bar."),
+    ];
+    let mut config = base.clone();
+    config.plugins = None;
+    config.sessions = None;
+    for width in [1000.0, 640.0] {
+        let config = config.clone();
+        let list = list.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        wait(cx, window, Duration::from_secs(1));
+        handle
+            .update(cx, |w, _, cx| w.official_plugins_listed(list, cx))
+            .unwrap();
+        wait(cx, window, Duration::from_millis(500));
+        save(cx, window, &out.join(format!("first-launch-{width}.png")));
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
         wait(cx, window, Duration::from_millis(300));
     }
 }

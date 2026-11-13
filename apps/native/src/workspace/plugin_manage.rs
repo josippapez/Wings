@@ -108,6 +108,8 @@ pub(super) fn carries_package(paths: &ExternalPaths) -> bool {
 pub(super) trait UpdateSource: Send + Sync {
     fn latest(&self, repo: &str, folder: Option<&str>) -> Result<Option<String>, String>;
     fn available(&self) -> Result<Vec<Available>, String>;
+    /// The package a GitHub link names, as an Install button downloads it.
+    fn fetch(&self, link: &str) -> Result<(Vec<u8>, Source), String>;
 }
 
 struct GithubUpdates;
@@ -119,6 +121,10 @@ impl UpdateSource for GithubUpdates {
 
     fn available(&self) -> Result<Vec<Available>, String> {
         store::available()
+    }
+
+    fn fetch(&self, link: &str) -> Result<(Vec<u8>, Source), String> {
+        store::fetch_github(link)
     }
 }
 
@@ -205,6 +211,14 @@ impl Workspace {
             self.leave("review", done, crate::ui::motion::POPUP_IN, cx);
         }
         cx.notify();
+    }
+
+    /// Where the official list and its packages come from: GitHub, unless a test supplied a source.
+    pub(super) fn updates_source(&self) -> Arc<dyn UpdateSource> {
+        self.manage
+            .update_source
+            .clone()
+            .unwrap_or_else(|| Arc::new(GithubUpdates))
     }
 
     fn store(&self) -> Result<Arc<Mutex<Store>>, String> {
@@ -479,9 +493,10 @@ impl Workspace {
         if self.manage.installing.is_some() {
             return;
         }
+        let source = self.updates_source();
         let download = cx
             .background_executor()
-            .spawn(async move { store::fetch_github(&link) });
+            .spawn(async move { source.fetch(&link) });
         self.run_install("available", download, window, cx);
     }
 
@@ -601,6 +616,7 @@ impl Workspace {
                     }
                     Err(error) => this.manage.error = Some(error),
                 }
+                this.install_next_official(window, cx);
                 cx.notify();
             });
         });
@@ -801,11 +817,7 @@ impl Workspace {
             .collect();
         self.manage.checking = true;
         cx.notify();
-        let source = self
-            .manage
-            .update_source
-            .clone()
-            .unwrap_or_else(|| Arc::new(GithubUpdates));
+        let source = self.updates_source();
         // Every plugin and the catalogue at once, as the desktop's `Promise.all`: a check waits for the slowest answer,
         // not for the sum of a dozen round trips to GitHub.
         let found = cx.background_executor().spawn(async move {

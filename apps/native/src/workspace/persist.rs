@@ -355,6 +355,7 @@ impl Workspace {
             global_hotkey: Some(self.prefs.global_hotkey.clone()),
             terminal_server: self.prefs.terminal_server,
             app_data_asked: self.prefs.app_data_asked.then_some(true),
+            official_plugins_asked: self.prefs.official_plugins_asked.then_some(true),
             right_width: Some(self.plugin_ui.right_size.width),
             ..self.side.saved()
         };

@@ -282,6 +282,9 @@ pub struct Settings {
     /// Wings asked once to turn on other apps' data for its terminals, which macOS never asks for itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_data_asked: Option<bool>,
+    /// Wings asked once whether to install the official plugins, on the first launch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub official_plugins_asked: Option<bool>,
 }
 
 #[derive(Default, Serialize, Deserialize)]

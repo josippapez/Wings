@@ -12,6 +12,7 @@ mod context_menu;
 mod desktop_parity_tests;
 mod diff;
 mod disk_access;
+mod first_launch_plugins;
 mod drag_slot;
 mod editor;
 mod exits;
@@ -286,6 +287,7 @@ pub struct Workspace {
     watching_mounts: bool,
     /// Whether the terminals can read other apps' data, and the dialog that asks for it.
     disk_access: disk_access::DiskAccess,
+    first_launch: first_launch_plugins::FirstLaunch,
     /// Settings' list of terminal servers, its Stop dialog, and the panes moving off an older server.
     #[cfg(unix)]
     older: older_servers::OlderServers,
@@ -451,6 +453,7 @@ impl Workspace {
             worktree_setup: None,
             watching_mounts: false,
             disk_access: Default::default(),
+            first_launch: Default::default(),
             #[cfg(unix)]
             older: Default::default(),
             _detection: None,
@@ -638,6 +641,7 @@ impl Workspace {
             global_hotkey: settings.global_hotkey.clone().unwrap_or_default(),
             terminal_server: settings.terminal_server,
             app_data_asked: settings.app_data_asked == Some(true),
+            official_plugins_asked: settings.official_plugins_asked == Some(true),
         };
         this.find_editors(cx);
         this.start_global_hotkey(window, cx);
@@ -647,6 +651,7 @@ impl Workspace {
         this.check_disk_access(cx);
         this.start_update_checks(window, cx);
         this.start_plugin_update_checks(window, cx);
+        this.offer_official_plugins(cx);
         // The cached pieces need the workspace's entity, which exists once this returns (see `parts`).
         let workspace = cx.weak_entity();
         cx.defer(move |cx| {

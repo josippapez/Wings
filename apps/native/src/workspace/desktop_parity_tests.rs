@@ -114,6 +114,7 @@ fn the_new_settings_are_saved_and_come_back() {
                 global_hotkey: Default::default(),
                 terminal_server: Some(false),
                 app_data_asked: false,
+                official_plugins_asked: false,
             }
         );
     });

@@ -264,6 +264,12 @@ impl Workspace {
             Self::disk_access_dialog,
             cx,
         );
+        let first_launch = self.layer(
+            "first-launch-plugins",
+            |this| &mut this.first_launch.asking,
+            Self::first_launch_dialog,
+            cx,
+        );
         let worktree_setup = self.layer(
             "worktree-setup",
             |this| &mut this.worktree_setup,
@@ -300,6 +306,7 @@ impl Workspace {
             dialog("plugin-review", review),
             dialog("setup-approval", setup),
             dialog("app-data-access", disk_access),
+            dialog("first-launch-plugins", first_launch),
             dialog("worktree-setup", worktree_setup),
             sheet.map(|(sheet, phase)| motion::sheet_layer(phase, sheet)),
             dialog("palette", palette),

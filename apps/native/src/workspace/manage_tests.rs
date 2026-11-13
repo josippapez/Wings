@@ -24,7 +24,7 @@ use crate::{
 };
 
 /// A `.wings-plugin` of plugin `id` whose native main saves `version` under `started`, asking to run `exec`.
-fn package(id: &str, version: &str, exec: &[&str]) -> Vec<u8> {
+pub(super) fn package(id: &str, version: &str, exec: &[&str]) -> Vec<u8> {
     let manifest = json!({ "id": id, "name": format!("Plugin {id}"), "version": version, "api": 1,
         "main": "dist/main.js", "permissions": { "exec": exec } });
     let version = version.to_owned();
@@ -59,11 +59,14 @@ fn github() -> Source {
 }
 
 #[derive(Default)]
-struct Updates {
+pub(super) struct Updates {
     latest: Mutex<String>,
-    catalog: Mutex<Vec<wings_plugins::store::Available>>,
-    failed: std::sync::atomic::AtomicBool,
-    calls: std::sync::atomic::AtomicUsize,
+    pub(super) catalog: Mutex<Vec<wings_plugins::store::Available>>,
+    /// What an Install downloads, by link.
+    pub(super) packages: Mutex<std::collections::HashMap<String, Vec<u8>>>,
+    pub(super) fetched: Mutex<Vec<String>>,
+    pub(super) failed: std::sync::atomic::AtomicBool,
+    pub(super) calls: std::sync::atomic::AtomicUsize,
     queried: Mutex<Vec<String>>,
 }
 
@@ -82,6 +85,12 @@ impl super::plugin_manage::UpdateSource for Updates {
             return Err("offline".into());
         }
         Ok(self.catalog.lock().unwrap().clone())
+    }
+
+    fn fetch(&self, link: &str) -> Result<(Vec<u8>, Source), String> {
+        self.fetched.lock().unwrap().push(link.into());
+        let bytes = self.packages.lock().unwrap().get(link).cloned();
+        bytes.map(|bytes| (bytes, github())).ok_or("no package".into())
     }
 }
 
@@ -103,7 +112,7 @@ fn plugin_update_announcements_replace_the_previous_version() {
     assert!(window.read(|w, _| w.manage.announcements[0].title.contains("1.2.0")));
 }
 
-fn offered(id: &str) -> wings_plugins::store::Available {
+pub(super) fn offered(id: &str) -> wings_plugins::store::Available {
     wings_plugins::store::Available {
         id: id.into(),
         name: format!("Plugin {id}"),
@@ -149,6 +158,10 @@ impl super::plugin_manage::UpdateSource for Together {
     fn available(&self) -> Result<Vec<wings_plugins::store::Available>, String> {
         self.wait()?;
         Ok(vec![offered("new")])
+    }
+
+    fn fetch(&self, _: &str) -> Result<(Vec<u8>, Source), String> {
+        Err("no download".into())
     }
 }
 
