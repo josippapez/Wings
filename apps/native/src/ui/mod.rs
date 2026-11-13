@@ -32,6 +32,9 @@ use crate::{
 
 /// The desktop's `--hairline` between rows and around cards.
 pub const HAIRLINE: u32 = 0xffffff12;
+/// Room the window's close, minimize and zoom buttons take at the left of whatever is drawn under the title bar, as the
+/// desktop's `pl-[84px]`.
+pub const TRAFFIC_LIGHTS: f32 = 84.0;
 /// The desktop's `--input` border around a field.
 const INPUT_BORDER: u32 = 0xffffff1a;
 /// The desktop dialog's `--popover`.

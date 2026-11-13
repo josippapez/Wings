@@ -17,8 +17,6 @@ use super::{Workspace, shortcut_label};
 
 /// The desktop's `h-10`.
 pub(super) const TITLE_BAR_HEIGHT: f32 = 40.0;
-/// Room for the traffic lights, as the desktop's `pl-[84px]`.
-const TRAFFIC_LIGHTS: f32 = 84.0;
 
 /// One entry of the new tab menu: a plugin page that offers itself as a new tab.
 struct NewPage {
@@ -61,7 +59,7 @@ impl Workspace {
                         .flex()
                         .items_center()
                         .gap(px(4.0))
-                        .pl(px(TRAFFIC_LIGHTS))
+                        .pl(px(ui::TRAFFIC_LIGHTS))
                         .when(sidebar, |left| left.w(px(width + 12.0)))
                         .when(!sidebar, |left| left.pr(px(4.0)))
                         .child(

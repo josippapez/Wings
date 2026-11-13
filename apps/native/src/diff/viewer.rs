@@ -1381,8 +1381,9 @@ impl Render for Viewer {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key))
             .children(ui::spot(|| "diff".into()))
-            // The desktop's header: `py-3 pr-3 pl-5` and a 15px title when the diff fills the window, `py-2 pr-2 pl-4`
-            // and 13px docked. Under the title, the subtitle, the number of files and the lines added and removed.
+            // The desktop's header: `py-3 pr-3` and a 15px title when the diff fills the window, `py-2 pr-2 pl-4` and
+            // 13px docked. Under the title, the subtitle, the number of files and the lines added and removed. Filling
+            // the window, it starts right of the window's buttons, which sit over its top-left corner.
             .child(
                 div()
                     .flex_none()
@@ -1391,7 +1392,7 @@ impl Render for Viewer {
                     .gap(px(4.0))
                     .py(px(if docked { 8.0 } else { 12.0 }))
                     .pr(px(if docked { 8.0 } else { 12.0 }))
-                    .pl(px(if docked { 16.0 } else { 20.0 }))
+                    .pl(px(if docked { 16.0 } else { ui::TRAFFIC_LIGHTS }))
                     .border_b_1()
                     .border_color(rgba(ui::HAIRLINE))
                     .child(
