@@ -32,7 +32,10 @@ async fn answer(asked: Value) -> Result<Value, String> {
             let paths: Vec<String> = asked["paths"].as_array().map_or_else(Vec::new, |list| list.iter().filter_map(|p| p.as_str().map(str::to_owned)).collect());
             collector::uncollect(&paths).map(|()| Value::Null)
         }
-        "trash" => actions::trash_collected().await.map(|result| result.to_value()),
+        "trash" => {
+            let reviewed: Vec<String> = asked["paths"].as_array().into_iter().flatten().filter_map(|path| path.as_str().map(str::to_owned)).collect();
+            actions::trash_collected(&reviewed).await.map(|result| result.to_value())
+        }
         "reveal" => actions::reveal(&text(&asked, "path")).await.map(|()| Value::Null),
         "preview" => actions::preview(&text(&asked, "path")).map(|()| Value::Null),
         "deleteSnapshot" => actions::delete_snapshot(&text(&asked, "date")).await.map(|()| Value::Null),

@@ -460,9 +460,12 @@ pub fn trash_messages(result: &TrashResult) -> Vec<(&'static str, String)> {
 }
 
 fn trash() {
-    with(|page| page.say(Vec::new()));
-    spawn(async {
-        let answer = ask("trash", Value::Null).await;
+    let shown: Vec<String> = with(|page| {
+        page.say(Vec::new());
+        page.collector.items.iter().map(|item| item.path.clone()).collect()
+    });
+    spawn(async move {
+        let answer = ask("trash", serde_json::json!({ "paths": shown })).await;
         let moved = with(|page| {
             page.countdown = Countdown::Idle;
             match answer {

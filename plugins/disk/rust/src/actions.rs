@@ -83,23 +83,30 @@ thread_local! {
     static TRASHING: RefCell<Option<Rc<Trashing>>> = const { RefCell::new(None) };
 }
 
-/// Moves everything in the Collector to the Trash, and gives what moved and what didn't. A second call while one runs gets that one's result.
-pub async fn trash_collected() -> Result<TrashResult, String> {
+/// Moves what is in the Collector and among `reviewed`, the paths the tab showed when you chose Move to Trash, to the
+/// Trash, and gives what moved and what didn't. A second call while one runs gets that one's result.
+pub async fn trash_collected(reviewed: &[String]) -> Result<TrashResult, String> {
     if let Some(running) = TRASHING.with(|trashing| trashing.borrow().clone()) {
         running.done.wait().await;
         return running.result.borrow().clone().ok_or_else(|| "Moving to the Trash didn't finish.".to_owned());
     }
     let running = Rc::new(Trashing { done: Gate::default(), result: RefCell::new(None) });
     TRASHING.with(|trashing| *trashing.borrow_mut() = Some(running.clone()));
-    let moved = move_to_trash().await;
+    let moved = move_to_trash(reviewed).await;
     *running.result.borrow_mut() = moved.as_ref().ok().cloned();
     TRASHING.with(|trashing| *trashing.borrow_mut() = None);
     running.done.open();
     moved
 }
 
-async fn move_to_trash() -> Result<TrashResult, String> {
-    let items = collector::now().items;
+/// What of the Collector's `items` you were shown. A tool can add to the Collector at any moment, and what it added
+/// after you chose Move to Trash stays for the next look.
+fn reviewed_only(items: Vec<Collected>, reviewed: &[String]) -> Vec<Collected> {
+    items.into_iter().filter(|item| reviewed.contains(&item.path)).collect()
+}
+
+async fn move_to_trash(reviewed: &[String]) -> Result<TrashResult, String> {
+    let items = reviewed_only(collector::now().items, reviewed);
     let mounts: Vec<String> = disks_now(30_000.0).await?.rows.into_iter().map(|d| d.disk.mount).collect();
     // Each item is checked again where it matters most, so one stored by an older version can't get past what is refused now.
     let errors: Vec<Option<String>> = map_limit(items.clone(), 4, |item| {
@@ -183,6 +190,13 @@ mod tests {
 
     fn output(stdout: &str, stderr: &str, code: i64) -> Value {
         json!({ "code": code, "stdout": stdout, "stderr": stderr })
+    }
+
+    #[test]
+    fn only_what_the_tab_showed_is_moved_to_the_trash() {
+        let item = |path: &str| Collected { path: path.to_owned(), size: 1, kind: crate::entry::Kind::File };
+        let moved = reviewed_only(vec![item("/tmp/a"), item("/tmp/added-later")], &["/tmp/a".to_owned(), "/tmp/gone".to_owned()]);
+        assert_eq!(moved.iter().map(|item| item.path.as_str()).collect::<Vec<_>>(), ["/tmp/a"]);
     }
 
     #[test]
