@@ -1,6 +1,6 @@
 {
   "name": "wings-plugin-ui",
-  "version": "0.14.9",
+  "version": "1.0.0",
   "description": "React components and the stylesheet for Wings plugin pages, on Base UI like the Wings app's shadcn/ui components.",
   "license": "MIT",
   "type": "module",
@@ -10,21 +10,15 @@
       "types": "./ui.d.ts",
       "default": "./ui.js"
     },
-    "./native": {
-      "types": "./native.d.ts",
-      "default": "./native.js"
-    },
     "./plugin-ui.css": "./plugin-ui.css"
   },
   "files": [
     "ui.js",
-    "native.js",
     "highlight.js",
     "hooks.js",
     "markdown.js",
     "emoji.js",
     "ui.d.ts",
-    "native.d.ts",
     "plugin-ui.css",
     "README.md",
     "LICENSE"
@@ -38,13 +32,12 @@
     "test": "tsc -p tsconfig.json && node --test"
   },
   "dependencies": {
-    "@base-ui/react": "^1.8.0",
-    "react-reconciler": "0.34.0"
+    "@base-ui/react": "^1.8.0"
   },
   "peerDependencies": {
     "react": ">=19",
     "react-dom": ">=19",
-    "wings-plugin-sdk": "^0.17.0 || ^0.18.0 || ^0.19.0 || ^0.20.0 || ^0.21.0 || ^0.22.0 || ^0.23.0 || ^0.24.0 || ^0.25.0"
+    "wings-plugin-sdk": "^0.17.0 || ^0.18.0 || ^0.19.0 || ^0.20.0 || ^0.21.0 || ^0.22.0 || ^0.23.0 || ^0.24.0 || ^0.25.0 || ^1.0.0"
   },
   "devDependencies": {
     "@types/react": "^19.1.8",

@@ -11,5 +11,5 @@
     "skipLibCheck": true,
     "types": []
   },
-  "include": ["types.test-d.tsx", "native.test-d.tsx"]
+  "include": ["types.test-d.tsx"]
 }

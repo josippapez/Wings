@@ -1,4 +1,4 @@
-// The page hooks ui.js and native.js share: the same React state over the same `wings` calls, whichever app draws the page.
+// The page hooks ui.js uses: React state over the `wings` calls.
 import { createElement as h, Fragment, useCallback, useEffect, useState } from "react";
 import { errorMessage } from "wings-plugin-sdk/async";
 

@@ -172,24 +172,6 @@ export function SaveButton({ saving, save }: { saving: boolean; save: () => void
 }
 ```
 
-## Native pages (pilot)
-
-`wings-plugin-ui/native` has the components a page of the native Wings app can use, with the names and props of the ones
-above: `Page`, `Toolbar`, `Stack`, `Row`, `Text`, `Button`, `Badge`, `Empty`, `Loading`, `Card`, `Heading`, `Dot`,
-`Gauge`, `List`, `ListItem`, `Disclosure` and `Select`, and for forms `Field`, `FieldGroup`, `TextInput`, `Textarea`,
-`Chip`, `Combobox` (its matches are chips under the field), `Menu` (its items show under the button), `Icon`, `Svg`,
-`Properties`, `Stats` and `Time`, and for a pull request's page `Title`, `Avatar`, `Skeleton`, `Skeletons`, `Summary`,
-`SummaryChip`, `Tabs` (drawn as `Chips`, or underlined for the `line` variant), `Timeline`, `ListDetail`, `Markdown` (the same parser as the web one: bold, code
-and links are spans of their line, and an image shows as its alt text), `CodeBlock` (no colours by language),
-`ProjectGate` and `languageOf`, with the `useAction`, `useProject`, `useViewArgs`, `useTabState` and `useBlockState` hooks
-(the last two keep the state while the page is open, not across restarts). A `Text` inside a `Text` is a span with its own tone, weight, `mono`
-and `onClick`, which makes a link. `copyText` puts the text on the clipboard through the app, within 5 s of a click or key in the page and up to 1 MB. It renders with
-`react-reconciler` into a JSON tree that the app draws with its own controls, so hooks, state and effects work but there
-is no DOM: no `className`, `style`, `title`, `as` or `aria-*`, and a handler gets a `NativeEvent`, not a DOM event. A
-`Select`'s `onChange` gets the value picked, as in `wings-plugin-ui`. `mount(<App />)` shows the page, and `mount(<App />, { fill: true })` lays it out edge to edge with no padding, as
-`fill: true` does in `page`. A plugin whose
-`wings-plugin.json` says `"native": true` has its pages built this way: see Native build in the wings-plugin-sdk README.
-
 ## Ours or your own
 
 The components are there for a page that looks like the rest of Wings without effort, not a rule. Write your

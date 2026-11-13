@@ -901,7 +901,7 @@ interface Wings {
 
 declare const wings: Wings;
 
-/** True in dist/native/ bundles and false in browser bundles. Use it to select modules for the matching renderer. */
+/** Always false: the build no longer makes a native bundle. Kept so source that tests it still builds. */
 declare const WINGS_NATIVE: boolean;
 
 /** A page's own CSS, `import "./sidebar.css"`: wings-plugin build bundles it into the page's `<name>.css`. */

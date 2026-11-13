@@ -343,7 +343,7 @@ export function Icon(props: Omit<Props<"svg">, "children"> & { name: IconName; l
 /**
  * A small drawing of your own, like an icon Lucide doesn't have: `children` are SVG's shapes in a square `viewBox`,
  * drawn `size` px square (16 by default) in `tone`'s colour, or the text's, as `currentColor`. It is decoration unless
- * it has a `label`. The native app draws fewer shapes and props, in that one colour: see native.d.ts.
+ * it has a `label`.
  */
 export function Svg(props: Omit<Props<"svg">, "children"> & { viewBox: string; size?: number; tone?: Tone; label?: string; children?: ReactNode }): ReactElement;
 

@@ -11,9 +11,6 @@ importers:
       '@base-ui/react':
         specifier: ^1.8.0
         version: 1.9.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
-      react-reconciler:
-        specifier: 0.34.0
-        version: 0.34.0(react@19.3.0)
     devDependencies:
       '@types/react':
         specifier: ^19.1.8
@@ -194,12 +191,6 @@ packages:
 
   react-dom@19.3.0:
     resolution: {integrity: sha512-JDk8dgif51OjFoDE70+OT9ICyYr+69HlmihNwp1+Nsfbna3t5sIiCa9ZJktDmQ4/1b/rn26hIAR2uYXDMr5r0Q==}
-    peerDependencies:
-      react: ^19.3.0
-
-  react-reconciler@0.34.0:
-    resolution: {integrity: sha512-eVibvB1fc9j5Qf1KRkiM3GzRPBdjg2P6G6QV2f3P6Eb3OGMxRBhdg2rrUwjbV5JrQaJj8nOa8uajmmJA5tJWjQ==}
-    engines: {node: '>=0.10.0'}
     peerDependencies:
       react: ^19.3.0
 
@@ -436,11 +427,6 @@ snapshots:
   punycode@2.3.1: {}
 
   react-dom@19.3.0(react@19.3.0):
-    dependencies:
-      react: 19.3.0
-      scheduler: 0.28.0
-
-  react-reconciler@0.34.0(react@19.3.0):
     dependencies:
       react: 19.3.0
       scheduler: 0.28.0

@@ -5,15 +5,11 @@
 // `page` to say where it shows, and the build writes the mount that calls the matching show function of
 // wings-plugin-ui. The CSS a page imports, like `import "./sidebar.css"`, becomes dist/<name>.css, and a page that
 // mounts with wings-plugin-ui or wings-plugin-sdk/shell gets a dist/<name>.html written for it unless the plugin
-// has its own. A plugin with no src/main.ts gets an empty dist/main.js, since Wings needs a main. A plugin whose
-// manifest says `"native": true` also gets each entry built for the native app into dist/native/, and its pages built
-// a second time, when it has more than one, to share one copy of React and wings-plugin-ui: dist/native/shared.js and
-// dist/native/shared/. A plugin with a
+// has its own. A plugin with no src/main.ts gets an empty dist/main.js, since Wings needs a main. A plugin with a
 // src/tools.ts gets its manifest's contributes.mcpTools written from it. Last, the manifest is checked against what
 // was built, and the build fails where they disagree, so a typo doesn't wait for Wings to load the plugin.
 import * as esbuild from "esbuild";
 import { zipSync } from "fflate";
-import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, parse, relative } from "node:path";
@@ -113,146 +109,16 @@ function oneReact(dir) {
 }
 
 /**
- * The mount for a native page: its default export is the component, and the app decides where it shows. `fill` goes
- * along as the browser mount's does, except on a block, whose `showBlock` takes no options.
- */
-const nativeMount = (file) => `import Page, { page } from ${JSON.stringify(file)};
-import { mount } from "wings-plugin-ui/native";
-mount(<Page />, { fill: page.place !== "block" && page.fill === true });
-`;
-
-/** Points `wings-plugin-ui` at its native build, which draws a smaller set of components with the same names and props. */
-function nativeUi(dir) {
-  return {
-    name: "wings-native-ui",
-    setup(build) {
-      build.onResolve({ filter: /^wings-plugin-ui$/ }, (args) => build.resolve("wings-plugin-ui/native", { kind: args.kind, resolveDir: dir }));
-    },
-  };
-}
-
-/** The line to print for each error esbuild collected, with a component the native renderer lacks named as one. */
-function nativeProblems({ errors }) {
-  return errors.map(({ text, location }) => {
-    const at = location ? `${location.file}:${location.line}: ` : "";
-    const missing = /^No matching export in "[^"]*" for import "([^"]+)"/.exec(text)?.[1];
-    if (missing) return `${at}${missing} isn't in wings-plugin-ui/native, which draws a smaller set of components than wings-plugin-ui (see its native.d.ts). Use ones it has, or take "native" out of wings-plugin.json until the page is ported.`;
-    return `${at}${text}`;
-  });
-}
-
-/** What a page built to share them gets each of React, its JSX runtime and wings-plugin-ui from: its instance of dist/native/shared.js. */
-const SHARED = { react: "react", "react/jsx-runtime": "jsx", "wings-plugin-ui": "ui", "wings-plugin-ui/native": "ui" };
-
-/** Points the packages in SHARED at the page's instance of the library, `__wingsShared`, which the app gives it. */
-function sharedLibrary() {
-  return {
-    name: "wings-shared",
-    setup(build) {
-      build.onResolve({ filter: /^(react|react\/jsx-runtime|wings-plugin-ui|wings-plugin-ui\/native)$/ }, (args) => ({ path: args.path, namespace: "wings-shared" }));
-      build.onLoad({ filter: /.*/, namespace: "wings-shared" }, (args) => ({ contents: `module.exports = __wingsShared.${SHARED[args.path]};`, loader: "js" }));
-    },
-  };
-}
-
-/**
- * dist/native/shared.js: React, its JSX runtime and what the pages use of wings-plugin-ui/native (`names`, or all of it
- * when that's null), as the plugin has them installed, defining `__wingsLib`. The native app compiles it once for all
- * the plugin's open pages and runs it again for each page that shares it, so each has its own React state while the
- * code is held once. Each run builds every module-level table the library has, so it holds only what pages use: all
- * of wings-plugin-ui costs each page 250 KB of the engine's heap, and a page's share 170 KB (measured).
- */
-const librarySource = (names) => `import * as react from "react";
-import * as jsx from "react/jsx-runtime";
-${names ? `import { ${names.join(", ")} } from "wings-plugin-ui/native";\nexport const ui = { ${names.join(", ")} };` : `import * as ui from "wings-plugin-ui/native";\nexport { ui };`}
-export { react, jsx };
-`;
-
-/** The names the native pages `pages` import from wings-plugin-ui and the mount uses, or null when one imports it whole. */
-async function uiNames(dir, pages) {
-  const names = new Set(["mount"]);
-  for (const { src } of pages) {
-    const { outputFiles } = await esbuild.build({
-      entryPoints: [src],
-      bundle: true,
-      format: "esm",
-      platform: "neutral",
-      jsx: "automatic",
-      mainFields: ["module", "main"],
-      loader: { ".css": "empty" },
-      define: { "process.env.NODE_ENV": '"production"', WINGS_NATIVE: "true" },
-      external: ["react", "react/*", "wings-plugin-ui", "wings-plugin-ui/*"],
-      write: false,
-      logLevel: "silent",
-    });
-    // esbuild writes each external's imports as one statement, with only the names the page keeps.
-    for (const [, imported] of outputFiles[0].text.matchAll(/^import (.+) from "wings-plugin-ui(?:\/native)?";$/gm)) {
-      const named = /^\{([^}]*)\}$/.exec(imported.trim());
-      if (!named) return null;
-      for (const part of named[1].split(",")) names.add(part.trim().split(/\s+as\s+/)[0]);
-    }
-  }
-  return [...names].sort();
-}
-
-/** The first line of a page built to share dist/native/shared.js, before the SHA-256 of that file. The app runs it only with that file. */
-const SHARED_MARKER = "// wings-shared ";
-
-/**
- * The script for the native app that `src` builds to: one classic script, like the browser build's, but for a JS
- * engine with no DOM. `wings-plugin-ui` is `wings-plugin-ui/native` here, CSS imports are dropped (the app draws
- * the page itself), and a page mounts with that package's `mount`. Fails naming each component the page imports
- * that the native renderer doesn't have.
- */
-async function buildNative(dir, src, banner, { shared = false, library = null } = {}) {
-  const page = dirname(src) === join(dir, "src", "pages");
-  if (page && !/\.[jt]sx$/.test(src)) throw new Error(`${relative(dir, src)}: a native page is a React page that default-exports its component, like src/pages/sidebar.tsx. Write this one that way, or take "native" out of wings-plugin.json.`);
-  const entry = library
-    ? { stdin: { contents: librarySource(library.names), resolveDir: dir, sourcefile: "dist/native/shared.js", loader: "js" }, globalName: "__wingsLib" }
-    : page
-      ? { stdin: { contents: nativeMount(src), resolveDir: dir, sourcefile: `${relative(dir, src)} (native mount)`, loader: "tsx" } }
-      : { entryPoints: [src] };
-  try {
-    const result = await esbuild.build({
-      ...entry,
-      bundle: true,
-      format: "iife",
-      platform: "neutral",
-      // QuickJS runs it.
-      target: "es2022",
-      jsx: "automatic",
-      mainFields: ["module", "main"],
-      loader: { ".css": "empty" },
-      define: { "process.env.NODE_ENV": '"production"', WINGS_NATIVE: "true" },
-      banner: { js: banner },
-      plugins: [...(shared ? [sharedLibrary()] : []), nativeUi(dir), oneReact(dir)],
-      legalComments: "none",
-      minify: true,
-      write: false,
-      logLevel: "silent",
-    });
-    return result.outputFiles[0].text;
-  } catch (error) {
-    if (!Array.isArray(error.errors)) throw error;
-    throw new Error(nativeProblems(error).join("\n"));
-  }
-}
-
-/**
  * Builds the plugin in `dir` into its `dist/` folder. With `check`, writes nothing and returns the outputs that
  * differ from what's on disk instead, so a release can refuse built files that no longer match their source. With `outDir`,
  * writes the outputs there instead; a page's own HTML or CSS already in `outDir` still wins over a generated one.
  * The manifest with the tools from src/tools.ts goes to `manifestDir`, the plugin folder by default. Throws a line for
- * each place that manifest and the built code disagree. A manifest with `"native": true` also gets `native/main.js`
- * and `native/<page>.js` in `outDir`, for the native app, and with two pages or more `native/shared.js` and `native/shared/<page>.js`,
- * the pages again sharing that one copy of React and wings-plugin-ui.
+ * each place that manifest and the built code disagree.
  */
 export async function buildPlugin(dir, { check = false, banner = BANNER, outDir = join(dir, OUT), manifestDir = dir } = {}) {
   const built = [];
   const stale = [];
   const files = [];
-  const nativeFiles = [];
-  const native = JSON.parse(readFileSync(join(dir, "wings-plugin.json"), "utf8")).native === true;
   for (const { src, out } of entries(dir)) {
     const { name } = parse(out);
     const seen = { shell: false };
@@ -277,25 +143,12 @@ export async function buildPlugin(dir, { check = false, banner = BANNER, outDir 
     files.push({ name: `${name}.js`, text: js.text, owned: true });
     if (css) files.push({ name: `${name}.css`, text: css.text, owned: ours(join(outDir, `${name}.css`)) });
     if (seen.shell && ours(join(outDir, `${name}.html`))) files.push({ name: `${name}.html`, text: pageHtml(dir, name, src, Boolean(css)), owned: true });
-    if (native) nativeFiles.push({ name: `native/${name}.js`, text: await buildNative(dir, src, banner) });
-  }
-  // Each page again, sharing one React and wings-plugin-ui with the others: the app runs these when it can and the
-  // ones above, which carry their own, when it can't, as a Wings from before this does. With one page there is no
-  // other to share with, and the library's own cost makes that page bigger (measured: 1.4 MB against 1.0 MB).
-  const pages = native ? entries(dir).filter(({ src }) => dirname(src) === join(dir, "src", "pages")) : [];
-  if (pages.length > 1) {
-    if (pages.some(({ out }) => parse(out).name === "shared")) throw new Error(`${relative(process.cwd(), join(dir, "src", "pages"))}: a native page can't be called shared, as dist/native/shared.js is the React its pages share. Rename it.`);
-    const library = await buildNative(dir, join(dir, "src", "shared.js"), banner, { library: { names: await uiNames(dir, pages) } });
-    const hash = createHash("sha256").update(library).digest("hex");
-    nativeFiles.push({ name: "native/shared.js", text: library });
-    for (const { src, out } of pages) nativeFiles.push({ name: `native/shared/${parse(out).name}.js`, text: `${SHARED_MARKER}${hash}\n${await buildNative(dir, src, banner, { shared: true })}` });
   }
   if (!files.some((f) => f.name === "main.js")) files.push({ name: "main.js", text: `${banner}\n`, owned: true });
-  if (native && !nativeFiles.some((f) => f.name === "native/main.js")) nativeFiles.push({ name: "native/main.js", text: `${banner}\n` });
   const foreign = files.filter((f) => !f.owned).map((f) => f.name);
   if (foreign.length) throw new Error(`${foreign.join(", ")} would be overwritten by the CSS built from src/. Move it into src/ or rename it.`);
   if (!check) mkdirSync(outDir, { recursive: true });
-  for (const { name, text } of [...files, ...nativeFiles]) {
+  for (const { name, text } of files) {
     const file = join(outDir, name);
     if (check) {
       if (!existsSync(file) || readFileSync(file, "utf8") !== text) stale.push(file);
