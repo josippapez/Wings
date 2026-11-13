@@ -2,8 +2,7 @@
 //! the way the app does, one frame at a time, and prints the memory the process grew by and the time to the page's
 //! first tree. The frames get no data (no access, no panes), so the numbers are each bundle's floor: its engine, its
 //! code and an empty first render. A page full of data costs more. macOS only (it reads the process's footprint).
-//! A page runs as the app picks it (`installed::page_source`): its build that shares the plugin's React when the plugin
-//! has one, and the column `shares` says so; `WINGS_BENCH_OWN=1` runs every page's own build instead.
+//! Each page's module is what the app runs (`installed::page_source`); the column `shares` is always empty now.
 //!
 //! cargo run --release --manifest-path apps/native/Cargo.toml --example bench_plugins --features test-support -- [plugins-folder]
 
@@ -14,7 +13,7 @@ use std::{
 };
 
 use wings_native::{
-    installed::{library, page_source},
+    installed::page_source,
     page::{
         plugin::{PluginConfig, PluginHost},
         runtime::{Event, PageRuntime},
@@ -68,7 +67,6 @@ fn main() {
     let mut receivers = Vec::new();
     let start = footprint();
     let mut total_bundle = 0u64;
-    let own = std::env::var_os("WINGS_BENCH_OWN").is_some();
     println!("{:<18} {:<22} {:>9} {:>9} {:>16} {:>7}", "plugin", "frame", "bundle KB", "+MB", "first tree", "shares");
     for native in plugins {
         let id = native.parent().and_then(Path::parent).and_then(Path::file_name).unwrap().to_string_lossy().into_owned();
@@ -78,17 +76,15 @@ fn main() {
             scope: "bench".into(),
         });
         let dir = native.parent().and_then(Path::parent).unwrap().to_owned();
-        let shared = if own { None } else { library(&dir) };
-        host.set_library(shared.clone());
         let mut files: Vec<PathBuf> = std::fs::read_dir(&native)
             .unwrap()
             .filter_map(|entry| Some(entry.ok()?.path()))
-            .filter(|path| path.extension().is_some_and(|ext| ext == "js") && path.file_stem().unwrap() != "shared")
+            .filter(|path| path.extension().is_some_and(|ext| ext == "wasm"))
             .collect();
         // Main first, as the app starts it before any page.
         files.sort_by_key(|path| (path.file_stem().unwrap() != "main", path.clone()));
         for file in files {
-            let source = page_source(&dir, &file, shared.as_deref()).unwrap();
+            let source = page_source(&dir, &file).unwrap();
             let shares = source.starts_with(wings_native::page::runtime::SHARED_MARKER);
             total_bundle += source.len() as u64;
             let name = file.file_stem().unwrap().to_string_lossy().into_owned();
