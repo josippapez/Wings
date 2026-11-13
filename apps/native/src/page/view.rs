@@ -696,6 +696,14 @@ impl PageView {
         self.tree.as_ref().and_then(|tree| find(&tree.children))
     }
 
+    /// Whether the drawn graph's rows show their author and their date, as its width allows.
+    #[cfg(all(test, feature = "test-support"))]
+    pub(super) fn graph_columns(&self) -> Option<(bool, bool)> {
+        use graph_view::Columns;
+        let columns = self.graphs.borrow().values().next()?.columns;
+        Some((columns == Columns::All, columns != Columns::NoAuthorOrDate))
+    }
+
     #[cfg(all(test, feature = "test-support"))]
     pub(super) fn graph_window(&self) -> Option<(usize, usize, usize)> {
         fn find(nodes: &[Node]) -> Option<(usize, usize, usize)> {

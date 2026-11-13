@@ -1,6 +1,6 @@
 //! A bounded window of graph data over a virtual list of the complete history.
 use super::*;
-use gpui::{PathBuilder, ScrollStrategy, UniformListScrollHandle, point, uniform_list};
+use gpui::{PathBuilder, ScrollStrategy, UniformListScrollHandle, canvas, point, uniform_list};
 use std::ops::Range;
 
 #[derive(Default)]
@@ -11,6 +11,29 @@ pub(super) struct GraphState {
     pending: bool,
     cursor: usize,
     focus: Option<gpui::FocusHandle>,
+    pub(super) columns: Columns,
+}
+
+/// Which of a row's fixed columns fit the graph's width. A sidebar is 250 to 640 points wide, and the author's 110 and
+/// the date left the subject next to nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum Columns {
+    #[default]
+    All,
+    NoAuthor,
+    NoAuthorOrDate,
+}
+
+impl Columns {
+    fn fit(width: f32) -> Self {
+        if width >= 520.0 {
+            Self::All
+        } else if width >= 380.0 {
+            Self::NoAuthor
+        } else {
+            Self::NoAuthorOrDate
+        }
+    }
 }
 
 fn window_range(visible: Range<usize>, total: usize) -> Range<usize> {
@@ -83,13 +106,37 @@ impl PageView {
         })
         .track_scroll(&handle)
         .flex_1().min_h_0().w_full();
+        // Draws again only when the width crosses into other columns, not on every frame of a sidebar drag.
+        let entity = cx.entity();
+        let measure = canvas(
+            move |bounds, _, cx| {
+                let fit = Columns::fit(bounds.size.width.as_f32());
+                entity.update(cx, |view, cx| {
+                    let changed = {
+                        let mut graphs = view.graphs.borrow_mut();
+                        let state = graphs.entry(id).or_default();
+                        std::mem::replace(&mut state.columns, fit) != fit
+                    };
+                    if changed {
+                        cx.notify();
+                    }
+                })
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
         div()
             .id(ElementId::NamedInteger("page-graph".into(), id))
+            .relative()
             .flex_1()
             .min_h_0()
             .w_full()
             .flex()
             .flex_col()
+            .child(measure)
             .child(list)
             .role(Role::ListBox)
             .aria_label("Commits")
@@ -137,11 +184,11 @@ impl PageView {
         focused: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let cursor = self
+        let (cursor, columns) = self
             .graphs
             .borrow()
             .get(&graph.id)
-            .map(|s| s.cursor)
+            .map(|s| (s.cursor, s.columns))
             .unwrap_or_default();
         let row = index
             .checked_sub(graph.offset)
@@ -286,20 +333,24 @@ impl PageView {
                     .text_color(rgb(theme::MUTED_FOREGROUND))
                     .child(row.hash.chars().take(7).collect::<String>()),
             )
-            .child(
-                div()
-                    .w(px(110.0))
-                    .flex_none()
-                    .truncate()
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
-                    .child(row.author.clone()),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
-                    .child(row.date.clone()),
-            )
+            .when(columns == Columns::All, |element| {
+                element.child(
+                    div()
+                        .w(px(110.0))
+                        .flex_none()
+                        .truncate()
+                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                        .child(row.author.clone()),
+                )
+            })
+            .when(columns != Columns::NoAuthorOrDate, |element| {
+                element.child(
+                    div()
+                        .flex_none()
+                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                        .child(row.date.clone()),
+                )
+            })
             .on_click(cx.listener(move |view, _, window, cx| {
                 let focus = {
                     let mut graphs = view.graphs.borrow_mut();
@@ -348,5 +399,16 @@ mod tests {
         assert_eq!(navigate("pageup", 12, 10_000, 20), Some(0));
         assert_eq!(navigate("pagedown", 12, 10_000, 20), Some(32));
         assert_eq!(navigate("home", 500, 10_000, 20), Some(0));
+    }
+    #[test]
+    fn a_sidebar_dragged_from_widest_to_narrowest_changes_columns_twice() {
+        let mut seen = vec![Columns::fit(640.0)];
+        for width in (250..640).rev() {
+            let columns = Columns::fit(width as f32);
+            if seen.last() != Some(&columns) {
+                seen.push(columns);
+            }
+        }
+        assert_eq!(seen, [Columns::All, Columns::NoAuthor, Columns::NoAuthorOrDate]);
     }
 }

@@ -357,6 +357,16 @@ fn graph_virtualizes_ten_thousand_commits_and_keyboard_scrolls_before_opening() 
     settle(&app, &mut window, shows("Selected 0"));
 }
 
+#[test]
+fn a_narrow_graph_drops_the_author_then_the_date() {
+    // (window width, author shown, date shown); the graph is 30 points narrower than its window.
+    for (width, author, date) in [(640.0, true, true), (480.0, false, true), (300.0, false, false)] {
+        let (app, mut window) = open_narrow(graph(), width);
+        settle(&app, &mut window, |view| view.graph_window().is_some());
+        settle(&app, &mut window, |view| view.graph_columns() == Some((author, date)));
+    }
+}
+
 type View = TestAppWindow<PageView>;
 
 /// Two buttons, one in the top left corner of the page and one in the top right, and the presses each has heard.
