@@ -1187,6 +1187,9 @@ impl PageView {
             .flex_none()
             .min_h(px(44.0))
             .flex()
+            // Too narrow for the title and the actions, the actions go to a line of their own: on one line they ran
+            // off the frame's edge, as a 250 point sidebar cut off Changes' Refresh.
+            .flex_wrap()
             .items_center()
             .gap(px(10.0))
             .px(px(14.0))
