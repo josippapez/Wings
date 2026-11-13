@@ -18,5 +18,5 @@
       "react/*": ["./node_modules/@types/react/*"]
     }
   },
-  "include": ["*/src", "*/preview"]
+  "include": ["tasks/worker"]
 }

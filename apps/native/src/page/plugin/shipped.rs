@@ -41,17 +41,6 @@ fn load_unreleased(name: &str) -> Plugin {
     Plugin { manifest, dir, icon_svg: None }
 }
 
-/// A file of the plugin's native build. It is built by `wings-plugin build` in the plugin's folder.
-fn native(name: &str, file: &str) -> String {
-    let path = repo_plugin(name).join("dist/native").join(file);
-    fs::read_to_string(&path).unwrap_or_else(|error| {
-        panic!(
-            "{}: {error}. Build the plugin: cd plugins/{name} && pnpm build",
-            path.display()
-        )
-    })
-}
-
 /// A frame of a plugin written in Rust, as the app runs it: its committed module, which `sh build-rust.sh` in `plugins/`
 /// builds.
 fn module(name: &str, frame: &str) -> String {
@@ -60,6 +49,8 @@ fn module(name: &str, frame: &str) -> String {
     crate::page::runtime::wasm::keep_compiled_in(std::env::temp_dir().join("wings-test-cwasm"));
     let path = repo_plugin(name).join("dist/native").join(format!("{frame}.wasm"));
     assert!(path.is_file(), "{}: build the plugin: cd plugins && sh build-rust.sh {name}", path.display());
+    // Before any page is opened: a page that is still compiling when its test stops waiting is never kept.
+    crate::page::runtime::wasm::compile_now(&path.to_string_lossy()).unwrap();
     format!("{}{}", crate::page::runtime::wasm::MARKER, path.display())
 }
 

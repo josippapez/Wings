@@ -184,6 +184,13 @@ fn compiled(path: &str) -> wasmtime::Result<(wasmtime::Engine, Module)> {
     Ok((engine.0.clone(), module))
 }
 
+/// Compiles the module at `path` now, and waits for it. A test build compiles a large module for minutes, far past what
+/// a test waits for a page to draw, and a test that gave up left nothing kept for the next one.
+#[cfg(feature = "test-support")]
+pub fn compile_now(path: &str) -> wasmtime::Result<()> {
+    compiled(path).map(|_| ())
+}
+
 /// What the page exports for the host to call.
 struct Page {
     store: Store<Host>,
