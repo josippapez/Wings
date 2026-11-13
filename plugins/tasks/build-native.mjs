@@ -12,13 +12,13 @@ const output = new URL("./dist/native-issues.js", import.meta.url);
 export async function buildNative() {
   const result = await build({
     absWorkingDir: dir,
-    entryPoints: ["src/native/issues.ts"],
+    entryPoints: ["worker/issues.ts"],
     bundle: true,
     format: "iife",
     platform: "neutral",
     target: "es2022",
     write: false,
-    banner: { js: "// Built by node plugins/tasks/build-native.mjs. Edit src/native/issues.ts, not this file." },
+    banner: { js: "// Built by node plugins/tasks/build-native.mjs. Edit worker/issues.ts, not this file." },
   });
   return result.outputFiles[0].text;
 }

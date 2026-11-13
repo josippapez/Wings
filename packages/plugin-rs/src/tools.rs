@@ -54,9 +54,9 @@ fn has_pattern(schema: &Value) -> bool {
 }
 
 async fn answer(call: &Value) -> Result<String, String> {
-    // A Claude Code hook: this SDK has none, which says nothing, as a JS plugin without that hook does.
+    // A Claude Code hook: what the plugin's `hooks::on_hook` says, or nothing when it has none for it.
     if call["hook"] == true {
-        return Ok("{}".into());
+        return Ok(crate::hooks::answer(call).await);
     }
     let name = call["name"].as_str().unwrap_or_default();
     let Some((schema, run)) = TOOLS.with(|tools| tools.borrow().get(name).cloned()) else {

@@ -1,7 +1,7 @@
-// Built by node plugins/tasks/build-native.mjs. Edit src/native/issues.ts, not this file.
+// Built by node plugins/tasks/build-native.mjs. Edit worker/issues.ts, not this file.
 "use strict";
 (() => {
-  // src/lib/domain.ts
+  // worker/domain.ts
   var LIMITS = { issues: 300, title: 200, description: 2e4, note: 2e4, branch: 200, pr: 500, log: 300, key: 20, commit: 40, query: 200, files: 100, filePath: 300, fileWhat: 300 };
   var FORMAT_VERSION = 3;
   var STATUSES = ["todo", "in_progress", "in_review", "done", "canceled"];
@@ -14,7 +14,7 @@
   var keyNumber = (key) => Number(key.slice(key.lastIndexOf("-") + 1));
   var KEY_PATTERN = /^[A-Z]{1,3}-\d{1,9}$/;
 
-  // src/lib/storage.ts
+  // worker/storage.ts
   var emptyStore = (projectName) => ({ v: FORMAT_VERSION, prefix: prefixFor(projectName), next: 1, issues: [] });
   function slotOf(projectId) {
     let h1 = 3735928559;
@@ -77,7 +77,7 @@
     return migrateTasks(await wings.storage.get(legacyKey(projectId)), projectName);
   }
 
-  // src/native/issues.ts
+  // worker/issues.ts
   var MAX_ROWS = 2e3;
   var MAX_ERROR = 500;
   var record = (value) => !!value && typeof value === "object" && !Array.isArray(value);

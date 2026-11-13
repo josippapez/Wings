@@ -13,6 +13,7 @@ pub mod cli;
 pub mod diff;
 pub mod format;
 pub mod git;
+pub mod hooks;
 pub mod host;
 pub mod local_time;
 pub mod messages;

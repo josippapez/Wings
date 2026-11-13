@@ -1093,8 +1093,8 @@ fn work_item(out: PathBuf) {
     );
 }
 
-/// The Issues plugin's built board, list, issue tab and block with its real main, over the made-up issues
-/// `plugins/tasks/preview/native-seed.js` stores first.
+/// The Issues plugin's board, list, issue tab and block with its real main, over the made-up issues
+/// `shot_plugins/tasks_seed.js` stores first.
 fn tasks(out: PathBuf) {
     let _ = std::fs::remove_dir_all(out.join("fixture-storage-tasks"));
     let (host, project) = repo_host(
@@ -1102,11 +1102,12 @@ fn tasks(out: PathBuf) {
         "tasks",
         include_str!("../../../plugins/tasks/wings-plugin.json"),
     );
+    // The project on screen, which the app always says and the pages follow.
+    host.publish_project(Some(std::path::Path::new(&project)));
     let (seeded, done) = std::sync::mpsc::channel();
     let seed = host
         .open_page(
-            &include_str!("../../../plugins/tasks/preview/native-seed.js")
-                .replace("__PROJECT__", &project),
+            &include_str!("shot_plugins/tasks_seed.js").replace("__PROJECT__", &project),
             move |event| match event {
                 wings_native::page::runtime::Event::Tree(tree)
                     if tree.text().contains("Seeded") =>
@@ -1120,14 +1121,13 @@ fn tasks(out: PathBuf) {
     done.recv_timeout(Duration::from_secs(10))
         .expect("the issues to be stored");
     drop(seed);
-    host.start_main(
-        include_str!("../../../plugins/tasks/dist/native/main.js"),
-        fail_on_error,
-    )
-    .unwrap();
-    let board = include_str!("../../../plugins/tasks/dist/native/board.js");
-    let issue = include_str!("../../../plugins/tasks/dist/native/issue.js");
-    let block = include_str!("../../../plugins/tasks/dist/native/block.js");
+    let module = |frame: &str| {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../plugins/tasks/dist/native/{frame}.wasm"));
+        format!("{}{}", wings_native::page::runtime::wasm::MARKER, path.canonicalize().expect("sh build-rust.sh tasks, in plugins/").display())
+    };
+    host.start_main(&module("main"), fail_on_error).unwrap();
+    let (board, issue, block) = (module("board"), module("issue"), module("block"));
+    let (board, issue, block) = (board.as_str(), issue.as_str(), block.as_str());
     let args = json!({ "key": "WEB-4", "projectId": project });
     use wings_native::page::plugin::StatePlace::{Block, Tab};
     shoot_pages(
@@ -1153,6 +1153,27 @@ fn tasks(out: PathBuf) {
                 "Waiting on the release branch",
             ),
             ("block", block, None, Block, &[], "Open board"),
+            (
+                "issue-missing",
+                issue,
+                Some(&json!({ "key": "WEB-99", "projectId": project })),
+                Tab,
+                &[],
+                "may have been removed",
+            ),
+            ("settings", &module("settings"), None, Tab, &[], "Keep issues local"),
+        ],
+    );
+    // A project with no issues: the board's empty columns and the block's empty state.
+    let (empty_host, empty_project) = repo_host(&out, "tasks-empty", include_str!("../../../plugins/tasks/wings-plugin.json"));
+    empty_host.publish_project(Some(std::path::Path::new(&empty_project)));
+    shoot_pages(
+        &out,
+        &empty_host,
+        "tasks-empty",
+        &[
+            ("board", board, None, Tab, &["Board"], "Nothing waiting"),
+            ("block", block, None, Block, &[], "No issues yet"),
         ],
     );
     // On its own, after the others: Group by parent stays on for every Issues tab once it's turned on.
