@@ -16,9 +16,13 @@ mod dates;
 mod diff;
 #[cfg(feature = "graph")]
 mod graph;
+#[cfg(any(feature = "graph", feature = "sidebar", test))]
+mod graph_log;
 mod history;
 mod layout;
 mod log;
+#[cfg(any(feature = "sidebar", test))]
+mod mode;
 #[cfg(feature = "main")]
 mod main_frame;
 #[cfg(feature = "sidebar")]

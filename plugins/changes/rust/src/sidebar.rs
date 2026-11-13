@@ -4,8 +4,10 @@
 use crate::{
     COMMIT, DONE, GRAPH, OPEN, POLL_MS,
     changes::{Changes, FileChange, Mode, changes, forget_repos},
+    graph_log,
     history::{history_page, with_first_page},
     log::{Commit, describe_ref},
+    mode::{self, Section},
 };
 use serde_json::{Value, json};
 use std::{cell::RefCell, collections::BTreeSet, future::Future, pin::Pin, rc::Rc};
@@ -14,7 +16,7 @@ use wings_plugin::{
     git::{branch_label, ok, on_change, repo_root},
     host, messages, poll,
     task::{join, join_all, spawn},
-    ui::{Node, card, checkbox, chips, empty, list, list_button, list_row, loading, muted, notice, page, row, search_field, spinner, stack, text, toolbar_with},
+    ui::{Node, card, checkbox, chips, empty, icon, list, list_button, list_row, loading, muted, notice, page, row, search_field, spinner, stack, text, toolbar_with},
 };
 
 /// How long the search waits after the last key before it asks git.
@@ -65,6 +67,8 @@ struct Page {
     /// The repo the sidebar follows, which it keeps while the selected pane isn't in one.
     followed: Option<String>,
     view: View,
+    /// Files, or the commit graph, as picked for the repo the sidebar follows.
+    section: Section,
     /// Folders you collapsed, by path.
     collapsed: BTreeSet<String>,
     /// The repo the header shows, kept for the moment after a switch when the new answer isn't here yet.
@@ -94,7 +98,7 @@ struct Page {
 
 thread_local! {
     static PAGE: RefCell<Page> = RefCell::new(Page {
-        panes: Vec::new(), followed: None, view: View::Uncommitted, collapsed: BTreeSet::new(), repo: None, answered: false, changes: None,
+        panes: Vec::new(), followed: None, view: View::Uncommitted, section: Section::Files, collapsed: BTreeSet::new(), repo: None, answered: false, changes: None,
         history: Shown::default(), pending: true, loading_more: false, history_polled: false, loading: false, error: None, open_error: None,
         query: String::new(), typed: String::new(), all: false, loads: 0, typing: 0, asks: 0,
     });
@@ -149,7 +153,23 @@ async fn reload() {
             }
         });
     };
-    if view == View::History {
+    let section = mode::saved(&root);
+    with(|page| page.section = section);
+    if section == Section::Graph {
+        let (branch, head) = join(ok(&root, &["branch", "--show-current"]), ok(&root, &["rev-parse", "--verify", "--quiet", "HEAD"])).await;
+        let (name, polled) = (basename(&root).to_owned(), !watched(&root).await);
+        let log = graph_log::begin(Some(root.clone()), Some(name.clone()));
+        let found = graph_log::read(Some(&root)).await;
+        with(|page| {
+            if page.loads != mine {
+                return;
+            }
+            (page.loading, page.history_polled) = (false, polled);
+            page.repo = Some(Repo { name, branch: branch_label(branch.as_deref(), head.as_deref()), root });
+            (page.answered, page.error) = (true, None);
+        });
+        graph_log::finish(log, found);
+    } else if view == View::History {
         let (branch, head) = join(ok(&root, &["branch", "--show-current"]), ok(&root, &["rev-parse", "--verify", "--quiet", "HEAD"])).await;
         let head = head.filter(|head| !head.is_empty());
         let found = if head.is_some() || all { history_page(&root, &query, all, 0).await } else { Ok((Vec::new(), false)) };
@@ -226,6 +246,15 @@ fn ask(name: &str, mut what: Value) {
     })
     .into();
     messages::tell(name, &what);
+}
+
+/// Switches between Files and the graph, and keeps the pick for the repo the sidebar follows.
+fn pick(section: Section) {
+    if let Some(root) = with(|page| page.followed.clone()) {
+        mode::save(&root, section);
+    }
+    with(|page| page.section = section);
+    spawn(reload());
 }
 
 fn show(view: View) {
@@ -358,7 +387,6 @@ fn commit_row(c: &Commit, key: String, root: &str) -> Node {
 }
 
 fn history_body(p: &Page, root: &str) -> Vec<Node> {
-    let graph_root = root.to_owned();
     let mut out = vec![
         row()
             .key("search")
@@ -371,8 +399,7 @@ fn history_body(p: &Page, root: &str) -> Vec<Node> {
                         reload().await;
                     }
                 });
-            })))
-            .child(button("Graph", "outline", false, move || ask(GRAPH, json!({ "root": graph_root })))),
+            }))),
         checkbox("All branches", p.all, |all| {
             with(|page| (page.all, page.pending) = (all, true));
             spawn(reload());
@@ -415,11 +442,30 @@ fn view() -> Vec<Node> {
                 loading()
             }];
         };
-        let refresh = button("Refresh", "outline", false, || {
-            forget_repos();
-            spawn(reload());
-        });
-        let actions = row().prop("gap", "xs").maybe(p.loading.then(|| spinner().prop("label", "Refreshing"))).child(refresh);
+        // An icon, as the switch and the pop-out left a 250 point sidebar no room for the word.
+        let refresh = Node::new("Button")
+            .prop("variant", "ghost")
+            .prop("size", "sm")
+            .prop("label", "Refresh")
+            .on("onClick", |_| {
+                forget_repos();
+                spawn(reload());
+            })
+            .child(icon(24, 2.0, &["M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8", "M21 3v5h-5", "M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16", "M8 16H3v5"]));
+        let switch = chips("Show in the sidebar", &[("files", "Files"), ("graph", "Graph")], p.section.name(), |picked| pick(if picked == "graph" { Section::Graph } else { Section::Files }));
+        let graph_root = repo.root.clone();
+        let pop_out = Node::new("Button")
+            .prop("variant", "ghost")
+            .prop("size", "sm")
+            .prop("label", "Open in a window")
+            .on("onClick", move |_| ask(GRAPH, json!({ "root": graph_root })))
+            .child(icon(24, 2.0, &["M15 3h6v6", "M10 14 21 3", "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"]));
+        let actions = row().prop("gap", "xs").maybe(p.loading.then(|| spinner().prop("label", "Refreshing"))).child(switch).child(refresh).child(pop_out);
+        if p.section == Section::Graph {
+            let notice = p.open_error.as_ref().map(|error| notice("warn", error).key("open-error"));
+            let shown = graph_log::with(|log| graph_log::body(log, |asked| ask(COMMIT, asked)));
+            return vec![page(toolbar_with(&repo.name, muted(repo.branch.clone()).prop("truncate", true), Some(actions)), notice.into_iter().chain(shown).collect::<Vec<_>>()).prop("flush", true)];
+        }
         let tabs = chips("Show", &[("uncommitted", "Changes"), ("branch", "Branch"), ("history", "History")], p.view.name(), |picked| {
             show(match picked {
                 "branch" => View::Branch,
@@ -460,7 +506,7 @@ pub fn start() {
     });
     // Edits to files in the working tree, which Wings doesn't watch, and the history of a repo it doesn't watch.
     poll::while_focused(POLL_MS, false, || {
-        if with(|page| page.view != View::History || page.history_polled) {
+        if with(|page| (page.view != View::History && page.section == Section::Files) || page.history_polled) {
             spawn(reload());
         }
     });

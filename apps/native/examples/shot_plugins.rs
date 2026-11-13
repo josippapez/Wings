@@ -245,7 +245,7 @@ fn changes(out: PathBuf) {
     })
     .unwrap();
     let mut cx = app();
-    for (frame, width, height) in [("sidebar", 1000.0, 760.0), ("sidebar", 640.0, 760.0), ("sidebar", 360.0, 760.0), ("graph", 1100.0, 420.0)] {
+    for (frame, width, height) in [("sidebar", 1000.0, 760.0), ("sidebar", 640.0, 760.0), ("sidebar", 360.0, 760.0), ("sidebar", 250.0, 760.0), ("graph", 1100.0, 420.0)] {
         let source = module(frame);
         let handle = cx
             .open_offscreen_window(size(px(width), px(height)), |_, cx| cx.new(|cx| PageView::in_plugin(&host, &source, cx)))
@@ -267,6 +267,13 @@ fn changes(out: PathBuf) {
             shown(&mut cx, "shipping.ts", "files");
             assert!(handle.read_with(&cx, |view, _| view.press_chip("History")).unwrap());
             shown(&mut cx, "Add coupon validation", "history");
+            assert!(handle.read_with(&cx, |view, _| view.press_chip("Graph")).unwrap());
+            // The graph's rows aren't text, so this waits for its git log to be read.
+            wait(&mut cx, window, Duration::from_millis(700));
+            shown(&mut cx, "acme-web", "sidebar-graph");
+            // The pick is kept per repo, and the next width starts on Files again.
+            assert!(handle.read_with(&cx, |view, _| view.press_chip("Files")).unwrap());
+            wait(&mut cx, window, Duration::from_millis(300));
         }
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
     }

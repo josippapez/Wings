@@ -190,9 +190,9 @@ fn changes_lists_what_changed_opens_a_files_diff_through_main_and_searches_the_h
     assert!(page.dispatch(&readme.expect("README.md's row"), None));
     rig.env.wait("the diff viewer", |seen| seen.iter().any(|seen| matches!(seen, Seen::DiffUpdate(_, _, update) if update.patch.is_some())));
 
-    // The History tab, and a search that matches nothing.
+    // The History tab, and a search that matches nothing. The header's Files and Graph are chips too.
     let chips = handler_of(&files.children, &|node| match node {
-        Node::Chips(chips) => chips.on_change.clone(),
+        Node::Chips(chips) if chips.options.iter().any(|option| option.value == "history") => chips.on_change.clone(),
         _ => None,
     });
     assert!(page.dispatch(&chips.expect("the chips"), Some(&json!({ "value": "history" }))));
