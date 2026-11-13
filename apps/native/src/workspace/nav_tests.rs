@@ -136,6 +136,22 @@ fn terminal_opens_a_page_in_the_home_folder_listed_under_the_nav() {
     assert_eq!(loose(&window), [(0, Place::Hidden), (1, Place::Hidden)]);
 }
 
+/// An agent's row in the sidebar did nothing while the one-off terminal filled the pane area: the agent's tab was
+/// already the active one behind it, and only a change of tab put the terminal away.
+#[test]
+fn going_to_a_pane_of_the_active_tab_puts_the_one_off_terminal_away() {
+    let (_app, mut window) = open();
+    let (project, pane) = window.read(|w, _| {
+        let Active::Terminal(id) = w.active else { panic!("a terminal tab is shown") };
+        (w.config.project.clone(), w.terminals.iter().find(|tab| tab.id == id).unwrap().focused)
+    });
+    click(&mut window, nav_row(1));
+    assert_eq!(loose(&window), [(0, Place::Full)]);
+    window.update(|w, window, cx| w.go_to_pane(project, pane, window, cx));
+    assert_eq!(loose(&window), [(0, Place::Hidden)]);
+    window.update(|w, window, cx| assert!(w.panes[&pane].view.as_ref().is_ok_and(|view| view.focus_handle(cx).is_focused(window))));
+}
+
 #[test]
 fn the_rows_close_button_ends_its_shell() {
     let (app, mut window) = open();

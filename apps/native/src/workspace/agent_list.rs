@@ -222,6 +222,8 @@ impl Workspace {
             .find(|tab| tab.layout.panes().contains(&pane))
         {
             let id = tab.id;
+            // `show` puts the one-off terminal away only when the tab changes, and this one may be the tab behind it.
+            self.leave_loose(cx);
             self.show(Active::Terminal(id), window, cx);
             self.focus_pane(pane, window, cx);
         }
