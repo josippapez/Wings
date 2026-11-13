@@ -401,11 +401,7 @@ fn a_page_that_loops_in_a_broadcast_stops_alone() {
         }
     }
     let root = Root::new();
-    let limits = Limits {
-        turn: Duration::from_millis(300),
-        ..Limits::default()
-    };
-    let host = PluginHost::with_limits(root.config("fixture"), limits);
+    let host = PluginHost::new(root.config("fixture"));
     let stuck = open(&host, &fake::source("stuck", || Box::new(Stuck)));
     let (a, b) = (open(&host, &probe()), open(&host, &probe()));
     a.send(json!({ "value": 1 }));
@@ -440,7 +436,7 @@ fn a_frame_that_is_dropped_leaves_the_plugin_and_its_thread_ends() {
     assert_eq!(host.shared.frames.lock().unwrap().len(), 2);
     drop(gone);
     assert_eq!(host.shared.frames.lock().unwrap().len(), 1);
-    // Its engine lets go of its context, and of its link with it.
+    // Its thread lets go of its link with the host.
     let until = Instant::now() + Duration::from_secs(5);
     while Arc::strong_count(&host.shared) > 3 {
         assert!(
@@ -612,11 +608,7 @@ fn a_main_that_stops_is_started_again_until_its_plugin_is_dropped() {
         }
     }
     let root = Root::new();
-    let limits = Limits {
-        turn: Duration::from_millis(100),
-        ..Limits::default()
-    };
-    let host = Arc::new(PluginHost::with_limits(root.config("fixture"), limits));
+    let host = Arc::new(PluginHost::new(root.config("fixture")));
     let (stops, stopped) = mpsc::channel();
     host.keep_main(
         fake::source("main", || Box::new(Counts)).into(),

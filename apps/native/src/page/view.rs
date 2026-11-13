@@ -65,34 +65,6 @@ struct InputState {
     sent: Vec<String>,
 }
 
-/// How the page is started, kept to start it again after it stopped.
-enum Source {
-    /// A bundle with no plugin behind it.
-    Bare(String),
-    Plugin(PageOpener),
-}
-
-impl Source {
-    fn open(&self, on_event: Box<dyn FnMut(Event) + Send>) -> std::io::Result<PageRuntime> {
-        match self {
-            Source::Bare(source) => PageRuntime::spawn(source, on_event),
-            Source::Plugin(opener) => opener.open(on_event),
-        }
-    }
-
-    /// Whether the plugin behind the page is gone, so the page is not started again.
-    fn gone(&self) -> bool {
-        matches!(self, Source::Plugin(opener) if opener.gone())
-    }
-
-    /// Records why the page stopped where the installed app keeps it.
-    fn log(&self, message: &str) {
-        if let Source::Plugin(opener) = self {
-            super::log::line(opener.plugin(), opener.name(), message);
-        }
-    }
-}
-
 pub struct PageView {
     runtime: Option<PageRuntime>,
     tree: Option<Tree>,
@@ -127,7 +99,7 @@ pub struct PageView {
     /// The page has stopped: nothing in it answers a click until it is started again, which happens by itself
     /// (`restart_later`) or with the Reload by its error.
     stopped: bool,
-    source: Source,
+    source: PageOpener,
     /// Whether the page was last said to be in view, to tell the next runtime the same.
     shown: Cell<Option<bool>>,
     /// When the runtime that runs now was started, and how long the next restart waits: `RESTART_FIRST`, then twice
@@ -222,14 +194,9 @@ impl PageView {
         }));
     }
 
-    /// Starts the page bundle `source`; its first tree is drawn when it arrives.
-    pub fn new(source: &str, cx: &mut Context<Self>) -> Self {
-        Self::start(cx, Source::Bare(source.into()))
-    }
-
     /// Opens `source` as a page of the plugin `host` runs, which can talk to its main and its other pages.
     pub fn in_plugin(host: &PluginHost, source: &str, cx: &mut Context<Self>) -> Self {
-        Self::start(cx, Source::Plugin(host.page(false, 0, None, None, source)))
+        Self::start(cx, host.page(false, 0, None, None, source))
     }
 
     /// Like `in_plugin`, for a page shown in the popover under its sidebar's title bar button.
@@ -240,15 +207,6 @@ impl PageView {
         }
     }
 
-    /// A bare page drawn as a popover's, for tests.
-    #[cfg(test)]
-    pub fn new_popover(source: &str, cx: &mut Context<Self>) -> Self {
-        Self {
-            popover: true,
-            ..Self::new(source, cx)
-        }
-    }
-
     /// Like `in_plugin`, for a tab `wings.openView` opened with `args`, which the page reads with `viewArgs`.
     pub fn in_plugin_with_args(
         host: &PluginHost,
@@ -256,7 +214,7 @@ impl PageView {
         args: Option<&serde_json::Value>,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::start(cx, Source::Plugin(host.page(false, 0, args, None, source)))
+        Self::start(cx, host.page(false, 0, args, None, source))
     }
 
     /// Like `in_plugin_with_args`, for a tab or block whose `wings.tabState`/`blockState` is `state`.
@@ -267,7 +225,7 @@ impl PageView {
         state: crate::page::plugin::FrameState,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::start(cx, Source::Plugin(host.page(false, 0, args, Some(state), source)))
+        Self::start(cx, host.page(false, 0, args, Some(state), source))
     }
 
     pub fn in_plugin_window(
@@ -276,11 +234,11 @@ impl PageView {
         source: &str,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::start(cx, Source::Plugin(host.page(true, window_id, None, None, source)))
+        Self::start(cx, host.page(true, window_id, None, None, source))
     }
 
     /// Starts the page's runtime: the runtime, or why it didn't start, and the task that takes what it sends.
-    fn launch(source: &Source, cx: &mut Context<Self>) -> (Option<PageRuntime>, Option<SharedString>, Task<()>) {
+    fn launch(source: &PageOpener, cx: &mut Context<Self>) -> (Option<PageRuntime>, Option<SharedString>, Task<()>) {
         let pending = Arc::new(Mutex::new(Pending::default()));
         let (wake, woken) = async_channel::bounded::<()>(1);
         let runtime = source.open(Box::new({
@@ -303,7 +261,7 @@ impl PageView {
             Ok(runtime) => (Some(runtime), None),
             Err(error) => {
                 let message = format!("the page didn't start: {error}");
-                source.log(&message);
+                super::log::line(source.plugin(), source.name(), &message);
                 (None, Some(message.into()))
             }
         };
@@ -352,7 +310,7 @@ impl PageView {
                         }
                         if let Some(error) = taken.error {
                             if taken.stopped {
-                                view.source.log(&error);
+                                super::log::line(view.source.plugin(), view.source.name(), &error);
                             }
                             view.error = Some(error.into());
                         }
@@ -371,7 +329,7 @@ impl PageView {
         (runtime, error, events)
     }
 
-    fn start(cx: &mut Context<Self>, source: Source) -> Self {
+    fn start(cx: &mut Context<Self>, source: PageOpener) -> Self {
         let (runtime, error, events) = Self::launch(&source, cx);
         let mut view = Self {
             stopped: runtime.is_none(),

@@ -1,7 +1,5 @@
 //! One plugin running natively: its main script and any number of its pages, talking through `wings.broadcast` and
-//! keeping what they save in `wings.storage`. Main runs on an engine of its own, and the pages share one (see
-//! `runtime::Engine`), which ends when the last page closes: one thread and runtime for them all, and, for pages built
-//! to share React and `wings-plugin-ui` (`runtime::Library`), one compiled copy of those.
+//! keeping what they save in `wings.storage`. Each runs on a thread of its own.
 //!
 //! This does what the desktop's plugin host does for its frames (`apps/desktop/src/lib/plugins.ts`, the `broadcast` and
 //! `storage*` cases, and `plugin_storage_*` in `src-tauri/src/lib.rs`):
@@ -28,7 +26,7 @@
 //!   `callTool` hands the call over with `run_tool`). A host without access refuses calls.
 
 use super::runtime::{
-    Delivery, Engine, Event, Inbox, Library, Limits, Link, Message, PageRuntime, Reply, Role, Store,
+    Delivery, Event, Inbox, Link, Message, PageRuntime, Reply, Role, Store,
 };
 use std::{
     collections::HashMap,
@@ -451,12 +449,7 @@ fn keep_main(
 /// a frame that stops for good (it threw while starting, or ran too long) leaves the others going.
 pub struct PluginHost {
     shared: Arc<Shared>,
-    limits: Limits,
     main: Mutex<Option<PageRuntime>>,
-    /// The engine the open pages run on, while one is open.
-    pages: Arc<Mutex<Weak<Engine>>>,
-    /// The plugin's `dist/native/shared.js`, which its pages built to share it need.
-    library: Arc<Mutex<Option<Arc<Library>>>>,
     /// Gone with the host: a `PageOpener` opens nothing after that.
     alive: Arc<()>,
 }
@@ -467,9 +460,6 @@ pub struct PluginHost {
 pub struct PageOpener {
     alive: Weak<()>,
     shared: Arc<Shared>,
-    limits: Limits,
-    pages: Arc<Mutex<Weak<Engine>>>,
-    library: Arc<Mutex<Option<Arc<Library>>>>,
     visible: bool,
     window: u64,
     args: Option<String>,
@@ -502,9 +492,6 @@ impl PageOpener {
         }
         open_frame(
             &self.shared,
-            self.limits,
-            &self.pages,
-            &self.library,
             Role::Page,
             self.visible,
             self.window,
@@ -518,19 +505,15 @@ impl PageOpener {
 
 impl PluginHost {
     pub fn new(config: PluginConfig) -> Self {
-        Self::with_limits(config, Limits::default())
-    }
-
-    pub fn with_limits(config: PluginConfig, limits: Limits) -> Self {
-        Self::build(config, None, limits)
+        Self::build(config, None)
     }
 
     /// A host that runs `access.plugin` in `access.env`: its frames can make the calls its manifest grants.
     pub fn with_access(config: PluginConfig, access: Access) -> Self {
-        Self::build(config, Some(access), Limits::default())
+        Self::build(config, Some(access))
     }
 
-    fn build(config: PluginConfig, access: Option<Access>, limits: Limits) -> Self {
+    fn build(config: PluginConfig, access: Option<Access>) -> Self {
         let storage = Storage::new(config.root.clone());
         Self {
             shared: Arc::new(Shared {
@@ -551,23 +534,9 @@ impl PluginHost {
                 next_diff: AtomicU64::new(1),
                 scans: Mutex::default(),
             }),
-            limits,
             main: Mutex::default(),
-            pages: Arc::default(),
-            library: Arc::default(),
             alive: Arc::new(()),
         }
-    }
-
-    /// The React and `wings-plugin-ui` the plugin's pages share, read from its `dist/native/shared.js` (see
-    /// `runtime::Library`). A page opened after this that was built with it runs on it.
-    pub fn set_library(&self, library: Option<Arc<Library>>) {
-        *self.library.lock().unwrap() = library;
-    }
-
-    /// The library set with `set_library`.
-    pub fn library(&self) -> Option<Arc<Library>> {
-        self.library.lock().unwrap().clone()
     }
 
     /// Starts the plugin's main script, in place of the one that ran before, which is let go of. Its errors, and the
@@ -927,9 +896,6 @@ impl PluginHost {
         PageOpener {
             alive: Arc::downgrade(&self.alive),
             shared: self.shared.clone(),
-            limits: self.limits,
-            pages: self.pages.clone(),
-            library: self.library.clone(),
             visible,
             window,
             args: args.map(|args| args.to_string()),
@@ -949,27 +915,13 @@ impl PluginHost {
         source: &str,
         on_event: impl FnMut(Event) + Send + 'static,
     ) -> std::io::Result<PageRuntime> {
-        open_frame(&self.shared, self.limits, &self.pages, &self.library, role, visible, window, args, state, source, on_event)
+        open_frame(&self.shared, role, visible, window, args, state, source, on_event)
     }
-}
-
-/// The engine the plugin's pages run on: the one its open pages use, or a new one when none is open.
-fn page_engine(pages: &Mutex<Weak<Engine>>, limits: Limits) -> std::io::Result<Arc<Engine>> {
-    let mut pages = pages.lock().unwrap();
-    if let Some(engine) = pages.upgrade() {
-        return Ok(engine);
-    }
-    let engine = Engine::start(limits)?;
-    *pages = Arc::downgrade(&engine);
-    Ok(engine)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn open_frame(
     shared: &Arc<Shared>,
-    limits: Limits,
-    pages: &Mutex<Weak<Engine>>,
-    library: &Mutex<Option<Arc<Library>>>,
     role: Role,
     visible: bool,
     window: u64,
@@ -1002,17 +954,7 @@ fn open_frame(
         }
         on_event(event);
     };
-    let runtime = match role {
-        Role::Main => PageRuntime::spawn_plugin(source, role, limits, link, on_event)?,
-        Role::Page => PageRuntime::open_plugin(
-            &page_engine(pages, limits)?,
-            source,
-            role,
-            link,
-            library.lock().unwrap().clone(),
-            on_event,
-        ),
-    };
+    let runtime = PageRuntime::open_plugin(source, role, link, on_event)?;
     let inbox = runtime.inbox();
     let focused = shared.focused.lock().unwrap();
     shared.frames.lock().unwrap().push(Open {

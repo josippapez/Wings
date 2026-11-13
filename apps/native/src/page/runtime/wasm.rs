@@ -1,6 +1,5 @@
-//! A plugin frame built to WebAssembly, for plugins written in Rust: a page is a module that hands over the same tree
-//! a JS page gives `wings.render` and hears the same events, a main is one that only runs, and both reach the host
-//! through the same `Link`. So the view, the plugin's permissions and its other frames can't tell it from a JS frame.
+//! A plugin frame built to WebAssembly, for plugins written in Rust: a page is a module that hands over its tree and
+//! hears events, a main is one that only runs, and both reach the host through a `Link`.
 //!
 //! The module imports, from `wings`: `render(ptr, len)` with the tree's JSON (a page's alone: a main that calls it
 //! stops), `call(id, method, params)` for a host call that is answered later, `storage(op, key, json)` for one of
@@ -13,13 +12,12 @@
 //! `wings_deliver(kind, id, text)` (see `Message`) and `wings_timer(id)`. Strings are UTF-8, as a pointer and a length;
 //! one the host wrote is the module's to free.
 //!
-//! debt: each such page has a thread of its own, and `Limits::default()` whatever its plugin's are. Fine for one
-//! trial page; put them on their plugin's `Engine` thread if Rust plugins stay. A module is compiled once for as long
+//! debt: each such frame has a thread of its own, and `Limits::default()` whatever its plugin's are. A module is compiled once for as long
 //! as the app runs, and its compiled code is kept on disk for the next launch (`keep_compiled_in`), never pruned: each
 //! build of a module leaves a file a few times its size. Clear the folder of the ones no installed plugin has if it grows.
 
 use super::{
-    Command, Engine, Event, Inbox, Job, Limits, Link, PageRuntime, QUEUED_COMMANDS, Queue,
+    Command, Event, HEAP_BYTES, Inbox, Job, Link, PageRuntime, QUEUED_COMMANDS, Queue,
     Reply, Role, THREAD_STACK_BYTES, Tree, message, overran,
 };
 use std::{
@@ -28,7 +26,7 @@ use std::{
     rc::Rc,
     sync::{
         Arc, Mutex, OnceLock,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
         mpsc,
     },
     thread,
@@ -66,7 +64,7 @@ impl Host {
             emit,
             timers: Vec::new(),
             limits: StoreLimitsBuilder::new()
-                .memory_size(Limits::default().heap_bytes)
+                .memory_size(HEAP_BYTES)
                 .build(),
         }
     }
@@ -122,24 +120,22 @@ pub(super) fn open(
     on_event: impl FnMut(Event) + Send + 'static,
 ) -> PageRuntime {
     let (jobs, received) = mpsc::sync_channel(QUEUED_COMMANDS);
-    let quit = Arc::new(AtomicBool::new(false));
     let closed = Arc::new(AtomicBool::new(false));
     let stopped = Arc::new(AtomicBool::new(false));
     let queue = Queue {
         jobs: jobs.clone(),
-        frame: 1,
     };
     let path = path.to_owned();
     let spawned = thread::Builder::new()
         .name("page-wasm".into())
         .stack_size(THREAD_STACK_BYTES)
         .spawn({
-            let (quit, closed, stopped) = (quit.clone(), closed.clone(), stopped.clone());
+            let (closed, stopped) = (closed.clone(), stopped.clone());
             let (link, queue) = (link.clone(), queue.clone());
             move || {
                 let emit: Emit = Rc::new(RefCell::new(Box::new(on_event)));
                 let host = Host::new(role == Role::Page, link, queue, emit.clone());
-                serve(&path, host, &emit, &received, &quit, &closed, &stopped)
+                serve(&path, host, &emit, &received, &closed, &stopped)
             }
         });
     if spawned.is_err() {
@@ -150,11 +146,7 @@ pub(super) fn open(
         inbox: Inbox { queue, stopped },
         closed,
         _attached: None,
-        engine: Arc::new(Engine {
-            jobs,
-            quit,
-            next_frame: AtomicU64::new(2),
-        }),
+        jobs,
     }
 }
 
@@ -320,7 +312,6 @@ fn serve(
     host: Host,
     emit: &Emit,
     jobs: &mpsc::Receiver<Job>,
-    quit: &AtomicBool,
     closed: &AtomicBool,
     stopped: &AtomicBool,
 ) {
@@ -335,12 +326,12 @@ fn serve(
     #[cfg(any(test, feature = "test-support"))]
     if let Some(guest) = super::fake::claim(path) {
         return match super::fake::start(guest, host) {
-            Ok(frame) => run(frame, jobs, quit, closed, fail),
+            Ok(frame) => run(frame, jobs, closed, fail),
             Err(error) => fail(error),
         };
     }
     match Page::start(path, host) {
-        Ok(page) => run(page, jobs, quit, closed, fail),
+        Ok(page) => run(page, jobs, closed, fail),
         Err(error) => fail(error),
     }
 }
@@ -348,7 +339,6 @@ fn serve(
 fn run(
     mut page: impl Frame,
     jobs: &mpsc::Receiver<Job>,
-    quit: &AtomicBool,
     closed: &AtomicBool,
     fail: impl Fn(wasmtime::Error),
 ) {
@@ -369,10 +359,10 @@ fn run(
                 Err(_) => return,
             },
         };
-        if quit.load(Ordering::Relaxed) || closed.load(Ordering::Relaxed) {
+        if closed.load(Ordering::Relaxed) {
             return;
         }
-        if let Some(Job::Frame(_, command)) = job
+        if let Some(Job::Frame(command)) = job
             && let Err(error) = page.command(command)
         {
             return fail(error);

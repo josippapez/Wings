@@ -63,7 +63,6 @@ tar = "0.4.46"
 flate2 = "1.1.10"
 tempfile = "3.27.0"
 plist = "1.10.1"
-rquickjs = { version = "=0.14.0", default-features = false, features = ["std"] }
 # Runs a plugin page built to WebAssembly (`page/runtime/wasm.rs`): the trial of Rust plugins. An LTS release, with
 # the compiler and nothing else of its defaults (no WASI, component model, async or cache).
 wasmtime = { version = "=48.0.8", default-features = false, features = ["runtime", "cranelift", "std", "anyhow"] }

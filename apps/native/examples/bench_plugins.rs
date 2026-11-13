@@ -1,8 +1,8 @@
-//! What the JavaScript plugin layer costs: for each installed plugin, starts its main and each native page in QuickJS
-//! the way the app does, one frame at a time, and prints the memory the process grew by and the time to the page's
-//! first tree. The frames get no data (no access, no panes), so the numbers are each bundle's floor: its engine, its
-//! code and an empty first render. A page full of data costs more. macOS only (it reads the process's footprint).
-//! Each page's module is what the app runs (`installed::page_source`); the column `shares` is always empty now.
+//! What the plugin layer costs: for each installed plugin, starts its main and each native page the way the app does,
+//! one frame at a time, and prints the memory the process grew by and the time to the page's first tree. The frames
+//! get no data (no access, no panes), so the numbers are each module's floor: its runtime, its code and an empty
+//! first render. A page full of data costs more. macOS only (it reads the process's footprint).
+//! Each page's module is what the app runs (`installed::page_source`).
 //!
 //! cargo run --release --manifest-path apps/native/Cargo.toml --example bench_plugins --features test-support -- [plugins-folder]
 
@@ -67,7 +67,7 @@ fn main() {
     let mut receivers = Vec::new();
     let start = footprint();
     let mut total_bundle = 0u64;
-    println!("{:<18} {:<22} {:>9} {:>9} {:>16} {:>7}", "plugin", "frame", "bundle KB", "+MB", "first tree", "shares");
+    println!("{:<18} {:<22} {:>9} {:>9} {:>16}", "plugin", "frame", "bundle KB", "+MB", "first tree");
     for native in plugins {
         let id = native.parent().and_then(Path::parent).and_then(Path::file_name).unwrap().to_string_lossy().into_owned();
         let host = PluginHost::new(PluginConfig {
@@ -85,7 +85,6 @@ fn main() {
         files.sort_by_key(|path| (path.file_stem().unwrap() != "main", path.clone()));
         for file in files {
             let source = page_source(&dir, &file).unwrap();
-            let shares = source.starts_with(wings_native::page::runtime::SHARED_MARKER);
             total_bundle += source.len() as u64;
             let name = file.file_stem().unwrap().to_string_lossy().into_owned();
             let (tx, events) = mpsc::channel();
@@ -116,7 +115,7 @@ fn main() {
             };
             std::thread::sleep(Duration::from_millis(100));
             let grew = footprint() as i64 - before;
-            println!("{:<18} {:<22} {:>9} {:>9} {:>16} {:>7}", id, name, source.len() / 1024, mb(grew), shown, if shares { "yes" } else { "" });
+            println!("{:<18} {:<22} {:>9} {:>9} {:>16}", id, name, source.len() / 1024, mb(grew), shown);
             receivers.push(events);
         }
         hosts.push(host);
