@@ -1429,7 +1429,7 @@ fn end_at(socket: &Path) {
 #[test]
 fn an_agent_asleep_at_quit_stays_asleep_until_its_tab_is_shown() {
     use crate::workspace::agent_list::Phase;
-    let dir = PathBuf::from("/tmp").join(format!("wsl-{}", std::process::id()));
+    let dir = PathBuf::from("/tmp").join(format!("wsz-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let dir = dir.canonicalize().unwrap();
