@@ -18,6 +18,10 @@ dirs = "7.0.0"
 sysinfo = "0.39.6"
 # `read_pane` takes the colors and cursor moves out of a pane's output, as the desktop's terminal does.
 vte = "0.15.0"
+# The usage limits Claude Code's `/usage` reads (`usage.rs`): the request, and the keychain item's name. Both are already
+# in the build through `wings-agents` and `wings-plugins`.
+ureq = "3.4.2"
+sha2 = "0.11"
 wings-agents = { path = "../wings-agents" }
 wings-plugins = { path = "../wings-plugins" }
 wings-spaces = { path = "../wings-spaces" }

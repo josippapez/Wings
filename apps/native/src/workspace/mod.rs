@@ -66,6 +66,7 @@ mod tabs;
 mod tests;
 mod title_bar;
 mod updater;
+mod usage;
 mod welcome;
 mod worktree_setup;
 
@@ -528,6 +529,7 @@ impl Workspace {
             );
             opencode::connect_on_start(socket, this.config.state.clone());
             journal::sync_on_start(this.config.state.clone());
+            this.start_usage(wings_connect::usage::Usage::claude(), cx);
         }
         this.transcript_plugins = this
             .plugins

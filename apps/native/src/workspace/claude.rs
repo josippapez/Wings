@@ -738,7 +738,7 @@ pub(super) fn wings_program() -> Option<PathBuf> {
 
 /// Who is signed in to the account a status line came from. A status comes every few seconds from every session and
 /// the config it is read from is some hundred KB, so it is read again only when the file changed.
-fn login_of(account: Option<&str>) -> Option<String> {
+pub(super) fn login_of(account: Option<&str>) -> Option<String> {
     type Read = (Option<std::time::SystemTime>, Option<String>);
     static KNOWN: std::sync::Mutex<Option<std::collections::HashMap<Option<String>, Read>>> = std::sync::Mutex::new(None);
     let account = account.filter(|name| claude_accounts::valid_name(name));

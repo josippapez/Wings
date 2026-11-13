@@ -4,7 +4,7 @@
 //! out from transcripts. Only these fields are kept, checked and bounded, since any process of yours can
 //! write to the socket. Each Claude Code account has limits of its own, so they are kept per account.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -110,17 +110,24 @@ fn session_id(v: &Value) -> Option<&str> {
     v.as_str().filter(|id| id.len() == 36 && id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-'))
 }
 
+/// Reset times this close are one period's. The usage endpoint (`usage.rs`) gives them to a fraction of a second and a
+/// status line in whole seconds, and periods start hours apart.
+const SAME_PERIOD: i64 = 60;
+
 /// Of a window already kept and one a status line reports later, the one with newer data. A session's limits are
 /// from its own last response, so one that has been idle, or has just started, reports numbers that were true
 /// when it last heard, whatever the order the reports come in. The window's `resets_at` says which period it is:
 /// a later one is a newer period (the usage was reset), an earlier one is an old period that already ended. Within
-/// one period usage only goes up, so the lower number is the one that is out of date. A report that has no window
-/// (Claude Code drops one once it resets) or no `resets_at` to compare is taken as it is.
+/// one period usage only goes up, so the lower number is the one that is out of date, and the reset time stays the
+/// one kept: the HUD alerts again when it changes. A report that has no window (Claude Code drops one once it resets)
+/// or no `resets_at` to compare is taken as it is.
 fn newer(kept: &Option<Window>, reported: &Option<Window>) -> Option<Window> {
     match (kept, reported) {
         (Some(kept), Some(reported)) => match (kept.resets_at, reported.resets_at) {
+            (Some(k), Some(r)) if (r - k).abs() <= SAME_PERIOD => {
+                Some(Window { used_percentage: kept.used_percentage.max(reported.used_percentage), resets_at: Some(k) })
+            }
             (Some(k), Some(r)) if r < k => Some(kept.clone()),
-            (Some(k), Some(r)) if r == k && reported.used_percentage < kept.used_percentage => Some(kept.clone()),
             _ => Some(reported.clone()),
         },
         _ => reported.clone(),
@@ -188,6 +195,36 @@ impl Statusline {
             let oldest = self.sessions.iter().min_by_key(|(_, s)| s.at).map(|(id, _)| id.clone());
             self.sessions.remove(&oldest.unwrap_or_default());
         }
+    }
+
+    /// Keeps the limits of `account` that Wings read itself (`usage.rs`), at `now` in ms, by the same newest-data rule
+    /// as a status line's. A window the answer didn't have leaves the one kept. Unless something changed, the kept
+    /// limits stay as they are, `at` too, so the HUD has nothing to redraw.
+    pub fn record_usage(&mut self, account: Option<&str>, login: Option<&str>, five_hour: Option<Window>, seven_day: Option<Window>, now: u64) {
+        let account = account.filter(|name| wings_spaces::claude_accounts::valid_name(name)).map(str::to_string);
+        let fetched = |kept: &Option<Window>, fetched: Option<Window>| if fetched.is_some() { newer(kept, &fetched) } else { kept.clone() };
+        match self.limits.iter_mut().find(|l| l.account == account) {
+            Some(kept) => {
+                let (five_hour, seven_day) = (fetched(&kept.five_hour, five_hour), fetched(&kept.seven_day, seven_day));
+                if (&five_hour, &seven_day) != (&kept.five_hour, &kept.seven_day) {
+                    (kept.five_hour, kept.seven_day, kept.at) = (five_hour, seven_day, now);
+                }
+            }
+            None if five_hour.is_some() || seven_day.is_some() => {
+                self.limits.insert(0, Limits { account, login: login.map(str::to_string), five_hour, seven_day, at: now });
+                self.limits.truncate(ACCOUNTS_MAX);
+            }
+            None => {}
+        }
+    }
+
+    /// The ids of the sessions that reported, by account.
+    pub fn sessions_by_account(&self) -> BTreeMap<Option<String>, BTreeSet<String>> {
+        let mut accounts: BTreeMap<Option<String>, BTreeSet<String>> = BTreeMap::new();
+        for (id, session) in &self.sessions {
+            accounts.entry(session.account.clone()).or_default().insert(id.clone());
+        }
+        accounts
     }
 
     /// What `wings.statusline()` resolves.
@@ -376,6 +413,71 @@ mod tests {
             ]
         );
         assert!(view["rateLimits"][0].get("login").is_none());
+    }
+
+    /// Limits Wings read itself (`usage.rs`) and a status line's join by the newest-data rule, whichever comes first.
+    #[test]
+    fn read_limits_and_status_lines_keep_the_newest_data_both_ways() {
+        let window = |used: f64, resets_at: i64| Some(Window { used_percentage: used, resets_at: Some(resets_at) });
+        let shown = |s: &Statusline| {
+            let view = s.view();
+            let l = &view["rateLimits"][0];
+            (l["fiveHour"]["usedPercentage"].clone(), l["fiveHour"]["resetsAt"].clone(), l["sevenDay"]["usedPercentage"].clone(), l["at"].clone())
+        };
+        let (idle, working) = (status(ID), status("4c21b0c5-8113-4f55-9493-fa156c3fa369"));
+
+        // A status line, then a read with more used. Its reset time, given to a fraction of a second, is a second later
+        // than the status line's: the same period, so the reset time stays and the HUD doesn't alert again.
+        let mut s = Statusline::default();
+        s.record(&working, &Value::Null, None, 1000);
+        s.record_usage(None, None, window(30.0, 1738425601), window(41.0, 1738857600), 2000);
+        assert_eq!(shown(&s), (json!(30.0), json!(1738425600), json!(41.2), json!(2000)));
+        // A session that hasn't heard since sends its older numbers: the read ones stay.
+        s.record(&idle, &Value::Null, None, 3000);
+        assert_eq!(shown(&s).0, json!(30.0));
+        // A read in the next period wins, and a window it doesn't have stays as it was.
+        s.record_usage(None, None, window(2.0, 1738443600), None, 4000);
+        assert_eq!(shown(&s), (json!(2.0), json!(1738443600), json!(41.2), json!(4000)));
+
+        // A read first, then status lines: an old period's report doesn't replace it, the next period's does.
+        let mut s = Statusline::default();
+        s.record_usage(Some("work"), Some("me"), window(50.0, 1738443600), window(60.0, 1738857600), 1000);
+        let mut old = working.clone();
+        old["rate_limits"]["five_hour"] = json!({ "used_percentage": 80, "resets_at": 1738425600 });
+        s.record(&old, &json!("work"), Some("me"), 2000);
+        assert_eq!(shown(&s), (json!(50.0), json!(1738443600), json!(60.0), json!(2000)));
+        let mut next = working.clone();
+        next["context_window"]["total_output_tokens"] = json!(1300);
+        next["rate_limits"]["five_hour"] = json!({ "used_percentage": 1, "resets_at": 1738461600 });
+        s.record(&next, &json!("work"), Some("me"), 3000);
+        assert_eq!(shown(&s), (json!(1.0), json!(1738461600), json!(60.0), json!(3000)));
+    }
+
+    /// The HUD redraws when what `wings.statusline()` resolves changes.
+    #[test]
+    fn a_read_with_no_news_changes_nothing() {
+        let mut s = Statusline::default();
+        s.record(&status(ID), &Value::Null, None, 1000);
+        let before = s.view();
+        let same = |used: f64, resets_at: i64| Some(Window { used_percentage: used, resets_at: Some(resets_at) });
+        s.record_usage(None, None, same(23.5, 1738425600), same(41.2, 1738857600), 2000);
+        s.record_usage(None, None, None, None, 3000);
+        assert_eq!(s.view(), before);
+        // An account with no limits yet gets them; one whose name couldn't be a folder counts as the default.
+        s.record_usage(Some("work"), None, same(5.0, 1738425600), None, 4000);
+        s.record_usage(Some("../x"), None, same(24.0, 1738425600), None, 5000);
+        let accounts: Vec<_> = s.view()["rateLimits"].as_array().unwrap().iter().map(|l| (l["account"].clone(), l["fiveHour"]["usedPercentage"].clone())).collect();
+        assert_eq!(accounts, [(json!("work"), json!(5.0)), (Value::Null, json!(24.0))]);
+    }
+
+    #[test]
+    fn lists_the_sessions_that_reported_by_account() {
+        let mut s = Statusline::default();
+        let other = "4c21b0c5-8113-4f55-9493-fa156c3fa369";
+        s.record(&status(ID), &Value::Null, None, 1000);
+        s.record(&status(other), &json!("work"), None, 2000);
+        let by: Vec<_> = s.sessions_by_account().into_iter().map(|(account, ids)| (account, ids.into_iter().collect::<Vec<_>>())).collect();
+        assert_eq!(by, [(None, vec![ID.to_string()]), (Some("work".to_string()), vec![other.to_string()])]);
     }
 
     #[test]

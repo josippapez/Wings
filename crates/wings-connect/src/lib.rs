@@ -1,8 +1,8 @@
 //! How Wings connects to Claude Code, the same in every Wings app so one can replace another without a change to
 //! Claude Code's config: the status line and hooks in its settings (`settings`), the MCP server registered with it
 //! (`register`), the socket the app serves (`server`), and the `wings` commands Claude Code and you run, which talk to
-//! that socket (`cli`, and `bridge` for `wings --mcp`). `statusline` keeps what Claude Code tells its status line, and
-//! `panes` and `project_info` are Wings' own tools.
+//! that socket (`cli`, and `bridge` for `wings --mcp`). `statusline` keeps what Claude Code tells its status line, `usage`
+//! reads the usage limits as Claude Code's `/usage` does, and `panes` and `project_info` are Wings' own tools.
 
 #[cfg(unix)]
 pub mod bridge;
@@ -18,6 +18,7 @@ pub mod register;
 pub mod server;
 pub mod settings;
 pub mod statusline;
+pub mod usage;
 
 /// Runs the `wings` command `args` (without the program's name), or `None` when they aren't one, for the app to start.
 /// `version` is the Wings version the MCP server reports.
