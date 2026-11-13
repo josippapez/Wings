@@ -7,6 +7,7 @@
 //! A plugin is a main script and its pages (`plugin`): each runs in its own thread, and they talk through
 //! `wings.broadcast` and share `wings.storage`, as on the desktop.
 
+pub mod log;
 pub mod plugin;
 pub mod runtime;
 #[cfg(all(test, feature = "test-support"))]

@@ -292,7 +292,7 @@ pub fn start(found: Vec<Found>, paths: &PluginPaths, env: &Arc<dyn Env>) -> Vec<
                 main.into(),
                 Arc::new(move |event| {
                     if let Event::Error { message, .. } = event {
-                        eprintln!("[plugins] {reported}: {message}");
+                        crate::page::log::line(&reported, "main", &message);
                     }
                 }),
             )

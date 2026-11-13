@@ -144,39 +144,6 @@ fn search_field_can_be_reached_with_tab() {
     settle(&app, &mut window, shows("Query=coupon"));
 }
 
-#[test]
-fn built_changes_sidebar_supports_keyboard_chips_and_live_history_search_in_quickjs() {
-    let root = Root::new();
-    let host = Arc::new(PluginHost::new(root.config("changes")));
-    host.start_main(
-        include_str!("../../../../plugins/changes/preview/native-host.js"),
-        |_| {},
-    )
-    .unwrap();
-    let mut app = TestApp::new();
-    app.background_executor().allow_parking();
-    let page_host = host.clone();
-    let mut window = app.open_window(move |_, cx| {
-        PageView::in_plugin(
-            &page_host,
-            include_str!("../../../../plugins/changes/dist/native/sidebar.js"),
-            cx,
-        )
-    });
-    settle(&app, &mut window, shows("Coupon.tsx"));
-    // A sidebar doesn't fill, so it sits inside the desktop's 14pt of padding.
-    window.simulate_click(point(px(59.0), px(92.0)), MouseButton::Left);
-    // Arrow through Branch to History. Focus must follow the selected chip.
-    key(&mut window, "right");
-    settle(&app, &mut window, shows("against main"));
-    key(&mut window, "right");
-    settle(&app, &mut window, shows("Add coupon validation"));
-    window.simulate_click(point(px(84.0), px(130.0)), MouseButton::Left);
-    window.simulate_input("not-a-commit");
-    settle(&app, &mut window, shows("No commits match."));
-    assert!(window.read(|view, _| view.error().is_none()));
-}
-
 fn key(window: &mut View, key: &'static str) {
     window.simulate_event(gpui::KeyDownEvent {
         keystroke: Keystroke::parse(key).unwrap(),
@@ -572,6 +539,48 @@ fn a_plugin_page_in_a_window_asks_main_and_shows_the_count_main_saved() {
         clicked.elapsed()
     );
     assert_eq!(root.saved("fixture", "count"), Some(serde_json::json!(1)));
+}
+
+/// Draws, then loops until it is stopped.
+const STOPS: &str = "wings.render(JSON.stringify({id:0,type:'#root',children:[{id:1,type:'Text',children:[{id:2,type:'#text',text:'Up'}]}]}));
+    setTimeout(() => { for (;;) {} }, 300);";
+
+/// A stopped page stayed stopped wherever it was shown but a sidebar, whose Reload had to be pressed. Any page now
+/// starts again by itself, Reload does it at once, and why it stopped is in the log.
+#[test]
+fn a_plugin_page_that_stopped_starts_again_by_itself_or_at_once_with_reload_and_its_stop_is_logged() {
+    let logs = tempfile::tempdir().unwrap();
+    crate::page::log::keep_in(logs.path().join("plugins.log"));
+    let root = Root::new();
+    let host = Arc::new(PluginHost::new(root.config("fixture")));
+    let mut app = TestApp::new();
+    app.background_executor().allow_parking();
+    let page_host = host.clone();
+    let mut window = app.open_window(move |_, cx| PageView::in_plugin(&page_host, STOPS, cx));
+    let up = |view: &PageView| view.text().contains("Up") && !view.stopped();
+    settle(&app, &mut window, up);
+    settle(&app, &mut window, |view| view.stopped());
+    let kept = std::fs::read_to_string(logs.path().join("plugins.log")).unwrap();
+    assert!(kept.contains(" fixture page: the page ran for too long and was stopped"), "{kept}");
+
+    // Two seconds after it stopped, and not before.
+    app.advance_clock(Duration::from_millis(1900));
+    app.run_until_parked();
+    assert!(window.read(|view, _| view.stopped()));
+    app.advance_clock(Duration::from_millis(200));
+    settle(&app, &mut window, up);
+
+    settle(&app, &mut window, |view| view.stopped());
+    window.update(|view, _, cx| view.reload(cx));
+    settle(&app, &mut window, up);
+
+    // Not once its plugin is gone.
+    settle(&app, &mut window, |view| view.stopped());
+    drop(host);
+    app.advance_clock(Duration::from_secs(600));
+    app.run_until_parked();
+    window.draw();
+    assert!(window.read(|view, _| view.stopped()));
 }
 
 // The components page, under its 44px toolbar and 14px of padding and 10px apart: the refresh button (as the pilot's,

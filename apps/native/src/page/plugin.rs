@@ -408,11 +408,11 @@ impl Drop for Membership {
 }
 
 /// How long after a main stops it starts again, the first time.
-const RESTART_FIRST: Duration = Duration::from_secs(2);
+pub(crate) const RESTART_FIRST: Duration = Duration::from_secs(2);
 /// The longest wait before a restart.
-const RESTART_MOST: Duration = Duration::from_secs(10 * 60);
+pub(crate) const RESTART_MOST: Duration = Duration::from_secs(10 * 60);
 /// A main that ran this long before it stopped is restarted after `RESTART_FIRST` again.
-const RESTART_RESET: Duration = Duration::from_secs(10 * 60);
+pub(crate) const RESTART_RESET: Duration = Duration::from_secs(10 * 60);
 
 /// `PluginHost::keep_main`, waiting `wait` before the next restart.
 fn keep_main(
@@ -454,9 +454,66 @@ pub struct PluginHost {
     limits: Limits,
     main: Mutex<Option<PageRuntime>>,
     /// The engine the open pages run on, while one is open.
-    pages: Mutex<Weak<Engine>>,
+    pages: Arc<Mutex<Weak<Engine>>>,
     /// The plugin's `dist/native/shared.js`, which its pages built to share it need.
-    library: Mutex<Option<Arc<Library>>>,
+    library: Arc<Mutex<Option<Arc<Library>>>>,
+    /// Gone with the host: a `PageOpener` opens nothing after that.
+    alive: Arc<()>,
+}
+
+/// How one of a plugin's pages is opened, for the view that shows it to keep: a page that stopped for good is opened
+/// again with it, as `keep_main` starts a main again.
+#[derive(Clone)]
+pub struct PageOpener {
+    alive: Weak<()>,
+    shared: Arc<Shared>,
+    limits: Limits,
+    pages: Arc<Mutex<Weak<Engine>>>,
+    library: Arc<Mutex<Option<Arc<Library>>>>,
+    visible: bool,
+    window: u64,
+    args: Option<String>,
+    state: Option<FrameState>,
+    source: Arc<str>,
+}
+
+impl PageOpener {
+    /// Whether the plugin was turned off or restarted since: its pages are not opened again.
+    pub fn gone(&self) -> bool {
+        self.alive.strong_count() == 0
+    }
+
+    pub fn plugin(&self) -> &str {
+        &self.shared.config.id
+    }
+
+    /// The page's file for a module, and "page" for a script, which has no name here.
+    pub fn name(&self) -> &str {
+        self.source
+            .strip_prefix(super::runtime::wasm::MARKER)
+            .and_then(|path| path.lines().next()?.rsplit('/').next())
+            .unwrap_or("page")
+    }
+
+    /// Opens the page. It lives as long as what's returned.
+    pub fn open(&self, on_event: impl FnMut(Event) + Send + 'static) -> std::io::Result<PageRuntime> {
+        if self.gone() {
+            return Err(std::io::Error::other("the plugin was turned off"));
+        }
+        open_frame(
+            &self.shared,
+            self.limits,
+            &self.pages,
+            &self.library,
+            Role::Page,
+            self.visible,
+            self.window,
+            self.args.clone(),
+            self.state.clone(),
+            &self.source,
+            on_event,
+        )
+    }
 }
 
 impl PluginHost {
@@ -496,8 +553,9 @@ impl PluginHost {
             }),
             limits,
             main: Mutex::default(),
-            pages: Mutex::default(),
-            library: Mutex::default(),
+            pages: Arc::default(),
+            library: Arc::default(),
+            alive: Arc::new(()),
         }
     }
 
@@ -857,15 +915,27 @@ impl PluginHost {
         )
     }
 
-    /// The engine the plugin's pages run on: the one its open pages use, or a new one when none is open.
-    fn page_engine(&self) -> std::io::Result<Arc<Engine>> {
-        let mut pages = self.pages.lock().unwrap();
-        if let Some(engine) = pages.upgrade() {
-            return Ok(engine);
+    /// How the page `source` is opened, with what `open_hidden_page_with_state` and `open_window_page` take.
+    pub fn page(
+        &self,
+        visible: bool,
+        window: u64,
+        args: Option<&serde_json::Value>,
+        state: Option<FrameState>,
+        source: &str,
+    ) -> PageOpener {
+        PageOpener {
+            alive: Arc::downgrade(&self.alive),
+            shared: self.shared.clone(),
+            limits: self.limits,
+            pages: self.pages.clone(),
+            library: self.library.clone(),
+            visible,
+            window,
+            args: args.map(|args| args.to_string()),
+            state,
+            source: source.into(),
         }
-        let engine = Engine::start(self.limits)?;
-        *pages = Arc::downgrade(&engine);
-        Ok(engine)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -879,76 +949,104 @@ impl PluginHost {
         source: &str,
         on_event: impl FnMut(Event) + Send + 'static,
     ) -> std::io::Result<PageRuntime> {
-        let id = self.shared.next_frame.fetch_add(1, Ordering::Relaxed);
-        let visible = Arc::new(AtomicBool::new(visible));
-        let ready = Arc::new((Mutex::new(None), Condvar::new()));
-        let link = Arc::new(FrameLink {
-            id,
-            shared: self.shared.clone(),
-            visible: visible.clone(),
-            role,
-            window,
-            ready: ready.clone(),
-            args,
-            state,
-            acted: Mutex::new(None),
-        });
-        let shared = Arc::downgrade(&self.shared);
-        let mut on_event = on_event;
-        let on_event = move |event| {
-            if matches!(&event, Event::Error { fatal: true, .. })
-                && let Some(shared) = shared.upgrade()
-            {
-                shared.close_frame_diffs(id);
-            }
-            on_event(event);
-        };
-        let runtime = match role {
-            Role::Main => PageRuntime::spawn_plugin(source, role, self.limits, link, on_event)?,
-            Role::Page => PageRuntime::open_plugin(
-                &self.page_engine()?,
-                source,
-                role,
-                link,
-                self.library(),
-                on_event,
-            ),
-        };
-        let inbox = runtime.inbox();
-        let focused = self.shared.focused.lock().unwrap();
-        self.shared.frames.lock().unwrap().push(Open {
-            id,
-            role,
-            inbox: inbox.clone(),
-            visible: visible.clone(),
-            window,
-        });
-        // The frame hears the panes once its bundle has run, which is when its listeners exist.
-        let panes = self.shared.panes.lock().unwrap().json.clone();
-        if let Some(json) = panes {
-            inbox.send(Message::Panes, 0, json);
-        }
-        inbox.send(
-            Message::Projects,
-            0,
-            json(&*self.shared.projects.lock().unwrap()).unwrap(),
-        );
-        if let Some(current) = self.shared.current.lock().unwrap().clone() {
-            inbox.send(Message::Project, 0, current);
-        }
-        let initial = effective_focus(&focused, role, window) && visible.load(Ordering::Relaxed);
-        inbox.send(
-            Message::Focus,
-            0,
-            serde_json::json!({ "focused": initial }).to_string(),
-        );
-        *ready.0.lock().unwrap() = Some(initial);
-        ready.1.notify_all();
-        Ok(runtime.attach(Membership {
-            id,
-            shared: self.shared.clone(),
-        }))
+        open_frame(&self.shared, self.limits, &self.pages, &self.library, role, visible, window, args, state, source, on_event)
     }
+}
+
+/// The engine the plugin's pages run on: the one its open pages use, or a new one when none is open.
+fn page_engine(pages: &Mutex<Weak<Engine>>, limits: Limits) -> std::io::Result<Arc<Engine>> {
+    let mut pages = pages.lock().unwrap();
+    if let Some(engine) = pages.upgrade() {
+        return Ok(engine);
+    }
+    let engine = Engine::start(limits)?;
+    *pages = Arc::downgrade(&engine);
+    Ok(engine)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn open_frame(
+    shared: &Arc<Shared>,
+    limits: Limits,
+    pages: &Mutex<Weak<Engine>>,
+    library: &Mutex<Option<Arc<Library>>>,
+    role: Role,
+    visible: bool,
+    window: u64,
+    args: Option<String>,
+    state: Option<FrameState>,
+    source: &str,
+    on_event: impl FnMut(Event) + Send + 'static,
+) -> std::io::Result<PageRuntime> {
+    let id = shared.next_frame.fetch_add(1, Ordering::Relaxed);
+    let visible = Arc::new(AtomicBool::new(visible));
+    let ready = Arc::new((Mutex::new(None), Condvar::new()));
+    let link = Arc::new(FrameLink {
+        id,
+        shared: shared.clone(),
+        visible: visible.clone(),
+        role,
+        window,
+        ready: ready.clone(),
+        args,
+        state,
+        acted: Mutex::new(None),
+    });
+    let weak = Arc::downgrade(shared);
+    let mut on_event = on_event;
+    let on_event = move |event| {
+        if matches!(&event, Event::Error { fatal: true, .. })
+            && let Some(shared) = weak.upgrade()
+        {
+            shared.close_frame_diffs(id);
+        }
+        on_event(event);
+    };
+    let runtime = match role {
+        Role::Main => PageRuntime::spawn_plugin(source, role, limits, link, on_event)?,
+        Role::Page => PageRuntime::open_plugin(
+            &page_engine(pages, limits)?,
+            source,
+            role,
+            link,
+            library.lock().unwrap().clone(),
+            on_event,
+        ),
+    };
+    let inbox = runtime.inbox();
+    let focused = shared.focused.lock().unwrap();
+    shared.frames.lock().unwrap().push(Open {
+        id,
+        role,
+        inbox: inbox.clone(),
+        visible: visible.clone(),
+        window,
+    });
+    // The frame hears the panes once its bundle has run, which is when its listeners exist.
+    let panes = shared.panes.lock().unwrap().json.clone();
+    if let Some(json) = panes {
+        inbox.send(Message::Panes, 0, json);
+    }
+    inbox.send(
+        Message::Projects,
+        0,
+        json(&*shared.projects.lock().unwrap()).unwrap(),
+    );
+    if let Some(current) = shared.current.lock().unwrap().clone() {
+        inbox.send(Message::Project, 0, current);
+    }
+    let initial = effective_focus(&focused, role, window) && visible.load(Ordering::Relaxed);
+    inbox.send(
+        Message::Focus,
+        0,
+        serde_json::json!({ "focused": initial }).to_string(),
+    );
+    *ready.0.lock().unwrap() = Some(initial);
+    ready.1.notify_all();
+    Ok(runtime.attach(Membership {
+        id,
+        shared: shared.clone(),
+    }))
 }
 
 impl Drop for PluginHost {

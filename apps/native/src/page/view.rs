@@ -3,9 +3,8 @@
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
-    rc::Rc,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use gpui::{
@@ -26,7 +25,7 @@ mod rich_view;
 mod sunburst_view;
 
 use super::{
-    plugin::PluginHost,
+    plugin::{PageOpener, PluginHost, RESTART_FIRST, RESTART_MOST, RESTART_RESET},
     runtime::{Event, PageRuntime},
     tree::{self, Align, Gap, Justify, Level, Node, TextSize, Tone, Tree, Weight, plain_text},
 };
@@ -66,8 +65,33 @@ struct InputState {
     sent: Vec<String>,
 }
 
-/// What a stopped page's Reload button runs.
-pub type Reload = Rc<dyn Fn(&mut Window, &mut gpui::App)>;
+/// How the page is started, kept to start it again after it stopped.
+enum Source {
+    /// A bundle with no plugin behind it.
+    Bare(String),
+    Plugin(PageOpener),
+}
+
+impl Source {
+    fn open(&self, on_event: Box<dyn FnMut(Event) + Send>) -> std::io::Result<PageRuntime> {
+        match self {
+            Source::Bare(source) => PageRuntime::spawn(source, on_event),
+            Source::Plugin(opener) => opener.open(on_event),
+        }
+    }
+
+    /// Whether the plugin behind the page is gone, so the page is not started again.
+    fn gone(&self) -> bool {
+        matches!(self, Source::Plugin(opener) if opener.gone())
+    }
+
+    /// Records why the page stopped where the installed app keeps it.
+    fn log(&self, message: &str) {
+        if let Source::Plugin(opener) = self {
+            super::log::line(opener.plugin(), opener.name(), message);
+        }
+    }
+}
 
 pub struct PageView {
     runtime: Option<PageRuntime>,
@@ -100,11 +124,17 @@ pub struct PageView {
     chip_focus: RefCell<HashMap<(u64, String), gpui::FocusHandle>>,
     /// What the page last threw, shown under it until it renders again.
     error: Option<SharedString>,
-    /// The page has stopped for good: nothing in it answers a click any more.
+    /// The page has stopped: nothing in it answers a click until it is started again, which happens by itself
+    /// (`restart_later`) or with the Reload by its error.
     stopped: bool,
-    /// Loads the page again, for the button a stopped page shows by its error. None where whoever holds the page gave
-    /// no way to (`on_reload`).
-    reload: Option<Reload>,
+    source: Source,
+    /// Whether the page was last said to be in view, to tell the next runtime the same.
+    shown: Cell<Option<bool>>,
+    /// When the runtime that runs now was started, and how long the next restart waits: `RESTART_FIRST`, then twice
+    /// as long after each short run up to `RESTART_MOST`, as a plugin's main (`PluginHost::keep_main`).
+    started: Instant,
+    restart_wait: Duration,
+    _restart: Option<Task<()>>,
     /// Shown in a title bar button's popover (`place: "popover"`), whose shell and ground are the popover's.
     popover: bool,
     /// Where the page's shell is scrolled, so a field that takes the keyboard can be brought into view.
@@ -128,37 +158,78 @@ impl PageView {
     }
 
     pub fn set_visible(&self, visible: bool) {
+        self.shown.set(Some(visible));
         if let Some(runtime) = &self.runtime {
             runtime.set_visible(visible);
         }
     }
 
-    /// Gives a stopped page a Reload button by its error, which calls `reload`: whoever holds the page drops it and
-    /// opens it again.
-    pub fn on_reload(&mut self, reload: impl Fn(&mut Window, &mut gpui::App) + 'static) {
-        self.reload = Some(Rc::new(reload));
-    }
-
-    /// Whether the page has stopped for good.
+    /// Whether the page has stopped and not started again yet.
     #[cfg(feature = "test-support")]
     pub fn stopped(&self) -> bool {
         self.stopped
     }
 
-    /// What a stopped page's Reload button runs, for a test to press it. None when it shows none.
-    #[cfg(feature = "test-support")]
-    pub fn reload_button(&self) -> Option<Reload> {
-        self.reload.clone().filter(|_| self.stopped)
+    /// Starts a stopped page again now, as the Reload by its error does.
+    pub fn reload(&mut self, cx: &mut Context<Self>) {
+        self._restart = None;
+        self.restart_wait = RESTART_FIRST;
+        self.restart(cx);
+    }
+
+    /// Starts the page from its beginning in place of the runtime that stopped. What the page drew and what was open
+    /// or typed in it go with the old one.
+    fn restart(&mut self, cx: &mut Context<Self>) {
+        let (runtime, error, events) = Self::launch(&self.source, cx);
+        if let (Some(runtime), Some(shown)) = (&runtime, self.shown.get()) {
+            runtime.set_visible(shown);
+        }
+        self.stopped = runtime.is_none();
+        (self.runtime, self.error, self._events) = (runtime, error, events);
+        self.started = Instant::now();
+        self.tree = None;
+        self.open.clear();
+        self.menu = None;
+        self.pressed_open = false;
+        self.select_bounds.clear();
+        self.focused = None;
+        self.suggestions_closed = false;
+        self.highlight = None;
+        self.fields.borrow_mut().clear();
+        self.inputs.borrow_mut().clear();
+        self.graphs.borrow_mut().clear();
+        self.sunbursts.borrow_mut().clear();
+        self.chip_focus.borrow_mut().clear();
+        self.actions_focus.borrow_mut().clear();
+        self.actions_within.clear();
+        self.reveal = None;
+        if self.stopped {
+            self.restart_later(cx);
+        }
+        cx.notify();
+    }
+
+    /// Starts the stopped page again after a wait, so it comes back without a click. Not once its plugin is gone.
+    fn restart_later(&mut self, cx: &mut Context<Self>) {
+        if self.source.gone() {
+            return;
+        }
+        let wait = if self.started.elapsed() >= RESTART_RESET { RESTART_FIRST } else { self.restart_wait };
+        self.restart_wait = (wait * 2).min(RESTART_MOST);
+        self._restart = Some(cx.spawn(async move |view, cx| {
+            cx.background_executor().timer(wait).await;
+            let _ = view.update(cx, |view, cx| view.restart(cx));
+        }));
     }
 
     /// Starts the page bundle `source`; its first tree is drawn when it arrives.
     pub fn new(source: &str, cx: &mut Context<Self>) -> Self {
-        Self::start(cx, |on_event| PageRuntime::spawn(source, on_event))
+        Self::start(cx, Source::Bare(source.into()))
     }
 
     /// Opens `source` as a page of the plugin `host` runs, which can talk to its main and its other pages.
     pub fn in_plugin(host: &PluginHost, source: &str, cx: &mut Context<Self>) -> Self {
-        Self::start(cx, |on_event| host.open_hidden_page(source, on_event))
+        Self::start(cx, Source::Plugin(host.page(false, 0, None, None, source)))
     }
 
     /// Like `in_plugin`, for a page shown in the popover under its sidebar's title bar button.
@@ -185,9 +256,7 @@ impl PageView {
         args: Option<&serde_json::Value>,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::start(cx, |on_event| {
-            host.open_hidden_page_with_args(source, args, on_event)
-        })
+        Self::start(cx, Source::Plugin(host.page(false, 0, args, None, source)))
     }
 
     /// Like `in_plugin_with_args`, for a tab or block whose `wings.tabState`/`blockState` is `state`.
@@ -198,9 +267,7 @@ impl PageView {
         state: crate::page::plugin::FrameState,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::start(cx, |on_event| {
-            host.open_hidden_page_with_state(source, args, state, on_event)
-        })
+        Self::start(cx, Source::Plugin(host.page(false, 0, args, Some(state), source)))
     }
 
     pub fn in_plugin_window(
@@ -209,18 +276,14 @@ impl PageView {
         source: &str,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::start(cx, |on_event| {
-            host.open_window_page(source, window_id, on_event)
-        })
+        Self::start(cx, Source::Plugin(host.page(true, window_id, None, None, source)))
     }
 
-    fn start(
-        cx: &mut Context<Self>,
-        spawn: impl FnOnce(Box<dyn FnMut(Event) + Send>) -> std::io::Result<PageRuntime>,
-    ) -> Self {
+    /// Starts the page's runtime: the runtime, or why it didn't start, and the task that takes what it sends.
+    fn launch(source: &Source, cx: &mut Context<Self>) -> (Option<PageRuntime>, Option<SharedString>, Task<()>) {
         let pending = Arc::new(Mutex::new(Pending::default()));
         let (wake, woken) = async_channel::bounded::<()>(1);
-        let runtime = spawn(Box::new({
+        let runtime = source.open(Box::new({
             let pending = pending.clone();
             move |event| {
                 {
@@ -238,7 +301,11 @@ impl PageView {
         }));
         let (runtime, error) = match runtime {
             Ok(runtime) => (Some(runtime), None),
-            Err(error) => (None, Some(format!("the page didn't start: {error}").into())),
+            Err(error) => {
+                let message = format!("the page didn't start: {error}");
+                source.log(&message);
+                (None, Some(message.into()))
+            }
         };
         let events = cx.spawn(async move |view, cx| {
             while woken.recv().await.is_ok() {
@@ -284,9 +351,15 @@ impl PageView {
                             view.error = None;
                         }
                         if let Some(error) = taken.error {
+                            if taken.stopped {
+                                view.source.log(&error);
+                            }
                             view.error = Some(error.into());
                         }
-                        view.stopped |= taken.stopped;
+                        if taken.stopped {
+                            view.stopped = true;
+                            view.restart_later(cx);
+                        }
                         cx.notify();
                     })
                     .is_err()
@@ -295,7 +368,13 @@ impl PageView {
                 }
             }
         });
-        Self {
+        (runtime, error, events)
+    }
+
+    fn start(cx: &mut Context<Self>, source: Source) -> Self {
+        let (runtime, error, events) = Self::launch(&source, cx);
+        let mut view = Self {
+            stopped: runtime.is_none(),
             runtime,
             tree: None,
             open: HashSet::new(),
@@ -312,8 +391,11 @@ impl PageView {
             sunbursts: RefCell::new(HashMap::new()),
             chip_focus: RefCell::new(HashMap::new()),
             error,
-            stopped: false,
-            reload: None,
+            source,
+            shown: Cell::new(None),
+            started: Instant::now(),
+            restart_wait: RESTART_FIRST,
+            _restart: None,
             popover: false,
             shell_scroll: gpui::ScrollHandle::new(),
             combobox_scroll: gpui::ScrollHandle::new(),
@@ -321,7 +403,11 @@ impl PageView {
             actions_within: HashSet::new(),
             reveal: None,
             _events: events,
+        };
+        if view.stopped {
+            view.restart_later(cx);
         }
+        view
     }
 
     fn send(&self, handler: &str, payload: Option<&serde_json::Value>) {
@@ -1442,7 +1528,7 @@ impl Render for PageView {
             )
             .when_some(self.error.clone(), |page, error| {
                 // A page that stopped can't be clicked back to life, so its error comes with a way to load it again.
-                let reload = self.reload.clone().filter(|_| self.stopped);
+                let reload = self.stopped.then(|| cx.listener(|view, _: &gpui::ClickEvent, _, cx| view.reload(cx)));
                 page.child(
                     div()
                         .flex_none()
@@ -1467,7 +1553,7 @@ impl Render for PageView {
                         .when_some(reload, |row, reload| {
                             row.child(
                                 ui::button("page-reload", "Reload", ui::Variant::Outline, false, "Reload")
-                                    .on_click(move |_, window, cx| reload(window, cx)),
+                                    .on_click(reload),
                             )
                         }),
                 )

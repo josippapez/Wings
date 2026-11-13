@@ -788,9 +788,9 @@ fn a_sidebar_shows_its_label_and_its_popover_page_while_you_point_at_its_button(
 }
 
 /// A sidebar's page is kept for as long as the app runs, so one that stopped stayed stopped, its buttons dead, as
-/// Cyclops' did. Its error now comes with Reload, which loads the page again in the panel.
+/// Cyclops' did. It starts again in the panel by itself.
 #[test]
-fn a_sidebar_page_that_stopped_is_loaded_again_by_its_reload_button() {
+fn a_sidebar_page_that_stopped_starts_again_in_the_panel_by_itself() {
     let data = Data::temp();
     // Draws, then loops until it is stopped.
     let sidebar = "wings.render(JSON.stringify({id:0,type:'#root',children:[{id:1,type:'Text',children:[{id:2,type:'#text',text:'Up'}]}]}));
@@ -815,18 +815,13 @@ fn a_sidebar_page_that_stopped_is_loaded_again_by_its_reload_button() {
             std::thread::sleep(Duration::from_millis(10));
         }
     };
-    // A page that runs has no Reload to press.
     wait(&mut window, "the page never drew", &|page| page.text().contains("Up"));
-    assert!(window.read(|_, cx| first.read(cx).reload_button().is_none()));
     wait(&mut window, "the page was never stopped", &|page| page.stopped());
-    let reload = window.read(|_, cx| first.read(cx).reload_button()).expect("Reload by the error");
-    window.update(|_, window, cx| reload(window, cx));
-    app.run_until_parked();
-    // Another page in the same place, drawn again and running.
-    let second = window.read(|w, _| w.sidebar_pages[&key].clone());
-    assert_ne!(first.entity_id(), second.entity_id());
+    app.advance_clock(Duration::from_secs(2));
+    // The same page in the same place, drawn again and running.
+    wait(&mut window, "the page never started again", &|page| page.text().contains("Up") && !page.stopped());
+    assert_eq!(first.entity_id(), window.read(|w, _| w.sidebar_pages[&key].entity_id()));
     window.read(|w, _| assert_eq!(w.right.as_ref(), Some(&key)));
-    wait(&mut window, "the reloaded page never drew", &|page| page.text().contains("Up") && !page.stopped());
 }
 
 /// Typing in Cyclops' popover, or picking from a list or menu in it, keeps it open: gpui reads a key press as the

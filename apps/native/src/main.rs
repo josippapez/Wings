@@ -214,6 +214,7 @@ fn main() {
     without_large_malloc_cache();
     if let Some(dir) = data_dir::state_file().as_deref().and_then(std::path::Path::parent) {
         wings_native::page::runtime::wasm::keep_compiled_in(dir.join("wasm-cache"));
+        wings_native::page::log::keep_in(dir.join("plugins.log"));
     }
     if let Err(error) = run() {
         eprintln!("{error}");

@@ -690,7 +690,7 @@ fn a_plugins_pages_share_one_engine_which_ends_with_the_last_page_and_main_keeps
     let first = open(&host, PROBE);
     let engine = host.pages.lock().unwrap().upgrade().unwrap();
     let second = open(&host, PROBE);
-    assert!(Arc::ptr_eq(&engine, &host.page_engine().unwrap()));
+    assert!(Arc::ptr_eq(&engine, &super::page_engine(&host.pages, host.limits).unwrap()));
     second.report("the second page", |_| true);
     drop(engine);
     drop((first, second));
