@@ -4,8 +4,8 @@
 use std::path::PathBuf;
 
 use gpui::{
-    AnyElement, ClipboardItem, Context, ElementId, Pixels, Point, SharedString, Window, div,
-    prelude::*, px, relative,
+    AnyElement, ClipboardItem, Context, ElementId, Pixels, Point, Role, SharedString, Toggled,
+    Window, div, prelude::*, px, relative,
 };
 
 use crate::{
@@ -78,8 +78,18 @@ impl Workspace {
             MenuTarget::Agent(pane) => self.agent_items(*pane),
         };
         let mut children = Vec::new();
+        let mut checks = match &menu.target {
+            MenuTarget::Project(path) => self.section_checks(path, cx),
+            _ => Vec::new(),
+        };
+        let last = groups.len().saturating_sub(1);
         for (index, group) in groups.into_iter().enumerate() {
             if index > 0 {
+                children.push(ui::menu_separator());
+            }
+            // The sections' checks go above the last group, "Remove from sidebar".
+            if index == last && index > 0 && !checks.is_empty() {
+                children.append(&mut checks);
                 children.push(ui::menu_separator());
             }
             children.extend(group.into_iter().map(|item| self.menu_item(item, cx)));
@@ -93,6 +103,32 @@ impl Workspace {
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_menu(cx)))
                 .children(children),
         ))
+    }
+
+    /// A project's plugin sections, a check on each it shows; a click turns one off or on.
+    fn section_checks(&self, project: &std::path::Path, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        if self.projects.iter().any(|entry| entry.path == project && entry.child) {
+            return Vec::new();
+        }
+        self.section_choices(project)
+            .into_iter()
+            .map(|(key, title, on)| {
+                let project = project.to_path_buf();
+                // The check stands where the other items have their icon, so all the labels line up.
+                let glyph = match on {
+                    true => crate::icons::icon(Icon::Check, 16.0, crate::theme::MUTED_FOREGROUND).into_any_element(),
+                    false => div().size(px(16.0)).flex_none().into_any_element(),
+                };
+                ui::menu_item_with(ElementId::Name(format!("menu-section-{key}").into()), glyph, title, false, false)
+                    .role(Role::MenuItemCheckBox)
+                    .aria_toggled(if on { Toggled::True } else { Toggled::False })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.menu = None;
+                        this.set_section_off(&project, &key, on, cx);
+                    }))
+                    .into_any_element()
+            })
+            .collect()
     }
 
     fn menu_item(

@@ -171,7 +171,7 @@ fn changes_lists_what_changed_opens_a_files_diff_through_main_and_searches_the_h
         id: root.to_string_lossy().into(),
         path: root.to_string_lossy().into(),
         name: "Fixture".into(),
-        parent_id: None,
+        parent_id: None, hidden_sections: Vec::new(),
     }]);
     rig.host.publish_panes(vec![pane("1", &root.to_string_lossy())]);
     let (on_event, main_errors) = errors();
@@ -219,7 +219,7 @@ fn worktrees_sidebar_loads_the_actual_native_bundle_refreshes_on_git_and_opens_a
         id: root.to_string_lossy().into(),
         path: root.to_string_lossy().into(),
         name: "Fixture worktrees".into(),
-        parent_id: None,
+        parent_id: None, hidden_sections: Vec::new(),
     }]);
     rig.host
         .publish_panes(vec![pane("1", &root.to_string_lossy())]);
@@ -247,13 +247,13 @@ fn worktrees_sidebar_loads_the_actual_native_bundle_refreshes_on_git_and_opens_a
             id: root.to_string_lossy().into(),
             path: root.to_string_lossy().into(),
             name: "Fixture worktrees".into(),
-            parent_id: None,
+            parent_id: None, hidden_sections: Vec::new(),
         },
         Project {
             id: linked.to_string_lossy().into(),
             path: linked.to_string_lossy().into(),
             name: "Fixture feature".into(),
-            parent_id: None,
+            parent_id: None, hidden_sections: Vec::new(),
         },
     ]);
     rig.host.publish_git(&[root.to_string_lossy().into()]);
@@ -298,7 +298,7 @@ fn worktrees_sidebar_loads_forty_projects_within_its_turns() {
                 id: root.to_string_lossy().into(),
                 path: root.to_string_lossy().into(),
                 name: root.file_name().unwrap().to_string_lossy().into(),
-                parent_id: None,
+                parent_id: None, hidden_sections: Vec::new(),
             })
             .collect(),
     );
@@ -711,7 +711,7 @@ fn schedules_rig() -> (Rig, mpsc::Receiver<String>) {
         id: "/work/api".into(),
         path: "/work/api".into(),
         name: "Api".into(),
-        parent_id: None,
+        parent_id: None, hidden_sections: Vec::new(),
     }]);
     let (on_event, main_errors) = errors();
     rig.host
@@ -852,7 +852,7 @@ fn schedules_start_rig(agents_start: bool) -> (Rig, mpsc::Receiver<String>) {
     // A pane opens only inside a project, and the app lists the worktrees a start makes by then.
     *rig.env.projects.lock().unwrap() = vec![repo.clone(), dir.join("app-worktrees")];
     let id: String = repo.to_string_lossy().into();
-    rig.host.publish_projects(vec![Project { id: id.clone(), path: id.clone(), name: "Api".into(), parent_id: None }]);
+    rig.host.publish_projects(vec![Project { id: id.clone(), path: id.clone(), name: "Api".into(), parent_id: None, hidden_sections: Vec::new() }]);
     let mut entry = json!({
         "id": "w1", "projectId": id, "agent": "claude", "prompt": "Work on {id}: {title}", "minFreeGb": 0, "enabled": false, "primed": true, "seen": ["42"],
         "waiting": [{ "id": "42", "title": "Fix totals", "url": "https://example.test/42", "at": 1 }, { "id": "43", "title": "Add tax rows", "url": "https://example.test/43", "at": 2 }],
@@ -1006,7 +1006,7 @@ fn disk_scans_a_folder_in_its_main_and_its_native_page_draws_the_map_and_fills_t
         id: id.clone(),
         path: id,
         name: "Scanned".into(),
-        parent_id: None,
+        parent_id: None, hidden_sections: Vec::new(),
     }]);
     let (on_event, main_errors) = errors();
     rig.host
@@ -1065,7 +1065,7 @@ fn disk_page_takes_a_folder_of_five_thousand_files_in_one_turn_and_draws_the_fir
         fs::write(folder.join(format!("file-{n:04}.txt")), "x").unwrap();
     }
     let id: String = folder.to_string_lossy().into();
-    rig.host.publish_projects(vec![Project { id: id.clone(), path: id, name: "Many".into(), parent_id: None }]);
+    rig.host.publish_projects(vec![Project { id: id.clone(), path: id, name: "Many".into(), parent_id: None, hidden_sections: Vec::new() }]);
     let (on_event, main_errors) = errors();
     rig.host.start_main(&module("disk", "main"), on_event).unwrap();
 
@@ -1089,7 +1089,7 @@ fn disk_page_opens_the_smaller_items_of_a_folder_of_twelve_thousand_files() {
         fs::write(folder.join(format!("file-{n:05}.txt")), "x").unwrap();
     }
     let id: String = folder.to_string_lossy().into();
-    rig.host.publish_projects(vec![Project { id: id.clone(), path: id, name: "Most".into(), parent_id: None }]);
+    rig.host.publish_projects(vec![Project { id: id.clone(), path: id, name: "Most".into(), parent_id: None, hidden_sections: Vec::new() }]);
     let (on_event, main_errors) = errors();
     rig.host.start_main(&module("disk", "main"), on_event).unwrap();
 
@@ -1179,7 +1179,7 @@ fn pr_rig() -> (Rig, PathBuf) {
     git(&repo, &["branch", "-M", "ada/sync-retry"]);
     let path = repo.to_string_lossy().to_string();
     *rig.env.projects.lock().unwrap() = vec![repo.clone()];
-    rig.host.publish_projects(vec![Project { id: path.clone(), path, name: "web".into(), parent_id: None }]);
+    rig.host.publish_projects(vec![Project { id: path.clone(), path, name: "web".into(), parent_id: None, hidden_sections: Vec::new() }]);
     // The project on screen, which the app always says and the pages follow.
     rig.host.publish_project(Some(&repo));
     (rig, repo)
@@ -1654,7 +1654,7 @@ fn work_item_rig() -> (Rig, PathBuf) {
     git(&repo, &["branch", "-M", "feature/1432-sync"]);
     let path = repo.to_string_lossy().to_string();
     *rig.env.projects.lock().unwrap() = vec![repo.clone()];
-    rig.host.publish_projects(vec![Project { id: path.clone(), path, name: "web".into(), parent_id: None }]);
+    rig.host.publish_projects(vec![Project { id: path.clone(), path, name: "web".into(), parent_id: None, hidden_sections: Vec::new() }]);
     // The project on screen, which the app always says and the pages follow.
     rig.host.publish_project(Some(&repo));
     (rig, repo)
@@ -1765,7 +1765,7 @@ fn tasks_rig() -> Rig {
         id: "/work/web".into(),
         path: "/work/web".into(),
         name: "web".into(),
-        parent_id: None,
+        parent_id: None, hidden_sections: Vec::new(),
     }]);
     // The project on screen, which the app always says and the pages follow with `onProject`.
     rig.host.publish_project(Some(Path::new("/work/web")));

@@ -3448,3 +3448,103 @@ fn a_fill_tab_page_reaches_its_cards_edges_and_one_that_does_not_fill_keeps_its_
     click(&app, &mut window, 16.0);
     shows(&app, &mut window, "padded", "Pressed 1.");
 }
+
+/// A main that lists a section under each project that doesn't say it has the section off, as a plugin that skips what
+/// the user turned off, and saves the projects it heard.
+fn sectioner() -> String {
+    fake::script("main", || {
+        |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            if let Hear::Deliver("projects", _, text) = hear {
+                cx.save("projects", &said(text));
+                for project in said(text).as_array().unwrap() {
+                    if project["hiddenSections"]
+                        .as_array()
+                        .is_some_and(|off| off.contains(&json!("sectioner:issues")))
+                    {
+                        continue;
+                    }
+                    let rows = json!([{ "id": "r1", "label": "First", "open": { "view": "board" } }]);
+                    cx.call(
+                        "setProjectSection",
+                        json!({ "projectId": project["id"], "sectionId": "issues", "rows": rows }),
+                    );
+                }
+            }
+        }
+    })
+}
+
+#[test]
+fn a_section_turned_off_in_the_projects_menu_hides_for_that_project_stays_off_after_a_restart_and_the_plugin_hears_it() {
+    use std::path::Path;
+
+    use super::{
+        context_menu::MenuTarget,
+        project_sections::{ListItem, section_key},
+    };
+    let data = Data::temp();
+    let (project, other) = (data.root.join("project"), data.root.join("other"));
+    let spaces: Vec<_> = [&project, &other]
+        .iter()
+        .map(|folder| {
+            fs::create_dir_all(folder).unwrap();
+            json!({ "id": folder, "name": folder.file_name().unwrap().to_string_lossy(), "path": folder })
+        })
+        .collect();
+    fs::write(data.root.join("spaces.json"), serde_json::to_vec(&spaces).unwrap()).unwrap();
+    data.install_script(
+        "sectioner",
+        json!({ "contributes": {
+            "views": [{ "id": "board", "title": "Board", "page": "dist/board.html", "opens": ["tab"] }],
+            "projectSections": [{ "id": "issues", "title": "Issues", "all": "board" }],
+        } }),
+        &sectioner(),
+        &[("board", &fake::page("page", |_| json!({ "id": 0, "type": "#root", "props": {}, "children": [] })))],
+        "sectioner-scope",
+    );
+    let key = section_key("sectioner", "issues");
+    let launch = |data: &Data| {
+        let (project, data_root) = (project.clone(), data.root.clone());
+        open_plugins(data, &Arc::default(), move |config| {
+            config.project = project;
+            config.projects = Some(data_root.join("spaces.json"));
+            config.state = Some(data_root.join("workspace.json"));
+        })
+    };
+    let shows = |w: &Workspace, folder: &Path| {
+        let order: Vec<usize> = (0..w.projects.len()).collect();
+        w.sidebar_slots(&order).iter().any(
+            |slot| matches!(slot, ListItem::Sections(at, groups) if *at == folder && !groups.is_empty()),
+        )
+    };
+    let (app, mut window) = launch(&data);
+    until(&app, &mut window, "the sections never listed", |w| shows(w, &project) && shows(w, &other));
+
+    // The menu lists the section checked; unchecking hides it under this project only.
+    window.update(|w, _, cx| w.open_menu(MenuTarget::Project(project.clone()), point(px(100.0), px(100.0)), cx));
+    window.read(|w, _| assert_eq!(w.section_choices(&project), [(key.clone(), "Issues".to_owned(), true)]));
+    click_spot(&mut window, "menu:Issues");
+    window.read(|w, _| {
+        assert!(!shows(w, &project) && shows(w, &other));
+        assert_eq!(w.section_choices(&project), [(key.clone(), "Issues".to_owned(), false)]);
+        assert_eq!(w.section_choices(&other), [(key.clone(), "Issues".to_owned(), true)]);
+    });
+    // The plugin is told which project has it off, the other not.
+    until(&app, &mut window, "the plugin never heard", |_| {
+        let heard = data.saved("sectioner", "sectioner-scope", "projects").unwrap();
+        let off = |folder: &Path| heard.as_array().unwrap().iter().find(|p| p["path"] == json!(folder)).unwrap()["hiddenSections"].clone();
+        off(&project) == json!([key]) && off(&other) == Value::Null
+    });
+
+    // It stays off after a restart.
+    drop((window, app));
+    let (app, mut window) = launch(&data);
+    until(&app, &mut window, "the other never listed", |w| shows(w, &other));
+    window.read(|w, _| assert!(!shows(w, &project) && !w.section_choices(&project)[0].2));
+
+    // Checking it again lists it, as the plugin fills it again.
+    window.update(|w, _, cx| w.open_menu(MenuTarget::Project(project.clone()), point(px(100.0), px(100.0)), cx));
+    click_spot(&mut window, "menu:Issues");
+    until(&app, &mut window, "the section never came back", |w| shows(w, &project));
+    window.read(|w, _| assert!(w.section_choices(&project)[0].2));
+}

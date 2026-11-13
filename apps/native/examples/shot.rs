@@ -910,11 +910,21 @@ fn sidebar(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         ),
     )
     .unwrap();
+    // A plugin that lists a section under each project, so the project's menu shows it with its check. Its main lists
+    // no rows, so the sidebar looks as it did.
+    let sections = Data::temp();
+    sections.install_script(
+        "tracker",
+        serde_json::json!({ "contributes": { "projectSections": [{ "id": "pulls", "title": "Pull requests" }] } }),
+        &fake::idle("main"),
+        &[],
+        "shot",
+    );
     for width in [1000.0, 640.0] {
         let mut config = base.clone();
         config.project = api.clone();
         config.agents = None;
-        config.plugins = None;
+        config.plugins = Some(sections.paths());
         // Each size starts from the same files.
         for file in ["workspace", "spaces"] {
             std::fs::copy(

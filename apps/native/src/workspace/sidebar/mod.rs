@@ -12,7 +12,7 @@ mod tests;
 mod view;
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
@@ -39,6 +39,8 @@ pub(super) struct State {
     pub(super) width: f32,
     sort: Sort,
     older_open: bool,
+    /// The plugin sections turned off under each project, as `plugin:section`, by folder.
+    sections_off: BTreeMap<String, BTreeSet<String>>,
     /// When each project was last worked on, in ms, by folder.
     last_active: BTreeMap<String, u64>,
     resize: Option<Resize>,
@@ -90,6 +92,7 @@ impl Default for State {
             width: INITIAL_WIDTH,
             sort: Sort::default(),
             older_open: false,
+            sections_off: BTreeMap::new(),
             last_active: BTreeMap::new(),
             resize: None,
             hovered: None,
@@ -123,6 +126,7 @@ impl State {
             },
             sort: Sort::parse(settings.project_sort.as_deref()),
             older_open: settings.older_open.unwrap_or(false),
+            sections_off: settings.sections_off.clone(),
             last_active: settings.last_active.clone(),
             ..Self::default()
         };
@@ -136,6 +140,7 @@ impl State {
             sidebar_width: Some(self.width),
             project_sort: Some(self.sort.key().to_owned()),
             older_open: Some(self.older_open),
+            sections_off: self.sections_off.clone(),
             last_active: self.last_active.clone(),
             ..saved::Settings::default()
         }
@@ -153,11 +158,47 @@ impl State {
 
     /// Times of projects no longer listed are dropped.
     fn forget_removed(&mut self, projects: &[ProjectEntry]) {
-        self.last_active.retain(|folder, _| {
+        let listed = |folder: &String| {
             projects
                 .iter()
                 .any(|project| project.path.as_os_str() == folder.as_str())
-        });
+        };
+        self.last_active.retain(|folder, _| listed(folder));
+        self.sections_off.retain(|folder, _| listed(folder));
+    }
+
+    pub(in crate::workspace) fn section_off(&self, project: &Path, key: &str) -> bool {
+        self.sections_off
+            .get(project.to_string_lossy().as_ref())
+            .is_some_and(|keys| keys.contains(key))
+    }
+
+    /// The `plugin:section` keys turned off under `project`.
+    pub(in crate::workspace) fn sections_off(&self, project: &Path) -> Vec<String> {
+        self.sections_off
+            .get(project.to_string_lossy().as_ref())
+            .map(|keys| keys.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Whether anything changed.
+    pub(in crate::workspace) fn set_section_off(&mut self, project: &Path, key: &str, off: bool) -> bool {
+        let folder = project.to_string_lossy().into_owned();
+        if off {
+            return self
+                .sections_off
+                .entry(folder)
+                .or_default()
+                .insert(key.to_owned());
+        }
+        let Some(keys) = self.sections_off.get_mut(&folder) else {
+            return false;
+        };
+        let changed = keys.remove(key);
+        if keys.is_empty() {
+            self.sections_off.remove(&folder);
+        }
+        changed
     }
 
     /// `project` was worked on now, at most once a minute.

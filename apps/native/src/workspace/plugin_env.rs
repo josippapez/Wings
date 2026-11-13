@@ -1117,7 +1117,7 @@ impl Workspace {
             installed.host.publish_panes(entries.clone());
             installed
                 .host
-                .publish_projects(published_projects(&self.projects));
+                .publish_projects(published_projects(&self.projects, &self.side));
             installed
                 .host
                 .publish_project(Some(self.config.project.as_path()));
@@ -1186,6 +1186,7 @@ impl Workspace {
         self.config.project.hash(&mut hasher);
         for project in &self.projects {
             (&project.path, &project.name).hash(&mut hasher);
+            self.side.sections_off(&project.path).hash(&mut hasher);
         }
         let focused = self.focused_pane_of_tab();
         for (id, path) in panes {
@@ -1332,7 +1333,10 @@ fn set<T>(
 }
 
 /// The project list as plugins know it. A worktree follows its project in the list, which is its `parentId`.
-fn published_projects(projects: &[crate::projects::ProjectEntry]) -> Vec<Project> {
+fn published_projects(
+    projects: &[crate::projects::ProjectEntry],
+    side: &super::sidebar::State,
+) -> Vec<Project> {
     let mut top = None;
     projects
         .iter()
@@ -1347,6 +1351,7 @@ fn published_projects(projects: &[crate::projects::ProjectEntry]) -> Vec<Project
             Project {
                 id: id.clone(),
                 name: project.name.clone(),
+                hidden_sections: side.sections_off(&project.path),
                 path: id,
                 parent_id,
             }

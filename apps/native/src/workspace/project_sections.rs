@@ -259,6 +259,9 @@ impl Workspace {
                     .iter()
                     .filter_map(move |section| {
                         let key = section_key(&plugin.id, &section.id);
+                        if self.side.section_off(project, &key) {
+                            return None;
+                        }
                         let rows = self
                             .sections
                             .rows
@@ -279,6 +282,44 @@ impl Workspace {
                     })
             })
             .collect()
+    }
+
+    /// Every section the plugins declare, with whether `project` shows it: what the project's menu turns on and off.
+    pub(super) fn section_choices(&self, project: &Path) -> Vec<(String, String, bool)> {
+        self.plugins
+            .iter()
+            .flat_map(|installed| {
+                let plugin = &installed.plugin.manifest;
+                plugin
+                    .contributes
+                    .project_sections
+                    .iter()
+                    .map(move |section| (section_key(&plugin.id, &section.id), section.title.clone()))
+            })
+            .map(|(key, title)| {
+                let on = !self.side.section_off(project, &key);
+                (key, title, on)
+            })
+            .collect()
+    }
+
+    /// Turns a plugin's section off under `project`, or back on. Off drops its rows, and the plugins hear it with the
+    /// project, so the one that fills the section stops working for it.
+    pub(super) fn set_section_off(
+        &mut self,
+        project: &Path,
+        key: &str,
+        off: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.side.set_section_off(project, key, off) {
+            return;
+        }
+        if off {
+            self.sections.set(project, key, None);
+        }
+        self.save(cx);
+        cx.notify();
     }
 
     /// The project's sections, or nothing while no plugin has put anything under it.

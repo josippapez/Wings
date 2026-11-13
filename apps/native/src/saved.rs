@@ -2,7 +2,7 @@
 //! The desktop app's `workspace.json` is a different file, and the native app never writes it (`data_dir`).
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     io,
     path::{Path, PathBuf},
 };
@@ -237,6 +237,9 @@ pub struct Settings {
     /// Whether the sidebar's "Older" group is open.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub older_open: Option<bool>,
+    /// The plugin sections turned off under each project, as `plugin:section`, by its folder.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sections_off: BTreeMap<String, BTreeSet<String>>,
     /// When each project was last worked on, in ms since the epoch, by its folder.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub last_active: BTreeMap<String, u64>,

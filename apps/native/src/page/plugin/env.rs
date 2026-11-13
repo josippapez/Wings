@@ -30,6 +30,9 @@ pub struct Project {
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
+    /// The sections the user turned off for this project, as `plugin:section`, so a plugin skips its work for it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hidden_sections: Vec<String>,
 }
 
 /// A project of the list, as plugins know it: its folder is its id.
@@ -39,7 +42,7 @@ impl From<Space> for Project {
             id: space.path.clone(),
             name: space.name,
             path: space.path,
-            parent_id: None,
+            parent_id: None, hidden_sections: Vec::new(),
         }
     }
 }
