@@ -1,13 +1,12 @@
 {
   "id": "disk",
   "name": "Disk usage",
-  "version": "0.2.3",
-  "minWingsVersion": "0.1.108",
+  "version": "0.3.0",
+  "minWingsVersion": "0.2.17",
   "icon": "icon.svg",
   "description": "Shows what takes the space on your disks as a map you click into, like DaisyDisk: scan a disk or a folder, find the biggest folders and files, gather them in the Collector and move them to the Trash. Claude can scan too, with its disk tools.",
   "api": 1,
-  "native": true,
-  "main": "dist/main.js",
+  "main": "dist/native/main.wasm",
   "permissions": {
     "diskUsage": true,
     "exec": [
@@ -26,7 +25,7 @@
       {
         "id": "map",
         "title": "Disk usage",
-        "page": "dist/map.html",
+        "page": "dist/native/map.wasm",
         "opens": [
           "tab"
         ],

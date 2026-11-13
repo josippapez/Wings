@@ -19,6 +19,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "disk"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
+ "wings-plugin",
+]
+
+[[package]]
 name = "hud"
 version = "0.0.0"
 dependencies = [

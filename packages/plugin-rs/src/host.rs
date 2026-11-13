@@ -618,3 +618,19 @@ pub fn set_block_state(state: &Value) -> Pending<Result<Value, String>> {
 pub fn open_url(url: &str) {
     drop(call("openUrl", json!({ "url": url })));
 }
+
+/// `wings.diskUsage`: the tree of `path` as `{ root, floor, entries, restricted, ms }`, kept as the `options` say
+/// (`minBytes`, `depth`, `maxEntries`, `reuse`). With `on_progress` it hears how far the scan is, as `{ entries, bytes,
+/// path }`. The scan stops when its `stopper` is used, and then fails with "The scan was stopped".
+pub fn disk_usage(path: &str, options: &Value, on_progress: Option<Rc<dyn Fn(&Value)>>) -> Search {
+    let id = next_id();
+    let token = format!("usage-{id}");
+    let mut params = options.clone();
+    params["path"] = path.into();
+    params["token"] = token.clone().into();
+    params["stream"] = on_progress.is_some().into();
+    if let Some(on_progress) = on_progress {
+        OUTPUTS.with(|outputs| outputs.borrow_mut().insert(id, on_progress));
+    }
+    Search { token, answer: call_as(id, "diskUsage", params) }
+}

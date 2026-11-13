@@ -623,7 +623,7 @@ fn hud(out: PathBuf) {
     }
 }
 
-/// Disk usage's real main and built page: the disks are this Mac's, and the map is of a folder of made-up files, which it
+/// Disk usage's real main and page modules: the disks are this Mac's, and the map is of a folder of made-up files, which it
 /// scans for real. The folder is removed afterwards.
 fn disk(out: PathBuf) {
     let folder = out.join("fixture-disk");
@@ -649,48 +649,24 @@ fn disk(out: PathBuf) {
     }
     std::fs::write(folder.join("notes.txt"), "made up\n").unwrap();
     let id = folder.to_string_lossy().into_owned();
-    let storage = out.join("fixture-storage-disk");
-    let _ = std::fs::remove_dir_all(&storage);
-    let manifest: wings_plugins::manifest::Manifest =
-        serde_json::from_str(include_str!("../../../plugins/disk/wings-plugin.json")).unwrap();
-    let host = PluginHost::with_access(
-        PluginConfig {
-            id: "disk".into(),
-            root: storage,
-            scope: "shot".into(),
-        },
-        Access {
-            plugin: wings_plugins::manifest::Plugin {
-                manifest,
-                dir: folder.clone(),
-                icon_svg: None,
-            },
-            builtin: true,
-            env: std::sync::Arc::new(FixtureEnv(folder.clone())),
-        },
-    );
-    host.publish_projects(vec![wings_native::page::plugin::Project {
-        id: id.clone(),
-        name: "Fixture".into(),
-        parent_id: None,
-        path: id,
-    }]);
-    host.start_main(
-        include_str!("../../../plugins/disk/dist/native/main.js"),
-        |event| {
-            if let wings_native::page::runtime::Event::Error { message, .. } = event {
-                panic!("{message}");
-            }
-        },
-    )
-    .unwrap();
+    let module = |frame: &str| {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../plugins/disk/dist/native/{frame}.wasm"));
+        format!("{}{}", wings_native::page::runtime::wasm::MARKER, path.canonicalize().expect("sh build-rust.sh disk, in plugins/").display())
+    };
+    let fail = |event: wings_native::page::runtime::Event| {
+        if let wings_native::page::runtime::Event::Error { message, .. } = event {
+            panic!("{message}");
+        }
+    };
+    let project = |name: &str, path: String| wings_native::page::plugin::Project { id: path.clone(), name: name.into(), parent_id: None, path };
+    let host = disk_host(&out, "fixture-storage-disk", &folder, vec![project("Fixture", id)]);
+    host.start_main(&module("main"), fail).unwrap();
     let mut cx = app();
-    let source = include_str!("../../../plugins/disk/dist/native/map.js");
-    // The Scan buttons come in the page's order: a disk's each, then the home folder's, then the project's, which is the folder.
+    let source = module("map");
+    // The Scan buttons come in the page's order: a disk's each, then the home folder's, then the projects'.
     let scan = wings_disk_usage::disks().len() + 1;
     // What to press to reach each view, one after the other with the text each shows, and what undoes it: main keeps
     // the Collector between windows.
-    type Steps<'a> = Vec<(&'a str, usize, &'a str)>;
     let views: [(&str, Steps, Steps); 3] = [
         ("overview", vec![], vec![]),
         ("map", vec![("Scan", scan, "Downloads")], vec![]),
@@ -707,16 +683,52 @@ fn disk(out: PathBuf) {
             ],
         ),
     ];
+    shoot_disk(&mut cx, &host, &source, &out, &views);
+    // The other states of the tab, which a scan of a few files is too quick to show: a main that says what the page
+    // hears, as the real one does, for a scan in progress, one that failed and one that has not begun.
+    let states = disk_host(&out, "fixture-storage-disk-states", &folder, vec![project("Slow", "/fixture/slow".into()), project("Broken", "/fixture/broken".into()), project("Quiet", "/fixture/quiet".into())]);
+    states.start_main(include_str!("shot_plugins/disk_states_main.js"), fail).unwrap();
+    let views: [(&str, Steps, Steps); 3] = [
+        ("scanning", vec![("Scan", scan, "Found so far")], vec![]),
+        ("error", vec![("Scan", scan + 1, "Try again")], vec![]),
+        ("starting", vec![("Scan", scan + 2, "Starting the scan")], vec![]),
+    ];
+    shoot_disk(&mut cx, &states, &source, &out, &views);
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+/// What to press to reach a view of Disk usage, with the text each press shows.
+type Steps<'a> = Vec<(&'a str, usize, &'a str)>;
+
+/// Disk usage's plugin host over a storage folder of its own, its projects as given and its permissions its manifest's.
+fn disk_host(out: &std::path::Path, storage: &str, folder: &std::path::Path, projects: Vec<wings_native::page::plugin::Project>) -> PluginHost {
+    let storage = out.join(storage);
+    let _ = std::fs::remove_dir_all(&storage);
+    let manifest: wings_plugins::manifest::Manifest = serde_json::from_str(include_str!("../../../plugins/disk/wings-plugin.json")).unwrap();
+    let host = PluginHost::with_access(
+        PluginConfig { id: "disk".into(), root: storage, scope: "shot".into() },
+        Access {
+            plugin: wings_plugins::manifest::Plugin { manifest, dir: folder.to_path_buf(), icon_svg: None },
+            builtin: true,
+            env: std::sync::Arc::new(FixtureEnv(folder.to_path_buf())),
+        },
+    );
+    host.publish_projects(projects);
+    host
+}
+
+/// Renders each of `views` of Disk usage's page at 1000 and 640 points wide.
+fn shoot_disk(cx: &mut VisualTestAppContext, host: &PluginHost, source: &str, out: &std::path::Path, views: &[(&str, Steps, Steps)]) {
     for width in [1000.0, 640.0] {
-        for (name, steps, undo) in &views {
+        for (name, steps, undo) in views {
             let handle = cx
                 .open_offscreen_window(size(px(width), px(900.0)), |_, cx| {
-                    cx.new(|cx| PageView::in_plugin(&host, source, cx))
+                    cx.new(|cx| PageView::in_plugin(host, source, cx))
                 })
                 .unwrap();
             let window = handle.into();
             handle
-                .read_with(&cx, |view, _| view.set_visible(true))
+                .read_with(cx, |view, _| view.set_visible(true))
                 .unwrap();
             let until = |cx: &mut VisualTestAppContext, text: &str| {
                 let deadline = Instant::now() + Duration::from_secs(20);
@@ -732,15 +744,15 @@ fn disk(out: PathBuf) {
                     wait(cx, window, Duration::from_millis(20));
                 }
             };
-            until(&mut cx, "Folders");
-            // The disks come from main, which reads them with `df`.
+            until(cx, "Folders");
+            // The disks come from the page's own calls.
             let deadline = Instant::now() + Duration::from_secs(20);
             while handle
-                .read_with(&cx, |view, _| view.text().contains("Looking for disks"))
+                .read_with(cx, |view, _| view.text().contains("Looking for disks"))
                 .unwrap()
             {
                 assert!(Instant::now() < deadline, "the disks never came");
-                wait(&mut cx, window, Duration::from_millis(20));
+                wait(cx, window, Duration::from_millis(20));
             }
             let press = |cx: &mut VisualTestAppContext,
                          (label, nth, shows): &(&str, usize, &str)| {
@@ -751,21 +763,16 @@ fn disk(out: PathBuf) {
                 until(cx, shows);
             };
             for step in steps {
-                press(&mut cx, step);
+                press(cx, step);
             }
-            wait(&mut cx, window, Duration::from_millis(500));
-            save(
-                &mut cx,
-                window,
-                out.join(format!("disk-{name}-{width}.png")),
-            );
+            wait(cx, window, Duration::from_millis(500));
+            save(cx, window, out.join(format!("disk-{name}-{width}.png")));
             for step in undo {
-                press(&mut cx, step);
+                press(cx, step);
             }
             let _ = cx.update_window(window, |_, window, _| window.remove_window());
         }
     }
-    let _ = std::fs::remove_dir_all(&folder);
 }
 
 /// A page, what it opens with, what to press to reach a view of it, and a text it shows.
