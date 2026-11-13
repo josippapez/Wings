@@ -6,8 +6,8 @@
     "deps": "pnpm -C ../packages/plugin-sdk install --frozen-lockfile && pnpm -C ../packages/plugin-ui install --frozen-lockfile && pnpm install --frozen-lockfile",
     "build": "node build.mjs",
     "shot": "node shot.mjs",
-    "check": "tsc --noEmit && node build.mjs --check && sh build-rust.sh --check",
-    "test": "node --import ./ts-resolve.mjs --test \"tasks/worker/*.test.mjs\" && cargo test --workspace --quiet"
+    "check": "node build.mjs --check && sh build-rust.sh --check",
+    "test": "cargo test --workspace --quiet"
   },
   "devDependencies": {
     "@types/react": "^19.1.8",

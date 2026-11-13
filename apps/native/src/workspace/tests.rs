@@ -1023,6 +1023,17 @@ pub(super) fn wait_for(
 }
 
 #[test]
+fn the_issues_tab_without_the_plugin_offers_to_open_settings_on_plugins() {
+    let (_app, mut window) = open();
+    window.update(|w, window, cx| w.show(Active::Issues, window, cx));
+    window.draw();
+    assert!(window.read(|w, _| w.settings.is_none()));
+    let button = crate::ui::spot_at("issues-open-plugins").expect("the panel's button is drawn");
+    window.simulate_click(button.center(), gpui::MouseButton::Left);
+    assert!(window.read(|w, _| w.settings.as_ref().unwrap().section == settings::Section::Plugins));
+}
+
+#[test]
 fn settings_open_with_the_shortcut_and_change_every_terminal() {
     use crate::terminal_view::{DEFAULT_FONT_FAMILY, look};
     let (_app, mut window) = open();

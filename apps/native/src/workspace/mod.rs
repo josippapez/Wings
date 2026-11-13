@@ -90,7 +90,6 @@ use crate::{
     installed::{self, Installed},
     layout::{Dir, Layout, Toward},
     page::{PageView, plugin::Env},
-    plugin,
     plugin_view::{IssuesEvent, IssuesView},
     projects::{ProjectEntry, Projects},
     saved,
@@ -214,8 +213,6 @@ pub struct Workspace {
     tab_layout: Option<(Pixels, bool, Option<f32>, bool, usize)>,
     active: Active,
     config: Config,
-    in_flight: bool,
-    load_task: Option<Task<()>>,
     /// Where the active tab's panes go, measured every frame.
     area: Option<Bounds<Pixels>>,
     drag: Option<Drag>,
@@ -350,8 +347,14 @@ impl Workspace {
             false
         });
         let issues = cx.new(IssuesView::new);
-        cx.subscribe(&issues, |this, _, event: &IssuesEvent, cx| match event {
-            IssuesEvent::Refresh => this.load(Some(plugin::Action::Refresh), cx),
+        cx.subscribe_in(&issues, window, |this, _, event: &IssuesEvent, window, cx| match event {
+            IssuesEvent::OpenPlugins => {
+                this.open_settings(window, cx);
+                if let Some(dialog) = &mut this.settings {
+                    dialog.section = settings::Section::Plugins;
+                }
+                cx.notify();
+            }
         })
         .detach();
         let (plugin_events, requested) = async_channel::unbounded();
@@ -405,8 +408,6 @@ impl Workspace {
             active: Active::Issues,
             issues_open: true,
             config,
-            in_flight: false,
-            load_task: None,
             area: None,
             drag: None,
             projects: spaces.entries(),

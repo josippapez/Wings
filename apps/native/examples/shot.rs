@@ -598,7 +598,7 @@ fn main() {
         cx.simulate_input(window, "needle-2");
         wait(&mut cx, window, Duration::from_millis(500));
         save(&mut cx, window, &name("find"));
-        cx.simulate_keystrokes(window, "escape cmd-4");
+        cx.simulate_keystrokes(window, "escape cmd-1 cmd-[");
         wait(&mut cx, window, Duration::from_millis(300));
         save(&mut cx, window, &name("issues"));
         // The fixture plugin's page, opened from the palette, before and after a click on its button, which asks the

@@ -4,7 +4,6 @@ pub mod data_dir;
 pub mod diff;
 pub mod host;
 pub mod page;
-pub mod plugin;
 pub mod projects;
 pub mod saved;
 pub mod secrets;

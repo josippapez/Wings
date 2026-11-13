@@ -6,7 +6,7 @@ use gpui::{AnyElement, Context, Role, Window, div, prelude::*, px, rgb, rgba};
 
 use crate::{
     icons::{Icon, icon},
-    plugin, saved, theme,
+    saved, theme,
 };
 
 use super::{HAIRLINE, Parked, Workspace};
@@ -16,7 +16,7 @@ pub(super) const SIDEBAR_ACCENT: u32 = 0xffffff14;
 pub(super) const SIDEBAR_FOREGROUND: u32 = 0xe4e0da;
 
 impl Workspace {
-    /// The current project's saved tabs, or one new terminal, and its Issues.
+    /// The current project's saved tabs, or one new terminal.
     pub(super) fn enter_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let restored = self
             .config
@@ -38,7 +38,6 @@ impl Workspace {
         }
         #[cfg(unix)]
         self.adopt_orphans(window, cx);
-        self.load_issues(cx);
         self.open_tasks_board(cx);
     }
 
@@ -137,17 +136,6 @@ impl Workspace {
         }
     }
 
-    fn load_issues(&mut self, cx: &mut Context<Self>) {
-        if self.config.issues.is_some() {
-            // A load still running belongs to the project shown before.
-            self.load_task = None;
-            self.in_flight = false;
-            self.load(None, cx);
-        } else {
-            self.issues.update(cx, |view, cx| view.set_setup(cx));
-        }
-    }
-
     /// A tab for each pane of this project the terminal server still runs but no saved pane names, so no program the
     /// server kept goes on unseen.
     #[cfg(unix)]
@@ -208,7 +196,6 @@ impl Workspace {
                     Some(waiting) => self.start_waiting(waiting, window, cx),
                     None => self.show(parked.active, window, cx),
                 }
-                self.load_issues(cx);
             }
             None => self.enter_project(window, cx),
         }
@@ -276,27 +263,5 @@ impl Workspace {
 
     pub(super) fn project_key(&self) -> String {
         self.config.project.to_string_lossy().into_owned()
-    }
-
-    pub(super) fn load(&mut self, action: Option<plugin::Action>, cx: &mut Context<Self>) {
-        if self.in_flight {
-            return;
-        }
-        self.in_flight = true;
-        self.issues.update(cx, |view, cx| view.set_loading(cx));
-        let config = self.config.clone();
-        let load = cx
-            .background_executor()
-            .spawn(async move { config.load_issues(action) });
-        self.load_task = Some(cx.spawn(async move |this, cx| {
-            let result = load.await;
-            let _ = this.update(cx, |this, cx| {
-                this.in_flight = false;
-                this.issues.update(cx, |view, cx| match result {
-                    Ok(screen) => view.set_screen(screen, cx),
-                    Err(error) => view.set_error(error, cx),
-                });
-            });
-        }));
     }
 }
