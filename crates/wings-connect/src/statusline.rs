@@ -110,6 +110,23 @@ fn session_id(v: &Value) -> Option<&str> {
     v.as_str().filter(|id| id.len() == 36 && id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-'))
 }
 
+/// Of a window already kept and one a status line reports later, the one with newer data. A session's limits are
+/// from its own last response, so one that has been idle, or has just started, reports numbers that were true
+/// when it last heard, whatever the order the reports come in. The window's `resets_at` says which period it is:
+/// a later one is a newer period (the usage was reset), an earlier one is an old period that already ended. Within
+/// one period usage only goes up, so the lower number is the one that is out of date. A report that has no window
+/// (Claude Code drops one once it resets) or no `resets_at` to compare is taken as it is.
+fn newer(kept: &Option<Window>, reported: &Option<Window>) -> Option<Window> {
+    match (kept, reported) {
+        (Some(kept), Some(reported)) => match (kept.resets_at, reported.resets_at) {
+            (Some(k), Some(r)) if r < k => Some(kept.clone()),
+            (Some(k), Some(r)) if r == k && reported.used_percentage < kept.used_percentage => Some(kept.clone()),
+            _ => Some(reported.clone()),
+        },
+        _ => reported.clone(),
+    }
+}
+
 impl Statusline {
     /// Keeps what one status line run of `account` reported, at `now` in ms. `login` is who is signed in to that
     /// account, when known.
@@ -137,9 +154,13 @@ impl Statusline {
         });
         // Absent before a session's first response, so that says nothing about the account.
         if (five_hour.is_some() || seven_day.is_some()) && !repeats {
+            // Whichever session reports, what is kept is the newest data of each window, not the last report.
+            let kept = self.limits.iter().find(|l| l.account == account);
+            let five_hour = kept.map_or(five_hour.clone(), |k| newer(&k.five_hour, &five_hour));
+            let seven_day = kept.map_or(seven_day.clone(), |k| newer(&k.seven_day, &seven_day));
             self.limits.retain(|l| l.account != account);
             // Newest first. Names are checked, and there are only as many as you made.
-            self.limits.insert(0, Limits { account: account.clone(), login: login.map(str::to_string), five_hour: five_hour.clone(), seven_day: seven_day.clone(), at: now });
+            self.limits.insert(0, Limits { account: account.clone(), login: login.map(str::to_string), five_hour, seven_day, at: now });
             self.limits.truncate(ACCOUNTS_MAX);
         }
         let Some(id) = id else { return };
@@ -177,8 +198,15 @@ impl Statusline {
             .limits
             .iter()
             .map(|own| {
-                let newest = self.limits.iter().find(|other| own.login.is_some() && other.login == own.login).unwrap_or(own);
-                Limits { account: own.account.clone(), ..newest.clone() }
+                let Some(login) = own.login.as_ref() else { return own.clone() };
+                // Oldest report first, so each window ends up as the newest data of any account on the login.
+                let mut shared = self.limits.iter().rev().filter(|other| other.login.as_ref() == Some(login));
+                let first = shared.next().unwrap_or(own);
+                let (mut five_hour, mut seven_day, mut at) = (first.five_hour.clone(), first.seven_day.clone(), first.at);
+                for other in shared {
+                    (five_hour, seven_day, at) = (newer(&five_hour, &other.five_hour), newer(&seven_day, &other.seven_day), other.at);
+                }
+                Limits { account: own.account.clone(), login: own.login.clone(), five_hour, seven_day, at }
             })
             .collect();
         serde_json::json!({ "rateLimits": limits, "sessions": self.sessions })
@@ -236,15 +264,16 @@ mod tests {
     /// kept sending the old numbers, which replaced a working session's new ones each time.
     #[test]
     fn a_session_that_repeats_its_old_limits_does_not_replace_a_working_sessions_new_ones() {
-        let limits = |five: f64, week: f64| json!({ "five_hour": { "used_percentage": five, "resets_at": 1738425600 }, "seven_day": { "used_percentage": week, "resets_at": 1738857600 } });
+        // A reset moves `resets_at` on: the old numbers are of the period before, the new ones of the one after.
+        let limits = |five: f64, week: f64, period: i64| json!({ "five_hour": { "used_percentage": five, "resets_at": 1738425600 + period }, "seven_day": { "used_percentage": week, "resets_at": 1738857600 + period } });
         let shown = |s: &Statusline| (s.view()["rateLimits"][0]["fiveHour"]["usedPercentage"].clone(), s.view()["rateLimits"][0]["sevenDay"]["usedPercentage"].clone());
         let (idle, working) = (status(ID), status("4c21b0c5-8113-4f55-9493-fa156c3fa369"));
         let mut s = Statusline::default();
         let mut old = idle.clone();
-        old["rate_limits"] = limits(93.0, 38.0);
+        old["rate_limits"] = limits(93.0, 38.0, 0);
         s.record(&old, &Value::Null, None, 1000);
         let mut new = working.clone();
-        new["rate_limits"] = limits(1.0, 11.0);
+        new["rate_limits"] = limits(1.0, 11.0, 1000);
         s.record(&new, &Value::Null, None, 2000);
         s.record(&old, &Value::Null, None, 3000);
         assert_eq!(shown(&s), (json!(1.0), json!(11.0)));
@@ -254,9 +283,36 @@ mod tests {
         assert_eq!(s.view()["rateLimits"][0]["at"], 4000);
         // The idle one answers again: it has news now.
         old["context_window"]["total_output_tokens"] = json!(1300);
-        old["rate_limits"] = limits(2.0, 11.0);
+        old["rate_limits"] = limits(2.0, 11.0, 1000);
         s.record(&old, &Value::Null, None, 5000);
         assert_eq!(shown(&s), (json!(2.0), json!(11.0)));
+    }
+
+    /// After Wings restarts every session's first report is new to it, so an idle session's old numbers arrive as
+    /// "news", and a working session that then repeats its own is dropped as no news.
+    #[test]
+    fn a_stale_first_report_does_not_replace_newer_numbers_of_the_same_period() {
+        let limits = |five: f64, week: f64, reset: i64| json!({ "five_hour": { "used_percentage": five, "resets_at": reset }, "seven_day": { "used_percentage": week, "resets_at": 1738857600 } });
+        let shown = |s: &Statusline| (s.view()["rateLimits"][0]["fiveHour"]["usedPercentage"].clone(), s.view()["rateLimits"][0]["sevenDay"]["usedPercentage"].clone());
+        let (working, idle) = (status(ID), status("4c21b0c5-8113-4f55-9493-fa156c3fa369"));
+        let mut s = Statusline::default();
+        let mut new = working.clone();
+        new["rate_limits"] = limits(55.0, 87.0, 1738425600);
+        s.record(&new, &Value::Null, None, 1000);
+        let mut old = idle.clone();
+        old["rate_limits"] = limits(50.0, 85.0, 1738425600);
+        s.record(&old, &Value::Null, None, 2000);
+        s.record(&new, &Value::Null, None, 3000);
+        assert_eq!(shown(&s), (json!(55.0), json!(87.0)));
+        // A report of an older period, after the usage was reset, is not newer either.
+        let mut reset = working.clone();
+        reset["context_window"]["total_output_tokens"] = json!(1300);
+        reset["rate_limits"] = limits(2.0, 88.0, 1738443600);
+        s.record(&reset, &Value::Null, None, 4000);
+        assert_eq!(shown(&s), (json!(2.0), json!(88.0)));
+        old["context_window"]["total_output_tokens"] = json!(1400);
+        s.record(&old, &Value::Null, None, 5000);
+        assert_eq!(shown(&s), (json!(2.0), json!(88.0)));
     }
 
     #[test]
