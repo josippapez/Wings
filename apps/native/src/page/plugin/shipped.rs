@@ -33,14 +33,6 @@ fn load(name: &str) -> Plugin {
     loading::load(&repo_plugin(name)).unwrap_or_else(|error| panic!("{name}: {error}"))
 }
 
-/// The plugin as `load` has it, without checking `minWingsVersion` against the app's: Work item needs `host::view_args`,
-/// which ships in Wings 0.2.21, and this checkout is still 0.2.20. Use `load` once the app's version is bumped.
-fn load_unreleased(name: &str) -> Plugin {
-    let dir = repo_plugin(name);
-    let manifest = serde_json::from_str(&fs::read_to_string(dir.join("wings-plugin.json")).unwrap()).unwrap();
-    Plugin { manifest, dir, icon_svg: None }
-}
-
 /// A frame of a plugin written in Rust, as the app runs it: its committed module, which `sh build-rust.sh` in `plugins/`
 /// builds.
 fn module(name: &str, frame: &str) -> String {
@@ -709,7 +701,7 @@ fn hud_reads_the_transcript_only_for_the_types_its_manifest_names() {
 /// Schedules with its real main and the project `/work/api`, named Api.
 fn schedules_rig() -> (Rig, mpsc::Receiver<String>) {
     // Needs Wings 0.2.21, for `host::view_args`: use `load` once the app's version is bumped.
-    let rig = Rig::with(load_unreleased("schedules"), true, vec![]);
+    let rig = Rig::with(load("schedules"), true, vec![]);
     let work = PathBuf::from("/work/api");
     *rig.env.projects.lock().unwrap() = vec![work.clone()];
     rig.host.publish_projects(vec![Project {
@@ -852,7 +844,7 @@ fn schedules_start_rig(agents_start: bool) -> (Rig, mpsc::Receiver<String>) {
     let repo = crate::projects::test_repo(&dir);
     let file = dir.join("spaces.json");
     std::fs::write(&file, serde_json::to_vec(&json!([{ "id": repo, "name": "Api", "path": repo }])).unwrap()).unwrap();
-    let rig = Rig::with(load_unreleased("schedules"), true, vec![]);
+    let rig = Rig::with(load("schedules"), true, vec![]);
     *rig.env.spaces.lock().unwrap() = crate::projects::Projects::open(Some(file), repo.clone());
     // A pane opens only inside a project, and the app lists the worktrees a start makes by then.
     *rig.env.projects.lock().unwrap() = vec![repo.clone(), dir.join("app-worktrees")];
@@ -1173,7 +1165,7 @@ fn with_fake_pr(name: &str) {
 /// PR tracker in a project that is a git repo on `ada/sync-retry` with a GitHub origin, with the fake `gh` and `az`.
 fn pr_rig() -> (Rig, PathBuf) {
     assert!(std::env::var_os(FAKE_PR).is_some(), "run it through its test, which starts a process with the fake gh and az");
-    let rig = Rig::with(load_unreleased("pr-tracker"), true, vec![]);
+    let rig = Rig::with(load("pr-tracker"), true, vec![]);
     let repo = rig.root.config("pr-tracker").root.join("web");
     fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q"]);
@@ -1544,7 +1536,7 @@ fn pr_tracker_main_offers_sign_in_on_the_badge_when_gh_is_signed_out_with_the_fa
 
 #[test]
 fn pr_tracker_main_starts_in_the_native_host_and_its_settings_page_renders() {
-    let mut plugin = load_unreleased("pr-tracker");
+    let mut plugin = load("pr-tracker");
     // No program runs: the CLIs a real main asks for are refused, as for a plugin that may not run them.
     plugin.manifest.permissions.exec.clear();
     let rig = Rig::with(plugin, true, vec![pane("1", "/work/web")]);
@@ -1648,7 +1640,7 @@ fn with_fake_az(name: &str) {
 /// Work item in a project that is a git repo on `feature/1432-sync` with an Azure DevOps origin, with the fake `az`.
 fn work_item_rig() -> (Rig, PathBuf) {
     assert!(std::env::var_os(FAKE_AZ).is_some(), "run it through its test, which starts a process with the fake az");
-    let rig = Rig::with(load_unreleased("work-item"), true, vec![]);
+    let rig = Rig::with(load("work-item"), true, vec![]);
     let repo = rig.root.config("work-item").root.join("web");
     fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q"]);
@@ -1757,14 +1749,14 @@ fn work_item_tab_shows_the_work_item_its_links_and_history_each_from_its_own_az_
 
 #[test]
 fn work_item_tab_without_a_work_item_says_where_to_open_one() {
-    let rig = Rig::with(load_unreleased("work-item"), true, vec![]);
+    let rig = Rig::with(load("work-item"), true, vec![]);
     let (_page, events) = open_page(&rig.host, &module("work-item", "item"));
     tree(&events, "the empty tab", |tree| tree.text().contains("Open a work item from a pane's badge"));
 }
 
 /// Issues with its real main, in the project `/work/web`.
 fn tasks_rig() -> Rig {
-    let rig = Rig::with(load_unreleased("tasks"), true, vec![]);
+    let rig = Rig::with(load("tasks"), true, vec![]);
     *rig.env.projects.lock().unwrap() = vec![PathBuf::from("/work/web")];
     rig.host.publish_projects(vec![Project {
         id: "/work/web".into(),

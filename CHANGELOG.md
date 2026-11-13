@@ -2,6 +2,16 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.21 · 2026-11-13
+
+- **Every plugin that comes with Wings is written in Rust.** Changes, Work item, Disk usage, Schedules, Issues and PR tracker work as before and run no JavaScript. Needs Changes 0.9.0, Work item 0.12.0, Disk usage 0.3.0, Schedules 0.7.0, Issues 0.27.0 and PR tracker 0.29.0.
+- **A plugin page that stops comes back by itself.** A popover, tab or window page that stopped stayed dead, and a sidebar's needed its Reload pressed. Any page now starts again after two seconds, and Reload does it at once.
+- **Wings keeps a record of why a plugin stopped**, in `plugins.log` beside its other files.
+- **The HUD's limits stay current.** With several Claude sessions open, one that had been idle since your limits were reset kept putting its old numbers back. The HUD now follows the session that answered last.
+- **An agent's row in the sidebar opens it** while the one-off terminal is shown. The click did nothing.
+- **Schedules asks before an agent starts a ticket.** An agent's start tool made a worktree and opened an agent without asking. It now waits for your Allow in a dialog. An assigned entry has an option to let agents start its tickets without asking.
+- **Disk usage moves to the Trash only what you were shown.** Something added to the Collector after you chose Move to Trash stays for the next look.
+
 ## 0.2.20 · 2026-11-12
 
 - **Sessions on one Claude login show the same limits.** With the same login in two account folders, like the default one and a named account, the HUD could show an old reading for one of them. Wings now gives every folder signed in to that login the newest limits any of them reported.
