@@ -2,6 +2,19 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.22 · 2026-11-13
+
+- **Wings runs no JavaScript.** Plugins run as WebAssembly only, and the JavaScript engine is gone from the app. A plugin that only has a JavaScript build says "Built for JavaScript" in Settings, Plugins and in the sidebar, and needs an update. Sprint board 0.11.0 and Claude accounts 0.4.0 are written in Rust.
+- **The HUD's limits are live.** Wings asks Anthropic for each signed-in account's usage every 5 seconds while it's in front, as Claude Code's /usage does, instead of waiting for a session to report. An account whose sign-in has expired keeps the numbers its sessions report.
+- **The first launch offers the official plugins.** A new install asks once whether to install them, and each one still asks for your approval.
+- **Pull requests can be turned off for one project.** A project's menu has a check for each section a plugin adds under it. With Pull requests off, PR tracker doesn't look the project up at all. Needs PR tracker 0.30.0.
+- **The commit graph can show in the Changes sidebar**, beside the files, with a button that opens it in its own window. A narrow sidebar drops the author and then the date. Needs Changes 0.10.0.
+- **A plugin's page opens in its own window when it's built to WebAssembly.** The Changes graph window didn't open.
+- **A diff that fills the window starts its title right of the window buttons**, not under them.
+- **Plugin buttons and text can have a hover text.** Claude accounts gets its tooltips back.
+- **A plugin page's toolbar no longer cuts off its buttons.** Too narrow for them, they move to a second line.
+- **Without the Issues plugin, the Issues tab says so** and opens Settings on Plugins. The old built-in Issues screen and its `--issues-storage-root` and `--issues-scope` options are gone.
+
 ## 0.2.21 · 2026-11-13
 
 - **Every plugin that comes with Wings is written in Rust.** Changes, Work item, Disk usage, Schedules, Issues and PR tracker work as before and run no JavaScript. Needs Changes 0.9.0, Work item 0.12.0, Disk usage 0.3.0, Schedules 0.7.0, Issues 0.27.0 and PR tracker 0.29.0.
