@@ -65,13 +65,10 @@ impl Workspace {
             .file_stem()
             .and_then(|stem| stem.to_str())
             .ok_or("The view has no native page")?;
-        let file = wings_plugins::loading::resolve(
-            &installed.plugin.dir,
-            &format!("dist/native/{stem}.js"),
-        )
-        .filter(|file| file.is_file())
-        .ok_or("The view has no native window page")?;
-        let source = std::fs::read_to_string(file).map_err(|error| error.to_string())?;
+        let file = crate::installed::frame_file(&installed.plugin.dir, stem)
+            .ok_or("The view has no native window page")?;
+        let source = crate::installed::page_source(&installed.plugin.dir, &file, None)
+            .map_err(|error| error.to_string())?;
         let title = view.title.clone();
         let (width, height) = (view.width.unwrap_or(1100), view.height.unwrap_or(760));
         self.show_plugin_window(key, plugin, &source, title, (width, height), cx)

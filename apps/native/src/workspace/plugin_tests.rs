@@ -214,8 +214,7 @@ fn graph_default_open_view_uses_an_owned_native_window_with_local_focus_and_clea
         "views": [{ "id":"graph", "title":"Commit graph", "page":"dist/graph.html", "opens":["window","modal"], "width":1100, "height":760 }],
         "sidebars": [{"id":"changes","title":"Changes","page":"dist/sidebar.html"}]
     } }), &graph_main(),
-        // A window's page is read from `dist/native/graph.js` alone (`plugin_windows.rs`), so this one stays a script.
-        &[("graph", "wings.onFocus(({focused})=>wings.storage.set('graph',focused));"), ("sidebar", &saves_focus("sidebar"))], "graph-scope");
+        &[("graph", &saves_focus("graph")), ("sidebar", &saves_focus("sidebar"))], "graph-scope");
     let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
     window.update(|w, window, cx| {
         window.activate_window();

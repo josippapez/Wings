@@ -129,7 +129,7 @@ fn native_file(dir: &Path, name: &str) -> Option<PathBuf> {
 
 /// A frame's native build in the plugin in `dir`: `dist/native/<name>.js`, or for one written in Rust alone
 /// `dist/native/<name>.wasm`. `page_source` says which of the two runs.
-fn frame_file(dir: &Path, name: &str) -> Option<PathBuf> {
+pub(crate) fn frame_file(dir: &Path, name: &str) -> Option<PathBuf> {
     native_file(dir, name).or_else(|| {
         loading::resolve(dir, &format!("{NATIVE_DIR}/{name}.wasm")).filter(|file| file.is_file())
     })
