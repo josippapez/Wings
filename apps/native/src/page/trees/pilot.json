@@ -1,0 +1,139 @@
+{
+  "id": 0,
+  "type": "#root",
+  "props": {
+    "fill": true
+  },
+  "children": [
+    {
+      "id": 17,
+      "type": "Page",
+      "props": {},
+      "children": [
+        {
+          "id": 7,
+          "type": "Slot",
+          "props": {
+            "name": "toolbar"
+          },
+          "children": [
+            {
+              "id": 6,
+              "type": "Toolbar",
+              "props": {},
+              "children": [
+                {
+                  "id": 2,
+                  "type": "Slot",
+                  "props": {
+                    "name": "title"
+                  },
+                  "children": [
+                    {
+                      "id": 1,
+                      "type": "#text",
+                      "text": "Pilot"
+                    }
+                  ]
+                },
+                {
+                  "id": 5,
+                  "type": "Slot",
+                  "props": {
+                    "name": "actions"
+                  },
+                  "children": [
+                    {
+                      "id": 4,
+                      "type": "Badge",
+                      "props": {
+                        "tone": "info"
+                      },
+                      "children": [
+                        {
+                          "id": 3,
+                          "type": "#text",
+                          "text": "Starting"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": 16,
+          "type": "Slot",
+          "props": {
+            "name": "body"
+          },
+          "children": [
+            {
+              "id": 15,
+              "type": "Stack",
+              "props": {
+                "gap": "l"
+              },
+              "children": [
+                {
+                  "id": 12,
+                  "type": "Row",
+                  "props": {
+                    "gap": "m"
+                  },
+                  "children": [
+                    {
+                      "id": 9,
+                      "type": "Button",
+                      "props": {
+                        "onClick": "9:onClick"
+                      },
+                      "children": [
+                        {
+                          "id": 8,
+                          "type": "#text",
+                          "text": "Increment"
+                        }
+                      ]
+                    },
+                    {
+                      "id": 11,
+                      "type": "Text",
+                      "props": {
+                        "weight": "medium"
+                      },
+                      "children": [
+                        {
+                          "id": 10,
+                          "type": "#text",
+                          "text": "Count: 0"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": 14,
+                  "type": "Text",
+                  "props": {
+                    "tone": "muted",
+                    "size": "small"
+                  },
+                  "children": [
+                    {
+                      "id": 13,
+                      "type": "#text",
+                      "text": "This page is React running in the app's own JS engine. The app draws what it renders and sends clicks back."
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

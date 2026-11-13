@@ -2,46 +2,234 @@
 
 use super::{
     plugin::{PluginHost, tests::Root},
+    runtime::{
+        Store,
+        fake::{self, Cx, Guest},
+    },
     tree::{Level, Node, Tree},
     view::{PageView, baseline_drops, level_color, three_lines},
 };
 use crate::theme;
-use gpui::{Keystroke, MouseButton, TestApp, TestAppWindow, point, px};
+use gpui::{Global, Keystroke, MouseButton, TestApp, TestAppWindow, point, px};
+use serde_json::{Value, json};
 use std::{
     sync::Arc,
     thread,
     time::{Duration, Instant},
 };
 
-const PILOT: &str = include_str!("../../pages/dist/pilot.js");
-const COMPONENTS: &str = include_str!("../../pages/dist/components-page.js");
-const FIXTURE_MAIN: &str = include_str!("../../pages/dist/fixture-main.js");
-const FIXTURE_PAGE: &str = include_str!("../../pages/dist/fixture-page.js");
-
-const GRAPH: &str = r#"
-let selected = -1, offset = 0, end = 64, requests = 0;
-function render() {
-  const rows = Array.from({length:end-offset}, (_,i)=>({hash:String(offset+i), subject:'Commit '+(offset+i), author:'Ada', date:'2026-11-06', refs:[], lane:0, color:0, merge:false, lines:[0,0,2,0]}));
-  wings.render(JSON.stringify({id:0,type:'#root',children:[{id:1,type:'Page',children:[{id:2,type:'Slot',props:{name:'body'},children:[
-    {id:3,type:'Text',children:[{id:4,type:'#text',text:'Selected '+selected+', requests '+requests}]},
-    {id:5,type:'Graph',props:{total:10000,lanes:1,selected,offset,rows,onRangeChange:'5:range',onSelect:'5:select'}}
-  ]}],props:{flush:true}}]}));
+/// A text node.
+fn text_node(id: usize, text: &str) -> Value {
+    json!({ "id": id, "type": "#text", "text": text })
 }
-globalThis.__wingsEvent=(handler,json)=>{ const e=JSON.parse(json); if(handler==='5:range'){offset=e.start;end=e.end;requests++;}else selected=e.index;render();return true;};
-render();
-"#;
 
-const SEARCH: &str = r#"
-let query = '';
-function render(){wings.render(JSON.stringify({id:0,type:'#root',props:{fill:true},children:[{id:1,type:'Page',children:[{id:2,type:'Slot',props:{name:'body'},children:[
-{id:3,type:'SearchField',props:{label:'Search commits',placeholder:'Search commits',onInput:'3:input'}},
-{id:4,type:'Text',children:[{id:5,type:'#text',text:'Query='+query}]}]}]}]}));}
-globalThis.__wingsEvent=(_,json)=>{query=JSON.parse(json).value;render();return true;};render();
-"#;
+/// A `Text` of one string.
+fn text(id: usize, text_id: usize, text: String) -> Value {
+    json!({ "id": id, "type": "Text", "children": [text_node(text_id, &text)] })
+}
+
+/// A page that draws `tree` from the number of events it has heard.
+fn counting(tree: impl Fn(u32) -> Value + Clone + Send + Sync + 'static) -> String {
+    let mut heard = 0;
+    fake::page("page", move |event| {
+        heard += u32::from(event.is_some());
+        tree(heard)
+    })
+}
+
+/// The number in a handler such as `102:onClick`.
+fn number(handler: &str) -> usize {
+    handler.split(':').next().unwrap().parse().unwrap()
+}
+
+/// The node `id` of `tree`.
+fn node(tree: &mut Value, id: u64) -> &mut Value {
+    find(tree, id).unwrap()
+}
+
+fn find(tree: &mut Value, id: u64) -> Option<&mut Value> {
+    if tree["id"] == id {
+        return Some(tree);
+    }
+    tree.get_mut("children")?
+        .as_array_mut()?
+        .iter_mut()
+        .find_map(|child| find(child, id))
+}
+
+/// The pilot page as React drew it (`trees/pilot.json`): "Starting" at first, then "Ready" once it had mounted, and a
+/// count that its button adds one to.
+fn pilot() -> String {
+    struct Pilot {
+        ready: bool,
+        count: u32,
+    }
+    impl Pilot {
+        fn draw(&self, cx: &mut Cx<'_>) {
+            let mut tree: Value = serde_json::from_str(include_str!("trees/pilot.json")).unwrap();
+            node(&mut tree, 10)["text"] = format!("Count: {}", self.count).into();
+            if self.ready {
+                node(&mut tree, 3)["text"] = "Ready".into();
+                node(&mut tree, 4)["props"]["tone"] = "success".into();
+            }
+            cx.render(&tree);
+        }
+    }
+    impl Guest for Pilot {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            self.draw(cx);
+            cx.later(1);
+        }
+        fn event(&mut self, cx: &mut Cx<'_>, _handler: &str, _payload: &Value) {
+            self.count += 1;
+            self.draw(cx);
+        }
+        fn timer(&mut self, cx: &mut Cx<'_>, _id: u32) {
+            self.ready = true;
+            self.draw(cx);
+        }
+    }
+    fake::source("page", || {
+        Box::new(Pilot {
+            ready: false,
+            count: 0,
+        })
+    })
+}
+
+/// The components page as React drew it (`trees/components.json`), with what its two buttons have counted and what its
+/// select was set to.
+fn components() -> String {
+    let (mut session, mut refreshed, mut retried) = ("web".to_owned(), 0, 0);
+    fake::page("page", move |event| {
+        match event {
+            Some(("9:onClick", _)) => refreshed += 1,
+            Some(("30:onClick", _)) => retried += 1,
+            Some(("13:onChange", change)) => {
+                session = change["value"].as_str().unwrap_or_default().to_owned()
+            }
+            _ => {}
+        }
+        let mut tree: Value = serde_json::from_str(include_str!("trees/components.json")).unwrap();
+        node(&mut tree, 10)["text"] =
+            format!("Session {session}, refreshed {refreshed}, retried {retried}").into();
+        node(&mut tree, 13)["props"]["value"] = session.clone().into();
+        tree
+    })
+}
+
+/// The fixture plugin's page: the count its main keeps, and a button that asks main to add one.
+fn fixture_page() -> String {
+    struct Page(Option<u64>);
+    impl Page {
+        fn draw(&self, cx: &mut Cx<'_>) {
+            let count = self
+                .0
+                .map_or("Loading…".to_owned(), |count| format!("Count: {count}"));
+            cx.render(&json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+                { "id": 15, "type": "Page", "props": {}, "children": [
+                    { "id": 7, "type": "Slot", "props": { "name": "toolbar" }, "children": [
+                        { "id": 6, "type": "Toolbar", "props": {}, "children": [
+                            { "id": 2, "type": "Slot", "props": { "name": "title" }, "children": [text_node(1, "Fixture")] },
+                            { "id": 5, "type": "Slot", "props": { "name": "actions" }, "children": [
+                                { "id": 4, "type": "Badge", "props": { "tone": "success" }, "children": [text_node(3, "Plugin")] }] }] }] },
+                    { "id": 14, "type": "Slot", "props": { "name": "body" }, "children": [
+                        { "id": 13, "type": "Stack", "props": { "gap": "l" }, "children": [
+                            { "id": 12, "type": "Row", "props": { "gap": "m" }, "children": [
+                                { "id": 9, "type": "Button", "props": { "onClick": "9:onClick" }, "children": [text_node(8, "Increment")] },
+                                { "id": 11, "type": "Text", "props": { "weight": "medium" }, "children": [text_node(10, &count)] }] }] }] }] }] }));
+        }
+    }
+    impl Guest for Page {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            self.draw(cx);
+            cx.link()
+                .broadcast(json!({ "ask": "count" }).to_string())
+                .unwrap();
+        }
+        fn event(&mut self, cx: &mut Cx<'_>, _handler: &str, _payload: &Value) {
+            cx.link()
+                .broadcast(json!({ "ask": "increment" }).to_string())
+                .unwrap();
+        }
+        fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, _id: u32, text: &str) {
+            let heard: Value = serde_json::from_str(text).unwrap_or_default();
+            if let (true, Some(count)) = (kind == "broadcast", heard["count"].as_u64()) {
+                self.0 = Some(count);
+                self.draw(cx);
+            }
+        }
+    }
+    fake::source("page", || Box::new(Page(None)))
+}
+
+/// The fixture plugin's main: a count kept in storage, which it broadcasts when asked for it or to add one to it.
+fn fixture_main() -> String {
+    struct Main;
+    impl Guest for Main {
+        fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, _id: u32, text: &str) {
+            let heard: Value = serde_json::from_str(text).unwrap_or_default();
+            if kind != "broadcast" || heard["ask"].is_null() {
+                return;
+            }
+            let link = cx.link();
+            let saved: Value =
+                serde_json::from_str(&link.storage(Store::Get("count".into())).unwrap()).unwrap();
+            let mut count = saved.as_u64().unwrap_or(0);
+            if heard["ask"] == "increment" {
+                count += 1;
+                link.storage(Store::Set("count".into(), count.to_string()))
+                    .unwrap();
+            }
+            link.broadcast(json!({ "count": count }).to_string())
+                .unwrap();
+        }
+    }
+    fake::source("main", || Box::new(Main))
+}
+
+fn graph() -> String {
+    let (mut selected, mut offset, mut end, mut requests) = (-1_i64, 0_u64, 64_u64, 0);
+    fake::page("page", move |event| {
+        match event {
+            Some(("5:range", range)) => {
+                offset = range["start"].as_u64().unwrap();
+                end = range["end"].as_u64().unwrap();
+                requests += 1;
+            }
+            Some((_, pick)) => selected = pick["index"].as_i64().unwrap(),
+            None => {}
+        }
+        let rows: Vec<Value> = (offset..end)
+            .map(|i| {
+                json!({ "hash": i.to_string(), "subject": format!("Commit {i}"), "author": "Ada", "date": "2026-11-06",
+                    "refs": [], "lane": 0, "color": 0, "merge": false, "lines": [0, 0, 2, 0] })
+            })
+            .collect();
+        json!({ "id": 0, "type": "#root", "children": [{ "id": 1, "type": "Page", "props": { "flush": true }, "children": [
+            { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [
+                text(3, 4, format!("Selected {selected}, requests {requests}")),
+                { "id": 5, "type": "Graph", "props": { "total": 10000, "lanes": 1, "selected": selected, "offset": offset,
+                    "rows": rows, "onRangeChange": "5:range", "onSelect": "5:select" } }] }] }] })
+    })
+}
+
+fn search() -> String {
+    let mut query = String::new();
+    fake::page("page", move |event| {
+        if let Some((_, input)) = event {
+            query = input["value"].as_str().unwrap_or_default().to_owned();
+        }
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Page", "children": [
+            { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [
+                { "id": 3, "type": "SearchField", "props": { "label": "Search commits", "placeholder": "Search commits", "onInput": "3:input" } },
+                text(4, 5, format!("Query={query}")) ] }] }] })
+    })
+}
 
 #[test]
 fn search_field_physical_input_reaches_the_query_and_backspace_edits_it() {
-    let (app, mut window) = open(SEARCH);
+    let (app, mut window) = open(search());
     settle(&app, &mut window, shows("Query="));
     window.simulate_click(point(px(70.0), px(27.0)), MouseButton::Left);
     window.simulate_input("coupon");
@@ -50,27 +238,66 @@ fn search_field_physical_input_reaches_the_query_and_backspace_edits_it() {
     settle(&app, &mut window, shows("Query=coupo"));
 }
 
-const FORM: &str = r#"
-let name = 'x', note = '';
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[{id:1,type:'Page',children:[{id:2,type:'Slot',props:{name:'body'},children:[
-{id:3,type:'TextInput',props:{label:'Name',value:name,maxLength:5,onChange:'3:change'}},
-{id:4,type:'Textarea',props:{label:'Note',rows:3,value:note,onChange:'4:change'}},
-{id:5,type:'Text',children:[{id:6,type:'#text',text:'Name='+name+' Note='+JSON.stringify(note)}]}]}]}]}));}
-globalThis.__wingsEvent=(handler,json)=>{const v=JSON.parse(json).value;if(handler==='3:change')name=v;else note=v;render();return true;};render();
-"#;
+fn form() -> String {
+    let (mut name, mut note) = ("x".to_owned(), String::new());
+    fake::page("page", move |event| {
+        if let Some((handler, change)) = event {
+            let value = change["value"].as_str().unwrap_or_default().to_owned();
+            if handler == "3:change" {
+                name = value
+            } else {
+                note = value
+            }
+        }
+        json!({ "id": 0, "type": "#root", "children": [{ "id": 1, "type": "Page", "children": [
+            { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [
+                { "id": 3, "type": "TextInput", "props": { "label": "Name", "value": name, "maxLength": 5, "onChange": "3:change" } },
+                { "id": 4, "type": "Textarea", "props": { "label": "Note", "rows": 3, "value": note, "onChange": "4:change" } },
+                text(5, 6, format!("Name={name} Note={}", json!(note))) ] }] }] })
+    })
+}
 
 /// A page that renders each value it hears a while later, as a busy page does.
-const SLOW_FORM: &str = r#"
-let name = '';
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[{id:1,type:'Page',children:[{id:2,type:'Slot',props:{name:'body'},children:[
-{id:3,type:'TextInput',props:{label:'Name',value:name,onChange:'3:change'}},
-{id:5,type:'Text',children:[{id:6,type:'#text',text:'Name='+name+'.'}]}]}]}]}));}
-globalThis.__wingsEvent=(_,json)=>{const v=JSON.parse(json).value;setTimeout(()=>{name=v;render();},60);return true;};render();
-"#;
+fn slow_form() -> String {
+    struct Slow {
+        name: String,
+        heard: Vec<(u32, String)>,
+    }
+    impl Slow {
+        fn draw(&self, cx: &mut Cx<'_>) {
+            cx.render(&json!({ "id": 0, "type": "#root", "children": [{ "id": 1, "type": "Page", "children": [
+                { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [
+                    { "id": 3, "type": "TextInput", "props": { "label": "Name", "value": self.name, "onChange": "3:change" } },
+                    text(5, 6, format!("Name={}.", self.name)) ] }] }] }));
+        }
+    }
+    impl Guest for Slow {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            self.draw(cx);
+        }
+        fn event(&mut self, cx: &mut Cx<'_>, _handler: &str, payload: &Value) {
+            let id = cx.later(60);
+            self.heard
+                .push((id, payload["value"].as_str().unwrap_or_default().to_owned()));
+        }
+        fn timer(&mut self, cx: &mut Cx<'_>, id: u32) {
+            if let Some(at) = self.heard.iter().position(|(heard, _)| *heard == id) {
+                self.name = self.heard.remove(at).1;
+                self.draw(cx);
+            }
+        }
+    }
+    fake::source("page", || {
+        Box::new(Slow {
+            name: String::new(),
+            heard: Vec::new(),
+        })
+    })
+}
 
 #[test]
 fn a_page_that_gives_typed_text_back_late_does_not_undo_the_keys_typed_since() {
-    let (app, mut window) = open(SLOW_FORM);
+    let (app, mut window) = open(slow_form());
     settle(&app, &mut window, shows("Name=."));
     window.update(|_, window, cx| window.focus_next(cx));
     window.draw();
@@ -86,7 +313,7 @@ fn a_page_that_gives_typed_text_back_late_does_not_undo_the_keys_typed_since() {
 
 #[test]
 fn form_inputs_start_from_the_pages_text_stop_at_their_max_length_and_a_textarea_takes_enter() {
-    let (app, mut window) = open(FORM);
+    let (app, mut window) = open(form());
     settle(&app, &mut window, shows("Name=x "));
     window.update(|_, window, cx| window.focus_next(cx));
     window.draw();
@@ -101,18 +328,28 @@ fn form_inputs_start_from_the_pages_text_stop_at_their_max_length_and_a_textarea
 }
 
 /// Cyclops' manual entry: a start and an end, `type="time"`.
-const TIMES: &str = r#"
-let start = '', end = '';
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[{id:1,type:'Page',children:[{id:2,type:'Slot',props:{name:'body'},children:[
-{id:3,type:'TextInput',props:{label:'Start',type:'time',value:start,onChange:'3:change'}},
-{id:4,type:'TextInput',props:{label:'End',type:'time',value:end,onChange:'4:change'}},
-{id:5,type:'Text',children:[{id:6,type:'#text',text:'Start='+start+' End='+end+'.'}]}]}]}]}));}
-globalThis.__wingsEvent=(handler,json)=>{const v=JSON.parse(json).value;if(handler==='3:change')start=v;else end=v;render();return true;};render();
-"#;
+fn times() -> String {
+    let (mut start, mut end) = (String::new(), String::new());
+    fake::page("page", move |event| {
+        if let Some((handler, change)) = event {
+            let value = change["value"].as_str().unwrap_or_default().to_owned();
+            if handler == "3:change" {
+                start = value
+            } else {
+                end = value
+            }
+        }
+        json!({ "id": 0, "type": "#root", "children": [{ "id": 1, "type": "Page", "children": [
+            { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [
+                { "id": 3, "type": "TextInput", "props": { "label": "Start", "type": "time", "value": start, "onChange": "3:change" } },
+                { "id": 4, "type": "TextInput", "props": { "label": "End", "type": "time", "value": end, "onChange": "4:change" } },
+                text(5, 6, format!("Start={start} End={end}.")) ] }] }] })
+    })
+}
 
 #[test]
 fn time_fields_take_digits_and_tab_goes_between_them() {
-    let (app, mut window) = open(TIMES);
+    let (app, mut window) = open(times());
     settle(&app, &mut window, shows("Start= End=."));
     window.update(|_, window, cx| window.focus_next(cx));
     window.draw();
@@ -136,7 +373,7 @@ fn time_fields_take_digits_and_tab_goes_between_them() {
 
 #[test]
 fn search_field_can_be_reached_with_tab() {
-    let (app, mut window) = open(SEARCH);
+    let (app, mut window) = open(search());
     settle(&app, &mut window, shows("Query="));
     window.update(|_, window, cx| window.focus_next(cx));
     window.draw();
@@ -157,7 +394,7 @@ fn key(window: &mut View, key: &'static str) {
 
 #[test]
 fn graph_virtualizes_ten_thousand_commits_and_keyboard_scrolls_before_opening() {
-    let (app, mut window) = open(GRAPH);
+    let (app, mut window) = open(graph());
     settle(&app, &mut window, |view| {
         view.graph_window()
             .is_some_and(|(_, _, n)| n > 0 && n <= 256)
@@ -193,20 +430,21 @@ fn graph_virtualizes_ten_thousand_commits_and_keyboard_scrolls_before_opening() 
 type View = TestAppWindow<PageView>;
 
 /// Two buttons, one in the top left corner of the page and one in the top right, and the presses each has heard.
-/// `PROPS` is what `mount` puts on the root.
-macro_rules! corners {
-    ($props:literal) => {
-        concat!(
-            "let left = 0, right = 0;\n",
-            "function render(){wings.render(JSON.stringify({id:0,type:'#root',props:",
-            $props,
-            ",children:[{id:1,type:'Row',props:{justify:'between'},children:[",
-            "{id:2,type:'Button',props:{onClick:'2:click'},children:[{id:3,type:'#text',text:'Left'}]},",
-            "{id:4,type:'Button',props:{onClick:'4:click'},children:[{id:5,type:'#text',text:'Right'}]}]},",
-            "{id:6,type:'Text',children:[{id:7,type:'#text',text:'Pressed '+left+' '+right+'.'}]}]}));}\n",
-            "globalThis.__wingsEvent=(handler)=>{if(handler==='2:click')left++;else right++;render();return true;};render();",
-        )
-    };
+/// `props` is what `mount` puts on the root.
+fn corners(props: Value) -> String {
+    let (mut left, mut right) = (0, 0);
+    fake::page("page", move |event| {
+        match event {
+            Some(("2:click", _)) => left += 1,
+            Some(_) => right += 1,
+            None => {}
+        }
+        json!({ "id": 0, "type": "#root", "props": props, "children": [
+            { "id": 1, "type": "Row", "props": { "justify": "between" }, "children": [
+                { "id": 2, "type": "Button", "props": { "onClick": "2:click" }, "children": [text_node(3, "Left")] },
+                { "id": 4, "type": "Button", "props": { "onClick": "4:click" }, "children": [text_node(5, "Right")] }] },
+            text(6, 7, format!("Pressed {left} {right}.")) ] })
+    })
 }
 
 /// Clicks `inset` points in from the top left and the top right corners of the window.
@@ -222,7 +460,7 @@ fn click_corners(app: &TestApp, window: &mut View, inset: f32) {
 
 #[test]
 fn a_fill_page_has_no_padding_and_fills_the_frame_edge_to_edge() {
-    let (app, mut window) = open(corners!("{fill:true}"));
+    let (app, mut window) = open(corners(json!({ "fill": true })));
     settle(&app, &mut window, shows("Pressed 0 0."));
     // 2pt in from either top corner is already on a button: nothing pads the page, and it spans the window's width.
     click_corners(&app, &mut window, 2.0);
@@ -231,7 +469,7 @@ fn a_fill_page_has_no_padding_and_fills_the_frame_edge_to_edge() {
 
 #[test]
 fn a_page_that_does_not_fill_keeps_the_desktops_14pt_padding() {
-    let (app, mut window) = open(corners!("{}"));
+    let (app, mut window) = open(corners(json!({})));
     settle(&app, &mut window, shows("Pressed 0 0."));
     // plugin-ui.css's `.w-shell { padding: 14px }`: the corners themselves are padding, and just inside it are the buttons.
     click_corners(&app, &mut window, 2.0);
@@ -247,11 +485,13 @@ fn a_popover_page_has_the_desktops_popover_shell() {
     let at = |popover: bool| {
         let mut app = TestApp::new();
         app.background_executor().allow_parking();
+        let host = hosted(&mut app);
+        let source = corners(json!({}));
         let mut window = app.open_window(move |_, cx| {
             if popover {
-                PageView::new_popover(corners!("{}"), cx)
+                PageView::in_plugin_popover(&host, &source, cx)
             } else {
-                PageView::new(corners!("{}"), cx)
+                PageView::in_plugin(&host, &source, cx)
             }
         });
         settle(&app, &mut window, shows("Pressed 0 0."));
@@ -266,22 +506,29 @@ fn a_popover_page_has_the_desktops_popover_shell() {
 }
 
 /// Thirty lines, then a field that takes the keyboard: Cyclops' entry edit form, opened below the fold.
-const FOCUS_BELOW: &str = r#"
-const lines = Array.from({length:30}, (_,i)=>({id:10+i,type:'Text',children:[{id:100+i,type:'#text',text:'Line '+i}]}));
-wings.render(JSON.stringify({id:0,type:'#root',children:[...lines,{id:5,type:'TextInput',props:{label:'Task',value:'Code review',autoFocus:true}}]}));
-"#;
+fn focus_below() -> String {
+    fake::page("page", |_| {
+        let mut children: Vec<Value> = (0..30)
+            .map(|i| text(10 + i, 100 + i, format!("Line {i}")))
+            .collect();
+        children.push(json!({ "id": 5, "type": "TextInput", "props": { "label": "Task", "value": "Code review", "autoFocus": true } }));
+        json!({ "id": 0, "type": "#root", "children": children })
+    })
+}
 
 #[test]
 fn a_field_that_takes_the_keyboard_below_the_fold_is_scrolled_into_view() {
     let mut app = TestApp::new();
     app.background_executor().allow_parking();
+    let host = hosted(&mut app);
+    let source = focus_below();
     let bounds = gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(400.0), px(300.0)));
     let mut window = app.open_window_with_options(
         gpui::WindowOptions {
             window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
             ..Default::default()
         },
-        |_, cx| PageView::new(FOCUS_BELOW, cx),
+        |_, cx| PageView::in_plugin(&host, &source, cx),
     );
     settle(&app, &mut window, shows("Line 29"));
     for _ in 0..5 {
@@ -293,15 +540,21 @@ fn a_field_that_takes_the_keyboard_below_the_fold_is_scrolled_into_view() {
 }
 
 /// Two buttons at either end of a 720pt column, the desktop's Schedules form, on a page that fills its frame.
-const COLUMN: &str = r#"
-let left = 0, right = 0;
-function render(){wings.render(JSON.stringify({id:0,type:'#root',props:{fill:true},children:[{id:1,type:'Stack',props:{maxWidth:720},children:[
-{id:2,type:'Row',props:{justify:'between'},children:[
-{id:3,type:'Button',props:{onClick:'3:click'},children:[{id:4,type:'#text',text:'Left'}]},
-{id:5,type:'Button',props:{onClick:'5:click'},children:[{id:6,type:'#text',text:'Right'}]}]},
-{id:7,type:'Text',children:[{id:8,type:'#text',text:'Pressed '+left+' '+right+'.'}]}]}]}));}
-globalThis.__wingsEvent=(handler)=>{if(handler==='3:click')left++;else right++;render();return true;};render();
-"#;
+fn column() -> String {
+    let (mut left, mut right) = (0, 0);
+    fake::page("page", move |event| {
+        match event {
+            Some(("3:click", _)) => left += 1,
+            Some(_) => right += 1,
+            None => {}
+        }
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Stack", "props": { "maxWidth": 720 }, "children": [
+            { "id": 2, "type": "Row", "props": { "justify": "between" }, "children": [
+                { "id": 3, "type": "Button", "props": { "onClick": "3:click" }, "children": [text_node(4, "Left")] },
+                { "id": 5, "type": "Button", "props": { "onClick": "5:click" }, "children": [text_node(6, "Right")] }] },
+            text(7, 8, format!("Pressed {left} {right}.")) ] }] })
+    })
+}
 
 /// Clicks 6pt from the top at each of `xs`.
 fn click_along(app: &TestApp, window: &mut View, xs: [f32; 2]) {
@@ -315,7 +568,7 @@ fn click_along(app: &TestApp, window: &mut View, xs: [f32; 2]) {
 
 #[test]
 fn a_stack_with_a_max_width_is_a_centred_column_that_narrow_frames_fill() {
-    let (app, mut window) = open(COLUMN);
+    let (app, mut window) = open(column());
     settle(&app, &mut window, shows("Pressed 0 0."));
     let width = window.update(|_, window, _| window.viewport_size().width.as_f32());
     assert!(width > 800.0, "the window is narrower than the column");
@@ -329,13 +582,15 @@ fn a_stack_with_a_max_width_is_a_centred_column_that_narrow_frames_fill() {
     // In a window narrower than the column, it takes the whole width.
     let mut app = TestApp::new();
     app.background_executor().allow_parking();
+    let host = hosted(&mut app);
+    let source = column();
     let bounds = gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(640.0), px(400.0)));
     let mut window = app.open_window_with_options(
         gpui::WindowOptions {
             window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
             ..Default::default()
         },
-        |_, cx| PageView::new(COLUMN, cx),
+        |_, cx| PageView::in_plugin(&host, &source, cx),
     );
     settle(&app, &mut window, shows("Pressed 0 0."));
     assert_eq!(
@@ -347,18 +602,22 @@ fn a_stack_with_a_max_width_is_a_centred_column_that_narrow_frames_fill() {
 }
 
 /// A list row opened to a card of three lines, as Session detail's activity rows open to their detail.
-const OPENED_ROW: &str = r#"
-let opened = 0;
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[{id:1,type:'List',children:[{id:2,type:'ListItem',children:[
-{id:3,type:'ListButton',props:{onClick:'3:click','aria-expanded':true},children:[{id:4,type:'Text',children:[{id:5,type:'#text',text:'pnpm test'}]}]},
-{id:6,type:'Card',children:[1,2,3].map(i=>({id:10+i,type:'Text',children:[{id:20+i,type:'#text',text:'Detail line '+i}]}))}]}]},
-{id:7,type:'Text',children:[{id:8,type:'#text',text:'Opened '+opened+'.'}]}]}));}
-globalThis.__wingsEvent=()=>{opened++;render();return true;};render();
-"#;
+fn opened_row() -> String {
+    counting(|opened| {
+        let detail: Vec<Value> = (1..=3)
+            .map(|i| text(10 + i, 20 + i, format!("Detail line {i}")))
+            .collect();
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "List", "children": [{ "id": 2, "type": "ListItem", "children": [
+                { "id": 3, "type": "ListButton", "props": { "onClick": "3:click", "aria-expanded": true }, "children": [text(4, 5, "pnpm test".into())] },
+                { "id": 6, "type": "Card", "children": detail }] }] },
+            text(7, 8, format!("Opened {opened}.")) ] })
+    })
+}
 
 #[test]
 fn a_row_opened_to_a_card_keeps_its_whole_line() {
-    let (app, mut window) = open(OPENED_ROW);
+    let (app, mut window) = open(opened_row());
     settle(&app, &mut window, shows("Opened 0."));
     let width = window.update(|_, window, _| window.viewport_size().width.as_f32());
     // The row's own line reaches the far end: beside it was the card, which took that end and pushed the row down to
@@ -367,10 +626,32 @@ fn a_row_opened_to_a_card_keeps_its_whole_line() {
     settle(&app, &mut window, shows("Opened 1."));
 }
 
-fn open(source: &'static str) -> (TestApp, View) {
+/// The plugin a page runs in and the folder of its storage, which the app keeps for as long as it runs.
+struct Hosted {
+    _host: Arc<PluginHost>,
+    _root: Root,
+}
+
+impl Global for Hosted {}
+
+/// A plugin that runs as long as `app` does, for a page to open in.
+fn hosted(app: &mut TestApp) -> Arc<PluginHost> {
+    let root = Root::new();
+    let host = Arc::new(PluginHost::new(root.config("fixture")));
+    app.update(|cx| {
+        cx.set_global(Hosted {
+            _host: host.clone(),
+            _root: root,
+        })
+    });
+    host
+}
+
+fn open(source: String) -> (TestApp, View) {
     let mut app = TestApp::new();
     app.background_executor().allow_parking();
-    let window = app.open_window(move |_, cx| PageView::new(source, cx));
+    let host = hosted(&mut app);
+    let window = app.open_window(move |_, cx| PageView::in_plugin(&host, &source, cx));
     (app, window)
 }
 
@@ -398,7 +679,7 @@ const PILOT_BUTTON: (f32, f32) = (22.0, 74.0);
 
 #[test]
 fn the_pilot_page_is_drawn_and_a_click_on_its_button_renders_the_new_count() {
-    let (app, mut window) = open(PILOT);
+    let (app, mut window) = open(pilot());
     settle(&app, &mut window, shows("Ready"));
     window.read(|view, _| {
         let text = view.text();
@@ -422,7 +703,7 @@ fn the_pilot_page_is_drawn_and_a_click_on_its_button_renders_the_new_count() {
 
 #[test]
 fn the_keyboard_presses_the_focused_button() {
-    let (app, mut window) = open(PILOT);
+    let (app, mut window) = open(pilot());
     settle(&app, &mut window, shows("Ready"));
     window.update(|_, window, cx| window.focus_next(cx));
     window.draw();
@@ -437,38 +718,49 @@ fn the_keyboard_presses_the_focused_button() {
     settle(&app, &mut window, shows("Count: 1"));
 }
 
-const THROWS: &str = r#"
-globalThis.__wingsEvent = () => { throw new Error('nope'); };
-wings.render(JSON.stringify({ id: 0, type: '#root', props: { fill: true }, children: [
-  { id: 1, type: 'Page', props: {}, children: [
-    { id: 2, type: 'Slot', props: { name: 'body' }, children: [
-      { id: 3, type: 'Button', props: { onClick: '3:onClick' }, children: [{ id: 4, type: '#text', text: 'Boom' }] },
-      { id: 5, type: 'Hologram', props: {}, children: [{ id: 6, type: '#text', text: 'not drawn' }] },
-    ] }] }] }));
-"#;
+fn throws() -> String {
+    struct Throws;
+    impl Guest for Throws {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            cx.render(&json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+                { "id": 1, "type": "Page", "props": {}, "children": [
+                    { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [
+                        { "id": 3, "type": "Button", "props": { "onClick": "3:onClick" }, "children": [text_node(4, "Boom")] },
+                        { "id": 5, "type": "Hologram", "props": {}, "children": [text_node(6, "not drawn")] }] }] }] }));
+        }
+        // A tree the host refuses is an error shown under the page, as a throw was.
+        fn event(&mut self, cx: &mut Cx<'_>, _handler: &str, _payload: &Value) {
+            cx.render(&json!({ "id": 0, "type": "#root", "children": "nope" }));
+        }
+    }
+    fake::source("page", || Box::new(Throws))
+}
 
-const CHECKBOX: &str = r#"
-let checked = false;
-const render = () => wings.render(JSON.stringify({ id: 0, type: '#root', props: {}, children: [
-  { id: 1, type: 'Page', props: {}, children: [{ id: 2, type: 'Slot', props: { name: 'body' }, children: [
-    { id: 3, type: 'Checkbox', props: { checked, onChange: '3:onChange' }, children: [{ id: 4, type: '#text', text: 'Delete branch' }] }
-  ] }] }
-] }));
-globalThis.__wingsEvent = (_handler, payload) => { checked = JSON.parse(payload).checked; render(); return true; };
-render();
-"#;
+fn checkbox() -> String {
+    let mut checked = false;
+    fake::page("page", move |event| {
+        if let Some((_, change)) = event {
+            checked = change["checked"].as_bool().unwrap_or_default();
+        }
+        json!({ "id": 0, "type": "#root", "props": {}, "children": [
+            { "id": 1, "type": "Page", "props": {}, "children": [{ "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [
+                { "id": 3, "type": "Checkbox", "props": { "checked": checked, "onChange": "3:onChange" }, "children": [text_node(4, "Delete branch")] }
+            ] }] }] })
+    })
+}
 
-const DISABLED_CHECKBOX: &str = r#"
-wings.render(JSON.stringify({ id: 0, type: '#root', props: {}, children: [
-  { id: 1, type: 'Page', props: {}, children: [{ id: 2, type: 'Slot', props: { name: 'body' }, children: [
-    { id: 3, type: 'Checkbox', props: { checked: false, disabled: true, onChange: '3:onChange' }, children: [{ id: 4, type: '#text', text: 'Delete branch' }] }
-  ] }] }
-] }));
-"#;
+fn disabled_checkbox() -> String {
+    fake::page("page", |_| {
+        json!({ "id": 0, "type": "#root", "props": {}, "children": [
+            { "id": 1, "type": "Page", "props": {}, "children": [{ "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [
+                { "id": 3, "type": "Checkbox", "props": { "checked": false, "disabled": true, "onChange": "3:onChange" }, "children": [text_node(4, "Delete branch")] }
+            ] }] }] })
+    })
+}
 
 #[test]
 fn what_the_page_throws_is_shown_under_it_and_what_the_host_does_not_know_is_not_drawn() {
-    let (app, mut window) = open(THROWS);
+    let (app, mut window) = open(throws());
     settle(&app, &mut window, shows("Boom"));
     assert!(window.read(|view, _| !view.text().contains("not drawn")));
     window.simulate_click(point(px(22.0), px(30.0)), MouseButton::Left);
@@ -479,7 +771,7 @@ fn what_the_page_throws_is_shown_under_it_and_what_the_host_does_not_know_is_not
 
 #[test]
 fn a_checkbox_is_keyboard_operable_and_its_disabled_state_is_skipped() {
-    let (app, mut window) = open(CHECKBOX);
+    let (app, mut window) = open(checkbox());
     settle(&app, &mut window, shows("Delete branch"));
     assert_eq!(window.read(|view, _| view.checkbox_checked()), Some(false));
     window.update(|_, window, cx| window.focus_next(cx));
@@ -501,7 +793,7 @@ fn a_checkbox_is_keyboard_operable_and_its_disabled_state_is_skipped() {
         view.checkbox_checked() == Some(false)
     });
 
-    let (disabled_app, mut disabled) = open(DISABLED_CHECKBOX);
+    let (disabled_app, mut disabled) = open(disabled_checkbox());
     settle(&disabled_app, &mut disabled, shows("Delete branch"));
     disabled.update(|_, window, cx| window.focus_next(cx));
     disabled.draw();
@@ -521,12 +813,12 @@ fn a_checkbox_is_keyboard_operable_and_its_disabled_state_is_skipped() {
 fn a_plugin_page_in_a_window_asks_main_and_shows_the_count_main_saved() {
     let root = Root::new();
     let host = Arc::new(PluginHost::new(root.config("fixture")));
-    host.start_main(FIXTURE_MAIN, |_| {}).unwrap();
+    host.start_main(&fixture_main(), |_| {}).unwrap();
     let mut app = TestApp::new();
     app.background_executor().allow_parking();
     let page_host = host.clone();
     let mut window =
-        app.open_window(move |_, cx| PageView::in_plugin(&page_host, FIXTURE_PAGE, cx));
+        app.open_window(move |_, cx| PageView::in_plugin(&page_host, &fixture_page(), cx));
     settle(&app, &mut window, shows("Count: 0"));
 
     // The fixture lays out like the pilot: its button is first in the body.
@@ -542,13 +834,25 @@ fn a_plugin_page_in_a_window_asks_main_and_shows_the_count_main_saved() {
 }
 
 /// Draws, then loops until it is stopped.
-const STOPS: &str = "wings.render(JSON.stringify({id:0,type:'#root',children:[{id:1,type:'Text',children:[{id:2,type:'#text',text:'Up'}]}]}));
-    setTimeout(() => { for (;;) {} }, 300);";
+fn stops() -> String {
+    struct Stops;
+    impl Guest for Stops {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            cx.render(&json!({ "id": 0, "type": "#root", "children": [text(1, 2, "Up".into())] }));
+            cx.later(300);
+        }
+        fn timer(&mut self, cx: &mut Cx<'_>, _id: u32) {
+            cx.stop("the page ran for too long and was stopped");
+        }
+    }
+    fake::source("page", || Box::new(Stops))
+}
 
 /// A stopped page stayed stopped wherever it was shown but a sidebar, whose Reload had to be pressed. Any page now
 /// starts again by itself, Reload does it at once, and why it stopped is in the log.
 #[test]
-fn a_plugin_page_that_stopped_starts_again_by_itself_or_at_once_with_reload_and_its_stop_is_logged() {
+fn a_plugin_page_that_stopped_starts_again_by_itself_or_at_once_with_reload_and_its_stop_is_logged()
+{
     let logs = tempfile::tempdir().unwrap();
     crate::page::log::keep_in(logs.path().join("plugins.log"));
     let root = Root::new();
@@ -556,12 +860,15 @@ fn a_plugin_page_that_stopped_starts_again_by_itself_or_at_once_with_reload_and_
     let mut app = TestApp::new();
     app.background_executor().allow_parking();
     let page_host = host.clone();
-    let mut window = app.open_window(move |_, cx| PageView::in_plugin(&page_host, STOPS, cx));
+    let mut window = app.open_window(move |_, cx| PageView::in_plugin(&page_host, &stops(), cx));
     let up = |view: &PageView| view.text().contains("Up") && !view.stopped();
     settle(&app, &mut window, up);
     settle(&app, &mut window, |view| view.stopped());
     let kept = std::fs::read_to_string(logs.path().join("plugins.log")).unwrap();
-    assert!(kept.contains(" fixture page: the page ran for too long and was stopped"), "{kept}");
+    assert!(
+        kept.contains(" fixture page.wasm: the page ran for too long and was stopped"),
+        "{kept}"
+    );
 
     // Two seconds after it stopped, and not before.
     app.advance_clock(Duration::from_millis(1900));
@@ -606,7 +913,7 @@ fn nothing_happens(app: &TestApp) {
 
 #[test]
 fn a_disclosure_opens_on_a_click_and_stays_as_it_is_through_the_renders_the_page_makes() {
-    let (app, mut window) = open(COMPONENTS);
+    let (app, mut window) = open(components());
     settle(&app, &mut window, shows("refreshed 0, retried 0"));
     assert_eq!(window.read(|view, _| view.open_disclosures()), 0);
 
@@ -633,7 +940,7 @@ fn a_disclosure_opens_on_a_click_and_stays_as_it_is_through_the_renders_the_page
 
 #[test]
 fn picking_in_a_select_tells_the_page_the_value_and_a_disabled_option_cannot_be_picked() {
-    let (app, mut window) = open(COMPONENTS);
+    let (app, mut window) = open(components());
     settle(&app, &mut window, shows("Session web,"));
     assert!(!window.read(|view, _| view.menu_open()));
 
@@ -657,7 +964,7 @@ fn picking_in_a_select_tells_the_page_the_value_and_a_disabled_option_cannot_be_
 
 #[test]
 fn a_select_menu_closes_on_a_press_outside_and_on_its_own_trigger() {
-    let (app, mut window) = open(COMPONENTS);
+    let (app, mut window) = open(components());
     settle(&app, &mut window, shows("Session web,"));
 
     click(&mut window, SELECT);
@@ -690,16 +997,17 @@ fn a_gauge_bar_is_blue_until_its_level_and_then_warn_and_danger() {
 }
 
 /// A page in a frame `width` points wide.
-fn open_narrow(source: &'static str, width: f32) -> (TestApp, View) {
+fn open_narrow(source: String, width: f32) -> (TestApp, View) {
     let mut app = TestApp::new();
     app.background_executor().allow_parking();
+    let host = hosted(&mut app);
     let bounds = gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(width), px(400.0)));
     let window = app.open_window_with_options(
         gpui::WindowOptions {
             window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
             ..Default::default()
         },
-        move |_, cx| PageView::new(source, cx),
+        move |_, cx| PageView::in_plugin(&host, &source, cx),
     );
     (app, window)
 }
@@ -713,17 +1021,17 @@ fn pressed_at(app: &TestApp, window: &mut View, at: (f32, f32), heard: &'static 
 }
 
 /// A pull request's summary chip that shows its checks: an outlined pill with a click.
-const SUMMARY_CHIP: &str = r#"
-let heard = 0;
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
-{id:1,type:'Badge',props:{variant:'outline',tone:'danger',onClick:'1:click'},children:[{id:2,type:'#text',text:'1 failed ›'}]},
-{id:3,type:'Text',children:[{id:4,type:'#text',text:'Heard '+heard+'.'}]}]}));}
-globalThis.__wingsEvent=()=>{heard++;render();return true;};render();
-"#;
+fn summary_chip() -> String {
+    counting(|heard| {
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "Badge", "props": { "variant": "outline", "tone": "danger", "onClick": "1:click" }, "children": [text_node(2, "1 failed ›")] },
+            text(3, 4, format!("Heard {heard}.")) ] })
+    })
+}
 
 #[test]
 fn a_badge_with_a_click_is_a_button_for_the_keyboard_and_the_pointer() {
-    let (app, mut window) = open_narrow(SUMMARY_CHIP, 300.0);
+    let (app, mut window) = open_narrow(summary_chip(), 300.0);
     settle(&app, &mut window, shows("Heard 0."));
     window.update(|_, window, cx| window.focus_next(cx));
     window.draw();
@@ -734,17 +1042,22 @@ fn a_badge_with_a_click_is_a_button_for_the_keyboard_and_the_pointer() {
 }
 
 /// A pull request's tabs, of the "line" variant.
-const LINE_TABS: &str = r#"
-let picked = 'a';
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
-{id:1,type:'Chips',props:{label:'Pull request',line:true,value:picked,options:[{value:'a',label:'Overview'},{value:'b',label:'Checks'}],onChange:'1:change'}},
-{id:2,type:'Text',children:[{id:3,type:'#text',text:'Picked '+picked+'.'}]}]}));}
-globalThis.__wingsEvent=(_,json)=>{picked=JSON.parse(json).value;render();return true;};render();
-"#;
+fn line_tabs() -> String {
+    let mut picked = "a".to_owned();
+    fake::page("page", move |event| {
+        if let Some((_, pick)) = event {
+            picked = pick["value"].as_str().unwrap_or_default().to_owned();
+        }
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "Chips", "props": { "label": "Pull request", "line": true, "value": picked,
+                "options": [{ "value": "a", "label": "Overview" }, { "value": "b", "label": "Checks" }], "onChange": "1:change" } },
+            text(2, 3, format!("Picked {picked}.")) ] })
+    })
+}
 
 #[test]
 fn line_tabs_are_picked_with_the_arrow_keys_and_a_click() {
-    let (app, mut window) = open_narrow(LINE_TABS, 300.0);
+    let (app, mut window) = open_narrow(line_tabs(), 300.0);
     settle(&app, &mut window, shows("Picked a."));
     window.update(|_, window, cx| window.focus_next(cx));
     window.draw();
@@ -754,18 +1067,19 @@ fn line_tabs_are_picked_with_the_arrow_keys_and_a_click() {
 }
 
 /// A chip whose label is longer than its line, as a Cyclops task suggested under its field.
-const LONG_CHIP: &str = r#"
-let pressed = 0;
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
-{id:1,type:'Row',props:{gap:'s',wrap:true},children:[
-{id:2,type:'Button',props:{chip:true,onClick:'2:click'},children:[{id:3,type:'#text',text:'Report table keeps the Unassigned group last when sorted ascending, on the web and on mobile'}]}]},
-{id:4,type:'Text',children:[{id:5,type:'#text',text:'Pressed '+pressed+'.'}]}]}));}
-globalThis.__wingsEvent=()=>{pressed++;render();return true;};render();
-"#;
+fn long_chip() -> String {
+    counting(|pressed| {
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "Row", "props": { "gap": "s", "wrap": true }, "children": [
+                { "id": 2, "type": "Button", "props": { "chip": true, "onClick": "2:click" }, "children": [
+                    text_node(3, "Report table keeps the Unassigned group last when sorted ascending, on the web and on mobile")] }] },
+            text(4, 5, format!("Pressed {pressed}.")) ] })
+    })
+}
 
 #[test]
 fn a_chip_longer_than_its_line_ends_at_the_pages_padding() {
-    let (app, mut window) = open_narrow(LONG_CHIP, 300.0);
+    let (app, mut window) = open_narrow(long_chip(), 300.0);
     settle(&app, &mut window, shows("Pressed 0."));
     // The page's 14pt padding on the right is past the chip's end: the chip used to run on through it and off the frame.
     assert!(!pressed_at(&app, &mut window, (293.0, 28.0), "Pressed 1."));
@@ -785,19 +1099,20 @@ fn a_clamped_text_ends_its_third_line_in_an_ellipsis() {
 }
 
 /// A chip that holds a dot and a word, as Work item's state menu and Issues' parent chip: the word can be pressed.
-const DOT_CHIP: &str = r#"
-let pressed = 0;
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
-{id:1,type:'Row',props:{gap:'s'},children:[
-{id:2,type:'Button',props:{chip:true},children:[{id:3,type:'Dot',props:{tone:'info'}},
-{id:4,type:'Text',props:{onClick:'4:click'},children:[{id:5,type:'#text',text:'Active'}]}]}]},
-{id:6,type:'Text',children:[{id:7,type:'#text',text:'Pressed '+pressed+'.'}]}]}));}
-globalThis.__wingsEvent=()=>{pressed++;render();return true;};render();
-"#;
+fn dot_chip() -> String {
+    counting(|pressed| {
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "Row", "props": { "gap": "s" }, "children": [
+                { "id": 2, "type": "Button", "props": { "chip": true }, "children": [
+                    { "id": 3, "type": "Dot", "props": { "tone": "info" } },
+                    { "id": 4, "type": "Text", "props": { "onClick": "4:click" }, "children": [text_node(5, "Active")] }] }] },
+            text(6, 7, format!("Pressed {pressed}.")) ] })
+    })
+}
 
 #[test]
 fn a_dot_in_a_chip_keeps_the_chips_gap_from_the_word_after_it() {
-    let (app, mut window) = open_narrow(DOT_CHIP, 300.0);
+    let (app, mut window) = open_narrow(dot_chip(), 300.0);
     settle(&app, &mut window, shows("Pressed 0."));
     // The chip's content starts 11pt in, at 25: the 6pt dot, then 4pt of gap, and the word at 35. The word used to start
     // right after the dot, at 31, so 33 was on it.
@@ -807,21 +1122,21 @@ fn a_dot_in_a_chip_keeps_the_chips_gap_from_the_word_after_it() {
 
 /// A row of Properties as wings-plugin-ui/native draws it: a label, and a value that starts with a dot, like Sprint
 /// board's "State ● New". The value's text can be pressed.
-const DOT_VALUE: &str = r#"
-let pressed = 0;
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
-{id:1,type:'Row',props:{gap:'m',align:'baseline'},children:[
-{id:2,type:'Text',props:{tone:'muted',size:'small'},children:[{id:3,type:'#text',text:'State'}]},
-{id:4,type:'Text',props:{size:'small',grow:true},children:[{id:5,type:'Row',props:{gap:'s'},children:[
-{id:6,type:'Dot',props:{}},
-{id:7,type:'Text',props:{onClick:'7:click'},children:[{id:8,type:'#text',text:'New, the state it is in'}]}]}]}]},
-{id:9,type:'Text',children:[{id:10,type:'#text',text:'Pressed '+pressed+'.'}]}]}));}
-globalThis.__wingsEvent=()=>{pressed++;render();return true;};render();
-"#;
+fn dot_value() -> String {
+    counting(|pressed| {
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "Row", "props": { "gap": "m", "align": "baseline" }, "children": [
+                { "id": 2, "type": "Text", "props": { "tone": "muted", "size": "small" }, "children": [text_node(3, "State")] },
+                { "id": 4, "type": "Text", "props": { "size": "small", "grow": true }, "children": [{ "id": 5, "type": "Row", "props": { "gap": "s" }, "children": [
+                    { "id": 6, "type": "Dot", "props": {} },
+                    { "id": 7, "type": "Text", "props": { "onClick": "7:click" }, "children": [text_node(8, "New, the state it is in")] }] }] }] },
+            text(9, 10, format!("Pressed {pressed}.")) ] })
+    })
+}
 
 #[test]
 fn a_value_that_starts_with_a_dot_sits_level_with_its_label() {
-    let (app, mut window) = open_narrow(DOT_VALUE, 400.0);
+    let (app, mut window) = open_narrow(dot_value(), 400.0);
     settle(&app, &mut window, shows("Pressed 0."));
     // 2pt under the row's top, beside the label, is the value's text: the dot's bottom used to be lined up with the
     // label's, which pushed the value down by half a line.
@@ -830,19 +1145,20 @@ fn a_value_that_starts_with_a_dot_sits_level_with_its_label() {
 
 /// A line of a check run's log as PR tracker draws it: its number, small, and its text, which wraps in a narrow frame.
 /// The number can be pressed.
-const LOG_LINE: &str = r#"
-let pressed = 0;
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
-{id:1,type:'Row',props:{gap:'m',align:'baseline'},children:[
-{id:2,type:'Text',props:{mono:true,size:'tiny',tone:'muted',onClick:'2:click'},children:[{id:3,type:'#text',text:'3'}]},
-{id:4,type:'Text',props:{mono:true,size:'small',grow:true},children:[{id:5,type:'#text',text:'src/sync/module-1.test.ts (8 tests) 120ms, then the next file and the one after it'}]}]},
-{id:6,type:'Text',children:[{id:7,type:'#text',text:'Pressed '+pressed+'.'}]}]}));}
-globalThis.__wingsEvent=()=>{pressed++;render();return true;};render();
-"#;
+fn log_line() -> String {
+    counting(|pressed| {
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "Row", "props": { "gap": "m", "align": "baseline" }, "children": [
+                { "id": 2, "type": "Text", "props": { "mono": true, "size": "tiny", "tone": "muted", "onClick": "2:click" }, "children": [text_node(3, "3")] },
+                { "id": 4, "type": "Text", "props": { "mono": true, "size": "small", "grow": true }, "children": [
+                    text_node(5, "src/sync/module-1.test.ts (8 tests) 120ms, then the next file and the one after it")] }] },
+            text(6, 7, format!("Pressed {pressed}.")) ] })
+    })
+}
 
 #[test]
 fn a_log_lines_number_sits_by_its_first_line_when_the_line_wraps() {
-    let (app, mut window) = open_narrow(LOG_LINE, 300.0);
+    let (app, mut window) = open_narrow(log_line(), 300.0);
     settle(&app, &mut window, shows("Pressed 0."));
     // The text takes three lines from the top of the row, 14pt down; the number used to sit by the last of them.
     assert!(pressed_at(&app, &mut window, (17.0, 22.0), "Pressed 1."));
@@ -850,19 +1166,19 @@ fn a_log_lines_number_sits_by_its_first_line_when_the_line_wraps() {
 
 /// A line of a check run's log that is one word wider than the frame, an Azure log's "=====" rule, with a text under it
 /// that can be pressed.
-const LOG_RULE: &str = r#"
-let pressed = 0;
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
-{id:1,type:'Row',props:{gap:'m',align:'baseline'},children:[
-{id:2,type:'Text',props:{mono:true,size:'tiny',tone:'muted'},children:[{id:3,type:'#text',text:'3'}]},
-{id:4,type:'Text',props:{mono:true,size:'small',grow:true},children:[{id:5,type:'#text',text:'='.repeat(78)}]}]},
-{id:6,type:'Text',props:{onClick:'6:click'},children:[{id:7,type:'#text',text:'Pressed '+pressed+'.'}]}]}));}
-globalThis.__wingsEvent=()=>{pressed++;render();return true;};render();
-"#;
+fn log_rule() -> String {
+    counting(|pressed| {
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "Row", "props": { "gap": "m", "align": "baseline" }, "children": [
+                { "id": 2, "type": "Text", "props": { "mono": true, "size": "tiny", "tone": "muted" }, "children": [text_node(3, "3")] },
+                { "id": 4, "type": "Text", "props": { "mono": true, "size": "small", "grow": true }, "children": [text_node(5, &"=".repeat(78))] }] },
+            { "id": 6, "type": "Text", "props": { "onClick": "6:click" }, "children": [text_node(7, &format!("Pressed {pressed}."))] } ] })
+    })
+}
 
 #[test]
 fn a_log_line_wider_than_the_frame_wraps_inside_it() {
-    let (app, mut window) = open_narrow(LOG_RULE, 300.0);
+    let (app, mut window) = open_narrow(log_rule(), 300.0);
     settle(&app, &mut window, shows("Pressed 0."));
     // The rule takes three lines inside the frame, so the text under it starts 76pt down. The rule used to be one line
     // as wide as its 78 characters, past the frame's edge, with the text right under it.
@@ -871,20 +1187,25 @@ fn a_log_line_wider_than_the_frame_wraps_inside_it() {
 
 /// A folded group of a check run's log as PR tracker draws it: its number, which can be pressed, beside a list button
 /// that holds its title, which wraps in a narrow frame.
-const LOG_GROUP: &str = r#"
-let pressed = 0;
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
-{id:1,type:'Row',props:{gap:'m',align:'baseline'},children:[
-{id:2,type:'Text',props:{mono:true,size:'tiny',tone:'muted',onClick:'2:click'},children:[{id:3,type:'#text',text:'  1'}]},
-{id:4,type:'ListButton',props:{align:'baseline','aria-expanded':false,onClick:'4:open'},children:[
-{id:5,type:'Text',props:{mono:true,size:'small',grow:true,weight:'strong'},children:[{id:6,type:'#text',text:'Run pnpm --filter web test -- --reporter=verbose --coverage.enabled=true'}]}]}]},
-{id:7,type:'Text',children:[{id:8,type:'#text',text:'Pressed '+pressed+'.'}]}]}));}
-globalThis.__wingsEvent=(handler)=>{if(handler==='2:click')pressed++;render();return true;};render();
-"#;
+fn log_group() -> String {
+    let mut pressed = 0;
+    fake::page("page", move |event| {
+        if let Some(("2:click", _)) = event {
+            pressed += 1;
+        }
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "Row", "props": { "gap": "m", "align": "baseline" }, "children": [
+                { "id": 2, "type": "Text", "props": { "mono": true, "size": "tiny", "tone": "muted", "onClick": "2:click" }, "children": [text_node(3, "  1")] },
+                { "id": 4, "type": "ListButton", "props": { "align": "baseline", "aria-expanded": false, "onClick": "4:open" }, "children": [
+                    { "id": 5, "type": "Text", "props": { "mono": true, "size": "small", "grow": true, "weight": "strong" }, "children": [
+                        text_node(6, "Run pnpm --filter web test -- --reporter=verbose --coverage.enabled=true")] }] }] },
+            text(7, 8, format!("Pressed {pressed}.")) ] })
+    })
+}
 
 #[test]
 fn a_log_groups_number_sits_on_one_line_by_its_titles_first() {
-    let (app, mut window) = open_narrow(LOG_GROUP, 300.0);
+    let (app, mut window) = open_narrow(log_group(), 300.0);
     settle(&app, &mut window, shows("Pressed 0."));
     // The number is on the title's first line, 17pt to 35pt down: it used to sit by the button's foot, three lines down.
     assert!(pressed_at(&app, &mut window, (16.0, 26.0), "Pressed 1."));
@@ -894,19 +1215,22 @@ fn a_log_groups_number_sits_on_one_line_by_its_titles_first() {
 
 /// A board of one column with a card in it, as Issues' board in its page with no padding of its own. The card can be
 /// pressed.
-const BOARD: &str = r#"
-let pressed = 0;
-function render(){wings.render(JSON.stringify({id:0,type:'#root',props:{fill:true},children:[
-{id:8,type:'Page',props:{flush:true},children:[{id:9,type:'Slot',props:{name:'body'},children:[
-{id:1,type:'Board',props:{label:'Issues'},children:[
-{id:2,type:'BoardColumn',children:[{id:3,type:'Slot',props:{name:'title'},children:[{id:4,type:'#text',text:'To do'}]},
-{id:5,type:'Slot',props:{name:'body'},children:[{id:6,type:'Button',props:{variant:'outline',onClick:'6:click'},children:[{id:7,type:'#text',text:'Pressed '+pressed+'.'}]}]}]}]}]}]}]}));}
-globalThis.__wingsEvent=()=>{pressed++;render();return true;};render();
-"#;
+fn board() -> String {
+    counting(|pressed| {
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            { "id": 8, "type": "Page", "props": { "flush": true }, "children": [{ "id": 9, "type": "Slot", "props": { "name": "body" }, "children": [
+                { "id": 1, "type": "Board", "props": { "label": "Issues" }, "children": [
+                    { "id": 2, "type": "BoardColumn", "children": [
+                        { "id": 3, "type": "Slot", "props": { "name": "title" }, "children": [text_node(4, "To do")] },
+                        { "id": 5, "type": "Slot", "props": { "name": "body" }, "children": [
+                            { "id": 6, "type": "Button", "props": { "variant": "outline", "onClick": "6:click" }, "children": [
+                                text_node(7, &format!("Pressed {pressed}."))] }] }] }] }] }] }] })
+    })
+}
 
 #[test]
 fn a_boards_columns_are_boxes_inside_the_pages_padding() {
-    let (app, mut window) = open_narrow(BOARD, 300.0);
+    let (app, mut window) = open_narrow(board(), 300.0);
     settle(&app, &mut window, shows("Pressed 0."));
     // The column is 14pt in from the frame, the page's padding the board takes on, and its card 9pt into the column, so
     // the card starts at 23. Both used to start at the frame's edge.
@@ -916,17 +1240,17 @@ fn a_boards_columns_are_boxes_inside_the_pages_padding() {
 
 /// A stack of two strings and a button, as a `Time` with its prefix ("Updated ", "14 h ago") makes. The button can be
 /// pressed.
-const TWO_STRINGS: &str = r#"
-let pressed = 0;
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
-{id:1,type:'Stack',children:[{id:2,type:'#text',text:'Updated '},{id:3,type:'#text',text:'14 h ago'},
-{id:4,type:'Button',props:{onClick:'4:click'},children:[{id:5,type:'#text',text:'Pressed '+pressed+'.'}]}]}]}));}
-globalThis.__wingsEvent=()=>{pressed++;render();return true;};render();
-"#;
+fn two_strings() -> String {
+    counting(|pressed| {
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "Stack", "children": [text_node(2, "Updated "), text_node(3, "14 h ago"),
+                { "id": 4, "type": "Button", "props": { "onClick": "4:click" }, "children": [text_node(5, &format!("Pressed {pressed}."))] }] }] })
+    })
+}
 
 #[test]
 fn strings_side_by_side_in_a_stack_are_one_line_of_it() {
-    let (app, mut window) = open_narrow(TWO_STRINGS, 300.0);
+    let (app, mut window) = open_narrow(two_strings(), 300.0);
     settle(&app, &mut window, shows("Pressed 0."));
     // One line of text and the stack's 8pt gap put the button at 41 to 73. Each string was a line of its own, which put
     // it at 68 to 100.
@@ -936,17 +1260,17 @@ fn strings_side_by_side_in_a_stack_are_one_line_of_it() {
 
 /// An empty text over a button, as PR tracker's line that says whether a token is saved, before it knows. The button
 /// can be pressed.
-const EMPTY_TEXT: &str = r#"
-let pressed = 0;
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
-{id:1,type:'Stack',children:[{id:2,type:'Text',children:[{id:3,type:'#text',text:''}]},
-{id:4,type:'Button',props:{onClick:'4:click'},children:[{id:5,type:'#text',text:'Pressed '+pressed+'.'}]}]}]}));}
-globalThis.__wingsEvent=()=>{pressed++;render();return true;};render();
-"#;
+fn empty_text() -> String {
+    counting(|pressed| {
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "Stack", "children": [text(2, 3, String::new()),
+                { "id": 4, "type": "Button", "props": { "onClick": "4:click" }, "children": [text_node(5, &format!("Pressed {pressed}."))] }] }] })
+    })
+}
 
 #[test]
 fn an_empty_text_takes_no_line() {
-    let (app, mut window) = open_narrow(EMPTY_TEXT, 300.0);
+    let (app, mut window) = open_narrow(empty_text(), 300.0);
     settle(&app, &mut window, shows("Pressed 0."));
     // Under the stack's 8pt gap the button is at 22 to 54. The empty text took a line, which put it at 41 to 73.
     assert!(pressed_at(&app, &mut window, (40.0, 28.0), "Pressed 1."));
@@ -954,18 +1278,19 @@ fn an_empty_text_takes_no_line() {
 }
 
 /// A commit in Changes' history: a list button of two lines, its subject over a line that can be pressed.
-const COMMIT: &str = r#"
-let pressed = 0;
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
-{id:1,type:'ListButton',props:{layout:'column'},children:[{id:2,type:'Text',children:[{id:3,type:'#text',text:'Add coupon validation'}]},
-{id:4,type:'Text',props:{onClick:'4:click'},children:[{id:5,type:'#text',text:'aaaaaaa Ada Lovelace'}]}]},
-{id:6,type:'Text',children:[{id:7,type:'#text',text:'Pressed '+pressed+'.'}]}]}));}
-globalThis.__wingsEvent=()=>{pressed++;render();return true;};render();
-"#;
+fn commit() -> String {
+    counting(|pressed| {
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "ListButton", "props": { "layout": "column" }, "children": [
+                text(2, 3, "Add coupon validation".into()),
+                { "id": 4, "type": "Text", "props": { "onClick": "4:click" }, "children": [text_node(5, "aaaaaaa Ada Lovelace")] }] },
+            text(6, 7, format!("Pressed {pressed}.")) ] })
+    })
+}
 
 #[test]
 fn a_column_list_buttons_lines_are_close_together() {
-    let (app, mut window) = open_narrow(COMMIT, 300.0);
+    let (app, mut window) = open_narrow(commit(), 300.0);
     settle(&app, &mut window, shows("Pressed 0."));
     // The second line is 2pt under the subject, from 38 to 57; it was 8pt under it, from 44 to 63, further than the
     // next commit was from this one.
@@ -975,38 +1300,40 @@ fn a_column_list_buttons_lines_are_close_together() {
 
 /// A prompt in Session detail's activity: a list button lined up on its first lines, the name that can be pressed, the
 /// prompt that wraps, and its time.
-const PROMPT: &str = r#"
-let pressed = 0;
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
-{id:1,type:'ListButton',props:{align:'baseline','aria-expanded':false},children:[
-{id:2,type:'Text',props:{tone:'info',weight:'strong',onClick:'2:click'},children:[{id:3,type:'#text',text:'You'}]},
-{id:4,type:'Text',props:{grow:true},children:[{id:5,type:'#text',text:'Rework the checkout page so the coupon field sits under the order summary'}]},
-{id:6,type:'Text',props:{tone:'muted'},children:[{id:7,type:'#text',text:'11:46 PM'}]}]},
-{id:8,type:'Text',children:[{id:9,type:'#text',text:'Pressed '+pressed+'.'}]}]}));}
-globalThis.__wingsEvent=()=>{pressed++;render();return true;};render();
-"#;
+fn prompt() -> String {
+    counting(|pressed| {
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "ListButton", "props": { "align": "baseline", "aria-expanded": false }, "children": [
+                { "id": 2, "type": "Text", "props": { "tone": "info", "weight": "strong", "onClick": "2:click" }, "children": [text_node(3, "You")] },
+                { "id": 4, "type": "Text", "props": { "grow": true }, "children": [
+                    text_node(5, "Rework the checkout page so the coupon field sits under the order summary")] },
+                { "id": 6, "type": "Text", "props": { "tone": "muted" }, "children": [text_node(7, "11:46 PM")] }] },
+            text(8, 9, format!("Pressed {pressed}.")) ] })
+    })
+}
 
 #[test]
 fn a_list_button_lined_up_on_baselines_keeps_its_name_by_the_first_line() {
-    let (app, mut window) = open_narrow(PROMPT, 300.0);
+    let (app, mut window) = open_narrow(prompt(), 300.0);
     settle(&app, &mut window, shows("Pressed 0."));
     // "You" is on the prompt's first line, 17 to 36 down; it sat halfway down the prompt's three lines, from 36.
     assert!(pressed_at(&app, &mut window, (45.0, 24.0), "Pressed 1."));
 }
 
 /// A disclosure whose summary is longer than its line, as Sprint board's "What was detected", with a button under it.
-const LONG_SUMMARY: &str = r#"
-let pressed = 0;
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
-{id:1,type:'Disclosure',children:[{id:2,type:'Slot',props:{name:'summary'},children:[{id:3,type:'#text',text:'What was detected in the repos, the remotes and the Azure DevOps organizations this Mac is signed in to (12 calls, 3.4 s)'}]}]},
-{id:4,type:'Button',props:{onClick:'4:click'},children:[{id:5,type:'#text',text:'Next'}]},
-{id:6,type:'Text',children:[{id:7,type:'#text',text:'Pressed '+pressed+'.'}]}]}));}
-globalThis.__wingsEvent=()=>{pressed++;render();return true;};render();
-"#;
+fn long_summary() -> String {
+    counting(|pressed| {
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "Disclosure", "children": [{ "id": 2, "type": "Slot", "props": { "name": "summary" }, "children": [
+                text_node(3, "What was detected in the repos, the remotes and the Azure DevOps organizations this Mac is signed in to (12 calls, 3.4 s)")] }] },
+            { "id": 4, "type": "Button", "props": { "onClick": "4:click" }, "children": [text_node(5, "Next")] },
+            text(6, 7, format!("Pressed {pressed}.")) ] })
+    })
+}
 
 #[test]
 fn a_disclosure_summary_longer_than_its_line_wraps() {
-    let (app, mut window) = open_narrow(LONG_SUMMARY, 300.0);
+    let (app, mut window) = open_narrow(long_summary(), 300.0);
     settle(&app, &mut window, shows("Pressed 0."));
     // The summary takes three lines, so the button under it is this far down; on one line it ran off the frame and the
     // button sat 50pt higher.
@@ -1014,17 +1341,24 @@ fn a_disclosure_summary_longer_than_its_line_wraps() {
 }
 
 /// A select of sixty options at the top of a 400pt frame, as Cyclops' projects in its form.
-const LONG_SELECT: &str = r#"
-let picked = 'none';
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
-{id:1,type:'Select',props:{label:'Project',value:'o0',onChange:'1:change',options:Array.from({length:60},(_,i)=>({value:'o'+i,label:'Project '+i}))}},
-{id:2,type:'Text',children:[{id:3,type:'#text',text:'Picked '+picked+'.'}]}]}));}
-globalThis.__wingsEvent=(_,json)=>{picked=JSON.parse(json).value;render();return true;};render();
-"#;
+fn long_select() -> String {
+    let mut picked = "none".to_owned();
+    fake::page("page", move |event| {
+        if let Some((_, pick)) = event {
+            picked = pick["value"].as_str().unwrap_or_default().to_owned();
+        }
+        let options: Vec<Value> = (0..60)
+            .map(|i| json!({ "value": format!("o{i}"), "label": format!("Project {i}") }))
+            .collect();
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "Select", "props": { "label": "Project", "value": "o0", "onChange": "1:change", "options": options } },
+            text(2, 3, format!("Picked {picked}.")) ] })
+    })
+}
 
 #[test]
 fn a_select_menu_longer_than_the_window_scrolls_to_its_last_option() {
-    let (app, mut window) = open_narrow(LONG_SELECT, 300.0);
+    let (app, mut window) = open_narrow(long_select(), 300.0);
     settle(&app, &mut window, shows("Picked none."));
     click(&mut window, (100.0, 30.0));
     settle(&app, &mut window, PageView::menu_open);
@@ -1039,28 +1373,60 @@ fn a_select_menu_longer_than_the_window_scrolls_to_its_last_option() {
 /// A task field with recent tasks to pick from and a Start button under it, as Cyclops' timer form: the tree is what
 /// wings-plugin-ui/native's `Combobox` renders, the field and the tasks that match it as chips, or a muted line when
 /// none do, and only the field once it holds a task.
-const TASK_FIELD: &str = r#"
-const tasks = ['Code review', 'Checkout redesign', 'Sidebar labels', 'Password fields', 'Standup'];
-let text = '', started = 0;
-function render(){
-  const found = tasks.filter(t => t.toLowerCase().includes(text.toLowerCase())).slice(0, 8);
-  const done = found.length === 1 && found[0] === text;
-  const under = done ? [] : found.length
-    ? [{id:4,type:'Row',props:{gap:'s',wrap:true},children:found.map(t=>{const i=tasks.indexOf(t);return {id:100+2*i,type:'Button',props:{chip:true,pressed:false,onClick:(100+2*i)+':onClick'},children:[{id:101+2*i,type:'#text',text:t}]};})}]
-    : text ? [{id:5,type:'Text',props:{size:'small',tone:'muted'},children:[{id:6,type:'#text',text:'No matching tasks.'}]}] : [];
-  wings.render(JSON.stringify({id:0,type:'#root',children:[
-    {id:1,type:'Stack',props:{gap:'s'},children:[{id:3,type:'TextInput',props:{label:'Task',value:text,maxLength:2000,onChange:'3:onChange'}},...under]},
-    {id:7,type:'Button',props:{onClick:'7:onClick'},children:[{id:8,type:'#text',text:'Start'}]},
-    {id:9,type:'Text',children:[{id:10,type:'#text',text:'Task='+text+', started '+started+'.'}]}]}));
+fn task_field() -> String {
+    const TASKS: [&str; 5] = [
+        "Code review",
+        "Checkout redesign",
+        "Sidebar labels",
+        "Password fields",
+        "Standup",
+    ];
+    let (mut typed, mut started) = (String::new(), 0);
+    fake::page("page", move |event| {
+        match event {
+            Some(("3:onChange", change)) => {
+                typed = change["value"].as_str().unwrap_or_default().to_owned()
+            }
+            Some(("7:onClick", _)) => started += 1,
+            Some((handler, _)) => typed = TASKS[(number(handler) - 100) / 2].to_owned(),
+            None => {}
+        }
+        let found: Vec<&str> = TASKS
+            .into_iter()
+            .filter(|task| task.to_lowercase().contains(&typed.to_lowercase()))
+            .take(8)
+            .collect();
+        let under = if found.len() == 1 && found[0] == typed {
+            None
+        } else if !found.is_empty() {
+            let chips: Vec<Value> = found
+                .iter()
+                .map(|task| {
+                    let i = TASKS.iter().position(|t| t == task).unwrap();
+                    json!({ "id": 100 + 2 * i, "type": "Button", "props": { "chip": true, "pressed": false, "onClick": format!("{}:onClick", 100 + 2 * i) },
+                        "children": [text_node(101 + 2 * i, task)] })
+                })
+                .collect();
+            Some(
+                json!({ "id": 4, "type": "Row", "props": { "gap": "s", "wrap": true }, "children": chips }),
+            )
+        } else if !typed.is_empty() {
+            Some(
+                json!({ "id": 5, "type": "Text", "props": { "size": "small", "tone": "muted" }, "children": [text_node(6, "No matching tasks.")] }),
+            )
+        } else {
+            None
+        };
+        let mut stack = vec![
+            json!({ "id": 3, "type": "TextInput", "props": { "label": "Task", "value": typed, "maxLength": 2000, "onChange": "3:onChange" } }),
+        ];
+        stack.extend(under);
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "Stack", "props": { "gap": "s" }, "children": stack },
+            { "id": 7, "type": "Button", "props": { "onClick": "7:onClick" }, "children": [text_node(8, "Start")] },
+            text(9, 10, format!("Task={typed}, started {started}.")) ] })
+    })
 }
-globalThis.__wingsEvent=(handler,json)=>{
-  if(handler==='3:onChange') text=JSON.parse(json).value;
-  else if(handler==='7:onClick') started++;
-  else text=tasks[(parseInt(handler)-100)/2];
-  render(); return true;
-};
-render();
-"#;
 
 /// The task field, 14pt in from the page's corner and 32pt tall.
 const TASK: (f32, f32) = (100.0, 30.0);
@@ -1071,7 +1437,7 @@ const FIRST_TASK: (f32, f32) = (60.0, 71.0);
 
 #[test]
 fn a_combobox_lists_its_options_over_the_page_and_the_keyboard_or_a_click_picks_one() {
-    let (app, mut window) = open(TASK_FIELD);
+    let (app, mut window) = open(task_field());
     settle(&app, &mut window, shows("Task=, started 0."));
     // The five tasks don't take a place in the page: Start is right under the field. They pushed it down, and a press
     // there picked the first of them.
@@ -1144,27 +1510,46 @@ fn a_combobox_lists_its_options_over_the_page_and_the_keyboard_or_a_click_picks_
 /// Cyclops' edit form: the task field takes the keyboard when the form opens, holding a task that more than one recent
 /// task matches, and the project select sits right under it. The page asks for the tasks not to open on focus
 /// (`openOnFocus: false`, sent on the field by wings-plugin-ui/native's `Combobox`), as the desktop's form does.
-const EDIT_FORM: &str = r#"
-const tasks = ['Standup', 'FE Standup'];
-let text = 'Standup', project = 'a';
-function render(){
-  const found = tasks.filter(t => t.toLowerCase().includes(text.toLowerCase()));
-  const under = found.length === 1 && found[0] === text ? [] : found.length
-    ? [{id:4,type:'Row',props:{gap:'s',wrap:true},children:found.map(t=>{const i=tasks.indexOf(t);return {id:100+2*i,type:'Button',props:{chip:true,pressed:false,onClick:(100+2*i)+':onClick'},children:[{id:101+2*i,type:'#text',text:t}]};})}]
-    : [];
-  wings.render(JSON.stringify({id:0,type:'#root',children:[
-    {id:1,type:'Stack',props:{gap:'s'},children:[{id:3,type:'TextInput',props:{label:'Task',value:text,maxLength:2000,autoFocus:true,openOnFocus:false,onChange:'3:onChange'}},...under]},
-    {id:7,type:'Select',props:{label:'Project',value:project,onChange:'7:onChange',options:[{value:'a',label:'Healthcare'},{value:'b',label:'57hours'}]}},
-    {id:9,type:'Text',children:[{id:10,type:'#text',text:'Task='+text+', project='+project+'.'}]}]}));
+fn edit_form() -> String {
+    const TASKS: [&str; 2] = ["Standup", "FE Standup"];
+    let (mut typed, mut project) = ("Standup".to_owned(), "a".to_owned());
+    fake::page("page", move |event| {
+        match event {
+            Some(("3:onChange", change)) => {
+                typed = change["value"].as_str().unwrap_or_default().to_owned()
+            }
+            Some(("7:onChange", change)) => {
+                project = change["value"].as_str().unwrap_or_default().to_owned()
+            }
+            Some((handler, _)) => typed = TASKS[(number(handler) - 100) / 2].to_owned(),
+            None => {}
+        }
+        let found: Vec<&str> = TASKS
+            .into_iter()
+            .filter(|task| task.to_lowercase().contains(&typed.to_lowercase()))
+            .collect();
+        let mut stack = vec![
+            json!({ "id": 3, "type": "TextInput", "props": { "label": "Task", "value": typed, "maxLength": 2000,
+            "autoFocus": true, "openOnFocus": false, "onChange": "3:onChange" } }),
+        ];
+        if !(found.len() == 1 && found[0] == typed) && !found.is_empty() {
+            let chips: Vec<Value> = found
+                .iter()
+                .map(|task| {
+                    let i = TASKS.iter().position(|t| t == task).unwrap();
+                    json!({ "id": 100 + 2 * i, "type": "Button", "props": { "chip": true, "pressed": false, "onClick": format!("{}:onClick", 100 + 2 * i) },
+                        "children": [text_node(101 + 2 * i, task)] })
+                })
+                .collect();
+            stack.push(json!({ "id": 4, "type": "Row", "props": { "gap": "s", "wrap": true }, "children": chips }));
+        }
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "Stack", "props": { "gap": "s" }, "children": stack },
+            { "id": 7, "type": "Select", "props": { "label": "Project", "value": project, "onChange": "7:onChange",
+                "options": [{ "value": "a", "label": "Healthcare" }, { "value": "b", "label": "57hours" }] } },
+            text(9, 10, format!("Task={typed}, project={project}.")) ] })
+    })
 }
-globalThis.__wingsEvent=(handler,json)=>{
-  if(handler==='3:onChange') text=JSON.parse(json).value;
-  else if(handler==='7:onChange') project=JSON.parse(json).value;
-  else text=tasks[(parseInt(handler)-100)/2];
-  render(); return true;
-};
-render();
-"#;
 
 /// The project select, 10pt under the task field.
 const PROJECT: (f32, f32) = (100.0, 72.0);
@@ -1173,7 +1558,7 @@ const SECOND_PROJECT: (f32, f32) = (100.0, 145.0);
 
 #[test]
 fn a_combobox_that_does_not_open_on_focus_leaves_the_select_under_it_to_be_picked() {
-    let (app, mut window) = open(EDIT_FORM);
+    let (app, mut window) = open(edit_form());
     settle(&app, &mut window, shows("Task=Standup, project=a."));
     // The field has the keyboard, and its two tasks aren't listed over the select: a press there opens the select. The
     // list was open, and the press picked "FE Standup" as the task, so the project couldn't be changed.
@@ -1193,31 +1578,65 @@ fn a_combobox_that_does_not_open_on_focus_leaves_the_select_under_it_to_be_picke
 /// Cyclops' project picker as wings-plugin-ui/native's `Combobox` renders one without `freeText`: the field shows the
 /// project picked, selects it when it takes the keyboard and hears when it loses it, and every project that matches
 /// what's typed is a chip with its client after its name.
-const PROJECT_PICKER: &str = r#"
-const projects = [['p1','Wings','Prototyp'],['p2','Website','Acme'],...Array.from({length:20},(_,i)=>['q'+i,'Project '+(i+1),'Client '+(i+1)])];
-let picked = 'p1', query = null;
-function render(){
-  const pick = projects.find(p => p[0] === picked);
-  const found = projects.filter(p => (p[1]+' '+p[2]).toLowerCase().includes((query ?? '').toLowerCase()));
-  const under = found.length
-    ? [{id:4,type:'Row',props:{gap:'s',wrap:true},children:found.map(p=>{const i=projects.indexOf(p);return {id:100+3*i,type:'Button',props:{chip:true,pressed:false,onClick:(100+3*i)+':onClick'},children:[{id:101+3*i,type:'#text',text:p[1]},{id:102+3*i,type:'Text',props:{size:'small',tone:'muted'},children:[{id:1000+i,type:'#text',text:p[2]}]}]};})}]
-    : [{id:5,type:'Text',props:{size:'small',tone:'muted'},children:[{id:6,type:'#text',text:'No matching projects.'}]}];
-  wings.render(JSON.stringify({id:0,type:'#root',children:[
-    {id:1,type:'Stack',props:{gap:'s'},children:[{id:3,type:'TextInput',props:{label:'Project',value:query ?? pick[1]+' · '+pick[2],maxLength:2000,selectOnFocus:true,onBlur:'3:onBlur',onChange:'3:onChange'}},...under]},
-    {id:9,type:'Text',children:[{id:10,type:'#text',text:'Project='+picked+', query='+query+'.'}]}]}));
+fn project_picker() -> String {
+    let mut projects: Vec<(String, String, String)> = vec![
+        ("p1".into(), "Wings".into(), "Prototyp".into()),
+        ("p2".into(), "Website".into(), "Acme".into()),
+    ];
+    projects.extend((0..20).map(|i| {
+        (
+            format!("q{i}"),
+            format!("Project {}", i + 1),
+            format!("Client {}", i + 1),
+        )
+    }));
+    let (mut picked, mut query) = ("p1".to_owned(), None::<String>);
+    fake::page("page", move |event| {
+        match event {
+            Some(("3:onChange", change)) => {
+                query = Some(change["value"].as_str().unwrap_or_default().to_owned())
+            }
+            Some(("3:onBlur", _)) => query = None,
+            Some((handler, _)) => {
+                picked = projects[(number(handler) - 100) / 3].0.clone();
+                query = None;
+            }
+            None => {}
+        }
+        let pick = projects.iter().find(|p| p.0 == picked).unwrap();
+        let asked = query.clone().unwrap_or_default().to_lowercase();
+        let under = if projects
+            .iter()
+            .any(|p| format!("{} {}", p.1, p.2).to_lowercase().contains(&asked))
+        {
+            let chips: Vec<Value> = projects
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| format!("{} {}", p.1, p.2).to_lowercase().contains(&asked))
+                .map(|(i, p)| {
+                    json!({ "id": 100 + 3 * i, "type": "Button", "props": { "chip": true, "pressed": false, "onClick": format!("{}:onClick", 100 + 3 * i) },
+                        "children": [text_node(101 + 3 * i, &p.1),
+                            { "id": 102 + 3 * i, "type": "Text", "props": { "size": "small", "tone": "muted" }, "children": [text_node(1000 + i, &p.2)] }] })
+                })
+                .collect();
+            json!({ "id": 4, "type": "Row", "props": { "gap": "s", "wrap": true }, "children": chips })
+        } else {
+            json!({ "id": 5, "type": "Text", "props": { "size": "small", "tone": "muted" }, "children": [text_node(6, "No matching projects.")] })
+        };
+        let shown = query
+            .clone()
+            .unwrap_or_else(|| format!("{} · {}", pick.1, pick.2));
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "Stack", "props": { "gap": "s" }, "children": [
+                { "id": 3, "type": "TextInput", "props": { "label": "Project", "value": shown, "maxLength": 2000, "selectOnFocus": true,
+                    "onBlur": "3:onBlur", "onChange": "3:onChange" } }, under] },
+            text(9, 10, format!("Project={picked}, query={}.", query.as_deref().unwrap_or("null"))) ] })
+    })
 }
-globalThis.__wingsEvent=(handler,json)=>{
-  if(handler==='3:onChange') query=JSON.parse(json).value;
-  else if(handler==='3:onBlur') query=null;
-  else { picked=projects[(parseInt(handler)-100)/3][0]; query=null; }
-  render(); return true;
-};
-render();
-"#;
 
 #[test]
 fn a_picker_lists_every_project_with_its_client_and_typing_replaces_the_pick_to_search_them() {
-    let (app, mut window) = open(PROJECT_PICKER);
+    let (app, mut window) = open(project_picker());
     settle(&app, &mut window, shows("Project=p1, query=null."));
     // Taking the keyboard lists the projects over the page, each name with its client beside it, not run into it.
     click(&mut window, TASK);
@@ -1246,17 +1665,21 @@ fn a_picker_lists_every_project_with_its_client_and_typing_replaces_the_pick_to_
 }
 
 /// Cyclops' start time, a `type="time"` input holding 08:30, and what the page hears.
-const START_TIME: &str = r#"
-let start = '08:30';
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
-{id:3,type:'TextInput',props:{label:'Start',type:'time',value:start,onChange:'3:onChange'}},
-{id:9,type:'Text',children:[{id:10,type:'#text',text:'Start='+start+'.'}]}]}));}
-globalThis.__wingsEvent=(_,json)=>{start=JSON.parse(json).value;render();return true;};render();
-"#;
+fn start_time() -> String {
+    let mut start = "08:30".to_owned();
+    fake::page("page", move |event| {
+        if let Some((_, change)) = event {
+            start = change["value"].as_str().unwrap_or_default().to_owned();
+        }
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 3, "type": "TextInput", "props": { "label": "Start", "type": "time", "value": start, "onChange": "3:onChange" } },
+            text(9, 10, format!("Start={start}.")) ] })
+    })
+}
 
 #[test]
 fn a_time_input_types_over_its_hours_and_minutes_and_steps_them_with_the_arrows() {
-    let (app, mut window) = open(START_TIME);
+    let (app, mut window) = open(start_time());
     settle(&app, &mut window, shows("Start=08:30."));
     // The keyboard comes to the hours: 1 and 0 make them 10, over the 08 that is there, and move on to the minutes.
     window.update(|_, window, cx| window.focus_next(cx));
@@ -1282,20 +1705,22 @@ fn a_time_input_types_over_its_hours_and_minutes_and_steps_them_with_the_arrows(
 }
 
 /// Cyclops' entry: its task and its time, and an edit button among the row's actions.
-const ENTRY_ACTIONS: &str = r#"
-let edited = 0;
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
-{id:1,type:'List',children:[{id:2,type:'ListItem',children:[
-  {id:3,type:'Text',props:{grow:true},children:[{id:4,type:'#text',text:'Code review'}]},
-  {id:5,type:'Text',children:[{id:6,type:'#text',text:'45m'}]},
-  {id:7,type:'Slot',props:{name:'actions'},children:[{id:8,type:'Button',props:{variant:'ghost',size:'icon-sm',label:'Edit Code review',onClick:'8:click'},children:[{id:9,type:'#text',text:'E'}]}]}]}]},
-{id:10,type:'Text',children:[{id:11,type:'#text',text:'Edited '+edited+'.'}]}]}));}
-globalThis.__wingsEvent=()=>{edited++;render();return true;};render();
-"#;
+fn entry_actions() -> String {
+    counting(|edited| {
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "List", "children": [{ "id": 2, "type": "ListItem", "children": [
+                { "id": 3, "type": "Text", "props": { "grow": true }, "children": [text_node(4, "Code review")] },
+                text(5, 6, "45m".into()),
+                { "id": 7, "type": "Slot", "props": { "name": "actions" }, "children": [
+                    { "id": 8, "type": "Button", "props": { "variant": "ghost", "size": "icon-sm", "label": "Edit Code review", "onClick": "8:click" },
+                        "children": [text_node(9, "E")] }] }] }] },
+            text(10, 11, format!("Edited {edited}.")) ] })
+    })
+}
 
 #[test]
 fn a_list_items_actions_sit_over_its_end_and_take_a_click_or_the_keyboard() {
-    let (app, mut window) = open_narrow(ENTRY_ACTIONS, 300.0);
+    let (app, mut window) = open_narrow(entry_actions(), 300.0);
     settle(&app, &mut window, shows("Edited 0."));
     // Over the row's end, 6pt in from it, where the 45m is: the page dropped them.
     assert!(pressed_at(&app, &mut window, (266.0, 32.0), "Edited 1."));
@@ -1307,19 +1732,20 @@ fn a_list_items_actions_sit_over_its_end_and_take_a_click_or_the_keyboard() {
 }
 
 /// An issue's title row: a large title that doesn't grow, and its key after it on its baseline.
-const TITLE_ROW: &str = r#"
-let heard = 0;
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
-{id:1,type:'Row',props:{gap:'l',align:'baseline'},children:[
-{id:2,type:'Text',props:{size:'large',weight:'strong'},children:[{id:3,type:'#text',text:'Backfill order totals for rows created before the currency column existed'}]},
-{id:4,type:'Text',props:{size:'small',mono:true,onClick:'4:click'},children:[{id:5,type:'#text',text:'WEB-3'}]}]},
-{id:6,type:'Text',children:[{id:7,type:'#text',text:'Heard '+heard+'.'}]}]}));}
-globalThis.__wingsEvent=()=>{heard++;render();return true;};render();
-"#;
+fn title_row() -> String {
+    counting(|heard| {
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "Row", "props": { "gap": "l", "align": "baseline" }, "children": [
+                { "id": 2, "type": "Text", "props": { "size": "large", "weight": "strong" }, "children": [
+                    text_node(3, "Backfill order totals for rows created before the currency column existed")] },
+                { "id": 4, "type": "Text", "props": { "size": "small", "mono": true, "onClick": "4:click" }, "children": [text_node(5, "WEB-3")] }] },
+            text(6, 7, format!("Heard {heard}.")) ] })
+    })
+}
 
 #[test]
 fn a_title_in_a_baseline_row_wraps_and_keeps_its_key_beside_it() {
-    let (app, mut window) = open_narrow(TITLE_ROW, 300.0);
+    let (app, mut window) = open_narrow(title_row(), 300.0);
     settle(&app, &mut window, shows("Heard 0."));
     // The key is clickable, so a click finds it: on the title's first line, at the frame's right, after the title has
     // wrapped. GPUI took the narrowest the title could be as its whole line, so the key sat past the frame's edge.
@@ -1328,20 +1754,28 @@ fn a_title_in_a_baseline_row_wraps_and_keeps_its_key_beside_it() {
 
 /// Issues' title as the native page draws it: a ghost button that wraps the large title, then the key, which can be
 /// pressed here. The page hears the title's click and the F2 sent to it.
-const WRAPPED_TITLE: &str = r#"
-let edited = 0, keyed = 0, f2 = 0;
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
-{id:1,type:'Row',props:{gap:'m',align:'baseline'},children:[
-{id:2,type:'Button',props:{variant:'ghost',wrap:true,label:'Edit the title',onClick:'2:click',onKeyDown:'2:key'},children:[
-{id:3,type:'Text',props:{size:'large',weight:'strong'},children:[{id:4,type:'#text',text:'Backfill order totals for rows created before the currency column existed'}]}]},
-{id:5,type:'Text',props:{size:'small',mono:true,onClick:'5:click'},children:[{id:6,type:'#text',text:'WEB-3'}]}]},
-{id:7,type:'Text',children:[{id:8,type:'#text',text:'Edited '+edited+', keyed '+keyed+', F2 '+f2+'.'}]}]}));}
-globalThis.__wingsEvent=(handler,json)=>{if(handler==='2:click')edited++;else if(handler==='5:click')keyed++;else if(JSON.parse(json).key==='F2')f2++;render();return true;};render();
-"#;
+fn wrapped_title() -> String {
+    let (mut edited, mut keyed, mut f2) = (0, 0, 0);
+    fake::page("page", move |event| {
+        match event {
+            Some(("2:click", _)) => edited += 1,
+            Some(("5:click", _)) => keyed += 1,
+            Some((_, key)) if key["key"] == "F2" => f2 += 1,
+            _ => {}
+        }
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "Row", "props": { "gap": "m", "align": "baseline" }, "children": [
+                { "id": 2, "type": "Button", "props": { "variant": "ghost", "wrap": true, "label": "Edit the title", "onClick": "2:click", "onKeyDown": "2:key" }, "children": [
+                    { "id": 3, "type": "Text", "props": { "size": "large", "weight": "strong" }, "children": [
+                        text_node(4, "Backfill order totals for rows created before the currency column existed")] }] },
+                { "id": 5, "type": "Text", "props": { "size": "small", "mono": true, "onClick": "5:click" }, "children": [text_node(6, "WEB-3")] }] },
+            text(7, 8, format!("Edited {edited}, keyed {keyed}, F2 {f2}.")) ] })
+    })
+}
 
 #[test]
 fn a_wrap_button_is_as_tall_as_its_lines_keeps_the_key_beside_it_and_hears_f2() {
-    let (app, mut window) = open_narrow(WRAPPED_TITLE, 300.0);
+    let (app, mut window) = open_narrow(wrapped_title(), 300.0);
     settle(&app, &mut window, shows("Edited 0, keyed 0, F2 0."));
     // The title's third line, 26pt lines under the button's 3pt of border and padding, is the button: it was one 32pt
     // line that ran on past the frame, pushing the key out of it.
@@ -1358,22 +1792,29 @@ fn a_wrap_button_is_as_tall_as_its_lines_keeps_the_key_beside_it_and_hears_f2() 
 
 /// Issues' linked issue as the native page draws it: an outlined chip of a dot, the key and a title cut short, with an
 /// × beside it.
-const LINKED_ISSUE: &str = r#"
-let opened = 0, removed = 0;
-function render(){wings.render(JSON.stringify({id:0,type:'#root',children:[
-{id:1,type:'Row',props:{gap:'s'},children:[
-{id:2,type:'Button',props:{variant:'outline',size:'xs',onClick:'2:click'},children:[
-{id:3,type:'Dot',props:{tone:'info'}},
-{id:4,type:'Text',props:{tone:'muted',size:'tiny',mono:true},children:[{id:5,type:'#text',text:'WEB-8'}]},
-{id:6,type:'Text',props:{grow:true,truncate:true},children:[{id:7,type:'#text',text:'Order history landing page: tabs, design alignment, page and tab events'}]}]},
-{id:8,type:'Button',props:{variant:'ghost',size:'icon-xs',label:'Remove WEB-8',onClick:'8:click'},children:[{id:9,type:'#text',text:'×'}]}]},
-{id:10,type:'Text',children:[{id:11,type:'#text',text:'Opened '+opened+', removed '+removed+'.'}]}]}));}
-globalThis.__wingsEvent=(handler)=>{if(handler==='8:click')removed++;else opened++;render();return true;};render();
-"#;
+fn linked_issue() -> String {
+    let (mut opened, mut removed) = (0, 0);
+    fake::page("page", move |event| {
+        match event {
+            Some(("8:click", _)) => removed += 1,
+            Some(_) => opened += 1,
+            None => {}
+        }
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "Row", "props": { "gap": "s" }, "children": [
+                { "id": 2, "type": "Button", "props": { "variant": "outline", "size": "xs", "onClick": "2:click" }, "children": [
+                    { "id": 3, "type": "Dot", "props": { "tone": "info" } },
+                    { "id": 4, "type": "Text", "props": { "tone": "muted", "size": "tiny", "mono": true }, "children": [text_node(5, "WEB-8")] },
+                    { "id": 6, "type": "Text", "props": { "grow": true, "truncate": true }, "children": [
+                        text_node(7, "Order history landing page: tabs, design alignment, page and tab events")] }] },
+                { "id": 8, "type": "Button", "props": { "variant": "ghost", "size": "icon-xs", "label": "Remove WEB-8", "onClick": "8:click" }, "children": [text_node(9, "×")] }] },
+            text(10, 11, format!("Opened {opened}, removed {removed}.")) ] })
+    })
+}
 
 #[test]
 fn a_button_with_a_truncated_text_narrows_to_its_row_and_leaves_room_for_the_rest() {
-    let (app, mut window) = open_narrow(LINKED_ISSUE, 300.0);
+    let (app, mut window) = open_narrow(linked_issue(), 300.0);
     settle(&app, &mut window, shows("Opened 0, removed 0."));
     // The × is the row's last 24pt, inside the page's 14pt of padding: the chip kept the whole title's width and ran past
     // the frame's edge, taking the × with it.
@@ -1431,28 +1872,35 @@ fn a_baseline_row_starts_a_smaller_text_lower_so_their_baselines_meet() {
 }
 
 /// Forty buttons in the start pane of a split on a page that fills its frame, Disk usage's list of files.
-const SPLIT_LIST: &str = r#"
-let hit = -1;
-function render(){
-const rows = Array.from({length:40}, (_,i)=>({id:10+i,type:'Button',props:{onClick:(10+i)+':click'},children:[{id:100+i,type:'#text',text:'Row '+i}]}));
-wings.render(JSON.stringify({id:0,type:'#root',props:{fill:true},children:[{id:1,type:'Split',props:{defaultSize:200},children:[
-{id:2,type:'Slot',props:{name:'start'},children:[{id:3,type:'Stack',props:{grow:true},children:rows}]},
-{id:4,type:'Slot',props:{name:'end'},children:[{id:5,type:'Text',children:[{id:6,type:'#text',text:'Hit '+hit}]}]}]}]}));}
-globalThis.__wingsEvent=(handler)=>{hit=parseInt(handler)-10;render();return true;};render();
-"#;
+fn split_list() -> String {
+    let mut hit = -1;
+    fake::page("page", move |event| {
+        if let Some((handler, _)) = event {
+            hit = number(handler) as i32 - 10;
+        }
+        let rows: Vec<Value> = (0..40)
+            .map(|i| json!({ "id": 10 + i, "type": "Button", "props": { "onClick": format!("{}:click", 10 + i) }, "children": [text_node(100 + i, &format!("Row {i}"))] }))
+            .collect();
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Split", "props": { "defaultSize": 200 }, "children": [
+            { "id": 2, "type": "Slot", "props": { "name": "start" }, "children": [{ "id": 3, "type": "Stack", "props": { "grow": true }, "children": rows }] },
+            { "id": 4, "type": "Slot", "props": { "name": "end" }, "children": [text(5, 6, format!("Hit {hit}"))] }] }] })
+    })
+}
 
 /// As the desktop's split panes do, a pane taller than the frame scrolls: the wheel brings later rows up to click.
 #[test]
 fn a_split_pane_longer_than_its_frame_scrolls() {
     let mut app = TestApp::new();
     app.background_executor().allow_parking();
+    let host = hosted(&mut app);
+    let source = split_list();
     let bounds = gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(500.0), px(300.0)));
     let mut window = app.open_window_with_options(
         gpui::WindowOptions {
             window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
             ..Default::default()
         },
-        |_, cx| PageView::new(SPLIT_LIST, cx),
+        |_, cx| PageView::in_plugin(&host, &source, cx),
     );
     settle(&app, &mut window, shows("Hit -1"));
     window.simulate_event(gpui::ScrollEvent {

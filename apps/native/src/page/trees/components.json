@@ -1,0 +1,737 @@
+{
+  "id": 0,
+  "type": "#root",
+  "props": {
+    "fill": true
+  },
+  "children": [
+    {
+      "id": 94,
+      "type": "Page",
+      "props": {},
+      "children": [
+        {
+          "id": 7,
+          "type": "Slot",
+          "props": {
+            "name": "toolbar"
+          },
+          "children": [
+            {
+              "id": 6,
+              "type": "Toolbar",
+              "props": {},
+              "children": [
+                {
+                  "id": 2,
+                  "type": "Slot",
+                  "props": {
+                    "name": "title"
+                  },
+                  "children": [
+                    {
+                      "id": 1,
+                      "type": "#text",
+                      "text": "Components"
+                    }
+                  ]
+                },
+                {
+                  "id": 5,
+                  "type": "Slot",
+                  "props": {
+                    "name": "actions"
+                  },
+                  "children": [
+                    {
+                      "id": 4,
+                      "type": "Badge",
+                      "props": {
+                        "tone": "info"
+                      },
+                      "children": [
+                        {
+                          "id": 3,
+                          "type": "#text",
+                          "text": "Preview"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": 93,
+          "type": "Slot",
+          "props": {
+            "name": "body"
+          },
+          "children": [
+            {
+              "id": 12,
+              "type": "Row",
+              "props": {
+                "gap": "m"
+              },
+              "children": [
+                {
+                  "id": 9,
+                  "type": "Button",
+                  "props": {
+                    "onClick": "9:onClick"
+                  },
+                  "children": [
+                    {
+                      "id": 8,
+                      "type": "#text",
+                      "text": "Refresh"
+                    }
+                  ]
+                },
+                {
+                  "id": 11,
+                  "type": "Text",
+                  "props": {
+                    "tone": "muted",
+                    "size": "small",
+                    "truncate": true,
+                    "grow": true
+                  },
+                  "children": [
+                    {
+                      "id": 10,
+                      "type": "#text",
+                      "text": "Session web, refreshed 0, retried 0"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": 13,
+              "type": "Select",
+              "props": {
+                "label": "Session",
+                "options": [
+                  {
+                    "value": "web",
+                    "label": "web · Refactor the API client"
+                  },
+                  {
+                    "value": "api",
+                    "label": "api · Fix the login redirect"
+                  },
+                  {
+                    "value": "docs",
+                    "label": "docs · Archived",
+                    "disabled": true
+                  }
+                ],
+                "value": "web",
+                "onChange": "13:onChange"
+              },
+              "children": []
+            },
+            {
+              "id": 33,
+              "type": "Disclosure",
+              "props": {},
+              "children": [
+                {
+                  "id": 15,
+                  "type": "Slot",
+                  "props": {
+                    "name": "summary"
+                  },
+                  "children": [
+                    {
+                      "id": 14,
+                      "type": "#text",
+                      "text": "2 need sign-in"
+                    }
+                  ]
+                },
+                {
+                  "id": 32,
+                  "type": "Slot",
+                  "props": {
+                    "name": "body"
+                  },
+                  "children": [
+                    {
+                      "id": 28,
+                      "type": "List",
+                      "props": {},
+                      "children": [
+                        {
+                          "id": 21,
+                          "type": "ListItem",
+                          "props": {},
+                          "children": [
+                            {
+                              "id": 16,
+                              "type": "Dot",
+                              "props": {
+                                "tone": "muted"
+                              },
+                              "children": []
+                            },
+                            {
+                              "id": 18,
+                              "type": "Text",
+                              "props": {
+                                "truncate": true,
+                                "grow": true
+                              },
+                              "children": [
+                                {
+                                  "id": 17,
+                                  "type": "#text",
+                                  "text": "notes"
+                                }
+                              ]
+                            },
+                            {
+                              "id": 20,
+                              "type": "Text",
+                              "props": {
+                                "tone": "muted"
+                              },
+                              "children": [
+                                {
+                                  "id": 19,
+                                  "type": "#text",
+                                  "text": "Needs sign-in"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "id": 27,
+                          "type": "ListItem",
+                          "props": {},
+                          "children": [
+                            {
+                              "id": 22,
+                              "type": "Dot",
+                              "props": {
+                                "tone": "muted"
+                              },
+                              "children": []
+                            },
+                            {
+                              "id": 24,
+                              "type": "Text",
+                              "props": {
+                                "truncate": true,
+                                "grow": true
+                              },
+                              "children": [
+                                {
+                                  "id": 23,
+                                  "type": "#text",
+                                  "text": "calendar"
+                                }
+                              ]
+                            },
+                            {
+                              "id": 26,
+                              "type": "Text",
+                              "props": {
+                                "tone": "muted"
+                              },
+                              "children": [
+                                {
+                                  "id": 25,
+                                  "type": "#text",
+                                  "text": "Needs sign-in"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "id": 31,
+                      "type": "Row",
+                      "props": {},
+                      "children": [
+                        {
+                          "id": 30,
+                          "type": "Button",
+                          "props": {
+                            "variant": "outline",
+                            "onClick": "30:onClick"
+                          },
+                          "children": [
+                            {
+                              "id": 29,
+                              "type": "#text",
+                              "text": "Retry"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": 35,
+              "type": "Heading",
+              "props": {},
+              "children": [
+                {
+                  "id": 34,
+                  "type": "#text",
+                  "text": "Usage"
+                }
+              ]
+            },
+            {
+              "id": 46,
+              "type": "Card",
+              "props": {},
+              "children": [
+                {
+                  "id": 38,
+                  "type": "Gauge",
+                  "props": {
+                    "label": "5-hour limit",
+                    "percent": 40,
+                    "levels": [
+                      70,
+                      90
+                    ]
+                  },
+                  "children": [
+                    {
+                      "id": 37,
+                      "type": "Slot",
+                      "props": {
+                        "name": "note"
+                      },
+                      "children": [
+                        {
+                          "id": 36,
+                          "type": "#text",
+                          "text": "Resets in 2h 10m"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": 41,
+                  "type": "Gauge",
+                  "props": {
+                    "label": "Weekly limit",
+                    "percent": 85,
+                    "levels": [
+                      70,
+                      90
+                    ]
+                  },
+                  "children": [
+                    {
+                      "id": 40,
+                      "type": "Slot",
+                      "props": {
+                        "name": "note"
+                      },
+                      "children": [
+                        {
+                          "id": 39,
+                          "type": "#text",
+                          "text": "Resets in 3d 4h"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": 44,
+                  "type": "Gauge",
+                  "props": {
+                    "label": "Memory",
+                    "percent": 96,
+                    "levels": [
+                      70,
+                      90
+                    ]
+                  },
+                  "children": [
+                    {
+                      "id": 43,
+                      "type": "Slot",
+                      "props": {
+                        "name": "note"
+                      },
+                      "children": [
+                        {
+                          "id": 42,
+                          "type": "#text",
+                          "text": "15.4 GB of 16 GB in use"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": 45,
+                  "type": "Gauge",
+                  "props": {
+                    "label": "Disk",
+                    "percent": 12
+                  },
+                  "children": []
+                }
+              ]
+            },
+            {
+              "id": 48,
+              "type": "Heading",
+              "props": {},
+              "children": [
+                {
+                  "id": 47,
+                  "type": "#text",
+                  "text": "MCP servers (5)"
+                }
+              ]
+            },
+            {
+              "id": 77,
+              "type": "List",
+              "props": {},
+              "children": [
+                {
+                  "id": 52,
+                  "type": "ListItem",
+                  "props": {},
+                  "children": [
+                    {
+                      "id": 49,
+                      "type": "Dot",
+                      "props": {},
+                      "children": []
+                    },
+                    {
+                      "id": 51,
+                      "type": "Text",
+                      "props": {
+                        "truncate": true,
+                        "grow": true
+                      },
+                      "children": [
+                        {
+                          "id": 50,
+                          "type": "#text",
+                          "text": "filesystem"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": 58,
+                  "type": "ListItem",
+                  "props": {},
+                  "children": [
+                    {
+                      "id": 53,
+                      "type": "Dot",
+                      "props": {
+                        "tone": "info"
+                      },
+                      "children": []
+                    },
+                    {
+                      "id": 55,
+                      "type": "Text",
+                      "props": {
+                        "truncate": true,
+                        "grow": true
+                      },
+                      "children": [
+                        {
+                          "id": 54,
+                          "type": "#text",
+                          "text": "browser"
+                        }
+                      ]
+                    },
+                    {
+                      "id": 57,
+                      "type": "Text",
+                      "props": {
+                        "tone": "muted"
+                      },
+                      "children": [
+                        {
+                          "id": 56,
+                          "type": "#text",
+                          "text": "Used"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": 64,
+                  "type": "ListItem",
+                  "props": {},
+                  "children": [
+                    {
+                      "id": 59,
+                      "type": "Dot",
+                      "props": {
+                        "tone": "warn"
+                      },
+                      "children": []
+                    },
+                    {
+                      "id": 61,
+                      "type": "Text",
+                      "props": {
+                        "truncate": true,
+                        "grow": true
+                      },
+                      "children": [
+                        {
+                          "id": 60,
+                          "type": "#text",
+                          "text": "search"
+                        }
+                      ]
+                    },
+                    {
+                      "id": 63,
+                      "type": "Text",
+                      "props": {
+                        "tone": "muted"
+                      },
+                      "children": [
+                        {
+                          "id": 62,
+                          "type": "#text",
+                          "text": "Last call failed"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": 70,
+                  "type": "ListItem",
+                  "props": {},
+                  "children": [
+                    {
+                      "id": 65,
+                      "type": "Dot",
+                      "props": {
+                        "tone": "danger"
+                      },
+                      "children": []
+                    },
+                    {
+                      "id": 67,
+                      "type": "Text",
+                      "props": {
+                        "truncate": true,
+                        "grow": true
+                      },
+                      "children": [
+                        {
+                          "id": 66,
+                          "type": "#text",
+                          "text": "database"
+                        }
+                      ]
+                    },
+                    {
+                      "id": 69,
+                      "type": "Text",
+                      "props": {
+                        "tone": "danger"
+                      },
+                      "children": [
+                        {
+                          "id": 68,
+                          "type": "#text",
+                          "text": "Failed"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": 76,
+                  "type": "ListItem",
+                  "props": {},
+                  "children": [
+                    {
+                      "id": 71,
+                      "type": "Dot",
+                      "props": {
+                        "tone": "muted"
+                      },
+                      "children": []
+                    },
+                    {
+                      "id": 73,
+                      "type": "Text",
+                      "props": {
+                        "truncate": true,
+                        "grow": true
+                      },
+                      "children": [
+                        {
+                          "id": 72,
+                          "type": "#text",
+                          "text": "a server with a very long name that has to be cut short somewhere before the edge"
+                        }
+                      ]
+                    },
+                    {
+                      "id": 75,
+                      "type": "Text",
+                      "props": {
+                        "tone": "muted"
+                      },
+                      "children": [
+                        {
+                          "id": 74,
+                          "type": "#text",
+                          "text": "Connecting"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": 79,
+              "type": "Heading",
+              "props": {},
+              "children": [
+                {
+                  "id": 78,
+                  "type": "#text",
+                  "text": "Skills (3)"
+                }
+              ]
+            },
+            {
+              "id": 92,
+              "type": "List",
+              "props": {},
+              "children": [
+                {
+                  "id": 83,
+                  "type": "ListItem",
+                  "props": {},
+                  "children": [
+                    {
+                      "id": 82,
+                      "type": "Stack",
+                      "props": {
+                        "gap": "none",
+                        "grow": true
+                      },
+                      "children": [
+                        {
+                          "id": 81,
+                          "type": "Text",
+                          "props": {
+                            "truncate": true
+                          },
+                          "children": [
+                            {
+                              "id": 80,
+                              "type": "#text",
+                              "text": "review"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": 87,
+                  "type": "ListItem",
+                  "props": {},
+                  "children": [
+                    {
+                      "id": 86,
+                      "type": "Stack",
+                      "props": {
+                        "gap": "none",
+                        "grow": true
+                      },
+                      "children": [
+                        {
+                          "id": 85,
+                          "type": "Text",
+                          "props": {
+                            "truncate": true
+                          },
+                          "children": [
+                            {
+                              "id": 84,
+                              "type": "#text",
+                              "text": "simplify"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": 91,
+                  "type": "ListItem",
+                  "props": {},
+                  "children": [
+                    {
+                      "id": 90,
+                      "type": "Stack",
+                      "props": {
+                        "gap": "none",
+                        "grow": true
+                      },
+                      "children": [
+                        {
+                          "id": 89,
+                          "type": "Text",
+                          "props": {
+                            "truncate": true
+                          },
+                          "children": [
+                            {
+                              "id": 88,
+                              "type": "#text",
+                              "text": "run"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
