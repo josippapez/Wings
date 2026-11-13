@@ -233,6 +233,8 @@ pub struct Text {
     pub grow: bool,
     /// What to send back to the page when the text is clicked, for a link inside a line of text.
     pub on_click: Option<String>,
+    /// The hover text, drawn as the app's tooltip.
+    pub title: Option<String>,
     pub children: Vec<Node>,
 }
 
@@ -247,6 +249,8 @@ pub struct Button {
     pub disabled: bool,
     /// The name a screen reader says, when it isn't the button's text (an icon button's).
     pub label: Option<String>,
+    /// The hover text, drawn as the app's tooltip. It describes the button; `label` still names it.
+    pub title: Option<String>,
     /// Its text wraps onto the lines it needs, from its start, and it's as tall as they are: an issue's title that is
     /// a button, as plugin-ui.css's `.w-button[data-wrap]`.
     pub wrap: bool,
@@ -910,6 +914,7 @@ impl Walk {
                 on_click: str_prop(&props, "onClick")
                     .filter(|handler| valid_handler(handler))
                     .map(str::to_owned),
+                title: title(&props),
                 children: parts(children),
             }),
             "Avatar" => Node::Avatar(Avatar {
@@ -941,6 +946,7 @@ impl Walk {
                 pressed: on("pressed"),
                 disabled: on("disabled"),
                 label: str_prop(&props, "label").map(|label| cut(label.to_owned())),
+                title: title(&props),
                 wrap: on("wrap"),
                 on_click: handler("onClick"),
                 on_key_down: handler("onKeyDown"),
@@ -1154,6 +1160,7 @@ impl Walk {
                     pressed: false,
                     disabled: on("disabled"),
                     label: None,
+                    title: None,
                     wrap: false,
                     on_click: handler("onClick"),
                     on_key_down: handler("onKeyDown"),
@@ -1202,6 +1209,13 @@ fn str_prop<'a>(props: &'a Map<String, Value>, name: &str) -> Option<&'a str> {
 /// A string prop as text the page shows, cut to `MAX_TEXT_CHARS`, or nothing when it isn't one.
 fn text_prop(props: &Map<String, Value>, name: &str) -> String {
     cut(str_prop(props, name).unwrap_or_default().to_owned())
+}
+
+/// A `title`: the hover text, none when empty.
+fn title(props: &Map<String, Value>) -> Option<String> {
+    str_prop(props, "title")
+        .filter(|title| !title.is_empty())
+        .map(|title| cut(title.to_owned()))
 }
 
 fn number(props: &Map<String, Value>, name: &str) -> Option<f64> {
@@ -1387,6 +1401,31 @@ mod tests {
         assert_eq!(button.variant, Variant::Outline);
         assert_eq!(button.on_click.as_deref(), Some("2:onClick"));
         assert_eq!(parsed.text(), "Pilot Go");
+    }
+
+    #[test]
+    fn a_button_and_a_text_keep_their_title_and_none_when_it_is_absent_or_empty() {
+        let parsed = tree(json!([
+            button(json!({"title":"Opens a terminal"})),
+            button(json!({"title":""})),
+            button(json!({})),
+            {"id":50,"type":"Text","props":{"title":"/work"},"children":[]},
+            {"id":51,"type":"Text","props":{},"children":[]},
+        ]))
+        .unwrap();
+        let titles: Vec<_> = parsed
+            .children
+            .iter()
+            .map(|node| match node {
+                Node::Button(button) => button.title.as_deref(),
+                Node::Text(text) => text.title.as_deref(),
+                _ => panic!("a button or a text"),
+            })
+            .collect();
+        assert_eq!(
+            titles,
+            [Some("Opens a terminal"), None, None, Some("/work"), None]
+        );
     }
 
     #[test]

@@ -6,6 +6,7 @@
 //! and Sprint block, and with `--tasks` the Issues board, list, issue and block, each over made-up data. With
 //! `--external <folder>` it renders the separately shipped Sprint board, Cyclops and Claude accounts plugins from their
 //! repos in that folder, popovers too (`shot_plugins/external.rs`).
+//! `--tooltips` points at a titled Button and Text of a made-up page until their tooltips show.
 //! Nothing shows on screen and focus doesn't move. macOS only (real Metal rendering).
 //!
 //! cargo run --manifest-path apps/native/Cargo.toml --example shot_plugins --features test-support -- <out-dir>
@@ -16,7 +17,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gpui::{AnyWindowHandle, AppContext, VisualTestAppContext, px, size};
+use gpui::{AnyWindowHandle, AppContext, Modifiers, VisualTestAppContext, point, px, size};
 use serde_json::json;
 use wings_native::{
     actions,
@@ -103,6 +104,10 @@ fn main() {
             .nth(at + 1)
             .expect("--external <folder of the plugin repos>");
         external::external(out, root.into());
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--tooltips") {
+        tooltips(out);
         return;
     }
     if std::env::args().any(|arg| arg == "--tasks") {
@@ -274,6 +279,34 @@ fn changes(out: PathBuf) {
             // The pick is kept per repo, and the next width starts on Files again.
             assert!(handle.read_with(&cx, |view, _| view.press_chip("Files")).unwrap());
             wait(&mut cx, window, Duration::from_millis(300));
+        }
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+    }
+}
+
+/// A page with a titled Button and a titled Text, each pointed at until its tooltip shows.
+fn tooltips(out: PathBuf) {
+    let words = |id: u64, text: &str| json!([{ "id": id, "type": "#text", "text": text }]);
+    let source = fake::page("page", move |_| {
+        json!({ "id": 0, "type": "#root", "children": [{ "id": 1, "type": "Page", "children": [
+            { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [
+                { "id": 3, "type": "Button", "props": { "variant": "outline", "title": "Opens a terminal as this account running claude auth login" }, "children": words(4, "Sign in") },
+                { "id": 5, "type": "Text", "props": { "tone": "muted", "title": "/Users/ada/.claude-work" }, "children": words(6, "ada@example.com") }] }] }] })
+    });
+    let host = PluginHost::new(PluginConfig { id: "tooltips".into(), root: out.join("fixture-storage-tooltips"), scope: "shot".into() });
+    let mut cx = app();
+    for width in [1000.0, 640.0] {
+        let handle = cx.open_offscreen_window(size(px(width), px(240.0)), |_, cx| cx.new(|cx| PageView::in_plugin(&host, &source, cx))).unwrap();
+        let window = handle.into();
+        wait(&mut cx, window, Duration::from_millis(800));
+        for (name, at) in [("button", point(px(40.0), px(44.0))), ("text", point(px(40.0), px(80.0)))] {
+            cx.simulate_mouse_move(window, at, None, Modifiers::default());
+            wait(&mut cx, window, Duration::from_millis(100));
+            cx.advance_clock(Duration::from_millis(600));
+            wait(&mut cx, window, Duration::from_millis(100));
+            save(&mut cx, window, out.join(format!("tooltip-{name}-{width}.png")));
+            cx.simulate_mouse_move(window, point(px(width - 5.0), px(230.0)), None, Modifiers::default());
+            wait(&mut cx, window, Duration::from_millis(100));
         }
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
     }

@@ -34,6 +34,7 @@ impl Node {
         self
     }
 
+    /// A prop the app reads by this name. `title` on a `Button` or `Text` is its hover text.
     pub fn prop(mut self, name: &str, value: impl Into<Value>) -> Self {
         self.props.insert(name.to_owned(), value.into());
         self

@@ -838,9 +838,18 @@ impl PageView {
                     .any(|node| !matches!(node, Node::Str { text, .. } if text.is_empty())),
                 |el| el.child(self.inline(&text.children, cx)),
             );
+        if text.on_click.is_none() && text.title.is_none() {
+            return element.into_any_element();
+        }
+        // A tooltip needs an id to hang on.
+        let element = element
+            .id(ElementId::NamedInteger("page-text".into(), text.id))
+            .when_some(text.title.clone(), |el, title| {
+                el.aria_description(title.clone())
+                    .tooltip(ui::tooltip(title, None))
+            });
         match text.on_click.clone() {
             Some(handler) => element
-                .id(ElementId::NamedInteger("page-text".into(), text.id))
                 .cursor_pointer()
                 .text_color(rgb(text.tone.map_or(theme::INFO, tone_color)))
                 .on_click(cx.listener(move |view, _, _, _| view.act(&handler, None)))
@@ -912,7 +921,11 @@ impl PageView {
                     .justify_start()
                     .whitespace_normal()
             })
-            .when(drop > 0.0, |el| el.mt(px(drop)));
+            .when(drop > 0.0, |el| el.mt(px(drop)))
+            .when_some(button.title.clone(), |el, title| {
+                el.aria_description(title.clone())
+                    .tooltip(ui::tooltip(title, None))
+            });
         let key_handler = button.on_key_down.clone();
         let element =
             element.on_key_down(cx.listener(move |view, event: &KeyDownEvent, window, cx| {
