@@ -1920,8 +1920,8 @@ fn plugin_settings(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
 /// A made-up plugin's diff of three files, opened from the terminal tab: docked beside it, filling the window, and docked
 /// again with its file list hidden.
 /// An agent (the made-up `claude`) in the first pane opens a dev server, which runs, and a test run, which waits for
-/// Enter. Then the buttons on its terminals float them over it, minimise and dock the panel, hide them and move them
-/// to its right; and Settings, Agents with where they open.
+/// Enter. Then the buttons on its terminals float them over it, pick the other one in the panel's menu, minimise and dock
+/// the panel, hide them and move them to its right; and Settings, Agents with where they open.
 fn agent_terminals(
     cx: &mut VisualTestAppContext,
     config: &Config,
@@ -1976,6 +1976,12 @@ fn agent_terminals(
         click(cx, window, spot("agent-float:1"));
         wait(cx, window, Duration::from_secs(1));
         save(cx, window, &name("floated"));
+        click(cx, window, spot("float-picker:0"));
+        wait(cx, window, Duration::from_millis(500));
+        save(cx, window, &name("floated-menu"));
+        click(cx, window, spot("float-pick:1"));
+        wait(cx, window, Duration::from_millis(500));
+        save(cx, window, &name("floated-picked"));
         click(cx, window, spot("float-minimise:0"));
         wait(cx, window, Duration::from_millis(500));
         save(cx, window, &name("minimised"));

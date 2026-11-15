@@ -12,8 +12,8 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, Bounds, Context, MouseButton, Pixels, Point, Role, SharedString, StyleRefinement,
-    Window, canvas, div, prelude::*, px, rgb, rgba,
+    AnyElement, Bounds, Context, MouseButton, MouseDownEvent, Pixels, Point, Role, SharedString,
+    StyleRefinement, Window, canvas, div, prelude::*, px, rgb, rgba,
 };
 
 use crate::{
@@ -22,7 +22,7 @@ use crate::{
     page::plugin::OpenPane,
     projects::shell_quote,
     theme,
-    ui::{self, ButtonSize},
+    ui::{self, ButtonSize, motion},
 };
 
 use super::{
@@ -98,6 +98,9 @@ struct Float {
     collapsed: bool,
     /// The terminal it shows, of several.
     active: Option<usize>,
+    /// Whether the menu that picks it is open, and where its button is while it is.
+    menu: bool,
+    picker: Option<Bounds<Pixels>>,
     gesture: Option<Gesture>,
     /// The agent's terminal area it floats over, measured every frame.
     area: Option<Bounds<Pixels>>,
@@ -114,6 +117,8 @@ impl Default for Float {
             },
             collapsed: false,
             active: None,
+            menu: false,
+            picker: None,
             gesture: None,
             area: None,
         }
@@ -134,6 +139,12 @@ impl AgentTerminals {
     #[cfg(all(test, feature = "test-support"))]
     pub(super) fn floats(&self, owner: usize) -> bool {
         self.floated.contains(&owner)
+    }
+
+    /// Whether the menu picking the terminal `owner`'s panel shows is open.
+    #[cfg(all(test, feature = "test-support"))]
+    pub(super) fn menu_open(&self, owner: usize) -> bool {
+        self.panels.get(&owner).is_some_and(|panel| panel.menu)
     }
 }
 
@@ -614,8 +625,8 @@ impl Workspace {
             .collect()
     }
 
-    /// The desktop's `FloatingTerminals`: the terminals an agent opened, in a panel over its pane, with a tab for each
-    /// when there are several.
+    /// The desktop's `FloatingTerminals`: the terminals an agent opened, in a panel over its pane, with a menu to pick
+    /// the one it shows when there are several.
     fn float_panel(
         &self,
         owner: usize,
@@ -629,44 +640,7 @@ impl Workspace {
         let mut header =
             vec![icon(Icon::SquareTerminal, 14.0, theme::MUTED_FOREGROUND).into_any_element()];
         if here.len() > 1 && !collapsed {
-            header.push(
-                div()
-                    .id(("float-tabs", owner))
-                    .role(Role::TabList)
-                    .min_w_0()
-                    .overflow_hidden()
-                    .flex()
-                    .gap(px(4.0))
-                    .children(here.iter().map(|&pane| {
-                        let selected = pane == active;
-                        div()
-                            .id(("float-tab", pane))
-                            .role(Role::Tab)
-                            .aria_selected(selected)
-                            .flex_none()
-                            .max_w(px(112.0))
-                            .px(px(6.0))
-                            .py(px(2.0))
-                            .rounded(px(6.0))
-                            .truncate()
-                            .text_color(rgb(if selected {
-                                theme::FOREGROUND
-                            } else {
-                                theme::MUTED_FOREGROUND
-                            }))
-                            .when(selected, |tab| {
-                                tab.bg(rgba(theme::HOVER))
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                            })
-                            .cursor_pointer()
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.change_float(owner, |panel| panel.active = Some(pane), cx)
-                            }))
-                            .child(self.pane_title(pane, cx))
-                    }))
-                    .into_any_element(),
-            );
+            header.push(self.float_picker(owner, &here, active, panel.menu, cx));
         } else {
             header.push(
                 div()
@@ -760,9 +734,9 @@ impl Workspace {
         .render(
             header,
             body,
-            Rc::new(move |this: &mut Workspace, resize, from| {
+            Rc::new(move |this: &mut Workspace, sides, from| {
                 let panel = this.agent_terminals.panels.entry(owner).or_default();
-                panel.gesture = Some(Gesture::new(resize, from, panel.rect));
+                panel.gesture = Some(Gesture::new(sides, from, panel.rect));
             }),
             Rc::new(move |this: &mut Workspace, _, cx| {
                 this.change_float(owner, |panel| panel.collapsed = false, cx)
@@ -805,6 +779,121 @@ impl Workspace {
             .size_full()
             .child(measure)
             .child(frame)
+            .into_any_element()
+    }
+}
+
+impl Workspace {
+    /// With several terminals in `owner`'s panel, the header's button naming the one it shows, and its menu of them
+    /// all to pick another.
+    fn float_picker(
+        &self,
+        owner: usize,
+        here: &[usize],
+        active: usize,
+        open: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let items: Vec<AnyElement> = here
+            .iter()
+            .map(|&pane| {
+                ui::select_item(
+                    ("float-pick", pane),
+                    self.pane_title(pane, cx),
+                    pane == active,
+                )
+                .children(ui::spot(|| format!("float-pick:{pane}")))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.change_float(
+                        owner,
+                        |panel| {
+                            panel.active = Some(pane);
+                            panel.menu = false;
+                        },
+                        cx,
+                    )
+                }))
+                .into_any_element()
+            })
+            .collect();
+        let entity = cx.entity();
+        // While the menu is open, a press on the button closes it: the menu's press outside lets that one be.
+        let measure = open.then(|| {
+            canvas(
+                move |bounds, _, cx| {
+                    entity.update(cx, |this, _| {
+                        this.agent_terminals.panels.entry(owner).or_default().picker = Some(bounds)
+                    })
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+        });
+        let trigger = div()
+            .id(("float-picker", owner))
+            .role(Role::ComboBox)
+            .aria_label("Terminal shown")
+            .aria_expanded(open)
+            .relative()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap(px(4.0))
+            .h(px(22.0))
+            .pl(px(6.0))
+            .pr(px(4.0))
+            .rounded(px(6.0))
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .cursor_pointer()
+            .hover(|style| style.bg(rgba(theme::HOVER)))
+            .when(open, |trigger| trigger.bg(rgba(theme::HOVER)))
+            .children(ui::spot(|| format!("float-picker:{owner}")))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let panel = this.agent_terminals.panels.entry(owner).or_default();
+                panel.menu = !panel.menu;
+                cx.notify();
+            }))
+            .children(measure)
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .child(self.pane_title(active, cx)),
+            )
+            .child(icon(Icon::ChevronDown, 14.0, theme::MUTED_FOREGROUND));
+        let menu = self
+            .popover_phase(format!("float-menu-{owner}"), open, cx)
+            .map(|phase| {
+                motion::with_phase(phase, || {
+                    // It drops over the terminal, so a press on it mustn't reach the terminal too.
+                    ui::popover(
+                        ui::select_menu(items)
+                            .mt(px(26.0))
+                            .occlude()
+                            .on_mouse_down_out(cx.listener(
+                                move |this, event: &MouseDownEvent, _, cx| {
+                                    let panel =
+                                        this.agent_terminals.panels.entry(owner).or_default();
+                                    if !panel.picker.is_some_and(|at| at.contains(&event.position))
+                                    {
+                                        panel.menu = false;
+                                        cx.notify();
+                                    }
+                                },
+                            )),
+                    )
+                })
+            });
+        div()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .child(trigger)
+            .children(menu)
             .into_any_element()
     }
 }

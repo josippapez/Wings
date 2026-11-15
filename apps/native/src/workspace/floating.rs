@@ -1,5 +1,5 @@
-//! A terminal panel floating over an area, as the desktop's `floating-panel.tsx`: drag its header to move it, its
-//! top-left corner to resize it, and it shrinks to a bar when collapsed. The quick terminal and the terminals an agent
+//! A terminal panel floating over an area, as the desktop's `floating-panel.tsx`: drag its header to move it, any edge
+//! or corner to resize it, and it shrinks to a bar when collapsed. The quick terminal and the terminals an agent
 //! opened float in one. A gesture moves only the panel; the terminal in it refits its shell once the size holds still
 //! (`TerminalView`'s resize delay), as the desktop's refits once the gesture ends.
 
@@ -29,17 +29,36 @@ pub(super) struct Rect {
     pub(super) h: f32,
 }
 
-/// A move of the header or a resize from the corner: where the pointer and the panel were when it started.
+/// The sides of the panel a drag takes with it: an edge, two for a corner, none to move the whole panel.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct Sides {
+    pub(super) left: bool,
+    pub(super) top: bool,
+    pub(super) right: bool,
+    pub(super) bottom: bool,
+}
+
+impl Sides {
+    /// The header's drag, which moves the panel.
+    pub(super) const MOVE: Sides = Sides {
+        left: false,
+        top: false,
+        right: false,
+        bottom: false,
+    };
+}
+
+/// A move of the header or a resize from an edge or corner: where the pointer and the panel were when it started.
 #[derive(Clone, Copy)]
 pub(super) struct Gesture {
-    resize: bool,
+    sides: Sides,
     from: Point<Pixels>,
     rect: Rect,
 }
 
 impl Gesture {
-    pub(super) fn new(resize: bool, from: Point<Pixels>, rect: Rect) -> Self {
-        Self { resize, from, rect }
+    pub(super) fn new(sides: Sides, from: Point<Pixels>, rect: Rect) -> Self {
+        Self { sides, from, rect }
     }
 
     /// Where the panel is with the pointer at `position`, kept inside `area` as the desktop's.
@@ -49,25 +68,41 @@ impl Gesture {
             (position.y - self.from.y).as_f32(),
         );
         let (width, height) = (area.size.width.as_f32(), area.size.height.as_f32());
-        let r = self.rect;
-        if self.resize {
-            Rect {
-                w: (r.w - dx).clamp(MIN_W, (width - r.right).max(MIN_W)),
-                h: (r.h - dy).clamp(MIN_H, (height - r.bottom).max(MIN_H)),
-                ..r
-            }
-        } else {
-            Rect {
+        let (r, sides) = (self.rect, self.sides);
+        if sides == Sides::MOVE {
+            return Rect {
                 right: (r.right - dx).clamp(0.0, (width - r.w).max(0.0)),
                 bottom: (r.bottom - dy).clamp(0.0, (height - r.h).max(0.0)),
                 ..r
-            }
+            };
         }
+        let mut next = r;
+        // The panel is placed from the area's bottom-right corner, so the left and top edges change only its size, and
+        // the right and bottom edges move that corner too, keeping the opposite edge where it was.
+        if sides.left {
+            next.w = (r.w - dx).clamp(MIN_W, (width - r.right).max(MIN_W));
+        }
+        if sides.right {
+            next.right = (r.right - dx).clamp(0.0, (r.right + r.w - MIN_W).max(0.0));
+            next.w = r.w + r.right - next.right;
+        }
+        if sides.top {
+            next.h = (r.h - dy).clamp(MIN_H, (height - r.bottom).max(MIN_H));
+        }
+        if sides.bottom {
+            next.bottom = (r.bottom - dy).clamp(0.0, (r.bottom + r.h - MIN_H).max(0.0));
+            next.h = r.h + r.bottom - next.bottom;
+        }
+        next
     }
 }
 
-/// Starts a move (`false`) or a resize (`true`) of the panel from the pointer's place.
-pub(super) type Start = Rc<dyn Fn(&mut Workspace, bool, Point<Pixels>)>;
+/// How far in from its edge an edge's grip reaches, and the side of a corner's square.
+const GRIP: f32 = 6.0;
+const CORNER: f32 = 14.0;
+
+/// Starts a move (`Sides::MOVE`) or a resize of those sides of the panel from the pointer's place.
+pub(super) type Start = Rc<dyn Fn(&mut Workspace, Sides, Point<Pixels>)>;
 /// A click on the collapsed bar.
 pub(super) type Expand = Rc<dyn Fn(&mut Workspace, &mut Window, &mut Context<Workspace>)>;
 
@@ -118,7 +153,7 @@ impl Panel {
                 header.cursor_grab().on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                        start(this, false, event.position);
+                        start(this, Sides::MOVE, event.position);
                         cx.stop_propagation();
                     }),
                 )
@@ -189,23 +224,58 @@ impl Panel {
                     })
             })
             .when(!collapsed && !full, |panel| {
-                panel.child(
+                // The corners after the edges, so they take the press where the two meet.
+                panel.children(GRIPS.iter().map(|&(name, sides)| {
+                    let resize = resize.clone();
+                    let (horizontal, vertical) =
+                        (sides.left || sides.right, sides.top || sides.bottom);
                     div()
-                        .id(SharedString::from(format!("{id}-resize")))
+                        .id(SharedString::from(format!("{id}-resize-{name}")))
                         .absolute()
-                        .top_0()
-                        .left_0()
-                        .size(px(16.0))
-                        .cursor_nwse_resize()
+                        .map(|grip| match (horizontal, vertical) {
+                            (true, false) => grip.top_0().bottom_0().w(px(GRIP)).cursor_ew_resize(),
+                            (false, _) => grip.left_0().right_0().h(px(GRIP)).cursor_ns_resize(),
+                            _ if sides.left == sides.top => {
+                                grip.size(px(CORNER)).cursor_nwse_resize()
+                            }
+                            _ => grip.size(px(CORNER)).cursor_nesw_resize(),
+                        })
+                        .when(sides.left, |grip| grip.left_0())
+                        .when(sides.right, |grip| grip.right_0())
+                        .when(sides.top, |grip| grip.top_0())
+                        .when(sides.bottom, |grip| grip.bottom_0())
+                        .children(ui::spot(|| format!("{id}-resize-{name}")))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                                resize(this, true, event.position);
+                                resize(this, sides, event.position);
                                 cx.stop_propagation();
                             }),
-                        ),
-                )
+                        )
+                }))
             });
         panel.into_any_element()
     }
 }
+
+/// The edges and corners that resize the panel, each with the sides it moves.
+const GRIPS: [(&str, Sides); 8] = {
+    const fn sides(left: bool, top: bool, right: bool, bottom: bool) -> Sides {
+        Sides {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+    [
+        ("left", sides(true, false, false, false)),
+        ("right", sides(false, false, true, false)),
+        ("top", sides(false, true, false, false)),
+        ("bottom", sides(false, false, false, true)),
+        ("top-left", sides(true, true, false, false)),
+        ("top-right", sides(false, true, true, false)),
+        ("bottom-left", sides(true, false, false, true)),
+        ("bottom-right", sides(false, false, true, true)),
+    ]
+};

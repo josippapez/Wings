@@ -1,7 +1,7 @@
 //! The sidebar's terminals and the quick terminal, as the desktop's `quick-terminal.tsx` and its `looseReducer`: shells
 //! in your home folder that belong to no project. The sidebar's Terminal row opens one filling the pane area as a page
 //! of its own; Ctrl-` shows the last one floating over whatever is on screen, and hides it again with its shell still
-//! running. Drag a floating one's header to move it, its top-left corner to resize it, fill the window with it like a
+//! running. Drag a floating one's header to move it, any edge or corner to resize it, fill the window with it like a
 //! tab, or minimise it to a bar. Like the desktop's, they're in no tab, so nothing saves them.
 
 use std::{path::PathBuf, rc::Rc};
@@ -409,9 +409,9 @@ impl Workspace {
         panel.render(
             header,
             quick.view.clone().into_any_element(),
-            Rc::new(move |this: &mut Workspace, resize, from| {
+            Rc::new(move |this: &mut Workspace, sides, from| {
                 if let Some(quick) = this.loose.iter_mut().find(|t| t.key == key) {
-                    quick.gesture = Some(Gesture::new(resize, from, quick.rect));
+                    quick.gesture = Some(Gesture::new(sides, from, quick.rect));
                 }
             }),
             Rc::new(move |this: &mut Workspace, window, cx| {

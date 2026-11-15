@@ -274,6 +274,82 @@ fn dragging_a_floating_agent_terminal_resizes_its_shell_once_when_it_settles() {
     assert_eq!(grids.len(), 1, "moving it resized the shell: {grids:?}");
 }
 
+/// Each edge and corner of a floating panel resizes it, the edges across from it staying where they were.
+#[test]
+fn every_edge_and_corner_of_a_floating_panel_resizes_it() {
+    let (app, mut window) = open();
+    window.update(|w, _, cx| w.set_prefs(|prefs| prefs.agent_terminals_open = Opens::Float, cx));
+    open_from(&mut window, 0, "echo hi");
+    settle(&app, &mut window);
+    let panel = || crate::ui::spot_at("agent-float-0").unwrap();
+    // Each grip dragged 30 points left and 20 up: how far its left, top, right and bottom edges go.
+    for (grip, edges) in [
+        ("left", (-30.0, 0.0, 0.0, 0.0)),
+        ("right", (0.0, 0.0, -30.0, 0.0)),
+        ("top", (0.0, -20.0, 0.0, 0.0)),
+        ("bottom", (0.0, 0.0, 0.0, -20.0)),
+        ("top-left", (-30.0, -20.0, 0.0, 0.0)),
+        ("top-right", (0.0, -20.0, -30.0, 0.0)),
+        ("bottom-left", (-30.0, 0.0, 0.0, -20.0)),
+        ("bottom-right", (0.0, 0.0, -30.0, -20.0)),
+    ] {
+        window.draw();
+        let start = panel();
+        let from = crate::ui::spot_at(&format!("agent-float-0-resize-{grip}"))
+            .unwrap_or_else(|| panic!("no {grip} grip"))
+            .center();
+        let to = point(from.x - px(30.0), from.y - px(20.0));
+        window.simulate_mouse_down(from, MouseButton::Left);
+        window.simulate_event(MouseMoveEvent {
+            position: to,
+            pressed_button: Some(MouseButton::Left),
+            modifiers: Modifiers::default(),
+        });
+        window.simulate_mouse_up(to, MouseButton::Left);
+        window.draw();
+        let end = panel();
+        assert_eq!(
+            (
+                (end.left() - start.left()).as_f32(),
+                (end.top() - start.top()).as_f32(),
+                (end.right() - start.right()).as_f32(),
+                (end.bottom() - start.bottom()).as_f32(),
+            ),
+            edges,
+            "{grip}"
+        );
+    }
+}
+
+/// With several terminals in the panel, the menu in its header picks the one it shows, and a second press on its
+/// button closes it.
+#[test]
+fn the_floating_panels_menu_picks_the_terminal_it_shows() {
+    let (app, mut window) = open();
+    window.update(|w, _, cx| w.set_prefs(|prefs| prefs.agent_terminals_open = Opens::Float, cx));
+    open_from(&mut window, 0, "echo first");
+    open_from(&mut window, 0, "echo second");
+    settle(&app, &mut window);
+    let menu =
+        |window: &TestAppWindow<Workspace>| window.read(|w, _| w.agent_terminals.menu_open(0));
+    let shown =
+        |window: &TestAppWindow<Workspace>| window.read(|w, _| w.shown_panes(&w.terminals[0]));
+    // The newest shows.
+    assert_eq!(shown(&window), vec![0, 2]);
+    click_spot(&mut window, "float-picker:0");
+    assert!(menu(&window), "the menu didn't open");
+    settle(&app, &mut window);
+    click_spot(&mut window, "float-pick:1");
+    assert!(!menu(&window), "picking one left the menu open");
+    assert_eq!(shown(&window), vec![0, 1]);
+    settle(&app, &mut window);
+    click_spot(&mut window, "float-picker:0");
+    assert!(menu(&window));
+    click_spot(&mut window, "float-picker:0");
+    assert!(!menu(&window), "a press on its button left it open");
+    assert_eq!(shown(&window), vec![0, 1]);
+}
+
 /// The scan that marks a terminal idle is up to half a second old. A program started since holds the terminal, so the
 /// agent's command gets a terminal of its own rather than being typed into that program.
 #[test]
