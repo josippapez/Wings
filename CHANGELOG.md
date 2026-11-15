@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.23 · 2026-11-15
+
+- **A floating terminal resizes from any edge or corner.** Only a hidden square in its top-left corner did before.
+- **A menu picks which of an agent's floating terminals shows.** With several in the panel, its header names the one on show. Click it for the others.
+
 ## 0.2.22 · 2026-11-13
 
 - **Wings runs no JavaScript.** Plugins run as WebAssembly only, and the JavaScript engine is gone from the app. A plugin that only has a JavaScript build says "Built for JavaScript" in Settings, Plugins and in the sidebar, and needs an update. Sprint board 0.11.0 and Claude accounts 0.4.0 are written in Rust.
