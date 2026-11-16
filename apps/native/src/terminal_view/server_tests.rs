@@ -177,7 +177,7 @@ fn a_pane_whose_server_stopped_says_so_and_closes() {
 }
 
 /// What reattaching costs the app: drawing a full ring (1 MiB) of Claude Code's fullscreen output on a fresh grid.
-/// Run with `cargo test --release --lib -- --ignored --nocapture bench_replay`.
+/// Run with `cargo test --release --features test-support --lib -- --ignored --nocapture bench_replay`.
 #[test]
 #[ignore]
 fn bench_replay_of_a_full_ring() {
