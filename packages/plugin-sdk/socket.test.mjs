@@ -48,7 +48,7 @@ test("the socket is where Wings puts it, and WINGS_SOCKET overrides", () => {
   assert.equal(socketPath({ WINGS_SOCKET: "/s" }, "darwin", "/Users/a"), "/s");
 });
 
-test("the app identifier is the one in tauri.conf.json", () => {
-  const config = JSON.parse(readFileSync(join(import.meta.dirname, "../../apps/desktop/src-tauri/tauri.conf.json"), "utf8"));
-  assert.equal(IDENTIFIER, config.identifier);
+test("the app identifier is the one Wings serves the socket under", () => {
+  const cli = readFileSync(join(import.meta.dirname, "../../crates/wings-connect/src/cli.rs"), "utf8");
+  assert.equal(IDENTIFIER, cli.match(/pub const IDENTIFIER: &str = "(.+)";/)[1]);
 });

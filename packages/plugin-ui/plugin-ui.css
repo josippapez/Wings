@@ -9,7 +9,7 @@
 @layer wings-base, theme, base, wings-components, components, utilities;
 
 @layer wings-base {
-/* tokens:start (generated from apps/desktop/src/index.css by apps/desktop/scripts/plugin-tokens.mjs, do not edit) */
+/* tokens:start (Wings' dark theme, as the app draws it in apps/native/src/theme.rs) */
 :root {
   --wings-fg: #ece9e4;
   --wings-muted: #9d978f;

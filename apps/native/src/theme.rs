@@ -1,4 +1,5 @@
-//! The dark palette from apps/desktop/src/index.css, shared with plugin-tokens.mjs.
+//! The dark palette. Plugin pages get the same colours from the `tokens:start` block in
+//! packages/plugin-ui/plugin-ui.css, so a change here goes there too.
 
 pub const BACKGROUND: u32 = 0x0f0e12;
 /// The desktop's `--glass`, 58%, over the window's vibrancy, behind the sidebar and title bar.
