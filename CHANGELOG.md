@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.24 · 2026-11-16
+
+- **Claude Code's `/usage` stops saying "Usage endpoint is rate limited".** Wings asked Anthropic for your usage limits every 5 seconds, which ran into Anthropic's rate limit for both. It now asks once a minute, and after a rate limit it waits as long as Anthropic says.
+
 ## 0.2.23 · 2026-11-15
 
 - **A floating terminal resizes from any edge or corner.** Only a hidden square in its top-left corner did before.

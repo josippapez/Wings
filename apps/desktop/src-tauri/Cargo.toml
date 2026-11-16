@@ -1,6 +1,6 @@
 [package]
 name = "wings"
-version = "0.2.23"
+version = "0.2.24"
 description = "Wings: a desktop home for Claude Code sessions"
 authors = ["Josip Papez"]
 edition = "2021"
