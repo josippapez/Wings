@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.25 · 2026-11-16
+
+- **A sleeping agent comes back the way you started it.** An agent started through a wrapper script like `claude-rtk` resumed as plain `claude`, without what the wrapper sets. Wings now resumes it through the wrapper. It finds scripts with `claude` in their name that only set variables and end in `exec claude "$@"`. Agents already asleep before this update wake as plain `claude` once.
+
 ## 0.2.24 · 2026-11-16
 
 - **Claude Code's `/usage` stops saying "Usage endpoint is rate limited".** Wings asked Anthropic for your usage limits every 5 seconds, which ran into Anthropic's rate limit for both. It now asks once a minute, and after a rate limit it waits as long as Anthropic says.
