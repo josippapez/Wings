@@ -1,5 +1,7 @@
 # Wings desktop (POC)
 
+> **Deprecated.** The native app in [`apps/native`](../native) replaces this one, and releases no longer build or bump it. Copies of it still installed update to the native app. See [docs/releasing.md](../../docs/releasing.md).
+
 Tauri 2 + React 19 app. Rust owns the terminals (PTYs) and Claude Code detection; the UI is shadcn/ui on Base UI with xterm.js panes.
 
 ## Run

@@ -32,7 +32,7 @@ fn repo_plugin(name: &str) -> PathBuf {
 
 /// The plugin as the desktop loads it from the repo.
 fn load(name: &str) -> Plugin {
-    wings_plugins::set_wings_version(env!("WINGS_DESKTOP_VERSION"));
+    wings_plugins::set_wings_version(env!("CARGO_PKG_VERSION"));
     loading::load(&repo_plugin(name)).unwrap_or_else(|error| panic!("{name}: {error}"))
 }
 

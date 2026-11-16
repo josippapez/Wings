@@ -9,7 +9,7 @@ The native app (`apps/native`) replaces the Tauri desktop app (`apps/desktop`). 
 | Build | `sh scripts/build-mac-app.sh` | `WINGS_SWITCH=1 sh scripts/build-mac-app.sh` (cargo feature `switch`) |
 | Bundle | `Wings-native.app` | `Wings.app` |
 | Bundle id | `dev.wings.native` | `dev.wings.app`, the desktop's |
-| Version | `apps/native/Cargo.toml` | the desktop's, from `apps/desktop/src-tauri/Cargo.toml` |
+| Version | `apps/native/Cargo.toml` | `apps/native/Cargo.toml` |
 | Data folder | `~/Library/Application Support/Wings Native` | `~/Library/Application Support/dev.wings.app`, the desktop's |
 | Its state file | `Wings Native/workspace.json` | `dev.wings.app/native-workspace.json` |
 | Update feed | `native-latest-darwin-<arch>.json`, release `native-v<version>` | `wings-latest-darwin-<arch>.json`, release `v<version>`, plus the desktop's `latest.json` |

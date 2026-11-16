@@ -2,17 +2,16 @@
 # Builds and signs the local native app bundle. Installation is separate.
 #
 # By default it is Wings-native.app (dev.wings.native), which runs beside the desktop app on a data folder of its own.
-# WINGS_SWITCH=1 builds the replacement instead: Wings.app with the desktop's bundle id, name and version, running on
-# the desktop's data folder (src/data_dir.rs). Signed with the same certificate, it keeps the desktop's privacy and
+# WINGS_SWITCH=1 builds the replacement instead: Wings.app with the desktop's bundle id and name, running on the
+# desktop's data folder (src/data_dir.rs). Signed with the same certificate, it keeps the desktop's privacy and
 # keychain approvals, and the desktop's updater installs it in the desktop's place (docs/switch-to-native.md).
 set -e
 cd "$(dirname "$0")/.."
+VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
 if [ "${WINGS_SWITCH-}" = 1 ]; then
   cargo build --release --bins --features switch
   NAME=Wings
   IDENTIFIER=dev.wings.app
-  # The desktop's version, which the replacement carries (build.rs, updater.rs).
-  VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' ../desktop/src-tauri/Cargo.toml | head -n 1)
   APP=target/release/Wings.app
   # The terminal server's helper app (src/terminal_server.rs, `HELPER`), named apart from the side-by-side app's.
   HELPER_NAME="Wings Terminals"
@@ -21,7 +20,6 @@ else
   cargo build --release --bins
   NAME=Wings-native
   IDENTIFIER=dev.wings.native
-  VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
   APP=target/release/Wings-native.app
   HELPER_NAME="Wings-native Terminals"
   HELPER_IDENTIFIER=dev.wings.native.terminals

@@ -5,7 +5,7 @@ fn main() {
     #[cfg(unix)]
     {
         let args: Vec<String> = std::env::args().skip(1).collect();
-        if let Some(code) = wings_connect::run_command(&args, env!("WINGS_DESKTOP_VERSION")) {
+        if let Some(code) = wings_connect::run_command(&args, env!("CARGO_PKG_VERSION")) {
             std::process::exit(code);
         }
     }

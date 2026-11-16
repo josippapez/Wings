@@ -16,19 +16,6 @@ fn newer() -> String {
 }
 
 #[test]
-fn the_version_plugins_are_checked_against_is_the_desktops() {
-    let manifest = fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../desktop/src-tauri/Cargo.toml"),
-    )
-    .unwrap();
-    assert!(
-        manifest.contains(&format!("version = \"{WINGS_VERSION}\"")),
-        "{WINGS_VERSION} isn't the desktop's version"
-    );
-    assert_ne!(WINGS_VERSION, env!("CARGO_PKG_VERSION"));
-}
-
-#[test]
 fn only_plugins_that_are_on_approved_and_built_for_native_are_found() {
     let data = Data::temp();
     // `ready` asks for exactly the desktop's version, which is enough.

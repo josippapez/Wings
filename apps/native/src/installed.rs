@@ -33,10 +33,8 @@ use crate::{
     },
 };
 
-/// The Wings a plugin's `minWingsVersion` is checked against: the desktop's version, read from its `Cargo.toml` when this
-/// crate is built (see `build.rs`). A plugin's minimum is a promise about the desktop release it was written for, so this
-/// crate's own version would be wrong, and a constant here would need an edit with every desktop release.
-pub const WINGS_VERSION: &str = env!("WINGS_DESKTOP_VERSION");
+/// The Wings a plugin's `minWingsVersion` is checked against. It went on from the desktop app's version at 0.2.24.
+pub const WINGS_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The folder of a plugin's native build.
 const NATIVE_DIR: &str = "dist/native";

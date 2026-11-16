@@ -16,13 +16,7 @@ pub type Result<T> = std::result::Result<T, String>;
 #[cfg(test)]
 #[path = "updater_tests.rs"]
 mod tests;
-/// The side-by-side app has its own version. The replacement carries the desktop's (`build.rs`), so the desktop's
-/// updater offers it and its own updater goes on from there.
-pub const VERSION: &str = if crate::data_dir::REPLACEMENT {
-    env!("WINGS_DESKTOP_VERSION")
-} else {
-    env!("CARGO_PKG_VERSION")
-};
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const RESTART_ACK: &str = "--update-restarted";
 
 /// Which app a release is for, as its signed feed, archive and bundle name it.

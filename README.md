@@ -71,7 +71,7 @@ cargo test --features test-support        # tests
 WINGS_SWITCH=1 sh scripts/build-mac-app.sh  # build Wings.app
 ```
 
-More about the app is in [apps/native/README.md](apps/native/README.md). Signing and releasing are in [docs/signing.md](docs/signing.md), [docs/releasing.md](docs/releasing.md) and [docs/switch-to-native.md](docs/switch-to-native.md). The earlier Tauri app is in `apps/desktop`.
+More about the app is in [apps/native/README.md](apps/native/README.md). Signing and releasing are in [docs/signing.md](docs/signing.md), [docs/releasing.md](docs/releasing.md) and [docs/switch-to-native.md](docs/switch-to-native.md). The earlier Tauri app in `apps/desktop` is deprecated and no longer released.
 
 ## Plugins
 
