@@ -738,6 +738,7 @@ fn agent(pane: usize, state: crate::agents::AgentState) -> crate::agents::Agent 
         state,
         waiting_for: Some("permission to run Bash".into()),
         args: Vec::new(),
+        launcher: None,
         started_at: 0,
         state_since: None,
         direct: true,

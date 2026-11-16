@@ -191,6 +191,7 @@ impl Workspace {
                 id,
                 args: agent.args.clone(),
                 name,
+                launcher: agent.launcher.clone(),
             });
         }
     }

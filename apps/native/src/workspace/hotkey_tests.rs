@@ -50,6 +50,7 @@ fn agent(pane: usize, project: &str, state: AgentState) -> Agent {
         state,
         waiting_for: None,
         args: Vec::new(),
+        launcher: None,
         started_at: 0,
         state_since: None,
         direct: true,

@@ -710,6 +710,7 @@ fn agent_session() -> crate::saved::SavedSession {
         id: SESSION.into(),
         args: FLAGS.map(String::from).to_vec(),
         name: None,
+        launcher: None,
     }
 }
 

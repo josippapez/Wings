@@ -72,6 +72,9 @@ pub struct SavedSession {
     /// The agent's name in the Agents list, which its row keeps until the session is resumed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The wrapper Claude Code was started through, like `claude-rtk`, typed instead of `claude` to resume it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launcher: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -485,6 +488,7 @@ mod tests {
                                 id: "ses_01HZabcdefgh".into(),
                                 args: Vec::new(),
                                 name: None,
+                                launcher: None,
                             }),
                         }),
                     },
@@ -505,6 +509,7 @@ mod tests {
                             id: "0aa900ec-ed63-4df5-97c1-eecebeb8ef8d".into(),
                             args: vec!["--model".into(), "opus".into()],
                             name: Some("wings-12".into()),
+                            launcher: Some("claude-rtk".into()),
                         }),
                     },
                     focused: 0,

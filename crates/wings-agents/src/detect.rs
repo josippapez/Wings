@@ -14,6 +14,7 @@ use sysinfo::{Pid, Process, ProcessRefreshKind, ProcessesToUpdate, System, Updat
 
 mod launch_args;
 use launch_args::launch_args;
+mod launcher;
 
 use crate::opencode::{self, PaneRef};
 
@@ -52,6 +53,9 @@ pub struct Agent {
     pub waiting_for: Option<String>,
     /// The flags `claude` was started with, to type again when Wings resumes the session. Empty for opencode.
     pub args: Vec<String>,
+    /// The wrapper script `claude` was started through, like `claude-rtk`, which a resume types instead of `claude`.
+    #[serde(skip)]
+    pub launcher: Option<String>,
     /// When this `claude` process started, in ms since 1970. A resumed session's transcript also holds
     /// what came before it, and this tells the two apart.
     pub started_at: u64,
@@ -120,6 +124,8 @@ pub struct Detector {
     last_codex: HashMap<String, (u32, u64, Option<crate::program_status::CodexReport>)>,
     /// Dev builds log each state change, to debug detection against a live Claude.
     traced: HashMap<String, (AgentState, AgentState, bool)>,
+    /// Each `claude` process's wrapper, by pid and start time, found once since it means reading `PATH`.
+    launchers: HashMap<(u32, u64), Option<String>>,
     opencode: std::sync::Arc<opencode::Shared>,
 }
 
@@ -132,6 +138,7 @@ impl Detector {
             unseen_done: HashMap::new(),
             last_codex: HashMap::new(),
             traced: HashMap::new(),
+            launchers: HashMap::new(),
             opencode: Default::default(),
         }
     }
@@ -191,6 +198,23 @@ impl Detector {
                 Some((pane.pane_id.clone(), pane.shell_pid.is_some() && parent == pane.shell_pid))
             })
             .collect();
+        let claudes: Vec<(Pid, u64)> = found
+            .iter()
+            .zip(&launch)
+            .filter_map(|((_, agent), (_, started_at))| match agent {
+                Some((pid, AgentKind::Claude)) => Some((*pid, *started_at)),
+                _ => None,
+            })
+            .collect();
+        self.launchers.retain(|key, _| claudes.iter().any(|(pid, at)| *key == (pid.as_u32(), *at)));
+        let new: Vec<Pid> = claudes.iter().filter(|(pid, at)| !self.launchers.contains_key(&(pid.as_u32(), *at))).map(|(pid, _)| *pid).collect();
+        if !new.is_empty() {
+            self.system.refresh_processes_specifics(ProcessesToUpdate::Some(&new), false, ProcessRefreshKind::nothing().with_environ(UpdateKind::Always));
+            for (pid, at) in claudes.iter().filter(|(pid, _)| new.contains(pid)) {
+                let wrapper = self.system.process(*pid).and_then(|p| launcher::launcher(p.environ()));
+                self.launchers.insert((pid.as_u32(), *at), wrapper);
+            }
+        }
         // The working directory changes with every `cd`, so it is re-read each scan, for these processes only.
         let current: Vec<Pid> = found.iter().filter_map(|(pid, _)| *pid).collect();
         self.system.refresh_processes_specifics(ProcessesToUpdate::Some(&current), false, ProcessRefreshKind::nothing().with_cwd(UpdateKind::Always));
@@ -316,6 +340,7 @@ impl Detector {
                 state,
                 waiting_for: if state == AgentState::Blocked { file.waiting_for } else { None },
                 args,
+                launcher: self.launchers.get(&(pid.as_u32(), started_at)).cloned().flatten(),
                 started_at,
                 state_since: file.status_updated_at,
                 direct: direct.get(&pane.pane_id).copied().unwrap_or(false),
@@ -930,6 +955,62 @@ mod tests {
         assert_eq!(agents[0].args, ["--model", "opus", "--append-system-prompt", "say \"hi\", don't ask"]);
 
         child.kill().unwrap();
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// A `claude` started through a wrapper script on PATH, which `exec`s it, is found to have come through it.
+    #[cfg(unix)]
+    #[test]
+    fn finds_the_wrapper_a_claude_was_started_through() {
+        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = std::env::temp_dir().join(format!("wings-wrapper-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        // macOS hides the variables of its own programs, like `/bin/sleep`, so the stand-in is a copy signed as ours.
+        #[cfg(target_os = "macos")]
+        {
+            fs::copy("/bin/sleep", tmp.join("claude")).unwrap();
+            let signed = std::process::Command::new("codesign").args(["-f", "-s", "-"]).arg(tmp.join("claude")).output().unwrap();
+            assert!(signed.status.success(), "{signed:?}");
+        }
+        #[cfg(not(target_os = "macos"))]
+        std::os::unix::fs::symlink("/bin/sleep", tmp.join("claude")).unwrap();
+        let wrapper = tmp.join("claude-wings-test");
+        let mark = format!("export WINGS_TEST_WRAPPER={}", std::process::id());
+        fs::write(&wrapper, format!("#!/bin/sh\n{mark}\nexec claude \"$@\"\n")).unwrap();
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let path = format!("{}:/usr/bin:/bin", tmp.display());
+        let probe = |cmd: &str| {
+            let pair = native_pty_system().openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }).unwrap();
+            let mut sh = CommandBuilder::new("/bin/sh");
+            sh.args(["-c", cmd]);
+            sh.env("PATH", &path);
+            sh.cwd(&tmp);
+            let child = pair.slave.spawn_command(sh).unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+            let probe = PaneProbe {
+                pane_id: "p1".into(),
+                space_id: "s1".into(),
+                shell_pid: child.process_id(),
+                foreground_pid: pair.master.process_group_leader().map(|p| p as u32),
+                title: String::new(),
+                codex_status: None,
+            };
+            (child, probe, pair)
+        };
+        let (mut child, wrapped, _pty) = probe("exec claude-wings-test 30");
+        let agents = Detector::new(&tmp).scan(std::slice::from_ref(&wrapped), None).agents;
+        child.kill().unwrap();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].launcher.as_deref(), Some("claude-wings-test"));
+
+        let (mut child, plain, _pty) = probe("exec claude 30");
+        let agents = Detector::new(&tmp).scan(std::slice::from_ref(&plain), None).agents;
+        child.kill().unwrap();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].launcher, None);
         let _ = fs::remove_dir_all(&tmp);
     }
 

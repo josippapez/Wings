@@ -549,6 +549,7 @@ mod tests {
             state,
             waiting_for: Some("approval to run rm".into()),
             args: vec![],
+            launcher: None,
             started_at: 0,
             state_since: None,
             direct: true,

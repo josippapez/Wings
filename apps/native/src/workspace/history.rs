@@ -224,10 +224,16 @@ pub(super) fn resume_line(session: &crate::saved::SavedSession) -> Option<String
     };
     let mut line = resume_command(agent, &session.id)?;
     if agent == Agent::Claude {
+        line = line.replacen("claude", &claude_program(session), 1);
         push_flags(&mut line, &session.args);
     }
     line.push('\r');
     Some(line)
+}
+
+/// The command a Claude Code session was started with: its wrapper, like `claude-rtk`, or `claude`.
+fn claude_program(session: &crate::saved::SavedSession) -> String {
+    shell_quote(session.launcher.as_deref().filter(|name| typeable(name)).unwrap_or("claude"))
 }
 
 /// What a restored pane types to bring its agent back: `resume_line`, except for a Claude Code session with no
@@ -243,7 +249,7 @@ pub(super) fn restore_line(
             if session.kind == crate::saved::SessionKind::Claude
                 && !has_transcript(dir, &session.id) =>
         {
-            let mut line = String::from("claude");
+            let mut line = claude_program(session);
             push_flags(&mut line, &session.args);
             line.push('\r');
             Some(line)
@@ -1594,6 +1600,7 @@ mod tests {
             id: id.into(),
             args: args.iter().map(ToString::to_string).collect(),
             name: None,
+            launcher: None,
         };
         let claude = "0b8e7c1a-3d2f-4a5b-9c6d-7e8f9a0b1c2d";
         assert_eq!(
@@ -1649,6 +1656,7 @@ mod tests {
             id: id.into(),
             args: vec!["--model".into(), "opus".into()],
             name: None,
+            launcher: None,
         };
         let account =
             std::env::temp_dir().join(format!("wings-restore-line-{}", std::process::id()));
@@ -1681,6 +1689,43 @@ mod tests {
         assert_eq!(
             restore_line(&session(SessionKind::Claude, "$(id)"), Some(&account)),
             None
+        );
+    }
+
+    /// An agent started through a wrapper like `claude-rtk` comes back through it, so it keeps what the wrapper set.
+    #[test]
+    fn a_session_started_through_a_wrapper_resumes_through_it() {
+        use crate::saved::{SavedSession, SessionKind};
+        let id = "0b8e7c1a-3d2f-4a5b-9c6d-7e8f9a0b1c2d";
+        let session = |launcher: &str| SavedSession {
+            kind: SessionKind::Claude,
+            id: id.into(),
+            args: vec!["--model".into(), "opus".into()],
+            name: None,
+            launcher: Some(launcher.into()),
+        };
+        assert_eq!(
+            resume_line(&session("claude-rtk")).as_deref(),
+            Some("claude-rtk --resume 0b8e7c1a-3d2f-4a5b-9c6d-7e8f9a0b1c2d --model opus\r")
+        );
+        let account =
+            std::env::temp_dir().join(format!("wings-wrapper-line-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&account);
+        std::fs::create_dir_all(account.join("projects")).unwrap();
+        assert_eq!(
+            restore_line(&session("claude-rtk"), Some(&account)).as_deref(),
+            Some("claude-rtk --model opus\r"),
+            "a session with no transcript starts again through the wrapper"
+        );
+        let _ = std::fs::remove_dir_all(&account);
+        // A name that would press a key, or run more than a command, isn't typed as it is.
+        assert_eq!(
+            resume_line(&session("claude-rtk\r")).as_deref(),
+            Some("claude --resume 0b8e7c1a-3d2f-4a5b-9c6d-7e8f9a0b1c2d --model opus\r")
+        );
+        assert_eq!(
+            resume_line(&session("x; rm -rf ~")).as_deref(),
+            Some("'x; rm -rf ~' --resume 0b8e7c1a-3d2f-4a5b-9c6d-7e8f9a0b1c2d --model opus\r")
         );
     }
 

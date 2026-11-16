@@ -1320,6 +1320,7 @@ fn an_agent_that_comes_to_need_you_or_finishes_goes_to_the_inbox_read_if_you_are
         state,
         waiting_for: None,
         args: Vec::new(),
+        launcher: None,
         started_at: 0,
         state_since: None,
         direct: true,
@@ -1379,6 +1380,7 @@ fn an_agents_row_shows_the_named_account_its_claude_runs_under_and_nothing_for_t
         state: AgentState::Working,
         waiting_for: None,
         args: Vec::new(),
+        launcher: None,
         started_at: 0,
         state_since: None,
         direct: true,
@@ -1418,6 +1420,7 @@ fn an_agents_row_shows_its_summary_under_its_status() {
         state: AgentState::Done,
         waiting_for: None,
         args: Vec::new(),
+        launcher: None,
         started_at: 0,
         state_since: None,
         direct: true,
@@ -1460,6 +1463,7 @@ fn a_new_notification_plays_the_chosen_sound_as_settings_say_and_once_per_burst(
         state,
         waiting_for: None,
         args: Vec::new(),
+        launcher: None,
         started_at: 0,
         state_since: None,
         direct: true,
@@ -1614,6 +1618,7 @@ fn sleepy_agent(pane: usize) -> crate::agents::Agent {
         state: crate::agents::AgentState::Idle,
         waiting_for: None,
         args: Vec::new(),
+        launcher: None,
         started_at: 0,
         state_since: None,
         direct: true,
@@ -1628,7 +1633,7 @@ fn written(window: &TestAppWindow<Workspace>, pane: usize) -> Vec<String> {
 }
 
 /// As on the desktop, an idle agent out of sight is ended with `/exit` once "Sleep after" has passed, stays in the
-/// Agents list as sleeping, and resumes its session when its tab is shown again.
+/// Agents list as sleeping, and resumes its session when its tab is shown again, through the wrapper it started with.
 #[test]
 fn an_idle_agent_out_of_sight_sleeps_after_the_set_time_and_wakes_when_shown() {
     use crate::agents::Scan;
@@ -1640,7 +1645,10 @@ fn an_idle_agent_out_of_sight_sleeps_after_the_set_time_and_wakes_when_shown() {
         w.prefs.sleep.minutes = 5;
         w.apply(
             Scan {
-                agents: vec![sleepy_agent(0)],
+                agents: vec![crate::agents::Agent {
+                    launcher: Some("claude-rtk".into()),
+                    ..sleepy_agent(0)
+                }],
                 panes: HashMap::new(),
             },
             cx,
@@ -1677,7 +1685,7 @@ fn an_idle_agent_out_of_sight_sleeps_after_the_set_time_and_wakes_when_shown() {
     let typed = written(&window, 0);
     assert_eq!(typed.len(), 3, "{typed:?}");
     assert!(
-        typed[2].contains("--resume 0aa900ec-ed63-4df5-97c1-eecebeb8ef8d"),
+        typed[2].starts_with("claude-rtk --resume 0aa900ec-ed63-4df5-97c1-eecebeb8ef8d"),
         "{typed:?}"
     );
     window.read(|w, _| {

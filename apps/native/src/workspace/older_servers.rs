@@ -552,6 +552,7 @@ mod tests {
             id: "s1".into(),
             args: Vec::new(),
             name: None,
+            launcher: None,
         }
     }
 

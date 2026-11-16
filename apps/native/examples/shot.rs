@@ -1683,6 +1683,7 @@ fn restored(
                 id: "0aa900ec-ed63-4df5-97c1-eecebeb8ef8d".into(),
                 args: Vec::new(),
                 name: Some(name.into()),
+                launcher: None,
             }),
         },
         focused: 0,
