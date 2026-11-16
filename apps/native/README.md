@@ -18,6 +18,7 @@ The Issues tab shows the Issues plugin's board. With no Issues plugin (missing o
 
 ```sh
 cd apps/native
+pnpm install                    # once: the Tauri CLI that signs
 sh scripts/package-mac-app.sh
 node --test scripts/package-mac-app.test.mjs
 ```

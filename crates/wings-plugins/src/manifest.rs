@@ -228,9 +228,9 @@ pub struct Panel {
     pub height: Option<u32>,
 }
 
-/// The icon names the UI can draw, shared with `src/lib/plugin-icons.ts`.
+/// The icon names the UI can draw.
 pub(crate) static PANEL_ICONS: std::sync::LazyLock<Vec<String>> =
-    std::sync::LazyLock::new(|| serde_json::from_str(include_str!("../../../apps/desktop/src/lib/plugin-icons.json")).expect("plugin-icons.json"));
+    std::sync::LazyLock::new(|| serde_json::from_str(include_str!("plugin-icons.json")).expect("plugin-icons.json"));
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

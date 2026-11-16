@@ -183,7 +183,7 @@ fn a_pane_whose_server_stopped_says_so_and_closes() {
 fn bench_replay_of_a_full_ring() {
     let data = std::fs::read(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../desktop/bench/claude-fullscreen.rec"
+        "/bench/claude-fullscreen.rec"
     ))
     .unwrap();
     let (cols, rows) = (

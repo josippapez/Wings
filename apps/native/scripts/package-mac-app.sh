@@ -40,9 +40,8 @@ rm -f "$DIR/$ARCHIVE" "$DIR/$ARCHIVE.sig" "$DIR/$FEED" "$DIR/$FEED.sig" "$DIR/$F
 KEY="${WINGS_UPDATER_KEY:-$HOME/.tauri/wings-updater.key}"
 [ -f "$KEY" ] || { echo "No updater key at $KEY. Set WINGS_UPDATER_KEY to the native updater signing key." >&2; exit 1; }
 KEY="$(cd "$(dirname "$KEY")" && pwd)/$(basename "$KEY")"
-# The Tauri CLI the deprecated desktop app installed. Run directly: `pnpm tauri` in apps/desktop rewrote its
-# package.json and lockfile.
-TAURI=../desktop/node_modules/.bin/tauri
+# The Tauri CLI signs: `pnpm install` in apps/native.
+TAURI=node_modules/.bin/tauri
 sh scripts/build-mac-app.sh
 COPYFILE_DISABLE=1 tar -czf "$DIR/$ARCHIVE" -C target/release "$BUNDLE"
 SHA256=$(shasum -a 256 "$DIR/$ARCHIVE" | awk '{print $1}')

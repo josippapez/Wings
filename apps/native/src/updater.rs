@@ -83,15 +83,8 @@ fn err(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
-fn public_key() -> Result<String> {
-    let config: serde_json::Value =
-        serde_json::from_str(include_str!("../../desktop/src-tauri/tauri.conf.json"))
-            .map_err(err)?;
-    config["plugins"]["updater"]["pubkey"]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| "Missing updater public key".into())
-}
+/// The public half of the updater key that signs releases (docs/releasing.md), as the Tauri CLI writes it.
+const PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJCOTUxNjBFMDIzQTRCMzMKUldRelN6b0NEaGFWdSsxZjlWYmsyOFVRd3lNMjdnTGdoNHFNQVd4RzlTK2gxbk11ZmpxK0RoODEK";
 
 fn authenticate(bytes: &[u8], signature: &[u8], key: &str) -> Result<()> {
     if bytes.len() as u64 > MAX_META || signature.len() > 4096 {
@@ -445,7 +438,7 @@ fn check_with(
 }
 
 pub fn check() -> Result<Option<Available>> {
-    check_with(&Https, &public_key()?, VERSION, platform())
+    check_with(&Https, PUBLIC_KEY, VERSION, platform())
 }
 
 /// Only the actual running bundle decides where to install. Debug/source runs never auto-install.
@@ -907,7 +900,7 @@ fn run_installer() -> Result<()> {
     authenticate(
         &manifest,
         &fs::read(directory.join("manifest.sig")).map_err(err)?,
-        &public_key()?,
+        PUBLIC_KEY,
     )?;
     let release: Release = serde_json::from_slice(&manifest).map_err(err)?;
     if !release.validate(VERSION, platform())? {

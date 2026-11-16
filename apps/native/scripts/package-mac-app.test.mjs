@@ -12,16 +12,17 @@ const LOCAL_ONLY = "#!/bin/sh\nprintf '%s\\n' '1) ABC \"Wings Local Signing\"'\n
 
 function fixture({ arch = "arm64", os = "Darwin", version = "0.1.0", security = LOCAL_ONLY } = {}) {
   const root = mkdtempSync(join(tmpdir(), "wings-native-package-"));
-  // As in the repo: apps/native beside apps/desktop, and the terminal server's crate in crates/.
+  // As in the repo: apps/native, and the terminal server's crate in crates/.
   const native = join(root, "apps", "native");
   const bin = join(root, "bin");
   mkdirSync(join(native, "scripts"), { recursive: true });
-  mkdirSync(join(root, "apps", "desktop", "src-tauri", "icons"), { recursive: true });
+  mkdirSync(join(native, "assets"), { recursive: true });
+  mkdirSync(join(native, "node_modules", ".bin"), { recursive: true });
   mkdirSync(join(root, "crates", "wings-ptyd", "src"), { recursive: true });
   writeFileSync(join(root, "crates", "wings-ptyd", "src", "lib.rs"), "pub const SERVER_VERSION: u32 = 6;\n");
   mkdirSync(bin);
   writeFileSync(join(native, "Cargo.toml"), `[package]\nname = "wings-native"\nversion = "${version}"\n`);
-  writeFileSync(join(root, "apps", "desktop", "src-tauri", "icons", "icon.icns"), "icon");
+  writeFileSync(join(native, "assets", "icon.icns"), "icon");
   writeFileSync(join(root, "test-updater.key"), "test only");
   for (const script of ["build-mac-app.sh", "install-mac-app.sh", "package-mac-app.sh"]) {
     cpSync(join(scripts, script), join(native, "scripts", script));
@@ -38,14 +39,15 @@ done
   writeFileSync(join(bin, "uname"), `#!/bin/sh
 if [ "$1" = "-s" ]; then printf '%s\\n' '${os}'; else printf '%s\\n' '${arch}'; fi
 `);
-  writeFileSync(join(bin, "pnpm"), `#!/bin/sh
+  writeFileSync(join(native, "node_modules", ".bin", "tauri"), `#!/bin/sh
 for last do :; done
 printf 'test-signature' > "$last.sig"
 `);
+  execFileSync("chmod", ["+x", join(native, "node_modules", ".bin", "tauri")]);
   for (const command of ["open", "osascript", "gh"]) {
     writeFileSync(join(bin, command), `#!/bin/sh\nprintf '%s\\n' '${command}' >> "$CALL_LOG"\nexit 81\n`);
   }
-  for (const entry of ["cargo", "security", "codesign", "uname", "pnpm", "open", "osascript", "gh"]) {
+  for (const entry of ["cargo", "security", "codesign", "uname", "open", "osascript", "gh"]) {
     execFileSync("chmod", ["+x", join(bin, entry)]);
   }
   return { root, native, bin, log: join(root, "calls.log") };
@@ -214,7 +216,7 @@ test("missing signing key removes stale feeds and never builds or exposes an uns
 test("a signing failure leaves no feed or partial signature", (t) => {
   const setup = fixture();
   t.after(() => rmSync(setup.root, { recursive: true, force: true }));
-  writeFileSync(join(setup.bin, "pnpm"), "#!/bin/sh\necho 'test signing failure' >&2\nexit 82\n");
+  writeFileSync(join(setup.native, "node_modules", ".bin", "tauri"), "#!/bin/sh\necho 'test signing failure' >&2\nexit 82\n");
   const result = run(setup);
   assert.equal(result.status, 82);
   assert.match(result.stderr, /test signing failure/);
@@ -226,10 +228,9 @@ test("a signing failure leaves no feed or partial signature", (t) => {
   }
 });
 
-test("WINGS_SWITCH=1 packages Wings.app under the desktop's id and version, with a latest.json for the desktop's updater", (t) => {
-  const setup = fixture({ version: "0.1.0" });
+test("WINGS_SWITCH=1 packages Wings.app under the desktop's id, with a latest.json for the desktop's updater", (t) => {
+  const setup = fixture({ version: "0.2.0" });
   t.after(() => rmSync(setup.root, { recursive: true, force: true }));
-  writeFileSync(join(setup.root, "apps", "desktop", "src-tauri", "Cargo.toml"), `[package]\nname = "wings"\nversion = "0.2.0"\n`);
   const result = run(setup, { WINGS_SWITCH: "1" });
   assert.equal(result.status, 0, result.stderr);
 

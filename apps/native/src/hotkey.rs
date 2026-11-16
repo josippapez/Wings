@@ -304,11 +304,4 @@ mod tests {
         let default: global_hotkey::hotkey::HotKey = crate::saved::DEFAULT_HOTKEY.parse().unwrap();
         assert!(!default.mods.is_empty());
     }
-
-    #[test]
-    fn the_default_is_the_desktops() {
-        let commands: serde_json::Value =
-            serde_json::from_str(include_str!("../../desktop/src/lib/commands.json")).unwrap();
-        assert_eq!(commands["hotkey"]["default"], crate::saved::DEFAULT_HOTKEY);
-    }
 }

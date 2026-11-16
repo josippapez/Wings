@@ -29,7 +29,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # The plugin worker is found next to the app's own binary, and Claude Code's settings point at the `wings` command
 # beside it.
 cp target/release/wings-native target/release/wings-plugin-worker target/release/wings target/release/wings-terminal-server "$APP/Contents/MacOS/"
-cp ../desktop/src-tauri/icons/icon.icns "$APP/Contents/Resources/icon.icns"
+cp assets/icon.icns "$APP/Contents/Resources/icon.icns"
 cat > "$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

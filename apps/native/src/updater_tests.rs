@@ -510,7 +510,7 @@ fn expanded_archive_limit_and_code_signature_failures_are_errors() {
 #[test]
 fn native_verifier_accepts_the_release_cli_signature_format() {
     let dir = temp();
-    let cli = Path::new(env!("CARGO_MANIFEST_DIR")).join("../desktop/node_modules/.bin/tauri");
+    let cli = Path::new(env!("CARGO_MANIFEST_DIR")).join("node_modules/.bin/tauri");
     let key = dir.path().join("test.key");
     let generated = Command::new(&cli)
         .args([

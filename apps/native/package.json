@@ -1,0 +1,11 @@
+{
+  "name": "wings-native",
+  "private": true,
+  "description": "The Tauri CLI that signs releases (scripts/package-mac-app.sh) and the updater test.",
+  "scripts": {
+    "test:scripts": "node --test scripts/package-mac-app.test.mjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.1"
+  }
+}

@@ -4,11 +4,11 @@ Wings is the native app in `apps/native`. It checks the latest GitHub release on
 
 ## One-time setup
 
-The updater key pair signs each release. The public half is in `apps/desktop/src-tauri/tauri.conf.json` (`plugins.updater.pubkey`), which the native app reads when it's built. The private half lives at `~/.tauri/wings-updater.key`, outside the repo. Back it up somewhere private: if it is lost, installed copies can't verify updates and everyone has to reinstall by hand. Never commit it.
+The updater key pair signs each release. The public half is `PUBLIC_KEY` in `apps/native/src/updater.rs`. The private half lives at `~/.tauri/wings-updater.key`, outside the repo. Back it up somewhere private: if it is lost, installed copies can't verify updates and everyone has to reinstall by hand. Never commit it.
 
-To make a new pair: `apps/desktop/node_modules/.bin/tauri signer generate -w ~/.tauri/wings-updater.key`, then put the new public key in `tauri.conf.json`. Releases signed with the new key are only accepted by builds that already carry the new public key.
+To make a new pair: `apps/native/node_modules/.bin/tauri signer generate -w ~/.tauri/wings-updater.key`, then put the new public key in `updater.rs`. Releases signed with the new key are only accepted by builds that already carry the new public key.
 
-You also need the local code-signing certificate from [signing.md](signing.md), `pnpm install` run once in `apps/desktop` for the Tauri CLI that signs releases, and the `gh` CLI signed in.
+You also need the local code-signing certificate from [signing.md](signing.md), `pnpm install` run once in `apps/native` for the Tauri CLI that signs releases, and the `gh` CLI signed in.
 
 ## Steps
 
@@ -26,7 +26,7 @@ The version must be higher than the running app's, or nothing is offered. The sc
 
 ## The desktop app is deprecated
 
-`apps/desktop`, the earlier Tauri app, is deprecated and no longer released. Don't bump its version or run its `pnpm release:mac`. Copies of it still installed update through the `latest.json` each release carries, which installs the native app in its place. The native app still reads a few files from `apps/desktop` (the updater public key, the Tauri CLI that signs releases, the hotkey command list and some test fixtures), so the folder stays until those move.
+`apps/desktop`, the earlier Tauri app, is deprecated and no longer released. Don't bump its version or run its `pnpm release:mac`. Copies of it still installed update through the `latest.json` each release carries, which installs the native app in its place. The native app reads no files from `apps/desktop`.
 
 ## Gatekeeper
 
