@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.26 · 2026-11-16
+
+- **Disk usage's ⋯ menu opens as a menu.** Its Add to Collector, Reveal in Finder and Quick Look showed as loose buttons stacked in the row and ran past the window's edge. They now open in a box under the ⋯, which a pick, a click outside or Escape closes. Plugin pages can use the same menu. Disk usage 0.3.1 needs this Wings.
+
 ## 0.2.25 · 2026-11-16
 
 - **A sleeping agent comes back the way you started it.** An agent started through a wrapper script like `claude-rtk` resumed as plain `claude`, without what the wrapper sets. Wings now resumes it through the wrapper. It finds scripts with `claude` in their name that only set variables and end in `exec claude "$@"`. Agents already asleep before this update wake as plain `claude` once.
