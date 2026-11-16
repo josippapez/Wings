@@ -71,11 +71,13 @@ pub struct PageView {
     /// The disclosures that are open, by node id. The page never hears of it: the app keeps it, and an id stays the
     /// same through every render of its instance, so it survives them.
     open: HashSet<u64>,
-    /// The select whose menu is open, by node id.
+    /// The select or menu that is open, by node id.
     menu: Option<u64>,
     /// A press on that select's trigger found its menu open, so the click that follows closes it. The menu closes
     /// itself on any press outside it, the trigger's too, which would otherwise have the click open it again.
     pressed_open: bool,
+    /// An open `Menu`'s box takes the keyboard, so Escape closes it: a click leaves the button that opened it without.
+    menu_focus: gpui::FocusHandle,
     /// Where each select and combobox was drawn, by node id, and how tall the window was: its menu is as wide, and as
     /// tall as the room on one side of it.
     select_bounds: HashMap<u64, (gpui::Bounds<Pixels>, Pixels)>,
@@ -358,6 +360,7 @@ impl PageView {
             shell_scroll: gpui::ScrollHandle::new(),
             combobox_scroll: gpui::ScrollHandle::new(),
             actions_focus: RefCell::default(),
+            menu_focus: cx.focus_handle(),
             actions_within: HashSet::new(),
             reveal: None,
             _events: events,
@@ -438,6 +441,36 @@ impl PageView {
             self.act(handler, None);
             true
         })
+    }
+
+    /// Opens the `nth` menu whose button is labelled `label`, by its text or its name, as a click on it would. False
+    /// when the page has no such menu.
+    #[cfg(feature = "test-support")]
+    pub fn open_menu(&mut self, label: &str, nth: usize, cx: &mut Context<Self>) -> bool {
+        fn find(nodes: &[Node], label: &str, found: &mut Vec<u64>) {
+            for node in nodes {
+                if let Node::Menu(menu) = node
+                    && let Some(Node::Button(button)) = menu.trigger.first()
+                    && (plain_text(&button.children).trim() == label
+                        || button.label.as_deref() == Some(label))
+                {
+                    found.push(menu.id);
+                }
+                for part in node.parts() {
+                    find(part, label, found);
+                }
+            }
+        }
+        let mut found = Vec::new();
+        if let Some(tree) = &self.tree {
+            find(&tree.children, label, &mut found);
+        }
+        let Some(id) = found.get(nth).copied() else {
+            return false;
+        };
+        self.menu = Some(id);
+        cx.notify();
+        true
     }
 
     /// Presses the `nth` row that opens (`aria-expanded`) and shows `text`, as a click would. False when the page has none.
@@ -818,6 +851,25 @@ impl PageView {
 
     /// A `Button`, or a chip. In a baseline row it starts `drop` points down, as a text there does.
     fn button(&self, button: &tree::Button, drop: f32, cx: &mut Context<Self>) -> AnyElement {
+        let element = self.button_element(button, drop, cx);
+        match button.on_click.clone() {
+            Some(handler) => element
+                .on_click(cx.listener(move |view, _, _, cx| {
+                    cx.stop_propagation();
+                    view.act(&handler, None);
+                }))
+                .into_any_element(),
+            None => element.into_any_element(),
+        }
+    }
+
+    /// `button` before its click is added, for a menu's button, whose click opens the menu.
+    pub(super) fn button_element(
+        &self,
+        button: &tree::Button,
+        drop: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
         let id = ElementId::NamedInteger("page-button".into(), button.id);
         let label = button
             .label
@@ -885,21 +937,11 @@ impl PageView {
                     .tooltip(ui::tooltip(title, None))
             });
         let key_handler = button.on_key_down.clone();
-        let element =
-            element.on_key_down(cx.listener(move |view, event: &KeyDownEvent, window, cx| {
-                if let Some(handler) = &key_handler {
-                    send_shortcut(view, handler, event, window, cx);
-                }
-            }));
-        match button.on_click.clone() {
-            Some(handler) => element
-                .on_click(cx.listener(move |view, _, _, cx| {
-                    cx.stop_propagation();
-                    view.act(&handler, None);
-                }))
-                .into_any_element(),
-            None => element.into_any_element(),
-        }
+        element.on_key_down(cx.listener(move |view, event: &KeyDownEvent, window, cx| {
+            if let Some(handler) = &key_handler {
+                send_shortcut(view, handler, event, window, cx);
+            }
+        }))
     }
 
     fn node(&self, node: &Node, cx: &mut Context<Self>) -> AnyElement {
@@ -1111,6 +1153,7 @@ impl PageView {
             Node::Disclosure(disclosure) => self.disclosure(disclosure, cx),
             Node::Select(select) => self.select(select, cx),
             Node::Combobox(combobox) => self.combobox(combobox, cx),
+            Node::Menu(menu) => self.menu(menu, cx),
             Node::Chips(select) => self.chips(select, cx),
             Node::ListButton(item) => self.list_button(item, None, cx),
             Node::SearchField(field) => self.search_field(field, cx),

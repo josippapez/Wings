@@ -1035,14 +1035,9 @@ fn disk_scans_a_folder_in_its_main_and_its_native_page_draws_the_map_and_fills_t
     tree(&events, "the wedge's name in the middle", |tree| {
         sunburst_in(&tree.children).is_some_and(|map| map.title != "scanned")
     });
-    let mut menus = Vec::new();
-    buttons_named(&mapped.children, "⋯", &mut menus);
-    assert!(page.dispatch(&menus[0], None));
-    let open = tree(&events, "the row's menu", |tree| {
-        tree.text().contains("Add to Collector")
-    });
+    // The app opens a row's menu itself: its items are in the page already.
     let mut add = Vec::new();
-    buttons_named(&open.children, "Add to Collector", &mut add);
+    buttons_named(&mapped.children, "Add to Collector", &mut add);
     assert!(page.dispatch(&add[0], None));
     tree(&events, "the Collector with the folder", |tree| {
         tree.text().contains("1 item,")

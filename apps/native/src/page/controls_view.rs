@@ -744,6 +744,96 @@ impl PageView {
             .children(list)
             .into_any_element()
     }
+
+    /// A menu's button and, while it's open, its items in a box over the page under it. A click on an item tells the
+    /// page and closes the menu, as do Escape and a press outside it. Disk usage's ⋯ drew its items in the row's
+    /// flow, as bare buttons running past the page's edge.
+    pub(super) fn menu(&self, menu: &tree::Menu, cx: &mut Context<Self>) -> AnyElement {
+        let id = menu.id;
+        let Some(Node::Button(trigger)) = menu.trigger.first() else {
+            return div().into_any_element();
+        };
+        let name = trigger
+            .label
+            .clone()
+            .unwrap_or_else(|| plain_text(&trigger.children));
+        let spot = ui::spot(|| format!("page-menu:{name}"));
+        let trigger = self
+            .button_element(trigger, 0.0, cx)
+            .aria_expanded(self.menu == Some(id))
+            .capture_any_mouse_down(cx.listener(move |view, _, _, _| {
+                view.pressed_open = view.menu == Some(id);
+            }))
+            .on_click(cx.listener(move |view, _, window, cx| {
+                cx.stop_propagation();
+                view.toggle_menu(id, cx);
+                if view.menu == Some(id) {
+                    window.focus(&view.menu_focus, cx);
+                }
+            }));
+        let popup = (self.menu == Some(id)).then(|| {
+            let (bounds, _) = self.select_bounds.get(&id).copied().unwrap_or_default();
+            let x = if menu.end {
+                bounds.right()
+            } else {
+                bounds.left()
+            };
+            let items = menu.items.iter().enumerate().filter_map(|(at, node)| {
+                let Node::Button(item) = node else {
+                    return None;
+                };
+                let text = plain_text(&item.children);
+                let label = if text.trim().is_empty() {
+                    item.label.clone().unwrap_or_default()
+                } else {
+                    text
+                };
+                let row = ui::menu_item_text(
+                    ElementId::NamedInteger(format!("page-menu-{id}-item").into(), at as u64),
+                    label,
+                    item.variant == tree::Variant::Destructive,
+                    item.disabled,
+                );
+                Some(match item.on_click.clone() {
+                    Some(handler) if !item.disabled => row
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            cx.stop_propagation();
+                            view.menu = None;
+                            view.act(&handler, None);
+                            cx.notify();
+                        }))
+                        .into_any_element(),
+                    _ => row.into_any_element(),
+                })
+            });
+            ui::dropdown_menu(
+                gpui::point(x, bounds.bottom() + px(4.0)),
+                menu.end,
+                ui::menu(ElementId::NamedInteger("page-menu".into(), id), name)
+                    .track_focus(&self.menu_focus)
+                    .children(items)
+                    .on_key_down(cx.listener(|view, event: &KeyDownEvent, _, cx| {
+                        if event.keystroke.key == "escape" {
+                            view.menu = None;
+                            cx.stop_propagation();
+                            cx.notify();
+                        }
+                    }))
+                    .on_mouse_down_out(cx.listener(|view, _, _, cx| {
+                        view.menu = None;
+                        cx.notify();
+                    })),
+            )
+        });
+        div()
+            .relative()
+            .flex_none()
+            .child(Self::measure_menu(id, cx))
+            .children(spot)
+            .child(trigger)
+            .children(popup)
+            .into_any_element()
+    }
 }
 
 /// How tall a select's or combobox's menu may be: as the desktop's, no taller than the room under it, or over it when

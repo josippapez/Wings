@@ -727,20 +727,17 @@ fn disk(out: PathBuf) {
     let scan = wings_disk_usage::disks().len() + 1;
     // What to press to reach each view, one after the other with the text each shows, and what undoes it: main keeps
     // the Collector between windows.
-    let views: [(&str, Steps, Steps); 3] = [
+    let views: [(&str, Steps, Steps); 4] = [
         ("overview", vec![], vec![]),
         ("map", vec![("Scan", scan, "Downloads")], vec![]),
+        ("menu", vec![("Scan", scan, "Downloads"), ("⋯", 0, "Add to Collector")], vec![]),
         (
             "collected",
             vec![
                 ("Scan", scan, "Downloads"),
-                ("⋯", 0, "Add to Collector"),
                 ("Add to Collector", 0, "1 item"),
             ],
-            vec![
-                ("⋯", 0, "Remove from Collector"),
-                ("Remove from Collector", 0, "Drag folders"),
-            ],
+            vec![("Remove from Collector", 0, "Drag folders")],
         ),
     ];
     shoot_disk(&mut cx, &host, &source, &out, &views);
@@ -855,9 +852,13 @@ fn shoot_disk(cx: &mut VisualTestAppContext, host: &PluginHost, source: &str, ou
             }
             let press = |cx: &mut VisualTestAppContext,
                          (label, nth, shows): &(&str, usize, &str)| {
+                // A menu's button has no click of its own for the page: the app opens the menu.
                 let pressed = handle
                     .read_with(cx, |view, _| view.press(label, *nth))
-                    .unwrap();
+                    .unwrap()
+                    || handle
+                        .update(cx, |view, _, cx| view.open_menu(label, *nth, cx))
+                        .unwrap();
                 assert!(pressed, "no button {label} number {nth}");
                 until(cx, shows);
             };

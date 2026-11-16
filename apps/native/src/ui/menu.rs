@@ -2,7 +2,7 @@
 //! pointer, each an icon and a label, with hairlines between groups. It fades and slides in as the desktop's does.
 
 use gpui::{
-    AnyElement, BoxShadow, Div, ElementId, IntoElement, Pixels, Point, Role, SharedString,
+    Anchor, AnyElement, BoxShadow, Div, ElementId, IntoElement, Pixels, Point, Role, SharedString,
     Stateful, anchored, deferred, div, hsla, point, prelude::*, px, rgb, rgba,
 };
 
@@ -20,6 +20,16 @@ const ACCENT: u32 = 0xffffff14;
 pub fn context_menu(at: Point<Pixels>, menu: Stateful<Div>) -> AnyElement {
     let menu = motion::popup("menu", motion::From::Corner, motion::POPUP_IN, menu);
     deferred(anchored().position(at).child(menu))
+        .with_priority(1)
+        .into_any_element()
+}
+
+/// A menu opened from a button, drawn above everything else with its top-left corner at `at` (in window coordinates),
+/// or its top-right with `end`, sliding down into place as a select's menu does. Add the close handler to `menu`.
+pub fn dropdown_menu(at: Point<Pixels>, end: bool, menu: Stateful<Div>) -> AnyElement {
+    let menu = motion::popup("menu", motion::From::Above, motion::POPUP_IN, menu);
+    let corner = if end { Anchor::TopRight } else { Anchor::TopLeft };
+    deferred(anchored().anchor(corner).position(at).child(menu))
         .with_priority(1)
         .into_any_element()
 }
@@ -78,6 +88,26 @@ pub fn menu_item_with(
     destructive: bool,
     disabled: bool,
 ) -> Stateful<Div> {
+    item(id, Some(glyph.into_any_element()), label, destructive, disabled)
+}
+
+/// A `menu_item` with no icon, as a plugin page's menu has.
+pub fn menu_item_text(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    destructive: bool,
+    disabled: bool,
+) -> Stateful<Div> {
+    item(id, None, label, destructive, disabled)
+}
+
+fn item(
+    id: impl Into<ElementId>,
+    glyph: Option<AnyElement>,
+    label: impl Into<SharedString>,
+    destructive: bool,
+    disabled: bool,
+) -> Stateful<Div> {
     let label = label.into();
     let color = if destructive {
         theme::DANGER
@@ -99,7 +129,7 @@ pub fn menu_item_with(
         .whitespace_nowrap()
         .relative()
         .children(super::spot(|| format!("menu:{label}")))
-        .child(glyph)
+        .children(glyph)
         .child(div().flex_1().min_w_0().truncate().child(label.clone()))
         .when(disabled, |item| {
             item.opacity(0.5).a11y_synthetic_children(|builder| {

@@ -23,14 +23,6 @@ use wings_plugin::{
 const MAX_CRUMBS: usize = 4;
 const NO_ACCESS: &str = "Wings can't open this folder. Allow Full Disk Access for Wings in System Settings, under Privacy & Security, to see it.";
 
-fn toggle_menu(key: String) -> impl Fn() + 'static {
-    move || with(|p| p.menu = if p.menu.as_deref() == Some(key.as_str()) { None } else { Some(key.clone()) })
-}
-
-fn close_menu() {
-    with(|p| p.menu = None);
-}
-
 // ---------- the toolbar ----------
 
 /// The folders from the scan's root down to `focus`, the root called `label`.
@@ -44,7 +36,7 @@ fn crumbs(done: &Done, label: &str, focus: &str) -> Vec<(String, String)> {
     out
 }
 
-fn crumb_row(p: &Page, crumbs: &[(String, String)]) -> Node {
+fn crumb_row(crumbs: &[(String, String)]) -> Node {
     let long = crumbs.len() > MAX_CRUMBS;
     let folded: &[(String, String)] = if long { &crumbs[1..crumbs.len() - 2] } else { &[] };
     let shown: Vec<&(String, String)> = if long { [&crumbs[0]].into_iter().chain(&crumbs[crumbs.len() - 2..]).collect() } else { crumbs.iter().collect() };
@@ -62,14 +54,11 @@ fn crumb_row(p: &Page, crumbs: &[(String, String)]) -> Node {
                 .iter()
                 .map(|(name, path)| {
                     let path = path.clone();
-                    let go: Box<dyn Fn()> = Box::new(move || {
-                        close_menu();
-                        go_to(&path);
-                    });
+                    let go: Box<dyn Fn()> = Box::new(move || go_to(&path));
                     (name.clone(), go)
                 })
                 .collect();
-            menu("…", "Folders in between", "ghost", "sm", p.menu.as_deref() == Some("crumbs"), toggle_menu("crumbs".into()), items)
+            menu("…", "Folders in between", "ghost", "sm", false, items)
         });
         gap(row(), "none").key(path.as_str()).maybe((i > 0).then(separator)).maybe(between.is_some().then(separator)).maybe(between).child(item)
     }))
@@ -105,7 +94,7 @@ fn toolbar(p: &Page, done: &Done, name: &str, focus: &str) -> Node {
         .prop("name", "children")
         .child(button("← Disks", "ghost", "sm", || with(|p| p.leave())))
         .child(history)
-        .child(crumb_row(p, &crumbs(done, name, focus)));
+        .child(crumb_row(&crumbs(done, name, focus)));
     Node::new("Toolbar").child(left).child(slot("actions", actions))
 }
 
@@ -202,12 +191,11 @@ fn sunburst(p: &Page, name: &str, focus: &str, done: &Done) -> Node {
 
 // ---------- the list ----------
 
-fn row_menu(p: &Page, row: &Row, collected: bool) -> Node {
+fn row_menu(row: &Row, collected: bool) -> Node {
     let files = matches!(row.kind, RowKind::Entry | RowKind::Extra);
     let mut items: Vec<(String, Box<dyn Fn()>)> = Vec::new();
     if let Some(item) = collected_of(row) {
         let toggle: Box<dyn Fn()> = Box::new(move || {
-            close_menu();
             if collected { run("uncollect", json!({ "paths": [item.path] })) } else { collect(vec![item.clone()]) }
         });
         items.push((if collected { "Remove from Collector" } else { "Add to Collector" }.into(), toggle));
@@ -215,18 +203,14 @@ fn row_menu(p: &Page, row: &Row, collected: bool) -> Node {
     for (label, op, shown) in [("Reveal in Finder", "reveal", files), ("Quick Look", "preview", files && !row.restricted)] {
         if shown {
             let path = row.path.clone();
-            let act: Box<dyn Fn()> = Box::new(move || {
-                close_menu();
-                run(op, json!({ "path": path }));
-            });
+            let act: Box<dyn Fn()> = Box::new(move || run(op, json!({ "path": path })));
             items.push((label.into(), act));
         }
     }
     if items.is_empty() {
         return stack().prop("gap", "none");
     }
-    let key = format!("row:{}", row.key);
-    menu("⋯", &format!("More for {}", row.name), "ghost", "icon-xs", p.menu.as_deref() == Some(key.as_str()), toggle_menu(key.clone()), items)
+    menu("⋯", &format!("More for {}", row.name), "ghost", "icon-xs", true, items)
 }
 
 /// A click on a row: a folder is gone into, and the smaller items and the hidden space are opened.
@@ -267,7 +251,7 @@ fn entry_row(p: &Page, row: &Row, swatch: Option<u32>, loading: bool) -> Node {
     } else if collected {
         main = main.prop("title", format!("{} is in the Collector", row.name));
     }
-    Node::new("ListItem").key(row.key.as_str()).child(main).child(row_menu(p, row, collected))
+    Node::new("ListItem").key(row.key.as_str()).child(main).child(row_menu(row, collected))
 }
 
 /// The colour of the wedge at a row's path, or the nearest one above it that the map draws.

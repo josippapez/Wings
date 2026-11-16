@@ -920,6 +920,66 @@ fn a_select_menu_closes_on_a_press_outside_and_on_its_own_trigger() {
     assert!(window.read(|view, _| view.text().contains("Session web,")));
 }
 
+/// A row's `⋯` menu at the end of a line, as Disk usage's: what was picked last, and the menu with two items.
+fn row_menu() -> String {
+    let mut picked = "nothing".to_owned();
+    fake::page("page", move |event| {
+        match event {
+            Some(("5:onClick", _)) => picked = "reveal".into(),
+            Some(("7:onClick", _)) => picked = "trash".into(),
+            _ => {}
+        }
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "Row", "props": { "justify": "between" }, "children": [
+                { "id": 2, "type": "Text", "children": [text_node(9, &format!("picked {picked}"))] },
+                { "id": 3, "type": "Menu", "props": { "align": "end" }, "children": [
+                    { "id": 4, "type": "Button", "props": { "variant": "ghost", "size": "icon-xs", "label": "More" }, "children": [text_node(10, "⋯")] },
+                    { "id": 5, "type": "Button", "props": { "onClick": "5:onClick" }, "children": [text_node(11, "Reveal")] },
+                    { "id": 7, "type": "Button", "props": { "variant": "destructive", "onClick": "7:onClick" }, "children": [text_node(12, "Trash")] },
+                ]},
+            ]},
+        ]})
+    })
+}
+
+fn center(bounds: gpui::Bounds<gpui::Pixels>) -> (f32, f32) {
+    let at = bounds.center();
+    (f32::from(at.x), f32::from(at.y))
+}
+
+#[test]
+fn a_menu_opens_over_the_page_under_its_button_and_closes_on_a_pick_a_press_outside_and_escape() {
+    let (app, mut window) = open(row_menu());
+    settle(&app, &mut window, shows("picked nothing"));
+    window.draw();
+    let trigger = crate::ui::spot_at("page-menu:More").expect("the menu's button is drawn");
+    assert!(!window.read(|view, _| view.menu_open()));
+
+    click(&mut window, center(trigger));
+    settle(&app, &mut window, PageView::menu_open);
+    window.draw();
+    // Under the button and lined up with its right edge, not in the row, where its items ran past the window.
+    let reveal = crate::ui::spot_at("menu:Reveal").expect("the item is drawn");
+    assert!(reveal.top() > trigger.bottom(), "{reveal:?} under {trigger:?}");
+    assert!(reveal.right() <= trigger.right() && reveal.right() > trigger.right() - px(12.0), "{reveal:?} at {trigger:?}");
+    assert_eq!(crate::ui::spot_at("page-menu:More"), Some(trigger), "the row kept its place");
+
+    click(&mut window, center(reveal));
+    settle(&app, &mut window, shows("picked reveal"));
+    assert!(!window.read(|view, _| view.menu_open()));
+
+    click(&mut window, center(trigger));
+    settle(&app, &mut window, PageView::menu_open);
+    click(&mut window, (20.0, 400.0));
+    settle(&app, &mut window, |view| !view.menu_open());
+
+    click(&mut window, center(trigger));
+    settle(&app, &mut window, PageView::menu_open);
+    key(&mut window, "escape");
+    settle(&app, &mut window, |view| !view.menu_open());
+    assert!(window.read(|view, _| view.text().contains("picked reveal")));
+}
+
 #[test]
 fn a_gauge_bar_is_blue_until_its_level_and_then_warn_and_danger() {
     let json = r##"{"id":0,"type":"#root","children":[{"id":1,"type":"Gauge","props":{"label":"x","percent":PERCENT,"levels":[70,90]}}]}"##;

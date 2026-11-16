@@ -107,8 +107,6 @@ pub struct Page {
     extras_made: u64,
     pub messages: Vec<Message>,
     next_message: u64,
-    /// The menu that is open, by what it belongs to.
-    pub menu: Option<String>,
     /// What the pointer is on in the map: a wedge's index, -2 for the middle, -1 for nothing.
     pub pointed: i64,
     pub more_rows: usize,
@@ -163,7 +161,6 @@ impl Page {
             extras_made: 0,
             messages: Vec::new(),
             next_message: 0,
-            menu: None,
             pointed: -1,
             more_rows: FIRST_ROWS,
             collector_open: false,
@@ -233,7 +230,6 @@ impl Page {
             self.confirm = None;
             self.pointed = -1;
             self.more_rows = FIRST_ROWS;
-            self.menu = None;
         }
         self.focus = focus;
     }

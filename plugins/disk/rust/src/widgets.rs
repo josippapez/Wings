@@ -39,13 +39,13 @@ pub fn stats(items: Vec<(&str, String)>) -> Node {
     }))
 }
 
-/// A button that shows its `items`, as `(label, handler)`, under it when pressed: the app has no popup menu yet.
-pub fn menu(label: &str, name: &str, variant: &str, size: &str, open: bool, toggle: impl Fn() + 'static, items: Vec<(String, Box<dyn Fn()>)>) -> Node {
-    let items = items.into_iter().map(|(label, on_select)| {
-        let key = label.clone();
-        Node::new("Button").key(key).prop("variant", "ghost").on("onClick", move |_| on_select()).text(label)
-    });
-    gap(stack(), "xs").child(named_button(label, name, variant, size, toggle)).children(open.then_some(items).into_iter().flatten())
+/// A button reading `label`, named `name`, that opens `items`, as `(label, handler)`, in a menu under it. `end` lines
+/// the menu up with the button's right edge.
+pub fn menu(label: &str, name: &str, variant: &str, size: &str, end: bool, items: Vec<(String, Box<dyn Fn()>)>) -> Node {
+    let trigger = Node::new("Button").prop("variant", variant).prop("size", size).prop("label", name).text(label);
+    let items = items.into_iter().map(|(label, on_select)| Node::new("Button").key(label.clone()).on("onClick", move |_| on_select()).text(label));
+    let menu = Node::new("Menu").child(trigger).children(items);
+    if end { menu.prop("align", "end") } else { menu }
 }
 
 pub fn section(title_: &str, children: Vec<Node>) -> Node {

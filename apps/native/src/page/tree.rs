@@ -161,6 +161,7 @@ pub enum Node {
     Select(Select),
     Chips(Select),
     Combobox(Combobox),
+    Menu(Menu),
     ListButton(ListButton),
     SearchField(SearchField),
     Input(Input),
@@ -488,6 +489,19 @@ pub struct Select {
     pub line: bool,
 }
 
+/// wings-plugin-ui's `Menu`: a button that opens a list of actions over the page, under it. The page sends the button
+/// and then one `Button` for each item, with its own click.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Menu {
+    pub id: u64,
+    /// The button that opens it, one `Node::Button`. The app opens the menu on its click, and sends the page nothing.
+    pub trigger: Vec<Node>,
+    /// The items, each a `Node::Button`: its text, its click, and red when its variant is destructive.
+    pub items: Vec<Node>,
+    /// The menu lines up with the button's right edge instead of its left.
+    pub end: bool,
+}
+
 /// wings-plugin-ui/native's `Combobox`, which has no node of its own: the page sends a stack of its field and, under
 /// it, the options that match the field as chips, or a muted line saying none do. The app draws them as a list over
 /// the page, as the desktop does, instead of in the page's flow, where they pushed everything under the field down.
@@ -764,6 +778,7 @@ impl Node {
             Node::ListItem(n) => vec![&n.children, &n.actions],
             Node::Disclosure(n) => vec![&n.summary, &n.body],
             Node::Combobox(n) => vec![&n.field, &n.options, &n.empty],
+            Node::Menu(n) => vec![&n.trigger, &n.items],
         }
     }
 }
@@ -847,6 +862,7 @@ impl Walk {
                 | "Split"
                 | "Bar"
                 | "Sunburst"
+                | "Menu"
         ) {
             return Ok(None);
         }
@@ -1189,6 +1205,17 @@ impl Walk {
                 } else {
                     Node::Select(select)
                 }
+            }
+            "Menu" => {
+                let mut buttons = children
+                    .into_iter()
+                    .filter(|node| matches!(node, Node::Button(_)));
+                Node::Menu(Menu {
+                    id,
+                    trigger: buttons.next().into_iter().collect(),
+                    items: buttons.collect(),
+                    end: str_prop(&props, "align") == Some("end"),
+                })
             }
             _ => return Ok(None),
         }))
