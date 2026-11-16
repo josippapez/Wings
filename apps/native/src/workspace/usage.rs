@@ -1,4 +1,4 @@
-//! The usage limits Wings reads itself, as Claude Code's `/usage` does (`wings_connect::usage`): every 5 seconds while
+//! The usage limits Wings reads itself, as Claude Code's `/usage` does (`wings_connect::usage`): once a minute while
 //! Wings is in front, for each Claude account with a session on screen or that reported to the status line. What comes
 //! back joins the status line's limits, so `wings.statusline()` and the HUD read them as before. Only the app that
 //! serves the socket does it, never tests or screenshots.
@@ -97,7 +97,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 
     use serde_json::{Value, json};
-    use wings_connect::usage::{Api, Logins, NoToken, Token};
+    use wings_connect::usage::{Api, Logins, NoToken, Reply, Token};
 
     use super::*;
 
@@ -122,10 +122,14 @@ mod tests {
     struct TestApi(Arc<AtomicUsize>);
 
     impl Api for TestApi {
-        fn usage(&self, _: &Token) -> Option<(u16, String)> {
+        fn usage(&self, _: &Token) -> Option<Reply> {
             self.0.fetch_add(1, SeqCst);
             let answer = r#"{ "five_hour": { "utilization": 64.0, "resets_at": "2025-02-01T16:00:00.2+00:00" }, "seven_day": null }"#;
-            Some((200, answer.into()))
+            Some(Reply {
+                status: 200,
+                body: answer.into(),
+                retry_after: None,
+            })
         }
     }
 

@@ -1,4 +1,4 @@
-//! Asks once for the usage limits of Claude accounts, by the code the app asks with every 5 seconds, and prints only
+//! Asks once for the usage limits of Claude accounts, by the code the app asks with once a minute, and prints only
 //! what came of it: each window's percent used and reset time, or why there is none. Never the token.
 //!
 //! `cargo run --manifest-path crates/wings-connect/Cargo.toml --example usage_live -- [account ...]`

@@ -30,10 +30,14 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 const BODY_MAX: u64 = 256 * 1024;
 
 /// How often a followed account is asked while Wings is in front. Behind it nothing is asked: the status line still
-/// reports, and network polling is for a focused app only (`.claude/skills/wings-performance`).
-pub const EVERY: Duration = Duration::from_secs(5);
+/// reports, and network polling is for a focused app only (`.claude/skills/wings-performance`). Every 5 seconds ran
+/// into the endpoint's rate limit within the hour, and its 429 holds Claude Code's own `/usage` too.
+pub const EVERY: Duration = Duration::from_secs(60);
 /// The longest wait after failures in a row.
 const BACKOFF_MAX: Duration = Duration::from_secs(600);
+/// How long a 429 holds when its `Retry-After` is missing or 0, and the longest it may: what Claude Code waits.
+const HOLD: Duration = Duration::from_secs(300);
+const HOLD_MAX: Duration = Duration::from_secs(3600);
 
 /// A claude.ai access token. It has no `Display`, and `Debug` leaves it out.
 pub struct Token(String);
@@ -71,8 +75,17 @@ pub trait Logins: Send + Sync {
 
 /// Anthropic's usage endpoint.
 pub trait Api: Send + Sync {
-    /// The status and body of a `GET` of the usage endpoint with `token`, `None` when no answer came.
-    fn usage(&self, token: &Token) -> Option<(u16, String)>;
+    /// What a `GET` of the usage endpoint with `token` answered, `None` when no answer came.
+    fn usage(&self, token: &Token) -> Option<Reply>;
+}
+
+/// An answer of the usage endpoint.
+#[derive(Debug, Clone)]
+pub struct Reply {
+    pub status: u16,
+    pub body: String,
+    /// Its `Retry-After`, in seconds.
+    pub retry_after: Option<u64>,
 }
 
 /// What asking for an account's usage came to. Nothing in it can hold the token.
@@ -84,13 +97,15 @@ pub enum Fetched {
     NoToken(NoToken),
     /// 401 or 403: the token was turned down.
     Rejected(u16),
+    /// 429: asked too often. Not again for this long.
+    Limited(Duration),
     /// Try again later.
     Failed(Failure),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Failure {
-    /// 429, a server error or another status.
+    /// A server error or another status.
     Status(u16),
     /// No answer.
     Network,
@@ -104,14 +119,18 @@ pub fn fetch(logins: &dyn Logins, api: &dyn Api, account: Option<&str>) -> Fetch
         Ok(token) => token,
         Err(no) => return Fetched::NoToken(no),
     };
-    match api.usage(&token) {
-        None => Fetched::Failed(Failure::Network),
-        Some((200..=299, body)) => match parse(&body) {
+    let Some(reply) = api.usage(&token) else { return Fetched::Failed(Failure::Network) };
+    match reply.status {
+        200..=299 => match parse(&reply.body) {
             Some((five_hour, seven_day)) => Fetched::Limits { five_hour, seven_day },
             None => Fetched::Failed(Failure::Unreadable),
         },
-        Some((status @ (401 | 403), _)) => Fetched::Rejected(status),
-        Some((status, _)) => Fetched::Failed(Failure::Status(status)),
+        status @ (401 | 403) => Fetched::Rejected(status),
+        429 => Fetched::Limited(match reply.retry_after {
+            Some(seconds @ 1..) => Duration::from_secs(seconds).min(HOLD_MAX),
+            _ => HOLD,
+        }),
+        status => Fetched::Failed(Failure::Status(status)),
     }
 }
 
@@ -257,7 +276,7 @@ impl Default for Anthropic {
 }
 
 impl Api for Anthropic {
-    fn usage(&self, token: &Token) -> Option<(u16, String)> {
+    fn usage(&self, token: &Token) -> Option<Reply> {
         let mut answer = self
             .0
             .get(URL)
@@ -267,8 +286,9 @@ impl Api for Anthropic {
             .call()
             .ok()?;
         let status = answer.status().as_u16();
+        let retry_after = answer.headers().get("retry-after").and_then(|v| v.to_str().ok()?.trim().parse().ok());
         let body = answer.body_mut().with_config().limit(BODY_MAX).read_to_string().ok()?;
-        Some((status, body))
+        Some(Reply { status, body, retry_after })
     }
 }
 
@@ -343,6 +363,10 @@ impl Poller {
         match fetched {
             Fetched::Limits { .. } => turn.failures = 0,
             Fetched::Rejected(_) | Fetched::NoToken(NoToken::Refused) => turn.stopped = Some(std::mem::take(&mut turn.sessions)),
+            Fetched::Limited(hold) => {
+                turn.failures += 1;
+                turn.next = Some(now + backoff(turn.failures).max(*hold));
+            }
             Fetched::NoToken(_) | Fetched::Failed(_) => {
                 turn.failures += 1;
                 turn.next = Some(now + backoff(turn.failures));
@@ -409,19 +433,23 @@ mod tests {
         }
     }
 
-    struct Answer(Option<(u16, String)>);
+    struct Answer(Option<Reply>);
 
     impl Api for Answer {
-        fn usage(&self, token: &Token) -> Option<(u16, String)> {
+        fn usage(&self, token: &Token) -> Option<Reply> {
             assert_eq!(token.0, SENTINEL);
             self.0.clone()
         }
     }
 
+    fn reply(status: u16, body: &str) -> Option<Reply> {
+        Some(Reply { status, body: body.into(), retry_after: None })
+    }
+
     struct Unasked;
 
     impl Api for Unasked {
-        fn usage(&self, _: &Token) -> Option<(u16, String)> {
+        fn usage(&self, _: &Token) -> Option<Reply> {
             panic!("asked without a token");
         }
     }
@@ -487,15 +515,20 @@ mod tests {
 
     #[test]
     fn each_answer_comes_to_what_the_poller_acts_on() {
-        let with = |answer: Option<(u16, String)>| fetch(&Login(Ok(SENTINEL)), &Answer(answer), None);
-        assert_eq!(with(Some((200, ANSWER.into()))), Fetched::Limits { five_hour: window(37.0, 1794592800), seven_day: window(12.5, 1794992400) });
-        assert_eq!(with(Some((401, String::new()))), Fetched::Rejected(401));
-        assert_eq!(with(Some((403, String::new()))), Fetched::Rejected(403));
-        assert_eq!(with(Some((429, String::new()))), Fetched::Failed(Failure::Status(429)));
-        assert_eq!(with(Some((503, String::new()))), Fetched::Failed(Failure::Status(503)));
-        assert_eq!(with(Some((302, String::new()))), Fetched::Failed(Failure::Status(302)));
-        assert_eq!(with(Some((200, "{}".into()))), Fetched::Failed(Failure::Unreadable));
+        let with = |answer: Option<Reply>| fetch(&Login(Ok(SENTINEL)), &Answer(answer), None);
+        assert_eq!(with(reply(200, ANSWER)), Fetched::Limits { five_hour: window(37.0, 1794592800), seven_day: window(12.5, 1794992400) });
+        assert_eq!(with(reply(401, "")), Fetched::Rejected(401));
+        assert_eq!(with(reply(403, "")), Fetched::Rejected(403));
+        assert_eq!(with(reply(503, "")), Fetched::Failed(Failure::Status(503)));
+        assert_eq!(with(reply(302, "")), Fetched::Failed(Failure::Status(302)));
+        assert_eq!(with(reply(200, "{}")), Fetched::Failed(Failure::Unreadable));
         assert_eq!(with(None), Fetched::Failed(Failure::Network));
+        // A 429 holds for its `Retry-After`: 5 minutes without one or with 0, and an hour at most.
+        let limited = |retry_after| with(Some(Reply { status: 429, body: String::new(), retry_after }));
+        assert_eq!(limited(None), Fetched::Limited(Duration::from_secs(300)));
+        assert_eq!(limited(Some(0)), Fetched::Limited(Duration::from_secs(300)));
+        assert_eq!(limited(Some(471)), Fetched::Limited(Duration::from_secs(471)));
+        assert_eq!(limited(Some(37_800)), Fetched::Limited(Duration::from_secs(3600)));
         // Without a token nothing is asked.
         for no in [NoToken::Missing, NoToken::Expired, NoToken::Unscoped, NoToken::Refused] {
             assert_eq!(fetch(&Login(Err(no)), &Unasked, Some("work")), Fetched::NoToken(no));
@@ -508,9 +541,9 @@ mod tests {
         let quoted = format!(r#"{{"type":"error","error":{{"type":"authentication_error","message":"Bearer {SENTINEL} is not valid"}}}}"#);
         let mut shown = Vec::new();
         for status in [200, 201, 302, 400, 401, 403, 404, 429, 500, 503] {
-            shown.push(format!("{:?}", fetch(&Login(Ok(SENTINEL)), &Answer(Some((status, quoted.clone()))), None)));
+            shown.push(format!("{:?}", fetch(&Login(Ok(SENTINEL)), &Answer(reply(status, &quoted)), None)));
         }
-        for answer in [None, Some((200, ANSWER.to_string())), Some((200, SENTINEL.to_string())), Some((200, format!(r#"{{"five_hour":"{SENTINEL}"}}"#)))] {
+        for answer in [None, reply(200, ANSWER), reply(200, SENTINEL), reply(200, &format!(r#"{{"five_hour":"{SENTINEL}"}}"#))] {
             shown.push(format!("{:?}", fetch(&Login(Ok(SENTINEL)), &Answer(answer), None)));
         }
         for no in [NoToken::Missing, NoToken::Expired, NoToken::Unscoped, NoToken::Refused] {
@@ -545,21 +578,35 @@ mod tests {
     }
 
     #[test]
-    fn asks_every_5_seconds_while_wings_is_in_front_and_nothing_behind_it() {
+    fn asks_once_a_minute_while_wings_is_in_front_and_nothing_behind_it() {
         let accounts = [account(None, Some("me"), &["a"])];
         let (mut poller, start) = (Poller::default(), Instant::now());
         let mut asked = Vec::new();
-        for ms in (0..60_000).step_by(100) {
+        for ms in (0..600_000).step_by(100) {
             for account in poller.due(&accounts, true, at(start, ms)) {
                 asked.push(ms / 1000);
                 poller.done(&account, &limits(), at(start, ms + 400));
             }
         }
-        assert_eq!(asked, (0..60).step_by(5).collect::<Vec<_>>(), "12 a minute");
-        let behind: usize = (60_000..660_000).step_by(100).map(|ms| poller.due(&accounts, false, at(start, ms)).len()).sum();
+        assert_eq!(asked, (0..600).step_by(60).collect::<Vec<_>>(), "10 in 10 minutes");
+        let behind: usize = (600_000..1_200_000).step_by(100).map(|ms| poller.due(&accounts, false, at(start, ms)).len()).sum();
         assert_eq!(behind, 0);
         // Back in front: at once.
-        assert_eq!(poller.due(&accounts, true, at(start, 660_000)), [None]);
+        assert_eq!(poller.due(&accounts, true, at(start, 1_200_000)), [None]);
+    }
+
+    #[test]
+    fn a_429_waits_out_its_retry_after() {
+        let accounts = [account(None, Some("me"), &["a"])];
+        let (mut poller, start) = (Poller::default(), Instant::now());
+        let mut asked = Vec::new();
+        for ms in (0..3_600_000).step_by(1_000) {
+            for account in poller.due(&accounts, true, at(start, ms)) {
+                asked.push(ms / 1000);
+                poller.done(&account, &Fetched::Limited(Duration::from_secs(1800)), at(start, ms));
+            }
+        }
+        assert_eq!(asked, [0, 1800]);
     }
 
     #[test]
@@ -608,7 +655,7 @@ mod tests {
     fn failures_wait_longer_each_time_and_never_loop() {
         let accounts = [account(Some("work"), None, &["a"])];
         for failure in [
-            Fetched::Failed(Failure::Status(429)),
+            Fetched::Limited(Duration::from_secs(1)),
             Fetched::Failed(Failure::Status(503)),
             Fetched::Failed(Failure::Network),
             Fetched::NoToken(NoToken::Expired),
@@ -621,12 +668,12 @@ mod tests {
                     poller.done(&account, &failure, at(start, ms));
                 }
             }
-            assert_eq!(asked, [0, 10, 30, 70, 150, 310, 630, 1230, 1830, 2430, 3030], "{failure:?}: 10 minutes apart at most");
-            // An answer brings it back to every 5 seconds.
-            let now = at(start, 3_630_000);
+            assert_eq!(asked, [0, 120, 360, 840, 1440, 2040, 2640, 3240], "{failure:?}: 10 minutes apart at most");
+            // An answer brings it back to once a minute.
+            let now = at(start, 3_840_000);
             assert_eq!(poller.due(&accounts, true, now).len(), 1);
             poller.done(&Some("work".into()), &limits(), now);
-            assert_eq!(poller.due(&accounts, true, at(start, 3_635_000)).len(), 1);
+            assert_eq!(poller.due(&accounts, true, at(start, 3_900_000)).len(), 1);
         }
     }
 }
