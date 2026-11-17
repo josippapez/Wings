@@ -9,7 +9,10 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::PathBuf,
     process::Command,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 
@@ -137,6 +140,8 @@ pub(super) enum UiEvent {
         page: String,
         label: Option<SidebarLabel>,
     },
+    /// A notification for the system to show as the app's own, which only the window's thread can post.
+    SystemNotification(gpui::SystemNotification),
     /// A notification the system couldn't show, for the window to show itself.
     Notice {
         title: String,
@@ -175,14 +180,31 @@ pub(super) trait System: Send + Sync + 'static {
     fn claude_auth(&self, name: Option<&str>) -> AuthStatus;
 }
 
-/// The real system. A bare binary has no bundle to post notifications from (`UNUserNotificationCenter` needs one), so
-/// a notification is `osascript`'s `display notification`, which any process may use. The title and body go in as the
-/// script's arguments, never in its text, so nothing a plugin writes is read as script.
+/// The real system. In the app's bundle a notification is the app's own, so macOS shows Wings' name and icon and a
+/// click opens Wings. A bare binary has no bundle to post notifications from (`UNUserNotificationCenter` needs one), so
+/// there a notification is `osascript`'s `display notification`, which any process may use but macOS credits to Script
+/// Editor. The title and body go in as the script's arguments, never in its text, so nothing a plugin writes is read as
+/// script.
 struct Os {
     /// The socket Claude Code's config points at, and the app's state beside which the disconnected marker is, as the
     /// app's `Config` has them. Without a socket Claude Code is left alone.
     socket: Option<PathBuf>,
     state: Option<PathBuf>,
+    /// The window's events, to post notifications through when the app runs from its bundle.
+    bundle: Option<Sender<UiEvent>>,
+}
+
+/// Whether the app runs from its bundle: gpui posts no notifications outside one, and this is the check it makes.
+#[cfg(target_os = "macos")]
+fn in_bundle() -> bool {
+    objc2_foundation::NSBundle::mainBundle()
+        .bundleIdentifier()
+        .is_some()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn in_bundle() -> bool {
+    false
 }
 
 fn succeeded(what: &str, result: std::io::Result<std::process::ExitStatus>) -> Result<(), String> {
@@ -204,6 +226,24 @@ impl System for Os {
     }
 
     fn notify(&self, title: &str, body: &str) -> Result<(), String> {
+        if let Some(events) = &self.bundle {
+            static NEXT: AtomicUsize = AtomicUsize::new(0);
+            let notification = gpui::SystemNotification {
+                // A tag of its own, so it never replaces an earlier one still in Notification Center.
+                tag: format!(
+                    "{}.{}",
+                    std::process::id(),
+                    NEXT.fetch_add(1, Ordering::Relaxed)
+                )
+                .into(),
+                title: title.to_owned().into(),
+                body: body.to_owned().into(),
+                actions: Vec::new(),
+            };
+            return events
+                .try_send(UiEvent::SystemNotification(notification))
+                .map_err(|_| "The Wings window is closed or busy".into());
+        }
         if cfg!(target_os = "macos") {
             succeeded(
                 "osascript",
@@ -313,13 +353,18 @@ impl AppEnv {
         socket: Option<PathBuf>,
         state: Option<PathBuf>,
     ) -> Self {
+        let os = Os {
+            socket,
+            state,
+            bundle: in_bundle().then(|| events.clone()),
+        };
         Self {
             events,
             known: Mutex::default(),
             projects,
             running: Running::default(),
             claude_dir,
-            system: Mutex::new(Arc::new(Os { socket, state })),
+            system: Mutex::new(Arc::new(os)),
             statusline: Mutex::default(),
             store: store.map(|store| Arc::new(Mutex::new(store))),
             clients: Arc::default(),
@@ -878,6 +923,7 @@ impl Workspace {
                     None => self.plugin_ui.labels.remove(&key),
                 };
             }
+            UiEvent::SystemNotification(notification) => cx.show_system_notification(notification),
             UiEvent::Notice { title, body } => self.show_notice(title, body, cx),
             UiEvent::Notified(notification) => self.inbox_plugin(notification),
             UiEvent::Copy(text) => cx.write_to_clipboard(gpui::ClipboardItem::new_string(text)),

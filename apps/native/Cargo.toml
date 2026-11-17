@@ -82,7 +82,7 @@ gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", default-fe
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6.5", optional = true }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSSound", "NSApplication", "NSResponder", "NSEvent", "NSWindow", "NSRunningApplication", "NSView", "NSVisualEffectView"], optional = true }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData", "NSArray", "NSGeometry"], optional = true }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData", "NSArray", "NSGeometry", "NSBundle", "NSString"], optional = true }
 # The window's AppKit view, for the desktop's vibrancy under the glass. gpui-pre already builds this version.
 raw-window-handle = { version = "0.6.2", optional = true }
 # The global shortcut, the version the desktop's tauri-plugin-global-shortcut uses: Carbon's RegisterEventHotKey.
