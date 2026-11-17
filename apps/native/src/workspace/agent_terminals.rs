@@ -235,8 +235,8 @@ impl Workspace {
             .find(|tab| tab.layout.panes().contains(&pane))
     }
 
-    /// `open_pane` beside the agent's pane `owner` in the tab `tab`: the shell starts in the split, and the keys stay
-    /// with the agent, as the desktop's.
+    /// `open_pane` beside the agent's pane `owner` in the tab `tab`: the shell starts in the split without the keys, and
+    /// the tab isn't shown.
     pub(super) fn open_agent_split(
         &mut self,
         tab: usize,
@@ -280,12 +280,9 @@ impl Workspace {
             }
         }
         tab.zoomed = None;
-        let tab = Active::Terminal(tab.id);
         if let Some(input) = plan.input {
             terminal.update(cx, |view, cx| view.write_input(&input, cx));
         }
-        self.show(tab, window, cx);
-        self.sync_plugins(cx);
         Ok(pane)
     }
 

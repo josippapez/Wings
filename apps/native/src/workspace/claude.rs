@@ -39,7 +39,7 @@ use crate::{
     projects::with_setup,
 };
 
-use super::{Active, Workspace, history::Sessions, plugin_env::AppEnv};
+use super::{Workspace, history::Sessions, plugin_env::AppEnv};
 
 /// How long a plugin's tool has to answer Claude, as on the desktop.
 const CALL_TIMEOUT: Duration = Duration::from_secs(120);
@@ -133,8 +133,22 @@ impl Workspace {
     /// `open_pane`: a terminal in the project, as a split beside the caller's pane when it is given, where Settings,
     /// Agents says (`open_agent_split`), else as a tab, with the command typed, and run only while "Let Claude run
     /// commands in new tabs" is on. A command goes to a terminal the same agent opened before that sits idle instead,
-    /// as the desktop's `onMcpOpenPane`.
+    /// as the desktop's `onMcpOpenPane`. The user didn't ask for it, so it opens out of sight of what they look at.
     pub(super) fn claude_open_pane(
+        &mut self,
+        plan: OpenPlan,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<Opened, String> {
+        let project = PathBuf::from(&plan.space_id);
+        let opened = self.in_project(project, window, cx, |this, window, cx| {
+            this.open_for_claude(plan, window, cx)
+        });
+        self.sync_plugins(cx);
+        opened
+    }
+
+    fn open_for_claude(
         &mut self,
         plan: OpenPlan,
         window: &mut Window,
@@ -162,19 +176,12 @@ impl Workspace {
                 reused: true,
             });
         }
-        let mut tab = None;
-        if let Some(pane) = owner {
-            self.switch_project(project.clone(), window, cx);
-            if let Some(found) = self
-                .terminals
-                .iter_mut()
+        let tab = owner.and_then(|pane| {
+            self.terminals
+                .iter()
                 .find(|tab| tab.layout.panes().contains(&pane))
-            {
-                found.focused = pane;
-                self.active = Active::Terminal(found.id);
-                tab = Some(found.id);
-            }
-        }
+                .map(|tab| tab.id)
+        });
         let input = with_setup(self.spaces.take_setup(&project).as_deref(), typed);
         let cwd = plan
             .cwd
@@ -190,18 +197,7 @@ impl Workspace {
         let owner = owner.filter(|_| tab.is_some());
         let pane = match (tab, owner) {
             (Some(tab), Some(owner)) => self.open_agent_split(tab, owner, open, window, cx)?,
-            _ => {
-                let (reply, answer) = Reply::channel();
-                self.open_plugin_pane(open, reply, window, cx);
-                let opened = answer
-                    .wait(Duration::ZERO)
-                    .ok_or("The window didn't open the pane")??;
-                let opened: Value = serde_json::from_str(&opened).map_err(|e| e.to_string())?;
-                opened["paneId"]
-                    .as_str()
-                    .and_then(|pane| pane.parse().ok())
-                    .ok_or("The window didn't say which pane it opened")?
-            }
+            _ => self.place_plugin_pane(open, window, cx)?.0,
         };
         self.note_agent_terminal(pane, project, plan.cwd, owner);
         Ok(Opened {

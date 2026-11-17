@@ -176,15 +176,7 @@ impl Workspace {
         self.save(cx);
         self.side.touch(&self.config.project);
         self.side.touch(&path);
-        let current = Parked {
-            terminals: std::mem::take(&mut self.terminals),
-            plugin_tabs: std::mem::take(&mut self.plugin_tabs),
-            project_page: self.project_page.take(),
-            issues_open: self.issues_open,
-            active: self.active,
-            waiting: None,
-        };
-        self.parked.insert(self.config.project.clone(), current);
+        self.park_shown();
         self.config.project = path.clone();
         match self.parked.remove(&path) {
             Some(parked) => {
@@ -199,6 +191,60 @@ impl Workspace {
             }
             None => self.enter_project(window, cx),
         }
+    }
+
+    /// Puts the project on screen away with its tabs and shells, for when it comes back.
+    fn park_shown(&mut self) {
+        let current = Parked {
+            terminals: std::mem::take(&mut self.terminals),
+            plugin_tabs: std::mem::take(&mut self.plugin_tabs),
+            project_page: self.project_page.take(),
+            issues_open: self.issues_open,
+            active: self.active,
+            waiting: None,
+        };
+        self.parked.insert(self.config.project.clone(), current);
+    }
+
+    /// Runs `work` in the project `path` without showing it, for what the user didn't ask to see: the project, tab and
+    /// keys on screen and the sidebar's order stay as they are. A project with no tabs to work in yet, one not entered or
+    /// restored at launch and not shown since, is shown first.
+    pub(super) fn in_project<R>(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        work: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) -> R,
+    ) -> R {
+        let parked = self
+            .parked
+            .get(&path)
+            .is_some_and(|parked| parked.waiting.is_none());
+        let result = if parked && !self.welcome {
+            let shown = self.config.project.clone();
+            self.unpark(path);
+            let result = work(self, window, cx);
+            self.unpark(shown);
+            result
+        } else {
+            self.switch_project(path, window, cx);
+            work(self, window, cx)
+        };
+        self.sync_pane_visibility(cx);
+        cx.notify();
+        result
+    }
+
+    /// Parks the project on screen and takes the parked `path` out as it was left, without showing it.
+    fn unpark(&mut self, path: PathBuf) {
+        self.park_shown();
+        let parked = self.parked.remove(&path).expect("a parked project");
+        self.terminals = parked.terminals;
+        self.plugin_tabs = parked.plugin_tabs;
+        self.project_page = parked.project_page;
+        self.issues_open = parked.issues_open;
+        self.active = parked.active;
+        self.config.project = path;
     }
 
     /// The desktop's project bar above the panes: the project's name and its branch, and Open in <editor>.

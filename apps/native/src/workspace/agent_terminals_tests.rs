@@ -98,6 +98,81 @@ fn an_agents_first_terminal_opens_where_settings_say_and_its_next_ones_beside_it
     }
 }
 
+/// An agent's terminal opens out of sight: you stay on the project, tab and pane you were on, whether the agent is in
+/// another tab or another project, and so does a tab it opens.
+#[test]
+fn an_agents_terminal_opens_without_taking_you_from_what_you_look_at() {
+    let dir = std::env::temp_dir()
+        .canonicalize()
+        .unwrap()
+        .join(format!("wings-quiet-open-{}", std::process::id()));
+    let (alpha, beta) = (dir.join("alpha"), dir.join("beta"));
+    std::fs::create_dir_all(&alpha).unwrap();
+    std::fs::create_dir_all(&beta).unwrap();
+    let spaces = serde_json::json!([
+        { "id": "a", "name": "alpha", "path": alpha },
+        { "id": "b", "name": "beta", "path": beta },
+    ]);
+    std::fs::write(dir.join("spaces.json"), spaces.to_string()).unwrap();
+    let (_app, mut window) = open_sized(Some(size(px(1280.0), px(900.0))), |config| {
+        config.project = alpha.clone();
+        config.projects = Some(dir.join("spaces.json"));
+    });
+    let open_in = |window: &mut TestAppWindow<Workspace>, next_to: Option<usize>| {
+        let plan = OpenPlan {
+            space_id: alpha.to_string_lossy().into_owned(),
+            cwd: None,
+            input: Some("echo hi".into()),
+            run: false,
+            next_to: next_to.map(|pane| pane.to_string()),
+        };
+        let opened = window.update(|w, window, cx| w.claude_open_pane(plan, window, cx).unwrap());
+        opened.pane_id.parse::<usize>().unwrap()
+    };
+    // What's on screen, and the pane with the keys.
+    let on_screen = |window: &mut TestAppWindow<Workspace>| {
+        window.update(|w, window, cx| {
+            let keys = w.panes.iter().find(|(_, pane)| {
+                pane.view
+                    .as_ref()
+                    .is_ok_and(|view| view.focus_handle(cx).is_focused(window))
+            });
+            (w.config.project.clone(), w.active, keys.map(|(id, _)| *id))
+        })
+    };
+
+    // The agent in alpha's first tab, you in its second.
+    let agent = window.read(|w, _| w.terminals[0].focused);
+    super::tests::press(&mut window, "t");
+    let before = on_screen(&mut window);
+    assert_ne!(
+        before.1,
+        Active::Terminal(window.read(|w, _| w.terminals[0].id))
+    );
+    let split = open_in(&mut window, Some(agent));
+    assert_eq!(on_screen(&mut window), before);
+    assert!(window.read(|w, _| w.terminals[0].layout.panes().contains(&split)));
+
+    // You in beta, alpha out of sight.
+    window.update(|w, window, cx| w.switch_project(beta.clone(), window, cx));
+    let before = on_screen(&mut window);
+    let split = open_in(&mut window, Some(agent));
+    let tab = open_in(&mut window, None);
+    assert_eq!(on_screen(&mut window), before);
+    window.read(|w, _| {
+        let alpha = &w.parked[&alpha];
+        assert!(alpha.terminals[0].layout.panes().contains(&split));
+        assert!(
+            alpha
+                .terminals
+                .iter()
+                .any(|t| t.layout.panes() == vec![tab])
+        );
+        assert!(!w.terminals.iter().any(|t| t.layout.panes().contains(&tab)));
+    });
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn a_command_goes_to_a_terminal_the_agent_opened_that_sits_idle() {
     let (app, mut window) = open();

@@ -1008,10 +1008,25 @@ impl Workspace {
         window: &mut gpui::Window,
         cx: &mut Context<Self>,
     ) {
-        let pane = match self.start_plugin_pane(&plan, window, cx) {
-            Ok(pane) => pane,
-            Err(error) => return reply.err(error),
-        };
+        match self.place_plugin_pane(plan, window, cx) {
+            Ok((pane, tab)) => {
+                self.show(tab, window, cx);
+                self.sync_plugins(cx);
+                reply.ok(serde_json::json!({ "paneId": pane.to_string() }).to_string());
+            }
+            Err(error) => reply.err(error),
+        }
+    }
+
+    /// Starts the shell `plan` asks for and puts it in a tab of its own, or in a split of the tab on screen, without
+    /// showing it: the pane and its tab.
+    pub(super) fn place_plugin_pane(
+        &mut self,
+        plan: OpenPane,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(usize, Active), String> {
+        let pane = self.start_plugin_pane(&plan, window, cx)?;
         let split =
             (plan.placement != "tab")
                 .then_some(self.active)
@@ -1047,9 +1062,7 @@ impl Workspace {
                 .unwrap()
                 .update(cx, |view, cx| view.write_input(&input, cx));
         }
-        self.show(active, window, cx);
-        self.sync_plugins(cx);
-        reply.ok(serde_json::json!({ "paneId": pane.to_string() }).to_string());
+        Ok((pane, active))
     }
 
     /// Pastes a plugin's message into the prompt of the agent in `pane`, as the desktop's `sendToAgent` does: only an agent
