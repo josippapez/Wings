@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.27 · 2026-11-17
+
+- **Notifications come from Wings, and clicking one opens Wings.** They used to go through a script, so macOS showed them as Script Editor's and a click opened Script Editor. The first one asks once whether Wings may send notifications.
+
 ## 0.2.26 · 2026-11-16
 
 - **Disk usage's ⋯ menu opens as a menu.** Its Add to Collector, Reveal in Finder and Quick Look showed as loose buttons stacked in the row and ran past the window's edge. They now open in a box under the ⋯, which a pick, a click outside or Escape closes. Plugin pages can use the same menu. Disk usage 0.3.1 needs this Wings.
