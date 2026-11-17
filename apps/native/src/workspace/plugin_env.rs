@@ -17,7 +17,7 @@ use std::{
 };
 
 use async_channel::Sender;
-use gpui::{Context, SharedString, Task};
+use gpui::{Context, SharedString, Task, Window};
 use wings_plugins::transcript::{Line, transcript_event};
 use wings_spaces::{
     claude_accounts::{self, Accounts, AuthStatus},
@@ -140,8 +140,12 @@ pub(super) enum UiEvent {
         page: String,
         label: Option<SidebarLabel>,
     },
-    /// A notification for the system to show as the app's own, which only the window's thread can post.
-    SystemNotification(gpui::SystemNotification),
+    /// A notification for the system to show as the app's own, which only the window's thread can post, and the pane a
+    /// click on it goes to.
+    SystemNotification {
+        notification: gpui::SystemNotification,
+        pane: Option<String>,
+    },
     /// A notification the system couldn't show, for the window to show itself.
     Notice {
         title: String,
@@ -167,7 +171,8 @@ pub(super) enum UiEvent {
 /// What the system does for a plugin: open a URL, show a notification. Faked in tests, which must not open anything.
 pub(super) trait System: Send + Sync + 'static {
     fn open_url(&self, url: &str) -> Result<(), String>;
-    fn notify(&self, title: &str, body: &str) -> Result<(), String>;
+    /// `pane` is where a click on the notification goes.
+    fn notify(&self, title: &str, body: &str, pane: Option<String>) -> Result<(), String>;
     /// Makes a named Claude Code account's folder and gives it its share of the default account's setup (unless that is
     /// off), as the desktop's `prepare_claude_account`. The terminal starts all the same if sharing fails.
     fn prepare_claude_account(&self, name: &str) -> Result<(), String>;
@@ -225,7 +230,7 @@ impl System for Os {
         succeeded(opener, Command::new(opener).arg(url).status())
     }
 
-    fn notify(&self, title: &str, body: &str) -> Result<(), String> {
+    fn notify(&self, title: &str, body: &str, pane: Option<String>) -> Result<(), String> {
         if let Some(events) = &self.bundle {
             static NEXT: AtomicUsize = AtomicUsize::new(0);
             let notification = gpui::SystemNotification {
@@ -241,7 +246,7 @@ impl System for Os {
                 actions: Vec::new(),
             };
             return events
-                .try_send(UiEvent::SystemNotification(notification))
+                .try_send(UiEvent::SystemNotification { notification, pane })
                 .map_err(|_| "The Wings window is closed or busy".into());
         }
         if cfg!(target_os = "macos") {
@@ -414,9 +419,9 @@ impl AppEnv {
         &self.projects
     }
 
-    /// Shows a notification for Claude Code: the system's, else the window's own.
-    pub(super) fn show_notification(&self, title: String, body: String) {
-        if self.system().notify(&title, &body).is_err() {
+    /// Shows a notification for Claude Code: the system's, which a click on takes to `pane`, else the window's own.
+    pub(super) fn show_notification(&self, title: String, body: String, pane: Option<String>) {
+        if self.system().notify(&title, &body, pane).is_err() {
             self.send(UiEvent::Notice { title, body });
         }
     }
@@ -651,7 +656,11 @@ impl Env for AppEnv {
     fn notify(&self, notification: Notification) -> Result<(), String> {
         let title = notification.system_title();
         // Where the system has no way to show it, the window does, so a notification is never lost.
-        if self.system().notify(&title, &notification.body).is_err() {
+        if self
+            .system()
+            .notify(&title, &notification.body, None)
+            .is_err()
+        {
             self.send(UiEvent::Notice {
                 title,
                 body: notification.body.clone(),
@@ -751,6 +760,8 @@ pub(super) struct PluginUi {
     pub(super) needs_update: std::cell::RefCell<NeedsUpdate>,
     /// The notifications the system couldn't show, newest last.
     pub(super) notices: Vec<Notice>,
+    /// The pane each system notification from one came from, by its tag, until it's clicked.
+    notified_panes: HashMap<SharedString, String>,
     /// The plugin buttons kept in the project bar, as `plugin:sidebar`, in the order they were pinned.
     pub(super) pinned: Vec<String>,
     /// The project bar's menu of plugin buttons is open.
@@ -923,7 +934,13 @@ impl Workspace {
                     None => self.plugin_ui.labels.remove(&key),
                 };
             }
-            UiEvent::SystemNotification(notification) => cx.show_system_notification(notification),
+            UiEvent::SystemNotification { notification, pane } => {
+                if let Some(pane) = pane {
+                    let tag = notification.tag.clone();
+                    self.plugin_ui.notified_panes.insert(tag, pane);
+                }
+                cx.show_system_notification(notification)
+            }
             UiEvent::Notice { title, body } => self.show_notice(title, body, cx),
             UiEvent::Notified(notification) => self.inbox_plugin(notification),
             UiEvent::Copy(text) => cx.write_to_clipboard(gpui::ClipboardItem::new_string(text)),
@@ -1096,6 +1113,46 @@ impl Workspace {
             reply.ok(serde_json::json!({ "submitted": submitted }).to_string());
         })
         .detach();
+    }
+
+    /// Clicks on the system's notifications come to `notification_clicked`. Registering wakes the notification centre,
+    /// which asks nothing of the user until a notification is posted.
+    pub(super) fn listen_for_notification_clicks(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (workspace, handle) = (cx.entity().downgrade(), window.window_handle());
+        cx.on_system_notification_response(move |response, cx| {
+            let _ = handle.update(cx, |_, window, cx| {
+                workspace.update(cx, |this, cx| {
+                    this.notification_clicked(&response.tag, window, cx)
+                })
+            });
+        });
+    }
+
+    /// Goes to the pane the notification came from, while it's open. macOS has brought Wings forward already.
+    pub(super) fn notification_clicked(
+        &mut self,
+        tag: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pane) = self.plugin_ui.notified_panes.remove(tag) else {
+            return;
+        };
+        let Some(id) = self.plugin_pane(&pane) else {
+            return;
+        };
+        let project = self
+            .pane_projects()
+            .into_iter()
+            .find(|(pane, _)| *pane == id)
+            .map(|(_, project)| project.to_path_buf());
+        if let Some(project) = project {
+            self.go_to_pane(project, id, window, cx);
+        }
     }
 
     /// The pane a plugin named, if it is still open: one that closed since the call has nothing to draw on.

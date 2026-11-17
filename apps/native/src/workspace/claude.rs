@@ -623,7 +623,7 @@ impl Host for NativeHost<'_> {
         Ok(())
     }
 
-    fn notify(&self, title: String, body: String) -> Result<(), String> {
+    fn notify(&self, title: String, body: String, pane: Option<String>) -> Result<(), String> {
         self.server
             .notified
             .lock()
@@ -636,7 +636,7 @@ impl Host for NativeHost<'_> {
                     wait.as_secs() + 1
                 )
             })?;
-        self.server.env.show_notification(title, body);
+        self.server.env.show_notification(title, body, pane);
         Ok(())
     }
 
@@ -720,6 +720,7 @@ impl Host for NativeHost<'_> {
                     &format!("An agent asks to set the setup command for {project}"),
                     200,
                 ),
+                None,
             );
         }
         answered

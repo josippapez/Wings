@@ -645,6 +645,7 @@ impl Workspace {
         };
         this.find_editors(cx);
         this.start_global_hotkey(window, cx);
+        this.listen_for_notification_clicks(window, cx);
         this.enter_project(window, cx);
         #[cfg(unix)]
         this.restore_hidden(cx);

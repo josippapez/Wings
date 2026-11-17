@@ -152,6 +152,51 @@ fn going_to_a_pane_of_the_active_tab_puts_the_one_off_terminal_away() {
     window.update(|w, window, cx| assert!(w.panes[&pane].view.as_ref().is_ok_and(|view| view.focus_handle(cx).is_focused(window))));
 }
 
+/// A click on a notification Claude sent from a pane goes to that pane, in its tab. One with no pane, or from a pane
+/// that isn't open, leaves the window as it is.
+#[test]
+fn clicking_a_notification_goes_to_the_pane_it_came_from() {
+    let (_app, mut window) = open();
+    let (first_tab, first_pane) = window.read(|w, _| (w.terminals[0].id, w.terminals[0].focused));
+    press(&mut window, "t");
+    let notify = |window: &mut TestAppWindow<Workspace>, tag: &str, pane: Option<String>| {
+        let notification = gpui::SystemNotification {
+            tag: tag.to_owned().into(),
+            title: "Claude: Done".into(),
+            body: "".into(),
+            actions: Vec::new(),
+        };
+        window.update(|w, window, cx| {
+            w.apply_plugin_event(
+                super::plugin_env::UiEvent::SystemNotification { notification, pane },
+                window,
+                cx,
+            )
+        });
+    };
+    notify(&mut window, "first", Some(first_pane.to_string()));
+    notify(&mut window, "none", None);
+    notify(&mut window, "closed", Some("999999".into()));
+    let shown = |window: &TestAppWindow<Workspace>| window.read(|w, _| w.active);
+    let second = shown(&window);
+    assert_ne!(second, Active::Terminal(first_tab));
+
+    for tag in ["none", "closed", "unknown"] {
+        window.update(|w, window, cx| w.notification_clicked(tag, window, cx));
+        assert_eq!(shown(&window), second, "{tag}");
+    }
+    window.update(|w, window, cx| w.notification_clicked("first", window, cx));
+    assert_eq!(shown(&window), Active::Terminal(first_tab));
+    window.update(|w, window, cx| {
+        assert!(
+            w.panes[&first_pane]
+                .view
+                .as_ref()
+                .is_ok_and(|view| view.focus_handle(cx).is_focused(window))
+        )
+    });
+}
+
 #[test]
 fn the_rows_close_button_ends_its_shell() {
     let (app, mut window) = open();

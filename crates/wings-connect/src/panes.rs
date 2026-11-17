@@ -66,8 +66,8 @@ pub trait Host {
     fn open(&self, plan: OpenPlan) -> Result<Opened, String>;
     /// Closes a pane through the window, which refuses one no agent opened with `open_pane`.
     fn close(&self, pane_id: &str) -> Result<(), String>;
-    /// A system notification, if the rate limit allows one.
-    fn notify(&self, title: String, body: String) -> Result<(), String>;
+    /// A system notification, if the rate limit allows one. `pane` is the calling Claude's, where a click on it goes.
+    fn notify(&self, title: String, body: String, pane: Option<String>) -> Result<(), String>;
     /// Pastes `text` into an agent's prompt through the window, which presses Enter only while the user lets agents
     /// message each other. Whether it pressed Enter.
     fn send(&self, pane_id: &str, text: &str) -> Result<bool, String>;
@@ -211,7 +211,7 @@ pub fn call_tool(host: &dyn Host, name: &str, args: &Value, caller: &dyn Fn() ->
         "notify" => match text("title").map(str::trim).filter(|t| !t.is_empty()) {
             Some(title) => {
                 let title = format!("Claude: {}", wings_plugins::permissions::clip(title, NOTIFY_TITLE_MAX));
-                host.notify(title, wings_plugins::permissions::clip(text("body").unwrap_or_default().trim(), NOTIFY_BODY_MAX)).map(|()| "Shown.".to_string())
+                host.notify(title, wings_plugins::permissions::clip(text("body").unwrap_or_default().trim(), NOTIFY_BODY_MAX), caller()).map(|()| "Shown.".to_string())
             }
             None => Err("notify needs a title".into()),
         },
@@ -484,7 +484,7 @@ mod tests {
         opened: RefCell<Vec<OpenPlan>>,
         /// The user's "Let Claude run commands in new tabs" setting, and "Let agents message each other".
         allow_run: bool,
-        notified: RefCell<Vec<(String, String)>>,
+        notified: RefCell<Vec<(String, String, Option<String>)>>,
         sent: RefCell<Vec<(String, String)>>,
         /// What the user answers to a setup approval: `None` is no answer in time.
         approval: Option<bool>,
@@ -520,8 +520,8 @@ mod tests {
             self.sent.borrow_mut().push((pane_id.into(), "closed".into()));
             Ok(())
         }
-        fn notify(&self, title: String, body: String) -> Result<(), String> {
-            self.notified.borrow_mut().push((title, body));
+        fn notify(&self, title: String, body: String, pane: Option<String>) -> Result<(), String> {
+            self.notified.borrow_mut().push((title, body, pane));
             Ok(())
         }
         fn send(&self, pane_id: &str, text: &str) -> Result<bool, String> {
@@ -732,6 +732,16 @@ mod tests {
         assert_eq!(sent[0].1.chars().count(), NOTIFY_BODY_MAX);
         assert_eq!(sent[1].0.chars().count(), "Claude: ".len() + NOTIFY_TITLE_MAX);
         assert!(run(&host, "notify", json!({ "title": "  " }), None).is_err());
+    }
+
+    #[test]
+    fn notify_names_the_calling_pane_for_a_click_to_go_to() {
+        let host = Fake::default();
+        run(&host, "notify", json!({ "title": "Done" }), Some("p1")).unwrap();
+        run(&host, "notify", json!({ "title": "Done" }), None).unwrap();
+        let sent = host.notified.borrow();
+        assert_eq!(sent[0].2.as_deref(), Some("p1"));
+        assert_eq!(sent[1].2, None);
     }
 
     #[test]

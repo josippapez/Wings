@@ -45,7 +45,7 @@ impl System for FakeSystem {
         Ok(())
     }
 
-    fn notify(&self, title: &str, body: &str) -> Result<(), String> {
+    fn notify(&self, title: &str, body: &str, _pane: Option<String>) -> Result<(), String> {
         if self.no_notifications {
             return Err("no notification centre".into());
         }
