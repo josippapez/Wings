@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.28 · 2026-11-17
+
+- **Clicking Claude's notification takes you to its pane.** Wings opens on the project, tab and pane of the Claude that sent it.
+- **An agent opening a terminal no longer moves you.** The project, tab and pane you're on stay on screen and keep the keys. The terminal opens beside the agent, or as a new tab in its project.
+
 ## 0.2.27 · 2026-11-17
 
 - **Notifications come from Wings, and clicking one opens Wings.** They used to go through a script, so macOS showed them as Script Editor's and a click opened Script Editor. The first one asks once whether Wings may send notifications.
