@@ -424,7 +424,7 @@ mod tests {
 
     #[test]
     fn a_question_tells_you_once_and_isnt_a_message_of_yours() {
-        let mut session = session_with(form());
+        let session = session_with(form());
         assert_eq!(session.alerts.len(), 1);
         assert_eq!(session.alerts[0].0, "elicit asks you");
         assert!(session.items.is_empty());
