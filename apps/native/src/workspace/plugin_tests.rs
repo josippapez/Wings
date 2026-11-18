@@ -207,6 +207,48 @@ fn graph_main() -> String {
     })
 }
 
+/// A main that opens its view `approve` as a modal on the action `open`, and closes it on `close`.
+fn modal_main() -> String {
+    fake::script("main", || {
+        let mut wait = Pending::default();
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+            Hear::Deliver("action", token, text) => {
+                let (method, params) = match said(text)["actionId"].as_str() {
+                    Some("open") => ("openView", json!({ "id": "approve", "as": "modal", "newTab": false })),
+                    _ => ("closeView", json!({ "id": "approve" })),
+                };
+                wait.call(cx, method, params, token);
+            }
+            Hear::Deliver(kind, id, text) => {
+                if let Some((token, answer)) = wait.answered(kind, id, text) {
+                    settled(cx, token, answer.err());
+                }
+            }
+            _ => {}
+        }
+    })
+}
+
+#[test]
+fn a_view_that_opens_as_a_modal_shows_its_page_over_the_window_until_the_plugin_closes_it() {
+    let data = Data::temp();
+    data.install_script("asker", json!({ "contributes": {
+        "views": [{ "id":"approve", "title":"Allow this?", "page":"dist/approve.html", "opens":["modal"], "width":560, "height":420 }]
+    } }), &modal_main(), &[("approve", &saves_focus("approve"))], "asker-scope");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let host = window.read(|w, _| w.plugins[0].host.clone());
+    host.send_action("0", "open", |_| {});
+    // It used to fail with "Native views don't open as modal yet", and an agent waited for an answer nobody was asked.
+    until(&app, &mut window, "the modal did not open", |w| {
+        w.plugin_ui.modal.is_some() && w.plugins[0].host.frames() == 2
+    });
+    host.send_action("0", "close", |_| {});
+    until(&app, &mut window, "the modal did not close", |w| w.plugin_ui.modal.is_none());
+    // Its page goes once the dialog has faded out.
+    app.advance_clock(crate::ui::motion::POPUP_IN);
+    until(&app, &mut window, "the modal's page kept running", |w| w.plugins[0].host.frames() == 1);
+}
+
 #[test]
 fn graph_default_open_view_uses_an_owned_native_window_with_local_focus_and_cleanup() {
     let data = Data::temp();

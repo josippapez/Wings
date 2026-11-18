@@ -161,7 +161,7 @@ impl Workspace {
     }
 
     /// Closes the plugin's page `view` wherever it shows: its tabs in this project, its place in the panel on the right,
-    /// and its window. A view a plugin has no page for is left alone.
+    /// its window and its dialog. A view a plugin has no page for is left alone.
     pub(super) fn close_plugin_view(
         &mut self,
         plugin: &str,
@@ -184,6 +184,7 @@ impl Workspace {
         if let Some(handle) = self.plugin_ui.windows.remove(&key) {
             let _ = handle.update(cx, |_, window, _| window.remove_window());
         }
+        self.close_plugin_modal(Some(&key), window, cx);
         self.sync_plugin_visibility(cx);
         cx.notify();
     }

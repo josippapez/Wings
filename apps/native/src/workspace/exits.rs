@@ -258,6 +258,12 @@ impl Workspace {
             Self::setup_approval_dialog,
             cx,
         );
+        let plugin_modal = self.layer(
+            "plugin-modal",
+            |this| &mut this.plugin_ui.modal,
+            Self::plugin_modal_dialog,
+            cx,
+        );
         let disk_access = self.layer(
             "app-data-access",
             |this| &mut this.disk_access.asking,
@@ -305,6 +311,7 @@ impl Workspace {
             dialog("settings", settings),
             dialog("plugin-review", review),
             dialog("setup-approval", setup),
+            dialog("plugin-modal", plugin_modal),
             dialog("app-data-access", disk_access),
             dialog("first-launch-plugins", first_launch),
             dialog("worktree-setup", worktree_setup),

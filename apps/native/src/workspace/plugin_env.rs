@@ -771,6 +771,8 @@ pub(super) struct PluginUi {
     pub(super) windows:
         HashMap<(String, String), gpui::WindowHandle<super::plugin_windows::PluginViewWindow>>,
     pub(super) windows_release: Option<gpui::Subscription>,
+    /// The plugin view that shows as a dialog over the window, if one does.
+    pub(super) modal: Option<super::plugin_modal::PluginModal>,
     pub(super) windows_closed: Option<gpui::Subscription>,
     watcher: Option<wings_gitwatch::Watcher>,
     watched_projects: Vec<PathBuf>,
@@ -919,6 +921,11 @@ impl Workspace {
                 } else if plan.place == "window" {
                     reply.done(
                         self.open_plugin_window(&plan.plugin, &plan.id, cx)
+                            .map(|_| "null".into()),
+                    );
+                } else if plan.place == "modal" {
+                    reply.done(
+                        self.open_plugin_modal(&plan.plugin, &plan.id, window, cx)
                             .map(|_| "null".into()),
                     );
                 } else {

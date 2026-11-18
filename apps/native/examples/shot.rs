@@ -370,6 +370,10 @@ fn main() {
         return plugins_install(&mut cx, &config, &out);
     }
     // `-- <out-dir> plugins-drop` renders only dropping a .wings-plugin file on the window and a plugin's README.
+    // `-- <out-dir> plugins-modal` renders only a plugin's view that opens as a modal, over the window.
+    if std::env::args().nth(2).as_deref() == Some("plugins-modal") {
+        return plugins_modal(&mut cx, &config, &out);
+    }
     if std::env::args().nth(2).as_deref() == Some("plugins-drop") {
         return plugins_drop(&mut cx, &config, &out);
     }
@@ -2317,6 +2321,61 @@ fn plugins_install(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
 
 /// A `.wings-plugin` file dragged over the window, the review it opens once dropped, and an installed plugin's page with
 /// its README. Temp folders only.
+/// A plugin's view that opens as a modal, over the window: a made-up "Allow this?" page, as Schedules asks before an agent
+/// adds a schedule.
+fn plugins_modal(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+    use serde_json::json;
+    let data = Data::temp();
+    let main = fake::script("main", || {
+        let mut asked = false;
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            if let Hear::Deliver("panes", _, _) = hear
+                && !std::mem::replace(&mut asked, true)
+            {
+                cx.call("openView", json!({ "id": "approve", "as": "modal", "newTab": false }));
+            }
+        }
+    });
+    let page = fake::page("page", |_| {
+        let text = |id: u64, text: &str, props: serde_json::Value| {
+            json!({ "id": id, "type": "Text", "props": props, "children": [{ "id": id + 1, "type": "#text", "text": text }] })
+        };
+        let button = |id: u64, label: &str, variant: &str| {
+            json!({ "id": id, "type": "Button", "props": { "variant": variant }, "children": [{ "id": id + 1, "type": "#text", "text": label }] })
+        };
+        json!({ "id": 0, "type": "#root", "props": {}, "children": [
+            { "id": 1, "type": "Stack", "props": { "gap": "m" }, "children": [
+                text(2, "An agent asks to add a schedule", json!({ "weight": "strong" })),
+                text(4, "Claude in shop · Once, 16 Dec 2026 at 12:00", json!({ "tone": "muted" })),
+                { "id": 6, "type": "Card", "props": {}, "children": [
+                    text(7, "Check the Ministry's answers to the consultation comments on the price list rules.", json!({})) ] },
+                { "id": 9, "type": "Row", "props": { "gap": "s", "justify": "end" }, "children": [
+                    button(10, "Deny", "outline"), button(12, "Allow", "default") ] } ] } ] })
+    });
+    data.install_script(
+        "asker",
+        json!({ "name": "Schedules", "contributes": { "views": [{ "id": "approve", "title": "Allow this?",
+            "page": "dist/approve.html", "opens": ["modal"], "width": 560, "height": 420, "button": false }] } }),
+        &main,
+        &[("approve", &page)],
+        "asker-scope",
+    );
+    let mut config = base.clone();
+    config.plugins = Some(data.paths());
+    for width in [1000.0, 640.0] {
+        let config = config.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        wait(cx, window, Duration::from_secs(4));
+        save(cx, window, &out.join(format!("plugins-modal-{width}.png")));
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+    }
+}
+
 fn plugins_drop(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     use std::io::Write;
     let data = Data::temp();
