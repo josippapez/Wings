@@ -2008,8 +2008,9 @@ fn a_dialog_is_drawn_over_the_page_and_escape_or_the_backdrop_sends_on_close() {
     window.draw();
     let panel = crate::ui::spot_at("page-dialog").expect("the dialog is drawn");
     let page = window.update(|_, window, _| window.viewport_size());
-    // In the middle of the page, as wide as the page asked, and not in the body's flow under the button.
-    assert!((f32::from(panel.size.width) - 360.0).abs() < 1.0, "{panel:?}");
+    // In the middle of the page, as wide as the page asked (measured inside its 1-point border), and not in the body's
+    // flow under the button.
+    assert!((f32::from(panel.size.width) - 358.0).abs() < 1.0, "{panel:?}");
     assert!((f32::from(panel.center().x) - f32::from(page.width) / 2.0).abs() < 1.0, "{panel:?} in {page:?}");
     assert!((f32::from(panel.center().y) - f32::from(page.height) / 2.0).abs() < 1.0, "{panel:?} in {page:?}");
 
