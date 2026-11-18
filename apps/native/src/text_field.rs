@@ -32,11 +32,13 @@ pub enum FieldEvent {
         back: bool,
     },
     Cancel,
-    /// A paste of an image into a field with `pastes_images`: what to send the page.
-    PasteImage {
-        media_type: &'static str,
-        data: String,
-    },
+}
+
+/// A paste of an image into a field with `pastes_images`: its media type and its bytes as base64. An event of its own,
+/// so the fields that take only text needn't hear of it.
+pub struct PastedImage {
+    pub media_type: &'static str,
+    pub data: String,
 }
 
 /// The most image bytes a paste hands the page. The Claude API takes an image of up to 5 MB as base64 on its
@@ -97,6 +99,7 @@ pub struct TextField {
 }
 
 impl EventEmitter<FieldEvent> for TextField {}
+impl EventEmitter<PastedImage> for TextField {}
 
 impl Focusable for TextField {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -306,7 +309,7 @@ impl TextField {
                 .read_from_clipboard()
                 .and_then(|item| Self::pasted_image(&item))
             {
-                cx.emit(FieldEvent::PasteImage { media_type, data });
+                cx.emit(PastedImage { media_type, data });
                 return;
             }
         }
@@ -1379,13 +1382,11 @@ mod tests {
         window: &mut TestAppWindow<Host>,
         field: &Entity<TextField>,
     ) -> std::rc::Rc<std::cell::RefCell<Vec<(&'static str, usize)>>> {
-        let heard = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let heard = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(&'static str, usize)>::new()));
         let log = heard.clone();
         window.update(|_, _, cx| {
-            cx.subscribe(field, move |_, event: &FieldEvent, _| {
-                if let FieldEvent::PasteImage { media_type, data } = event {
-                    log.borrow_mut().push((*media_type, data.len()));
-                }
+            cx.subscribe(field, move |_, _, pasted: &PastedImage, _| {
+                log.borrow_mut().push((pasted.media_type, pasted.data.len()));
             })
             .detach();
             field.update(cx, |field, _| field.pastes_images = true);

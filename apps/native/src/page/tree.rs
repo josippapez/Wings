@@ -1379,11 +1379,11 @@ fn valid_handler(handler: &str) -> bool {
 fn combobox(stack: Stack) -> Node {
     let plain =
         stack.gap == Gap::S && !stack.grow && stack.width.is_none() && stack.max_width.is_none();
-    // A picker's field selects its text when it takes the keyboard, and hears when it loses it.
+    // A picker's field selects its text when it takes the keyboard, and hears when it loses it. A message box that
+    // sends on Enter takes suggestions too, like a chat's slash commands: it keeps its Enter while none show.
     let field = |node: &Node| {
-        matches!(node, Node::Input(input) if input.rows.is_none()
-            && !input.password
-            && input.on_key_down.is_none())
+        matches!(node, Node::Input(input) if !input.password
+            && (input.enter_submits || (input.rows.is_none() && input.on_key_down.is_none())))
     };
     // An option's label, and its detail after it as a small muted text.
     let chip = |node: &Node| {

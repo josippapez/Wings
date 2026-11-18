@@ -371,20 +371,16 @@ impl PageView {
                 field
             });
             let id = input.id;
-            cx.subscribe(&entity, move |view, entity, event, cx| {
-                if let crate::text_field::FieldEvent::PasteImage { media_type, data } = event {
-                    let handler = view
-                        .inputs
-                        .borrow()
-                        .get(&id)
-                        .and_then(|state| state.paste_image_handler.clone());
-                    if let Some(handler) = handler {
-                        let payload = serde_json::json!({ "mediaType": media_type, "data": data });
-                        // A paste is a key gesture, as Enter is.
-                        view.act(&handler, Some(&payload));
-                    }
-                    return;
+            cx.subscribe(&entity, move |view, _, pasted: &crate::text_field::PastedImage, _| {
+                let handler = view.inputs.borrow().get(&id).and_then(|state| state.paste_image_handler.clone());
+                if let Some(handler) = handler {
+                    let payload = serde_json::json!({ "mediaType": pasted.media_type, "data": pasted.data });
+                    // A paste is a key gesture, as Enter is.
+                    view.act(&handler, Some(&payload));
                 }
+            })
+            .detach();
+            cx.subscribe(&entity, move |view, entity, event, cx| {
                 if let crate::text_field::FieldEvent::Submit { .. }
                 | crate::text_field::FieldEvent::Cancel = event
                 {
@@ -622,10 +618,11 @@ impl PageView {
         });
         // A picker, whose field selects its pick when it takes the keyboard, has its first match picked out until the
         // arrows move, so Enter takes it, as ui.js's `autoHighlight`.
+        // A message box's too: its Enter sends, so with nothing picked out it would send what was meant to be completed.
         let picker = combobox
             .field
             .iter()
-            .any(|node| matches!(node, Node::Input(input) if input.select_on_focus));
+            .any(|node| matches!(node, Node::Input(input) if input.select_on_focus || input.enter_submits));
         let options = combobox
             .options
             .iter()
@@ -643,6 +640,12 @@ impl PageView {
                 _ => None,
             })
             .collect::<Vec<_>>();
+        // A message box sits at the foot of its page, as a chat's does: its list opens over it, upwards, instead of
+        // under it over its buttons.
+        let upward = combobox
+            .field
+            .iter()
+            .any(|node| matches!(node, Node::Input(input) if input.enter_submits));
         let listed = !options.is_empty() || !combobox.empty.is_empty();
         let shows = move |view: &Self| {
             field.is_some_and(|(input, disabled)| {
@@ -660,7 +663,7 @@ impl PageView {
         let measure = Self::measure_menu(id, cx);
         let list = shows(self).then(|| {
             let (bounds, window_height) = self.select_bounds.get(&id).copied().unwrap_or_default();
-            let room = menu_room(bounds, window_height);
+            let room = if upward { bounds.top() - px(8.0) } else { menu_room(bounds, window_height) };
             let rows = options
                 .into_iter()
                 .enumerate()
@@ -693,8 +696,11 @@ impl PageView {
             });
             // Over the page as `ui::popover` draws a select's menu, without its motion: the desktop's
             // `.w-combobox-popup` has `transition: none`, as a list that changes with each key has nothing to animate.
+            let place = anchored().when(upward, |place| {
+                place.anchor(gpui::Anchor::BottomLeft).position(bounds.origin - gpui::point(px(0.0), px(4.0)))
+            });
             deferred(
-                anchored().child(
+                place.child(
                     div().child(
                         ui::select_menu(rows.into_iter().chain(empty))
                             // As wide as the field, and no taller than 252pt, as the desktop's `.w-combobox-popup`:
