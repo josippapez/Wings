@@ -6,6 +6,8 @@ What changed in each Wings release, newest first.
 
 - **Claude chat works with every Claude Code account.** A session from your work account resumes in a chat instead of failing with "No conversation found": the chat runs Claude Code under the account the session is in, and a new chat under its project's account, as a terminal there does. Its past sessions name the account when it isn't the default.
 - **Resume a Claude session in a chat from Past sessions.** The session's menu has "Resume in Claude chat" next to "Resume in this tab", while the Claude chat plugin is on. A plugin view declares it can with `resumes` in its manifest.
+- **Claude chat's /hooks, /memory and /permissions can change things.** Add or remove a permission rule, remove a hook, or turn auto memory on or off. Each change shows what it will write, and to which file, before you confirm it.
+- **/usage, /cost and /context open as dialogs** over the chat, and the side panel's context and limit rows open them too.
 
 ## 0.2.38 · 2026-11-18
 
