@@ -22,7 +22,7 @@ use crate::{
 
 /// What a chat may run Claude Code as: Claude Code itself, or the wrapper a terminal started it through.
 const PROGRAMS: [&str; 2] = ["claude", "claude-rtk"];
-/// How many of the newest items the chat shows at first, and how many more each Show earlier adds.
+/// How many of the newest items the chat shows at first, and how many more each scroll up to the top adds.
 pub const PAGE: usize = 80;
 /// How many entries of a resumed session's transcript are read back.
 const HISTORY: u32 = 400;

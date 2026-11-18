@@ -355,6 +355,9 @@ pub struct Scroll {
     pub id: u64,
     /// `follow: "end"`: it stays at its end as what it holds grows, while you haven't scrolled up.
     pub follow_end: bool,
+    /// `onReachStart`, with `follow: "end"`: sent when the scroll comes within a screen of its top, once until what
+    /// is above it grows. The page then adds older items, and the view stays on what it showed.
+    pub on_reach_start: Option<String>,
     pub children: Vec<Node>,
 }
 
@@ -1108,6 +1111,7 @@ impl Walk {
             "Scroll" => Node::Scroll(Scroll {
                 id,
                 follow_end: str_prop(&props, "follow") == Some("end"),
+                on_reach_start: handler("onReachStart"),
                 children: parts(children),
             }),
             "Bar" => Node::Bar(Bar {
@@ -1658,7 +1662,9 @@ mod tests {
                 {"id":3,"type":"Text","props":{"shimmer":true},"children":[text(4, "Thinking")]}
             ]}
         ]})) else { panic!() };
-        assert!(scroll.follow_end);
+        assert!(scroll.follow_end && scroll.on_reach_start.is_none());
+        let Node::Scroll(older) = parse_one(json!({"id":1,"type":"Scroll","props":{"follow":"end","onReachStart":"1:onReachStart"},"children":[]})) else { panic!() };
+        assert_eq!(older.on_reach_start.as_deref(), Some("1:onReachStart"));
         let Node::Stack(column) = &scroll.children[0] else { panic!() };
         assert!(column.enter);
         let Node::Text(thinking) = &column.children[0] else { panic!() };

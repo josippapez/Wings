@@ -3,6 +3,7 @@
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
+    rc::Rc,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -10,7 +11,7 @@ use std::{
 use gpui::{
     Animation, AnimationExt, AnyElement, Context, ElementId, Focusable, FontWeight, IntoElement,
     KeyDownEvent, Pixels, Render, Role, SharedString, Task, Window, canvas, div, prelude::*, px,
-    relative, rgb, rgba,
+    point, relative, rgb, rgba,
 };
 
 #[path = "board_view.rs"]
@@ -66,6 +67,16 @@ struct InputState {
     sent: Vec<String>,
 }
 
+/// A `Scroll` that follows its end: where it is scrolled, and what `onReachStart` needs to know of the last frame.
+#[derive(Default)]
+struct FollowScroll {
+    handle: gpui::ScrollHandle,
+    /// How far it could scroll at the last frame, to tell how much its content grew.
+    max: Cell<Pixels>,
+    /// `onReachStart` was sent and what is above hasn't grown since, so it isn't sent again.
+    asked: Cell<bool>,
+}
+
 pub struct PageView {
     runtime: Option<PageRuntime>,
     tree: Option<Tree>,
@@ -117,7 +128,7 @@ pub struct PageView {
     /// Where the open combobox's list is scrolled, so the option the arrow keys reach is brought into view.
     combobox_scroll: gpui::ScrollHandle,
     /// Where each `Scroll` that follows its end is scrolled, by node id.
-    follow_scrolls: RefCell<HashMap<u64, gpui::ScrollHandle>>,
+    follow_scrolls: RefCell<HashMap<u64, Rc<FollowScroll>>>,
     /// A focus handle round each list item's `actions`, by node id, and the items one of whose actions had the
     /// keyboard when the page was last drawn: those show their actions without the pointer on them.
     actions_focus: RefCell<HashMap<u64, gpui::FocusHandle>>,
@@ -686,6 +697,14 @@ impl PageView {
         self.tree.as_ref().map(Tree::text).unwrap_or_default()
     }
 
+    /// How far the following `Scroll` `id` is scrolled from its top, and how far it can scroll at most, in points.
+    #[cfg(all(test, feature = "test-support"))]
+    pub(super) fn scrolled(&self, id: u64) -> Option<(f32, f32)> {
+        let scrolls = self.follow_scrolls.borrow();
+        let handle = &scrolls.get(&id)?.handle;
+        Some(((-handle.offset().y).as_f32(), handle.max_offset().y.as_f32()))
+    }
+
     #[cfg(all(test, feature = "test-support"))]
     pub(super) fn open_disclosures(&self) -> usize {
         self.open.len()
@@ -733,13 +752,45 @@ impl PageView {
 
     /// The handle of a `Scroll` that follows its end, which keeps it at its end through this draw while it is there, as
     /// a chat stays on its newest message. Scrolled up, it stays where it is.
-    fn follow_end(&self, id: u64) -> gpui::ScrollHandle {
-        let handle = self.follow_scrolls.borrow_mut().entry(id).or_default().clone();
+    fn follow_end(&self, id: u64) -> Rc<FollowScroll> {
+        let state = self.follow_scrolls.borrow_mut().entry(id).or_default().clone();
+        let handle = &state.handle;
         // Its offset grows negative as it scrolls down, to minus the most it can scroll. Not laid out yet, both are 0.
         if -handle.offset().y >= handle.max_offset().y - px(FOLLOW_SLACK) {
             handle.scroll_to_bottom();
         }
-        handle
+        state
+    }
+
+    /// Asks the page for older items when `area` is scrolled within a screen of its top, and keeps the view on what
+    /// it showed when they arrive. It runs once the area is laid out, so it sees how far it scrolls now.
+    fn reach_start(state: Rc<FollowScroll>, handler: String, cx: &mut Context<Self>) -> impl Fn(Vec<gpui::Bounds<Pixels>>, &mut Window, &mut gpui::App) + 'static {
+        let entity = cx.entity();
+        move |_, window, cx| {
+            let handle = &state.handle;
+            let (max, offset) = (handle.max_offset().y, handle.offset());
+            let grew = max - state.max.replace(max);
+            let at_end = -offset.y >= max - px(FOLLOW_SLACK);
+            // Only a request brings older items, and what a request brings is above the view: moving the offset by
+            // what it added keeps the same lines under the pointer. At its end the scroll follows on its own.
+            if grew > px(0.0) && state.asked.get() {
+                state.asked.set(false);
+                if !at_end {
+                    handle.set_offset(point(offset.x, offset.y - grew));
+                    // This frame drew the content shifted, so draw once more with it back in place.
+                    window.refresh();
+                }
+                return;
+            }
+            let height = handle.bounds().size.height;
+            if state.asked.get() || height <= px(0.0) || -offset.y > height {
+                return;
+            }
+            state.asked.set(true);
+            let handler = handler.clone();
+            let entity = entity.clone();
+            cx.defer(move |cx| entity.update(cx, |view, _| view.send(&handler, None)));
+        }
     }
 
     fn nodes(&self, nodes: &[Node], cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -1205,7 +1256,21 @@ impl PageView {
             .into_any_element(),
             // A scroll keeps 8 points either side and 12 below, as a list under a header does.
             Node::Scroll(scroll) => {
-                let area = div()
+                let state = scroll.follow_end.then(|| self.follow_end(scroll.id));
+                let reach = match (&state, scroll.on_reach_start.clone()) {
+                    (Some(state), Some(handler)) => Some(Self::reach_start(state.clone(), handler, cx)),
+                    (Some(state), None) => {
+                        // Nothing older to ask for now, so the next time there is, it is asked for afresh.
+                        state.asked.set(false);
+                        None
+                    }
+                    _ => None,
+                };
+                let mut base = div();
+                if let Some(reach) = reach {
+                    base = base.on_children_prepainted(reach);
+                }
+                let area = base
                     .id(ElementId::NamedInteger("page-scroll".into(), scroll.id))
                     .flex_1()
                     .min_h_0()
@@ -1216,9 +1281,9 @@ impl PageView {
                     .pb(px(12.0))
                     .overflow_y_scroll()
                     .children(self.nodes(&scroll.children, cx));
-                match scroll.follow_end {
-                    true => area.track_scroll(&self.follow_end(scroll.id)).into_any_element(),
-                    false => area.into_any_element(),
+                match state {
+                    Some(state) => area.track_scroll(&state.handle).into_any_element(),
+                    None => area.into_any_element(),
                 }
             }
             Node::Bar(bar) => div()

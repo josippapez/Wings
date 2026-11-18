@@ -96,11 +96,9 @@ fn conversation(c: &Chat) -> Node {
         blocks.push(block);
     }
     blocks.reverse();
-    let earlier = if cut {
-        Some(muted("Older messages aren't shown here. Open the session in a terminal to see all of it.").key("earlier"))
-    } else {
-        (from > 0).then(|| row().key("earlier").child(button(format!("Show earlier ({from})"), "ghost", false, || chat::with(|c| c.shown += PAGE))))
-    };
+    // Older items load as you scroll up to them. What the budget cut can't be added to, so a note stands for it.
+    let earlier = cut.then(|| muted("Older messages aren't shown here. Open the session in a terminal to see all of it.").key("earlier"));
+    let more = from > 0 && !cut;
     let mut nodes: Vec<Node> = earlier.into_iter().chain(blocks).collect();
     if !c.session.live.is_empty() {
         let live = markdown(&c.session.live);
@@ -117,7 +115,11 @@ fn conversation(c: &Chat) -> Node {
         State::Moved => nodes.push(muted("This session goes on in a terminal.").key("ended")),
         _ => {}
     }
-    Node::new("Scroll").prop("follow", "end").child(column().prop("enter", "rise").children(nodes))
+    let scroll = Node::new("Scroll").prop("follow", "end").child(column().prop("enter", "rise").children(nodes));
+    match more {
+        true => scroll.on("onReachStart", |_| chat::with(|c| c.shown += PAGE)),
+        false => scroll,
+    }
 }
 
 /// An item that folds into the line of the tool calls around it: a call, or a question you answered about one.
