@@ -412,7 +412,7 @@ pub struct Session {
     /// Between a turn's first `requesting` status and its `result`.
     turn_open: bool,
     /// The uuids of messages Claude Code has queued or started and not yet finished, from `command_lifecycle`.
-    commands: Vec<String>,
+    lifecycle: Vec<String>,
     /// Messages sent while Claude works, in the order Claude Code reads them, until it echoes each as read.
     pub queued: Vec<Queued>,
     /// What to tell you, as (title, body), for the chat to show when you aren't looking. At most one of each kind a turn.
@@ -513,8 +513,8 @@ impl Session {
             "command_lifecycle" => {
                 let uuid = line["command_uuid"].as_str().unwrap_or_default();
                 match line["state"].as_str().unwrap_or_default() {
-                    "queued" | "started" if !self.commands.iter().any(|known| known == uuid) => self.commands.push(uuid.to_owned()),
-                    "completed" | "cancelled" => self.commands.retain(|known| known != uuid),
+                    "queued" | "started" if !self.lifecycle.iter().any(|known| known == uuid) => self.lifecycle.push(uuid.to_owned()),
+                    "completed" | "cancelled" => self.lifecycle.retain(|known| known != uuid),
                     _ => {}
                 }
                 self.settle();
@@ -633,7 +633,7 @@ impl Session {
                 // done, whether or not their `completed` line comes.
                 self.turn_open = self.reports_state && self.turn_open;
                 if let Some(answered) = line["user_message_uuids"].as_array() {
-                    self.commands.retain(|known| !answered.iter().any(|uuid| uuid == known.as_str()));
+                    self.lifecycle.retain(|known| !answered.iter().any(|uuid| uuid == known.as_str()));
                 }
                 self.settle();
                 self.live.clear();
@@ -675,7 +675,7 @@ impl Session {
         match state {
             "idle" => {
                 self.turn_open = false;
-                self.commands.clear();
+                self.lifecycle.clear();
             }
             "running" | "requires_action" => self.turn_open = true,
             _ => {}
@@ -685,7 +685,7 @@ impl Session {
 
     /// Works `working` out: a turn is open, or a message Claude Code holds has not been finished.
     fn settle(&mut self) {
-        self.working = self.turn_open || !self.commands.is_empty();
+        self.working = self.turn_open || !self.lifecycle.is_empty();
         if !self.working {
             // Nothing will read what is still queued now, so it was read without an echo.
             for queued in std::mem::take(&mut self.queued) {
@@ -697,7 +697,7 @@ impl Session {
     /// The Claude Code process ended: nothing runs any more.
     pub fn stopped_running(&mut self) {
         self.turn_open = false;
-        self.commands.clear();
+        self.lifecycle.clear();
         self.working = false;
     }
 
