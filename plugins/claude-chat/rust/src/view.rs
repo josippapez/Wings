@@ -1,7 +1,7 @@
 //! What the chat page shows: the conversation in a reading column, newest at the bottom and kept there while you read
 //! the end, and a floating message box with the model, effort and mode pickers in it. Your messages are bubbles on the
 //! right; Claude's replies are plain text; its tool calls fold into one line per run of them; a question it asks is a
-//! card with Allow and Deny. The project's past sessions open in place of the conversation.
+//! card: Allow, Always allow and Deny with a reason; its questions with options to pick; its plan to approve. The project's past sessions open in place of the conversation.
 
 use serde_json::Value;
 use wings_plugin::{
@@ -9,14 +9,14 @@ use wings_plugin::{
     host,
     markdown::{code_block, markdown},
     ui::{
-        Node, badge, button, card, confirm, disclosure, empty, icon, list, list_button, loading, muted, notice, page, row,
-        search_field, select, spinner, stack, text, toolbar_with,
+        Node, badge, button, card, chip, confirm, disclosure, empty, icon, list, list_button, loading, muted, notice, page,
+        row, search_field, select, spinner, stack, text, text_input, toolbar_with,
     },
 };
 
 use crate::{
     chat::{self, Chat, PAGE, Past, State},
-    session::{Ask, Item, MODES, Tool},
+    session::{Ask, Draft, Item, MODES, Tool},
 };
 
 /// An arrow up, a square and a cross, in a 14-point box.
@@ -141,7 +141,7 @@ fn item_node(at: usize, item: &Item, c: &Chat) -> Option<Node> {
     let node = match item {
         Item::User(said) => row().prop("justify", "end").child(card().child(text(said.as_str()))),
         Item::Text(said) => markdown(said),
-        Item::Ask(ask) if ask.answer.is_none() => ask_node(ask),
+        Item::Ask(ask) if ask.answer.is_none() => ask_node(ask, c),
         Item::Error(said) => notice("danger", said.as_str()),
         Item::Stopped => muted("Stopped"),
         Item::Note(title, body) => note(at, title, body, c.open_outputs.contains(&format!("note-{at}"))),
@@ -222,12 +222,97 @@ fn note(at: usize, title: &str, body: &str, opened: bool) -> Node {
     row().child(fold)
 }
 
-fn ask_node(ask: &Ask) -> Node {
-    let (deny, allow) = (ask.request.clone(), ask.request.clone());
+/// The card for a question of Claude's: a tool to allow, questions to answer, or a plan to approve.
+fn ask_node(ask: &Ask, c: &Chat) -> Node {
+    let none = Draft::default();
+    let draft = c.drafts.get(&ask.request).unwrap_or(&none);
+    match ask.tool.as_str() {
+        "AskUserQuestion" if ask.input["questions"].as_array().is_some_and(|questions| !questions.is_empty()) => questions_node(ask, draft),
+        "ExitPlanMode" if ask.input["plan"].as_str().is_some() => plan_node(ask, draft),
+        _ => permission_node(ask, draft),
+    }
+}
+
+/// The text field for what Claude should hear along with a no.
+fn feedback_field(request: &str, draft: &Draft, label: &str, placeholder: &str) -> Node {
+    let request = request.to_owned();
+    text_input(label, draft.feedback.as_str(), move |said| chat::edit(&request, |draft| draft.feedback = said)).prop("placeholder", placeholder)
+}
+
+fn permission_node(ask: &Ask, draft: &Draft) -> Node {
+    let (deny, once, always) = (ask.request.clone(), ask.request.clone(), ask.request.clone());
+    let mut body: Vec<Node> = ask.reason.iter().map(|why| muted(why.as_str())).collect();
+    body.push(text(ask.detail.as_str()).prop("mono", true).prop("size", "small"));
+    body.push(feedback_field(&ask.request, draft, "Reason for denying", "Why not, or what to do instead (Claude reads it)"));
+    let always = (!ask.suggestions.is_empty()).then(|| button("Always allow", "secondary", false, move || chat::allow(&always, true)));
     confirm(
         format!("Allow {}?", ask.tool),
-        [text(ask.summary.as_str()).prop("mono", true)],
-        [button("Deny", "outline", false, move || chat::answer(&deny, false)), button("Allow", "default", false, move || chat::answer(&allow, true))],
+        body,
+        [button("Deny", "outline", false, move || chat::deny(&deny)), button("Allow once", "default", false, move || chat::allow(&once, false))]
+            .into_iter()
+            .chain(always),
+    )
+}
+
+/// Each question with its options as chips, and a field for another answer.
+fn questions_node(ask: &Ask, draft: &Draft) -> Node {
+    let questions = ask.input["questions"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let mut body = Vec::new();
+    for (q, question) in questions.iter().enumerate() {
+        let multi = question["multiSelect"] == true;
+        let options = question["options"].as_array().map(Vec::as_slice).unwrap_or_default();
+        let chips = row().prop("gap", "s").prop("wrap", true).children(options.iter().enumerate().map(|(o, option)| {
+            let request = ask.request.clone();
+            let label = option["label"].as_str().unwrap_or_default();
+            let pick = chip(label, draft.is_picked(q, o), move || chat::edit(&request, |draft| draft.toggle(q, o, multi))).key(format!("{q}-{o}"));
+            match option["description"].as_str().filter(|said| !said.is_empty()) {
+                Some(said) => pick.child(muted(truncate(said, 80)).prop("size", "small")),
+                None => pick,
+            }
+        }));
+        let request = ask.request.clone();
+        let other = text_input("Other", draft.other(q), move |said| chat::edit(&request, |draft| draft.set_other(q, said, multi)))
+            .prop("placeholder", "Something else")
+            .key(format!("other-{q}"));
+        let header = question["header"].as_str().filter(|header| !header.is_empty()).map(|header| badge(header, None));
+        body.push(
+            stack()
+                .prop("gap", "xs")
+                .key(format!("q-{q}"))
+                .child(row().prop("gap", "s").prop("align", "baseline").maybe(header).child(text(question["question"].as_str().unwrap_or_default()).prop("weight", "medium")))
+                .child(chips)
+                .child(other),
+        );
+    }
+    let ready = draft.answers(&ask.input["questions"]).is_some();
+    let (skip, submit) = (ask.request.clone(), ask.request.clone());
+    confirm(
+        "Claude has a question",
+        body,
+        [button("Skip", "outline", false, move || chat::skip(&skip)), button("Submit", "default", false, move || chat::submit(&submit)).prop("disabled", !ready)],
+    )
+}
+
+/// The plan as Markdown, to approve, or to send back with what to change.
+fn plan_node(ask: &Ask, draft: &Draft) -> Node {
+    let plan = ask.input["plan"].as_str().unwrap_or_default();
+    let shown = markdown(plan);
+    let shown = if shown.count() > BUDGET / 4 { text(truncate(plan, 20_000)) } else { shown };
+    let (auto, approve, keep) = (ask.request.clone(), ask.request.clone(), ask.request.clone());
+    let actions = row()
+        .prop("gap", "s")
+        .prop("wrap", true)
+        .prop("justify", "end")
+        .child(button("Keep planning", "outline", false, move || chat::keep_planning(&keep)))
+        .child(button("Approve", "secondary", false, move || chat::approve_plan(&approve, "default")))
+        .child(button("Approve and auto-accept edits", "default", false, move || chat::approve_plan(&auto, "acceptEdits")));
+    card().prop("variant", "raised").child(
+        stack()
+            .prop("gap", "m")
+            .child(text("Claude's plan").prop("weight", "strong"))
+            .child(shown)
+            .child(feedback_field(&ask.request, draft, "What to change", "What to change in the plan, to keep planning"))
+            .child(actions),
     )
 }
 

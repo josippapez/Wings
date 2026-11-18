@@ -2,12 +2,17 @@
 //! from the entries of its transcript when an earlier session is resumed. The two share their `user` and `assistant`
 //! shapes.
 
-use serde_json::{Value, json};
+use std::collections::{HashMap, HashSet};
+
+use serde_json::{Map, Value, json};
 
 /// The most of a tool's output the chat keeps. A whole file read or a long build log is more than anyone reads in a card.
 const OUTPUT_KEPT: usize = 4000;
 /// The most of a tool's input shown as its one-line summary.
 const SUMMARY_KEPT: usize = 200;
+/// The most lines of a command, and characters of the reason, a permission card shows.
+const DETAIL_LINES: usize = 6;
+const REASON_KEPT: usize = 300;
 
 #[derive(Debug, PartialEq)]
 pub enum Item {
@@ -41,8 +46,14 @@ pub struct Ask {
     pub request: String,
     pub tool: String,
     pub summary: String,
+    /// What the tool is asked to do, as the card shows it: a command in full (a few lines), else the summary.
+    pub detail: String,
+    /// Why Claude Code asks, in its own words: the request's title, description and reason.
+    pub reason: Option<String>,
+    /// The permission rules "Always allow" adds. None when Claude Code offers none, or says not to offer them.
+    pub suggestions: Vec<Value>,
     pub input: Value,
-    /// Allowed or denied, once you have said.
+    /// Allowed or denied, once you have said, or once Claude Code withdrew the question (shown as denied).
     pub answer: Option<bool>,
 }
 
@@ -52,6 +63,68 @@ pub struct Queued {
     /// What Claude Code knows it by, for cancelling it and for recognising it when it is read.
     pub uuid: String,
     pub text: String,
+}
+
+/// What you have picked and typed on a card that isn't answered yet.
+#[derive(Debug, Default)]
+pub struct Draft {
+    /// The words for Claude when you deny, or keep planning.
+    pub feedback: String,
+    /// The options picked, as (question, option) places.
+    picked: HashSet<(usize, usize)>,
+    /// The "Other" text of each question.
+    other: HashMap<usize, String>,
+}
+
+impl Draft {
+    pub fn is_picked(&self, question: usize, option: usize) -> bool {
+        self.picked.contains(&(question, option))
+    }
+
+    pub fn other(&self, question: usize) -> &str {
+        self.other.get(&question).map_or("", String::as_str)
+    }
+
+    /// Picks the option, or takes it back. A question that takes one answer holds one option, and not the other text.
+    pub fn toggle(&mut self, question: usize, option: usize, multi: bool) {
+        if self.picked.remove(&(question, option)) {
+            return;
+        }
+        if !multi {
+            self.picked.retain(|(q, _)| *q != question);
+            self.other.remove(&question);
+        }
+        self.picked.insert((question, option));
+    }
+
+    pub fn set_other(&mut self, question: usize, text: String, multi: bool) {
+        if !multi && !text.trim().is_empty() {
+            self.picked.retain(|(q, _)| *q != question);
+        }
+        self.other.insert(question, text);
+    }
+
+    /// Each question's answer, by its text: the labels picked, then the other text, joined by commas. None while a
+    /// question has none.
+    pub fn answers(&self, questions: &Value) -> Option<Map<String, Value>> {
+        let mut answers = Map::new();
+        for (q, question) in questions.as_array()?.iter().enumerate() {
+            let mut said: Vec<String> = question["options"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .filter(|(o, _)| self.is_picked(q, *o))
+                .filter_map(|(_, option)| option["label"].as_str().map(str::to_owned))
+                .collect();
+            said.extend(Some(self.other(q).trim().to_owned()).filter(|other| !other.is_empty()));
+            if said.is_empty() {
+                return None;
+            }
+            answers.insert(question["question"].as_str().unwrap_or_default().to_owned(), Value::String(said.join(", ")));
+        }
+        Some(answers)
+    }
 }
 
 /// A model Claude Code offers, as `initialize` lists it.
@@ -145,13 +218,27 @@ impl Session {
                 if !std::mem::replace(&mut self.asked_you, true) {
                     self.alerts.push((format!("Claude needs you: {tool}"), summary(&tool, &request["input"])));
                 }
+                // Claude Code says when a rule for this ask would be broader than the ask itself.
+                let suggestions = match request["suppress_always_allow_rule"] == true {
+                    true => Vec::new(),
+                    false => request["permission_suggestions"].as_array().cloned().unwrap_or_default(),
+                };
                 self.items.push(Item::Ask(Ask {
                     request: line["request_id"].as_str().unwrap_or_default().to_owned(),
                     summary: summary(&tool, &request["input"]),
+                    detail: detail(&tool, &request["input"]),
+                    reason: reason(request),
+                    suggestions,
                     tool,
                     input: request["input"].clone(),
                     answer: None,
                 }));
+            }
+            // Claude Code no longer needs the answer: the turn was stopped, or another client answered.
+            "control_cancel_request" => {
+                if let Some(ask) = line["request_id"].as_str().and_then(|id| self.pending(id)) {
+                    ask.answer = Some(false);
+                }
             }
             "result" => {
                 self.working = self.reports_state && self.working;
@@ -381,23 +468,57 @@ impl Session {
         request(&format!("interrupt-{n}"), what)
     }
 
-    /// The line that answers the question `request`, which is then shown answered. None when there is no such question
-    /// waiting.
-    pub fn answer(&mut self, request: &str, allow: bool) -> Option<String> {
-        let ask = self.items.iter_mut().find_map(|item| match item {
+    /// The question `request` while it waits for an answer.
+    fn pending(&mut self, request: &str) -> Option<&mut Ask> {
+        self.items.iter_mut().find_map(|item| match item {
             Item::Ask(ask) if ask.request == request && ask.answer.is_none() => Some(ask),
             _ => None,
-        })?;
-        ask.answer = Some(allow);
-        let response = if allow {
-            json!({ "behavior": "allow", "updatedInput": ask.input })
-        } else {
-            json!({ "behavior": "deny", "message": "The user said no to this in the chat." })
-        };
-        Some(line(&json!({ "type": "control_response", "response": { "subtype": "success", "request_id": request, "response": response } })))
+        })
+    }
+
+    /// The line that allows what `request` asks, which is then shown answered. With `always` it also gives the rules
+    /// Claude Code suggested, so it stops asking. None when there is no such question waiting.
+    pub fn allow(&mut self, request: &str, always: bool) -> Option<String> {
+        let ask = self.pending(request)?;
+        ask.answer = Some(true);
+        let mut response = json!({ "behavior": "allow", "updatedInput": ask.input });
+        if always && !ask.suggestions.is_empty() {
+            response["updatedPermissions"] = Value::Array(ask.suggestions.clone());
+        }
+        Some(answer_line(request, response))
+    }
+
+    /// The line that denies `request` with `message`, which Claude reads: what you wrote, or else a plain no.
+    pub fn deny(&mut self, request: &str, message: &str) -> Option<String> {
+        let ask = self.pending(request)?;
+        ask.answer = Some(false);
+        let message = Some(message.trim()).filter(|message| !message.is_empty()).unwrap_or("The user said no to this in the chat.");
+        Some(answer_line(request, json!({ "behavior": "deny", "message": message })))
+    }
+
+    /// The line that answers the questions of `request` with what `draft` holds. None when one has no answer yet, or
+    /// there is no such question waiting.
+    pub fn submit(&mut self, request: &str, draft: &Draft) -> Option<String> {
+        let ask = self.pending(request)?;
+        let answers = draft.answers(&ask.input["questions"])?;
+        ask.answer = Some(true);
+        let mut input = ask.input.clone();
+        input["answers"] = Value::Object(answers);
+        Some(answer_line(request, json!({ "behavior": "allow", "updatedInput": input })))
+    }
+
+    /// The lines that approve the plan of `request` and switch to `mode`: both in one write, as one click makes them.
+    pub fn approve_plan(&mut self, request: &str, mode: &str, n: u32) -> Option<String> {
+        let allow = self.allow(request, false)?;
+        Some(allow + &self.set_mode(mode, n))
     }
 }
 
+
+/// Claude Code's answer to the question `request`.
+fn answer_line(request: &str, response: Value) -> String {
+    line(&json!({ "type": "control_response", "response": { "subtype": "success", "request_id": request, "response": response } }))
+}
 
 fn line(message: &Value) -> String {
     format!("{message}\n")
@@ -485,6 +606,48 @@ pub fn summary(tool: &str, input: &Value) -> String {
     cut(text.lines().next().unwrap_or_default(), SUMMARY_KEPT)
 }
 
+/// What a tool is asked to do, as a permission card shows it: a command in full, up to a few lines, else the summary.
+fn detail(tool: &str, input: &Value) -> String {
+    let Some(command) = input["command"].as_str().filter(|_| tool == "Bash") else {
+        return summary(tool, input);
+    };
+    let lines: Vec<&str> = command.trim().lines().collect();
+    let shown = cut(&lines.iter().take(DETAIL_LINES).copied().collect::<Vec<_>>().join("\n"), OUTPUT_KEPT);
+    if lines.len() > DETAIL_LINES { format!("{shown}\n…") } else { shown }
+}
+
+/// Why Claude Code asks, in one line: its title, description and reason, without what two of them say alike.
+fn reason(request: &Value) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for key in ["title", "description", "decision_reason"] {
+        if let Some(said) = request[key].as_str().map(unescaped).filter(|said| !said.is_empty() && !parts.contains(said)) {
+            parts.push(said);
+        }
+    }
+    (!parts.is_empty()).then(|| cut(&parts.join(" · "), REASON_KEPT))
+}
+
+/// `text` as one line of plain words: Claude Code's reasons can carry terminal colour codes.
+fn unescaped(text: &str) -> String {
+    let mut out = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\x1b' if chars.peek() == Some(&'[') => {
+                chars.next();
+                for end in chars.by_ref() {
+                    if end.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            c if c.is_control() => out.push(' '),
+            c => out.push(c),
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// The `text` of each `{ type: "text", text }` part.
 fn texts(parts: &[Value]) -> Vec<String> {
     parts.iter().filter_map(|part| part["text"].as_str().or(part.as_str()).map(str::to_owned)).collect()
@@ -555,16 +718,16 @@ mod tests {
         );
         let Item::Ask(ask) = &session.items[0] else { panic!("{:?}", session.items) };
         assert_eq!((ask.tool.as_str(), ask.summary.as_str()), ("Bash", "touch a"));
-        let allow: Value = serde_json::from_str(&session.answer("r1", true).unwrap()).unwrap();
+        let allow: Value = serde_json::from_str(&session.allow("r1", false).unwrap()).unwrap();
         assert_eq!(
             allow,
             json!({ "type": "control_response", "response": { "subtype": "success", "request_id": "r1", "response": { "behavior": "allow", "updatedInput": { "command": "touch a\nb", "description": "Make a" } } } })
         );
-        assert_eq!(session.answer("r1", false), None, "answered already");
-        assert_eq!(session.answer("r2", true), None, "never asked");
+        assert_eq!(session.deny("r1", ""), None, "answered already");
+        assert_eq!(session.allow("r2", false), None, "never asked");
         let mut denied = heard(r#"{"type":"control_request","request_id":"r3","request":{"subtype":"can_use_tool","tool_name":"Write","input":{}}}"#);
-        let deny: Value = serde_json::from_str(&denied.answer("r3", false).unwrap()).unwrap();
-        assert_eq!(deny["response"]["response"]["behavior"], "deny");
+        let deny: Value = serde_json::from_str(&denied.deny("r3", "  ").unwrap()).unwrap();
+        assert_eq!(deny["response"]["response"], json!({ "behavior": "deny", "message": "The user said no to this in the chat." }));
     }
 
     #[test]
@@ -759,5 +922,92 @@ mod tests {
         session.alerts.clear();
         session.hear(&ask("r3"));
         assert_eq!(session.alerts.len(), 1);
+    }
+
+    fn asked(extra: Value) -> Session {
+        let mut request = json!({ "subtype": "can_use_tool", "tool_name": "Bash", "input": { "command": "npm test" } });
+        request.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        heard(&json!({ "type": "control_request", "request_id": "r1", "request": request }).to_string())
+    }
+
+    fn sent(line: &str) -> Value {
+        serde_json::from_str(line).unwrap()
+    }
+
+    #[test]
+    fn always_allow_gives_the_suggested_rules_back() {
+        let rules = json!([{ "type": "addRules", "rules": [{ "toolName": "Bash", "ruleContent": "npm test:*" }], "behavior": "allow", "destination": "localSettings" }]);
+        let mut session = asked(json!({ "permission_suggestions": rules, "title": "Run the tests", "decision_reason": "\u{1b}[31mNot allowed\u{1b}[0m yet" }));
+        let Item::Ask(ask) = &session.items[0] else { panic!() };
+        assert_eq!(ask.reason.as_deref(), Some("Run the tests · Not allowed yet"));
+        assert_eq!(ask.suggestions.len(), 1);
+        let line = sent(&session.allow("r1", true).unwrap());
+        assert_eq!(line["response"]["response"], json!({ "behavior": "allow", "updatedInput": { "command": "npm test" }, "updatedPermissions": rules }));
+        // Allow once carries no rules, and a request that suppresses them offers none.
+        let mut once = asked(json!({ "permission_suggestions": rules }));
+        assert!(sent(&once.allow("r1", false).unwrap())["response"]["response"].get("updatedPermissions").is_none());
+        let Item::Ask(ask) = &asked(json!({ "permission_suggestions": rules, "suppress_always_allow_rule": true })).items[0] else { panic!() };
+        assert!(ask.suggestions.is_empty());
+    }
+
+    #[test]
+    fn deny_tells_claude_what_you_wrote() {
+        let mut session = asked(json!({}));
+        let line = sent(&session.deny("r1", " use pnpm instead ").unwrap());
+        assert_eq!(line["response"]["response"], json!({ "behavior": "deny", "message": "use pnpm instead" }));
+        let Item::Ask(ask) = &session.items[0] else { panic!() };
+        assert_eq!(ask.answer, Some(false));
+    }
+
+    #[test]
+    fn a_bash_command_shows_in_full_up_to_a_few_lines() {
+        let Item::Ask(ask) = &asked(json!({ "input": { "command": "a\nb\nc\nd\ne\nf\ng\nh" } })).items[0] else { panic!() };
+        assert_eq!(ask.summary, "a");
+        assert_eq!(ask.detail, "a\nb\nc\nd\ne\nf\n…");
+    }
+
+    #[test]
+    fn the_questions_are_answered_by_text_with_labels_or_other_words() {
+        let questions = json!([
+            { "question": "Which library?", "header": "Library", "multiSelect": false, "options": [{ "label": "date-fns", "description": "" }, { "label": "dayjs", "description": "" }] },
+            { "question": "Which features?", "header": "Features", "multiSelect": true, "options": [{ "label": "Parse", "description": "" }, { "label": "Format", "description": "" }] },
+        ]);
+        let mut session = heard(&json!({ "type": "control_request", "request_id": "q1", "request": { "subtype": "can_use_tool", "tool_name": "AskUserQuestion", "input": { "questions": questions } } }).to_string());
+        let mut draft = Draft::default();
+        assert_eq!(session.submit("q1", &draft), None, "nothing picked");
+        draft.toggle(0, 0, false);
+        draft.toggle(0, 1, false);
+        draft.toggle(1, 0, true);
+        draft.toggle(1, 1, true);
+        draft.set_other(1, " and Diff ".into(), true);
+        let line = sent(&session.submit("q1", &draft).unwrap());
+        assert_eq!(
+            line["response"]["response"],
+            json!({ "behavior": "allow", "updatedInput": { "questions": questions, "answers": { "Which library?": "dayjs", "Which features?": "Parse, Format, and Diff" } } })
+        );
+    }
+
+    #[test]
+    fn approving_a_plan_allows_it_and_switches_the_mode_in_one_write() {
+        let mut session = heard(r##"{"type":"control_request","request_id":"p1","request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","input":{"plan":"# Plan"}}}"##);
+        let written = session.approve_plan("p1", "acceptEdits", 7).unwrap();
+        let lines: Vec<Value> = written.lines().map(sent).collect();
+        assert_eq!(lines.len(), 2);
+        assert!(written.ends_with('\n'));
+        assert_eq!(lines[0]["response"]["response"], json!({ "behavior": "allow", "updatedInput": { "plan": "# Plan" } }));
+        assert_eq!(lines[1], json!({ "type": "control_request", "request_id": "mode-7", "request": { "subtype": "set_permission_mode", "mode": "acceptEdits" } }));
+        assert_eq!(session.mode.as_deref(), Some("acceptEdits"));
+        assert_eq!(session.approve_plan("p1", "default", 8), None, "answered already");
+    }
+
+    #[test]
+    fn a_cancel_request_withdraws_the_card() {
+        let mut session = asked(json!({}));
+        session.hear(&json!({ "type": "control_cancel_request", "request_id": "other" }));
+        assert_eq!(session.pending("r1").is_some(), true);
+        session.hear(&json!({ "type": "control_cancel_request", "request_id": "r1" }));
+        let Item::Ask(ask) = &session.items[0] else { panic!() };
+        assert_eq!(ask.answer, Some(false));
+        assert_eq!(session.allow("r1", false), None, "nothing left to answer");
     }
 }

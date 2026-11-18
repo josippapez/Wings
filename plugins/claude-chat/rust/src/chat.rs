@@ -6,7 +6,7 @@
 //! Everything the chat writes to Claude Code is your doing (a message, an answer, a pick, Stop), which Wings checks:
 //! what it asks as Claude Code starts goes with the start.
 
-use std::{cell::RefCell, collections::HashSet};
+use std::{cell::RefCell, collections::{HashMap, HashSet}};
 
 use serde_json::{Value, json};
 use wings_plugin::{
@@ -17,7 +17,7 @@ use wings_plugin::{
 
 use crate::{
     mentions::{self, Files},
-    session::{Command, Item, Session},
+    session::{Command, Draft, Item, Session},
 };
 
 /// What a chat may run Claude Code as: Claude Code itself, or the wrapper a terminal started it through.
@@ -66,6 +66,8 @@ pub struct Chat {
     pub open_outputs: HashSet<String>,
     /// The project's files, for @-mentions.
     pub files: Files,
+    /// What you have picked and typed on the cards that wait for an answer, by request.
+    pub drafts: HashMap<String, Draft>,
     /// Going on in a terminal once Claude Code here has ended.
     moving: bool,
     input: Option<ProcessInput>,
@@ -88,6 +90,7 @@ thread_local! {
         open_steps: HashSet::new(),
         open_outputs: HashSet::new(),
         files: Files::default(),
+        drafts: HashMap::new(),
         moving: false,
         input: None,
         requests: 0,
@@ -141,6 +144,7 @@ fn launch(resume: Option<String>) {
         c.past = None;
         c.open_steps.clear();
         c.open_outputs.clear();
+        c.drafts.clear();
         c.moving = false;
         (c.run, c.cwd.clone(), c.program.clone())
     });
@@ -318,9 +322,60 @@ pub fn send_now(uuid: &str) {
     write(|c, n| c.session.send_now(uuid, host::now() as u64, n));
 }
 
-/// Allows or denies what Claude asked to do.
-pub fn answer(request: &str, allow: bool) {
-    write(|c, _| c.session.answer(request, allow));
+/// Changes what you have picked or typed on the card for `request`.
+pub fn edit(request: &str, change: impl FnOnce(&mut Draft)) {
+    with(|c| change(c.drafts.entry(request.to_owned()).or_default()));
+}
+
+/// Allows what Claude asked to do, once or, with `always`, for the rules Claude Code suggested too.
+pub fn allow(request: &str, always: bool) {
+    write(|c, _| {
+        c.drafts.remove(request);
+        c.session.allow(request, always)
+    });
+}
+
+/// Denies it, with the words you wrote for Claude.
+pub fn deny(request: &str) {
+    write(|c, _| {
+        let draft = c.drafts.remove(request).unwrap_or_default();
+        c.session.deny(request, &draft.feedback)
+    });
+}
+
+/// Answers the questions Claude asked with what you picked and typed.
+pub fn submit(request: &str) {
+    write(|c, _| {
+        let draft = c.drafts.get(request)?;
+        let line = c.session.submit(request, draft)?;
+        c.drafts.remove(request);
+        Some(line)
+    });
+}
+
+/// Declines to answer the questions.
+pub fn skip(request: &str) {
+    write(|c, _| {
+        c.drafts.remove(request);
+        c.session.deny(request, "The user skipped these questions without answering.")
+    });
+}
+
+/// Approves the plan and goes on in `mode`.
+pub fn approve_plan(request: &str, mode: &str) {
+    write(|c, n| {
+        c.drafts.remove(request);
+        c.session.approve_plan(request, mode, n)
+    });
+}
+
+/// Sends the plan back, with what you want changed.
+pub fn keep_planning(request: &str) {
+    write(|c, _| {
+        let draft = c.drafts.remove(request).unwrap_or_default();
+        let said = if draft.feedback.trim().is_empty() { "The user wants you to keep planning. Don't start the work yet." } else { draft.feedback.as_str() };
+        c.session.deny(request, said)
+    });
 }
 
 /// Asks Claude to stop the turn it is on.
