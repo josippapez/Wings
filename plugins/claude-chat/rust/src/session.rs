@@ -186,6 +186,8 @@ pub struct Model {
     pub name: String,
     /// The effort levels it takes, none for a model without effort.
     pub efforts: Vec<String>,
+    /// The model it stands for, like `claude-opus-5-5`.
+    pub resolved: String,
 }
 
 /// A slash command, as `initialize` lists it.
@@ -202,6 +204,8 @@ pub const MODES: [(&str, &str); 4] = [("default", "Ask first"), ("acceptEdits", 
 /// The ids of the requests the chat makes as Claude Code starts, which its answers come back under.
 pub const INITIALIZE: &str = "initialize";
 pub const CONTEXT: &str = "context";
+pub const SETTINGS: &str = "settings";
+pub const USAGE: &str = "usage";
 
 #[derive(Debug, Default)]
 pub struct Session {
@@ -213,7 +217,13 @@ pub struct Session {
     pub id: Option<String>,
     /// The model the session runs on, as Claude Code names it (`claude-opus-5-5`) or as it was picked (`opus`).
     pub model: Option<String>,
+    /// The effort picked in the chat.
     pub effort: Option<String>,
+    /// The effort your settings give each model by its full name (`modelSettings`), and the one for the rest.
+    model_efforts: Vec<(String, String)>,
+    default_effort: Option<String>,
+    /// How much of your plan's limits is used, as Claude Code's /usage says: ("5h", percent, when it resets) and the week's.
+    pub limits: Vec<(&'static str, u64, String)>,
     /// The permission mode, one of `MODES`' or another Claude Code has.
     pub mode: Option<String>,
     pub models: Vec<Model>,
@@ -357,6 +367,7 @@ impl Session {
                         value: text(model, "value"),
                         name: text(model, "displayName"),
                         efforts: model["supportedEffortLevels"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect(),
+                        resolved: text(model, "resolvedModel"),
                     })
                     .collect();
                 self.commands = answer["commands"]
@@ -371,6 +382,31 @@ impl Session {
                 if let (Some(used), Some(most)) = (answer["totalTokens"].as_u64(), answer["maxTokens"].as_u64()) {
                     self.context = Some((used, most));
                 }
+            }
+            // Your settings, merged as Claude Code reads them: the model and effort the chat shows until you pick
+            // others, as a terminal's Claude starts on them.
+            SETTINGS => {
+                let settings = &answer["effective"];
+                if self.model.is_none() {
+                    self.model = settings["model"].as_str().map(str::to_owned);
+                }
+                self.default_effort = settings["effortLevel"].as_str().map(str::to_owned);
+                self.model_efforts = settings["modelSettings"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(model, set)| Some((model.clone(), set["effortLevel"].as_str()?.to_owned())))
+                    .collect();
+            }
+            USAGE => {
+                let limits = &answer["rate_limits"];
+                self.limits = [("5h", "five_hour"), ("week", "seven_day")]
+                    .into_iter()
+                    .filter_map(|(label, key)| {
+                        let limit = &limits[key];
+                        Some((label, limit["utilization"].as_f64()?.round() as u64, limit["resets_at"].as_str().unwrap_or_default().to_owned()))
+                    })
+                    .collect();
             }
             _ => {}
         }
@@ -511,7 +547,8 @@ impl Session {
     pub fn send(&mut self, text: &str) -> String {
         self.items.push(Item::User(text.to_owned()));
         self.working = true;
-        line(&json!({ "type": "user", "message": { "role": "user", "content": text } }))
+        // The limits are asked again with each message: the chat may only write when you send something.
+        line(&json!({ "type": "user", "message": { "role": "user", "content": text } })) + &usage()
     }
 
     /// The line that sends `text` to be read after what Claude is doing, and the message queued. `stamp` (the time in
@@ -541,9 +578,16 @@ impl Session {
         Some(lines)
     }
 
-    /// What the chat asks Claude Code as it starts: the models and commands it has, and how full the context is.
+    /// What the chat asks Claude Code as it starts: the models and commands it has, how full the context is, your
+    /// settings and how much of your plan's limits is used.
     pub fn opening() -> String {
-        [request(INITIALIZE, json!({ "subtype": "initialize" })), request(CONTEXT, json!({ "subtype": "get_context_usage" }))].concat()
+        [
+            request(INITIALIZE, json!({ "subtype": "initialize" })),
+            request(CONTEXT, json!({ "subtype": "get_context_usage" })),
+            request(SETTINGS, json!({ "subtype": "get_settings" })),
+            usage(),
+        ]
+        .concat()
     }
 
     /// The line that switches the session to `model`, which is then shown.
@@ -564,10 +608,19 @@ impl Session {
         request(&format!("mode-{n}"), json!({ "subtype": "set_permission_mode", "mode": mode }))
     }
 
-    /// The model the session runs on, among `models`: by its value, or by the full name Claude Code reports.
+    /// The effort Claude works at: the one picked here, else the one your settings give the model, else theirs for all.
+    pub fn current_effort(&self) -> Option<String> {
+        let model = self.current_model().map(|model| model.resolved.as_str());
+        self.effort
+            .clone()
+            .or_else(|| self.model_efforts.iter().find(|(name, _)| Some(name.as_str()) == model).map(|(_, effort)| effort.clone()))
+            .or_else(|| self.default_effort.clone())
+    }
+
+    /// The model the session runs on, among `models`: by its value, by the full name Claude Code reports, or by its family.
     pub fn current_model(&self) -> Option<&Model> {
         let model = self.model.as_deref()?;
-        self.models.iter().find(|m| m.value == model).or_else(|| {
+        self.models.iter().find(|m| m.value == model).or_else(|| self.models.iter().find(|m| m.resolved == model)).or_else(|| {
             let family = model.trim_start_matches("claude-").split('-').next()?;
             self.models.iter().find(|m| m.value == family)
         })
@@ -656,6 +709,11 @@ fn uuid(stamp: u64, n: u32) -> String {
 /// A request of the chat's to Claude Code, answered under `id`.
 fn request(id: &str, request: Value) -> String {
     line(&json!({ "type": "control_request", "request_id": id, "request": request }))
+}
+
+/// The line that asks how much of your plan's limits is used.
+fn usage() -> String {
+    request(USAGE, json!({ "subtype": "get_usage" }))
 }
 
 /// A text in your name as the chat shows it: what you wrote, or a note for what Claude Code wrote in your name, which
@@ -1210,6 +1268,33 @@ mod tests {
         assert_eq!(line["response"]["response"], json!({ "behavior": "deny", "message": "use pnpm instead" }));
         let Item::Ask(ask) = &session.items[0] else { panic!() };
         assert_eq!(ask.answer, Some(false));
+    }
+
+    #[test]
+    fn the_chat_starts_on_your_settings_model_and_effort_and_shows_your_limits() {
+        let answer = |id: &str, response: Value| json!({ "type": "control_response", "response": { "subtype": "success", "request_id": id, "response": response } });
+        let efforts = json!(["low", "medium", "high", "xhigh", "max"]);
+        let mut session = Session::default();
+        session.hear(&answer(INITIALIZE, json!({ "models": [
+            { "value": "default", "displayName": "Default", "supportedEffortLevels": efforts, "resolvedModel": "claude-opus-5-5" },
+            { "value": "opus", "displayName": "Opus 5.5", "supportedEffortLevels": efforts, "resolvedModel": "claude-opus-5-5" },
+            { "value": "sonnet", "displayName": "Sonnet 5.5", "supportedEffortLevels": efforts, "resolvedModel": "claude-sonnet-5-5" },
+        ] })));
+        // As a terminal's Claude: `model` and `effortLevel`, and `modelSettings` over them for one model.
+        session.hear(&answer(SETTINGS, json!({ "effective": { "model": "opus", "effortLevel": "high",
+            "modelSettings": { "claude-opus-5-5": { "effortLevel": "xhigh" } } } })));
+        assert_eq!(session.current_model().map(|model| model.name.as_str()), Some("Opus 5.5"));
+        assert_eq!(session.current_effort().as_deref(), Some("xhigh"));
+        session.set_model("sonnet", 1);
+        assert_eq!(session.current_effort().as_deref(), Some("high"));
+        session.set_effort("low", 2);
+        assert_eq!(session.current_effort().as_deref(), Some("low"));
+        session.hear(&answer(USAGE, json!({ "rate_limits": {
+            "five_hour": { "utilization": 96.4, "resets_at": "2026-11-18T14:29:59.562698+00:00" },
+            "seven_day": { "utilization": 91, "resets_at": "2026-11-19T10:59:59+00:00" }, "seven_day_opus": null } })));
+        assert_eq!(session.limits.iter().map(|(label, used, _)| (*label, *used)).collect::<Vec<_>>(), [("5h", 96), ("week", 91)]);
+        // Each message asks for them again.
+        assert!(session.send("hi").contains(r#""request_id":"usage""#));
     }
 
     #[test]

@@ -743,7 +743,7 @@ fn claude_chat(out: PathBuf) {
         answer("initialize", json!({
             "models": [
                 { "value": "default", "displayName": "Default (recommended)", "supportedEffortLevels": efforts },
-                { "value": "opus", "displayName": "Opus 5.5", "supportedEffortLevels": efforts },
+                { "value": "opus", "displayName": "Opus 5.5", "supportedEffortLevels": efforts, "resolvedModel": "claude-opus-5-5" },
                 { "value": "sonnet", "displayName": "Sonnet 5.5", "supportedEffortLevels": efforts },
                 { "value": "haiku", "displayName": "Haiku 5.5", "supportedEffortLevels": efforts },
             ],
@@ -756,6 +756,11 @@ fn claude_chat(out: PathBuf) {
             "current_permission_mode": "default",
         })),
         answer("context", json!({ "totalTokens": 41_000, "maxTokens": 200_000 })),
+        answer("settings", json!({ "effective": { "model": "opus", "effortLevel": "high",
+            "modelSettings": { "claude-opus-5-5": { "effortLevel": "xhigh" } } } })),
+        answer("usage", json!({ "rate_limits": {
+            "five_hour": { "utilization": 42, "resets_at": "2026-11-18T17:00:00+00:00" },
+            "seven_day": { "utilization": 86, "resets_at": "2026-11-21T09:00:00+00:00" } } })),
     ];
     let opened = |mut lines: Vec<serde_json::Value>| {
         lines.splice(1..1, ready.iter().cloned());

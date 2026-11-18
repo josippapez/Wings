@@ -5,7 +5,7 @@
 
 use serde_json::Value;
 use wings_plugin::{
-    format::{ago, plural, truncate},
+    format::{ago, clock, day, parse_time, plural, truncate},
     host,
     markdown::{code_block, markdown},
     ui::{
@@ -479,11 +479,39 @@ fn composer(c: &Chat) -> Node {
             .child(icon(14, 2.0, &[SEND]))
     };
     let context = c.session.context.map(|(used, most)| {
-        text(format!("{}%", (used * 100 / most.max(1)).min(100))).prop("tone", "muted").prop("size", "small").prop("title", "How full the context window is")
+        text(format!("context {}%", (used * 100 / most.max(1)).min(100))).prop("tone", "muted").prop("size", "small").prop("title", "How full the context window is")
     });
-    let controls = row().prop("gap", "xs").prop("align", "center").children(pickers(c)).child(stack().prop("grow", true)).maybe(context).child(action);
+    let controls = row()
+        .prop("gap", "xs")
+        .prop("align", "center")
+        .children(pickers(c))
+        .child(stack().prop("grow", true))
+        .child(row().prop("gap", "s").prop("align", "center").maybe(context).children(limits(c)))
+        .child(action);
     let message_box = card().prop("variant", "raised").child(field.prop("grow", true)).child(controls);
     Node::new("Bar").prop("edge", "none").child(stack().prop("gap", "s").prop("maxWidth", COLUMN).maybe(commands(c).or_else(|| file_menu(c))).maybe(queued(c)).child(message_box))
+}
+
+/// How much of your plan's 5-hour and weekly limits is used, as a terminal's status line shows it: amber from 80%, red
+/// from 95%, and when each resets on hover.
+fn limits(c: &Chat) -> Vec<Node> {
+    c.session
+        .limits
+        .iter()
+        .map(|(label, used, resets)| {
+            let tone = match used {
+                95.. => "danger",
+                80.. => "warn",
+                _ => "muted",
+            };
+            let when = parse_time(resets).map(|ms| if *label == "5h" { clock(ms) } else { format!("{}, {}", day(ms), clock(ms)) });
+            let what = if *label == "5h" { "5-hour" } else { "weekly" };
+            text(format!("{label} {used}%"))
+                .prop("tone", tone)
+                .prop("size", "small")
+                .prop("title", when.map_or_else(|| format!("Your {what} limit"), |when| format!("Your {what} limit resets {when}")))
+        })
+        .collect()
 }
 
 /// The messages waiting for Claude to finish, each with Send now and a way to take it back.
@@ -520,8 +548,8 @@ fn pickers(c: &Chat) -> Vec<Node> {
         pickers.push(select("Model", &options, &value, chat::pick_model).prop("variant", "ghost"));
     }
     if let Some(model) = session.current_model().filter(|model| !model.efforts.is_empty()) {
-        let options: Vec<(String, String)> = model.efforts.iter().map(|effort| (effort.clone(), capital(effort))).collect();
-        let value = session.effort.clone().unwrap_or_else(|| "high".into());
+        let options: Vec<(String, String)> = model.efforts.iter().map(|effort| (effort.clone(), if effort == "xhigh" { "Extra high".into() } else { capital(effort) })).collect();
+        let value = session.current_effort().unwrap_or_else(|| "high".into());
         pickers.push(select("Effort", &options, &value, chat::pick_effort).prop("variant", "ghost"));
     }
     if let Some(mode) = &session.mode {
