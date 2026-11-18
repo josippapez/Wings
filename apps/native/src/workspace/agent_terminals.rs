@@ -25,6 +25,8 @@ use crate::{
     ui::{self, ButtonSize, motion},
 };
 
+use wings_connect::panes::PaneRow;
+
 use super::{
     Active, TerminalTab, Workspace,
     floating::{EDGE, Gesture, Panel, Rect},
@@ -89,6 +91,26 @@ struct Opened {
     project: PathBuf,
     cwd: Option<String>,
     owner: Option<usize>,
+    /// The plugin tab whose agent opened it, when it shows in that tab's page.
+    page: Option<usize>,
+}
+
+/// A terminal a plugin tab's agent opened, which shows in the tab's page instead of a split or a tab of its own: the tab,
+/// the project, and what it was opened to run.
+struct PageTerminal {
+    tab: usize,
+    project: PathBuf,
+    title: String,
+}
+
+/// How Wings' MCP tools name a plugin tab a call came from, as they name a pane by its id.
+pub(super) fn page_caller(tab: usize) -> String {
+    format!("tab-{tab}")
+}
+
+/// The plugin tab a caller named by `page_caller` is.
+pub(super) fn page_of_caller(caller: &str) -> Option<usize> {
+    caller.strip_prefix("tab-")?.parse().ok()
 }
 
 /// The panel over an agent's pane, the desktop's `PanelState`.
@@ -132,6 +154,8 @@ pub(super) struct AgentTerminals {
     floated: HashSet<usize>,
     /// Each agent pane's panel, kept for as long as the app runs.
     panels: HashMap<usize, Float>,
+    /// The terminals plugin tabs' agents opened, by pane, which show in those tabs' pages.
+    pages: HashMap<usize, PageTerminal>,
 }
 
 impl AgentTerminals {
@@ -286,13 +310,15 @@ impl Workspace {
         Ok(pane)
     }
 
-    /// Keeps `pane` as a terminal an agent opened, the agent's own pane `owner` when it opened as a split beside it.
+    /// Keeps `pane` as a terminal an agent opened, the agent's own pane `owner` when it opened as a split beside it, or
+    /// the plugin tab `page` whose page shows it.
     pub(super) fn note_agent_terminal(
         &mut self,
         pane: usize,
         project: PathBuf,
         cwd: Option<String>,
         owner: Option<usize>,
+        page: Option<usize>,
     ) {
         self.agent_terminals.opened.insert(
             pane,
@@ -300,6 +326,7 @@ impl Workspace {
                 project,
                 cwd,
                 owner,
+                page,
             },
         );
     }
@@ -311,6 +338,7 @@ impl Workspace {
         project: &Path,
         cwd: Option<&str>,
         owner: Option<usize>,
+        page: Option<usize>,
         cx: &gpui::App,
     ) -> Option<usize> {
         let mut idle: Vec<(usize, &Opened)> = self
@@ -320,6 +348,7 @@ impl Workspace {
             .filter(|(pane, at)| {
                 at.project == project
                     && at.owner == owner
+                    && at.page == page
                     && self.panes.contains_key(pane)
                     && self.pane_info.get(pane).is_some_and(|info| !info.busy)
                     && !self.agents.contains_key(pane)
@@ -346,10 +375,11 @@ impl Workspace {
         project: &Path,
         cwd: Option<String>,
         owner: Option<usize>,
+        page: Option<usize>,
         input: &str,
         cx: &mut Context<Self>,
     ) -> Option<usize> {
-        let pane = self.idle_agent_terminal(project, cwd.as_deref(), owner, cx)?;
+        let pane = self.idle_agent_terminal(project, cwd.as_deref(), owner, page, cx)?;
         let dir = cwd
             .clone()
             .unwrap_or_else(|| project.to_string_lossy().into_owned());
@@ -363,7 +393,11 @@ impl Workspace {
         };
         self.terminal(pane)?
             .update(cx, |view, cx| view.write_input(&typed, cx));
-        self.note_agent_terminal(pane, project.to_owned(), cwd, owner);
+        self.note_agent_terminal(pane, project.to_owned(), cwd, owner, page);
+        if let Some(at) = self.agent_terminals.pages.get_mut(&pane) {
+            at.title = input.trim_end_matches('\r').to_owned();
+            self.sync_page_terminals(cx);
+        }
         if let Some(owner) = owner {
             let parked = self
                 .parked
@@ -892,6 +926,259 @@ impl Workspace {
             .child(trigger)
             .children(menu)
             .into_any_element()
+    }
+}
+
+impl Workspace {
+    /// Whether the agent of the plugin tab `tab`, in the project on screen, has its terminals in the tab's page: its plugin
+    /// declares `terminals` in `contributes.ui`.
+    pub(super) fn shows_terminals(&self, tab: usize) -> bool {
+        let Some(tab) = self.plugin_tabs.iter().find(|t| t.id == tab) else {
+            return false;
+        };
+        self.plugins.iter().any(|installed| {
+            installed.id == tab.plugin
+                && installed.plugin.manifest.contributes.ui.iter().any(|ui| ui == "terminals")
+        })
+    }
+
+    /// The plugin tabs whose agent has its terminals in their page, as Wings' MCP tools see a pane (`page_caller`), each in
+    /// its project and with the programs its page runs: a call from its agent comes from one of them.
+    pub(super) fn page_callers(&self) -> Vec<(PaneRow, Vec<u32>)> {
+        let shown = self.plugin_tabs.iter().map(|tab| (&self.config.project, tab));
+        let parked = self
+            .parked
+            .iter()
+            .flat_map(|(path, parked)| parked.plugin_tabs.iter().map(move |tab| (path, tab)));
+        shown
+            .chain(parked)
+            .filter_map(|(project, tab)| {
+                let installed = self.plugins.iter().find(|installed| installed.id == tab.plugin)?;
+                if !installed.plugin.manifest.contributes.ui.iter().any(|ui| ui == "terminals") {
+                    return None;
+                }
+                let pids = installed.host.pids(&tab.state);
+                let row = PaneRow {
+                    id: page_caller(tab.id),
+                    space_id: project.to_string_lossy().into_owned(),
+                    cwd: project.clone(),
+                    command: None,
+                    title: tab.label().to_string(),
+                };
+                (!pids.is_empty()).then_some((row, pids))
+            })
+            .collect()
+    }
+
+    /// `open_pane` from the agent of the plugin tab `tab`: a terminal that shows in the tab's page. Wings keeps it as it
+    /// keeps any pane, so it outlives the page and its plugin. It starts without the keys, and the tab isn't shown.
+    pub(super) fn open_page_terminal(
+        &mut self,
+        tab: usize,
+        plan: OpenPane,
+        title: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<usize, String> {
+        let pane = self.start_plugin_pane(&plan, window, cx)?;
+        let terminal = self.terminal(pane).unwrap();
+        terminal.update(cx, |view, _| view.keep_focus_away());
+        if let Some(input) = plan.input {
+            terminal.update(cx, |view, cx| view.write_input(&input, cx));
+        }
+        self.agent_terminals.pages.insert(
+            pane,
+            PageTerminal {
+                tab,
+                project: plan.project,
+                title,
+            },
+        );
+        self.sync_page_terminals(cx);
+        self.sync_pane_visibility(cx);
+        Ok(pane)
+    }
+
+    /// The open terminals the agent of the plugin tab `tab` opened in its page, oldest first.
+    pub(super) fn page_terminals_of(&self, tab: usize) -> Vec<usize> {
+        let mut panes: Vec<usize> = self
+            .agent_terminals
+            .pages
+            .iter()
+            .filter(|(pane, at)| at.tab == tab && self.panes.contains_key(pane))
+            .map(|(pane, _)| *pane)
+            .collect();
+        panes.sort_unstable();
+        panes
+    }
+
+    pub(super) fn is_page_terminal(&self, pane: usize) -> bool {
+        self.agent_terminals.pages.contains_key(&pane)
+    }
+
+    /// The terminals in plugin tabs' pages, each with its project, as `pane_projects` lists the panes of the tabs.
+    pub(super) fn page_terminal_projects(&self) -> impl Iterator<Item = (usize, &Path)> + '_ {
+        self.agent_terminals
+            .pages
+            .iter()
+            .filter(|(pane, _)| self.panes.contains_key(pane))
+            .map(|(pane, at)| (*pane, at.project.as_path()))
+    }
+
+    /// Tells the page of each plugin tab whose agent's terminals show there which they are, what each was opened to run
+    /// and whether it still runs (`terminals`). A page hears the list again only when it changed.
+    pub(super) fn sync_page_terminals(&self, cx: &mut Context<Self>) {
+        for tab in &self.plugin_tabs {
+            if !self.shows_terminals(tab.id) {
+                continue;
+            }
+            let panes = self.page_terminals_of(tab.id);
+            let list: Vec<serde_json::Value> = panes
+                .iter()
+                .map(|pane| {
+                    let running = self.pane_info.get(pane).is_some_and(|info| info.busy);
+                    let title = self.agent_terminals.pages.get(pane).map_or("", |at| at.title.as_str());
+                    serde_json::json!({ "paneId": pane.to_string(), "title": title, "running": running })
+                })
+                .collect();
+            let json = serde_json::Value::Array(list).to_string();
+            tab.page.update(cx, |page, cx| page.set_terminals(panes, json, cx));
+        }
+    }
+
+    /// Ends a terminal a plugin tab's agent opened in its page: whether `pane` was one.
+    pub(super) fn close_page_terminal(&mut self, pane: usize, cx: &mut Context<Self>) -> bool {
+        if !self.agent_terminals.pages.contains_key(&pane) {
+            return false;
+        }
+        #[cfg(unix)]
+        let older = self.on_older_server(pane, cx);
+        self.agent_terminals.pages.remove(&pane);
+        self.agent_terminals.opened.remove(&pane);
+        self.panes.remove(&pane);
+        self.sync_page_terminals(cx);
+        #[cfg(unix)]
+        if older {
+            self.tidy_older_servers(cx);
+        }
+        cx.notify();
+        true
+    }
+
+    /// Moves a terminal out of a plugin tab's page into a tab of its own in its project, which the agent no longer
+    /// types into: the tab's id.
+    fn release_page_terminal(&mut self, pane: usize, cx: &mut Context<Self>) -> Option<usize> {
+        let at = self.agent_terminals.pages.remove(&pane)?;
+        self.agent_terminals.opened.remove(&pane);
+        if !self.panes.contains_key(&pane) {
+            return None;
+        }
+        let id = self.next_tab;
+        self.next_tab += 1;
+        let tab = TerminalTab {
+            id,
+            layout: Layout::Pane(pane),
+            focused: pane,
+            zoomed: None,
+            focus: cx.focus_handle().tab_stop(true),
+        };
+        match self.parked.get_mut(&at.project) {
+            Some(parked) if at.project != self.config.project => parked.terminals.push(tab),
+            _ => self.terminals.push(tab),
+        }
+        Some(id)
+    }
+
+    /// A page terminal's button that opens it as a tab of its own, and shows that tab.
+    pub(super) fn pop_page_terminal(&mut self, pane: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(tab) = self.release_page_terminal(pane, cx) {
+            self.sync_page_terminals(cx);
+            self.show(Active::Terminal(tab), window, cx);
+        }
+    }
+
+    /// The terminals of the plugin tab `tab`, which is closing, go on as tabs of their own, out of sight.
+    pub(super) fn release_page_terminals(&mut self, tab: usize, cx: &mut Context<Self>) {
+        for pane in self.page_terminals_of(tab) {
+            self.release_page_terminal(pane, cx);
+        }
+    }
+
+    /// The page terminal of the plugin tab on screen that has the keyboard, which Close Pane closes before the tab.
+    pub(super) fn focused_page_terminal(&self, window: &Window, cx: &gpui::App) -> Option<usize> {
+        use gpui::Focusable as _;
+        let Active::Plugin(tab) = self.active else {
+            return None;
+        };
+        self.page_terminals_of(tab).into_iter().find(|pane| {
+            self.terminal(*pane)
+                .is_some_and(|view| view.focus_handle(cx).contains_focused(window, cx))
+        })
+    }
+
+    /// The terminals of the plugin tab on screen, each at the place its page leaves for it (`page::TERMINALS`), with a
+    /// header naming what it runs and whether it still does, and buttons that open it as a tab and close it.
+    pub(super) fn page_terminals_layer(&self, cx: &mut Context<Self>) -> Vec<(SharedString, AnyElement)> {
+        let Active::Plugin(tab) = self.active else {
+            return Vec::new();
+        };
+        if self.welcome || self.loose_page().is_some() {
+            return Vec::new();
+        }
+        let workspace = cx.weak_entity();
+        self.page_terminals_of(tab)
+            .into_iter()
+            .filter_map(|pane| {
+                let view = self.terminal(pane)?;
+                let title = self.agent_terminals.pages.get(&pane)?.title.clone();
+                let running = self.pane_info.get(&pane).is_some_and(|info| info.busy);
+                let (pop, close) = (workspace.clone(), workspace.clone());
+                let card = crate::page::terminal_card(
+                    pane,
+                    title,
+                    running,
+                    view,
+                    move |window, cx| {
+                        let _ = pop.update(cx, |this, cx| this.pop_page_terminal(pane, window, cx));
+                    },
+                    move |window, cx| {
+                        let _ = close.update(cx, |this, cx| this.close_pane(pane, window, cx));
+                    },
+                );
+                Some((crate::page::terminal_slot(pane), card))
+            })
+            .collect()
+    }
+
+
+    /// The agent of the plugin tab `tab` runs `command` in a terminal, for the screenshots.
+    #[cfg(feature = "test-support")]
+    pub fn sample_page_terminal(
+        &mut self,
+        tab: usize,
+        command: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let allowed = self.prefs.agents_run_commands;
+        self.prefs.agents_run_commands = true;
+        let plan = wings_connect::panes::OpenPlan {
+            space_id: self.config.project.to_string_lossy().into_owned(),
+            cwd: None,
+            input: Some(command.into()),
+            run: true,
+            next_to: Some(page_caller(tab)),
+        };
+        if let Err(error) = self.claude_open_pane(plan, window, cx) {
+            eprintln!("Couldn't open the sample terminal: {error}");
+        }
+        self.prefs.agents_run_commands = allowed;
+    }
+
+    /// The plugin tabs of the project on screen, for the screenshots.
+    #[cfg(feature = "test-support")]
+    pub fn plugin_tab_ids(&self) -> Vec<usize> {
+        self.plugin_tabs.iter().map(|tab| tab.id).collect()
     }
 }
 

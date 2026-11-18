@@ -874,6 +874,21 @@ impl PluginHost {
         }
     }
 
+    /// The process ids of the programs `spawn` started for the page that holds `state`, while they run: a call from one
+    /// of them comes from that page.
+    pub fn pids(&self, state: &FrameState) -> Vec<u32> {
+        let Some(frame) = state.frame() else {
+            return Vec::new();
+        };
+        let prefix = format!("{frame}:");
+        let processes = self.shared.processes.lock().unwrap();
+        processes
+            .iter()
+            .filter(|(token, _)| token.starts_with(&prefix))
+            .filter_map(|(_, process)| process.pid())
+            .collect()
+    }
+
     /// How many frames the plugin has open, its main included: a frame leaves when what holds it is let go of.
     #[cfg(all(test, feature = "test-support"))]
     pub(crate) fn frames(&self) -> usize {
@@ -1041,6 +1056,9 @@ fn open_frame(
     on_event: impl FnMut(Event) + Send + 'static,
 ) -> std::io::Result<PageRuntime> {
     let id = shared.next_frame.fetch_add(1, Ordering::Relaxed);
+    if let Some(state) = &state {
+        state.set_frame(id);
+    }
     let visible = Arc::new(AtomicBool::new(visible));
     let ready = Arc::new((Mutex::new(None), Condvar::new()));
     let link = Arc::new(FrameLink {

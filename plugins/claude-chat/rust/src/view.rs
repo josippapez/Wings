@@ -61,7 +61,7 @@ fn chat_page(c: &Chat) -> Node {
         .prop("defaultSize", SIDE)
         .prop("side", "end")
         .prop("collapseBelow", SIDE_BELOW)
-        .prop("pinned", c.subagent.as_ref().is_some_and(|id| c.session.subagents.contains_key(id)))
+        .prop("pinned", c.subagent.as_ref().is_some_and(|id| c.session.subagents.contains_key(id)) || !c.terminals.is_empty())
         .child(Node::new("Slot").prop("name", "start").children(main))
         .child(Node::new("Slot").prop("name", "end").children(side(c)));
     // No page toolbar: the tab and the project's header over it already name the place, so the card starts with a
@@ -170,7 +170,7 @@ fn conversation(c: &Chat) -> Node {
     let more = from > 0 && !cut;
     let mut nodes: Vec<Node> = earlier.into_iter().chain(blocks).collect();
     if !c.session.live.is_empty() {
-        let live = markdown(&c.session.live);
+        let live = markdown(&c.session.live).prop("links", true);
         let live = if live.count() > BUDGET / 4 { text(truncate(&c.session.live, 20_000)) } else { live };
         nodes.push(live.key("live"));
     } else if c.session.thinking || (c.session.working && !asking(c)) {
@@ -248,7 +248,8 @@ fn item_node(at: usize, item: &Item, c: &Chat, own: bool) -> Option<Node> {
         Item::Images(pictures) => thumbs(pictures, "Picture").unwrap_or_else(stack),
         // A subagent's replies sit in its own list, which the Copy buttons' indexes don't name.
         Item::Text(said) if own => crate::status_view::reply(at, said, c),
-        Item::Text(said) => markdown(said),
+        // Words that name something in Wings, like an issue key, open it there.
+        Item::Text(said) => markdown(said).prop("links", true),
         Item::Divider(said) => row().prop("justify", "center").child(muted(format!("── {said} ──")).prop("size", "small")),
         Item::Notice(said) => muted(said.as_str()).prop("size", "small"),
         Item::Thought(said, ms) => thought(at, said, *ms, c.open_outputs.contains(&format!("thought-{at}"))),
@@ -720,7 +721,7 @@ fn pasted(c: &Chat) -> Option<Node> {
 /// place of that while one is open. Nothing when there is nothing to say yet.
 fn side(c: &Chat) -> Vec<Node> {
     if let Some((id, sub)) = c.subagent.as_ref().and_then(|id| Some((id, c.session.subagents.get(id)?))) {
-        return vec![subagent_card(id, sub, c)];
+        return [subagent_card(id, sub, c)].into_iter().chain(terminals(c)).collect();
     }
     let small = |said: String| text(said).prop("size", "small");
     let mut sections: Vec<Node> = Vec::new();
@@ -760,10 +761,23 @@ fn side(c: &Chat) -> Vec<Node> {
     sections.extend(subagents(c));
     // A stack with nothing in it takes room: leave out the sections that have nothing.
     let sections: Vec<Node> = sections.into_iter().filter(|section| section.count() > 1).collect();
-    match sections.is_empty() {
-        true => Vec::new(),
-        false => vec![card().prop("variant", "raised").child(stack().prop("gap", "m").children(sections))],
-    }
+    let summary = (!sections.is_empty()).then(|| card().prop("variant", "raised").child(stack().prop("gap", "m").children(sections)));
+    summary.into_iter().chain(terminals(c)).collect()
+}
+
+/// How many of the terminals Claude opened the panel shows, newest first, and how tall each is.
+const TERMINALS_SHOWN: usize = 3;
+const TERMINAL_HEIGHT: u32 = 220;
+
+/// The terminals Claude opened with Wings' `open_pane`, under the session card: Wings draws each live where its node is,
+/// with what it runs, whether it still does, and buttons that open it as a tab and close it.
+fn terminals(c: &Chat) -> Vec<Node> {
+    c.terminals
+        .iter()
+        .rev()
+        .take(TERMINALS_SHOWN)
+        .map(|terminal| Node::new("Terminal").prop("pane", terminal.pane.as_str()).prop("height", TERMINAL_HEIGHT).key(format!("terminal-{}", terminal.pane)))
+        .collect()
 }
 
 /// A meter row that is a button: a click opens the dialog with the detail behind it.

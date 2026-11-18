@@ -83,6 +83,11 @@ impl Process {
         }
     }
 
+    /// The program's process id while it runs, so Wings can tell which page started a program that calls it.
+    pub fn pid(&self) -> Option<u32> {
+        self.child.lock().unwrap().as_ref().map(Child::id)
+    }
+
     /// Closes the program's input once the writes before have gone, which tells a program like Claude to finish, and
     /// kills it if it's still running `STOP_GRACE` later. Never waits.
     pub fn stop(self: &Arc<Self>) {

@@ -12,7 +12,12 @@ use super::{
     PageView, tone_color,
     tree::{Avatar, Length, Node, Skeleton, Tone, Weight},
 };
-use crate::{terminal_view::DEFAULT_FONT_FAMILY, theme};
+use crate::{
+    page::links::{LinkTarget, PageLinks},
+    terminal_view::DEFAULT_FONT_FAMILY,
+    theme,
+};
+use wings_plugins::links::Found;
 
 /// How a run of text looks, and what a click on it does.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -22,6 +27,8 @@ struct Style {
     mono: bool,
     click: Option<String>,
     mark: bool,
+    /// One of Wings' links, by its place among the line's.
+    link: Option<usize>,
 }
 
 /// A run of the line's text with a look of its own.
@@ -64,6 +71,7 @@ fn collect(
                     mono: outer.mono || inner.mono,
                     click: inner.on_click.clone().or_else(|| outer.click.clone()),
                     mark: outer.mark || inner.mark,
+                    link: None,
                 };
                 if !collect(&inner.children, &style, text, spans, first) {
                     return false;
@@ -76,9 +84,8 @@ fn collect(
 }
 
 fn highlight(style: &Style) -> HighlightStyle {
-    let tone = style
-        .tone
-        .or_else(|| style.click.is_some().then_some(Tone::Info));
+    let clicks = style.click.is_some() || style.link.is_some();
+    let tone = style.tone.or_else(|| clicks.then_some(Tone::Info));
     // A word a search found reads in full colour on the search's mark, as Past sessions shows it.
     if style.mark {
         return HighlightStyle {
@@ -95,7 +102,7 @@ fn highlight(style: &Style) -> HighlightStyle {
             Weight::Strong => Some(FontWeight::SEMIBOLD),
         },
         background_color: style.mono.then(|| rgba(0xffffff14).into()),
-        underline: style.click.is_some().then(|| UnderlineStyle {
+        underline: clicks.then(|| UnderlineStyle {
             thickness: px(1.0),
             color: None,
             wavy: false,
@@ -140,6 +147,112 @@ impl PageView {
                     if let Some(handler) = handlers.get(index) {
                         let _ = view.update(cx, |view, _| view.act(handler, None));
                     }
+                })
+                .into_any_element(),
+        )
+    }
+}
+
+/// The runs of a line with its links laid over its spans, in order and none overlapping another, as `StyledText` takes
+/// them: a key in a code span is both code and a link.
+fn with_links(spans: &[Span], links: &[Found]) -> Vec<Span> {
+    let mut cuts: Vec<usize> = spans
+        .iter()
+        .flat_map(|span| [span.range.start, span.range.end])
+        .chain(links.iter().flat_map(|link| [link.start, link.end]))
+        .collect();
+    cuts.sort_unstable();
+    cuts.dedup();
+    cuts.windows(2)
+        .filter_map(|cut| {
+            let (start, end) = (cut[0], cut[1]);
+            let base = spans
+                .iter()
+                .find(|span| span.range.start <= start && end <= span.range.end)
+                .map(|span| span.style.clone())
+                .unwrap_or_default();
+            let link = links.iter().position(|link| link.start <= start && end <= link.end);
+            let style = Style { link, ..base };
+            (style != Style::default()).then_some(Span { range: start..end, style })
+        })
+        .collect()
+}
+
+/// What a click on a run of a linked line does.
+enum Click {
+    Page(String),
+    Link(LinkTarget),
+}
+
+impl PageView {
+    /// A `Text` with `links: true` as one line with Wings' links in it, which a click opens, or None when it holds no link
+    /// or more than text. A link inside a run the page made clickable is left to the page.
+    pub(super) fn linked_text(&self, nodes: &[Node], id: u64, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (rules, generation) = {
+            let links = cx.try_global::<PageLinks>()?;
+            (links.rules.clone(), links.generation)
+        };
+        if rules.is_empty() {
+            return None;
+        }
+        let (mut text, mut spans, mut first) = (String::new(), Vec::new(), None);
+        if !collect(nodes, &Style::default(), &mut text, &mut spans, &mut first) {
+            return None;
+        }
+        let found = self.found_links(id, &text, &rules, generation);
+        let links: Vec<Found> = found
+            .iter()
+            .filter(|link| {
+                !spans
+                    .iter()
+                    .any(|span| span.style.click.is_some() && span.range.start < link.end && link.start < span.range.end)
+            })
+            .copied()
+            .collect();
+        if links.is_empty() {
+            return None;
+        }
+        let targets: Vec<LinkTarget> = links
+            .iter()
+            .map(|link| LinkTarget {
+                plugin: rules[link.rule].plugin.clone(),
+                link: rules[link.rule].link.clone(),
+                text: text[link.start..link.end].to_owned(),
+            })
+            .collect();
+        let runs = with_links(&spans, &links);
+        let mut styled = StyledText::new(text)
+            .with_highlights(runs.iter().map(|run| (run.range.clone(), highlight(&run.style))));
+        let families: Vec<_> = runs
+            .iter()
+            .filter(|run| run.style.mono)
+            .map(|run| (run.range.clone(), SharedString::from(DEFAULT_FONT_FAMILY)))
+            .collect();
+        if !families.is_empty() {
+            styled = styled.with_font_family_overrides(families);
+        }
+        let (ranges, clicks): (Vec<_>, Vec<_>) = runs
+            .into_iter()
+            .filter_map(|run| match (run.style.click, run.style.link) {
+                (Some(handler), _) => Some((run.range, Click::Page(handler))),
+                (None, Some(link)) => Some((run.range, Click::Link(targets[link].clone()))),
+                (None, None) => None,
+            })
+            .unzip();
+        let view = cx.weak_entity();
+        Some(
+            InteractiveText::new(ElementId::NamedInteger("page-linked".into(), id), styled)
+                .on_click(ranges, move |index, window, cx| match clicks.get(index) {
+                    Some(Click::Page(handler)) => {
+                        let _ = view.update(cx, |view, _| view.act(handler, None));
+                    }
+                    Some(Click::Link(target)) => {
+                        let open = cx.try_global::<PageLinks>().map(|links| links.open.clone());
+                        if let Some(open) = open {
+                            open(target.clone(), window, cx);
+                        }
+                    }
+                    None => {}
                 })
                 .into_any_element(),
         )
@@ -192,4 +305,29 @@ pub(super) fn skeleton(skeleton: &Skeleton) -> AnyElement {
             None => block.w_full(),
         })
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn span(range: std::ops::Range<usize>, mono: bool) -> Span {
+        Span { range, style: Style { mono, ..Style::default() } }
+    }
+
+    /// "See `ABC-12` and ABC-7": a code span around the first key, and two links.
+    #[test]
+    fn links_are_laid_over_the_spans_of_a_line_without_overlapping_them() {
+        let spans = [span(4..10, true)];
+        let links = [Found { start: 4, end: 10, rule: 0 }, Found { start: 15, end: 20, rule: 0 }];
+        let runs: Vec<(std::ops::Range<usize>, bool, Option<usize>)> =
+            with_links(&spans, &links).into_iter().map(|run| (run.range, run.style.mono, run.style.link)).collect();
+        assert_eq!(runs, [(4..10, true, Some(0)), (15..20, false, Some(1))]);
+        // A link across the end of a code span is cut where the span ends, both halves the same link.
+        let runs: Vec<(std::ops::Range<usize>, bool, Option<usize>)> = with_links(&[span(0..6, true)], &[Found { start: 4, end: 9, rule: 0 }])
+            .into_iter()
+            .map(|run| (run.range, run.style.mono, run.style.link))
+            .collect();
+        assert_eq!(runs, [(0..4, true, None), (4..6, true, Some(0)), (6..9, false, Some(0))]);
+    }
 }

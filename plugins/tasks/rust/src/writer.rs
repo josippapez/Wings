@@ -22,6 +22,8 @@ thread_local! {
     static MIGRATED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     /// The key prefix of each project that has issues, as main last saw it.
     static PREFIXES: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+    /// The issue keys of each project, as main last saw them.
+    static KEYS: RefCell<HashMap<String, Vec<String>>> = RefCell::new(HashMap::new());
 }
 
 #[cfg(test)]
@@ -46,6 +48,21 @@ pub fn remember_prefix(project_id: &str, prefix: &str, issues: usize) {
             prefixes.remove(project_id);
         }
     });
+}
+
+/// Keeps the keys of a project's issues and, when they changed, tells Wings: a key in a chat's message is a link to its
+/// issue only while there is one, so "UTF-8" isn't.
+fn remember_keys(project_id: &str, issues: &[Issue]) {
+    let keys: Vec<String> = issues.iter().map(|issue| issue.key.clone()).collect();
+    let changed = KEYS.with(|known| known.borrow_mut().insert(project_id.to_owned(), keys.clone()) != Some(keys));
+    if changed {
+        let mut all: Vec<String> = KEYS.with(|known| known.borrow().values().flatten().cloned().collect());
+        all.sort();
+        all.dedup();
+        spawn(async move {
+            let _ = wings_plugin::host::set_link_words("issue", Some(&all)).await;
+        });
+    }
 }
 
 pub fn known_prefix(project_id: &str) -> bool {
@@ -80,6 +97,7 @@ pub fn write(project_id: &str, project_name: &str, op: &Op, by: &Actor) -> Resul
     let before = read_store(project_id, project_name)?;
     let applied = apply_op(&before, op, by, now())?;
     remember_prefix(project_id, &applied.store.prefix, applied.store.issues.len());
+    remember_keys(project_id, &applied.store.issues);
     if applied.changed {
         write_store(project_id, &before, &applied.store)?;
         messages::tell("issues", &json!({ "projectId": project_id }));
@@ -94,6 +112,7 @@ pub async fn load_project(project_id: String, project_name: String) {
     let _ = migrate_once(&project_id, &project_name);
     if let Ok(store) = read_store(&project_id, &project_name) {
         remember_prefix(&project_id, &store.prefix, store.issues.len());
+        remember_keys(&project_id, &store.issues);
         push_section(project_id, store.issues).await;
     }
 }

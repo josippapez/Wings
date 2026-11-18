@@ -24,6 +24,7 @@ fn ui_name(kind: &str) -> String {
     match kind {
         "badges" => "Pane badges".into(),
         "diff" => "Diff viewer".into(),
+        "terminals" => "The terminals its agent opens, in its page".into(),
         other => other.into(),
     }
 }
@@ -103,6 +104,7 @@ pub(super) fn access_groups(manifest: &Manifest) -> Vec<(&'static str, Vec<Strin
                     .map(|v| format!("{} {}", v.title, v.opens.join(" or "))),
             )
             .chain(c.settings.as_ref().map(|_| "Settings page".to_owned()))
+            .chain(c.links.iter().map(|link| format!("{} links in messages", link.title)))
             .collect();
     let on = |yes: bool| if yes { Some(Vec::new()) } else { None };
     let list = |items: &[String]| (!items.is_empty()).then(|| items.to_vec());

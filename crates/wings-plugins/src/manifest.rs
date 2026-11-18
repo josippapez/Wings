@@ -101,7 +101,31 @@ pub struct Contributes {
     /// Its own page in Wings Settings, under Plugin settings.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub settings: Option<SettingsPage>,
+    /// Words that open something of the plugin's, like an issue key, shown as links in the pages that ask for them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<Link>,
 }
+
+/// Words a page may show as links to the plugin. A click on text `pattern` matches, as a whole word, opens `view` as a
+/// tab with `{ <arg>: <the text> }`, or with `url`, opens the text in the browser under the plugin's `openUrl`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Link {
+    pub id: String,
+    /// What a click opens, like "Issue": the link's tooltip, and what the manager lists.
+    pub title: String,
+    /// A regular expression in Rust's `regex` syntax, up to `MAX_LINK_PATTERN` characters.
+    pub pattern: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub view: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub arg: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub url: bool,
+}
+
+pub const MAX_LINKS: usize = 8;
+pub const MAX_LINK_PATTERN: usize = 200;
 
 /// A plugin page the user can place on a Project page. The page is an HTML file like a view's, so a view may share it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -256,7 +280,8 @@ fn empty_schema() -> Value {
     serde_json::json!({ "type": "object" })
 }
 
-pub(crate) const UI_KINDS: [&str; 5] = ["agents", "badges", "diff", "rail", "status"];
+/// `terminals`: the terminals the agent of the plugin's tab opens show in that tab's page, not over the tab.
+pub(crate) const UI_KINDS: [&str; 6] = ["agents", "badges", "diff", "rail", "status", "terminals"];
 /// The hooks a plugin can answer. `PreToolUse` only ever sees Bash commands. `UserPromptSubmit` runs on each message to
 /// the agent. `Journal` isn't a Claude Code event: it is what `wings journal` sends when an agent's change journal
 /// reports a finished turn.

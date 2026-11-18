@@ -21,6 +21,8 @@ struct State {
     agent_changed: Option<Box<dyn Fn() + Send + Sync>>,
     /// Closes the tab that holds this state, when its page asks.
     close: Option<Box<dyn Fn(&FrameState) + Send + Sync>>,
+    /// The frame that runs the page now, whose programs are the page's.
+    frame: Option<u64>,
 }
 
 /// An agent a tab's page runs, as the sidebar lists it.
@@ -54,6 +56,7 @@ impl FrameState {
                 title: None,
                 agent_changed: None,
                 close: None,
+                frame: None,
             })),
         }
     }
@@ -80,6 +83,14 @@ impl FrameState {
             (Some(close), StatePlace::Tab) => Ok(close(self)),
             _ => Err("Only a page shown as a tab can close its tab".into()),
         }
+    }
+
+    pub(super) fn set_frame(&self, frame: u64) {
+        self.state.lock().unwrap().frame = Some(frame);
+    }
+
+    pub(super) fn frame(&self) -> Option<u64> {
+        self.state.lock().unwrap().frame
     }
 
     pub fn agent(&self) -> Option<TabAgent> {

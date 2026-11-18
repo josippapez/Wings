@@ -26,6 +26,7 @@ mod history;
 mod hotkey_tests;
 mod inbox;
 mod journal;
+mod links;
 #[cfg(all(test, feature = "test-support"))]
 mod manage_tests;
 mod nav;
@@ -520,6 +521,7 @@ impl Workspace {
             _ => Vec::new(),
         };
         this.plugin_env.set_plugins(&this.plugins);
+        this.refresh_links(cx);
         // Claude Code reaches this app through the socket, as it reaches the desktop's.
         if let Some(socket) = this.config.socket.clone() {
             let info = this.project_info.as_ref().map(|info| info.store.clone());
@@ -1024,7 +1026,10 @@ impl Render for Workspace {
                 // does, as the desktop's `closeFocused`.
                 if let Some(key) = this.loose_page().or_else(|| this.focused_loose(window, cx)) {
                     this.close_quick(key, window, cx);
-                } else if let Some(pane) = this.focused_pane() {
+                } else if let Some(pane) = this
+                    .focused_pane()
+                    .or_else(|| this.focused_page_terminal(window, cx))
+                {
                     this.close_pane(pane, window, cx);
                 } else {
                     // A page tab (a plugin's, the project page, Issues) is a tab of one pane.
@@ -1123,6 +1128,11 @@ impl Render for Workspace {
                     .child(ui::slot_layer(
                         agent_terminals::FLOATS,
                         self.float_layer(cx),
+                    ))
+                    // The terminals a chat's agent opened, where its page shows them.
+                    .child(ui::slot_layer(
+                        crate::page::TERMINALS,
+                        self.page_terminals_layer(cx),
                     ))
                     .child(ui::slot_layer(
                         QUICK,

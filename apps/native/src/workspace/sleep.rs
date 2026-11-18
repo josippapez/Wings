@@ -107,7 +107,9 @@ impl Workspace {
                 .find(|tab| tab.id == id)
                 .map(|tab| self.shown_panes(tab))
                 .unwrap_or_default(),
-            Active::Plugin(_) | Active::Project | Active::Issues => Vec::new(),
+            // A chat's page shows the terminals its agent opened.
+            Active::Plugin(id) => self.page_terminals_of(id),
+            Active::Project | Active::Issues => Vec::new(),
         }
     }
 

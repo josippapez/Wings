@@ -370,6 +370,14 @@ impl Workspace {
         while let Some(index) = self.plugin_tabs.iter().position(|tab| tab.plugin == id) {
             self.close_plugin_tab(index, window, cx);
         }
+        let parked_tabs: Vec<usize> = self
+            .parked
+            .values()
+            .flat_map(|parked| parked.plugin_tabs.iter().filter(|tab| tab.plugin == id).map(|tab| tab.id))
+            .collect();
+        for tab in parked_tabs {
+            self.release_page_terminals(tab, cx);
+        }
         for parked in self.parked.values_mut() {
             let gone: Vec<usize> = parked
                 .plugin_tabs
@@ -456,6 +464,8 @@ impl Workspace {
         if blocks {
             self.reload_project_pages(cx);
         }
+        // Links in pages are those of the plugins that run now.
+        self.refresh_links(cx);
         // A new main hears of the panes on the next frame.
         self.plugin_ui.signature = 0;
         self.plugin_env.clients.notify_changed();

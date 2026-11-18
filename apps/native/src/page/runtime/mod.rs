@@ -84,6 +84,8 @@ pub enum Message {
     Transcript,
     /// The JSON `{ sessionId }` of an OpenCode session that did something, for `onAgentActivity`.
     AgentActivity,
+    /// The JSON list of the terminals a tab's agent opened, `{ paneId, title, running }`, which its page may draw.
+    Terminals,
     /// A badge action was clicked: `id` names it for `Link::call("actionDone")`, the text is the JSON of `{ paneId, actionId }`.
     Action,
     /// Another plugin calls one of this plugin's tools: `id` names the call for `Link::call("toolDone")`, the text is
@@ -113,6 +115,7 @@ impl Message {
             Message::Panes => "panes",
             Message::Transcript => "transcript",
             Message::AgentActivity => "agentActivity",
+            Message::Terminals => "terminals",
             Message::Action => "action",
             Message::Tool => "tool",
             Message::Resolve => "resolve",

@@ -226,6 +226,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The terminals its agent opened go on running, as tabs of their own.
+        self.release_page_terminals(self.plugin_tabs[index].id, cx);
         let tab = self.plugin_tabs.remove(index);
         if Self::is_tasks_board(&tab.plugin, &tab.view) {
             self.issues_open = false;

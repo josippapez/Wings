@@ -1,7 +1,7 @@
 {
   "id": "dev-servers",
   "name": "Dev servers",
-  "version": "0.5.4",
+  "version": "0.6.0",
   "minWingsVersion": "0.2.17",
   "icon": "icon.svg",
   "description": "Puts a localhost:port badge on a pane when a program in it starts listening on a local port, with a button to open it in your browser. The badge goes when the port closes.",
@@ -16,6 +16,14 @@
   "contributes": {
     "ui": [
       "badges"
+    ],
+    "links": [
+      {
+        "id": "local",
+        "title": "Dev server",
+        "pattern": "http://localhost:[0-9]{2,5}(?:/[A-Za-z0-9._~/?#&=%+-]*)?",
+        "url": true
+      }
     ]
   }
 }

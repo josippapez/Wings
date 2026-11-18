@@ -8,6 +8,8 @@ publish = false
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+# Links' patterns come from manifests: its engine runs in time linear in the text whatever the pattern.
+regex = "1"
 url = "2.5.8"
 ureq = "3.4.2"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

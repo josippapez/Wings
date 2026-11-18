@@ -60,6 +60,18 @@ pub struct Past {
     pub branch: Option<String>,
 }
 
+/// A terminal Claude opened in Wings, which Wings draws where the page puts its `Terminal` node.
+#[derive(Debug, PartialEq)]
+pub struct Terminal {
+    pub pane: String,
+}
+
+impl Terminal {
+    fn of(listed: &Value) -> Option<Terminal> {
+        Some(Terminal { pane: listed["paneId"].as_str()?.to_owned() })
+    }
+}
+
 pub struct Chat {
     pub session: Session,
     /// The message being typed.
@@ -105,6 +117,8 @@ pub struct Chat {
     /// The lines added and removed in the working tree since the last commit, and the branch it is on.
     pub changes: Option<(u64, u64)>,
     pub branch: Option<String>,
+    /// The terminals Claude opened with Wings' `open_pane`, as Wings lists them: shown in the side panel.
+    pub terminals: Vec<Terminal>,
     /// What the sidebar's Agents was last told of this chat: its state, name and what it does.
     agent: Option<(String, String, Option<String>)>,
     /// What the tab was last named, none for its view's title.
@@ -147,6 +161,7 @@ thread_local! {
         task: None,
         changes: None,
         branch: None,
+        terminals: Vec::new(),
         agent: None,
         titled: None,
         moving: false,
@@ -170,6 +185,7 @@ pub fn start() {
         c.text_scale = prefs::scale_of(&prefs::text_size().get());
     });
     prefs::text_size().on_change(|size| with(|c| c.text_scale = prefs::scale_of(size)));
+    host::on_terminals(|listed| with(|c| c.terminals = listed.iter().filter_map(Terminal::of).collect()));
     // The clicks were made against the old setting, so they go with it.
     prefs::detailed().on_change(|detailed| {
         with(|c| {

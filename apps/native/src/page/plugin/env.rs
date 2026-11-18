@@ -502,6 +502,9 @@ pub trait Env: Send + Sync + 'static {
     /// The plugin set, or with `None` took away, the label by the title bar button of its sidebar or view `page`, which
     /// the host has checked it has.
     fn set_sidebar_label(&self, _plugin: &str, _page: &str, _label: Option<SidebarLabel>) {}
+    /// The plugin narrowed its link `link` to `words`, or with `None` let its pattern alone say again. The host has checked
+    /// the plugin declares the link, and the words.
+    fn set_link_words(&self, _plugin: &str, _link: &str, _words: Option<std::collections::HashSet<String>>) {}
 }
 
 /// A plugin that is on and approved, and the app it runs in: what every call of its frames is checked against.

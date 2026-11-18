@@ -395,6 +395,7 @@ impl Shared {
                 self.off_thread(reply, move |_| share_claude_setup(&access, &params));
             }
             "setSidebarLabel" => reply.done(set_sidebar_label(&access, &params)),
+            "setLinkWords" => reply.done(set_link_words(&access, &params)),
             "fetch" | "secretSet" | "secretDelete" | "secretHas" | "post" | "sendToAgent"
             | "openSettings" | "emit" => self.forge_call(method, params, reply, access),
             "setProjectSection" => reply.done(self.set_project_section(&access, &params)),
@@ -832,6 +833,31 @@ fn set_sidebar_label(access: &Access, params: &Value) -> Result<String, String> 
     access
         .env
         .set_sidebar_label(plugin, &page, clean_sidebar_label(params));
+    Ok("null".into())
+}
+
+/// `setLinkWords`: one of the plugin's links finds only these words from now on, like the issue keys there are, or with
+/// `null` whatever its pattern matches.
+fn set_link_words(access: &Access, params: &Value) -> Result<String, String> {
+    let link = js_string(params.get("id"));
+    let plugin = &access.plugin.manifest.id;
+    if !access.plugin.manifest.contributes.links.iter().any(|declared| declared.id == link) {
+        return Err(format!("{plugin} has no link {link}"));
+    }
+    const WORDS: &str = "setLinkWords words is a list of strings, or null";
+    let words = match params.get("words") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(words)) => {
+            let words: Vec<String> = words
+                .iter()
+                .map(|word| word.as_str().map(str::to_owned))
+                .collect::<Option<_>>()
+                .ok_or(WORDS)?;
+            Some(wings_plugins::links::words(&words)?)
+        }
+        Some(_) => return Err(WORDS.into()),
+    };
+    access.env.set_link_words(plugin, &link, words);
     Ok("null".into())
 }
 

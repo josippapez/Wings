@@ -7,6 +7,7 @@ use std::{fmt::Arguments, sync::OnceLock};
 mod cli_rules;
 pub mod exec;
 pub mod fetch;
+pub mod links;
 pub mod loading;
 pub mod manifest;
 pub mod panes;

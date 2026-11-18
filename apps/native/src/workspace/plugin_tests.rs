@@ -3738,3 +3738,136 @@ fn a_section_turned_off_in_the_projects_menu_hides_for_that_project_stays_off_af
     until(&app, &mut window, "the section never came back", |w| shows(w, &project));
     window.read(|w, _| assert!(w.section_choices(&project)[0].2));
 }
+
+/// A page that saves the terminals Wings tells it of, under `terminals`.
+fn terminals_page() -> String {
+    fake::script("page", || {
+        |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            if let Hear::Deliver("terminals", _, text) = hear {
+                cx.save("terminals", &said(text));
+            }
+        }
+    })
+}
+
+/// Claude in a chat tab calls Wings' `open_pane`: the terminal shows in the chat's page, not in a tab of its own, where
+/// Wings' tools still reach it, and goes on in a tab once the chat closes. An agent's tab whose plugin doesn't show its
+/// terminals gets a tab, as before.
+#[test]
+fn a_chat_tabs_agent_opens_its_terminals_in_the_tabs_page() {
+    let data = Data::temp();
+    let views = json!([{ "id": "chat", "title": "Chat", "page": "dist/chat.html", "opens": ["tab"], "multiple": true }]);
+    data.install_script("chatty", json!({ "contributes": { "ui": ["agents", "terminals"], "views": views } }), &fake::idle("main"),
+        &[("chat", &terminals_page())], "chatty-scope");
+    data.install_script("quiet", json!({ "contributes": { "ui": ["agents"], "views": views } }), &fake::idle("main"),
+        &[("chat", &terminals_page())], "quiet-scope");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let (chatty, quiet) = window.update(|w, window, cx| {
+        assert!(w.open_plugin_view("chatty", "chat", None, window, cx));
+        assert!(w.open_plugin_view("quiet", "chat", None, window, cx));
+        let tab = |plugin: &str| w.plugin_tabs.iter().find(|tab| tab.plugin == plugin).unwrap().id;
+        (tab("chatty"), tab("quiet"))
+    });
+    let open_from = |window: &mut TestAppWindow<Workspace>, tab: usize| {
+        window.update(|w, window, cx| {
+            let plan = wings_connect::panes::OpenPlan {
+                space_id: w.config.project.to_string_lossy().into_owned(),
+                cwd: None,
+                input: Some("make all".into()),
+                run: false,
+                next_to: Some(format!("tab-{tab}")),
+            };
+            w.claude_open_pane(plan, window, cx).unwrap().pane_id.parse::<usize>().unwrap()
+        })
+    };
+    let in_a_tab = |w: &Workspace, pane: usize| w.terminals.iter().any(|tab| tab.layout.panes().contains(&pane));
+    let terminal = open_from(&mut window, chatty);
+    window.read(|w, _| {
+        assert_eq!(w.page_terminals_of(chatty), [terminal]);
+        assert!(!in_a_tab(w, terminal), "not a tab or a split of its own");
+        assert!(w.pane_projects().iter().any(|(pane, _)| *pane == terminal), "listed, so read_pane and wait reach it");
+    });
+    until(&app, &mut window, "the chat's page wasn't told of its terminal", |_| {
+        data.saved("chatty", "chatty-scope", "terminals")
+            .is_some_and(|list| list[0]["paneId"] == terminal.to_string() && list[0]["title"] == "make all")
+    });
+    let other = open_from(&mut window, quiet);
+    window.read(|w, _| assert!(w.page_terminals_of(quiet).is_empty() && in_a_tab(w, other)));
+    assert_eq!(data.saved("quiet", "quiet-scope", "terminals"), None, "a page that doesn't show terminals hears of none");
+    // The chat closes: its terminal runs on, in a tab of its own.
+    window.update(|w, window, cx| {
+        let index = w.plugin_tabs.iter().position(|tab| tab.id == chatty).unwrap();
+        w.close_plugin_tab(index, window, cx);
+    });
+    window.read(|w, _| assert!(w.panes.contains_key(&terminal) && in_a_tab(w, terminal)));
+}
+
+/// A plugin with an issue view and two links: keys that open it, and local addresses it may open in the browser.
+fn install_tracker(data: &Data, main: &str) {
+    let views = json!([{ "id": "issue", "title": "Issue", "page": "dist/issue.html", "opens": ["tab"], "button": false }]);
+    let links = json!([
+        { "id": "issue", "title": "Issue", "pattern": "[A-Z]{1,3}-[0-9]{1,9}", "view": "issue", "arg": "key" },
+        { "id": "local", "title": "Dev server", "pattern": "http://localhost:[0-9]{2,5}", "url": true },
+    ]);
+    let manifest = json!({ "permissions": { "openUrl": ["http://localhost:"] }, "contributes": { "views": views, "links": links } });
+    data.install_script("tracker", manifest, main, &[("issue", &fake::idle("page"))], "tracker-scope");
+}
+
+/// The names of the links Wings finds in `text`, as the pages find them.
+fn links_in(window: &TestAppWindow<Workspace>, text: &str) -> Vec<String> {
+    window.read(|_, cx| {
+        let links = cx.try_global::<crate::page::links::PageLinks>().unwrap();
+        let found = wings_plugins::links::find(text, &links.rules);
+        found.iter().map(|found| links.rules[found.rule].link.clone()).collect()
+    })
+}
+
+#[test]
+fn links_are_those_of_the_plugins_that_run_and_a_click_opens_what_the_plugin_says() {
+    let data = Data::temp();
+    install_tracker(&data, &fake::idle("main"));
+    let system = Arc::new(FakeSystem::default());
+    let (_app, mut window) = open_plugins(&data, &system, |_| {});
+    assert_eq!(links_in(&window, "Fixed ABC-12, see http://localhost:5173 or XABC-1"), ["issue", "local"]);
+    let target = |link: &str, text: &str| crate::page::links::LinkTarget { plugin: "tracker".into(), link: link.into(), text: text.into() };
+    window.update(|w, window, cx| w.open_link(&target("issue", "ABC-12"), window, cx));
+    window.read(|w, _| {
+        let tab = w.plugin_tabs.iter().find(|tab| tab.plugin == "tracker" && tab.view == "issue").expect("the issue opened");
+        assert_eq!(tab.args, Some(json!({ "key": "ABC-12" })));
+    });
+    window.update(|w, window, cx| {
+        w.open_link(&target("local", "http://localhost:5173"), window, cx);
+        // One the plugin doesn't declare opens nothing.
+        w.open_link(&target("other", "http://localhost:1"), window, cx);
+    });
+    assert_eq!(*system.opened.lock().unwrap(), ["http://localhost:5173"]);
+    // Turned off, its words are no links, and a click on one it drew before opens nothing.
+    window.update(|w, window, cx| w.set_plugin_enabled("tracker", false, None, window, cx).unwrap());
+    assert!(links_in(&window, "Fixed ABC-12").is_empty());
+    window.update(|w, window, cx| w.open_link(&target("local", "http://localhost:5173"), window, cx));
+    assert_eq!(system.opened.lock().unwrap().len(), 1);
+}
+
+/// A plugin narrows a link to the words it knows, like the keys of the issues there are, so "UTF-8" is no link.
+#[test]
+fn a_plugin_narrows_its_link_to_the_words_it_knows() {
+    let data = Data::temp();
+    let main = fake::script("main", || {
+        let mut said = false;
+        move |cx: &mut Cx<'_>, _: Hear<'_>| {
+            if !std::mem::replace(&mut said, true) {
+                cx.call("setLinkWords", json!({ "id": "issue", "words": ["ABC-12"] }));
+                cx.call("setLinkWords", json!({ "id": "undeclared", "words": ["UTF-8"] }));
+            }
+        }
+    });
+    install_tracker(&data, &main);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while links_in(&window, "ABC-12 and UTF-8") != ["issue"] {
+        assert!(Instant::now() < deadline, "the link wasn't narrowed: {:?}", links_in(&window, "ABC-12 and UTF-8"));
+        app.run_until_parked();
+        window.draw();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}

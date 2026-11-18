@@ -58,6 +58,11 @@ pub struct Opened {
 /// The running app, as far as the tools are concerned.
 pub trait Host {
     fn panes(&self) -> Vec<PaneRow>;
+    /// The pane `id`, or another place an agent runs that `panes` doesn't list as it isn't a terminal, like a chat in a
+    /// tab: where a terminal it opens goes, and in which project.
+    fn row(&self, id: &str) -> Option<PaneRow> {
+        self.panes().into_iter().find(|p| p.id == id)
+    }
     fn agents(&self) -> Vec<Agent>;
     fn spaces(&self) -> Vec<Space>;
     /// The raw bytes a pane has printed lately, oldest first.
@@ -179,7 +184,7 @@ pub fn call_tool(host: &dyn Host, name: &str, args: &Value, caller: &dyn Fn() ->
             None => Err("read_pane needs a pane_id, from list_sessions".into()),
         },
         "open_pane" => {
-            let caller_pane = caller().and_then(|id| host.panes().into_iter().find(|p| p.id == id));
+            let caller_pane = caller().and_then(|id| host.row(&id));
             let run = args.get("run").and_then(Value::as_bool).unwrap_or(false);
             let new_tab = args.get("new_tab").and_then(Value::as_bool).unwrap_or(false);
             plan_open(&host.spaces(), caller_pane.as_ref(), text("cwd"), text("command"), run).and_then(|mut plan| {
@@ -234,7 +239,7 @@ fn worktree_setup(host: &dyn Host, caller: Option<&str>, args: &Value) -> Result
             }
         }
         None => {
-            let pane = caller.and_then(|id| host.panes().into_iter().find(|p| p.id == id));
+            let pane = caller.and_then(|id| host.row(id));
             pane.map(|p| p.space_id).ok_or("Call this from a Wings pane, or pass project")?
         }
     };
@@ -257,7 +262,7 @@ fn worktree_setup(host: &dyn Host, caller: Option<&str>, args: &Value) -> Result
         let owner = wings_spaces::spaces::worktree_setup(&spaces, &id).ok_or("unknown project")?;
         if owner.setup.as_deref().unwrap_or_default() != line {
             let pane = caller.and_then(|id| {
-                let row = host.panes().into_iter().find(|p| p.id == id)?;
+                let row = host.row(id)?;
                 Some(host.agents().into_iter().find(|a| a.pane_id == id).and_then(|a| a.name).unwrap_or(row.title))
             });
             let asked = host.approve_setup(&owner.project, pane.as_deref().filter(|p| !p.trim().is_empty()).unwrap_or("An agent"), owner.setup.as_deref(), line)?;
@@ -478,6 +483,8 @@ mod tests {
     #[derive(Default)]
     struct Fake {
         panes: Vec<PaneRow>,
+        /// Places agents run in that aren't terminals, like a chat in a tab.
+        pages: Vec<PaneRow>,
         agents: Vec<Agent>,
         spaces: RefCell<Vec<Space>>,
         output: HashMap<String, Vec<u8>>,
@@ -494,6 +501,9 @@ mod tests {
     impl Host for Fake {
         fn panes(&self) -> Vec<PaneRow> {
             self.panes.clone()
+        }
+        fn row(&self, id: &str) -> Option<PaneRow> {
+            self.panes.iter().chain(&self.pages).find(|p| p.id == id).cloned()
         }
         fn agents(&self) -> Vec<Agent> {
             self.agents.clone()
@@ -720,6 +730,21 @@ mod tests {
         let wait = format!("'{}' wait p9", std::env::current_exe().unwrap().display());
         assert_eq!(reply, json!({ "paneId": "p9", "commandTyped": true, "commandRun": true, "waitCommand": wait }));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Claude in a chat tab isn't in a pane, yet its terminal goes beside it, in its project, and it isn't listed as a pane.
+    #[test]
+    fn open_pane_from_a_chat_tab_goes_beside_the_tab() {
+        let host = Fake {
+            panes: vec![row("p1", "s1", "/work/app")],
+            pages: vec![row("tab-4", "s1", "/work/app")],
+            spaces: vec![space("s1", "app", "/work/app")].into(),
+            ..Fake::default()
+        };
+        run(&host, "open_pane", json!({ "command": "make all" }), Some("tab-4")).unwrap();
+        assert_eq!(host.opened.borrow()[0], OpenPlan { space_id: "s1".into(), cwd: None, input: Some("make all".into()), run: false, next_to: Some("tab-4".into()) });
+        let listed: Value = serde_json::from_str(&run(&host, "list_sessions", json!({}), Some("tab-4")).unwrap()).unwrap();
+        assert_eq!(listed["panes"].as_array().unwrap().len(), 1);
     }
 
     #[test]

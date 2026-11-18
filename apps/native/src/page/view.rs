@@ -31,7 +31,7 @@ mod sunburst_view;
 
 use super::{
     plugin::{PageOpener, PluginHost, RESTART_FIRST, RESTART_MOST, RESTART_RESET},
-    runtime::{Event, PageRuntime},
+    runtime::{Event, Message, PageRuntime},
     tree::{self, Align, Gap, Justify, Level, Node, TextSize, Tone, Tree, Weight, plain_text},
 };
 use crate::{terminal_view::DEFAULT_FONT_FAMILY, theme, ui};
@@ -74,6 +74,8 @@ struct InputState {
 thread_local! {
     /// The `textScale` of the `Scroll` being drawn, which its texts' sizes are multiplied by. Read, not computed, per text.
     static TEXT_SCALE: Cell<f32> = const { Cell::new(1.0) };
+    /// A `Stack` being drawn asked for links in its texts (`links: true`).
+    static LINKED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// A text size in points as the `Scroll` being drawn scales it.
@@ -89,6 +91,27 @@ struct FollowScroll {
     max: Cell<Pixels>,
     /// `onReachStart` was sent and what is above hasn't grown since, so it isn't sent again.
     asked: Cell<bool>,
+}
+
+/// The layer of the window that draws the terminals a tab's agent opened, each at the place its page's `Terminal` leaves.
+pub const TERMINALS: &str = "page-terminals";
+
+/// The name of a terminal's place in `TERMINALS`.
+pub fn terminal_slot(pane: usize) -> SharedString {
+    format!("page-terminal-{pane}").into()
+}
+
+/// The pane a `Terminal` node names, when it is one of those the page's tab was handed.
+fn embeddable(handed: &[usize], pane: &str) -> Option<usize> {
+    pane.parse().ok().filter(|pane| handed.contains(pane))
+}
+
+/// The links found in each `Text` with `links: true`, by node id, with the text they were found in, for the links of
+/// `generation`.
+#[derive(Default)]
+struct FoundLinks {
+    generation: u64,
+    by_text: HashMap<u64, (String, Rc<Vec<wings_plugins::links::Found>>)>,
 }
 
 pub struct PageView {
@@ -173,6 +196,16 @@ pub struct PageView {
     pressed_with: RefCell<Option<Option<gpui::FocusHandle>>>,
     /// Fields that left the tree and may still hold the keyboard, as one that takes a field's place asks for it.
     former_inputs: RefCell<Vec<gpui::WeakFocusHandle>>,
+    /// The terminals the agent of the page's tab opened, by pane: the only ones its `Terminal` nodes draw.
+    terminals: Vec<usize>,
+    /// The list of them the page was last told, which a page that starts again is told again.
+    terminals_told: Option<String>,
+    /// A dialog or sheet of the page is over its terminals, which are then not drawn: they draw over the page.
+    terminals_covered: Cell<bool>,
+    found_links: RefCell<FoundLinks>,
+    /// Draws the page's terminals over it, as the workspace does, for the screenshots of a page alone.
+    #[cfg(feature = "test-support")]
+    shot_terminals: Option<Rc<dyn Fn(&mut gpui::App) -> Vec<(SharedString, AnyElement)>>>,
     _events: Task<()>,
 }
 
@@ -209,6 +242,9 @@ impl PageView {
         let (runtime, error, events) = Self::launch(&self.source, cx);
         if let (Some(runtime), Some(shown)) = (&runtime, self.shown.get()) {
             runtime.set_visible(shown);
+        }
+        if let (Some(runtime), Some(told)) = (&runtime, &self.terminals_told) {
+            runtime.inbox().send(Message::Terminals, 0, told.clone());
         }
         self.stopped = runtime.is_none();
         (self.runtime, self.error, self._events) = (runtime, error, events);
@@ -447,12 +483,77 @@ impl PageView {
             gesture_at: Cell::new(None),
             pressed_with: RefCell::new(None),
             former_inputs: RefCell::default(),
+            terminals: Vec::new(),
+            terminals_told: None,
+            terminals_covered: Cell::new(false),
+            found_links: RefCell::default(),
+            #[cfg(feature = "test-support")]
+            shot_terminals: None,
             _events: events,
         };
         if view.stopped {
             view.restart_later(cx);
         }
         view
+    }
+
+    /// The terminals the agent of this page's tab opened, by pane, which its `Terminal` nodes may draw, and the JSON list
+    /// the page hears them as (`terminals`). Nothing is sent when it is what the page heard last.
+    pub fn set_terminals(&mut self, panes: Vec<usize>, json: String, cx: &mut Context<Self>) {
+        if self.terminals_told.as_deref() == Some(json.as_str()) {
+            return;
+        }
+        if let Some(runtime) = &self.runtime {
+            runtime.inbox().send(Message::Terminals, 0, json.clone());
+        }
+        self.terminals = panes;
+        self.terminals_told = Some(json);
+        cx.notify();
+    }
+
+    /// Draws the page's terminals over it with `draw`, as the workspace does, for the screenshots of a page alone.
+    #[cfg(feature = "test-support")]
+    pub fn draw_terminals_for_shots(
+        &mut self,
+        draw: impl Fn(&mut gpui::App) -> Vec<(SharedString, AnyElement)> + 'static,
+    ) {
+        self.shot_terminals = Some(Rc::new(draw));
+    }
+
+    /// Where a `Terminal` shows: the workspace draws the terminal over this place, in the `TERMINALS` layer, so what it
+    /// prints never draws the page again. One the tab wasn't handed draws a line saying so, and one under the page's own
+    /// dialog or sheet is left out, as it would draw over them.
+    fn terminal(&self, terminal: &tree::Terminal) -> AnyElement {
+        let Some(pane) = embeddable(&self.terminals, &terminal.pane) else {
+            return div()
+                .text_size(px(12.0))
+                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .child("Only a terminal this tab's agent opened shows here.")
+                .into_any_element();
+        };
+        let place = div().w_full().flex_none().h(px(terminal.height));
+        if self.terminals_covered.get() {
+            return place.into_any_element();
+        }
+        place.child(ui::slot(TERMINALS, terminal_slot(pane), None)).into_any_element()
+    }
+
+    /// The links in the text of `id`, found once for each text and set of links rather than each time the page draws.
+    fn found_links(&self, id: u64, text: &str, rules: &[wings_plugins::links::Rule], generation: u64) -> Rc<Vec<wings_plugins::links::Found>> {
+        let mut cache = self.found_links.borrow_mut();
+        // A long chat's texts come and go: a bound on what is kept, past which it starts over.
+        if cache.generation != generation || cache.by_text.len() > 4096 {
+            cache.generation = generation;
+            cache.by_text.clear();
+        }
+        if let Some((seen, found)) = cache.by_text.get(&id)
+            && seen.as_str() == text
+        {
+            return found.clone();
+        }
+        let found = Rc::new(wings_plugins::links::find(text, rules));
+        cache.by_text.insert(id, (text.to_owned(), found.clone()));
+        found
     }
 
     fn send(&self, handler: &str, payload: Option<&serde_json::Value>) {
@@ -1070,6 +1171,10 @@ impl PageView {
                         let took = Node::Str { id: text.id, text: format!(" · {}", took(since, now)) };
                         el.child(self.inline(&[text.children.clone(), vec![took]].concat(), cx))
                     }
+                    None if text.links || LINKED.with(Cell::get) => el.child(
+                        self.linked_text(&text.children, text.id, cx)
+                            .unwrap_or_else(|| self.inline(&text.children, cx)),
+                    ),
                     None => el.child(self.inline(&text.children, cx)),
                 },
             );
@@ -1243,21 +1348,28 @@ impl PageView {
                     .into_any_element()
             }
             Node::Toolbar(toolbar) => self.toolbar(toolbar, cx),
-            Node::Stack(stack) => div()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap(px(gap(stack.gap)))
-                .when(stack.grow, |el| el.flex_1())
-                .when_some(stack.width, |el, width| el.w(px(width)).flex_none())
-                .when_some(stack.max_width, |el, width| {
-                    el.w_full().max_w(px(width)).mx_auto()
-                })
-                .map(|el| match stack.enter {
-                    true => el.children(stack.children.iter().map(|child| self.rising(child, cx))),
-                    false => el.children(self.items(&stack.children, cx)),
-                })
-                .into_any_element(),
+            Node::Stack(stack) => {
+                // The texts it holds find links when it asks, as a Scroll's take its `textScale`.
+                let before = LINKED.with(Cell::get);
+                LINKED.with(|cell| cell.set(before || stack.links));
+                let element = div()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(gap(stack.gap)))
+                    .when(stack.grow, |el| el.flex_1())
+                    .when_some(stack.width, |el, width| el.w(px(width)).flex_none())
+                    .when_some(stack.max_width, |el, width| {
+                        el.w_full().max_w(px(width)).mx_auto()
+                    })
+                    .map(|el| match stack.enter {
+                        true => el.children(stack.children.iter().map(|child| self.rising(child, cx))),
+                        false => el.children(self.items(&stack.children, cx)),
+                    })
+                    .into_any_element();
+                LINKED.with(|cell| cell.set(before));
+                element
+            }
             Node::Row(row) => self.row(row, cx),
             Node::Text(text) => self.text_element(text, None, cx),
             Node::Button(button) => self.button(button, 0.0, cx),
@@ -1503,6 +1615,7 @@ impl PageView {
             // Drawn over the whole page by `render`, not where it sits.
             Node::Dialog(_) => div().into_any_element(),
             Node::Sheet(sheet) => self.sheet(sheet, cx),
+            Node::Terminal(terminal) => self.terminal(terminal),
         }
     }
 
@@ -1924,11 +2037,23 @@ impl Render for PageView {
             .filter(|(_, focus)| focus.contains_focused(window, cx))
             .map(|(id, _)| *id)
             .collect();
-        let body = self
-            .tree
-            .as_ref()
-            .map(|tree| self.nodes(&tree.children, cx))
-            .unwrap_or_default();
+        let tree_nodes = |view: &Self, cx: &mut Context<Self>| {
+            view.tree
+                .as_ref()
+                .map(|tree| view.nodes(&tree.children, cx))
+                .unwrap_or_default()
+        };
+        let body = if self.terminals.is_empty() {
+            tree_nodes(self, cx)
+        } else {
+            self.terminals_covered.set(
+                dialog.is_some() || self.tree.as_ref().is_some_and(|tree| sheet_in(&tree.children)),
+            );
+            // Its terminals' places are kept from this draw until the page draws again, which a terminal's output doesn't
+            // make it do.
+            let id = window.window_handle().window_id();
+            ui::drawing_piece(TERMINALS, id, || tree_nodes(self, cx))
+        };
         let overlay = dialog
             .and(self.tree.as_ref())
             .and_then(|tree| dialog_in(&tree.children))
@@ -1980,6 +2105,13 @@ impl Render for PageView {
         // Names this page in the focused control's key contexts, so Tab can tell when focus has left it.
         let mut page_context = gpui::KeyContext::default();
         page_context.set(PAGE_CONTEXT, cx.entity_id().to_string());
+        #[cfg(feature = "test-support")]
+        let shot_terminals = self
+            .shot_terminals
+            .clone()
+            .map(|draw| ui::slot_layer(TERMINALS, draw(cx)).into_any_element());
+        #[cfg(not(feature = "test-support"))]
+        let shot_terminals: Option<AnyElement> = None;
         div()
             .id("native-page")
             .capture_any_mouse_down(cx.listener(|view, _, window, cx| {
@@ -2061,7 +2193,15 @@ impl Render for PageView {
                 )
             })
             .children(overlay)
+            .children(shot_terminals)
     }
+}
+
+/// Whether the page shows a sheet, wherever in its tree.
+fn sheet_in(nodes: &[Node]) -> bool {
+    nodes
+        .iter()
+        .any(|node| matches!(node, Node::Sheet(_)) || node.parts().into_iter().any(sheet_in))
 }
 
 /// The dialog the page shows, wherever in its tree it put it.
@@ -2347,4 +2487,15 @@ fn a_status_line_counts_seconds_then_minutes_then_hours() {
     assert_eq!(took(at, at + 3_840_000), "1h 4m");
     // A clock that steps back reads as no time, not a negative one.
     assert_eq!(took(at, at - 5_000), "0s");
+}
+
+/// A page draws a terminal only by the id of one its tab was handed: any other pane, or a word it made up, is none.
+#[cfg(test)]
+#[test]
+fn a_page_embeds_only_a_terminal_its_tab_was_handed() {
+    assert_eq!(embeddable(&[3, 7], "7"), Some(7));
+    assert_eq!(embeddable(&[3, 7], "4"), None);
+    assert_eq!(embeddable(&[], "3"), None);
+    assert_eq!(embeddable(&[3], "tab-3"), None);
+    assert_eq!(embeddable(&[3], ""), None);
 }

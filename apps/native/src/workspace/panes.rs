@@ -470,6 +470,9 @@ impl Workspace {
 
     /// Ends the pane's shell. The pane before it takes focus, and the tab closes with its last pane.
     pub fn close_pane(&mut self, pane: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.close_page_terminal(pane, cx) {
+            return;
+        }
         let Some(index) = self
             .terminals
             .iter()

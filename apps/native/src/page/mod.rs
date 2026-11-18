@@ -9,6 +9,8 @@
 
 #[cfg(feature = "ui")]
 pub mod images;
+#[cfg(feature = "ui")]
+pub mod links;
 pub mod log;
 pub mod plugin;
 pub mod runtime;
@@ -19,4 +21,8 @@ pub mod tree;
 mod view;
 
 #[cfg(feature = "ui")]
-pub use view::PageView;
+mod terminal_card;
+#[cfg(feature = "ui")]
+pub use terminal_card::terminal_card;
+#[cfg(feature = "ui")]
+pub use view::{PageView, TERMINALS, terminal_slot};

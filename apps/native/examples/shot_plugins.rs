@@ -1094,7 +1094,21 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         user("Show me the rounding fix."),
         text("Work in cents and round once at the end:\n\n```ts\nconst cents = Math.round(total * 100);\nreturn Math.round(cents * (1 - rate)) / 100;\n```\n\nThat keeps `100 * 0.9` at exactly 90."),
     ]);
-    let scenes: [Scene; 51] = [
+    // Claude ran a build with Wings' open_pane: the terminal shows live in the side panel, which stays open in a narrow tab.
+    let built = opened(vec![
+        init.clone(),
+        user("Build the shop and tell me when it's done."),
+        tool("o1", "mcp__wings__open_pane", json!({ "command": "make all", "run": true })),
+        output("o1", "{\"paneId\":\"1\",\"commandTyped\":true,\"commandRun\":true}", false),
+        text("The build runs in the terminal beside the chat. I'll tell you when it finishes."),
+    ]);
+    // Words that name something in Wings: two keys of issues there are, a dev server's address, and near misses.
+    let linked = opened(vec![
+        init.clone(),
+        user("What's left on the checkout work?"),
+        text("ABC-12 is done: the discount rounds in cents now. ABC-14 still needs its tests (`ABC-14` on the board), and the dev server runs at http://localhost:5173 if you want to try the cart.\n\n- UTF-8 handling is unchanged\n- ABC-99 was never filed"),
+    ]);
+    let scenes: [Scene; 53] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -1178,6 +1192,10 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         ("export", work, None, Some("type:/export;keys:enter"), "Copy to clipboard"),
         // Each reply and each code block has a Copy button.
         ("copy", copyable, None, None, "at exactly 90"),
+        // Issue keys Issues knows and a dev server's address are links; UTF-8 and a key never filed aren't.
+        ("links", linked, None, None, "never filed"),
+        // The terminal Claude opened, live in the side panel with what it runs and buttons to open it as a tab and close it.
+        ("terminal", built, None, None, "beside the chat"),
     ];
     // Files for @-mentions, which the chat lists with git.
     for file in ["src/checkout.ts", "src/checkout.test.ts", "src/cart.ts", "api/limits.ts", "README.md"] {
@@ -1225,6 +1243,27 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
     wings_native::page::runtime::wasm::compile_now(&page.to_string_lossy()).unwrap();
     let source = format!("{}{}", wings_native::page::runtime::wasm::MARKER, page.display());
     let mut cx = app();
+    // The links Wings gives the pages with Issues and Dev servers on: the keys of the issues there are, and local addresses.
+    let link = |id: &str, pattern: &str| wings_plugins::manifest::Link {
+        id: id.into(),
+        title: id.into(),
+        pattern: pattern.into(),
+        view: String::new(),
+        arg: String::new(),
+        url: true,
+    };
+    let keys = std::sync::Arc::new(wings_plugins::links::words(&["ABC-12".into(), "ABC-14".into()]).unwrap());
+    let rules = vec![
+        wings_plugins::links::Rule::new("tasks", &link("issue", "[A-Z]{1,3}-[0-9]{1,9}"), Some(keys)).unwrap(),
+        wings_plugins::links::Rule::new("dev-servers", &link("local", "http://localhost:[0-9]{2,5}"), None).unwrap(),
+    ];
+    cx.update(|cx| {
+        cx.set_global(wings_native::page::links::PageLinks {
+            rules: std::sync::Arc::new(rules),
+            generation: 1,
+            open: std::rc::Rc::new(|_: wings_native::page::links::LinkTarget, _: &mut gpui::Window, _: &mut gpui::App| {}),
+        })
+    });
     // `CHAT_SCENE=<name>` renders that scene alone.
     let only = std::env::var("CHAT_SCENE").ok();
     for (name, lines, exit, act, expected) in scenes {
@@ -1295,7 +1334,7 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
             std::env::set_var("CHAT_STDERR", exit.map_or("", |(_, said)| said));
         }
         // The side panel is left out of a tab under 1,100 points, so a few scenes are drawn wider to show it.
-        let widths: &[f32] = if ["conversation", "work", "ask-bash", "tasks"].contains(&name) { &[1280.0, 1000.0, 640.0] } else { &[1000.0, 640.0] };
+        let widths: &[f32] = if ["conversation", "work", "ask-bash", "tasks", "terminal"].contains(&name) { &[1280.0, 1000.0, 640.0] } else { &[1000.0, 640.0] };
         for &width in widths {
             let args = (name == "long").then(|| json!({ "resume": LONG, "cwd": root.canonicalize().unwrap() }));
             let handle = cx
@@ -1303,6 +1342,25 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
                 .unwrap();
             let window = handle.into();
             handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
+            if name == "terminal" {
+                // What the workspace does over the page: it hands the tab the terminal its agent opened, and draws it there,
+                // here over made-up output of a build, in a shell of its own rather than the scene's fake one.
+                let printed = b"$ make all\r\n  Compiling shop v0.4.0 (/work/shop)\r\n  Compiling checkout v0.4.0\r\n  Compiling cart v0.4.0\r\n    Building [=========>       ] 41/63: cart\r\n".to_vec();
+                // SAFETY: nothing else reads the environment while the shell starts.
+                unsafe { std::env::set_var("SHELL", "/bin/sh") };
+                handle
+                    .update(&mut cx, |view, _, cx| {
+                        let terminal = wings_native::terminal_view::TerminalView::open(root.clone(), printed.clone(), None, cx).unwrap();
+                        let listed = json!([{ "paneId": "1", "title": "make all", "running": true }]).to_string();
+                        view.set_terminals(vec![1], listed, cx);
+                        view.draw_terminals_for_shots(move |_| {
+                            let card = wings_native::page::terminal_card(1, "make all".into(), true, terminal.clone(), |_, _| {}, |_, _| {});
+                            vec![(wings_native::page::terminal_slot(1), card)]
+                        });
+                    })
+                    .unwrap();
+                unsafe { std::env::set_var("SHELL", root.join("shell")) };
+            }
             let until = |cx: &mut VisualTestAppContext, expected: &str| {
                 let deadline = Instant::now() + Duration::from_secs(30);
                 while !handle.read_with(cx, |view, _| view.text().contains(expected)).unwrap() {

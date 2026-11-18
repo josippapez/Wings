@@ -58,6 +58,9 @@ pub(super) struct Snapshot {
     shells: HashMap<u32, String>,
     /// The panes whose program is running something rather than sitting at its prompt.
     busy: Vec<String>,
+    /// The plugin tabs whose agent, like a chat's Claude, has the terminals it opens in the tab's page. Its programs are
+    /// in `shells`, so a call from it comes from the tab, though it isn't a pane.
+    pages: Vec<PaneRow>,
 }
 
 impl Snapshot {
@@ -73,7 +76,7 @@ impl Snapshot {
     fn caller(&self, pane: Option<String>) -> ClaudeCaller {
         let row = pane
             .as_ref()
-            .and_then(|id| self.panes.iter().find(|p| &p.id == id));
+            .and_then(|id| self.panes.iter().chain(&self.pages).find(|p| &p.id == id));
         let space = row.and_then(|row| self.spaces.iter().find(|s| s.id == row.space_id));
         let agent = pane
             .as_ref()
@@ -111,11 +114,17 @@ impl Workspace {
                 }
             })
             .collect();
-        let shells = self
+        let mut shells: HashMap<u32, String> = self
             .pane_shells(cx)
             .into_iter()
             .filter_map(|(id, pid)| Some((pid?, id)))
             .collect();
+        let pages = self.page_callers();
+        for (row, pids) in &pages {
+            for pid in pids {
+                shells.insert(*pid, row.id.clone());
+            }
+        }
         Snapshot {
             panes,
             agents: self.agents.values().cloned().collect(),
@@ -127,6 +136,7 @@ impl Workspace {
                 .filter(|(_, info)| info.busy)
                 .map(|(id, _)| id.to_string())
                 .collect(),
+            pages: pages.into_iter().map(|(row, _)| row).collect(),
         }
     }
 
@@ -159,6 +169,18 @@ impl Workspace {
             .next_to
             .as_deref()
             .and_then(|pane| self.plugin_pane(pane));
+        // From the agent of a plugin tab, like a chat, whose page shows the terminals it opens.
+        let page = plan
+            .next_to
+            .as_deref()
+            .and_then(super::agent_terminals::page_of_caller)
+            .filter(|tab| self.shows_terminals(*tab));
+        let title = plan.input.clone().unwrap_or_else(|| {
+            let dir = plan.cwd.as_deref().unwrap_or(&plan.space_id);
+            Path::new(dir)
+                .file_name()
+                .map_or_else(|| dir.to_owned(), |name| name.to_string_lossy().into_owned())
+        });
         // Enter only while the user lets Claude run commands in new tabs, as the desktop's `onMcpOpenPane`.
         let ran = plan.run && plan.input.is_some() && self.prefs.agents_run_commands;
         let typed = if ran {
@@ -168,7 +190,7 @@ impl Workspace {
         };
         if let Some(typed) = &typed
             && let Some(pane) =
-                self.reuse_agent_terminal(&project, plan.cwd.clone(), owner, typed, cx)
+                self.reuse_agent_terminal(&project, plan.cwd.clone(), owner, page, typed, cx)
         {
             return Ok(Opened {
                 pane_id: pane.to_string(),
@@ -195,11 +217,12 @@ impl Workspace {
             claude_account: None,
         };
         let owner = owner.filter(|_| tab.is_some());
-        let pane = match (tab, owner) {
-            (Some(tab), Some(owner)) => self.open_agent_split(tab, owner, open, window, cx)?,
+        let pane = match (page, tab, owner) {
+            (Some(page), ..) => self.open_page_terminal(page, open, title, window, cx)?,
+            (None, Some(tab), Some(owner)) => self.open_agent_split(tab, owner, open, window, cx)?,
             _ => self.place_plugin_pane(open, window, cx)?.0,
         };
-        self.note_agent_terminal(pane, project, plan.cwd, owner);
+        self.note_agent_terminal(pane, project, plan.cwd, owner, page);
         Ok(Opened {
             pane_id: pane.to_string(),
             ran,
@@ -222,6 +245,7 @@ impl Workspace {
             .terminals
             .iter()
             .any(|tab| tab.layout.panes().contains(&id))
+            && !self.is_page_terminal(id)
         {
             return Err(format!(
                 "Pane {pane} is in a project that isn't on screen. Close it there."
@@ -554,6 +578,11 @@ struct NativeHost<'a> {
 impl Host for NativeHost<'_> {
     fn panes(&self) -> Vec<PaneRow> {
         self.snapshot.panes.clone()
+    }
+
+    fn row(&self, id: &str) -> Option<PaneRow> {
+        let mut rows = self.snapshot.panes.iter().chain(&self.snapshot.pages);
+        rows.find(|row| row.id == id).cloned()
     }
 
     fn agents(&self) -> Vec<Agent> {
@@ -969,4 +998,27 @@ impl Workspace {
         self.claude.accounts = Some(accounts);
         cx.notify();
     }
+}
+
+/// Claude in a chat tab runs as a program the tab's page started, under no pane's shell: a call from it comes from the tab,
+/// in the tab's project, which plugins' tools are told.
+#[cfg(test)]
+#[test]
+fn a_call_from_a_program_a_tabs_page_runs_comes_from_that_tab() {
+    let program = std::process::id();
+    let snapshot = Snapshot {
+        shells: HashMap::from([(program, "tab-4".to_owned())]),
+        spaces: vec![serde_json::from_value(json!({ "id": "/work/shop", "name": "shop", "path": "/work/shop" })).unwrap()],
+        pages: vec![PaneRow {
+            id: "tab-4".into(),
+            space_id: "/work/shop".into(),
+            cwd: "/work/shop".into(),
+            command: None,
+            title: "Chat".into(),
+        }],
+        ..Snapshot::default()
+    };
+    let pane = snapshot.pane(Some(program), None);
+    assert_eq!(pane.as_deref(), Some("tab-4"));
+    assert_eq!(snapshot.caller(pane).project["path"], "/work/shop");
 }

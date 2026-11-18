@@ -374,6 +374,11 @@ fn main() {
     if std::env::args().nth(2).as_deref() == Some("plugins-agent") {
         return plugins_agent(&mut cx, &config, &out);
     }
+    // `-- <out-dir> plugins-terminals` renders only a chat's page with the terminal its agent opened in its side panel, and
+    // an issue key in its message as a link.
+    if std::env::args().nth(2).as_deref() == Some("plugins-terminals") {
+        return plugins_terminals(&mut cx, &config, &out);
+    }
     // `-- <out-dir> plugins-modal` renders only a plugin's view that opens as a modal, over the window.
     if std::env::args().nth(2).as_deref() == Some("plugins-modal") {
         return plugins_modal(&mut cx, &config, &out);
@@ -2367,6 +2372,99 @@ fn plugins_agent(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         let window: AnyWindowHandle = handle.into();
         wait(cx, window, Duration::from_secs(3));
         save(cx, window, &out.join(format!("plugins-agent-{width}.png")));
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+    }
+}
+
+/// A made-up chat in a tab, laid out as Claude chat's: its message on the left, and on the right the terminal its agent
+/// opened with Wings' `open_pane`, which Wings draws live there. An issue tracker that is on makes the key in the message a
+/// link.
+fn plugins_terminals(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+    use serde_json::json;
+    let data = Data::temp();
+    let main = fake::script("main", || {
+        let mut opened = false;
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            if let Hear::Deliver("panes", _, _) = hear
+                && !std::mem::replace(&mut opened, true)
+            {
+                cx.call("openView", json!({ "id": "chat", "as": "tab", "newTab": true }));
+            }
+        }
+    });
+    let page = fake::script("page", || {
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            let panes: Vec<String> = match hear {
+                Hear::Start => Vec::new(),
+                Hear::Deliver("terminals", _, text) => serde_json::from_str::<serde_json::Value>(text)
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|terminal| terminal["paneId"].as_str().unwrap().to_owned())
+                    .collect(),
+                _ => return,
+            };
+            let terminals: Vec<serde_json::Value> = panes
+                .iter()
+                .enumerate()
+                .map(|(at, pane)| json!({ "id": 100 + at, "type": "Terminal", "props": { "pane": pane, "height": 240 } }))
+                .collect();
+            let said = "The build for ABC-12 runs in the terminal beside the chat. I'll tell you when it finishes.";
+            cx.render(&json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+                { "id": 1, "type": "Page", "props": { "flush": true }, "children": [
+                    { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [
+                        { "id": 3, "type": "Split", "props": { "side": "end", "defaultSize": 260, "collapseBelow": 1100, "pinned": !panes.is_empty() }, "children": [
+                            { "id": 4, "type": "Slot", "props": { "name": "start" }, "children": [
+                                { "id": 5, "type": "Scroll", "props": {}, "children": [
+                                    { "id": 6, "type": "Stack", "props": { "gap": "l", "maxWidth": 760, "links": true }, "children": [
+                                        { "id": 7, "type": "Text", "props": { "grow": true }, "children": [{ "id": 8, "type": "#text", "text": said }] }
+                                    ] }
+                                ] }
+                            ] },
+                            { "id": 9, "type": "Slot", "props": { "name": "end" }, "children": terminals }
+                        ] }
+                    ] }
+                ] }
+            ] }));
+        }
+    });
+    data.install_script(
+        "chat",
+        json!({ "name": "Claude chat", "contributes": { "ui": ["agents", "terminals"], "views": [{ "id": "chat", "title": "Claude",
+            "page": "dist/chat.html", "opens": ["tab"], "newTab": true, "button": false }] } }),
+        &main,
+        &[("chat", &page)],
+        "chat-scope",
+    );
+    data.install_script(
+        "tracker",
+        json!({ "name": "Tracker", "contributes": {
+            "views": [{ "id": "issue", "title": "Issue", "page": "dist/issue.html", "opens": ["tab"], "button": false }],
+            "links": [{ "id": "issue", "title": "Issue", "pattern": "[A-Z]{1,3}-[0-9]{1,9}", "view": "issue", "arg": "key" }] } }),
+        &fake::idle("main"),
+        &[("issue", &fake::idle("page"))],
+        "tracker-scope",
+    );
+    let mut config = base.clone();
+    config.plugins = Some(data.paths());
+    for width in [1280.0, 640.0] {
+        let config = config.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        wait(cx, window, Duration::from_secs(2));
+        handle
+            .update(cx, |workspace, window, cx| {
+                let tab = workspace.plugin_tab_ids()[0];
+                workspace.sample_page_terminal(tab, "for step in fetch compile link; do echo $step; done", window, cx);
+            })
+            .expect("the chat's agent opens a terminal");
+        wait(cx, window, Duration::from_secs(2));
+        save(cx, window, &out.join(format!("plugins-terminals-{width}.png")));
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
     }
 }

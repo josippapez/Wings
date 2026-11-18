@@ -38,7 +38,8 @@
     },
     "ui": [
       "agents",
-      "badges"
+      "badges",
+      "terminals"
     ],
     "projectSections": [
       {

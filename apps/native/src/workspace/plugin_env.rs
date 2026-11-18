@@ -338,6 +338,8 @@ pub(super) struct AppEnv {
     pub(super) clients: Arc<wings_connect::server::Clients>,
     /// The past sessions the Past Sessions sheet lists, for `wings.pastSessions`.
     sessions: super::history::Sessions,
+    /// The words plugins narrowed their links to, by plugin and link (`wings.setLinkWords`).
+    pub(super) link_words: Mutex<HashMap<(String, String), Arc<HashSet<String>>>>,
 }
 
 impl AppEnv {
@@ -393,6 +395,7 @@ impl AppEnv {
             store: store.map(|store| Arc::new(Mutex::new(store))),
             clients: Arc::default(),
             sessions,
+            link_words: Mutex::default(),
         }
     }
 
@@ -770,6 +773,18 @@ impl Env for AppEnv {
             page: page.to_owned(),
             label,
         });
+    }
+
+    fn set_link_words(&self, plugin: &str, link: &str, words: Option<HashSet<String>>) {
+        let key = (plugin.to_owned(), link.to_owned());
+        {
+            let mut known = self.link_words.lock().unwrap();
+            match words {
+                Some(words) => known.insert(key, Arc::new(words)),
+                None => known.remove(&key),
+            };
+        }
+        self.send(UiEvent::Run(Box::new(|workspace, _, cx| workspace.refresh_links(cx))));
     }
 
     fn set_project_section(
@@ -1360,6 +1375,7 @@ impl Workspace {
                     .into_iter()
                     .map(move |pane| (pane, path.as_path()))
             })
+            .chain(self.page_terminal_projects())
             .filter(|(pane, _)| self.panes.contains_key(pane))
             .collect();
         panes.sort_unstable_by_key(|(pane, _)| *pane);

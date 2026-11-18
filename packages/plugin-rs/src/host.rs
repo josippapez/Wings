@@ -259,6 +259,19 @@ pub fn on_panes(listener: impl Fn(&[Value]) + 'static) {
     }
 }
 
+/// The terminals the agent of this tab's page opened with Wings' `open_pane`, each `{ paneId, title, running }`, now and
+/// on every change, for a page whose plugin declares `terminals` in `contributes.ui`. A `Terminal` node with a `pane`
+/// from it draws that terminal live. Needs Wings 0.2.40.
+pub fn on_terminals(listener: impl Fn(&[Value]) + 'static) {
+    on("terminals", move |_, list| listener(list.as_array().map(Vec::as_slice).unwrap_or_default()));
+}
+
+/// `wings.setLinkWords`: the link `id` of the plugin's `contributes.links` finds only `words` from now on, like the issue
+/// keys there are, or with `None` whatever its pattern matches. Needs Wings 0.2.40.
+pub async fn set_link_words(id: &str, words: Option<&[String]>) -> Result<(), String> {
+    call("setLinkWords", json!({ "id": id, "words": words })).await.map(drop)
+}
+
 type Sent = std::thread::LocalKey<RefCell<HashMap<String, String>>>;
 
 /// Sends `value` for the pane only when it differs from the last one sent, which `sent` keeps. One the host refuses

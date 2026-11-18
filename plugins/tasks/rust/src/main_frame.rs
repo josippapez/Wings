@@ -121,6 +121,26 @@ mod tests {
         assert!(block_on(answer("explode".into(), json!({}))).unwrap_err().contains("doesn't do explode"));
     }
 
+    /// Wings links a word in a chat's message to Issues only when it is the key of an issue there is.
+    #[test]
+    fn the_keys_of_the_issues_are_the_words_wings_links() {
+        memory::reset(&[]);
+        let said = std::rc::Rc::new(RefCell::new(Vec::new()));
+        let seen = said.clone();
+        host::testing::answer(move |method, params| {
+            if method == "setLinkWords" {
+                seen.borrow_mut().push(params.clone());
+            }
+            Ok(Value::Null)
+        });
+        ask("proj7", "links", json!({ "kind": "create", "title": "First" })).unwrap();
+        ask("proj7", "links", json!({ "kind": "create", "title": "Second" })).unwrap();
+        let count = said.borrow().len();
+        ask("proj7", "links", json!({ "kind": "update", "key": "LIN-1", "title": "First, renamed" })).unwrap();
+        assert_eq!(said.borrow().last(), Some(&json!({ "id": "issue", "words": ["LIN-1", "LIN-2"] })));
+        assert_eq!(said.borrow().len(), count, "an edit that keeps the keys tells Wings nothing");
+    }
+
     #[test]
     fn the_projects_section_shows_its_open_issues_after_a_change_and_is_filled_when_wings_lists_the_projects() {
         memory::reset(&[]);

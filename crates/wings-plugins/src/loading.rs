@@ -14,8 +14,8 @@ use crate::{
     fetch::{fetch_prefix_ok, fetch_rule, open_url_prefix_ok, valid_secret_name},
     log_line,
     manifest::{
-        Contributes, Manifest, Permissions, Plugin, SectionSort, BLOCK_MIN_HEIGHT, HOOK_EVENTS, MAX_BLOCKS, MAX_MCP_INSTRUCTIONS, PANEL_ICONS, POPOVER_HEIGHT,
-        POPOVER_WIDTH, RESUMABLE_AGENTS, UI_KINDS, VIEW_PLACES,
+        Contributes, Manifest, Permissions, Plugin, SectionSort, BLOCK_MIN_HEIGHT, HOOK_EVENTS, MAX_BLOCKS, MAX_LINKS, MAX_MCP_INSTRUCTIONS, PANEL_ICONS,
+        POPOVER_HEIGHT, POPOVER_WIDTH, RESUMABLE_AGENTS, UI_KINDS, VIEW_PLACES,
     },
     panes::plain_word,
     post::post_entry,
@@ -251,6 +251,24 @@ fn check_contributes(dir: &Path, contributes: &Contributes) -> Result<(), String
     }
     if let Some(settings) = &contributes.settings {
         check_page(dir, "settings", &settings.page)?;
+    }
+    if contributes.links.len() > MAX_LINKS {
+        return Err(format!("at most {MAX_LINKS} links"));
+    }
+    for (i, link) in contributes.links.iter().enumerate() {
+        let used_twice = contributes.links[..i].iter().any(|l| l.id == link.id);
+        check_entry("link", &link.id, &link.title, "", used_twice)?;
+        crate::links::compile(&link.pattern).map_err(|error| format!("link {:?}: {error}", link.id))?;
+        let tab_view = contributes.views.iter().any(|v| v.id == link.view && v.opens.iter().any(|o| o == "tab"));
+        let arg = !link.arg.is_empty() && link.arg.len() <= 32 && link.arg.bytes().all(|b| b.is_ascii_alphanumeric());
+        let opens_view = !link.url && tab_view && arg;
+        let opens_url = link.url && link.view.is_empty() && link.arg.is_empty();
+        if !opens_view && !opens_url {
+            return Err(format!(
+                "link {:?} opens one of the plugin's views that open as a tab, with an arg of up to 32 letters and digits, or with url: true the text itself",
+                link.id
+            ));
+        }
     }
     Ok(())
 }
@@ -645,6 +663,49 @@ mod tests {
         }
         let plain = manifest(serde_json::json!([])).unwrap();
         assert!(serde_json::to_value(&plain.manifest.contributes).unwrap().get("blocks").is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn links_are_checked_and_stay_out_of_older_manifests() {
+        let dir = std::env::temp_dir().join(format!("wings-links-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        for file in ["main.js", "issue.html"] {
+            fs::write(dir.join(file), "").unwrap();
+        }
+        let manifest = |links: Value| {
+            let views = serde_json::json!([{ "id": "issue", "title": "Issue", "page": "issue.html", "opens": ["tab"] }, { "id": "side", "title": "Side", "page": "issue.html" }]);
+            let m = serde_json::json!({ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js", "contributes": { "views": views, "links": links } });
+            fs::write(dir.join("wings-plugin.json"), m.to_string()).unwrap();
+            load(&dir)
+        };
+        let issue = serde_json::json!({ "id": "issue", "title": "Issue", "pattern": "[A-Z]{1,3}-[0-9]{1,9}", "view": "issue", "arg": "key" });
+        let local = serde_json::json!({ "id": "local", "title": "Dev server", "pattern": "http://localhost:[0-9]{2,5}", "url": true });
+        let ok = manifest(serde_json::json!([issue, local])).unwrap();
+        let links = &ok.manifest.contributes.links;
+        assert_eq!((links[0].arg.as_str(), links[1].url, links[1].view.as_str()), ("key", true, ""));
+        let with = |change: Value| {
+            let mut link = issue.clone();
+            link.as_object_mut().unwrap().extend(change.as_object().unwrap().clone());
+            serde_json::json!([link])
+        };
+        for (bad, error) in [
+            (with(serde_json::json!({ "view": "side" })), "open as a tab"),
+            (with(serde_json::json!({ "view": "missing" })), "open as a tab"),
+            (with(serde_json::json!({ "arg": "" })), "open as a tab"),
+            (with(serde_json::json!({ "arg": "a.b" })), "open as a tab"),
+            (with(serde_json::json!({ "url": true })), "open as a tab"),
+            (with(serde_json::json!({ "pattern": "x*" })), "matches empty text"),
+            (with(serde_json::json!({ "pattern": "(" })), "isn't a regular expression"),
+            (with(serde_json::json!({ "id": "Bad Id" })), "needs an id"),
+            (serde_json::json!([issue, issue]), "used twice"),
+            (serde_json::json!((0..9).map(|i| { let mut l = issue.clone(); l["id"] = format!("l{i}").into(); l }).collect::<Vec<_>>()), "at most 8"),
+        ] {
+            assert!(manifest(bad.clone()).err().unwrap().contains(error), "{bad}");
+        }
+        // Without them `contributes` serializes as before, so plugins approved earlier keep their grant.
+        let plain = manifest(serde_json::json!([])).unwrap();
+        assert!(serde_json::to_value(&plain.manifest.contributes).unwrap().get("links").is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 

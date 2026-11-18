@@ -179,6 +179,7 @@ pub enum Node {
     Sunburst(Sunburst),
     Dialog(Dialog),
     Sheet(Sheet),
+    Terminal(Terminal),
 }
 
 /// A named part of the component it's in.
@@ -215,6 +216,8 @@ pub struct Stack {
     pub max_width: Option<f32>,
     /// `enter: "rise"`: a child that wasn't there before fades in and rises into place, as a chat's new message does.
     pub enter: bool,
+    /// `links: true`: every `Text` in it finds Wings' links, as one with `links: true` does.
+    pub links: bool,
     pub children: Vec<Node>,
 }
 
@@ -250,7 +253,18 @@ pub struct Text {
     /// Milliseconds since the epoch: the text ends with how long ago that was, counting up while it shows, as in
     /// "Running pnpm test · 16s". The app counts, so the page needn't send a new tree each second.
     pub since: Option<i64>,
+    /// `links: true`: words in it that a plugin that is on declares in `contributes.links` are links to that plugin.
+    pub links: bool,
     pub children: Vec<Node>,
+}
+
+/// A terminal the agent of the page's tab opened, by its pane id, drawn live where the node is, `height` points tall.
+/// The app draws only a terminal it handed to that tab, and nothing for any other.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Terminal {
+    pub id: u64,
+    pub pane: String,
+    pub height: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -864,6 +878,7 @@ impl Node {
             Node::Sunburst(n) => Some(n.id),
             Node::Dialog(n) => Some(n.id),
             Node::Sheet(n) => Some(n.id),
+            Node::Terminal(n) => Some(n.id),
         }
     }
 
@@ -899,7 +914,8 @@ impl Node {
             | Node::Graph(_)
             | Node::Avatar(_)
             | Node::Skeleton(_)
-            | Node::Sunburst(_) => vec![],
+            | Node::Sunburst(_)
+            | Node::Terminal(_) => vec![],
             Node::Scroll(n) => vec![&n.children],
             Node::Split(n) => vec![&n.start, &n.end],
             Node::Bar(n) => vec![&n.children],
@@ -1002,6 +1018,7 @@ impl Walk {
                 | "Menu"
                 | "Dialog"
                 | "Sheet"
+                | "Terminal"
         ) {
             return Ok(None);
         }
@@ -1047,6 +1064,7 @@ impl Walk {
                     .filter(|width| *width > 0.0)
                     .map(|width| width as f32),
                 enter: str_prop(&props, "enter") == Some("rise"),
+                links: on("links"),
                 children: parts(children),
             }),
             "Row" => Node::Row(Row {
@@ -1074,7 +1092,13 @@ impl Walk {
                 shimmer: on("shimmer"),
                 mark: on("mark"),
                 since: props.get("since").and_then(Value::as_f64).map(|ms| ms as i64),
+                links: on("links"),
                 children: parts(children),
+            }),
+            "Terminal" => Node::Terminal(Terminal {
+                id,
+                pane: str_prop(&props, "pane").filter(|pane| pane.len() <= 20).unwrap_or_default().to_owned(),
+                height: number(&props, "height").unwrap_or(220.0).clamp(80.0, 800.0) as f32,
             }),
             "Avatar" => Node::Avatar(Avatar {
                 id,
@@ -2347,6 +2371,21 @@ mod tests {
         // A width past the bounds is held to them, and a close that isn't a handler is none.
         assert_eq!((dialogs[1].width, dialogs[1].on_close.as_deref()), (1_000.0, None));
         assert_eq!(dialogs[2].width, 280.0);
+    }
+
+    #[test]
+    fn parses_a_terminal_and_a_text_that_asks_for_links() {
+        let parsed = tree(json!([
+            {"id":1,"type":"Terminal","props":{"pane":"12","height":5000}},
+            {"id":2,"type":"Terminal","props":{"pane":"x".repeat(21)}},
+            {"id":3,"type":"Text","props":{"links":true},"children":[{"id":4,"type":"#text","text":"See ABC-12"}]},
+            {"id":5,"type":"Stack","props":{"links":true},"children":[]}
+        ]))
+        .unwrap();
+        assert_eq!(parsed.children[0], Node::Terminal(Terminal { id: 1, pane: "12".into(), height: 800.0 }));
+        assert_eq!(parsed.children[1], Node::Terminal(Terminal { id: 2, pane: String::new(), height: 220.0 }));
+        assert!(matches!(&parsed.children[2], Node::Text(text) if text.links));
+        assert!(matches!(&parsed.children[3], Node::Stack(stack) if stack.links));
     }
 
     #[test]
