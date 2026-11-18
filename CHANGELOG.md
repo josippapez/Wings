@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.33 · 2026-11-18
+
+- **Agents can add schedules again.** The "Allow this?" question Schedules asks before an agent adds or changes a schedule never showed, so every request timed out. Plugin dialogs now open over the window. Schedules 0.8.1 also tells the agent straight away if Wings can't ask you, instead of making it wait.
+
 ## 0.2.32 · 2026-11-18
 
 - **Claude chat's hooks and MCP servers work.** Claude Code in a chat couldn't find programs like node or npx, so its hooks failed and MCP servers didn't connect. Programs a plugin starts now get your shell's PATH.
