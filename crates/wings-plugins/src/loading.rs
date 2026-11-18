@@ -267,10 +267,12 @@ fn check_permissions(permissions: &Permissions) -> Result<(), String> {
         let (_, flags) = exec_entry(e);
         e.matches('[').count() <= 1 && flags.is_none_or(|f| e.trim_end().ends_with(']') && f.iter().all(|w| w.starts_with('-')))
     };
-    if let Some(entry) = permissions.exec.iter().find(|e| !flags_ok(e)) {
-        return Err(format!(
-            "exec entry {entry:?} may end with one [...] listing the flags it allows, like az boards work-item update [--id --state], or [] for none"
-        ));
+    for (name, entries) in [("exec", &permissions.exec), ("processes", &permissions.processes)] {
+        if let Some(entry) = entries.iter().find(|e| !flags_ok(e)) {
+            return Err(format!(
+                "{name} entry {entry:?} may end with one [...] listing the flags it allows, like az boards work-item update [--id --state], or [] for none"
+            ));
+        }
     }
     if let Some(entry) = permissions.post.iter().find(|e| post_entry(e).is_none()) {
         return Err(format!("post entry {entry:?} must be gh, glab or az and an API path, like gh repos/*/*/issues/*/comments"));

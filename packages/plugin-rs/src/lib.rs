@@ -17,6 +17,7 @@ pub mod github;
 pub mod hooks;
 pub mod host;
 pub mod local_time;
+pub mod markdown;
 pub mod messages;
 pub mod poll;
 pub mod remote;
@@ -32,7 +33,13 @@ use std::cell::RefCell;
 thread_local! {
     static VIEW: RefCell<Option<fn() -> Vec<ui::Node>>> = const { RefCell::new(None) };
     static LAST: RefCell<String> = const { RefCell::new(String::new()) };
+    /// Set while a build of the page waits for `OUTPUT_FRAME_MS` to pass.
+    static BUILD_WAITING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
+
+/// How often lines a program prints build the page, at most: 30 times a second, as the app's spinners step. A streaming
+/// agent prints dozens of lines a second, and each build makes and sends the whole page.
+const OUTPUT_FRAME_MS: u32 = 33;
 
 /// Shows what `view` builds as the page. Call it once, from `start`.
 pub fn run(view: fn() -> Vec<ui::Node>) {
@@ -63,6 +70,21 @@ fn settle() {
         // SAFETY: the pointer and length are of a live `String`, which the host copies before this returns.
         unsafe { host::ffi::render(json.as_ptr(), json.len()) };
     }
+}
+
+/// `settle` for a line a program printed: its listeners run now, and the page is built at the end of the frame, once for
+/// all the lines that came in it.
+fn settle_output() {
+    task::run_ready();
+    if BUILD_WAITING.with(|waiting| waiting.replace(true)) {
+        return;
+    }
+    // The timer's turn settles, which builds the page.
+    task::spawn(async {
+        host::sleep(OUTPUT_FRAME_MS).await;
+        BUILD_WAITING.with(|waiting| waiting.set(false));
+    });
+    task::run_ready();
 }
 
 /// A string the host wrote into memory `wings_alloc` gave it.
@@ -103,8 +125,9 @@ pub unsafe extern "C" fn wings_event(handler: *mut u8, handler_len: usize, paylo
 pub unsafe extern "C" fn wings_deliver(kind: *mut u8, kind_len: usize, id: u32, text: *mut u8, text_len: usize) {
     // SAFETY: both are strings the host wrote into `wings_alloc` memory.
     let (kind, text) = unsafe { (taken(kind, kind_len), taken(text, text_len)) };
+    let output = kind == "output";
     host::deliver(&kind, id, text);
-    settle();
+    if output { settle_output() } else { settle() }
 }
 
 #[unsafe(no_mangle)]

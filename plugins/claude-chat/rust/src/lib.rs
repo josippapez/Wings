@@ -1,0 +1,15 @@
+//! Claude chat (experimental): Claude Code as a chat in a tab instead of a terminal. The crate builds two frames. The
+//! main (`--features main`, `main_frame.rs`) puts a Chat badge on Claude's terminals, whose button moves the session
+//! into a chat tab. The chat page (`--features chat`, `chat.rs` and `view.rs`) runs Claude Code headless and draws the
+//! session from what it prints (`session.rs`).
+
+// Each frame uses its own part of the crate.
+#![allow(dead_code)]
+
+#[cfg(feature = "chat")]
+mod chat;
+#[cfg(any(feature = "main", test))]
+mod main_frame;
+mod session;
+#[cfg(feature = "chat")]
+mod view;

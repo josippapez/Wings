@@ -44,6 +44,7 @@ mod calls;
 mod diff;
 mod disk;
 mod env;
+mod process;
 mod state;
 pub use state::{FrameState, StatePlace};
 #[cfg(test)]
@@ -154,6 +155,8 @@ struct Shared {
     diffs: Mutex<HashMap<String, (u64, Option<u32>)>>,
     next_diff: AtomicU64,
     scans: Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>>,
+    /// The programs the frames keep running, by token (see `process`).
+    processes: Mutex<HashMap<String, Arc<wings_plugins::process::Process>>>,
 }
 
 impl Shared {
@@ -367,13 +370,19 @@ impl Link for FrameLink {
         if matches!(method, "openDiff" | "updateDiff") {
             return self.shared.diff_call(self.id, method, params, reply);
         }
-        if matches!(method, "diskFind" | "diskUsage" | "diskUsageCancel") {
+        // A scan or a program is named by a token of the frame's, which only that frame can reach.
+        let owner = match method {
+            "diskFind" | "diskUsage" | "diskUsageCancel" => Some("A scan"),
+            "spawn" | "processWrite" | "processStop" => Some("A program"),
+            _ => None,
+        };
+        if let Some(owner) = owner {
             let Some(token) = params
                 .get("token")
                 .and_then(serde_json::Value::as_str)
                 .filter(|s| (1..=64).contains(&s.encode_utf16().count()))
             else {
-                return reply.err("A scan needs a token of 1 to 64 characters".into());
+                return reply.err(format!("{owner} needs a token of 1 to 64 characters"));
             };
             let token = format!("{}:{token}", self.id);
             params["token"] = token.into();
@@ -397,6 +406,7 @@ impl Drop for Membership {
                 flag.store(true, Ordering::Relaxed);
             }
         }
+        self.shared.stop_processes(&prefix);
         self.shared
             .frames
             .lock()
@@ -533,6 +543,7 @@ impl PluginHost {
                 diffs: Mutex::default(),
                 next_diff: AtomicU64::new(1),
                 scans: Mutex::default(),
+                processes: Mutex::default(),
             }),
             main: Mutex::default(),
             alive: Arc::new(()),
@@ -997,6 +1008,7 @@ impl Drop for PluginHost {
         for flag in self.shared.scans.lock().unwrap().values() {
             flag.store(true, Ordering::Relaxed);
         }
+        self.shared.stop_processes("");
         self.shared.fail_actions("The plugin was turned off");
         self.shared.fail_tools(&format!(
             "{} was turned off in Wings",

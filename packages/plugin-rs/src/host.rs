@@ -335,6 +335,11 @@ pub fn open_pane(cwd: &str) -> Pending<Result<Value, String>> {
     call("openPane", json!({ "command": null, "args": [], "cwd": cwd, "placement": "tab" }))
 }
 
+/// `wings.closePane`: ends the program in a pane of the project on screen and closes the pane. Needs `panes`.
+pub fn close_pane(pane: &str) -> Pending<Result<Value, String>> {
+    call("closePane", json!({ "paneId": pane }))
+}
+
 /// `wings.disks`: the disks Finder shows, each with its `name`, `mount`, `total` and `free`.
 pub fn disks() -> Pending<Result<Value, String>> {
     call("disks", json!({}))
@@ -648,6 +653,56 @@ pub fn exec_lines(program: &str, args: &[&str], timeout_ms: u32, on_line: impl F
     let id = next_id();
     OUTPUTS.with(|outputs| outputs.borrow_mut().insert(id, Rc::new(move |line| on_line(line.as_str().unwrap_or_default()))));
     call_as(id, "exec", json!({ "program": program, "args": args, "cwd": null, "timeoutMs": timeout_ms, "stream": true }))
+}
+
+/// A program the frame keeps running, from `spawn`. It resolves with `{ code, stderr }` once the program has ended
+/// (`code` is null when a signal ended it, and `stderr` is the end of what it printed there). Letting go of it doesn't
+/// stop the program.
+pub struct Process {
+    input: ProcessInput,
+    answer: Pending<Result<Value, String>>,
+}
+
+impl Process {
+    /// What writes to the program and stops it, to keep where a page's handlers reach it.
+    pub fn input(&self) -> ProcessInput {
+        self.input.clone()
+    }
+}
+
+impl Future for Process {
+    type Output = Result<Value, String>;
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.answer).poll(cx)
+    }
+}
+
+#[derive(Clone)]
+pub struct ProcessInput(String);
+
+impl ProcessInput {
+    /// Writes `text` to the program's input as it is, so a line needs its own `\n`. Writes reach the program in the
+    /// order they were made.
+    pub fn write(&self, text: &str) -> Pending<Result<Value, String>> {
+        call("processWrite", json!({ "token": self.0, "text": text }))
+    }
+
+    /// Closes the program's input once the writes before it have gone, which tells a program like Claude to finish.
+    /// Wings kills it if it is still running 3 s later.
+    pub fn stop(&self) {
+        drop(call("processStop", json!({ "token": self.0 })));
+    }
+}
+
+/// `wings.spawn`: runs a program the manifest's `processes` lists, in the folder `cwd`, which has to be in one of your
+/// projects, and keeps it running until it ends, it is stopped, or the frame closes. `on_line` hears each line it
+/// prints to stdout, in order and none lost: as JSON when the line is JSON, and as a string when it isn't.
+pub fn spawn(program: &str, args: &[&str], cwd: &str, on_line: impl Fn(&Value) + 'static) -> Process {
+    let id = next_id();
+    let token = format!("process-{id}");
+    OUTPUTS.with(|outputs| outputs.borrow_mut().insert(id, Rc::new(on_line)));
+    let answer = call_as(id, "spawn", json!({ "program": program, "args": args, "cwd": cwd, "token": token }));
+    Process { input: ProcessInput(token), answer }
 }
 
 #[cfg(test)]

@@ -334,15 +334,19 @@ impl Shared {
         };
         let this = self.clone();
         match method {
-            "focusPane" => {
+            "focusPane" | "closePane" => {
                 let pane = js_string(params.get("paneId"));
+                let verb = if method == "focusPane" { "focus" } else { "close" };
                 if !wings_plugins::permissions::may_use_panes(&access.plugin) {
-                    return reply.err(format!("{} may not focus panes", self.config.id));
+                    return reply.err(format!("{} may not {verb} panes", self.config.id));
                 }
                 if let Err(error) = self.require_pane(&pane) {
                     return reply.err(error);
                 }
-                access.env.focus_pane(&pane, reply);
+                match method {
+                    "focusPane" => access.env.focus_pane(&pane, reply),
+                    _ => access.env.close_pane(&pane, reply),
+                }
             }
             "projects" => reply.done(to_json(&*self.projects.lock().unwrap())),
             "disks" | "diskFind" | "diskUsage" | "diskUsageCancel" => {
@@ -394,6 +398,9 @@ impl Shared {
             "exec" => {
                 self.off_thread(reply, move |reply| this.exec(&access, &params, reply));
             }
+            "spawn" | "processWrite" | "processStop" => {
+                self.process_call(method, params, reply, access)
+            }
             "transcript" => {
                 self.off_thread(reply, move |_| transcript(&access, &params));
             }
@@ -436,6 +443,17 @@ impl Shared {
         if let Err(error) = spawned {
             spare.err(format!("The call couldn't start: {error}"));
         }
+    }
+
+    /// Where each pane's program is now.
+    pub(super) fn pane_folders(&self) -> Vec<PathBuf> {
+        let panes = self.panes.lock().unwrap();
+        panes
+            .list
+            .iter()
+            .filter(|pane| !pane.cwd.is_empty())
+            .map(|pane| PathBuf::from(&pane.cwd))
+            .collect()
     }
 
     /// The pane must be one the app last listed, so a plugin can't draw on a pane that isn't there.
@@ -486,19 +504,14 @@ impl Shared {
         } = request;
         let timeout = exec::exec_timeout(timeout_ms(requested)?);
         let on_line = stream.then(|| -> exec::OnLine { reply.lines() });
-        let projects = access.env.projects();
-        // Where each pane's program is now.
-        let panes: Vec<PathBuf> = {
-            let panes = self.panes.lock().unwrap();
-            panes
-                .list
-                .iter()
-                .filter(|pane| !pane.cwd.is_empty())
-                .map(|pane| PathBuf::from(&pane.cwd))
-                .collect()
-        };
         let any_repo = worktrees_call_in_any_repo(access.builtin, &program, &args);
-        let cwd = exec_cwd(&program, cwd.as_deref(), &projects, &panes, any_repo)?;
+        let cwd = exec_cwd(
+            &program,
+            cwd.as_deref(),
+            &access.env.projects(),
+            &self.pane_folders(),
+            any_repo,
+        )?;
         let result = exec::exec(
             &access.plugin,
             &program,
@@ -850,6 +863,8 @@ pub use sections::{SectionIcon, SectionRow};
 mod disk_usage;
 #[cfg(test)]
 mod prerequisites;
+#[cfg(test)]
+mod processes;
 #[cfg(test)]
 mod schedules;
 mod session_detail;

@@ -3,7 +3,7 @@
 //! shortcodes stay as written.
 
 use serde_json::json;
-use wings_plugin::{
+use crate::{
     host,
     ui::{Node, card, row, stack, text},
 };

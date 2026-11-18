@@ -203,6 +203,21 @@ impl Reply {
         })
     }
 
+    /// `lines` for a program whose every line matters, like an agent's messages: each line waits for room in the
+    /// frame's queue instead of being lost, which holds the program up while the frame is behind. False once the frame
+    /// has stopped.
+    pub fn lines_in_order(&self) -> impl Fn(&str) -> bool + Send + 'static {
+        let (jobs, call) = (self.queue.jobs.clone(), self.call);
+        move |line| {
+            let deliver = Command::Deliver {
+                message: Message::Output,
+                id: call,
+                text: line.to_owned(),
+            };
+            jobs.send(Job::Frame(deliver)).is_ok()
+        }
+    }
+
     fn send(self, message: Message, text: String) {
         let command = Command::Deliver {
             message,

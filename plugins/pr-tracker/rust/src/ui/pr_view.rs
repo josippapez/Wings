@@ -8,12 +8,13 @@ use crate::{
     snippet::snippet_span,
     threads::{Kind, Thread, focus_of, is_automated, kind_of, one_line, threads_of},
     types::{Comment, Overview, Push, Reviewer, SnippetLine, Status},
-    ui::{checks_view, markdown::markdown, parts, run_view},
+    ui::{checks_view, parts, run_view},
     vote::{AZURE_VOTES, reviewable},
 };
 use serde_json::{Value, json};
 use std::{cell::RefCell, collections::{HashMap, HashSet}};
 use wings_plugin::{
+    markdown::markdown,
     host,
     task::spawn,
     ui::{Node, card, confirm, empty, heading, muted, notice, page, row, stack, text},

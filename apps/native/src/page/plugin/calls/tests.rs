@@ -86,6 +86,7 @@ fn every_frame_hears_the_panes_as_the_desktop_lists_them_when_it_starts_and_when
         name: Some("fix it".into()),
         state: "working".into(),
         started_at: 1_700_000_000_000,
+        launcher: None,
     });
     rig.host.publish_panes(changed);
     let report = frame.report("the changed list", |r| {
@@ -1130,6 +1131,16 @@ fn focus_pane_needs_panes_granted_and_a_pane_that_is_there() {
         without.refuses("focusPane", json!({ "paneId": "1" })),
         "probe may not focus panes"
     );
+}
+
+#[test]
+fn close_pane_needs_panes_granted_and_a_pane_that_is_there() {
+    let rig = Rig::new(json!({ "permissions": { "panes": [] } }), panes());
+    assert_eq!(rig.allows("closePane", json!({ "paneId": "2" })), json!(null));
+    assert_eq!(rig.env.seen(), [Seen::ClosePane("2".into())]);
+    assert_eq!(rig.refuses("closePane", json!({ "paneId": "9" })), "no pane 9");
+    let without = Rig::new(json!({}), panes());
+    assert_eq!(without.refuses("closePane", json!({ "paneId": "1" })), "probe may not close panes");
 }
 
 #[test]

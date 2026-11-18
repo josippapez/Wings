@@ -11,6 +11,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "claude-chat"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
+ "wings-plugin",
+]
+
+[[package]]
 name = "dev-servers"
 version = "0.0.0"
 dependencies = [

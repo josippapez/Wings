@@ -555,6 +555,7 @@ fn claude_pane() -> super::PaneEntry {
         name: Some("fix tests".into()),
         state: "idle".into(),
         started_at: now_ms() - 60_000,
+        launcher: None,
     });
     claude
 }

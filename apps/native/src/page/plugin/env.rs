@@ -350,6 +350,10 @@ pub trait Env: Send + Sync + 'static {
     fn focus_pane(&self, _pane: &str, reply: crate::page::runtime::Reply) {
         reply.err("Focusing panes isn't available".into());
     }
+    /// Ends a pane's program and closes the pane, in the project on screen.
+    fn close_pane(&self, _pane: &str, reply: crate::page::runtime::Reply) {
+        reply.err("Closing panes isn't available".into());
+    }
     /// Closes the plugin's page `view` wherever the app shows it.
     fn close_view(&self, _plugin: &str, _view: &str) {}
     /// Whether the plugin is one of Wings' own, or `None` when it doesn't run here.
@@ -523,4 +527,7 @@ pub struct SessionEntry {
     pub state: String,
     /// When the agent process started, in ms since 1970.
     pub started_at: u64,
+    /// The wrapper it was started through, like `claude-rtk`, to start it again the same way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launcher: Option<String>,
 }

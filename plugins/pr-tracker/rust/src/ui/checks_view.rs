@@ -5,11 +5,12 @@ use crate::{
     checklist::{GroupId, duration_text, group_checks, has_log, log_tail, with_unresolved},
     pr_page,
     types::{CheckItem, CheckState, FailureDetail, Status},
-    ui::{markdown::code_block, parts, run_view},
+    ui::{parts, run_view},
 };
 use serde_json::json;
 use std::{cell::RefCell, collections::{HashMap, HashSet}};
 use wings_plugin::{
+    markdown::code_block,
     host,
     task::spawn,
     ui::{Node, muted, notice, row, stack, text},

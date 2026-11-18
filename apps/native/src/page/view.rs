@@ -115,6 +115,8 @@ pub struct PageView {
     shell_scroll: gpui::ScrollHandle,
     /// Where the open combobox's list is scrolled, so the option the arrow keys reach is brought into view.
     combobox_scroll: gpui::ScrollHandle,
+    /// Where each `Scroll` that follows its end is scrolled, by node id.
+    follow_scrolls: RefCell<HashMap<u64, gpui::ScrollHandle>>,
     /// A focus handle round each list item's `actions`, by node id, and the items one of whose actions had the
     /// keyboard when the page was last drawn: those show their actions without the pointer on them.
     actions_focus: RefCell<HashMap<u64, gpui::FocusHandle>>,
@@ -359,6 +361,7 @@ impl PageView {
             popover: false,
             shell_scroll: gpui::ScrollHandle::new(),
             combobox_scroll: gpui::ScrollHandle::new(),
+            follow_scrolls: RefCell::default(),
             actions_focus: RefCell::default(),
             menu_focus: cx.focus_handle(),
             actions_within: HashSet::new(),
@@ -706,6 +709,17 @@ impl PageView {
         self.tree.as_ref().and_then(|tree| find(&tree.children))
     }
 
+    /// The handle of a `Scroll` that follows its end, which keeps it at its end through this draw while it is there, as
+    /// a chat stays on its newest message. Scrolled up, it stays where it is.
+    fn follow_end(&self, id: u64) -> gpui::ScrollHandle {
+        let handle = self.follow_scrolls.borrow_mut().entry(id).or_default().clone();
+        // Its offset grows negative as it scrolls down, to minus the most it can scroll. Not laid out yet, both are 0.
+        if -handle.offset().y >= handle.max_offset().y - px(FOLLOW_SLACK) {
+            handle.scroll_to_bottom();
+        }
+        handle
+    }
+
     fn nodes(&self, nodes: &[Node], cx: &mut Context<Self>) -> Vec<AnyElement> {
         nodes.iter().map(|node| self.node(node, cx)).collect()
     }
@@ -1002,7 +1016,8 @@ impl PageView {
                 })
                 .rounded(px(8.0))
                 .border_1()
-                .border_color(rgba(notice.tone.map_or(theme::INFO, tone_color)))
+                // The tone is 0xRRGGBB: alpha goes below it, as the ground's does.
+                .border_color(rgba(notice.tone.map_or(theme::INFO, tone_color) << 8 | 0x66))
                 .bg(rgba(
                     notice.tone.map_or(theme::INFO, tone_color) << 8 | 0x20,
                 ))
@@ -1107,18 +1122,23 @@ impl PageView {
             )
             .into_any_element(),
             // A scroll keeps 8 points either side and 12 below, as a list under a header does.
-            Node::Scroll(scroll) => div()
-                .id(ElementId::NamedInteger("page-scroll".into(), scroll.id))
-                .flex_1()
-                .min_h_0()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .px(px(8.0))
-                .pb(px(12.0))
-                .overflow_y_scroll()
-                .children(self.nodes(&scroll.children, cx))
-                .into_any_element(),
+            Node::Scroll(scroll) => {
+                let area = div()
+                    .id(ElementId::NamedInteger("page-scroll".into(), scroll.id))
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .px(px(8.0))
+                    .pb(px(12.0))
+                    .overflow_y_scroll()
+                    .children(self.nodes(&scroll.children, cx));
+                match scroll.follow_end {
+                    true => area.track_scroll(&self.follow_end(scroll.id)).into_any_element(),
+                    false => area.into_any_element(),
+                }
+            }
             Node::Bar(bar) => div()
                 .flex_none()
                 .min_w_0()
@@ -1586,6 +1606,8 @@ impl Render for PageView {
     }
 }
 
+/// How near its end, in points, a following `Scroll` still counts as there: a line's worth of a pointer's drift.
+const FOLLOW_SLACK: f32 = 24.0;
 const PAGE_CONTEXT: &str = "plugin-page";
 /// The group a list item with actions names itself, for its actions to show while it is pointed at.
 const LIST_ITEM_GROUP: &str = "page-list-item";

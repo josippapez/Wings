@@ -44,6 +44,8 @@ pub struct TextField {
     pub text: String,
     /// The lines a multi-line field shows at least. Enter then starts a new line, and a one-line field (`None`) submits.
     pub rows: Option<usize>,
+    /// A multi-line field that submits on Enter and starts a new line on Shift-Enter, as a chat's message box does.
+    pub enter_submits: bool,
     /// Takes the width of its place, not `width`.
     pub fill: bool,
     /// Dimmed, and takes no typing.
@@ -104,6 +106,7 @@ impl TextField {
             width,
             text: String::new(),
             rows: None,
+            enter_submits: false,
             fill: false,
             disabled: false,
             max_chars: None,
@@ -305,7 +308,7 @@ impl TextField {
         }
         match key.key.as_str() {
             "escape" => cx.emit(FieldEvent::Cancel),
-            "enter" if self.rows.is_some() => {
+            "enter" if self.rows.is_some() && !(self.enter_submits && !mods.shift) => {
                 self.replace(self.selection(), "\n", window, cx);
             }
             "enter" => cx.emit(FieldEvent::Submit { back: mods.shift }),
@@ -1335,6 +1338,27 @@ mod tests {
         window.draw();
         assert_eq!(text(&window, &field), "flatoting");
         assert_eq!(selected(&window, &field), 4..4);
+    }
+
+    #[test]
+    fn a_message_box_sends_on_enter_and_starts_a_line_on_shift_enter() {
+        let (_app, mut window, field) = open("hi");
+        let lines = |window: &mut TestAppWindow<Host>, submits: bool| {
+            window.update(|_, _, cx| {
+                field.update(cx, |field, _| {
+                    field.rows = Some(3);
+                    field.enter_submits = submits;
+                })
+            });
+        };
+        lines(&mut window, true);
+        press(&mut window, "enter");
+        assert_eq!(text(&window, &field), "hi");
+        press(&mut window, "shift-enter");
+        assert_eq!(text(&window, &field), "hi\n");
+        lines(&mut window, false);
+        press(&mut window, "enter");
+        assert_eq!(text(&window, &field), "hi\n\n");
     }
 
     #[test]

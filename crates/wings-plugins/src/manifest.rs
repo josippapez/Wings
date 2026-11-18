@@ -12,6 +12,9 @@ pub struct Permissions {
     /// `gh pr view`. A bare program name allows any arguments. A trailing `[...]` lists the only flags it may pass,
     /// and `[]` allows none.
     pub exec: Vec<String>,
+    /// Programs the plugin may keep running and talk to: it writes to their input and hears each line they print, like
+    /// an agent run headless. Each entry is matched like `exec`'s.
+    pub processes: Vec<String>,
     /// Claude Code transcript entry types the plugin may read, e.g. `pr-link`, or `attachment:<kind>` for one
     /// kind of attachment, e.g. `attachment:model`.
     pub transcript: Vec<String>,

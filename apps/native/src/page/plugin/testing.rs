@@ -35,6 +35,7 @@ pub(super) enum Seen {
     OpenPane(super::OpenPane),
     OpenView(super::OpenView),
     FocusPane(String),
+    ClosePane(String),
     CloseView(String, String),
     Badge(String, String, Option<Badge>),
     Status(String, String, Option<PaneStatus>),
@@ -161,6 +162,10 @@ impl Env for FakeEnv {
     }
     fn focus_pane(&self, pane: &str, reply: crate::page::runtime::Reply) {
         self.record(Seen::FocusPane(pane.into()));
+        reply.ok("null".into());
+    }
+    fn close_pane(&self, pane: &str, reply: crate::page::runtime::Reply) {
+        self.record(Seen::ClosePane(pane.into()));
         reply.ok("null".into());
     }
     fn close_view(&self, plugin: &str, view: &str) {
@@ -444,7 +449,9 @@ pub(super) struct Caller {
     answers: std::sync::mpsc::Receiver<Heard>,
 }
 
-enum Heard {
+/// What a `Caller`'s frame heard: a line a call printed, or a call's answer.
+#[derive(Debug, PartialEq)]
+pub(super) enum Heard {
     Line(String),
     Done(Result<Value, String>),
 }
@@ -501,6 +508,16 @@ impl Caller {
     pub fn streamed(&self, method: &str, params: Value) -> (Result<Value, String>, Vec<String>) {
         assert!(self.frame._runtime.dispatch("call", Some(&json!({ "method": method, "params": params }))));
         self.finish()
+    }
+
+    /// Makes the call without waiting for it: `next` gives what comes back.
+    pub fn send(&self, method: &str, params: Value) {
+        assert!(self.frame._runtime.dispatch("call", Some(&json!({ "method": method, "params": params }))));
+    }
+
+    /// What the frame heard next, of any of its calls.
+    pub fn next(&self) -> Heard {
+        self.answers.recv_timeout(WAIT).expect("waiting for the frame to hear from a call")
     }
 
     /// The call, made right after a click of yours, as a page may copy.

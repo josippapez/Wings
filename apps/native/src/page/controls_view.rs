@@ -364,6 +364,7 @@ impl PageView {
                 );
                 field.fill = true;
                 field.rows = input.rows;
+                field.enter_submits = input.enter_submits;
                 field.time = input.time;
                 field.select_on_focus = input.select_on_focus;
                 field

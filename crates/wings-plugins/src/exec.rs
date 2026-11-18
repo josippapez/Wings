@@ -71,7 +71,12 @@ pub(crate) fn exec_entry(entry: &str) -> (&str, Option<Vec<&str>>) {
 /// `az boards work-item update [--id --state]` allows that command with no flags but those two, and `gh pr diff []`
 /// allows no flags at all.
 pub(crate) fn may_exec(plugin: &Plugin, program: &str, args: &[String]) -> bool {
-    plugin.manifest.permissions.exec.iter().any(|entry| {
+    entries_allow(&plugin.manifest.permissions.exec, program, args)
+}
+
+/// Whether one of `entries`, written as `permissions.exec`'s are, covers `program` with `args`.
+pub(crate) fn entries_allow(entries: &[String], program: &str, args: &[String]) -> bool {
+    entries.iter().any(|entry| {
         let (command, flags) = exec_entry(entry);
         let mut words = command.split_whitespace();
         words.next() == Some(program)
@@ -89,11 +94,21 @@ pub fn exec(plugin: &Plugin, program: &str, args: &[String], cwd: Option<&Path>,
 
 /// Everything `exec` checks before it runs a command in `cwd`.
 pub(crate) fn exec_check(plugin: &Plugin, program: &str, args: &[String], cwd: Option<&Path>) -> Result<(), String> {
-    let id = &plugin.manifest.id;
     if !may_exec(plugin, program, args) {
-        let sub = args.iter().take_while(|a| !a.starts_with('-')).take(3).cloned().collect::<Vec<_>>().join(" ");
-        return Err(format!("{id} may not run {program} {sub}"));
+        return Err(not_allowed(plugin, program, args));
     }
+    args_check(plugin, program, args, cwd)
+}
+
+/// What a plugin is told when its manifest doesn't list the command.
+pub(crate) fn not_allowed(plugin: &Plugin, program: &str, args: &[String]) -> String {
+    let sub = args.iter().take_while(|a| !a.starts_with('-')).take(3).cloned().collect::<Vec<_>>().join(" ");
+    format!("{} may not run {program} {sub}", plugin.manifest.id)
+}
+
+/// The checks of a command's arguments that hold whatever the manifest allows.
+pub(crate) fn args_check(plugin: &Plugin, program: &str, args: &[String], cwd: Option<&Path>) -> Result<(), String> {
+    let id = &plugin.manifest.id;
     command_refused(id, program, args)?;
     if let Some(flag) = args.iter().find(|a| is_unsafe_flag(program, a)) {
         return Err(format!("{id} may not pass {flag} to {program}"));
@@ -118,23 +133,8 @@ pub(crate) fn exec_check(plugin: &Plugin, program: &str, args: &[String], cwd: O
 
 /// Runs a program once its arguments have been checked.
 pub(crate) fn run(program: &str, args: &[String], cwd: Option<&Path>, timeout: Duration, on_line: Option<OnLine>) -> Result<ExecResult, String> {
-    let path = find_program(program).ok_or_else(|| format!("{program} is not installed or not on PATH"))?;
-    let mut cmd = Command::new(path);
-    cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    // A plugin's folder, or a branch it fetched and checked out, can hold a folder shaped like a bare repo, whose config
-    // runs commands (`diff.external`, `remote.<name>.uploadpack`) when git, or the az, gh and glab that call git, start
-    // inside it. git takes this setting only from config a repo can't write, like the command line's.
-    cmd.env("GIT_CONFIG_COUNT", "1").env("GIT_CONFIG_KEY_0", "safe.bareRepository").env("GIT_CONFIG_VALUE_0", "explicit");
-    if program == "git" {
-        // Makes git reject abbreviated options outright, on top of the prefix check above.
-        cmd.env("GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS", "1");
-    }
-    if let Some(dir) = cwd {
-        if !dir.is_dir() {
-            return Err(format!("{} is not a folder", dir.display()));
-        }
-        cmd.current_dir(dir);
-    }
+    let mut cmd = command(program, args, cwd)?;
+    cmd.stdin(Stdio::null());
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
     let overflow = Arc::new(AtomicBool::new(false));
     let out_reader = read_pipe(child.stdout.take().unwrap(), on_line.clone(), overflow.clone());
@@ -162,6 +162,28 @@ pub(crate) fn run(program: &str, args: &[String], cwd: Option<&Path>, timeout: D
         return Err(EXEC_OUTPUT_TOO_LARGE.into());
     }
     Ok(ExecResult { code: status.code(), stdout, stderr })
+}
+
+/// The command for a program a plugin runs, once its arguments have been checked, with stdout and stderr piped.
+pub(crate) fn command(program: &str, args: &[String], cwd: Option<&Path>) -> Result<Command, String> {
+    let path = find_program(program).ok_or_else(|| format!("{program} is not installed or not on PATH"))?;
+    let mut cmd = Command::new(path);
+    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    // A plugin's folder, or a branch it fetched and checked out, can hold a folder shaped like a bare repo, whose config
+    // runs commands (`diff.external`, `remote.<name>.uploadpack`) when git, or the az, gh and glab that call git, start
+    // inside it. git takes this setting only from config a repo can't write, like the command line's.
+    cmd.env("GIT_CONFIG_COUNT", "1").env("GIT_CONFIG_KEY_0", "safe.bareRepository").env("GIT_CONFIG_VALUE_0", "explicit");
+    if program == "git" {
+        // Makes git reject abbreviated options outright, on top of the prefix check above.
+        cmd.env("GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS", "1");
+    }
+    if let Some(dir) = cwd {
+        if !dir.is_dir() {
+            return Err(format!("{} is not a folder", dir.display()));
+        }
+        cmd.current_dir(dir);
+    }
+    Ok(cmd)
 }
 
 /// GUI apps don't get the shell's PATH on macOS and Linux, so ask the login shell, until it answers.

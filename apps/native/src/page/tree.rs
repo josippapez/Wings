@@ -18,8 +18,8 @@ pub use svg::Svg;
 pub const MAX_JSON_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_NODES: usize = 5_000;
 pub const MAX_DEPTH: usize = 32;
-/// A longer text is cut to this many characters.
-pub const MAX_TEXT_CHARS: usize = 2_000;
+/// A longer text is cut to this many characters: a long paragraph of a chat's reply fits.
+pub const MAX_TEXT_CHARS: usize = 20_000;
 const MAX_HANDLER_BYTES: usize = 64;
 /// A select shows this many of its options; the rest are dropped.
 pub const MAX_OPTIONS: usize = 200;
@@ -344,6 +344,8 @@ pub struct Dot {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scroll {
     pub id: u64,
+    /// `follow: "end"`: it stays at its end as what it holds grows, while you haven't scrolled up.
+    pub follow_end: bool,
     pub children: Vec<Node>,
 }
 
@@ -543,6 +545,8 @@ pub struct Input {
     pub placeholder: String,
     pub value: String,
     pub rows: Option<usize>,
+    /// `submitOnEnter`: a `Textarea` that sends Enter to `onKeyDown`, and starts a new line on Shift-Enter.
+    pub enter_submits: bool,
     pub disabled: bool,
     pub max_length: Option<usize>,
     /// What to send back to the page, with the text after each edit.
@@ -1033,6 +1037,7 @@ impl Walk {
             }),
             "Scroll" => Node::Scroll(Scroll {
                 id,
+                follow_end: str_prop(&props, "follow") == Some("end"),
                 children: parts(children),
             }),
             "Bar" => Node::Bar(Bar {
@@ -1145,6 +1150,7 @@ impl Walk {
                     .collect(),
                 rows: (kind == "Textarea")
                     .then(|| number(&props, "rows").unwrap_or(2.0).clamp(1.0, 24.0) as usize),
+                enter_submits: on("submitOnEnter"),
                 disabled: on("disabled"),
                 max_length: number(&props, "maxLength")
                     .filter(|max| *max >= 0.0)
@@ -1791,17 +1797,14 @@ mod tests {
 
     #[test]
     fn a_select_is_bounded_and_its_bad_handler_is_none() {
+        // One label too long: all of them would be more than a page may send.
+        let label = |n: usize| if n == 0 { "x".repeat(MAX_TEXT_CHARS * 2) } else { "x".into() };
         let many: Vec<Value> = (0..MAX_OPTIONS * 2)
-            .map(|n| json!({"value":n.to_string(),"label":"x".repeat(MAX_TEXT_CHARS * 2)}))
+            .map(|n| json!({"value":n.to_string(),"label":label(n)}))
             .collect();
         let bounded = select(json!({"options":many,"onChange":"../../etc"}));
         assert_eq!(bounded.options.len(), MAX_OPTIONS);
-        assert!(
-            bounded
-                .options
-                .iter()
-                .all(|o| o.label.chars().count() == MAX_TEXT_CHARS)
-        );
+        assert_eq!(bounded.options[0].label.chars().count(), MAX_TEXT_CHARS);
         assert_eq!(bounded.on_change, None);
     }
 

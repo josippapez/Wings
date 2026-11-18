@@ -12,6 +12,7 @@ pub mod manifest;
 pub mod panes;
 pub mod permissions;
 pub mod post;
+pub mod process;
 pub mod store;
 pub mod transcript;
 

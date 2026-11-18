@@ -207,8 +207,9 @@ impl Workspace {
         })
     }
 
-    /// `close_pane`, for a pane of the project on screen.
-    fn claude_close_pane(
+    /// Closes a pane of the project on screen, by the id plugins and Claude know it by: Claude's `close_pane` and a
+    /// plugin's `closePane`.
+    pub(super) fn close_pane_on_screen(
         &mut self,
         pane: &str,
         window: &mut Window,
@@ -613,7 +614,7 @@ impl Host for NativeHost<'_> {
         self.server
             .env
             .on_window(WINDOW_WAIT, move |workspace, window, cx| {
-                workspace.claude_close_pane(&pane, window, cx)
+                workspace.close_pane_on_screen(&pane, window, cx)
             })??;
         self.server.opened.lock().unwrap().retain(|p| p != pane_id);
         Ok(())

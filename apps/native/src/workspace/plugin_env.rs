@@ -90,6 +90,10 @@ pub(super) enum UiEvent {
         pane: String,
         reply: crate::page::runtime::Reply,
     },
+    ClosePane {
+        pane: String,
+        reply: crate::page::runtime::Reply,
+    },
     OpenDiff(crate::diff::View),
     UpdateDiff {
         plugin: String,
@@ -444,14 +448,14 @@ impl AppEnv {
 
 impl Env for AppEnv {
     fn focus_pane(&self, pane: &str, reply: crate::page::runtime::Reply) {
-        if self
-            .events
-            .try_send(UiEvent::FocusPane {
-                pane: pane.into(),
-                reply: reply.clone(),
-            })
-            .is_err()
-        {
+        let event = UiEvent::FocusPane { pane: pane.into(), reply: reply.clone() };
+        if self.events.try_send(event).is_err() {
+            reply.err("The Wings window is closed or busy".into());
+        }
+    }
+    fn close_pane(&self, pane: &str, reply: crate::page::runtime::Reply) {
+        let event = UiEvent::ClosePane { pane: pane.into(), reply: reply.clone() };
+        if self.events.try_send(event).is_err() {
             reply.err("The Wings window is closed or busy".into());
         }
     }
@@ -833,6 +837,9 @@ impl Workspace {
                 self.active = Active::Terminal(tab.id);
                 self.focus_pane(id, window, cx);
                 reply.ok("null".into());
+            }
+            UiEvent::ClosePane { pane, reply } => {
+                reply.done(self.close_pane_on_screen(&pane, window, cx).map(|()| "null".into()))
             }
             UiEvent::OpenDiff(view) => self.open_diff_view(view, window, cx),
             UiEvent::UpdateDiff { plugin, id, update } => {
@@ -1364,6 +1371,7 @@ impl Workspace {
                                 .ok()
                                 .and_then(|state| state.as_str().map(str::to_owned))?,
                             started_at: agent.started_at,
+                            launcher: agent.launcher.clone(),
                         })
                     }),
                     focused: focused == Some(id),

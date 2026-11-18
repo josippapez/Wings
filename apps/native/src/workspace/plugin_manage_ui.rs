@@ -117,8 +117,9 @@ pub(super) fn access_groups(manifest: &Manifest) -> Vec<(&'static str, Vec<Strin
         ("Offer Claude these tools over MCP", list(&c.mcp_tools.iter().map(|tool| tool.name.clone()).collect::<Vec<_>>())),
         ("Answer these Claude Code hooks: add context to a session, or refuse a Bash command", list(&c.hooks)),
         ("Run these commands as you, with your own sign-ins", list(&p.exec)),
+        ("Keep these programs running as you, and talk to them", list(&p.processes)),
         ("Post to these addresses as you, like replying to a review comment", list(&p.post)),
-        ("Open terminals in your projects and move your typing to any pane", on(p.panes.is_some())),
+        ("Open and close terminals in your projects, and move your typing to any pane", on(p.panes.is_some())),
         ("Start these commands in a new terminal, as you", p.panes.as_deref().and_then(list)),
         ("Show desktop notifications, up to 20 a minute", on(p.notify)),
         ("Type messages into the prompts of the agents in your terminals", on(p.send_to_agents)),
@@ -946,7 +947,7 @@ mod tests {
                     vec!["gh pr view".to_owned()]
                 ),
                 (
-                    "Open terminals in your projects and move your typing to any pane",
+                    "Open and close terminals in your projects, and move your typing to any pane",
                     vec![]
                 ),
                 ("Show desktop notifications, up to 20 a minute", vec![]),
