@@ -46,6 +46,14 @@ pub struct Ask {
     pub answer: Option<bool>,
 }
 
+/// A message of yours Claude Code holds until it has finished what it is doing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Queued {
+    /// What Claude Code knows it by, for cancelling it and for recognising it when it is read.
+    pub uuid: String,
+    pub text: String,
+}
+
 /// A model Claude Code offers, as `initialize` lists it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Model {
@@ -88,8 +96,19 @@ pub struct Session {
     pub commands: Vec<Command>,
     /// The tokens in the context window after the last message, and how many it holds.
     pub context: Option<(u64, u64)>,
-    /// A turn is running: from your message to its result.
+    /// A turn is running. Claude Code's own `session_state_changed` says so when it prints them, else it is from your
+    /// message to its result. The result alone ends a turn, not the work: with a message of yours queued the next turn
+    /// starts at once, and a background task can run on, while `idle` waits for all of that.
     pub working: bool,
+    /// Messages sent while Claude works, in the order Claude Code reads them, until it echoes each as read.
+    pub queued: Vec<Queued>,
+    /// What to tell you, as (title, body), for the chat to show when you aren't looking. At most one of each kind a turn.
+    pub alerts: Vec<(String, String)>,
+    /// Claude Code prints `session_state_changed`, so `working` follows it. It prints them only when asked to by an
+    /// environment variable Wings can't set, so this is how the chat knows it may rely on them.
+    reports_state: bool,
+    asked_you: bool,
+    told_you: bool,
     /// What the session has cost so far, in US dollars.
     pub cost: f64,
     /// You asked Claude to stop, and the turn hasn't ended yet.
@@ -109,13 +128,23 @@ impl Session {
                 self.model = line["model"].as_str().map(str::to_owned);
                 self.mode = line["permissionMode"].as_str().map(str::to_owned).or(self.mode.take());
             }
+            "system" if line["subtype"] == "session_state_changed" => self.changed(line["state"].as_str().unwrap_or_default()),
             "control_response" => self.answered(&line["response"]),
             "stream_event" => self.stream(&line["event"]),
-            "assistant" => self.assistant(&line["message"]),
+            "assistant" => {
+                self.told_you = false;
+                self.assistant(&line["message"]);
+            }
+            // Claude Code echoes each message of yours it reads when it runs with `--replay-user-messages`. The ones sent
+            // while it was idle are on the page already.
+            "user" if line["isReplay"] == true => self.echoed(line["uuid"].as_str().unwrap_or_default()),
             "user" if line["isMeta"] != true => self.user(&line["message"]["content"]),
             "control_request" if line["request"]["subtype"] == "can_use_tool" => {
                 let request = &line["request"];
                 let tool = request["tool_name"].as_str().unwrap_or("a tool").to_owned();
+                if !std::mem::replace(&mut self.asked_you, true) {
+                    self.alerts.push((format!("Claude needs you: {tool}"), summary(&tool, &request["input"])));
+                }
                 self.items.push(Item::Ask(Ask {
                     request: line["request_id"].as_str().unwrap_or_default().to_owned(),
                     summary: summary(&tool, &request["input"]),
@@ -125,7 +154,7 @@ impl Session {
                 }));
             }
             "result" => {
-                self.working = false;
+                self.working = self.reports_state && self.working;
                 self.live.clear();
                 self.cost = line["total_cost_usd"].as_f64().unwrap_or(self.cost);
                 // A stopped turn ends as an error, with Claude Code's diagnostics as its text.
@@ -134,9 +163,38 @@ impl Session {
                 } else if line["is_error"] == true || line["subtype"].as_str().is_some_and(|s| s != "success") {
                     let said = line["result"].as_str().map(str::to_owned).or_else(|| line["errors"].as_array().map(|e| texts(e).join("\n")));
                     self.items.push(Item::Error(said.filter(|s| !s.is_empty()).unwrap_or_else(|| "The turn ended with an error.".into())));
+                } else if !std::mem::replace(&mut self.told_you, true) {
+                    let last = self.items.iter().rev().find_map(|item| if let Item::Text(text) = item { Some(text) } else { None });
+                    let first = last.and_then(|text| text.lines().find(|line| !line.trim().is_empty())).unwrap_or_default();
+                    self.alerts.push(("Claude finished".into(), cut(first.trim(), SUMMARY_KEPT)));
                 }
+                // A question in the next turn tells you again. "Finished" waits for the next turn's own output: a
+                // turn can end with more than one result line.
+                self.asked_you = false;
             }
             _ => {}
+        }
+    }
+
+    /// Claude Code's `session_state_changed`: `idle` is its own word that the turn, and what follows it, is over.
+    fn changed(&mut self, state: &str) {
+        self.reports_state = true;
+        match state {
+            "idle" => {
+                self.working = false;
+                // Nothing will read what is still queued now, so it was read without an echo.
+                let left = std::mem::take(&mut self.queued);
+                self.items.extend(left.into_iter().map(|queued| Item::User(queued.text)));
+            }
+            "running" | "requires_action" => self.working = true,
+            _ => {}
+        }
+    }
+
+    /// Claude Code read the message `uuid`: from the queue into the conversation.
+    fn echoed(&mut self, uuid: &str) {
+        if let Some(at) = self.queued.iter().position(|queued| queued.uuid == uuid) {
+            self.items.push(Item::User(self.queued.remove(at).text));
         }
     }
 
@@ -255,6 +313,33 @@ impl Session {
         line(&json!({ "type": "user", "message": { "role": "user", "content": text } }))
     }
 
+    /// The line that sends `text` to be read after what Claude is doing, and the message queued. `stamp` (the time in
+    /// milliseconds) and `n` (this write's number) make its uuid: the plugin has no randomness, and the uuid must differ
+    /// from the ones of this session's earlier starts, which share its transcript.
+    pub fn queue(&mut self, text: &str, stamp: u64, n: u32) -> String {
+        let uuid = uuid(stamp, n);
+        let sent = user_line(text, "later", &uuid);
+        self.queued.push(Queued { uuid, text: text.to_owned() });
+        sent
+    }
+
+    /// The line that takes the queued message `uuid` back, which is then gone from the queue. None when it isn't there.
+    pub fn unqueue(&mut self, uuid: &str, n: u32) -> Option<String> {
+        let at = self.queued.iter().position(|queued| queued.uuid == uuid)?;
+        self.queued.remove(at);
+        Some(cancel(uuid, n))
+    }
+
+    /// The lines that take the queued message `uuid` back and send it again to be read at Claude's next step, in the
+    /// same place of the queue. It has a new uuid, since Claude Code may keep the cancelled one in mind.
+    pub fn send_now(&mut self, uuid: &str, stamp: u64, n: u32) -> Option<String> {
+        let queued = self.queued.iter_mut().find(|queued| queued.uuid == uuid)?;
+        let fresh = self::uuid(stamp, n);
+        let lines = [cancel(uuid, n), user_line(&queued.text, "next", &fresh)].concat();
+        queued.uuid = fresh;
+        Some(lines)
+    }
+
     /// What the chat asks Claude Code as it starts: the models and commands it has, and how full the context is.
     pub fn opening() -> String {
         [request(INITIALIZE, json!({ "subtype": "initialize" })), request(CONTEXT, json!({ "subtype": "get_context_usage" }))].concat()
@@ -287,10 +372,13 @@ impl Session {
         })
     }
 
-    /// The line that asks Claude to stop the turn it is on, the `n`th time you have.
+    /// The line that asks Claude to stop the turn it is on, the `n`th time you have, and to drop the messages queued
+    /// behind it, which are then gone from the chat. Without that, Claude Code reads them as soon as it has stopped.
     pub fn interrupt(&mut self, n: u32) -> String {
         self.stopping = true;
-        request(&format!("interrupt-{n}"), json!({ "subtype": "interrupt" }))
+        let cancel_queued = !std::mem::take(&mut self.queued).is_empty();
+        let what = if cancel_queued { json!({ "subtype": "interrupt", "cancel_queued": true }) } else { json!({ "subtype": "interrupt" }) };
+        request(&format!("interrupt-{n}"), what)
     }
 
     /// The line that answers the question `request`, which is then shown answered. None when there is no such question
@@ -313,6 +401,21 @@ impl Session {
 
 fn line(message: &Value) -> String {
     format!("{message}\n")
+}
+
+/// Your message `text` for Claude Code to read as `priority` says (`later`: after what it is doing, `next`: at its next
+/// step), stamped `uuid`, which it echoes when it reads it.
+fn user_line(text: &str, priority: &str, uuid: &str) -> String {
+    line(&json!({ "type": "user", "message": { "role": "user", "content": text }, "parent_tool_use_id": null, "priority": priority, "uuid": uuid }))
+}
+
+fn cancel(uuid: &str, n: u32) -> String {
+    request(&format!("cancel-{n}"), json!({ "subtype": "cancel_async_message", "message_uuid": uuid }))
+}
+
+/// A uuid (version 4 in shape, which the protocol wants) made from the time in milliseconds and a number.
+fn uuid(stamp: u64, n: u32) -> String {
+    format!("{:08x}-{:04x}-4000-8000-{:012x}", (stamp >> 16) as u32, stamp & 0xffff, n)
 }
 
 /// A request of the chat's to Claude Code, answered under `id`.
@@ -527,5 +630,134 @@ mod tests {
         // The next turn's error is an error again.
         session.hear(&json!({ "type": "result", "subtype": "error_during_execution", "is_error": true, "errors": ["Overloaded"] }));
         assert_eq!(session.items[2], Item::Error("Overloaded".into()));
+    }
+
+    fn parsed(lines: &str) -> Vec<Value> {
+        lines.lines().map(|line| serde_json::from_str(line).unwrap()).collect()
+    }
+
+    #[test]
+    fn a_message_sent_while_claude_works_is_queued_with_a_uuid_and_a_later_priority() {
+        let mut session = Session::default();
+        session.send("count to 400");
+        let sent = parsed(&session.queue("and then stop", 1_700_000_000_123, 5));
+        assert_eq!(sent.len(), 1);
+        let uuid = sent[0]["uuid"].as_str().unwrap().to_owned();
+        assert_eq!(uuid.len(), 36);
+        assert_eq!(uuid.matches('-').count(), 4);
+        assert_eq!(
+            sent[0],
+            json!({ "type": "user", "message": { "role": "user", "content": "and then stop" }, "parent_tool_use_id": null, "priority": "later", "uuid": uuid })
+        );
+        assert_eq!(session.queued, [Queued { uuid: uuid.clone(), text: "and then stop".into() }]);
+        // Another write, even in the same millisecond, has another uuid.
+        session.queue("more", 1_700_000_000_123, 6);
+        assert_ne!(session.queued[0].uuid, session.queued[1].uuid);
+    }
+
+    #[test]
+    fn taking_a_queued_message_back_cancels_it_by_uuid() {
+        let mut session = Session::default();
+        session.queue("one", 1, 1);
+        let uuid = session.queued[0].uuid.clone();
+        let cancelled: Value = serde_json::from_str(&session.unqueue(&uuid, 2).unwrap()).unwrap();
+        assert_eq!(cancelled, json!({ "type": "control_request", "request_id": "cancel-2", "request": { "subtype": "cancel_async_message", "message_uuid": uuid } }));
+        assert!(session.queued.is_empty());
+        assert_eq!(session.unqueue(&uuid, 3), None, "gone already");
+    }
+
+    #[test]
+    fn send_now_cancels_and_sends_again_as_next_in_one_write() {
+        let mut session = Session::default();
+        session.queue("first", 1, 1);
+        session.queue("second", 1, 2);
+        let old = session.queued[1].uuid.clone();
+        let written = session.send_now(&old, 2, 3).unwrap();
+        let lines = parsed(&written);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0]["request"], json!({ "subtype": "cancel_async_message", "message_uuid": old }));
+        assert_eq!(lines[1]["priority"], "next");
+        assert_eq!(lines[1]["message"]["content"], "second");
+        let fresh = lines[1]["uuid"].as_str().unwrap();
+        assert_ne!(fresh, old);
+        // Still queued, in its place, under the new uuid.
+        assert_eq!((session.queued[1].uuid.as_str(), session.queued[1].text.as_str()), (fresh, "second"));
+        assert_eq!(session.send_now("nope", 2, 4), None);
+    }
+
+    #[test]
+    fn a_queued_message_moves_into_the_conversation_when_claude_echoes_it_and_only_once() {
+        let mut session = Session::default();
+        session.send("count to 400");
+        session.queue("then say done", 1, 1);
+        let uuid = session.queued[0].uuid.clone();
+        // The echo of the first message, sent while Claude was idle, is on the page already.
+        session.hear(&json!({ "type": "user", "isReplay": true, "uuid": "x", "message": { "role": "user", "content": "count to 400" } }));
+        assert_eq!(session.items, [Item::User("count to 400".into())]);
+        let echo = json!({ "type": "user", "isReplay": true, "uuid": uuid, "session_id": "s", "message": { "role": "user", "content": "then say done" } });
+        session.hear(&echo);
+        session.hear(&echo);
+        assert_eq!(session.items, [Item::User("count to 400".into()), Item::User("then say done".into())]);
+        assert!(session.queued.is_empty());
+    }
+
+    #[test]
+    fn stop_with_messages_queued_cancels_them_too() {
+        let mut session = Session::default();
+        session.send("count to 400");
+        session.queue("one", 1, 1);
+        session.queue("two", 1, 2);
+        let stop: Value = serde_json::from_str(&session.interrupt(3)).unwrap();
+        assert_eq!(stop, json!({ "type": "control_request", "request_id": "interrupt-3", "request": { "subtype": "interrupt", "cancel_queued": true } }));
+        assert!(session.queued.is_empty());
+    }
+
+    #[test]
+    fn the_working_state_follows_session_state_changed_once_claude_code_prints_it() {
+        let state = |state: &str| json!({ "type": "system", "subtype": "session_state_changed", "state": state });
+        let result = json!({ "type": "result", "subtype": "success", "is_error": false });
+        // Without the events, the result ends the turn.
+        let mut plain = Session::default();
+        plain.send("hi");
+        plain.hear(&result);
+        assert!(!plain.working);
+        // With them, a turn's result isn't the end: the next queued turn goes on, and `idle` ends it.
+        let mut session = Session::default();
+        session.hear(&state("running"));
+        session.queue("next", 1, 1);
+        let uuid = session.queued[0].uuid.clone();
+        session.hear(&result);
+        assert!(session.working);
+        session.hear(&json!({ "type": "user", "isReplay": true, "uuid": uuid, "message": { "role": "user", "content": "next" } }));
+        session.hear(&state("requires_action"));
+        assert!(session.working);
+        session.hear(&result);
+        session.hear(&state("idle"));
+        assert!(!session.working);
+        // A message nothing echoed is shown once Claude is idle, not left in the queue.
+        session.hear(&state("running"));
+        session.queue("lost", 1, 2);
+        session.hear(&state("idle"));
+        assert!(session.queued.is_empty());
+        assert_eq!(session.items.last(), Some(&Item::User("lost".into())));
+    }
+
+    #[test]
+    fn you_are_told_once_a_turn_when_claude_needs_you_and_once_when_it_finishes() {
+        let ask = |id: &str| json!({ "type": "control_request", "request_id": id, "request": { "subtype": "can_use_tool", "tool_name": "Bash", "input": { "command": "rm x" } } });
+        let mut session = Session::default();
+        session.send("clean up");
+        session.hear(&ask("r1"));
+        session.hear(&ask("r2"));
+        assert_eq!(session.alerts, [("Claude needs you: Bash".to_owned(), "rm x".to_owned())]);
+        session.alerts.clear();
+        session.hear(&json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "\nDone, x is gone.\nAnything else?" }] } }));
+        session.hear(&json!({ "type": "result", "subtype": "success", "is_error": false }));
+        session.hear(&json!({ "type": "result", "subtype": "success", "is_error": false }));
+        assert_eq!(session.alerts, [("Claude finished".to_owned(), "Done, x is gone.".to_owned())]);
+        // The next turn tells you again.
+        session.alerts.clear();
+        session.hear(&ask("r3"));
+        assert_eq!(session.alerts.len(), 1);
     }
 }

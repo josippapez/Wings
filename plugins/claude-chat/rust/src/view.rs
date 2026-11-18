@@ -19,9 +19,10 @@ use crate::{
     session::{Ask, Item, MODES, Tool},
 };
 
-/// An arrow up, and a square, in a 14-point box.
+/// An arrow up, a square and a cross, in a 14-point box.
 const SEND: &str = "M7 12V2M2.5 6.5 7 2l4.5 4.5";
 const STOP: &str = "M3.5 3.5h7v7h-7z";
+const CLOSE: &str = "M3.5 3.5l7 7M10.5 3.5l-7 7";
 
 /// The conversation's column, as wide as a page meant for reading.
 const COLUMN: u32 = 760;
@@ -272,23 +273,47 @@ fn composer(c: &Chat) -> Node {
                 chat::send();
             }
         });
-    // A round button with an arrow, or a square to stop, as chat apps have.
-    let go = if c.session.working {
+    // A round button with an arrow, and a square to stop while Claude works, as chat apps have. What you send then
+    // waits in the queue.
+    let stop = c.session.working.then(|| {
         button("", "secondary", false, chat::stop).prop("size", "icon-sm").prop("label", "Stop").prop("title", "Stop").child(icon(14, 2.0, &[STOP]))
-    } else {
-        button("", "default", false, chat::send)
-            .prop("size", "icon-sm")
-            .prop("label", "Send")
-            .prop("title", "Send (Enter)")
-            .prop("disabled", !open || c.draft.trim().is_empty())
-            .child(icon(14, 2.0, &[SEND]))
-    };
+    });
+    let send = button("", "default", false, chat::send)
+        .prop("size", "icon-sm")
+        .prop("label", if c.session.working { "Queue" } else { "Send" })
+        .prop("title", if c.session.working { "Queue for after Claude's turn (Enter)" } else { "Send (Enter)" })
+        .prop("disabled", !open || c.draft.trim().is_empty())
+        .child(icon(14, 2.0, &[SEND]));
     let context = c.session.context.map(|(used, most)| {
         text(format!("{}%", (used * 100 / most.max(1)).min(100))).prop("tone", "muted").prop("size", "small").prop("title", "How full the context window is")
     });
-    let controls = row().prop("gap", "xs").prop("align", "center").children(pickers(c)).child(stack().prop("grow", true)).maybe(context).child(go);
+    let controls = row().prop("gap", "xs").prop("align", "center").children(pickers(c)).child(stack().prop("grow", true)).maybe(context).maybe(stop).child(send);
     let message_box = card().prop("variant", "raised").child(field.prop("grow", true)).child(controls);
-    Node::new("Bar").prop("edge", "none").child(stack().prop("gap", "s").prop("maxWidth", COLUMN).maybe(commands(c).or_else(|| file_menu(c))).child(message_box))
+    Node::new("Bar").prop("edge", "none").child(stack().prop("gap", "s").prop("maxWidth", COLUMN).maybe(commands(c).or_else(|| file_menu(c))).maybe(queued(c)).child(message_box))
+}
+
+/// The messages waiting for Claude to finish, each with Send now and a way to take it back.
+fn queued(c: &Chat) -> Option<Node> {
+    if c.session.queued.is_empty() {
+        return None;
+    }
+    let rows = c.session.queued.iter().map(|queued| {
+        let (now, remove) = (queued.uuid.clone(), queued.uuid.clone());
+        row()
+            .prop("gap", "xs")
+            .prop("align", "center")
+            .child(text(truncate(&queued.text, 120)).prop("truncate", true).prop("grow", true).prop("title", queued.text.as_str()))
+            .child(button("Send now", "ghost", false, move || chat::send_now(&now)).prop("size", "sm").prop("title", "Claude reads it at its next step"))
+            .child(
+                button("", "ghost", false, move || chat::unqueue(&remove))
+                    .prop("size", "icon-sm")
+                    .prop("label", "Remove")
+                    .prop("title", "Remove")
+                    .child(icon(14, 2.0, &[CLOSE])),
+            )
+            .key(queued.uuid.as_str())
+    });
+    Some(card().child(muted("Queued")).child(stack().prop("gap", "xs").children(rows)))
 }
 
 /// The model, effort and permission mode, each a menu, once Claude Code has said what it has.

@@ -11,9 +11,10 @@
       "git ls-files [--cached --others --exclude-standard -z]"
     ],
     "processes": [
-      "claude [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --resume]",
-      "claude-rtk [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --resume]"
+      "claude [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --replay-user-messages --resume]",
+      "claude-rtk [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --replay-user-messages --resume]"
     ],
+    "notify": true,
     "transcript": [
       "user",
       "assistant"

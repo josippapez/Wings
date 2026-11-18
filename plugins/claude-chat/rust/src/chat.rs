@@ -158,7 +158,7 @@ fn launch(resume: Option<String>) {
             drop(host::call("setTabState", json!({ "state": { "sessionId": id } })));
         }
         // Each value joined to its flag: Wings passes a program nothing else.
-        let mut args: Vec<String> = ["-p", "--input-format=stream-json", "--output-format=stream-json", "--verbose", "--include-partial-messages", "--permission-prompt-tool=stdio"]
+        let mut args: Vec<String> = ["-p", "--input-format=stream-json", "--output-format=stream-json", "--verbose", "--include-partial-messages", "--permission-prompt-tool=stdio", "--replay-user-messages"]
             .map(str::to_owned)
             .to_vec();
         args.extend(resume.as_ref().map(|id| format!("--resume={id}")));
@@ -259,14 +259,20 @@ fn why(exit: &Value) -> String {
 
 /// One line Claude Code printed, from the start `run`. The tab keeps the session's id once Claude Code names it.
 fn hear(run: u32, line: &Value) {
-    let named = with(|c| {
+    let (named, alerts) = with(|c| {
         if c.run != run {
-            return None;
+            return (None, Vec::new());
         }
         let before = c.session.id.clone();
         c.session.hear(line);
-        c.session.id.clone().filter(|id| Some(id) != before.as_ref())
+        (c.session.id.clone().filter(|id| Some(id) != before.as_ref()), std::mem::take(&mut c.session.alerts))
     });
+    // Only for what you'd miss: someone looking at this tab sees it happen.
+    if !host::focused() {
+        for (title, body) in alerts {
+            drop(host::notify(&title, &body));
+        }
+    }
     if let Some(id) = named {
         drop(host::call("setTabState", json!({ "state": { "sessionId": id } })));
     }
@@ -290,16 +296,26 @@ fn write(make: impl FnOnce(&mut Chat, u32) -> Option<String>) {
     });
 }
 
-/// Sends the draft as your message.
+/// Sends the draft as your message, or queues it while Claude works.
 pub fn send() {
-    write(|c, _| {
+    write(|c, n| {
         let text = c.draft.trim().to_owned();
         if text.is_empty() {
             return None;
         }
         c.draft.clear();
-        Some(c.session.send(&text))
+        Some(if c.session.working { c.session.queue(&text, host::now() as u64, n) } else { c.session.send(&text) })
     });
+}
+
+/// Takes a queued message back.
+pub fn unqueue(uuid: &str) {
+    write(|c, n| c.session.unqueue(uuid, n));
+}
+
+/// Has Claude read a queued message at its next step instead of after the turn.
+pub fn send_now(uuid: &str) {
+    write(|c, n| c.session.send_now(uuid, host::now() as u64, n));
 }
 
 /// Allows or denies what Claude asked to do.
