@@ -48,15 +48,18 @@ pub fn view() -> Vec<Node> {
 }
 
 fn chat_page(c: &Chat) -> Node {
-    let facts = row().prop("gap", "s").child(muted(c.folder.as_str()));
+    // Usage view hook: its way back in the toolbar.
+    let facts = row().prop("gap", "s").child(muted(c.folder.as_str())).maybe(crate::usage_view::crumbs(c));
     let sessions = button("Sessions", if c.past.is_some() { "secondary" } else { "ghost" }, false, chat::toggle_past);
     let terminal = (c.session.id.is_some() && c.state != State::Moved).then(|| button("Open in terminal", "ghost", false, chat::to_terminal));
     let settings = button("Settings", "ghost", false, chat::open_settings).prop("title", "The mode new chats start in, and how much of the tool calls shows");
     let actions = row().prop("gap", "s").maybe(terminal).child(settings).child(sessions).child(button("New chat", "outline", false, chat::new_chat));
     let toolbar = toolbar_with("Claude", facts, Some(actions));
-    let body = match &c.past {
-        Some(past) => past_sessions(past),
-        None => conversation(c),
+    let body = match (&c.panel, &c.past) {
+        // Usage view hook: /usage and /context open over the conversation.
+        (Some(panel), _) => crate::usage_view::body(c, *panel),
+        (None, Some(past)) => past_sessions(past),
+        (None, None) => conversation(c),
     };
     // The conversation, the checklist and the message box in the main pane, and a card on the right that the app leaves out
     // of a narrow tab. An open subagent pins it: that is what you asked to see. Flush, so the conversation scrolls on its own
@@ -568,6 +571,10 @@ fn composer(c: &Chat) -> Node {
         .on("onKeyDown", |event| {
             if event["key"] == "Enter" {
                 chat::send();
+            }
+            // Usage view hook: Escape closes it.
+            if event["key"] == "Escape" {
+                chat::close_panel();
             }
         });
     // One button, as chat apps have: a square to stop while Claude works and nothing is typed, else an arrow to send.

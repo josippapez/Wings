@@ -888,6 +888,20 @@ fn claude_chat(out: PathBuf) {
     // Each: its name, what the fake prints, its exit code and stderr when it fails, what to do once the page is up (press a
     // button or type), and the text to wait for.
     type Scene<'a> = (&'a str, Vec<serde_json::Value>, Option<(&'a str, &'a str)>, Option<&'a str>, &'a str);
+    // What `/usage` asks for in full, which the fake prints with the rest: the view fills from it once it opens.
+    let full_usage = answer("usage-view", json!({
+        "session": { "total_cost_usd": 1.2345, "total_api_duration_ms": 84200, "total_duration_ms": 612000, "total_lines_added": 120, "total_lines_removed": 31,
+            "model_usage": { "claude-opus-5-5": { "inputTokens": 1200, "outputTokens": 9800, "cacheReadInputTokens": 410000, "cacheCreationInputTokens": 52000 } } },
+        "subscription_type": "max",
+        "rate_limits": {
+            "five_hour": { "utilization": 42, "resets_at": "2026-11-18T17:00:00+00:00" },
+            "seven_day": { "utilization": 13, "resets_at": "2026-11-22T15:59:00+00:00" },
+            "model_scoped": [{ "display_name": "Fable", "utilization": 0, "resets_at": "2026-11-22T15:59:00+00:00" }],
+            "extra_usage": { "is_enabled": true, "monthly_limit": 20000, "used_credits": 1174, "utilization": 6, "currency": "EUR", "decimal_places": 2 } },
+        "behaviors": {
+            "day": { "recommendations": [{ "key": "long_context", "pct": 70, "title": "See what fills your context", "detail": "run /context" }],
+                "agents": [], "skills": [{ "name": "release-notes", "pct": 4 }], "plugins": [{ "name": "toolbox", "pct": 11 }], "mcp_servers": [{ "name": "files", "pct": 6 }] },
+            "week": { "recommendations": [], "agents": [], "skills": [], "plugins": [], "mcp_servers": [] } } }));
     let scenes: [Scene; 17] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
@@ -896,6 +910,8 @@ fn claude_chat(out: PathBuf) {
         ("new", opened(vec![init.clone()]), None, None, "What should Claude do?"),
         ("slash", opened(vec![init.clone()]), None, Some("type:/re;keys:down"), "/review"),
         ("sessions", opened(vec![init.clone()]), None, Some("press:Sessions"), "Fix the flaky checkout test"),
+        // /usage opens the usage view in place of the conversation instead of going to Claude as a message.
+        ("usage", opened(vec![init.clone(), full_usage]), None, Some("type:/usage;keys:enter"), "Current week"),
         ("failed", vec![], Some(("1", "Error: Invalid API key · Please run /login")), None, "Invalid API key"),
         ("work", work.clone(), None, None, "of 4 done"),
         ("work-open", work.clone(), None, Some("disclose:Ran 1 command"), "pnpm test discount"),

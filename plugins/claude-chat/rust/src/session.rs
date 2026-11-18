@@ -6,6 +6,8 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::{Map, Value, json};
 
+use crate::usage::{ContextDetail, Panel, Usage};
+
 /// The most of a tool's output the chat keeps. A whole file read or a long build log is more than anyone reads in a card.
 const OUTPUT_KEPT: usize = 4000;
 /// The most of a tool's input shown as its one-line summary.
@@ -223,6 +225,9 @@ pub const SETTINGS: &str = "settings";
 pub const USAGE: &str = "usage";
 /// The request that puts a new chat in the mode you set for them.
 pub const START_MODE: &str = "start-mode";
+/// The requests behind the usage and context views, apart from the opening ones: those ask for less.
+pub const USAGE_VIEW: &str = "usage-view";
+pub const CONTEXT_VIEW: &str = "context-view";
 
 #[derive(Debug, Default)]
 pub struct Session {
@@ -249,6 +254,10 @@ pub struct Session {
     pub commands: Vec<Command>,
     /// The tokens in the context window after the last message, and how many it holds.
     pub context: Option<(u64, u64)>,
+    /// What the usage and context views show, once Claude Code has answered, or why it couldn't.
+    pub usage_view: Option<Usage>,
+    pub context_view: Option<ContextDetail>,
+    pub view_error: Option<String>,
     /// A turn is running. Claude Code's own `session_state_changed` says so when it prints them, else it is from your
     /// message to its result. The result alone ends a turn, not the work: with a message of yours queued the next turn
     /// starts at once, and a background task can run on, while `idle` waits for all of that.
@@ -407,7 +416,20 @@ impl Session {
     /// Claude Code's answer to one of the chat's requests.
     fn answered(&mut self, response: &Value) {
         let answer = &response["response"];
-        match response["request_id"].as_str().unwrap_or_default() {
+        let id = response["request_id"].as_str().unwrap_or_default();
+        if response["subtype"] == "error" && (id == USAGE_VIEW || id == CONTEXT_VIEW) {
+            self.view_error = Some(response["error"].as_str().unwrap_or("Claude Code didn't answer.").to_owned());
+            return;
+        }
+        match id {
+            USAGE_VIEW => {
+                self.usage_view = Usage::parse(answer);
+                self.view_error = self.usage_view.is_none().then(|| "Claude Code's answer had no usage in it.".to_owned());
+            }
+            CONTEXT_VIEW => {
+                self.context_view = ContextDetail::parse(answer);
+                self.view_error = self.context_view.is_none().then(|| "Claude Code's answer had no context in it.".to_owned());
+            }
             INITIALIZE => {
                 let text = |value: &Value, key: &str| value[key].as_str().unwrap_or_default().to_owned();
                 self.models = answer["models"]
@@ -656,6 +678,20 @@ impl Session {
         Some(lines)
     }
 
+    /// A draft that is a command with a view of the chat's own (`/usage`, `/cost`, `/context`): which view, and the
+    /// request line that fills it. It is never sent as a message. Claude Code answers a control request at once, even
+    /// while a turn runs, so the view doesn't wait for the turn.
+    pub fn view_command(&mut self, text: &str) -> Option<(Panel, String)> {
+        let (panel, line) = match view_of(text)? {
+            // Without `skip_behaviors`, so what fills the limits comes too.
+            Panel::Usage => (Panel::Usage, request(USAGE_VIEW, json!({ "subtype": "get_usage" }))),
+            Panel::Context => (Panel::Context, request(CONTEXT_VIEW, json!({ "subtype": "get_context_usage", "detail": "full" }))),
+        };
+        // What the view showed last stays until the new answer replaces it.
+        self.view_error = None;
+        Some((panel, line))
+    }
+
     /// What the chat asks Claude Code as it starts: the models and commands it has, how full the context is, your
     /// settings and how much of your plan's limits is used, and, with a `mode`, to start in it.
     pub fn opening(mode: Option<&str>) -> String {
@@ -800,6 +836,15 @@ fn sent_item(text: String, images: usize) -> Item {
 
 fn cancel(uuid: &str, n: u32) -> String {
     request(&format!("cancel-{n}"), json!({ "subtype": "cancel_async_message", "message_uuid": uuid }))
+}
+
+/// The view a draft opens, when the draft is exactly that command.
+pub fn view_of(text: &str) -> Option<Panel> {
+    match text.trim() {
+        "/usage" | "/cost" => Some(Panel::Usage),
+        "/context" => Some(Panel::Context),
+        _ => None,
+    }
 }
 
 /// A uuid (version 4 in shape, which the protocol wants) made from the time in milliseconds and a number.
@@ -1741,5 +1786,80 @@ mod tests {
         assert_eq!(session.todos[0].active, "Building entities");
         tool_call(&mut session, "u3", "TaskUpdate", json!({ "taskId": "1", "status": "deleted" }));
         assert_eq!(session.todos.len(), 1);
+    }
+
+    #[test]
+    fn the_usage_answer_becomes_the_windows_credits_contributors_and_totals_the_view_shows() {
+        let mut session = Session::default();
+        session.hear(&serde_json::from_str(include_str!("../tests/usage.json")).unwrap());
+        let usage = session.usage_view.expect("the answer to the usage view's request");
+        let windows: Vec<(&str, u64)> = usage.windows.iter().map(|window| (window.name.as_str(), window.used)).collect();
+        assert_eq!(windows, [("Current session", 3), ("Current week (all models)", 13), ("Current week (Fable)", 0)]);
+        assert_eq!(usage.windows[1].resets, "2026-11-22T15:59:59.562716+00:00");
+        assert_eq!(usage.plan.as_deref(), Some("max"));
+        let credits = usage.credits.unwrap();
+        assert_eq!((credits.spent, credits.limit, credits.currency.as_str(), credits.used), (11.74, Some(200.0), "EUR", Some(6)));
+        let day = usage.day.unwrap();
+        assert_eq!(day.tips[0], (70, "See what fills your context".into(), "run /context".into()));
+        assert_eq!((day.skills, day.plugins, day.mcp_servers), (vec![("release-notes".into(), 4)], vec![("toolbox".into(), 11)], vec![("files".into(), 6)]));
+        assert_eq!(usage.week.unwrap().skills, [("release-notes".to_owned(), 7)]);
+        let totals = usage.totals;
+        assert_eq!((totals.api_ms, totals.wall_ms, totals.added, totals.removed), (84_200, 612_000, 120, 31));
+        // Summed over the models the session used.
+        assert_eq!((totals.input, totals.output, totals.cache_read, totals.cache_write), (1500, 10_500, 410_000, 57_000));
+        assert!((totals.cost - 1.2345).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_usage_answer_without_credits_or_a_scan_shows_neither_and_an_error_says_why() {
+        let answer = |id: &str, response: Value| json!({ "type": "control_response", "response": { "subtype": "success", "request_id": id, "response": response } });
+        let mut session = Session::default();
+        session.hear(&answer(USAGE_VIEW, json!({ "session": {}, "rate_limits": {
+            "five_hour": { "utilization": 40, "resets_at": "2026-11-18T14:29:59+00:00" },
+            "seven_day_opus": { "utilization": 7, "resets_at": "2026-11-19T10:59:59+00:00" },
+            "extra_usage": { "is_enabled": false } }, "behaviors": null })));
+        let usage = session.usage_view.take().unwrap();
+        // No server-listed per-model windows: the fixed Opus one stands in.
+        assert_eq!(usage.windows.iter().map(|window| window.name.as_str()).collect::<Vec<_>>(), ["Current session", "Current week (Opus)"]);
+        assert!(usage.credits.is_none() && usage.day.is_none() && usage.week.is_none());
+        session.hear(&json!({ "type": "control_response", "response": { "subtype": "error", "request_id": USAGE_VIEW, "error": "Not signed in" } }));
+        assert_eq!(session.view_error.as_deref(), Some("Not signed in"));
+    }
+
+    #[test]
+    fn the_context_answer_becomes_its_categories_without_the_deferred_ones() {
+        let answer = json!({ "type": "control_response", "response": { "subtype": "success", "request_id": CONTEXT_VIEW, "response": {
+            "model": "claude-opus-5-5", "totalTokens": 41_000, "maxTokens": 200_000,
+            "categories": [
+                { "name": "System prompt", "tokens": 6000, "color": "x", "kind": "used" },
+                { "name": "Messages", "tokens": 35_000, "color": "x", "kind": "used" },
+                { "name": "Deferred tools", "tokens": 9000, "color": "x", "kind": "deferred", "isDeferred": true },
+                { "name": "Free space", "tokens": 120_000, "color": "x", "kind": "free" },
+                { "name": "Autocompact buffer", "tokens": 39_000, "color": "x", "kind": "buffer" } ] } } });
+        let mut session = Session::default();
+        session.hear(&answer);
+        let context = session.context_view.unwrap();
+        assert_eq!((context.used, context.most, context.model.as_str()), (41_000, 200_000, "claude-opus-5-5"));
+        let names: Vec<&str> = context.categories.iter().map(|(name, ..)| name.as_str()).collect();
+        assert_eq!(names, ["System prompt", "Messages", "Free space", "Autocompact buffer"]);
+    }
+
+    #[test]
+    fn usage_cost_and_context_open_a_view_and_are_not_sent_as_messages() {
+        for (text, panel, subtype) in [("/usage", Panel::Usage, "get_usage"), (" /cost\n", Panel::Usage, "get_usage"), ("/context", Panel::Context, "get_context_usage")] {
+            let mut session = Session::default();
+            let (opened, line) = session.view_command(text).expect(text);
+            assert_eq!(opened, panel);
+            // One control request, no message, and nothing in the conversation.
+            assert_eq!(line.lines().count(), 1);
+            let sent: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(sent["type"], "control_request");
+            assert_eq!(sent["request"]["subtype"], subtype);
+            assert!(sent["request"].get("skip_behaviors").is_none());
+            assert!(session.items.is_empty() && !session.working);
+        }
+        let mut session = Session::default();
+        assert!(session.view_command("/usage now").is_none());
+        assert!(session.view_command("tell me about /usage").is_none());
     }
 }

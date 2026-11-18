@@ -21,5 +21,8 @@ mod prefs;
 mod session;
 #[cfg(feature = "settings")]
 mod settings_page;
+mod usage;
+#[cfg(feature = "chat")]
+mod usage_view;
 #[cfg(feature = "chat")]
 mod view;

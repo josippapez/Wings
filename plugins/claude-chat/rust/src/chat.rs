@@ -18,7 +18,8 @@ use wings_plugin::{
 use crate::{
     mentions::{self, Files},
     prefs,
-    session::{Command, Draft, Item, Session},
+    session::{Command, Draft, Item, Session, view_of},
+    usage::Panel,
 };
 
 /// What a chat may run Claude Code as: Claude Code itself, or the wrapper a terminal started it through.
@@ -65,6 +66,10 @@ pub struct Chat {
     pub past: Option<Past>,
     /// Your setting for how tool calls show: Compact folds them, Detailed opens every run and each call's output.
     pub detailed: bool,
+    /// The usage or context view, open in place of the conversation, and whether the usage view lists the last week's
+    /// contributors in place of the last day's.
+    pub panel: Option<Panel>,
+    pub panel_week: bool,
     /// The groups of tool calls you clicked, by the index of their first item: each flips what `detailed` shows.
     pub open_steps: HashSet<usize>,
     /// The tool calls whose output you clicked, by their id: each flips what `detailed` shows.
@@ -107,6 +112,8 @@ thread_local! {
         state: State::Starting,
         past: None,
         detailed: false,
+        panel: None,
+        panel_week: false,
         open_steps: HashSet::new(),
         open_outputs: HashSet::new(),
         open_queued: HashSet::new(),
@@ -178,6 +185,7 @@ fn launch(resume: Option<String>) {
         c.state = State::Starting;
         c.shown = PAGE;
         c.past = None;
+        c.panel = None;
         c.open_steps.clear();
         c.open_outputs.clear();
         c.open_queued.clear();
@@ -427,6 +435,15 @@ pub fn send() {
         if text.is_empty() && c.images.is_empty() {
             return None;
         }
+        // /usage, /cost and /context open a view here, as in Claude Code, and aren't sent as a message, not even queued.
+        if c.images.is_empty() {
+            if let Some((panel, line)) = c.session.view_command(&text) {
+                c.draft.clear();
+                c.past = None;
+                c.panel = Some(panel);
+                return Some(line);
+            }
+        }
         c.draft.clear();
         let images = std::mem::take(&mut c.images);
         if c.session.working {
@@ -573,6 +590,10 @@ pub fn command_matches(c: &Chat) -> Vec<&Command> {
     let Some(typed) = c.draft.strip_prefix('/').filter(|typed| !typed.contains(char::is_whitespace)) else {
         return Vec::new();
     };
+    // Typed out in full, the command is ready: a list over it would take the Enter that opens its view.
+    if view_of(&c.draft).is_some() {
+        return Vec::new();
+    }
     let typed = typed.to_lowercase();
     c.session.commands.iter().filter(|command| command.name.to_lowercase().contains(&typed)).take(8).collect()
 }
@@ -608,6 +629,7 @@ pub fn resume(id: &str) {
 /// Opens the list of the project's past sessions, or closes it.
 pub fn toggle_past() {
     let open = with(|c| {
+        c.panel = None;
         c.past = match c.past.take() {
             Some(_) => None,
             None => Some(Past::default()),
@@ -638,6 +660,16 @@ pub fn load_past(query: String) {
             }
         });
     });
+}
+
+/// Closes the usage or context view.
+pub fn close_panel() {
+    with(|c| c.panel = None);
+}
+
+/// Switches the usage view between the last day's contributors and the last week's.
+pub fn set_panel_week(week: bool) {
+    with(|c| c.panel_week = week);
 }
 
 pub fn toggle_output(id: &str) {
