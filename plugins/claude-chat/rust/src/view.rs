@@ -17,7 +17,8 @@ use wings_plugin::{
 
 use crate::{
     chat::{self, Chat, PAGE, Past, State},
-    session::{Ask, Detail, Diff, Draft, Item, MODES, Progress, Session, Todo, Tool, exit_code, files_found, model_name},
+    prefs,
+    session::{Ask, Detail, Diff, Draft, Item, MODES, Progress, Session, Todo, Tool, exit_code, files_found, first_lines, model_name},
 };
 
 /// An arrow up, a square and a cross, in a 14-point box.
@@ -38,6 +39,9 @@ const SIDE_BELOW: u32 = 1_100;
 const SUB_BUDGET: usize = 1_200;
 /// The most subagents the panel lists.
 const SUBAGENTS_LISTED: usize = 12;
+/// The most lines of one call's output Detailed shows, about 3 nodes each: a long output is cut to this and says how many
+/// lines it leaves out. Opening one yourself in Compact shows it whole, as before.
+const DETAILED_LINES: usize = 30;
 
 pub fn view() -> Vec<Node> {
     chat::with(|c| vec![chat_page(c)])
@@ -47,7 +51,8 @@ fn chat_page(c: &Chat) -> Node {
     let facts = row().prop("gap", "s").child(muted(c.folder.as_str()));
     let sessions = button("Sessions", if c.past.is_some() { "secondary" } else { "ghost" }, false, chat::toggle_past);
     let terminal = (c.session.id.is_some() && c.state != State::Moved).then(|| button("Open in terminal", "ghost", false, chat::to_terminal));
-    let actions = row().prop("gap", "s").maybe(terminal).child(sessions).child(button("New chat", "outline", false, chat::new_chat));
+    let settings = button("Settings", "ghost", false, chat::open_settings).prop("title", "The mode new chats start in, and how much of the tool calls shows");
+    let actions = row().prop("gap", "s").maybe(terminal).child(settings).child(sessions).child(button("New chat", "outline", false, chat::new_chat));
     let toolbar = toolbar_with("Claude", facts, Some(actions));
     let body = match &c.past {
         Some(past) => past_sessions(past),
@@ -183,9 +188,9 @@ fn item_node(at: usize, item: &Item, c: &Chat) -> Option<Node> {
     Some(node.key(at.to_string()))
 }
 
-/// A run of tool calls as one line that says what they did, open only when you open it: one that opened while a call ran
-/// and shut once it ended showed the calls for a moment and hid them again. The line under the conversation says what
-/// runs. Closed, its calls aren't built at all.
+/// A run of tool calls as one line that says what they did, open only when you open it (or, in Detailed, until you shut
+/// it): one that opened while a call ran and shut once it ended showed the calls for a moment and hid them again. The
+/// line under the conversation says what runs. Closed, its calls aren't built at all.
 fn steps(first: usize, tools: &[&Tool], c: &Chat) -> Node {
     steps_in(first, None, tools, c)
 }
@@ -194,17 +199,29 @@ fn steps(first: usize, tools: &[&Tool], c: &Chat) -> Node {
 /// conversation's by their name, and kept open or shut with the tool outputs.
 fn steps_in(first: usize, scope: Option<&str>, tools: &[&Tool], c: &Chat) -> Node {
     let run = scope.map(|scope| format!("run-{scope}-{first}"));
-    let open = match &run {
+    let clicked = match &run {
         Some(run) => c.open_outputs.contains(run),
         None => c.open_steps.contains(&first),
     };
+    let open = prefs::is_open(c.detailed, clicked);
     let failed = tools.iter().filter(|tool| matches!(tool.output, Some((_, true)))).count();
     let mut said = describe(tools);
     if failed > 0 {
         said.push_str(&format!(" · {failed} failed"));
     }
-    let rows = stack().prop("gap", "s");
-    let rows = if open { rows.children(tools.iter().map(|tool| step(tool, c.open_outputs.contains(&tool.id), c))) } else { rows };
+    // With `outputs_open` each call's output shows unless you shut it, else only what you opened.
+    let calls = |outputs_open: bool| {
+        let cap = c.detailed.then_some(DETAILED_LINES);
+        stack().prop("gap", "s").children(tools.iter().map(|tool| step(tool, prefs::is_open(outputs_open, c.open_outputs.contains(&tool.id)), cap, c)))
+    };
+    let rows = if open {
+        let rows = calls(c.detailed);
+        // Every output of a long run, even cut to its first lines, would take most of the page's nodes and push the rest
+        // of the conversation out: its calls then show as lines, with the outputs for you to open.
+        if c.detailed && rows.count() > BUDGET / 2 { calls(false) } else { rows }
+    } else {
+        stack().prop("gap", "s")
+    };
     let key = format!("steps-{}{first}", scope.map(|scope| format!("{scope}-")).unwrap_or_default());
     disclosure(said, rows)
         .prop("open", open)
@@ -243,8 +260,9 @@ fn describe(tools: &[&Tool]) -> String {
     parts.join(" · ")
 }
 
-/// One tool call: what it is, and what it did or printed, folded. The fold is built only once you open it.
-fn step(tool: &Tool, opened: bool, c: &Chat) -> Node {
+/// One tool call: what it is, and what it did or printed, folded. The fold is built only once you open it. With a `cap`
+/// its output shows no more lines than that.
+fn step(tool: &Tool, opened: bool, cap: Option<usize>, c: &Chat) -> Node {
     let output = tool.output.as_ref().map(|(output, failed)| (output.as_str(), *failed)).filter(|(output, _)| !output.trim().is_empty());
     let mark = match &tool.output {
         None => spinner(),
@@ -280,7 +298,7 @@ fn step(tool: &Tool, opened: bool, c: &Chat) -> Node {
     match label {
         Some(label) => {
             let id = tool.id.clone();
-            let body = if opened { body(tool, output) } else { stack() };
+            let body = if opened { body(tool, output, cap) } else { stack() };
             let label = if error.is_some() { "Whole error" } else { label };
             let fold = disclosure(label, body).prop("open", opened).on("onOpenChange", move |_| chat::toggle_output(&id));
             stack().prop("gap", "xs").child(head).maybe(error).child(fold)
@@ -321,7 +339,7 @@ fn facts(tool: &Tool) -> Vec<Node> {
 }
 
 /// What a call's fold holds: the diff, the start of the file, a command of several lines, and what it printed.
-fn body(tool: &Tool, output: Option<(&str, bool)>) -> Node {
+fn body(tool: &Tool, output: Option<(&str, bool)>, cap: Option<usize>) -> Node {
     let failed = output.is_some_and(|(_, failed)| failed);
     let mut body = stack().prop("gap", "s");
     match &tool.detail {
@@ -336,7 +354,11 @@ fn body(tool: &Tool, output: Option<(&str, bool)>) -> Node {
         _ => {}
     }
     match output {
-        Some((output, _)) if failed || !matches!(tool.detail, Detail::Diff(_) | Detail::Write { .. }) => body.child(code_block(output)),
+        Some((output, _)) if failed || !matches!(tool.detail, Detail::Diff(_) | Detail::Write { .. }) => {
+            let (shown, more) = cap.map_or((output, 0), |cap| first_lines(output, cap));
+            let rest = (more > 0).then(|| muted(format!("{} more", plural(more, "line"))));
+            body.child(code_block(shown)).maybe(rest)
+        }
         _ => body,
     }
 }

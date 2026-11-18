@@ -221,6 +221,8 @@ pub const INITIALIZE: &str = "initialize";
 pub const CONTEXT: &str = "context";
 pub const SETTINGS: &str = "settings";
 pub const USAGE: &str = "usage";
+/// The request that puts a new chat in the mode you set for them.
+pub const START_MODE: &str = "start-mode";
 
 #[derive(Debug, Default)]
 pub struct Session {
@@ -241,6 +243,8 @@ pub struct Session {
     pub limits: Vec<(&'static str, u64, String)>,
     /// The permission mode, one of `MODES`' or another Claude Code has.
     pub mode: Option<String>,
+    /// The mode the opening input asked for, which `mode` shows once Claude Code has accepted it.
+    pub start_mode: Option<String>,
     pub models: Vec<Model>,
     pub commands: Vec<Command>,
     /// The tokens in the context window after the last message, and how many it holds.
@@ -425,6 +429,8 @@ impl Session {
                     .collect();
                 self.mode = answer["current_permission_mode"].as_str().map(str::to_owned).or(self.mode.take());
             }
+            // It is answered after `initialize` and the init line, which still say the mode Claude Code started in.
+            START_MODE if response["subtype"] == "success" => self.mode = self.start_mode.clone().or(self.mode.take()),
             CONTEXT => {
                 if let (Some(used), Some(most)) = (answer["totalTokens"].as_u64(), answer["maxTokens"].as_u64()) {
                     self.context = Some((used, most));
@@ -651,15 +657,18 @@ impl Session {
     }
 
     /// What the chat asks Claude Code as it starts: the models and commands it has, how full the context is, your
-    /// settings and how much of your plan's limits is used.
-    pub fn opening() -> String {
+    /// settings and how much of your plan's limits is used, and, with a `mode`, to start in it.
+    pub fn opening(mode: Option<&str>) -> String {
+        let mode = mode.map(|mode| request(START_MODE, json!({ "subtype": "set_permission_mode", "mode": mode })));
         [
             request(INITIALIZE, json!({ "subtype": "initialize" })),
             request(CONTEXT, json!({ "subtype": "get_context_usage" })),
             request(SETTINGS, json!({ "subtype": "get_settings" })),
             usage(),
         ]
-        .concat()
+        .into_iter()
+        .chain(mode)
+        .collect()
     }
 
     /// The line that switches the session to `model`, which is then shown.
@@ -1045,6 +1054,14 @@ fn detail(tool: &str, input: &Value) -> Detail {
         }
         "Grep" | "Glob" => Detail::Search,
         _ => Detail::Plain,
+    }
+}
+
+/// The first `cap` lines of an output, and how many lines are left out after them.
+pub fn first_lines(output: &str, cap: usize) -> (&str, usize) {
+    match output.match_indices('\n').nth(cap.saturating_sub(1)) {
+        Some((end, _)) => (&output[..end], output[end + 1..].lines().count()),
+        None => (output, 0),
     }
 }
 
@@ -1437,6 +1454,36 @@ mod tests {
 
     fn sent(line: &str) -> Value {
         serde_json::from_str(line).unwrap()
+    }
+
+    #[test]
+    fn the_opening_input_asks_for_a_start_mode_only_when_given_one() {
+        let lines = |mode| Session::opening(mode).lines().map(sent).collect::<Vec<_>>();
+        assert!(lines(None).iter().all(|line| line["request"]["subtype"] != "set_permission_mode"));
+        let asked = lines(Some("auto"));
+        assert_eq!(asked.len(), 5);
+        assert_eq!(asked[4]["request_id"], START_MODE);
+        assert_eq!(asked[4]["request"], json!({ "subtype": "set_permission_mode", "mode": "auto" }));
+        // Once accepted the picker shows it, though Claude Code's own answers before it say it started in `default`.
+        let answer = |id: &str, response: Value| json!({ "type": "control_response", "response": { "subtype": "success", "request_id": id, "response": response } });
+        let mut session = Session { start_mode: Some("auto".into()), ..Session::default() };
+        session.hear(&answer(INITIALIZE, json!({ "current_permission_mode": "default" })));
+        assert_eq!(session.mode.as_deref(), Some("default"));
+        session.hear(&answer(START_MODE, json!({})));
+        assert_eq!(session.mode.as_deref(), Some("auto"));
+        // Refused, it stays as Claude Code has it.
+        let mut refused = Session { start_mode: Some("auto".into()), ..Session::default() };
+        refused.hear(&answer(INITIALIZE, json!({ "current_permission_mode": "default" })));
+        refused.hear(&json!({ "type": "control_response", "response": { "subtype": "error", "request_id": START_MODE, "error": "no" } }));
+        assert_eq!(refused.mode.as_deref(), Some("default"));
+    }
+
+    #[test]
+    fn an_output_shows_its_first_lines_and_counts_the_rest() {
+        assert_eq!(first_lines("a\nb\nc", 2), ("a\nb", 1));
+        assert_eq!(first_lines("a\nb\nc", 3), ("a\nb\nc", 0));
+        assert_eq!(first_lines("a\nb", 5), ("a\nb", 0));
+        assert_eq!(first_lines("a\nb\nc\nd\n", 1), ("a", 3));
     }
 
     #[test]

@@ -17,6 +17,7 @@ use wings_plugin::{
 
 use crate::{
     mentions::{self, Files},
+    prefs,
     session::{Command, Draft, Item, Session},
 };
 
@@ -62,9 +63,11 @@ pub struct Chat {
     pub folder: String,
     pub state: State,
     pub past: Option<Past>,
-    /// The groups of tool calls you opened, by the index of their first item.
+    /// Your setting for how tool calls show: Compact folds them, Detailed opens every run and each call's output.
+    pub detailed: bool,
+    /// The groups of tool calls you clicked, by the index of their first item: each flips what `detailed` shows.
     pub open_steps: HashSet<usize>,
-    /// The tool calls whose output you opened, by their id.
+    /// The tool calls whose output you clicked, by their id: each flips what `detailed` shows.
     pub open_outputs: HashSet<String>,
     /// The queued messages shown in full, by uuid.
     pub open_queued: HashSet<String>,
@@ -103,6 +106,7 @@ thread_local! {
         folder: String::new(),
         state: State::Starting,
         past: None,
+        detailed: false,
         open_steps: HashSet::new(),
         open_outputs: HashSet::new(),
         open_queued: HashSet::new(),
@@ -130,6 +134,15 @@ pub fn with<T>(change: impl FnOnce(&mut Chat) -> T) -> T {
 #[unsafe(no_mangle)]
 pub fn start() {
     wings_plugin::run_filled(crate::view::view);
+    with(|c| c.detailed = prefs::detailed().get());
+    // The clicks were made against the old setting, so they go with it.
+    prefs::detailed().on_change(|detailed| {
+        with(|c| {
+            c.detailed = *detailed;
+            c.open_steps.clear();
+            c.open_outputs.clear();
+        })
+    });
     task::spawn(open());
 }
 
@@ -156,12 +169,12 @@ async fn open() {
 
 /// Starts Claude Code anew in the tab, going on with `resume` or in a new session, in place of the one running.
 fn launch(resume: Option<String>) {
-    let (run, cwd, program) = with(|c| {
+    let (run, cwd, program, start_mode) = with(|c| {
         if let Some(input) = c.input.take() {
             input.stop();
         }
         c.run += 1;
-        c.session = Session::default();
+        c.session = Session { start_mode: prefs::start_mode(), ..Session::default() };
         c.state = State::Starting;
         c.shown = PAGE;
         c.past = None;
@@ -171,7 +184,7 @@ fn launch(resume: Option<String>) {
         c.drafts.clear();
         c.subagent = None;
         c.moving = false;
-        (c.run, c.cwd.clone(), c.program.clone())
+        (c.run, c.cwd.clone(), c.program.clone(), c.session.start_mode.clone())
     });
     load_files(run, cwd.clone());
     load_git(run, cwd.clone());
@@ -193,7 +206,7 @@ fn launch(resume: Option<String>) {
             .to_vec();
         args.extend(resume.as_ref().map(|id| format!("--resume={id}")));
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        let process = host::spawn(&program, &args, &cwd, &Session::opening(), move |line| hear(run, line));
+        let process = host::spawn(&program, &args, &cwd, &Session::opening(start_mode.as_deref()), move |line| hear(run, line));
         let current = with(|c| {
             if c.run != run {
                 return false;
@@ -531,6 +544,11 @@ pub fn keep_planning(request: &str) {
 /// Asks Claude to stop the turn it is on.
 pub fn stop() {
     write(|c, n| Some(c.session.interrupt(n)));
+}
+
+/// Opens the Claude chat page in Wings Settings, where the defaults for every chat are.
+pub fn open_settings() {
+    drop(host::call("openSettings", json!({})));
 }
 
 pub fn pick_model(model: &str) {

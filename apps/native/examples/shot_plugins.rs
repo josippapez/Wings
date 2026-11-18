@@ -899,6 +899,7 @@ fn claude_chat(out: PathBuf) {
         ("failed", vec![], Some(("1", "Error: Invalid API key · Please run /login")), None, "Invalid API key"),
         ("work", work.clone(), None, None, "of 4 done"),
         ("work-open", work.clone(), None, Some("disclose:Ran 1 command"), "pnpm test discount"),
+        ("detailed", work.clone(), None, None, "No test suite found"),
         ("queue", work.clone(), None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter"), "Claude reads these"),
         // The same two, each opened to its whole message by its More button, which reads Less once it is open.
         ("queue-open", work, None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter;press:More"), "Less"),
@@ -925,19 +926,30 @@ fn claude_chat(out: PathBuf) {
     git(&["commit", "-q", "-m", "Start"]);
     std::fs::write(root.join("src/checkout.ts"), "export const a = 1;\nexport const c = 30;\nexport const d = 4;\nexport const e = 5;\n").unwrap();
 
-    let manifest = serde_json::from_str(include_str!("../../../plugins/claude-chat/wings-plugin.json")).unwrap();
-    let storage = out.join("fixture-storage-claude-chat");
-    let _ = std::fs::remove_dir_all(&storage);
-    let host = PluginHost::with_access(
-        PluginConfig { id: "claude-chat".into(), root: storage, scope: "shot".into() },
-        Access {
-            plugin: wings_plugins::manifest::Plugin { manifest, dir: root.clone(), icon_svg: None },
-            builtin: false,
-            env: std::sync::Arc::new(FixtureEnv(root.canonicalize().unwrap())),
-        },
-    );
+    let manifest: serde_json::Value = serde_json::from_str(include_str!("../../../plugins/claude-chat/wings-plugin.json")).unwrap();
     let project = root.canonicalize().unwrap().display().to_string();
-    host.publish_projects(vec![wings_native::page::plugin::Project { hidden_sections: Vec::new(), id: project.clone(), name: "shop".into(), parent_id: None, path: project }]);
+    // A host over a storage folder of its own that holds `seed`, the settings of the Settings page: the page reads them as it builds.
+    let host_over = |folder: &str, seed: &[(&str, serde_json::Value)]| {
+        let storage = out.join(folder);
+        let _ = std::fs::remove_dir_all(&storage);
+        let store = wings_plugin_storage::Storage::new(storage.clone());
+        for (key, value) in seed {
+            store.set("claude-chat", "shot", key, value.clone()).unwrap();
+        }
+        let host = PluginHost::with_access(
+            PluginConfig { id: "claude-chat".into(), root: storage, scope: "shot".into() },
+            Access {
+                plugin: wings_plugins::manifest::Plugin { manifest: manifest.clone(), dir: root.clone(), icon_svg: None },
+                builtin: false,
+                env: std::sync::Arc::new(FixtureEnv(root.canonicalize().unwrap())),
+            },
+        );
+        host.publish_projects(vec![wings_native::page::plugin::Project { hidden_sections: Vec::new(), id: project.clone(), name: "shop".into(), parent_id: None, path: project.clone() }]);
+        host
+    };
+    let host = host_over("fixture-storage-claude-chat", &[]);
+    // Detailed output on: every run of calls open, with each command's output.
+    let detailed = host_over("fixture-storage-claude-chat-detailed", &[("detailed-output", json!(true))]);
     let page = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/claude-chat/dist/native/chat.wasm");
     let page = page.canonicalize().expect("sh build-rust.sh claude-chat, in plugins/");
     // Compiled before the first scene waits on it: on a busy Mac a debug build's compile ran past the scene's wait.
@@ -950,6 +962,7 @@ fn claude_chat(out: PathBuf) {
         if only.as_deref().is_some_and(|only| only != name) {
             continue;
         }
+        let host = if name == "detailed" { &detailed } else { &host };
         let fixture = root.join(format!("{name}.jsonl"));
         std::fs::write(&fixture, lines.iter().map(|line| format!("{line}\n")).collect::<String>()).unwrap();
         // SAFETY: the page from the scene before is closed, so nothing reads these while they change.
@@ -998,6 +1011,29 @@ fn claude_chat(out: PathBuf) {
             until(&mut cx, expected);
             wait(&mut cx, window, Duration::from_millis(300));
             save(&mut cx, window, out.join(format!("claude-chat-{name}-{width}.png")));
+            let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        }
+    }
+    // The page in Wings Settings, with a mode and Detailed picked.
+    if only.as_deref().is_none_or(|only| only == "settings") {
+        let settings = host_over("fixture-storage-claude-chat-settings", &[("default-mode", json!("auto")), ("detailed-output", json!(true))]);
+        let page = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/claude-chat/dist/native/settings.wasm");
+        let page = page.canonicalize().expect("the claude-chat settings page is built, in plugins/");
+        wings_native::page::runtime::wasm::compile_now(&page.to_string_lossy()).unwrap();
+        let source = format!("{}{}", wings_native::page::runtime::wasm::MARKER, page.display());
+        for width in [1000.0, 640.0] {
+            let handle = cx
+                .open_offscreen_window(size(px(width), px(560.0)), |_, cx| cx.new(|cx| PageView::in_plugin(&settings, &source, cx)))
+                .unwrap();
+            let window = handle.into();
+            handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !handle.read_with(&cx, |view, _| view.text().contains("Permission mode")).unwrap() {
+                assert!(Instant::now() < deadline, "page did not show the settings: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
+                wait(&mut cx, window, Duration::from_millis(20));
+            }
+            wait(&mut cx, window, Duration::from_millis(300));
+            save(&mut cx, window, out.join(format!("claude-chat-settings-{width}.png")));
             let _ = cx.update_window(window, |_, window, _| window.remove_window());
         }
     }
