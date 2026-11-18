@@ -1126,7 +1126,7 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         ("large-text", work.clone(), None, None, "of 4 done"),
         ("queue", work.clone(), None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter"), "Claude reads these"),
         // The same two, each opened to its whole message by its More button, which reads Less once it is open.
-        ("queue-open", work, None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter;press:More"), "Less"),
+        ("queue-open", work.clone(), None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter;press:More"), "Less"),
         ("ask-bash", ask_bash, None, None, "Allow Bash?"),
         ("question", question, None, None, "Which formats"),
         ("plan", plan, None, None, "Keep planning"),
@@ -1175,9 +1175,9 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         // /status, /btw and /export open a dialog over the chat that the conversation never gets.
         ("status", opened(vec![init.clone()]), None, Some("type:/status;keys:enter"), "Setting sources"),
         ("btw", work.clone(), None, Some("type:/btw what does the rounding fix change?;keys:enter"), "It rounds once, at the end"),
-        ("export", work.clone(), None, Some("type:/export;keys:enter"), "Copy to clipboard"),
+        ("export", work, None, Some("type:/export;keys:enter"), "Copy to clipboard"),
         // Each reply and each code block has a Copy button.
-        ("copy", copyable, None, None, "Copy"),
+        ("copy", copyable, None, None, "at exactly 90"),
     ];
     // Files for @-mentions, which the chat lists with git.
     for file in ["src/checkout.ts", "src/checkout.test.ts", "src/cart.ts", "api/limits.ts", "README.md"] {
