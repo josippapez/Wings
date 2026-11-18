@@ -757,35 +757,43 @@ fn doing(tool: &str, summary: &str) -> String {
 }
 
 /// What a tool is asked to do, as a permission card shows it: the whole command, the change an edit makes, the file a
-/// write leaves, else the input as Claude sent it.
+/// write leaves, else the input as Claude sent it. Whatever else the input holds follows as JSON, so nothing that runs is
+/// left off the card.
 fn ask_detail(tool: &str, input: &Value) -> String {
-    let text = |key: &str| input[key].as_str().unwrap_or_default();
+    let field = |key: &str| shown(input[key].as_str().unwrap_or_default(), true);
     let change = |edit: &Value| {
-        let lines = |key: &str, mark: &str| edit[key].as_str().unwrap_or_default().lines().map(|line| format!("{mark} {line}")).collect::<Vec<_>>();
+        let lines = |key: &str, mark: &str| edit[key].as_str().unwrap_or_default().lines().map(|line| format!("{mark} {}", shown(line, true))).collect::<Vec<_>>();
         let every = if edit["replace_all"] == true { "Every match of:\n" } else { "" };
         format!("{every}{}\n{}", lines("old_string", "−").join("\n"), lines("new_string", "+").join("\n"))
     };
-    let said = match tool {
-        "Bash" => text("command").to_owned(),
-        "Edit" => format!("{}\n\n{}", text("file_path"), change(input)),
+    let (said, keys): (String, &[&str]) = match tool {
+        // A command's description is Claude's words about it, which don't run.
+        "Bash" => (shown(input["command"].as_str().unwrap_or_default().trim(), false), &["command", "description"]),
+        "Edit" => (format!("{}\n\n{}", field("file_path"), change(input)), &["file_path", "old_string", "new_string", "replace_all"]),
         "MultiEdit" => {
             let edits = input["edits"].as_array().map(Vec::as_slice).unwrap_or_default();
-            format!("{}\n\n{}", text("file_path"), edits.iter().map(change).collect::<Vec<_>>().join("\n\n"))
+            (format!("{}\n\n{}", field("file_path"), edits.iter().map(change).collect::<Vec<_>>().join("\n\n")), &["file_path", "edits"])
         }
-        "Write" => format!("{}\n\n{}", text("file_path"), text("content")),
-        _ => serde_json::to_string_pretty(input).unwrap_or_default(),
+        "Write" => (format!("{}\n\n{}", field("file_path"), shown(input["content"].as_str().unwrap_or_default(), false)), &["file_path", "content"]),
+        _ => (String::new(), &[]),
     };
-    shown(said.trim())
+    let rest: serde_json::Map<String, Value> = input.as_object().into_iter().flatten().filter(|(key, _)| !keys.contains(&key.as_str())).map(|(key, value)| (key.clone(), value.clone())).collect();
+    let rest = (!rest.is_empty()).then(|| shown(&serde_json::to_string_pretty(&rest).unwrap_or_default(), false));
+    let outside = (input["dangerouslyDisableSandbox"] == true).then(|| "Runs outside the sandbox.".to_owned());
+    [outside, Some(said).filter(|said| !said.is_empty()), rest].into_iter().flatten().collect::<Vec<_>>().join("\n\n")
 }
 
-/// `text` with the characters that don't show, or that turn text around, written out as `\u{…}`, so what a card shows
-/// is what runs.
-fn shown(text: &str) -> String {
-    let hidden = |c: char| {
-        (c.is_control() && c != '\n' && c != '\t')
-            || matches!(c, '\u{ad}' | '\u{61c}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2069}' | '\u{feff}')
+/// `text` as a card can show it truthfully: printable ASCII, letters and digits stay, and every other character is
+/// written out as `\u{…}`, so nothing invisible, nothing that turns text around and nothing that looks like something
+/// else hides in what you allow. A field that is one line, like a path, writes out its line breaks and tabs too.
+fn shown(text: &str, one_line: bool) -> String {
+    let plain = |c: char| {
+        matches!(c, ' '..='~')
+            || (!one_line && matches!(c, '\n' | '\t'))
+            // Hangul fillers are letters that draw nothing.
+            || (!c.is_ascii() && c.is_alphanumeric() && !matches!(c, '\u{115f}' | '\u{1160}' | '\u{3164}' | '\u{ffa0}'))
     };
-    text.chars().map(|c| if hidden(c) { format!("\\u{{{:x}}}", c as u32) } else { c.to_string() }).collect()
+    text.chars().map(|c| if plain(c) { c.to_string() } else { format!("\\u{{{:x}}}", c as u32) }).collect()
 }
 
 /// Why Claude Code asks, in one line: its title, description and reason, without what two of them say alike.
@@ -1230,12 +1238,18 @@ mod tests {
         };
         let ask = detail(json!({ "input": { "command": "a\nb\nc\nd\ne\nf\ng\nh" } }));
         assert_eq!((ask.summary.as_str(), ask.detail.as_str()), ("a", "a\nb\nc\nd\ne\nf\ng\nh"));
-        // A right-to-left mark or a zero-width space would make the command read other than it runs.
-        assert_eq!(detail(json!({ "input": { "command": "ls \u{202e}fdp.exe\u{200b}" } })).detail, "ls \\u{202e}fdp.exe\\u{200b}");
-        let edit = json!({ "file_path": "/a.rs", "old_string": "one\ntwo", "new_string": "one\n2" });
-        assert_eq!(detail(json!({ "tool_name": "Edit", "input": edit })).detail, "/a.rs\n\n− one\n− two\n+ one\n+ 2");
+        // A right-to-left mark, a zero-width space, a Hangul filler or a tag would make the command read other than it
+        // runs. Letters stay as they are.
+        let tricky = detail(json!({ "input": { "command": "ls \u{202e}fdp.exe\u{200b} \u{3164} \u{e0041} café" } })).detail;
+        assert_eq!(tricky, "ls \\u{202e}fdp.exe\\u{200b} \\u{3164} \\u{e0041} café");
+        // A path is one line: a line break in it is written out, not drawn.
+        let edit = json!({ "file_path": "/a.rs\n/b.rs", "old_string": "one\ntwo", "new_string": "one\n2" });
+        assert_eq!(detail(json!({ "tool_name": "Edit", "input": edit })).detail, "/a.rs\\u{a}/b.rs\n\n− one\n− two\n+ one\n+ 2");
         assert_eq!(detail(json!({ "tool_name": "Write", "input": { "file_path": "/b", "content": "x\ny" } })).detail, "/b\n\nx\ny");
         assert_eq!(detail(json!({ "tool_name": "mcp__db__drop", "input": { "table": "users" } })).detail, "{\n  \"table\": \"users\"\n}");
+        // What else the input holds shows too, and leaving the sandbox says so first.
+        let outside = detail(json!({ "input": { "command": "make", "description": "Build", "dangerouslyDisableSandbox": true, "timeout": 600000 } })).detail;
+        assert_eq!(outside, "Runs outside the sandbox.\n\nmake\n\n{\n  \"dangerouslyDisableSandbox\": true,\n  \"timeout\": 600000\n}");
         // Past what a card can show, it says so.
         let long = detail(json!({ "input": { "command": "x".repeat(ASK_KEPT + 1) } }));
         assert!(long.cut_short);
