@@ -282,6 +282,8 @@ pub struct Model {
     pub efforts: Vec<String>,
     /// The model it stands for, like `claude-opus-5-5`.
     pub resolved: String,
+    /// It has a fast mode.
+    pub fast: bool,
 }
 
 /// A slash command, as `initialize` lists it.
@@ -393,6 +395,8 @@ pub struct Session {
     pub restored: Option<String>,
     /// The background tasks heard of, running or ended, in the order they started.
     pub tasks: Vec<Task>,
+    /// Fast mode and the output style.
+    pub options: crate::composer::Options,
 }
 
 impl Session {
@@ -648,8 +652,10 @@ impl Session {
                         name: text(model, "displayName"),
                         efforts: model["supportedEffortLevels"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect(),
                         resolved: text(model, "resolvedModel"),
+                        fast: model["supportsFastMode"] == true,
                     })
                     .collect();
+                self.options.initialized(answer);
                 self.commands = commands(&answer["commands"]);
                 self.mode = answer["current_permission_mode"].as_str().map(str::to_owned).or(self.mode.take());
             }

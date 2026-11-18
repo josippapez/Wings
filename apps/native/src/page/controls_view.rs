@@ -399,10 +399,19 @@ impl PageView {
                 }
             })
             .detach();
-            cx.subscribe(&entity, move |view, _, _: &crate::text_field::TabPressed, _| {
+            cx.subscribe(&entity, move |view, _, tab: &crate::text_field::TabPressed, _| {
                 let handler = view.inputs.borrow().get(&id).and_then(|state| state.key_handler.clone());
                 if let Some(handler) = handler {
-                    view.act(&handler, Some(&serde_json::json!({"type":"keydown", "key":"Tab"})));
+                    let payload = serde_json::json!({"type":"keydown", "key":"Tab", "shiftKey":tab.back});
+                    view.act(&handler, Some(&payload));
+                }
+            })
+            .detach();
+            cx.subscribe(&entity, move |view, _, recall: &crate::text_field::HistoryKey, _| {
+                let handler = view.inputs.borrow().get(&id).and_then(|state| state.key_handler.clone());
+                if let Some(handler) = handler {
+                    let key = if recall.up { "ArrowUp" } else { "ArrowDown" };
+                    view.act(&handler, Some(&serde_json::json!({"type":"keydown", "key":key})));
                 }
             })
             .detach();
@@ -422,12 +431,8 @@ impl PageView {
                             "Enter"
                         };
                         let payload = serde_json::json!({"type":"keydown", "key":key});
-                        // Escape gives no user activation in a browser either.
-                        if key == "Enter" {
-                            view.act(&handler, Some(&payload));
-                        } else {
-                            view.send(&handler, Some(&payload));
-                        }
+                        // Escape is a key gesture too: a chat stops the turn on it.
+                        view.act(&handler, Some(&payload));
                     }
                     return;
                 }
@@ -490,6 +495,8 @@ impl PageView {
             }
             field.select_on_focus = input.select_on_focus;
             field.takes_tab = input.takes_tab;
+            field.takes_shift_tab = input.takes_shift_tab;
+            field.history_keys = input.history_keys;
             if !input.time {
                 field.set_placeholder(&input.placeholder, cx);
             }

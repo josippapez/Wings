@@ -41,8 +41,17 @@ pub struct PastedImage {
     pub data: String,
 }
 
-/// Tab pressed in a field with `takes_tab`. An event of its own, so the fields that leave Tab to focus needn't hear of it.
-pub struct TabPressed;
+/// Tab pressed in a field with `takes_tab`, or Shift-Tab (`back`) in one with `takes_shift_tab`. An event of its own, so
+/// the fields that leave Tab to focus needn't hear of it.
+pub struct TabPressed {
+    pub back: bool,
+}
+
+/// Up (`up`) or Down pressed in a field with `history_keys` while the caret is on its first or last line, where the key
+/// would have moved it nowhere. An event of its own, so the fields that keep those keys needn't hear of it.
+pub struct HistoryKey {
+    pub up: bool,
+}
 
 /// The most image bytes a paste hands the page. The Claude API takes an image of up to 5 MB as base64 on its
 /// strictest platform (10 MB on its own API), and base64 is a third bigger than the bytes, so this is the bytes that
@@ -65,6 +74,11 @@ pub struct TextField {
     pub pastes_images: bool,
     /// Tab, without a modifier, is a `TabPressed` the owner hears, in place of moving focus to the next control.
     pub takes_tab: bool,
+    /// Shift-Tab is a `TabPressed` with `back` the owner hears, in place of moving focus to the one before.
+    pub takes_shift_tab: bool,
+    /// Up on the first line and Down on the last are a `HistoryKey` the owner hears, in place of moving the caret to the
+    /// start or the end of the text, as a terminal's prompt recalls what was typed before.
+    pub history_keys: bool,
     /// Takes the width of its place, not `width`.
     pub fill: bool,
     /// Drawn with no frame of its own, inside a box that is its frame, as a chat's message box is.
@@ -106,6 +120,7 @@ pub struct TextField {
 impl EventEmitter<FieldEvent> for TextField {}
 impl EventEmitter<PastedImage> for TextField {}
 impl EventEmitter<TabPressed> for TextField {}
+impl EventEmitter<HistoryKey> for TextField {}
 
 impl Focusable for TextField {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -132,6 +147,8 @@ impl TextField {
             enter_submits: false,
             pastes_images: false,
             takes_tab: false,
+            takes_shift_tab: false,
+            history_keys: false,
             fill: false,
             bare: false,
             disabled: false,
@@ -376,7 +393,13 @@ impl TextField {
             "enter" => cx.emit(FieldEvent::Submit { back: mods.shift }),
             // The input method has the rest while it composes.
             _ if !self.marked.is_empty() => return,
-            "tab" if self.takes_tab && !mods.modified() => cx.emit(TabPressed),
+            "tab" if self.takes_tab && !mods.modified() => cx.emit(TabPressed { back: false }),
+            "tab" if self.takes_shift_tab && mods.shift && !(mods.control || mods.alt || mods.platform) => {
+                cx.emit(TabPressed { back: true })
+            }
+            "up" | "down" if self.history_keys && !mods.modified() && self.at_edge(key.key == "up") => {
+                cx.emit(HistoryKey { up: key.key == "up" })
+            }
             "a" if secondary => self.select(0, self.text.len(), window, cx),
             "c" if secondary => self.copy(cx),
             "x" if secondary && !self.secret => {
@@ -394,6 +417,19 @@ impl TextField {
         }
         window.prevent_default();
         cx.stop_propagation();
+    }
+
+    /// The caret is on the first line (`up`) or the last, as the text is wrapped and drawn.
+    fn at_edge(&self, up: bool) -> bool {
+        let head = self.head();
+        match &self.layout {
+            Some(layout) => {
+                let at = layout.point(head);
+                if up { at.y < layout.line_height } else { at.y + layout.line_height >= layout.height }
+            }
+            None if up => !self.text[..head].contains('\n'),
+            None => !self.text[head..].contains('\n'),
+        }
     }
 
     /// Where Alt or Cmd on macOS, and Ctrl elsewhere, send a move or a delete: by word, or to the line's end.
@@ -1462,6 +1498,56 @@ mod tests {
         press(&mut window, "shift-tab");
         assert_eq!(heard.get(), 1);
         assert_eq!(text(&window, &field), "hi");
+    }
+
+    #[test]
+    fn shift_tab_reaches_the_owner_only_in_a_field_that_takes_it_and_tab_stays_with_focus() {
+        let (_app, mut window, field) = open("hi");
+        let heard = std::rc::Rc::new(std::cell::RefCell::new(Vec::<bool>::new()));
+        let log = heard.clone();
+        window.update(|_, _, cx| {
+            cx.subscribe(&field, move |_, _, tab: &TabPressed, _| log.borrow_mut().push(tab.back)).detach();
+        });
+        press(&mut window, "shift-tab");
+        assert!(heard.borrow().is_empty());
+        window.update(|_, _, cx| field.update(cx, |field, _| field.takes_shift_tab = true));
+        press(&mut window, "shift-tab");
+        assert_eq!(*heard.borrow(), [true]);
+        // A field that takes only Shift-Tab leaves plain Tab to move focus.
+        press(&mut window, "tab");
+        assert_eq!(*heard.borrow(), [true]);
+        assert_eq!(text(&window, &field), "hi");
+    }
+
+    #[test]
+    fn up_and_down_reach_the_owner_only_with_history_keys_and_only_past_the_first_and_last_line() {
+        let (_app, mut window, field) = open("one\ntwo\nthree");
+        let heard = std::rc::Rc::new(std::cell::RefCell::new(Vec::<bool>::new()));
+        let log = heard.clone();
+        window.update(|_, _, cx| {
+            cx.subscribe(&field, move |_, _, key: &HistoryKey, _| log.borrow_mut().push(key.up)).detach();
+            field.update(cx, |field, _| field.rows = Some(3));
+        });
+        window.draw();
+        // Without the prop the keys move the caret as before.
+        press(&mut window, "up");
+        assert!(heard.borrow().is_empty());
+        window.update(|_, _, cx| field.update(cx, |field, _| field.history_keys = true));
+        window.draw();
+        // The caret is on the middle line now: Up and Down move it, Down to the last line and then past it recalls.
+        press(&mut window, "down");
+        window.draw();
+        assert!(heard.borrow().is_empty());
+        press(&mut window, "down");
+        assert_eq!(*heard.borrow(), [false]);
+        press(&mut window, "up up");
+        window.draw();
+        assert_eq!(*heard.borrow(), [false]);
+        press(&mut window, "up");
+        assert_eq!(*heard.borrow(), [false, true]);
+        // A modifier keeps the key for selecting.
+        press(&mut window, "shift-up");
+        assert_eq!(heard.borrow().len(), 2);
     }
 
     #[test]

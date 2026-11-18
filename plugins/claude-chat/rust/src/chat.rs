@@ -19,6 +19,7 @@ use crate::{
     images,
     mentions::{self, Files},
     plugins, prefs,
+    composer::{self, Escape},
     session::{self, Command, Draft, Item, Restore, Session, exits, view_of},
     setup,
     usage::Panel,
@@ -207,6 +208,7 @@ fn launch(resume: Option<String>) {
             input.stop();
         }
         c.run += 1;
+        composer::forget();
         c.session = Session::default();
         c.session.start_mode = prefs::start_mode();
         c.state = State::Starting;
@@ -515,6 +517,7 @@ pub fn send() {
             }
         }
         c.draft.clear();
+        composer::forget();
         let images = std::mem::take(&mut c.images);
         if c.session.working {
             return Some(c.session.queue(&text, images, host::now() as u64, n));
@@ -661,11 +664,59 @@ pub fn open_settings() {
 
 /// Switches to the model and effort picked together in the message box, as `<model>@<effort>`.
 pub fn pick_model_effort(choice: &str) {
+    // The menu's fast mode and output style entries come this way too.
+    if composer::is_extra(choice) {
+        return write(|c, n| c.session.options.pick(choice, n));
+    }
     write(|c, n| c.session.pick(choice, n));
 }
 
 pub fn pick_mode(mode: &str) {
     write(|c, n| Some(c.session.set_mode(mode, n)));
+}
+
+/// Shift-Tab: the next permission mode, as the mode menu lists them.
+pub fn cycle_mode() {
+    if let Some(next) = with(|c| c.session.mode.as_deref().map(composer::next_mode)) {
+        pick_mode(next);
+    }
+}
+
+/// Escape: closes the dialog or sheet that is open, else stops the turn while Claude works.
+pub fn escape() {
+    let (dialog, working) = with(|c| {
+        let open = c.past.is_some() || c.panel.is_some() || c.plugins.is_some() || c.task.is_some() || c.session.rewind.is_some() || c.session.setup.open.is_some();
+        (open, c.session.working)
+    });
+    match composer::escape(dialog, working) {
+        Escape::Close => with(|c| {
+            // The one opened last is on top: the setup dialog's form, then the dialogs over the chat, then the sheet.
+            if c.session.setup.form.take().is_none() && c.session.setup.open.take().is_none() && c.session.rewind.take().is_none() && c.task.take().is_none() && c.plugins.take().is_none() && c.panel.take().is_none() {
+                c.past = None;
+            }
+        }),
+        Escape::Stop => stop(),
+        Escape::Nothing => {}
+    }
+}
+
+/// Up from the first line: the prompt you sent before the one in the box, the newest first. What you had typed comes back
+/// with Down.
+pub fn recall_older() {
+    with(|c| {
+        if let Some(said) = composer::older(&c.draft, &composer::prompts(&c.session.items)) {
+            c.draft = said;
+        }
+    });
+}
+
+/// Down from the last line: the next prompt, and after the newest what you had typed.
+pub fn recall_newer() {
+    with(|c| {
+        if let Some(said) = composer::newer(&composer::prompts(&c.session.items)) {
+            c.draft = said;
+        }
+    });
 }
 
 /// Puts the command in the message box, to add what it takes.

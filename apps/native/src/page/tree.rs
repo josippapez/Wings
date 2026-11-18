@@ -611,6 +611,12 @@ pub struct Input {
     pub enter_submits: bool,
     /// `takesTab`: a `Textarea` that sends Tab to `onKeyDown`, in place of moving focus on.
     pub takes_tab: bool,
+    /// `takesShiftTab`: a `Textarea` that sends Shift-Tab to `onKeyDown` (as `key: "Tab"` with `shiftKey`), in place of
+    /// moving focus back. Plain Tab still moves focus on, unless `takesTab` is on.
+    pub takes_shift_tab: bool,
+    /// `historyKeys`: a `Textarea` that sends Up from its first line and Down from its last to `onKeyDown` (as
+    /// `ArrowUp` and `ArrowDown`), in place of moving the caret to the start or end of the text.
+    pub history_keys: bool,
     /// `variant: "bare"`: no frame of its own, for a field inside a box that frames it.
     pub bare: bool,
     pub disabled: bool,
@@ -1315,6 +1321,8 @@ impl Walk {
                     .then(|| number(&props, "rows").unwrap_or(2.0).clamp(1.0, 24.0) as usize),
                 enter_submits: on("submitOnEnter"),
                 takes_tab: on("takesTab"),
+                takes_shift_tab: on("takesShiftTab"),
+                history_keys: on("historyKeys"),
                 bare: str_prop(&props, "variant") == Some("bare"),
                 disabled: on("disabled"),
                 max_length: number(&props, "maxLength")
@@ -1884,6 +1892,18 @@ mod tests {
         assert!(!password("TextInput", "time"));
         assert!(!password("TextInput", "text"));
         assert!(!password("Textarea", "password"));
+    }
+
+    #[test]
+    fn a_textarea_takes_shift_tab_and_history_keys_only_when_the_page_asks() {
+        let props = |props: Value| match parse_one(json!({"id":1,"type":"Textarea","props":props,"children":[]})) {
+            Node::Input(input) => (input.takes_shift_tab, input.history_keys),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(props(json!({"takesShiftTab":true,"historyKeys":true})), (true, true));
+        assert_eq!(props(json!({"takesShiftTab":true})), (true, false));
+        assert_eq!(props(json!({"historyKeys":false})), (false, false));
+        assert_eq!(props(json!({})), (false, false));
     }
 
     #[test]

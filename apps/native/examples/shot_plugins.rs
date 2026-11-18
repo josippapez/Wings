@@ -1045,7 +1045,27 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
             "content": [{ "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": screen } }] }] } }),
         text("The third bar is a fraction of the first because the cart reloads and its counter starts again, as the checkout screen shows."),
     ]);
-    let scenes: [Scene; 41] = [
+    // Three messages sent, so Up has prompts to recall, and a model with fast mode, whose menu also lists the output styles.
+    let recalled = opened(vec![
+        init.clone(),
+        user("Run the checkout tests."),
+        text("All 24 pass."),
+        user("Now bump the version."),
+        text("Bumped to 0.2.40."),
+        user("Write the changelog line."),
+        text("Added."),
+        json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 9_000, "num_turns": 3, "result": "", "total_cost_usd": 0.05 }),
+    ]);
+    let mut fast = opened(vec![init.clone()]);
+    fast[1]["response"]["response"]["models"] = json!([
+        { "value": "opus", "displayName": "Opus 5.5", "supportedEffortLevels": ["medium", "high"], "resolvedModel": "claude-opus-5-5", "supportsFastMode": true },
+        { "value": "haiku", "displayName": "Haiku 5.5", "supportedEffortLevels": [] },
+    ]);
+    fast[1]["response"]["response"]["fast_mode_state"] = json!("off");
+    fast[1]["response"]["response"]["fast_mode_disabled_reason"] = json!("sdk_opt_in_required");
+    fast[1]["response"]["response"]["output_style"] = json!("default");
+    fast[1]["response"]["response"]["available_output_styles"] = json!(["default", "Concise", "Explanatory", "Learning"]);
+    let scenes: [Scene; 43] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -1053,6 +1073,10 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         ("new", opened(vec![init.clone()]), None, None, "What should Claude do?"),
         // The model and effort menu open over the message box.
         ("models", opened(vec![init.clone()]), None, Some("select:Model and effort"), "resets"),
+        // Fast mode and the output styles are in the same menu, after the models.
+        ("models-fast", fast, None, Some("select:Model and effort"), "Output style"),
+        // Up twice from the empty box recalls the second newest of the prompts sent.
+        ("recall", recalled, None, Some("keys:up;keys:up"), "Now bump the version."),
         ("slash", opened(vec![init.clone()]), None, Some("type:/re;keys:down"), "/review"),
         // The header's Past sessions button opens the sheet over the chat, and its search has the keyboard.
         ("sessions", opened(vec![init.clone()]), None, Some("press:Past sessions"), "Past sessions"),

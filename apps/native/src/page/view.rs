@@ -469,6 +469,12 @@ impl PageView {
         }
     }
 
+    /// Whether a click or a key of yours has reached the page.
+    #[cfg(test)]
+    pub(super) fn acted(&self) -> bool {
+        self.gesture_at.get().is_some()
+    }
+
     /// The tab that shows this page: while it has the keyboard, as it does once you open the tab, the page may move it
     /// into a field of its own.
     pub fn set_host_focus(&mut self, focus: gpui::FocusHandle) {

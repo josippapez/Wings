@@ -1664,6 +1664,43 @@ fn a_picker_lists_every_project_with_its_client_and_typing_replaces_the_pick_to_
     settle(&app, &mut window, shows("Project=q9, query=null."));
 }
 
+/// A chat's message box, as the app draws it: a Textarea that takes Shift-Tab and the history keys, and what the page
+/// heard of its keys.
+fn message_box() -> String {
+    let mut heard: Vec<String> = Vec::new();
+    fake::page("page", move |event| {
+        if let Some((handler, key)) = event
+            && handler.ends_with("onKeyDown")
+        {
+            let shift = if key["shiftKey"] == true { "shift-" } else { "" };
+            heard.push(format!("{shift}{}", key["key"].as_str().unwrap_or_default()));
+        }
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 3, "type": "Textarea", "props": { "label": "Message", "rows": 2, "value": "one", "submitOnEnter": true,
+                "takesShiftTab": true, "historyKeys": true, "onKeyDown": "3:onKeyDown" } },
+            text(9, 10, format!("heard={}.", heard.join(","))) ] })
+    })
+}
+
+#[test]
+fn a_message_box_sends_escape_shift_tab_and_the_history_keys_to_the_page_as_your_own_keys() {
+    let (app, mut window) = open(message_box());
+    settle(&app, &mut window, shows("heard=."));
+    window.update(|_, window, cx| window.focus_next(cx));
+    window.draw();
+    assert!(!window.read(|view, _| view.acted()));
+    key(&mut window, "escape");
+    settle(&app, &mut window, shows("heard=Escape."));
+    // Escape lets the page write to a program for a moment, as Enter does, so a chat can stop its turn.
+    assert!(window.read(|view, _| view.acted()));
+    // The caret is at the end of the one line: Up leaves it to the page, as does Down.
+    key(&mut window, "up");
+    key(&mut window, "down");
+    settle(&app, &mut window, shows("heard=Escape,ArrowUp,ArrowDown."));
+    key(&mut window, "shift-tab");
+    settle(&app, &mut window, shows("heard=Escape,ArrowUp,ArrowDown,shift-Tab."));
+}
+
 /// Cyclops' start time, a `type="time"` input holding 08:30, and what the page hears.
 fn start_time() -> String {
     let mut start = "08:30".to_owned();

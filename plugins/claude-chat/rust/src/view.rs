@@ -609,6 +609,9 @@ fn composer(c: &Chat) -> Node {
         .prop("label", "Message")
         .prop("placeholder", suggested.unwrap_or("Ask anything. @ files, / commands"))
         .prop("takesTab", suggested.is_some())
+        // Shift-Tab goes to the next permission mode, and Up and Down from the first and last line recall prompts.
+        .prop("takesShiftTab", true)
+        .prop("historyKeys", true)
         .prop("variant", "bare")
         .prop("rows", 2)
         .prop("submitOnEnter", true)
@@ -624,11 +627,15 @@ fn composer(c: &Chat) -> Node {
         })
         .on("onPasteImage", |event| chat::add_image(event["mediaType"].as_str().unwrap_or_default(), event["data"].as_str().unwrap_or_default()))
         .on("onKeyDown", |event| {
-            if event["key"] == "Enter" {
-                chat::send();
-            }
-            if event["key"] == "Tab" {
-                chat::accept_suggestion();
+            let shift = event["shiftKey"] == true;
+            match event["key"].as_str() {
+                Some("Enter") => chat::send(),
+                Some("Tab") if shift => chat::cycle_mode(),
+                Some("Tab") => chat::accept_suggestion(),
+                Some("Escape") => chat::escape(),
+                Some("ArrowUp") => chat::recall_older(),
+                Some("ArrowDown") => chat::recall_newer(),
+                _ => {}
             }
         });
     // One round button, as chat apps have: a square to stop while Claude works and nothing is typed, else an arrow to send.
@@ -956,6 +963,8 @@ fn pickers(c: &Chat) -> Vec<Node> {
     let mut pickers = Vec::new();
     if !session.models.is_empty() {
         let (options, value) = model_options(session);
+        // Fast mode and the output style are in the same menu, after the models.
+        let options: Vec<(String, String)> = options.into_iter().chain(session.options.menu(session.current_model().is_some_and(|model| model.fast))).collect();
         pickers.push(select("Model and effort", &options, &value, chat::pick_model_effort).prop("variant", "ghost"));
     }
     if let Some(mode) = &session.mode {
@@ -1048,6 +1057,7 @@ mod tests {
             name: name.into(),
             efforts: efforts.iter().map(|effort| effort.to_string()).collect(),
             resolved: format!("claude-{value}-5-5"),
+            fast: false,
         };
         let mut session = Session::default();
         session.models = vec![model("opus", "Opus 5.5", &["medium", "high", "xhigh"]), model("haiku", "Haiku 5.5", &[])];
