@@ -931,7 +931,7 @@ fn claude_chat(out: PathBuf) {
         json!({ "type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.0068 }),
         json!({ "type": "prompt_suggestion", "suggestion": "run it", "uuid": "cdab3e06-e878-423a-add5-9ed9174c610e", "session_id": "5b7e2c1a-0f3d-4c8e-9a61-2d4f8b3c7e90" }),
     ]);
-    let scenes: [Scene; 22] = [
+    let scenes: [Scene; 24] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),

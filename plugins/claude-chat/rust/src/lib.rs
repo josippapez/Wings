@@ -13,7 +13,7 @@ pub const SESSION_SAVED: &str = "session-saved";
 
 #[cfg(feature = "chat")]
 mod chat;
-#[cfg(any(feature = "main", test))]
+#[cfg(any(feature = "main", all(test, not(feature = "chat"))))]
 mod main_frame;
 #[cfg(any(feature = "chat", test))]
 mod mentions;
