@@ -936,7 +936,7 @@ fn claude_chat(out: PathBuf) {
             };
             if let Some(act) = act {
                 // Once Claude Code has answered, the model picker shows.
-                until(&mut cx, "20%");
+                until(&mut cx, "Resets");
                 for act in act.split(';') {
                     match act.split_once(':') {
                         Some(("type", typed)) => cx.simulate_input(window, typed),

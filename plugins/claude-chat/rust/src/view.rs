@@ -5,11 +5,12 @@
 
 use serde_json::Value;
 use wings_plugin::{
-    format::{ago, clock, day, parse_time, plural, truncate},
+    format::{ago, clock, parse_time, plural, truncate},
+    local_time::local,
     host,
     markdown::{code_block, markdown},
     ui::{
-        Node, badge, button, card, chip, confirm, disclosure, empty, icon, list, list_button, loading, muted, notice, page,
+        Node, badge, button, card, chip, confirm, disclosure, empty, gauge, icon, list, list_button, loading, muted, notice, page,
         row, search_field, select, spinner, stack, text, text_input, toolbar_with,
     },
 };
@@ -478,41 +479,36 @@ fn composer(c: &Chat) -> Node {
             .prop("disabled", !open || !typed)
             .child(icon(14, 2.0, &[SEND]))
     };
-    let context = c.session.context.map(|(used, most)| {
-        text(format!("context {}%", (used * 100 / most.max(1)).min(100))).prop("tone", "muted").prop("size", "small").prop("title", "How full the context window is")
-    });
-    let controls = row()
-        .prop("gap", "xs")
-        .prop("align", "center")
-        .children(pickers(c))
-        .child(stack().prop("grow", true))
-        .child(row().prop("gap", "s").prop("align", "center").maybe(context).children(limits(c)))
-        .child(action);
+    let controls = row().prop("gap", "xs").prop("align", "center").children(pickers(c)).child(stack().prop("grow", true)).child(action);
     let message_box = card().prop("variant", "raised").child(field.prop("grow", true)).child(controls);
-    Node::new("Bar").prop("edge", "none").child(stack().prop("gap", "s").prop("maxWidth", COLUMN).maybe(commands(c).or_else(|| file_menu(c))).maybe(queued(c)).child(message_box))
+    Node::new("Bar").prop("edge", "none").child(
+        stack()
+            .prop("gap", "s")
+            .prop("maxWidth", COLUMN)
+            .maybe(commands(c).or_else(|| file_menu(c)))
+            .maybe(queued(c))
+            .child(message_box)
+            .maybe(usage(c)),
+    )
 }
 
-/// How much of your plan's 5-hour and weekly limits is used, as a terminal's status line shows it: amber from 80%, red
-/// from 95%, and when each resets on hover.
-fn limits(c: &Chat) -> Vec<Node> {
-    c.session
-        .limits
-        .iter()
-        .map(|(label, used, resets)| {
-            let tone = match used {
-                95.. => "danger",
-                80.. => "warn",
-                _ => "muted",
-            };
-            let when = parse_time(resets).map(|ms| if *label == "5h" { clock(ms) } else { format!("{}, {}", day(ms), clock(ms)) });
-            let what = if *label == "5h" { "5-hour" } else { "weekly" };
-            text(format!("{label} {used}%"))
-                .prop("tone", tone)
-                .prop("size", "small")
-                .prop("title", when.map_or_else(|| format!("Your {what} limit"), |when| format!("Your {what} limit resets {when}")))
-        })
-        .collect()
+/// How full the context is and how much of your plan's 5-hour and weekly limits is used, as bars under the message box,
+/// each with when it resets: what a terminal's status line shows.
+fn usage(c: &Chat) -> Option<Node> {
+    let context = c.session.context.map(|(used, most)| gauge("Context", (used * 100 / most.max(1)) as f64, (70, 90), None));
+    let limits = c.session.limits.iter().map(|(label, used, resets)| {
+        let name = if *label == "5h" { "5-hour limit" } else { "Weekly limit" };
+        let resets = parse_time(resets).map(|ms| match *label {
+            "5h" => format!("Resets {}", clock(ms)),
+            _ => format!("Resets {} {}", WEEKDAYS[local(ms as i64).weekday as usize % 7], clock(ms)),
+        });
+        gauge(name, *used as f64, (80, 95), resets)
+    });
+    let bars: Vec<Node> = context.into_iter().chain(limits).map(|bar| stack().prop("grow", true).child(bar)).collect();
+    (!bars.is_empty()).then(|| row().prop("gap", "l").prop("align", "start").children(bars))
 }
+
+const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 /// The messages waiting for Claude to finish, each with Send now and a way to take it back.
 fn queued(c: &Chat) -> Option<Node> {
