@@ -436,6 +436,12 @@ pub struct Split {
     pub collapse_below: Option<f32>,
     /// The fixed pane stays however narrow the split is: the page wants it shown now.
     pub pinned: bool,
+    /// With `fixed_end`: the fixed pane floats over the right of the split as a card and takes no width from `start`.
+    pub float: bool,
+    /// Heard, with `{ "narrow": bool }`, when the split's width crosses `collapse_below`, and once it first has a width.
+    pub on_narrow: Option<String>,
+    /// A floating pane with this handler hears Escape in it and a press outside it.
+    pub on_close: Option<String>,
     pub start: Vec<Node>,
     pub end: Vec<Node>,
 }
@@ -1237,6 +1243,9 @@ impl Walk {
                         .filter(|below| *below > 0.0)
                         .map(|below| below.min(10_000.0) as f32),
                     pinned: on("pinned"),
+                    float: on("float"),
+                    on_narrow: handler("onNarrow"),
+                    on_close: handler("onClose"),
                     start: slots.take("start"),
                     end: slots.take("end"),
                 })

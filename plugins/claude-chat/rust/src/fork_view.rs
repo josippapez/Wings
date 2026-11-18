@@ -30,7 +30,7 @@ const WIDTH: u32 = 520;
 /// again, which would end the turn.
 pub fn header_button(c: &Chat) -> Option<Node> {
     (c.session.id.is_some() && c.state == State::Running).then(|| {
-        ui::button("", "ghost", false, fork)
+        ui::button("", "ghost", false, ask_fork)
             .prop("size", "icon-sm")
             .prop("label", "Fork")
             .prop("title", "Fork: go on in a copy of this session, and leave this one as it is")
@@ -57,6 +57,27 @@ pub fn message_actions(at: usize, c: &Chat) -> Option<Node> {
     }
 }
 
+/// Cancel and Fork, under what a dialog says.
+fn buttons(c: &Chat, cancel: fn(), fork: fn()) -> Node {
+    row()
+        .prop("gap", "s")
+        .prop("wrap", true)
+        .prop("justify", "end")
+        .prop("align", "center")
+        .child(ui::button("Cancel", "ghost", false, cancel))
+        .child(ui::button("Fork", "default", false, fork).prop("disabled", c.session.working))
+}
+
+/// The dialog that asks before the header's Fork copies the whole session, while it is open.
+pub fn header_dialog(c: &Chat) -> Option<Node> {
+    c.fork_ask.then(|| {
+        panel("Fork this session", WIDTH, close_ask)
+            .child(muted("A fork is a new session that starts with this whole conversation, so you can take it another way.").prop("size", "small"))
+            .child(muted("This one stays as it is, in Past sessions. Your files stay as they are.").prop("size", "small"))
+            .child(buttons(c, close_ask, fork))
+    })
+}
+
 /// The dialog that asks before forking before a message, while it is open.
 pub fn dialog(c: &Chat) -> Option<Node> {
     let uuid = c.fork_from.as_deref()?;
@@ -68,13 +89,7 @@ pub fn dialog(c: &Chat) -> Option<Node> {
         Some(said) if !said.is_empty() => text(truncate(said, 600)),
         _ => muted("A message of pictures only"),
     };
-    let actions = row()
-        .prop("gap", "s")
-        .prop("wrap", true)
-        .prop("justify", "end")
-        .prop("align", "center")
-        .child(ui::button("Cancel", "ghost", false, close_fork_from))
-        .child(ui::button("Fork", "default", false, fork_from).prop("disabled", c.session.working));
+    let actions = buttons(c, close_fork_from, fork_from);
     Some(
         panel("Fork from here", WIDTH, close_fork_from)
             .child(muted("Start a new chat from this session as it was before this message of yours:").prop("size", "small"))
@@ -125,9 +140,19 @@ fn say(why: impl Into<String>) {
     chat::with(|c| c.session.items.push(Item::Error(why)));
 }
 
-/// Starts the session again as a copy of itself, under a new id, from the Fork button.
+/// Asks before the header's Fork copies the session.
+pub fn ask_fork() {
+    chat::with(|c| c.fork_ask = true);
+}
+
+pub fn close_ask() {
+    chat::with(|c| c.fork_ask = false);
+}
+
+/// Starts the session again as a copy of itself, under a new id, from the dialog's Fork button.
 pub fn fork() {
     let started = chat::with(|c| {
+        c.fork_ask = false;
         if let Some(why) = busy(c) {
             c.session.items.push(Item::Error(why.into()));
             return None;

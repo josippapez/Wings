@@ -120,6 +120,14 @@ pub struct Chat {
     pub dirs: Vec<String>,
     /// The message the Fork from here dialog is about, by its uuid.
     pub fork_from: Option<String>,
+    /// The header's Fork is asking before it forks.
+    pub fork_ask: bool,
+    /// Where this chat was forked from, as the note at its top says: the name of the original session.
+    pub forked_from: Option<String>,
+    /// Whether the tab is narrower than the side panel and the conversation need side by side, as the page's split says: None
+    /// until it has measured. Then the panel stays out of the way, and `side_open` has it over the conversation.
+    pub narrow: Option<bool>,
+    pub side_open: bool,
     /// The background agent a message is being written to, by its id, and the message.
     pub message_to: Option<(String, String)>,
     /// The lines added and removed in the working tree since the last commit, and the branch it is on.
@@ -169,6 +177,10 @@ thread_local! {
         task: None,
         dirs: Vec::new(),
         fork_from: None,
+        fork_ask: false,
+        forked_from: None,
+        narrow: None,
+        side_open: false,
         message_to: None,
         changes: None,
         branch: None,
@@ -239,6 +251,9 @@ fn launch(resume: Option<String>) {
 /// `launch`, as a copy of the session when `how` says so, and with the folders you added.
 pub fn launch_with(resume: Option<String>, how: Launch) {
     let (run, cwd, program, start_mode, dirs) = with(|c| {
+        if how.fork {
+            c.forked_from = Some(name(c).unwrap_or_else(|| "an earlier session".into()));
+        }
         if let Some(input) = c.input.take() {
             input.stop();
         }
@@ -259,6 +274,7 @@ pub fn launch_with(resume: Option<String>, how: Launch) {
         c.subagent = None;
         c.task = None;
         c.fork_from = None;
+        c.fork_ask = false;
         c.message_to = None;
         c.moving = false;
         (c.run, c.cwd.clone(), c.program.clone(), c.session.start_mode.clone(), c.dirs.clone())
@@ -764,12 +780,15 @@ pub fn cycle_mode() {
 /// Escape: closes the dialog or sheet that is open, else stops the turn while Claude works.
 pub fn escape() {
     let (dialog, working) = with(|c| {
-        let open = c.past.is_some() || c.panel.is_some() || c.plugins.is_some() || c.task.is_some() || c.session.rewind.is_some() || c.session.setup.open.is_some();
+        let open = c.side_open || c.past.is_some() || c.panel.is_some() || c.plugins.is_some() || c.task.is_some() || c.session.rewind.is_some() || c.session.setup.open.is_some();
         (open, c.session.working)
     });
     match composer::escape(dialog, working) {
         Escape::Close => with(|c| {
             // The one opened last is on top: the setup dialog's form, then the dialogs over the chat, then the sheet.
+            if std::mem::take(&mut c.side_open) {
+                return;
+            }
             if c.session.setup.form.take().is_none() && c.session.setup.open.take().is_none() && c.session.rewind.take().is_none() && c.task.take().is_none() && c.plugins.take().is_none() && c.panel.take().is_none() {
                 c.past = None;
             }
@@ -839,12 +858,18 @@ pub fn insert_mention(path: &str) {
 }
 
 pub fn new_chat() {
-    with(|c| c.dirs.clear());
+    with(|c| {
+        c.dirs.clear();
+        c.forked_from = None;
+    });
     launch(None);
 }
 
 pub fn resume(id: &str) {
-    with(|c| c.dirs.clear());
+    with(|c| {
+        c.dirs.clear();
+        c.forked_from = None;
+    });
     launch(Some(id.to_owned()));
 }
 
@@ -956,7 +981,31 @@ pub fn toggle_output(id: &str) {
 
 /// Shows the subagent started by the tool call `id` in the side panel, or closes it when it is the one shown.
 pub fn toggle_subagent(id: &str) {
-    with(|c| c.subagent = if c.subagent.as_deref() == Some(id) { None } else { Some(id.to_owned()) });
+    with(|c| {
+        c.subagent = if c.subagent.as_deref() == Some(id) { None } else { Some(id.to_owned()) };
+        // What you asked to see opens the panel over a narrow tab.
+        c.side_open = c.subagent.is_some();
+    });
+}
+
+/// The page's split says whether the tab is narrower than `view::SIDE_BELOW`. A panel left open over the conversation
+/// goes away once the tab is wide enough to hold it beside.
+pub fn set_narrow(narrow: bool) {
+    with(|c| {
+        c.narrow = Some(narrow);
+        if !narrow {
+            c.side_open = false;
+        }
+    });
+}
+
+/// The header's button for the side panel: opens it over the conversation, or puts it away.
+pub fn toggle_side() {
+    with(|c| c.side_open = !c.side_open);
+}
+
+pub fn close_side() {
+    with(|c| c.side_open = false);
 }
 
 pub fn close_subagent() {

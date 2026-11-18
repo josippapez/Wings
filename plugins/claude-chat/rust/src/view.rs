@@ -35,10 +35,12 @@ const COLUMN: u32 = 760;
 /// The most nodes the conversation sends. The app draws a page of at most 5,000, and a long session's whole history
 /// made more: the page was refused and stayed on Loading. The toolbar and the message box take the rest.
 const BUDGET: usize = 3_500;
-/// The side panel's width, and the width of the tab under which it is left out. The column is 760 wide, drawn with 8 points
-/// of margin either side, so at 1,100 and up it keeps all of that beside the panel; a 1,000-wide tab has the chat as it was.
+/// The side panel's width. It floats over the right of the tab and takes no width from the conversation, which stays
+/// centered in the whole tab. The column is 760 wide, drawn with 8 points of margin either side, so the panel is shown while
+/// the tab holds that and the panel (with its 12 points of padding) either side of the centre; narrower, it is put away
+/// behind a button in the header that opens it over the conversation.
 const SIDE: u32 = 260;
-const SIDE_BELOW: u32 = 1_100;
+const SIDE_BELOW: u32 = COLUMN + 16 + 2 * (SIDE + 12);
 /// The most nodes a subagent's transcript in the side panel makes, apart from the conversation's own budget.
 const SUB_BUDGET: usize = 1_200;
 /// The most subagents the panel lists.
@@ -57,13 +59,20 @@ fn chat_page(c: &Chat) -> Node {
     // of a narrow tab. An open subagent pins it: that is what you asked to see. Flush, so the conversation scrolls on its own
     // and the checklist and the message box stay at the foot.
     let main = [body].into_iter().chain(todo_card(c)).chain([composer(c)]);
+    // The panel floats over the right of the tab. The split says when the tab is narrow; then the panel shows only when you
+    // opened it, over the conversation, and Escape or a press outside puts it away. A panel left out leaves its terminals
+    // out with it.
+    let shown = side_shown(c);
     let split = Node::new("Split")
         .prop("defaultSize", SIDE)
         .prop("side", "end")
+        .prop("float", true)
         .prop("collapseBelow", SIDE_BELOW)
-        .prop("pinned", c.subagent.as_ref().is_some_and(|id| c.session.subagents.contains_key(id)) || !c.terminals.is_empty())
+        .on("onNarrow", |payload| chat::set_narrow(payload["narrow"].as_bool().unwrap_or(false)));
+    let split = if c.side_open && c.narrow == Some(true) { split.on("onClose", |_| chat::close_side()) } else { split };
+    let split = split
         .child(Node::new("Slot").prop("name", "start").children(main))
-        .child(Node::new("Slot").prop("name", "end").children(side(c)));
+        .child(Node::new("Slot").prop("name", "end").children(if shown { side(c) } else { Vec::new() }));
     // No page toolbar: the tab and the project's header over it already name the place, so the card starts with a
     // header as a terminal pane's does. The dialogs, which the app draws over the whole page, and the past
     // sessions, which open over it all as Wings' own sheet, come after.
@@ -76,6 +85,7 @@ fn chat_page(c: &Chat) -> Node {
         .maybe(crate::tasks_view::dialog(c))
         .maybe(crate::rewind_view::dialog(c))
         .maybe(crate::fork_view::dialog(c))
+        .maybe(crate::fork_view::header_dialog(c))
         .maybe(crate::actions_view::message_dialog(c))
         .maybe(crate::usage_view::dialog(c))
         .maybe(crate::pictures_view::dialog_of(c))
@@ -91,6 +101,8 @@ const HISTORY: [&str; 3] = ["M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8",
 const PLUS: [&str; 2] = ["M5 12h14", "M12 5v14"];
 /// Lucide's `zap`, on the fast mode button.
 const FAST: [&str; 1] = ["M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"];
+/// Lucide's `panel-right`.
+const PANEL: [&str; 2] = ["M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z", "M15 3v18"];
 const SETTINGS: [&str; 2] = [
     "M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915",
     "M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0",
@@ -103,6 +115,40 @@ fn icon_button(label: &str, paths: &[&str], on_click: impl Fn() + 'static) -> No
 
 /// The card's header, as a terminal pane's: the Claude mark and the session's name, which the tab shows too, and the
 /// chat's actions as icon buttons.
+/// Whether the side panel is on the page: beside the conversation in a wide tab, over it in a narrow one once opened. Not
+/// before the split has measured the tab.
+fn side_shown(c: &Chat) -> bool {
+    match c.narrow {
+        Some(false) => true,
+        Some(true) => c.side_open,
+        None => false,
+    }
+}
+
+/// What is alive in the side panel: a terminal Claude opened, a background task and a subagent that run.
+pub fn live_in_side(c: &Chat) -> usize {
+    let subagents = c.session.items.iter().filter(|item| matches!(item, Item::Tool(tool) if matches!(tool.name.as_str(), "Task" | "Agent") && tool.output.is_none())).count();
+    c.terminals.len() + c.session.tasks.iter().filter(|task| task.ended.is_none()).count() + subagents
+}
+
+/// The header's button that opens the side panel over a narrow tab, with how many things run in it.
+fn side_button(c: &Chat) -> Option<Node> {
+    if c.narrow != Some(true) {
+        return None;
+    }
+    let live = live_in_side(c);
+    let title = match live {
+        0 => "Side panel".to_owned(),
+        n => format!("Side panel, {n} running"),
+    };
+    let glyph = icon(24, 2.0, &PANEL).prop("size", 16);
+    let button = button("", "ghost", false, chat::toggle_side).prop("label", "Side panel").prop("title", title.as_str());
+    Some(match live {
+        0 => button.prop("size", "icon-sm").child(glyph),
+        n => button.prop("size", "sm").child(row().prop("gap", "xs").prop("align", "center").child(glyph).child(text(n.to_string()).prop("size", "small"))),
+    })
+}
+
 fn header(c: &Chat) -> Node {
     let name = chat::name(c).unwrap_or_else(|| "Claude chat".into());
     let title = row()
@@ -117,6 +163,7 @@ fn header(c: &Chat) -> Node {
         .prop("align", "center")
         .maybe(terminal)
         .maybe(crate::fork_view::header_button(c))
+        .maybe(side_button(c))
         .child(icon_button("Past sessions", &HISTORY, chat::open_past))
         .child(icon_button("New chat", &PLUS, chat::new_chat))
         .child(icon_button("Settings", &SETTINGS, chat::open_settings));
@@ -173,7 +220,9 @@ fn conversation(c: &Chat) -> Node {
     // Older items load as you scroll up to them. What the budget cut can't be added to, so a note stands for it.
     let earlier = cut.then(|| muted("Older messages aren't shown here. Open the session in a terminal to see all of it.").key("earlier"));
     let more = from > 0 && !cut;
-    let mut nodes: Vec<Node> = earlier.into_iter().chain(blocks).collect();
+    // A fork says where it came from, at the top.
+    let forked = c.forked_from.as_ref().map(|from| muted(format!("Forked from {}", truncate(from, 80))).prop("size", "small").key("forked"));
+    let mut nodes: Vec<Node> = forked.into_iter().chain(earlier).chain(blocks).collect();
     // What an MCP server asks you waits at the foot, where Claude's own questions do.
     nodes.extend(crate::elicitation_view::cards(c));
     if !c.session.live.is_empty() {
@@ -238,9 +287,14 @@ fn asking(c: &Chat) -> bool {
 }
 
 /// Your message on the right, as chat apps show it, and never wider than the column less a margin on its left: a long one
-/// spread over the whole width read like Claude's. `action`, the rewind button, sits just left of it.
+/// spread over the whole width read like Claude's. `action`, the rewind and fork buttons, sits under it at the right, where
+/// it never shares a row with the card.
 fn bubble(card: Node, action: Option<Node>) -> Node {
-    row().prop("justify", "end").prop("align", "center").child(stack().prop("width", 64)).maybe(action).child(card)
+    let said = row().prop("justify", "end").prop("align", "center").child(stack().prop("width", 64)).child(card);
+    match action {
+        Some(action) => stack().prop("gap", "xs").child(said).child(row().prop("justify", "end").child(action)),
+        None => said,
+    }
 }
 
 /// An item of the conversation, or with `own` false, of a subagent's, whose messages can't be rewound.
@@ -1096,6 +1150,78 @@ fn capital(word: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn terminal(pane: &str) -> crate::chat::Terminal {
+        crate::chat::Terminal { pane: pane.into() }
+    }
+
+    #[test]
+    fn the_side_panel_shows_beside_a_wide_tab_and_over_a_narrow_one_once_opened() {
+        chat::with(|c| {
+            assert!(!side_shown(c), "not before the split has measured the tab");
+            assert!(side_button(c).is_none());
+        });
+        chat::set_narrow(false);
+        chat::with(|c| {
+            assert!(side_shown(c));
+            assert!(side_button(c).is_none(), "the button is for a tab that has no room for the panel");
+        });
+        chat::set_narrow(true);
+        chat::with(|c| {
+            assert!(!side_shown(c));
+            assert!(side_button(c).is_some());
+        });
+        chat::toggle_side();
+        assert!(chat::with(|c| side_shown(c)));
+        // A tab that grows wide enough to hold it beside the conversation puts the opened one away.
+        chat::set_narrow(false);
+        chat::set_narrow(true);
+        assert!(!chat::with(|c| side_shown(c)));
+    }
+
+    #[test]
+    fn the_panel_is_wide_enough_to_leave_the_conversation_column_clear() {
+        // Centered in the tab, the column and its margins have (tab - 776) / 2 either side.
+        assert!((SIDE_BELOW - COLUMN - 16) / 2 >= SIDE + 12);
+    }
+
+    #[test]
+    fn escape_puts_an_opened_panel_away_before_anything_else() {
+        chat::set_narrow(true);
+        chat::toggle_side();
+        chat::escape();
+        assert!(!chat::with(|c| c.side_open));
+    }
+
+    #[test]
+    fn the_header_button_shows_a_count_when_something_runs_in_the_panel() {
+        chat::set_narrow(true);
+        let quiet = chat::with(|c| (live_in_side(c), side_button(c).unwrap().count()));
+        chat::with(|c| c.terminals = vec![terminal("1"), terminal("2")]);
+        let busy = chat::with(|c| (live_in_side(c), side_button(c).unwrap().count()));
+        assert_eq!((quiet.0, busy.0), (0, 2));
+        assert!(busy.1 > quiet.1, "the count is a node of its own");
+    }
+
+    #[test]
+    fn a_fork_says_where_it_came_from_at_the_top_of_the_conversation() {
+        chat::with(|c| c.session.items.push(Item::User("Fix the build".into())));
+        let plain = chat::with(|c| conversation(c).count());
+        chat::with(|c| c.forked_from = Some("Fix the build".into()));
+        assert!(chat::with(|c| conversation(c).count()) > plain);
+    }
+
+    #[test]
+    fn the_header_fork_asks_first_and_starts_nothing_until_fork_is_clicked() {
+        chat::with(|c| {
+            c.session.id = Some("abc".into());
+            c.state = State::Running;
+        });
+        crate::fork_view::ask_fork();
+        assert!(chat::with(|c| crate::fork_view::header_dialog(c).is_some() && c.state == State::Running));
+        crate::fork_view::close_ask();
+        assert!(chat::with(|c| crate::fork_view::header_dialog(c).is_none() && c.state == State::Running));
+    }
 
     #[test]
     fn a_duration_is_told_in_seconds_minutes_and_hours() {

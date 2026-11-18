@@ -1757,11 +1757,15 @@ impl PageView {
         // it saves sizing the split from what it holds.
         let measure = split.collapse_below.map(|below| {
             let entity = cx.entity();
+            let on_narrow = split.on_narrow.clone();
             canvas(
                 move |bounds, _, cx| {
                     let narrow = bounds.size.width.as_f32() < below;
                     entity.update(cx, |view, cx| {
                         if view.split_narrow.insert(id, narrow) != Some(narrow) {
+                            if let Some(handler) = &on_narrow {
+                                view.send(handler, Some(&serde_json::json!({ "narrow": narrow })));
+                            }
                             cx.notify();
                         }
                     })
@@ -1788,6 +1792,9 @@ impl PageView {
                 .flex_col()
         };
         let container = div().relative().flex_1().min_h_0().min_w_0().flex().children(measure);
+        if split.fixed_end && split.float {
+            return self.floating_split(split, container, cx);
+        }
         if split.fixed_end {
             return container
                 .child(
@@ -1826,6 +1833,53 @@ impl PageView {
                     .children(self.nodes(&split.end, cx)),
             )
             .into_any_element()
+    }
+
+    /// A split with `float: true`: `start` takes the whole width and the fixed `end` pane floats over its right edge,
+    /// as tall as what it holds, so the main pane never moves for it. The page decides when it shows (it hears
+    /// `onNarrow`). With `onClose` the pane is open over the content: it has the keyboard, Escape in it and a press
+    /// outside it send `onClose`.
+    fn floating_split(&self, split: &tree::Split, container: gpui::Div, cx: &mut Context<Self>) -> AnyElement {
+        let id = split.id;
+        let main = div().flex_1().min_w_0().min_h_0().flex().flex_col().overflow_hidden().children(self.nodes(&split.start, cx));
+        let container = container.child(main);
+        if split.end.is_empty() {
+            return container.into_any_element();
+        }
+        let mut pane = div()
+            .id(ElementId::NamedInteger("page-split-float".into(), id))
+            .absolute()
+            .top_0()
+            .right_0()
+            .w(px(split.size))
+            .max_w(relative(0.5))
+            .max_h(relative(1.0))
+            .overflow_y_scroll()
+            .p(px(12.0))
+            .flex()
+            .flex_col()
+            .gap(px(8.0));
+        let mut container = container;
+        if let Some(close) = split.on_close.clone() {
+            let focus = self.sheet_focus.borrow_mut().entry(id).or_insert_with(|| cx.focus_handle()).clone();
+            self.sheets_drawn.borrow_mut().push((id, focus.clone()));
+            let on_press = close.clone();
+            container = container.child(
+                div().absolute().top_0().left_0().size_full().on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(move |view, _, _, _| view.act(&on_press, None)),
+                ),
+            );
+            pane = pane.track_focus(&focus).capture_key_down(cx.listener(move |view, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key != "escape" || view.shows_menu() {
+                    return;
+                }
+                view.send(&close, None);
+                window.prevent_default();
+                cx.stop_propagation();
+            }));
+        }
+        container.child(pane.children(self.nodes(&split.end, cx))).into_any_element()
     }
 
     /// A `Dialog` over the whole page, as Wings' own dialogs are (`ui::dialog`): its title and a close button at the top,

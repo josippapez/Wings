@@ -2007,6 +2007,56 @@ fn side_split(pinned: bool) -> String {
     })
 }
 
+/// A chat's floating panel: the split with `float`, which tells the page when it is narrower than 600 points and, while
+/// the page gives it an `onClose`, hears Escape in the panel.
+fn float_split(with_close: bool) -> String {
+    let (mut narrow, mut closed) = ("unknown".to_owned(), 0);
+    fake::page("page", move |event| {
+        match event {
+            Some(("5:narrow", payload)) => narrow = payload["narrow"].to_string(),
+            Some(("5:close", _)) => closed += 1,
+            _ => {}
+        }
+        let mut props = json!({ "defaultSize": 200, "side": "end", "float": true, "collapseBelow": 600, "onNarrow": "5:narrow" });
+        if with_close && closed == 0 {
+            props["onClose"] = json!("5:close");
+        }
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Split",
+            "props": props, "children": [
+            { "id": 2, "type": "Slot", "props": { "name": "start" }, "children": [text(3, 4, format!("Main, narrow {narrow}, closed {closed}."))] },
+            { "id": 6, "type": "Slot", "props": { "name": "end" }, "children": [text(7, 8, "Side".into())] }] }] })
+    })
+}
+
+/// A floating split keeps its pane at any width, takes no width from the main pane, and tells the page which side of
+/// `collapseBelow` it is on.
+#[test]
+fn a_floating_split_reports_its_width_and_keeps_its_pane() {
+    for (width, narrow) in [(500.0, "narrow true,"), (900.0, "narrow false,")] {
+        let mut app = TestApp::new();
+        app.background_executor().allow_parking();
+        let host = hosted(&mut app);
+        let source = float_split(false);
+        let bounds = gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(width), px(300.0)));
+        let mut window = app.open_window_with_options(
+            gpui::WindowOptions { window_bounds: Some(gpui::WindowBounds::Windowed(bounds)), ..Default::default() },
+            |_, cx| PageView::in_plugin(&host, &source, cx),
+        );
+        settle(&app, &mut window, shows(narrow));
+        assert!(window.read(|view, _| view.text().contains("Side")));
+    }
+}
+
+/// A floating pane with `onClose` has the keyboard, and Escape in it sends `onClose`.
+#[test]
+fn escape_in_a_floating_pane_sends_its_on_close() {
+    let (app, mut window) = open(float_split(true));
+    settle(&app, &mut window, shows("Side"));
+    window.draw();
+    key(&mut window, "escape");
+    settle(&app, &mut window, shows("closed 1."));
+}
+
 /// A page with a button that opens a dialog, which the page leaves out once it hears `onClose`, and how often it has.
 fn dialog_page() -> String {
     let (mut open, mut closed) = (false, 0);

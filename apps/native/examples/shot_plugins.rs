@@ -1094,7 +1094,8 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         user("Show me the rounding fix."),
         text("Work in cents and round once at the end:\n\n```ts\nconst cents = Math.round(total * 100);\nreturn Math.round(cents * (1 - rate)) / 100;\n```\n\nThat keeps `100 * 0.9` at exactly 90."),
     ]);
-    // Claude ran a build with Wings' open_pane: the terminal shows live in the side panel, which stays open in a narrow tab.
+    // Claude ran a build with Wings' open_pane: the terminal shows live in the side panel, which floats over the tab's right side
+    // when the tab is wide and opens from the header's button when it is narrow.
     let built = opened(vec![
         init.clone(),
         user("Build the shop and tell me when it's done."),
@@ -1151,8 +1152,16 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         text("The agent audits the discount code in the background."),
         json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 9_400, "num_turns": 2, "result": "", "total_cost_usd": 0.05 }),
     ]);
-    let (worked_again, rewound_again) = (worked.clone(), rewound.clone());
-    let scenes: [Scene; 60] = [
+    let (worked_again, worked_forking, rewound_again) = (worked.clone(), worked.clone(), rewound.clone());
+    let tasks_open = tasks.clone();
+    // A long message of yours that wraps, with Rewind and Fork from here under it.
+    let wrapped = opened(vec![
+        init.clone(),
+        said("Why does the checkout test fail on CI but pass here, and could you also look at whether the cart rounds the same way, and tell me which of the two places I should change first before the release goes out on Friday?", FIRST),
+        text("The discount is applied in floating point, so `100 * 0.9` comes out a hair under 90 on CI's Node version."),
+        json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 12_000, "num_turns": 2, "result": "", "total_cost_usd": 0.03 }),
+    ]);
+    let scenes: [Scene; 63] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -1191,7 +1200,7 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         ("mention", opened(vec![init.clone()]), None, Some("type:fix the rounding in @che"), "checkout.test.ts"),
         // Two pasted pictures wait in the message box as chips, with a message under them.
         ("paste", opened(vec![init.clone()]), None, Some("paste:;paste:;type:what is in these?"), "Image 2"),
-        // The subagent's transcript in the side panel, pinned open even in a narrow tab.
+        // The subagent's transcript in the side panel, which Open shows over a narrow tab.
         ("subagent", subagent, None, Some("disclose:Ran 2 subagents;press:Open"), "Found three callers"),
         ("suggestion", suggested, None, None, "Tab"),
         ("subagents", subagents, None, None, "Waiting on 2 subagents"),
@@ -1242,6 +1251,12 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         ("terminal", built, None, None, "beside the chat"),
         // The button beside your message forks before it, and asks first what that does.
         ("fork-from", rewound_again, None, Some("press:Fork from here"), "Start a new chat from this session"),
+        // The header's Fork asks first, and says what a fork is.
+        ("fork-ask", worked_forking, None, Some("press:Fork"), "A fork is a new session"),
+        // A long message that wraps keeps Rewind and Fork from here clear of it, under it at the right.
+        ("long-message", wrapped, None, None, "which of the two places"),
+        // The side panel opened over a narrow tab from the header's button, with the conversation under it.
+        ("panel-open", tasks_open, None, Some("press:Side panel"), "Background tasks"),
         // /add-dir restarts the chat with the folder, which the side panel lists with a Remove.
         ("folder", worked_again, None, Some(add_dir.as_str()), "Folders"),
         // /mcp offers Reconnect on the server that failed, Sign in on the one that wants it and Sign out on a signed-in one.
@@ -1393,9 +1408,25 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
             std::env::set_var("CHAT_EXIT", exit.map_or("", |(code, _)| code));
             std::env::set_var("CHAT_STDERR", exit.map_or("", |(_, said)| said));
         }
-        // The side panel is left out of a tab under 1,100 points, so a few scenes are drawn wider to show it.
-        let widths: &[f32] = if ["conversation", "work", "ask-bash", "tasks", "terminal", "folder"].contains(&name) { &[1280.0, 1000.0, 640.0] } else { &[1000.0, 640.0] };
+        // The side panel floats over a tab's right side while the tab is wide enough to leave the conversation clear (1,320
+        // points), and is behind the header's button in a narrower one, so a few scenes are drawn at 1,400 too to show it and
+        // at 1,280 for the button just under it.
+        let widths: &[f32] = if ["conversation", "work", "ask-bash", "tasks", "terminal", "folder", "long-message"].contains(&name) {
+            &[1400.0, 1280.0, 1000.0, 640.0]
+        } else {
+            &[1000.0, 640.0]
+        };
         for &width in widths {
+            // What these scenes look for is in the side panel, which a narrow tab opens from the header's button, after the
+            // restart that /add-dir makes.
+            let opening = ["tasks", "task-output", "terminal", "folder"].contains(&name) && width < 1_320.0;
+            let acted = match (act, opening) {
+                (Some(act), true) if name == "folder" => Some(format!("{act};wait:1500;press:Side panel")),
+                (Some(act), true) => Some(format!("press:Side panel;{act}")),
+                (None, true) => Some("press:Side panel".to_owned()),
+                (act, false) => act.map(str::to_owned),
+            };
+            let act = acted.as_deref();
             // The shell of the terminal the workspace draws over the page, opened before the page so the fake `claude` the
             // page starts is found under the scene's own shell.
             let shot_terminal = (name == "terminal").then(|| {
@@ -1446,6 +1477,7 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
                             cx.update(|cx| cx.write_to_clipboard(gpui::ClipboardItem::new_image(&picture)));
                             cx.simulate_keystrokes(window, "cmd-v");
                         }
+                        Some(("wait", ms)) => wait(&mut cx, window, Duration::from_millis(ms.parse().unwrap())),
                         Some(("chip", label)) => assert!(handle.read_with(&cx, |view, _| view.press_chip(label)).unwrap()),
                         Some(("press", label)) => assert!(handle.read_with(&cx, |view, _| view.press(label, 0)).unwrap()),
                         // A row of a list that is a button, like a task in the side panel.
