@@ -471,6 +471,11 @@ pub trait Env: Send + Sync + 'static {
     fn copy_text(&self, _text: String) -> Result<(), String> {
         Err("The clipboard isn't available in this host".into())
     }
+    /// Asks for files, one or `multiple`, in the system's file picker, for a page's `pickFiles`, and answers `reply` once
+    /// it closes with the pictures among them, as `picked_images` reads them.
+    fn pick_files(&self, _multiple: bool, reply: crate::page::runtime::Reply) {
+        reply.err("The file picker isn't available in this host".into());
+    }
     /// The plugin set, or with `None` took away, its section `section` under the project in folder `project`. The host
     /// has checked the plugin declares the section and the project is listed.
     fn set_project_section(

@@ -477,6 +477,17 @@ pub fn add_image(media_type: &str, data: &str) {
     }
 }
 
+/// Adds the pictures you pick in the system's file picker, as pasted ones are. Wings opens it only on your click.
+pub fn attach() {
+    let picked = host::pick_images(true);
+    task::spawn(async move {
+        match picked.await {
+            Ok(images) => with(|c| c.images.extend(images)),
+            Err(error) => with(|c| c.session.items.push(Item::Error(format!("Couldn't attach pictures: {error}")))),
+        }
+    });
+}
+
 /// Takes the `index`th pasted picture out of the message.
 pub fn remove_image(index: usize) {
     with(|c| {
@@ -581,12 +592,9 @@ pub fn open_settings() {
     drop(host::call("openSettings", json!({})));
 }
 
-pub fn pick_model(model: &str) {
-    write(|c, n| Some(c.session.set_model(model, n)));
-}
-
-pub fn pick_effort(effort: &str) {
-    write(|c, n| Some(c.session.set_effort(effort, n)));
+/// Switches to the model and effort picked together in the message box, as `<model>@<effort>`.
+pub fn pick_model_effort(choice: &str) {
+    write(|c, n| c.session.pick(choice, n));
 }
 
 pub fn pick_mode(mode: &str) {

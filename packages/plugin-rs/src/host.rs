@@ -657,6 +657,30 @@ pub fn open_url(url: &str) {
     drop(call("openUrl", json!({ "url": url })));
 }
 
+/// `wings.pickFiles` for pictures: the system's file picker, `multiple` or one, and each png, jpeg, gif or webp picked as
+/// its media type and base64, as a pasted one comes. Wings opens it only right after your click in the page. A file that
+/// isn't one, or is over 3.75 MB, is left out, and so is what would take the pick past 7.5 MB. Cancelled, it gives none.
+/// The call goes out now.
+pub fn pick_images(multiple: bool) -> impl Future<Output = Result<Vec<(String, String)>, String>> {
+    let answer = call("pickFiles", json!({ "kinds": ["image"], "multiple": multiple }));
+    async move {
+        let Value::Array(files) = answer.await? else {
+            return Ok(Vec::new());
+        };
+        // Moved out of the answer, not copied: a picture is megabytes.
+        Ok(files
+            .into_iter()
+            .filter_map(|file| match file {
+                Value::Object(mut file) => match (file.remove("mediaType"), file.remove("data")) {
+                    (Some(Value::String(media_type)), Some(Value::String(data))) => Some((media_type, data)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect())
+    }
+}
+
 /// `wings.diskUsage`: the tree of `path` as `{ root, floor, entries, restricted, ms }`, kept as the `options` say
 /// (`minBytes`, `depth`, `maxEntries`, `reuse`). With `on_progress` it hears how far the scan is, as `{ entries, bytes,
 /// path }`. The scan stops when its `stopper` is used, and then fails with "The scan was stopped".
@@ -794,6 +818,16 @@ mod tests {
         run_ready();
         let sent: Vec<Value> = calls.borrow().iter().map(|(_, params)| params["label"].clone()).collect();
         assert_eq!(sent, [json!("same"), Value::Null]);
+    }
+
+    #[test]
+    fn picked_pictures_come_as_their_media_type_and_base64() {
+        testing::answer(|method, params| {
+            assert_eq!((method, params), ("pickFiles", &json!({ "kinds": ["image"], "multiple": true })));
+            Ok(json!([{ "mediaType": "image/png", "data": "AAAA" }, { "mediaType": "image/gif", "data": "BBBB" }]))
+        });
+        let picked = block_on(pick_images(true)).unwrap();
+        assert_eq!(picked, [("image/png".to_owned(), "AAAA".to_owned()), ("image/gif".to_owned(), "BBBB".to_owned())]);
     }
 
     #[test]

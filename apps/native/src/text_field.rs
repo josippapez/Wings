@@ -47,7 +47,7 @@ pub struct TabPressed;
 /// The most image bytes a paste hands the page. The Claude API takes an image of up to 5 MB as base64 on its
 /// strictest platform (10 MB on its own API), and base64 is a third bigger than the bytes, so this is the bytes that
 /// still fit in 5 MB. A bigger image is dropped: the page would only get a request the API refuses.
-const MAX_PASTED_IMAGE_BYTES: usize = 3_750_000;
+const MAX_PASTED_IMAGE_BYTES: usize = crate::page::plugin::MAX_IMAGE_BYTES;
 
 pub struct TextField {
     focus: FocusHandle,

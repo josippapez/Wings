@@ -706,6 +706,40 @@ fn only_a_page_copies_and_only_right_after_a_click_or_key_and_never_more_than_a_
     assert_eq!(rig.env.seen(), [Seen::Copied("fix/login".into())]);
 }
 
+// pickFiles
+
+#[test]
+fn only_a_page_opens_the_file_picker_and_only_right_after_a_click_and_gets_the_pictures() {
+    const REFUSED: &str = "A page can open the file picker only right after you click or type in it";
+    let rig = Rig::new(json!({}), panes());
+    let folder = tmp().join(format!("wings-native-calls-pick-{}", std::process::id()));
+    fs::create_dir_all(&folder).unwrap();
+    let png = folder.join("shot.png");
+    fs::write(&png, b"\x89PNG\r\n\x1a\nrest").unwrap();
+    let notes = folder.join("notes.txt");
+    fs::write(&notes, "not a picture").unwrap();
+    *rig.env.picks.lock().unwrap() = vec![png, notes];
+    let images = json!({ "kinds": ["image"], "multiple": true });
+    // Main has no clicks of yours, and a page opens it only on one, once.
+    assert_eq!(
+        call_from_main(&rig.host, "pickFiles", images.clone()),
+        Err(REFUSED.into())
+    );
+    let page = Caller::start(&rig.host);
+    assert_eq!(page.call("pickFiles", images.clone()), Err(REFUSED.into()));
+    assert_eq!(
+        page.call_after_click("pickFiles", json!({ "kinds": ["text"] })),
+        Err(r#"pickFiles takes kinds: ["image"]"#.into())
+    );
+    assert_eq!(
+        page.call_after_click("pickFiles", images.clone()),
+        Ok(json!([{ "mediaType": "image/png", "data": "iVBORw0KGgpyZXN0" }]))
+    );
+    assert_eq!(page.call("pickFiles", images), Err(REFUSED.into()));
+    assert_eq!(rig.env.seen(), [Seen::PickFiles(true)]);
+    let _ = fs::remove_dir_all(&folder);
+}
+
 #[test]
 fn notifications_are_rate_limited_per_plugin() {
     let rig = notifier();

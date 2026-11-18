@@ -42,6 +42,8 @@ pub(super) enum Seen {
     Url(String),
     Notice(String, String),
     Copied(String),
+    /// The file picker opened, for several files or one.
+    PickFiles(bool),
     SendToAgent(String, String),
     OpenSettings(String),
     /// A plugin's section under a project: plugin, project, section, rows.
@@ -76,6 +78,8 @@ pub(super) struct FakeEnv {
     pub statusline: Mutex<wings_connect::statusline::Statusline>,
     /// The past sessions of every project, which `pastSessions` gets with its project and query.
     pub past: Mutex<Vec<serde_json::Value>>,
+    /// The files you pick when the file picker opens.
+    pub picks: Mutex<Vec<PathBuf>>,
     log: Mutex<Vec<Seen>>,
     changed: Condvar,
 }
@@ -94,6 +98,7 @@ impl FakeEnv {
             secrets: Mutex::default(),
             statusline: Mutex::default(),
             past: Mutex::default(),
+            picks: Mutex::default(),
             log: Mutex::default(),
             changed: Condvar::new(),
         })
@@ -335,6 +340,11 @@ impl Env for FakeEnv {
     fn copy_text(&self, text: String) -> Result<(), String> {
         self.record(Seen::Copied(text));
         Ok(())
+    }
+
+    fn pick_files(&self, multiple: bool, reply: crate::page::runtime::Reply) {
+        self.record(Seen::PickFiles(multiple));
+        reply.ok(super::picked_images(&self.picks.lock().unwrap()));
     }
 
     fn set_badge(&self, plugin: &str, pane: &str, badge: Option<Badge>) {

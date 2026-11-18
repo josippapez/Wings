@@ -577,8 +577,15 @@ impl PageView {
         let measure = Self::measure_menu(id, cx);
         let menu = open.then(|| {
             let (bounds, window_height) = self.select_bounds.get(&id).copied().unwrap_or_default();
-            // As wide as the select, and no narrower than the desktop's 144px.
-            let width = bounds.size.width.max(px(144.0));
+            // As wide as the select, and no narrower than the desktop's 144px. A quiet select is only as wide as its
+            // choice, so its menu fits its longest option instead: a chat's "Opus 5.5 · Extra high" under "Opus 5.5 ·
+            // High".
+            let fit = if select.quiet {
+                widest_option(select, cx)
+            } else {
+                px(0.0)
+            };
+            let width = bounds.size.width.max(px(144.0)).max(fit);
             let room = menu_room(bounds, window_height);
             let current = select.current();
             let items = select.options.iter().enumerate().map(|(at, option)| {
@@ -896,6 +903,26 @@ impl PageView {
             .children(popup)
             .into_any_element()
     }
+}
+
+/// How wide a select's menu is with its longest option whole: the label at 13pt, then `ui::select_row`'s padding, gap
+/// and check and `ui::select_menu`'s padding and border. At most 360pt.
+fn widest_option(select: &tree::Select, cx: &gpui::App) -> Pixels {
+    let system = cx.text_system();
+    let font = super::page_font(FontWeight::NORMAL, false, cx);
+    let width = |label: &str| {
+        label
+            .chars()
+            .filter_map(|c| system.advance(font, px(13.0), c).ok())
+            .map(|advance| advance.width.as_f32())
+            .sum::<f32>()
+    };
+    let widest = select
+        .options
+        .iter()
+        .map(|option| width(&option.label))
+        .fold(0.0, f32::max);
+    px((widest.ceil() + 48.0).min(360.0))
 }
 
 /// How tall a select's or combobox's menu may be: as the desktop's, no taller than the room under it, or over it when

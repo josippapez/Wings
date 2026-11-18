@@ -1066,6 +1066,7 @@ impl PageView {
                 ui::button(id, label, variant(button.variant), button.disabled, content),
                 button.size,
             )
+            .when(button.round, |el| el.rounded_full())
         };
         let element = element
             // A button that holds a text cut short narrows to fit its row and cuts that text, as each desktop page

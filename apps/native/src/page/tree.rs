@@ -262,6 +262,8 @@ pub struct Button {
     /// Its text wraps onto the lines it needs, from its start, and it's as tall as they are: an issue's title that is
     /// a button, as plugin-ui.css's `.w-button[data-wrap]`.
     pub wrap: bool,
+    /// `round: true`: fully rounded, a circle at an icon size, as a chat's send button.
+    pub round: bool,
     /// What to send back to the page when it's clicked. A disabled button has none.
     pub on_click: Option<String>,
     pub on_key_down: Option<String>,
@@ -1052,6 +1054,7 @@ impl Walk {
                 label: str_prop(&props, "label").map(|label| cut(label.to_owned())),
                 title: title(&props),
                 wrap: on("wrap"),
+                round: on("round"),
                 on_click: handler("onClick"),
                 on_key_down: handler("onKeyDown"),
                 children: parts(children),
@@ -1279,6 +1282,7 @@ impl Walk {
                     label: None,
                     title: title(&props),
                     wrap: false,
+                    round: false,
                     on_click: handler("onClick"),
                     on_key_down: handler("onKeyDown"),
                     children: parts(children),
@@ -1599,6 +1603,22 @@ mod tests {
                 (ButtonSize::Default, false, false),
             ]
         );
+    }
+
+    #[test]
+    fn a_button_is_round_only_when_it_says_so() {
+        let parsed = tree(json!([
+            button(json!({"size":"icon-sm","round":true})),
+            button(json!({"round":"yes"})),
+            button(json!({})),
+        ]))
+        .unwrap();
+        let round: Vec<_> = parsed
+            .children
+            .iter()
+            .map(|node| matches!(node, Node::Button(button) if button.round))
+            .collect();
+        assert_eq!(round, [true, false, false]);
     }
 
     #[test]

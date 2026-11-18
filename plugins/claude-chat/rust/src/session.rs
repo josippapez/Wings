@@ -43,6 +43,8 @@ pub enum Item {
     /// What Claude Code added to the conversation in your name, like a background task's notice: what it is, and
     /// what it said.
     Note(String, String),
+    /// A turn ended as it should, after this many milliseconds of work.
+    Worked(u64),
 }
 
 #[derive(Debug, PartialEq)]
@@ -402,10 +404,17 @@ impl Session {
                         self.items.pop();
                     }
                     self.items.push(Item::Error(said));
-                } else if !std::mem::replace(&mut self.told_you, true) {
-                    let last = self.items.iter().rev().find_map(|item| if let Item::Text(text) = item { Some(text) } else { None });
-                    let first = last.and_then(|text| text.lines().find(|line| !line.trim().is_empty())).unwrap_or_default();
-                    self.alerts.push(("Claude finished".into(), cut(first.trim(), SUMMARY_KEPT)));
+                } else {
+                    if !std::mem::replace(&mut self.told_you, true) {
+                        let last = self.items.iter().rev().find_map(|item| if let Item::Text(text) = item { Some(text) } else { None });
+                        let first = last.and_then(|text| text.lines().find(|line| !line.trim().is_empty())).unwrap_or_default();
+                        self.alerts.push(("Claude finished".into(), cut(first.trim(), SUMMARY_KEPT)));
+                    }
+                    // As Claude Code timed the turn. A result of no turns, like one for a background task answered along
+                    // with another, did no work of its own.
+                    if let Some(ms) = line["duration_ms"].as_f64().filter(|_| line["num_turns"] != 0) {
+                        self.items.push(Item::Worked(ms as u64));
+                    }
                 }
                 // A question in the next turn tells you again. "Finished" waits for the next turn's own output: a
                 // turn can end with more than one result line.
@@ -750,6 +759,22 @@ impl Session {
         request(&format!("mode-{n}"), json!({ "subtype": "set_permission_mode", "mode": mode }))
     }
 
+    /// The lines that switch to a model and effort picked together, `<model>@<effort>`, the effort left out for a model
+    /// that takes none: only what differs from now. None when nothing does.
+    pub fn pick(&mut self, choice: &str, n: u32) -> Option<String> {
+        let (model, effort) = choice.rsplit_once('@')?;
+        let switch = self.current_model().map(|current| current.value.as_str()) != Some(model);
+        let mut lines = String::new();
+        if switch {
+            lines.push_str(&self.set_model(model, n));
+        }
+        // A new model gets the effort picked with it, whatever your settings give that model.
+        if !effort.is_empty() && (switch || self.current_effort().as_deref() != Some(effort)) {
+            lines.push_str(&self.set_effort(effort, n));
+        }
+        (!lines.is_empty()).then_some(lines)
+    }
+
     /// The effort Claude works at: the one picked here, else the one your settings give the model, else theirs for all.
     pub fn current_effort(&self) -> Option<String> {
         let model = self.current_model().map(|model| model.resolved.as_str());
@@ -974,6 +999,33 @@ impl Session {
             None if !self.live.is_empty() => "Writing".into(),
             None => "Working".into(),
         }
+    }
+
+    /// The items of the turn under way: those after your last message.
+    fn turn(&self) -> &[Item] {
+        let start = self.items.iter().rposition(|item| matches!(item, Item::User(_) | Item::UserImages(..))).map_or(0, |at| at + 1);
+        &self.items[start..]
+    }
+
+    /// The subagents the turn under way started: how many, and how many of them still run.
+    pub fn turn_subagents(&self) -> (usize, usize) {
+        self.turn().iter().fold((0, 0), |(started, running), item| match item {
+            Item::Tool(tool) if matches!(tool.name.as_str(), "Task" | "Agent") => (started + 1, running + usize::from(tool.output.is_none())),
+            _ => (started, running),
+        })
+    }
+
+    /// How many subagents the turn waits on, when it waits on nothing else: every call still running is a subagent's, and
+    /// Claude neither thinks nor writes. None otherwise.
+    pub fn waiting_on_subagents(&self) -> Option<usize> {
+        if self.thinking || !self.live.is_empty() {
+            return None;
+        }
+        let running: Vec<&Tool> = self.turn().iter().filter_map(|item| match item {
+            Item::Tool(tool) if tool.output.is_none() => Some(tool),
+            _ => None,
+        }).collect();
+        (!running.is_empty() && running.iter().all(|tool| matches!(tool.name.as_str(), "Task" | "Agent"))).then_some(running.len())
     }
 }
 
@@ -1947,5 +1999,59 @@ mod tests {
         let mut session = Session::default();
         assert!(session.view_command("/usage now").is_none());
         assert!(session.view_command("tell me about /usage").is_none());
+    }
+
+    #[test]
+    fn a_finished_turn_says_how_long_it_worked() {
+        let mut session = Session::default();
+        session.send("go", &[]);
+        // Fields as the Agent SDK's SDKResultMessage names them.
+        session.hear(&json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 20_400, "num_turns": 3 }));
+        // One that answers a background task along with another did no turns of its own.
+        session.hear(&json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 12, "num_turns": 0 }));
+        // A failed turn says so instead.
+        session.hear(&json!({ "type": "result", "subtype": "error_during_execution", "is_error": true, "duration_ms": 900, "num_turns": 1, "errors": ["Overloaded"] }));
+        assert_eq!(session.items, [Item::User("go".into()), Item::Worked(20_400), Item::Error("Overloaded".into())]);
+    }
+
+    #[test]
+    fn the_turn_counts_its_subagents_and_waits_on_them_once_nothing_else_runs() {
+        let mut session = Session::default();
+        session.send("survey", &[]);
+        tool_call(&mut session, "s1", "Task", json!({ "description": "Callers" }));
+        tool_call(&mut session, "s2", "Agent", json!({ "description": "Rounding" }));
+        tool_call(&mut session, "b1", "Bash", json!({ "command": "ls" }));
+        assert_eq!((session.turn_subagents(), session.waiting_on_subagents()), ((2, 2), None), "it runs a command too");
+        tool_result(&mut session, "b1", "a.txt", false);
+        tool_result(&mut session, "s1", "Three callers", false);
+        assert_eq!((session.turn_subagents(), session.waiting_on_subagents()), ((2, 1), Some(1)));
+        session.thinking = true;
+        assert_eq!(session.waiting_on_subagents(), None, "Claude thinks");
+        // The next message starts a turn with none, even with one left running.
+        session.thinking = false;
+        session.send("next", &[]);
+        assert_eq!((session.turn_subagents(), session.waiting_on_subagents()), ((0, 0), None));
+    }
+
+    #[test]
+    fn a_model_and_effort_picked_together_switch_only_what_differs() {
+        let answer = |id: &str, response: Value| json!({ "type": "control_response", "response": { "subtype": "success", "request_id": id, "response": response } });
+        let mut session = Session::default();
+        session.hear(&answer(INITIALIZE, json!({ "models": [
+            { "value": "opus", "displayName": "Opus 5.5", "supportedEffortLevels": ["high", "max"], "resolvedModel": "claude-opus-5-5" },
+            { "value": "sonnet", "displayName": "Sonnet 5.5", "supportedEffortLevels": ["low", "high"], "resolvedModel": "claude-sonnet-5-5" },
+            { "value": "haiku", "displayName": "Haiku 5.5", "resolvedModel": "claude-haiku-5-5" },
+        ] })));
+        session.hear(&answer(SETTINGS, json!({ "effective": { "model": "opus", "effortLevel": "high" } })));
+        assert_eq!(session.pick("opus@high", 1), None);
+        let requests = |lines: String| parsed(&lines).iter().map(|line| line["request"].clone()).collect::<Vec<_>>();
+        let effort = |level: &str| json!({ "subtype": "apply_flag_settings", "settings": { "effortLevel": level } });
+        assert_eq!(requests(session.pick("opus@max", 2).unwrap()), [effort("max")]);
+        // Another model is switched to with the effort picked, even the one in use.
+        session.pick("opus@high", 3);
+        assert_eq!(requests(session.pick("sonnet@high", 4).unwrap()), [json!({ "subtype": "set_model", "model": "sonnet" }), effort("high")]);
+        assert_eq!(requests(session.pick("haiku@", 5).unwrap()), [json!({ "subtype": "set_model", "model": "haiku" })]);
+        assert_eq!(session.current_model().map(|model| model.name.as_str()), Some("Haiku 5.5"));
+        assert_eq!(session.pick("haiku", 6), None, "not a pick");
     }
 }

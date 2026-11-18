@@ -714,6 +714,33 @@ impl Env for AppEnv {
             .map_err(|_| "The Wings window is closed or busy".into())
     }
 
+    fn pick_files(&self, multiple: bool, reply: crate::page::runtime::Reply) {
+        let spare = reply.clone();
+        let event = UiEvent::Run(Box::new(move |_, _, cx| {
+            let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
+                files: true,
+                directories: false,
+                multiple,
+                prompt: Some("Attach".into()),
+            });
+            // The files are read off the window's thread: a pick can be megabytes.
+            cx.background_executor()
+                .spawn(async move {
+                    match picked.await {
+                        Ok(Ok(paths)) => {
+                            reply.ok(crate::page::plugin::picked_images(&paths.unwrap_or_default()))
+                        }
+                        Ok(Err(error)) => reply.err(format!("The file picker didn't open: {error}")),
+                        Err(_) => reply.ok("[]".into()),
+                    }
+                })
+                .detach();
+        }));
+        if self.events.try_send(event).is_err() {
+            spare.err("The Wings window is closed or busy".into());
+        }
+    }
+
     fn set_badge(&self, plugin: &str, pane: &str, badge: Option<Badge>) {
         self.send(UiEvent::Badge {
             plugin: plugin.to_owned(),

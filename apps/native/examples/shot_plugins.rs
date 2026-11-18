@@ -808,6 +808,13 @@ fn claude_chat(out: PathBuf) {
         output("w5", "Found 3 files\nsrc/checkout.ts\nsrc/discount.ts\nsrc/cart.ts", false),
         delta("The suite has no discount tests yet, so I'm writing them now."),
     ]);
+    // The same turn finished: Claude's answer, then the result that ends the turn and says how long it took.
+    let mut worked = work.clone();
+    worked.pop();
+    worked.extend([
+        text("The discount maths is in `src/discount.ts` now, and `checkout.ts` re-exports it. The suite has no discount tests yet: shall I write them?"),
+        json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 83_400, "num_turns": 7, "result": "", "total_cost_usd": 0.41 }),
+    ]);
     let asked = |name: &str, input: serde_json::Value, extra: serde_json::Value| {
         let mut request = json!({ "subtype": "can_use_tool", "tool_name": name, "input": input });
         request.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
@@ -852,6 +859,20 @@ fn claude_chat(out: PathBuf) {
         within("s1", haiku(json!([{ "type": "tool_use", "id": "g2", "name": "Read", "input": { "file_path": "/work/shop/src/cart.ts" } }]))),
         within("s2", haiku(json!([{ "type": "text", "text": "The cart rounds once, at the end." }]))),
         output("s2", "The cart rounds once, at the end.", false),
+    ]);
+    // Three subagents of a turn, two still at work and one done, while Claude waits on them alone. Claude Code says the
+    // turn runs, as it does when asked to.
+    let subagents = opened(vec![
+        init.clone(),
+        json!({ "type": "system", "subtype": "session_state_changed", "state": "running" }),
+        user("Survey the discount code: who calls it, how the cart rounds, and which tests cover it."),
+        tool("p1", "Task", json!({ "description": "Survey the callers of applyDiscount", "subagent_type": "Explore", "prompt": "List every caller." })),
+        tool("p2", "Task", json!({ "description": "Check the rounding in the cart", "subagent_type": "Explore", "prompt": "Does the cart round?" })),
+        tool("p3", "Task", json!({ "description": "List the discount tests", "subagent_type": "Explore", "prompt": "Which tests cover discounts?" })),
+        within("p1", haiku(json!([{ "type": "tool_use", "id": "q1", "name": "Grep", "input": { "pattern": "applyDiscount" } }]))),
+        within("p2", haiku(json!([{ "type": "tool_use", "id": "q2", "name": "Read", "input": { "file_path": "/work/shop/src/cart.ts" } }]))),
+        within("p3", haiku(json!([{ "type": "text", "text": "Two tests cover discounts, both in checkout.test.ts." }]))),
+        output("p3", "Two tests cover discounts, both in checkout.test.ts.", false),
     ]);
     let streaming = opened(vec![
         init.clone(),
@@ -916,12 +937,14 @@ fn claude_chat(out: PathBuf) {
         ("streaming", streaming, None, None, "token bucket"),
         ("thinking", thinking, None, None, "Thinking"),
         ("new", opened(vec![init.clone()]), None, None, "What should Claude do?"),
+        // The model and effort menu open over the message box.
+        ("models", opened(vec![init.clone()]), None, Some("select:Model and effort"), "resets"),
         ("slash", opened(vec![init.clone()]), None, Some("type:/re;keys:down"), "/review"),
         ("sessions", opened(vec![init.clone()]), None, Some("press:Sessions"), "Fix the flaky checkout test"),
         // /usage opens the usage view in place of the conversation instead of going to Claude as a message.
         ("usage", opened(vec![init.clone(), full_usage]), None, Some("type:/usage;keys:enter"), "Plan usage limits"),
         ("failed", vec![], Some(("1", "Error: Invalid API key · Please run /login")), None, "Invalid API key"),
-        ("work", work.clone(), None, None, "of 4 done"),
+        ("work", worked, None, None, "Worked for 1m 23s"),
         ("work-open", work.clone(), None, Some("disclose:Ran 1 command"), "pnpm test discount"),
         ("detailed", work.clone(), None, None, "No test suite found"),
         ("large-text", work.clone(), None, None, "of 4 done"),
@@ -937,6 +960,7 @@ fn claude_chat(out: PathBuf) {
         // The subagent's transcript in the side panel, pinned open even in a narrow tab.
         ("subagent", subagent, None, Some("disclose:Ran 2 subagents;press:Open"), "Found three callers"),
         ("suggestion", suggested, None, None, "Tab"),
+        ("subagents", subagents, None, None, "Waiting on 2 subagents"),
     ];
     // Files for @-mentions, which the chat lists with git.
     for file in ["src/checkout.ts", "src/checkout.test.ts", "src/cart.ts", "api/limits.ts", "README.md"] {
@@ -1034,6 +1058,7 @@ fn claude_chat(out: PathBuf) {
                         }
                         Some(("press", label)) => assert!(handle.read_with(&cx, |view, _| view.press(label, 0)).unwrap()),
                         Some(("disclose", summary)) => assert!(handle.update(&mut cx, |view, _, cx| view.press_disclosure(summary, cx)).unwrap()),
+                        Some(("select", label)) => assert!(handle.update(&mut cx, |view, _, cx| view.open_select(label, cx)).unwrap()),
                         _ => panic!("{act}"),
                     }
                     // The page hears what was typed before the next key.

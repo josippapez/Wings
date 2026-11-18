@@ -25,6 +25,8 @@ use crate::{
 const SEND: &str = "M7 12V2M2.5 6.5 7 2l4.5 4.5";
 const STOP: &str = "M3.5 3.5h7v7h-7z";
 const CLOSE: &str = "M3.5 3.5l7 7M10.5 3.5l-7 7";
+/// A paperclip, in the same box.
+const ATTACH: &str = "M12.5 6.45 7.15 11.8a3.5 3.5 0 0 1-4.95-4.95l5-5a2.33 2.33 0 0 1 3.3 3.3l-5 5a1.17 1.17 0 0 1-1.65-1.65l4.95-4.95";
 
 /// The conversation's column, as wide as a page meant for reading.
 const COLUMN: u32 = 760;
@@ -132,8 +134,27 @@ fn conversation(c: &Chat) -> Node {
         nodes.push(live.key("live"));
     } else if c.session.thinking || (c.session.working && !asking(c)) {
         // The app adds how long it has been and counts it up: "Calling wings · 16s".
-        let what = if c.doing.0.is_empty() { "Working" } else { c.doing.0.as_str() };
-        nodes.push(row().key("working").child(text(what).prop("tone", "muted").prop("shimmer", true).prop("since", c.doing.1)));
+        let status = match c.session.waiting_on_subagents() {
+            Some(n) => row()
+                .prop("gap", "s")
+                .prop("align", "center")
+                .child(text(format!("Waiting on {}", plural(n, "subagent"))).prop("tone", "muted").prop("shimmer", true).prop("since", c.doing.1))
+                .child(button("Stop", "ghost", false, chat::stop).prop("size", "sm")),
+            None => {
+                let what = if c.doing.0.is_empty() { "Working" } else { c.doing.0.as_str() };
+                row().child(text(what).prop("tone", "muted").prop("shimmer", true).prop("since", c.doing.1))
+            }
+        };
+        // While subagents of the turn run, how many, over the status line.
+        let (started, running) = c.session.turn_subagents();
+        nodes.push(match running {
+            0 => status.key("working"),
+            _ => stack()
+                .prop("gap", "xs")
+                .child(muted(format!("{} · {running} working", plural(started, "subagent"))).prop("size", "small"))
+                .child(status)
+                .key("working"),
+        });
     }
     match &c.state {
         State::Failed(why) => nodes.push(notice("danger", why.as_str()).key("ended")),
@@ -185,6 +206,7 @@ fn item_node(at: usize, item: &Item, c: &Chat) -> Option<Node> {
         Item::Ask(ask) if ask.answer.is_none() => ask_node(ask, c),
         Item::Error(said) => notice("danger", said.as_str()),
         Item::Stopped => muted("Stopped"),
+        Item::Worked(ms) => muted(format!("Worked for {}", took(*ms))).prop("size", "small"),
         Item::Note(title, body) => note(at, title, body, c.open_outputs.contains(&format!("note-{at}"))),
         Item::Tool(_) | Item::Ask(_) => return None,
     };
@@ -554,14 +576,14 @@ fn past_row(session: &Value) -> Node {
         .key(id)
 }
 
-/// The message box, floating at the foot: what you type, then the pickers, how full the context is, and Send or Stop.
+/// The message box, floating at the foot: what you type, then a paperclip to attach images, the pickers, and Send or Stop.
 fn composer(c: &Chat) -> Node {
     let open = c.state == State::Running;
     // Claude Code's suggested next message shows as grey text in the empty box, and Tab fills the box with it.
     let suggested = chat::suggested(c);
     let field = Node::new("Textarea")
         .prop("label", "Message")
-        .prop("placeholder", suggested.unwrap_or("Ask Claude to do something, or type / for commands"))
+        .prop("placeholder", suggested.unwrap_or("Ask anything. @ files, / commands"))
         .prop("takesTab", suggested.is_some())
         .prop("variant", "bare")
         .prop("rows", 2)
@@ -589,7 +611,7 @@ fn composer(c: &Chat) -> Node {
                 chat::close_panel();
             }
         });
-    // One button, as chat apps have: a square to stop while Claude works and nothing is typed, else an arrow to send.
+    // One round button, as chat apps have: a square to stop while Claude works and nothing is typed, else an arrow to send.
     // What you send while Claude works waits in the queue.
     let typed = !c.draft.trim().is_empty() || !c.images.is_empty();
     let action = if c.session.working && !typed {
@@ -603,7 +625,22 @@ fn composer(c: &Chat) -> Node {
             .child(icon(14, 2.0, &[SEND]))
     };
     let tab = suggested.map(|_| chip("Tab", false, chat::accept_suggestion).prop("title", "Use the suggested message (Tab)").key("tab"));
-    let controls = row().prop("gap", "xs").prop("align", "center").children(pickers(c)).child(stack().prop("grow", true)).maybe(tab).child(action);
+    // As big and as round as the send button, so the row's ends match.
+    let attach = button("", "ghost", false, chat::attach)
+        .prop("size", "icon-sm")
+        .prop("round", true)
+        .prop("label", "Attach images")
+        .prop("title", "Attach images")
+        .prop("disabled", !open)
+        .child(icon(14, 1.5, &[ATTACH]));
+    let controls = row()
+        .prop("gap", "xs")
+        .prop("align", "center")
+        .child(attach)
+        .children(pickers(c))
+        .child(stack().prop("grow", true))
+        .maybe(tab)
+        .child(action.prop("round", true));
     // The field with the slash commands or files that match what you typed, which the app shows as a list over the page
     // that the arrows move through and Enter picks from, as a combobox's. Keyed, so the field stays the same one as the
     // list comes and goes, and keeps the keyboard.
@@ -882,25 +919,47 @@ fn queued(c: &Chat) -> Option<Node> {
     Some(card().child(muted("Claude reads these after its current step")).child(stack().prop("gap", "xs").children(rows)))
 }
 
-/// The model, effort and permission mode, each a menu, once Claude Code has said what it has.
+/// The model with its effort in one menu, as "Opus 5.5 · High", and the permission mode, once Claude Code has said what
+/// it has.
 fn pickers(c: &Chat) -> Vec<Node> {
     let session = &c.session;
     let mut pickers = Vec::new();
     if !session.models.is_empty() {
-        let options: Vec<(String, String)> = session.models.iter().map(|model| (model.value.clone(), model.name.clone())).collect();
-        let value = session.current_model().map_or("default".to_owned(), |model| model.value.clone());
-        pickers.push(select("Model", &options, &value, chat::pick_model).prop("variant", "ghost"));
-    }
-    if let Some(model) = session.current_model().filter(|model| !model.efforts.is_empty()) {
-        let options: Vec<(String, String)> = model.efforts.iter().map(|effort| (effort.clone(), if effort == "xhigh" { "Extra high".into() } else { capital(effort) })).collect();
-        let value = session.current_effort().unwrap_or_else(|| "high".into());
-        pickers.push(select("Effort", &options, &value, chat::pick_effort).prop("variant", "ghost"));
+        let (options, value) = model_options(session);
+        pickers.push(select("Model and effort", &options, &value, chat::pick_model_effort).prop("variant", "ghost"));
     }
     if let Some(mode) = &session.mode {
         let options: Vec<(String, String)> = MODES.iter().map(|(value, name)| (value.to_string(), name.to_string())).collect();
         pickers.push(select("Permission mode", &options, mode, chat::pick_mode).prop("variant", "ghost"));
     }
     pickers
+}
+
+/// The model menu's options, as `<model>@<effort>` and its label: each model with each effort it takes, as "Opus 5.5 ·
+/// Extra high", or alone when it takes none. And the one in use, where an effort the model doesn't list, or none known,
+/// shows as High, else its first.
+fn model_options(session: &Session) -> (Vec<(String, String)>, String) {
+    let options = session
+        .models
+        .iter()
+        .flat_map(|model| {
+            let alone = model.efforts.is_empty().then(|| (format!("{}@", model.value), model.name.clone()));
+            let efforts = model.efforts.iter().map(move |effort| (format!("{}@{effort}", model.value), format!("{} · {}", model.name, effort_name(effort))));
+            alone.into_iter().chain(efforts)
+        })
+        .collect();
+    let model = session.current_model().or_else(|| session.models.iter().find(|model| model.value == "default"));
+    let value = model.map_or_else(String::new, |model| {
+        let listed = |effort: &String| model.efforts.contains(effort);
+        let effort = session.current_effort().filter(listed).or_else(|| model.efforts.iter().find(|effort| *effort == "high").or(model.efforts.first()).cloned());
+        format!("{}@{}", model.value, effort.unwrap_or_default())
+    });
+    (options, value)
+}
+
+/// An effort as the menu says it: "xhigh" is "Extra high".
+fn effort_name(effort: &str) -> String {
+    if effort == "xhigh" { "Extra high".into() } else { capital(effort) }
 }
 
 /// What the message box suggests for what you typed: the slash commands that match a `/`, else the files that match an
@@ -950,5 +1009,27 @@ mod tests {
     #[test]
     fn a_meter_turns_amber_then_red_at_its_levels() {
         assert_eq!([level(40, (70, 90)), level(70, (70, 90)), level(95, (70, 90))], [None, Some("warn"), Some("danger")]);
+    }
+
+    #[test]
+    fn the_model_menu_lists_each_model_with_the_efforts_it_takes() {
+        let model = |value: &str, name: &str, efforts: &[&str]| crate::session::Model {
+            value: value.into(),
+            name: name.into(),
+            efforts: efforts.iter().map(|effort| effort.to_string()).collect(),
+            resolved: format!("claude-{value}-5-5"),
+        };
+        let mut session = Session::default();
+        session.models = vec![model("opus", "Opus 5.5", &["medium", "high", "xhigh"]), model("haiku", "Haiku 5.5", &[])];
+        session.model = Some("opus".into());
+        let (options, value) = model_options(&session);
+        let labels: Vec<(&str, &str)> = options.iter().map(|(value, label)| (value.as_str(), label.as_str())).collect();
+        assert_eq!(labels, [("opus@medium", "Opus 5.5 · Medium"), ("opus@high", "Opus 5.5 · High"), ("opus@xhigh", "Opus 5.5 · Extra high"), ("haiku@", "Haiku 5.5")]);
+        // With no effort known yet, High.
+        assert_eq!(value, "opus@high");
+        session.effort = Some("xhigh".into());
+        assert_eq!(model_options(&session).1, "opus@xhigh");
+        session.model = Some("haiku".into());
+        assert_eq!(model_options(&session).1, "haiku@");
     }
 }

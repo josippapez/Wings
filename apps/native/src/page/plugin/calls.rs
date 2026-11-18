@@ -434,6 +434,15 @@ impl Shared {
                 }
                 reply.done(access.env.copy_text(text).map(|_| "null".into()))
             }
+            // Any page may open the file picker right after your click or key; the frame has checked that. Only for
+            // pictures, given as a paste gives them.
+            "pickFiles" => {
+                if params.get("kinds") != Some(&json!(["image"])) {
+                    return reply.err(r#"pickFiles takes kinds: ["image"]"#.into());
+                }
+                let multiple = params.get("multiple") == Some(&Value::Bool(true));
+                access.env.pick_files(multiple, reply)
+            }
             _ => reply.err(format!("unknown method {method}")),
         }
     }

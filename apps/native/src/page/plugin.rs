@@ -44,8 +44,10 @@ mod calls;
 mod diff;
 mod disk;
 mod env;
+mod pick;
 mod process;
 mod state;
+pub use pick::{MAX_IMAGE_BYTES, picked_images};
 pub use state::{FrameState, StatePlace, TabAgent};
 #[cfg(test)]
 mod focus_tests;
@@ -390,9 +392,10 @@ impl Link for FrameLink {
             };
             return reply.done(state.close().map(|()| "null".into()));
         }
-        // Each click or key lets the page try once to copy, or to write to a program it runs: what reaches an agent,
-        // like the answer to its permission prompt, is what you just asked for in the page, never the plugin alone.
-        if matches!(method, "copyText" | "processWrite") {
+        // Each click or key lets the page try once to copy, to write to a program it runs, or to open the file picker:
+        // what reaches an agent, like the answer to its permission prompt, is what you just asked for in the page, never
+        // the plugin alone, and a picker never opens by itself.
+        if matches!(method, "copyText" | "processWrite" | "pickFiles") {
             let acted = self
                 .acted
                 .lock()
@@ -400,7 +403,11 @@ impl Link for FrameLink {
                 .take()
                 .is_some_and(|at| at.elapsed() < USER_ACTION);
             if self.role != Role::Page || !acted {
-                let what = if method == "copyText" { "copy" } else { "write to a program" };
+                let what = match method {
+                    "copyText" => "copy",
+                    "pickFiles" => "open the file picker",
+                    _ => "write to a program",
+                };
                 return reply.err(format!("A page can {what} only right after you click or type in it"));
             }
         }
