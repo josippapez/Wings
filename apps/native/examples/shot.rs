@@ -428,6 +428,11 @@ fn main() {
     if std::env::args().nth(2).as_deref() == Some("diff-dock") {
         return diff_dock(&mut cx, &config, &out);
     }
+    // `-- <out-dir> diff-sidebar` renders only a diff opened from a plugin's sidebar: widened in the sidebar's place over
+    // the panes at 1280, 1000 and 640 points, and the sidebar again after Back.
+    if std::env::args().nth(2).as_deref() == Some("diff-sidebar") {
+        return diff_sidebar(&mut cx, &config, &out);
+    }
     // `-- <out-dir> diff-comments` renders only a plugin's diff with review threads: under their lines docked and filling
     // the window, a reply being written, and the discussion.
     if std::env::args().nth(2).as_deref() == Some("diff-comments") {
@@ -2095,6 +2100,48 @@ fn diff_dock(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         click(cx, window, spot("diff-files-toggle"));
         wait(cx, window, Duration::from_millis(300));
         save(cx, window, &name("docked-no-files"));
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+    }
+}
+
+fn diff_sidebar(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+    let data = Data::temp();
+    data.install_script(
+        "changes",
+        serde_json::json!({ "name": "Changes", "contributes": {
+            "sidebars": [{ "id": "side", "title": "Changes", "page": "dist/side.html" }],
+        } }),
+        &fake::idle("main"),
+        &[("side", &words("3 changed files: src/config.rs, src/client/retry.rs, README.md"))],
+        "changes-scope",
+    );
+    let mut config = base.clone();
+    config.plugins = Some(data.paths());
+    for width in [1280.0, 1000.0, 640.0] {
+        let config = config.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        let name = |state: &str| out.join(format!("diff-sidebar-{state}-{width}.png"));
+        wait(cx, window, Duration::from_secs(1));
+        handle
+            .update(cx, |w, _, cx| w.shot_sidebar("changes", "side", cx))
+            .unwrap();
+        wait(cx, window, Duration::from_millis(500));
+        save(cx, window, &name("list"));
+        handle
+            .update(cx, |w, window, cx| {
+                w.shot_sidebar_diff("changes", "side", DOCK_PATCH, window, cx)
+            })
+            .unwrap();
+        wait(cx, window, Duration::from_millis(600));
+        save(cx, window, &name("open"));
+        click(cx, window, spot("diff-back"));
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("back"));
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
     }
 }

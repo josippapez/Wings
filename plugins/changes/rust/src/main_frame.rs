@@ -220,8 +220,8 @@ pub fn start() {
             return Ok(());
         };
         match asked {
-            "open" => open_changes(root, Mode::Uncommitted, None).await,
-            "branch" => open_changes(root, Mode::Branch, None).await,
+            "open" => open_changes(root, Mode::Uncommitted, None, false).await,
+            "branch" => open_changes(root, Mode::Branch, None, false).await,
             "refresh" => {
                 refresh_badges(panes(), true).await;
                 Ok(())
@@ -242,7 +242,7 @@ pub fn start() {
     messages::on(OPEN, |asked| {
         let asked = asked.clone();
         let text = |name: &str| asked[name].as_str().map(str::to_owned);
-        let opening = open_changes(text("root").unwrap_or_default(), Mode::named(&text("mode").unwrap_or_default()), text("path"));
+        let opening = open_changes(text("root").unwrap_or_default(), Mode::named(&text("mode").unwrap_or_default()), text("path"), true);
         spawn(answer(asked["id"].clone(), opening));
     });
     messages::on(COMMIT, |asked| {

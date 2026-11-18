@@ -59,6 +59,8 @@ pub struct Viewer {
     pub(crate) docked: bool,
     /// Filling the window, it has a tab to dock beside.
     pub(crate) can_dock: bool,
+    /// Shown in a sidebar's place: a Back button leads to the sidebar's page, and there is no expand or close.
+    pub(crate) back: bool,
     /// Docked, the file list shows.
     dock_files: bool,
     /// Long lines wrap; else they scroll sideways.
@@ -163,6 +165,7 @@ impl Viewer {
             split_choice: None,
             docked: false,
             can_dock: false,
+            back: false,
             dock_files: true,
             wrap: false,
             tree: false,
@@ -233,6 +236,12 @@ impl Viewer {
         if self.split() != split {
             self.rebuild(cx);
         }
+        cx.notify();
+    }
+
+    /// Shown in a sidebar's place, with a Back button.
+    pub fn set_back(&mut self, back: bool, cx: &mut Context<Self>) {
+        self.back = back;
         cx.notify();
     }
 
@@ -1392,9 +1401,28 @@ impl Render for Viewer {
                     .gap(px(4.0))
                     .py(px(if docked { 8.0 } else { 12.0 }))
                     .pr(px(if docked { 8.0 } else { 12.0 }))
-                    .pl(px(if docked { 16.0 } else { ui::TRAFFIC_LIGHTS }))
+                    .pl(px(if self.back {
+                        8.0
+                    } else if docked {
+                        16.0
+                    } else {
+                        ui::TRAFFIC_LIGHTS
+                    }))
                     .border_b_1()
                     .border_color(rgba(ui::HAIRLINE))
+                    .when(self.back, |bar| {
+                        bar.child(
+                            ui::icon_button(
+                                "diff-back",
+                                Icon::ArrowLeft,
+                                "Back",
+                                ui::ButtonSize::Sm,
+                            )
+                            .track_focus(&self.close_focus)
+                            .children(ui::spot(|| "diff-back".into()))
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::Close))),
+                        )
+                    })
                     .child(
                         div()
                             .mr(px(12.0))
@@ -1522,14 +1550,16 @@ impl Render for Viewer {
                             })),
                         )
                     })
-                    .child(
-                        div()
-                            .mx(px(4.0))
-                            .h(px(16.0))
-                            .w(px(1.0))
-                            .bg(rgba(ui::HAIRLINE)),
-                    )
-                    .when(docked, |bar| {
+                    .when(!self.back, |bar| {
+                        bar.child(
+                            div()
+                                .mx(px(4.0))
+                                .h(px(16.0))
+                                .w(px(1.0))
+                                .bg(rgba(ui::HAIRLINE)),
+                        )
+                    })
+                    .when(docked && !self.back, |bar| {
                         bar.child(
                             ui::untipped_ghost_button(
                                 "diff-expand",
@@ -1555,11 +1585,18 @@ impl Render for Viewer {
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::Expand(false)))),
                         )
                     })
-                    .child(
-                        ui::icon_button("diff-close", Icon::X, "Close diff", ui::ButtonSize::Sm)
+                    .when(!self.back, |bar| {
+                        bar.child(
+                            ui::icon_button(
+                                "diff-close",
+                                Icon::X,
+                                "Close diff",
+                                ui::ButtonSize::Sm,
+                            )
                             .track_focus(&self.close_focus)
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::Close))),
-                    ),
+                        )
+                    }),
             )
             .when_some(self.link_error.clone(), |body, error| {
                 body.child(
@@ -1602,6 +1639,7 @@ mod tests {
         let view = View {
             id: "test:1".into(),
             plugin_id: "test".into(),
+            sidebar: None,
             title: "Large diff".into(),
             subtitle: String::new(),
             cwd: String::new(),
@@ -1667,6 +1705,7 @@ mod layout_tests {
         let view = View {
             id: "test:2".into(),
             plugin_id: "test".into(),
+            sidebar: None,
             title: "Changes".into(),
             subtitle: String::new(),
             cwd: String::new(),
@@ -1861,6 +1900,7 @@ mod comment_tests {
         let view = View {
             id: "test:3".into(),
             plugin_id: "test".into(),
+            sidebar: None,
             title: "Pull request".into(),
             subtitle: String::new(),
             cwd: String::new(),
@@ -2037,6 +2077,7 @@ mod color_tests {
         View {
             id: "test:3".into(),
             plugin_id: "test".into(),
+            sidebar: None,
             title: "Changes".into(),
             subtitle: String::new(),
             cwd: String::new(),

@@ -1,12 +1,13 @@
 //! A plugin's diff, as the desktop's: docked beside the tab it was opened from and shown only while that tab is, or
-//! filling the window. The dock's left edge drags within the desktop's `SIDES.diff`, and its width is kept with the
-//! sidebars'.
+//! filling the window. One a plugin opens from its sidebar shows in that sidebar's place instead: the sidebar widens
+//! into it, floating over the panes, which keep their size. The dock's left edge drags within the desktop's
+//! `SIDES.diff`, and its width is kept with the sidebars'.
 
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use gpui::{
-    AnyElement, AppContext, Context, Focusable, Pixels, StyleRefinement, Window, div, prelude::*,
-    px, rgb, rgba,
+    AnyElement, AppContext, BoxShadow, Context, ElementId, Focusable, Pixels, StyleRefinement,
+    Window, div, hsla, point, prelude::*, px, rgb, rgba,
 };
 
 use super::{Active, HAIRLINE, Workspace};
@@ -15,7 +16,8 @@ use crate::{
         View,
         viewer::{Event, Viewer},
     },
-    saved, theme, ui,
+    saved, theme,
+    ui::{self, motion},
 };
 
 /// The desktop's `SIDES.diff`: how narrow and how wide the dock can be dragged, and where it starts.
@@ -24,11 +26,18 @@ pub(super) const MAX_WIDTH: f32 = 1600.0;
 pub(super) const INITIAL_WIDTH: f32 = 620.0;
 /// The desktop's `minSize={320}` of the tabs beside the dock: they keep this much while the window has it.
 const TABS_MIN: f32 = 320.0;
+/// The panes keep this much showing beside a diff that floats over them from the sidebar. With less room the diff fills
+/// the window.
+const SLIVER: f32 = 64.0;
 
 pub(super) struct Dock {
     /// The project and tab on screen when the diff opened, which it docks beside. None, as with no project, fills the
     /// window.
     tab: Option<(PathBuf, Active)>,
+    /// The plugin and sidebar the diff opened from, whose place it takes while that sidebar is open.
+    pub(super) sidebar: Option<(String, String)>,
+    /// How many diffs have opened in a sidebar, so each widening starts its own animation.
+    opened: u64,
     /// Filling the window though it has a tab to dock beside.
     expanded: bool,
     /// The window has room for the dock beside the tab's 320. Without it the diff fills the window, as squeezing the
@@ -43,6 +52,8 @@ impl Default for Dock {
     fn default() -> Self {
         Self {
             tab: None,
+            sidebar: None,
+            opened: 0,
             expanded: false,
             fits: true,
             width: INITIAL_WIDTH,
@@ -70,6 +81,8 @@ impl Dock {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Shown {
     Docked,
+    /// In its sidebar's place, wider than the sidebar and floating over the panes.
+    Sidebar,
     Full,
 }
 
@@ -91,9 +104,21 @@ impl Workspace {
         self.plugin_ui.diff = None;
         window.activate_window();
         let fits = self.dock_fits(window.viewport_size().width);
+        // From a sidebar that is open, it takes the sidebar's place. Otherwise it docks beside the tab as before.
+        let sidebar = view
+            .sidebar
+            .clone()
+            .map(|id| (view.plugin_id.clone(), id))
+            .filter(|key| self.right.as_ref() == Some(key));
+        let in_sidebar = sidebar.is_some();
         let dock = &mut self.plugin_ui.diff_dock;
+        if in_sidebar && dock.sidebar != sidebar {
+            dock.opened += 1;
+        }
+        dock.sidebar = sidebar;
         dock.fits = fits;
-        dock.tab = (!self.welcome).then(|| (self.config.project.clone(), self.active));
+        dock.tab =
+            (!self.welcome && !in_sidebar).then(|| (self.config.project.clone(), self.active));
         dock.expanded = false;
         let can_dock = dock.tab.is_some() && dock.fits;
         let prefs = &self.prefs;
@@ -102,7 +127,8 @@ impl Workspace {
             let mut viewer = Viewer::new(view, host, cx);
             viewer.set_layout(wrap, tree, cx);
             viewer.set_dock_files(files, cx);
-            viewer.set_dock(can_dock, can_dock, cx);
+            viewer.set_dock(can_dock || in_sidebar, can_dock, cx);
+            viewer.set_back(in_sidebar, cx);
             viewer
         });
         let events = cx.subscribe_in(&viewer, window, |this, _, event, window, cx| match event {
@@ -128,6 +154,7 @@ impl Workspace {
     pub(super) fn close_diff_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.plugin_ui.diff = None;
         self.plugin_ui.diff_dock.tab = None;
+        self.plugin_ui.diff_dock.sidebar = None;
         self.show(self.active, window, cx);
     }
 
@@ -169,6 +196,9 @@ impl Workspace {
     pub(super) fn diff_shown(&self) -> Option<Shown> {
         self.plugin_ui.diff.as_ref()?;
         let dock = &self.plugin_ui.diff_dock;
+        if let Some(key) = &dock.sidebar {
+            return (self.right.as_ref() == Some(key)).then_some(Shown::Sidebar);
+        }
         match &dock.tab {
             Some(_) if dock.expanded || !dock.fits => Some(Shown::Full),
             Some((project, tab)) => {
@@ -181,6 +211,14 @@ impl Workspace {
 
     /// The diff closes with the tab it docks beside, as the desktop's does once `diffTab` is no longer among the tabs.
     pub(super) fn close_diff_without_tab(&mut self) {
+        // A sidebar's diff goes with its sidebar: closed, or another one shown in the panel.
+        if let Some(key) = &self.plugin_ui.diff_dock.sidebar {
+            if self.right.as_ref() != Some(key) {
+                self.plugin_ui.diff = None;
+                self.plugin_ui.diff_dock.sidebar = None;
+            }
+            return;
+        }
         let Some((project, tab)) = &self.plugin_ui.diff_dock.tab else {
             return;
         };
@@ -219,12 +257,34 @@ impl Workspace {
     /// The widest the dock can be in a window `viewport` wide: the tab beside it keeps its 320, but the dock never goes
     /// under its 360.
     fn diff_room(&self, viewport: Pixels) -> f32 {
+        if self.plugin_ui.diff_dock.sidebar.is_some() {
+            return self
+                .sidebar_diff_space(viewport)
+                .clamp(MIN_WIDTH, MAX_WIDTH);
+        }
         self.diff_space(viewport).clamp(MIN_WIDTH, MAX_WIDTH)
     }
 
-    /// How wide the dock is drawn: as dragged, within the room the window leaves it.
+    /// The width over the panes of a diff in a sidebar's place: all but the project sidebar and a sliver of the panes.
+    fn sidebar_diff_space(&self, viewport: Pixels) -> f32 {
+        let left = if self.sidebar { self.side.width } else { 0.0 };
+        viewport.as_f32() - left - SLIVER
+    }
+
+    /// How wide the dock is drawn: as dragged, within the room the window leaves it. In a sidebar's place it is never
+    /// narrower than the sidebar, and with no room for the diff it fills the window.
     pub(super) fn diff_width(&self, viewport: Pixels) -> f32 {
-        self.plugin_ui.diff_dock.width.min(self.diff_room(viewport))
+        let dock = &self.plugin_ui.diff_dock;
+        if dock.sidebar.is_some() {
+            if self.sidebar_diff_space(viewport) < MIN_WIDTH {
+                return viewport.as_f32();
+            }
+            return dock
+                .width
+                .max(self.right_width(viewport))
+                .min(self.diff_room(viewport));
+        }
+        dock.width.min(self.diff_room(viewport))
     }
 
     /// The edge was grabbed with the pointer at `x`.
@@ -290,6 +350,81 @@ impl Workspace {
                 )
                 .child(self.diff_resize_edge(cx))
                 .into_any_element(),
+        )
+    }
+
+    /// The diff of a sidebar's page, in the sidebar's place: it widens from the sidebar's width to the dock's, floating
+    /// over the panes, which keep their size, so nothing refits as it grows. Its card is laid out once at its full width
+    /// and the widening only uncovers it. None unless the diff is open from the sidebar that is on screen.
+    pub(super) fn sidebar_diff(
+        &self,
+        viewport: Pixels,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if self.diff_shown() != Some(Shown::Sidebar) {
+            return None;
+        }
+        let (viewer, _) = self.plugin_ui.diff.as_ref()?;
+        let width = self.diff_width(viewport);
+        let from = self.right_width(viewport).min(width);
+        let card = div()
+            .size_full()
+            .overflow_hidden()
+            .rounded(px(14.0))
+            .border_1()
+            .border_color(rgba(HAIRLINE))
+            .bg(rgb(theme::SURFACE))
+            .shadow(vec![BoxShadow {
+                color: hsla(0.0, 0.0, 0.0, 0.5),
+                offset: point(px(0.0), px(24.0)),
+                blur_radius: px(64.0),
+                spread_radius: px(0.0),
+                inset: false,
+            }])
+            .child(
+                viewer
+                    .clone()
+                    .cached(StyleRefinement::default().size_full()),
+            );
+        let panel = div()
+            .id("sidebar-diff")
+            .occlude()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .right_0()
+            .flex()
+            .pr(px(8.0))
+            .pb(px(8.0))
+            .child(
+                div().flex_1().min_w_0().relative().overflow_hidden().child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .right_0()
+                        .w(px((width - 8.0).max(0.0)))
+                        .child(card),
+                ),
+            )
+            .child(self.diff_resize_edge(cx));
+        let duration = if motion::reduced(cx) {
+            Duration::ZERO
+        } else {
+            motion::SLIDE
+        };
+        let spring = motion::spring();
+        Some(
+            motion::tween(
+                panel,
+                ElementId::NamedInteger("sidebar-diff".into(), self.plugin_ui.diff_dock.opened),
+                duration,
+                move |panel, t, _| {
+                    let share = if t >= 1.0 { 1.0 } else { spring(t) };
+                    panel.w(px(from + (width - from) * share))
+                },
+            )
+            .into_any_element(),
         )
     }
 

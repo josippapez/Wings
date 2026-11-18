@@ -44,6 +44,7 @@ fn main() {
             let view = View {
                 id: "diff-shot:1".into(),
                 plugin_id: "diff-shot".into(),
+                sidebar: None,
                 title: "Uncommitted changes".into(),
                 subtitle: "Wings · Working tree against HEAD".into(),
                 cwd: String::new(),

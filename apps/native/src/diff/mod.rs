@@ -33,6 +33,8 @@ pub struct View {
     pub title: String,
     pub subtitle: String,
     pub cwd: String,
+    /// The id of the plugin sidebar the diff was opened from: it shows in that sidebar's place while that sidebar is open.
+    pub sidebar: Option<String>,
     pub refresh: bool,
     pub update: Update,
 }

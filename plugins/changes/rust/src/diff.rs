@@ -14,6 +14,9 @@ use wings_plugin::{
     task::join,
 };
 
+/// The id of the sidebar the viewer opens in the place of (`wings-plugin.json`).
+const SIDEBAR: &str = "changes";
+
 /// About 2 MB of patch in all. Past this the biggest files turn into "Too large to show" entries, since the viewer
 /// would take seconds to draw them.
 pub const MAX_PATCH_LINES: u64 = 50_000;
@@ -90,18 +93,34 @@ async fn patch_of(c: &Changes, path: Option<&str>) -> Result<(String, String), S
 }
 
 /// Opens the viewer at once in its loading state, fills it when git answers, and keeps it up to date while it's open.
-pub async fn open_changes(root: String, mode: Mode, path: Option<String>) -> Result<(), String> {
-    let title = path.clone().unwrap_or_else(|| if mode == Mode::Branch { "Changes on this branch" } else { "Uncommitted changes" }.to_owned());
+/// From the sidebar (`from_sidebar`) the viewer takes the sidebar's place, with every changed file in its list and `path`
+/// selected, so another file is a click away. Only a change too large for that falls back to `path` alone.
+pub async fn open_changes(root: String, mode: Mode, path: Option<String>, from_sidebar: bool) -> Result<(), String> {
+    let all = from_sidebar && path.is_some();
+    let title = match &path {
+        Some(path) if !all => path.clone(),
+        _ => if mode == Mode::Branch { "Changes on this branch" } else { "Uncommitted changes" }.to_owned(),
+    };
     let subtitle = format!("{} · {}", basename(&root), if mode == Mode::Branch { "This branch" } else { "Working tree against HEAD" });
     let key = root.clone();
-    open_live(json!({ "title": title, "cwd": root, "subtitle": subtitle }), &key, move |fresh| {
+    let mut open = json!({ "title": title, "cwd": root, "subtitle": subtitle });
+    if from_sidebar {
+        open["sidebar"] = SIDEBAR.into();
+    }
+    if all {
+        open["focus"] = json!({ "path": path });
+    }
+    open_live(open, &key, move |fresh| {
         let (root, path) = (root.clone(), path.clone());
         async move {
             let c = changes(&root, mode, fresh).await?;
             if c.files.is_empty() {
                 return Ok(json!({ "error": if mode == Mode::Branch { "Nothing changed on this branch." } else { "No uncommitted changes." } }));
             }
-            let (patch, note) = patch_of(&c, path.as_deref()).await?;
+            let (patch, note) = match patch_of(&c, if all { None } else { path.as_deref() }).await {
+                Err(_) if all => patch_of(&c, path.as_deref()).await?,
+                done => done?,
+            };
             Ok(if patch.is_empty() { json!({ "error": format!("No diff to show{note}.") }) } else { json!({ "patch": patch }) })
         }
     })
@@ -193,7 +212,7 @@ mod tests {
             ("grep --untracked -I -z --no-color --no-line-number", 0, "new.txt\0one\nnew.txt\0two\n"),
             ("grep --untracked -z --count", 0, "pic.png\x003\n"),
         ]);
-        block_on(open_changes("/r".into(), Mode::Uncommitted, None)).unwrap();
+        block_on(open_changes("/r".into(), Mode::Uncommitted, None, false)).unwrap();
         let patch = sent.borrow()[0]["patch"].as_str().unwrap().to_owned();
         assert_eq!(
             patch,
@@ -206,10 +225,10 @@ mod tests {
     #[test]
     fn a_repo_with_nothing_changed_and_a_file_that_is_no_longer_changed_say_so() {
         let sent = fake(&[("branch --show-current", 0, "main\n"), ("rev-parse --verify --quiet HEAD", 0, "abc\n"), ("diff abc", 0, ""), ("ls-files", 0, "")]);
-        block_on(open_changes("/clean".into(), Mode::Uncommitted, None)).unwrap();
+        block_on(open_changes("/clean".into(), Mode::Uncommitted, None, false)).unwrap();
         assert_eq!(sent.borrow()[0]["error"], "No uncommitted changes.");
         let sent = fake(&[("branch --show-current", 0, "main\n"), ("rev-parse --verify --quiet HEAD", 0, "abc\n"), ("diff abc --numstat", 0, "1\t0\ta.rs\0"), ("diff abc --name-status", 0, "M\0a.rs\0"), ("ls-files", 0, "")]);
-        block_on(open_changes("/one".into(), Mode::Uncommitted, Some("gone.rs".into()))).unwrap();
+        block_on(open_changes("/one".into(), Mode::Uncommitted, Some("gone.rs".into()), false)).unwrap();
         assert_eq!(sent.borrow()[0]["error"], "This file has no changes any more.");
     }
 

@@ -125,6 +125,7 @@ fn main() {
             let view = View {
                 id: "bench:1".into(),
                 plugin_id: "bench".into(),
+                sidebar: None,
                 title: "Big diff".into(),
                 subtitle: String::new(),
                 cwd: String::new(),

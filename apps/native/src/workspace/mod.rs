@@ -1147,6 +1147,7 @@ impl Render for Workspace {
                             .collect(),
                     ))
                     .children(right)
+                    .children(self.sidebar_diff(window.viewport_size().width, cx))
                     .children(self.sidebar_peek(cx)),
             )
             // The sidebar's spinners, which turn here so the sidebar keeps its last drawing (see `parts`).

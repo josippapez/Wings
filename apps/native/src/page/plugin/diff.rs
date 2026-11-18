@@ -47,6 +47,8 @@ impl Shared {
                     subtitle: diff::text(params.get("subtitle"), 200),
                     cwd: diff::text(params.get("cwd"), 1000),
                     refresh: params.get("refresh") == Some(&Value::Bool(true)),
+                    sidebar: Some(diff::text(params.get("sidebar"), 100))
+                        .filter(|id| !id.is_empty()),
                     update,
                 };
                 if let Err(error) = access.env.open_diff(view) {

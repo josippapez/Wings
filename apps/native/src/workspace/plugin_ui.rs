@@ -1549,6 +1549,30 @@ impl Workspace {
         self.show_sidebar(plugin, sidebar, cx);
     }
 
+    /// Opens a diff from the plugin's open sidebar, as its `openDiff` with `sidebar` does.
+    pub fn shot_sidebar_diff(
+        &mut self,
+        plugin: &str,
+        sidebar: &str,
+        patch: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let update = crate::diff::clean_update(&serde_json::json!({ "patch": patch }))
+            .expect("a patch to show");
+        let view = crate::diff::View {
+            id: format!("{plugin}:shot"),
+            plugin_id: plugin.to_owned(),
+            sidebar: Some(sidebar.to_owned()),
+            title: "Uncommitted changes".into(),
+            subtitle: "acme-web \u{b7} Working tree against HEAD".into(),
+            cwd: String::new(),
+            refresh: false,
+            update,
+        };
+        self.open_diff_view(view, window, cx);
+    }
+
     pub fn shot_popover(&mut self, plugin: &str, sidebar: &str, cx: &mut Context<Self>) {
         self.right = None;
         self.sync_plugin_visibility(cx);

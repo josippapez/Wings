@@ -559,6 +559,7 @@ fn central_diff_loads_selects_files_refreshes_and_closes_through_the_plugin_api(
         let view = crate::diff::View {
             id: "differ:again".into(),
             plugin_id: "differ".into(),
+            sidebar: None,
             title: "Again".into(),
             subtitle: String::new(),
             cwd: String::new(),
@@ -714,6 +715,7 @@ fn open_diff(window: &mut TestAppWindow<Workspace>) {
         let view = crate::diff::View {
             id: "differ:1".into(),
             plugin_id: "differ".into(),
+            sidebar: None,
             title: "Changes".into(),
             subtitle: String::new(),
             cwd: String::new(),
@@ -833,6 +835,142 @@ fn a_window_too_narrow_for_the_dock_shows_the_diff_filling_it() {
         assert_eq!(w.diff_shown(), Some(super::diff::Shown::Docked));
         assert!(w.plugin_ui.diff.as_ref().unwrap().0.read(cx).docked);
     });
+}
+
+/// Opens the sidebar `side` of the `sider` plugin and lets it finish sliding in.
+fn open_side(app: &gpui::TestApp, window: &mut TestAppWindow<Workspace>) {
+    window.update(|w, _, cx| w.show_sidebar("sider", "side", cx));
+    settle_slide(app, window);
+}
+
+fn settle_slide(app: &gpui::TestApp, window: &mut TestAppWindow<Workspace>) {
+    window.draw();
+    app.advance_clock(crate::ui::motion::SLIDE * 2);
+    app.run_until_parked();
+    window.draw();
+}
+
+/// Opens a diff the way the plugin's `openDiff` does when its sidebar asked for it, `from` being the sidebar it names.
+fn open_diff_from(window: &mut TestAppWindow<Workspace>, from: &str) {
+    let patch = "diff --git a/one b/one\n--- a/one\n+++ b/one\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/two b/two\n--- a/two\n+++ b/two\n@@ -1 +1 @@\n-a\n+b\n";
+    window.update(|w, window, cx| {
+        let view = crate::diff::View {
+            id: "sider:1".into(),
+            plugin_id: "sider".into(),
+            sidebar: Some(from.into()),
+            title: "Changes".into(),
+            subtitle: String::new(),
+            cwd: String::new(),
+            refresh: false,
+            update: crate::diff::clean_update(&json!({ "patch": patch })).unwrap(),
+        };
+        w.open_diff_view(view, window, cx);
+    });
+}
+
+/// A diff a sidebar opens shows in the sidebar's place, as wide as the dock's width and floating over the panes: they
+/// keep their size and their shell isn't resized when it opens or when Back closes it. Back returns the sidebar's page,
+/// the same one that kept running underneath, at its own width.
+#[test]
+fn a_diff_from_a_sidebar_shows_in_its_place_over_the_panes_and_back_returns_the_sidebar() {
+    let data = Data::temp();
+    install_sider(&data);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.draw();
+    open_side(&app, &mut window);
+    let key = ("sider".to_owned(), "side".to_owned());
+    let page = window.read(|w, _| w.sidebar_pages[&key].entity_id());
+    let grid = |window: &TestAppWindow<Workspace>| {
+        window.read(|w, cx| w.terminal(0).unwrap().read(cx).grid())
+    };
+    let (right, cells) = (terminal_right(&window, 0), grid(&window));
+
+    open_diff_from(&mut window, "side");
+    settle_slide(&app, &mut window);
+    window.read(|w, cx| {
+        assert_eq!(w.diff_shown(), Some(super::diff::Shown::Sidebar));
+        let viewer = w.plugin_ui.diff.as_ref().unwrap().0.read(cx);
+        assert!(viewer.docked && viewer.back && !viewer.can_dock);
+    });
+    // The dock's 620, less the card's border and the 8px beside the window's edge.
+    let at = diff_at();
+    assert_eq!(at.right().as_f32() - at.left().as_f32(), 620.0 - 8.0 - 2.0);
+    assert_eq!(at.right().as_f32(), 1000.0 - 8.0 - 1.0);
+    assert_eq!(terminal_right(&window, 0), right, "the panes keep their size");
+    assert_eq!(grid(&window), cells);
+
+    let back = crate::ui::spot_at("diff-back").unwrap().center();
+    window.simulate_click(back, MouseButton::Left);
+    settle_slide(&app, &mut window);
+    window.read(|w, _| {
+        assert!(w.plugin_ui.diff.is_none() && w.diff_shown().is_none());
+        assert_eq!(w.right.as_ref(), Some(&key));
+        assert_eq!(w.sidebar_pages[&key].entity_id(), page);
+        assert_eq!(w.right_width(px(1000.0)), super::right_edge::INITIAL_WIDTH);
+    });
+    assert_eq!(terminal_right(&window, 0), right);
+    assert_eq!(grid(&window), cells);
+}
+
+#[test]
+fn escape_in_a_sidebar_diff_goes_back_to_the_sidebar() {
+    let data = Data::temp();
+    install_sider(&data);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.draw();
+    open_side(&app, &mut window);
+    open_diff_from(&mut window, "side");
+    window.draw();
+    window.simulate_keystroke("escape");
+    until(&app, &mut window, "diff stayed open", |w| {
+        w.plugin_ui.diff.is_none()
+    });
+    assert!(window.read(|w, _| w.right.is_some()));
+}
+
+/// A window with no room for the widened sidebar beside a sliver of the panes shows the diff filling it.
+#[test]
+fn a_narrow_window_shows_a_sidebar_diff_filling_it() {
+    let data = Data::temp();
+    install_sider(&data);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.simulate_resize(size(px(600.0), px(640.0)));
+    window.draw();
+    open_side(&app, &mut window);
+    open_diff_from(&mut window, "side");
+    settle_slide(&app, &mut window);
+    // 600 less the 248 sidebar and the 64 sliver is under the dock's 360.
+    let at = diff_at();
+    assert_eq!((at.left().as_f32(), at.right().as_f32()), (1.0, 600.0 - 8.0 - 1.0));
+}
+
+/// A diff goes with the sidebar it replaced: with that sidebar closed it is gone, and one that names a sidebar that
+/// isn't open docks beside the tab as any other.
+#[test]
+fn a_sidebar_diff_closes_with_its_sidebar_and_one_from_a_closed_sidebar_docks() {
+    let data = Data::temp();
+    install_sider(&data);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.draw();
+    open_diff_from(&mut window, "side");
+    window.draw();
+    assert_eq!(
+        window.read(|w, _| w.diff_shown()),
+        Some(super::diff::Shown::Docked)
+    );
+    open_side(&app, &mut window);
+    open_diff_from(&mut window, "side");
+    window.draw();
+    assert_eq!(
+        window.read(|w, _| w.diff_shown()),
+        Some(super::diff::Shown::Sidebar)
+    );
+    window.update(|w, _, cx| {
+        w.right = None;
+        cx.notify();
+    });
+    window.draw();
+    assert!(window.read(|w, _| w.plugin_ui.diff.is_none()));
 }
 
 /// The dock's left edge drags within the desktop's `SIDES.diff`, leaving the tab its 320, and the width is written once
