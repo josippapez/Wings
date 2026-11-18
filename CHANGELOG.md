@@ -2,6 +2,15 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.41 · 2026-11-18
+
+- **Subagents open in a tab of their own** in Claude chat, right after the chat's tab: read what the subagent does as it goes, and message it from there. Back to chat stays at the top.
+- **Claude chat shows working while Claude works.** The Agents list said idle while Claude thought or ran a command, and in turns a finished background task started.
+- **Finished agents and commands show in the conversation** with their time, Open and their summary, and the side panel marks them done. You get a notification when you're in another tab.
+- **Claude chat's side panel floats** over the right of the tab instead of pushing the conversation aside. When there's no room it waits behind a header button with a count of what's running.
+- **Fork asks first**, and a forked chat says what it came from. Rewind and Fork sit under your message, so they no longer overlap it.
+- **A diff from the Changes sidebar opens in the sidebar**, which widens over your panes with a back button. The terminals keep their size.
+
 ## 0.2.40 · 2026-11-18
 
 - **Pictures in Claude chat.** Pictures you attach, files Claude reads and screenshots show in the conversation, also in a resumed chat. A click shows one large.
