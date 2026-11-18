@@ -1016,7 +1016,7 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         ("sessions-search", opened(vec![init.clone()]), None, Some("press:Past sessions;type:checkout"), "matching messages"),
         // /usage opens the usage dialog over the conversation instead of going to Claude as a message, and so does /context.
         ("usage", work.iter().cloned().chain([full_usage]).collect(), None, Some("type:/usage;keys:enter"), "Plan usage limits"),
-        ("context", work.iter().cloned().chain([full_context]).collect(), None, Some("type:/context;keys:enter"), "Autocompact buffer"),
+        ("context", work.iter().cloned().chain([full_context]).collect(), None, Some("type:/context;keys:enter"), "41,000 of 200,000 tokens"),
         // /plugins and /mcp open the plugins dialog over the chat, each leading with its own list.
         ("plugins", plugins.clone(), None, Some("type:/plugins;keys:enter"), "toolbox"),
         ("mcp", plugins.clone(), None, Some("type:/mcp;keys:enter"), "Needs sign-in"),
