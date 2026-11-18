@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.38 · 2026-11-18
+
+- **Rewind in Claude chat.** Each of your messages has a Rewind button with Claude Code's own choices: restore the code, the conversation, or both. It lists the files it writes back before you confirm, and a restored message comes back in the box to edit.
+- **Background tasks in Claude chat's side panel**, like a dev server or a test watcher Claude started, each with how long it has run and Stop. A click shows what it printed.
+- **Claude chat's message box keeps the keyboard** when Claude Code rebuilds it. Since 0.2.37 it could lose it, and what you typed went nowhere.
+
 ## 0.2.37 · 2026-11-18
 
 - **Claude chat looks like part of Wings.** Its tab is named after the session, as a terminal's tab after what runs in it, and its card starts with a slim header like a terminal pane's, with icon buttons in place of the old bar.
