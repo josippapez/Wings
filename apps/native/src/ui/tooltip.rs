@@ -60,7 +60,10 @@ fn pill(label: SharedString, shortcut: Option<SharedString>) -> Div {
         .bg(rgb(theme::FOREGROUND))
         .text_size(px(12.0))
         .text_color(rgb(theme::BACKGROUND))
-        .child(label)
+        // GPUI measures a text leaf at its full one-line width when it asks how small it can get, so a bare label
+        // never shrinks to the pill's `max_w` and its text runs out of the box. In a box of its own that may shrink
+        // (`min_w_0`), the label gets the pill's width and wraps in it.
+        .child(div().min_w_0().child(label))
         .when_some(shortcut, |pill, keys| {
             pill.child(
                 div()

@@ -66,6 +66,8 @@ pub struct Chat {
     pub open_steps: HashSet<usize>,
     /// The tool calls whose output you opened, by their id.
     pub open_outputs: HashSet<String>,
+    /// The queued messages shown in full, by uuid.
+    pub open_queued: HashSet<String>,
     /// The project's files, for @-mentions.
     pub files: Files,
     /// What you have picked and typed on the cards that wait for an answer, by request.
@@ -98,6 +100,7 @@ thread_local! {
         past: None,
         open_steps: HashSet::new(),
         open_outputs: HashSet::new(),
+        open_queued: HashSet::new(),
         files: Files::default(),
         drafts: HashMap::new(),
         todos_folded: false,
@@ -156,6 +159,7 @@ fn launch(resume: Option<String>) {
         c.past = None;
         c.open_steps.clear();
         c.open_outputs.clear();
+        c.open_queued.clear();
         c.drafts.clear();
         c.moving = false;
         (c.run, c.cwd.clone(), c.program.clone())
@@ -395,11 +399,30 @@ pub fn remove_image(index: usize) {
 /// Takes a queued message back.
 pub fn unqueue(uuid: &str) {
     write(|c, n| c.session.unqueue(uuid, n));
+    forget_open_queued();
+}
+
+/// Shows a queued message in full, or folds it back to one line.
+pub fn toggle_queued(uuid: &str) {
+    with(|c| {
+        if !c.open_queued.remove(uuid) {
+            c.open_queued.insert(uuid.to_owned());
+        }
+    });
+}
+
+/// Drops the open state of queued messages that are gone: taken back, read, or sent now under a new uuid.
+fn forget_open_queued() {
+    with(|c| {
+        let queued = &c.session.queued;
+        c.open_queued.retain(|uuid| queued.iter().any(|queued| &queued.uuid == uuid));
+    });
 }
 
 /// Has Claude read a queued message at its next step instead of after the turn.
 pub fn send_now(uuid: &str) {
     write(|c, n| c.session.send_now(uuid, host::now() as u64, n));
+    forget_open_queued();
 }
 
 /// Changes what you have picked or typed on the card for `request`.

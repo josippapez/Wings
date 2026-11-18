@@ -869,7 +869,7 @@ fn claude_chat(out: PathBuf) {
     // Each: its name, what the fake prints, its exit code and stderr when it fails, what to do once the page is up (press a
     // button or type), and the text to wait for.
     type Scene<'a> = (&'a str, Vec<serde_json::Value>, Option<(&'a str, &'a str)>, Option<&'a str>, &'a str);
-    let scenes: [Scene; 16] = [
+    let scenes: [Scene; 17] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -880,7 +880,9 @@ fn claude_chat(out: PathBuf) {
         ("failed", vec![], Some(("1", "Error: Invalid API key · Please run /login")), None, "Invalid API key"),
         ("work", work.clone(), None, None, "of 4 done"),
         ("work-open", work.clone(), None, Some("disclose:Ran 1 command"), "pnpm test discount"),
-        ("queue", work, None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line;keys:enter"), "Claude reads these"),
+        ("queue", work.clone(), None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter"), "Claude reads these"),
+        // The same two, each opened to its whole message by its More button, which reads Less once it is open.
+        ("queue-open", work, None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter;press:More;press:More"), "Less"),
         ("ask-bash", ask_bash, None, None, "Allow Bash?"),
         ("question", question, None, None, "Which formats"),
         ("plan", plan, None, None, "Keep planning"),

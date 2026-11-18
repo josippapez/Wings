@@ -565,18 +565,33 @@ fn usage(c: &Chat) -> Option<Node> {
 
 const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+/// A queued message longer than this gets a More button.
+const QUEUED_LINE: usize = 60;
+
 /// The messages waiting for Claude to finish, each with Send now and a way to take it back.
 fn queued(c: &Chat) -> Option<Node> {
     if c.session.queued.is_empty() {
         return None;
     }
     let rows = c.session.queued.iter().map(|queued| {
-        let (now, remove) = (queued.uuid.clone(), queued.uuid.clone());
-        // The text takes the room the buttons leave and is cut short in it, so a long message keeps them in the card.
+        let (now, remove, fold) = (queued.uuid.clone(), queued.uuid.clone(), queued.uuid.clone());
+        let open = c.open_queued.contains(&queued.uuid);
+        // Nothing here measures the text, so a message counts as long once it can't fit a line of the narrow card.
+        let long = queued.text.chars().count() > QUEUED_LINE || queued.text.contains('\n');
+        // The text takes the room the buttons leave and is cut short in it, so a long message keeps them in the card;
+        // opened, it wraps whole and the buttons stay by its first line.
+        let said = if queued.text.is_empty() {
+            muted(plural(queued.images.len(), "image"))
+        } else if open {
+            text(queued.text.as_str())
+        } else {
+            text(queued.text.as_str()).prop("truncate", true).prop("title", queued.text.as_str())
+        };
         row()
             .prop("gap", "xs")
-            .prop("align", "center")
-            .child(stack().prop("grow", true).child(text(queued.text.as_str()).prop("truncate", true).prop("title", queued.text.as_str())))
+            .prop("align", if open { "start" } else { "center" })
+            .child(stack().prop("grow", true).child(said))
+            .maybe(long.then(|| button(if open { "Less" } else { "More" }, "ghost", false, move || chat::toggle_queued(&fold)).prop("size", "sm")))
             .child(button("Send now", "ghost", false, move || chat::send_now(&now)).prop("size", "sm").prop("title", "Claude puts what it runs aside and reads it now"))
             .child(
                 button("", "ghost", false, move || chat::unqueue(&remove))
