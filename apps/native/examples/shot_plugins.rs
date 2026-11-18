@@ -902,7 +902,7 @@ fn claude_chat(out: PathBuf) {
             "day": { "recommendations": [{ "key": "long_context", "pct": 70, "title": "See what fills your context", "detail": "run /context" }],
                 "agents": [], "skills": [{ "name": "release-notes", "pct": 4 }], "plugins": [{ "name": "toolbox", "pct": 11 }], "mcp_servers": [{ "name": "files", "pct": 6 }] },
             "week": { "recommendations": [], "agents": [], "skills": [], "plugins": [], "mcp_servers": [] } } }));
-    let scenes: [Scene; 20] = [
+    let scenes: [Scene; 21] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -916,7 +916,7 @@ fn claude_chat(out: PathBuf) {
         ("work", work.clone(), None, None, "of 4 done"),
         ("work-open", work.clone(), None, Some("disclose:Ran 1 command"), "pnpm test discount"),
         ("detailed", work.clone(), None, None, "No test suite found"),
-        ("large-text", work.clone(), None, None, "No test suite found"),
+        ("large-text", work.clone(), None, None, "of 4 done"),
         ("queue", work.clone(), None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter"), "Claude reads these"),
         // The same two, each opened to its whole message by its More button, which reads Less once it is open.
         ("queue-open", work, None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter;press:More"), "Less"),

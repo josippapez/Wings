@@ -9,7 +9,7 @@ use gpui::{
 };
 
 use super::{
-    InputState, Node, PageView, SearchState, line_height, plain_text, send_shortcut, tree,
+    InputState, Node, PageView, SearchState, line_height, plain_text, scaled, send_shortcut, tree,
 };
 use crate::{theme, ui};
 
@@ -484,7 +484,8 @@ impl PageView {
             plain_text(&disclosure.summary),
             open,
             // A summary longer than the line wraps under itself, as in the desktop, instead of running past the card.
-            div().min_w_0().child(self.inline(&disclosure.summary, cx)),
+            // The trigger's 12 points, as a `Scroll`'s `textScale` makes them.
+            div().min_w_0().text_size(px(scaled(12.0))).child(self.inline(&disclosure.summary, cx)),
         )
         .on_click(cx.listener(move |view, _, _, cx| {
             cx.stop_propagation();
