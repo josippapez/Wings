@@ -345,12 +345,15 @@ fn permission_node(ask: &Ask, draft: &Draft) -> Node {
     let (deny, once, always) = (ask.request.clone(), ask.request.clone(), ask.request.clone());
     let mut body: Vec<Node> = ask.reason.iter().map(|why| muted(why.as_str())).collect();
     body.push(text(ask.detail.as_str()).prop("mono", true).prop("size", "small"));
+    if ask.cut_short {
+        body.push(text("This is too long to show here in full, so it can't be allowed here. Open the session in the terminal to read it.").prop("tone", "warn"));
+    }
     body.push(feedback_field(&ask.request, draft, "Reason for denying", "Why not, or what to do instead (Claude reads it)"));
-    let always = (!ask.suggestions.is_empty()).then(|| button("Always allow", "secondary", false, move || chat::allow(&always, true)));
+    let always = (!ask.suggestions.is_empty()).then(|| button("Always allow", "secondary", false, move || chat::allow(&always, true)).prop("disabled", ask.cut_short));
     confirm(
         format!("Allow {}?", ask.tool),
         body,
-        [button("Deny", "outline", false, move || chat::deny(&deny)), button("Allow once", "default", false, move || chat::allow(&once, false))]
+        [button("Deny", "outline", false, move || chat::deny(&deny)), button("Allow once", "default", false, move || chat::allow(&once, false)).prop("disabled", ask.cut_short)]
             .into_iter()
             .chain(always),
     )

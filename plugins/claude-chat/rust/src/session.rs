@@ -10,8 +10,9 @@ use serde_json::{Map, Value, json};
 const OUTPUT_KEPT: usize = 4000;
 /// The most of a tool's input shown as its one-line summary.
 const SUMMARY_KEPT: usize = 200;
-/// The most lines of a command, and characters of the reason, a permission card shows.
-const DETAIL_LINES: usize = 6;
+/// The most of what a tool would do that a permission card shows, and of the reason. Past the first, the card can't be
+/// allowed: you would approve what you can't read.
+const ASK_KEPT: usize = 16_000;
 const REASON_KEPT: usize = 300;
 /// The most lines of an edit's diff the chat keeps, and the most of a written file's start.
 const DIFF_KEPT: usize = 40;
@@ -94,8 +95,10 @@ pub struct Ask {
     pub request: String,
     pub tool: String,
     pub summary: String,
-    /// What the tool is asked to do, as the card shows it: a command in full (a few lines), else the summary.
+    /// What the tool is asked to do, in full, as the card shows it.
     pub detail: String,
+    /// The detail was too long to show whole.
+    pub cut_short: bool,
     /// Why Claude Code asks, in its own words: the request's title, description and reason.
     pub reason: Option<String>,
     /// The permission rules "Always allow" adds. None when Claude Code offers none, or says not to offer them.
@@ -276,10 +279,12 @@ impl Session {
                     true => Vec::new(),
                     false => request["permission_suggestions"].as_array().cloned().unwrap_or_default(),
                 };
+                let detail = ask_detail(&tool, &request["input"]);
                 self.items.push(Item::Ask(Ask {
                     request: line["request_id"].as_str().unwrap_or_default().to_owned(),
                     summary: summary(&tool, &request["input"]),
-                    detail: ask_detail(&tool, &request["input"]),
+                    detail: cut(&detail, ASK_KEPT),
+                    cut_short: detail.len() > ASK_KEPT,
                     reason: reason(request),
                     suggestions,
                     tool,
@@ -715,14 +720,36 @@ pub fn summary(tool: &str, input: &Value) -> String {
     cut(text.lines().next().unwrap_or_default(), SUMMARY_KEPT)
 }
 
-/// What a tool is asked to do, as a permission card shows it: a command in full, up to a few lines, else the summary.
+/// What a tool is asked to do, as a permission card shows it: the whole command, the change an edit makes, the file a
+/// write leaves, else the input as Claude sent it.
 fn ask_detail(tool: &str, input: &Value) -> String {
-    let Some(command) = input["command"].as_str().filter(|_| tool == "Bash") else {
-        return summary(tool, input);
+    let text = |key: &str| input[key].as_str().unwrap_or_default();
+    let change = |edit: &Value| {
+        let lines = |key: &str, mark: &str| edit[key].as_str().unwrap_or_default().lines().map(|line| format!("{mark} {line}")).collect::<Vec<_>>();
+        let every = if edit["replace_all"] == true { "Every match of:\n" } else { "" };
+        format!("{every}{}\n{}", lines("old_string", "−").join("\n"), lines("new_string", "+").join("\n"))
     };
-    let lines: Vec<&str> = command.trim().lines().collect();
-    let shown = cut(&lines.iter().take(DETAIL_LINES).copied().collect::<Vec<_>>().join("\n"), OUTPUT_KEPT);
-    if lines.len() > DETAIL_LINES { format!("{shown}\n…") } else { shown }
+    let said = match tool {
+        "Bash" => text("command").to_owned(),
+        "Edit" => format!("{}\n\n{}", text("file_path"), change(input)),
+        "MultiEdit" => {
+            let edits = input["edits"].as_array().map(Vec::as_slice).unwrap_or_default();
+            format!("{}\n\n{}", text("file_path"), edits.iter().map(change).collect::<Vec<_>>().join("\n\n"))
+        }
+        "Write" => format!("{}\n\n{}", text("file_path"), text("content")),
+        _ => serde_json::to_string_pretty(input).unwrap_or_default(),
+    };
+    shown(said.trim())
+}
+
+/// `text` with the characters that don't show, or that turn text around, written out as `\u{…}`, so what a card shows
+/// is what runs.
+fn shown(text: &str) -> String {
+    let hidden = |c: char| {
+        (c.is_control() && c != '\n' && c != '\t')
+            || matches!(c, '\u{ad}' | '\u{61c}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2069}' | '\u{feff}')
+    };
+    text.chars().map(|c| if hidden(c) { format!("\\u{{{:x}}}", c as u32) } else { c.to_string() }).collect()
 }
 
 /// Why Claude Code asks, in one line: its title, description and reason, without what two of them say alike.
@@ -1142,10 +1169,23 @@ mod tests {
     }
 
     #[test]
-    fn a_bash_command_shows_in_full_up_to_a_few_lines() {
-        let Item::Ask(ask) = &asked(json!({ "input": { "command": "a\nb\nc\nd\ne\nf\ng\nh" } })).items[0] else { panic!() };
-        assert_eq!(ask.summary, "a");
-        assert_eq!(ask.detail, "a\nb\nc\nd\ne\nf\n…");
+    fn the_card_shows_all_a_tool_would_do_and_the_characters_that_hide() {
+        let detail = |extra: Value| {
+            let Item::Ask(ask) = asked(extra).items.remove(0) else { panic!() };
+            ask
+        };
+        let ask = detail(json!({ "input": { "command": "a\nb\nc\nd\ne\nf\ng\nh" } }));
+        assert_eq!((ask.summary.as_str(), ask.detail.as_str()), ("a", "a\nb\nc\nd\ne\nf\ng\nh"));
+        // A right-to-left mark or a zero-width space would make the command read other than it runs.
+        assert_eq!(detail(json!({ "input": { "command": "ls \u{202e}fdp.exe\u{200b}" } })).detail, "ls \\u{202e}fdp.exe\\u{200b}");
+        let edit = json!({ "file_path": "/a.rs", "old_string": "one\ntwo", "new_string": "one\n2" });
+        assert_eq!(detail(json!({ "tool_name": "Edit", "input": edit })).detail, "/a.rs\n\n− one\n− two\n+ one\n+ 2");
+        assert_eq!(detail(json!({ "tool_name": "Write", "input": { "file_path": "/b", "content": "x\ny" } })).detail, "/b\n\nx\ny");
+        assert_eq!(detail(json!({ "tool_name": "mcp__db__drop", "input": { "table": "users" } })).detail, "{\n  \"table\": \"users\"\n}");
+        // Past what a card can show, it says so.
+        let long = detail(json!({ "input": { "command": "x".repeat(ASK_KEPT + 1) } }));
+        assert!(long.cut_short);
+        assert!(!ask.cut_short);
     }
 
     #[test]
