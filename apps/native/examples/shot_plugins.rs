@@ -733,12 +733,15 @@ fn claude_chat(out: PathBuf) {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
     };
     // `claude plugin ...` is what the plugins dialog's Discover view runs: the list prints a made-up one, an install says it went well.
+    // `claude edit-...` is what a change in the /hooks, /memory and /permissions dialogs runs: it reads the edit to the end
+    // of its input, and refuses it with the text of `$CHAT_ANSWERS/<subcommand>` when the scene has one, as Claude Code does.
     // A request the chat writes whose subtype names a file in `$CHAT_ANSWERS` gets that file as its answer, as Claude Code
     // answers a request made after it started.
     std::fs::write(root.join("available.json"), include_str!("../../../plugins/claude-chat/rust/tests/available.json")).unwrap();
     script(
         bin.join("claude"),
         r##"if [ "$1" = plugin ]; then case "$2" in list) cat "$CHAT_AVAILABLE";; install) echo '{"command":"install","outcome":"ok","scope":"user"}';; esac; exit 0; fi
+case "$1" in edit-*) cat >/dev/null; if [ -f "$CHAT_ANSWERS/$1" ]; then cat "$CHAT_ANSWERS/$1" >&2; exit 1; fi; echo '{"ok":true}'; exit 0;; esac
 cat "$CHAT_FIXTURE"; if [ -n "$CHAT_EXIT" ]; then echo "$CHAT_STDERR" >&2; exit "$CHAT_EXIT"; fi
 while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ] && case "$line" in *"\"subtype\":\"${answer##*/}\""*) cat "$answer";; esac; done; done"##,
     );
@@ -1007,7 +1010,7 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         text("Fixed: the discount works in cents now, and all 24 checkout tests pass."),
         json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 52_800, "num_turns": 5, "result": "", "total_cost_usd": 0.2 }),
     ]);
-    let scenes: [Scene; 35] = [
+    let scenes: [Scene; 39] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -1056,6 +1059,20 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         ("hooks", opened(vec![init.clone()]), None, Some("type:/hooks;keys:enter"), "Before tool execution"),
         ("memory", opened(vec![init.clone()]), None, Some("type:/memory;keys:enter"), "412 tokens"),
         ("permissions", opened(vec![init.clone()]), None, Some("type:/permissions;keys:enter"), "set in User settings"),
+        // Remove on a hook in a settings file asks first, in its place: what it removes, and from which file.
+        ("hooks-remove", opened(vec![init.clone()]), None, Some("type:/hooks;keys:enter;press:Remove"), "Remove this PreToolUse hook"),
+        // A new rule's form, filled in, before it is reviewed.
+        ("permissions-add", opened(vec![init.clone()]), None, Some("type:/permissions;keys:enter;press:Add rule;type:Bash(pnpm build)"), "what it may do in parentheses"),
+        // Review asks before the rule is written: the rule as typed, what allowing means, and the file it goes in.
+        ("permissions-confirm", opened(vec![init.clone()]), None, Some("type:/permissions;keys:enter;press:Add rule;type:Bash(pnpm build);press:Review"), "Bash(pnpm build)"),
+        // Claude Code refuses the rule, and the dialog says why, with the form as it was.
+        (
+            "permissions-refused",
+            opened(vec![init.clone()]),
+            None,
+            Some("type:/permissions;keys:enter;press:Add rule;type:Bash(curl -u admin:hunter2 https://ci.example.com);press:Review;press:Add allow rule"),
+            "contains a secret",
+        ),
     ];
     // Files for @-mentions, which the chat lists with git.
     for file in ["src/checkout.ts", "src/checkout.test.ts", "src/cart.ts", "api/limits.ts", "README.md"] {
@@ -1125,7 +1142,7 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
             std::fs::write(answers.join("rewind_files"), format!("{check}\n")).unwrap();
         }
         // Claude Code's answers to the reads of /hooks, /memory and /permissions, made up, each under the subtype it answers.
-        if ["hooks", "memory", "permissions"].contains(&name) {
+        if ["hooks", "memory", "permissions"].iter().any(|dialog| name.starts_with(dialog)) {
             for line in include_str!("../../../plugins/claude-chat/rust/tests/setup.jsonl").lines() {
                 let id = serde_json::from_str::<serde_json::Value>(line).unwrap()["response"]["request_id"].as_str().unwrap().to_owned();
                 let subtype = match id.as_str() {
@@ -1137,6 +1154,9 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
                 };
                 std::fs::write(answers.join(subtype), format!("{line}\n")).unwrap();
             }
+        }
+        if name == "permissions-refused" {
+            std::fs::write(answers.join("edit-permission-rules"), "the rule looks like it contains a secret, so it was not saved to settings\n").unwrap();
         }
         // SAFETY: the page from the scene before is closed, so nothing reads these while they change.
         unsafe {

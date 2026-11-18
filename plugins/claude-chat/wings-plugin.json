@@ -1,7 +1,7 @@
 {
   "id": "claude-chat",
   "name": "Claude chat",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "minWingsVersion": "0.2.39",
   "description": "Experimental. Runs Claude Code as a chat in a tab instead of a terminal: messages, tool calls and permission prompts as cards, with Enter to send. Open a new chat from the + menu, or move a Claude terminal into one with its Chat badge.",
   "api": 1,
@@ -16,7 +16,10 @@
     ],
     "processes": [
       "claude [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --replay-user-messages --prompt-suggestions --resume]",
-      "claude-rtk [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --replay-user-messages --prompt-suggestions --resume]"
+      "claude-rtk [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --replay-user-messages --prompt-suggestions --resume]",
+      "claude edit-permission-rules [--json]",
+      "claude edit-hook [--json]",
+      "claude edit-memory-settings [--json]"
     ],
     "notify": true,
     "transcript": [

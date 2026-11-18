@@ -1,9 +1,13 @@
 //! What the `/hooks`, `/memory` and `/permissions` dialogs show, from Claude Code's answers to the reads the Enter that
-//! typed the command sends. They only read. Claude Code's control protocol has no request that changes a hook, a memory
-//! setting or a permission rule: its own `edit-hook`, `edit-memory-settings` and `edit-permission-rules` commands take
-//! their edit on stdin, so a change is made in a terminal.
+//! typed the command sends, and the changes they make. Claude Code's control protocol has no request that changes a
+//! hook, a memory setting or a permission rule, so a change runs one of its own commands, `claude edit-hook`,
+//! `edit-memory-settings` or `edit-permission-rules`, which reads the edit as JSON on stdin and writes the settings file
+//! itself. Each change is one you confirmed with a click, after the dialog showed what it changes and in which file.
+
+use std::{cell::RefCell, rc::Rc};
 
 use serde_json::{Value, json};
+use wings_plugin::host;
 
 use crate::session::{MODES, request};
 
@@ -13,6 +17,9 @@ pub const MEMORY: &str = "memory-dialog";
 pub const SIZES: &str = "memory-sizes";
 pub const RULES: &str = "permission-rules";
 pub const MODE: &str = "permission-mode";
+
+/// The settings files the edit commands write. They refuse any other source.
+pub const FILES: [&str; 3] = ["localSettings", "projectSettings", "userSettings"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Which {
@@ -45,6 +52,9 @@ pub struct Hook {
     pub from_detail: String,
     /// The session's mode or a policy keeps it from running.
     pub off: bool,
+    /// Claude Code's record of it in a settings file, which names it to `edit-hook`: the file, its raw matcher and its
+    /// config. None for a hook a plugin, your organization or the session sets.
+    pub stored: Option<(String, String, Value)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -91,6 +101,10 @@ pub struct Memory {
     pub saved: Vec<Saved>,
     /// What Claude Code says of auto memory: "on", "off", or why it is off.
     pub auto: String,
+    /// Whether auto memory is on, when Claude Code lets you turn it on or off.
+    pub auto_toggle: Option<bool>,
+    /// What Claude Code says of auto dream, when it shows it, and whether it is on when you may turn it on or off.
+    pub dream: Option<(String, Option<bool>)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -103,6 +117,8 @@ pub struct Rule {
     pub source: String,
     /// Your organization's settings allow only their own rules, so this one is ignored.
     pub ignored: bool,
+    /// It is in a settings file `edit-permission-rules` may change.
+    pub editable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -116,6 +132,134 @@ pub struct Rules {
 pub struct Mode {
     pub mode: Option<String>,
     pub from: Option<String>,
+}
+
+/// A change the dialogs make to Claude Code's settings, with Claude Code's own command for it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Edit {
+    /// Adds `rule` to the `behavior` rules (`allow`, `ask` or `deny`) of the settings `file`, one of `FILES`.
+    AddRule { behavior: String, rule: String, file: String },
+    RemoveRule { behavior: String, rule: String, file: String },
+    /// Removes the `event` hook Claude Code keeps in `file` under the raw `matcher` as `config`. `text` is what it runs.
+    RemoveHook { event: String, file: String, matcher: String, config: Value, text: String },
+    /// Sets `autoMemoryEnabled` or `autoDreamEnabled`, which Claude Code keeps in your user settings.
+    Memory { setting: &'static str, on: bool },
+}
+
+impl Edit {
+    /// Removes `rule` from its settings file. None for a rule the edit command can't change.
+    pub fn remove_rule(rule: &Rule) -> Option<Edit> {
+        rule.editable.then(|| Edit::RemoveRule { behavior: rule.behavior.clone(), rule: rule.rule.clone(), file: rule.source.clone() })
+    }
+
+    /// Removes `hook` from its settings file. None for a hook that isn't in one.
+    pub fn remove_hook(hook: &Hook) -> Option<Edit> {
+        let (file, matcher, config) = hook.stored.clone()?;
+        Some(Edit::RemoveHook { event: hook.event.clone(), file, matcher, config, text: hook.text.clone() })
+    }
+
+    /// The `claude` subcommand that makes it, and the edit it reads on stdin, as Claude Code 2.1.327 takes them.
+    pub fn command(&self) -> (&'static str, Value) {
+        match self {
+            Edit::AddRule { behavior, rule, file } => ("edit-permission-rules", json!({ "op": "add", "rules": [rule], "behavior": behavior, "destination": file })),
+            Edit::RemoveRule { behavior, rule, file } => ("edit-permission-rules", json!({ "op": "remove", "rule": rule, "behavior": behavior, "source": file })),
+            Edit::RemoveHook { event, file, matcher, config, .. } => {
+                let target = json!({ "event": event, "matcher": matcher, "hook": config });
+                ("edit-hook", json!({ "op": "remove", "source": file, "event": event, "matcher": matcher, "target": target }))
+            }
+            Edit::Memory { setting, on } => ("edit-memory-settings", json!({ *setting: on })),
+        }
+    }
+
+    /// What its confirm shows: the question, what it adds or removes as it is written, and the file it changes.
+    pub fn shown(&self) -> (String, String, String) {
+        match self {
+            Edit::AddRule { behavior, rule, file } => (format!("Add this {behavior} rule?"), rule.clone(), format!("To {}", place(file))),
+            Edit::RemoveRule { behavior, rule, file } => (format!("Remove this {behavior} rule?"), rule.clone(), format!("From {}", place(file))),
+            Edit::RemoveHook { event, file, matcher, text, .. } => {
+                let title = if matcher.is_empty() { format!("Remove this {event} hook?") } else { format!("Remove this {event} hook for {matcher}?") };
+                (title, text.clone(), format!("From {}", place(file)))
+            }
+            Edit::Memory { setting, on } => (format!("Turn {} {}?", memory_name(setting), on_off(*on)), format!("\"{setting}\": {on}"), format!("In {}", place("userSettings"))),
+        }
+    }
+
+    /// The label of the button that makes it.
+    pub fn verb(&self) -> String {
+        match self {
+            Edit::AddRule { behavior, .. } => format!("Add {behavior} rule"),
+            Edit::RemoveRule { .. } | Edit::RemoveHook { .. } => "Remove".into(),
+            Edit::Memory { on, .. } => format!("Turn {}", on_off(*on)),
+        }
+    }
+
+    /// What it did, once Claude Code has made it.
+    fn done(&self) -> String {
+        match self {
+            Edit::AddRule { behavior, rule, file } => format!("Added {rule} to the {behavior} rules in {}.", source_label(file)),
+            Edit::RemoveRule { behavior, rule, file } => format!("Removed {rule} from the {behavior} rules in {}.", source_label(file)),
+            Edit::RemoveHook { event, file, .. } => format!("Removed the {event} hook from {}.", source_label(file)),
+            Edit::Memory { setting, on } => format!("Turned {} {}.", memory_name(setting), on_off(*on)),
+        }
+    }
+
+    /// The read that lists what it changed again.
+    pub fn reread(&self) -> String {
+        match self {
+            Edit::AddRule { .. } | Edit::RemoveRule { .. } => request(RULES, json!({ "subtype": "list_permission_rules" })),
+            Edit::RemoveHook { .. } => request(HOOKS, json!({ "subtype": "get_hooks_listing" })),
+            Edit::Memory { .. } => request(MEMORY, json!({ "subtype": "get_memory_dialog" })),
+        }
+    }
+}
+
+/// A settings file as the confirm names it: "Local settings (.claude/settings.local.json)".
+pub fn place(file: &str) -> String {
+    format!("{} ({})", source_label(file), source_file(file).unwrap_or_default())
+}
+
+fn memory_name(setting: &str) -> &'static str {
+    if setting == "autoDreamEnabled" { "auto dream" } else { "auto memory" }
+}
+
+fn on_off(on: bool) -> &'static str {
+    if on { "on" } else { "off" }
+}
+
+/// Makes `edit` with Claude Code's own command for it, under the Claude account of the chat's `session` and in the chat's
+/// folder `cwd`, where Claude Code finds the project's settings files. Every change the dialogs make runs through here.
+/// It gives the warnings Claude Code printed, or why it refused.
+pub async fn run(session: Option<&str>, cwd: &str, edit: &Edit) -> Result<Vec<String>, String> {
+    let (command, input) = edit.command();
+    let printed = Rc::new(RefCell::new(Value::Null));
+    let kept = printed.clone();
+    let account = host::Account::of_session(session);
+    let process = host::spawn_as(&account, "claude", &[command, "--json"], cwd, &input.to_string(), move |line| *kept.borrow_mut() = line.clone());
+    // It reads stdin to its end before it does anything.
+    process.input().stop();
+    let exit = process.await;
+    outcome(&exit, &printed.borrow())
+}
+
+/// How an edit command ended: the warnings it printed with `{"ok":true}`, or the line it printed to stderr when it
+/// refused, which says why.
+pub fn outcome(exit: &Result<Value, String>, printed: &Value) -> Result<Vec<String>, String> {
+    let exit = exit.as_ref().map_err(String::clone)?;
+    if exit["code"] == 0 {
+        return Ok(list(&printed["warnings"]).filter_map(|warning| warning.as_str().map(str::to_owned)).collect());
+    }
+    match exit["stderr"].as_str().unwrap_or_default().lines().rev().map(str::trim).find(|line| !line.is_empty()) {
+        Some(said) => Err(said.to_owned()),
+        None => Err(format!("claude exited with code {}.", exit["code"])),
+    }
+}
+
+/// The new permission rule you are writing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuleForm {
+    pub rule: String,
+    pub behavior: String,
+    pub file: String,
 }
 
 /// The open dialog and what it shows. Each answer is None until Claude Code gives it, or why it couldn't.
@@ -133,6 +277,14 @@ pub struct Setup {
     pub query: String,
     /// The path the memory dialog copied last.
     pub copied: Option<String>,
+    /// The change you asked for, which the dialog shows with what it changes until you confirm or cancel it, and
+    /// whether Claude Code is making it.
+    pub pending: Option<Edit>,
+    pub saving: bool,
+    /// How the last change went, as notices: what it did and Claude Code's warnings, or why it refused.
+    pub outcome: Vec<(&'static str, String)>,
+    /// The permissions dialog's form for a new rule, while it is open.
+    pub form: Option<RuleForm>,
 }
 
 impl Setup {
@@ -140,6 +292,8 @@ impl Setup {
     pub fn open(&mut self, text: &str) -> Option<String> {
         let which = command(text)?;
         self.open = Some(which);
+        (self.pending, self.form) = (None, None);
+        self.outcome.clear();
         Some(match which {
             Which::Hooks => {
                 self.hooks = None;
@@ -178,6 +332,66 @@ impl Setup {
     /// The tokens the file at `path` takes in the context, when Claude Code has loaded it.
     pub fn size(&self, path: &str) -> Option<u64> {
         self.sizes.iter().find(|(file, _)| file == path).map(|(_, tokens)| *tokens)
+    }
+
+    /// Shows `edit` with what it changes, for you to confirm. Nothing is written yet.
+    pub fn ask(&mut self, edit: Edit) {
+        if !self.saving {
+            self.pending = Some(edit);
+            self.outcome.clear();
+        }
+    }
+
+    /// Drops the change you asked for, unless Claude Code is already making it.
+    pub fn cancel(&mut self) {
+        if !self.saving {
+            self.pending = None;
+        }
+    }
+
+    /// The edit your click on the confirm button makes: the one shown, once, and none while another is being made.
+    pub fn confirm(&mut self) -> Option<Edit> {
+        if self.saving {
+            return None;
+        }
+        let edit = self.pending.clone()?;
+        self.saving = true;
+        Some(edit)
+    }
+
+    /// Takes in how Claude Code made `edit`: the warnings it gave, or why it refused. A rule it added closes its form,
+    /// and a refused one leaves the form as you wrote it.
+    pub fn saved(&mut self, edit: &Edit, outcome: Result<Vec<String>, String>) {
+        self.saving = false;
+        self.pending = None;
+        self.outcome = match outcome {
+            Ok(warnings) => {
+                if matches!(edit, Edit::AddRule { .. }) {
+                    self.form = None;
+                }
+                std::iter::once(("success", edit.done())).chain(warnings.into_iter().map(|warning| ("warn", warning))).collect()
+            }
+            Err(why) => vec![("danger", why)],
+        };
+    }
+
+    /// Opens the form for a new rule of the list on screen, saved in this project's local settings unless you pick
+    /// another file. The rule starts empty, so only what you type goes in it.
+    pub fn new_rule(&mut self) {
+        self.form = Some(RuleForm { rule: String::new(), behavior: self.behavior.clone(), file: "localSettings".into() });
+        self.outcome.clear();
+    }
+
+    /// Asks to add the rule the form holds, once it has one.
+    pub fn review_rule(&mut self) {
+        let Some(form) = &self.form else {
+            return;
+        };
+        let rule = form.rule.trim();
+        if !rule.is_empty() {
+            let edit = Edit::AddRule { behavior: form.behavior.clone(), rule: rule.to_owned(), file: form.file.clone() };
+            self.ask(edit);
+        }
     }
 }
 
@@ -243,6 +457,9 @@ fn hooks_of(answer: &Value) -> Hooks {
                 _ => source_label(source).to_owned(),
             };
             let what = hook["commandText"].as_str().unwrap_or(text(hook, "displayText"));
+            // Only a hook in a settings file has it. Its matcher is the raw one, which `matcher` shows escaped.
+            let editable = &hook["editable"];
+            let stored = (editable.is_object() && FILES.contains(&source)).then(|| (source.to_owned(), text(editable, "matcher").to_owned(), editable["config"].clone()));
             Hook {
                 event: text(hook, "event").to_owned(),
                 matcher: text(hook, "matcher").to_owned(),
@@ -251,6 +468,7 @@ fn hooks_of(answer: &Value) -> Hooks {
                 from,
                 from_detail: text(hook, "sourceLabel").to_owned(),
                 off: hook["disabled"] == true,
+                stored,
             }
         })
         .collect();
@@ -307,7 +525,16 @@ fn memory_of(answer: &Value) -> Memory {
             modified: memory["modified_ms"].as_f64().unwrap_or(0.0),
         })
         .collect();
-    Memory { files, folders, saved, auto: text(&answer["auto_memory"], "status").to_owned() }
+    let toggle = |state: &Value| (state["toggleable"] == true).then(|| state["enabled"] == true);
+    let dream = &answer["auto_dream"];
+    Memory {
+        files,
+        folders,
+        saved,
+        auto: text(&answer["auto_memory"], "status").to_owned(),
+        auto_toggle: toggle(&answer["auto_memory"]),
+        dream: (dream["shown"] == true).then(|| (text(dream, "status").to_owned(), toggle(dream))),
+    }
 }
 
 fn sizes_of(answer: &Value) -> Vec<(String, u64)> {
@@ -326,6 +553,7 @@ fn rules_of(answer: &Value) -> Rules {
                 .map(|[prefix, emphasis, suffix]| (prefix, emphasis, suffix)),
             source: text(rule, "source").to_owned(),
             ignored: rule["notInEffect"] == true,
+            editable: rule["editability"] == "persistent" && FILES.contains(&text(rule, "source")),
         })
         .collect();
     let mut notices = Vec::new();
@@ -349,6 +577,7 @@ fn mode_of(answer: &Value) -> Mode {
 mod tests {
     use super::*;
     use crate::session::Session;
+    use wings_plugin::task;
 
     /// Claude Code 2.1.327's answers to the dialogs' reads, in its shapes, with made-up paths, hooks and rules.
     const ANSWERS: &str = include_str!("../tests/setup.jsonl");
@@ -467,6 +696,7 @@ mod tests {
         assert_eq!(memory.folders[0].label, "reviewer agent memory");
         assert!(memory.saved.is_empty());
         assert_eq!(memory.auto, "off in safe mode");
+        assert_eq!((memory.auto_toggle, memory.dream), (None, None), "nothing to turn on or off");
     }
 
     #[test]
@@ -504,6 +734,7 @@ mod tests {
         assert!(setup.answered(RULES, &rules));
         let rules = setup.rules.clone().expect("an answer").expect("the rules");
         assert!(rules.rules[0].ignored);
+        assert_eq!(Edit::remove_rule(&rules.rules[0]), None, "Claude Code says it can't be changed here");
         assert_eq!(rules.notices.len(), 1);
         let settings = json!({ "subtype": "success", "request_id": MODE, "response": { "effective": { "permissions": { "allow": ["Bash(ls)"] } },
             "sources": [{ "source": "userSettings", "settings": { "permissions": { "allow": ["Bash(ls)"] } } }] } });
@@ -525,5 +756,182 @@ mod tests {
         let refused = json!({ "subtype": "error", "request_id": MODE, "error": "boom" });
         assert!(setup.answered(MODE, &refused));
         assert_eq!(setup.mode, None);
+    }
+
+    fn add(behavior: &str, rule: &str, file: &str) -> Edit {
+        Edit::AddRule { behavior: behavior.into(), rule: rule.into(), file: file.into() }
+    }
+
+    #[test]
+    fn each_change_is_the_json_its_edit_command_takes() {
+        assert_eq!(
+            add("allow", "Bash(npm test)", "localSettings").command(),
+            ("edit-permission-rules", json!({ "op": "add", "rules": ["Bash(npm test)"], "behavior": "allow", "destination": "localSettings" }))
+        );
+        let session = heard();
+        let rules = session.setup.rules.clone().unwrap().unwrap();
+        assert_eq!(
+            Edit::remove_rule(&rules.rules[5]).expect("a project rule").command(),
+            ("edit-permission-rules", json!({ "op": "remove", "rule": "Bash(git push:*)", "behavior": "ask", "source": "projectSettings" }))
+        );
+        // A hook is named by Claude Code's own record of it, which the listing gives.
+        let hooks = session.setup.hooks.clone().unwrap().unwrap();
+        let target = json!({ "event": "PreToolUse", "matcher": "Bash", "hook": { "type": "command", "command": "~/.claude/hooks/guard-rm.sh", "timeout": 5 } });
+        assert_eq!(
+            Edit::remove_hook(&hooks.hooks[0]).expect("a user hook").command(),
+            ("edit-hook", json!({ "op": "remove", "source": "userSettings", "event": "PreToolUse", "matcher": "Bash", "target": target }))
+        );
+        let target = json!({ "event": "Stop", "matcher": "", "hook": { "type": "prompt", "prompt": "Check that the tests ran before you stop." } });
+        assert_eq!(Edit::remove_hook(&hooks.hooks[4]).unwrap().command().1, json!({ "op": "remove", "source": "localSettings", "event": "Stop", "matcher": "", "target": target }));
+        assert_eq!(Edit::Memory { setting: "autoMemoryEnabled", on: false }.command(), ("edit-memory-settings", json!({ "autoMemoryEnabled": false })));
+        assert_eq!(Edit::Memory { setting: "autoDreamEnabled", on: true }.command(), ("edit-memory-settings", json!({ "autoDreamEnabled": true })));
+    }
+
+    #[test]
+    fn rows_a_plugin_your_organization_or_the_session_set_offer_no_change() {
+        let session = heard();
+        let rules = session.setup.rules.clone().unwrap().unwrap();
+        let removable: Vec<&str> = rules.rules.iter().filter(|rule| Edit::remove_rule(rule).is_some()).map(|rule| rule.rule.as_str()).collect();
+        // Not the session's mcp__files__read_file, nor the managed pastebin rule.
+        assert_eq!(removable, ["Bash(npm run test:*)", "Read(~/notes/**)", "Bash(pnpm lint)", "WebFetch(domain:example.com)", "Bash(git push:*)", "Bash(rm -rf:*)"]);
+        let hooks = session.setup.hooks.clone().unwrap().unwrap();
+        let removable: Vec<bool> = hooks.hooks.iter().map(|hook| Edit::remove_hook(hook).is_some()).collect();
+        assert_eq!(removable, [true, true, true, false, true], "the plugin's SessionStart hook stays");
+        let memory = session.setup.memory.clone().unwrap().unwrap();
+        assert_eq!((memory.auto_toggle, memory.dream), (Some(true), None), "auto memory turns off, and auto dream isn't shown");
+        // Auto dream shows once Claude Code shows it, with a switch only while it may change.
+        let mut setup = Setup::default();
+        let shown = |toggleable: bool| json!({ "subtype": "success", "request_id": MEMORY, "response": { "files": [],
+            "auto_memory": { "enabled": true, "toggleable": true, "status": "on" },
+            "auto_dream": { "shown": true, "enabled": false, "toggleable": toggleable, "status": "off", "detail": "" } } });
+        setup.answered(MEMORY, &shown(true));
+        assert_eq!(setup.memory.clone().unwrap().unwrap().dream, Some(("off".into(), Some(false))));
+        setup.answered(MEMORY, &shown(false));
+        assert_eq!(setup.memory.clone().unwrap().unwrap().dream, Some(("off".into(), None)));
+    }
+
+    #[test]
+    fn the_confirm_says_what_changes_and_in_which_file() {
+        let rule = add("allow", "Bash(npm test)", "localSettings");
+        assert_eq!(rule.shown(), ("Add this allow rule?".into(), "Bash(npm test)".into(), "To Local settings (.claude/settings.local.json)".into()));
+        assert_eq!(rule.verb(), "Add allow rule");
+        let rules = heard().setup.rules.unwrap().unwrap();
+        assert_eq!(
+            Edit::remove_rule(&rules.rules[6]).unwrap().shown(),
+            ("Remove this deny rule?".into(), "Bash(rm -rf:*)".into(), "From User settings (~/.claude/settings.json)".into())
+        );
+        let hooks = heard().setup.hooks.unwrap().unwrap();
+        let hook = Edit::remove_hook(&hooks.hooks[1]).unwrap();
+        assert_eq!(hook.shown(), ("Remove this PreToolUse hook for Bash?".into(), "${CLAUDE_PROJECT_DIR}/.claude/hooks/no-deploy.sh".into(), "From Project settings (.claude/settings.json)".into()));
+        assert_eq!(hook.verb(), "Remove");
+        let off = Edit::Memory { setting: "autoMemoryEnabled", on: false };
+        assert_eq!(off.shown(), ("Turn auto memory off?".into(), "\"autoMemoryEnabled\": false".into(), "In User settings (~/.claude/settings.json)".into()));
+        assert_eq!(off.verb(), "Turn off");
+    }
+
+    #[test]
+    fn a_new_rule_starts_empty_and_is_only_shown_until_you_confirm_it() {
+        let mut setup = Setup::default();
+        setup.open("/permissions");
+        setup.behavior = "deny".into();
+        setup.new_rule();
+        // Nothing of Claude's: the rule is yours to type.
+        assert_eq!(setup.form, Some(RuleForm { rule: String::new(), behavior: "deny".into(), file: "localSettings".into() }));
+        setup.review_rule();
+        assert_eq!(setup.pending, None, "an empty rule asks nothing");
+        setup.form.as_mut().unwrap().rule = "  Read(./secrets/**) ".into();
+        setup.review_rule();
+        assert_eq!(setup.pending, Some(add("deny", "Read(./secrets/**)", "localSettings")));
+        setup.cancel();
+        assert_eq!(setup.pending, None);
+        assert!(setup.form.is_some(), "cancel goes back to the form");
+    }
+
+    #[test]
+    fn a_change_runs_once_from_its_confirm_and_never_before() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let kept = calls.clone();
+        host::testing::answer(move |method, params| {
+            kept.borrow_mut().push((method.to_owned(), params.clone()));
+            Ok(if method == "spawn" { json!({ "code": 0, "stderr": "" }) } else { Value::Null })
+        });
+        let mut setup = Setup::default();
+        setup.open("/permissions");
+        setup.new_rule();
+        setup.form.as_mut().unwrap().rule = "Bash(npm test)".into();
+        setup.review_rule();
+        assert!(calls.borrow().is_empty(), "asking runs nothing");
+        let edit = setup.confirm().expect("the change shown");
+        assert_eq!(setup.confirm(), None, "a second click while it is made");
+        setup.ask(add("deny", "Bash(ls)", "userSettings"));
+        assert_eq!(setup.pending, Some(edit.clone()), "nothing else is asked while it is made");
+        let made = edit.clone();
+        let outcome = task::block_on(async move { run(Some("5b7e2c1a-0f3d-4c8e-9a61-2d4f8b3c7e90"), "/work/shop", &made).await });
+        assert_eq!(outcome, Ok(Vec::new()));
+        let calls = calls.borrow();
+        let methods: Vec<&str> = calls.iter().map(|(method, _)| method.as_str()).collect();
+        // One run, whose input closes once the edit is written.
+        assert_eq!(methods, ["spawn", "processStop"]);
+        let spawn = &calls[0].1;
+        assert_eq!((&spawn["program"], &spawn["args"], &spawn["cwd"]), (&json!("claude"), &json!(["edit-permission-rules", "--json"]), &json!("/work/shop")));
+        // Under the account the chat's session is in.
+        assert_eq!(spawn["account"], json!({ "session": "5b7e2c1a-0f3d-4c8e-9a61-2d4f8b3c7e90" }));
+        let input: Value = serde_json::from_str(spawn["input"].as_str().unwrap()).unwrap();
+        assert_eq!(input, json!({ "op": "add", "rules": ["Bash(npm test)"], "behavior": "allow", "destination": "localSettings" }));
+        assert_eq!(calls[1].1["token"], spawn["token"]);
+        setup.saved(&edit, outcome);
+        assert_eq!(setup.confirm(), None, "a click after it was made");
+    }
+
+    #[test]
+    fn a_refused_change_says_why_and_keeps_the_rule_you_wrote() {
+        let refused = Ok(json!({ "code": 1, "stderr": "the rule looks like it contains a secret, so it was not saved to settings\n" }));
+        let why = "the rule looks like it contains a secret, so it was not saved to settings";
+        assert_eq!(outcome(&refused, &Value::Null), Err(why.into()));
+        // edit-hook prints its refusal as JSON too, and says it on stderr.
+        let gone = "edit_hook: that hook is no longer in localSettings; it may have been changed outside this dialog";
+        let printed = json!({ "ok": false, "error": gone, "code": "target_missing" });
+        assert_eq!(outcome(&Ok(json!({ "code": 1, "stderr": format!("{gone}\n") })), &printed), Err(gone.into()));
+        assert_eq!(outcome(&Ok(json!({ "code": 1, "stderr": "" })), &Value::Null), Err("claude exited with code 1.".into()));
+        assert_eq!(outcome(&Err("A plugin can keep at most 8 programs running".into()), &Value::Null), Err("A plugin can keep at most 8 programs running".into()));
+
+        let mut setup = Setup::default();
+        setup.open("/permissions");
+        setup.new_rule();
+        setup.form.as_mut().unwrap().rule = "Bash(curl -u admin:hunter2 https://ci.example.com)".into();
+        setup.review_rule();
+        let edit = setup.confirm().unwrap();
+        setup.saved(&edit, outcome(&refused, &Value::Null));
+        assert_eq!(setup.outcome, [("danger", why.to_owned())]);
+        assert_eq!((&setup.pending, setup.saving), (&None, false));
+        assert_eq!(setup.form.map(|form| form.rule), Some("Bash(curl -u admin:hunter2 https://ci.example.com)".into()));
+    }
+
+    #[test]
+    fn a_saved_change_says_what_it_did_and_reads_its_list_again() {
+        let warning = "\"Bash(*)\" was saved as the tool-wide rule \"Bash\", which matches every use of the tool. To limit it, put a specific pattern inside the parentheses.";
+        let printed = json!({ "ok": true, "warnings": [warning], "stored": ["Bash"] });
+        let warnings = outcome(&Ok(json!({ "code": 0, "stderr": "" })), &printed);
+        let mut session = heard();
+        let setup = &mut session.setup;
+        setup.behavior = "ask".into();
+        setup.new_rule();
+        setup.form.as_mut().unwrap().rule = "Bash(*)".into();
+        setup.review_rule();
+        let edit = setup.confirm().unwrap();
+        setup.saved(&edit, warnings);
+        assert_eq!(setup.outcome, [("success", "Added Bash(*) to the ask rules in Local settings.".to_owned()), ("warn", warning.to_owned())]);
+        assert_eq!(setup.form, None);
+        let reread: Value = serde_json::from_str(edit.reread().trim()).unwrap();
+        assert_eq!((&reread["request_id"], &reread["request"]["subtype"]), (&json!(RULES), &json!("list_permission_rules")));
+        // Its answer is the list the dialog shows from then on.
+        let listed = json!({ "subtype": "success", "request_id": RULES, "response": { "state": { "rules": [
+            { "behavior": "ask", "source": "localSettings", "rule": "Bash", "editability": "persistent" }] } } });
+        assert!(setup.answered(RULES, &listed));
+        assert_eq!(setup.rules.clone().unwrap().unwrap().rules.iter().map(|rule| rule.rule.as_str()).collect::<Vec<_>>(), ["Bash"]);
+        let hooks = setup.hooks.clone().unwrap().unwrap();
+        let reads = |edit: Edit| serde_json::from_str::<Value>(edit.reread().trim()).unwrap()["request"]["subtype"].clone();
+        assert_eq!(reads(Edit::remove_hook(&hooks.hooks[0]).unwrap()), "get_hooks_listing");
+        assert_eq!(reads(Edit::Memory { setting: "autoMemoryEnabled", on: false }), "get_memory_dialog");
     }
 }
