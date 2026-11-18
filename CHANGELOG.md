@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.32 · 2026-11-18
+
+- **Claude chat's hooks and MCP servers work.** Claude Code in a chat couldn't find programs like node or npx, so its hooks failed and MCP servers didn't connect. Programs a plugin starts now get your shell's PATH.
+- **One Stop or Send button in Claude chat's message box.** It's Stop while Claude works and nothing is typed, else Send.
+
 ## 0.2.31 · 2026-11-18
 
 - **Claude chat shows what Claude is doing, and for how long.** A line under the conversation says "Running pnpm test · 16s", "Reading checkout.ts" or "Calling wings", and counts up, as Claude Code's own status line does.
