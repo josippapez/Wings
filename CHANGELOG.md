@@ -2,6 +2,13 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.30 · 2026-11-18
+
+- **Claude chat opens long sessions.** One with a long history stayed on Loading, as it was more than a page may draw: the chat now shows the newest messages that fit, and builds a tool's output only when you open it.
+- **Claude chat looks and works more like a chat app.** Your messages are bubbles on the right; Claude's tool calls fold into one line per run, like "Ran 2 commands · Read 3 files"; what Claude Code adds in your name, like a background task's notice, is a quiet line of its own; "Thinking" shimmers while it thinks; new messages rise in. The message box is one rounded box with the model, effort and permission mode in it, how full the context is, and a round send button that turns into Stop. Typing / lists the slash commands.
+- **Past sessions in Claude chat.** Sessions lists this project's Claude Code sessions, with a search, and opens one in the tab. New chat starts afresh.
+- **Back to a terminal.** Open in terminal goes on with the chat's session in a terminal, once Claude Code in the chat has ended. A Claude terminal's Chat badge won't move a session while Claude is working in it.
+
 ## 0.2.29 · 2026-11-18
 
 - **Claude chat (experimental): Claude Code in a chat tab instead of a terminal.** Turn on the Claude chat plugin, then open a chat from the + menu, or click the Chat badge on a Claude terminal to carry its session on in a chat. Replies stream in, tool calls show as cards, permission prompts have Allow and Deny buttons, Enter sends and Shift+Enter starts a new line. A session started with `claude-rtk` goes on with `claude-rtk`.
