@@ -28,6 +28,9 @@ mod rewind_view;
 mod session;
 #[cfg(feature = "settings")]
 mod settings_page;
+mod setup;
+#[cfg(feature = "chat")]
+mod setup_view;
 #[cfg(feature = "chat")]
 mod tasks_view;
 mod usage;

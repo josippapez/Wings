@@ -71,6 +71,7 @@ fn chat_page(c: &Chat) -> Node {
         .child(header(c))
         .child(split)
         .maybe(crate::plugins_view::dialog(c))
+        .maybe(crate::setup_view::dialog(c))
         .maybe(crate::tasks_view::dialog(c))
         .maybe(crate::rewind_view::dialog(c))
         .maybe(crate::usage_view::dialog(c))

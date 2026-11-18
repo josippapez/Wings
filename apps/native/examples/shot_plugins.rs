@@ -1002,7 +1002,7 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         text("Fixed: the discount works in cents now, and all 24 checkout tests pass."),
         json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 52_800, "num_turns": 5, "result": "", "total_cost_usd": 0.2 }),
     ]);
-    let scenes: [Scene; 32] = [
+    let scenes: [Scene; 35] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -1047,6 +1047,10 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         ("task-output", tasks, None, Some("row:Watch the test suite"), "Waiting for file changes"),
         // The Rewind button beside your first message opens its dialog, with the files restoring the code writes back.
         ("rewind", rewound, None, Some("press:Rewind"), "src/checkout.ts"),
+        // /hooks, /memory and /permissions open their dialog over the chat, filled by the reads the Enter sends.
+        ("hooks", opened(vec![init.clone()]), None, Some("type:/hooks;keys:enter"), "Before tool execution"),
+        ("memory", opened(vec![init.clone()]), None, Some("type:/memory;keys:enter"), "412 tokens"),
+        ("permissions", opened(vec![init.clone()]), None, Some("type:/permissions;keys:enter"), "set in User settings"),
     ];
     // Files for @-mentions, which the chat lists with git.
     for file in ["src/checkout.ts", "src/checkout.test.ts", "src/cart.ts", "api/limits.ts", "README.md"] {
@@ -1114,6 +1118,20 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         if name == "rewind" {
             let check = answer(&format!("rewind-check-{FIRST}"), json!({ "canRewind": true, "filesChanged": [format!("{project}/src/checkout.ts")], "insertions": 2, "deletions": 1 }));
             std::fs::write(answers.join("rewind_files"), format!("{check}\n")).unwrap();
+        }
+        // Claude Code's answers to the reads of /hooks, /memory and /permissions, made up, each under the subtype it answers.
+        if ["hooks", "memory", "permissions"].contains(&name) {
+            for line in include_str!("../../../plugins/claude-chat/rust/tests/setup.jsonl").lines() {
+                let id = serde_json::from_str::<serde_json::Value>(line).unwrap()["response"]["request_id"].as_str().unwrap().to_owned();
+                let subtype = match id.as_str() {
+                    "hooks-listing" => "get_hooks_listing",
+                    "memory-dialog" => "get_memory_dialog",
+                    "memory-sizes" => "get_context_usage",
+                    "permission-rules" => "list_permission_rules",
+                    _ => "get_settings",
+                };
+                std::fs::write(answers.join(subtype), format!("{line}\n")).unwrap();
+            }
         }
         // SAFETY: the page from the scene before is closed, so nothing reads these while they change.
         unsafe {

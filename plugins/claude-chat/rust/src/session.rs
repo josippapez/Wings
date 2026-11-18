@@ -9,6 +9,7 @@ use wings_plugin::format::parse_time;
 
 use crate::{
     plugins::{self, Plugins, Show},
+    setup::Setup,
     usage::{ContextDetail, Panel, Usage},
 };
 
@@ -349,6 +350,8 @@ pub struct Session {
     pub view_error: Option<String>,
     /// What the plugins dialog shows, and the toggles in it.
     pub plugins: Plugins,
+    /// The /hooks, /memory or /permissions dialog, while it is open, and what Claude Code answered its reads.
+    pub setup: Setup,
     /// A turn is running. Claude Code's own `session_state_changed` says so when it prints them, else it is from your
     /// message to its result. The result alone ends a turn, not the work: with a message of yours queued the next turn
     /// starts at once, and a background task can run on, while `idle` waits for all of that.
@@ -614,7 +617,7 @@ impl Session {
         if id == plugins::RELOAD && response["subtype"] == "success" {
             self.commands = commands(&answer["commands"]);
         }
-        if self.plugins.answered(id, response) || self.answered_rewind(id, response) || self.answered_task(id, response) {
+        if self.plugins.answered(id, response) || self.answered_rewind(id, response) || self.answered_task(id, response) || self.setup.answered(id, response) {
             return;
         }
         if response["subtype"] == "error" && (id == USAGE_VIEW || id == CONTEXT_VIEW) {

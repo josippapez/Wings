@@ -105,13 +105,13 @@ fn available_row(found: &Discover, plugin: &Available) -> Node {
 
 /// How many nodes the dialog's rows have taken, and how many rows were left out once they had taken all they may.
 #[derive(Default)]
-struct Budget {
+pub(crate) struct Budget {
     spent: usize,
-    left: usize,
+    pub(crate) left: usize,
 }
 
 impl Budget {
-    fn take(&mut self, row: Node) -> Option<Node> {
+    pub(crate) fn take(&mut self, row: Node) -> Option<Node> {
         let size = row.count();
         if self.left > 0 || self.spent + size > BUDGET {
             self.left += 1;

@@ -19,6 +19,7 @@ use crate::{
     mentions::{self, Files},
     plugins, prefs,
     session::{self, Command, Draft, Item, Restore, Session, exits, view_of},
+    setup,
     usage::Panel,
 };
 
@@ -497,6 +498,11 @@ pub fn send() {
                 c.plugins = Some(plugins::Dialog::new(show));
                 return Some(line);
             }
+            // /hooks, /memory and /permissions open theirs, filled by the reads the line asks for.
+            if let Some(line) = c.session.setup.open(&text) {
+                c.draft.clear();
+                return Some(line);
+            }
         }
         c.draft.clear();
         let images = std::mem::take(&mut c.images);
@@ -653,7 +659,7 @@ pub fn command_matches(c: &Chat) -> Vec<&Command> {
         return Vec::new();
     };
     // Typed out in full, the command is ready: a list over it would take the Enter that opens its view.
-    if view_of(&c.draft).is_some() || exits(&c.draft) || plugins::command(&c.draft).is_some() {
+    if view_of(&c.draft).is_some() || exits(&c.draft) || plugins::command(&c.draft).is_some() || setup::command(&c.draft).is_some() {
         return Vec::new();
     }
     let typed = typed.to_lowercase();
