@@ -72,11 +72,6 @@ pub fn open_subagent(id: &str) {
     chat::toggle_subagent(id);
 }
 
-/// A click on a subagent's row in the side panel. One place, so what it does can change in one place.
-pub fn open_subagent(id: &str) {
-    chat::toggle_subagent(id);
-}
-
 /// The dialog with the end of what the open task printed, while it is open: how it stands, Refresh and Stop, and the
 /// output as plain text, as Claude Code says to show it.
 pub fn dialog(c: &Chat) -> Option<Node> {
