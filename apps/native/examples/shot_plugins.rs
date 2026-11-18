@@ -1466,7 +1466,11 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
             };
             if let Some(act) = act {
                 // Once Claude Code has answered, the model picker shows.
-                until(&mut cx, "resets");
+                let deadline = Instant::now() + Duration::from_secs(30);
+                while handle.read_with(&cx, |view, _| view.select_named("Model and effort")).unwrap().is_none() {
+                    assert!(Instant::now() < deadline, "the model picker never showed: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
+                    wait(&mut cx, window, Duration::from_millis(20));
+                }
                 for act in act.split(';') {
                     match act.split_once(':') {
                         Some(("type", typed)) => cx.simulate_input(window, typed),

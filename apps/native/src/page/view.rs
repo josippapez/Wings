@@ -832,10 +832,9 @@ impl PageView {
         })
     }
 
-    /// Opens the menu of the select named `label`, or showing it, as a click on it would. False when the page has no
-    /// such select.
+    /// The id of the select named `label`, or showing it, while the page has one.
     #[cfg(feature = "test-support")]
-    pub fn open_select(&mut self, label: &str, cx: &mut Context<Self>) -> bool {
+    pub fn select_named(&self, label: &str) -> Option<u64> {
         fn find(nodes: &[Node], label: &str) -> Option<u64> {
             nodes.iter().find_map(|node| match node {
                 Node::Select(select) if select.label == label || select.shown() == label => {
@@ -844,10 +843,14 @@ impl PageView {
                 other => other.parts().into_iter().find_map(|part| find(part, label)),
             })
         }
-        let found = self
-            .tree
-            .as_ref()
-            .and_then(|tree| find(&tree.children, label));
+        self.tree.as_ref().and_then(|tree| find(&tree.children, label))
+    }
+
+    /// Opens the menu of the select named `label`, or showing it, as a click on it would. False when the page has no
+    /// such select.
+    #[cfg(feature = "test-support")]
+    pub fn open_select(&mut self, label: &str, cx: &mut Context<Self>) -> bool {
+        let found = self.select_named(label);
         if let Some(id) = found {
             self.menu = Some(id);
             cx.notify();
@@ -1879,7 +1882,18 @@ impl PageView {
                 cx.stop_propagation();
             }));
         }
-        container.child(pane.children(self.nodes(&split.end, cx))).into_any_element()
+        // The cards' surface is see-through, which only shows once the pane floats over the page's text: an opaque layer of
+        // the page's own colour under them, at the raised card's radius, keeps that text out, and the pointer with it.
+        let under = div()
+            .id(ElementId::NamedInteger("page-split-float-under".into(), id))
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .rounded(px(14.0))
+            .bg(rgb(theme::BACKGROUND))
+            .occlude()
+            .children(self.nodes(&split.end, cx));
+        container.child(pane.child(under)).into_any_element()
     }
 
     /// A `Dialog` over the whole page, as Wings' own dialogs are (`ui::dialog`): its title and a close button at the top,

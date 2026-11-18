@@ -4,6 +4,7 @@
 //! Nothing shows on screen and focus doesn't move. macOS only (real Metal rendering).
 //!
 //! cargo run --manifest-path apps/native/Cargo.toml --example shot --features test-support -- <out-dir>
+#![recursion_limit = "256"]
 
 use std::{
     path::{Path, PathBuf},
@@ -2137,7 +2138,7 @@ fn diff_sidebar(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
                 w.shot_sidebar_diff("changes", "side", DOCK_PATCH, window, cx)
             })
             .unwrap();
-        wait(cx, window, Duration::from_millis(600));
+        wait(cx, window, Duration::from_millis(2000));
         save(cx, window, &name("open"));
         click(cx, window, spot("diff-back"));
         wait(cx, window, Duration::from_millis(300));
