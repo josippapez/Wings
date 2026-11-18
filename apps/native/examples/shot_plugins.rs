@@ -902,7 +902,7 @@ fn claude_chat(out: PathBuf) {
             "day": { "recommendations": [{ "key": "long_context", "pct": 70, "title": "See what fills your context", "detail": "run /context" }],
                 "agents": [], "skills": [{ "name": "release-notes", "pct": 4 }], "plugins": [{ "name": "toolbox", "pct": 11 }], "mcp_servers": [{ "name": "files", "pct": 6 }] },
             "week": { "recommendations": [], "agents": [], "skills": [], "plugins": [], "mcp_servers": [] } } }));
-    let scenes: [Scene; 17] = [
+    let scenes: [Scene; 20] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -911,7 +911,7 @@ fn claude_chat(out: PathBuf) {
         ("slash", opened(vec![init.clone()]), None, Some("type:/re;keys:down"), "/review"),
         ("sessions", opened(vec![init.clone()]), None, Some("press:Sessions"), "Fix the flaky checkout test"),
         // /usage opens the usage view in place of the conversation instead of going to Claude as a message.
-        ("usage", opened(vec![init.clone(), full_usage]), None, Some("type:/usage;keys:enter"), "Current week"),
+        ("usage", opened(vec![init.clone(), full_usage]), None, Some("type:/usage;keys:enter"), "Plan usage limits"),
         ("failed", vec![], Some(("1", "Error: Invalid API key · Please run /login")), None, "Invalid API key"),
         ("work", work.clone(), None, None, "of 4 done"),
         ("work-open", work.clone(), None, Some("disclose:Ran 1 command"), "pnpm test discount"),
@@ -942,7 +942,7 @@ fn claude_chat(out: PathBuf) {
     git(&["commit", "-q", "-m", "Start"]);
     std::fs::write(root.join("src/checkout.ts"), "export const a = 1;\nexport const c = 30;\nexport const d = 4;\nexport const e = 5;\n").unwrap();
 
-    let manifest: serde_json::Value = serde_json::from_str(include_str!("../../../plugins/claude-chat/wings-plugin.json")).unwrap();
+    let manifest: wings_plugins::manifest::Manifest = serde_json::from_str(include_str!("../../../plugins/claude-chat/wings-plugin.json")).unwrap();
     let project = root.canonicalize().unwrap().display().to_string();
     // A host over a storage folder of its own that holds `seed`, the settings of the Settings page: the page reads them as it builds.
     let host_over = |folder: &str, seed: &[(&str, serde_json::Value)]| {
@@ -1044,7 +1044,7 @@ fn claude_chat(out: PathBuf) {
             let window = handle.into();
             handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
             let deadline = Instant::now() + Duration::from_secs(30);
-            while !handle.read_with(&cx, |view, _| view.text().contains("Permission mode")).unwrap() {
+            while !handle.read_with(&cx, |view, _| view.text().contains("New chats")).unwrap() {
                 assert!(Instant::now() < deadline, "page did not show the settings: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
                 wait(&mut cx, window, Duration::from_millis(20));
             }
