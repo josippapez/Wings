@@ -175,7 +175,9 @@ pub(crate) fn run(program: &str, args: &[String], cwd: Option<&Path>, timeout: D
 pub(crate) fn command(program: &str, args: &[String], cwd: Option<&Path>) -> Result<Command, String> {
     let path = find_program(program).ok_or_else(|| format!("{program} is not installed or not on PATH"))?;
     let mut cmd = Command::new(path);
-    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    // The program gets the PATH it was found on: started from the Dock, Wings has only the system's, and what the program
+    // runs in turn (Claude Code's hooks calling node, gh's git) would not be found.
+    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped()).env("PATH", search_path());
     // A plugin's folder, or a branch it fetched and checked out, can hold a folder shaped like a bare repo, whose config
     // runs commands (`diff.external`, `remote.<name>.uploadpack`) when git, or the az, gh and glab that call git, start
     // inside it. git takes this setting only from config a repo can't write, like the command line's.
@@ -321,6 +323,13 @@ mod tests {
         assert_eq!(err, EXEC_OUTPUT_TOO_LARGE);
         assert!(start.elapsed() < Duration::from_secs(10), "took {:?}", start.elapsed());
         assert!(exec(&p, "echo", &["fine".into()], None, EXEC_TIMEOUT, None).is_ok());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_program_runs_with_the_path_it_was_found_on() {
+        let out = command("sh", &["-c".into(), "printf %s \"$PATH\"".into()], None).unwrap().output().unwrap();
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), search_path());
     }
 
     #[test]
