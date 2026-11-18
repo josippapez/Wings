@@ -13,6 +13,9 @@ const SUMMARY_KEPT: usize = 200;
 /// The most lines of a command, and characters of the reason, a permission card shows.
 const DETAIL_LINES: usize = 6;
 const REASON_KEPT: usize = 300;
+/// The most lines of an edit's diff the chat keeps, and the most of a written file's start.
+const DIFF_KEPT: usize = 40;
+const WRITE_KEPT: usize = 20;
 
 #[derive(Debug, PartialEq)]
 pub enum Item {
@@ -39,6 +42,51 @@ pub struct Tool {
     pub summary: String,
     /// What it printed, once it has, and whether it failed.
     pub output: Option<(String, bool)>,
+    /// What its input says beyond the summary, by kind of tool.
+    pub detail: Detail,
+}
+
+/// What a tool call's input holds that its one-line summary doesn't.
+#[derive(Debug, PartialEq)]
+pub enum Detail {
+    Plain,
+    /// An edit: the lines it takes out and puts in.
+    Diff(Diff),
+    /// A file written: how many lines, and the first of them.
+    Write { lines: usize, head: Vec<String> },
+    /// A shell command, whole.
+    Command(String),
+    /// A file read, and which of its lines when the call says.
+    Read(Option<String>),
+    /// A Grep or a Glob: its count comes from what it printed.
+    Search,
+}
+
+/// The lines an Edit or MultiEdit changes, as `(added, text)`, cut at `DIFF_KEPT`.
+#[derive(Debug, Default, PartialEq)]
+pub struct Diff {
+    pub added: usize,
+    pub removed: usize,
+    pub lines: Vec<(bool, String)>,
+    /// The lines past the ones kept.
+    pub more: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Progress {
+    Pending,
+    Active,
+    Done,
+}
+
+/// One entry of Claude's checklist: from TodoWrite, or from the task tools.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Todo {
+    pub id: String,
+    pub text: String,
+    /// What it reads as while it is being done, like "Running the tests".
+    pub active: String,
+    pub progress: Progress,
 }
 
 #[derive(Debug, PartialEq)]
@@ -184,6 +232,11 @@ pub struct Session {
     told_you: bool,
     /// What the session has cost so far, in US dollars.
     pub cost: f64,
+    /// Claude's checklist as it stands now.
+    pub todos: Vec<Todo>,
+    /// TaskCreate calls waiting for their result, which names the task's number: the call's id, its subject and its
+    /// active form.
+    creating: Vec<(String, String, String)>,
     /// You asked Claude to stop, and the turn hasn't ended yet.
     stopping: bool,
 }
@@ -226,7 +279,7 @@ impl Session {
                 self.items.push(Item::Ask(Ask {
                     request: line["request_id"].as_str().unwrap_or_default().to_owned(),
                     summary: summary(&tool, &request["input"]),
-                    detail: detail(&tool, &request["input"]),
+                    detail: ask_detail(&tool, &request["input"]),
                     reason: reason(request),
                     suggestions,
                     tool,
@@ -352,12 +405,9 @@ impl Session {
                 }
                 "tool_use" => {
                     let name = block["name"].as_str().unwrap_or("Tool").to_owned();
-                    self.items.push(Item::Tool(Tool {
-                        id: block["id"].as_str().unwrap_or_default().to_owned(),
-                        summary: summary(&name, &block["input"]),
-                        name,
-                        output: None,
-                    }));
+                    let id = block["id"].as_str().unwrap_or_default().to_owned();
+                    self.track(&name, &id, &block["input"]);
+                    self.items.push(Item::Tool(Tool { id, summary: summary(&name, &block["input"]), detail: detail(&name, &block["input"]), name, output: None }));
                 }
                 _ => {}
             }
@@ -387,9 +437,68 @@ impl Session {
                     if let Some(tool) = tool {
                         tool.output = Some((cut(&output, OUTPUT_KEPT), block["is_error"] == true));
                     }
+                    if let Some(at) = self.creating.iter().position(|(call, ..)| call == id) {
+                        let (_, text, active) = self.creating.remove(at);
+                        // "Task #3 created successfully: ..."
+                        let number = output.strip_prefix("Task #").and_then(|rest| rest.split_whitespace().next());
+                        if let (Some(number), false) = (number, block["is_error"] == true) {
+                            self.todos.push(Todo { id: number.to_owned(), text, active, progress: Progress::Pending });
+                        }
+                    }
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// Keeps the checklist up with the calls that change it.
+    fn track(&mut self, tool: &str, id: &str, input: &Value) {
+        let text = |key: &str| input[key].as_str().map(str::to_owned);
+        match tool {
+            "TodoWrite" => {
+                if let Some(todos) = input["todos"].as_array() {
+                    self.todos = todos
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(n, todo)| {
+                            let content = todo["content"].as_str()?.to_owned();
+                            Some(Todo {
+                                id: (n + 1).to_string(),
+                                active: todo["activeForm"].as_str().unwrap_or(&content).to_owned(),
+                                text: content,
+                                progress: progress(todo["status"].as_str().unwrap_or_default()),
+                            })
+                        })
+                        .collect();
+                }
+            }
+            "TaskCreate" => {
+                if let Some(subject) = text("subject") {
+                    let active = text("activeForm").unwrap_or_else(|| subject.clone());
+                    self.creating.push((id.to_owned(), subject, active));
+                }
+            }
+            "TaskUpdate" => {
+                let task = input["taskId"].as_str().map(str::to_owned).or_else(|| input["taskId"].as_u64().map(|n| n.to_string()));
+                let Some(at) = task.and_then(|task| self.todos.iter().position(|todo| todo.id == task)) else {
+                    return;
+                };
+                if input["status"] == "deleted" {
+                    self.todos.remove(at);
+                    return;
+                }
+                let todo = &mut self.todos[at];
+                if let Some(status) = input["status"].as_str() {
+                    todo.progress = progress(status);
+                }
+                if let Some(subject) = text("subject") {
+                    todo.text = subject;
+                }
+                if let Some(active) = text("activeForm") {
+                    todo.active = active;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -607,7 +716,7 @@ pub fn summary(tool: &str, input: &Value) -> String {
 }
 
 /// What a tool is asked to do, as a permission card shows it: a command in full, up to a few lines, else the summary.
-fn detail(tool: &str, input: &Value) -> String {
+fn ask_detail(tool: &str, input: &Value) -> String {
     let Some(command) = input["command"].as_str().filter(|_| tool == "Bash") else {
         return summary(tool, input);
     };
@@ -646,6 +755,78 @@ fn unescaped(text: &str) -> String {
         }
     }
     out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn progress(status: &str) -> Progress {
+    match status {
+        "in_progress" => Progress::Active,
+        "completed" => Progress::Done,
+        _ => Progress::Pending,
+    }
+}
+
+/// What a tool call's input holds beyond its summary: the diff of an edit, the start of a file written, a whole
+/// command.
+fn detail(tool: &str, input: &Value) -> Detail {
+    match tool {
+        "Edit" | "MultiEdit" => {
+            let one = [input.clone()];
+            let edits = if tool == "MultiEdit" { input["edits"].as_array().map_or(&[][..], Vec::as_slice) } else { &one[..] };
+            let mut diff = Diff::default();
+            let mut total = 0;
+            for edit in edits {
+                let (old, new) = (edit["old_string"].as_str().unwrap_or_default(), edit["new_string"].as_str().unwrap_or_default());
+                for (added, lines) in [(false, old), (true, new)] {
+                    for line in lines.lines() {
+                        total += 1;
+                        match added {
+                            true => diff.added += 1,
+                            false => diff.removed += 1,
+                        }
+                        if diff.lines.len() < DIFF_KEPT {
+                            diff.lines.push((added, cut(line, SUMMARY_KEPT)));
+                        }
+                    }
+                }
+            }
+            diff.more = total - diff.lines.len();
+            Detail::Diff(diff)
+        }
+        "Write" => {
+            let content = input["content"].as_str().unwrap_or_default();
+            Detail::Write { lines: content.lines().count(), head: content.lines().take(WRITE_KEPT).map(|line| cut(line, SUMMARY_KEPT)).collect() }
+        }
+        "Bash" => Detail::Command(cut(input["command"].as_str().unwrap_or_default(), OUTPUT_KEPT)),
+        "Read" => {
+            let (offset, limit) = (input["offset"].as_u64(), input["limit"].as_u64());
+            Detail::Read(match (offset, limit) {
+                (start, Some(limit)) if limit > 0 => Some(format!("lines {}–{}", start.unwrap_or(1), start.unwrap_or(1) + limit - 1)),
+                (Some(start), None) => Some(format!("from line {start}")),
+                _ => None,
+            })
+        }
+        "Grep" | "Glob" => Detail::Search,
+        _ => Detail::Plain,
+    }
+}
+
+/// The exit code Claude Code puts first in a failed command's output: "Exit code 1".
+pub fn exit_code(output: &str) -> Option<i32> {
+    output.strip_prefix("Exit code ")?.split_whitespace().next()?.parse().ok()
+}
+
+/// How many files a Grep or Glob found, as what it printed says: "Found 12 files" and one path a line. A Grep that
+/// printed matching lines has no count.
+pub fn files_found(tool: &str, output: &str) -> Option<usize> {
+    let first = output.lines().next().unwrap_or_default();
+    if first.starts_with("No ") && first.ends_with(" found") {
+        return Some(0);
+    }
+    match first.strip_prefix("Found ") {
+        Some(rest) => rest.split_whitespace().next()?.parse().ok(),
+        None if tool == "Glob" => Some(output.lines().filter(|line| !line.trim().is_empty()).count()),
+        None => None,
+    }
 }
 
 /// The `text` of each `{ type: "text", text }` part.
@@ -695,6 +876,7 @@ mod tests {
                     name: "Bash".into(),
                     summary: "ls".into(),
                     output: Some(("err.txt\nout.jsonl\nprobe-file.txt".into(), false)),
+                    detail: Detail::Command("ls".into()),
                 }),
                 Item::Text("There are 3 files:\n\n- `err.txt`\n- `out.jsonl`\n- `probe-file.txt`".into()),
             ]
@@ -1009,5 +1191,95 @@ mod tests {
         let Item::Ask(ask) = &session.items[0] else { panic!() };
         assert_eq!(ask.answer, Some(false));
         assert_eq!(session.allow("r1", false), None, "nothing left to answer");
+    }
+
+    fn tool_call(session: &mut Session, id: &str, name: &str, input: Value) {
+        session.hear(&json!({ "type": "assistant", "message": { "content": [{ "type": "tool_use", "id": id, "name": name, "input": input }] } }));
+    }
+
+    fn tool_result(session: &mut Session, id: &str, content: &str, error: bool) {
+        session.hear(&json!({ "type": "user", "message": { "content": [{ "type": "tool_result", "tool_use_id": id, "content": content, "is_error": error }] } }));
+    }
+
+    #[test]
+    fn an_edit_counts_the_lines_it_takes_out_and_puts_in() {
+        let mut session = Session::default();
+        tool_call(&mut session, "e1", "Edit", json!({ "file_path": "/a/b.rs", "old_string": "one\ntwo", "new_string": "one\n2\nthree" }));
+        let Item::Tool(tool) = &session.items[0] else { panic!("{:?}", session.items) };
+        assert_eq!(
+            tool.detail,
+            Detail::Diff(Diff {
+                added: 3,
+                removed: 2,
+                lines: vec![(false, "one".into()), (false, "two".into()), (true, "one".into()), (true, "2".into()), (true, "three".into())],
+                more: 0,
+            })
+        );
+        // A multi-edit adds its edits up, and a long one keeps only its first lines.
+        let many = "x\n".repeat(30);
+        tool_call(&mut session, "e2", "MultiEdit", json!({ "file_path": "/a", "edits": [{ "old_string": many, "new_string": "y" }, { "old_string": "", "new_string": many }] }));
+        let Item::Tool(tool) = &session.items[1] else { panic!() };
+        let Detail::Diff(diff) = &tool.detail else { panic!("{:?}", tool.detail) };
+        assert_eq!((diff.added, diff.removed, diff.lines.len(), diff.more), (31, 30, 40, 21));
+    }
+
+    #[test]
+    fn a_write_a_read_and_a_command_keep_what_the_view_draws() {
+        let mut session = Session::default();
+        tool_call(&mut session, "w", "Write", json!({ "file_path": "/a", "content": "a\nb\nc\n" }));
+        tool_call(&mut session, "r", "Read", json!({ "file_path": "/a", "offset": 10, "limit": 50 }));
+        tool_call(&mut session, "r2", "Read", json!({ "file_path": "/a" }));
+        let details: Vec<&Detail> = session.items.iter().filter_map(|item| if let Item::Tool(tool) = item { Some(&tool.detail) } else { None }).collect();
+        assert_eq!(details[0], &Detail::Write { lines: 3, head: vec!["a".into(), "b".into(), "c".into()] });
+        assert_eq!(details[1], &Detail::Read(Some("lines 10–59".into())));
+        assert_eq!(details[2], &Detail::Read(None));
+    }
+
+    #[test]
+    fn failed_commands_and_searches_say_what_they_printed() {
+        assert_eq!(exit_code("Exit code 127\nzsh: command not found"), Some(127));
+        assert_eq!(exit_code("fine"), None);
+        assert_eq!(files_found("Grep", "Found 12 files\na\nb"), Some(12));
+        assert_eq!(files_found("Grep", "No files found"), Some(0));
+        assert_eq!(files_found("Grep", "12:let x = 1"), None);
+        assert_eq!(files_found("Glob", "a.rs\nb.rs"), Some(2));
+    }
+
+    #[test]
+    fn todo_write_replaces_the_checklist() {
+        let mut session = Session::default();
+        tool_call(
+            &mut session,
+            "t1",
+            "TodoWrite",
+            json!({ "todos": [
+                { "content": "Write it", "status": "completed", "activeForm": "Writing it" },
+                { "content": "Test it", "status": "in_progress", "activeForm": "Testing it" },
+                { "content": "Ship it", "status": "pending" },
+            ] }),
+        );
+        let got: Vec<(&str, &str, Progress)> = session.todos.iter().map(|t| (t.text.as_str(), t.active.as_str(), t.progress)).collect();
+        assert_eq!(got, [("Write it", "Writing it", Progress::Done), ("Test it", "Testing it", Progress::Active), ("Ship it", "Ship it", Progress::Pending)]);
+        tool_call(&mut session, "t2", "TodoWrite", json!({ "todos": [{ "content": "Only", "status": "pending" }] }));
+        assert_eq!(session.todos.len(), 1);
+    }
+
+    #[test]
+    fn task_tools_build_the_checklist_from_their_results() {
+        let mut session = Session::default();
+        tool_call(&mut session, "c1", "TaskCreate", json!({ "subject": "Entities", "description": "d", "activeForm": "Building entities" }));
+        assert!(session.todos.is_empty(), "the number comes with the result");
+        tool_result(&mut session, "c1", "Task #1 created successfully: Entities", false);
+        tool_call(&mut session, "c2", "TaskCreate", json!({ "subject": "Maps" }));
+        tool_result(&mut session, "c2", "Task #2 created successfully: Maps", false);
+        tool_call(&mut session, "c3", "TaskCreate", json!({ "subject": "Refused" }));
+        tool_result(&mut session, "c3", "no", true);
+        tool_call(&mut session, "u1", "TaskUpdate", json!({ "taskId": "1", "status": "in_progress" }));
+        tool_call(&mut session, "u2", "TaskUpdate", json!({ "taskId": "2", "status": "completed", "subject": "EF maps" }));
+        let got: Vec<(&str, &str, Progress)> = session.todos.iter().map(|t| (t.id.as_str(), t.text.as_str(), t.progress)).collect();
+        assert_eq!(got, [("1", "Entities", Progress::Active), ("2", "EF maps", Progress::Done)]);
+        assert_eq!(session.todos[0].active, "Building entities");
+        tool_call(&mut session, "u3", "TaskUpdate", json!({ "taskId": "1", "status": "deleted" }));
+        assert_eq!(session.todos.len(), 1);
     }
 }

@@ -16,7 +16,7 @@ use wings_plugin::{
 
 use crate::{
     chat::{self, Chat, PAGE, Past, State},
-    session::{Ask, Draft, Item, MODES, Tool},
+    session::{Ask, Detail, Diff, Draft, Item, MODES, Progress, Todo, Tool, exit_code, files_found},
 };
 
 /// An arrow up, a square and a cross, in a 14-point box.
@@ -44,8 +44,8 @@ fn chat_page(c: &Chat) -> Node {
         Some(past) => past_sessions(past),
         None => conversation(c),
     };
-    // Flush, so the conversation scrolls on its own and the message box stays at the foot.
-    page(toolbar, [body, composer(c)]).prop("flush", true)
+    // Flush, so the conversation scrolls on its own and the checklist and the message box stay at the foot.
+    page(toolbar, [body].into_iter().chain(todo_card(c)).chain([composer(c)])).prop("flush", true)
 }
 
 fn column() -> Node {
@@ -189,11 +189,12 @@ fn describe(tools: &[&Tool]) -> String {
     parts.join(" · ")
 }
 
-/// One tool call: what it is, and what it printed, folded. Its output is built only once you open it.
+/// One tool call: what it is, and what it did or printed, folded. The fold is built only once you open it.
 fn step(tool: &Tool, opened: bool) -> Node {
+    let output = tool.output.as_ref().map(|(output, failed)| (output.as_str(), *failed)).filter(|(output, _)| !output.trim().is_empty());
     let mark = match &tool.output {
         None => spinner(),
-        Some((_, true)) => badge("Failed", Some("danger")),
+        Some((output, true)) => badge(exit_code(output).map_or("Failed".to_owned(), |code| format!("Failed · exit {code}")), Some("danger")),
         Some(_) => text("✓").prop("tone", "success"),
     };
     let head = row()
@@ -201,17 +202,118 @@ fn step(tool: &Tool, opened: bool) -> Node {
         .prop("align", "baseline")
         .child(mark)
         .child(text(tool.name.as_str()).prop("weight", "medium"))
-        .child(text(tool.summary.as_str()).prop("mono", true).prop("size", "small").prop("tone", "muted").prop("truncate", true).prop("grow", true));
-    match &tool.output {
-        Some((output, failed)) if !output.trim().is_empty() => {
+        .child(text(tool.summary.as_str()).prop("mono", true).prop("size", "small").prop("tone", "muted").prop("truncate", true).prop("grow", true))
+        .children(facts(tool));
+    // What an edit or a write printed is only "updated successfully", which the diff already says.
+    let label = match (&tool.detail, output) {
+        (_, Some((_, true))) => Some("Error"),
+        (Detail::Diff(diff), _) if !diff.lines.is_empty() => Some("Changes"),
+        (Detail::Write { head, .. }, _) if !head.is_empty() => Some("Content"),
+        (Detail::Read(_), _) => None,
+        (_, Some(_)) => Some("Output"),
+        (Detail::Command(command), None) if command.contains('\n') => Some("Command"),
+        _ => None,
+    };
+    match label {
+        Some(label) => {
             let id = tool.id.clone();
-            let body = if opened { code_block(output) } else { stack() };
-            let fold = disclosure(if *failed { "Error" } else { "Output" }, body).prop("open", opened).on("onOpenChange", move |_| chat::toggle_output(&id));
+            let body = if opened { body(tool, output) } else { stack() };
+            let fold = disclosure(label, body).prop("open", opened).on("onOpenChange", move |_| chat::toggle_output(&id));
             stack().prop("gap", "xs").child(head).child(fold)
         }
-        _ => head,
+        None => head,
     }
     .key(tool.id.as_str())
+}
+
+/// A small mono text on a call's head line.
+fn fact(said: impl Into<String>, tone: &str) -> Node {
+    text(said).prop("mono", true).prop("size", "small").prop("tone", tone)
+}
+
+/// What a call's head line says after its summary: the lines an edit changes, the lines written, which lines were read,
+/// how many files a search found.
+fn facts(tool: &Tool) -> Vec<Node> {
+    match &tool.detail {
+        Detail::Diff(Diff { added, removed, .. }) => vec![fact(format!("+{added}"), "success"), fact(format!("−{removed}"), "danger")],
+        Detail::Write { lines, .. } => vec![fact(format!("+{}", plural(*lines, "line")), "success")],
+        Detail::Read(Some(range)) => vec![fact(range.as_str(), "muted")],
+        Detail::Search => {
+            let found = tool.output.as_ref().and_then(|(output, _)| files_found(&tool.name, output));
+            found.map(|n| fact(plural(n, "file"), "muted")).into_iter().collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// What a call's fold holds: the diff, the start of the file, a command of several lines, and what it printed.
+fn body(tool: &Tool, output: Option<(&str, bool)>) -> Node {
+    let failed = output.is_some_and(|(_, failed)| failed);
+    let mut body = stack().prop("gap", "s");
+    match &tool.detail {
+        Detail::Diff(diff) if !failed => body = body.child(diff_lines(diff)),
+        Detail::Write { lines, head } if !failed => {
+            body = body.child(code_block(&head.join("\n")));
+            if *lines > head.len() {
+                body = body.child(muted(format!("{} more", plural(lines - head.len(), "line"))));
+            }
+        }
+        Detail::Command(command) if command.contains('\n') => body = body.child(code_block(command)),
+        _ => {}
+    }
+    match output {
+        Some((output, _)) if failed || !matches!(tool.detail, Detail::Diff(_) | Detail::Write { .. }) => body.child(code_block(output)),
+        _ => body,
+    }
+}
+
+/// An edit's lines: each taken out in red with a minus, each put in in green with a plus.
+fn diff_lines(diff: &Diff) -> Node {
+    let rows = diff.lines.iter().map(|(added, line)| {
+        let (mark, tone) = if *added { ("+", "success") } else { ("−", "danger") };
+        text(format!("{mark} {line}")).prop("mono", true).prop("size", "small").prop("tone", tone)
+    });
+    let more = (diff.more > 0).then(|| muted(format!("{} more", plural(diff.more, "line"))));
+    card().child(stack().prop("gap", "none").children(rows).maybe(more))
+}
+
+/// The most checklist lines shown at once.
+const TODOS_SHOWN: usize = 12;
+
+/// Claude's checklist, a raised card over the message box: how many are done, folded to that line when you fold it.
+fn todo_card(c: &Chat) -> Option<Node> {
+    let todos = &c.session.todos;
+    if todos.is_empty() {
+        return None;
+    }
+    let done = todos.iter().filter(|todo| todo.progress == Progress::Done).count();
+    let folded = c.todos_folded;
+    let working = c.session.working;
+    let active = todos.iter().find(|todo| todo.progress == Progress::Active);
+    let summary = button(format!("{} {done} of {} done", if folded { "▸" } else { "▾" }, todos.len()), "ghost", false, chat::toggle_todos);
+    let mut head = row().prop("gap", "s").prop("align", "center").child(summary);
+    if let (true, Some(todo)) = (folded, active) {
+        head = head.child(text(todo.active.as_str()).prop("tone", "muted").prop("size", "small").prop("truncate", true).prop("grow", true).prop("shimmer", working));
+    }
+    let mut list = card().prop("variant", "raised").child(head);
+    if !folded {
+        // A long list shows what is left first; the header still counts what is done.
+        let shown: Vec<&Todo> = if todos.len() > TODOS_SHOWN { todos.iter().filter(|todo| todo.progress != Progress::Done).collect() } else { todos.iter().collect() };
+        let rows = shown.iter().take(TODOS_SHOWN).map(|todo| todo_line(todo, working));
+        let more = (shown.len() > TODOS_SHOWN).then(|| muted(format!("{} more", plural(shown.len() - TODOS_SHOWN, "item"))));
+        list = list.child(stack().prop("gap", "xs").children(rows).maybe(more));
+    }
+    Some(Node::new("Bar").prop("edge", "none").child(stack().prop("gap", "s").prop("maxWidth", COLUMN).child(list)).key("todos"))
+}
+
+/// One checklist line: done is muted with a check, the one in progress shimmers while Claude works.
+fn todo_line(todo: &Todo, working: bool) -> Node {
+    let line = row().prop("gap", "s").prop("align", "baseline").key(todo.id.as_str());
+    match todo.progress {
+        Progress::Done => line.child(text("✓").prop("tone", "success")).child(muted(todo.text.as_str())),
+        Progress::Active => line.child(text("●")).child(text(todo.active.as_str()).prop("weight", "medium").prop("shimmer", working)),
+        Progress::Pending => line.child(muted("○")).child(text(todo.text.as_str())),
+    }
 }
 
 /// What Claude Code wrote in your name, as a quiet line on the left you can open, apart from your own messages.

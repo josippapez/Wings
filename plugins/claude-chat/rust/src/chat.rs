@@ -68,6 +68,8 @@ pub struct Chat {
     pub files: Files,
     /// What you have picked and typed on the cards that wait for an answer, by request.
     pub drafts: HashMap<String, Draft>,
+    /// The checklist above the message box is folded to its summary line.
+    pub todos_folded: bool,
     /// Going on in a terminal once Claude Code here has ended.
     moving: bool,
     input: Option<ProcessInput>,
@@ -91,6 +93,7 @@ thread_local! {
         open_outputs: HashSet::new(),
         files: Files::default(),
         drafts: HashMap::new(),
+        todos_folded: false,
         moving: false,
         input: None,
         requests: 0,
@@ -478,6 +481,10 @@ pub fn toggle_output(id: &str) {
             c.open_outputs.insert(id.to_owned());
         }
     });
+}
+
+pub fn toggle_todos() {
+    with(|c| c.todos_folded = !c.todos_folded);
 }
 
 pub fn toggle_steps(first: usize) {
