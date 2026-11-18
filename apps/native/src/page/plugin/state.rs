@@ -16,6 +16,8 @@ struct State {
     /// What a tab's page says of the agent it runs, for the sidebar's Agents.
     agent: Option<TabAgent>,
     agent_changed: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Closes the tab that holds this state, when its page asks.
+    close: Option<Box<dyn Fn(&FrameState) + Send + Sync>>,
 }
 
 /// An agent a tab's page runs, as the sidebar lists it.
@@ -47,6 +49,7 @@ impl FrameState {
                 save: Box::new(save),
                 agent: None,
                 agent_changed: None,
+                close: None,
             })),
         }
     }
@@ -55,6 +58,24 @@ impl FrameState {
     pub fn on_agent(self, changed: impl Fn() + Send + Sync + 'static) -> Self {
         self.state.lock().unwrap().agent_changed = Some(Box::new(changed));
         self
+    }
+
+    /// Calls `close` with this state when its tab's page asks to close the tab.
+    pub fn on_close(self, close: impl Fn(&FrameState) + Send + Sync + 'static) -> Self {
+        self.state.lock().unwrap().close = Some(Box::new(close));
+        self
+    }
+
+    /// Whether `other` is this same tab's or block's state.
+    pub fn same(&self, other: &FrameState) -> bool {
+        Arc::ptr_eq(&self.state, &other.state)
+    }
+
+    pub(super) fn close(&self) -> Result<(), String> {
+        match (&self.state.lock().unwrap().close, self.place) {
+            (Some(close), StatePlace::Tab) => Ok(close(self)),
+            _ => Err("Only a page shown as a tab can close its tab".into()),
+        }
     }
 
     pub fn agent(&self) -> Option<TabAgent> {

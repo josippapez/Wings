@@ -356,6 +356,11 @@ pub fn set_agent(agent: Option<(&str, &str, Option<&str>)>) -> Pending<Result<Va
     call("setAgent", json!({ "agent": agent }))
 }
 
+/// `wings.closeTab`: closes the tab this page shows in, and no other tab of its view. Wings 0.2.36.
+pub fn close_tab() -> Pending<Result<Value, String>> {
+    call("closeTab", json!({}))
+}
+
 /// `wings.closePane`: ends the program in a pane of the project on screen and closes the pane. Needs `panes`.
 pub fn close_pane(pane: &str) -> Pending<Result<Value, String>> {
     call("closePane", json!({ "paneId": pane }))

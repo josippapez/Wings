@@ -864,6 +864,11 @@ fn cancel(uuid: &str, n: u32) -> String {
 }
 
 /// The view a draft opens, when the draft is exactly that command.
+/// Whether a draft is `/exit`, which closes the chat.
+pub fn exits(text: &str) -> bool {
+    text.trim() == "/exit"
+}
+
 pub fn view_of(text: &str) -> Option<Panel> {
     match text.trim() {
         "/usage" | "/cost" => Some(Panel::Usage),

@@ -345,7 +345,7 @@ impl AppEnv {
         &self,
         initial: Option<serde_json::Value>,
     ) -> crate::page::plugin::FrameState {
-        let (events, redraw) = (self.events.clone(), self.events.clone());
+        let (events, redraw, closing) = (self.events.clone(), self.events.clone(), self.events.clone());
         crate::page::plugin::FrameState::new(
             crate::page::plugin::StatePlace::Tab,
             initial,
@@ -358,6 +358,14 @@ impl AppEnv {
         // The sidebar's Agents shows what the tab's agent does.
         .on_agent(move || {
             let _ = redraw.try_send(UiEvent::Run(Box::new(|_, _, cx| cx.notify())));
+        })
+        .on_close(move |state| {
+            let state = state.clone();
+            let _ = closing.try_send(UiEvent::Run(Box::new(move |workspace, window, cx| {
+                if let Some(index) = workspace.plugin_tabs.iter().position(|tab| tab.state.same(&state)) {
+                    workspace.close_plugin_tab(index, window, cx);
+                }
+            })));
         })
     }
     pub(super) fn new(

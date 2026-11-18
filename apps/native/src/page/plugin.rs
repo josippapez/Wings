@@ -383,6 +383,13 @@ impl Link for FrameLink {
             };
             return reply.done(state.set_agent(agent).map(|()| "null".into()));
         }
+        // A tab's page closes its own tab, and only that one: `closeView` closes every tab of the view.
+        if method == "closeTab" {
+            let Some(state) = self.state.clone() else {
+                return reply.err("Only a page shown as a tab can close its tab".into());
+            };
+            return reply.done(state.close().map(|()| "null".into()));
+        }
         // Each click or key lets the page try once to copy, or to write to a program it runs: what reaches an agent,
         // like the answer to its permission prompt, is what you just asked for in the page, never the plugin alone.
         if matches!(method, "copyText" | "processWrite") {

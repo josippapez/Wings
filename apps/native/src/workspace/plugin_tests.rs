@@ -257,6 +257,38 @@ fn a_tab_whose_page_runs_an_agent_shows_with_the_agents_in_the_sidebar() {
     assert!(window.read(|w, _| w.tab_agents().is_empty()));
 }
 
+/// A page that closes its own tab as it starts, in the second tab of it to start only.
+fn closing_page() -> String {
+    let started = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    fake::script("page", move || {
+        let second = started.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 1;
+        let mut asked = false;
+        move |cx: &mut Cx<'_>, _: Hear<'_>| {
+            if second && !std::mem::replace(&mut asked, true) {
+                cx.call("closeTab", json!({}));
+            }
+        }
+    })
+}
+
+#[test]
+fn a_tabs_page_closes_its_own_tab_and_no_other() {
+    let data = Data::temp();
+    let views = json!([{ "id": "chat", "title": "Chat", "page": "dist/chat.html", "opens": ["tab"], "multiple": true }]);
+    data.install_script("chatty", json!({ "contributes": { "views": views } }), &fake::idle("main"), &[("chat", &closing_page())], "chatty-scope");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.update(|w, window, cx| {
+        assert!(w.open_plugin_view("chatty", "chat", Some(json!({ "n": 1 })), window, cx));
+        assert!(w.open_plugin_view("chatty", "chat", Some(json!({ "n": 2 })), window, cx));
+    });
+    until(&app, &mut window, "the page didn't close its tab", |w| w.plugin_tabs.len() == 1);
+    // The other tab of the same view stays.
+    for _ in 0..20 {
+        app.run_until_parked();
+    }
+    assert_eq!(window.read(|w, _| w.plugin_tabs.len()), 1);
+}
+
 /// A main that opens its view `approve` as a modal on the action `open`, and closes it on `close`.
 fn modal_main() -> String {
     fake::script("main", || {

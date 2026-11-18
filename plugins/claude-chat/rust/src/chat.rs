@@ -18,7 +18,7 @@ use wings_plugin::{
 use crate::{
     mentions::{self, Files},
     prefs,
-    session::{Command, Draft, Item, Session, view_of},
+    session::{Command, Draft, Item, Session, exits, view_of},
     usage::Panel,
 };
 
@@ -438,6 +438,11 @@ fn write(make: impl FnOnce(&mut Chat, u32) -> Option<String>) {
 
 /// Sends the draft as your message, or queues it while Claude works.
 pub fn send() {
+    // /exit ends the session, as in Claude Code: the tab closes, and the Claude Code it runs stops with it.
+    if with(|c| c.images.is_empty() && exits(&c.draft)) {
+        drop(host::close_tab());
+        return;
+    }
     write(|c, n| {
         let text = c.draft.trim().to_owned();
         if text.is_empty() && c.images.is_empty() {
@@ -599,7 +604,7 @@ pub fn command_matches(c: &Chat) -> Vec<&Command> {
         return Vec::new();
     };
     // Typed out in full, the command is ready: a list over it would take the Enter that opens its view.
-    if view_of(&c.draft).is_some() {
+    if view_of(&c.draft).is_some() || exits(&c.draft) {
         return Vec::new();
     }
     let typed = typed.to_lowercase();
