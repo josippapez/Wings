@@ -139,6 +139,78 @@ impl Queued {
     }
 }
 
+/// One of your messages: the item it is, and the uuid Claude Code knows it by, which a rewind names.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Prompt {
+    pub at: usize,
+    pub uuid: String,
+    /// The transcript entry it follows, for one read from the transcript.
+    parent: Option<String>,
+}
+
+/// The rewind dialog, while it is open: the message it goes back to before.
+#[derive(Debug, PartialEq)]
+pub struct Rewind {
+    pub uuid: String,
+    pub text: String,
+    /// What restoring the code would change, from the dry run, or why it can't. None until Claude Code answers.
+    pub check: Option<Result<Check, String>>,
+    /// The requests the choice made are waiting for.
+    pub waiting: Vec<&'static str>,
+    pub error: Option<String>,
+}
+
+/// The files a code rewind writes back, and the lines it adds and takes out.
+#[derive(Debug, PartialEq)]
+pub struct Check {
+    pub files: Vec<String>,
+    pub added: u64,
+    pub removed: u64,
+}
+
+/// What a rewind restores, as Claude Code's own `/rewind` offers it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Restore {
+    Both,
+    Conversation,
+    Code,
+}
+
+/// A task Claude Code runs in the background for the session: a command started with `run_in_background`, a monitor, or
+/// a subagent sent there.
+#[derive(Debug, PartialEq)]
+pub struct Task {
+    pub id: String,
+    /// Claude Code's `task_type`, like `local_bash`.
+    pub kind: String,
+    pub description: String,
+    /// When the chat first heard of it (ms).
+    pub started: u64,
+    /// How it ended, in Claude Code's word (`completed`, `failed`, `stopped`, `killed`), once it has.
+    pub ended: Option<String>,
+    /// You asked to stop it, and it hasn't ended yet.
+    pub stopping: bool,
+    /// The end of what it printed, as last read.
+    pub output: Option<Output>,
+    /// Why the last stop or read failed.
+    pub error: Option<String>,
+}
+
+impl Task {
+    /// Claude Code reads what a shell or a monitor printed, not a subagent.
+    pub fn has_output(&self) -> bool {
+        self.kind == "local_bash" || self.kind.starts_with("monitor")
+    }
+}
+
+/// The end of what a task printed: at most its last 8 KiB, and how big the whole is.
+#[derive(Debug, PartialEq)]
+pub struct Output {
+    pub text: String,
+    pub bytes: u64,
+    pub truncated: bool,
+}
+
 /// What you have picked and typed on a card that isn't answered yet.
 #[derive(Debug, Default)]
 pub struct Draft {
@@ -236,6 +308,15 @@ pub const START_MODE: &str = "start-mode";
 /// The requests behind the usage and context views, apart from the opening ones: those ask for less.
 pub const USAGE_VIEW: &str = "usage-view";
 pub const CONTEXT_VIEW: &str = "context-view";
+/// The opening request that has Claude Code keep the checkpoints a code rewind restores.
+const CHECKPOINTS: &str = "checkpoints";
+/// The rewind dialog's dry run, followed by the message's uuid, and the requests its choices make.
+pub const REWIND_CHECK: &str = "rewind-check-";
+pub const REWIND_FILES: &str = "rewind-files";
+pub const REWIND_CONVERSATION: &str = "rewind-conversation";
+/// A background task's output and its stop, each followed by the task's id.
+pub const TASK_OUTPUT: &str = "task-output-";
+pub const TASK_STOP: &str = "task-stop-";
 
 #[derive(Debug, Default)]
 pub struct Session {
@@ -303,6 +384,14 @@ pub struct Session {
     pub suggestion: Option<String>,
     /// The model named on the last message of Claude's heard, like `claude-haiku-5-5`.
     pub reported_model: Option<String>,
+    /// Your messages Claude Code knows by a uuid, oldest first.
+    pub prompts: Vec<Prompt>,
+    /// The rewind dialog, while it is open.
+    pub rewind: Option<Rewind>,
+    /// What a rewound conversation gives back to the message box: the message it went back before, to edit and send.
+    pub restored: Option<String>,
+    /// The background tasks heard of, running or ended, in the order they started.
+    pub tasks: Vec<Task>,
 }
 
 impl Session {
@@ -339,6 +428,15 @@ impl Session {
                 self.mode = line["permissionMode"].as_str().map(str::to_owned).or(self.mode.take());
             }
             "system" if line["subtype"] == "session_state_changed" => self.changed(line["state"].as_str().unwrap_or_default()),
+            "system" if line["subtype"] == "background_tasks_changed" => self.tasks_now(&line["tasks"]),
+            // A task's end, from its update and its notice, whichever comes first.
+            "system" if line["subtype"] == "task_updated" || line["subtype"] == "task_notification" => {
+                let status = line["patch"]["status"].as_str().or(line["status"].as_str()).filter(|status| ["completed", "failed", "stopped", "killed"].contains(status));
+                if let (Some(task), Some(status)) = (self.tasks.iter_mut().find(|task| line["task_id"] == task.id.as_str()), status) {
+                    task.ended = Some(status.to_owned());
+                    task.stopping = false;
+                }
+            }
             "control_response" => self.answered(&line["response"]),
             // Claude Code says how much is used when that changes, as when you hit a limit. The chat itself only asks when
             // you send something, so without this it showed what was used at your last message.
@@ -363,7 +461,21 @@ impl Session {
             "user" if line["isReplay"] == true => self.echoed(line["uuid"].as_str().unwrap_or_default()),
             // What Claude Code adds in a turn on its own, like a skill's text once the Skill tool loads it (`isSynthetic` as it
             // prints it, `isMeta` in the transcript), isn't yours to see as a message.
-            "user" if line["isMeta"] != true && line["isSynthetic"] != true => self.user(&line["message"]["content"]),
+            "user" if line["isMeta"] != true && line["isSynthetic"] != true => {
+                let parent = line["parentUuid"].as_str();
+                // In a transcript, an entry that follows what one of your messages followed took its place: the
+                // conversation was rewound to before that message, which Claude Code leaves in the file.
+                let replaced = parent.and_then(|parent| self.prompts.iter().find(|prompt| prompt.parent.as_deref() == Some(parent))).map(|prompt| prompt.at);
+                if let Some(at) = replaced {
+                    self.cut(at);
+                }
+                let first = self.items.len();
+                self.user(&line["message"]["content"]);
+                let said = (first..self.items.len()).find(|at| matches!(self.items[*at], Item::User(_) | Item::UserImages(..)));
+                if let (Some(at), Some(uuid)) = (said, line["uuid"].as_str()) {
+                    self.prompts.push(Prompt { at, uuid: uuid.to_owned(), parent: parent.map(str::to_owned) });
+                }
+            }
             "control_request" if line["request"]["subtype"] == "can_use_tool" => {
                 let request = &line["request"];
                 let tool = request["tool_name"].as_str().unwrap_or("a tool").to_owned();
@@ -436,8 +548,9 @@ impl Session {
             "idle" => {
                 self.working = false;
                 // Nothing will read what is still queued now, so it was read without an echo.
-                let left = std::mem::take(&mut self.queued);
-                self.items.extend(left.into_iter().map(Queued::read));
+                for queued in std::mem::take(&mut self.queued) {
+                    self.read_queued(queued);
+                }
             }
             "running" | "requires_action" => self.working = true,
             _ => {}
@@ -447,7 +560,42 @@ impl Session {
     /// Claude Code read the message `uuid`: from the queue into the conversation.
     fn echoed(&mut self, uuid: &str) {
         if let Some(at) = self.queued.iter().position(|queued| queued.uuid == uuid) {
-            self.items.push(self.queued.remove(at).read());
+            let queued = self.queued.remove(at);
+            self.read_queued(queued);
+        }
+    }
+
+    /// A queued message, read: into the conversation, under its uuid.
+    fn read_queued(&mut self, queued: Queued) {
+        self.prompts.push(Prompt { at: self.items.len(), uuid: queued.uuid.clone(), parent: None });
+        self.items.push(queued.read());
+    }
+
+    /// Drops your message at `at` and everything after it.
+    fn cut(&mut self, at: usize) {
+        self.items.truncate(at);
+        self.prompts.retain(|prompt| prompt.at < at);
+    }
+
+    /// The live set of background tasks, as `background_tasks_changed` gives it whole. One that left it has ended; one
+    /// that ended and is back is a new run.
+    fn tasks_now(&mut self, live: &Value) {
+        let live: Vec<&Value> = live.as_array().into_iter().flatten().collect();
+        for task in &mut self.tasks {
+            let listed = live.iter().any(|entry| entry["task_id"] == task.id.as_str());
+            match (listed, task.ended.is_some()) {
+                (false, false) => task.ended = Some("ended".into()),
+                (true, true) => (task.ended, task.started, task.output) = (None, self.now, None),
+                _ => continue,
+            }
+            task.stopping = false;
+        }
+        for entry in live {
+            let Some(id) = entry["task_id"].as_str().filter(|id| self.tasks.iter().all(|task| task.id != *id)) else {
+                continue;
+            };
+            let text = |key: &str| entry[key].as_str().unwrap_or_default().to_owned();
+            self.tasks.push(Task { id: id.to_owned(), kind: text("task_type"), description: text("description"), started: self.now, ended: None, stopping: false, output: None, error: None });
         }
     }
 
@@ -459,7 +607,7 @@ impl Session {
         if id == plugins::RELOAD && response["subtype"] == "success" {
             self.commands = commands(&answer["commands"]);
         }
-        if self.plugins.answered(id, response) {
+        if self.plugins.answered(id, response) || self.answered_rewind(id, response) || self.answered_task(id, response) {
             return;
         }
         if response["subtype"] == "error" && (id == USAGE_VIEW || id == CONTEXT_VIEW) {
@@ -676,13 +824,15 @@ impl Session {
     }
 
     /// The line that sends `text` and the pictures `images` (media type and base64) as your message, and the message
-    /// shown at once.
-    pub fn send(&mut self, text: &str, images: &[(String, String)]) -> String {
+    /// shown at once. It goes under a uuid made from `stamp` and `n`, as a queued one does, which a rewind names.
+    pub fn send(&mut self, text: &str, images: &[(String, String)], stamp: u64, n: u32) -> String {
+        let uuid = uuid(stamp, n);
+        self.prompts.push(Prompt { at: self.items.len(), uuid: uuid.clone(), parent: None });
         self.items.push(sent_item(text.to_owned(), images.len()));
         self.working = true;
         self.suggestion = None;
         // The limits are asked again with each message: the chat may only write when you send something.
-        line(&json!({ "type": "user", "message": { "role": "user", "content": content(text, images) } })) + &usage()
+        line(&json!({ "type": "user", "message": { "role": "user", "content": content(text, images) }, "parent_tool_use_id": null, "uuid": uuid })) + &usage()
     }
 
     /// The line that sends `text` while Claude works, and the message queued until Claude reads it. It goes in at
@@ -741,7 +891,7 @@ impl Session {
     }
 
     /// What the chat asks Claude Code as it starts: the models and commands it has, how full the context is, your
-    /// settings and how much of your plan's limits is used, and, with a `mode`, to start in it.
+    /// settings and how much of your plan's limits is used, to keep file checkpoints, and, with a `mode`, to start in it.
     pub fn opening(mode: Option<&str>) -> String {
         let mode = mode.map(|mode| request(START_MODE, json!({ "subtype": "set_permission_mode", "mode": mode })));
         [
@@ -749,6 +899,9 @@ impl Session {
             request(CONTEXT, json!({ "subtype": "get_context_usage" })),
             request(SETTINGS, json!({ "subtype": "get_settings" })),
             usage(),
+            // A terminal's Claude Code keeps them for /rewind by itself; with -p it answers "File rewinding is not
+            // enabled." unless this variable is set, which its flag settings do as well as the environment.
+            request(CHECKPOINTS, json!({ "subtype": "apply_flag_settings", "settings": { "env": { "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING": "1" } } })),
         ]
         .into_iter()
         .chain(mode)
@@ -861,6 +1014,135 @@ impl Session {
     pub fn approve_plan(&mut self, request: &str, mode: &str, n: u32) -> Option<String> {
         let allow = self.allow(request, false)?;
         Some(allow + &self.set_mode(mode, n))
+    }
+
+    /// Opens the rewind dialog for your message `uuid`, and the dry run that asks which files restoring the code to before
+    /// it would change, which only reads. None for a message Claude Code knows by no uuid.
+    pub fn open_rewind(&mut self, uuid: &str) -> Option<String> {
+        let prompt = self.prompts.iter().find(|prompt| prompt.uuid == uuid)?;
+        let text = match self.items.get(prompt.at) {
+            Some(Item::User(said) | Item::UserImages(said, _)) => said.clone(),
+            _ => String::new(),
+        };
+        self.rewind = Some(Rewind { uuid: uuid.to_owned(), text, check: None, waiting: Vec::new(), error: None });
+        Some(request(&format!("{REWIND_CHECK}{uuid}"), json!({ "subtype": "rewind_files", "user_message_id": uuid, "dry_run": true })))
+    }
+
+    /// The requests a choice in the rewind dialog makes, in the one write its click allows: the code back to before the
+    /// message, the conversation, or both, code first. None while an earlier choice waits, and for code until the dry run
+    /// has listed the files it changes.
+    pub fn restore(&mut self, how: Restore) -> Option<String> {
+        // Claude Code refuses to cut a conversation with messages after the one named that it can't tell you saw.
+        let seen = self.prompts.last()?.uuid.clone();
+        let rewind = self.rewind.as_mut().filter(|rewind| rewind.waiting.is_empty())?;
+        let code = how != Restore::Conversation;
+        if code && !matches!(&rewind.check, Some(Ok(check)) if !check.files.is_empty()) {
+            return None;
+        }
+        let uuid = rewind.uuid.clone();
+        let mut lines = String::new();
+        if code {
+            lines.push_str(&request(REWIND_FILES, json!({ "subtype": "rewind_files", "user_message_id": uuid })));
+            rewind.waiting.push(REWIND_FILES);
+        }
+        if how != Restore::Code {
+            lines.push_str(&request(REWIND_CONVERSATION, json!({ "subtype": "rewind_conversation", "target_message_uuid": uuid, "last_seen_user_message_uuid": seen })));
+            rewind.waiting.push(REWIND_CONVERSATION);
+        }
+        rewind.error = None;
+        Some(lines)
+    }
+
+    /// Claude Code's answer to the rewind dialog's requests. False for any other.
+    fn answered_rewind(&mut self, id: &str, response: &Value) -> bool {
+        let answer = &response["response"];
+        let why = || answer["error"].as_str().or(response["error"].as_str()).unwrap_or("Claude Code didn't say why.").to_owned();
+        if let Some(uuid) = id.strip_prefix(REWIND_CHECK) {
+            if let Some(rewind) = self.rewind.as_mut().filter(|rewind| rewind.uuid == uuid) {
+                rewind.check = Some(match answer["canRewind"] == true {
+                    true => Ok(Check {
+                        files: answer["filesChanged"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect(),
+                        added: answer["insertions"].as_u64().unwrap_or(0),
+                        removed: answer["deletions"].as_u64().unwrap_or(0),
+                    }),
+                    false => Err(why()),
+                });
+            }
+            return true;
+        }
+        let error = match id {
+            REWIND_FILES => (answer["canRewind"] != true).then(|| format!("Couldn't restore the code: {}", why())),
+            REWIND_CONVERSATION => (answer["rewound"] != true).then(|| format!("Couldn't restore the conversation: {}", why())),
+            _ => return false,
+        };
+        if id == REWIND_CONVERSATION && error.is_none() {
+            // Claude Code cut its conversation before the message, and gives its text back to send again.
+            let target = answer["targetMessageUuid"].as_str().or(self.rewind.as_ref().map(|rewind| rewind.uuid.as_str()));
+            let prompt = target.and_then(|target| self.prompts.iter().find(|prompt| prompt.uuid == target)).cloned();
+            if let Some(prompt) = prompt {
+                let said = match self.items.get(prompt.at) {
+                    Some(Item::User(said) | Item::UserImages(said, _)) => said.clone(),
+                    _ => String::new(),
+                };
+                self.restored = Some(answer["prefillText"].as_str().map_or(said, str::to_owned));
+                self.cut(prompt.at);
+            }
+        }
+        let done = match self.rewind.as_mut() {
+            Some(rewind) => {
+                rewind.waiting.retain(|waiting| *waiting != id);
+                rewind.error = error.or(rewind.error.take());
+                rewind.waiting.is_empty() && rewind.error.is_none()
+            }
+            // The dialog was closed before the answer came, so a failure shows in the conversation.
+            None => {
+                self.items.extend(error.map(Item::Error));
+                false
+            }
+        };
+        if done {
+            self.rewind = None;
+        }
+        true
+    }
+
+    /// The request that reads the end of what the background task `id` printed, from your click on it. None for a task
+    /// whose output Claude Code doesn't keep.
+    pub fn read_task(&mut self, id: &str) -> Option<String> {
+        let task = self.tasks.iter_mut().find(|task| task.id == id && task.has_output())?;
+        task.error = None;
+        Some(request(&format!("{TASK_OUTPUT}{id}"), json!({ "subtype": "get_task_output", "task_id": id })))
+    }
+
+    /// The request that stops the background task `id`, from your click on its Stop. None once it has ended, and while
+    /// it is being stopped.
+    pub fn stop_task(&mut self, id: &str) -> Option<String> {
+        let task = self.tasks.iter_mut().find(|task| task.id == id && task.ended.is_none() && !task.stopping)?;
+        task.stopping = true;
+        task.error = None;
+        Some(request(&format!("{TASK_STOP}{id}"), json!({ "subtype": "stop_task", "task_id": id })))
+    }
+
+    /// Claude Code's answer to a read or a stop of a background task. False for any other request.
+    fn answered_task(&mut self, id: &str, response: &Value) -> bool {
+        let (task, read) = match (id.strip_prefix(TASK_OUTPUT), id.strip_prefix(TASK_STOP)) {
+            (Some(task), _) => (task, true),
+            (_, Some(task)) => (task, false),
+            _ => return false,
+        };
+        let Some(task) = self.tasks.iter_mut().find(|known| known.id == task) else {
+            return true;
+        };
+        let answer = &response["response"];
+        if response["subtype"] != "success" {
+            task.error = Some(response["error"].as_str().unwrap_or("Claude Code didn't answer.").to_owned());
+            if !read {
+                task.stopping = false;
+            }
+        } else if read {
+            task.output = Some(Output { text: answer["output"].as_str().unwrap_or_default().to_owned(), bytes: answer["total_bytes"].as_u64().unwrap_or(0), truncated: answer["truncated"] == true });
+        }
+        true
     }
 }
 
@@ -1274,7 +1556,7 @@ mod tests {
     #[test]
     fn a_turn_becomes_the_tool_call_with_its_output_then_the_answer() {
         let mut session = Session::default();
-        session.send("How many files?", &[]);
+        session.send("How many files?", &[], 1, 1);
         for line in TURN.lines().filter(|line| !line.trim().is_empty()) {
             session.hear(&serde_json::from_str(line).unwrap());
         }
@@ -1310,7 +1592,7 @@ mod tests {
         assert_eq!(session.suggestion.as_deref(), Some("run it"));
         assert!(session.items.iter().all(|item| !matches!(item, Item::User(_))));
 
-        session.send("run it", &[]);
+        session.send("run it", &[], 1, 1);
         assert_eq!(session.suggestion, None);
 
         // A turn that starts on its own, or a message queued while Claude works, clears it as well.
@@ -1432,7 +1714,7 @@ mod tests {
     fn pictures_go_as_image_blocks_before_the_text_and_show_as_a_count() {
         let pictures = [("image/png".to_owned(), "AAAA".to_owned()), ("image/jpeg".to_owned(), "BBBB".to_owned())];
         let mut session = Session::default();
-        let sent: Value = serde_json::from_str(session.send("what is this?", &pictures).lines().next().unwrap()).unwrap();
+        let sent: Value = serde_json::from_str(session.send("what is this?", &pictures, 1, 1).lines().next().unwrap()).unwrap();
         assert_eq!(
             sent["message"]["content"],
             json!([
@@ -1442,7 +1724,7 @@ mod tests {
             ])
         );
         // Without text there is no empty text block, which the API refuses.
-        let alone: Value = serde_json::from_str(session.send("", &pictures[..1]).lines().next().unwrap()).unwrap();
+        let alone: Value = serde_json::from_str(session.send("", &pictures[..1], 1, 1).lines().next().unwrap()).unwrap();
         assert_eq!(alone["message"]["content"], json!([{ "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "AAAA" } }]));
         assert_eq!(session.items, [Item::UserImages("what is this?".into(), 2), Item::UserImages(String::new(), 1)]);
     }
@@ -1471,7 +1753,7 @@ mod tests {
     #[test]
     fn a_failed_turn_says_why_and_ends() {
         let mut session = Session::default();
-        session.send("hi", &[]);
+        session.send("hi", &[], 1, 1);
         session.hear(&json!({ "type": "result", "subtype": "error_during_execution", "is_error": true, "errors": ["Credit balance is too low"] }));
         assert!(!session.working);
         assert_eq!(session.items[1], Item::Error("Credit balance is too low".into()));
@@ -1481,7 +1763,7 @@ mod tests {
     fn a_hit_limit_shows_at_once_in_the_limits_and_once_in_the_conversation() {
         let answer = |response: Value| json!({ "type": "control_response", "response": { "subtype": "success", "request_id": USAGE, "response": response } });
         let mut session = Session::default();
-        session.send("go on", &[]);
+        session.send("go on", &[], 1, 1);
         session.hear(&answer(json!({ "rate_limits": {
             "five_hour": { "utilization": 67, "resets_at": "2026-11-18T19:30:00.262659+00:00" },
             "seven_day": { "utilization": 97, "resets_at": "2026-11-19T10:59:59+00:00" } } })));
@@ -1510,7 +1792,7 @@ mod tests {
     #[test]
     fn a_stopped_turn_shows_as_stopped_not_as_an_error() {
         let mut session = Session::default();
-        session.send("count to 400", &[]);
+        session.send("count to 400", &[], 1, 1);
         let stop: Value = serde_json::from_str(&session.interrupt(4)).unwrap();
         assert_eq!(stop, json!({ "type": "control_request", "request_id": "interrupt-4", "request": { "subtype": "interrupt" } }));
         // As Claude Code 2.1.327 ended a stopped turn.
@@ -1531,7 +1813,7 @@ mod tests {
     #[test]
     fn a_message_sent_while_claude_works_is_queued_for_claudes_next_step_with_a_uuid() {
         let mut session = Session::default();
-        session.send("count to 400", &[]);
+        session.send("count to 400", &[], 1, 1);
         let sent = parsed(&session.queue("and then stop", Vec::new(), 1_700_000_000_123, 5));
         assert_eq!(sent.len(), 1);
         let uuid = sent[0]["uuid"].as_str().unwrap().to_owned();
@@ -1580,7 +1862,7 @@ mod tests {
     #[test]
     fn a_queued_message_moves_into_the_conversation_when_claude_echoes_it_and_only_once() {
         let mut session = Session::default();
-        session.send("count to 400", &[]);
+        session.send("count to 400", &[], 1, 1);
         session.queue("then say done", Vec::new(), 1, 1);
         let uuid = session.queued[0].uuid.clone();
         // The echo of the first message, sent while Claude was idle, is on the page already.
@@ -1596,7 +1878,7 @@ mod tests {
     #[test]
     fn stop_with_messages_queued_cancels_them_too() {
         let mut session = Session::default();
-        session.send("count to 400", &[]);
+        session.send("count to 400", &[], 1, 1);
         session.queue("one", Vec::new(), 1, 1);
         session.queue("two", Vec::new(), 1, 2);
         let stop: Value = serde_json::from_str(&session.interrupt(3)).unwrap();
@@ -1610,7 +1892,7 @@ mod tests {
         let result = json!({ "type": "result", "subtype": "success", "is_error": false });
         // Without the events, the result ends the turn.
         let mut plain = Session::default();
-        plain.send("hi", &[]);
+        plain.send("hi", &[], 1, 1);
         plain.hear(&result);
         assert!(!plain.working);
         // With them, a turn's result isn't the end: the next queued turn goes on, and `idle` ends it.
@@ -1638,7 +1920,7 @@ mod tests {
     fn you_are_told_once_a_turn_when_claude_needs_you_and_once_when_it_finishes() {
         let ask = |id: &str| json!({ "type": "control_request", "request_id": id, "request": { "subtype": "can_use_tool", "tool_name": "Bash", "input": { "command": "rm x" } } });
         let mut session = Session::default();
-        session.send("clean up", &[]);
+        session.send("clean up", &[], 1, 1);
         session.hear(&ask("r1"));
         session.hear(&ask("r2"));
         assert_eq!(session.alerts, [("Claude needs you: Bash".to_owned(), "rm x".to_owned())]);
@@ -1668,9 +1950,9 @@ mod tests {
         let lines = |mode| Session::opening(mode).lines().map(sent).collect::<Vec<_>>();
         assert!(lines(None).iter().all(|line| line["request"]["subtype"] != "set_permission_mode"));
         let asked = lines(Some("auto"));
-        assert_eq!(asked.len(), 5);
-        assert_eq!(asked[4]["request_id"], START_MODE);
-        assert_eq!(asked[4]["request"], json!({ "subtype": "set_permission_mode", "mode": "auto" }));
+        assert_eq!(asked.len(), 6);
+        assert_eq!(asked[5]["request_id"], START_MODE);
+        assert_eq!(asked[5]["request"], json!({ "subtype": "set_permission_mode", "mode": "auto" }));
         // Once accepted the picker shows it, though Claude Code's own answers before it say it started in `default`.
         let answer = |id: &str, response: Value| json!({ "type": "control_response", "response": { "subtype": "success", "request_id": id, "response": response } });
         let mut session = Session { start_mode: Some("auto".into()), ..Session::default() };
@@ -1742,7 +2024,7 @@ mod tests {
             "seven_day": { "utilization": 91, "resets_at": "2026-11-19T10:59:59+00:00" }, "seven_day_opus": null } })));
         assert_eq!(session.limits.iter().map(|(label, used, _)| (*label, *used)).collect::<Vec<_>>(), [("5h", 96), ("week", 91)]);
         // Each message asks for them again.
-        assert!(session.send("hi", &[]).contains(r#""request_id":"usage""#));
+        assert!(session.send("hi", &[], 1, 1).contains(r#""request_id":"usage""#));
     }
 
     #[test]
@@ -1755,7 +2037,7 @@ mod tests {
             { "value": "sonnet", "displayName": "Sonnet 5.5", "resolvedModel": "claude-sonnet-5-5" },
         ] })));
         session.hear(&answer(SETTINGS, json!({ "effective": { "model": "opus" } })));
-        session.send("go", &[]);
+        session.send("go", &[], 1, 1);
         session.hear(&json!({ "type": "system", "subtype": "init", "session_id": "s", "model": "claude-opus-5-5" }));
         assert_eq!(session.current_model().map(|model| model.name.as_str()), Some("Opus 5.5"));
         // Started with no model of its own: the full name reads as the model, not as "Default".
@@ -1774,7 +2056,7 @@ mod tests {
     #[test]
     fn the_status_line_names_the_tool_that_runs() {
         let mut session = Session::default();
-        session.send("go", &[]);
+        session.send("go", &[], 1, 1);
         assert_eq!(session.activity(), "Working");
         tool_call(&mut session, "a", "mcp__wings__tasks__list", json!({}));
         assert_eq!(session.activity(), "Calling wings");
@@ -2028,7 +2310,7 @@ mod tests {
     #[test]
     fn a_finished_turn_says_how_long_it_worked() {
         let mut session = Session::default();
-        session.send("go", &[]);
+        session.send("go", &[], 1, 1);
         // Fields as the Agent SDK's SDKResultMessage names them.
         session.hear(&json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 20_400, "num_turns": 3 }));
         // One that answers a background task along with another did no turns of its own.
@@ -2041,7 +2323,7 @@ mod tests {
     #[test]
     fn the_turn_counts_its_subagents_and_waits_on_them_once_nothing_else_runs() {
         let mut session = Session::default();
-        session.send("survey", &[]);
+        session.send("survey", &[], 1, 1);
         tool_call(&mut session, "s1", "Task", json!({ "description": "Callers" }));
         tool_call(&mut session, "s2", "Agent", json!({ "description": "Rounding" }));
         tool_call(&mut session, "b1", "Bash", json!({ "command": "ls" }));
@@ -2053,7 +2335,7 @@ mod tests {
         assert_eq!(session.waiting_on_subagents(), None, "Claude thinks");
         // The next message starts a turn with none, even with one left running.
         session.thinking = false;
-        session.send("next", &[]);
+        session.send("next", &[], 1, 1);
         assert_eq!((session.turn_subagents(), session.waiting_on_subagents()), ((0, 0), None));
     }
 
@@ -2225,5 +2507,245 @@ mod tests {
         session.hear(&json!({ "type": "control_response", "response": { "subtype": "error", "request_id": "plugins-reload", "error": "The session is busy" } }));
         assert_eq!(session.plugins.error.as_deref(), Some("The session is busy"));
         assert_eq!(session.commands.len(), 1);
+    }
+
+    /// What Claude Code 2.1.327 printed while two commands ran with `run_in_background`, one finishing on its own, with
+    /// made-up ids and descriptions.
+    fn live(tasks: &[(&str, &str)]) -> Value {
+        let tasks: Vec<Value> = tasks.iter().map(|(id, description)| json!({ "task_id": id, "run_id": format!("run-{id}"), "task_type": "local_bash", "description": description })).collect();
+        json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": tasks, "uuid": "7a0e5b52-0c1f-4d39-8f0b-2b3c4d5e6f70", "session_id": "s" })
+    }
+
+    fn started(id: &str, description: &str) -> Value {
+        json!({ "type": "system", "subtype": "task_started", "task_id": id, "run_id": format!("run-{id}"), "tool_use_id": format!("toolu_{id}"),
+            "description": description, "is_backgrounded": true, "task_type": "local_bash", "uuid": "8b1f6c63-1d20-4e4a-9a1c-3c4d5e6f7081", "session_id": "s" })
+    }
+
+    fn task_end(id: &str, updated: &str, notified: &str) -> [Value; 2] {
+        [
+            json!({ "type": "system", "subtype": "task_updated", "task_id": id, "run_id": format!("run-{id}"), "patch": { "status": updated, "end_time": 1_795_027_323_607u64 }, "uuid": "9c2a7d74-2e31-4f5b-8b2d-4d5e6f708192", "session_id": "s" }),
+            json!({ "type": "system", "subtype": "task_notification", "task_id": id, "run_id": format!("run-{id}"), "tool_use_id": format!("toolu_{id}"), "status": notified,
+                "output_file": format!("/tmp/claude/tasks/{id}.output"), "summary": "Background command \"Run the tests\" completed (exit code 0)", "uuid": "ad3b8e85-3f42-405c-9c3e-5e6f708192a3", "session_id": "s" }),
+        ]
+    }
+
+    fn answered_with(id: &str, response: Value) -> Value {
+        json!({ "type": "control_response", "response": { "subtype": "success", "request_id": id, "response": response } })
+    }
+
+    #[test]
+    fn background_tasks_follow_the_live_set_and_say_how_each_ended() {
+        let mut session = Session::default();
+        session.now = 1_000;
+        session.hear(&live(&[("bk1", "Run the tests")]));
+        session.hear(&started("bk1", "Run the tests"));
+        session.now = 1_070;
+        session.hear(&live(&[("bk1", "Run the tests"), ("bk2", "Watch the build")]));
+        session.hear(&started("bk2", "Watch the build"));
+        let running: Vec<(&str, &str, &str, u64)> = session.tasks.iter().map(|t| (t.id.as_str(), t.kind.as_str(), t.description.as_str(), t.started)).collect();
+        assert_eq!(running, [("bk1", "local_bash", "Run the tests", 1_000), ("bk2", "local_bash", "Watch the build", 1_070)]);
+        assert!(session.tasks.iter().all(|task| task.ended.is_none() && task.has_output()));
+        // The first ends on its own: its update and notice come before the set it leaves.
+        session.now = 6_000;
+        for line in task_end("bk1", "completed", "completed") {
+            session.hear(&line);
+        }
+        session.hear(&live(&[("bk2", "Watch the build")]));
+        assert_eq!(session.tasks[0].ended.as_deref(), Some("completed"));
+        assert_eq!((session.tasks[1].ended.as_deref(), session.tasks[1].started), (None, 1_070));
+        // One that leaves the set with no notice has ended all the same.
+        session.hear(&live(&[]));
+        assert_eq!(session.tasks[1].ended.as_deref(), Some("ended"));
+        // Listed again, it is a new run, timed from now.
+        session.hear(&live(&[("bk2", "Watch the build")]));
+        assert_eq!((session.tasks[1].ended.as_deref(), session.tasks[1].started), (None, 6_000));
+        assert_eq!(session.tasks.len(), 2);
+    }
+
+    #[test]
+    fn a_stop_click_is_one_stop_task_request_and_the_task_ends_as_claude_code_says() {
+        let mut session = heard(&live(&[("bk1", "Sleep then say done")]).to_string());
+        let line = session.stop_task("bk1").expect("a stop");
+        assert_eq!(parsed(&line), [json!({ "type": "control_request", "request_id": "task-stop-bk1", "request": { "subtype": "stop_task", "task_id": "bk1" } })]);
+        assert!(session.tasks[0].stopping);
+        assert_eq!(session.stop_task("bk1"), None, "stopping already");
+        assert_eq!(session.stop_task("nope"), None);
+        // As Claude Code 2.1.327 answered and ended it.
+        session.hear(&answered_with("task-stop-bk1", json!({})));
+        for line in task_end("bk1", "killed", "stopped") {
+            session.hear(&line);
+        }
+        session.hear(&live(&[]));
+        assert_eq!((session.tasks[0].ended.as_deref(), session.tasks[0].stopping), (Some("stopped"), false));
+        assert_eq!(session.stop_task("bk1"), None, "ended");
+        // A refused stop lets you try again, and says why.
+        let mut refused = heard(&live(&[("bk2", "Watch the build")]).to_string());
+        refused.stop_task("bk2").unwrap();
+        refused.hear(&json!({ "type": "control_response", "response": { "subtype": "error", "request_id": "task-stop-bk2", "error": "No task found with ID: bk2" } }));
+        assert_eq!((refused.tasks[0].stopping, refused.tasks[0].error.as_deref()), (false, Some("No task found with ID: bk2")));
+        assert!(refused.stop_task("bk2").is_some());
+    }
+
+    #[test]
+    fn opening_a_tasks_output_is_one_read_and_its_answer_shows_the_end_of_what_it_printed() {
+        let mut session = heard(&live(&[("bk1", "Watch the build")]).to_string());
+        let line = session.read_task("bk1").expect("a read");
+        assert_eq!(parsed(&line), [json!({ "type": "control_request", "request_id": "task-output-bk1", "request": { "subtype": "get_task_output", "task_id": "bk1" } })]);
+        // As Claude Code 2.1.327 answered while it ran, and once it had ended.
+        session.hear(&answered_with("task-output-bk1", json!({ "output": "tock 1\ntock 2\ntock 3\n", "total_bytes": 21, "truncated": false })));
+        assert_eq!(session.tasks[0].output, Some(Output { text: "tock 1\ntock 2\ntock 3\n".into(), bytes: 21, truncated: false }));
+        session.hear(&answered_with("task-output-bk1", json!({ "output": "\n[killed]\n", "total_bytes": 10, "truncated": false })));
+        assert_eq!(session.tasks[0].output.as_ref().map(|output| output.text.as_str()), Some("\n[killed]\n"));
+        // A subagent sent to the background has no output Claude Code reads.
+        let mut agent = heard(&json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": [{ "task_id": "a1", "task_type": "local_agent", "description": "Survey" }] }).to_string());
+        assert_eq!(agent.read_task("a1"), None);
+        assert_eq!(agent.read_task("nope"), None);
+    }
+
+    const ONE: &str = "11111111-1111-4111-8111-111111111111";
+
+    /// Two messages of yours sent from the chat, the second at `stamp` 2, each answered.
+    fn two_turns() -> (Session, String, String) {
+        let mut session = Session::default();
+        let first: Value = serde_json::from_str(session.send("Write notes.txt with one", &[], 1, 1).lines().next().unwrap()).unwrap();
+        session.hear(&json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "OK" }] } }));
+        session.hear(&json!({ "type": "result", "subtype": "success", "is_error": false }));
+        let second: Value = serde_json::from_str(session.send("Change one to two", &[], 2, 3).lines().next().unwrap()).unwrap();
+        session.hear(&json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "Done" }] } }));
+        session.hear(&json!({ "type": "result", "subtype": "success", "is_error": false }));
+        let uuid = |sent: &Value| sent["uuid"].as_str().unwrap().to_owned();
+        (session, uuid(&first), uuid(&second))
+    }
+
+    #[test]
+    fn a_message_sent_while_claude_is_idle_goes_under_a_uuid_a_rewind_names() {
+        let (session, first, second) = two_turns();
+        assert_ne!(first, second);
+        assert_eq!(first.len(), 36);
+        let prompts: Vec<(usize, &str)> = session.prompts.iter().map(|prompt| (prompt.at, prompt.uuid.as_str())).collect();
+        assert_eq!(prompts, [(0, first.as_str()), (2, second.as_str())]);
+        // A queued one keeps its own once it is read.
+        let mut queued = Session::default();
+        queued.hear(&json!({ "type": "system", "subtype": "session_state_changed", "state": "running" }));
+        queued.queue("and lint", Vec::new(), 5, 6);
+        let uuid = queued.queued[0].uuid.clone();
+        queued.hear(&json!({ "type": "user", "isReplay": true, "uuid": uuid, "message": { "role": "user", "content": "and lint" } }));
+        assert_eq!(queued.prompts, [Prompt { at: 0, uuid, parent: None }]);
+    }
+
+    #[test]
+    fn the_rewind_dialog_opens_with_a_dry_run_that_lists_what_restoring_the_code_changes() {
+        let (mut session, first, second) = two_turns();
+        let line = session.open_rewind(&second).expect("a dry run");
+        assert_eq!(
+            parsed(&line),
+            [json!({ "type": "control_request", "request_id": format!("rewind-check-{second}"), "request": { "subtype": "rewind_files", "user_message_id": second, "dry_run": true } })]
+        );
+        let rewind = session.rewind.as_ref().unwrap();
+        assert_eq!((rewind.text.as_str(), &rewind.check), ("Change one to two", &None));
+        // Another message's dry run doesn't fill this one.
+        session.hear(&answered_with(&format!("rewind-check-{first}"), json!({ "canRewind": false, "error": "No file checkpoint found for this message." })));
+        assert_eq!(session.rewind.as_ref().unwrap().check, None);
+        // As Claude Code 2.1.327 answered it, with a made-up path.
+        session.hear(&answered_with(&format!("rewind-check-{second}"), json!({ "canRewind": true, "filesChanged": ["/work/shop/notes.txt"], "insertions": 1, "deletions": 1 })));
+        assert_eq!(session.rewind.as_ref().unwrap().check, Some(Ok(Check { files: vec!["/work/shop/notes.txt".into()], added: 1, removed: 1 })));
+        // Without checkpoints it says why, as Claude Code does.
+        session.open_rewind(&first).unwrap();
+        session.hear(&answered_with(&format!("rewind-check-{first}"), json!({ "canRewind": false, "error": "File rewinding is not enabled." })));
+        assert_eq!(session.rewind.as_ref().unwrap().check, Some(Err("File rewinding is not enabled.".into())));
+        assert_eq!(session.open_rewind(ONE), None, "not a message of this chat");
+    }
+
+    #[test]
+    fn each_rewind_choice_is_one_write_of_what_it_restores() {
+        let (mut session, first, second) = two_turns();
+        session.open_rewind(&first).unwrap();
+        // Code isn't restored before the dry run has listed what it changes.
+        assert_eq!(session.restore(Restore::Code), None);
+        assert_eq!(session.restore(Restore::Both), None);
+        session.hear(&answered_with(&format!("rewind-check-{first}"), json!({ "canRewind": true, "filesChanged": ["/work/shop/notes.txt"], "insertions": 0, "deletions": 1 })));
+        let files = json!({ "type": "control_request", "request_id": "rewind-files", "request": { "subtype": "rewind_files", "user_message_id": first } });
+        let conversation = json!({ "type": "control_request", "request_id": "rewind-conversation",
+            "request": { "subtype": "rewind_conversation", "target_message_uuid": first, "last_seen_user_message_uuid": second } });
+        assert_eq!(parsed(&session.restore(Restore::Both).unwrap()), [files.clone(), conversation.clone()]);
+        assert_eq!(session.restore(Restore::Conversation), None, "waiting on the first choice");
+        for (how, sent) in [(Restore::Code, vec![files]), (Restore::Conversation, vec![conversation])] {
+            session.rewind.as_mut().unwrap().waiting.clear();
+            assert_eq!(parsed(&session.restore(how).unwrap()), sent);
+        }
+        // With no files changed there is no code to restore; the conversation still can be.
+        let (mut quiet, first, _) = two_turns();
+        quiet.open_rewind(&first).unwrap();
+        quiet.hear(&answered_with(&format!("rewind-check-{first}"), json!({ "canRewind": true, "filesChanged": [], "insertions": 0, "deletions": 0 })));
+        assert_eq!(quiet.restore(Restore::Code), None);
+        assert!(quiet.restore(Restore::Conversation).is_some());
+    }
+
+    #[test]
+    fn a_restored_conversation_drops_the_message_and_after_and_gives_it_back_to_send_again() {
+        let (mut session, _, second) = two_turns();
+        session.open_rewind(&second).unwrap();
+        session.hear(&answered_with(&format!("rewind-check-{second}"), json!({ "canRewind": true, "filesChanged": ["/work/shop/notes.txt"], "insertions": 1, "deletions": 1 })));
+        session.restore(Restore::Both).unwrap();
+        // As Claude Code 2.1.327 answered the two, in the order sent.
+        session.hear(&answered_with("rewind-files", json!({ "canRewind": true, "skippedLinks": 0 })));
+        assert_eq!(session.rewind.as_ref().unwrap().waiting, [REWIND_CONVERSATION]);
+        session.hear(&answered_with("rewind-conversation", json!({ "rewound": true, "targetMessageUuid": second,
+            "prefillText": "Change one to two", "precedingAssistantUuid": "5cc4bf2b-6279-4085-9a7b-75fa1de128b9" })));
+        assert_eq!(session.items, [Item::User("Write notes.txt with one".into()), Item::Text("OK".into())]);
+        assert_eq!(session.prompts.len(), 1);
+        assert_eq!(session.restored.as_deref(), Some("Change one to two"));
+        assert!(session.rewind.is_none(), "done, so closed");
+    }
+
+    #[test]
+    fn a_refused_restore_says_why_and_keeps_the_dialog_open() {
+        let (mut session, first, _) = two_turns();
+        session.open_rewind(&first).unwrap();
+        session.restore(Restore::Conversation).unwrap();
+        // As Claude Code 2.1.327 refused one that named no message as seen.
+        session.hear(&answered_with("rewind-conversation", json!({ "rewound": false, "prefillText": null, "precedingAssistantUuid": null, "error": "stale target", "reason": "stale_target" })));
+        let rewind = session.rewind.as_ref().unwrap();
+        assert_eq!((rewind.error.as_deref(), rewind.waiting.is_empty()), (Some("Couldn't restore the conversation: stale target"), true));
+        assert_eq!(session.items.len(), 4);
+        assert_eq!(session.restored, None);
+        // Closed before the answer, a failure shows in the conversation.
+        session.rewind = None;
+        session.hear(&json!({ "type": "control_response", "response": { "subtype": "error", "request_id": "rewind-files", "error": "Failed to rewind: EACCES" } }));
+        assert_eq!(session.items.last(), Some(&Item::Error("Couldn't restore the code: Failed to rewind: EACCES".into())));
+    }
+
+    #[test]
+    fn a_transcript_read_again_leaves_out_what_a_rewind_dropped() {
+        // Entries as Claude Code 2.1.327 wrote them, with made-up uuids: the second message was rewound, and the next one
+        // follows the entry it followed, which the chat can't read.
+        let entry = |kind: &str, uuid: &str, parent: &str, content: Value| {
+            json!({ "parentUuid": parent, "isSidechain": false, "type": kind, "message": { "role": kind, "content": content }, "uuid": uuid, "timestamp": "2026-11-18T18:42:42.764Z" })
+        };
+        let said = |text: &str| json!([{ "type": "text", "text": text }]);
+        let mut session = Session::default();
+        for line in [
+            entry("user", "u1", "a0", json!("Write notes.txt with one")),
+            entry("assistant", "r1", "a1", said("OK")),
+            entry("user", "u2", "s1", json!("Start two commands in the background")),
+            entry("assistant", "r2", "a2", said("Both run")),
+            entry("user", "u3", "s1", json!("List my messages")),
+            entry("assistant", "r3", "a3", said("One, and this one")),
+        ] {
+            session.hear(&line);
+        }
+        assert_eq!(
+            session.items,
+            [Item::User("Write notes.txt with one".into()), Item::Text("OK".into()), Item::User("List my messages".into()), Item::Text("One, and this one".into())]
+        );
+        let prompts: Vec<(usize, &str)> = session.prompts.iter().map(|prompt| (prompt.at, prompt.uuid.as_str())).collect();
+        assert_eq!(prompts, [(0, "u1"), (2, "u3")]);
+    }
+
+    #[test]
+    fn the_opening_input_has_claude_code_keep_the_checkpoints_a_code_rewind_restores() {
+        let lines = parsed(&Session::opening(None));
+        assert!(lines.contains(&json!({ "type": "control_request", "request_id": "checkpoints",
+            "request": { "subtype": "apply_flag_settings", "settings": { "env": { "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING": "1" } } } })));
     }
 }

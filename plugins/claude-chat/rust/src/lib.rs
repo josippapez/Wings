@@ -23,9 +23,13 @@ mod plugins;
 #[cfg(feature = "chat")]
 mod plugins_view;
 mod prefs;
+#[cfg(feature = "chat")]
+mod rewind_view;
 mod session;
 #[cfg(feature = "settings")]
 mod settings_page;
+#[cfg(feature = "chat")]
+mod tasks_view;
 mod usage;
 #[cfg(feature = "chat")]
 mod usage_view;

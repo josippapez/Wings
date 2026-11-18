@@ -18,7 +18,7 @@ use wings_plugin::{
 use crate::{
     mentions::{self, Files},
     plugins, prefs,
-    session::{Command, Draft, Item, Session, exits, view_of},
+    session::{self, Command, Draft, Item, Restore, Session, exits, view_of},
     usage::Panel,
 };
 
@@ -94,6 +94,8 @@ pub struct Chat {
     pub doing: (String, u64),
     /// The subagent whose transcript the side panel shows, by the id of the tool call that started it.
     pub subagent: Option<String>,
+    /// The background task whose output is open in a dialog, by its id.
+    pub task: Option<String>,
     /// The lines added and removed in the working tree since the last commit, and the branch it is on.
     pub changes: Option<(u64, u64)>,
     pub branch: Option<String>,
@@ -135,6 +137,7 @@ thread_local! {
         todos_folded: false,
         doing: (String::new(), 0),
         subagent: None,
+        task: None,
         changes: None,
         branch: None,
         agent: None,
@@ -211,6 +214,7 @@ fn launch(resume: Option<String>) {
         c.open_queued.clear();
         c.drafts.clear();
         c.subagent = None;
+        c.task = None;
         c.moving = false;
         (c.run, c.cwd.clone(), c.program.clone(), c.session.start_mode.clone())
     });
@@ -367,6 +371,12 @@ fn hear(run: u32, line: &Value) {
         let was_working = c.session.working;
         c.session.now = host::now() as u64;
         c.session.hear(line);
+        // A rewound conversation gives the message it went back before to the message box, to edit and send again.
+        if let Some(said) = c.session.restored.take() {
+            c.draft = said;
+            let shown = c.session.items.len();
+            c.open_steps.retain(|first| *first < shown);
+        }
         let doing = c.session.activity();
         if doing != c.doing.0 {
             c.doing = (doing, host::now() as u64);
@@ -387,7 +397,8 @@ fn hear(run: u32, line: &Value) {
     if ended {
         messages::tell(crate::SESSION_SAVED, &Value::Null);
     }
-    if line["type"] == "result" {
+    // Files change in a turn, and when the code is rewound.
+    if line["type"] == "result" || line["response"]["request_id"] == session::REWIND_FILES {
         if let Some(cwd) = with(|c| (c.run == run).then(|| c.cwd.clone())) {
             load_git(run, cwd);
         }
@@ -492,7 +503,7 @@ pub fn send() {
         if c.session.working {
             return Some(c.session.queue(&text, images, host::now() as u64, n));
         }
-        let line = c.session.send(&text, &images);
+        let line = c.session.send(&text, &images, host::now() as u64, n);
         // The status line's time counts from here, not from the end of the turn before.
         c.doing = (c.session.activity(), host::now() as u64);
         Some(line)
@@ -781,6 +792,42 @@ pub fn toggle_subagent(id: &str) {
 
 pub fn close_subagent() {
     with(|c| c.subagent = None);
+}
+
+/// Opens what the background task `id` printed in a dialog, and reads it again: one request, from your click.
+pub fn open_task(id: &str) {
+    with(|c| c.task = Some(id.to_owned()));
+    write(|c, _| c.session.read_task(id));
+}
+
+/// Reads the open task's output again.
+pub fn refresh_task() {
+    if let Some(id) = with(|c| c.task.clone()) {
+        write(|c, _| c.session.read_task(&id));
+    }
+}
+
+pub fn close_task() {
+    with(|c| c.task = None);
+}
+
+/// Stops the background task `id`.
+pub fn stop_task(id: &str) {
+    write(|c, _| c.session.stop_task(id));
+}
+
+/// Opens the rewind dialog for your message `uuid`, with the dry run that lists the files restoring its code changes.
+pub fn open_rewind(uuid: &str) {
+    write(|c, _| c.session.open_rewind(uuid));
+}
+
+/// Restores what the rewind dialog's choice says.
+pub fn restore(how: Restore) {
+    write(|c, _| c.session.restore(how));
+}
+
+pub fn close_rewind() {
+    with(|c| c.session.rewind = None);
 }
 
 pub fn toggle_todos() {

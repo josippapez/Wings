@@ -728,11 +728,14 @@ fn claude_chat(out: PathBuf) {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
     };
     // `claude plugin ...` is what the plugins dialog's Discover view runs: the list prints a made-up one, an install says it went well.
+    // A request the chat writes whose subtype names a file in `$CHAT_ANSWERS` gets that file as its answer, as Claude Code
+    // answers a request made after it started.
     std::fs::write(root.join("available.json"), include_str!("../../../plugins/claude-chat/rust/tests/available.json")).unwrap();
     script(
         bin.join("claude"),
-        r#"if [ "$1" = plugin ]; then case "$2" in list) cat "$CHAT_AVAILABLE";; install) echo '{"command":"install","outcome":"ok","scope":"user"}';; esac; exit 0; fi
-cat "$CHAT_FIXTURE"; if [ -n "$CHAT_EXIT" ]; then echo "$CHAT_STDERR" >&2; exit "$CHAT_EXIT"; fi; cat > /dev/null"#,
+        r##"if [ "$1" = plugin ]; then case "$2" in list) cat "$CHAT_AVAILABLE";; install) echo '{"command":"install","outcome":"ok","scope":"user"}';; esac; exit 0; fi
+cat "$CHAT_FIXTURE"; if [ -n "$CHAT_EXIT" ]; then echo "$CHAT_STDERR" >&2; exit "$CHAT_EXIT"; fi
+while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ] && case "$line" in *"\"subtype\":\"${answer##*/}\""*) cat "$answer";; esac; done; done"##,
     );
     // Wings finds programs on the login shell's PATH, so the scene's shell names the fake's folder.
     script(root.join("shell"), &format!("printf '__WINGS_PATH__{}__WINGS_PATH__'", bin.display()));
@@ -955,7 +958,42 @@ cat "$CHAT_FIXTURE"; if [ -n "$CHAT_EXIT" ]; then echo "$CHAT_STDERR" >&2; exit 
         .extend(["toolbox:lint", "toolbox:format", "release-notes:write"].map(|name| json!({ "name": name, "description": "", "argumentHint": "" })));
     let installed: Vec<serde_json::Value> = include_str!("../../../plugins/claude-chat/rust/tests/plugins.jsonl").lines().map(|line| serde_json::from_str(line).unwrap()).collect();
     let plugins = opened([init.clone(), skilled].into_iter().chain(installed).collect());
-    let scenes: [Scene; 28] = [
+    // Two commands Claude started in the background, still running, as Claude Code lists them. The fake has already
+    // answered the read of the second one's output, which a click on its row in the side panel shows.
+    let server = json!({ "task_id": "bk3f9a2c1", "run_id": "run-1", "task_type": "local_bash", "description": "Run the dev server" });
+    let watcher = json!({ "task_id": "bq7d2e8a4", "run_id": "run-2", "task_type": "local_bash", "description": "Watch the test suite" });
+    let tasks = opened(vec![
+        init.clone(),
+        user("Start the dev server and the test watcher in the background, then check the cart page."),
+        tool("b1", "Bash", json!({ "command": "pnpm dev", "description": "Run the dev server", "run_in_background": true })),
+        json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": [server.clone()] }),
+        output("b1", "Command running in background with ID: bk3f9a2c1.", false),
+        tool("b2", "Bash", json!({ "command": "pnpm test --watch", "description": "Watch the test suite", "run_in_background": true })),
+        json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": [server, watcher] }),
+        output("b2", "Command running in background with ID: bq7d2e8a4.", false),
+        text("Both run in the background: the dev server on port 5173, and the test watcher, which passes so far. The cart page loads and applies the discount."),
+        json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 41_200, "num_turns": 4, "result": "", "total_cost_usd": 0.12 }),
+        answer("task-output-bq7d2e8a4", json!({ "output": " RERUN  src/cart.test.ts\n\n ✓ src/cart.test.ts (12 tests) 38ms\n ✓ src/checkout.test.ts (9 tests) 22ms\n ✓ src/discount.test.ts (6 tests) 9ms\n\n Test Files  3 passed (3)\n      Tests  27 passed (27)\n   Duration  412ms\n\n Waiting for file changes...\n", "total_bytes": 248, "truncated": false })),
+    ]);
+    // Your messages as a transcript has them, each with the uuid Claude Code knows it by, which a rewind names. The fake
+    // answers the dry run the Rewind button asks for.
+    const FIRST: &str = "3e1b7c52-8a4d-4f6e-9b21-5c7d8e9f0a13";
+    let said = |text: &str, uuid: &str| json!({ "type": "user", "message": { "role": "user", "content": text }, "uuid": uuid });
+    let rewound = opened(vec![
+        init.clone(),
+        said("Why does the checkout test fail on CI but pass here?", FIRST),
+        tool("t1", "Bash", json!({ "command": "pnpm test checkout --reporter=dot" })),
+        output("t1", "FAIL  src/checkout.test.ts > applies the discount\n  Expected: 90\n  Received: 89.99999999999999", true),
+        text("The discount is applied in floating point, so `100 * 0.9` comes out a hair under 90 on CI's Node version."),
+        said("Do it, and run the tests again.", "4f2c8d63-9b5e-4a7f-8c32-6d8e9f0a1b24"),
+        tool("t3", "Edit", fix.clone()),
+        output("t3", "The file has been updated.", false),
+        tool("t4", "Bash", json!({ "command": "pnpm test checkout" })),
+        output("t4", "Tests  24 passed (24)", false),
+        text("Fixed: the discount works in cents now, and all 24 checkout tests pass."),
+        json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 52_800, "num_turns": 5, "result": "", "total_cost_usd": 0.2 }),
+    ]);
+    let scenes: [Scene; 31] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -993,6 +1031,12 @@ cat "$CHAT_FIXTURE"; if [ -n "$CHAT_EXIT" ]; then echo "$CHAT_STDERR" >&2; exit 
         ("subagent", subagent, None, Some("disclose:Ran 2 subagents;press:Open"), "Found three callers"),
         ("suggestion", suggested, None, None, "Tab"),
         ("subagents", subagents, None, None, "Waiting on 2 subagents"),
+        // The side panel lists the background tasks that run, each with how long it has and Stop.
+        ("tasks", tasks.clone(), None, None, "Background tasks"),
+        // A click on one opens the end of what it printed in a dialog.
+        ("task-output", tasks, None, Some("row:Watch the test suite"), "Waiting for file changes"),
+        // The Rewind button beside your first message opens its dialog, with the files restoring the code writes back.
+        ("rewind", rewound, None, Some("press:Rewind"), "src/checkout.ts"),
     ];
     // Files for @-mentions, which the chat lists with git.
     for file in ["src/checkout.ts", "src/checkout.test.ts", "src/cart.ts", "api/limits.ts", "README.md"] {
@@ -1053,14 +1097,23 @@ cat "$CHAT_FIXTURE"; if [ -n "$CHAT_EXIT" ]; then echo "$CHAT_STDERR" >&2; exit 
         };
         let fixture = root.join(format!("{name}.jsonl"));
         std::fs::write(&fixture, lines.iter().map(|line| format!("{line}\n")).collect::<String>()).unwrap();
+        // What the fake answers a request with, by its subtype: the rewind dialog's dry run, with a path in the project.
+        let answers = root.join(format!("answers-{name}"));
+        let _ = std::fs::remove_dir_all(&answers);
+        std::fs::create_dir_all(&answers).unwrap();
+        if name == "rewind" {
+            let check = answer(&format!("rewind-check-{FIRST}"), json!({ "canRewind": true, "filesChanged": [format!("{project}/src/checkout.ts")], "insertions": 2, "deletions": 1 }));
+            std::fs::write(answers.join("rewind_files"), format!("{check}\n")).unwrap();
+        }
         // SAFETY: the page from the scene before is closed, so nothing reads these while they change.
         unsafe {
             std::env::set_var("CHAT_FIXTURE", &fixture);
+            std::env::set_var("CHAT_ANSWERS", &answers);
             std::env::set_var("CHAT_EXIT", exit.map_or("", |(code, _)| code));
             std::env::set_var("CHAT_STDERR", exit.map_or("", |(_, said)| said));
         }
         // The side panel is left out of a tab under 1,100 points, so a few scenes are drawn wider to show it.
-        let widths: &[f32] = if ["conversation", "work", "ask-bash"].contains(&name) { &[1280.0, 1000.0, 640.0] } else { &[1000.0, 640.0] };
+        let widths: &[f32] = if ["conversation", "work", "ask-bash", "tasks"].contains(&name) { &[1280.0, 1000.0, 640.0] } else { &[1000.0, 640.0] };
         for &width in widths {
             let args = (name == "long").then(|| json!({ "resume": LONG, "cwd": root.canonicalize().unwrap() }));
             let handle = cx
@@ -1090,6 +1143,8 @@ cat "$CHAT_FIXTURE"; if [ -n "$CHAT_EXIT" ]; then echo "$CHAT_STDERR" >&2; exit 
                         }
                         Some(("chip", label)) => assert!(handle.read_with(&cx, |view, _| view.press_chip(label)).unwrap()),
                         Some(("press", label)) => assert!(handle.read_with(&cx, |view, _| view.press(label, 0)).unwrap()),
+                        // A row of a list that is a button, like a task in the side panel.
+                        Some(("row", text)) => assert!(handle.read_with(&cx, |view, _| view.press_list_button(text)).unwrap()),
                         Some(("disclose", summary)) => assert!(handle.update(&mut cx, |view, _, cx| view.press_disclosure(summary, cx)).unwrap()),
                         Some(("select", label)) => assert!(handle.update(&mut cx, |view, _, cx| view.open_select(label, cx)).unwrap()),
                         _ => panic!("{act}"),

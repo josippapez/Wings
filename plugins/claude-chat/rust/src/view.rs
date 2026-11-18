@@ -74,6 +74,8 @@ fn chat_page(c: &Chat) -> Node {
         .child(header(c))
         .child(split)
         .maybe(crate::plugins_view::dialog(c))
+        .maybe(crate::tasks_view::dialog(c))
+        .maybe(crate::rewind_view::dialog(c))
         .maybe(crate::past_view::sheet_of(c));
     Node::new("Page").prop("flush", true).child(body)
 }
@@ -146,7 +148,7 @@ fn conversation(c: &Chat) -> Node {
                 let tools: Vec<&Tool> = items[start..end].iter().filter_map(|item| if let Item::Tool(tool) = item { Some(tool) } else { None }).collect();
                 (!tools.is_empty()).then(|| steps(start, &tools, c))
             }
-            false => item_node(start, &items[start], c),
+            false => item_node(start, &items[start], c, true),
         };
         end = start;
         let Some(block) = block else { continue };
@@ -229,17 +231,19 @@ fn asking(c: &Chat) -> bool {
 }
 
 /// Your message on the right, as chat apps show it, and never wider than the column less a margin on its left: a long one
-/// spread over the whole width read like Claude's.
-fn bubble(card: Node) -> Node {
-    row().prop("justify", "end").child(stack().prop("width", 64)).child(card)
+/// spread over the whole width read like Claude's. `action`, the rewind button, sits just left of it.
+fn bubble(card: Node, action: Option<Node>) -> Node {
+    row().prop("justify", "end").prop("align", "center").child(stack().prop("width", 64)).maybe(action).child(card)
 }
 
-fn item_node(at: usize, item: &Item, c: &Chat) -> Option<Node> {
+/// An item of the conversation, or with `own` false, of a subagent's, whose messages can't be rewound.
+fn item_node(at: usize, item: &Item, c: &Chat, own: bool) -> Option<Node> {
+    let rewind = || own.then(|| crate::rewind_view::button(at, c)).flatten();
     let node = match item {
-        Item::User(said) => bubble(card().child(text(said.as_str()))),
+        Item::User(said) => bubble(card().child(text(said.as_str())), rewind()),
         Item::UserImages(said, images) => {
             let card = card().child(muted(plural(*images, "image")));
-            bubble(if said.is_empty() { card } else { card.child(text(said.as_str())) })
+            bubble(if said.is_empty() { card } else { card.child(text(said.as_str())) }, rewind())
         }
         Item::Text(said) => markdown(said),
         Item::Ask(ask) if ask.answer.is_none() => ask_node(ask, c),
@@ -729,6 +733,7 @@ fn side(c: &Chat) -> Vec<Node> {
         limits = limits.child(meter_row(if *label == "5h" { "5-hour" } else { "Week" }, *used, (80, 95), resets));
     }
     sections.push(limits);
+    sections.extend(crate::tasks_view::section(c));
     sections.extend(subagents(c));
     // A stack with nothing in it takes room: leave out the sections that have nothing.
     let sections: Vec<Node> = sections.into_iter().filter(|section| section.count() > 1).collect();
@@ -872,7 +877,7 @@ fn transcript(id: &str, sub: &Session, c: &Chat) -> Vec<Node> {
                 (!tools.is_empty()).then(|| steps_in(start, Some(id), &tools, c))
             }
             Item::User(_) => None,
-            item => item_node(start, item, c),
+            item => item_node(start, item, c, false),
         };
         end = start;
         let Some(block) = block else { continue };
