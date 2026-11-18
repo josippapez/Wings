@@ -204,7 +204,7 @@ mod tests {
 
     #[test]
     fn up_goes_back_through_the_prompts_down_comes_forward_and_ends_at_the_draft() {
-        let items = [said("first"), Item::Text("ok".into()), said("second"), said("second"), Item::UserImages(String::new(), 1), said("third")];
+        let items = [said("first"), Item::Text("ok".into()), said("second"), said("second"), Item::UserImages(String::new(), vec!["p1".into()]), said("third")];
         let all = prompts(&items);
         assert_eq!(all, ["first", "second", "third"], "a repeat counts once and a picture alone says nothing");
         let mut recall = None;

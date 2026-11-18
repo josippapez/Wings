@@ -14,7 +14,7 @@ impl PageView {
         // A render that finds it still decoding doesn't ask to be woken again: the first one's wake is enough.
         let (done, heard) = async_channel::bounded::<()>(1);
         let waiting = self.images_waiting.borrow().contains(&picture.id);
-        let wake: Option<Wake> = (!waiting).then(|| Box::new(move || drop(done.try_send(()))) as Wake);
+        let wake: Option<Wake> = (!waiting).then(|| Box::new(move || { let _ = done.try_send(()); }) as Wake);
         let shown = images::show(self.source.plugin(), &picture.src, level, wake);
         let (size, inside) = match &shown {
             Shown::Ready { width, height, .. } | Shown::Waiting { width, height } | Shown::Broken { width, height } => {
