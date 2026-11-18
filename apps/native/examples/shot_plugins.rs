@@ -1074,7 +1074,7 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         // The model and effort menu open over the message box.
         ("models", opened(vec![init.clone()]), None, Some("select:Model and effort"), "resets"),
         // Fast mode and the output styles are in the same menu, after the models.
-        ("models-fast", fast, None, Some("select:Model and effort"), "Output style"),
+        ("models-fast", fast, None, Some("select:Model and effort"), "resets"),
         // Up twice from the empty box recalls the second newest of the prompts sent.
         ("recall", recalled, None, Some("keys:up;keys:up"), "Now bump the version."),
         ("slash", opened(vec![init.clone()]), None, Some("type:/re;keys:down"), "/review"),

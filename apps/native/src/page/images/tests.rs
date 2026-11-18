@@ -72,12 +72,12 @@ mod drawn {
 
     use gpui::RenderImage;
 
-    use super::{super::*, *};
+    use super::*;
 
     /// Shows `id` of `plugin` at `level` until it is decoded.
     fn shown(plugin: &str, id: &str, level: u32) -> Shown {
         let (done, heard) = mpsc::channel();
-        match show(plugin, id, level, Some(Box::new(move || drop(done.send(()))))) {
+        match show(plugin, id, level, Some(Box::new(move || { let _ = done.send(()); }))) {
             Shown::Waiting { .. } => {
                 heard.recv_timeout(Duration::from_secs(20)).expect("the picture was decoded");
                 show(plugin, id, level, None)
