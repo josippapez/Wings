@@ -162,8 +162,9 @@ pub struct PageView {
     sheet_return: Option<gpui::FocusHandle>,
     /// The tab that shows the page, whose keyboard counts as the page's (`set_host_focus`).
     host_focus: Option<gpui::FocusHandle>,
-    /// When you last clicked or pressed a key in the page.
+    /// When you last clicked or pressed a key in the page, and what had the keyboard as you last pressed in it.
     gesture_at: Cell<Option<Instant>>,
+    pressed_with: RefCell<Option<Option<gpui::FocusHandle>>>,
     _events: Task<()>,
 }
 
@@ -423,6 +424,7 @@ impl PageView {
             sheet_return: None,
             host_focus: None,
             gesture_at: Cell::new(None),
+            pressed_with: RefCell::new(None),
             _events: events,
         };
         if view.stopped {
@@ -455,10 +457,14 @@ impl PageView {
     /// the keyboard is in the page or on its tab already, nothing has it, or you just clicked or typed in the page. A
     /// page never takes it from a terminal or another page you are typing in.
     pub(super) fn may_take_keyboard(&self, window: &gpui::Window, cx: &gpui::App) -> bool {
-        if self.gesture_at.get().is_some_and(|at| at.elapsed() < GESTURE_TAKES_KEYBOARD) {
+        let focused = window.focused(cx);
+        // Right after you used the page, while the keyboard is where it was as you pressed in it: a click in a terminal
+        // since then takes it back.
+        let recent = self.gesture_at.get().is_some_and(|at| at.elapsed() < GESTURE_TAKES_KEYBOARD);
+        if recent && self.pressed_with.borrow().as_ref().is_some_and(|before| *before == focused) {
             return true;
         }
-        let Some(focused) = window.focused(cx) else {
+        let Some(focused) = focused else {
             return true;
         };
         // What can hold the keyboard in the page: its fields, menus, chips, action rows, dialog and sheets. Compared by
@@ -1924,6 +1930,9 @@ impl Render for PageView {
         page_context.set(PAGE_CONTEXT, cx.entity_id().to_string());
         div()
             .id("native-page")
+            .capture_any_mouse_down(cx.listener(|view, _, window, cx| {
+                *view.pressed_with.borrow_mut() = Some(window.focused(cx));
+            }))
             .key_context(page_context)
             .on_key_down(cx.listener(Self::tab))
             .relative()
