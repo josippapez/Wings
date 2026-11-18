@@ -62,6 +62,7 @@ fn allowed(answer: Answer, none: &str) -> Result<(), String> {
         Answer::Allow => Ok(()),
         Answer::Deny => Err(format!("The user denied it in Wings. {none}")),
         Answer::Timeout => Err(format!("The user didn't answer in Wings within 100 seconds. {none} Ask them before you try again.")),
+        Answer::Unshown => Err(format!("Wings couldn't show the dialog that asks the user to allow it. {none}")),
     }
 }
 

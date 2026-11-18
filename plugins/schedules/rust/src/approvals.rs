@@ -24,6 +24,8 @@ pub enum Answer {
     Allow,
     Deny,
     Timeout,
+    /// Wings couldn't show the modal, so nobody could answer.
+    Unshown,
 }
 
 #[derive(Default)]
@@ -95,7 +97,14 @@ async fn wait_for(asker: Option<String>, project_name: &str, what: What, project
         settle(&late, Answer::Timeout);
     });
     changed();
-    drop(host::open_view_with(VIEW, "modal", &Value::Null));
+    // An ask Wings can't show fails at once: waiting out the 100 s for an answer nobody can give told the agent the user
+    // hadn't answered, when the user never saw it.
+    let shown = id.clone();
+    spawn(async move {
+        if host::open_view_with(VIEW, "modal", &Value::Null).await.is_err() {
+            settle(&shown, Answer::Unshown);
+        }
+    });
     if !host::focused() {
         drop(host::call("notify", json!({ "title": title, "body": format!("In {project_name}. Allow or deny it in Wings."), "projectId": project_id })));
     }
