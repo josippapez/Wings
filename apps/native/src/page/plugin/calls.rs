@@ -411,7 +411,7 @@ impl Shared {
             "spawn" | "processWrite" | "processStop" => {
                 self.process_call(method, params, reply, access)
             }
-            "pastSessions" => self.off_thread(reply, move |_| past_sessions(&access, &params)),
+            "pastSessions" => self.off_thread(reply, move |_| this.past_sessions(&access, &params)),
             "transcript" => {
                 self.off_thread(reply, move |_| transcript(&access, &params));
             }
@@ -849,17 +849,29 @@ fn transcript(access: &Access, params: &Value) -> Result<String, String> {
 /// The most sessions one `pastSessions` lists.
 const PAST_SESSIONS_MAX: u64 = 200;
 
-/// `pastSessions`: the Claude Code sessions of the project on screen, most recent first, matching `query`. Each one
-/// shows your first prompt, so it needs the `user` entries of `permissions.transcript`.
-fn past_sessions(access: &Access, params: &Value) -> Result<String, String> {
-    let id = &access.plugin.manifest.id;
-    if !access.plugin.manifest.permissions.transcript.iter().any(|kind| kind == "user") {
-        return Err(format!("{id} may not list your Claude sessions: it needs \"user\" in permissions.transcript"));
+impl Shared {
+    /// `pastSessions`: the Claude Code sessions of a project, most recent first, matching `query`. Each one shows your
+    /// first prompt, so it needs the `user` entries of `permissions.transcript`. The project is the one on screen, or
+    /// the one `projectId` names, which has to be one of Wings' projects: a plugin never reads the sessions of any
+    /// other folder.
+    fn past_sessions(&self, access: &Access, params: &Value) -> Result<String, String> {
+        let id = &access.plugin.manifest.id;
+        if !access.plugin.manifest.permissions.transcript.iter().any(|kind| kind == "user") {
+            return Err(format!("{id} may not list your Claude sessions: it needs \"user\" in permissions.transcript"));
+        }
+        let project = match params.get("projectId").filter(|value| !value.is_null()) {
+            Some(project) => {
+                let project = js_string(Some(project));
+                let known = self.projects.lock().unwrap();
+                let found = known.iter().find(|known| known.id == project).ok_or_else(|| format!("no project {project}"))?;
+                std::path::PathBuf::from(&found.path)
+            }
+            None => access.env.current_project().ok_or("No project is open in Wings")?,
+        };
+        let query = params.get("query").and_then(Value::as_str).unwrap_or_default();
+        let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(50).clamp(1, PAST_SESSIONS_MAX);
+        to_json(&access.env.past_sessions(&project, query, limit as usize))
     }
-    let project = access.env.current_project().ok_or("No project is open in Wings")?;
-    let query = params.get("query").and_then(Value::as_str).unwrap_or_default();
-    let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(50).clamp(1, PAST_SESSIONS_MAX);
-    to_json(&access.env.past_sessions(&project, query, limit as usize))
 }
 
 fn ports(access: &Access) -> Result<String, String> {

@@ -342,6 +342,12 @@ pub fn past_sessions(query: &str, limit: u32) -> Pending<Result<Value, String>> 
     call("pastSessions", json!({ "query": query, "limit": limit }))
 }
 
+/// `wings.pastSessions` for the project `project_id` (an `id` of `projects`) instead of the one on screen. Needs
+/// Wings 0.2.36.
+pub fn past_sessions_in(project_id: &str, query: &str, limit: u32) -> Pending<Result<Value, String>> {
+    call("pastSessions", json!({ "projectId": project_id, "query": query, "limit": limit }))
+}
+
 /// `wings.setAgent`: this tab's page runs an agent, which the sidebar's Agents lists with the terminals' agents: its
 /// state (`working`, `blocked`, `done` or `idle`), its name and what it does now. `None` takes it off the list. Needs
 /// `"agents"` in `contributes.ui` and Wings 0.2.34.

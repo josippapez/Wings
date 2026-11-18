@@ -8,7 +8,7 @@ use wings_spaces::claude_accounts::AccountPick;
 
 use crate::page::{
     plugin::{
-        PanePort, PluginHost,
+        PanePort, PluginHost, Project,
         testing::{
             Caller, Frame, Rig, Seen, WAIT, call_at_start, call_from_main, exec, hears, idle, open_pane, pane, show,
         },
@@ -1134,6 +1134,11 @@ fn past_sessions_are_the_projects_and_need_its_prompts_granted() {
     assert_eq!(ids(rig.allows("pastSessions", json!({}))), ["s1", "s3"]);
     assert_eq!(ids(rig.allows("pastSessions", json!({ "query": "build" }))), ["s1"]);
     assert_eq!(ids(rig.allows("pastSessions", json!({ "limit": 1 }))), ["s1"]);
+    // Another project of Wings by its id, not only the one on screen; any other id is refused.
+    let other = Project { id: "other".into(), name: "Other".into(), path: "/elsewhere".into(), parent_id: None, hidden_sections: Vec::new() };
+    rig.host.publish_projects(vec![other]);
+    assert_eq!(ids(rig.allows("pastSessions", json!({ "projectId": "other" }))), ["s2"]);
+    assert_eq!(rig.refuses("pastSessions", json!({ "projectId": "/etc" })), "no project /etc");
     let replies_only = Rig::new(json!({ "permissions": { "transcript": ["assistant"] } }), panes());
     assert!(replies_only.refuses("pastSessions", json!({})).contains("needs \"user\" in permissions.transcript"));
 }

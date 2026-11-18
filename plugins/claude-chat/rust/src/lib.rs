@@ -6,6 +6,10 @@
 // Each frame uses its own part of the crate.
 #![allow(dead_code)]
 
+/// What a chat tab tells main when a turn ended, so the sidebar's Chats list reads the session again.
+#[cfg(any(feature = "main", feature = "chat", test))]
+pub const SESSION_SAVED: &str = "session-saved";
+
 #[cfg(feature = "chat")]
 mod chat;
 #[cfg(any(feature = "main", test))]

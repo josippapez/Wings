@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use wings_plugin::{
     format::{basename, truncate},
     host::{self, ProcessInput},
-    task,
+    messages, task,
 };
 
 use crate::{
@@ -284,17 +284,19 @@ fn why(exit: &Value) -> String {
 
 /// One line Claude Code printed, from the start `run`. The tab keeps the session's id once Claude Code names it.
 fn hear(run: u32, line: &Value) {
-    let (named, alerts) = with(|c| {
+    let (named, alerts, ended) = with(|c| {
         if c.run != run {
-            return (None, Vec::new());
+            return (None, Vec::new(), false);
         }
         let before = c.session.id.clone();
+        let was_working = c.session.working;
         c.session.hear(line);
         let doing = c.session.activity();
         if doing != c.doing.0 {
             c.doing = (doing, host::now() as u64);
         }
-        (c.session.id.clone().filter(|id| Some(id) != before.as_ref()), std::mem::take(&mut c.session.alerts))
+        let named = c.session.id.clone().filter(|id| Some(id) != before.as_ref());
+        (named, std::mem::take(&mut c.session.alerts), was_working && !c.session.working)
     });
     // Only for what you'd miss: someone looking at this tab sees it happen.
     if !host::focused() {
@@ -304,6 +306,10 @@ fn hear(run: u32, line: &Value) {
     }
     if let Some(id) = named {
         drop(host::call("setTabState", json!({ "state": { "sessionId": id } })));
+    }
+    // The sidebar's Chats list reads sessions from their transcripts, which Claude Code has written by the end of a turn.
+    if ended {
+        messages::tell(crate::SESSION_SAVED, &Value::Null);
     }    report_agent();
 }
 

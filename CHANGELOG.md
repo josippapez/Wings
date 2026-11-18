@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.36 · 2026-11-18
+
+- **Claude chat lists your Claude sessions in the sidebar.** A Chats section under each project shows its newest five, and a click continues one in a chat tab. A session a terminal runs is marked running.
+
 ## 0.2.35 · 2026-11-18
 
 - **Paste images into Claude chat.** Cmd+V puts a screenshot in the message box as a chip, sent with your message.
