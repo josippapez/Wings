@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.34 · 2026-11-18
+
+- **Claude chat shows in the sidebar's Agents.** Like a terminal's Claude: working with what it runs, needs you while it asks something, or done. A click goes to its tab.
+- **Claude chat starts on your default model and effort**, per model as your Claude Code settings give them, and shows your 5-hour and weekly usage by the context, as a terminal's status line does.
+- **For plugin authors:** a tab page can list the agent it runs in the sidebar with `wings.setAgent`. See `plugins/README.md`.
+
 ## 0.2.33 · 2026-11-18
 
 - **Agents can add schedules again.** The "Allow this?" question Schedules asks before an agent adds or changes a schedule never showed, so every request timed out. Plugin dialogs now open over the window. Schedules 0.8.1 also tells the agent straight away if Wings can't ask you, instead of making it wait.
