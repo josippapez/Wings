@@ -850,6 +850,22 @@ fn settle_slide(app: &gpui::TestApp, window: &mut TestAppWindow<Workspace>) {
     window.draw();
 }
 
+/// The shell's grid once it holds still: the shell refits to its pane off the test's clock (on opening, then again
+/// when a sidebar narrows the pane), so a busy machine needs real time before the size is the one the pane gives.
+fn settled_grid(app: &gpui::TestApp, window: &mut TestAppWindow<Workspace>) -> (usize, usize) {
+    let grid = |window: &TestAppWindow<Workspace>| window.read(|w, cx| w.terminal(0).unwrap().read(cx).grid());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let (mut last, mut same) = (grid(window), 0);
+    while same < 8 && std::time::Instant::now() < deadline {
+        settle_slide(app, window);
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        let now = grid(window);
+        same = if now == last { same + 1 } else { 0 };
+        last = now;
+    }
+    last
+}
+
 /// Opens a diff the way the plugin's `openDiff` does when its sidebar asked for it, `from` being the sidebar it names.
 fn open_diff_from(window: &mut TestAppWindow<Workspace>, from: &str) {
     let patch = "diff --git a/one b/one\n--- a/one\n+++ b/one\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/two b/two\n--- a/two\n+++ b/two\n@@ -1 +1 @@\n-a\n+b\n";
@@ -878,14 +894,9 @@ fn a_diff_from_a_sidebar_shows_in_its_place_over_the_panes_and_back_returns_the_
     let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
     window.draw();
     open_side(&app, &mut window);
-    // The shell refits to the narrower pane the sidebar leaves once that size holds still: what the diff must not change.
-    settle_slide(&app, &mut window);
     let key = ("sider".to_owned(), "side".to_owned());
     let page = window.read(|w, _| w.sidebar_pages[&key].entity_id());
-    let grid = |window: &TestAppWindow<Workspace>| {
-        window.read(|w, cx| w.terminal(0).unwrap().read(cx).grid())
-    };
-    let (right, cells) = (terminal_right(&window, 0), grid(&window));
+    let (right, cells) = (terminal_right(&window, 0), settled_grid(&app, &mut window));
 
     open_diff_from(&mut window, "side");
     settle_slide(&app, &mut window);
@@ -899,7 +910,7 @@ fn a_diff_from_a_sidebar_shows_in_its_place_over_the_panes_and_back_returns_the_
     assert_eq!(at.right().as_f32() - at.left().as_f32(), 620.0 - 8.0 - 2.0);
     assert_eq!(at.right().as_f32(), 1000.0 - 8.0 - 1.0);
     assert_eq!(terminal_right(&window, 0), right, "the panes keep their size");
-    assert_eq!(grid(&window), cells);
+    assert_eq!(settled_grid(&app, &mut window), cells);
 
     let back = crate::ui::spot_at("diff-back").unwrap().center();
     window.simulate_click(back, MouseButton::Left);
@@ -911,7 +922,7 @@ fn a_diff_from_a_sidebar_shows_in_its_place_over_the_panes_and_back_returns_the_
         assert_eq!(w.right_width(px(1000.0)), super::right_edge::INITIAL_WIDTH);
     });
     assert_eq!(terminal_right(&window, 0), right);
-    assert_eq!(grid(&window), cells);
+    assert_eq!(settled_grid(&app, &mut window), cells);
 }
 
 #[test]
