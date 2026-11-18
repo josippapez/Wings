@@ -2,6 +2,18 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.31 · 2026-11-18
+
+- **Claude chat shows what Claude is doing, and for how long.** A line under the conversation says "Running pnpm test · 16s", "Reading checkout.ts" or "Calling wings", and counts up, as Claude Code's own status line does.
+- **Smarter permission prompts in Claude chat.** Always allow adds the rule Claude Code suggests, so it stops asking; Deny takes a reason that Claude reads. The card shows the whole command, or the change an edit makes, with hidden characters written out; one too long to show can't be allowed there.
+- **Claude's questions and plans get their own cards.** Pick an answer from the options or write your own; approve a plan, approve it and let Claude make edits without asking, or send it back with what to change.
+- **Type while Claude works.** What you send waits in a queue above the message box, where Send now gets it to Claude at its next step and × takes it back. Stop clears the queue too.
+- **Claude chat tells you when it needs you.** A notification when Claude asks something or finishes a turn, while you're looking at something else.
+- **Tool calls drawn by kind.** Edits show their lines added and removed, a written file its lines, a failed command its exit code, and Claude's checklist stays above the message box with what's done.
+- **@ mentions files.** Typing @ in the message box lists the project's files that match.
+- **Schedules can run once on a date.** Pick "On a date" in the form, or give an agent a date: it runs once at that time, and if Wings was closed then, when Wings next starts.
+- **For plugin authors:** a `Text` with `since` ends with how long ago that was and counts it up, without the page sending anything each second.
+
 ## 0.2.30 · 2026-11-18
 
 - **Claude chat opens long sessions.** One with a long history stayed on Loading, as it was more than a page may draw: the chat now shows the newest messages that fit, and builds a tool's output only when you open it.
