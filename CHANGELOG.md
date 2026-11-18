@@ -5,6 +5,13 @@ What changed in each Wings release, newest first.
 ## 0.2.36 · 2026-11-18
 
 - **Claude chat lists your Claude sessions in the sidebar.** A Chats section under each project shows its newest five, and a click continues one in a chat tab. A session a terminal runs is marked running.
+- **A side panel next to the chat** shows the folder and branch, what changed (a click opens the Changes sidebar), how full the context is, your 5-hour and weekly limits, and the subagents with their transcripts.
+- **The limits are right after a long turn.** They followed only your messages, so a turn that used up the 5-hour limit still showed 67%. A hit limit also shows once instead of twice.
+- **A new message box:** attach images with the paperclip, one picker for model and effort, Claude Code's suggested next message in grey that Tab fills in, "Worked for" after each turn, and a "Waiting on 2 subagents" line with Stop.
+- **/plugins and /mcp open a dialog** to turn plugins on or off for the chat and MCP servers on or off for the project. **/usage, /cost and /context** open a detailed view, and **/exit** closes the chat.
+- **Claude chat settings:** the permission mode new chats start in, Compact or Detailed tool calls, and Small, Default or Large text.
+- **Older messages load as you scroll up**, and long tooltips and queued messages show in full.
+- **For plugin authors:** a page can show a `Dialog`, scale its text with `textScale`, take Tab in a text box, open a file picker for images with `wings.pickFiles`, and close its own tab with `wings.closeTab`. See `plugins/README.md`.
 
 ## 0.2.35 · 2026-11-18
 
