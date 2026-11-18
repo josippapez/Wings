@@ -70,6 +70,8 @@ pub struct Chat {
     pub drafts: HashMap<String, Draft>,
     /// The checklist above the message box is folded to its summary line.
     pub todos_folded: bool,
+    /// What Claude is doing, for the status line, and since when (ms).
+    pub doing: (String, u64),
     /// Going on in a terminal once Claude Code here has ended.
     moving: bool,
     input: Option<ProcessInput>,
@@ -94,6 +96,7 @@ thread_local! {
         files: Files::default(),
         drafts: HashMap::new(),
         todos_folded: false,
+        doing: (String::new(), 0),
         moving: false,
         input: None,
         requests: 0,
@@ -272,6 +275,10 @@ fn hear(run: u32, line: &Value) {
         }
         let before = c.session.id.clone();
         c.session.hear(line);
+        let doing = c.session.activity();
+        if doing != c.doing.0 {
+            c.doing = (doing, host::now() as u64);
+        }
         (c.session.id.clone().filter(|id| Some(id) != before.as_ref()), std::mem::take(&mut c.session.alerts))
     });
     // Only for what you'd miss: someone looking at this tab sees it happen.
@@ -311,7 +318,13 @@ pub fn send() {
             return None;
         }
         c.draft.clear();
-        Some(if c.session.working { c.session.queue(&text, host::now() as u64, n) } else { c.session.send(&text) })
+        if c.session.working {
+            return Some(c.session.queue(&text, host::now() as u64, n));
+        }
+        let line = c.session.send(&text);
+        // The status line's time counts from here, not from the end of the turn before.
+        c.doing = (c.session.activity(), host::now() as u64);
+        Some(line)
     });
 }
 

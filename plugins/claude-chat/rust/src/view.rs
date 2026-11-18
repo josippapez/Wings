@@ -105,9 +105,10 @@ fn conversation(c: &Chat) -> Node {
         let live = markdown(&c.session.live);
         let live = if live.count() > BUDGET / 4 { text(truncate(&c.session.live, 20_000)) } else { live };
         nodes.push(live.key("live"));
-    } else if c.session.thinking || (c.session.working && !waiting(c)) {
-        let what = if c.session.thinking { "Thinking" } else { "Working" };
-        nodes.push(row().key("working").child(text(what).prop("tone", "muted").prop("shimmer", true)));
+    } else if c.session.thinking || (c.session.working && !asking(c)) {
+        // The app adds how long it has been and counts it up: "Calling wings · 16s".
+        let what = if c.doing.0.is_empty() { "Working" } else { c.doing.0.as_str() };
+        nodes.push(row().key("working").child(text(what).prop("tone", "muted").prop("shimmer", true).prop("since", c.doing.1)));
     }
     match &c.state {
         State::Failed(why) => nodes.push(notice("danger", why.as_str()).key("ended")),
@@ -133,8 +134,9 @@ fn plain(at: usize, item: &Item) -> Node {
 }
 
 /// Claude is waiting on you, or on a tool it started.
-fn waiting(c: &Chat) -> bool {
-    c.session.items.iter().any(|item| matches!(item, Item::Ask(Ask { answer: None, .. }) | Item::Tool(Tool { output: None, .. })))
+/// A card waits for your answer, so the status line would only repeat it.
+fn asking(c: &Chat) -> bool {
+    c.session.items.iter().any(|item| matches!(item, Item::Ask(Ask { answer: None, .. })))
 }
 
 fn item_node(at: usize, item: &Item, c: &Chat) -> Option<Node> {

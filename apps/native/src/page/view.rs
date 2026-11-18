@@ -855,18 +855,35 @@ impl PageView {
                 text.children
                     .iter()
                     .any(|node| !matches!(node, Node::Str { text, .. } if text.is_empty())),
-                |el| el.child(self.inline(&text.children, cx)),
+                |el| match text.since {
+                    Some(since) => {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |now| now.as_millis() as i64);
+                        let took = Node::Str { id: text.id, text: format!(" · {}", took(since, now)) };
+                        el.child(self.inline(&[text.children.clone(), vec![took]].concat(), cx))
+                    }
+                    None => el.child(self.inline(&text.children, cx)),
+                },
             );
-        // A shimmer pulses as the page's spinners turn: at most 30 frames a second, and still under Reduce motion.
-        let element = match text.shimmer {
-            true => element
+        // A shimmer pulses as the page's spinners turn: at most 30 frames a second, and still under Reduce motion. Each
+        // of its frames draws the page again, which counts a `since` up too; without one, a second's tick does that.
+        let element = match (text.shimmer, text.since) {
+            (true, _) => element
                 .with_animation(
                     ElementId::NamedInteger("page-shimmer".into(), text.id),
                     Animation::new(SHIMMER).repeat().with_max_fps(30.0),
                     |el, t| el.opacity(0.45 + 0.55 * (0.5 + 0.5 * (t * std::f32::consts::TAU).cos())),
                 )
                 .into_any_element(),
-            false => element.into_any_element(),
+            (false, Some(_)) => element
+                .with_animation(
+                    ElementId::NamedInteger("page-since".into(), text.id),
+                    Animation::new(std::time::Duration::from_secs(1)).repeat().with_max_fps(1.0),
+                    |el, _| el,
+                )
+                .into_any_element(),
+            (false, None) => element.into_any_element(),
         };
         if text.on_click.is_none() && text.title.is_none() {
             return element;
@@ -1649,6 +1666,16 @@ impl Render for PageView {
     }
 }
 
+/// How long ago `since` was, at `now` (both ms since the epoch), as a status line counts: "16s", "2m 5s", "1h 4m".
+fn took(since: i64, now: i64) -> String {
+    let seconds = (now - since).max(0) / 1000;
+    match seconds {
+        ..60 => format!("{seconds}s"),
+        ..3600 => format!("{}m {}s", seconds / 60, seconds % 60),
+        _ => format!("{}h {}m", seconds / 3600, seconds / 60 % 60),
+    }
+}
+
 /// One pulse of a shimmering `Text`: bright, faint and bright again.
 const SHIMMER: std::time::Duration = std::time::Duration::from_millis(1600);
 
@@ -1896,4 +1923,15 @@ fn sized(button: gpui::Stateful<gpui::Div>, size: tree::ButtonSize) -> gpui::Sta
         Size::IconSm => button.size(px(28.0)).px_0().rounded(px(8.0)),
         Size::IconLg => button.size(px(36.0)).px_0(),
     }
+}
+
+#[cfg(test)]
+#[test]
+fn a_status_line_counts_seconds_then_minutes_then_hours() {
+    let at = 1_763_470_000_000;
+    assert_eq!(took(at, at + 16_400), "16s");
+    assert_eq!(took(at, at + 125_000), "2m 5s");
+    assert_eq!(took(at, at + 3_840_000), "1h 4m");
+    // A clock that steps back reads as no time, not a negative one.
+    assert_eq!(took(at, at - 5_000), "0s");
 }

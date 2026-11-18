@@ -240,6 +240,9 @@ pub struct Text {
     pub title: Option<String>,
     /// It pulses softly, as a shimmer does, while something it names is under way, like "Thinking".
     pub shimmer: bool,
+    /// Milliseconds since the epoch: the text ends with how long ago that was, counting up while it shows, as in
+    /// "Running pnpm test · 16s". The app counts, so the page needn't send a new tree each second.
+    pub since: Option<i64>,
     pub children: Vec<Node>,
 }
 
@@ -997,6 +1000,7 @@ impl Walk {
                     .map(str::to_owned),
                 title: title(&props),
                 shimmer: on("shimmer"),
+                since: props.get("since").and_then(Value::as_f64).map(|ms| ms as i64),
                 children: parts(children),
             }),
             "Avatar" => Node::Avatar(Avatar {
@@ -1655,6 +1659,9 @@ mod tests {
         assert!(column.enter);
         let Node::Text(thinking) = &column.children[0] else { panic!() };
         assert!(thinking.shimmer);
+        assert_eq!(thinking.since, None);
+        let Node::Text(running) = parse_one(json!({"id":1,"type":"Text","props":{"shimmer":true,"since":1_763_470_000_000u64},"children":[text(2, "Running pnpm test")]})) else { panic!() };
+        assert_eq!(running.since, Some(1_763_470_000_000));
         assert_eq!(thinking.children[0].id(), Some(4));
         let Node::Scroll(plain) = parse_one(json!({"id":1,"type":"Scroll","props":{},"children":[
             {"id":2,"type":"Stack","props":{"enter":"fade"},"children":[]}

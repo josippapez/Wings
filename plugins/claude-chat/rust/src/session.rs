@@ -720,6 +720,42 @@ pub fn summary(tool: &str, input: &Value) -> String {
     cut(text.lines().next().unwrap_or_default(), SUMMARY_KEPT)
 }
 
+impl Session {
+    /// What Claude is doing now, as the line under the conversation says it: the tool it runs, else thinking or writing.
+    pub fn activity(&self) -> String {
+        let running = self.items.iter().rev().find_map(|item| match item {
+            Item::Tool(tool) if tool.output.is_none() => Some(tool),
+            _ => None,
+        });
+        match running {
+            _ if self.thinking => "Thinking".into(),
+            Some(tool) => doing(&tool.name, &tool.summary),
+            None if !self.live.is_empty() => "Writing".into(),
+            None => "Working".into(),
+        }
+    }
+}
+
+/// A running tool call in a few words, as Claude Code's own status line puts it: "Running pnpm test", "Calling wings".
+fn doing(tool: &str, summary: &str) -> String {
+    let file = summary.rsplit('/').next().unwrap_or(summary);
+    match tool {
+        "Bash" => format!("Running {}", cut(summary, 60)),
+        "Read" => format!("Reading {file}"),
+        "Edit" | "MultiEdit" | "NotebookEdit" => format!("Editing {file}"),
+        "Write" => format!("Writing {file}"),
+        "Grep" | "Glob" => format!("Searching for {}", cut(summary, 60)),
+        "WebSearch" => "Searching the web".into(),
+        "WebFetch" => format!("Fetching {}", cut(summary, 60)),
+        "Task" | "Agent" => "Running a subagent".into(),
+        // MCP tools are mcp__<server>__<tool>, and a plugin's server is plugin_<plugin>_<server>.
+        _ => match tool.strip_prefix("mcp__").and_then(|rest| rest.split("__").next()) {
+            Some(server) => format!("Calling {}", if server.starts_with("plugin_") { server.rsplit('_').next().unwrap_or(server) } else { server }),
+            None => format!("Using {tool}"),
+        },
+    }
+}
+
 /// What a tool is asked to do, as a permission card shows it: the whole command, the change an edit makes, the file a
 /// write leaves, else the input as Claude sent it.
 fn ask_detail(tool: &str, input: &Value) -> String {
@@ -1166,6 +1202,24 @@ mod tests {
         assert_eq!(line["response"]["response"], json!({ "behavior": "deny", "message": "use pnpm instead" }));
         let Item::Ask(ask) = &session.items[0] else { panic!() };
         assert_eq!(ask.answer, Some(false));
+    }
+
+    #[test]
+    fn the_status_line_names_the_tool_that_runs() {
+        let mut session = Session::default();
+        session.send("go");
+        assert_eq!(session.activity(), "Working");
+        tool_call(&mut session, "a", "mcp__wings__tasks__list", json!({}));
+        assert_eq!(session.activity(), "Calling wings");
+        tool_result(&mut session, "a", "[]", false);
+        tool_call(&mut session, "b", "mcp__plugin_repo-docs_repo-docs__find_docs", json!({ "query": "x" }));
+        assert_eq!(session.activity(), "Calling repo-docs");
+        tool_result(&mut session, "b", "", false);
+        tool_call(&mut session, "c", "Read", json!({ "file_path": "/work/shop/src/checkout.ts" }));
+        assert_eq!(session.activity(), "Reading checkout.ts");
+        tool_result(&mut session, "c", "", false);
+        tool_call(&mut session, "d", "Bash", json!({ "command": "pnpm test\necho done" }));
+        assert_eq!(session.activity(), "Running pnpm test");
     }
 
     #[test]
