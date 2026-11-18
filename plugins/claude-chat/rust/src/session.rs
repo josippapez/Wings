@@ -22,6 +22,9 @@ pub enum Item {
     Error(String),
     /// You stopped the turn.
     Stopped,
+    /// What Claude Code added to the conversation in your name, like a background task's notice: what it is, and
+    /// what it said.
+    Note(String, String),
 }
 
 #[derive(Debug, PartialEq)]
@@ -43,13 +46,48 @@ pub struct Ask {
     pub answer: Option<bool>,
 }
 
+/// A model Claude Code offers, as `initialize` lists it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Model {
+    /// What `set_model` takes, like `opus`.
+    pub value: String,
+    pub name: String,
+    /// The effort levels it takes, none for a model without effort.
+    pub efforts: Vec<String>,
+}
+
+/// A slash command, as `initialize` lists it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Command {
+    pub name: String,
+    pub description: String,
+    pub hint: String,
+}
+
+/// The permission modes Claude Code runs in, as `set_permission_mode` takes them, with what the chat calls them.
+pub const MODES: [(&str, &str); 4] = [("default", "Ask first"), ("acceptEdits", "Accept edits"), ("plan", "Plan"), ("auto", "Auto")];
+
+/// The ids of the requests the chat makes as Claude Code starts, which its answers come back under.
+pub const INITIALIZE: &str = "initialize";
+pub const CONTEXT: &str = "context";
+
 #[derive(Debug, Default)]
 pub struct Session {
     pub items: Vec<Item>,
     /// Claude's text of the message it is writing now, before the whole message comes.
     pub live: String,
+    /// Claude is thinking before it writes.
+    pub thinking: bool,
     pub id: Option<String>,
+    /// The model the session runs on, as Claude Code names it (`claude-opus-5-5`) or as it was picked (`opus`).
     pub model: Option<String>,
+    pub effort: Option<String>,
+    /// The permission mode, one of `MODES`' or another Claude Code has.
+    pub mode: Option<String>,
+    pub models: Vec<Model>,
+    pub commands: Vec<Command>,
+    /// The tokens in the context window after the last message, and how many it holds.
+    pub context: Option<(u64, u64)>,
     /// A turn is running: from your message to its result.
     pub working: bool,
     /// What the session has cost so far, in US dollars.
@@ -69,9 +107,11 @@ impl Session {
             "system" if line["subtype"] == "init" => {
                 self.id = line["session_id"].as_str().map(str::to_owned);
                 self.model = line["model"].as_str().map(str::to_owned);
+                self.mode = line["permissionMode"].as_str().map(str::to_owned).or(self.mode.take());
             }
+            "control_response" => self.answered(&line["response"]),
             "stream_event" => self.stream(&line["event"]),
-            "assistant" => self.assistant(&line["message"]["content"]),
+            "assistant" => self.assistant(&line["message"]),
             "user" if line["isMeta"] != true => self.user(&line["message"]["content"]),
             "control_request" if line["request"]["subtype"] == "can_use_tool" => {
                 let request = &line["request"];
@@ -100,9 +140,48 @@ impl Session {
         }
     }
 
+    /// Claude Code's answer to one of the chat's requests.
+    fn answered(&mut self, response: &Value) {
+        let answer = &response["response"];
+        match response["request_id"].as_str().unwrap_or_default() {
+            INITIALIZE => {
+                let text = |value: &Value, key: &str| value[key].as_str().unwrap_or_default().to_owned();
+                self.models = answer["models"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|model| Model {
+                        value: text(model, "value"),
+                        name: text(model, "displayName"),
+                        efforts: model["supportedEffortLevels"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect(),
+                    })
+                    .collect();
+                self.commands = answer["commands"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|command| Command { name: text(command, "name"), description: text(command, "description"), hint: text(command, "argumentHint") })
+                    .collect();
+                self.mode = answer["current_permission_mode"].as_str().map(str::to_owned).or(self.mode.take());
+            }
+            CONTEXT => {
+                if let (Some(used), Some(most)) = (answer["totalTokens"].as_u64(), answer["maxTokens"].as_u64()) {
+                    self.context = Some((used, most));
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn stream(&mut self, event: &Value) {
         match event["type"].as_str().unwrap_or_default() {
-            "content_block_start" if event["content_block"]["type"] == "text" => self.live.clear(),
+            "content_block_start" => {
+                self.thinking = event["content_block"]["type"] == "thinking";
+                if event["content_block"]["type"] == "text" {
+                    self.live.clear();
+                }
+            }
+            "content_block_stop" => self.thinking = false,
             "content_block_delta" if event["delta"]["type"] == "text_delta" => {
                 self.live.push_str(event["delta"]["text"].as_str().unwrap_or_default());
             }
@@ -110,8 +189,14 @@ impl Session {
         }
     }
 
-    fn assistant(&mut self, content: &Value) {
-        for block in content.as_array().into_iter().flatten() {
+    fn assistant(&mut self, message: &Value) {
+        // What the window holds now: everything sent in, cached or not, and what came out.
+        let usage = &message["usage"];
+        let used: u64 = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens"].iter().filter_map(|key| usage[*key].as_u64()).sum();
+        if let Some((_, most)) = self.context.filter(|_| used > 0) {
+            self.context = Some((used, most));
+        }
+        for block in message["content"].as_array().into_iter().flatten() {
             match block["type"].as_str().unwrap_or_default() {
                 "text" => {
                     self.live.clear();
@@ -136,13 +221,13 @@ impl Session {
 
     fn user(&mut self, content: &Value) {
         if let Some(text) = content.as_str() {
-            return self.items.push(Item::User(text.to_owned()));
+            return self.items.extend(said(text));
         }
         for block in content.as_array().into_iter().flatten() {
             match block["type"].as_str().unwrap_or_default() {
                 // What Claude Code writes in your name when a turn is stopped, which `Stopped` shows.
                 "text" if block["text"].as_str().is_some_and(|text| text.starts_with("[Request interrupted by user")) => {}
-                "text" => self.items.push(Item::User(block["text"].as_str().unwrap_or_default().to_owned())),
+                "text" => self.items.extend(said(block["text"].as_str().unwrap_or_default())),
                 "tool_result" => {
                     let id = block["tool_use_id"].as_str().unwrap_or_default();
                     let output = match &block["content"] {
@@ -170,10 +255,42 @@ impl Session {
         line(&json!({ "type": "user", "message": { "role": "user", "content": text } }))
     }
 
+    /// What the chat asks Claude Code as it starts: the models and commands it has, and how full the context is.
+    pub fn opening() -> String {
+        [request(INITIALIZE, json!({ "subtype": "initialize" })), request(CONTEXT, json!({ "subtype": "get_context_usage" }))].concat()
+    }
+
+    /// The line that switches the session to `model`, which is then shown.
+    pub fn set_model(&mut self, model: &str, n: u32) -> String {
+        self.model = Some(model.to_owned());
+        request(&format!("model-{n}"), json!({ "subtype": "set_model", "model": model }))
+    }
+
+    /// The line that sets how hard Claude thinks from the next message on.
+    pub fn set_effort(&mut self, effort: &str, n: u32) -> String {
+        self.effort = Some(effort.to_owned());
+        request(&format!("effort-{n}"), json!({ "subtype": "apply_flag_settings", "settings": { "effortLevel": effort } }))
+    }
+
+    /// The line that switches the permission mode.
+    pub fn set_mode(&mut self, mode: &str, n: u32) -> String {
+        self.mode = Some(mode.to_owned());
+        request(&format!("mode-{n}"), json!({ "subtype": "set_permission_mode", "mode": mode }))
+    }
+
+    /// The model the session runs on, among `models`: by its value, or by the full name Claude Code reports.
+    pub fn current_model(&self) -> Option<&Model> {
+        let model = self.model.as_deref()?;
+        self.models.iter().find(|m| m.value == model).or_else(|| {
+            let family = model.trim_start_matches("claude-").split('-').next()?;
+            self.models.iter().find(|m| m.value == family)
+        })
+    }
+
     /// The line that asks Claude to stop the turn it is on, the `n`th time you have.
     pub fn interrupt(&mut self, n: u32) -> String {
         self.stopping = true;
-        line(&json!({ "type": "control_request", "request_id": format!("interrupt-{n}"), "request": { "subtype": "interrupt" } }))
+        request(&format!("interrupt-{n}"), json!({ "subtype": "interrupt" }))
     }
 
     /// The line that answers the question `request`, which is then shown answered. None when there is no such question
@@ -196,6 +313,58 @@ impl Session {
 
 fn line(message: &Value) -> String {
     format!("{message}\n")
+}
+
+/// A request of the chat's to Claude Code, answered under `id`.
+fn request(id: &str, request: Value) -> String {
+    line(&json!({ "type": "control_request", "request_id": id, "request": request }))
+}
+
+/// A text in your name as the chat shows it: what you wrote, or a note for what Claude Code wrote in your name, which
+/// starts with a tag of its own: a background task's notice, a reminder, a slash command or what it printed. The
+/// caveat Claude Code puts before a command's output says nothing to you, and shows nothing.
+fn said(text: &str) -> Option<Item> {
+    let text = text.trim();
+    let tag = text.strip_prefix('<').and_then(|rest| rest.split_once('>')).map(|(tag, _)| tag).filter(|tag| {
+        tag.starts_with(|c: char| c.is_ascii_lowercase()) && tag.chars().all(|c| c.is_ascii_lowercase() || c == '-')
+    });
+    let Some(tag) = tag else {
+        return (!text.is_empty()).then(|| Item::User(text.to_owned()));
+    };
+    let inner = |name: &str| text.split_once(&format!("<{name}>"))?.1.split_once(&format!("</{name}>")).map(|(inside, _)| inside.trim());
+    let title = match tag {
+        "local-command-caveat" => return None,
+        "task-notification" => match inner("summary") {
+            Some(summary) => summary.to_owned(),
+            None => "A background task finished".to_owned(),
+        },
+        "system-reminder" => "Reminder".to_owned(),
+        "command-name" | "command-message" => format!("Ran {}", inner("command-name").unwrap_or("a command")),
+        "local-command-stdout" => "Command output".to_owned(),
+        "bash-input" => format!("Ran {}", inner("bash-input").unwrap_or("a shell command")),
+        "bash-stdout" | "bash-stderr" => "Shell output".to_owned(),
+        // A tag of your own, like a bit of HTML you pasted.
+        _ => return Some(Item::User(text.to_owned())),
+    };
+    Some(Item::Note(cut(&title, SUMMARY_KEPT), cut(&untagged(text), OUTPUT_KEPT)))
+}
+
+/// `text` without its tags, and without the lines they leave empty.
+fn untagged(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(open) = rest.find('<') {
+        out.push_str(&rest[..open]);
+        match rest[open..].find('>') {
+            Some(close) => rest = &rest[open + close + 1..],
+            None => {
+                rest = &rest[open..];
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+    out.lines().map(str::trim_end).filter(|line| !line.trim().is_empty()).collect::<Vec<_>>().join("\n")
 }
 
 /// What a tool is doing, in one line: the command it runs, the file or the pattern, or else its first text input.
@@ -307,6 +476,24 @@ mod tests {
             r#"{"type":"assistant","parent_tool_use_id":"toolu_1","message":{"content":[{"type":"text","text":"a subagent's"}]}}"#,
         ));
         assert_eq!(session.items, [Item::User("Fix the build".into()), Item::Text("Done.".into())]);
+        // As this very session's transcript has them: what Claude Code wrote in your name is a note, not yours.
+        let added = heard(concat!(
+            r#"{"type":"user","message":{"role":"user","content":"<task-notification>\n<task-id>b1</task-id>\n<summary>Survey stopped</summary>\n</task-notification>"}}"#,
+            "\n",
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"<local-command-caveat>The command below was run</local-command-caveat>"}]}}"#,
+            "\n",
+            r#"{"type":"user","message":{"role":"user","content":"<command-name>/reload-plugins</command-name>\n<command-args></command-args>"}}"#,
+            "\n",
+            r#"{"type":"user","message":{"role":"user","content":"<b>bold</b> is mine"}}"#,
+        ));
+        assert_eq!(
+            added.items,
+            [
+                Item::Note("Survey stopped".into(), "b1\nSurvey stopped".into()),
+                Item::Note("Ran /reload-plugins".into(), "/reload-plugins".into()),
+                Item::User("<b>bold</b> is mine".into()),
+            ]
+        );
     }
 
     #[test]

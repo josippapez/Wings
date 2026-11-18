@@ -24,6 +24,16 @@ enum Child {
 }
 
 impl Node {
+    /// How many nodes it makes in the page, itself and all it holds. The app draws a page of at most 5,000.
+    pub fn count(&self) -> usize {
+        let children = self.children.iter().map(|child| match child {
+            Child::Node(node) => node.count(),
+            Child::Text(_) => 1,
+            Child::Group(nodes) => nodes.iter().map(Node::count).sum(),
+        });
+        1 + children.sum::<usize>()
+    }
+
     pub fn new(kind: &'static str) -> Self {
         Self { kind, key: None, props: Map::new(), handlers: Vec::new(), children: Vec::new() }
     }

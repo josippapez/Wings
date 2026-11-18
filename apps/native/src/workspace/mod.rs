@@ -365,6 +365,11 @@ impl Workspace {
             config.projects.clone(),
             config.project.clone(),
         ));
+        let ai = config
+            .ai
+            .clone()
+            .map(|dir| Arc::new(wings_agents::ai::Ai::new(dir)));
+        let sessions = history::Sessions::new(config.sessions.clone(), ai.clone());
         let plugin_env = Arc::new(plugin_env::AppEnv::new(
             plugin_events,
             config.agents.clone().unwrap_or_default(),
@@ -372,12 +377,8 @@ impl Workspace {
             config.plugins.as_ref().map(installed::load_store),
             config.socket.clone(),
             config.state.clone(),
+            sessions.clone(),
         ));
-        let ai = config
-            .ai
-            .clone()
-            .map(|dir| Arc::new(wings_agents::ai::Ai::new(dir)));
-        let sessions = history::Sessions::new(config.sessions.clone(), ai.clone());
         if let Some(ai) = &ai {
             summaries::start(ai.clone(), sessions.clone());
         }

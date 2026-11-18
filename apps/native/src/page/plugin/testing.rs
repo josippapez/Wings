@@ -74,6 +74,8 @@ pub(super) struct FakeEnv {
     pub secrets: Mutex<std::collections::HashMap<(String, String, String), String>>,
     /// What Claude Code told `wings statusline`.
     pub statusline: Mutex<wings_connect::statusline::Statusline>,
+    /// The past sessions of every project, which `pastSessions` gets with its project and query.
+    pub past: Mutex<Vec<serde_json::Value>>,
     log: Mutex<Vec<Seen>>,
     changed: Condvar,
 }
@@ -91,6 +93,7 @@ impl FakeEnv {
             running: Running::default(),
             secrets: Mutex::default(),
             statusline: Mutex::default(),
+            past: Mutex::default(),
             log: Mutex::default(),
             changed: Condvar::new(),
         })
@@ -149,6 +152,12 @@ impl Env for FakeEnv {
     }
     fn current_project(&self) -> Option<PathBuf> {
         self.projects.lock().unwrap().first().cloned()
+    }
+    fn past_sessions(&self, project: &std::path::Path, query: &str, limit: usize) -> Vec<serde_json::Value> {
+        let project = project.to_string_lossy();
+        let past = self.past.lock().unwrap();
+        let matches = past.iter().filter(|s| s["cwd"] == *project && s["firstPrompt"].as_str().unwrap_or("").contains(query));
+        matches.take(limit).cloned().collect()
     }
 
     fn open_pane(&self, plan: super::OpenPane, reply: crate::page::runtime::Reply) {

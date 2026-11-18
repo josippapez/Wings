@@ -782,6 +782,20 @@ impl PageView {
         items
     }
 
+    /// A child of a stack that rises in: it plays once, the first time a node of its id is drawn, so the items already
+    /// there stay put as new ones come. A tween asks for frames only while it runs.
+    fn rising(&self, node: &Node, cx: &mut Context<Self>) -> AnyElement {
+        let element = div().min_w_0().flex().flex_col().child(self.node(node, cx));
+        let Some(id) = node.id() else {
+            return element.into_any_element();
+        };
+        crate::ui::motion::tween(element, ElementId::NamedInteger("page-rise".into(), id), crate::ui::motion::RISE, |el, t, reduced| {
+            let (opacity, below) = crate::ui::motion::rise_frame(t, reduced);
+            el.opacity(opacity).relative().top(px(below))
+        })
+        .into_any_element()
+    }
+
     /// A `Text`. In a baseline row it has a `drop`: its first line starts that many points down, onto the row's
     /// baseline, and it narrows to its longest word and wraps when the row is short of room, as a CSS flex item does
     /// even when it doesn't grow. GPUI takes a text's narrowest as its whole line, so an issue's long title ran over the
@@ -843,9 +857,21 @@ impl PageView {
                     .any(|node| !matches!(node, Node::Str { text, .. } if text.is_empty())),
                 |el| el.child(self.inline(&text.children, cx)),
             );
+        // A shimmer pulses as the page's spinners turn: at most 30 frames a second, and still under Reduce motion.
+        let element = match text.shimmer {
+            true => element
+                .with_animation(
+                    ElementId::NamedInteger("page-shimmer".into(), text.id),
+                    Animation::new(SHIMMER).repeat().with_max_fps(30.0),
+                    |el, t| el.opacity(0.45 + 0.55 * (0.5 + 0.5 * (t * std::f32::consts::TAU).cos())),
+                )
+                .into_any_element(),
+            false => element.into_any_element(),
+        };
         if text.on_click.is_none() && text.title.is_none() {
-            return element.into_any_element();
+            return element;
         }
+        let element = div().child(element);
         // A tooltip needs an id to hang on.
         let element = element
             .id(ElementId::NamedInteger("page-text".into(), text.id))
@@ -1002,7 +1028,10 @@ impl PageView {
                 .when_some(stack.max_width, |el, width| {
                     el.w_full().max_w(px(width)).mx_auto()
                 })
-                .children(self.items(&stack.children, cx))
+                .map(|el| match stack.enter {
+                    true => el.children(stack.children.iter().map(|child| self.rising(child, cx))),
+                    false => el.children(self.items(&stack.children, cx)),
+                })
                 .into_any_element(),
             Node::Row(row) => self.row(row, cx),
             Node::Text(text) => self.text_element(text, None, cx),
@@ -1107,6 +1136,20 @@ impl PageView {
                 } else {
                     self.inline(&loading.children, cx)
                 })
+                .into_any_element(),
+            Node::Card(card) if card.raised => ui::plain_card(self.nodes(&card.children, cx))
+                .gap(px(6.0))
+                .px(px(12.0))
+                .py(px(10.0))
+                .rounded(px(14.0))
+                .border_color(rgba(theme::HAIRLINE_STRONG))
+                .shadow(vec![gpui::BoxShadow {
+                    color: gpui::hsla(0.0, 0.0, 0.0, 0.28),
+                    offset: gpui::point(px(0.0), px(6.0)),
+                    blur_radius: px(18.0),
+                    spread_radius: px(0.0),
+                    inset: false,
+                }])
                 .into_any_element(),
             Node::Card(card) => ui::plain_card(self.nodes(&card.children, cx)).into_any_element(),
             Node::Heading(heading) => ui::heading(self.inline(&heading.children, cx))
@@ -1605,6 +1648,9 @@ impl Render for PageView {
             })
     }
 }
+
+/// One pulse of a shimmering `Text`: bright, faint and bright again.
+const SHIMMER: std::time::Duration = std::time::Duration::from_millis(1600);
 
 /// How near its end, in points, a following `Scroll` still counts as there: a line's worth of a pointer's drift.
 const FOLLOW_SLACK: f32 = 24.0;

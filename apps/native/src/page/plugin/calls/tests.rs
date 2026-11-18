@@ -1121,6 +1121,24 @@ fn a_sidebar_label_is_cleaned_and_only_for_the_plugins_own_pages() {
 }
 
 #[test]
+fn past_sessions_are_the_projects_and_need_its_prompts_granted() {
+    let rig = Rig::new(json!({ "permissions": { "transcript": ["user", "assistant"] } }), panes());
+    *rig.env.projects.lock().unwrap() = vec![tmp()];
+    let here = tmp().to_string_lossy().into_owned();
+    *rig.env.past.lock().unwrap() = vec![
+        json!({ "id": "s1", "cwd": here, "firstPrompt": "fix the build" }),
+        json!({ "id": "s2", "cwd": "/elsewhere", "firstPrompt": "fix the docs" }),
+        json!({ "id": "s3", "cwd": here, "firstPrompt": "add a chat" }),
+    ];
+    let ids = |result: Value| result.as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+    assert_eq!(ids(rig.allows("pastSessions", json!({}))), ["s1", "s3"]);
+    assert_eq!(ids(rig.allows("pastSessions", json!({ "query": "build" }))), ["s1"]);
+    assert_eq!(ids(rig.allows("pastSessions", json!({ "limit": 1 }))), ["s1"]);
+    let replies_only = Rig::new(json!({ "permissions": { "transcript": ["assistant"] } }), panes());
+    assert!(replies_only.refuses("pastSessions", json!({})).contains("needs \"user\" in permissions.transcript"));
+}
+
+#[test]
 fn focus_pane_needs_panes_granted_and_a_pane_that_is_there() {
     let rig = Rig::new(json!({ "permissions": { "panes": [] } }), panes());
     assert_eq!(rig.allows("focusPane", json!({ "paneId": "2" })), json!(null));

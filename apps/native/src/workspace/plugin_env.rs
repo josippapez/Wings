@@ -336,6 +336,8 @@ pub(super) struct AppEnv {
     pub(super) store: Option<Arc<Mutex<wings_plugins::store::Store>>>,
     /// The connections of the socket, told when the plugins' tools change.
     pub(super) clients: Arc<wings_connect::server::Clients>,
+    /// The past sessions the Past Sessions sheet lists, for `wings.pastSessions`.
+    sessions: super::history::Sessions,
 }
 
 impl AppEnv {
@@ -361,6 +363,7 @@ impl AppEnv {
         store: Option<wings_plugins::store::Store>,
         socket: Option<PathBuf>,
         state: Option<PathBuf>,
+        sessions: super::history::Sessions,
     ) -> Self {
         let os = Os {
             socket,
@@ -377,6 +380,7 @@ impl AppEnv {
             statusline: Mutex::default(),
             store: store.map(|store| Arc::new(Mutex::new(store))),
             clients: Arc::default(),
+            sessions,
         }
     }
 
@@ -447,6 +451,24 @@ impl AppEnv {
 }
 
 impl Env for AppEnv {
+    fn past_sessions(&self, project: &std::path::Path, query: &str, limit: usize) -> Vec<serde_json::Value> {
+        let filter = wings_agents::history::Filter {
+            project: Some(project.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        self.sessions
+            .search(query, &filter, limit)
+            .sessions
+            .into_iter()
+            .filter(|hit| hit.agent == wings_agents::history::Agent::Claude)
+            .map(|hit| {
+                serde_json::json!({
+                    "id": hit.id, "title": hit.name.or(hit.title), "firstPrompt": hit.first_prompt, "cwd": hit.cwd,
+                    "gitBranch": hit.git_branch, "lastActiveMs": hit.last_active_ms, "messages": hit.messages,
+                })
+            })
+            .collect()
+    }
     fn focus_pane(&self, pane: &str, reply: crate::page::runtime::Reply) {
         let event = UiEvent::FocusPane { pane: pane.into(), reply: reply.clone() };
         if self.events.try_send(event).is_err() {

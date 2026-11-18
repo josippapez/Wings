@@ -19,7 +19,7 @@ fn badge(pane: &Value) -> Value {
         "label": "Chat",
         "tone": "neutral",
         "title": "Claude chat (experimental)",
-        "rows": [{ "label": "Open as chat", "value": "Ends this terminal and goes on with the session in a chat tab" }],
+        "rows": [{ "label": "Open as chat", "value": "Once Claude has finished, ends this terminal and goes on with the session in a chat tab" }],
         "actions": [{ "id": "open", "label": "Open as chat", "primary": true }],
     })
 }
@@ -45,7 +45,12 @@ pub fn start() {
     host::on_action(|action| async move {
         let id = action["paneId"].as_str().unwrap_or_default().to_owned();
         let pane = PANES.with(|panes| panes.borrow().iter().find(|pane| pane["paneId"] == id.as_str()).cloned());
-        let args = pane.as_ref().and_then(chat_args).ok_or("Claude Code isn't running in this terminal any more")?;
+        let pane = pane.ok_or("Claude Code isn't running in this terminal any more")?;
+        // Closing the terminal ends Claude Code there, and with it a turn it is on.
+        if !matches!(pane["session"]["state"].as_str(), Some("idle" | "done")) {
+            return Err("Claude is still working in this terminal. Open it as a chat once it has finished.".into());
+        }
+        let args = chat_args(&pane).ok_or("Claude Code isn't running in this terminal any more")?;
         // The terminal's Claude Code ends first, so the chat's is the only one writing to the session.
         host::close_pane(&id).await?;
         host::open_view_with("chat", "tab", &args).await.map(drop)

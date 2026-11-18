@@ -208,6 +208,8 @@ pub struct Stack {
     pub width: Option<f32>,
     /// At most this wide, centred: a reading column, as plugin-ui.css's `.w-stack[data-max-width]`.
     pub max_width: Option<f32>,
+    /// `enter: "rise"`: a child that wasn't there before fades in and rises into place, as a chat's new message does.
+    pub enter: bool,
     pub children: Vec<Node>,
 }
 
@@ -236,6 +238,8 @@ pub struct Text {
     pub on_click: Option<String>,
     /// The hover text, drawn as the app's tooltip.
     pub title: Option<String>,
+    /// It pulses softly, as a shimmer does, while something it names is under way, like "Thinking".
+    pub shimmer: bool,
     pub children: Vec<Node>,
 }
 
@@ -320,6 +324,8 @@ pub struct Loading {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Card {
     pub id: u64,
+    /// `variant: "raised"`: rounder, and lifted off the page by a shadow, as a chat's message box floats.
+    pub raised: bool,
     pub children: Vec<Node>,
 }
 
@@ -489,6 +495,9 @@ pub struct Select {
     pub on_change: Option<String>,
     /// Chips drawn as `Tabs` of the "line" variant are: labels with a line under the picked one.
     pub line: bool,
+    /// `variant: "ghost"`: a select as wide as its choice, with no box until you point at it, for a row of settings
+    /// beside a field, like a chat's model and effort.
+    pub quiet: bool,
 }
 
 /// wings-plugin-ui's `Menu`: a button that opens a list of actions over the page, under it. The page sends the button
@@ -547,6 +556,8 @@ pub struct Input {
     pub rows: Option<usize>,
     /// `submitOnEnter`: a `Textarea` that sends Enter to `onKeyDown`, and starts a new line on Shift-Enter.
     pub enter_submits: bool,
+    /// `variant: "bare"`: no frame of its own, for a field inside a box that frames it.
+    pub bare: bool,
     pub disabled: bool,
     pub max_length: Option<usize>,
     /// What to send back to the page, with the text after each edit.
@@ -738,6 +749,55 @@ pub fn plain_text(nodes: &[Node]) -> String {
 }
 
 impl Node {
+    /// The node's id, which a keyed node keeps from one build of the page to the next. A slot has none: it is a part of
+    /// the component it's in.
+    pub fn id(&self) -> Option<u64> {
+        match self {
+            Node::Str { id, .. } => Some(*id),
+            Node::Slot(_) => None,
+            Node::Page(n) => Some(n.id),
+            Node::Toolbar(n) => Some(n.id),
+            Node::Stack(n) => Some(n.id),
+            Node::Row(n) => Some(n.id),
+            Node::Text(n) => Some(n.id),
+            Node::Button(n) => Some(n.id),
+            Node::Notice(n) => Some(n.id),
+            Node::Spinner(n) => Some(n.id),
+            Node::Checkbox(n) => Some(n.id),
+            Node::Confirm(n) => Some(n.id),
+            Node::Badge(n) => Some(n.id),
+            Node::Empty(n) => Some(n.id),
+            Node::Loading(n) => Some(n.id),
+            Node::Card(n) => Some(n.id),
+            Node::Heading(n) => Some(n.id),
+            Node::Dot(n) => Some(n.id),
+            Node::Gauge(n) => Some(n.id),
+            Node::Meter(n) => Some(n.id),
+            Node::Board(n) => Some(n.id),
+            Node::BoardRow(n) => Some(n.id),
+            Node::BoardColumn(n) => Some(n.id),
+            Node::List(n) => Some(n.id),
+            Node::ListItem(n) => Some(n.id),
+            Node::Disclosure(n) => Some(n.id),
+            Node::Select(n) => Some(n.id),
+            Node::Chips(n) => Some(n.id),
+            Node::Combobox(n) => Some(n.id),
+            Node::Menu(n) => Some(n.id),
+            Node::ListButton(n) => Some(n.button.id),
+            Node::SearchField(n) => Some(n.id),
+            Node::Input(n) => Some(n.id),
+            Node::Icon(n) => Some(n.id),
+            Node::Svg(n) => Some(n.id),
+            Node::Graph(n) => Some(n.id),
+            Node::Avatar(n) => Some(n.id),
+            Node::Skeleton(n) => Some(n.id),
+            Node::Scroll(n) => Some(n.id),
+            Node::Split(n) => Some(n.id),
+            Node::Bar(n) => Some(n.id),
+            Node::Sunburst(n) => Some(n.id),
+        }
+    }
+
     /// What the component holds, one list for each of its named parts.
     pub fn parts(&self) -> Vec<&[Node]> {
         match self {
@@ -911,6 +971,7 @@ impl Walk {
                 max_width: number(&props, "maxWidth")
                     .filter(|width| *width > 0.0)
                     .map(|width| width as f32),
+                enter: str_prop(&props, "enter") == Some("rise"),
                 children: parts(children),
             }),
             "Row" => Node::Row(Row {
@@ -935,6 +996,7 @@ impl Walk {
                     .filter(|handler| valid_handler(handler))
                     .map(str::to_owned),
                 title: title(&props),
+                shimmer: on("shimmer"),
                 children: parts(children),
             }),
             "Avatar" => Node::Avatar(Avatar {
@@ -1021,6 +1083,7 @@ impl Walk {
             }),
             "Card" => Node::Card(Card {
                 id,
+                raised: str_prop(&props, "variant") == Some("raised"),
                 children: parts(children),
             }),
             "Heading" => Node::Heading(Heading {
@@ -1151,6 +1214,7 @@ impl Walk {
                 rows: (kind == "Textarea")
                     .then(|| number(&props, "rows").unwrap_or(2.0).clamp(1.0, 24.0) as usize),
                 enter_submits: on("submitOnEnter"),
+                bare: str_prop(&props, "variant") == Some("bare"),
                 disabled: on("disabled"),
                 max_length: number(&props, "maxLength")
                     .filter(|max| *max >= 0.0)
@@ -1205,6 +1269,7 @@ impl Walk {
                         .filter(|handler| valid_handler(handler))
                         .map(str::to_owned),
                     line: kind == "Chips" && on("line"),
+                    quiet: kind == "Select" && str_prop(&props, "variant") == Some("ghost"),
                 };
                 if kind == "Chips" {
                     Node::Chips(select)
@@ -1576,6 +1641,26 @@ mod tests {
 
     fn parse_one(node: Value) -> Node {
         tree(json!([node])).unwrap().children.remove(0)
+    }
+
+    #[test]
+    fn a_chat_column_rises_in_a_scroll_that_follows_its_end_and_its_thinking_shimmers() {
+        let Node::Scroll(scroll) = parse_one(json!({"id":1,"type":"Scroll","props":{"follow":"end"},"children":[
+            {"id":2,"type":"Stack","props":{"enter":"rise"},"children":[
+                {"id":3,"type":"Text","props":{"shimmer":true},"children":[text(4, "Thinking")]}
+            ]}
+        ]})) else { panic!() };
+        assert!(scroll.follow_end);
+        let Node::Stack(column) = &scroll.children[0] else { panic!() };
+        assert!(column.enter);
+        let Node::Text(thinking) = &column.children[0] else { panic!() };
+        assert!(thinking.shimmer);
+        assert_eq!(thinking.children[0].id(), Some(4));
+        let Node::Scroll(plain) = parse_one(json!({"id":1,"type":"Scroll","props":{},"children":[
+            {"id":2,"type":"Stack","props":{"enter":"fade"},"children":[]}
+        ]})) else { panic!() };
+        assert!(!plain.follow_end);
+        assert!(matches!(&plain.children[0], Node::Stack(stack) if !stack.enter));
     }
 
     #[test]

@@ -52,6 +52,19 @@ fn a_page_writes_to_a_program_hears_its_lines_and_hears_when_it_ends() {
 }
 
 #[test]
+fn a_program_reads_what_it_was_started_with_before_anything_written_later() {
+    let rig = rig(&["cat []"]);
+    let caller = Caller::start(&rig.host);
+    let mut start = spawn("chat", "cat", &[]);
+    start["input"] = json!("{\"subtype\":\"initialize\"}\n");
+    caller.send("spawn", start);
+    caller.send_after_click("processWrite", json!({ "token": "chat", "text": "after\n" }));
+    let (lines, _) = hear(&caller, 3);
+    assert_eq!(lines, ["{\"subtype\":\"initialize\"}", "after"]);
+    caller.send("processStop", json!({ "token": "chat" }));
+}
+
+#[test]
 fn a_page_writes_to_a_program_only_right_after_you_click_or_type_in_it() {
     let rig = rig(&["cat []"]);
     let caller = Caller::start(&rig.host);

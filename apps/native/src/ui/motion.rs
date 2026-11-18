@@ -34,6 +34,16 @@ pub const TOOLTIP_IN: Duration = Duration::from_millis(150);
 pub const POPUP_IN: Duration = Duration::from_millis(100);
 /// How far a tooltip or menu slides in from: `slide-in-from-*-2`, two of Tailwind's 4px spacing steps.
 pub const SLIDE_IN: f32 = 8.0;
+/// An item of a page coming in, like a chat's new message: `animate-in fade-in slide-in-from-bottom-2 duration-200`.
+pub const RISE: Duration = Duration::from_millis(200);
+
+/// One frame of `RISE`, `t` of the way through in time: the item's opacity, and how far below its place it is. Reduce
+/// motion keeps the fade alone.
+pub fn rise_frame(t: f32, reduced: bool) -> (f32, f32) {
+    let eased = cubic_bezier(EASE_OUT_SOFT)(t);
+    (eased, if reduced { 0.0 } else { SLIDE_IN * (1.0 - eased) })
+}
+
 /// The history sheet's dimmed backdrop fading in: `transition-opacity duration-150`.
 pub const SHEET_BACKDROP: Duration = Duration::from_millis(150);
 /// The history sheet coming in from the right: `transition duration-200 ease-in-out` from `translate-x-[2.5rem]`.

@@ -335,6 +335,13 @@ pub fn open_pane(cwd: &str) -> Pending<Result<Value, String>> {
     call("openPane", json!({ "command": null, "args": [], "cwd": cwd, "placement": "tab" }))
 }
 
+/// `wings.pastSessions`: the Claude Code sessions of the project on screen, most recent first, that match `query`, at
+/// most `limit`: each `{ id, title, firstPrompt, cwd, gitBranch, lastActiveMs, messages }`. Needs `user` in
+/// `permissions.transcript`.
+pub fn past_sessions(query: &str, limit: u32) -> Pending<Result<Value, String>> {
+    call("pastSessions", json!({ "query": query, "limit": limit }))
+}
+
 /// `wings.closePane`: ends the program in a pane of the project on screen and closes the pane. Needs `panes`.
 pub fn close_pane(pane: &str) -> Pending<Result<Value, String>> {
     call("closePane", json!({ "paneId": pane }))
@@ -695,13 +702,15 @@ impl ProcessInput {
 }
 
 /// `wings.spawn`: runs a program the manifest's `processes` lists, in the folder `cwd`, which has to be in one of your
-/// projects, and keeps it running until it ends, it is stopped, or the frame closes. `on_line` hears each line it
-/// prints to stdout, in order and none lost: as JSON when the line is JSON, and as a string when it isn't.
-pub fn spawn(program: &str, args: &[&str], cwd: &str, on_line: impl Fn(&Value) + 'static) -> Process {
+/// projects, and keeps it running until it ends, it is stopped, or the frame closes. `input` is what it reads first,
+/// sent with its start (empty for nothing): later writes need your click or key. `on_line` hears each line it prints to
+/// stdout, in order and none lost: as JSON when the line is JSON, and as a string when it isn't.
+pub fn spawn(program: &str, args: &[&str], cwd: &str, input: &str, on_line: impl Fn(&Value) + 'static) -> Process {
     let id = next_id();
     let token = format!("process-{id}");
     OUTPUTS.with(|outputs| outputs.borrow_mut().insert(id, Rc::new(on_line)));
-    let answer = call_as(id, "spawn", json!({ "program": program, "args": args, "cwd": cwd, "token": token }));
+    let input = (!input.is_empty()).then_some(input);
+    let answer = call_as(id, "spawn", json!({ "program": program, "args": args, "cwd": cwd, "token": token, "input": input }));
     Process { input: ProcessInput(token), answer }
 }
 

@@ -48,6 +48,8 @@ pub struct TextField {
     pub enter_submits: bool,
     /// Takes the width of its place, not `width`.
     pub fill: bool,
+    /// Drawn with no frame of its own, inside a box that is its frame, as a chat's message box is.
+    pub bare: bool,
     /// Dimmed, and takes no typing.
     pub disabled: bool,
     /// The most characters it holds: what is typed or pasted past that is dropped.
@@ -108,6 +110,7 @@ impl TextField {
             rows: None,
             enter_submits: false,
             fill: false,
+            bare: false,
             disabled: false,
             max_chars: None,
             secret: false,
@@ -618,7 +621,7 @@ impl Render for TextField {
             .on_action(cx.listener(Self::on_copy))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
             .relative()
-            .when(self.fill, |field| {
+            .when(self.fill && !self.bare, |field| {
                 // A form input draws its own frame, shadcn's `Input`, so focus shows on it.
                 field
                     .w_full()
@@ -629,11 +632,12 @@ impl Render for TextField {
                     .bg(rgba(HOVER))
                     .focus(|style| style.border_color(rgb(FOREGROUND)))
             })
+            .when(self.fill && self.bare, |field| field.w_full().min_w_0())
             .when(!self.fill, |field| field.w(self.width))
-            .px(px(8.0))
+            .px(px(if self.bare { 4.0 } else { 8.0 }))
             .flex()
             .overflow_hidden()
-            .text_size(px(13.0))
+            .text_size(px(if self.bare { 14.0 } else { 13.0 }))
             .cursor_text()
             .opacity(if self.disabled { 0.5 } else { 1.0 })
             .when_some(self.rows, |field, rows| {

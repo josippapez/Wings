@@ -151,6 +151,18 @@ impl Env for FixtureEnv {
     }
     fn set_badge(&self, _: &str, _: &str, _: Option<Badge>) {}
     fn set_pane_status(&self, _: &str, _: &str, _: Option<PaneStatus>) {}
+    fn past_sessions(&self, project: &std::path::Path, _: &str, _: usize) -> Vec<serde_json::Value> {
+        let hours = |n: u64| now_ms() - n * 3_600_000;
+        let session = |id: &str, title: &str, branch: &str, ago: u64, messages: u64| {
+            json!({ "id": id, "title": title, "firstPrompt": title, "cwd": project, "gitBranch": branch, "lastActiveMs": hours(ago), "messages": messages })
+        };
+        vec![
+            session("1d3f6a9e-0b2c-4f1d-8e7a-5c9b2d4e6f10", "Fix the flaky checkout test", "main", 1, 24),
+            session("2e4a7b0f-1c3d-4e2f-9f8b-6d0c3e5f7a21", "Split checkout into its own package", "checkout-pkg", 5, 61),
+            session("3f5b8c1a-2d4e-4f3a-8a9c-7e1d4f6a8b32", "Why is the rate limiter returning 429s?", "main", 26, 12),
+            session("4a6c9d2b-3e5f-4a4b-9bad-8f2e5a7b9c43", "Add Stripe webhooks for refunds", "refunds", 72, 88),
+        ]
+    }
 }
 
 /// The made-up data's "now": when the run started, so data made up later in the run lines up with data made earlier.
@@ -716,7 +728,32 @@ fn claude_chat(out: PathBuf) {
     };
     let text = |text: &str| assistant(json!([{ "type": "text", "text": text }]));
     let delta = |text: &str| json!({ "type": "stream_event", "event": { "type": "content_block_delta", "index": 0, "delta": { "type": "text_delta", "text": text } } });
-    let conversation = vec![
+    // What Claude Code answers the chat's opening questions with: its models, commands and mode, and the context.
+    let answer = |id: &str, response: serde_json::Value| json!({ "type": "control_response", "response": { "subtype": "success", "request_id": id, "response": response } });
+    let efforts = json!(["low", "medium", "high", "xhigh", "max"]);
+    let ready = [
+        answer("initialize", json!({
+            "models": [
+                { "value": "default", "displayName": "Default (recommended)", "supportedEffortLevels": efforts },
+                { "value": "opus", "displayName": "Opus 5.5", "supportedEffortLevels": efforts },
+                { "value": "sonnet", "displayName": "Sonnet 5.5", "supportedEffortLevels": efforts },
+                { "value": "haiku", "displayName": "Haiku 5.5", "supportedEffortLevels": efforts },
+            ],
+            "commands": [
+                { "name": "review", "description": "Review the changes on this branch", "argumentHint": "" },
+                { "name": "compact", "description": "Clear the conversation but keep a summary in context", "argumentHint": "<instructions>" },
+                { "name": "release", "description": "Bump the version, write the changelog and publish", "argumentHint": "" },
+                { "name": "init", "description": "Write a CLAUDE.md for this project", "argumentHint": "" },
+            ],
+            "current_permission_mode": "default",
+        })),
+        answer("context", json!({ "totalTokens": 41_000, "maxTokens": 200_000 })),
+    ];
+    let opened = |mut lines: Vec<serde_json::Value>| {
+        lines.splice(1..1, ready.iter().cloned());
+        lines
+    };
+    let conversation = opened(vec![
         init.clone(),
         user("Why does the checkout test fail on CI but pass here?"),
         tool("t1", "Bash", json!({ "command": "pnpm test checkout --reporter=dot", "description": "Run the checkout tests" })),
@@ -728,20 +765,51 @@ fn claude_chat(out: PathBuf) {
         tool("t3", "Edit", json!({ "file_path": "/work/shop/src/checkout.ts", "old_string": "a", "new_string": "b" })),
         json!({ "type": "control_request", "request_id": "r1", "request": { "subtype": "can_use_tool", "tool_name": "Edit",
             "input": { "file_path": "/work/shop/src/checkout.ts", "old_string": "a", "new_string": "b" } } }),
-    ];
-    let streaming = vec![
+    ]);
+    let streaming = opened(vec![
         init.clone(),
         user("Explain what the rate limiter in api/limits.ts does."),
+        tool("t1", "Read", json!({ "file_path": "/work/shop/api/limits.ts" })),
+        output("t1", "export const RATE = 5;", false),
+        tool("t2", "Grep", json!({ "pattern": "takeToken" })),
+        output("t2", "api/limits.ts:12", false),
         delta("It keeps a **token bucket** per account: each request takes a token, and the bucket refills at "),
         delta("`RATE` tokens a second up to `BURST`.\n\n- A request with no token left gets a `429`"),
-    ];
-    // Each: its name, what the fake prints, its exit code and stderr when it fails, and the text to wait for.
-    type Scene<'a> = (&'a str, Vec<serde_json::Value>, Option<(&'a str, &'a str)>, &'a str);
-    let scenes: [Scene; 4] = [
-        ("conversation", conversation, None, "Allow Edit?"),
-        ("streaming", streaming, None, "token bucket"),
-        ("new", vec![init], None, "Ask Claude anything"),
-        ("failed", vec![], Some(("1", "Error: Invalid API key · Please run /login")), "Invalid API key"),
+    ]);
+    let thinking = opened(vec![
+        init.clone(),
+        user("Plan how to split the checkout into its own package."),
+        json!({ "type": "stream_event", "event": { "type": "content_block_start", "index": 0, "content_block": { "type": "thinking", "thinking": "" } } }),
+    ]);
+    // A long session the chat goes on with, as a terminal's would be: far more than a page may draw.
+    const LONG: &str = "6b8d0e3c-4f6a-4b5c-9cbe-0a3f6b8c0d54";
+    std::fs::create_dir_all(root.join("projects/-work-shop")).unwrap();
+    let code = (0..120).map(|n| format!("let step_{n} = compute({n});")).collect::<Vec<_>>().join("\n");
+    let log = (0..200).map(|n| format!("test checkout::case_{n} ... ok")).collect::<Vec<_>>().join("\n");
+    let history: Vec<serde_json::Value> = (0..100)
+        .flat_map(|n| {
+            let id = format!("long-{n}");
+            [
+                user(&format!("Step {n}: run the checkout suite and tidy what fails.")),
+                tool(&id, "Bash", json!({ "command": format!("pnpm test checkout --run {n}") })),
+                output(&id, &log, false),
+                text(&format!("Step {n} passes. The loop now reads:\n\n```rs\n{code}\n```\n\n- **Kept:** the order of the steps\n- **Changed:** each step runs once")),
+            ]
+        })
+        .collect();
+    std::fs::write(root.join(format!("projects/-work-shop/{LONG}.jsonl")), history.iter().map(|line| format!("{line}\n")).collect::<String>()).unwrap();
+    // Each: its name, what the fake prints, its exit code and stderr when it fails, what to do once the page is up (press a
+    // button or type), and the text to wait for.
+    type Scene<'a> = (&'a str, Vec<serde_json::Value>, Option<(&'a str, &'a str)>, Option<&'a str>, &'a str);
+    let scenes: [Scene; 8] = [
+        ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
+        ("conversation", conversation, None, None, "Allow Edit?"),
+        ("streaming", streaming, None, None, "token bucket"),
+        ("thinking", thinking, None, None, "Thinking"),
+        ("new", opened(vec![init.clone()]), None, None, "What should Claude do?"),
+        ("slash", opened(vec![init.clone()]), None, Some("type:/re"), "/review"),
+        ("sessions", opened(vec![init.clone()]), None, Some("press:Sessions"), "Fix the flaky checkout test"),
+        ("failed", vec![], Some(("1", "Error: Invalid API key · Please run /login")), None, "Invalid API key"),
     ];
 
     let manifest = serde_json::from_str(include_str!("../../../plugins/claude-chat/wings-plugin.json")).unwrap();
@@ -758,9 +826,12 @@ fn claude_chat(out: PathBuf) {
     let project = root.canonicalize().unwrap().display().to_string();
     host.publish_projects(vec![wings_native::page::plugin::Project { hidden_sections: Vec::new(), id: project.clone(), name: "shop".into(), parent_id: None, path: project }]);
     let page = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/claude-chat/dist/native/chat.wasm");
-    let source = format!("{}{}", wings_native::page::runtime::wasm::MARKER, page.canonicalize().expect("sh build-rust.sh claude-chat, in plugins/").display());
+    let page = page.canonicalize().expect("sh build-rust.sh claude-chat, in plugins/");
+    // Compiled before the first scene waits on it: on a busy Mac a debug build's compile ran past the scene's wait.
+    wings_native::page::runtime::wasm::compile_now(&page.to_string_lossy()).unwrap();
+    let source = format!("{}{}", wings_native::page::runtime::wasm::MARKER, page.display());
     let mut cx = app();
-    for (name, lines, exit, expected) in scenes {
+    for (name, lines, exit, act, expected) in scenes {
         let fixture = root.join(format!("{name}.jsonl"));
         std::fs::write(&fixture, lines.iter().map(|line| format!("{line}\n")).collect::<String>()).unwrap();
         // SAFETY: the page from the scene before is closed, so nothing reads these while they change.
@@ -770,16 +841,29 @@ fn claude_chat(out: PathBuf) {
             std::env::set_var("CHAT_STDERR", exit.map_or("", |(_, said)| said));
         }
         for width in [1000.0, 640.0] {
+            let args = (name == "long").then(|| json!({ "resume": LONG, "cwd": root.canonicalize().unwrap() }));
             let handle = cx
-                .open_offscreen_window(size(px(width), px(760.0)), |_, cx| cx.new(|cx| PageView::in_plugin(&host, &source, cx)))
+                .open_offscreen_window(size(px(width), px(760.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, &source, args.as_ref(), cx)))
                 .unwrap();
             let window = handle.into();
             handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
-            let deadline = Instant::now() + Duration::from_secs(30);
-            while !handle.read_with(&cx, |view, _| view.text().contains(expected)).unwrap() {
-                assert!(Instant::now() < deadline, "page did not show {expected:?}: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
-                wait(&mut cx, window, Duration::from_millis(20));
+            let until = |cx: &mut VisualTestAppContext, expected: &str| {
+                let deadline = Instant::now() + Duration::from_secs(30);
+                while !handle.read_with(cx, |view, _| view.text().contains(expected)).unwrap() {
+                    assert!(Instant::now() < deadline, "page did not show {expected:?}: {}", handle.read_with(cx, |view, _| view.text()).unwrap());
+                    wait(cx, window, Duration::from_millis(20));
+                }
+            };
+            if let Some(act) = act {
+                // Once Claude Code has answered, the model picker shows.
+                until(&mut cx, "20%");
+                match act.split_once(':') {
+                    Some(("type", typed)) => cx.simulate_input(window, typed),
+                    Some(("press", label)) => assert!(handle.read_with(&cx, |view, _| view.press(label, 0)).unwrap()),
+                    _ => panic!("{act}"),
+                }
             }
+            until(&mut cx, expected);
             wait(&mut cx, window, Duration::from_millis(300));
             save(&mut cx, window, out.join(format!("claude-chat-{name}-{width}.png")));
             let _ = cx.update_window(window, |_, window, _| window.remove_window());

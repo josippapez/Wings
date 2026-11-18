@@ -1,8 +1,8 @@
 {
   "id": "claude-chat",
   "name": "Claude chat",
-  "version": "0.1.0",
-  "minWingsVersion": "0.2.29",
+  "version": "0.2.0",
+  "minWingsVersion": "0.2.30",
   "description": "Experimental. Runs Claude Code as a chat in a tab instead of a terminal: messages, tool calls and permission prompts as cards, with Enter to send. Open a new chat from the + menu, or move a Claude terminal into one with its Chat badge.",
   "api": 1,
   "main": "dist/native/main.wasm",
@@ -11,18 +11,28 @@
       "claude [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --resume]",
       "claude-rtk [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --resume]"
     ],
-    "transcript": ["user", "assistant"],
-    "panes": []
+    "transcript": [
+      "user",
+      "assistant"
+    ],
+    "panes": [
+      "claude --resume",
+      "claude-rtk --resume"
+    ]
   },
   "contributes": {
-    "ui": ["badges"],
+    "ui": [
+      "badges"
+    ],
     "views": [
       {
         "id": "chat",
         "title": "Claude chat",
         "icon": "message",
         "page": "dist/native/chat.wasm",
-        "opens": ["tab"],
+        "opens": [
+          "tab"
+        ],
         "newTab": true,
         "multiple": true,
         "button": false

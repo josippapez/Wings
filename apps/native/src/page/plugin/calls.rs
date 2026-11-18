@@ -411,6 +411,7 @@ impl Shared {
             "spawn" | "processWrite" | "processStop" => {
                 self.process_call(method, params, reply, access)
             }
+            "pastSessions" => self.off_thread(reply, move |_| past_sessions(&access, &params)),
             "transcript" => {
                 self.off_thread(reply, move |_| transcript(&access, &params));
             }
@@ -843,6 +844,22 @@ fn transcript(access: &Access, params: &Value) -> Result<String, String> {
         last,
     )?;
     to_json(&entries)
+}
+
+/// The most sessions one `pastSessions` lists.
+const PAST_SESSIONS_MAX: u64 = 200;
+
+/// `pastSessions`: the Claude Code sessions of the project on screen, most recent first, matching `query`. Each one
+/// shows your first prompt, so it needs the `user` entries of `permissions.transcript`.
+fn past_sessions(access: &Access, params: &Value) -> Result<String, String> {
+    let id = &access.plugin.manifest.id;
+    if !access.plugin.manifest.permissions.transcript.iter().any(|kind| kind == "user") {
+        return Err(format!("{id} may not list your Claude sessions: it needs \"user\" in permissions.transcript"));
+    }
+    let project = access.env.current_project().ok_or("No project is open in Wings")?;
+    let query = params.get("query").and_then(Value::as_str).unwrap_or_default();
+    let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(50).clamp(1, PAST_SESSIONS_MAX);
+    to_json(&access.env.past_sessions(&project, query, limit as usize))
 }
 
 fn ports(access: &Access) -> Result<String, String> {

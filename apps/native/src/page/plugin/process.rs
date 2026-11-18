@@ -60,12 +60,23 @@ impl Shared {
         let SpawnRequest { program, args, cwd } =
             serde_json::from_value(params.clone()).map_err(|error| error.to_string())?;
         let cwd = exec_cwd(&program, Some(&cwd), &access.env.projects(), &self.pane_folders(), false)?;
+        // What the program reads first, sent with its start: what the page asks as it opens, never an answer to the
+        // program's questions, whose ids it makes up later.
+        let input = match params.get("input") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(input)) if input.len() <= WRITE_MAX => Some(input.clone()),
+            Some(_) => return Err("spawn input is text of up to 8 MB".into()),
+        };
         // Kept from now, before it starts, so that the page can write to it at once.
         let running = Process::new();
         {
             let mut processes = self.processes.lock().unwrap();
             room(&processes, &token)?;
             processes.insert(token.clone(), running.clone());
+        }
+        if let Some(input) = input {
+            // A failed write shows as the program's own end.
+            running.write(input, |_| {});
         }
         let host = Arc::downgrade(self);
         self.off_thread(reply, move |reply| {

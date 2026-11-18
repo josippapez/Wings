@@ -365,6 +365,7 @@ impl PageView {
                 field.fill = true;
                 field.rows = input.rows;
                 field.enter_submits = input.enter_submits;
+                field.bare = input.bare;
                 field.time = input.time;
                 field.select_on_focus = input.select_on_focus;
                 field
@@ -484,7 +485,19 @@ impl PageView {
             .flex()
             .flex_col()
             .child(trigger)
-            .when(open, |el| el.children(self.nodes(&disclosure.body, cx)))
+            // The body rises in each time it opens: closed, it isn't drawn, so its tween starts over.
+            .when(open, |el| {
+                let body = div().min_w_0().flex().flex_col().children(self.nodes(&disclosure.body, cx));
+                el.child(crate::ui::motion::tween(
+                    body,
+                    ElementId::NamedInteger("page-disclosure-body".into(), id),
+                    crate::ui::motion::RISE,
+                    |el, t, reduced| {
+                        let (opacity, below) = crate::ui::motion::rise_frame(t, reduced);
+                        el.opacity(opacity).relative().top(px(below))
+                    },
+                ))
+            })
             .into_any_element()
     }
 
@@ -518,7 +531,19 @@ impl PageView {
             name.to_owned(),
             select.shown().to_owned(),
         )
-        .w_full()
+        .map(|trigger| match select.quiet {
+            true => trigger
+                .w_auto()
+                .h(px(28.0))
+                .gap(px(4.0))
+                .pl(px(8.0))
+                .pr(px(6.0))
+                .text_size(px(13.0))
+                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .border_color(gpui::transparent_black())
+                .bg(gpui::transparent_black()),
+            false => trigger.w_full(),
+        })
         .capture_any_mouse_down(cx.listener(move |view, _, _, _| {
             view.pressed_open = view.menu == Some(id);
         }))
@@ -559,7 +584,7 @@ impl PageView {
         });
         div()
             .relative()
-            .w_full()
+            .when(!select.quiet, |el| el.w_full())
             .min_w_0()
             .flex()
             .flex_col()

@@ -384,11 +384,20 @@ fn claude_chat_badges_claude_panes_and_its_button_moves_the_session_into_a_chat_
         started_at: 1_700_000_000_000,
         launcher: Some("claude-rtk".into()),
     });
-    let rig = Rig::with(load("claude-chat"), false, vec![claude, pane("2", "/work")]);
+    let mut working = claude.clone();
+    working.session.as_mut().unwrap().state = "working".into();
+    let rig = Rig::with(load("claude-chat"), false, vec![working, pane("2", "/work")]);
     let (on_event, main_errors) = errors();
     rig.host.start_main(&module("claude-chat", "main"), on_event).unwrap();
     let seen = rig.env.wait("the badges", |seen| seen.iter().any(|seen| matches!(seen, Seen::Badge(_, pane, Some(_)) if pane == "1")));
     assert!(!seen.iter().any(|seen| matches!(seen, Seen::Badge(_, pane, Some(_)) if pane == "2")), "{seen:?}");
+    // Closing the terminal would end the turn Claude is on.
+    assert_eq!(
+        action(&rig, "1", "open"),
+        Err("Claude is still working in this terminal. Open it as a chat once it has finished.".into())
+    );
+    assert!(!rig.env.seen().iter().any(|seen| matches!(seen, Seen::ClosePane(_))));
+    rig.host.publish_panes(vec![claude, pane("2", "/work")]);
 
     assert_eq!(action(&rig, "1", "open"), Ok(()));
     let moved: Vec<Seen> = rig
