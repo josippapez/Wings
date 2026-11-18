@@ -450,6 +450,12 @@ pub fn transcript_with_images(session: &str, kinds: &[&str], last: Option<u32>) 
     call("transcript", json!({ "sessionId": session, "types": kinds, "last": last, "images": "register" }))
 }
 
+/// `transcript_with_images` of the subagent `agent` (Claude Code's agent id) of the session `session`: its own transcript,
+/// which Wings finds in the session's folder. Needs Wings 0.2.41.
+pub fn subagent_transcript(session: &str, agent: &str, kinds: &[&str], last: Option<u32>) -> Pending<Result<Value, String>> {
+    call("transcript", json!({ "sessionId": session, "agent": agent, "types": kinds, "last": last, "images": "register" }))
+}
+
 /// `wings.registerImage` (Wings 0.2.40): keeps a picture, a png, jpeg, gif or webp of up to 5 MB as base64, in Wings
 /// under `id` (up to 64 letters, digits, `-` and `_`) for `ui::image` nodes to show. Send it once: a node names it by id,
 /// so the bytes don't travel with each render. Wings keeps the most recently shown ones, so a node for one it let go of
@@ -675,6 +681,12 @@ pub fn open_view(id: &str) {
 /// args is shown rather than opened again.
 pub fn open_view_with(id: &str, place: &str, args: &Value) -> Pending<Result<Value, String>> {
     call("openView", json!({ "id": id, "as": place, "args": args, "newTab": false }))
+}
+
+/// `open_view_with` as a tab, which, when it is a new one, goes right after the tab of this page in the tab bar rather than
+/// at its end. Needs Wings 0.2.41.
+pub fn open_tab_beside(id: &str, args: &Value) -> Pending<Result<Value, String>> {
+    call("openView", json!({ "id": id, "as": "tab", "args": args, "newTab": false, "after": "self" }))
 }
 
 /// `wings.setProjectSection`: the rows of the plugin's section `section` under the project `project` in the sidebar, or

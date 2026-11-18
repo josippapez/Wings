@@ -112,8 +112,6 @@ pub struct Chat {
     pub todos_folded: bool,
     /// What Claude is doing, for the status line, and since when (ms).
     pub doing: (String, u64),
-    /// The subagent whose transcript the side panel shows, by the id of the tool call that started it.
-    pub subagent: Option<String>,
     /// The background task whose output is open in a dialog, by its id.
     pub task: Option<String>,
     /// The folders you added with /add-dir, which Claude Code is let into each time it starts here, and the tab keeps.
@@ -173,7 +171,6 @@ thread_local! {
         drafts: HashMap::new(),
         todos_folded: false,
         doing: (String::new(), 0),
-        subagent: None,
         task: None,
         dirs: Vec::new(),
         fork_from: None,
@@ -202,7 +199,12 @@ pub fn with<T>(change: impl FnOnce(&mut Chat) -> T) -> T {
 
 #[unsafe(no_mangle)]
 pub fn start() {
+    // A subagent's tab is a page of this view too, opened with the subagent in its args.
+    if crate::subagent_tab::start() {
+        return;
+    }
     wings_plugin::run_filled(crate::view::view);
+    crate::subagent_relay::start();
     with(|c| {
         c.detailed = prefs::detailed().get();
         c.text_scale = prefs::scale_of(&prefs::text_size().get());
@@ -271,7 +273,6 @@ pub fn launch_with(resume: Option<String>, how: Launch) {
         c.open_outputs.clear();
         c.open_queued.clear();
         c.drafts.clear();
-        c.subagent = None;
         c.task = None;
         c.fork_from = None;
         c.fork_ask = false;
@@ -456,7 +457,6 @@ fn hear(run: u32, line: &Value) {
             c.open_outputs.clear();
             c.open_queued.clear();
             c.drafts.clear();
-            c.subagent = None;
             c.task = None;
         }
         let doing = c.session.activity();
@@ -468,6 +468,7 @@ fn hear(run: u32, line: &Value) {
     });
     // Pictures in what was heard go to Wings once, as the page names them by id.
     images::flush();
+    crate::subagent_relay::heard(line);
     // Only for what you'd miss: someone looking at this tab sees it happen.
     if !host::focused() {
         for (title, body) in alerts {
@@ -491,8 +492,9 @@ fn hear(run: u32, line: &Value) {
 }
 
 /// Tells the sidebar's Agents what Claude does in this chat, when that changed: it needs you while a question of
-/// Claude's waits, works while a turn runs, and is done once one ended while you were looking elsewhere.
-fn report_agent() {
+/// Claude's waits, works while a turn runs, and is done once one ended while you were looking elsewhere. And the tabs of
+/// its subagents how they stand.
+pub(crate) fn report_agent() {
     let (agent, retitled) = with(|c| {
         let asking = c.session.items.iter().find_map(|item| match item {
             Item::Ask(ask) if ask.answer.is_none() => Some(ask.tool.clone()),
@@ -523,6 +525,7 @@ fn report_agent() {
     if let Some(title) = retitled {
         drop(host::set_tab_title(title.as_deref()));
     }
+    crate::subagent_relay::sync();
 }
 
 /// The session's name: the one Claude Code says (`/rename`), else the first line of your first message, cut short. None
@@ -979,15 +982,6 @@ pub fn toggle_output(id: &str) {
     });
 }
 
-/// Shows the subagent started by the tool call `id` in the side panel, or closes it when it is the one shown.
-pub fn toggle_subagent(id: &str) {
-    with(|c| {
-        c.subagent = if c.subagent.as_deref() == Some(id) { None } else { Some(id.to_owned()) };
-        // What you asked to see opens the panel over a narrow tab.
-        c.side_open = c.subagent.is_some();
-    });
-}
-
 /// The page's split says whether the tab is narrower than `view::SIDE_BELOW`. A panel left open over the conversation
 /// goes away once the tab is wide enough to hold it beside.
 pub fn set_narrow(narrow: bool) {
@@ -1006,10 +1000,6 @@ pub fn toggle_side() {
 
 pub fn close_side() {
     with(|c| c.side_open = false);
-}
-
-pub fn close_subagent() {
-    with(|c| c.subagent = None);
 }
 
 /// Opens what the background task `id` printed in a dialog, and reads it again: one request, from your click.

@@ -45,6 +45,7 @@ mod calls;
 mod diff;
 mod disk;
 mod env;
+mod pages;
 mod pick;
 mod process;
 mod state;
@@ -162,6 +163,8 @@ struct Shared {
     scans: Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>>,
     /// The programs the frames keep running, by token (see `process`).
     processes: Mutex<HashMap<String, Arc<wings_plugins::process::Process>>>,
+    /// The names the pages took, and the writes handed between them (see `pages`).
+    pages: Mutex<pages::Pages>,
 }
 
 impl Shared {
@@ -404,16 +407,28 @@ impl Link for FrameLink {
             };
             return reply.done(state.set_title(title).map(|()| "null".into()));
         }
+        if let Some(done) = pages::call(self, method, &params) {
+            return reply.done(done);
+        }
+        if method == "openView" {
+            return match pages::after(self, &params) {
+                Ok(after) => self.shared.open_view_call(params, after, reply),
+                Err(error) => reply.err(error),
+            };
+        }
         // Each click or key lets the page try once to copy, to write to a program it runs, or to open the file picker:
         // what reaches an agent, like the answer to its permission prompt, is what you just asked for in the page, never
-        // the plugin alone, and a picker never opens by itself.
+        // the plugin alone, and a picker never opens by itself. A write another page handed on with your click there
+        // counts as one here (`pages`), and goes before a click of this page's own.
         if matches!(method, "copyText" | "processWrite" | "pickFiles") {
-            let acted = self
-                .acted
-                .lock()
-                .unwrap()
-                .take()
-                .is_some_and(|at| at.elapsed() < USER_ACTION);
+            let handed = method == "processWrite" && self.role == Role::Page && self.shared.take_grant(self.id);
+            let acted = handed
+                || self
+                    .acted
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .is_some_and(|at| at.elapsed() < USER_ACTION);
             if self.role != Role::Page || !acted {
                 let what = match method {
                     "copyText" => "copy",
@@ -494,6 +509,7 @@ struct Membership {
 impl Drop for Membership {
     fn drop(&mut self) {
         self.shared.close_frame_diffs(self.id);
+        self.shared.forget_page(self.id);
         let prefix = format!("{}:", self.id);
         for (token, flag) in self.shared.scans.lock().unwrap().iter() {
             if token.starts_with(&prefix) {
@@ -638,6 +654,7 @@ impl PluginHost {
                 next_diff: AtomicU64::new(1),
                 scans: Mutex::default(),
                 processes: Mutex::default(),
+                pages: Mutex::default(),
             }),
             main: Mutex::default(),
             alive: Arc::new(()),

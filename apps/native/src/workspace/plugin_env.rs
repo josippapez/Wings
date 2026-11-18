@@ -347,7 +347,7 @@ impl AppEnv {
         &self,
         initial: Option<serde_json::Value>,
     ) -> crate::page::plugin::FrameState {
-        let (events, redraw, closing) = (self.events.clone(), self.events.clone(), self.events.clone());
+        let (events, redraw, closing, showing) = (self.events.clone(), self.events.clone(), self.events.clone(), self.events.clone());
         crate::page::plugin::FrameState::new(
             crate::page::plugin::StatePlace::Tab,
             initial,
@@ -368,6 +368,10 @@ impl AppEnv {
                     workspace.close_plugin_tab(index, window, cx);
                 }
             })));
+        })
+        .on_show(move |state| {
+            let state = state.clone();
+            let _ = showing.try_send(UiEvent::Run(Box::new(move |workspace, window, cx| workspace.show_tab_of(&state, window, cx))));
         })
     }
     pub(super) fn new(
@@ -965,6 +969,7 @@ impl Workspace {
                         Err("The view has no native sidebar page".into())
                     });
                 } else if plan.place == "tab" {
+                    let before: Vec<usize> = self.plugin_tabs.iter().map(|tab| tab.id).collect();
                     let opened = if plan.new_tab {
                         self.new_plugin_tab(&plan.plugin, &plan.id, plan.args, cx)
                             .map(|id| {
@@ -974,6 +979,9 @@ impl Workspace {
                     } else {
                         self.open_plugin_view(&plan.plugin, &plan.id, plan.args, window, cx)
                     };
+                    if let Some(frame) = plan.after.filter(|_| opened) {
+                        self.place_after(&plan.plugin, frame, &before, cx);
+                    }
                     reply.done(if opened {
                         Ok("null".into())
                     } else {

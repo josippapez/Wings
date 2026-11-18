@@ -522,6 +522,18 @@ impl Caller {
         Self { frame: Frame::start(host, &source), answers }
     }
 
+    /// A page of the plugin shown as a tab, which keeps `state`.
+    pub fn in_tab(host: &PluginHost, state: super::FrameState) -> Self {
+        let (source, answers) = calls(None);
+        let (sender, events) = std::sync::mpsc::channel();
+        let runtime = host
+            .open_hidden_page_with_state(&source, None, state, move |event| {
+                let _ = sender.send(event);
+            })
+            .unwrap();
+        Self { frame: Frame { _runtime: runtime, events }, answers }
+    }
+
     /// The call `method`, and what it came to.
     pub fn call(&self, method: &str, params: Value) -> Result<Value, String> {
         self.streamed(method, params).0

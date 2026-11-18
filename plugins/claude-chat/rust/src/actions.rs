@@ -76,6 +76,22 @@ pub fn agent_message(session: &Session, task: &str, said: &str) -> Option<String
     Some(format!("Use the SendMessage tool to pass this message on, word for word, to the background agent \"{name}\" (to: \"{}\"): {said}", task.id))
 }
 
+/// How a message from a subagent's tab starts, which the chat knows it by.
+const RELAYED: &str = "Use the SendMessage tool to pass on this message from the user, word for word, to the subagent ";
+
+/// The message that has Claude pass `said` on to the subagent `name` (`to`, its id) from its tab (`subagents.rs`).
+pub fn relayed_message(name: &str, to: &str, said: &str) -> String {
+    format!("{RELAYED}\"{name}\" (to: \"{to}\"): {said}")
+}
+
+/// What the chat shows for a message of `relayed_message`'s, in place of the words that ask Claude to pass it on.
+pub fn relayed_note(text: &str) -> Option<String> {
+    let rest = text.strip_prefix(RELAYED)?.strip_prefix('"')?;
+    let (name, rest) = rest.split_once("\" (to: \"")?;
+    let (_, said) = rest.split_once("\"): ")?;
+    Some(format!("You messaged {name}: {said}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

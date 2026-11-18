@@ -43,9 +43,26 @@ pub fn find_transcript(claude_dirs: &[PathBuf], session_id: &str) -> Option<Path
     claude_dirs.iter().find_map(|dir| fs::read_dir(dir.join("projects")).ok()?.flatten().map(|d| d.path().join(&file)).find(|p| p.is_file()))
 }
 
+/// The transcript of the subagent `agent` of the session `session_id`, which Claude Code keeps in a folder named after
+/// the session, beside the session's own file: `<project>/<session>/subagents/agent-<agent>.jsonl`. Only that folder:
+/// the agent id becomes a file name, so it is Claude Code's shape, letters and digits.
+pub fn find_subagent_transcript(claude_dirs: &[PathBuf], session_id: &str, agent: &str) -> Option<PathBuf> {
+    if agent.is_empty() || agent.len() > 64 || !agent.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return None;
+    }
+    let session = find_transcript(claude_dirs, session_id)?;
+    let file = session.parent()?.join(session_id).join("subagents").join(format!("agent-{agent}.jsonl"));
+    file.is_file().then_some(file)
+}
+
 /// With `last`, only the newest that many entries, read from the end. A long session's transcript runs to tens
 /// of MB, and most callers want only its latest state.
 pub fn transcript_entries(plugin: &Plugin, claude_dirs: &[PathBuf], session_id: &str, types: &[String], last: Option<usize>) -> Result<Vec<Value>, String> {
+    agent_entries(plugin, claude_dirs, session_id, None, types, last)
+}
+
+/// `transcript_entries` of the session's subagent `agent`, or of the session itself without one.
+pub fn agent_entries(plugin: &Plugin, claude_dirs: &[PathBuf], session_id: &str, agent: Option<&str>, types: &[String], last: Option<usize>) -> Result<Vec<Value>, String> {
     let allowed = &plugin.manifest.permissions.transcript;
     if let Some(t) = types.iter().find(|t| !allowed.contains(t)) {
         return Err(format!("{} may not read {t:?} transcript entries", plugin.manifest.id));
@@ -53,7 +70,10 @@ pub fn transcript_entries(plugin: &Plugin, claude_dirs: &[PathBuf], session_id: 
     if session_id.len() != 36 || !session_id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
         return Err("not a session id".into());
     }
-    let path = find_transcript(claude_dirs, session_id).ok_or("no transcript for that session")?;
+    let path = match agent {
+        None => find_transcript(claude_dirs, session_id).ok_or("no transcript for that session")?,
+        Some(agent) => find_subagent_transcript(claude_dirs, session_id, agent).ok_or("no transcript for that subagent of the session")?,
+    };
     let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
     let patterns: Vec<String> = types.iter().map(|t| type_marker(t)).collect();
     let mentions = |l: &&str| patterns.iter().any(|p| l.contains(p.as_str()));
@@ -147,6 +167,38 @@ mod tests {
         assert_eq!(n(transcript_entries(&p, std::slice::from_ref(&claude), id, &["user".into()], Some(2)).unwrap()), [3, 4]);
         assert_eq!(n(transcript_entries(&p, std::slice::from_ref(&claude), id, &["user".into()], Some(10)).unwrap()), [1, 3, 4]);
         assert_eq!(n(transcript_entries(&p, std::slice::from_ref(&claude), id, &["user".into()], None).unwrap()), [1, 3, 4]);
+        let _ = fs::remove_dir_all(&claude);
+    }
+
+    #[test]
+    fn a_subagents_transcript_is_found_only_in_its_sessions_folder() {
+        let claude = std::env::temp_dir().join(format!("wings-tr-agent-{}", std::process::id()));
+        let (id, other) = ("6c21b0c5-8113-4f55-9493-fa156c3fa369", "7c21b0c5-8113-4f55-9493-fa156c3fa369");
+        // As Claude Code 2.1.327 keeps them: the session's file, and its subagents in a folder named after it.
+        for session in [id, other] {
+            fs::create_dir_all(claude.join(format!("projects/-x/{session}/subagents"))).unwrap();
+            fs::write(claude.join(format!("projects/-x/{session}.jsonl")), "{\"type\":\"user\",\"n\":0}\n").unwrap();
+        }
+        let agent = |session: &str, name: &str, n: u32| {
+            let line = format!("{{\"type\":\"user\",\"isSidechain\":true,\"agentId\":\"{name}\",\"n\":{n}}}\n");
+            fs::write(claude.join(format!("projects/-x/{session}/subagents/agent-{name}.jsonl")), line).unwrap();
+        };
+        agent(id, "a1b2c3d4e5f60718a", 1);
+        agent(other, "a9f8e7d6c5b4a3921", 2);
+        fs::write(claude.join("projects/-x/secret.jsonl"), "{\"type\":\"user\",\"n\":9}\n").unwrap();
+        let p = plugin(&claude, &[], &["user"]);
+        let dirs = std::slice::from_ref(&claude);
+        let read = |agent: &str| agent_entries(&p, dirs, id, Some(agent), &["user".into()], None);
+        assert_eq!(read("a1b2c3d4e5f60718a").unwrap()[0]["n"], 1);
+        // Another session's subagent isn't this session's, and a page can't name a path.
+        assert!(read("a9f8e7d6c5b4a3921").is_err());
+        for name in ["../../secret", "a/b", "", "agent-a1b2c3d4e5f60718a.jsonl", &"a".repeat(65)] {
+            assert!(read(name).is_err(), "{name}");
+        }
+        // The types the manifest allows still hold.
+        assert!(agent_entries(&p, dirs, id, Some("a1b2c3d4e5f60718a"), &["assistant".into()], None).is_err());
+        // Without an agent it is the session's own file, as before.
+        assert_eq!(agent_entries(&p, dirs, id, None, &["user".into()], None).unwrap()[0]["n"], 0);
         let _ = fs::remove_dir_all(&claude);
     }
 

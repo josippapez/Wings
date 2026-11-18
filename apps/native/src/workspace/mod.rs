@@ -44,6 +44,7 @@ mod plugin_env;
 mod plugin_manage;
 mod plugin_manage_ui;
 mod plugin_modal;
+mod plugin_tab_place;
 #[cfg(all(test, feature = "test-support"))]
 mod plugin_tests;
 mod plugin_ui;

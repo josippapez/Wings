@@ -21,6 +21,8 @@ struct State {
     agent_changed: Option<Box<dyn Fn() + Send + Sync>>,
     /// Closes the tab that holds this state, when its page asks.
     close: Option<Box<dyn Fn(&FrameState) + Send + Sync>>,
+    /// Brings the tab that holds this state to the front, when another page of its plugin asks (`showPage`).
+    show: Option<Box<dyn Fn(&FrameState) + Send + Sync>>,
     /// The frame that runs the page now, whose programs are the page's.
     frame: Option<u64>,
 }
@@ -56,6 +58,7 @@ impl FrameState {
                 title: None,
                 agent_changed: None,
                 close: None,
+                show: None,
                 frame: None,
             })),
         }
@@ -71,6 +74,23 @@ impl FrameState {
     pub fn on_close(self, close: impl Fn(&FrameState) + Send + Sync + 'static) -> Self {
         self.state.lock().unwrap().close = Some(Box::new(close));
         self
+    }
+
+    /// Calls `show` with this state when another page of the plugin asks to bring its tab to the front.
+    pub fn on_show(self, show: impl Fn(&FrameState) + Send + Sync + 'static) -> Self {
+        self.state.lock().unwrap().show = Some(Box::new(show));
+        self
+    }
+
+    pub(super) fn is_tab(&self) -> bool {
+        self.place == StatePlace::Tab
+    }
+
+    pub(super) fn show(&self) -> Result<(), String> {
+        match (&self.state.lock().unwrap().show, self.place) {
+            (Some(show), StatePlace::Tab) => Ok(show(self)),
+            _ => Err("Only a page shown as a tab can be brought to the front".into()),
+        }
     }
 
     /// Whether `other` is this same tab's or block's state.
@@ -89,7 +109,8 @@ impl FrameState {
         self.state.lock().unwrap().frame = Some(frame);
     }
 
-    pub(super) fn frame(&self) -> Option<u64> {
+    /// The frame that runs the page now.
+    pub fn frame(&self) -> Option<u64> {
         self.state.lock().unwrap().frame
     }
 

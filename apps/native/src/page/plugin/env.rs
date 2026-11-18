@@ -64,6 +64,8 @@ pub struct OpenView {
     pub place: String,
     pub args: Option<serde_json::Value>,
     pub new_tab: bool,
+    /// The frame of the tab a new tab goes right after (`openView`'s `after: "self"`).
+    pub after: Option<u64>,
 }
 
 /// One plugin's call of another's tool, as the app is asked to run it. The caller's permission is checked.

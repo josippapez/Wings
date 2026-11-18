@@ -52,6 +52,13 @@ mod setup_view;
 #[cfg(feature = "chat")]
 mod status_view;
 #[cfg(feature = "chat")]
+mod subagent_relay;
+#[cfg(feature = "chat")]
+mod subagent_tab;
+#[cfg(feature = "chat")]
+mod subagent_view;
+mod subagents;
+#[cfg(feature = "chat")]
 mod tasks_view;
 mod usage;
 #[cfg(feature = "chat")]

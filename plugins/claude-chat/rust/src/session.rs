@@ -30,7 +30,7 @@ const REASON_KEPT: usize = 300;
 const DIFF_KEPT: usize = 40;
 const WRITE_KEPT: usize = 20;
 /// The most items kept of each subagent's own transcript: a subagent that searches a repository makes hundreds of tool
-/// calls, and only the end of them is read in a side panel. Older ones go, as the page couldn't draw them all anyway.
+/// calls, and its own tab reads them from its transcript. Older ones go.
 pub const SUBAGENT_KEPT: usize = 200;
 
 #[derive(Debug, PartialEq)]
@@ -434,6 +434,8 @@ pub struct Session {
     /// What each subagent said and did, by the id of the tool call that started it, from the lines that carry it as their
     /// `parent_tool_use_id`. Each is a session of its own, so it is drawn with the same code as this one.
     pub subagents: HashMap<String, Session>,
+    /// Claude Code's ids for the subagents, which their tabs and SendMessage name them by (`subagents.rs`).
+    pub agents: crate::subagents::Agents,
     /// The time (ms) of the line being heard, which the page sets before each, as a session has no clock of its own.
     pub now: u64,
     /// When a subagent's first and last line came (ms), for how long it ran.
@@ -471,6 +473,7 @@ pub struct Session {
 impl Session {
     /// Takes in one line Claude Code printed, or one transcript entry.
     pub fn hear(&mut self, line: &Value) {
+        self.agents.learn(line);
         // A subagent's own messages are kept apart, under the tool call that started it, and stay out of the conversation.
         if !line["parent_tool_use_id"].is_null() {
             if let Some(parent) = line["parent_tool_use_id"].as_str() {
@@ -713,6 +716,7 @@ impl Session {
         self.todos.clear();
         self.creating.clear();
         self.subagents.clear();
+        self.agents.clear();
         self.tasks.clear();
         self.suggestion = None;
         self.status = None;
@@ -1406,6 +1410,9 @@ fn content(text: &str, images: &[(String, String)]) -> Value {
 
 /// A message of yours as the conversation shows it.
 fn sent_item(text: String, pictures: Vec<String>) -> Item {
+    if let Some(note) = crate::actions::relayed_note(&text) {
+        return Item::Notice(note);
+    }
     if pictures.is_empty() { Item::User(text) } else { Item::UserImages(text, pictures) }
 }
 
@@ -1461,6 +1468,9 @@ fn said(text: &str) -> Option<Item> {
         tag.starts_with(|c: char| c.is_ascii_lowercase()) && tag.chars().all(|c| c.is_ascii_lowercase() || c == '-')
     });
     let Some(tag) = tag else {
+        if let Some(note) = crate::actions::relayed_note(text) {
+            return Some(Item::Notice(note));
+        }
         return (!text.is_empty()).then(|| Item::User(text.to_owned()));
     };
     let inner = |name: &str| text.split_once(&format!("<{name}>"))?.1.split_once(&format!("</{name}>")).map(|(inside, _)| inside.trim());

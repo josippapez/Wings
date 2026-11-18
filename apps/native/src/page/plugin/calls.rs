@@ -19,7 +19,7 @@ use wings_plugins::{
         NOTIFY_LIMIT, may_call_tool, may_create_worktrees, may_read_ports, may_read_statusline,
         may_use_claude_accounts, notification,
     },
-    transcript::transcript_entries,
+    transcript::agent_entries,
 };
 use wings_spaces::claude_accounts::{AccountPick, valid_name};
 
@@ -104,6 +104,8 @@ struct TranscriptRequest {
     last: Option<f64>,
     /// `"register"`: the pictures in the entries are kept by the app, and the entries name their ids.
     images: Option<String>,
+    /// A subagent of the session, by Claude Code's agent id: its own transcript, in the session's folder.
+    agent: Option<String>,
 }
 
 /// What the desktop's wrapper makes of an `exec`'s `timeoutMs`: a number of milliseconds, whole and not negative. The
@@ -207,7 +209,15 @@ impl Shared {
             .map_err(|error| format!("The call couldn't start: {error}"))
     }
 
-    fn open_view(&self, access: &Access, params: &Value, reply: Reply) -> Result<(), String> {
+    /// `openView` from a frame, which opens a new tab right after the tab of the frame `after` when it is given.
+    pub(super) fn open_view_call(&self, params: Value, after: Option<u64>, reply: Reply) {
+        let Some(access) = self.access.clone() else {
+            return reply.err(format!("{} is turned off or not installed", self.config.id));
+        };
+        reply_if_error(reply.clone(), self.open_view(&access, &params, after, reply));
+    }
+
+    fn open_view(&self, access: &Access, params: &Value, after: Option<u64>, reply: Reply) -> Result<(), String> {
         let id = js_string(params.get("id"));
         let contributes = &access.plugin.manifest.contributes;
         let opens = if contributes.sidebars.iter().any(|page| page.id == id) {
@@ -243,6 +253,9 @@ impl Shared {
         if new_tab && place != "tab" {
             return Err("openView newTab only works with as: \"tab\"".into());
         }
+        if after.is_some() && place != "tab" {
+            return Err("openView after only works with as: \"tab\"".into());
+        }
         access.env.open_view(
             super::OpenView {
                 plugin: access.plugin.manifest.id.clone(),
@@ -250,6 +263,7 @@ impl Shared {
                 place,
                 args,
                 new_tab,
+                after,
             },
             reply,
         );
@@ -369,7 +383,7 @@ impl Shared {
                 self.disk_call(method, params, reply, access)
             }
             "openPane" => reply_if_error(reply.clone(), self.open_pane(&access, &params, reply)),
-            "openView" => reply_if_error(reply.clone(), self.open_view(&access, &params, reply)),
+            "openView" => reply_if_error(reply.clone(), self.open_view(&access, &params, None, reply)),
             "project" => reply.done(self.project(&access)),
             "closeView" => reply.done(self.close_view(&access, &params)),
             "callTool" => reply_if_error(reply.clone(), self.call_tool(&access, &params, reply)),
@@ -882,10 +896,11 @@ fn transcript(access: &Access, params: &Value) -> Result<String, String> {
     let request: TranscriptRequest =
         serde_json::from_value(params.clone()).map_err(|error| error.to_string())?;
     let last = request.last.map(|last| last as usize);
-    let mut entries = transcript_entries(
+    let mut entries = agent_entries(
         &access.plugin,
         &access.env.claude_dirs(),
         &request.session_id,
+        request.agent.as_deref(),
         &request.types,
         last,
     )?;
@@ -952,6 +967,8 @@ pub use sections::{SectionIcon, SectionRow};
 mod disk_usage;
 #[cfg(test)]
 mod prerequisites;
+#[cfg(test)]
+mod page_names;
 #[cfg(test)]
 mod processes;
 #[cfg(test)]

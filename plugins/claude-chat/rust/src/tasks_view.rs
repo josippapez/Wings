@@ -70,8 +70,8 @@ fn done_row(task: &Task) -> Node {
     }
 }
 
-/// One running task: its name, how long it has run, small Message and Stop buttons, and its output on a click on the name
-/// when Claude Code keeps it.
+/// One running task: its name, how long it has run, small Message and Stop buttons, and on a click on the name its output
+/// when Claude Code keeps it, or a background agent's conversation in a tab of its own.
 fn task_row(task: &Task) -> Node {
     let name = if task.description.is_empty() { task.id.as_str() } else { task.description.as_str() };
     let time = match task.stopping {
@@ -80,12 +80,11 @@ fn task_row(task: &Task) -> Node {
     };
     // The name has the whole row, three lines at most; under it the time, and the small buttons at the right.
     let title = row().prop("gap", "s").prop("align", "center").child(spinner()).child(stack().prop("grow", true).child(text(name).prop("size", "small").prop("clamp", true).prop("title", name)));
-    let title = match task.has_output() {
-        true => {
-            let id = task.id.clone();
-            list_button([title], move || chat::open_task(&id)).prop("title", "What it printed")
-        }
-        false => title,
+    let id = task.id.clone();
+    let title = match (task.has_output(), task.kind == "local_agent") {
+        (true, _) => list_button([title], move || chat::open_task(&id)).prop("title", "What it printed"),
+        (false, true) => list_button([title], move || open_subagent(&id)).prop("title", "Its conversation, in a tab of its own"),
+        _ => title,
     };
     let id = task.id.clone();
     let actions = row()
@@ -110,9 +109,10 @@ fn task_row(task: &Task) -> Node {
 /// The small square on Stop, in a 14-point box.
 const STOP: &str = "M3.5 3.5h7v7h-7z";
 
-/// A click on a subagent's row in the side panel. One place, so what it does can change in one place.
+/// A click on a subagent, by the id of the call that started it or a background agent's own id: its conversation, in a
+/// tab of its own right after the chat's. One place, so what it does can change in one place.
 pub fn open_subagent(id: &str) {
-    chat::toggle_subagent(id);
+    crate::subagent_relay::open(id);
 }
 
 /// The dialog with the end of what the open task printed, while it is open: how it stands, Refresh and Stop, and the

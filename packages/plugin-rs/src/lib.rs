@@ -19,6 +19,7 @@ pub mod host;
 pub mod local_time;
 pub mod markdown;
 pub mod messages;
+pub mod pages;
 pub mod poll;
 pub mod remote;
 pub mod sessions;

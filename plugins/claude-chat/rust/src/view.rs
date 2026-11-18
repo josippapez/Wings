@@ -24,25 +24,23 @@ use crate::{
 };
 
 /// An arrow up, a square and a cross, in a 14-point box.
-const SEND: &str = "M7 12V2M2.5 6.5 7 2l4.5 4.5";
+pub(crate) const SEND: &str = "M7 12V2M2.5 6.5 7 2l4.5 4.5";
 const STOP: &str = "M3.5 3.5h7v7h-7z";
 const CLOSE: &str = "M3.5 3.5l7 7M10.5 3.5l-7 7";
 /// A paperclip, in the same box.
 const ATTACH: &str = "M12.5 6.45 7.15 11.8a3.5 3.5 0 0 1-4.95-4.95l5-5a2.33 2.33 0 0 1 3.3 3.3l-5 5a1.17 1.17 0 0 1-1.65-1.65l4.95-4.95";
 
 /// The conversation's column, as wide as a page meant for reading.
-const COLUMN: u32 = 760;
+pub(crate) const COLUMN: u32 = 760;
 /// The most nodes the conversation sends. The app draws a page of at most 5,000, and a long session's whole history
 /// made more: the page was refused and stayed on Loading. The toolbar and the message box take the rest.
-const BUDGET: usize = 3_500;
+pub(crate) const BUDGET: usize = 3_500;
 /// The side panel's width. It floats over the right of the tab and takes no width from the conversation, which stays
 /// centered in the whole tab. The column is 760 wide, drawn with 8 points of margin either side, so the panel is shown while
 /// the tab holds that and the panel (with its 12 points of padding) either side of the centre; narrower, it is put away
 /// behind a button in the header that opens it over the conversation.
 const SIDE: u32 = 340;
 const SIDE_BELOW: u32 = COLUMN + 16 + 2 * (SIDE + 12);
-/// The most nodes a subagent's transcript in the side panel makes, apart from the conversation's own budget.
-const SUB_BUDGET: usize = 1_200;
 /// The most subagents the panel lists.
 const SUBAGENTS_LISTED: usize = 12;
 /// The most lines of one call's output Detailed shows, about 3 nodes each: a long output is cut to this and says how many
@@ -56,8 +54,7 @@ pub fn view() -> Vec<Node> {
 fn chat_page(c: &Chat) -> Node {
     let body = conversation(c);
     // The conversation, the checklist and the message box in the main pane, and a card on the right that the app leaves out
-    // of a narrow tab. An open subagent pins it: that is what you asked to see. Flush, so the conversation scrolls on its own
-    // and the checklist and the message box stay at the foot.
+    // of a narrow tab. Flush, so the conversation scrolls on its own and the checklist and the message box stay at the foot.
     let main = [body].into_iter().chain(todo_card(c)).chain([composer(c)]);
     // The panel floats over the right of the tab. The split says when the tab is narrow; then the panel shows only when you
     // opened it, over the conversation, and Escape or a press outside puts it away. A panel left out leaves its terminals
@@ -267,7 +264,7 @@ fn conversation(c: &Chat) -> Node {
 }
 
 /// An item that folds into the line of the tool calls around it: a call, or a question you answered about one.
-fn folds(item: &Item) -> bool {
+pub(crate) fn folds(item: &Item) -> bool {
     matches!(item, Item::Tool(_) | Item::Ask(Ask { answer: Some(_), .. }))
 }
 
@@ -298,7 +295,7 @@ fn bubble(card: Node, action: Option<Node>) -> Node {
 }
 
 /// An item of the conversation, or with `own` false, of a subagent's, whose messages can't be rewound.
-fn item_node(at: usize, item: &Item, c: &Chat, own: bool) -> Option<Node> {
+pub(crate) fn item_node(at: usize, item: &Item, c: &Chat, own: bool) -> Option<Node> {
     let rewind = || own.then(|| crate::fork_view::message_actions(at, c)).flatten();
     let node = match item {
         Item::User(said) => bubble(card().child(text(said.as_str())), rewind()),
@@ -328,19 +325,8 @@ fn item_node(at: usize, item: &Item, c: &Chat, own: bool) -> Option<Node> {
 /// A run of tool calls as one line that says what they did, open only when you open it (or, in Detailed, until you shut
 /// it): one that opened while a call ran and shut once it ended showed the calls for a moment and hid them again. The
 /// line under the conversation says what runs. Closed, its calls aren't built at all.
-fn steps(first: usize, tools: &[&Tool], c: &Chat) -> Node {
-    steps_in(first, None, tools, c)
-}
-
-/// `steps` for a run of the subagent `scope`, whose runs are numbered from its own first item and so are told apart from the
-/// conversation's by their name, and kept open or shut with the tool outputs.
-fn steps_in(first: usize, scope: Option<&str>, tools: &[&Tool], c: &Chat) -> Node {
-    let run = scope.map(|scope| format!("run-{scope}-{first}"));
-    let clicked = match &run {
-        Some(run) => c.open_outputs.contains(run),
-        None => c.open_steps.contains(&first),
-    };
-    let open = prefs::is_open(c.detailed, clicked);
+pub(crate) fn steps(first: usize, tools: &[&Tool], c: &Chat) -> Node {
+    let open = prefs::is_open(c.detailed, c.open_steps.contains(&first));
     let failed = tools.iter().filter(|tool| matches!(tool.output, Some((_, true)))).count();
     let mut said = describe(tools);
     if failed > 0 {
@@ -359,14 +345,7 @@ fn steps_in(first: usize, scope: Option<&str>, tools: &[&Tool], c: &Chat) -> Nod
     } else {
         stack().prop("gap", "s")
     };
-    let key = format!("steps-{}{first}", scope.map(|scope| format!("{scope}-")).unwrap_or_default());
-    disclosure(said, rows)
-        .prop("open", open)
-        .on("onOpenChange", move |_| match &run {
-            Some(run) => chat::toggle_output(run),
-            None => chat::toggle_steps(first),
-        })
-        .key(key)
+    disclosure(said, rows).prop("open", open).on("onOpenChange", move |_| chat::toggle_steps(first)).key(format!("steps-{first}"))
 }
 
 /// What a run of tool calls did, by kind: "Ran 2 commands · Read 3 files".
@@ -451,14 +430,13 @@ fn step(tool: &Tool, opened: bool, cap: Option<usize>, c: &Chat) -> Node {
     .key(tool.id.as_str())
 }
 
-/// A subagent's call opens its transcript in the side panel, once it has said or done anything.
+/// A subagent's call opens its conversation in a tab of its own, once Claude Code has said its id.
 fn open_subagent(tool: &Tool, c: &Chat) -> Option<Node> {
-    if !matches!(tool.name.as_str(), "Task" | "Agent") || !c.session.subagents.contains_key(&tool.id) {
+    if !matches!(tool.name.as_str(), "Task" | "Agent") || !crate::subagent_relay::can_open(c, &tool.id) {
         return None;
     }
     let id = tool.id.clone();
-    let shown = c.subagent.as_deref() == Some(tool.id.as_str());
-    Some(button(if shown { "Close" } else { "Open" }, "ghost", false, move || chat::toggle_subagent(&id)).prop("size", "sm").prop("title", "Its transcript, in the side panel"))
+    Some(button("Open", "ghost", false, move || crate::tasks_view::open_subagent(&id)).prop("size", "sm").prop("title", "Its conversation, in a tab of its own"))
 }
 
 /// A small mono text on a call's head line.
@@ -811,12 +789,9 @@ fn pasted(c: &Chat) -> Option<Node> {
 }
 
 /// The panel on the right, quiet beside the conversation: the folder and branch, what the working tree changed, how full the
-/// context is and how much of your plan's limits is used, and the session's subagents. Holds a subagent's transcript in
-/// place of that while one is open. Nothing when there is nothing to say yet.
+/// context is and how much of your plan's limits is used, and the session's subagents, each of which opens in a tab of its
+/// own. Nothing when there is nothing to say yet.
 fn side(c: &Chat) -> Vec<Node> {
-    if let Some((id, sub)) = c.subagent.as_ref().and_then(|id| Some((id, c.session.subagents.get(id)?))) {
-        return [subagent_card(id, sub, c)].into_iter().chain(terminals(c)).collect();
-    }
     let small = |said: String| text(said).prop("size", "small");
     let mut sections: Vec<Node> = Vec::new();
     let place = match (c.folder.is_empty(), &c.branch) {
@@ -911,7 +886,7 @@ fn level(percent: u64, levels: (u64, u64)) -> Option<&'static str> {
 }
 
 /// The subagents this session started, from its Task calls: each with its model, whether it runs, and how long it has or
-/// took, and a click opens its transcript. The newest few, as the panel is small.
+/// took, and a click opens its conversation in a tab. The newest few, as the panel is small.
 fn subagents(c: &Chat) -> Option<Node> {
     let tasks: Vec<&Tool> = c.session.items.iter().filter_map(|item| match item {
         Item::Tool(tool) if matches!(tool.name.as_str(), "Task" | "Agent") => Some(tool),
@@ -970,12 +945,12 @@ fn subagent_row(tool: &Tool, c: &Chat) -> Node {
         .prop("align", "center")
         .child(mark)
         .child(stack().prop("grow", true).prop("gap", "none").child(text(name).prop("size", "small").prop("clamp", true).prop("title", name)).child(facts));
-    match sub {
-        Some(_) => {
+    match crate::subagent_relay::can_open(c, &tool.id) {
+        true => {
             let id = tool.id.clone();
-            list_button([line], move || crate::tasks_view::open_subagent(&id)).key(tool.id.as_str())
+            list_button([line], move || crate::tasks_view::open_subagent(&id)).prop("title", "Its conversation, in a tab of its own").key(tool.id.as_str())
         }
-        None => line.key(tool.id.as_str()),
+        false => line.key(tool.id.as_str()),
     }
 }
 
@@ -987,72 +962,6 @@ pub fn took(ms: u64) -> String {
         60..3600 => format!("{}m {}s", seconds / 60, seconds % 60),
         _ => format!("{}h {}m", seconds / 3600, seconds % 3600 / 60),
     }
-}
-
-/// The call that started the subagent `id`, in the conversation or in another subagent's.
-fn find_tool<'a>(c: &'a Chat, id: &str) -> Option<&'a Tool> {
-    let find = |session: &'a Session| session.items.iter().find_map(|item| match item {
-        Item::Tool(tool) if tool.id == id => Some(tool),
-        _ => None,
-    });
-    find(&c.session).or_else(|| c.session.subagents.values().find_map(find))
-}
-
-/// A subagent's transcript in place of the session card: what its call was for, a Close button, and what it said and did,
-/// drawn as the conversation is: its text as Markdown and its tool calls folded.
-fn subagent_card(id: &str, sub: &Session, c: &Chat) -> Node {
-    let tool = find_tool(c, id);
-    let title = tool.map(|tool| tool.summary.as_str()).filter(|title| !title.is_empty()).unwrap_or("Subagent");
-    let state = match tool.map(|tool| &tool.output) {
-        Some(None) => Some("Running".to_owned()),
-        Some(Some((_, true))) => Some("Failed".to_owned()),
-        Some(Some(_)) => Some("Done".to_owned()),
-        None => None,
-    };
-    let facts: Vec<String> = sub.reported_model.as_deref().map(model_name).into_iter().chain(state).collect();
-    let head = row()
-        .prop("gap", "s")
-        .prop("align", "start")
-        .child(stack().prop("grow", true).prop("gap", "none").child(text(title).prop("weight", "medium")).maybe((!facts.is_empty()).then(|| muted(facts.join(" · ")).prop("size", "small"))))
-        .child(button("Close", "ghost", false, chat::close_subagent).prop("size", "sm"));
-    card().prop("variant", "raised").child(stack().prop("gap", "m").child(head).children(transcript(id, sub, c)))
-}
-
-/// What a subagent said and did, newest last, from the newest back until its budget is spent. Your own prompt to it, which
-/// is its first message, isn't repeated.
-fn transcript(id: &str, sub: &Session, c: &Chat) -> Vec<Node> {
-    let items = &sub.items;
-    let (mut blocks, mut spent, mut cut) = (Vec::new(), 0, false);
-    let mut end = items.len();
-    while end > 0 {
-        let mut start = end - 1;
-        while folds(&items[start]) && start > 0 && folds(&items[start - 1]) {
-            start -= 1;
-        }
-        let block = match &items[start] {
-            item if folds(item) => {
-                let tools: Vec<&Tool> = items[start..end].iter().filter_map(|item| if let Item::Tool(tool) = item { Some(tool) } else { None }).collect();
-                (!tools.is_empty()).then(|| steps_in(start, Some(id), &tools, c))
-            }
-            Item::User(_) => None,
-            item => item_node(start, item, c, false),
-        };
-        end = start;
-        let Some(block) = block else { continue };
-        spent += block.count();
-        if spent > SUB_BUDGET && !blocks.is_empty() {
-            cut = true;
-            break;
-        }
-        blocks.push(block);
-    }
-    blocks.reverse();
-    let mut nodes: Vec<Node> = (cut || items.len() >= crate::session::SUBAGENT_KEPT).then(|| muted("Earlier steps aren't shown.").prop("size", "small")).into_iter().collect();
-    nodes.extend(blocks);
-    if sub.thinking || (!sub.live.is_empty()) {
-        nodes.push(muted("Working").prop("shimmer", true).key("working"));
-    }
-    nodes
 }
 
 const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -1068,16 +977,19 @@ fn queued(c: &Chat) -> Option<Node> {
     let rows = c.session.queued.iter().map(|queued| {
         let (now, remove, fold) = (queued.uuid.clone(), queued.uuid.clone(), queued.uuid.clone());
         let open = c.open_queued.contains(&queued.uuid);
+        // A message from a subagent's tab says what you sent, not how Claude is asked to pass it on.
+        let shown = crate::actions::relayed_note(&queued.text);
+        let said_text = shown.as_deref().unwrap_or(queued.text.as_str());
         // Nothing here measures the text, so a message counts as long once it can't fit a line of the narrow card.
-        let long = queued.text.chars().count() > QUEUED_LINE || queued.text.contains('\n');
+        let long = said_text.chars().count() > QUEUED_LINE || said_text.contains('\n');
         // The text takes the room the buttons leave and is cut short in it, so a long message keeps them in the card;
         // opened, it wraps whole and the buttons stay by its first line.
         let said = if queued.text.is_empty() {
             muted(plural(queued.images.len(), "image"))
         } else if open {
-            text(queued.text.as_str())
+            text(said_text)
         } else {
-            text(queued.text.as_str()).prop("truncate", true).prop("title", queued.text.as_str())
+            text(said_text).prop("truncate", true).prop("title", said_text)
         };
         row()
             .prop("gap", "xs")

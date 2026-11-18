@@ -86,6 +86,10 @@ pub enum Message {
     AgentActivity,
     /// The JSON list of the terminals a tab's agent opened, `{ paneId, title, running }`, which its page may draw.
     Terminals,
+    /// The JSON list of the names the plugin's pages took, for `pages` listeners.
+    Pages,
+    /// The JSON `{ from, message, write }` another page of the plugin told this one (`tellPage`).
+    PageMessage,
     /// A badge action was clicked: `id` names it for `Link::call("actionDone")`, the text is the JSON of `{ paneId, actionId }`.
     Action,
     /// Another plugin calls one of this plugin's tools: `id` names the call for `Link::call("toolDone")`, the text is
@@ -116,6 +120,8 @@ impl Message {
             Message::Transcript => "transcript",
             Message::AgentActivity => "agentActivity",
             Message::Terminals => "terminals",
+            Message::Pages => "pages",
+            Message::PageMessage => "pageMessage",
             Message::Action => "action",
             Message::Tool => "tool",
             Message::Resolve => "resolve",

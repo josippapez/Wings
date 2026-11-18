@@ -868,9 +868,10 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         json!({}),
     );
     // Two subagents the session started: one still at work, one done, each with the lines it printed, which carry the id of
-    // the call that started it. Opening the first shows its transcript in the side panel.
+    // the call that started it and the subagent's own id, which its tab is opened by.
     let within = |parent: &str, mut line: serde_json::Value| {
         line["parent_tool_use_id"] = parent.into();
+        line["agent_id"] = format!("a{parent}").into();
         line
     };
     let haiku = |content: serde_json::Value| json!({ "type": "assistant", "message": { "role": "assistant", "model": "claude-haiku-5-5", "content": content } });
@@ -1246,8 +1247,8 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         ("mention", opened(vec![init.clone()]), None, Some("type:fix the rounding in @che"), "checkout.test.ts"),
         // Two pasted pictures wait in the message box as chips, with a message under them.
         ("paste", opened(vec![init.clone()]), None, Some("paste:;paste:;type:what is in these?"), "Image 2"),
-        // The subagent's transcript in the side panel, which Open shows over a narrow tab.
-        ("subagent", subagent, None, Some("disclose:Ran 2 subagents;press:Open"), "Found three callers"),
+        // Each subagent's call has Open, which opens its conversation in a tab of its own (the `subagent-tab` scenes).
+        ("subagent", subagent, None, Some("disclose:Ran 2 subagents"), "Survey the callers of applyDiscount"),
         ("suggestion", suggested, None, None, "Tab"),
         ("subagents", subagents, None, None, "Waiting on 2 subagents"),
         // The side panel lists the background tasks that run, each with how long it has and Stop.
@@ -1549,6 +1550,97 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
             wait(&mut cx, window, Duration::from_millis(300));
             save(&mut cx, window, out.join(format!("claude-chat-{name}-{width}.png")));
             let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        }
+    }
+    // A subagent's tab: the subagent's transcript, read from its session's folder, how it stands as its chat tells it, and the
+    // message box, which sends through the chat. The chat runs in a window behind, as in a tab beside; without it the box
+    // says why it can't send.
+    if only.as_deref().is_none_or(|only| only.starts_with("subagent-tab")) {
+        const SUB_SESSION: &str = "8c2e4a6b-1d3f-4a5c-9e7b-0f2d4c6e8a13";
+        let (call, agent, title) = ("sa1", "asa1", "Survey the callers of applyDiscount");
+        let prompt = "List every caller of applyDiscount, and say which of them round.";
+        let printed = [
+            haiku(json!([{ "type": "tool_use", "id": "sg1", "name": "Grep", "input": { "pattern": "applyDiscount" } }])),
+            output("sg1", "Found 3 files\nsrc/checkout.ts\nsrc/discount.ts\nsrc/cart.ts", false),
+            haiku(json!([{ "type": "text", "text": "Found three callers:\n\n- `src/checkout.ts` re-exports it\n- `src/cart.ts` calls it once per line item, and rounds the total\n- `src/discount.ts` defines it" }])),
+            haiku(json!([{ "type": "tool_use", "id": "sg2", "name": "Read", "input": { "file_path": "/work/shop/src/cart.ts" } }])),
+        ];
+        // The subagent's own transcript, in a folder named after its session beside the session's, as Claude Code keeps it.
+        let folder = root.join(format!("projects/-work-shop/{SUB_SESSION}/subagents"));
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(root.join(format!("projects/-work-shop/{SUB_SESSION}.jsonl")), "").unwrap();
+        let entries: String = [user(prompt)]
+            .into_iter()
+            .chain(printed.iter().cloned())
+            .enumerate()
+            .map(|(n, mut entry)| {
+                entry["uuid"] = format!("su{n}").into();
+                entry["isSidechain"] = true.into();
+                entry["agentId"] = agent.into();
+                format!("{entry}\n")
+            })
+            .collect();
+        std::fs::write(folder.join(format!("agent-{agent}.jsonl")), entries).unwrap();
+        // The chat that runs it: its call, Claude Code's word that it started, and the lines it printed so far.
+        let started = [
+            json!({ "type": "system", "subtype": "init", "session_id": SUB_SESSION, "model": "claude-opus-5-5" }),
+            user("Find every caller of applyDiscount and tell me which of them round."),
+            tool(call, "Agent", json!({ "description": title, "subagent_type": "Explore", "prompt": prompt })),
+            json!({ "type": "system", "subtype": "task_started", "task_id": agent, "tool_use_id": call, "description": title, "task_type": "local_agent" }),
+        ];
+        let chat_lines = opened(started.into_iter().chain(printed.iter().cloned().map(|line| within(call, line))).collect());
+        let fixture = root.join("subagent-chat.jsonl");
+        std::fs::write(&fixture, chat_lines.iter().map(|line| format!("{line}\n")).collect::<String>()).unwrap();
+        let answers = root.join("answers-subagent-tab");
+        let _ = std::fs::remove_dir_all(&answers);
+        std::fs::create_dir_all(&answers).unwrap();
+        // SAFETY: the pages of the scenes before are closed, so nothing reads these while they change.
+        unsafe {
+            std::env::set_var("CHAT_FIXTURE", &fixture);
+            std::env::set_var("CHAT_ANSWERS", &answers);
+            std::env::set_var("CHAT_EXIT", "");
+            std::env::set_var("CHAT_STDERR", "");
+        }
+        let args = json!({ "subagent": { "session": SUB_SESSION, "agent": agent, "title": title } });
+        for (state, chat_open) in [("subagent-tab", true), ("subagent-tab-closed", false)] {
+            if only.as_deref().is_some_and(|only| only != state) {
+                continue;
+            }
+            for width in [1000.0, 640.0] {
+                let chat: Option<AnyWindowHandle> = chat_open.then(|| {
+                    let handle = cx
+                        .open_offscreen_window(size(px(1000.0), px(760.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, &source, None, cx)))
+                        .unwrap();
+                    handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
+                    let window = handle.into();
+                    let deadline = Instant::now() + Duration::from_secs(30);
+                    while !handle.read_with(&cx, |view, _| view.text().contains("Find every caller")).unwrap() {
+                        assert!(Instant::now() < deadline, "the chat did not start: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
+                        wait(&mut cx, window, Duration::from_millis(20));
+                    }
+                    window
+                });
+                let handle = cx
+                    .open_offscreen_window(size(px(width), px(760.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, &source, Some(&args), cx)))
+                    .unwrap();
+                handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
+                let window = handle.into();
+                // Open, the box says how a message goes once the chat has said it can pass one on; closed, it says why not.
+                let shown = if chat_open { ["Found three callers", "Goes through the chat"] } else { ["Found three callers", "is closed"] };
+                for expected in shown {
+                    let deadline = Instant::now() + Duration::from_secs(30);
+                    while !handle.read_with(&cx, |view, _| view.text().contains(expected)).unwrap() {
+                        assert!(Instant::now() < deadline, "the subagent's tab did not show {expected:?}: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
+                        wait(&mut cx, window, Duration::from_millis(20));
+                    }
+                }
+                wait(&mut cx, window, Duration::from_millis(300));
+                save(&mut cx, window, out.join(format!("claude-chat-{state}-{width}.png")));
+                let _ = cx.update_window(window, |_, window, _| window.remove_window());
+                if let Some(chat) = chat {
+                    let _ = cx.update_window(chat, |_, window, _| window.remove_window());
+                }
+            }
         }
     }
     // The page in Wings Settings, with a mode, Detailed and Large text picked.
