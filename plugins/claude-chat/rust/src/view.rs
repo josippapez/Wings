@@ -465,21 +465,23 @@ fn composer(c: &Chat) -> Node {
                 chat::send();
             }
         });
-    // A round button with an arrow, and a square to stop while Claude works, as chat apps have. What you send then
-    // waits in the queue.
-    let stop = c.session.working.then(|| {
-        button("", "secondary", false, chat::stop).prop("size", "icon-sm").prop("label", "Stop").prop("title", "Stop").child(icon(14, 2.0, &[STOP]))
-    });
-    let send = button("", "default", false, chat::send)
-        .prop("size", "icon-sm")
-        .prop("label", if c.session.working { "Queue" } else { "Send" })
-        .prop("title", if c.session.working { "Queue for after Claude's turn (Enter)" } else { "Send (Enter)" })
-        .prop("disabled", !open || c.draft.trim().is_empty())
-        .child(icon(14, 2.0, &[SEND]));
+    // One button, as chat apps have: a square to stop while Claude works and nothing is typed, else an arrow to send.
+    // What you send while Claude works waits in the queue.
+    let typed = !c.draft.trim().is_empty();
+    let action = if c.session.working && !typed {
+        button("", "default", false, chat::stop).prop("size", "icon-sm").prop("label", "Stop").prop("title", "Stop").child(icon(14, 2.0, &[STOP]))
+    } else {
+        button("", "default", false, chat::send)
+            .prop("size", "icon-sm")
+            .prop("label", if c.session.working { "Queue" } else { "Send" })
+            .prop("title", if c.session.working { "Queue for after Claude's turn (Enter)" } else { "Send (Enter)" })
+            .prop("disabled", !open || !typed)
+            .child(icon(14, 2.0, &[SEND]))
+    };
     let context = c.session.context.map(|(used, most)| {
         text(format!("{}%", (used * 100 / most.max(1)).min(100))).prop("tone", "muted").prop("size", "small").prop("title", "How full the context window is")
     });
-    let controls = row().prop("gap", "xs").prop("align", "center").children(pickers(c)).child(stack().prop("grow", true)).maybe(context).maybe(stop).child(send);
+    let controls = row().prop("gap", "xs").prop("align", "center").children(pickers(c)).child(stack().prop("grow", true)).maybe(context).child(action);
     let message_box = card().prop("variant", "raised").child(field.prop("grow", true)).child(controls);
     Node::new("Bar").prop("edge", "none").child(stack().prop("gap", "s").prop("maxWidth", COLUMN).maybe(commands(c).or_else(|| file_menu(c))).maybe(queued(c)).child(message_box))
 }
