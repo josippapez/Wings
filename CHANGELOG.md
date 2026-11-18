@@ -2,6 +2,14 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.35 · 2026-11-18
+
+- **Paste images into Claude chat.** Cmd+V puts a screenshot in the message box as a chip, sent with your message.
+- **Slash commands and @-files in a list over the message box**, which the arrow keys move through and Enter picks from.
+- **Messages you send while Claude works reach it at its next step**, as in a terminal, instead of after the whole turn. Send now has Claude read one at once.
+- **Long paths in Claude's replies wrap** instead of running past the edge.
+- **Claude chat keeps the model you picked**, hides a skill's text that showed as your message, keeps tool runs folded until you open them, and shows a failed command's error under it.
+
 ## 0.2.34 · 2026-11-18
 
 - **Claude chat shows in the sidebar's Agents.** Like a terminal's Claude: working with what it runs, needs you while it asks something, or done. A click goes to its tab.
