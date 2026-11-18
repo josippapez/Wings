@@ -429,6 +429,22 @@ pub fn transcript(session: &str, kinds: &[&str], last: Option<u32>) -> Pending<R
     call("transcript", json!({ "sessionId": session, "types": kinds, "last": last }))
 }
 
+/// `wings.transcript` that keeps the pictures out of the page (Wings 0.2.40). Each image block of an entry, in a message
+/// or in a tool result, comes back as `{ "type": "image", "source": { "type": "registered", "id": ... } }`, the id to
+/// give `ui::image`, and as `{ "type": "unavailable" }` when Wings won't keep it. A page has 64 MB, and a transcript with
+/// screenshots in it is more than that as base64.
+pub fn transcript_with_images(session: &str, kinds: &[&str], last: Option<u32>) -> Pending<Result<Value, String>> {
+    call("transcript", json!({ "sessionId": session, "types": kinds, "last": last, "images": "register" }))
+}
+
+/// `wings.registerImage` (Wings 0.2.40): keeps a picture, a png, jpeg, gif or webp of up to 5 MB as base64, in Wings
+/// under `id` (up to 64 letters, digits, `-` and `_`) for `ui::image` nodes to show. Send it once: a node names it by id,
+/// so the bytes don't travel with each render. Wings keeps the most recently shown ones, so a node for one it let go of
+/// shows a note. Nobody waits for it.
+pub fn register_image(id: &str, data: &str) {
+    drop(call("registerImage", json!({ "id": id, "data": data })));
+}
+
 /// `wings.onTranscript`: each entry Claude Code appends to the transcript of a session in a pane, as
 /// `{ sessionId, entry }`.
 pub fn on_transcript(listener: impl Fn(&Value) + 'static) {

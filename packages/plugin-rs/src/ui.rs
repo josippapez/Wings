@@ -381,6 +381,15 @@ pub fn icon(size: u8, stroke: f64, paths: &[&str]) -> Node {
         .prop("shapes", paths.iter().map(|d| json!(["path", { "d": d }])).collect::<Vec<_>>())
 }
 
+/// A picture registered with `host::register_image` under `id` (Wings 0.2.40), as big as `max_width` by `max_height`
+/// points allow: scaled down to fit, never up, and with `.prop("fit", "cover")` filling the box and cropping instead.
+/// `label` is what a screen reader says. More props: `radius` (points), `fitWindow` (also keep within the window, for a
+/// picture in a dialog) and `onClick`. It is drawn only from an id, never from a path or a URL, and a picture Wings no
+/// longer keeps shows as a small note.
+pub fn image(id: &str, label: &str, max_width: u32, max_height: u32) -> Node {
+    Node::new("Image").prop("src", id).prop("label", label).prop("maxWidth", max_width).prop("maxHeight", max_height)
+}
+
 pub struct Choice {
     pub value: String,
     pub label: String,

@@ -16,6 +16,7 @@ use wings_plugin::{
 };
 
 use crate::{
+    images,
     mentions::{self, Files},
     plugins, prefs,
     session::{self, Command, Draft, Item, Restore, Session, exits, view_of},
@@ -79,6 +80,8 @@ pub struct Chat {
     pub panel_week: bool,
     /// The plugins dialog, over the chat while it is open.
     pub plugins: Option<plugins::Dialog>,
+    /// The picture shown large in a dialog, by id.
+    pub picture: Option<String>,
     /// The groups of tool calls you clicked, by the index of their first item: each flips what `detailed` shows.
     pub open_steps: HashSet<usize>,
     /// The tool calls whose output you clicked, by their id: each flips what `detailed` shows.
@@ -130,6 +133,7 @@ thread_local! {
         panel: None,
         panel_week: false,
         plugins: None,
+        picture: None,
         open_steps: HashSet::new(),
         open_outputs: HashSet::new(),
         open_queued: HashSet::new(),
@@ -210,6 +214,7 @@ fn launch(resume: Option<String>) {
         c.past = None;
         c.panel = None;
         c.plugins = None;
+        c.picture = None;
         c.open_steps.clear();
         c.open_outputs.clear();
         c.open_queued.clear();
@@ -223,7 +228,7 @@ fn launch(resume: Option<String>) {
     load_git(run, cwd.clone());
     task::spawn(async move {
         if let Some(id) = &resume {
-            if let Ok(entries) = host::transcript(id, &["user", "assistant", "last-prompt"], Some(HISTORY)).await {
+            if let Ok(entries) = host::transcript_with_images(id, &["user", "assistant", "last-prompt"], Some(HISTORY)).await {
                 with(|c| {
                     if c.run == run {
                         entries.as_array().into_iter().flatten().for_each(|entry| c.session.hear(entry));
@@ -388,6 +393,8 @@ fn hear(run: u32, line: &Value) {
         let named = c.session.id.clone().filter(|id| Some(id) != before.as_ref());
         (named, std::mem::take(&mut c.session.alerts), was_working && !c.session.working)
     });
+    // Pictures in what was heard go to Wings once, as the page names them by id.
+    images::flush();
     // Only for what you'd miss: someone looking at this tab sees it happen.
     if !host::focused() {
         for (title, body) in alerts {
@@ -517,7 +524,17 @@ pub fn send() {
         c.doing = (c.session.activity(), host::now() as u64);
         Some(line)
     });
+    images::flush();
     report_agent();
+}
+
+/// Shows the picture `id` large, in a dialog.
+pub fn show_picture(id: &str) {
+    with(|c| c.picture = Some(id.to_owned()));
+}
+
+pub fn close_picture() {
+    with(|c| c.picture = None);
 }
 
 /// Adds a picture pasted into the message box.

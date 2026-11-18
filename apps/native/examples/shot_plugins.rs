@@ -1010,7 +1010,42 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         text("Fixed: the discount works in cents now, and all 24 checkout tests pass."),
         json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 52_800, "num_turns": 5, "result": "", "total_cost_usd": 0.2 }),
     ]);
-    let scenes: [Scene; 39] = [
+    // Made-up pictures drawn in code: a bar chart you attach, and a window a Read of an image gives back.
+    let png = |width: u32, height: u32, paint: &dyn Fn(u32, u32) -> [u8; 4]| {
+        use base64::Engine;
+        let mut bytes = Vec::new();
+        image::RgbaImage::from_fn(width, height, |x, y| image::Rgba(paint(x, y))).write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).unwrap();
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    };
+    let chart = png(480, 300, &|x, y| {
+        let bar = [(60..140, 120, [217, 119, 87, 255]), (190..270, 200, [156, 192, 255, 255]), (320..400, 80, [125, 211, 167, 255])]
+            .into_iter()
+            .find(|(across, high, _)| across.contains(&x) && y >= 270 - high && y < 270);
+        match bar {
+            Some((.., color)) => color,
+            None if (270..272).contains(&y) => [157, 151, 143, 255],
+            None => [24, 22, 30, 255],
+        }
+    });
+    let screen = png(800, 500, &|x, y| match (x, y) {
+        (_, 0..36) if (16..64).contains(&x) && y > 12 && y < 24 && x % 16 < 10 => [217, 119, 87, 255],
+        (_, 0..36) => [46, 42, 56, 255],
+        (40..160, 400..440) => [217, 119, 87, 255],
+        (40..720, 70..500) if (y - 70) % 28 < 10 && x < 40 + 640 - (y * 37 % 300) => [90, 86, 100, 255],
+        _ => [30, 28, 38, 255],
+    });
+    // You attach a chart, Claude reads a screenshot, and both come back as thumbnails.
+    let pictures = opened(vec![
+        init.clone(),
+        json!({ "type": "user", "message": { "role": "user", "content": [
+            { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": chart } },
+            { "type": "text", "text": "Why does the third bar look so small next to the others?" }] } }),
+        tool("v1", "Read", json!({ "file_path": "/work/shop/shots/checkout.png" })),
+        json!({ "type": "user", "message": { "role": "user", "content": [{ "type": "tool_result", "tool_use_id": "v1",
+            "content": [{ "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": screen } }] }] } }),
+        text("The third bar is a fraction of the first because the cart reloads and its counter starts again, as the checkout screen shows."),
+    ]);
+    let scenes: [Scene; 41] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -1073,6 +1108,10 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
             Some("type:/permissions;keys:enter;press:Add rule;type:Bash(curl -u admin:hunter2 https://ci.example.com);press:Review;press:Add allow rule"),
             "contains a secret",
         ),
+        // The picture you attached shows in your message, and the one Read gave back under its line, once the run is opened.
+        ("pictures", pictures.clone(), None, Some("disclose:Read 1 file"), "its counter starts again"),
+        // A click on a thumbnail shows it large in a dialog, which fits the window.
+        ("picture-open", pictures, None, Some("disclose:Read 1 file;image:Picture from the tool"), "its counter starts again"),
     ];
     // Files for @-mentions, which the chat lists with git.
     for file in ["src/checkout.ts", "src/checkout.test.ts", "src/cart.ts", "api/limits.ts", "README.md"] {
@@ -1198,6 +1237,7 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
                         Some(("press", label)) => assert!(handle.read_with(&cx, |view, _| view.press(label, 0)).unwrap()),
                         // A row of a list that is a button, like a task in the side panel.
                         Some(("row", text)) => assert!(handle.read_with(&cx, |view, _| view.press_list_button(text)).unwrap()),
+                        Some(("image", label)) => assert!(handle.read_with(&cx, |view, _| view.press_image(label)).unwrap()),
                         Some(("disclose", summary)) => assert!(handle.update(&mut cx, |view, _, cx| view.press_disclosure(summary, cx)).unwrap()),
                         Some(("select", label)) => assert!(handle.update(&mut cx, |view, _, cx| view.open_select(label, cx)).unwrap()),
                         _ => panic!("{act}"),

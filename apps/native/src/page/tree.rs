@@ -9,8 +9,10 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::fmt;
 
+mod picture;
 mod sunburst;
 mod svg;
+pub use picture::{Picture, valid_id as valid_image_id};
 pub use sunburst::{Geometry, Hit, Sunburst, Wedge};
 pub use svg::Svg;
 
@@ -167,6 +169,7 @@ pub enum Node {
     Input(Input),
     Icon(Icon),
     Svg(Svg),
+    Image(Picture),
     Graph(Graph),
     Avatar(Avatar),
     Skeleton(Skeleton),
@@ -845,6 +848,7 @@ impl Node {
             Node::Input(n) => Some(n.id),
             Node::Icon(n) => Some(n.id),
             Node::Svg(n) => Some(n.id),
+            Node::Image(n) => Some(n.id),
             Node::Graph(n) => Some(n.id),
             Node::Avatar(n) => Some(n.id),
             Node::Skeleton(n) => Some(n.id),
@@ -885,6 +889,7 @@ impl Node {
             | Node::Input(_)
             | Node::Icon(_)
             | Node::Svg(_)
+            | Node::Image(_)
             | Node::Graph(_)
             | Node::Avatar(_)
             | Node::Skeleton(_)
@@ -980,6 +985,7 @@ impl Walk {
                 | "Textarea"
                 | "Icon"
                 | "Svg"
+                | "Image"
                 | "Graph"
                 | "Avatar"
                 | "Skeleton"
@@ -1335,6 +1341,11 @@ impl Walk {
             // One that holds anything the app doesn't draw is left out, as an icon it has no name for is.
             "Svg" => match svg::parse(id, &props) {
                 Some(drawing) => Node::Svg(drawing),
+                None => return Ok(None),
+            },
+            // One whose `src` isn't an id a page registered is left out, as a path or a URL would be.
+            "Image" => match picture::parse(id, &props) {
+                Some(picture) => Node::Image(picture),
                 None => return Ok(None),
             },
             "ListButton" => Node::ListButton(ListButton {

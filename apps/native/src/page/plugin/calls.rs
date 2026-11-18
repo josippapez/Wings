@@ -102,6 +102,8 @@ struct TranscriptRequest {
     session_id: String,
     types: Vec<String>,
     last: Option<f64>,
+    /// `"register"`: the pictures in the entries are kept by the app, and the entries name their ids.
+    images: Option<String>,
 }
 
 /// What the desktop's wrapper makes of an `exec`'s `timeoutMs`: a number of milliseconds, whole and not negative. The
@@ -431,6 +433,8 @@ impl Shared {
             }
             // Any page may copy right after your click or key, as a desktop page's frame may use the clipboard API;
             // the frame has checked that (`FrameLink::call`).
+            // Any page may keep a picture for its `Image` nodes: the app's store of them is bounded (`page::images`).
+            "registerImage" => reply.done(pictures::register_image(&self.config.id, &params)),
             "copyText" => {
                 let text = js_string(params.get("text"));
                 if text.len() > COPY_MAX {
@@ -852,13 +856,16 @@ fn transcript(access: &Access, params: &Value) -> Result<String, String> {
     let request: TranscriptRequest =
         serde_json::from_value(params.clone()).map_err(|error| error.to_string())?;
     let last = request.last.map(|last| last as usize);
-    let entries = transcript_entries(
+    let mut entries = transcript_entries(
         &access.plugin,
         &access.env.claude_dirs(),
         &request.session_id,
         &request.types,
         last,
     )?;
+    if request.images.as_deref() == Some("register") {
+        pictures::register_in(&access.plugin.manifest.id, &mut entries);
+    }
     to_json(&entries)
 }
 
@@ -911,6 +918,7 @@ fn open_url(access: &Access, params: &Value) -> Result<String, String> {
 
 #[cfg(test)]
 mod claude;
+mod pictures;
 mod pr_tracker;
 mod sections;
 pub use sections::{SectionIcon, SectionRow};

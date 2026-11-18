@@ -8,6 +8,7 @@ use serde_json::{Map, Value, json};
 use wings_plugin::format::parse_time;
 
 use crate::{
+    images,
     plugins::{self, Plugins, Show},
     setup::Setup,
     usage::{ContextDetail, Panel, Usage},
@@ -32,11 +33,13 @@ pub const SUBAGENT_KEPT: usize = 200;
 pub enum Item {
     /// What you sent.
     User(String),
-    /// What you sent with pictures: the text, which may be empty, and how many pictures. Their data stays out of the
-    /// item, as it is large and only Claude Code needs it.
-    UserImages(String, usize),
+    /// What you sent with pictures: the text, which may be empty, and the ids of the pictures (`images.rs`). Their data
+    /// stays out of the item, as it is large and only Claude Code and Wings need it.
+    UserImages(String, Vec<String>),
     /// What Claude wrote, as Markdown.
     Text(String),
+    /// Pictures in Claude's own content, by id.
+    Images(Vec<String>),
     Tool(Tool),
     /// Claude asks before using a tool.
     Ask(Ask),
@@ -60,6 +63,8 @@ pub struct Tool {
     pub output: Option<(String, bool)>,
     /// What its input says beyond the summary, by kind of tool.
     pub detail: Detail,
+    /// The pictures it gave back (a Read of an image, a screenshot, an MCP tool), by id.
+    pub images: Vec<String>,
 }
 
 /// What a tool call's input holds that its one-line summary doesn't.
@@ -131,13 +136,6 @@ pub struct Queued {
     pub text: String,
     /// The pictures sent with it, as (media type, base64), kept in case it is sent again.
     pub images: Vec<(String, String)>,
-}
-
-impl Queued {
-    /// The message as the conversation shows it once it is read.
-    fn read(self) -> Item {
-        sent_item(self.text, self.images.len())
-    }
 }
 
 /// One of your messages: the item it is, and the uuid Claude Code knows it by, which a rewind names.
@@ -578,7 +576,13 @@ impl Session {
     /// A queued message, read: into the conversation, under its uuid.
     fn read_queued(&mut self, queued: Queued) {
         self.prompts.push(Prompt { at: self.items.len(), uuid: queued.uuid.clone(), parent: None });
-        self.items.push(queued.read());
+        let ids = self.keep_pictures(&queued.images);
+        self.items.push(sent_item(queued.text, ids));
+    }
+
+    /// The ids of pictures of yours (media type and base64), which Wings is to be given.
+    fn keep_pictures(&mut self, pictures: &[(String, String)]) -> Vec<String> {
+        pictures.iter().map(|(_, data)| images::keep(data)).collect()
     }
 
     /// Drops your message at `at` and everything after it.
@@ -723,7 +727,10 @@ impl Session {
                     let name = block["name"].as_str().unwrap_or("Tool").to_owned();
                     let id = block["id"].as_str().unwrap_or_default().to_owned();
                     self.track(&name, &id, &block["input"]);
-                    self.items.push(Item::Tool(Tool { id, summary: summary(&name, &block["input"]), detail: detail(&name, &block["input"]), name, output: None }));
+                    self.items.push(Item::Tool(Tool { id, summary: summary(&name, &block["input"]), detail: detail(&name, &block["input"]), name, output: None, images: Vec::new() }));
+                }
+                "image" => {
+                    self.items.push(Item::Images(images::of_block(block).into_iter().collect()));
                 }
                 _ => {}
             }
@@ -735,10 +742,10 @@ impl Session {
             return self.items.extend(said(text));
         }
         let first = self.items.len();
-        let mut images = 0;
+        let mut pictures: Vec<String> = Vec::new();
         for block in content.as_array().into_iter().flatten() {
             match block["type"].as_str().unwrap_or_default() {
-                "image" => images += 1,
+                "image" => pictures.extend(images::of_block(block)),
                 // What Claude Code writes in your name when a turn is stopped, which `Stopped` shows.
                 "text" if block["text"].as_str().is_some_and(|text| text.starts_with("[Request interrupted by user")) => {}
                 "text" => self.items.extend(said(block["text"].as_str().unwrap_or_default())),
@@ -749,12 +756,15 @@ impl Session {
                         Value::Array(parts) => texts(parts).join("\n"),
                         _ => String::new(),
                     };
+                    // A Read of an image, a screenshot or an MCP tool gives pictures back as image blocks.
+                    let shots: Vec<String> = block["content"].as_array().into_iter().flatten().filter(|part| part["type"] == "image").take(images::PER_RESULT).filter_map(images::of_block).collect();
                     let tool = self.items.iter_mut().rev().find_map(|item| match item {
                         Item::Tool(tool) if tool.id == id => Some(tool),
                         _ => None,
                     });
                     if let Some(tool) = tool {
                         tool.output = Some((cut(&output, OUTPUT_KEPT), block["is_error"] == true));
+                        tool.images = shots;
                     }
                     if let Some(at) = self.creating.iter().position(|(call, ..)| call == id) {
                         let (_, text, active) = self.creating.remove(at);
@@ -768,16 +778,16 @@ impl Session {
                 _ => {}
             }
         }
-        if images > 0 {
+        if !pictures.is_empty() {
             // The pictures belong to the text of that message, else they are a message of their own.
             match self.items[first..].iter().position(|item| matches!(item, Item::User(_))) {
                 Some(at) => {
                     if let Item::User(text) = &mut self.items[first + at] {
                         let text = std::mem::take(text);
-                        self.items[first + at] = Item::UserImages(text, images);
+                        self.items[first + at] = Item::UserImages(text, pictures);
                     }
                 }
-                None => self.items.insert(first, Item::UserImages(String::new(), images)),
+                None => self.items.insert(first, Item::UserImages(String::new(), pictures)),
             }
         }
     }
@@ -838,7 +848,8 @@ impl Session {
     pub fn send(&mut self, text: &str, images: &[(String, String)], stamp: u64, n: u32) -> String {
         let uuid = uuid(stamp, n);
         self.prompts.push(Prompt { at: self.items.len(), uuid: uuid.clone(), parent: None });
-        self.items.push(sent_item(text.to_owned(), images.len()));
+        let ids = self.keep_pictures(images);
+        self.items.push(sent_item(text.to_owned(), ids));
         self.working = true;
         self.suggestion = None;
         // The limits are asked again with each message: the chat may only write when you send something.
@@ -1191,8 +1202,8 @@ fn content(text: &str, images: &[(String, String)]) -> Value {
 }
 
 /// A message of yours as the conversation shows it.
-fn sent_item(text: String, images: usize) -> Item {
-    if images == 0 { Item::User(text) } else { Item::UserImages(text, images) }
+fn sent_item(text: String, pictures: Vec<String>) -> Item {
+    if pictures.is_empty() { Item::User(text) } else { Item::UserImages(text, pictures) }
 }
 
 fn cancel(uuid: &str, n: u32) -> String {
@@ -1587,6 +1598,7 @@ mod tests {
                     summary: "ls".into(),
                     output: Some(("err.txt\nout.jsonl\nprobe-file.txt".into(), false)),
                     detail: Detail::Command("ls".into()),
+                    images: Vec::new(),
                 }),
                 Item::Text("There are 3 files:\n\n- `err.txt`\n- `out.jsonl`\n- `probe-file.txt`".into()),
             ]
@@ -1726,7 +1738,8 @@ mod tests {
     }
 
     #[test]
-    fn pictures_go_as_image_blocks_before_the_text_and_show_as_a_count() {
+    fn pictures_go_as_image_blocks_before_the_text_and_show_by_their_ids() {
+        images::reset();
         let pictures = [("image/png".to_owned(), "AAAA".to_owned()), ("image/jpeg".to_owned(), "BBBB".to_owned())];
         let mut session = Session::default();
         let sent: Value = serde_json::from_str(session.send("what is this?", &pictures, 1, 1).lines().next().unwrap()).unwrap();
@@ -1741,7 +1754,14 @@ mod tests {
         // Without text there is no empty text block, which the API refuses.
         let alone: Value = serde_json::from_str(session.send("", &pictures[..1], 1, 1).lines().next().unwrap()).unwrap();
         assert_eq!(alone["message"]["content"], json!([{ "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "AAAA" } }]));
-        assert_eq!(session.items, [Item::UserImages("what is this?".into(), 2), Item::UserImages(String::new(), 1)]);
+        let [Item::UserImages(text, two), Item::UserImages(none, one)] = &session.items[..] else {
+            panic!("{:?}", session.items)
+        };
+        assert_eq!((text.as_str(), two.len(), none.as_str(), one.len()), ("what is this?", 2, "", 1));
+        // Each picture is kept for Wings under its id, once, and the id is what the item holds.
+        let kept = images::pending();
+        assert_eq!(kept.iter().map(|(_, data)| data.as_str()).collect::<Vec<_>>(), ["AAAA", "BBBB", "AAAA"]);
+        assert_eq!(kept.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(), [two.clone(), one.clone()].concat());
     }
 
     #[test]
@@ -1756,13 +1776,19 @@ mod tests {
     }
 
     #[test]
-    fn a_transcript_message_with_pictures_shows_how_many() {
+    fn a_transcript_message_with_pictures_shows_them() {
+        images::reset();
         let session = heard(concat!(
             r#"{"type":"user","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}},{"type":"text","text":"what is this?"}]}}"#,
             "\n",
             r#"{"type":"user","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]}}"#,
         ));
-        assert_eq!(session.items, [Item::UserImages("what is this?".into(), 1), Item::UserImages(String::new(), 1)]);
+        let [Item::UserImages(text, first), Item::UserImages(none, second)] = &session.items[..] else {
+            panic!("{:?}", session.items)
+        };
+        assert_eq!((text.as_str(), first.len(), none.as_str(), second.len()), ("what is this?", 1, "", 1));
+        assert_ne!(first, second);
+        assert!(images::is_shown(&first[0]) && images::is_shown(&second[0]));
     }
 
     #[test]
@@ -2807,5 +2833,96 @@ mod tests {
         let lines = parsed(&Session::opening(None));
         assert!(lines.contains(&json!({ "type": "control_request", "request_id": "checkpoints",
             "request": { "subtype": "apply_flag_settings", "settings": { "env": { "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING": "1" } } } })));
+    }
+
+    /// A Read of a small generated png as Claude Code 2.1.327 printed it: the tool result is an image block, and the line
+    /// carries the picture a second time as `tool_use_result`.
+    const IMAGE_TURN: &str = include_str!("../tests/image_turn.jsonl");
+
+    fn tool_images(session: &Session) -> Vec<Vec<String>> {
+        session.items.iter().filter_map(|item| if let Item::Tool(tool) = item { Some(tool.images.clone()) } else { None }).collect()
+    }
+
+    #[test]
+    fn a_picture_a_tool_gives_back_shows_in_its_step_and_goes_to_wings_once() {
+        images::reset();
+        let session = heard(IMAGE_TURN);
+        let shown = tool_images(&session);
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].len(), 1);
+        let Some(Item::Tool(read)) = session.items.first() else {
+            panic!("{:?}", session.items)
+        };
+        // It printed no text, and the picture is the id of what Wings was given.
+        assert_eq!(read.output, Some((String::new(), false)));
+        let kept = images::pending();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].0, shown[0][0]);
+        assert!(kept[0].1.starts_with("iVBORw0KGgo"));
+        assert!(images::is_shown(&kept[0].0));
+    }
+
+    #[test]
+    fn a_transcripts_pictures_come_as_ids_wings_registered() {
+        images::reset();
+        let session = heard(concat!(
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"image","source":{"type":"registered","id":"tabc"}},{"type":"text","text":"look"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"Read","input":{"file_path":"/tmp/a.png"}}]}}"#,
+            "\n",
+            r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"c1","type":"tool_result","content":[{"type":"image","source":{"type":"registered","id":"tdef"}},{"type":"image","source":{"type":"unavailable"}}]}]}}"#,
+        ));
+        assert_eq!(session.items[0], Item::UserImages("look".into(), vec!["tabc".into()]));
+        assert_eq!(tool_images(&session), [["tdef".to_owned(), "gone".to_owned()]]);
+        // Nothing is sent to Wings: it kept them as it read the transcript.
+        assert!(images::pending().is_empty());
+        assert!(images::is_shown("tabc") && images::is_shown("tdef") && !images::is_shown("gone"));
+    }
+
+    #[test]
+    fn only_the_newest_pictures_show_and_an_oversize_one_is_not_sent() {
+        images::reset();
+        let mut session = Session::default();
+        let pictures: Vec<(String, String)> = (0..images::SHOWN + 3).map(|_| ("image/png".to_owned(), "AAAA".to_owned())).collect();
+        session.send("many", &pictures, 1, 1);
+        let Some(Item::UserImages(_, ids)) = session.items.first() else {
+            panic!("{:?}", session.items)
+        };
+        assert_eq!(ids.len(), images::SHOWN + 3);
+        let showing: Vec<bool> = ids.iter().map(|id| images::is_shown(id)).collect();
+        assert_eq!(showing.iter().filter(|shown| **shown).count(), images::SHOWN);
+        assert!(!showing[0] && showing[ids.len() - 1]);
+        // Beyond what Wings keeps, the picture isn't copied into the page's queue at all.
+        images::reset();
+        let big = "A".repeat(5 * 1024 * 1024 / 3 * 4 + 8);
+        assert_eq!(images::keep(&big), "gone");
+        assert!(images::pending().is_empty());
+    }
+
+    #[test]
+    fn a_queued_message_shows_its_pictures_once_claude_code_reads_it() {
+        images::reset();
+        let mut session = Session::default();
+        session.queue("look", vec![("image/gif".into(), "CCCC".into())], 1, 1);
+        assert!(images::pending().is_empty());
+        let uuid = session.queued[0].uuid.clone();
+        session.hear(&json!({ "type": "user", "isReplay": true, "uuid": uuid, "message": { "role": "user", "content": "look" } }));
+        let Some(Item::UserImages(text, ids)) = session.items.first() else {
+            panic!("{:?}", session.items)
+        };
+        assert_eq!((text.as_str(), ids.len()), ("look", 1));
+        assert_eq!(images::pending(), [(ids[0].clone(), "CCCC".to_owned())]);
+    }
+
+    #[test]
+    fn a_tool_result_shows_at_most_a_few_pictures() {
+        images::reset();
+        let shot = json!({ "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "AAAA" } });
+        let session = heard(&[
+            json!({ "type": "assistant", "message": { "role": "assistant", "content": [{ "type": "tool_use", "id": "c1", "name": "mcp__shots__all", "input": {} }] } }),
+            json!({ "type": "user", "message": { "role": "user", "content": [{ "tool_use_id": "c1", "type": "tool_result", "content": vec![shot; 10] }] } }),
+        ].map(|line| line.to_string()).join("\n"));
+        assert_eq!(tool_images(&session)[0].len(), images::PER_RESULT);
+        assert_eq!(images::pending().len(), images::PER_RESULT);
     }
 }

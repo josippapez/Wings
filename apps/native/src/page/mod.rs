@@ -7,6 +7,8 @@
 //! A plugin is a main and its pages (`plugin`): each runs in its own thread, and they talk through
 //! `wings.broadcast` and share `wings.storage`, as on the desktop.
 
+#[cfg(feature = "ui")]
+pub mod images;
 pub mod log;
 pub mod plugin;
 pub mod runtime;

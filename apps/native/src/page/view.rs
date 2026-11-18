@@ -20,6 +20,8 @@ mod board_view;
 mod controls_view;
 #[path = "graph_view.rs"]
 mod graph_view;
+#[path = "picture_view.rs"]
+mod picture_view;
 #[path = "rich_view.rs"]
 mod rich_view;
 #[path = "sheet_view.rs"]
@@ -122,6 +124,10 @@ pub struct PageView {
     inputs: RefCell<HashMap<u64, InputState>>,
     graphs: RefCell<HashMap<u64, graph_view::GraphState>>,
     sunbursts: RefCell<HashMap<u64, sunburst_view::SunburstState>>,
+    /// The window's size and scale when the page was last drawn, which a picture sizes itself by, and the pictures
+    /// still being decoded, by node id.
+    viewport: Cell<(f32, f32, f32)>,
+    images_waiting: RefCell<HashSet<u64>>,
     chip_focus: RefCell<HashMap<(u64, String), gpui::FocusHandle>>,
     /// What the page last threw, shown under it until it renders again.
     error: Option<SharedString>,
@@ -413,6 +419,8 @@ impl PageView {
             inputs: RefCell::new(HashMap::new()),
             graphs: RefCell::new(HashMap::new()),
             sunbursts: RefCell::new(HashMap::new()),
+            viewport: Cell::new((0.0, 0.0, 1.0)),
+            images_waiting: RefCell::default(),
             chip_focus: RefCell::new(HashMap::new()),
             error,
             source,
@@ -547,6 +555,22 @@ impl PageView {
             find(&tree.children, label, &mut found);
         }
         found.get(nth).is_some_and(|handler| {
+            self.act(handler, None);
+            true
+        })
+    }
+
+    /// Clicks the first `Image` whose label starts with `label`. False when the page has none that takes a click.
+    #[cfg(feature = "test-support")]
+    pub fn press_image(&self, label: &str) -> bool {
+        fn find<'a>(nodes: &'a [Node], label: &str) -> Option<&'a str> {
+            nodes.iter().find_map(|node| match node {
+                Node::Image(picture) if picture.label.as_deref().is_some_and(|name| name.starts_with(label)) => picture.on_click.as_deref(),
+                node => node.parts().into_iter().find_map(|part| find(part, label)),
+            })
+        }
+        let handler = self.tree.as_ref().and_then(|tree| find(&tree.children, label));
+        handler.is_some_and(|handler| {
             self.act(handler, None);
             true
         })
@@ -1465,6 +1489,7 @@ impl PageView {
                     None => image.into_any_element(),
                 }
             }
+            Node::Image(picture) => self.picture(picture, cx),
             Node::Graph(graph) => self.graph(graph, cx),
             Node::Avatar(avatar) => rich_view::avatar(avatar),
             Node::Skeleton(skeleton) => rich_view::skeleton(skeleton),
@@ -1865,6 +1890,12 @@ impl Render for PageView {
             self.highlight = None;
         }
         self.listing.set(false);
+        let size = window.viewport_size();
+        self.viewport.set((size.width.into(), size.height.into(), window.scale_factor()));
+        // The textures of pictures the store let go of leave the window's atlas.
+        for gone in crate::page::images::take_retired() {
+            let _ = window.drop_image(gone.image.clone());
+        }
         // A dialog takes the keyboard from the page under it as it opens, and gives it back as it closes. A field in it
         // that asks for the keyboard takes it after this.
         let may_take = self.may_take_keyboard(window, cx);

@@ -73,7 +73,7 @@ serde_json = "1"
 syntect = { version = "5.3.0", default-features = false, features = ["parsing", "dump-load", "regex-onig"], optional = true }
 two-face = { version = "0.5.2", default-features = false, features = ["syntect-onig"], optional = true }
 # The frames of the images terminals draw, the version GPUI's own `RenderImage` is made of.
-image = { version = "0.25.10", default-features = false, optional = true }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"], optional = true }
 gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false, optional = true }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", default-features = false, features = ["font-kit", "runtime_shaders", "wayland", "x11"], optional = true }
 

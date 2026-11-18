@@ -17,6 +17,7 @@ use wings_plugin::{
 
 use crate::{
     chat::{self, Chat, PAGE, State},
+    pictures_view::thumbs,
     prefs,
     session::{Ask, Detail, Diff, Draft, Item, MODES, Progress, Session, Todo, Tool, exit_code, files_found, first_lines, model_name},
     usage::Panel,
@@ -75,6 +76,7 @@ fn chat_page(c: &Chat) -> Node {
         .maybe(crate::tasks_view::dialog(c))
         .maybe(crate::rewind_view::dialog(c))
         .maybe(crate::usage_view::dialog(c))
+        .maybe(crate::pictures_view::dialog_of(c))
         .maybe(crate::past_view::sheet_of(c));
     Node::new("Page").prop("flush", true).child(body)
 }
@@ -238,10 +240,11 @@ fn item_node(at: usize, item: &Item, c: &Chat, own: bool) -> Option<Node> {
     let rewind = || own.then(|| crate::rewind_view::button(at, c)).flatten();
     let node = match item {
         Item::User(said) => bubble(card().child(text(said.as_str())), rewind()),
-        Item::UserImages(said, images) => {
-            let card = card().child(muted(plural(*images, "image")));
+        Item::UserImages(said, pictures) => {
+            let card = card().maybe(thumbs(pictures, "Attached picture"));
             bubble(if said.is_empty() { card } else { card.child(text(said.as_str())) }, rewind())
         }
+        Item::Images(pictures) => thumbs(pictures, "Picture").unwrap_or_else(stack),
         Item::Text(said) => markdown(said),
         Item::Ask(ask) if ask.answer.is_none() => ask_node(ask, c),
         Item::Error(said) => notice("danger", said.as_str()),
@@ -360,15 +363,20 @@ fn step(tool: &Tool, opened: bool, cap: Option<usize>, c: &Chat) -> Node {
         let tail = lines[lines.len().saturating_sub(4)..].join("\n");
         text(truncate(&tail, 600)).prop("mono", true).prop("size", "small").prop("tone", "danger")
     });
+    // What it gave back as pictures (a Read of an image, a screenshot) shows under its line, closed or not.
+    let pictures = thumbs(&tool.images, "Picture from the tool");
     match label {
         Some(label) => {
             let id = tool.id.clone();
             let body = if opened { body(tool, output, cap) } else { stack() };
             let label = if error.is_some() { "Whole error" } else { label };
             let fold = disclosure(label, body).prop("open", opened).on("onOpenChange", move |_| chat::toggle_output(&id));
-            stack().prop("gap", "xs").child(head).maybe(error).child(fold)
+            stack().prop("gap", "xs").child(head).maybe(error).maybe(pictures).child(fold)
         }
-        None => head,
+        None => match pictures {
+            Some(pictures) => stack().prop("gap", "xs").child(head).child(pictures),
+            None => head,
+        },
     }
     .key(tool.id.as_str())
 }
