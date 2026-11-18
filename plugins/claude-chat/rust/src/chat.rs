@@ -10,7 +10,7 @@ use std::{cell::RefCell, collections::{HashMap, HashSet}};
 
 use serde_json::{Value, json};
 use wings_plugin::{
-    format::basename,
+    format::{basename, truncate},
     host::{self, ProcessInput},
     task,
 };
@@ -72,6 +72,8 @@ pub struct Chat {
     pub todos_folded: bool,
     /// What Claude is doing, for the status line, and since when (ms).
     pub doing: (String, u64),
+    /// What the sidebar's Agents was last told of this chat: its state, name and what it does.
+    agent: Option<(String, String, Option<String>)>,
     /// Going on in a terminal once Claude Code here has ended.
     moving: bool,
     input: Option<ProcessInput>,
@@ -97,6 +99,7 @@ thread_local! {
         drafts: HashMap::new(),
         todos_folded: false,
         doing: (String::new(), 0),
+        agent: None,
         moving: false,
         input: None,
         requests: 0,
@@ -203,7 +206,12 @@ fn launch(resume: Option<String>) {
             false
         });
         if moving {
+            // The session goes on in a terminal, which the sidebar lists by itself.
+            with(|c| c.agent = None);
+            drop(host::set_agent(None));
             open_terminal();
+        } else {
+            report_agent();
         }
     });
 }
@@ -289,6 +297,41 @@ fn hear(run: u32, line: &Value) {
     }
     if let Some(id) = named {
         drop(host::call("setTabState", json!({ "state": { "sessionId": id } })));
+    }    report_agent();
+}
+
+/// Tells the sidebar's Agents what Claude does in this chat, when that changed: it needs you while a question of
+/// Claude's waits, works while a turn runs, and is done once one ended while you were looking elsewhere.
+fn report_agent() {
+    let agent = with(|c| {
+        let asking = c.session.items.iter().find_map(|item| match item {
+            Item::Ask(ask) if ask.answer.is_none() => Some(ask.tool.clone()),
+            _ => None,
+        });
+        let (state, summary) = match asking {
+            Some(tool) => ("blocked", Some(format!("Asks to use {tool}"))),
+            None if c.session.working => ("working", Some(c.doing.0.clone()).filter(|doing| !doing.is_empty())),
+            None if c.session.items.is_empty() || host::focused() => ("idle", None),
+            None => ("done", None),
+        };
+        let name = c
+            .session
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::User(said) => Some(truncate(said.lines().next().unwrap_or_default().trim(), 60)),
+                _ => None,
+            })
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "Claude chat".into());
+        let agent = (state.to_owned(), name, summary);
+        (c.agent.as_ref() != Some(&agent)).then(|| {
+            c.agent = Some(agent.clone());
+            agent
+        })
+    });
+    if let Some((state, name, summary)) = agent {
+        drop(host::set_agent(Some((&state, &name, summary.as_deref()))));
     }
 }
 
@@ -326,6 +369,7 @@ pub fn send() {
         c.doing = (c.session.activity(), host::now() as u64);
         Some(line)
     });
+    report_agent();
 }
 
 /// Takes a queued message back.
