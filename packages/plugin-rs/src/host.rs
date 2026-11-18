@@ -342,6 +342,14 @@ pub fn past_sessions(query: &str, limit: u32) -> Pending<Result<Value, String>> 
     call("pastSessions", json!({ "query": query, "limit": limit }))
 }
 
+/// `wings.setAgent`: this tab's page runs an agent, which the sidebar's Agents lists with the terminals' agents: its
+/// state (`working`, `blocked`, `done` or `idle`), its name and what it does now. `None` takes it off the list. Needs
+/// `"agents"` in `contributes.ui` and Wings 0.2.34.
+pub fn set_agent(agent: Option<(&str, &str, Option<&str>)>) -> Pending<Result<Value, String>> {
+    let agent = agent.map(|(state, name, summary)| json!({ "state": state, "name": name, "summary": summary }));
+    call("setAgent", json!({ "agent": agent }))
+}
+
 /// `wings.closePane`: ends the program in a pane of the project on screen and closes the pane. Needs `panes`.
 pub fn close_pane(pane: &str) -> Pending<Result<Value, String>> {
     call("closePane", json!({ "paneId": pane }))

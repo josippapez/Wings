@@ -370,6 +370,10 @@ fn main() {
         return plugins_install(&mut cx, &config, &out);
     }
     // `-- <out-dir> plugins-drop` renders only dropping a .wings-plugin file on the window and a plugin's README.
+    // `-- <out-dir> plugins-agent` renders only the sidebar's Agents with a plugin tab's agent, as Claude chat lists one.
+    if std::env::args().nth(2).as_deref() == Some("plugins-agent") {
+        return plugins_agent(&mut cx, &config, &out);
+    }
     // `-- <out-dir> plugins-modal` renders only a plugin's view that opens as a modal, over the window.
     if std::env::args().nth(2).as_deref() == Some("plugins-modal") {
         return plugins_modal(&mut cx, &config, &out);
@@ -2321,6 +2325,52 @@ fn plugins_install(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
 
 /// A `.wings-plugin` file dragged over the window, the review it opens once dropped, and an installed plugin's page with
 /// its README. Temp folders only.
+/// The sidebar's Agents with a made-up chat tab's agent working beside the terminals.
+fn plugins_agent(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+    use serde_json::json;
+    let data = Data::temp();
+    let main = fake::script("main", || {
+        let mut opened = false;
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            if let Hear::Deliver("panes", _, _) = hear
+                && !std::mem::replace(&mut opened, true)
+            {
+                cx.call("openView", json!({ "id": "chat", "as": "tab", "newTab": true }));
+            }
+        }
+    });
+    let page = fake::script("page", || {
+        let mut said = false;
+        move |cx: &mut Cx<'_>, _: Hear<'_>| {
+            if !std::mem::replace(&mut said, true) {
+                cx.call("setAgent", json!({ "agent": { "state": "working", "name": "Fix the rounding in checkout", "summary": "Running pnpm test discount" } }));
+            }
+        }
+    });
+    data.install_script(
+        "chat",
+        json!({ "name": "Claude chat", "contributes": { "ui": ["agents"], "views": [{ "id": "chat", "title": "Claude",
+            "page": "dist/chat.html", "opens": ["tab"], "newTab": true, "button": false }] } }),
+        &main,
+        &[("chat", &page)],
+        "chat-scope",
+    );
+    let mut config = base.clone();
+    config.plugins = Some(data.paths());
+    for width in [1000.0, 640.0] {
+        let config = config.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        wait(cx, window, Duration::from_secs(3));
+        save(cx, window, &out.join(format!("plugins-agent-{width}.png")));
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+    }
+}
+
 /// A plugin's view that opens as a modal, over the window: a made-up "Allow this?" page, as Schedules asks before an agent
 /// adds a schedule.
 fn plugins_modal(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {

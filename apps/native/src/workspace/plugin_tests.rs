@@ -207,6 +207,56 @@ fn graph_main() -> String {
     })
 }
 
+/// A page that says it runs an agent as soon as it starts, and saves what Wings answered under `agent`: null once it was
+/// let.
+fn agent_page() -> String {
+    fake::script("page", || {
+        let (mut wait, mut said) = (Pending::default(), false);
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            if !std::mem::replace(&mut said, true) {
+                let agent = json!({ "state": "working", "name": "Fix the checkout", "summary": "Running pnpm test" });
+                wait.call(cx, "setAgent", json!({ "agent": agent }), ());
+            }
+            if let Hear::Deliver(kind, id, text) = hear
+                && let Some(((), answer)) = wait.answered(kind, id, text)
+            {
+                cx.save("agent", &json!(answer.err()));
+            }
+        }
+    })
+}
+
+#[test]
+fn a_tab_whose_page_runs_an_agent_shows_with_the_agents_in_the_sidebar() {
+    let data = Data::temp();
+    let views = json!([{ "id": "chat", "title": "Chat", "page": "dist/chat.html", "opens": ["tab"] }]);
+    data.install_script("chatty", json!({ "contributes": { "ui": ["agents"], "views": views } }), &fake::idle("main"),
+        &[("chat", &agent_page())], "chatty-scope");
+    data.install_script("quiet", json!({ "contributes": { "views": views } }), &fake::idle("main"),
+        &[("chat", &agent_page())], "quiet-scope");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.update(|w, window, cx| {
+        assert!(w.open_plugin_view("chatty", "chat", None, window, cx));
+        assert!(w.open_plugin_view("quiet", "chat", None, window, cx));
+    });
+    until(&app, &mut window, "chatty's page wasn't let say what its agent does", |_| {
+        data.saved("chatty", "chatty-scope", "agent") == Some(json!(null))
+    });
+    until(&app, &mut window, "a page without \"agents\" in contributes.ui was let", |_| {
+        data.saved("quiet", "quiet-scope", "agent").is_some_and(|error| error != json!(null))
+    });
+    let agents = window.read(|w, _| w.tab_agents());
+    assert_eq!(agents.len(), 1);
+    assert_eq!((agents[0].2.state.as_str(), agents[0].2.name.as_str()), ("working", "Fix the checkout"));
+    assert!(window.update(|w, _, cx| w.agent_list(cx).is_some()), "the Agents list shows");
+    // Its row goes with its tab.
+    window.update(|w, window, cx| {
+        let tab = w.plugin_tabs.iter().position(|tab| tab.plugin == "chatty").unwrap();
+        w.close_plugin_tab(tab, window, cx);
+    });
+    assert!(window.read(|w, _| w.tab_agents().is_empty()));
+}
+
 /// A main that opens its view `approve` as a modal on the action `open`, and closes it on `close`.
 fn modal_main() -> String {
     fake::script("main", || {

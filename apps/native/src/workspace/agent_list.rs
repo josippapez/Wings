@@ -13,6 +13,7 @@ use gpui::{
 
 use crate::{
     agents::{self, Agent, AgentKind, AgentState},
+    page::plugin::TabAgent,
     icons::{Icon, icon},
     saved::SessionKind,
     theme,
@@ -31,10 +32,11 @@ impl Workspace {
     /// there are none.
     pub(super) fn agent_list(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let pending = self.pending_agents(cx.background_executor().now());
-        if self.agents.is_empty() && pending.is_empty() {
+        let tabs = self.tab_agents();
+        if self.agents.is_empty() && pending.is_empty() && tabs.is_empty() {
             return None;
         }
-        let count = self.agents.len() + pending.len();
+        let count = self.agents.len() + pending.len() + tabs.len();
         let mut agents: Vec<(usize, &Agent)> = self.agents.iter().map(|(p, a)| (*p, a)).collect();
         let rank = |state: AgentState| match state {
             AgentState::Blocked => 0,
@@ -44,10 +46,17 @@ impl Workspace {
         };
         agents.sort_by_key(|(pane, agent)| (rank(agent.state), *pane));
         let focused = self.focused_pane();
-        let mut rows: Vec<_> = agents
+        let mut rows: Vec<(u8, AnyElement)> = agents
             .into_iter()
-            .map(|(pane, agent)| self.agent_row(pane, agent, focused == Some(pane), cx))
+            .map(|(pane, agent)| (rank(agent.state), self.agent_row(pane, agent, focused == Some(pane), cx)))
             .collect();
+        rows.extend(tabs.into_iter().map(|(project, tab, agent)| {
+            let state = tab_state(&agent.state);
+            (rank(state), self.tab_agent_row(project, tab, agent, state, cx))
+        }));
+        // Stable, so the terminals' agents keep their order among those in the same state.
+        rows.sort_by_key(|(rank, _)| *rank);
+        let mut rows: Vec<AnyElement> = rows.into_iter().map(|(_, row)| row).collect();
         rows.extend(
             pending
                 .into_iter()
@@ -200,6 +209,106 @@ impl Workspace {
                             .line_height(px(16.0))
                             .text_color(rgba(theme::MUTED_FOREGROUND << 8 | 0xb3))
                             .children(crate::ui::spot(|| format!("agent-summary:{pane}")))
+                            .child(summary)
+                    })),
+            )
+            .into_any_element()
+    }
+
+    /// The tabs whose page runs an agent and says so, like Claude chat's, in every project: its project, tab and agent.
+    pub(super) fn tab_agents(&self) -> Vec<(PathBuf, usize, TabAgent)> {
+        let shown = self.plugin_tabs.iter().map(|tab| (&self.config.project, tab));
+        let parked = self
+            .parked
+            .iter()
+            .flat_map(|(path, parked)| parked.plugin_tabs.iter().map(move |tab| (path, tab)));
+        shown
+            .chain(parked)
+            .filter_map(|(project, tab)| Some((project.clone(), tab.id, tab.state.agent()?)))
+            .collect()
+    }
+
+    /// Like `agent_row`, for a tab's agent: its name, project, state and what it does, and a click shows its tab.
+    fn tab_agent_row(
+        &self,
+        path: PathBuf,
+        tab: usize,
+        agent: TabAgent,
+        state: AgentState,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let project = self
+            .projects
+            .iter()
+            .find(|p| p.path == path)
+            .map_or_else(|| path.to_string_lossy().into_owned(), |p| p.name.clone());
+        let shown = self.active == Active::Plugin(tab) && self.config.project == path;
+        let blocked = state == AgentState::Blocked;
+        let status = agents::state_label(state).to_lowercase();
+        let label = match &agent.summary {
+            Some(summary) => format!("{}, {project}, {status}. {summary}", agent.name),
+            None => format!("{}, {project}, {status}", agent.name),
+        };
+        let (glyph, color) = glyph(AgentKind::Claude);
+        div()
+            .id(("tab-agent", tab))
+            .role(Role::Button)
+            .aria_label(label)
+            .flex()
+            .items_center()
+            .gap(px(10.0))
+            .px(px(8.0))
+            .py(px(6.0))
+            .border_1()
+            .border_color(rgba(0))
+            .rounded(px(theme::RADIUS))
+            .cursor_pointer()
+            .when(shown, |row| row.bg(rgba(SIDEBAR_ACCENT)))
+            .when(!shown && !blocked, |row| row.hover(|style| style.bg(rgba(theme::HOVER))))
+            .when(blocked, |row| row.bg(rgba(BLOCKED_ROW)).hover(|style| style.bg(rgba(BLOCKED_ROW_HOVER))))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.switch_project(path.clone(), window, cx);
+                this.reveal_project(&path);
+                this.leave_loose(cx);
+                this.show(Active::Plugin(tab), window, cx);
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .size(px(16.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(icon(glyph, 14.0, color)),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .child(div().min_w_0().truncate().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).child(agent.name))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .min_w_0()
+                            .text_size(px(11.0))
+                            .line_height(px(16.0))
+                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .child(div().flex_none().child(format!("{project},")))
+                            .child(crate::ui::status_dot_slot(state, format!("tab-agent-{tab}")))
+                            .child(div().min_w_0().truncate().child(status)),
+                    )
+                    .children(agent.summary.map(|summary| {
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(11.0))
+                            .line_height(px(16.0))
+                            .text_color(rgba(theme::MUTED_FOREGROUND << 8 | 0xb3))
                             .child(summary)
                     })),
             )
@@ -452,6 +561,16 @@ fn elapsed(ms: u64) -> String {
         0..60 => format!("{s}s"),
         60..3600 => format!("{}m", s / 60),
         _ => format!("{}h {}m", s / 3600, s / 60 % 60),
+    }
+}
+
+/// A tab agent's state, as `setAgent` checked it.
+fn tab_state(state: &str) -> AgentState {
+    match state {
+        "working" => AgentState::Working,
+        "blocked" => AgentState::Blocked,
+        "done" => AgentState::Done,
+        _ => AgentState::Idle,
     }
 }
 

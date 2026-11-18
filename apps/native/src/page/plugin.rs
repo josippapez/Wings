@@ -46,7 +46,7 @@ mod disk;
 mod env;
 mod process;
 mod state;
-pub use state::{FrameState, StatePlace};
+pub use state::{FrameState, StatePlace, TabAgent};
 #[cfg(test)]
 mod focus_tests;
 pub mod ui;
@@ -364,6 +364,25 @@ impl Link for FrameLink {
             });
             return;
         }
+        // A tab's page that runs an agent, like Claude chat, lists it with the terminals' agents in the sidebar.
+        if method == "setAgent" {
+            if let Some(access) = &self.shared.access
+                && let Err(error) = calls::needs(&access.plugin, "agents")
+            {
+                return reply.err(error);
+            }
+            let Some(state) = self.state.clone() else {
+                return reply.err("Only a page shown as a tab can show as an agent".into());
+            };
+            let agent = match params.get("agent") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(agent) => match tab_agent(agent) {
+                    Ok(agent) => Some(agent),
+                    Err(error) => return reply.err(error),
+                },
+            };
+            return reply.done(state.set_agent(agent).map(|()| "null".into()));
+        }
         // Each click or key lets the page try once to copy, or to write to a program it runs: what reaches an agent,
         // like the answer to its permission prompt, is what you just asked for in the page, never the plugin alone.
         if matches!(method, "copyText" | "processWrite") {
@@ -404,6 +423,26 @@ impl Link for FrameLink {
         }
         self.shared.call(method, params, reply)
     }
+}
+
+/// `setAgent`'s `{ state, name, summary? }`, checked: a state the sidebar knows, and a name and summary short enough for
+/// its row.
+fn tab_agent(agent: &serde_json::Value) -> Result<TabAgent, String> {
+    let state = agent["state"].as_str().unwrap_or_default();
+    if !matches!(state, "working" | "blocked" | "done" | "idle") {
+        return Err(format!("An agent's state is working, blocked, done or idle, not {state:?}"));
+    }
+    let text = |key: &str, most: usize| -> Result<Option<String>, String> {
+        match agent[key].as_str() {
+            Some(text) if text.chars().count() > most => Err(format!("An agent's {key} is at most {most} characters")),
+            text => Ok(text.map(str::to_owned).filter(|text| !text.trim().is_empty())),
+        }
+    };
+    Ok(TabAgent {
+        state: state.to_owned(),
+        name: text("name", 80)?.ok_or("An agent needs a name")?,
+        summary: text("summary", 200)?,
+    })
 }
 
 /// A frame's place among the plugin's frames, until the frame is let go of.

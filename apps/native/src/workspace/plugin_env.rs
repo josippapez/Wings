@@ -345,7 +345,7 @@ impl AppEnv {
         &self,
         initial: Option<serde_json::Value>,
     ) -> crate::page::plugin::FrameState {
-        let events = self.events.clone();
+        let (events, redraw) = (self.events.clone(), self.events.clone());
         crate::page::plugin::FrameState::new(
             crate::page::plugin::StatePlace::Tab,
             initial,
@@ -355,6 +355,10 @@ impl AppEnv {
                     .map_err(|_| "The Wings window is closed or busy".into())
             },
         )
+        // The sidebar's Agents shows what the tab's agent does.
+        .on_agent(move || {
+            let _ = redraw.try_send(UiEvent::Run(Box::new(|_, _, cx| cx.notify())));
+        })
     }
     pub(super) fn new(
         events: Sender<UiEvent>,

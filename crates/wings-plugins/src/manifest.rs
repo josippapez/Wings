@@ -250,7 +250,7 @@ fn empty_schema() -> Value {
     serde_json::json!({ "type": "object" })
 }
 
-pub(crate) const UI_KINDS: [&str; 4] = ["badges", "diff", "rail", "status"];
+pub(crate) const UI_KINDS: [&str; 5] = ["agents", "badges", "diff", "rail", "status"];
 /// The hooks a plugin can answer. `PreToolUse` only ever sees Bash commands. `UserPromptSubmit` runs on each message to
 /// the agent. `Journal` isn't a Claude Code event: it is what `wings journal` sends when an agent's change journal
 /// reports a finished turn.

@@ -13,6 +13,19 @@ pub enum StatePlace {
 struct State {
     value: Value,
     save: Box<dyn Fn(Value) -> Result<(), String> + Send + Sync>,
+    /// What a tab's page says of the agent it runs, for the sidebar's Agents.
+    agent: Option<TabAgent>,
+    agent_changed: Option<Box<dyn Fn() + Send + Sync>>,
+}
+
+/// An agent a tab's page runs, as the sidebar lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TabAgent {
+    /// `working`, `blocked`, `done` or `idle`.
+    pub state: String,
+    pub name: String,
+    /// What it does now, or what it waits for.
+    pub summary: Option<String>,
 }
 
 #[derive(Clone)]
@@ -32,8 +45,34 @@ impl FrameState {
             state: Arc::new(Mutex::new(State {
                 value: initial.unwrap_or(Value::Null),
                 save: Box::new(save),
+                agent: None,
+                agent_changed: None,
             })),
         }
+    }
+
+    /// Calls `changed` each time the page says what its agent does.
+    pub fn on_agent(self, changed: impl Fn() + Send + Sync + 'static) -> Self {
+        self.state.lock().unwrap().agent_changed = Some(Box::new(changed));
+        self
+    }
+
+    pub fn agent(&self) -> Option<TabAgent> {
+        self.state.lock().unwrap().agent.clone()
+    }
+
+    pub(super) fn set_agent(&self, agent: Option<TabAgent>) -> Result<(), String> {
+        if self.place != StatePlace::Tab {
+            return Err("Only a page shown as a tab can show as an agent".into());
+        }
+        let mut state = self.state.lock().unwrap();
+        if state.agent != agent {
+            state.agent = agent;
+            if let Some(changed) = &state.agent_changed {
+                changed();
+            }
+        }
+        Ok(())
     }
 
     pub fn value(&self) -> Value {
