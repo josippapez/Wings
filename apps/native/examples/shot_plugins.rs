@@ -786,7 +786,7 @@ cat "$CHAT_FIXTURE"; if [ -n "$CHAT_EXIT" ]; then echo "$CHAT_STDERR" >&2; exit 
         tool("t2", "Read", json!({ "file_path": "/work/shop/src/checkout.ts" })),
         output("t2", "", false),
         text("The discount is applied in floating point, so `100 * 0.9` comes out a hair under 90 on CI's Node version. The failing run's log is in `/private/var/folders/77/_cqqbnjn2dj0yzs68hlszmg40000gn/T/ci-logs/checkout-run-4211/report.txt`.\n\n- **Cause:** `total * (1 - rate)` in `applyDiscount`\n- **Fix:** work in cents, and round once at the end\n\n```ts\nconst cents = Math.round(total * 100);\nreturn Math.round(cents * (1 - rate)) / 100;\n```"),
-        text("The screenshots are at `/private/tmp/claude-501/-Users-josippapez-Desktop-wings/e78d6fcd-933c-466f-839f-fe4b99583cc2/scratchpad/shots/claude-chat-new-1000.png` and `/private/tmp/claude-501/-Users-josippapez-Desktop-wings/e78d6fcd-933c-466f-839f-fe4b99583cc2/scratchpad/shots/claude-chat-new-640.png`."),
+        text("The screenshots are at `/private/tmp/project-renders-0f3c9a52/e78d6fcd-933c-466f-839f-fe4b99583cc2/scratchpad/shots/claude-chat-new-1000.png` and `/private/tmp/project-renders-0f3c9a52/e78d6fcd-933c-466f-839f-fe4b99583cc2/scratchpad/shots/claude-chat-new-640.png`."),
         user("Do it, and run the tests again."),
         tool("t3", "Edit", fix.clone()),
         json!({ "type": "control_request", "request_id": "r1", "request": { "subtype": "can_use_tool", "tool_name": "Edit", "input": fix } }),
