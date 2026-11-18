@@ -14,11 +14,15 @@ pub const SESSION_SAVED: &str = "session-saved";
 #[cfg(feature = "chat")]
 mod chat;
 mod composer;
+mod commands;
+#[cfg(any(feature = "chat", test))]
+mod copy;
 #[cfg(any(feature = "main", all(test, not(feature = "chat"))))]
 mod main_frame;
 mod images;
 #[cfg(any(feature = "chat", test))]
 mod mentions;
+mod notices;
 #[cfg(feature = "chat")]
 mod past_view;
 #[cfg(feature = "chat")]
@@ -35,6 +39,8 @@ mod settings_page;
 mod setup;
 #[cfg(feature = "chat")]
 mod setup_view;
+#[cfg(feature = "chat")]
+mod status_view;
 #[cfg(feature = "chat")]
 mod tasks_view;
 mod usage;

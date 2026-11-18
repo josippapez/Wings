@@ -17,6 +17,8 @@ pub const MEMORY: &str = "memory-dialog";
 pub const SIZES: &str = "memory-sizes";
 pub const RULES: &str = "permission-rules";
 pub const MODE: &str = "permission-mode";
+/// The memory dialog's read that /hooks and /permissions make too, for the folder your user settings are in.
+pub const FOLDER: &str = "settings-folder";
 
 /// The settings files the edit commands write. They refuse any other source.
 pub const FILES: [&str; 3] = ["localSettings", "projectSettings", "userSettings"];
@@ -172,7 +174,9 @@ impl Edit {
     }
 
     /// What its confirm shows: the question, what it adds or removes as it is written, and the file it changes.
-    pub fn shown(&self) -> (String, String, String) {
+    /// `user_dir` is the folder your user settings are in, once Claude Code has said which.
+    pub fn shown(&self, user_dir: Option<&str>) -> (String, String, String) {
+        let place = |file: &str| place(file, user_dir);
         match self {
             Edit::AddRule { behavior, rule, file } => (format!("Add this {behavior} rule?"), rule.clone(), format!("To {}", place(file))),
             Edit::RemoveRule { behavior, rule, file } => (format!("Remove this {behavior} rule?"), rule.clone(), format!("From {}", place(file))),
@@ -214,8 +218,8 @@ impl Edit {
 }
 
 /// A settings file as the confirm names it: "Local settings (.claude/settings.local.json)".
-pub fn place(file: &str) -> String {
-    format!("{} ({})", source_label(file), source_file(file).unwrap_or_default())
+pub fn place(file: &str, user_dir: Option<&str>) -> String {
+    format!("{} ({})", source_label(file), source_path(file, user_dir).unwrap_or_default())
 }
 
 fn memory_name(setting: &str) -> &'static str {
@@ -285,6 +289,8 @@ pub struct Setup {
     pub outcome: Vec<(&'static str, String)>,
     /// The permissions dialog's form for a new rule, while it is open.
     pub form: Option<RuleForm>,
+    /// The folder your user settings are in, which differs from `~/.claude` under another Claude account.
+    pub user_dir: Option<String>,
 }
 
 impl Setup {
@@ -297,7 +303,7 @@ impl Setup {
         Some(match which {
             Which::Hooks => {
                 self.hooks = None;
-                request(HOOKS, json!({ "subtype": "get_hooks_listing" }))
+                [request(HOOKS, json!({ "subtype": "get_hooks_listing" })), request(FOLDER, json!({ "subtype": "get_memory_dialog" }))].concat()
             }
             Which::Memory => {
                 (self.memory, self.sizes, self.copied) = (None, Vec::new(), None);
@@ -306,7 +312,12 @@ impl Setup {
             Which::Permissions => {
                 (self.rules, self.mode, self.behavior) = (None, None, "allow".into());
                 self.query.clear();
-                [request(RULES, json!({ "subtype": "list_permission_rules" })), request(MODE, json!({ "subtype": "get_settings" }))].concat()
+                [
+                    request(RULES, json!({ "subtype": "list_permission_rules" })),
+                    request(MODE, json!({ "subtype": "get_settings" })),
+                    request(FOLDER, json!({ "subtype": "get_memory_dialog" })),
+                ]
+                .concat()
             }
         })
     }
@@ -319,7 +330,12 @@ impl Setup {
         };
         match id {
             HOOKS => self.hooks = Some(answer.map(hooks_of)),
-            MEMORY => self.memory = Some(answer.map(memory_of)),
+            MEMORY => {
+                self.user_dir = answer.as_ref().ok().and_then(|answer| user_dir_of(answer)).or(self.user_dir.take());
+                self.memory = Some(answer.map(memory_of));
+            }
+            // Without it the confirms name the default account's folder.
+            FOLDER => self.user_dir = answer.ok().and_then(user_dir_of).or(self.user_dir.take()),
             SIZES => self.sizes = answer.map(sizes_of).unwrap_or_default(),
             RULES => self.rules = Some(answer.map(rules_of)),
             // Without it the dialog lists the rules alone.
@@ -327,6 +343,14 @@ impl Setup {
             _ => return false,
         }
         true
+    }
+
+    /// What Claude Code says of where a hook is set, with the user settings file as it is under this account.
+    pub fn where_set(&self, detail: &str) -> String {
+        match &self.user_dir {
+            Some(dir) => detail.replace("~/.claude/settings.json", &format!("{}/settings.json", dir.trim_end_matches('/'))),
+            None => detail.to_owned(),
+        }
     }
 
     /// The tokens the file at `path` takes in the context, when Claude Code has loaded it.
@@ -424,6 +448,22 @@ pub fn source_file(source: &str) -> Option<&'static str> {
         "localSettings" => Some(".claude/settings.local.json"),
         _ => None,
     }
+}
+
+/// The file a settings source is. Your user settings are in the folder of the Claude account the chat runs under, which is
+/// `user_dir` once known (Claude Code's own labels say `~/.claude` whatever the account), else the default account's.
+pub fn source_path(source: &str, user_dir: Option<&str>) -> Option<String> {
+    match (source, user_dir) {
+        ("userSettings", Some(dir)) => Some(format!("{}/settings.json", dir.trim_end_matches('/'))),
+        _ => source_file(source).map(str::to_owned),
+    }
+}
+
+/// The folder Claude Code keeps your user settings in, from the memory dialog's answer: the user instructions file is the
+/// first row it lists, `CLAUDE.md` in that folder.
+fn user_dir_of(answer: &Value) -> Option<String> {
+    let file = list(&answer["files"]).find(|file| file["kind"] == "user")?;
+    file["path"].as_str()?.strip_suffix("/CLAUDE.md").filter(|dir| !dir.is_empty()).map(str::to_owned)
 }
 
 /// A permission mode as the mode picker names it.
@@ -597,10 +637,10 @@ mod tests {
     #[test]
     fn hooks_memory_and_permissions_open_their_dialog_ask_only_to_read_and_are_not_sent_as_messages() {
         for (typed, which, reads) in [
-            ("/hooks", Which::Hooks, vec!["get_hooks_listing"]),
+            ("/hooks", Which::Hooks, vec!["get_hooks_listing", "get_memory_dialog"]),
             (" /memory\n", Which::Memory, vec!["get_memory_dialog", "get_context_usage"]),
-            ("/permissions", Which::Permissions, vec!["list_permission_rules", "get_settings"]),
-            ("/allowed-tools", Which::Permissions, vec!["list_permission_rules", "get_settings"]),
+            ("/permissions", Which::Permissions, vec!["list_permission_rules", "get_settings", "get_memory_dialog"]),
+            ("/allowed-tools", Which::Permissions, vec!["list_permission_rules", "get_settings", "get_memory_dialog"]),
         ] {
             let mut setup = Setup::default();
             let lines = setup.open(typed).expect(typed);
@@ -813,20 +853,43 @@ mod tests {
     #[test]
     fn the_confirm_says_what_changes_and_in_which_file() {
         let rule = add("allow", "Bash(npm test)", "localSettings");
-        assert_eq!(rule.shown(), ("Add this allow rule?".into(), "Bash(npm test)".into(), "To Local settings (.claude/settings.local.json)".into()));
+        assert_eq!(rule.shown(None), ("Add this allow rule?".into(), "Bash(npm test)".into(), "To Local settings (.claude/settings.local.json)".into()));
         assert_eq!(rule.verb(), "Add allow rule");
         let rules = heard().setup.rules.unwrap().unwrap();
         assert_eq!(
-            Edit::remove_rule(&rules.rules[6]).unwrap().shown(),
+            Edit::remove_rule(&rules.rules[6]).unwrap().shown(None),
             ("Remove this deny rule?".into(), "Bash(rm -rf:*)".into(), "From User settings (~/.claude/settings.json)".into())
         );
         let hooks = heard().setup.hooks.unwrap().unwrap();
         let hook = Edit::remove_hook(&hooks.hooks[1]).unwrap();
-        assert_eq!(hook.shown(), ("Remove this PreToolUse hook for Bash?".into(), "${CLAUDE_PROJECT_DIR}/.claude/hooks/no-deploy.sh".into(), "From Project settings (.claude/settings.json)".into()));
+        assert_eq!(hook.shown(None), ("Remove this PreToolUse hook for Bash?".into(), "${CLAUDE_PROJECT_DIR}/.claude/hooks/no-deploy.sh".into(), "From Project settings (.claude/settings.json)".into()));
         assert_eq!(hook.verb(), "Remove");
         let off = Edit::Memory { setting: "autoMemoryEnabled", on: false };
-        assert_eq!(off.shown(), ("Turn auto memory off?".into(), "\"autoMemoryEnabled\": false".into(), "In User settings (~/.claude/settings.json)".into()));
+        assert_eq!(off.shown(None), ("Turn auto memory off?".into(), "\"autoMemoryEnabled\": false".into(), "In User settings (~/.claude/settings.json)".into()));
         assert_eq!(off.verb(), "Turn off");
+    }
+
+    #[test]
+    fn under_another_account_the_confirm_names_that_accounts_user_settings() {
+        // `get_memory_dialog` lists the user instructions file in the account's folder (probed with a scratch CLAUDE_CONFIG_DIR),
+        // while the hooks listing's own label says `~/.claude` whatever the account.
+        let mut setup = Setup::default();
+        setup.open("/hooks");
+        let answer = json!({ "subtype": "success", "request_id": FOLDER, "response": { "files": [
+            { "kind": "user", "path": "/accounts/work/CLAUDE.md", "label": "User instructions", "description": "Saved in ~/.claude/CLAUDE.md", "exists": true },
+            { "kind": "project", "path": "/work/shop/CLAUDE.md", "label": "Project instructions", "description": "Checked in at ./CLAUDE.md", "exists": false },
+        ] } });
+        assert!(setup.answered(FOLDER, &answer));
+        assert_eq!(setup.user_dir.as_deref(), Some("/accounts/work"));
+        let off = Edit::Memory { setting: "autoMemoryEnabled", on: false };
+        assert_eq!(off.shown(setup.user_dir.as_deref()).2, "In User settings (/accounts/work/settings.json)");
+        let local = add("allow", "Bash(npm test)", "localSettings");
+        assert_eq!(local.shown(setup.user_dir.as_deref()).2, "To Local settings (.claude/settings.local.json)");
+        assert_eq!(setup.where_set("User settings (~/.claude/settings.json)"), "User settings (/accounts/work/settings.json)");
+        // Before the folder is known, or when the read fails, it is the default account's.
+        assert_eq!(off.shown(None).2, "In User settings (~/.claude/settings.json)");
+        setup.answered(FOLDER, &json!({ "subtype": "error", "request_id": FOLDER, "error": "no" }));
+        assert_eq!(setup.user_dir.as_deref(), Some("/accounts/work"));
     }
 
     #[test]

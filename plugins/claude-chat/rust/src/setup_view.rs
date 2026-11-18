@@ -15,7 +15,7 @@ use wings_plugin::{
 use crate::{
     chat::{self, Chat},
     plugins_view::Budget,
-    setup::{self, Edit, FILES, File, Hook, Hooks, Memory, Rule, RuleForm, Setup, Which, mode_name, place, source_file, source_label},
+    setup::{self, Edit, FILES, File, Hook, Hooks, Memory, Rule, RuleForm, Setup, Which, mode_name, place, source_label, source_path},
 };
 
 const WIDTH: u32 = 640;
@@ -53,7 +53,7 @@ fn notices(list: &[(&'static str, String)]) -> impl Iterator<Item = Node> {
 /// The card that asks before `edit` is made, in place of what it changes: what it adds, removes or sets as it is
 /// written, the settings file it writes, and the button that makes it. An allow rule says what allowing means.
 fn asking(setup: &Setup, edit: &Edit) -> Node {
-    let (question, what, place) = edit.shown();
+    let (question, what, place) = edit.shown(setup.user_dir.as_deref());
     let allows = matches!(edit, Edit::AddRule { behavior, .. } if behavior == "allow");
     let body = [
         Some(text(what.as_str()).prop("mono", true).prop("size", "small")),
@@ -103,7 +103,7 @@ fn hook_row(setup: &Setup, at: usize, hook: &Hook) -> Node {
     // A command is what most are, so only the others say what they are.
     let kind = (hook.kind != "Command" && !hook.kind.is_empty()).then(|| small(hook.kind.as_str()));
     let off = hook.off.then(|| badge("Off", Some("warn")).prop("title", "It doesn't run in this session"));
-    let from = small(hook.from.as_str()).prop("title", hook.from_detail.as_str());
+    let from = small(hook.from.as_str()).prop("title", setup.where_set(&hook.from_detail));
     row()
         .prop("gap", "s")
         .prop("align", "center")
@@ -228,7 +228,7 @@ fn rule_form(setup: &Setup, form: &RuleForm) -> Node {
     if let Some(edit) = setup.pending.as_ref().filter(|edit| matches!(edit, Edit::AddRule { .. })) {
         return asking(setup, edit);
     }
-    let files: Vec<(String, String)> = FILES.iter().map(|file| (file.to_string(), place(file))).collect();
+    let files: Vec<(String, String)> = FILES.iter().map(|file| (file.to_string(), place(file, setup.user_dir.as_deref()))).collect();
     let field = text_input("Rule", &form.rule, set_rule).prop("placeholder", "Bash(npm run test:*)").prop("autoFocus", true);
     let choices = row()
         .prop("gap", "s")
@@ -275,7 +275,7 @@ fn rule_row(setup: &Setup, at: usize, rule: &Rule) -> Node {
     });
     let ignored = rule.ignored.then(|| badge("Not in effect", Some("warn")).prop("title", "Your organization's settings allow only their own rules"));
     let mut from = small(source_label(&rule.source));
-    if let Some(file) = source_file(&rule.source) {
+    if let Some(file) = source_path(&rule.source, setup.user_dir.as_deref()) {
         from = from.prop("title", file);
     }
     row()

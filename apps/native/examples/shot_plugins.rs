@@ -1065,7 +1065,36 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
     fast[1]["response"]["response"]["fast_mode_disabled_reason"] = json!("sdk_opt_in_required");
     fast[1]["response"]["response"]["output_style"] = json!("default");
     fast[1]["response"]["response"]["available_output_styles"] = json!(["default", "Concise", "Explanatory", "Learning"]);
-    let scenes: [Scene; 43] = [
+    // Claude Code's lines about the session itself: a compaction, then a retry under way, and the conversation cleared. The fake
+    // prints a turn at once, so a thought shows no duration here (its unit test has one).
+    let compacting = opened(vec![
+        init.clone(),
+        json!({ "type": "system", "subtype": "session_state_changed", "state": "running" }),
+        user("Refactor the discount module, then update every caller."),
+        text("The module is split in two. I'm updating the callers now."),
+        json!({ "type": "system", "subtype": "compact_boundary", "compact_metadata": { "trigger": "manual", "pre_tokens": 120_000, "post_tokens": 18_000, "duration_ms": 3230 } }),
+        json!({ "type": "system", "subtype": "api_retry", "attempt": 2, "max_retries": 10, "retry_delay_ms": 5000, "error_status": 529 }),
+    ]);
+    let cleared = opened(vec![
+        init.clone(),
+        user("Why does the checkout test fail on CI but pass here?"),
+        text("The discount is applied in floating point."),
+        json!({ "type": "conversation_reset", "new_conversation_id": "7c1d9e4a-2b6f-4a38-8d50-3e9f1a7b6c24", "trigger": "clear" }),
+        json!({ "type": "system", "subtype": "init", "session_id": "7c1d9e4a-2b6f-4a38-8d50-3e9f1a7b6c24", "model": "claude-opus-5-5" }),
+    ]);
+    let thought = opened(vec![
+        init.clone(),
+        user("A bat and a ball cost 1.10 in total, and the bat costs 1 more than the ball. What does the ball cost?"),
+        assistant(json!([{ "type": "thinking", "thinking": "If the ball cost 0.10 the bat would be 1.10 and the total 1.20, so the ball costs 0.05 and the bat 1.05.", "signature": "sig" }])),
+        text("The ball costs **5 cents**, and the bat $1.05."),
+        json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 4_200, "num_turns": 1, "result": "", "total_cost_usd": 0.01 }),
+    ]);
+    let copyable = opened(vec![
+        init.clone(),
+        user("Show me the rounding fix."),
+        text("Work in cents and round once at the end:\n\n```ts\nconst cents = Math.round(total * 100);\nreturn Math.round(cents * (1 - rate)) / 100;\n```\n\nThat keeps `100 * 0.9` at exactly 90."),
+    ]);
+    let scenes: [Scene; 51] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -1136,6 +1165,19 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         ("pictures", pictures.clone(), None, Some("disclose:Read 1 file"), "its counter starts again"),
         // A click on a thumbnail shows it large in a dialog, which fits the window.
         ("picture-open", pictures, None, Some("disclose:Read 1 file;image:Picture from the tool"), "its counter starts again"),
+        // A compaction leaves a divider with the tokens before and after, and a request Claude Code retries is the status line.
+        ("compaction", compacting, None, None, "Retrying in 5s, attempt 2 of 10"),
+        // /clear starts a new session: what was said is gone.
+        ("cleared", cleared, None, None, "What should Claude do?"),
+        // Claude's thinking is folded under its turn, and opens on a click.
+        ("thought", thought.clone(), None, None, "Thought"),
+        ("thought-open", thought, None, Some("disclose:Thought"), "so the ball costs 0.05"),
+        // /status, /btw and /export open a dialog over the chat that the conversation never gets.
+        ("status", opened(vec![init.clone()]), None, Some("type:/status;keys:enter"), "Setting sources"),
+        ("btw", work.clone(), None, Some("type:/btw what does the rounding fix change?;keys:enter"), "It rounds once, at the end"),
+        ("export", work.clone(), None, Some("type:/export;keys:enter"), "Copy to clipboard"),
+        // Each reply and each code block has a Copy button.
+        ("copy", copyable, None, None, "Copy"),
     ];
     // Files for @-mentions, which the chat lists with git.
     for file in ["src/checkout.ts", "src/checkout.test.ts", "src/cart.ts", "api/limits.ts", "README.md"] {
@@ -1220,6 +1262,30 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         }
         if name == "permissions-refused" {
             std::fs::write(answers.join("edit-permission-rules"), "the rule looks like it contains a secret, so it was not saved to settings\n").unwrap();
+        }
+        // Claude Code's answers to the reads of /status, /btw and /export, made up, each under the subtype it answers. A side
+        // question's id ends with the number of the write that asked it, which is the first.
+        if name == "status" {
+            let status = answer("status-dialog", json!({ "sections": [
+                { "title": "Session", "rows": [
+                    { "label": "Version", "value": "2.1.327" },
+                    { "label": "Session ID", "value": "5b7e2c1a-0f3d-4c8e-9a61-2d4f8b3c7e90" },
+                    { "label": "cwd", "value": project.clone() },
+                    { "label": "Login method", "value": "Claude Max account" } ] },
+                { "title": "Environment", "rows": [
+                    { "label": "Model", "value": "claude-opus-5-5" },
+                    { "label": "MCP servers", "value": "2 connected, 1 needs auth · /mcp" },
+                    { "label": "Setting sources", "value": "User settings, Project settings" },
+                    { "value": "Your organization may apply global configuration to Claude Code." } ] } ] }));
+            std::fs::write(answers.join("get_status"), format!("{status}\n")).unwrap();
+        }
+        if name == "btw" {
+            let side = answer("side-question-1", json!({ "response": "It rounds once, at the end, in cents, so `100 * 0.9` is exactly 90 instead of 89.99999999999999.", "synthetic": false }));
+            std::fs::write(answers.join("side_question"), format!("{side}\n")).unwrap();
+        }
+        if name == "export" {
+            let export = answer("export-dialog", json!({ "text": "User: Move the discount maths into its own module and test it.\n\nClaude: The discount maths is in src/discount.ts now, and checkout.ts re-exports it.\n", "default_filename": "conversation-2026-11-18-101500.txt" }));
+            std::fs::write(answers.join("export_conversation"), format!("{export}\n")).unwrap();
         }
         // SAFETY: the page from the scene before is closed, so nothing reads these while they change.
         unsafe {

@@ -17,6 +17,7 @@ use wings_plugin::{
 
 use crate::{
     images,
+    commands,
     mentions::{self, Files},
     plugins, prefs,
     composer::{self, Escape},
@@ -388,6 +389,16 @@ fn hear(run: u32, line: &Value) {
             let shown = c.session.items.len();
             c.open_steps.retain(|first| *first < shown);
         }
+        // A cleared conversation takes what the page kept of it along: which folds were open, what was half answered.
+        if std::mem::take(&mut c.session.cleared) {
+            c.shown = PAGE;
+            c.open_steps.clear();
+            c.open_outputs.clear();
+            c.open_queued.clear();
+            c.drafts.clear();
+            c.subagent = None;
+            c.task = None;
+        }
         let doing = c.session.activity();
         if doing != c.doing.0 {
             c.doing = (doing, host::now() as u64);
@@ -454,8 +465,12 @@ fn report_agent() {
     }
 }
 
-/// The session's name: the first line of your first message, cut short. None before you have said anything.
+/// The session's name: the one Claude Code says (`/rename`), else the first line of your first message, cut short. None
+/// before you have said anything.
 pub fn name(c: &Chat) -> Option<String> {
+    if let Some(title) = &c.session.title {
+        return Some(truncate(title, 60));
+    }
     c.session
         .items
         .iter()
@@ -513,6 +528,13 @@ pub fn send() {
             // /hooks, /memory and /permissions open theirs, filled by the reads the line asks for.
             if let Some(line) = c.session.setup.open(&text) {
                 c.draft.clear();
+                return Some(line);
+            }
+            // /status, /export and /btw open a dialog, and /plan sets the mode and sends its task, all in this one write.
+            if let Some(line) = c.session.typed_command(&text, host::now() as u64, n) {
+                c.draft.clear();
+                c.past = None;
+                c.doing = (c.session.activity(), host::now() as u64);
                 return Some(line);
             }
         }
@@ -724,17 +746,19 @@ pub fn insert_command(name: &str) {
     with(|c| c.draft = format!("/{name} "));
 }
 
-/// The commands whose name holds what the draft has after its `/`, while that is one word.
-pub fn command_matches(c: &Chat) -> Vec<&Command> {
+/// The commands whose name holds what the draft has after its `/`, while that is one word: Claude Code's, and the ones the
+/// chat answers itself that it doesn't list.
+pub fn command_matches(c: &Chat) -> Vec<Command> {
     let Some(typed) = c.draft.strip_prefix('/').filter(|typed| !typed.contains(char::is_whitespace)) else {
         return Vec::new();
     };
     // Typed out in full, the command is ready: a list over it would take the Enter that opens its view.
-    if view_of(&c.draft).is_some() || exits(&c.draft) || plugins::command(&c.draft).is_some() || setup::command(&c.draft).is_some() {
+    if view_of(&c.draft).is_some() || exits(&c.draft) || plugins::command(&c.draft).is_some() || setup::command(&c.draft).is_some() || commands::is_whole(&c.draft) {
         return Vec::new();
     }
     let typed = typed.to_lowercase();
-    c.session.commands.iter().filter(|command| command.name.to_lowercase().contains(&typed)).take(8).collect()
+    let own = commands::own_commands(&c.session.commands);
+    c.session.commands.iter().cloned().chain(own).filter(|command| command.name.to_lowercase().contains(&typed)).take(8).collect()
 }
 
 /// The files that match the `@word` the draft ends in, with where the word starts. None while a slash command is being

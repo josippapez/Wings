@@ -77,6 +77,7 @@ fn chat_page(c: &Chat) -> Node {
         .maybe(crate::rewind_view::dialog(c))
         .maybe(crate::usage_view::dialog(c))
         .maybe(crate::pictures_view::dialog_of(c))
+        .maybe(crate::status_view::dialog(c))
         .maybe(crate::past_view::sheet_of(c));
     Node::new("Page").prop("flush", true).child(body)
 }
@@ -245,7 +246,12 @@ fn item_node(at: usize, item: &Item, c: &Chat, own: bool) -> Option<Node> {
             bubble(if said.is_empty() { card } else { card.child(text(said.as_str())) }, rewind())
         }
         Item::Images(pictures) => thumbs(pictures, "Picture").unwrap_or_else(stack),
+        // A subagent's replies sit in its own list, which the Copy buttons' indexes don't name.
+        Item::Text(said) if own => crate::status_view::reply(at, said, c),
         Item::Text(said) => markdown(said),
+        Item::Divider(said) => row().prop("justify", "center").child(muted(format!("── {said} ──")).prop("size", "small")),
+        Item::Notice(said) => muted(said.as_str()).prop("size", "small"),
+        Item::Thought(said, ms) => thought(at, said, *ms, c.open_outputs.contains(&format!("thought-{at}"))),
         Item::Ask(ask) if ask.answer.is_none() => ask_node(ask, c),
         Item::Error(said) => notice("danger", said.as_str()),
         Item::Stopped => muted("Stopped"),
@@ -483,6 +489,15 @@ fn todo_line(todo: &Todo, working: bool) -> Node {
         Progress::Active => line.child(text("●").prop("tone", "info").prop("size", "small")).child(text(todo.active.as_str()).prop("size", "small").prop("weight", "medium").prop("shimmer", working)),
         Progress::Pending => line.child(muted("○").prop("size", "small")).child(text(todo.text.as_str()).prop("size", "small")),
     }
+}
+
+/// What Claude thought before it answered, folded under "Thought for 12s" until you open it.
+fn thought(at: usize, said: &str, ms: u64, opened: bool) -> Node {
+    let id = format!("thought-{at}");
+    // Under a second, or unknown as in a transcript, a time says nothing.
+    let title = if ms >= 1000 { format!("Thought for {}", took(ms)) } else { "Thought".to_owned() };
+    let body = if opened { text(said).prop("tone", "muted").prop("size", "small") } else { stack() };
+    row().child(disclosure(title, body).prop("open", opened).on("onOpenChange", move |_| chat::toggle_output(&id)))
 }
 
 /// What Claude Code wrote in your name, as a quiet line on the left you can open, apart from your own messages.

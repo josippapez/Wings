@@ -9,6 +9,8 @@ use wings_plugin::format::parse_time;
 
 use crate::{
     images,
+    commands::Commands,
+    notices,
     plugins::{self, Plugins, Show},
     setup::Setup,
     usage::{ContextDetail, Panel, Usage},
@@ -52,6 +54,12 @@ pub enum Item {
     Note(String, String),
     /// A turn ended as it should, after this many milliseconds of work.
     Worked(u64),
+    /// A line across the conversation, like the one where it was compacted.
+    Divider(String),
+    /// A short note from Claude Code, like a retry that failed or a model it switched to.
+    Notice(String),
+    /// What Claude thought before it answered, as its summary, and how long it took (ms, 0 when unknown).
+    Thought(String, u64),
 }
 
 #[derive(Debug, PartialEq)]
@@ -311,6 +319,8 @@ pub const USAGE_VIEW: &str = "usage-view";
 pub const CONTEXT_VIEW: &str = "context-view";
 /// The opening request that has Claude Code keep the checkpoints a code rewind restores.
 const CHECKPOINTS: &str = "checkpoints";
+/// The opening request that has Claude Code send the text of its thinking.
+const THINKING: &str = "thinking-display";
 /// The rewind dialog's dry run, followed by the message's uuid, and the requests its choices make.
 pub const REWIND_CHECK: &str = "rewind-check-";
 pub const REWIND_FILES: &str = "rewind-files";
@@ -397,6 +407,16 @@ pub struct Session {
     pub tasks: Vec<Task>,
     /// Fast mode and the output style.
     pub options: crate::composer::Options,
+    /// What Claude Code says it is doing beyond a tool call, like compacting or retrying a request, for the status line.
+    pub status: Option<String>,
+    /// The session's name, as Claude Code last said it (`/rename`, or the one it gave).
+    pub title: Option<String>,
+    /// The conversation was cleared (`/clear`, `/new`, `/reset`), which the page reads once to drop what it kept of it.
+    pub cleared: bool,
+    /// When the thinking block being streamed began (ms), for how long the thought took.
+    pub thought_since: u64,
+    /// The dialogs and answers of `/status`, `/export` and `/btw`.
+    pub cmds: Commands,
 }
 
 impl Session {
@@ -421,6 +441,9 @@ impl Session {
     }
 
     fn hear_own(&mut self, line: &Value) {
+        if notices::hear(self, line) {
+            return;
+        }
         match line["type"].as_str().unwrap_or_default() {
             "system" if line["subtype"] == "init" => {
                 self.id = line["session_id"].as_str().map(str::to_owned);
@@ -458,6 +481,7 @@ impl Session {
             "prompt_suggestion" => self.suggestion = line["suggestion"].as_str().filter(|text| !text.trim().is_empty()).map(str::to_owned),
             "assistant" => {
                 self.suggestion = None;
+                self.status = None;
                 self.told_you = false;
                 self.assistant(&line["message"]);
             }
@@ -519,6 +543,7 @@ impl Session {
                 }
             }
             "result" => {
+                self.status = None;
                 self.working = self.reports_state && self.working;
                 self.live.clear();
                 self.cost = line["total_cost_usd"].as_f64().unwrap_or(self.cost);
@@ -567,6 +592,28 @@ impl Session {
             "running" | "requires_action" => self.working = true,
             _ => {}
         }
+    }
+
+    /// Starts the conversation over as the new session `id`, as `/clear`, `/new` and `/reset` do: what was said, asked and
+    /// planned is gone. What Claude Code reports about itself (models, commands, mode, limits) stays.
+    pub fn reset(&mut self, id: &str) {
+        self.items.clear();
+        self.live.clear();
+        self.thinking = false;
+        self.prompts.clear();
+        self.rewind = None;
+        self.restored = None;
+        self.todos.clear();
+        self.creating.clear();
+        self.subagents.clear();
+        self.tasks.clear();
+        self.suggestion = None;
+        self.status = None;
+        self.title = None;
+        self.stopping = false;
+        self.cmds = Commands::default();
+        self.id = Some(id.to_owned());
+        self.cleared = true;
     }
 
     /// Claude Code read the message `uuid`: from the queue into the conversation.
@@ -625,7 +672,7 @@ impl Session {
         if id == plugins::RELOAD && response["subtype"] == "success" {
             self.commands = commands(&answer["commands"]);
         }
-        if self.plugins.answered(id, response) || self.answered_rewind(id, response) || self.answered_task(id, response) || self.setup.answered(id, response) {
+        if self.plugins.answered(id, response) || self.answered_rewind(id, response) || self.answered_task(id, response) || self.setup.answered(id, response) || self.cmds.answered(id, response) {
             return;
         }
         if response["subtype"] == "error" && (id == USAGE_VIEW || id == CONTEXT_VIEW) {
@@ -697,7 +744,11 @@ impl Session {
     fn stream(&mut self, event: &Value) {
         match event["type"].as_str().unwrap_or_default() {
             "content_block_start" => {
+                self.status = None;
                 self.thinking = event["content_block"]["type"] == "thinking";
+                if self.thinking {
+                    self.thought_since = self.now;
+                }
                 if event["content_block"]["type"] == "text" {
                     self.live.clear();
                 }
@@ -728,6 +779,14 @@ impl Session {
                     if !text.is_empty() {
                         self.items.push(Item::Text(text.to_owned()));
                     }
+                }
+                "thinking" => {
+                    let text = block["thinking"].as_str().unwrap_or_default().trim();
+                    if !text.is_empty() {
+                        let took = if self.thought_since > 0 { self.now.saturating_sub(self.thought_since) } else { 0 };
+                        self.items.push(Item::Thought(cut(text, OUTPUT_KEPT), took));
+                    }
+                    self.thought_since = 0;
                 }
                 "tool_use" => {
                     let name = block["name"].as_str().unwrap_or("Tool").to_owned();
@@ -931,6 +990,9 @@ impl Session {
             request(CONTEXT, json!({ "subtype": "get_context_usage" })),
             request(SETTINGS, json!({ "subtype": "get_settings" })),
             usage(),
+            // Claude Code leaves a thinking block's text empty unless it is asked for a summary of it. Without
+            // `max_thinking_tokens` the thinking budget stays as it was.
+            request(THINKING, json!({ "subtype": "set_max_thinking_tokens", "thinking_display": "summarized" })),
             // A terminal's Claude Code keeps them for /rewind by itself; with -p it answers "File rewinding is not
             // enabled." unless this variable is set, which its flag settings do as well as the environment.
             request(CHECKPOINTS, json!({ "subtype": "apply_flag_settings", "settings": { "env": { "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING": "1" } } })),
@@ -1327,6 +1389,9 @@ impl Session {
 
     /// What Claude is doing now, as the line under the conversation says it: the tool it runs, else thinking or writing.
     pub fn activity(&self) -> String {
+        if let Some(status) = &self.status {
+            return status.clone();
+        }
         let running = self.items.iter().rev().find_map(|item| match item {
             Item::Tool(tool) if tool.output.is_none() => Some(tool),
             _ => None,
@@ -1997,9 +2062,10 @@ mod tests {
         let lines = |mode| Session::opening(mode).lines().map(sent).collect::<Vec<_>>();
         assert!(lines(None).iter().all(|line| line["request"]["subtype"] != "set_permission_mode"));
         let asked = lines(Some("auto"));
-        assert_eq!(asked.len(), 6);
-        assert_eq!(asked[5]["request_id"], START_MODE);
-        assert_eq!(asked[5]["request"], json!({ "subtype": "set_permission_mode", "mode": "auto" }));
+        assert_eq!(asked.len(), 7);
+        let last = asked.last().unwrap();
+        assert_eq!(last["request_id"], START_MODE);
+        assert_eq!(last["request"], json!({ "subtype": "set_permission_mode", "mode": "auto" }));
         // Once accepted the picker shows it, though Claude Code's own answers before it say it started in `default`.
         let answer = |id: &str, response: Value| json!({ "type": "control_response", "response": { "subtype": "success", "request_id": id, "response": response } });
         let mut session = Session { start_mode: Some("auto".into()), ..Session::default() };
@@ -2930,5 +2996,27 @@ mod tests {
         ].map(|line| line.to_string()).join("\n"));
         assert_eq!(tool_images(&session)[0].len(), images::PER_RESULT);
         assert_eq!(images::pending().len(), images::PER_RESULT);
+    }
+
+    #[test]
+    fn the_opening_input_asks_for_the_text_of_thinking_and_leaves_the_budget_alone() {
+        let lines = parsed(&Session::opening(None));
+        // Probed with Claude Code 2.1.327: with this alone the thinking blocks carry a summary, and the request is accepted.
+        let asked = lines.iter().find(|line| line["request"]["subtype"] == "set_max_thinking_tokens").expect("a thinking request");
+        assert_eq!(asked["request"], json!({ "subtype": "set_max_thinking_tokens", "thinking_display": "summarized" }));
+    }
+
+    #[test]
+    fn a_thought_is_kept_as_its_summary_with_how_long_it_took_and_one_without_text_is_left_out() {
+        let mut session = Session::default();
+        session.now = 1_000;
+        session.hear(&json!({ "type": "stream_event", "event": { "type": "content_block_start", "index": 0, "content_block": { "type": "thinking", "thinking": "", "signature": "" } } }));
+        assert!(session.thinking);
+        session.now = 13_000;
+        session.hear(&json!({ "type": "assistant", "message": { "content": [{ "type": "thinking", "thinking": "I'm checking the riddle.\n\n", "signature": "sig" }] } }));
+        assert_eq!(session.items, [Item::Thought("I'm checking the riddle.".into(), 12_000)]);
+        // Without a summary asked for, Claude Code sends the block with an empty text.
+        session.hear(&json!({ "type": "assistant", "message": { "content": [{ "type": "thinking", "thinking": "", "signature": "sig" }] } }));
+        assert_eq!(session.items.len(), 1);
     }
 }
