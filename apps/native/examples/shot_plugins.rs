@@ -776,7 +776,8 @@ fn claude_chat(out: PathBuf) {
         output("t1", "FAIL  src/checkout.test.ts > applies the discount\n  Expected: 90\n  Received: 89.99999999999999\n\nTests  1 failed | 23 passed (24)", true),
         tool("t2", "Read", json!({ "file_path": "/work/shop/src/checkout.ts" })),
         output("t2", "", false),
-        text("The discount is applied in floating point, so `100 * 0.9` comes out a hair under 90 on CI's Node version.\n\n- **Cause:** `total * (1 - rate)` in `applyDiscount`\n- **Fix:** work in cents, and round once at the end\n\n```ts\nconst cents = Math.round(total * 100);\nreturn Math.round(cents * (1 - rate)) / 100;\n```"),
+        text("The discount is applied in floating point, so `100 * 0.9` comes out a hair under 90 on CI's Node version. The failing run's log is in `/private/var/folders/77/_cqqbnjn2dj0yzs68hlszmg40000gn/T/ci-logs/checkout-run-4211/report.txt`.\n\n- **Cause:** `total * (1 - rate)` in `applyDiscount`\n- **Fix:** work in cents, and round once at the end\n\n```ts\nconst cents = Math.round(total * 100);\nreturn Math.round(cents * (1 - rate)) / 100;\n```"),
+        text("The screenshots are at `/private/tmp/claude-501/-Users-josippapez-Desktop-wings/e78d6fcd-933c-466f-839f-fe4b99583cc2/scratchpad/shots/claude-chat-new-1000.png` and `/private/tmp/claude-501/-Users-josippapez-Desktop-wings/e78d6fcd-933c-466f-839f-fe4b99583cc2/scratchpad/shots/claude-chat-new-640.png`."),
         user("Do it, and run the tests again."),
         tool("t3", "Edit", fix.clone()),
         json!({ "type": "control_request", "request_id": "r1", "request": { "subtype": "can_use_tool", "tool_name": "Edit", "input": fix } }),
@@ -868,17 +869,18 @@ fn claude_chat(out: PathBuf) {
     // Each: its name, what the fake prints, its exit code and stderr when it fails, what to do once the page is up (press a
     // button or type), and the text to wait for.
     type Scene<'a> = (&'a str, Vec<serde_json::Value>, Option<(&'a str, &'a str)>, Option<&'a str>, &'a str);
-    let scenes: [Scene; 14] = [
+    let scenes: [Scene; 16] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
         ("thinking", thinking, None, None, "Thinking"),
         ("new", opened(vec![init.clone()]), None, None, "What should Claude do?"),
-        ("slash", opened(vec![init.clone()]), None, Some("type:/re"), "/review"),
+        ("slash", opened(vec![init.clone()]), None, Some("type:/re;keys:down"), "/review"),
         ("sessions", opened(vec![init.clone()]), None, Some("press:Sessions"), "Fix the flaky checkout test"),
         ("failed", vec![], Some(("1", "Error: Invalid API key · Please run /login")), None, "Invalid API key"),
         ("work", work.clone(), None, None, "of 4 done"),
-        ("queue", work, None, Some("type:also bump the version;keys:enter;type:and add a changelog line;keys:enter"), "Queued"),
+        ("work-open", work.clone(), None, Some("disclose:Ran 1 command"), "pnpm test discount"),
+        ("queue", work, None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line;keys:enter"), "Claude reads these"),
         ("ask-bash", ask_bash, None, None, "Allow Bash?"),
         ("question", question, None, None, "Which formats"),
         ("plan", plan, None, None, "Keep planning"),
@@ -913,7 +915,12 @@ fn claude_chat(out: PathBuf) {
     wings_native::page::runtime::wasm::compile_now(&page.to_string_lossy()).unwrap();
     let source = format!("{}{}", wings_native::page::runtime::wasm::MARKER, page.display());
     let mut cx = app();
+    // `CHAT_SCENE=<name>` renders that scene alone.
+    let only = std::env::var("CHAT_SCENE").ok();
     for (name, lines, exit, act, expected) in scenes {
+        if only.as_deref().is_some_and(|only| only != name) {
+            continue;
+        }
         let fixture = root.join(format!("{name}.jsonl"));
         std::fs::write(&fixture, lines.iter().map(|line| format!("{line}\n")).collect::<String>()).unwrap();
         // SAFETY: the page from the scene before is closed, so nothing reads these while they change.
@@ -950,6 +957,7 @@ fn claude_chat(out: PathBuf) {
                             cx.simulate_keystrokes(window, "cmd-v");
                         }
                         Some(("press", label)) => assert!(handle.read_with(&cx, |view, _| view.press(label, 0)).unwrap()),
+                        Some(("disclose", summary)) => assert!(handle.update(&mut cx, |view, _, cx| view.press_disclosure(summary, cx)).unwrap()),
                         _ => panic!("{act}"),
                     }
                     // The page hears what was typed before the next key.

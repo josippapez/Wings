@@ -276,7 +276,12 @@ impl Session {
         match line["type"].as_str().unwrap_or_default() {
             "system" if line["subtype"] == "init" => {
                 self.id = line["session_id"].as_str().map(str::to_owned);
-                self.model = line["model"].as_str().map(str::to_owned);
+                // It names the model in full (`claude-opus-5-5`), which more than one choice stands for: the one picked, or
+                // your settings', stays shown while it is that model.
+                let reported = line["model"].as_str();
+                if self.current_model().map(|model| model.resolved.as_str()) != reported {
+                    self.model = reported.map(str::to_owned);
+                }
                 self.mode = line["permissionMode"].as_str().map(str::to_owned).or(self.mode.take());
             }
             "system" if line["subtype"] == "session_state_changed" => self.changed(line["state"].as_str().unwrap_or_default()),
@@ -289,7 +294,9 @@ impl Session {
             // Claude Code echoes each message of yours it reads when it runs with `--replay-user-messages`. The ones sent
             // while it was idle are on the page already.
             "user" if line["isReplay"] == true => self.echoed(line["uuid"].as_str().unwrap_or_default()),
-            "user" if line["isMeta"] != true => self.user(&line["message"]["content"]),
+            // What Claude Code adds in a turn on its own, like a skill's text once the Skill tool loads it (`isSynthetic` as it
+            // prints it, `isMeta` in the transcript), isn't yours to see as a message.
+            "user" if line["isMeta"] != true && line["isSynthetic"] != true => self.user(&line["message"]["content"]),
             "control_request" if line["request"]["subtype"] == "can_use_tool" => {
                 let request = &line["request"];
                 let tool = request["tool_name"].as_str().unwrap_or("a tool").to_owned();
@@ -579,12 +586,14 @@ impl Session {
         line(&json!({ "type": "user", "message": { "role": "user", "content": content(text, images) } })) + &usage()
     }
 
-    /// The line that sends `text` to be read after what Claude is doing, and the message queued. `stamp` (the time in
-    /// milliseconds) and `n` (this write's number) make its uuid: the plugin has no randomness, and the uuid must differ
-    /// from the ones of this session's earlier starts, which share its transcript.
+    /// The line that sends `text` while Claude works, and the message queued until Claude reads it. It goes in at
+    /// Claude's next step, as a terminal's does: sent to wait for the turn's end, a message sat there for minutes while
+    /// Claude ran command after command. `stamp` (the time in milliseconds) and `n` (this write's number) make its uuid:
+    /// the plugin has no randomness, and the uuid must differ from the ones of this session's earlier starts, which share
+    /// its transcript.
     pub fn queue(&mut self, text: &str, images: Vec<(String, String)>, stamp: u64, n: u32) -> String {
         let uuid = uuid(stamp, n);
-        let sent = user_line(text, &images, "later", &uuid);
+        let sent = user_line(text, &images, "next", &uuid);
         self.queued.push(Queued { uuid, text: text.to_owned(), images });
         sent
     }
@@ -596,12 +605,16 @@ impl Session {
         Some(cancel(uuid, n))
     }
 
-    /// The lines that take the queued message `uuid` back and send it again to be read at Claude's next step, in the
-    /// same place of the queue. It has a new uuid, since Claude Code may keep the cancelled one in mind.
+    /// The lines that take the queued message `uuid` back and send it again as one that can't wait: Claude Code moves the
+    /// command running to the background and reads it at once, as when you type in its terminal. It keeps its place in the
+    /// queue, under a new uuid, since Claude Code may keep the cancelled one in mind.
     pub fn send_now(&mut self, uuid: &str, stamp: u64, n: u32) -> Option<String> {
         let queued = self.queued.iter_mut().find(|queued| queued.uuid == uuid)?;
         let fresh = self::uuid(stamp, n);
-        let lines = [cancel(uuid, n), user_line(&queued.text, &queued.images, "next", &fresh)].concat();
+        let mut now: Value = serde_json::from_str(&user_line(&queued.text, &queued.images, "now", &fresh)).unwrap_or_default();
+        // Claude Code puts work aside for a message only when a person sent it.
+        now["origin"] = json!({ "kind": "human" });
+        let lines = [cancel(uuid, n), line(&now)].concat();
         queued.uuid = fresh;
         Some(lines)
     }
@@ -648,7 +661,9 @@ impl Session {
     /// The model the session runs on, among `models`: by its value, by the full name Claude Code reports, or by its family.
     pub fn current_model(&self) -> Option<&Model> {
         let model = self.model.as_deref()?;
-        self.models.iter().find(|m| m.value == model).or_else(|| self.models.iter().find(|m| m.resolved == model)).or_else(|| {
+        // "Default" stands for a model too, but it's the one you'd pick by its own name.
+        let named = |m: &&Model| m.resolved == model && m.value != "default";
+        self.models.iter().find(|m| m.value == model).or_else(|| self.models.iter().find(named)).or_else(|| self.models.iter().find(|m| m.resolved == model)).or_else(|| {
             let family = model.trim_start_matches("claude-").split('-').next()?;
             self.models.iter().find(|m| m.value == family)
         })
@@ -719,8 +734,8 @@ fn line(message: &Value) -> String {
     format!("{message}\n")
 }
 
-/// Your message `text` for Claude Code to read as `priority` says (`later`: after what it is doing, `next`: at its next
-/// step), stamped `uuid`, which it echoes when it reads it.
+/// Your message `text` for Claude Code to read as `priority` says (`next`: at its next step, `now`: at once), stamped
+/// `uuid`, which it echoes when it reads it.
 fn user_line(text: &str, images: &[(String, String)], priority: &str, uuid: &str) -> String {
     line(&json!({ "type": "user", "message": { "role": "user", "content": content(text, images) }, "parent_tool_use_id": null, "priority": priority, "uuid": uuid }))
 }
@@ -1197,7 +1212,7 @@ mod tests {
     }
 
     #[test]
-    fn a_message_sent_while_claude_works_is_queued_with_a_uuid_and_a_later_priority() {
+    fn a_message_sent_while_claude_works_is_queued_for_claudes_next_step_with_a_uuid() {
         let mut session = Session::default();
         session.send("count to 400", &[]);
         let sent = parsed(&session.queue("and then stop", Vec::new(), 1_700_000_000_123, 5));
@@ -1207,7 +1222,7 @@ mod tests {
         assert_eq!(uuid.matches('-').count(), 4);
         assert_eq!(
             sent[0],
-            json!({ "type": "user", "message": { "role": "user", "content": "and then stop" }, "parent_tool_use_id": null, "priority": "later", "uuid": uuid })
+            json!({ "type": "user", "message": { "role": "user", "content": "and then stop" }, "parent_tool_use_id": null, "priority": "next", "uuid": uuid })
         );
         assert_eq!(session.queued, [Queued { uuid: uuid.clone(), text: "and then stop".into(), images: Vec::new() }]);
         // Another write, even in the same millisecond, has another uuid.
@@ -1227,7 +1242,7 @@ mod tests {
     }
 
     #[test]
-    fn send_now_cancels_and_sends_again_as_next_in_one_write() {
+    fn send_now_cancels_and_sends_again_to_be_read_at_once_in_one_write() {
         let mut session = Session::default();
         session.queue("first", Vec::new(), 1, 1);
         session.queue("second", Vec::new(), 1, 2);
@@ -1236,7 +1251,7 @@ mod tests {
         let lines = parsed(&written);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0]["request"], json!({ "subtype": "cancel_async_message", "message_uuid": old }));
-        assert_eq!(lines[1]["priority"], "next");
+        assert_eq!((lines[1]["priority"].as_str(), &lines[1]["origin"]), (Some("now"), &json!({ "kind": "human" })));
         assert_eq!(lines[1]["message"]["content"], "second");
         let fresh = lines[1]["uuid"].as_str().unwrap();
         assert_ne!(fresh, old);
@@ -1381,6 +1396,32 @@ mod tests {
         assert_eq!(session.limits.iter().map(|(label, used, _)| (*label, *used)).collect::<Vec<_>>(), [("5h", 96), ("week", 91)]);
         // Each message asks for them again.
         assert!(session.send("hi", &[]).contains(r#""request_id":"usage""#));
+    }
+
+    #[test]
+    fn the_model_stays_as_picked_once_claude_code_names_it_in_full_and_a_skills_text_isnt_yours() {
+        let answer = |id: &str, response: Value| json!({ "type": "control_response", "response": { "subtype": "success", "request_id": id, "response": response } });
+        let mut session = Session::default();
+        session.hear(&answer(INITIALIZE, json!({ "models": [
+            { "value": "default", "displayName": "Default (recommended)", "resolvedModel": "claude-opus-5-5" },
+            { "value": "opus", "displayName": "Opus 5.5", "resolvedModel": "claude-opus-5-5" },
+            { "value": "sonnet", "displayName": "Sonnet 5.5", "resolvedModel": "claude-sonnet-5-5" },
+        ] })));
+        session.hear(&answer(SETTINGS, json!({ "effective": { "model": "opus" } })));
+        session.send("go", &[]);
+        session.hear(&json!({ "type": "system", "subtype": "init", "session_id": "s", "model": "claude-opus-5-5" }));
+        assert_eq!(session.current_model().map(|model| model.name.as_str()), Some("Opus 5.5"));
+        // Started with no model of its own: the full name reads as the model, not as "Default".
+        let mut fresh = Session::default();
+        fresh.hear(&json!({ "type": "system", "subtype": "init", "session_id": "s", "model": "claude-opus-5-5" }));
+        fresh.hear(&answer(INITIALIZE, json!({ "models": [
+            { "value": "default", "displayName": "Default (recommended)", "resolvedModel": "claude-opus-5-5" },
+            { "value": "opus", "displayName": "Opus 5.5", "resolvedModel": "claude-opus-5-5" } ] })));
+        assert_eq!(fresh.current_model().map(|model| model.name.as_str()), Some("Opus 5.5"));
+        // A skill's text, as Claude Code prints it once the Skill tool loaded it.
+        let shown = session.items.len();
+        session.hear(&json!({ "type": "user", "isSynthetic": true, "message": { "role": "user", "content": [{ "type": "text", "text": "# Keybindings Skill" }] } }));
+        assert_eq!(session.items.len(), shown);
     }
 
     #[test]

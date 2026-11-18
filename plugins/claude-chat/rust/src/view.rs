@@ -140,12 +140,18 @@ fn asking(c: &Chat) -> bool {
     c.session.items.iter().any(|item| matches!(item, Item::Ask(Ask { answer: None, .. })))
 }
 
+/// Your message on the right, as chat apps show it, and never wider than the column less a margin on its left: a long one
+/// spread over the whole width read like Claude's.
+fn bubble(card: Node) -> Node {
+    row().prop("justify", "end").child(stack().prop("width", 64)).child(card)
+}
+
 fn item_node(at: usize, item: &Item, c: &Chat) -> Option<Node> {
     let node = match item {
-        Item::User(said) => row().prop("justify", "end").child(card().child(text(said.as_str()))),
+        Item::User(said) => bubble(card().child(text(said.as_str()))),
         Item::UserImages(said, images) => {
-            let bubble = card().child(muted(plural(*images, "image")));
-            row().prop("justify", "end").child(if said.is_empty() { bubble } else { bubble.child(text(said.as_str())) })
+            let card = card().child(muted(plural(*images, "image")));
+            bubble(if said.is_empty() { card } else { card.child(text(said.as_str())) })
         }
         Item::Text(said) => markdown(said),
         Item::Ask(ask) if ask.answer.is_none() => ask_node(ask, c),
@@ -157,11 +163,11 @@ fn item_node(at: usize, item: &Item, c: &Chat) -> Option<Node> {
     Some(node.key(at.to_string()))
 }
 
-/// A run of tool calls as one line that says what they did, open while one runs or when you open it. Closed, its calls
-/// aren't built at all.
+/// A run of tool calls as one line that says what they did, open only when you open it: one that opened while a call ran
+/// and shut once it ended showed the calls for a moment and hid them again. The line under the conversation says what
+/// runs. Closed, its calls aren't built at all.
 fn steps(first: usize, tools: &[&Tool], c: &Chat) -> Node {
-    let running = tools.iter().any(|tool| tool.output.is_none());
-    let open = running || c.open_steps.contains(&first);
+    let open = c.open_steps.contains(&first);
     let failed = tools.iter().filter(|tool| matches!(tool.output, Some((_, true)))).count();
     let mut said = describe(tools);
     if failed > 0 {
@@ -174,19 +180,23 @@ fn steps(first: usize, tools: &[&Tool], c: &Chat) -> Node {
 
 /// What a run of tool calls did, by kind: "Ran 2 commands · Read 3 files".
 fn describe(tools: &[&Tool]) -> String {
-    let kinds: [(&[&str], &str, &str); 5] = [
+    let kinds: [(&[&str], &str, &str); 8] = [
         (&["Bash"], "Ran", "command"),
         (&["Read"], "Read", "file"),
         (&["Edit", "MultiEdit", "Write", "NotebookEdit"], "Edited", "file"),
         (&["Grep", "Glob"], "Searched", "time"),
         (&["WebFetch", "WebSearch"], "Looked up", "page"),
+        (&["Task", "Agent"], "Ran", "subagent"),
+        (&["Skill"], "Loaded", "skill"),
+        (&["TodoWrite", "TaskCreate", "TaskUpdate"], "Updated the checklist", ""),
     ];
     let known = |tool: &&&Tool| kinds.iter().any(|(names, ..)| names.contains(&tool.name.as_str()));
     let mut parts: Vec<String> = kinds
         .iter()
         .filter_map(|(names, verb, noun)| {
             let n = tools.iter().filter(|tool| names.contains(&tool.name.as_str())).count();
-            (n > 0).then(|| format!("{verb} {}", plural(n, noun)))
+            // The checklist shows above the message box: how often it changed says nothing.
+            (n > 0).then(|| if noun.is_empty() { (*verb).to_owned() } else { format!("{verb} {}", plural(n, noun)) })
         })
         .collect();
     let others = tools.iter().filter(|tool| !known(tool)).count();
@@ -214,6 +224,8 @@ fn step(tool: &Tool, opened: bool) -> Node {
     // What an edit or a write printed is only "updated successfully", which the diff already says.
     let label = match (&tool.detail, output) {
         (_, Some((_, true))) => Some("Error"),
+        // The checklist over the message box shows what these did; they print only that it changed.
+        _ if matches!(tool.name.as_str(), "TodoWrite" | "TaskCreate" | "TaskUpdate") => None,
         (Detail::Diff(diff), _) if !diff.lines.is_empty() => Some("Changes"),
         (Detail::Write { head, .. }, _) if !head.is_empty() => Some("Content"),
         (Detail::Read(_), _) => None,
@@ -221,12 +233,19 @@ fn step(tool: &Tool, opened: bool) -> Node {
         (Detail::Command(command), None) if command.contains('\n') => Some("Command"),
         _ => None,
     };
+    // A failed call shows the end of its error under its line, closed or not: that is what you open it for.
+    let error = output.filter(|(_, failed)| *failed && !opened).map(|(said, _)| {
+        let lines: Vec<&str> = said.trim_end().lines().collect();
+        let tail = lines[lines.len().saturating_sub(4)..].join("\n");
+        text(truncate(&tail, 600)).prop("mono", true).prop("size", "small").prop("tone", "danger")
+    });
     match label {
         Some(label) => {
             let id = tool.id.clone();
             let body = if opened { body(tool, output) } else { stack() };
+            let label = if error.is_some() { "Whole error" } else { label };
             let fold = disclosure(label, body).prop("open", opened).on("onOpenChange", move |_| chat::toggle_output(&id));
-            stack().prop("gap", "xs").child(head).child(fold)
+            stack().prop("gap", "xs").child(head).maybe(error).child(fold)
         }
         None => head,
     }
@@ -297,18 +316,18 @@ fn todo_card(c: &Chat) -> Option<Node> {
     let folded = c.todos_folded;
     let working = c.session.working;
     let active = todos.iter().find(|todo| todo.progress == Progress::Active);
-    let summary = button(format!("{} {done} of {} done", if folded { "▸" } else { "▾" }, todos.len()), "ghost", false, chat::toggle_todos);
-    let mut head = row().prop("gap", "s").prop("align", "center").child(summary);
-    if let (true, Some(todo)) = (folded, active) {
-        head = head.child(text(todo.active.as_str()).prop("tone", "muted").prop("size", "small").prop("truncate", true).prop("grow", true).prop("shimmer", working));
-    }
+    // Its count on the left, what is under way beside it once folded, and Hide or Show on the right.
+    let mut head = row().prop("gap", "s").prop("align", "center").child(text(format!("{done} of {} done", todos.len())).prop("weight", "medium"));
+    let doing = active.filter(|_| folded).map(|todo| text(todo.active.as_str()).prop("tone", "muted").prop("size", "small").prop("truncate", true).prop("shimmer", working));
+    head = head.child(stack().prop("grow", true).maybe(doing));
+    head = head.child(button(if folded { "Show" } else { "Hide" }, "ghost", false, chat::toggle_todos).prop("size", "sm"));
     let mut list = card().prop("variant", "raised").child(head);
     if !folded {
         // A long list shows what is left first; the header still counts what is done.
         let shown: Vec<&Todo> = if todos.len() > TODOS_SHOWN { todos.iter().filter(|todo| todo.progress != Progress::Done).collect() } else { todos.iter().collect() };
         let rows = shown.iter().take(TODOS_SHOWN).map(|todo| todo_line(todo, working));
         let more = (shown.len() > TODOS_SHOWN).then(|| muted(format!("{} more", plural(shown.len() - TODOS_SHOWN, "item"))));
-        list = list.child(stack().prop("gap", "xs").children(rows).maybe(more));
+        list = list.child(stack().prop("gap", "none").children(rows).maybe(more));
     }
     Some(Node::new("Bar").prop("edge", "none").child(stack().prop("gap", "s").prop("maxWidth", COLUMN).child(list)).key("todos"))
 }
@@ -317,9 +336,9 @@ fn todo_card(c: &Chat) -> Option<Node> {
 fn todo_line(todo: &Todo, working: bool) -> Node {
     let line = row().prop("gap", "s").prop("align", "baseline").key(todo.id.as_str());
     match todo.progress {
-        Progress::Done => line.child(text("✓").prop("tone", "success")).child(muted(todo.text.as_str())),
-        Progress::Active => line.child(text("●")).child(text(todo.active.as_str()).prop("weight", "medium").prop("shimmer", working)),
-        Progress::Pending => line.child(muted("○")).child(text(todo.text.as_str())),
+        Progress::Done => line.child(text("✓").prop("tone", "success").prop("size", "small")).child(muted(todo.text.as_str()).prop("size", "small")),
+        Progress::Active => line.child(text("●").prop("tone", "info").prop("size", "small")).child(text(todo.active.as_str()).prop("size", "small").prop("weight", "medium").prop("shimmer", working)),
+        Progress::Pending => line.child(muted("○").prop("size", "small")).child(text(todo.text.as_str()).prop("size", "small")),
     }
 }
 
@@ -373,14 +392,24 @@ fn questions_node(ask: &Ask, draft: &Draft) -> Node {
     for (q, question) in questions.iter().enumerate() {
         let multi = question["multiSelect"] == true;
         let options = question["options"].as_array().map(Vec::as_slice).unwrap_or_default();
-        let chips = row().prop("gap", "s").prop("wrap", true).children(options.iter().enumerate().map(|(o, option)| {
+        // One row an option, as Claude Code's own menu lists them, marked when picked: a round mark for one answer, a box
+        // for several.
+        let chips = list().children(options.iter().enumerate().map(|(o, option)| {
             let request = ask.request.clone();
-            let label = option["label"].as_str().unwrap_or_default();
-            let pick = chip(label, draft.is_picked(q, o), move || chat::edit(&request, |draft| draft.toggle(q, o, multi))).key(format!("{q}-{o}"));
-            match option["description"].as_str().filter(|said| !said.is_empty()) {
-                Some(said) => pick.child(muted(truncate(said, 80)).prop("size", "small")),
-                None => pick,
-            }
+            let picked = draft.is_picked(q, o);
+            let mark = match (multi, picked) {
+                (false, true) => "●",
+                (false, false) => "○",
+                (true, true) => "☑",
+                (true, false) => "☐",
+            };
+            let line = row()
+                .prop("gap", "s")
+                .prop("align", "baseline")
+                .child(text(mark).prop("tone", if picked { "info" } else { "muted" }))
+                .child(text(option["label"].as_str().unwrap_or_default()).prop("weight", "medium"))
+                .maybe(option["description"].as_str().filter(|said| !said.is_empty()).map(|said| muted(truncate(said, 120)).prop("size", "small").prop("grow", true)));
+            list_button([line], move || chat::edit(&request, |draft| draft.toggle(q, o, multi))).key(format!("{q}-{o}"))
         }));
         let request = ask.request.clone();
         let other = text_input("Other", draft.other(q), move |said| chat::edit(&request, |draft| draft.set_other(q, said, multi)))
@@ -480,17 +509,20 @@ fn composer(c: &Chat) -> Node {
         button("", "default", false, chat::send)
             .prop("size", "icon-sm")
             .prop("label", if c.session.working { "Queue" } else { "Send" })
-            .prop("title", if c.session.working { "Queue for after Claude's turn (Enter)" } else { "Send (Enter)" })
+            .prop("title", if c.session.working { "Claude reads it after its current step (Enter)" } else { "Send (Enter)" })
             .prop("disabled", !open || !typed)
             .child(icon(14, 2.0, &[SEND]))
     };
     let controls = row().prop("gap", "xs").prop("align", "center").children(pickers(c)).child(stack().prop("grow", true)).child(action);
-    let message_box = card().prop("variant", "raised").maybe(pasted(c)).child(field.prop("grow", true)).child(controls);
+    // The field with the slash commands or files that match what you typed, which the app shows as a list over the page
+    // that the arrows move through and Enter picks from, as a combobox's. Keyed, so the field stays the same one as the
+    // list comes and goes, and keeps the keyboard.
+    let field = stack().prop("gap", "s").key("message").child(field.prop("grow", true).key("field")).maybe(suggestions(c));
+    let message_box = card().prop("variant", "raised").maybe(pasted(c)).child(field).child(controls);
     Node::new("Bar").prop("edge", "none").child(
         stack()
             .prop("gap", "s")
             .prop("maxWidth", COLUMN)
-            .maybe(commands(c).or_else(|| file_menu(c)))
             .maybe(queued(c))
             .child(message_box)
             .maybe(usage(c)),
@@ -502,18 +534,14 @@ fn pasted(c: &Chat) -> Option<Node> {
     if c.images.is_empty() {
         return None;
     }
+    // Each picture is one chip with its × inside, which takes it back: a × beside a badge read as a button of its own.
     let chips = (0..c.images.len()).map(|at| {
-        row()
-            .prop("gap", "xs")
-            .prop("align", "center")
-            .child(badge(format!("Image {}", at + 1), None))
-            .child(
-                button("", "ghost", false, move || chat::remove_image(at))
-                    .prop("size", "icon-sm")
-                    .prop("label", format!("Remove image {}", at + 1))
-                    .prop("title", "Remove")
-                    .child(icon(14, 2.0, &[CLOSE])),
-            )
+        button("", "outline", false, move || chat::remove_image(at))
+            .prop("size", "sm")
+            .prop("label", format!("Remove image {}", at + 1))
+            .prop("title", "Remove")
+            .child(text(format!("Image {}", at + 1)))
+            .child(icon(12, 2.0, &[CLOSE]))
             .key(at.to_string())
     });
     Some(row().prop("gap", "s").prop("wrap", true).children(chips))
@@ -544,11 +572,12 @@ fn queued(c: &Chat) -> Option<Node> {
     }
     let rows = c.session.queued.iter().map(|queued| {
         let (now, remove) = (queued.uuid.clone(), queued.uuid.clone());
+        // The text takes the room the buttons leave and is cut short in it, so a long message keeps them in the card.
         row()
             .prop("gap", "xs")
             .prop("align", "center")
-            .child(text(truncate(&queued.text, 120)).prop("truncate", true).prop("grow", true).prop("title", queued.text.as_str()))
-            .child(button("Send now", "ghost", false, move || chat::send_now(&now)).prop("size", "sm").prop("title", "Claude reads it at its next step"))
+            .child(stack().prop("grow", true).child(text(queued.text.as_str()).prop("truncate", true).prop("title", queued.text.as_str())))
+            .child(button("Send now", "ghost", false, move || chat::send_now(&now)).prop("size", "sm").prop("title", "Claude puts what it runs aside and reads it now"))
             .child(
                 button("", "ghost", false, move || chat::unqueue(&remove))
                     .prop("size", "icon-sm")
@@ -558,7 +587,7 @@ fn queued(c: &Chat) -> Option<Node> {
             )
             .key(queued.uuid.as_str())
     });
-    Some(card().child(muted("Queued")).child(stack().prop("gap", "xs").children(rows)))
+    Some(card().child(muted("Claude reads these after its current step")).child(stack().prop("gap", "xs").children(rows)))
 }
 
 /// The model, effort and permission mode, each a menu, once Claude Code has said what it has.
@@ -582,38 +611,34 @@ fn pickers(c: &Chat) -> Vec<Node> {
     pickers
 }
 
-/// The slash commands that match what you typed, over the message box.
-fn commands(c: &Chat) -> Option<Node> {
-    let matches = chat::command_matches(c);
-    if matches.is_empty() {
-        return None;
-    }
-    let rows = matches.into_iter().map(|command| {
-        let name = command.name.clone();
-        let line = row()
-            .prop("gap", "s")
-            .prop("align", "baseline")
-            .child(text(format!("/{}", command.name)).prop("mono", true).prop("weight", "medium"))
-            .child(text(truncate(&command.description, 100)).prop("tone", "muted").prop("size", "small").prop("truncate", true).prop("grow", true));
-        list_button([line], move || chat::insert_command(&name)).key(command.name.as_str())
-    });
-    Some(card().child(list().children(rows)))
-}
-
-/// The files that match the `@word` you typed, over the message box.
-fn file_menu(c: &Chat) -> Option<Node> {
-    let (_, found) = chat::mention_matches(c)?;
-    let rows = found.into_iter().map(|path| {
-        let (dir, name) = path.rsplit_once('/').unwrap_or(("", path));
-        let line = row()
-            .prop("gap", "s")
-            .prop("align", "baseline")
-            .child(text(name).prop("mono", true).prop("weight", "medium"))
-            .child(text(dir).prop("tone", "muted").prop("size", "small").prop("truncate", true).prop("grow", true));
-        let picked = path.to_owned();
-        list_button([line], move || chat::insert_mention(&picked)).key(path)
-    });
-    Some(card().child(list().children(rows)))
+/// What the message box suggests for what you typed: the slash commands that match a `/`, else the files that match an
+/// `@word`, as a combobox's options, each a name with what it is beside it.
+fn suggestions(c: &Chat) -> Option<Node> {
+    let option = |key: &str, label: String, detail: &str, pick: Box<dyn Fn()>| {
+        let chip = chip(label, false, move || pick()).key(key);
+        if detail.is_empty() { chip } else { chip.child(muted(truncate(detail, 100)).prop("size", "small")) }
+    };
+    let commands = chat::command_matches(c);
+    let options: Vec<Node> = if !commands.is_empty() {
+        commands
+            .into_iter()
+            .map(|command| {
+                let name = command.name.clone();
+                option(&command.name, format!("/{}", command.name), &command.description, Box::new(move || chat::insert_command(&name)))
+            })
+            .collect()
+    } else {
+        let (_, found) = chat::mention_matches(c)?;
+        found
+            .into_iter()
+            .map(|path| {
+                let (dir, name) = path.rsplit_once('/').unwrap_or(("", path));
+                let picked = path.to_owned();
+                option(path, name.to_owned(), dir, Box::new(move || chat::insert_mention(&picked)))
+            })
+            .collect()
+    };
+    (!options.is_empty()).then(|| row().prop("gap", "s").prop("wrap", true).prop("align", "center").children(options))
 }
 
 fn capital(word: &str) -> String {
