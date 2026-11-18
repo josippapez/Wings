@@ -2070,6 +2070,44 @@ fn a_dialog_a_page_opens_by_itself_leaves_the_keyboard_where_you_type() {
     assert!(window.update(|_, window, _| elsewhere.is_focused(window)), "the dialog took the keyboard");
 }
 
+/// A page that puts a new field in place of the one you type in, as a chat's message box is built again: the new one
+/// asks for the keyboard after a moment.
+fn field_swapped() -> String {
+    struct Swap;
+    impl Swap {
+        fn draw(cx: &mut Cx<'_>, id: u64) {
+            cx.render(&json!({ "id": 0, "type": "#root", "children": [{ "id": 1, "type": "Page", "children": [
+                { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [
+                    { "id": id, "type": "TextInput", "props": { "label": "Message", "autoFocus": true, "onChange": "change" } },
+                    text(5, 6, format!("Field {id}.")) ] }] }] }));
+        }
+    }
+    impl Guest for Swap {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            Self::draw(cx, 3);
+            cx.later(200);
+        }
+        fn event(&mut self, _: &mut Cx<'_>, _: &str, _: &Value) {}
+        fn timer(&mut self, cx: &mut Cx<'_>, _: u32) {
+            Self::draw(cx, 13);
+        }
+    }
+    fake::source("page", || Box::new(Swap))
+}
+
+/// A field the page puts in place of the one that had the keyboard takes it over: the keyboard was the page's.
+#[test]
+fn a_field_that_takes_the_place_of_the_focused_one_gets_the_keyboard() {
+    let (app, mut window) = open(field_swapped());
+    settle(&app, &mut window, shows("Field 3."));
+    window.draw();
+    settle(&app, &mut window, shows("Field 13."));
+    window.draw();
+    app.run_until_parked();
+    let field = window.read(|view, cx| view.input_focus("Message", cx)).expect("the new field");
+    assert!(window.update(|_, window, _| field.is_focused(window)), "the new field didn't get the keyboard");
+}
+
 /// The split measures its own width while it is drawn, and a window under `collapseBelow` leaves the right pane out
 /// unless the page pins it.
 #[test]

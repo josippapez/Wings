@@ -165,6 +165,8 @@ pub struct PageView {
     /// When you last clicked or pressed a key in the page, and what had the keyboard as you last pressed in it.
     gesture_at: Cell<Option<Instant>>,
     pressed_with: RefCell<Option<Option<gpui::FocusHandle>>>,
+    /// Fields that left the tree and may still hold the keyboard, as one that takes a field's place asks for it.
+    former_inputs: RefCell<Vec<gpui::WeakFocusHandle>>,
     _events: Task<()>,
 }
 
@@ -351,6 +353,17 @@ impl PageView {
                             }
                             controls(&tree.children, &mut ids);
                             view.fields.borrow_mut().retain(|id, _| ids.contains(id));
+                            let gone: Vec<gpui::WeakFocusHandle> = view
+                                .inputs
+                                .borrow()
+                                .iter()
+                                .filter(|(id, _)| !ids.contains(id))
+                                .map(|(_, state)| state.field.read(cx).focus_handle(cx).downgrade())
+                                .collect();
+                            let mut former = view.former_inputs.borrow_mut();
+                            former.retain(|field| field.upgrade().is_some());
+                            former.extend(gone);
+                            drop(former);
                             view.inputs.borrow_mut().retain(|id, _| ids.contains(id));
                             view.graphs.borrow_mut().retain(|id, _| ids.contains(id));
                             view.sunbursts.borrow_mut().retain(|id, _| ids.contains(id));
@@ -425,6 +438,7 @@ impl PageView {
             host_focus: None,
             gesture_at: Cell::new(None),
             pressed_with: RefCell::new(None),
+            former_inputs: RefCell::default(),
             _events: events,
         };
         if view.stopped {
@@ -473,6 +487,7 @@ impl PageView {
             || focused == self.dialog_focus
             || focused == self.menu_focus
             || self.inputs.borrow().values().any(|state| state.field.read(cx).focus_handle(cx) == focused)
+            || self.former_inputs.borrow().iter().any(|field| *field == focused)
             || self.sheet_focus.borrow().values().any(|handle| *handle == focused)
             || self.chip_focus.borrow().values().any(|handle| *handle == focused)
             || self.actions_focus.borrow().values().any(|handle| *handle == focused)
