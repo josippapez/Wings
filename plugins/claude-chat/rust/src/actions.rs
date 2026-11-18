@@ -88,7 +88,7 @@ mod tests {
     }
 
     fn agent(id: &str, description: &str, ended: Option<&str>) -> Task {
-        Task { id: id.into(), kind: "local_agent".into(), description: description.into(), started: 0, ended: ended.map(str::to_owned), stopping: false, output: None, error: None }
+        Task { id: id.into(), kind: "local_agent".into(), description: description.into(), call: String::new(), started: 0, ended: ended.map(str::to_owned), ended_at: 0, stopping: false, output: None, error: None }
     }
 
     #[test]

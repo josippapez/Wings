@@ -19,7 +19,7 @@ use crate::{
     chat::{self, Chat, PAGE, State},
     pictures_view::thumbs,
     prefs,
-    session::{Ask, Detail, Diff, Draft, Item, MODES, Progress, Session, Todo, Tool, exit_code, files_found, first_lines, model_name},
+    session::{Ask, Detail, Diff, Draft, Finished, Item, MODES, Progress, Session, Task, Todo, Tool, exit_code, files_found, first_lines, model_name},
     usage::Panel,
 };
 
@@ -319,6 +319,7 @@ fn item_node(at: usize, item: &Item, c: &Chat, own: bool) -> Option<Node> {
         Item::Stopped => muted("Stopped"),
         Item::Worked(ms) => muted(format!("Worked for {}", took(*ms))).prop("size", "small"),
         Item::Note(title, body) => note(at, title, body, c.open_outputs.contains(&format!("note-{at}"))),
+        Item::Finished(done) => finished(at, done, c),
         Item::Tool(_) | Item::Ask(_) => return None,
     };
     Some(node.key(at.to_string()))
@@ -569,6 +570,37 @@ fn note(at: usize, title: &str, body: &str, opened: bool) -> Node {
     let text_ = if opened { text(body).prop("tone", "muted").prop("size", "small") } else { stack() };
     let fold = disclosure(format!("⚙ {title}"), text_).prop("open", opened).on("onOpenChange", move |_| chat::toggle_output(&id));
     row().child(fold)
+}
+
+/// The line where a background agent, command or monitor ended: a mark, what ended and how long it ran, an Open button
+/// while Claude Code still has the agent or the command's output, and what it reported folded under it.
+fn finished(at: usize, done: &Finished, c: &Chat) -> Node {
+    let mark = match done.status.as_str() {
+        "failed" => text("✗").prop("tone", "danger"),
+        "stopped" | "killed" => muted("■"),
+        _ => text("✓").prop("tone", "success"),
+    };
+    // Under a second, a time says nothing.
+    let title = match done.took {
+        Some(ms) if ms >= 1000 => format!("{} · {}", done.title(), took(ms)),
+        _ => done.title(),
+    };
+    let title = text(title).prop("size", "small").prop("tone", if done.failed() { "danger" } else { "muted" });
+    let open = if done.kind == "Agent" {
+        let id = done.call.clone();
+        (!id.is_empty() && c.session.subagents.contains_key(&id)).then(|| button("Open", "ghost", false, move || crate::tasks_view::open_subagent(&id)).prop("title", "Its transcript"))
+    } else {
+        let id = done.task.clone();
+        c.session.tasks.iter().any(|task| task.id == id && task.has_output()).then(|| button("Open", "ghost", false, move || chat::open_task(&id)).prop("title", "What it printed"))
+    };
+    let line = row().prop("gap", "s").prop("align", "center").child(mark).child(title).maybe(open.map(|open| open.prop("size", "sm")));
+    let opened = c.open_outputs.contains(&format!("finished-{at}"));
+    let id = format!("finished-{at}");
+    let body = if opened { text(done.report.as_str()).prop("tone", "muted").prop("size", "small") } else { stack() };
+    stack()
+        .prop("gap", "xs")
+        .child(line)
+        .maybe((!done.report.is_empty()).then(|| row().child(disclosure("Summary", body).prop("open", opened).on("onOpenChange", move |_| chat::toggle_output(&id)))))
 }
 
 /// The card for a question of Claude's: a tool to allow, questions to answer, or a plan to approve.
@@ -888,7 +920,7 @@ fn subagents(c: &Chat) -> Option<Node> {
     if tasks.is_empty() {
         return None;
     }
-    let running = tasks.iter().filter(|tool| tool.output.is_none()).count();
+    let running = tasks.iter().filter(|tool| subagent_runs(tool, c)).count();
     let title = if running > 0 { format!("Subagents · {running} running") } else { format!("Subagents · {} done", tasks.len()) };
     let hidden = tasks.len().saturating_sub(SUBAGENTS_LISTED);
     let rows = tasks[hidden..].iter().map(|tool| subagent_row(tool, c));
@@ -901,18 +933,34 @@ fn subagents(c: &Chat) -> Option<Node> {
     )
 }
 
+/// The background task a subagent's call started, when it went to the background.
+fn background_of<'a>(tool: &Tool, c: &'a Chat) -> Option<&'a Task> {
+    c.session.tasks.iter().find(|task| !task.call.is_empty() && task.call == tool.id)
+}
+
+/// A subagent runs until its call's result, or for one in the background, until its task ends: the call is answered the
+/// moment it is launched.
+fn subagent_runs(tool: &Tool, c: &Chat) -> bool {
+    background_of(tool, c).map_or(tool.output.is_none(), |task| task.ended.is_none())
+}
+
 fn subagent_row(tool: &Tool, c: &Chat) -> Node {
     let sub = c.session.subagents.get(&tool.id);
-    let mark = match &tool.output {
-        None => spinner(),
-        Some((_, true)) => text("✗").prop("tone", "danger"),
-        Some(_) => text("✓").prop("tone", "success"),
+    let background = background_of(tool, c);
+    let running = subagent_runs(tool, c);
+    let failed = background.map_or(matches!(tool.output, Some((_, true))), |task| task.ended.as_deref() == Some("failed"));
+    let mark = match (running, failed) {
+        (true, _) => spinner(),
+        (false, true) => text("✗").prop("tone", "danger"),
+        (false, false) => text("✓").prop("tone", "success"),
     };
     let model = sub.and_then(|sub| sub.reported_model.as_deref()).map(model_name);
     let name = if tool.summary.is_empty() { "Subagent" } else { tool.summary.as_str() };
-    let time = match (&tool.output, sub.filter(|sub| sub.started > 0)) {
-        (None, Some(sub)) => Some(muted("working").prop("size", "small").prop("since", sub.started)),
-        (Some(_), Some(sub)) => Some(fact(took(sub.last.saturating_sub(sub.started)), "muted")),
+    let ran = background.filter(|task| task.ended.is_some() && task.started > 0).map(|task| task.ended_at.saturating_sub(task.started));
+    let time = match (running, sub.filter(|sub| sub.started > 0)) {
+        (true, Some(sub)) => Some(muted("working").prop("size", "small").prop("since", sub.started)),
+        (false, Some(sub)) => Some(fact(took(ran.unwrap_or(sub.last.saturating_sub(sub.started))), "muted")),
+        (false, None) => ran.map(|ms| fact(took(ms), "muted")),
         _ => None,
     };
     // The name has the whole row, three lines at most; under it the model and the time on one muted line.
@@ -932,7 +980,7 @@ fn subagent_row(tool: &Tool, c: &Chat) -> Node {
 }
 
 /// How long, as "21s", "2m 5s", "1h 4m".
-fn took(ms: u64) -> String {
+pub fn took(ms: u64) -> String {
     let seconds = ms / 1000;
     match seconds {
         0..60 => format!("{seconds}s"),

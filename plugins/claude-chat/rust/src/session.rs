@@ -54,6 +54,8 @@ pub enum Item {
     /// What Claude Code added to the conversation in your name, like a background task's notice: what it is, and
     /// what it said.
     Note(String, String),
+    /// A background agent, command or monitor ended.
+    Finished(Finished),
     /// A turn ended as it should, after this many milliseconds of work.
     Worked(u64),
     /// A line across the conversation, like the one where it was compacted.
@@ -62,6 +64,40 @@ pub enum Item {
     Notice(String),
     /// What Claude thought before it answered, as its summary, and how long it took (ms, 0 when unknown).
     Thought(String, u64),
+}
+
+/// The line where a background task ended, from its notice in the stream or in a transcript.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Finished {
+    pub task: String,
+    /// The tool call that started it, which names the subagent for a click on an agent's line.
+    pub call: String,
+    /// Agent, Command or Monitor.
+    pub kind: &'static str,
+    pub description: String,
+    /// Claude Code's word: `completed`, `failed`, `stopped`, `killed`.
+    pub status: String,
+    /// How long it ran (ms), when known.
+    pub took: Option<u64>,
+    /// What it reported, shown under the line.
+    pub report: String,
+}
+
+impl Finished {
+    pub fn failed(&self) -> bool {
+        self.status == "failed"
+    }
+
+    /// "Agent “Survey” finished", "Command “Build” failed".
+    pub fn title(&self) -> String {
+        let word = match self.status.as_str() {
+            "failed" => "failed",
+            "stopped" | "killed" => "stopped",
+            _ if self.kind == "Monitor" => "ended",
+            _ => "finished",
+        };
+        format!("{} “{}” {word}", self.kind, self.description)
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -193,10 +229,14 @@ pub struct Task {
     /// Claude Code's `task_type`, like `local_bash`.
     pub kind: String,
     pub description: String,
+    /// The id of the tool call that started it, once Claude Code says (`task_started`).
+    pub call: String,
     /// When the chat first heard of it (ms).
     pub started: u64,
     /// How it ended, in Claude Code's word (`completed`, `failed`, `stopped`, `killed`), once it has.
     pub ended: Option<String>,
+    /// When the chat heard it end (ms).
+    pub ended_at: u64,
     /// You asked to stop it, and it hasn't ended yet.
     pub stopping: bool,
     /// The end of what it printed, as last read.
@@ -364,10 +404,15 @@ pub struct Session {
     pub plugins: Plugins,
     /// The /hooks, /memory or /permissions dialog, while it is open, and what Claude Code answered its reads.
     pub setup: Setup,
-    /// A turn is running. Claude Code's own `session_state_changed` says so when it prints them, else it is from your
-    /// message to its result. The result alone ends a turn, not the work: with a message of yours queued the next turn
-    /// starts at once, and a background task can run on, while `idle` waits for all of that.
+    /// A turn is running: one is open (its first `requesting` status to its `result`), or a message Claude Code holds
+    /// is not finished. Claude Code prints `session_state_changed` only when an environment variable asks for it, which
+    /// Wings can't set, so this is worked out from the turn's own lines (`settle`). A turn can start with no message of
+    /// yours, when a background task ends, and a message sent while one runs starts the next at once.
     pub working: bool,
+    /// Between a turn's first `requesting` status and its `result`.
+    turn_open: bool,
+    /// The uuids of messages Claude Code has queued or started and not yet finished, from `command_lifecycle`.
+    commands: Vec<String>,
     /// Messages sent while Claude works, in the order Claude Code reads them, until it echoes each as read.
     pub queued: Vec<Queued>,
     /// What to tell you, as (title, body), for the chat to show when you aren't looking. At most one of each kind a turn.
@@ -445,6 +490,12 @@ impl Session {
     }
 
     fn hear_own(&mut self, line: &Value) {
+        // Every turn starts with this status, also one a finished background task starts by itself, and Claude Code prints
+        // none outside a turn. Its `init` line comes with it, but the chat's own scenes print that one to start a session.
+        if line["type"] == "system" && line["subtype"] == "status" && line["status"] == "requesting" {
+            self.turn_open = true;
+            self.settle();
+        }
         if notices::hear(self, line) {
             return;
         }
@@ -459,14 +510,32 @@ impl Session {
                 }
                 self.mode = line["permissionMode"].as_str().map(str::to_owned).or(self.mode.take());
             }
+            "command_lifecycle" => {
+                let uuid = line["command_uuid"].as_str().unwrap_or_default();
+                match line["state"].as_str().unwrap_or_default() {
+                    "queued" | "started" if !self.commands.iter().any(|known| known == uuid) => self.commands.push(uuid.to_owned()),
+                    "completed" | "cancelled" => self.commands.retain(|known| known != uuid),
+                    _ => {}
+                }
+                self.settle();
+            }
             "system" if line["subtype"] == "session_state_changed" => self.changed(line["state"].as_str().unwrap_or_default()),
             "system" if line["subtype"] == "background_tasks_changed" => self.tasks_now(&line["tasks"]),
             // A task's end, from its update and its notice, whichever comes first.
+            "system" if line["subtype"] == "task_started" => {
+                if let Some(task) = self.tasks.iter_mut().find(|task| line["task_id"] == task.id.as_str()) {
+                    task.call = line["tool_use_id"].as_str().unwrap_or_default().to_owned();
+                }
+            }
             "system" if line["subtype"] == "task_updated" || line["subtype"] == "task_notification" => {
                 let status = line["patch"]["status"].as_str().or(line["status"].as_str()).filter(|status| ["completed", "failed", "stopped", "killed"].contains(status));
                 if let (Some(task), Some(status)) = (self.tasks.iter_mut().find(|task| line["task_id"] == task.id.as_str()), status) {
                     task.ended = Some(status.to_owned());
+                    task.ended_at = self.now;
                     task.stopping = false;
+                }
+                if line["subtype"] == "task_notification" {
+                    self.task_finished(line);
                 }
             }
             "control_response" => self.answered(&line["response"]),
@@ -560,7 +629,13 @@ impl Session {
             }
             "result" => {
                 self.status = None;
-                self.working = self.reports_state && self.working;
+                // With `session_state_changed` its `idle` ends the turn, else the result does. The messages it answered are
+                // done, whether or not their `completed` line comes.
+                self.turn_open = self.reports_state && self.turn_open;
+                if let Some(answered) = line["user_message_uuids"].as_array() {
+                    self.commands.retain(|known| !answered.iter().any(|uuid| uuid == known.as_str()));
+                }
+                self.settle();
                 self.live.clear();
                 self.cost = line["total_cost_usd"].as_f64().unwrap_or(self.cost);
                 // A stopped turn ends as an error, with Claude Code's diagnostics as its text.
@@ -599,15 +674,31 @@ impl Session {
         self.reports_state = true;
         match state {
             "idle" => {
-                self.working = false;
-                // Nothing will read what is still queued now, so it was read without an echo.
-                for queued in std::mem::take(&mut self.queued) {
-                    self.read_queued(queued);
-                }
+                self.turn_open = false;
+                self.commands.clear();
             }
-            "running" | "requires_action" => self.working = true,
+            "running" | "requires_action" => self.turn_open = true,
             _ => {}
         }
+        self.settle();
+    }
+
+    /// Works `working` out: a turn is open, or a message Claude Code holds has not been finished.
+    fn settle(&mut self) {
+        self.working = self.turn_open || !self.commands.is_empty();
+        if !self.working {
+            // Nothing will read what is still queued now, so it was read without an echo.
+            for queued in std::mem::take(&mut self.queued) {
+                self.read_queued(queued);
+            }
+        }
+    }
+
+    /// The Claude Code process ended: nothing runs any more.
+    pub fn stopped_running(&mut self) {
+        self.turn_open = false;
+        self.commands.clear();
+        self.working = false;
     }
 
     /// Starts the conversation over as the new session `id`, as `/clear`, `/new` and `/reset` do: what was said, asked and
@@ -665,8 +756,8 @@ impl Session {
         for task in &mut self.tasks {
             let listed = live.iter().any(|entry| entry["task_id"] == task.id.as_str());
             match (listed, task.ended.is_some()) {
-                (false, false) => task.ended = Some("ended".into()),
-                (true, true) => (task.ended, task.started, task.output) = (None, self.now, None),
+                (false, false) => (task.ended, task.ended_at) = (Some("ended".into()), self.now),
+                (true, true) => (task.ended, task.ended_at, task.started, task.output) = (None, 0, self.now, None),
                 _ => continue,
             }
             task.stopping = false;
@@ -676,8 +767,29 @@ impl Session {
                 continue;
             };
             let text = |key: &str| entry[key].as_str().unwrap_or_default().to_owned();
-            self.tasks.push(Task { id: id.to_owned(), kind: text("task_type"), description: text("description"), started: self.now, ended: None, stopping: false, output: None, error: None });
+            self.tasks.push(Task { id: id.to_owned(), kind: text("task_type"), description: text("description"), call: String::new(), started: self.now, ended: None, ended_at: 0, stopping: false, output: None, error: None });
         }
+    }
+
+    /// The line for a background task's notice in the stream, with how long it ran, and a note for you when you are
+    /// elsewhere. Only tasks heard of in the live set count: a command that ran in the foreground sends a notice too.
+    fn task_finished(&mut self, line: &Value) {
+        let (Some(status), Some(task)) = (line["status"].as_str(), self.tasks.iter().find(|task| line["task_id"] == task.id.as_str())) else {
+            return;
+        };
+        let summary = line["summary"].as_str().unwrap_or_default();
+        let report = if line["summary_is_report"] == true || status != "completed" { summary } else { "" };
+        let finished = Finished {
+            task: task.id.clone(),
+            call: line["tool_use_id"].as_str().unwrap_or(task.call.as_str()).to_owned(),
+            kind: task_kind(&task.kind),
+            description: task.description.clone(),
+            status: status.to_owned(),
+            took: Some(self.now.saturating_sub(task.started)).filter(|_| task.started > 0),
+            report: cut(report, OUTPUT_KEPT),
+        };
+        self.alerts.push((finished.title(), cut(report.lines().find(|line| !line.trim().is_empty()).unwrap_or_default().trim(), SUMMARY_KEPT)));
+        self.items.push(Item::Finished(finished));
     }
 
     /// Claude Code's answer to one of the chat's requests.
@@ -826,7 +938,7 @@ impl Session {
 
     fn user(&mut self, content: &Value) {
         if let Some(text) = content.as_str() {
-            return self.items.extend(said(text));
+            return self.items.extend(said_or_finished(text));
         }
         let first = self.items.len();
         let mut pictures: Vec<String> = Vec::new();
@@ -835,7 +947,7 @@ impl Session {
                 "image" => pictures.extend(images::of_block(block)),
                 // What Claude Code writes in your name when a turn is stopped, which `Stopped` shows.
                 "text" if block["text"].as_str().is_some_and(|text| text.starts_with("[Request interrupted by user")) => {}
-                "text" => self.items.extend(said(block["text"].as_str().unwrap_or_default())),
+                "text" => self.items.extend(said_or_finished(block["text"].as_str().unwrap_or_default())),
                 "tool_result" => {
                     let id = block["tool_use_id"].as_str().unwrap_or_default();
                     let output = match &block["content"] {
@@ -937,6 +1049,7 @@ impl Session {
         self.prompts.push(Prompt { at: self.items.len(), uuid: uuid.clone(), parent: None });
         let ids = self.keep_pictures(images);
         self.items.push(sent_item(text.to_owned(), ids));
+        self.turn_open = true;
         self.working = true;
         self.suggestion = None;
         // The limits are asked again with each message: the chat may only write when you send something.
@@ -1366,6 +1479,54 @@ fn said(text: &str) -> Option<Item> {
         _ => return Some(Item::User(text.to_owned())),
     };
     Some(Item::Note(cut(&title, SUMMARY_KEPT), cut(&untagged(text), OUTPUT_KEPT)))
+}
+
+/// What a background task is, as the line where it ended names it.
+fn task_kind(kind: &str) -> &'static str {
+    match kind {
+        "local_agent" => "Agent",
+        "local_bash" => "Command",
+        _ if kind.starts_with("monitor") => "Monitor",
+        _ => "Task",
+    }
+}
+
+/// `said`, but a background task's notices, which a transcript has as one of your messages, each become the line where the
+/// task ended. A notice with no status, like a monitor's event, stays a note.
+fn said_or_finished(text: &str) -> Vec<Item> {
+    if !text.trim_start().starts_with("<task-notification>") {
+        return said(text).into_iter().collect();
+    }
+    text.split("<task-notification>")
+        .skip(1)
+        .filter_map(|block| {
+            let inner = |name: &str| block.split_once(&format!("<{name}>"))?.1.split_once(&format!("</{name}>")).map(|(inside, _)| inside.trim());
+            let (status, summary) = (inner("status"), inner("summary"));
+            // `Agent "Survey" finished`, `Background command "Build" completed (exit code 0)`: the name is the quoted part.
+            let described = summary.and_then(|summary| {
+                let open = summary.find(['"', '“'])?;
+                let rest = &summary[open..];
+                let (quote, rest) = rest.split_at(rest.chars().next()?.len_utf8());
+                let close = rest.find(if quote == "“" { '”' } else { '"' })?;
+                Some((summary.starts_with("Agent "), summary.starts_with("Monitor"), rest[..close].to_owned()))
+            });
+            let (Some(status), Some((agent, monitor, description))) = (status, described) else {
+                return said(&format!("<task-notification>{block}"));
+            };
+            let kind = if agent { "Agent" } else if monitor { "Monitor" } else { "Command" };
+            // An agent's report reaches Claude as a message of its own, and the notice says it isn't repeated.
+            let report = inner("result").filter(|report| !report.contains("not repeated here")).or(summary.filter(|_| status != "completed")).unwrap_or_default();
+            Some(Item::Finished(Finished {
+                task: inner("task-id").unwrap_or_default().to_owned(),
+                call: inner("tool-use-id").unwrap_or_default().to_owned(),
+                kind,
+                description,
+                status: status.to_owned(),
+                took: inner("duration_ms").and_then(|ms| ms.parse().ok()),
+                report: cut(report, OUTPUT_KEPT),
+            }))
+        })
+        .collect()
 }
 
 /// `text` without its tags, and without the lines they leave empty.
@@ -3040,5 +3201,171 @@ mod tests {
         // Without a summary asked for, Claude Code sends the block with an empty text.
         session.hear(&json!({ "type": "assistant", "message": { "content": [{ "type": "thinking", "thinking": "", "signature": "sig" }] } }));
         assert_eq!(session.items.len(), 1);
+    }
+
+    // What Claude Code 2.1.327 printed, which has no `session_state_changed`: a turn starts with a `status` of `requesting` and ends
+    // with its `result`, and `command_lifecycle` follows each message of yours.
+    fn turn_start() -> Value {
+        json!({ "type": "system", "subtype": "status", "status": "requesting", "session_id": "s" })
+    }
+
+    fn turn_end(answered: &[&String], origin: Option<&str>) -> Value {
+        json!({ "type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "user_message_uuids": answered, "origin": origin.map(|kind| json!({ "kind": kind })) })
+    }
+
+    fn lifecycle(uuid: &str, state: &str) -> Value {
+        json!({ "type": "command_lifecycle", "command_uuid": uuid, "state": state, "session_id": "s" })
+    }
+
+    fn thinks() -> Value {
+        json!({ "type": "assistant", "message": { "content": [{ "type": "thinking", "thinking": "Reading the request.", "signature": "sig" }] } })
+    }
+
+    #[test]
+    fn a_turn_a_finished_task_starts_on_its_own_is_working_from_its_first_line_to_its_result() {
+        // No message of yours began it, as when a background command ends: its notice, then `init`, thinking, one command.
+        let mut session = Session::default();
+        session.now = 1_000;
+        session.hear(&live(&[("bk1", "Run the tests")]));
+        session.hear(&started("bk1", "Run the tests"));
+        for line in task_end("bk1", "completed", "completed") {
+            session.hear(&line);
+        }
+        session.hear(&live(&[]));
+        assert!(!session.working);
+        session.hear(&turn_start());
+        assert!(session.working);
+        session.hear(&thinks());
+        session.hear(&json!({ "type": "assistant", "message": { "content": [{ "type": "tool_use", "id": "toolu_1", "name": "Bash", "input": { "command": "ls" } }] } }));
+        assert!(session.working, "while it thinks and runs a command");
+        session.hear(&json!({ "type": "user", "message": { "role": "user", "content": [{ "type": "tool_result", "tool_use_id": "toolu_1", "content": "a" }] } }));
+        assert!(session.working);
+        session.hear(&turn_end(&[], Some("task-notification")));
+        assert!(!session.working);
+    }
+
+    #[test]
+    fn a_long_command_that_goes_on_in_the_background_leaves_the_turn_ended_and_its_end_starts_another() {
+        let mut session = Session::default();
+        session.send("Run the slow job", &[], 1, 1);
+        let sent = uuid(1, 1);
+        session.hear(&lifecycle(&sent, "queued"));
+        session.hear(&lifecycle(&sent, "started"));
+        session.hear(&turn_start());
+        session.hear(&live(&[("bk1", "Slow job")]));
+        session.hear(&started("bk1", "Slow job"));
+        assert!(session.working);
+        session.hear(&turn_end(&[&sent], None));
+        session.hear(&lifecycle(&sent, "completed"));
+        assert!(!session.working, "the turn is over while the job runs on");
+        for line in task_end("bk1", "completed", "completed") {
+            session.hear(&line);
+        }
+        session.hear(&turn_start());
+        assert!(session.working);
+        session.hear(&turn_end(&[], Some("task-notification")));
+        assert!(!session.working);
+    }
+
+    #[test]
+    fn a_message_sent_while_claude_works_keeps_it_working_across_the_turn_that_read_it() {
+        let mut session = Session::default();
+        session.send("Run sleep 8", &[], 1, 1);
+        let (first, next) = (uuid(1, 1), uuid(2, 2));
+        session.hear(&lifecycle(&first, "queued"));
+        session.hear(&lifecycle(&first, "started"));
+        session.hear(&turn_start());
+        session.queue("Also say banana", Vec::new(), 2, 2);
+        session.hear(&lifecycle(&next, "queued"));
+        // Claude Code stops the command for it: the first turn ends with its result, and the next starts at once.
+        session.hear(&turn_end(&[&first], None));
+        assert!(session.working, "its message is next");
+        session.hear(&lifecycle(&first, "cancelled"));
+        session.hear(&lifecycle(&next, "started"));
+        session.hear(&turn_start());
+        session.hear(&json!({ "type": "user", "isReplay": true, "uuid": next, "message": { "role": "user", "content": "Also say banana" } }));
+        assert!(session.working);
+        assert_eq!(session.items.last(), Some(&Item::User("Also say banana".into())));
+        session.hear(&thinks());
+        assert!(session.working);
+        session.hear(&turn_end(&[&next], None));
+        session.hear(&lifecycle(&next, "completed"));
+        assert!(!session.working);
+    }
+
+    #[test]
+    fn a_finished_message_is_not_waited_for_when_its_completed_line_never_comes() {
+        let mut session = Session::default();
+        session.send("hi", &[], 1, 1);
+        let sent = uuid(1, 1);
+        session.hear(&lifecycle(&sent, "queued"));
+        session.hear(&turn_start());
+        session.hear(&turn_end(&[&sent], None));
+        assert!(!session.working);
+        // The process ending ends it too.
+        session.hear(&turn_start());
+        session.stopped_running();
+        assert!(!session.working);
+    }
+
+    fn agent_live(id: &str, description: &str) -> [Value; 2] {
+        [
+            json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": [{ "task_id": id, "run_id": format!("run-{id}"), "task_type": "local_agent", "subagent_type": "general-purpose", "description": description }] }),
+            json!({ "type": "system", "subtype": "task_started", "task_id": id, "run_id": format!("run-{id}"), "tool_use_id": format!("toolu_{id}"), "description": description,
+                "subagent_type": "general-purpose", "is_backgrounded": true, "task_type": "local_agent" }),
+        ]
+    }
+
+    #[test]
+    fn a_background_agent_or_command_that_ends_makes_a_line_with_its_time_and_a_note_for_when_you_are_away() {
+        let mut session = Session::default();
+        session.now = 10_000;
+        for line in agent_live("ag1", "Survey the parser") {
+            session.hear(&line);
+        }
+        // The live set holds both now.
+        let mut both = agent_live("ag1", "Survey the parser")[0].clone();
+        both["tasks"].as_array_mut().unwrap().push(live(&[("bk1", "Run the tests")])["tasks"][0].clone());
+        session.hear(&both);
+        session.hear(&started("bk1", "Run the tests"));
+        assert_eq!(session.tasks[0].call, "toolu_ag1");
+        session.now = 10_000 + 452_000;
+        session.hear(&json!({ "type": "system", "subtype": "task_notification", "task_id": "ag1", "run_id": "run-ag1", "tool_use_id": "toolu_ag1", "status": "completed",
+            "output_file": "/tmp/claude/tasks/ag1.output", "summary": "Found two callers.\nBoth are tests.", "summary_is_report": true }));
+        let Some(Item::Finished(done)) = session.items.last() else { panic!("a finished line") };
+        assert_eq!((done.kind, done.description.as_str(), done.took, done.call.as_str()), ("Agent", "Survey the parser", Some(452_000), "toolu_ag1"));
+        assert_eq!(done.title(), "Agent “Survey the parser” finished");
+        assert_eq!(done.report, "Found two callers.\nBoth are tests.");
+        assert_eq!(session.alerts, [("Agent “Survey the parser” finished".to_owned(), "Found two callers.".to_owned())]);
+        // A command that fails says so, with Claude Code's words under it.
+        session.now = 20_000;
+        session.hear(&json!({ "type": "system", "subtype": "task_notification", "task_id": "bk1", "tool_use_id": "toolu_bk1", "status": "failed",
+            "summary": "Background command \"Run the tests\" failed (exit code 1)" }));
+        let Some(Item::Finished(done)) = session.items.last() else { panic!("a finished line") };
+        assert_eq!((done.kind, done.failed(), done.title().as_str()), ("Command", true, "Command “Run the tests” failed"));
+        assert_eq!(done.report, "Background command \"Run the tests\" failed (exit code 1)");
+        assert_eq!(session.tasks[1].ended_at, 20_000);
+        // A command that ran in the foreground sends a notice too, but was never one of the background tasks.
+        let before = session.items.len();
+        session.hear(&json!({ "type": "system", "subtype": "task_notification", "task_id": "fg1", "tool_use_id": "toolu_fg1", "status": "completed", "summary": "Ran it" }));
+        assert_eq!(session.items.len(), before);
+    }
+
+    #[test]
+    fn a_resumed_sessions_task_notices_are_the_lines_where_tasks_ended_and_never_your_messages() {
+        let text = |body: &str| json!({ "type": "user", "origin": { "kind": "task-notification" }, "message": { "role": "user", "content": body } }).to_string();
+        let agent = "<task-notification>\n<task-id>ag1</task-id>\n<tool-use-id>toolu_ag1</tool-use-id>\n<output-file>/tmp/claude/tasks/ag1.output</output-file>\n<status>completed</status>\n<summary>Agent \"Survey the parser\" finished</summary>\n<note>A task-notification fires each time this agent stops.</note>\n<result>Found two callers.</result>\n<usage><subagent_tokens>89885</subagent_tokens><tool_uses>10</tool_uses><duration_ms>75250</duration_ms></usage>\n</task-notification>";
+        let command = "<task-notification>\n<task-id>bk1</task-id>\n<tool-use-id>toolu_bk1</tool-use-id>\n<output-file>/tmp/claude/tasks/bk1.output</output-file>\n<status>completed</status>\n<summary>Background command \"Run the tests\" completed (exit code 0)</summary>\n</task-notification>";
+        let event = "<task-notification>\n<task-id>mn1</task-id>\n<summary>Monitor event: \"Watch the build\"</summary>\n<event>build ended</event>\n</task-notification>";
+        let session = heard(&[text(agent), text(command), text(event), text(&format!("{command}{agent}"))].join("\n"));
+        let Item::Finished(first) = &session.items[0] else { panic!("an agent line") };
+        assert_eq!((first.kind, first.description.as_str(), first.status.as_str(), first.took, first.report.as_str()), ("Agent", "Survey the parser", "completed", Some(75_250), "Found two callers."));
+        let Item::Finished(second) = &session.items[1] else { panic!("a command line") };
+        assert_eq!((second.kind, second.title().as_str(), second.took, second.report.as_str()), ("Command", "Command “Run the tests” finished", None, ""));
+        // A notice with no status is a monitor's event, which stays a quiet note.
+        assert!(matches!(&session.items[2], Item::Note(title, _) if title == "Monitor event: \"Watch the build\""));
+        // One entry can hold several notices.
+        assert_eq!(session.items.len(), 5);
+        assert!(session.items.iter().all(|item| !matches!(item, Item::User(_))));
     }
 }

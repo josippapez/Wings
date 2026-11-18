@@ -325,7 +325,7 @@ pub fn launch_with(resume: Option<String>, how: Launch) {
             if c.run != run {
                 return false;
             }
-            c.session.working = false;
+            c.session.stopped_running();
             c.input = None;
             if c.moving {
                 return true;

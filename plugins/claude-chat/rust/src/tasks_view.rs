@@ -13,18 +13,61 @@ use crate::{
 
 const WIDTH: u32 = 640;
 
-/// The side panel's group of running tasks, none when nothing runs.
+/// The most ended tasks the group keeps listing.
+const DONE_LISTED: usize = 5;
+
+/// The side panel's group of tasks: each running one, then the newest that ended with how long they ran. A subagent that
+/// ended is in the Subagents group, so it isn't listed twice. None when there is nothing to show.
 pub fn section(c: &Chat) -> Option<Node> {
     let running: Vec<&Task> = c.session.tasks.iter().filter(|task| task.ended.is_none()).collect();
-    if running.is_empty() {
+    let done: Vec<&Task> = c.session.tasks.iter().rev().filter(|task| task.ended.is_some() && task.kind != "local_agent").take(DONE_LISTED).collect();
+    if running.is_empty() && done.is_empty() {
         return None;
     }
+    let title = match (running.len(), done.len()) {
+        (0, done) => format!("Background tasks · {done} done"),
+        (running, 0) => format!("Background tasks · {running} running"),
+        (running, done) => format!("Background tasks · {running} running · {done} done"),
+    };
     Some(
         stack()
             .prop("gap", "xs")
-            .child(muted(format!("Background tasks · {} running", running.len())).prop("size", "small"))
-            .child(stack().prop("gap", "none").children(running.into_iter().map(task_row))),
+            .child(muted(title).prop("size", "small"))
+            .child(stack().prop("gap", "none").children(running.into_iter().map(task_row)).children(done.into_iter().map(done_row))),
     )
+}
+
+/// One task that ended: how it ended, its name and how long it ran, with its output on a click when Claude Code keeps it.
+fn done_row(task: &Task) -> Node {
+    let name = if task.description.is_empty() { task.id.as_str() } else { task.description.as_str() };
+    let ended = task.ended.as_deref().unwrap_or_default();
+    let mark = match ended {
+        "failed" => text("✗").prop("tone", "danger"),
+        "completed" => text("✓").prop("tone", "success"),
+        _ => muted("■"),
+    };
+    let how = match ended {
+        "failed" => "Failed",
+        "completed" => "Done",
+        "stopped" | "killed" => "Stopped",
+        _ => "Ended",
+    };
+    let time = match task.ended_at.saturating_sub(task.started) {
+        ms if task.started > 0 && ms >= 1000 => format!("{how} · {}", crate::view::took(ms)),
+        _ => how.to_owned(),
+    };
+    let line = row()
+        .prop("gap", "s")
+        .prop("align", "center")
+        .child(mark)
+        .child(stack().prop("grow", true).prop("gap", "none").child(text(name).prop("size", "small").prop("clamp", true).prop("title", name)).child(muted(time).prop("size", "small")));
+    match task.has_output() {
+        true => {
+            let id = task.id.clone();
+            list_button([line], move || chat::open_task(&id)).prop("title", "What it printed").key(task.id.as_str())
+        }
+        false => line.key(task.id.as_str()),
+    }
 }
 
 /// One running task: its name, how long it has run, small Message and Stop buttons, and its output on a click on the name

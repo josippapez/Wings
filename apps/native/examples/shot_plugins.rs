@@ -1152,6 +1152,52 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         text("The agent audits the discount code in the background."),
         json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 9_400, "num_turns": 2, "result": "", "total_cost_usd": 0.05 }),
     ]);
+    // A background agent and a command Claude started, then both ended: each leaves a line where it happened, the agent's report
+    // folded under its line, and the side panel lists them as done. The turn their notices start has no message of yours before it.
+    let (helper_id, suite_id) = ("a4443e71dac390806", "bc91d0e5a");
+    let helper = json!({ "task_id": helper_id, "run_id": "run-3", "task_type": "local_agent", "subagent_type": "general-purpose", "description": "Audit the discount code" });
+    let suite = json!({ "task_id": suite_id, "run_id": "run-4", "task_type": "local_bash", "description": "Run the tests" });
+    let started = |task: &serde_json::Value, call: &str| {
+        json!({ "type": "system", "subtype": "task_started", "task_id": task["task_id"], "run_id": task["run_id"], "tool_use_id": call, "description": task["description"], "is_backgrounded": true, "task_type": task["task_type"] })
+    };
+    let live = |tasks: Vec<serde_json::Value>| json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": tasks });
+    let ended = |task: &serde_json::Value, call: &str, status: &str, summary: &str, report: bool| {
+        [
+            json!({ "type": "system", "subtype": "task_updated", "task_id": task["task_id"], "run_id": task["run_id"], "patch": { "status": status, "end_time": 1_795_027_323_607u64 } }),
+            json!({ "type": "system", "subtype": "task_notification", "task_id": task["task_id"], "run_id": task["run_id"], "tool_use_id": call, "status": status,
+                "output_file": "/tmp/claude/tasks/out.output", "summary": summary, "summary_is_report": report }),
+        ]
+    };
+    let finished = opened(
+        [
+            vec![
+                init.clone(),
+                user("Have an agent audit the discount code and run the tests, both in the background."),
+                tool("a1", "Agent", json!({ "description": "Audit the discount code", "subagent_type": "general-purpose", "run_in_background": true, "prompt": "Audit the discount code." })),
+                live(vec![helper.clone()]),
+                started(&helper, "a1"),
+                output("a1", "Async agent launched successfully. The agent is working in the background.", false),
+                tool("b1", "Bash", json!({ "command": "pnpm test", "description": "Run the tests", "run_in_background": true })),
+                live(vec![helper.clone(), suite.clone()]),
+                started(&suite, "b1"),
+                output("b1", "Command running in background with ID: bc91d0e5a.", false),
+                within("a1", haiku(json!([{ "type": "text", "text": "Two callers round, and the cart does not." }]))),
+                text("Both run in the background."),
+                json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 6_000, "num_turns": 3, "result": "", "total_cost_usd": 0.04 }),
+            ],
+            ended(&helper, "a1", "completed", "The discount rounds in cents in two places, and the cart still rounds per line item.", true).to_vec(),
+            vec![live(vec![suite.clone()])],
+            ended(&suite, "b1", "failed", "Background command \"Run the tests\" failed (exit code 1)", false).to_vec(),
+            vec![
+                live(vec![]),
+                json!({ "type": "system", "subtype": "status", "status": "requesting" }),
+                text("The agent found one place that still rounds per line item, and the tests fail on it."),
+                json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 3_000, "num_turns": 1, "result": "", "total_cost_usd": 0.02, "origin": { "kind": "task-notification" } }),
+            ],
+        ]
+        .concat(),
+    );
+    let finished_panel = finished.clone();
     let (worked_again, worked_forking, rewound_again) = (worked.clone(), worked.clone(), rewound.clone());
     let tasks_open = tasks.clone();
     // A long message of yours that wraps, with Rewind and Fork from here under it.
@@ -1161,7 +1207,7 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         text("The discount is applied in floating point, so `100 * 0.9` comes out a hair under 90 on CI's Node version."),
         json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 12_000, "num_turns": 2, "result": "", "total_cost_usd": 0.03 }),
     ]);
-    let scenes: [Scene; 63] = [
+    let scenes: [Scene; 65] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -1266,6 +1312,10 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         ("elicitation", elicited, None, None, "Pick a flavour and how many scoops"),
         ("run-background", running, None, None, "Run in background"),
         ("agent-message", agent, None, Some("press:Message"), "SendMessage tool"),
+        // The agent and the command that ended each leave a line, the agent's report folded under its own.
+        ("tasks-finished", finished, None, None, "Command “Run the tests” failed"),
+        // The side panel lists them as done, the agent under Subagents and the command under Background tasks.
+        ("tasks-done", finished_panel, None, Some("press:Side panel"), "Background tasks · 1 done"),
     ];
     // Files for @-mentions, which the chat lists with git.
     for file in ["src/checkout.ts", "src/checkout.test.ts", "src/cart.ts", "api/limits.ts", "README.md"] {
