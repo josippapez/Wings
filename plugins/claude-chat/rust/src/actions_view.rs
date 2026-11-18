@@ -37,11 +37,18 @@ pub fn status_button(c: &Chat) -> Option<Node> {
     background_button(tool, c)
 }
 
+/// Lucide's `message-square`, in a 24-point box.
+const MESSAGE: &str = "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z";
+
 /// A background agent's Message button, for one that still runs.
 pub fn message_button(task: &Task) -> Option<Node> {
     actions::is_running_agent(task).then(|| {
         let id = task.id.clone();
-        ui::button("Message", "ghost", false, move || open_message(&id)).prop("size", "sm").prop("title", "Have Claude pass a message on to this agent")
+        ui::button("", "ghost", false, move || open_message(&id))
+            .prop("size", "icon-sm")
+            .prop("label", "Message")
+            .prop("title", "Have Claude pass a message on to this agent")
+            .child(ui::icon(24, 2.0, &[MESSAGE]).prop("size", 14))
     })
 }
 

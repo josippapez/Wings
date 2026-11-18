@@ -39,7 +39,7 @@ const BUDGET: usize = 3_500;
 /// centered in the whole tab. The column is 760 wide, drawn with 8 points of margin either side, so the panel is shown while
 /// the tab holds that and the panel (with its 12 points of padding) either side of the centre; narrower, it is put away
 /// behind a button in the header that opens it over the conversation.
-const SIDE: u32 = 260;
+const SIDE: u32 = 340;
 const SIDE_BELOW: u32 = COLUMN + 16 + 2 * (SIDE + 12);
 /// The most nodes a subagent's transcript in the side panel makes, apart from the conversation's own budget.
 const SUB_BUDGET: usize = 1_200;
@@ -915,16 +915,17 @@ fn subagent_row(tool: &Tool, c: &Chat) -> Node {
         (Some(_), Some(sub)) => Some(fact(took(sub.last.saturating_sub(sub.started)), "muted")),
         _ => None,
     };
+    // The name has the whole row, three lines at most; under it the model and the time on one muted line.
+    let facts = row().prop("gap", "s").prop("align", "center").maybe(model.map(|model| muted(model).prop("size", "small"))).maybe(time);
     let line = row()
         .prop("gap", "s")
         .prop("align", "center")
         .child(mark)
-        .child(stack().prop("grow", true).prop("gap", "none").child(text(name).prop("size", "small").prop("truncate", true).prop("title", name)).maybe(model.map(|model| muted(model).prop("size", "small"))))
-        .maybe(time);
+        .child(stack().prop("grow", true).prop("gap", "none").child(text(name).prop("size", "small").prop("clamp", true).prop("title", name)).child(facts));
     match sub {
         Some(_) => {
             let id = tool.id.clone();
-            list_button([line], move || chat::toggle_subagent(&id)).key(tool.id.as_str())
+            list_button([line], move || crate::tasks_view::open_subagent(&id)).key(tool.id.as_str())
         }
         None => line.key(tool.id.as_str()),
     }

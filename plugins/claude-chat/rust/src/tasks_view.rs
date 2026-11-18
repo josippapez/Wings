@@ -3,7 +3,7 @@
 
 use wings_plugin::{
     format::truncate,
-    ui::{Node, button, card, dialog as panel, list_button, loading, muted, notice, row, spinner, stack, text},
+    ui::{Node, button, card, dialog as panel, icon, list_button, loading, muted, notice, row, spinner, stack, text},
 };
 
 use crate::{
@@ -27,41 +27,54 @@ pub fn section(c: &Chat) -> Option<Node> {
     )
 }
 
-/// One running task: what it is and how long it has run, opening its output on a click when Claude Code keeps it, and
-/// its Stop button.
+/// One running task: its name, how long it has run, small Message and Stop buttons, and its output on a click on the name
+/// when Claude Code keeps it.
 fn task_row(task: &Task) -> Node {
     let name = if task.description.is_empty() { task.id.as_str() } else { task.description.as_str() };
     let time = match task.stopping {
         true => muted("stopping"),
         false => muted("running").prop("since", task.started),
     };
-    let line = row()
-        .prop("gap", "s")
-        .prop("align", "center")
-        .child(spinner())
-        .child(
-            stack()
-                .prop("grow", true)
-                .prop("gap", "none")
-                .child(text(name).prop("size", "small").prop("truncate", true).prop("title", name))
-                .child(time.prop("size", "small"))
-                .maybe(task.error.as_deref().map(|why| text(why).prop("size", "small").prop("tone", "danger").prop("truncate", true).prop("title", why))),
-        );
-    let line = match task.has_output() {
+    // The name has the whole row, three lines at most; under it the time, and the small buttons at the right.
+    let title = row().prop("gap", "s").prop("align", "center").child(spinner()).child(stack().prop("grow", true).child(text(name).prop("size", "small").prop("clamp", true).prop("title", name)));
+    let title = match task.has_output() {
         true => {
             let id = task.id.clone();
-            list_button([line], move || chat::open_task(&id)).prop("title", "What it printed")
+            list_button([title], move || chat::open_task(&id)).prop("title", "What it printed")
         }
-        false => line,
+        false => title,
     };
     let id = task.id.clone();
-    row()
+    let actions = row()
         .prop("gap", "xs")
         .prop("align", "center")
-        .key(task.id.as_str())
-        .child(stack().prop("grow", true).child(line))
         .maybe(crate::actions_view::message_button(task))
-        .child(button("Stop", "ghost", task.stopping, move || chat::stop_task(&id)).prop("size", "sm").prop("title", "Stop this task"))
+        .child(
+            button("", "ghost", task.stopping, move || chat::stop_task(&id))
+                .prop("size", "icon-sm")
+                .prop("label", "Stop")
+                .prop("title", "Stop this task")
+                .child(icon(14, 2.0, &[STOP])),
+        );
+    stack()
+        .prop("gap", "none")
+        .key(task.id.as_str())
+        .child(title)
+        .child(row().prop("gap", "xs").prop("align", "center").child(stack().prop("grow", true).child(time.prop("size", "small"))).child(actions))
+        .maybe(task.error.as_deref().map(|why| text(why).prop("size", "small").prop("tone", "danger").prop("clamp", true).prop("title", why)))
+}
+
+/// The small square on Stop, in a 14-point box.
+const STOP: &str = "M3.5 3.5h7v7h-7z";
+
+/// A click on a subagent's row in the side panel. One place, so what it does can change in one place.
+pub fn open_subagent(id: &str) {
+    chat::toggle_subagent(id);
+}
+
+/// A click on a subagent's row in the side panel. One place, so what it does can change in one place.
+pub fn open_subagent(id: &str) {
+    chat::toggle_subagent(id);
 }
 
 /// The dialog with the end of what the open task printed, while it is open: how it stands, Refresh and Stop, and the

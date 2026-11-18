@@ -1408,18 +1408,18 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
             std::env::set_var("CHAT_EXIT", exit.map_or("", |(code, _)| code));
             std::env::set_var("CHAT_STDERR", exit.map_or("", |(_, said)| said));
         }
-        // The side panel floats over a tab's right side while the tab is wide enough to leave the conversation clear (1,320
-        // points), and is behind the header's button in a narrower one, so a few scenes are drawn at 1,400 too to show it and
+        // The side panel floats over a tab's right side while the tab is wide enough to leave the conversation clear (1,480
+        // points), and is behind the header's button in a narrower one, so a few scenes are drawn at 1,600 too to show it and
         // at 1,280 for the button just under it.
-        let widths: &[f32] = if ["conversation", "work", "ask-bash", "tasks", "terminal", "folder", "long-message"].contains(&name) {
-            &[1400.0, 1280.0, 1000.0, 640.0]
+        let widths: &[f32] = if ["conversation", "work", "ask-bash", "tasks", "terminal", "folder", "long-message", "subagents", "subagent"].contains(&name) {
+            &[1600.0, 1280.0, 1000.0, 640.0]
         } else {
             &[1000.0, 640.0]
         };
         for &width in widths {
             // What these scenes look for is in the side panel, which a narrow tab opens from the header's button, after the
             // restart that /add-dir makes.
-            let opening = ["tasks", "task-output", "terminal", "folder"].contains(&name) && width < 1_320.0;
+            let opening = ["tasks", "task-output", "terminal", "folder", "agent-message"].contains(&name) && width < 1_480.0;
             let acted = match (act, opening) {
                 (Some(act), true) if name == "folder" => Some(format!("{act};wait:1500;press:Side panel")),
                 (Some(act), true) => Some(format!("press:Side panel;{act}")),
