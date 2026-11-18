@@ -878,6 +878,8 @@ fn a_diff_from_a_sidebar_shows_in_its_place_over_the_panes_and_back_returns_the_
     let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
     window.draw();
     open_side(&app, &mut window);
+    // The shell refits to the narrower pane the sidebar leaves once that size holds still: what the diff must not change.
+    settle_slide(&app, &mut window);
     let key = ("sider".to_owned(), "side".to_owned());
     let page = window.read(|w, _| w.sidebar_pages[&key].entity_id());
     let grid = |window: &TestAppWindow<Workspace>| {
