@@ -447,6 +447,27 @@ impl PageView {
         })
     }
 
+    /// Opens or closes the first disclosure whose summary starts with `summary`, as a click on its line would. False when
+    /// the page has none.
+    #[cfg(feature = "test-support")]
+    pub fn press_disclosure(&mut self, summary: &str, cx: &mut Context<Self>) -> bool {
+        fn find<'a>(nodes: &'a [Node], summary: &str) -> Option<&'a tree::Disclosure> {
+            nodes.iter().find_map(|node| match node {
+                Node::Disclosure(disclosure) if plain_text(&disclosure.summary).trim().starts_with(summary) => Some(disclosure),
+                node => node.parts().into_iter().find_map(|part| find(part, summary)),
+            })
+        }
+        let Some(disclosure) = self.tree.as_ref().and_then(|tree| find(&tree.children, summary)).cloned() else {
+            return false;
+        };
+        let open = disclosure.open.unwrap_or_else(|| self.open.contains(&disclosure.id));
+        match &disclosure.on_open_change {
+            Some(handler) => self.act(handler, Some(&serde_json::json!({ "open": !open }))),
+            None => self.toggle_disclosure(disclosure.id, cx),
+        }
+        true
+    }
+
     /// Opens the `nth` menu whose button is labelled `label`, by its text or its name, as a click on it would. False
     /// when the page has no such menu.
     #[cfg(feature = "test-support")]
@@ -1882,7 +1903,13 @@ fn variant(variant: tree::Variant) -> ui::Variant {
     }
 }
 
-/// The width of the widest word of `text` at `size`, in the page's font or the terminal's with `mono`.
+/// The most a text holds out for its longest word. A word wider than this, like a long path in a chat reply, breaks
+/// inside itself as a browser's `overflow-wrap: anywhere` does: holding out for all of it pushed the line past the page's
+/// edge.
+const LONGEST_WORD_KEPT: f32 = 240.0;
+
+/// The width of the widest word of `text` at `size`, in the page's font or the terminal's with `mono`, up to
+/// `LONGEST_WORD_KEPT`.
 fn longest_word(text: &str, size: f32, weight: FontWeight, mono: bool, cx: &gpui::App) -> f32 {
     let system = cx.text_system();
     let font = page_font(weight, mono, cx);
@@ -1893,11 +1920,7 @@ fn longest_word(text: &str, size: f32, weight: FontWeight, mono: bool, cx: &gpui
             .sum::<f32>()
     };
     // A point over, so rounding in the line's own layout never leaves the word a hair too wide to fit.
-    text.split_whitespace()
-        .map(width)
-        .fold(0.0, f32::max)
-        .ceil()
-        + 1.0
+    (text.split_whitespace().map(width).fold(0.0, f32::max).ceil() + 1.0).min(LONGEST_WORD_KEPT)
 }
 
 /// A button at its `size`, as plugin-ui.css's `.w-button[data-size]`: `xs` and `sm` are smaller with smaller text, the
