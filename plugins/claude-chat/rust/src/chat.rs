@@ -66,6 +66,8 @@ pub struct Chat {
     pub past: Option<Past>,
     /// Your setting for how tool calls show: Compact folds them, Detailed opens every run and each call's output.
     pub detailed: bool,
+    /// Your setting for the conversation's text size, as the `textScale` its scroll takes.
+    pub text_scale: f32,
     /// The usage or context view, open in place of the conversation, and whether the usage view lists the last week's
     /// contributors in place of the last day's.
     pub panel: Option<Panel>,
@@ -112,6 +114,7 @@ thread_local! {
         state: State::Starting,
         past: None,
         detailed: false,
+        text_scale: 1.0,
         panel: None,
         panel_week: false,
         open_steps: HashSet::new(),
@@ -141,7 +144,11 @@ pub fn with<T>(change: impl FnOnce(&mut Chat) -> T) -> T {
 #[unsafe(no_mangle)]
 pub fn start() {
     wings_plugin::run_filled(crate::view::view);
-    with(|c| c.detailed = prefs::detailed().get());
+    with(|c| {
+        c.detailed = prefs::detailed().get();
+        c.text_scale = prefs::scale_of(&prefs::text_size().get());
+    });
+    prefs::text_size().on_change(|size| with(|c| c.text_scale = prefs::scale_of(size)));
     // The clicks were made against the old setting, so they go with it.
     prefs::detailed().on_change(|detailed| {
         with(|c| {
@@ -661,6 +668,11 @@ pub fn load_past(query: String) {
             }
         });
     });
+}
+
+/// Asks the Changes plugin to show its sidebar: a plugin can only open its own pages, so it hears this event instead.
+pub fn open_changes() {
+    drop(host::call("emit", json!({ "name": "open-changes" })));
 }
 
 /// Closes the usage or context view.

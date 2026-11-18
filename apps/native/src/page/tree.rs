@@ -358,6 +358,9 @@ pub struct Scroll {
     /// `onReachStart`, with `follow: "end"`: sent when the scroll comes within a screen of its top, once until what
     /// is above it grows. The page then adds older items, and the view stays on what it showed.
     pub on_reach_start: Option<String>,
+    /// `textScale`: every text inside is this many times its size (0.5 to 2), as a page's text size setting asks.
+    /// None keeps the scale the scroll is in.
+    pub text_scale: Option<f32>,
     pub children: Vec<Node>,
 }
 
@@ -1119,6 +1122,7 @@ impl Walk {
                 id,
                 follow_end: str_prop(&props, "follow") == Some("end"),
                 on_reach_start: handler("onReachStart"),
+                text_scale: number(&props, "textScale").map(|scale| scale.clamp(0.5, 2.0) as f32),
                 children: parts(children),
             }),
             "Bar" => Node::Bar(Bar {
@@ -1270,7 +1274,7 @@ impl Walk {
                     pressed: false,
                     disabled: on("disabled"),
                     label: None,
-                    title: None,
+                    title: title(&props),
                     wrap: false,
                     on_click: handler("onClick"),
                     on_key_down: handler("onKeyDown"),
@@ -1551,6 +1555,24 @@ mod tests {
     }
 
     #[test]
+    fn a_list_button_keeps_its_title() {
+        let parsed = tree(json!([
+            {"id":1,"type":"ListButton","props":{"title":"Open Changes"},"children":[]},
+            {"id":2,"type":"ListButton","props":{},"children":[]},
+        ]))
+        .unwrap();
+        let titles: Vec<_> = parsed
+            .children
+            .iter()
+            .map(|node| match node {
+                Node::ListButton(item) => item.button.title.as_deref(),
+                _ => panic!("a list button"),
+            })
+            .collect();
+        assert_eq!(titles, [Some("Open Changes"), None]);
+    }
+
+    #[test]
     fn a_button_keeps_its_size_and_a_chip_its_pressed_state() {
         let parsed = tree(json!([
             button(json!({"size":"sm"})),
@@ -1690,6 +1712,19 @@ mod tests {
         ]})) else { panic!() };
         assert!(!plain.follow_end);
         assert!(matches!(&plain.children[0], Node::Stack(stack) if !stack.enter));
+    }
+
+    #[test]
+    fn a_scroll_takes_a_text_scale_within_reason() {
+        let scale = |props: Value| match parse_one(json!({"id":1,"type":"Scroll","props":props,"children":[]})) {
+            Node::Scroll(scroll) => scroll.text_scale,
+            _ => panic!(),
+        };
+        assert_eq!(scale(json!({})), None);
+        assert_eq!(scale(json!({"textScale":1.25})), Some(1.25));
+        assert_eq!(scale(json!({"textScale":40})), Some(2.0));
+        assert_eq!(scale(json!({"textScale":0})), Some(0.5));
+        assert_eq!(scale(json!({"textScale":"big"})), None);
     }
 
     #[test]

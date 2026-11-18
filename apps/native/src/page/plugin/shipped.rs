@@ -211,6 +211,19 @@ fn changes_lists_what_changed_opens_a_files_diff_through_main_and_searches_the_h
 }
 
 #[test]
+fn changes_shows_its_sidebar_when_the_claude_chat_asks_and_not_for_another_sender() {
+    let rig = Rig::with(load("changes"), true, vec![]);
+    let (on_event, main_errors) = errors();
+    rig.host.start_main(&module("changes", "main"), on_event).unwrap();
+    let opened = |rig: &Rig| rig.env.seen().iter().filter(|seen| matches!(seen, Seen::OpenView(open) if open.id == "changes")).count();
+    rig.host.hear_event(&json!({ "from": "other", "name": "open-changes", "data": null }).to_string());
+    rig.host.hear_event(&json!({ "from": "claude-chat", "name": "open-changes", "data": null }).to_string());
+    rig.env.wait("the sidebar", |seen| seen.iter().any(|seen| matches!(seen, Seen::OpenView(open) if open.id == "changes")));
+    assert_eq!(opened(&rig), 1);
+    assert!(main_errors.try_recv().is_err());
+}
+
+#[test]
 fn worktrees_sidebar_loads_the_actual_native_bundle_refreshes_on_git_and_opens_a_linked_worktree() {
     let rig = Rig::with(load("worktrees"), true, vec![]);
     let (root, linked) = worktree_repo(&rig);

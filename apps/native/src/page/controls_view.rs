@@ -257,6 +257,7 @@ impl PageView {
                     None => chevron.into_any_element(),
                 })
             })
+            .when_some(button.title.clone(), |el, title| el.tooltip(ui::tooltip(title, None)))
             .children(self.nodes(&button.children, cx));
         if !button.disabled {
             element = element

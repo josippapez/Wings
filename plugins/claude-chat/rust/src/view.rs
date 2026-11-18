@@ -141,7 +141,7 @@ fn conversation(c: &Chat) -> Node {
         State::Moved => nodes.push(muted("This session goes on in a terminal.").key("ended")),
         _ => {}
     }
-    let scroll = Node::new("Scroll").prop("follow", "end").child(column().prop("enter", "rise").children(nodes));
+    let scroll = Node::new("Scroll").prop("follow", "end").prop("textScale", c.text_scale as f64).child(column().prop("enter", "rise").children(nodes));
     match more {
         true => scroll.on("onReachStart", |_| chat::with(|c| c.shown += PAGE)),
         false => scroll,
@@ -642,13 +642,13 @@ fn side(c: &Chat) -> Vec<Node> {
         head = head.child(small(place.clone()).prop("tone", "muted").prop("truncate", true).prop("title", place));
     }
     if let Some((added, removed)) = c.changes {
+        // A click shows Wings' Changes sidebar.
         head = head.child(
-            row()
-                .prop("gap", "s")
-                .prop("align", "baseline")
-                .child(small("Changes".into()).prop("grow", true))
-                .child(fact(format!("+{added}"), "success"))
-                .child(fact(format!("−{removed}"), "danger")),
+            list_button(
+                [small("Changes".into()).prop("grow", true), fact(format!("+{added}"), "success"), fact(format!("−{removed}"), "danger")],
+                chat::open_changes,
+            )
+            .prop("title", "Open Changes"),
         );
     }
     sections.push(head);

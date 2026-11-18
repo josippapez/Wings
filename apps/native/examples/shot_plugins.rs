@@ -916,6 +916,7 @@ fn claude_chat(out: PathBuf) {
         ("work", work.clone(), None, None, "of 4 done"),
         ("work-open", work.clone(), None, Some("disclose:Ran 1 command"), "pnpm test discount"),
         ("detailed", work.clone(), None, None, "No test suite found"),
+        ("large-text", work.clone(), None, None, "No test suite found"),
         ("queue", work.clone(), None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter"), "Claude reads these"),
         // The same two, each opened to its whole message by its More button, which reads Less once it is open.
         ("queue-open", work, None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter;press:More"), "Less"),
@@ -966,6 +967,8 @@ fn claude_chat(out: PathBuf) {
     let host = host_over("fixture-storage-claude-chat", &[]);
     // Detailed output on: every run of calls open, with each command's output.
     let detailed = host_over("fixture-storage-claude-chat-detailed", &[("detailed-output", json!(true))]);
+    // Large text: the conversation's text a fifth bigger.
+    let large = host_over("fixture-storage-claude-chat-large", &[("text-size", json!("large"))]);
     let page = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/claude-chat/dist/native/chat.wasm");
     let page = page.canonicalize().expect("sh build-rust.sh claude-chat, in plugins/");
     // Compiled before the first scene waits on it: on a busy Mac a debug build's compile ran past the scene's wait.
@@ -978,7 +981,11 @@ fn claude_chat(out: PathBuf) {
         if only.as_deref().is_some_and(|only| only != name) {
             continue;
         }
-        let host = if name == "detailed" { &detailed } else { &host };
+        let host = match name {
+            "detailed" => &detailed,
+            "large-text" => &large,
+            _ => &host,
+        };
         let fixture = root.join(format!("{name}.jsonl"));
         std::fs::write(&fixture, lines.iter().map(|line| format!("{line}\n")).collect::<String>()).unwrap();
         // SAFETY: the page from the scene before is closed, so nothing reads these while they change.
@@ -1030,9 +1037,9 @@ fn claude_chat(out: PathBuf) {
             let _ = cx.update_window(window, |_, window, _| window.remove_window());
         }
     }
-    // The page in Wings Settings, with a mode and Detailed picked.
+    // The page in Wings Settings, with a mode, Detailed and Large text picked.
     if only.as_deref().is_none_or(|only| only == "settings") {
-        let settings = host_over("fixture-storage-claude-chat-settings", &[("default-mode", json!("auto")), ("detailed-output", json!(true))]);
+        let settings = host_over("fixture-storage-claude-chat-settings", &[("default-mode", json!("auto")), ("detailed-output", json!(true)), ("text-size", json!("large"))]);
         let page = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/claude-chat/dist/native/settings.wasm");
         let page = page.canonicalize().expect("the claude-chat settings page is built, in plugins/");
         wings_native::page::runtime::wasm::compile_now(&page.to_string_lossy()).unwrap();
@@ -1044,7 +1051,7 @@ fn claude_chat(out: PathBuf) {
             let window = handle.into();
             handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
             let deadline = Instant::now() + Duration::from_secs(30);
-            while !handle.read_with(&cx, |view, _| view.text().contains("New chats")).unwrap() {
+            while !handle.read_with(&cx, |view, _| view.text().contains("Text size")).unwrap() {
                 assert!(Instant::now() < deadline, "page did not show the settings: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
                 wait(&mut cx, window, Duration::from_millis(20));
             }

@@ -11,6 +11,10 @@ pub const MODE: &str = "default-mode";
 /// Every run of tool calls shows open with each call's output, as Claude Code's own verbose transcript does.
 pub const DETAILED: &str = "detailed-output";
 
+/// How big the conversation's text is, in every chat.
+pub const TEXT_SIZE: &str = "text-size";
+pub const TEXT_SIZES: [(&str, &str); 3] = [("small", "Small"), ("default", "Default"), ("large", "Large")];
+
 /// A mode the chat knows, else the stored value is ignored and Claude Code's own default stands.
 fn mode_of(stored: &Value) -> Option<String> {
     stored.as_str().filter(|mode| MODES.iter().any(|(value, _)| value == mode)).map(str::to_owned)
@@ -22,6 +26,23 @@ pub fn mode() -> Setting<String> {
 
 pub fn detailed() -> Setting<bool> {
     Setting::boolean(DETAILED, false)
+}
+
+fn text_size_of(stored: &Value) -> Option<String> {
+    stored.as_str().filter(|size| TEXT_SIZES.iter().any(|(value, _)| value == size)).map(str::to_owned)
+}
+
+pub fn text_size() -> Setting<String> {
+    Setting::new(TEXT_SIZE, "default".to_owned(), text_size_of, |size| json!(size))
+}
+
+/// What a text size multiplies the conversation's text by.
+pub fn scale_of(size: &str) -> f32 {
+    match size {
+        "small" => 0.9,
+        "large" => 1.2,
+        _ => 1.0,
+    }
 }
 
 /// The mode to ask Claude Code for as a chat starts. None while it is Claude Code's own default, which it starts in.
@@ -46,6 +67,17 @@ mod tests {
         assert_eq!(mode_of(&json!("auto")).as_deref(), Some("auto"));
         assert_eq!(mode_of(&json!("bypassEverything")), None);
         assert_eq!(mode_of(&json!(3)), None);
+    }
+
+    #[test]
+    fn a_text_size_is_one_the_chat_knows_and_scales_the_text() {
+        assert_eq!(text_size().get(), "default");
+        assert_eq!(text_size_of(&json!("large")).as_deref(), Some("large"));
+        assert_eq!(text_size_of(&json!("huge")), None);
+        assert_eq!(text_size_of(&json!(1)), None);
+        assert_eq!(scale_of("default"), 1.0);
+        assert!(scale_of("small") < 1.0 && scale_of("large") > 1.0);
+        assert_eq!(scale_of("anything else"), 1.0);
     }
 
     #[test]

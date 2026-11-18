@@ -1,4 +1,4 @@
-//! The Claude chat page in Wings Settings: the mode a new chat starts in, and how much of its tool calls a chat shows.
+//! The Claude chat page in Wings Settings: the mode a new chat starts in, how much of its tool calls a chat shows, and how big its text is.
 
 use wings_plugin::ui::{Node, chips, muted, stack};
 
@@ -18,7 +18,10 @@ fn view() -> Vec<Node> {
         .child(chips("Permission mode", &MODES, &prefs::mode().get(), |mode| drop(prefs::mode().set(mode.to_owned()))))
         .child(heading("Output"))
         .child(muted("Compact folds a run of tool calls into one line. Detailed shows every run open, with each command and what it printed, as Claude Code's verbose mode does. A chat that is open follows a change at once."))
-        .child(chips("Tool calls", &outputs, output, |value| drop(prefs::detailed().set(value == "detailed"))))]
+        .child(chips("Tool calls", &outputs, output, |value| drop(prefs::detailed().set(value == "detailed"))))
+        .child(heading("Text size"))
+        .child(muted("The size of the text in the conversation, in every chat. A chat that is open follows a change at once."))
+        .child(chips("Text size", &prefs::TEXT_SIZES, &prefs::text_size().get(), |size| drop(prefs::text_size().set(size.to_owned()))))]
 }
 
 #[unsafe(no_mangle)]

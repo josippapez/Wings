@@ -233,6 +233,12 @@ pub fn start() {
             _ => Ok(()),
         }
     });
+    // The Claude chat's Changes row opens this sidebar, as a plugin can't open another's page itself.
+    host::on("pluginEvent", |_, event| {
+        if event["from"] == "claude-chat" && event["name"] == "open-changes" {
+            host::open_view("changes");
+        }
+    });
     messages::on(OPEN, |asked| {
         let asked = asked.clone();
         let text = |name: &str| asked[name].as_str().map(str::to_owned);

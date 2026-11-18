@@ -67,6 +67,16 @@ struct InputState {
     sent: Vec<String>,
 }
 
+thread_local! {
+    /// The `textScale` of the `Scroll` being drawn, which its texts' sizes are multiplied by. Read, not computed, per text.
+    static TEXT_SCALE: Cell<f32> = const { Cell::new(1.0) };
+}
+
+/// A text size in points as the `Scroll` being drawn scales it.
+fn scaled(size: f32) -> f32 {
+    size * TEXT_SCALE.with(Cell::get)
+}
+
 /// A `Scroll` that follows its end: where it is scrolled, and what `onReachStart` needs to know of the last frame.
 #[derive(Default)]
 struct FollowScroll {
@@ -903,11 +913,11 @@ impl PageView {
         let code = text.mono && text.grow;
         let least = ((text.grow || drop.is_some()) && !text.truncate && !code).then(|| {
             let size = match text.size {
-                TextSize::Small => 12.0,
-                TextSize::Tiny => 11.0,
-                TextSize::Large => 20.0,
-                TextSize::Field => 14.0,
-                TextSize::Normal => 13.0,
+                TextSize::Small => scaled(12.0),
+                TextSize::Tiny => scaled(11.0),
+                TextSize::Large => scaled(20.0),
+                TextSize::Field => scaled(14.0),
+                TextSize::Normal => scaled(13.0),
             };
             let weight = match text.weight {
                 Weight::Normal => FontWeight::NORMAL,
@@ -926,10 +936,10 @@ impl PageView {
             .when(text.mono, |el| el.font_family(DEFAULT_FONT_FAMILY))
             .map(|el| match text.size {
                 TextSize::Normal => el,
-                TextSize::Small => el.text_size(px(12.0)),
-                TextSize::Tiny => el.text_size(px(11.0)),
-                TextSize::Large => el.text_size(px(20.0)).line_height(px(26.0)),
-                TextSize::Field => el.text_size(px(14.0)).line_height(relative(1.5)),
+                TextSize::Small => el.text_size(px(scaled(12.0))),
+                TextSize::Tiny => el.text_size(px(scaled(11.0))),
+                TextSize::Large => el.text_size(px(scaled(20.0))).line_height(px(scaled(26.0))),
+                TextSize::Field => el.text_size(px(scaled(14.0))).line_height(relative(1.5)),
             })
             .map(|el| match text.weight {
                 Weight::Normal => el,
@@ -1277,6 +1287,12 @@ impl PageView {
                 if let Some(reach) = reach {
                     base = base.on_children_prepainted(reach);
                 }
+                // A scale sizes the plain text the scroll holds from here, which the other sizes follow with `scaled`.
+                let before = TEXT_SCALE.with(Cell::get);
+                let scale = scroll.text_scale.unwrap_or(before);
+                TEXT_SCALE.with(|cell| cell.set(scale));
+                let children = self.nodes(&scroll.children, cx);
+                TEXT_SCALE.with(|cell| cell.set(before));
                 let area = base
                     .id(ElementId::NamedInteger("page-scroll".into(), scroll.id))
                     .flex_1()
@@ -1287,7 +1303,8 @@ impl PageView {
                     .px(px(8.0))
                     .pb(px(12.0))
                     .overflow_y_scroll()
-                    .children(self.nodes(&scroll.children, cx));
+                    .when(scale != 1.0, |el| el.text_size(px(13.0 * scale)))
+                    .children(children);
                 match state {
                     Some(state) => area.track_scroll(&state.handle).into_any_element(),
                     None => area.into_any_element(),
@@ -1926,11 +1943,11 @@ pub(super) fn baseline_drops(row: &tree::Row, cx: &gpui::App) -> Option<Vec<f32>
                 return 0.0;
             };
             let (size, line) = match text.size {
-                TextSize::Normal => (13.0, line),
-                TextSize::Small => (12.0, line),
-                TextSize::Tiny => (11.0, line),
-                TextSize::Large => (20.0, 26.0),
-                TextSize::Field => (14.0, 21.0),
+                TextSize::Normal => (scaled(13.0), line),
+                TextSize::Small => (scaled(12.0), line),
+                TextSize::Tiny => (scaled(11.0), line),
+                TextSize::Large => (scaled(20.0), scaled(26.0)),
+                TextSize::Field => (scaled(14.0), scaled(21.0)),
             };
             let weight = match text.weight {
                 Weight::Normal => FontWeight::NORMAL,
@@ -1961,11 +1978,11 @@ fn line_height(nodes: &[Node]) -> Option<f32> {
     nodes.iter().try_fold(None::<f32>, |tallest, node| {
         let (text, _) = row_text(node)?;
         let height = match text.size {
-            TextSize::Normal => 13.0 * 1.45,
-            TextSize::Small => 12.0 * 1.45,
-            TextSize::Tiny => 11.0 * 1.45,
-            TextSize::Large => 26.0,
-            TextSize::Field => 14.0 * 1.5,
+            TextSize::Normal => scaled(13.0 * 1.45),
+            TextSize::Small => scaled(12.0 * 1.45),
+            TextSize::Tiny => scaled(11.0 * 1.45),
+            TextSize::Large => scaled(26.0),
+            TextSize::Field => scaled(14.0 * 1.5),
         };
         Some(Some(tallest.map_or(height, |tallest| tallest.max(height))))
     })?
