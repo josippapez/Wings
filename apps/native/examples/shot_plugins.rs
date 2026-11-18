@@ -761,6 +761,9 @@ fn claude_chat(out: PathBuf) {
         lines.splice(1..1, ready.iter().cloned());
         lines
     };
+    let fix = json!({ "file_path": "/work/shop/src/checkout.ts",
+        "old_string": "  return total * (1 - rate);",
+        "new_string": "  const cents = Math.round(total * 100);\n  return Math.round(cents * (1 - rate)) / 100;" });
     let conversation = opened(vec![
         init.clone(),
         user("Why does the checkout test fail on CI but pass here?"),
@@ -770,10 +773,61 @@ fn claude_chat(out: PathBuf) {
         output("t2", "", false),
         text("The discount is applied in floating point, so `100 * 0.9` comes out a hair under 90 on CI's Node version.\n\n- **Cause:** `total * (1 - rate)` in `applyDiscount`\n- **Fix:** work in cents, and round once at the end\n\n```ts\nconst cents = Math.round(total * 100);\nreturn Math.round(cents * (1 - rate)) / 100;\n```"),
         user("Do it, and run the tests again."),
-        tool("t3", "Edit", json!({ "file_path": "/work/shop/src/checkout.ts", "old_string": "a", "new_string": "b" })),
-        json!({ "type": "control_request", "request_id": "r1", "request": { "subtype": "can_use_tool", "tool_name": "Edit",
-            "input": { "file_path": "/work/shop/src/checkout.ts", "old_string": "a", "new_string": "b" } } }),
+        tool("t3", "Edit", fix.clone()),
+        json!({ "type": "control_request", "request_id": "r1", "request": { "subtype": "can_use_tool", "tool_name": "Edit", "input": fix } }),
     ]);
+    // Claude at work on a checklist: an edit, a failed command, a file written and a read, with more to do.
+    let work = opened(vec![
+        init.clone(),
+        user("Move the discount maths into its own module and test it."),
+        tool("w0", "TodoWrite", json!({ "todos": [
+            { "content": "Find every place that applies a discount", "status": "completed", "activeForm": "Finding the discounts" },
+            { "content": "Move the maths into src/discount.ts", "status": "completed", "activeForm": "Moving the maths" },
+            { "content": "Write tests for the rounding", "status": "in_progress", "activeForm": "Writing tests for the rounding" },
+            { "content": "Run the whole suite", "status": "pending", "activeForm": "Running the suite" },
+        ] })),
+        output("w0", "Todos have been modified successfully.", false),
+        tool("w1", "Read", json!({ "file_path": "/work/shop/src/checkout.ts", "offset": 40, "limit": 30 })),
+        output("w1", "", false),
+        tool("w2", "Edit", json!({ "file_path": "/work/shop/src/checkout.ts",
+            "old_string": "export function applyDiscount(total: number, rate: number) {\n  return total * (1 - rate);\n}",
+            "new_string": "export { applyDiscount } from './discount';" })),
+        output("w2", "The file has been updated.", false),
+        tool("w3", "Write", json!({ "file_path": "/work/shop/src/discount.ts",
+            "content": "export function applyDiscount(total: number, rate: number) {\n  const cents = Math.round(total * 100);\n  return Math.round(cents * (1 - rate)) / 100;\n}\n" })),
+        output("w3", "File created successfully.", false),
+        tool("w4", "Bash", json!({ "command": "pnpm test discount" })),
+        output("w4", "Exit code 1\nFAIL  src/discount.test.ts\n  No test suite found", true),
+        tool("w5", "Grep", json!({ "pattern": "applyDiscount" })),
+        output("w5", "Found 3 files\nsrc/checkout.ts\nsrc/discount.ts\nsrc/cart.ts", false),
+        delta("The suite has no discount tests yet, so I'm writing them now."),
+    ]);
+    let asked = |name: &str, input: serde_json::Value, extra: serde_json::Value| {
+        let mut request = json!({ "subtype": "can_use_tool", "tool_name": name, "input": input });
+        request.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        opened(vec![init.clone(), user("Clean up the old build output and rebuild."), json!({ "type": "control_request", "request_id": "r1", "request": request })])
+    };
+    let ask_bash = asked(
+        "Bash",
+        json!({ "command": "rm -rf dist .turbo\npnpm install --frozen-lockfile\npnpm build", "description": "Clear the build output and rebuild" }),
+        json!({ "decision_reason": "rm -rf isn't in your allowed commands",
+            "permission_suggestions": [{ "type": "addRules", "rules": [{ "toolName": "Bash", "ruleContent": "pnpm build" }], "behavior": "allow", "destination": "localSettings" }] }),
+    );
+    let question = asked(
+        "AskUserQuestion",
+        json!({ "questions": [
+            { "question": "Which date library should the reports use?", "header": "Library", "multiSelect": false, "options": [
+                { "label": "date-fns", "description": "Functions, tree-shakes well" }, { "label": "dayjs", "description": "Small, Moment-like API" }] },
+            { "question": "Which formats do the reports need?", "header": "Formats", "multiSelect": true, "options": [
+                { "label": "ISO", "description": "2026-11-18" }, { "label": "Long", "description": "18 November 2026" }, { "label": "Relative", "description": "3 days ago" }] },
+        ] }),
+        json!({}),
+    );
+    let plan = asked(
+        "ExitPlanMode",
+        json!({ "plan": "## Split the checkout into a package\n\n1. Move `src/checkout` to `packages/checkout`\n2. Give it its own `package.json` and tests\n3. Point the app at `@shop/checkout`\n\n- **Risk:** the cart imports private helpers; they move along" }),
+        json!({}),
+    );
     let streaming = opened(vec![
         init.clone(),
         user("Explain what the rate limiter in api/limits.ts does."),
@@ -809,7 +863,7 @@ fn claude_chat(out: PathBuf) {
     // Each: its name, what the fake prints, its exit code and stderr when it fails, what to do once the page is up (press a
     // button or type), and the text to wait for.
     type Scene<'a> = (&'a str, Vec<serde_json::Value>, Option<(&'a str, &'a str)>, Option<&'a str>, &'a str);
-    let scenes: [Scene; 8] = [
+    let scenes: [Scene; 14] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -818,7 +872,20 @@ fn claude_chat(out: PathBuf) {
         ("slash", opened(vec![init.clone()]), None, Some("type:/re"), "/review"),
         ("sessions", opened(vec![init.clone()]), None, Some("press:Sessions"), "Fix the flaky checkout test"),
         ("failed", vec![], Some(("1", "Error: Invalid API key · Please run /login")), None, "Invalid API key"),
+        ("work", work.clone(), None, None, "of 4 done"),
+        ("queue", work, None, Some("type:also bump the version;keys:enter;type:and add a changelog line;keys:enter"), "Queued"),
+        ("ask-bash", ask_bash, None, None, "Allow Bash?"),
+        ("question", question, None, None, "Which formats"),
+        ("plan", plan, None, None, "Keep planning"),
+        ("mention", opened(vec![init.clone()]), None, Some("type:fix the rounding in @che"), "checkout.test.ts"),
     ];
+    // Files for @-mentions, which the chat lists with git.
+    for file in ["src/checkout.ts", "src/checkout.test.ts", "src/cart.ts", "api/limits.ts", "README.md"] {
+        let path = root.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "").unwrap();
+    }
+    assert!(std::process::Command::new("git").arg("init").arg("-q").current_dir(&root).status().unwrap().success());
 
     let manifest = serde_json::from_str(include_str!("../../../plugins/claude-chat/wings-plugin.json")).unwrap();
     let storage = out.join("fixture-storage-claude-chat");
@@ -865,10 +932,15 @@ fn claude_chat(out: PathBuf) {
             if let Some(act) = act {
                 // Once Claude Code has answered, the model picker shows.
                 until(&mut cx, "20%");
-                match act.split_once(':') {
-                    Some(("type", typed)) => cx.simulate_input(window, typed),
-                    Some(("press", label)) => assert!(handle.read_with(&cx, |view, _| view.press(label, 0)).unwrap()),
-                    _ => panic!("{act}"),
+                for act in act.split(';') {
+                    match act.split_once(':') {
+                        Some(("type", typed)) => cx.simulate_input(window, typed),
+                        Some(("keys", keys)) => cx.simulate_keystrokes(window, keys),
+                        Some(("press", label)) => assert!(handle.read_with(&cx, |view, _| view.press(label, 0)).unwrap()),
+                        _ => panic!("{act}"),
+                    }
+                    // The page hears what was typed before the next key.
+                    wait(&mut cx, window, Duration::from_millis(300));
                 }
             }
             until(&mut cx, expected);
