@@ -217,7 +217,7 @@ fn launch(resume: Option<String>) {
             drop(host::call("setTabState", json!({ "state": { "sessionId": id } })));
         }
         // Each value joined to its flag: Wings passes a program nothing else.
-        let mut args: Vec<String> = ["-p", "--input-format=stream-json", "--output-format=stream-json", "--verbose", "--include-partial-messages", "--permission-prompt-tool=stdio", "--replay-user-messages"]
+        let mut args: Vec<String> = ["-p", "--input-format=stream-json", "--output-format=stream-json", "--verbose", "--include-partial-messages", "--permission-prompt-tool=stdio", "--replay-user-messages", "--prompt-suggestions=true"]
             .map(str::to_owned)
             .to_vec();
         args.extend(resume.as_ref().map(|id| format!("--resume={id}")));
@@ -673,6 +673,22 @@ pub fn load_past(query: String) {
 /// Asks the Changes plugin to show its sidebar: a plugin can only open its own pages, so it hears this event instead.
 pub fn open_changes() {
     drop(host::call("emit", json!({ "name": "open-changes" })));
+}
+
+/// The suggested next message to show in the empty message box, if there is one.
+pub fn suggested(c: &Chat) -> Option<&str> {
+    let empty = c.draft.is_empty() && c.images.is_empty();
+    c.session.suggestion.as_deref().filter(|_| empty && c.state == State::Running)
+}
+
+/// Puts the suggested next message in the message box, to send or change.
+pub fn accept_suggestion() {
+    with(|c| {
+        if let Some(text) = suggested(c).map(str::to_owned) {
+            c.session.suggestion = None;
+            c.draft = text;
+        }
+    });
 }
 
 /// Closes the usage or context view.

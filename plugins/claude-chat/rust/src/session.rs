@@ -291,6 +291,9 @@ pub struct Session {
     /// When a subagent's first and last line came (ms), for how long it ran.
     pub started: u64,
     pub last: u64,
+    /// The next message Claude Code predicts you will send, after a turn. Claude Code leaves it out when you turned
+    /// prompt suggestions off in its settings.
+    pub suggestion: Option<String>,
     /// The model named on the last message of Claude's heard, like `claude-haiku-5-5`.
     pub reported_model: Option<String>,
 }
@@ -341,7 +344,10 @@ impl Session {
                 }
             }
             "stream_event" => self.stream(&line["event"]),
+            // It comes after the turn's result, and goes once anything else starts.
+            "prompt_suggestion" => self.suggestion = line["suggestion"].as_str().filter(|text| !text.trim().is_empty()).map(str::to_owned),
             "assistant" => {
+                self.suggestion = None;
                 self.told_you = false;
                 self.assistant(&line["message"]);
             }
@@ -658,6 +664,7 @@ impl Session {
     pub fn send(&mut self, text: &str, images: &[(String, String)]) -> String {
         self.items.push(sent_item(text.to_owned(), images.len()));
         self.working = true;
+        self.suggestion = None;
         // The limits are asked again with each message: the chat may only write when you send something.
         line(&json!({ "type": "user", "message": { "role": "user", "content": content(text, images) } })) + &usage()
     }
@@ -669,6 +676,7 @@ impl Session {
     /// its transcript.
     pub fn queue(&mut self, text: &str, images: Vec<(String, String)>, stamp: u64, n: u32) -> String {
         let uuid = uuid(stamp, n);
+        self.suggestion = None;
         let sent = user_line(text, &images, "next", &uuid);
         self.queued.push(Queued { uuid, text: text.to_owned(), images });
         sent
@@ -1208,6 +1216,32 @@ mod tests {
         assert!(!session.working);
         assert!(session.live.is_empty());
         assert_eq!(session.cost, 0.00596854);
+    }
+
+    /// The line Claude Code 2.1.327 prints after a turn's result with `--prompt-suggestions`.
+    const SUGGESTION: &str = r#"{"type":"prompt_suggestion","suggestion":"run it","uuid":"cdab3e06-e878-423a-add5-9ed9174c610e","session_id":"4414f6b3-7ed9-4059-bbb1-974fbcaf0b9b"}"#;
+
+    #[test]
+    fn the_suggested_next_message_comes_after_the_turn_and_goes_with_the_next_one() {
+        let mut session = heard(TURN);
+        assert_eq!(session.suggestion, None);
+        session.hear(&serde_json::from_str(SUGGESTION).unwrap());
+        assert_eq!(session.suggestion.as_deref(), Some("run it"));
+        assert!(session.items.iter().all(|item| !matches!(item, Item::User(_))));
+
+        session.send("run it", &[]);
+        assert_eq!(session.suggestion, None);
+
+        // A turn that starts on its own, or a message queued while Claude works, clears it as well.
+        session.hear(&serde_json::from_str(SUGGESTION).unwrap());
+        session.queue("and lint", Vec::new(), 1, 1);
+        assert_eq!(session.suggestion, None);
+        session.hear(&serde_json::from_str(SUGGESTION).unwrap());
+        session.hear(&serde_json::from_str(r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Running."}]}}"#).unwrap());
+        assert_eq!(session.suggestion, None);
+
+        session.hear(&serde_json::from_str(r#"{"type":"prompt_suggestion","suggestion":"  "}"#).unwrap());
+        assert_eq!(session.suggestion, None);
     }
 
     #[test]

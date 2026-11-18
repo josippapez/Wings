@@ -381,6 +381,13 @@ impl PageView {
                 }
             })
             .detach();
+            cx.subscribe(&entity, move |view, _, _: &crate::text_field::TabPressed, _| {
+                let handler = view.inputs.borrow().get(&id).and_then(|state| state.key_handler.clone());
+                if let Some(handler) = handler {
+                    view.act(&handler, Some(&serde_json::json!({"type":"keydown", "key":"Tab"})));
+                }
+            })
+            .detach();
             cx.subscribe(&entity, move |view, entity, event, cx| {
                 if let crate::text_field::FieldEvent::Submit { .. }
                 | crate::text_field::FieldEvent::Cancel = event
@@ -464,6 +471,10 @@ impl PageView {
                 cx.notify();
             }
             field.select_on_focus = input.select_on_focus;
+            field.takes_tab = input.takes_tab;
+            if !input.time {
+                field.set_placeholder(&input.placeholder, cx);
+            }
             // Without a handler a pasted image is left alone, so the field's text paste is all it does.
             field.pastes_images = input.on_paste_image.is_some();
         });

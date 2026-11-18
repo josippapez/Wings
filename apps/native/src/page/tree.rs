@@ -572,6 +572,8 @@ pub struct Input {
     pub rows: Option<usize>,
     /// `submitOnEnter`: a `Textarea` that sends Enter to `onKeyDown`, and starts a new line on Shift-Enter.
     pub enter_submits: bool,
+    /// `takesTab`: a `Textarea` that sends Tab to `onKeyDown`, in place of moving focus on.
+    pub takes_tab: bool,
     /// `variant: "bare"`: no frame of its own, for a field inside a box that frames it.
     pub bare: bool,
     pub disabled: bool,
@@ -1241,6 +1243,7 @@ impl Walk {
                 rows: (kind == "Textarea")
                     .then(|| number(&props, "rows").unwrap_or(2.0).clamp(1.0, 24.0) as usize),
                 enter_submits: on("submitOnEnter"),
+                takes_tab: on("takesTab"),
                 bare: str_prop(&props, "variant") == Some("bare"),
                 disabled: on("disabled"),
                 max_length: number(&props, "maxLength")
@@ -1784,6 +1787,17 @@ mod tests {
         assert!(!password("TextInput", "time"));
         assert!(!password("TextInput", "text"));
         assert!(!password("Textarea", "password"));
+    }
+
+    #[test]
+    fn a_textarea_takes_tab_only_when_the_page_asks() {
+        let takes = |props: Value| match parse_one(json!({"id":1,"type":"Textarea","props":props,"children":[]})) {
+            Node::Input(input) => input.takes_tab,
+            other => panic!("{other:?}"),
+        };
+        assert!(takes(json!({"takesTab":true})));
+        assert!(!takes(json!({"takesTab":false})));
+        assert!(!takes(json!({})));
     }
 
     #[test]

@@ -41,6 +41,9 @@ pub struct PastedImage {
     pub data: String,
 }
 
+/// Tab pressed in a field with `takes_tab`. An event of its own, so the fields that leave Tab to focus needn't hear of it.
+pub struct TabPressed;
+
 /// The most image bytes a paste hands the page. The Claude API takes an image of up to 5 MB as base64 on its
 /// strictest platform (10 MB on its own API), and base64 is a third bigger than the bytes, so this is the bytes that
 /// still fit in 5 MB. A bigger image is dropped: the page would only get a request the API refuses.
@@ -60,6 +63,8 @@ pub struct TextField {
     pub enter_submits: bool,
     /// A paste that holds an image becomes a `FieldEvent::PasteImage`, not text. Off, an image paste does nothing.
     pub pastes_images: bool,
+    /// Tab, without a modifier, is a `TabPressed` the owner hears, in place of moving focus to the next control.
+    pub takes_tab: bool,
     /// Takes the width of its place, not `width`.
     pub fill: bool,
     /// Drawn with no frame of its own, inside a box that is its frame, as a chat's message box is.
@@ -100,6 +105,7 @@ pub struct TextField {
 
 impl EventEmitter<FieldEvent> for TextField {}
 impl EventEmitter<PastedImage> for TextField {}
+impl EventEmitter<TabPressed> for TextField {}
 
 impl Focusable for TextField {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -125,6 +131,7 @@ impl TextField {
             rows: None,
             enter_submits: false,
             pastes_images: false,
+            takes_tab: false,
             fill: false,
             bare: false,
             disabled: false,
@@ -150,6 +157,14 @@ impl TextField {
     pub fn set_text(&mut self, text: String) {
         self.text = text;
         (self.anchor, self.head) = (usize::MAX, usize::MAX);
+    }
+
+    /// The grey text an empty field shows, which a page may change as it goes (a chat's suggested next message).
+    pub fn set_placeholder(&mut self, placeholder: &str, cx: &mut Context<Self>) {
+        if &*self.placeholder != placeholder {
+            self.placeholder = placeholder.to_owned().into();
+            cx.notify();
+        }
     }
 
     /// What a page hears the field holds: a time field's text once it is a whole HH:MM, and "" before, as from a
@@ -361,6 +376,7 @@ impl TextField {
             "enter" => cx.emit(FieldEvent::Submit { back: mods.shift }),
             // The input method has the rest while it composes.
             _ if !self.marked.is_empty() => return,
+            "tab" if self.takes_tab && !mods.modified() => cx.emit(TabPressed),
             "a" if secondary => self.select(0, self.text.len(), window, cx),
             "c" if secondary => self.copy(cx),
             "x" if secondary && !self.secret => {
@@ -1428,6 +1444,24 @@ mod tests {
         window.draw();
         assert_eq!(text(&window, &field), "flatoting");
         assert_eq!(selected(&window, &field), 4..4);
+    }
+
+    #[test]
+    fn tab_reaches_the_owner_only_in_a_field_that_takes_it() {
+        let (_app, mut window, field) = open("hi");
+        let heard = std::rc::Rc::new(std::cell::Cell::new(0));
+        let log = heard.clone();
+        window.update(|_, _, cx| {
+            cx.subscribe(&field, move |_, _, _: &TabPressed, _| log.set(log.get() + 1)).detach();
+        });
+        press(&mut window, "tab");
+        assert_eq!(heard.get(), 0);
+        window.update(|_, _, cx| field.update(cx, |field, _| field.takes_tab = true));
+        press(&mut window, "tab");
+        assert_eq!(heard.get(), 1);
+        press(&mut window, "shift-tab");
+        assert_eq!(heard.get(), 1);
+        assert_eq!(text(&window, &field), "hi");
     }
 
     #[test]

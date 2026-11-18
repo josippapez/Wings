@@ -557,20 +557,32 @@ fn past_row(session: &Value) -> Node {
 /// The message box, floating at the foot: what you type, then the pickers, how full the context is, and Send or Stop.
 fn composer(c: &Chat) -> Node {
     let open = c.state == State::Running;
+    // Claude Code's suggested next message shows as grey text in the empty box, and Tab fills the box with it.
+    let suggested = chat::suggested(c);
     let field = Node::new("Textarea")
         .prop("label", "Message")
-        .prop("placeholder", "Ask Claude to do something, or type / for commands")
+        .prop("placeholder", suggested.unwrap_or("Ask Claude to do something, or type / for commands"))
+        .prop("takesTab", suggested.is_some())
         .prop("variant", "bare")
         .prop("rows", 2)
         .prop("submitOnEnter", true)
         .prop("autoFocus", true)
         .prop("value", c.draft.as_str())
         .prop("disabled", !open)
-        .on("onChange", |event| chat::with(|c| c.draft = event["value"].as_str().unwrap_or_default().to_owned()))
+        .on("onChange", |event| {
+            chat::with(|c| {
+                c.draft = event["value"].as_str().unwrap_or_default().to_owned();
+                // Typing dismisses the suggestion, as in Claude Code.
+                c.session.suggestion = c.session.suggestion.take().filter(|_| c.draft.is_empty());
+            })
+        })
         .on("onPasteImage", |event| chat::add_image(event["mediaType"].as_str().unwrap_or_default(), event["data"].as_str().unwrap_or_default()))
         .on("onKeyDown", |event| {
             if event["key"] == "Enter" {
                 chat::send();
+            }
+            if event["key"] == "Tab" {
+                chat::accept_suggestion();
             }
             // Usage view hook: Escape closes it.
             if event["key"] == "Escape" {
@@ -590,7 +602,8 @@ fn composer(c: &Chat) -> Node {
             .prop("disabled", !open || !typed)
             .child(icon(14, 2.0, &[SEND]))
     };
-    let controls = row().prop("gap", "xs").prop("align", "center").children(pickers(c)).child(stack().prop("grow", true)).child(action);
+    let tab = suggested.map(|_| chip("Tab", false, chat::accept_suggestion).prop("title", "Use the suggested message (Tab)").key("tab"));
+    let controls = row().prop("gap", "xs").prop("align", "center").children(pickers(c)).child(stack().prop("grow", true)).maybe(tab).child(action);
     // The field with the slash commands or files that match what you typed, which the app shows as a list over the page
     // that the arrows move through and Enter picks from, as a combobox's. Keyed, so the field stays the same one as the
     // list comes and goes, and keeps the keyboard.

@@ -13,8 +13,8 @@
       "git rev-parse [--abbrev-ref]"
     ],
     "processes": [
-      "claude [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --replay-user-messages --resume]",
-      "claude-rtk [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --replay-user-messages --resume]"
+      "claude [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --replay-user-messages --prompt-suggestions --resume]",
+      "claude-rtk [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --replay-user-messages --prompt-suggestions --resume]"
     ],
     "notify": true,
     "transcript": [

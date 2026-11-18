@@ -902,7 +902,7 @@ fn claude_chat(out: PathBuf) {
             "day": { "recommendations": [{ "key": "long_context", "pct": 70, "title": "See what fills your context", "detail": "run /context" }],
                 "agents": [], "skills": [{ "name": "release-notes", "pct": 4 }], "plugins": [{ "name": "toolbox", "pct": 11 }], "mcp_servers": [{ "name": "files", "pct": 6 }] },
             "week": { "recommendations": [], "agents": [], "skills": [], "plugins": [], "mcp_servers": [] } } }));
-    let scenes: [Scene; 21] = [
+    let scenes: [Scene; 22] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -928,7 +928,16 @@ fn claude_chat(out: PathBuf) {
         ("paste", opened(vec![init.clone()]), None, Some("paste:;paste:;type:what is in these?"), "Image 2"),
         // The subagent's transcript in the side panel, pinned open even in a narrow tab.
         ("subagent", subagent, None, Some("disclose:Ran 2 subagents;press:Open"), "Found three callers"),
+        ("suggestion", suggested, None, None, "Tab"),
     ];
+    // Claude Code's guess at your next message, printed after the turn's result: grey in the empty box, with a Tab chip.
+    let suggested = opened(vec![
+        init.clone(),
+        user("Add a function that sums two numbers to add.py, and don't run it."),
+        text("`add.py` now has `add(a, b)`, which returns `a + b`. I did not run it."),
+        json!({ "type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.0068 }),
+        json!({ "type": "prompt_suggestion", "suggestion": "run it", "uuid": "cdab3e06-e878-423a-add5-9ed9174c610e", "session_id": "5b7e2c1a-0f3d-4c8e-9a61-2d4f8b3c7e90" }),
+    ]);
     // Files for @-mentions, which the chat lists with git.
     for file in ["src/checkout.ts", "src/checkout.test.ts", "src/cart.ts", "api/limits.ts", "README.md"] {
         let path = root.join(file);
