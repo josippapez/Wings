@@ -699,7 +699,7 @@ impl PageView {
 
     /// How far the following `Scroll` `id` is scrolled from its top, and how far it can scroll at most, in points.
     #[cfg(all(test, feature = "test-support"))]
-    pub(super) fn scrolled(&self, id: u64) -> Option<(f32, f32)> {
+    pub(super) fn follow_scrolled(&self, id: u64) -> Option<(f32, f32)> {
         let scrolls = self.follow_scrolls.borrow();
         let handle = &scrolls.get(&id)?.handle;
         Some(((-handle.offset().y).as_f32(), handle.max_offset().y.as_f32()))
@@ -764,7 +764,8 @@ impl PageView {
 
     /// Asks the page for older items when `area` is scrolled within a screen of its top, and keeps the view on what
     /// it showed when they arrive. It runs once the area is laid out, so it sees how far it scrolls now.
-    fn reach_start(state: Rc<FollowScroll>, handler: String, cx: &mut Context<Self>) -> impl Fn(Vec<gpui::Bounds<Pixels>>, &mut Window, &mut gpui::App) + 'static {
+    /// `handler` is `None` once there is nothing older to ask for, which is also how the last older items arrive.
+    fn reach_start(state: Rc<FollowScroll>, handler: Option<String>, cx: &mut Context<Self>) -> impl Fn(Vec<gpui::Bounds<Pixels>>, &mut Window, &mut gpui::App) + 'static {
         let entity = cx.entity();
         move |_, window, cx| {
             let handle = &state.handle;
@@ -782,6 +783,11 @@ impl PageView {
                 }
                 return;
             }
+            let Some(handler) = handler.as_ref() else {
+                // Nothing older to ask for now, so the next time there is, it is asked for afresh.
+                state.asked.set(false);
+                return;
+            };
             let height = handle.bounds().size.height;
             if state.asked.get() || height <= px(0.0) || -offset.y > height {
                 return;
@@ -831,27 +837,25 @@ impl PageView {
     }
 
     /// The items of a flex box, as CSS makes them: each component one, and a run of plain strings one between them. A
-    /// row of "Updated ", "14 h ago" and buttons spread apart put the gap of a row between the two words.
+    /// row of "Updated ", "14 h ago" and buttons spread apart put the gap of a row between the two words. A run with no
+    /// text is no item, as an empty text node makes no box in CSS: an icon button's empty label took a gap beside its
+    /// icon and pushed it off its middle.
     fn items(&self, nodes: &[Node], cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut items = Vec::new();
         let mut run: Vec<Node> = Vec::new();
+        let text = |run: &mut Vec<Node>| {
+            let text = plain_text(&std::mem::take(run));
+            (!text.is_empty()).then(|| div().child(text).into_any_element())
+        };
         for node in nodes {
             if matches!(node, Node::Str { .. }) {
                 run.push(node.clone());
                 continue;
             }
-            if !run.is_empty() {
-                items.push(
-                    div()
-                        .child(plain_text(&std::mem::take(&mut run)))
-                        .into_any_element(),
-                );
-            }
+            items.extend(text(&mut run));
             items.push(self.node(node, cx));
         }
-        if !run.is_empty() {
-            items.push(div().child(plain_text(&run)).into_any_element());
-        }
+        items.extend(text(&mut run));
         items
     }
 
@@ -1257,15 +1261,7 @@ impl PageView {
             // A scroll keeps 8 points either side and 12 below, as a list under a header does.
             Node::Scroll(scroll) => {
                 let state = scroll.follow_end.then(|| self.follow_end(scroll.id));
-                let reach = match (&state, scroll.on_reach_start.clone()) {
-                    (Some(state), Some(handler)) => Some(Self::reach_start(state.clone(), handler, cx)),
-                    (Some(state), None) => {
-                        // Nothing older to ask for now, so the next time there is, it is asked for afresh.
-                        state.asked.set(false);
-                        None
-                    }
-                    _ => None,
-                };
+                let reach = state.as_ref().map(|state| Self::reach_start(state.clone(), scroll.on_reach_start.clone(), cx));
                 let mut base = div();
                 if let Some(reach) = reach {
                     base = base.on_children_prepainted(reach);

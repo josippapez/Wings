@@ -1947,7 +1947,7 @@ fn a_following_scroll_asks_for_older_items_at_its_top_and_stays_on_what_it_showe
         |_, cx| PageView::in_plugin(&host, &source, cx),
     );
     // It starts at its end, as a chat does.
-    settle(&app, &mut window, |view| view.scrolled(1).is_some_and(|(top, max)| max > 300.0 && top >= max - 24.0));
+    settle(&app, &mut window, |view| view.follow_scrolled(1).is_some_and(|(top, max)| max > 300.0 && top >= max - 24.0));
     window.simulate_event(gpui::ScrollEvent {
         position: point(px(60.0), px(150.0)),
         delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(100_000.0))),
@@ -1957,5 +1957,5 @@ fn a_following_scroll_asks_for_older_items_at_its_top_and_stays_on_what_it_showe
     });
     // The 30 older rows are at least 300 points, so a view left at the top would show them and one kept in place is
     // further down.
-    settle(&app, &mut window, |view| view.text().contains("Older 0") && view.scrolled(1).is_some_and(|(top, _)| top >= 300.0));
+    settle(&app, &mut window, |view| view.text().contains("Older 0") && view.follow_scrolled(1).is_some_and(|(top, _)| top >= 300.0));
 }
