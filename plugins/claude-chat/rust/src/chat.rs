@@ -181,7 +181,8 @@ fn launch(resume: Option<String>) {
             input.stop();
         }
         c.run += 1;
-        c.session = Session { start_mode: prefs::start_mode(), ..Session::default() };
+        c.session = Session::default();
+        c.session.start_mode = prefs::start_mode();
         c.state = State::Starting;
         c.shown = PAGE;
         c.past = None;
