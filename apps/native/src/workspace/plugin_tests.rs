@@ -3840,7 +3840,8 @@ fn links_are_those_of_the_plugins_that_run_and_a_click_opens_what_the_plugin_say
         // One the plugin doesn't declare opens nothing.
         w.open_link(&target("other", "http://localhost:1"), window, cx);
     });
-    assert_eq!(*system.opened.lock().unwrap(), ["http://localhost:5173"]);
+    // The address in its normal form, which is what the plugin's openUrl is checked against.
+    assert_eq!(*system.opened.lock().unwrap(), ["http://localhost:5173/"]);
     // Turned off, its words are no links, and a click on one it drew before opens nothing.
     window.update(|w, window, cx| w.set_plugin_enabled("tracker", false, None, window, cx).unwrap());
     assert!(links_in(&window, "Fixed ABC-12").is_empty());

@@ -521,7 +521,9 @@ impl Workspace {
             _ => Vec::new(),
         };
         this.plugin_env.set_plugins(&this.plugins);
-        this.refresh_links(cx);
+        // Nothing has drawn yet, so nothing draws again: a second draw as the window opened took the keyboard from the
+        // restored tab's pane to the last pane drawn.
+        this.set_page_links(cx);
         // Claude Code reaches this app through the socket, as it reaches the desktop's.
         if let Some(socket) = this.config.socket.clone() {
             let info = this.project_info.as_ref().map(|info| info.store.clone());

@@ -5,7 +5,10 @@
 use std::{rc::Rc, sync::Arc};
 
 use gpui::{App, Context, Window};
-use wings_plugins::{fetch::may_open_url, links::Rule};
+use wings_plugins::{
+    fetch::may_open_url,
+    links::{Rule, url_of},
+};
 
 use crate::page::{
     links::{LinkTarget, PageLinks},
@@ -18,12 +21,19 @@ use super::Workspace;
 #[derive(Debug, PartialEq)]
 enum Opens {
     View { view: String, arg: String },
-    Url { allowed: bool },
+    /// The address in its normal form, while the plugin's `openUrl` allows it.
+    Url(Option<String>),
 }
 
 impl Workspace {
     /// Gives the pages the links of the plugins that run, each narrowed to the words its plugin set, and draws them again.
     pub(super) fn refresh_links(&mut self, cx: &mut Context<Self>) {
+        self.set_page_links(cx);
+        cx.refresh_windows();
+    }
+
+    /// `refresh_links` without drawing again, for the window as it opens, when nothing has drawn yet.
+    pub(super) fn set_page_links(&mut self, cx: &mut Context<Self>) {
         let words = self.plugin_env.link_words.lock().unwrap().clone();
         let rules: Vec<Rule> = self
             .plugins
@@ -45,7 +55,6 @@ impl Workspace {
                 let _ = workspace.update(cx, |workspace, cx| workspace.open_link(&target, window, cx));
             }),
         });
-        cx.refresh_windows();
     }
 
     /// What a click on `target` opens, while its plugin runs and declares the link.
@@ -53,12 +62,12 @@ impl Workspace {
         let installed = self.plugins.iter().find(|installed| installed.id == target.plugin)?;
         let link = installed.plugin.manifest.contributes.links.iter().find(|link| link.id == target.link)?;
         Some(match link.url {
-            true => Opens::Url { allowed: may_open_url(&installed.plugin, &target.text) },
+            true => Opens::Url(url_of(&target.text).filter(|url| may_open_url(&installed.plugin, url))),
             false => Opens::View { view: link.view.clone(), arg: link.arg.clone() },
         })
     }
 
-    /// A click on a link in a page: its plugin's view opens as a tab with the text, or the text opens in the browser.
+    /// A click on a link in a page: its plugin's view opens as a tab with the text, or the address it names in the browser.
     pub(super) fn open_link(&mut self, target: &LinkTarget, window: &mut Window, cx: &mut Context<Self>) {
         match self.link_opens(target) {
             Some(Opens::View { view, arg }) => {
@@ -66,12 +75,12 @@ impl Workspace {
                 args.insert(arg, target.text.clone().into());
                 self.open_plugin_view(&target.plugin, &view, Some(serde_json::Value::Object(args)), window, cx);
             }
-            Some(Opens::Url { allowed: true }) => {
-                if let Err(error) = self.plugin_env.open_url(&target.text) {
+            Some(Opens::Url(Some(url))) => {
+                if let Err(error) = self.plugin_env.open_url(&url) {
                     self.show_notice("Couldn't open the link".into(), error, cx);
                 }
             }
-            Some(Opens::Url { allowed: false }) | None => {}
+            Some(Opens::Url(None)) | None => {}
         }
     }
 }

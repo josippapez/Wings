@@ -65,6 +65,12 @@ pub struct Found {
     pub rule: usize,
 }
 
+/// The address a `url` link's text opens: the text in the normal form a browser reads it in, which is what `may_open_url`
+/// checks, so `http://localhost:5173` opens as `http://localhost:5173/`.
+pub fn url_of(text: &str) -> Option<String> {
+    url::Url::parse(text).ok().map(|url| url.as_str().to_owned())
+}
+
 fn word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
@@ -150,6 +156,14 @@ mod tests {
         // Past `MAX_TEXT`, nothing is looked for.
         let late = format!("{} ABC-7", " ".repeat(MAX_TEXT));
         assert!(find(&late, &rules).is_empty());
+    }
+
+    /// `may_open_url` takes only an address in its normal form, which a port with nothing after it isn't.
+    #[test]
+    fn a_url_link_opens_the_address_in_its_normal_form() {
+        assert_eq!(url_of("http://localhost:5173").as_deref(), Some("http://localhost:5173/"));
+        assert_eq!(url_of("http://localhost:5173/cart?step=2").as_deref(), Some("http://localhost:5173/cart?step=2"));
+        assert_eq!(url_of("no address"), None);
     }
 
     #[test]
