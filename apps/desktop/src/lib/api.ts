@@ -125,6 +125,8 @@ export type PluginPage = { id: string; title: string; icon: string; page: string
   multiple?: boolean;
   /** Works with no project on screen: the + menu opens it as a tab then too; needs `tab` in `opens`. */
   noProject?: boolean;
+  /** The agents whose past sessions this view can continue. The native app's Past sessions offers it for them. */
+  resumes?: string[];
   /** `false`: no title bar button, for a page that shows one item opened from a row. */
   button?: boolean;
 };

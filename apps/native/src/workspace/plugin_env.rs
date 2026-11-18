@@ -474,8 +474,10 @@ impl Env for AppEnv {
             .into_iter()
             .filter(|hit| hit.agent == wings_agents::history::Agent::Claude)
             .map(|hit| {
+                let account = self.sessions.account_label(&hit).map(|name| name.to_string());
                 serde_json::json!({
                     "id": hit.id, "title": hit.name.or(hit.title), "firstPrompt": hit.first_prompt, "cwd": hit.cwd,
+                    "account": account,
                     "gitBranch": hit.git_branch, "lastActiveMs": hit.last_active_ms, "messages": hit.messages,
                     "matches": hit.matches,
                 })
@@ -639,6 +641,10 @@ impl Env for AppEnv {
 
     fn claude_dirs(&self) -> Vec<PathBuf> {
         claude_accounts::dirs_with_default(self.claude_dir.clone())
+    }
+
+    fn claude_config_dir(&self, project: &std::path::Path) -> Option<PathBuf> {
+        self.projects.claude_config_dir(project)
     }
 
     fn claude_accounts(&self) -> Result<Accounts, String> {

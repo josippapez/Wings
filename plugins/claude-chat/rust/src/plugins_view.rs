@@ -305,13 +305,20 @@ fn set_tab(tab: &str) {
     }
 }
 
+/// The account the `claude` commands here run under, and the folder they run in: the chat's own, so that plugins land in
+/// the account the chat's session is in.
+fn account() -> (host::Account, String) {
+    chat::with(|c| (host::Account::of_session(c.session.id.as_deref()), c.cwd.clone()))
+}
+
 /// Reads what the marketplaces offer: one command, its output about 2.5 MB for 4,000 plugins, under Wings' 8 MB limit.
 fn list() {
     if !chat::with(|c| c.plugins.as_mut().is_some_and(|open| open.discover.begin())) {
         return;
     }
-    task::spawn(async {
-        let out = host::exec("claude", &["plugin", "list", "--available", "--json"]).await;
+    let (account, cwd) = account();
+    task::spawn(async move {
+        let out = host::exec_as(&account, &cwd, "claude", &["plugin", "list", "--available", "--json"], None).await;
         chat::with(|c| {
             if let Some(open) = &mut c.plugins {
                 open.discover.listed(out);
@@ -326,9 +333,10 @@ fn install(id: &str) {
         return;
     };
     let id = id.to_owned();
+    let (account, cwd) = account();
     task::spawn(async move {
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        let outcome = install_outcome(&host::exec_timeout("claude", &args, INSTALL_MS).await);
+        let outcome = install_outcome(&host::exec_as(&account, &cwd, "claude", &args, Some(INSTALL_MS)).await);
         let installed = outcome.is_ok();
         chat::with(|c| {
             if let Some(open) = &mut c.plugins {

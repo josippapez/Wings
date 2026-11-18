@@ -471,6 +471,14 @@ fn picking_a_session_opens_it_in_a_new_tab_where_it_started_and_resume_here_type
 /// The default account's folder, and a named account's beside it holding `LOGIN`, with a subagent's transcript in the
 /// folder beside its own; `DARK` is the default account's. The window lists both accounts' sessions.
 fn two_accounts(name: &str) -> (TestApp, TestAppWindow<Workspace>, PathBuf, PathBuf, PathBuf) {
+    two_accounts_with(name, None)
+}
+
+/// `two_accounts`, with the plugins in `data` running.
+fn two_accounts_with(
+    name: &str,
+    data: Option<&crate::installed::fixture::Data>,
+) -> (TestApp, TestAppWindow<Workspace>, PathBuf, PathBuf, PathBuf) {
     let project = folder(name);
     let gone = project.join("g/s");
     let accounts = folder(&format!("{name}-home"));
@@ -495,6 +503,7 @@ fn two_accounts(name: &str) -> (TestApp, TestAppWindow<Workspace>, PathBuf, Path
     let (app, window) = open_config(|config| {
         config.project = project.clone();
         config.sessions = Some(SessionSource::Folders(vec![default.clone(), work.clone()]));
+        config.plugins = data.map(|data| data.paths());
     });
     (app, window, gone, default, work)
 }
@@ -763,4 +772,76 @@ fn an_untitled_session_shows_its_generated_name() {
         titles(&window).first().map(String::as_str),
         Some("Login redirect fix")
     );
+}
+
+/// Two plugins with a page each: `chatty`'s view says it resumes Claude sessions, `plain`'s doesn't.
+fn resuming_plugins() -> crate::installed::fixture::Data {
+    use crate::page::runtime::fake;
+    let data = crate::installed::fixture::Data::temp();
+    let page = |id: &str, extra: serde_json::Value| {
+        let mut view = serde_json::json!({ "id": id, "title": format!("View {id}"), "page": format!("dist/{id}.html"), "opens": ["tab"], "multiple": true });
+        view.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        view
+    };
+    let views = serde_json::json!([page("chat", serde_json::json!({ "title": "Claude chat", "resumes": ["claude"] })), page("plain", serde_json::json!({}))]);
+    data.install_script(
+        "chatty",
+        serde_json::json!({ "contributes": { "views": views } }),
+        &fake::idle("main"),
+        &[("chat", &fake::idle("page")), ("plain", &fake::idle("page"))],
+        "chatty-scope",
+    );
+    data
+}
+
+#[test]
+fn only_a_view_that_declares_it_is_offered_to_resume_a_session() {
+    let data = resuming_plugins();
+    let (_app, window, _, _, _) = two_accounts_with("offer", Some(&data));
+    let offered = |agent| window.read(|w, _| w.resume_views(agent));
+    assert_eq!(offered(wings_agents::history::Agent::Claude), [("chatty".into(), "chat".into(), "Claude chat".into())]);
+    assert!(offered(wings_agents::history::Agent::OpenCode).is_empty());
+    // With no plugin running there is nothing to offer.
+    let (_app, window, _, _, _) = two_accounts("offer-none");
+    assert!(window.read(|w, _| w.resume_views(wings_agents::history::Agent::Claude)).is_empty());
+}
+
+#[test]
+fn a_work_account_session_resumes_in_the_view_with_the_args_the_badge_gives() {
+    let data = resuming_plugins();
+    let (app, mut window, gone, _, _) = two_accounts_with("view", Some(&data));
+    let login = listed(&app, &mut window).into_iter().find(|(s, _)| s.id == LOGIN).unwrap().0;
+    window.update(|w, window, cx| w.resume_in_view(&login, "chatty", "chat", window, cx));
+    window.read(|w, _| {
+        assert!(w.sheet.is_none(), "the sheet closed");
+        let tab = w.plugin_tabs.last().expect("a tab opened");
+        assert_eq!((tab.plugin.as_str(), tab.view.as_str()), ("chatty", "chat"));
+        assert_eq!(tab.args, Some(serde_json::json!({ "resume": LOGIN, "cwd": gone, "program": "claude" })));
+    });
+}
+
+#[test]
+fn a_view_that_is_not_there_says_so_instead_of_opening_nothing() {
+    let data = resuming_plugins();
+    let (app, mut window, _, _, _) = two_accounts_with("missing", Some(&data));
+    let login = listed(&app, &mut window).into_iter().find(|(s, _)| s.id == LOGIN).unwrap().0;
+    window.update(|w, window, cx| w.resume_in_view(&login, "chatty", "gone", window, cx));
+    let notice = window.read(|w, _| w.plugin_ui.notices.last().map(|n| (n.title.to_string(), n.body.to_string())));
+    let (title, body) = notice.expect("a notice");
+    assert_eq!(title, "Couldn't resume the session");
+    assert!(body.contains("chatty isn't running a page named gone"), "{body}");
+}
+
+#[test]
+fn past_sessions_for_a_plugin_find_every_account_and_name_the_one_that_is_not_the_default() {
+    use crate::page::plugin::Env;
+    let (_app, window, gone, _, _) = two_accounts("plugin-list");
+    let project = gone.ancestors().nth(2).unwrap().to_path_buf();
+    let mut listed: Vec<(String, Option<String>)> = window
+        .read(|w, _| w.plugin_env.past_sessions(&project, "", 50))
+        .iter()
+        .map(|s| (s["id"].as_str().unwrap().to_owned(), s["account"].as_str().map(str::to_owned)))
+        .collect();
+    listed.sort();
+    assert_eq!(listed, [(LOGIN.into(), Some("work".into())), (DARK.into(), None)]);
 }

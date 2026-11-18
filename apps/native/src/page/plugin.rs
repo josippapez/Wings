@@ -40,6 +40,7 @@ use std::{
 use wings_plugin_storage::Storage;
 use wings_plugins::permissions::{NotifyLog, may_read_agent_activity};
 
+mod account;
 mod calls;
 mod diff;
 mod disk;

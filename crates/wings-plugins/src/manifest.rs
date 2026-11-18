@@ -184,7 +184,13 @@ pub struct View {
     /// with its args, is empty from a button.
     #[serde(default = "yes", skip_serializing_if = "Clone::clone")]
     pub button: bool,
+    /// The agents whose past sessions the view can continue, from `RESUMABLE_AGENTS`: Past sessions offers "Resume in
+    /// <title>" for them and opens the view with `{ resume, cwd, program }`. Needs `tab` in `opens`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resumes: Vec<String>,
 }
+
+pub const RESUMABLE_AGENTS: [&str; 2] = ["claude", "opencode"];
 
 fn yes() -> bool {
     true

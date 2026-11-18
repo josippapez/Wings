@@ -263,6 +263,10 @@ impl Env for FakeEnv {
         self.claude.lock().unwrap().clone()
     }
 
+    fn claude_config_dir(&self, project: &std::path::Path) -> Option<PathBuf> {
+        self.spaces.lock().unwrap().claude_config_dir(project)
+    }
+
     fn claude_accounts(&self) -> Result<Accounts, String> {
         Ok(self
             .spaces

@@ -106,6 +106,8 @@ fn session_row(session: &Value, words: &[String], now: f64, c: &Chat) -> Node {
         .prop("align", "center")
         .child(Node::new("Icon").prop("name", "claude").prop("size", 12))
         .child(text(title.as_str()).prop("weight", "medium").prop("truncate", true).prop("title", title.as_str()))
+        // The account it ran under, as Wings' Past sessions names it, unless that is the default one.
+        .maybe(session["account"].as_str().map(|account| badge(account, None).prop("title", "The Claude Code account this session ran under")))
         .maybe(current.then(|| badge("This chat", None)));
     // Your first prompt shows when it says more than the title, or when a search may have found words in it.
     let said = prompt.filter(|prompt| !words.is_empty() || *prompt != title).map(|prompt| you_said(&truncate(&prompt, 400), words));

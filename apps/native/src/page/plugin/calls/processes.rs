@@ -141,3 +141,96 @@ fn a_program_runs_only_as_the_manifest_and_the_token_allow() {
     assert_eq!(other.call_after_click("processWrite", json!({ "token": "chat", "text": "x\n" })), Err("No program is running as chat".into()));
     caller.send("processStop", json!({ "token": "chat" }));
 }
+
+const SESSION: &str = "11111111-2222-4333-8444-555555555555";
+
+/// Prints the account folder the program runs under.
+fn prints_account(name: &str) -> String {
+    let script = tmp().join(format!("wings-account-{name}-{}.sh", std::process::id()));
+    std::fs::write(&script, "echo \"dir:$CLAUDE_CONFIG_DIR\"").unwrap();
+    script.to_string_lossy().into_owned()
+}
+
+/// The default account's folder and a named one's holding `SESSION`, in a scratch folder.
+fn accounts(name: &str) -> [std::path::PathBuf; 2] {
+    let base = tmp().join(format!("wings-spawn-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let dirs = [base.join(".claude"), base.join(".claude-work")];
+    std::fs::create_dir_all(dirs[0].join("projects/p")).unwrap();
+    std::fs::create_dir_all(dirs[1].join("projects/p")).unwrap();
+    std::fs::write(dirs[1].join(format!("projects/p/{SESSION}.jsonl")), "{}\n").unwrap();
+    dirs
+}
+
+/// What the program printed when spawned in the scratch project with `account`.
+fn account_seen(rig: &Rig, script: &str, account: Value) -> String {
+    let caller = Caller::start(&rig.host);
+    let mut start = spawn("account", "sh", &[script]);
+    start["account"] = account;
+    caller.send("spawn", start);
+    let (lines, _) = hear(&caller, 2);
+    lines.into_iter().next().unwrap_or_default()
+}
+
+#[test]
+fn a_program_runs_under_the_account_of_the_session_it_resumes() {
+    let dirs = accounts("session");
+    let script = prints_account("session");
+    let rig = rig(&[&format!("sh {script}")]);
+    *rig.env.claude.lock().unwrap() = dirs.to_vec();
+    assert_eq!(account_seen(&rig, &script, json!({ "session": SESSION })), format!("dir:{}", dirs[1].display()));
+    std::fs::remove_file(&script).unwrap();
+}
+
+#[test]
+fn a_new_chat_runs_under_the_account_of_its_project_and_keeps_wings_own_without_one() {
+    let dirs = accounts("project");
+    let script = prints_account("project");
+    let rig = rig(&[&format!("sh {script}")]);
+    *rig.env.claude.lock().unwrap() = dirs.to_vec();
+    let own = std::env::var("CLAUDE_CONFIG_DIR").unwrap_or_default();
+    assert_eq!(account_seen(&rig, &script, json!({})), format!("dir:{own}"), "the project has no account");
+    // No `account` at all leaves the environment alone too.
+    assert_eq!(account_seen_without(&rig, &script), format!("dir:{own}"));
+    rig.env.spaces.lock().unwrap().set_claude_account(&tmp().to_string_lossy(), Some("work"), |_| Ok(())).unwrap();
+    let work = wings_spaces::claude_accounts::dir(Some("work"));
+    assert_eq!(account_seen(&rig, &script, json!({})), format!("dir:{}", work.display()));
+    // A session that has no transcript is a new one.
+    assert_eq!(account_seen(&rig, &script, json!({ "session": "99999999-2222-4333-8444-555555555555" })), format!("dir:{}", work.display()));
+    std::fs::remove_file(&script).unwrap();
+}
+
+fn account_seen_without(rig: &Rig, script: &str) -> String {
+    let caller = Caller::start(&rig.host);
+    caller.send("spawn", spawn("account", "sh", &[script]));
+    hear(&caller, 2).0.into_iter().next().unwrap_or_default()
+}
+
+#[test]
+fn an_exec_runs_under_the_tabs_account_too() {
+    let dirs = accounts("exec");
+    let rig = Rig::new(json!({ "permissions": { "exec": ["printenv CLAUDE_CONFIG_DIR"] } }), vec![pane("1", "/a")]);
+    *rig.env.projects.lock().unwrap() = vec![tmp()];
+    *rig.env.claude.lock().unwrap() = dirs.to_vec();
+    let caller = Caller::start(&rig.host);
+    let run = |account: Value| {
+        let params = json!({ "program": "printenv", "args": ["CLAUDE_CONFIG_DIR"], "cwd": tmp(), "timeoutMs": null, "stream": false, "account": account });
+        caller.call("exec", params).unwrap()["stdout"].as_str().unwrap().to_owned()
+    };
+    assert_eq!(run(json!({ "session": SESSION })), format!("{}\n", dirs[1].display()));
+    let raw = json!({ "program": "printenv", "args": ["CLAUDE_CONFIG_DIR"], "cwd": tmp(), "timeoutMs": null, "stream": false, "account": { "dir": "/etc" } });
+    assert!(caller.call("exec", raw).is_err());
+}
+
+#[test]
+fn a_page_cannot_name_an_account_folder_of_its_own() {
+    let script = prints_account("raw");
+    let rig = rig(&[&format!("sh {script}")]);
+    let caller = Caller::start(&rig.host);
+    for account in [json!({ "dir": "/etc" }), json!({ "session": null, "configDir": "/etc" }), json!("/etc")] {
+        let mut start = spawn("raw", "sh", &[&script]);
+        start["account"] = account.clone();
+        assert!(caller.call("spawn", start).is_err(), "{account}");
+    }
+    std::fs::remove_file(&script).unwrap();
+}

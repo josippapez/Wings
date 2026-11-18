@@ -95,8 +95,14 @@ pub(crate) fn allowing_entry(entries: &[String], program: &str, args: &[String])
 
 /// Runs a command the manifest allows. No shell, so arguments can't smuggle in commands.
 pub fn exec(plugin: &Plugin, program: &str, args: &[String], cwd: Option<&Path>, timeout: Duration, on_line: Option<OnLine>) -> Result<ExecResult, String> {
+    exec_under(plugin, program, args, cwd, timeout, on_line, None)
+}
+
+/// `exec` with `CLAUDE_CONFIG_DIR` set to `config_dir`, the Claude Code account a command runs under. The host picks it
+/// from an account it knows; a plugin never names the folder.
+pub fn exec_under(plugin: &Plugin, program: &str, args: &[String], cwd: Option<&Path>, timeout: Duration, on_line: Option<OnLine>, config_dir: Option<&Path>) -> Result<ExecResult, String> {
     exec_check(plugin, program, args, cwd)?;
-    run(program, args, cwd, timeout, on_line)
+    run(program, args, cwd, timeout, on_line, config_dir)
 }
 
 /// Everything `exec` checks before it runs a command in `cwd`.
@@ -139,8 +145,11 @@ pub(crate) fn args_check(plugin: &Plugin, program: &str, args: &[String], cwd: O
 }
 
 /// Runs a program once its arguments have been checked.
-pub(crate) fn run(program: &str, args: &[String], cwd: Option<&Path>, timeout: Duration, on_line: Option<OnLine>) -> Result<ExecResult, String> {
+pub(crate) fn run(program: &str, args: &[String], cwd: Option<&Path>, timeout: Duration, on_line: Option<OnLine>, config_dir: Option<&Path>) -> Result<ExecResult, String> {
     let mut cmd = command(program, args, cwd)?;
+    if let Some(dir) = config_dir {
+        cmd.env("CLAUDE_CONFIG_DIR", dir);
+    }
     cmd.stdin(Stdio::null());
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
     let overflow = Arc::new(AtomicBool::new(false));
@@ -323,6 +332,15 @@ mod tests {
         assert_eq!(err, EXEC_OUTPUT_TOO_LARGE);
         assert!(start.elapsed() < Duration::from_secs(10), "took {:?}", start.elapsed());
         assert!(exec(&p, "echo", &["fine".into()], None, EXEC_TIMEOUT, None).is_ok());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_command_runs_under_the_account_folder_the_host_gives_it() {
+        let p = plugin(Path::new("/tmp"), &["printenv CLAUDE_CONFIG_DIR"], &[]);
+        let args = vec!["CLAUDE_CONFIG_DIR".to_string()];
+        let out = exec_under(&p, "printenv", &args, None, EXEC_TIMEOUT, None, Some(Path::new("/accounts/work"))).unwrap();
+        assert_eq!(out.stdout, "/accounts/work\n");
     }
 
     #[test]

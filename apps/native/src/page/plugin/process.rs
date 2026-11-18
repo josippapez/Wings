@@ -2,7 +2,7 @@
 //! `processes`, like an agent run headless. The frame names each with a token, which its link has prefixed with the
 //! frame's id, so a frame reaches only its own. They stop when the frame closes or the plugin is turned off.
 
-use super::{Access, Shared};
+use super::{Access, Shared, account::AccountRequest};
 use crate::page::runtime::Reply;
 use serde::Deserialize;
 use serde_json::Value;
@@ -22,6 +22,9 @@ struct SpawnRequest {
     program: String,
     args: Vec<String>,
     cwd: String,
+    /// Runs under a Claude Code account: see `account`.
+    #[serde(default)]
+    account: Option<AccountRequest>,
 }
 
 impl Shared {
@@ -57,9 +60,10 @@ impl Shared {
         reply: Reply,
         access: Access,
     ) -> Result<(), String> {
-        let SpawnRequest { program, args, cwd } =
+        let SpawnRequest { program, args, cwd, account } =
             serde_json::from_value(params.clone()).map_err(|error| error.to_string())?;
         let cwd = exec_cwd(&program, Some(&cwd), &access.env.projects(), &self.pane_folders(), false)?;
+        let config_dir = access.claude_config_dir(account.as_ref(), &cwd);
         // What the program reads first, sent with its start: what the page asks as it opens, never an answer to the
         // program's questions, whose ids it makes up later.
         let input = match params.get("input") {
@@ -81,7 +85,7 @@ impl Shared {
         let host = Arc::downgrade(self);
         self.off_thread(reply, move |reply| {
             let lines = reply.lines_in_order();
-            let exit = process::run(&access.plugin, &running, &program, &args, &cwd, |line| lines(line));
+            let exit = process::run_under(&access.plugin, &running, &program, &args, &cwd, config_dir.as_deref(), |line| lines(line));
             if let Some(host) = host.upgrade() {
                 host.processes.lock().unwrap().remove(&token);
             }

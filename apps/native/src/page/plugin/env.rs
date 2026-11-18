@@ -431,6 +431,11 @@ pub trait Env: Send + Sync + 'static {
     fn projects(&self) -> Vec<PathBuf>;
     /// The folders of the Claude Code accounts, the default one's first: where the transcripts are.
     fn claude_dirs(&self) -> Vec<PathBuf>;
+    /// The folder for `CLAUDE_CONFIG_DIR` in a new terminal of the project in folder `project`: its account's, or `None`
+    /// for the default account.
+    fn claude_config_dir(&self, _project: &std::path::Path) -> Option<PathBuf> {
+        None
+    }
     /// The Claude Code accounts, and the one each project's terminals use.
     fn claude_accounts(&self) -> Result<Accounts, String> {
         Err("Claude Code accounts aren't available in this host".into())
@@ -506,6 +511,22 @@ pub struct Access {
     /// One of Wings' own plugins, which may make the calls the desktop lets those make anywhere.
     pub builtin: bool,
     pub env: std::sync::Arc<dyn Env>,
+}
+
+impl Access {
+    /// The folder for `CLAUDE_CONFIG_DIR` in a program the plugin runs in `cwd` with `account`, `None` to leave it as it
+    /// is: with no `account` asked, or for the default account.
+    pub(super) fn claude_config_dir(
+        &self,
+        account: Option<&super::account::AccountRequest>,
+        cwd: &std::path::Path,
+    ) -> Option<PathBuf> {
+        let request = account?;
+        super::account::config_dir(request, &self.env.claude_dirs(), || {
+            let projects = self.env.projects();
+            self.env.claude_config_dir(super::account::holder(&projects, cwd)?)
+        })
+    }
 }
 
 /// A pane as `wings.onPanes` lists it: the desktop's `WingsPane`.

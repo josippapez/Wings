@@ -319,6 +319,12 @@ pub fn exec_timeout(program: &str, args: &[&str], timeout_ms: u32) -> Pending<Re
     call("exec", json!({ "program": program, "args": args, "cwd": null, "timeoutMs": timeout_ms, "stream": false }))
 }
 
+/// `wings.exec` in the folder `cwd`, under a Claude Code account, that Wings stops after `timeout_ms` when it is given.
+/// Without a session of its own the account is the project's that holds `cwd`. Needs Wings 0.2.39.
+pub fn exec_as(account: &Account, cwd: &str, program: &str, args: &[&str], timeout_ms: Option<u32>) -> Pending<Result<Value, String>> {
+    call("exec", json!({ "program": program, "args": args, "cwd": cwd, "timeoutMs": timeout_ms, "stream": false, "account": account.0 }))
+}
+
 /// `wings.projects`: every project, each with its `id`, `path` and `name`.
 pub fn projects() -> Pending<Result<Value, String>> {
     call("projects", json!({}))
@@ -755,11 +761,34 @@ impl ProcessInput {
 /// sent with its start (empty for nothing): later writes need your click or key. `on_line` hears each line it prints to
 /// stdout, in order and none lost: as JSON when the line is JSON, and as a string when it isn't.
 pub fn spawn(program: &str, args: &[&str], cwd: &str, input: &str, on_line: impl Fn(&Value) + 'static) -> Process {
+    spawn_with(None, program, args, cwd, input, on_line)
+}
+
+/// The Claude Code account a `spawn` or `exec` runs under, set as `CLAUDE_CONFIG_DIR`. Wings picks the folder from the
+/// accounts it knows: a plugin never names one. Needs Wings 0.2.39.
+pub struct Account(Value);
+
+impl Account {
+    /// The account whose folder holds the transcript of `session`, so `claude --resume` finds it; for a new chat (`None`)
+    /// and a session with no transcript yet, the account of the project that holds the program's folder, as a new
+    /// terminal there gets. The default account leaves Wings' own environment as it is.
+    pub fn of_session(session: Option<&str>) -> Self {
+        Account(json!({ "session": session }))
+    }
+}
+
+/// `spawn` under a Claude Code account.
+pub fn spawn_as(account: &Account, program: &str, args: &[&str], cwd: &str, input: &str, on_line: impl Fn(&Value) + 'static) -> Process {
+    spawn_with(Some(account), program, args, cwd, input, on_line)
+}
+
+fn spawn_with(account: Option<&Account>, program: &str, args: &[&str], cwd: &str, input: &str, on_line: impl Fn(&Value) + 'static) -> Process {
     let id = next_id();
     let token = format!("process-{id}");
     OUTPUTS.with(|outputs| outputs.borrow_mut().insert(id, Rc::new(on_line)));
     let input = (!input.is_empty()).then_some(input);
-    let answer = call_as(id, "spawn", json!({ "program": program, "args": args, "cwd": cwd, "token": token, "input": input }));
+    let account = account.map(|account| &account.0);
+    let answer = call_as(id, "spawn", json!({ "program": program, "args": args, "cwd": cwd, "token": token, "input": input, "account": account }));
     Process { input: ProcessInput(token), answer }
 }
 
@@ -813,6 +842,16 @@ mod tests {
         assert_eq!(set(Value::Null), Ok(()));
         let sent: Vec<Value> = calls.borrow().iter().map(|(_, params)| params["badge"].clone()).collect();
         assert_eq!(sent, [badge.clone(), badge, Value::Null]);
+    }
+
+    #[test]
+    fn a_program_asks_for_an_account_only_when_the_page_does() {
+        let calls = record(&[]);
+        let _plain = spawn("claude", &["-p"], "/repo", "", |_| {});
+        let _resumed = spawn_as(&Account::of_session(Some("s1")), "claude", &["-p"], "/repo", "", |_| {});
+        drop(exec_as(&Account::of_session(None), "/repo", "claude", &["plugin", "list"], None));
+        let sent: Vec<Value> = calls.borrow().iter().map(|(_, params)| params["account"].clone()).collect();
+        assert_eq!(sent, [Value::Null, json!({ "session": "s1" }), json!({ "session": null })]);
     }
 
     #[test]

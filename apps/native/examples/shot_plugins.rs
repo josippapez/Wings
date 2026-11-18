@@ -162,7 +162,12 @@ impl Env for FixtureEnv {
         vec![
             session("1d3f6a9e-0b2c-4f1d-8e7a-5c9b2d4e6f10", "Fix the flaky checkout test", project, "main", 1, 24),
             session("2e4a7b0f-1c3d-4e2f-9f8b-6d0c3e5f7a21", "Split checkout into its own package", project, "checkout-pkg", 5, 61),
-            session("3f5b8c1a-2d4e-4f3a-8a9c-7e1d4f6a8b32", "Why is the rate limiter returning 429s?", &project.join("api"), "main", 26, 12),
+            // One ran under a named account, which the sheet shows beside its title.
+            {
+                let mut limiter = session("3f5b8c1a-2d4e-4f3a-8a9c-7e1d4f6a8b32", "Why is the rate limiter returning 429s?", &project.join("api"), "main", 26, 12);
+                limiter["account"] = json!("work");
+                limiter
+            },
             session("4a6c9d2b-3e5f-4a4b-9bad-8f2e5a7b9c43", "Add Stripe webhooks for refunds", project, "refunds", 72, 88),
         ]
         .into_iter()

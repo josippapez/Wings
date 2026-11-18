@@ -149,9 +149,23 @@ pub fn run(
     program: &str,
     args: &[String],
     cwd: &Path,
+    on_line: impl FnMut(&str) -> bool,
+) -> Result<Exit, String> {
+    run_under(plugin, process, program, args, cwd, None, on_line)
+}
+
+/// `run` with `CLAUDE_CONFIG_DIR` set to `config_dir`, the Claude Code account the program runs under. The host picks it
+/// from an account it knows; a plugin never names the folder.
+pub fn run_under(
+    plugin: &Plugin,
+    process: &Arc<Process>,
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    config_dir: Option<&Path>,
     mut on_line: impl FnMut(&str) -> bool,
 ) -> Result<Exit, String> {
-    let (stdout, stderr) = start(plugin, process, program, args, cwd).inspect_err(|_| process.close())?;
+    let (stdout, stderr) = start(plugin, process, program, args, cwd, config_dir).inspect_err(|_| process.close())?;
     let errors = thread::spawn(move || tail(stderr));
     let mut reader = BufReader::new(stdout);
     let mut line = Vec::new();
@@ -193,9 +207,13 @@ pub fn run(
 }
 
 /// Checks the command, starts it with the writer on its input, and gives its output pipes.
-fn start(plugin: &Plugin, process: &Process, program: &str, args: &[String], cwd: &Path) -> Result<(ChildStdout, ChildStderr), String> {
+fn start(plugin: &Plugin, process: &Process, program: &str, args: &[String], cwd: &Path, config_dir: Option<&Path>) -> Result<(ChildStdout, ChildStderr), String> {
     check(plugin, program, args, cwd)?;
-    let mut child = command(program, args, Some(cwd))?.stdin(Stdio::piped()).spawn().map_err(|error| error.to_string())?;
+    let mut command = command(program, args, Some(cwd))?;
+    if let Some(dir) = config_dir {
+        command.env("CLAUDE_CONFIG_DIR", dir);
+    }
+    let mut child = command.stdin(Stdio::piped()).spawn().map_err(|error| error.to_string())?;
     let (stdout, stderr, stdin) = (child.stdout.take().unwrap(), child.stderr.take().unwrap(), child.stdin.take().unwrap());
     if let Some(writes) = process.writes.lock().unwrap().take() {
         thread::spawn(move || writer(stdin, writes));
@@ -339,5 +357,26 @@ mod tests {
         assert_eq!(exit.code, Some(3));
         assert!(exit.stderr.len() <= STDERR_KEPT);
         assert!(exit.stderr.ends_with("line-2999\n"), "{}", &exit.stderr[exit.stderr.len() - 20..]);
+    }
+
+    #[test]
+    fn runs_under_the_account_folder_the_host_gives_it() {
+        let script = std::env::temp_dir().join(format!("wings-account-{}.sh", std::process::id()));
+        std::fs::write(&script, "echo \"dir:$CLAUDE_CONFIG_DIR\"").unwrap();
+        let script = script.to_string_lossy().into_owned();
+        let p = with_processes(&[&format!("sh {script}")]);
+        let heard = |config: Option<&Path>| {
+            let mut lines = Vec::new();
+            run_under(&p, &Process::new(), "sh", &args(&[&script]), Path::new("/tmp"), config, |line| {
+                lines.push(line.to_owned());
+                true
+            })
+            .unwrap();
+            lines
+        };
+        assert_eq!(heard(Some(Path::new("/accounts/work"))), ["dir:/accounts/work"]);
+        // Without one the program keeps Wings' own environment.
+        assert_eq!(heard(None), [format!("dir:{}", std::env::var("CLAUDE_CONFIG_DIR").unwrap_or_default())]);
+        std::fs::remove_file(&script).unwrap();
     }
 }

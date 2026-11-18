@@ -19,6 +19,7 @@ use wings_agents::{
     ai::{Ai, Made},
     history::{Agent, Filter, History, Hit, Results, Role as Speaker, Snippet, fold, terms},
 };
+use wings_plugins::manifest::View;
 use wings_spaces::claude_accounts;
 
 use crate::{
@@ -146,10 +147,23 @@ impl Sessions {
     }
 
     /// The account a hit ran under, by name, when it isn't the default one.
-    fn account_label(&self, hit: &Hit) -> Option<SharedString> {
+    pub(super) fn account_label(&self, hit: &Hit) -> Option<SharedString> {
         let account = account_of(hit.transcript.as_deref()?)?;
         claude_accounts::label(account, &self.default_account()?).map(SharedString::new)
     }
+}
+
+/// How a manifest's `resumes` names the agent.
+fn agent_key(agent: Agent) -> &'static str {
+    match agent {
+        Agent::Claude => "claude",
+        Agent::OpenCode => "opencode",
+    }
+}
+
+/// The views that declare they can resume sessions of `agent`.
+fn resuming(views: &[View], agent: Agent) -> impl Iterator<Item = &View> {
+    views.iter().filter(move |view| view.resumes.iter().any(|name| name == agent_key(agent)))
 }
 
 /// The account folder a transcript is in: `<account>/projects/<folder>/<id>.jsonl`.
@@ -629,27 +643,82 @@ impl Workspace {
             return Err("Its folder has a name that can't be typed.".into());
         }
         let cwd = Path::new(&session.cwd);
-        let holder = self
-            .projects
-            .iter()
-            .filter(|project| cwd.starts_with(&project.path))
-            .max_by_key(|project| project.path.as_os_str().len())
-            .map(|project| project.path.clone());
-        let project = match holder {
-            Some(path) => path,
-            None if cwd.is_dir() => {
-                let added = self.spaces.add(&session.cwd);
-                self.projects = self.spaces.entries();
-                added.path.into()
-            }
-            None => return Err(format!("{} isn't there any more.", session.cwd)),
-        };
+        let project = self.project_holding(&session.cwd)?;
         let cd = if cwd == project {
             String::new()
         } else {
             format!("cd {} && ", shell_quote(&session.cwd))
         };
         Ok((project, format!("{cd}{command}\r")))
+    }
+
+    /// The project that holds the folder `cwd`, else a new project made of it.
+    fn project_holding(&mut self, cwd: &str) -> Result<PathBuf, String> {
+        let folder = Path::new(cwd);
+        let holder = self
+            .projects
+            .iter()
+            .filter(|project| folder.starts_with(&project.path))
+            .max_by_key(|project| project.path.as_os_str().len())
+            .map(|project| project.path.clone());
+        match holder {
+            Some(path) => Ok(path),
+            None if folder.is_dir() => {
+                let added = self.spaces.add(cwd);
+                self.projects = self.spaces.entries();
+                Ok(added.path.into())
+            }
+            None => Err(format!("{cwd} isn't there any more.")),
+        }
+    }
+
+    /// The views of running plugins that can continue a session of `agent`, as (plugin, view, title).
+    pub(super) fn resume_views(&self, agent: Agent) -> Vec<(String, String, String)> {
+        self.plugins
+            .iter()
+            .flat_map(|installed| {
+                let views = &installed.plugin.manifest.contributes.views;
+                resuming(views, agent)
+                    .filter(move |view| installed.pages.iter().any(|page| page.id == view.id))
+                    .map(move |view| (installed.id.clone(), view.id.clone(), view.title.clone()))
+            })
+            .collect()
+    }
+
+    /// Opens a session in a plugin's view that resumes sessions of its agent (see `resume_views`), in the project that
+    /// holds its folder, with the `{ resume, cwd, program }` the Chat badge opens it with. The plugin runs the agent.
+    pub(super) fn resume_in_view(
+        &mut self,
+        session: &SessionRef,
+        plugin: &str,
+        view: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_history(window, cx);
+        if let Err(error) = self.launch_in_view(session, plugin, view, window, cx) {
+            self.show_notice("Couldn't resume the session".into(), error, cx);
+        }
+    }
+
+    fn launch_in_view(
+        &mut self,
+        session: &SessionRef,
+        plugin: &str,
+        view: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        // The same check as a terminal's: only an id the agent itself writes.
+        resume_command(session.agent, &session.id).ok_or("It has no id the agent can continue.")?;
+        let project = self.project_holding(&session.cwd)?;
+        self.switch_project(project, window, cx);
+        let args = serde_json::json!({ "resume": session.id, "cwd": session.cwd, "program": agent_key(session.agent) });
+        if self.open_plugin_view(plugin, view, Some(args), window, cx) {
+            Ok(())
+        } else {
+            Err(format!("{plugin} isn't running a page named {view}."))
+        }
     }
 
     /// Opens a session in a new tab where it started (see `launch_plan`), under the account of the project there.
@@ -1244,6 +1313,25 @@ impl Workspace {
             })
             .into_any_element(),
         ];
+        // One for each view that can continue it, like the Claude chat for a Claude session.
+        let views = session.as_ref().map(|s| self.resume_views(s.agent)).unwrap_or_default();
+        for (n, (plugin, view, title)) in views.into_iter().enumerate() {
+            items.push(
+                menu_item(
+                    ("history-view", at * 100 + n),
+                    Icon::MessageSquareText,
+                    format!("Resume in {title}"),
+                    None,
+                    false,
+                )
+                .when_some(session.clone(), |item, session| {
+                    item.on_click(cx.listener(move |this, _, window, cx| {
+                        this.resume_in_view(&session, &plugin, &view, window, cx)
+                    }))
+                })
+                .into_any_element(),
+            );
+        }
         if can_fork {
             items.push(
                 menu_item(
@@ -1311,14 +1399,15 @@ fn menu_below(top: f32, menu: impl IntoElement) -> AnyElement {
 fn menu_item(
     id: impl Into<gpui::ElementId>,
     glyph: Icon,
-    label: &'static str,
+    label: impl Into<SharedString>,
     note: Option<&'static str>,
     disabled: bool,
 ) -> Stateful<Div> {
+    let label: SharedString = label.into();
     div()
         .id(id)
         .role(Role::MenuItem)
-        .aria_label(label)
+        .aria_label(label.clone())
         .min_h(px(32.0))
         .flex()
         .items_center()

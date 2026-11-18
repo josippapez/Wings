@@ -25,6 +25,7 @@ use wings_spaces::claude_accounts::{AccountPick, valid_name};
 
 use super::{
     Shared,
+    account::AccountRequest,
     env::{Access, ToolCall},
     ui::{clean_badge, clean_pane_status, clean_sidebar_label},
 };
@@ -90,6 +91,9 @@ struct ExecRequest {
     timeout_ms: Option<f64>,
     /// Send each output line to the frame while the program runs.
     stream: bool,
+    /// Runs under a Claude Code account: see `account`.
+    #[serde(default)]
+    account: Option<AccountRequest>,
 }
 
 #[derive(Deserialize)]
@@ -521,6 +525,7 @@ impl Shared {
             cwd,
             timeout_ms: requested,
             stream,
+            account,
         } = request;
         let timeout = exec::exec_timeout(timeout_ms(requested)?);
         let on_line = stream.then(|| -> exec::OnLine { reply.lines() });
@@ -532,13 +537,15 @@ impl Shared {
             &self.pane_folders(),
             any_repo,
         )?;
-        let result = exec::exec(
+        let config_dir = access.claude_config_dir(account.as_ref(), &cwd);
+        let result = exec::exec_under(
             &access.plugin,
             &program,
             &args,
             Some(&cwd),
             timeout,
             on_line,
+            config_dir.as_deref(),
         )?;
         to_json(&result)
     }

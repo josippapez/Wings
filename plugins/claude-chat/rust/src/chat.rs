@@ -239,7 +239,10 @@ fn launch(resume: Option<String>) {
             .to_vec();
         args.extend(resume.as_ref().map(|id| format!("--resume={id}")));
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        let process = host::spawn(&program, &args, &cwd, &Session::opening(start_mode.as_deref()), move |line| hear(run, line));
+        // Under the account the session's transcript is in, which a plain `claude --resume` would not find if it isn't the
+        // default one; a new chat gets its project's, as a terminal there does.
+        let account = host::Account::of_session(resume.as_deref());
+        let process = host::spawn_as(&account, &program, &args, &cwd, &Session::opening(start_mode.as_deref()), move |line| hear(run, line));
         let current = with(|c| {
             if c.run != run {
                 return false;

@@ -15,7 +15,7 @@ use crate::{
     log_line,
     manifest::{
         Contributes, Manifest, Permissions, Plugin, SectionSort, BLOCK_MIN_HEIGHT, HOOK_EVENTS, MAX_BLOCKS, MAX_MCP_INSTRUCTIONS, PANEL_ICONS, POPOVER_HEIGHT,
-        POPOVER_WIDTH, UI_KINDS, VIEW_PLACES,
+        POPOVER_WIDTH, RESUMABLE_AGENTS, UI_KINDS, VIEW_PLACES,
     },
     panes::plain_word,
     post::post_entry,
@@ -211,6 +211,14 @@ fn check_contributes(dir: &Path, contributes: &Contributes) -> Result<(), String
         }
         if (view.new_tab || view.multiple || view.no_project) && !view.opens.iter().any(|o| o == "tab") {
             return Err(format!("view {:?} sets newTab, multiple or noProject, which need \"tab\" in opens", view.id));
+        }
+        if !view.resumes.is_empty() {
+            if !view.opens.iter().any(|o| o == "tab") {
+                return Err(format!("view {:?} sets resumes, which needs \"tab\" in opens", view.id));
+            }
+            if view.resumes.iter().any(|agent| !RESUMABLE_AGENTS.contains(&agent.as_str())) {
+                return Err(format!("view {:?} resumes must list some of {RESUMABLE_AGENTS:?}", view.id));
+            }
         }
         check_page(dir, "view", &view.page)?;
     }
@@ -484,6 +492,29 @@ mod tests {
         let plain = manifest(None).unwrap().manifest.contributes.sidebars[0].clone();
         assert_eq!(plain.popover, None);
         assert!(serde_json::to_value(&plain).unwrap().get("popover").is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_view_that_resumes_sessions_names_known_agents_and_opens_as_a_tab() {
+        let dir = std::env::temp_dir().join(format!("wings-resumes-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        for file in ["main.js", "page.html"] {
+            fs::write(dir.join(file), "").unwrap();
+        }
+        let manifest = |resumes: Value, opens: Value| {
+            let view = serde_json::json!({ "id": "v", "title": "V", "page": "page.html", "opens": opens, "resumes": resumes });
+            let m = serde_json::json!({ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js", "contributes": { "views": [view] } });
+            fs::write(dir.join("wings-plugin.json"), m.to_string()).unwrap();
+            load(&dir)
+        };
+        let ok = manifest(serde_json::json!(["claude"]), serde_json::json!(["tab"])).unwrap();
+        assert_eq!(ok.manifest.contributes.views[0].resumes, ["claude"]);
+        assert!(manifest(serde_json::json!(["claude"]), serde_json::json!(["modal"])).err().unwrap().contains("needs \"tab\" in opens"));
+        assert!(manifest(serde_json::json!(["gemini"]), serde_json::json!(["tab"])).err().unwrap().contains("resumes must list"));
+        // Without it a view serializes as before, so plugins approved earlier keep their grant.
+        let plain = manifest(serde_json::json!([]), serde_json::json!(["tab"])).unwrap().manifest.contributes.views[0].clone();
+        assert!(serde_json::to_value(&plain).unwrap().get("resumes").is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 
