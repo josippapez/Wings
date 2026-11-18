@@ -463,7 +463,7 @@ pub fn send() {
             // /plugins, /plugin and /mcp open their dialog over the chat, filled by what the line asks.
             if let Some((show, line)) = c.session.dialog_command(&text) {
                 c.draft.clear();
-                c.plugins = Some(plugins::Dialog { show, query: String::new() });
+                c.plugins = Some(plugins::Dialog::new(show));
                 return Some(line);
             }
         }

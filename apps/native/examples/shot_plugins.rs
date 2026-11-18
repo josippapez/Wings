@@ -721,11 +721,20 @@ fn claude_chat(out: PathBuf) {
         std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
     };
-    script(bin.join("claude"), r#"cat "$CHAT_FIXTURE"; if [ -n "$CHAT_EXIT" ]; then echo "$CHAT_STDERR" >&2; exit "$CHAT_EXIT"; fi; cat > /dev/null"#);
+    // `claude plugin ...` is what the plugins dialog's Discover view runs: the list prints a made-up one, an install says it went well.
+    std::fs::write(root.join("available.json"), include_str!("../../../plugins/claude-chat/rust/tests/available.json")).unwrap();
+    script(
+        bin.join("claude"),
+        r#"if [ "$1" = plugin ]; then case "$2" in list) cat "$CHAT_AVAILABLE";; install) echo '{"command":"install","outcome":"ok","scope":"user"}';; esac; exit 0; fi
+cat "$CHAT_FIXTURE"; if [ -n "$CHAT_EXIT" ]; then echo "$CHAT_STDERR" >&2; exit "$CHAT_EXIT"; fi; cat > /dev/null"#,
+    );
     // Wings finds programs on the login shell's PATH, so the scene's shell names the fake's folder.
     script(root.join("shell"), &format!("printf '__WINGS_PATH__{}__WINGS_PATH__'", bin.display()));
     // SAFETY: set before anything in this process reads the environment from another thread.
-    unsafe { std::env::set_var("SHELL", root.join("shell")) };
+    unsafe {
+        std::env::set_var("SHELL", root.join("shell"));
+        std::env::set_var("CHAT_AVAILABLE", root.join("available.json"));
+    }
 
     let init = json!({ "type": "system", "subtype": "init", "session_id": "5b7e2c1a-0f3d-4c8e-9a61-2d4f8b3c7e90", "model": "claude-opus-5-5" });
     let user = |text: &str| json!({ "type": "user", "message": { "role": "user", "content": text } });
@@ -940,7 +949,7 @@ fn claude_chat(out: PathBuf) {
         .extend(["toolbox:lint", "toolbox:format", "release-notes:write"].map(|name| json!({ "name": name, "description": "", "argumentHint": "" })));
     let installed: Vec<serde_json::Value> = include_str!("../../../plugins/claude-chat/rust/tests/plugins.jsonl").lines().map(|line| serde_json::from_str(line).unwrap()).collect();
     let plugins = opened([init.clone(), skilled].into_iter().chain(installed).collect());
-    let scenes: [Scene; 26] = [
+    let scenes: [Scene; 27] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -954,7 +963,10 @@ fn claude_chat(out: PathBuf) {
         ("usage", opened(vec![init.clone(), full_usage]), None, Some("type:/usage;keys:enter"), "Plan usage limits"),
         // /plugins and /mcp open the plugins dialog over the chat, each leading with its own list.
         ("plugins", plugins.clone(), None, Some("type:/plugins;keys:enter"), "toolbox"),
-        ("mcp", plugins, None, Some("type:/mcp;keys:enter"), "Needs sign-in"),
+        ("mcp", plugins.clone(), None, Some("type:/mcp;keys:enter"), "Needs sign-in"),
+        // The dialog's Discover view lists what the fake `claude plugin list` prints; three tabs reach its search field (the
+        // close button and the two chips come first), and the filter leaves api-guard.
+        ("discover", plugins, None, Some("type:/plugins;keys:enter;chip:Discover;keys:tab tab tab;type:guard"), "api-guard"),
         ("failed", vec![], Some(("1", "Error: Invalid API key · Please run /login")), None, "Invalid API key"),
         ("work", worked, None, None, "Worked for 1m 23s"),
         ("work-open", work.clone(), None, Some("disclose:Ran 1 command"), "pnpm test discount"),
@@ -1068,6 +1080,7 @@ fn claude_chat(out: PathBuf) {
                             cx.update(|cx| cx.write_to_clipboard(gpui::ClipboardItem::new_image(&picture)));
                             cx.simulate_keystrokes(window, "cmd-v");
                         }
+                        Some(("chip", label)) => assert!(handle.read_with(&cx, |view, _| view.press_chip(label)).unwrap()),
                         Some(("press", label)) => assert!(handle.read_with(&cx, |view, _| view.press(label, 0)).unwrap()),
                         Some(("disclose", summary)) => assert!(handle.update(&mut cx, |view, _, cx| view.press_disclosure(summary, cx)).unwrap()),
                         Some(("select", label)) => assert!(handle.update(&mut cx, |view, _, cx| view.open_select(label, cx)).unwrap()),
