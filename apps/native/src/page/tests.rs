@@ -2045,3 +2045,39 @@ fn a_split_measures_its_width_and_folds_its_side_pane_when_narrow() {
         settle(&app, &mut window, |view| view.split_narrow(1) == Some(narrow));
     }
 }
+
+/// A page under a sheet that has a search in its header, until the sheet's `onClose` takes it away.
+fn sheet() -> String {
+    let (mut closed, mut query) = (0, String::new());
+    fake::page("page", move |event| {
+        match event {
+            Some(("5:close", _)) => closed += 1,
+            Some(("7:input", input)) => query = input["value"].as_str().unwrap_or_default().to_owned(),
+            _ => {}
+        }
+        let sheet = json!({ "id": 3, "type": "Sheet", "props": { "onClose": "5:close" }, "children": [
+            { "id": 4, "type": "Slot", "props": { "name": "title" }, "children": [text_node(40, "Past sessions")] },
+            { "id": 6, "type": "Slot", "props": { "name": "header" }, "children": [
+                { "id": 7, "type": "SearchField", "props": { "label": "Search", "placeholder": "Search", "onInput": "7:input" } }] },
+            text(8, 9, "Fix the checkout".into())] });
+        let body: Vec<Value> = std::iter::once(text(10, 11, format!("Closed {closed}, query {query}.")))
+            .chain((closed == 0).then_some(sheet))
+            .collect();
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Page", "props": { "flush": true }, "children": [
+            { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": body }] }] })
+    })
+}
+
+/// A sheet draws its title and what it lists, its search has the keyboard as it opens, and Escape there closes it.
+#[test]
+fn a_sheet_takes_the_keys_to_its_search_and_escape_sends_its_on_close() {
+    let (app, mut window) = open(sheet());
+    settle(&app, &mut window, shows("Past sessions"));
+    assert!(window.read(|view, _| view.text().contains("Fix the checkout")));
+    window.draw();
+    window.simulate_input("checkout");
+    settle(&app, &mut window, shows("query checkout."));
+    key(&mut window, "escape");
+    settle(&app, &mut window, shows("Closed 1,"));
+    assert!(!window.read(|view, _| view.text().contains("Past sessions")));
+}

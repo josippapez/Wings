@@ -91,6 +91,9 @@ impl PageView {
     }
 
     pub(super) fn chips(&self, select: &tree::Select, cx: &mut Context<Self>) -> AnyElement {
+        if !select.line && super::sheet_view::in_header() {
+            return self.sheet_chips(select, cx);
+        }
         // Every chip's keys move along the same chips, so they share one list of them and their focus.
         let focus = Rc::new(
             select
@@ -295,6 +298,28 @@ impl PageView {
         field: &tree::SearchField,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        // In a sheet's header it is the sheet's search, drawn as Past sessions' is.
+        if super::sheet_view::in_header() {
+            let entity = self.search_entity(field, px(ui::SHEET_SEARCH_WIDTH), cx);
+            return ui::search_box(entity, None).into_any_element();
+        }
+        let entity = self.search_entity(field, px(280.0), cx);
+        div()
+            .min_w_0()
+            .border_1()
+            .border_color(rgba(ui::HAIRLINE))
+            .rounded(px(6.0))
+            .child(entity)
+            .into_any_element()
+    }
+
+    /// The field a `SearchField` types into, `width` wide, made the first time it is drawn.
+    fn search_entity(
+        &self,
+        field: &tree::SearchField,
+        width: Pixels,
+        cx: &mut Context<Self>,
+    ) -> gpui::Entity<crate::text_field::TextField> {
         let mut fields = self.fields.borrow_mut();
         let state = fields.entry(field.id).or_insert_with(|| {
             let value = field.value.clone().unwrap_or_default();
@@ -303,7 +328,7 @@ impl PageView {
                     Role::SearchInput,
                     field.label.clone(),
                     field.placeholder.clone(),
-                    px(280.0),
+                    width,
                     cx,
                 );
                 input.text = value;
@@ -331,14 +356,7 @@ impl PageView {
             }
         });
         state.handler = field.on_input.clone();
-        let entity = state.field.clone();
-        div()
-            .min_w_0()
-            .border_1()
-            .border_color(rgba(ui::HAIRLINE))
-            .rounded(px(6.0))
-            .child(entity)
-            .into_any_element()
+        state.field.clone()
     }
 
     pub(super) fn input(&self, input: &tree::Input, cx: &mut Context<Self>) -> AnyElement {

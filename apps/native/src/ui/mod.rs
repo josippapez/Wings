@@ -6,6 +6,7 @@ mod drag;
 mod menu;
 pub mod motion;
 mod parts;
+mod sheet;
 mod slots;
 mod status_dot;
 mod tooltip;
@@ -16,6 +17,10 @@ pub use menu::{
     context_menu, dropdown_menu, menu, menu_item, menu_item_text, menu_item_with, menu_separator,
 };
 pub use parts::{board_box, disclosure_trigger, dot, gauge, heading, list, list_item, plain_card};
+pub use sheet::{
+    SEARCH_MARK, SHEET_SEARCH_WIDTH, SHEET_WIDTH, search_box, segment, segmented, sheet, sheet_corner,
+    sheet_header, sheet_list,
+};
 pub use slots::{drawing_piece, slot, slot_layer};
 pub use status_dot::{spinner as working_spinner, spinner_layer, status_dot, status_dot_slot};
 pub use tooltip::{tip, tooltip, tooltip_exit};

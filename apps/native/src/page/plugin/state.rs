@@ -15,6 +15,9 @@ struct State {
     save: Box<dyn Fn(Value) -> Result<(), String> + Send + Sync>,
     /// What a tab's page says of the agent it runs, for the sidebar's Agents.
     agent: Option<TabAgent>,
+    /// What a tab's page names its tab, in place of its view's title.
+    title: Option<String>,
+    /// Called when the agent or the title changes, so the window draws them again.
     agent_changed: Option<Box<dyn Fn() + Send + Sync>>,
     /// Closes the tab that holds this state, when its page asks.
     close: Option<Box<dyn Fn(&FrameState) + Send + Sync>>,
@@ -48,13 +51,14 @@ impl FrameState {
                 value: initial.unwrap_or(Value::Null),
                 save: Box::new(save),
                 agent: None,
+                title: None,
                 agent_changed: None,
                 close: None,
             })),
         }
     }
 
-    /// Calls `changed` each time the page says what its agent does.
+    /// Calls `changed` each time the page says what its agent does or names its tab.
     pub fn on_agent(self, changed: impl Fn() + Send + Sync + 'static) -> Self {
         self.state.lock().unwrap().agent_changed = Some(Box::new(changed));
         self
@@ -89,6 +93,25 @@ impl FrameState {
         let mut state = self.state.lock().unwrap();
         if state.agent != agent {
             state.agent = agent;
+            if let Some(changed) = &state.agent_changed {
+                changed();
+            }
+        }
+        Ok(())
+    }
+
+    /// What the page named its tab, if it did.
+    pub fn title(&self) -> Option<String> {
+        self.state.lock().unwrap().title.clone()
+    }
+
+    pub(super) fn set_title(&self, title: Option<String>) -> Result<(), String> {
+        if self.place != StatePlace::Tab {
+            return Err("Only a page shown as a tab can name its tab".into());
+        }
+        let mut state = self.state.lock().unwrap();
+        if state.title != title {
+            state.title = title;
             if let Some(changed) = &state.agent_changed {
                 changed();
             }

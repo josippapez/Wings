@@ -289,6 +289,41 @@ fn a_tabs_page_closes_its_own_tab_and_no_other() {
     assert_eq!(window.read(|w, _| w.plugin_tabs.len()), 1);
 }
 
+/// A page that names its own tab as it starts, over two lines, in the second tab of it to start only.
+fn naming_page() -> String {
+    let started = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    fake::script("page", move || {
+        let second = started.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 1;
+        let mut asked = false;
+        move |cx: &mut Cx<'_>, _: Hear<'_>| {
+            if second && !std::mem::replace(&mut asked, true) {
+                cx.call("setTabTitle", json!({ "title": "Fix the\ncheckout" }));
+            }
+        }
+    })
+}
+
+#[test]
+fn a_tabs_page_names_its_own_tab_and_no_other() {
+    let data = Data::temp();
+    let views = json!([{ "id": "chat", "title": "Chat", "page": "dist/chat.html", "opens": ["tab"], "multiple": true }]);
+    data.install_script("chatty", json!({ "contributes": { "views": views } }), &fake::idle("main"), &[("chat", &naming_page())], "chatty-scope");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.update(|w, window, cx| {
+        assert!(w.open_plugin_view("chatty", "chat", Some(json!({ "n": 1 })), window, cx));
+        assert!(w.open_plugin_view("chatty", "chat", Some(json!({ "n": 2 })), window, cx));
+    });
+    // On one line, in place of the view's title.
+    until(&app, &mut window, "the page didn't name its tab", |w| {
+        w.plugin_tabs.iter().any(|tab| tab.label().to_string() == "Fix the checkout")
+    });
+    for _ in 0..20 {
+        app.run_until_parked();
+    }
+    let labels: Vec<String> = window.read(|w, _| w.plugin_tabs.iter().map(|tab| tab.label().to_string()).collect());
+    assert_eq!(labels.iter().filter(|label| *label == "Chat").count(), 1, "the other tab keeps its view's title: {labels:?}");
+}
+
 /// A main that opens its view `approve` as a modal on the action `open`, and closes it on `close`.
 fn modal_main() -> String {
     fake::script("main", || {

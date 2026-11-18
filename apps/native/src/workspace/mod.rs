@@ -699,7 +699,7 @@ impl Workspace {
                 Active::Plugin(tab.id),
                 self.tab(
                     Active::Plugin(tab.id),
-                    tab.title.clone(),
+                    tab.label(),
                     None,
                     &tab.focus,
                     cx,

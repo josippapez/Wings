@@ -17,6 +17,8 @@ mod chat;
 mod main_frame;
 #[cfg(any(feature = "chat", test))]
 mod mentions;
+#[cfg(feature = "chat")]
+mod past_view;
 mod plugins;
 #[cfg(feature = "chat")]
 mod plugins_view;

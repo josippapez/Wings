@@ -43,13 +43,17 @@ pub enum State {
     Moved,
 }
 
-/// The project's past sessions, while their list is open.
+/// The project's past sessions, while their sheet is open.
 #[derive(Default)]
 pub struct Past {
     pub query: String,
     /// None while they load.
     pub sessions: Option<Vec<Value>>,
     pub error: Option<String>,
+    /// How recently a listed one was last active: `today`, `week` or `month`, and any time when empty.
+    pub since: String,
+    /// The branch a listed one ran on, or any.
+    pub branch: Option<String>,
 }
 
 pub struct Chat {
@@ -95,6 +99,8 @@ pub struct Chat {
     pub branch: Option<String>,
     /// What the sidebar's Agents was last told of this chat: its state, name and what it does.
     agent: Option<(String, String, Option<String>)>,
+    /// What the tab was last named, none for its view's title.
+    titled: Option<String>,
     /// Going on in a terminal once Claude Code here has ended.
     moving: bool,
     input: Option<ProcessInput>,
@@ -102,7 +108,8 @@ pub struct Chat {
     requests: u32,
     /// Which start of Claude Code the page shows: one started before it is let go of, and its lines are dropped.
     run: u32,
-    cwd: String,
+    /// The folder Claude Code runs in.
+    pub cwd: String,
     program: String,
 }
 
@@ -131,6 +138,7 @@ thread_local! {
         changes: None,
         branch: None,
         agent: None,
+        titled: None,
         moving: false,
         input: None,
         requests: 0,
@@ -390,7 +398,7 @@ fn hear(run: u32, line: &Value) {
 /// Tells the sidebar's Agents what Claude does in this chat, when that changed: it needs you while a question of
 /// Claude's waits, works while a turn runs, and is done once one ended while you were looking elsewhere.
 fn report_agent() {
-    let agent = with(|c| {
+    let (agent, retitled) = with(|c| {
         let asking = c.session.items.iter().find_map(|item| match item {
             Item::Ask(ask) if ask.answer.is_none() => Some(ask.tool.clone()),
             _ => None,
@@ -401,25 +409,37 @@ fn report_agent() {
             None if c.session.items.is_empty() || host::focused() => ("idle", None),
             None => ("done", None),
         };
-        let name = c
-            .session
-            .items
-            .iter()
-            .find_map(|item| match item {
-                Item::User(said) | Item::UserImages(said, _) => Some(truncate(said.lines().next().unwrap_or_default().trim(), 60)),
-                _ => None,
-            })
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| "Claude chat".into());
-        let agent = (state.to_owned(), name, summary);
-        (c.agent.as_ref() != Some(&agent)).then(|| {
+        // The tab is named after the session too, as a terminal's tab shows what runs in it.
+        let title = name(c);
+        let retitled = (c.titled != title).then(|| {
+            c.titled = title.clone();
+            title.clone()
+        });
+        let agent = (state.to_owned(), title.unwrap_or_else(|| "Claude chat".into()), summary);
+        let agent = (c.agent.as_ref() != Some(&agent)).then(|| {
             c.agent = Some(agent.clone());
             agent
-        })
+        });
+        (agent, retitled)
     });
     if let Some((state, name, summary)) = agent {
         drop(host::set_agent(Some((&state, &name, summary.as_deref()))));
     }
+    if let Some(title) = retitled {
+        drop(host::set_tab_title(title.as_deref()));
+    }
+}
+
+/// The session's name: the first line of your first message, cut short. None before you have said anything.
+pub fn name(c: &Chat) -> Option<String> {
+    c.session
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::User(said) | Item::UserImages(said, _) => Some(truncate(said.lines().next().unwrap_or_default().trim(), 60)),
+            _ => None,
+        })
+        .filter(|name| !name.is_empty())
 }
 
 /// Writes what `make` makes of the chat and the next request number, while Claude Code runs.
@@ -657,19 +677,41 @@ pub fn resume(id: &str) {
     launch(Some(id.to_owned()));
 }
 
-/// Opens the list of the project's past sessions, or closes it.
-pub fn toggle_past() {
-    let open = with(|c| {
-        c.panel = None;
-        c.past = match c.past.take() {
-            Some(_) => None,
-            None => Some(Past::default()),
-        };
-        c.past.is_some()
+/// Opens the sheet of the project's past sessions over the chat.
+pub fn open_past() {
+    let opened = with(|c| {
+        let closed = c.past.is_none();
+        if closed {
+            c.past = Some(Past::default());
+        }
+        closed
     });
-    if open {
+    if opened {
         load_past(String::new());
     }
+}
+
+/// Closes the sheet of past sessions.
+pub fn close_past() {
+    with(|c| c.past = None);
+}
+
+/// Lists only the past sessions last active `since` (`today`, `week` or `month`), or at any time.
+pub fn set_since(since: &str) {
+    with(|c| {
+        if let Some(past) = &mut c.past {
+            past.since = since.to_owned();
+        }
+    });
+}
+
+/// Lists only the past sessions on `branch`, or on every branch when it is empty.
+pub fn set_branch(branch: &str) {
+    with(|c| {
+        if let Some(past) = &mut c.past {
+            past.branch = Some(branch.to_owned()).filter(|branch| !branch.is_empty());
+        }
+    });
 }
 
 /// Lists the past sessions that match `query`.

@@ -19,13 +19,14 @@ const COLUMN: u32 = 760;
 const ROWS: usize = 8;
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-/// The toolbar's way back to the conversation: `← Chat` and the view's name.
+/// The header's way back to the conversation: `← Chat` and the view's name.
 pub fn crumbs(c: &Chat) -> Option<Node> {
     let name = match c.panel? {
         Panel::Usage => "Usage",
         Panel::Context => "Context",
     };
-    Some(row().prop("gap", "s").prop("align", "center").child(button("← Chat", "ghost", false, chat::close_panel)).child(muted(name)))
+    // Small, as the header it sits in is no taller than its icon buttons.
+    Some(row().prop("gap", "s").prop("align", "center").child(button("← Chat", "ghost", false, chat::close_panel).prop("size", "sm")).child(muted(name)))
 }
 
 /// The view that is open.

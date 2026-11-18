@@ -392,6 +392,17 @@ impl Link for FrameLink {
             };
             return reply.done(state.close().map(|()| "null".into()));
         }
+        // A tab's page names its own tab, as a terminal's tab shows what runs in it.
+        if method == "setTabTitle" {
+            let Some(state) = self.state.clone() else {
+                return reply.err("Only a page shown as a tab can name its tab".into());
+            };
+            let title = match tab_title(params.get("title")) {
+                Ok(title) => title,
+                Err(error) => return reply.err(error),
+            };
+            return reply.done(state.set_title(title).map(|()| "null".into()));
+        }
         // Each click or key lets the page try once to copy, to write to a program it runs, or to open the file picker:
         // what reaches an agent, like the answer to its permission prompt, is what you just asked for in the page, never
         // the plugin alone, and a picker never opens by itself.
@@ -457,6 +468,20 @@ fn tab_agent(agent: &serde_json::Value) -> Result<TabAgent, String> {
         name: text("name", 80)?.ok_or("An agent needs a name")?,
         summary: text("summary", 200)?,
     })
+}
+
+/// `setTabTitle`'s `title`, checked: one line of at most 80 characters, or none (null or blank) for the view's title.
+fn tab_title(title: Option<&serde_json::Value>) -> Result<Option<String>, String> {
+    let title = match title {
+        None | Some(serde_json::Value::Null) => return Ok(None),
+        Some(title) => title.as_str().ok_or("A tab's title is a string or null")?,
+    };
+    if title.chars().count() > 80 {
+        return Err("A tab's title is at most 80 characters".into());
+    }
+    let words = title.split(|c: char| c.is_whitespace() || c.is_control());
+    let line = words.filter(|word| !word.is_empty()).collect::<Vec<_>>().join(" ");
+    Ok((!line.is_empty()).then_some(line))
 }
 
 /// A frame's place among the plugin's frames, until the frame is let go of.

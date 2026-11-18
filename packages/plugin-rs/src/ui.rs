@@ -232,6 +232,19 @@ pub fn toolbar_with(title: &str, children: Node, actions: Option<Node>) -> Node 
         .maybe(actions.map(|actions| slot("actions", actions)))
 }
 
+/// A panel that slides in over what holds it from the right, as Wings' Past sessions: its `title` and `description`,
+/// the `header` under them (a `search_field` and `chips` there are the sheet's own search and toggle), then `body`,
+/// which scrolls. `on_close` hears Escape, a press beside it and its close button. Put it last in the page's body.
+/// Wings 0.2.37.
+pub fn sheet(title: &str, description: &str, header: impl IntoIterator<Item = Node>, body: impl IntoIterator<Item = Node>, on_close: impl Fn() + 'static) -> Node {
+    Node::new("Sheet")
+        .child(Node::new("Slot").prop("name", "title").text(title))
+        .child(Node::new("Slot").prop("name", "description").text(description))
+        .child(Node::new("Slot").prop("name", "header").children(header))
+        .children(body)
+        .on("onClose", move |_| on_close())
+}
+
 /// A button that is a whole row of a `List`, to put in a `list_row`: `children` side by side, or one under the other
 /// with `.prop("layout", "column")`. `.prop("indent", n)` moves it in by `n` points.
 pub fn list_button(children: impl IntoIterator<Item = Node>, on_click: impl Fn() + 'static) -> Node {

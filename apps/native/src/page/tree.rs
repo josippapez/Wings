@@ -85,7 +85,7 @@ choice!(
 choice!(Weight { Normal = "normal", Medium = "medium", Strong = "strong" });
 choice!(
     /// The names `Icon` draws.
-    IconName { Check = "check", ChevronDown = "chevron-down", Copy = "copy", Trash = "trash" }
+    IconName { Check = "check", ChevronDown = "chevron-down", Copy = "copy", Trash = "trash", Claude = "claude" }
 );
 choice!(
     /// A button's `size`, as plugin-ui.css's `.w-button[data-size]`.
@@ -175,6 +175,7 @@ pub enum Node {
     Bar(Bar),
     Sunburst(Sunburst),
     Dialog(Dialog),
+    Sheet(Sheet),
 }
 
 /// A named part of the component it's in.
@@ -241,6 +242,8 @@ pub struct Text {
     pub title: Option<String>,
     /// It pulses softly, as a shimmer does, while something it names is under way, like "Thinking".
     pub shimmer: bool,
+    /// `mark: true`: a word a search found, marked as Past sessions marks it.
+    pub mark: bool,
     /// Milliseconds since the epoch: the text ends with how long ago that was, counting up while it shows, as in
     /// "Running pnpm test · 16s". The app counts, so the page needn't send a new tree each second.
     pub since: Option<i64>,
@@ -373,6 +376,8 @@ pub struct Bar {
     pub id: u64,
     pub edge: Edge,
     pub gap: Gap,
+    /// `variant: "slim"`: as tall as a terminal pane's header, for a title and a row of small icon buttons.
+    pub slim: bool,
     pub children: Vec<Node>,
 }
 
@@ -387,6 +392,19 @@ pub struct Dialog {
     pub width: f32,
     pub on_close: Option<String>,
     pub children: Vec<Node>,
+}
+
+/// A panel that slides in over the page from its right edge, as Wings' Past sessions does: its `title` and
+/// `description` with a close button, what its `header` slot holds under them (a search, filters) over a hairline, and
+/// its other children under that, scrolling. `onClose` hears Escape, a press beside it and its close button.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Sheet {
+    pub id: u64,
+    pub title: Vec<Node>,
+    pub description: Vec<Node>,
+    pub header: Vec<Node>,
+    pub body: Vec<Node>,
+    pub on_close: Option<String>,
 }
 
 /// Two panes side by side: `start` is `size` points wide, `end` takes the rest. With `side: "end"` it is the other
@@ -615,6 +633,8 @@ pub struct Input {
 pub struct Icon {
     pub id: u64,
     pub name: IconName,
+    /// Points square, 16 unless the page says.
+    pub size: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -833,6 +853,7 @@ impl Node {
             Node::Bar(n) => Some(n.id),
             Node::Sunburst(n) => Some(n.id),
             Node::Dialog(n) => Some(n.id),
+            Node::Sheet(n) => Some(n.id),
         }
     }
 
@@ -882,6 +903,7 @@ impl Node {
             Node::Disclosure(n) => vec![&n.summary, &n.body],
             Node::Combobox(n) => vec![&n.field, &n.options, &n.empty],
             Node::Menu(n) => vec![&n.trigger, &n.items],
+            Node::Sheet(n) => vec![&n.title, &n.description, &n.header, &n.body],
         }
     }
 }
@@ -967,6 +989,7 @@ impl Walk {
                 | "Sunburst"
                 | "Menu"
                 | "Dialog"
+                | "Sheet"
         ) {
             return Ok(None);
         }
@@ -1037,6 +1060,7 @@ impl Walk {
                     .map(str::to_owned),
                 title: title(&props),
                 shimmer: on("shimmer"),
+                mark: on("mark"),
                 since: props.get("since").and_then(Value::as_f64).map(|ms| ms as i64),
                 children: parts(children),
             }),
@@ -1151,8 +1175,20 @@ impl Walk {
                 id,
                 edge: choice(&props, "edge"),
                 gap: choice(&props, "gap"),
+                slim: str_prop(&props, "variant") == Some("slim"),
                 children: parts(children),
             }),
+            "Sheet" => {
+                let mut slots = Slots(children);
+                Node::Sheet(Sheet {
+                    id,
+                    title: slots.take("title"),
+                    description: slots.take("description"),
+                    header: slots.take("header"),
+                    body: parts(slots.0),
+                    on_close: handler("onClose"),
+                })
+            }
             "Split" => {
                 let mut slots = Slots(children);
                 Node::Split(Split {
@@ -1289,7 +1325,11 @@ impl Walk {
                 time: kind == "TextInput" && str_prop(&props, "type") == Some("time"),
             }),
             "Icon" => match str_prop(&props, "name").and_then(IconName::choose) {
-                Some(name) => Node::Icon(Icon { id, name }),
+                Some(name) => Node::Icon(Icon {
+                    id,
+                    name,
+                    size: number(&props, "size").unwrap_or(16.0).clamp(8.0, 32.0) as f32,
+                }),
                 None => return Ok(None),
             },
             // One that holds anything the app doesn't draw is left out, as an icon it has no name for is.
@@ -2276,5 +2316,24 @@ mod tests {
         // A width past the bounds is held to them, and a close that isn't a handler is none.
         assert_eq!((dialogs[1].width, dialogs[1].on_close.as_deref()), (1_000.0, None));
         assert_eq!(dialogs[2].width, 280.0);
+    }
+
+    #[test]
+    fn a_sheet_has_a_title_a_description_a_header_and_a_body_and_hears_its_close() {
+        let parsed = tree(json!([{"id":1,"type":"Sheet","props":{"onClose":"1:onClose"},"children":[
+            slot("title", json!([{"id":3,"type":"#text","text":"Past sessions"}])),
+            slot("description", json!([{"id":4,"type":"#text","text":"In shop."}])),
+            slot("header", json!([{"id":5,"type":"SearchField","props":{"label":"Search"}}])),
+            text(6, "Fix the checkout"),
+            text(7, "Split the cart")
+        ]}]))
+        .unwrap();
+        let Node::Sheet(sheet) = &parsed.children[0] else { panic!("a sheet") };
+        assert_eq!(sheet.on_close.as_deref(), Some("1:onClose"));
+        assert_eq!((plain_text(&sheet.title), plain_text(&sheet.description)), ("Past sessions".into(), "In shop.".into()));
+        assert!(matches!(sheet.header.as_slice(), [Node::SearchField(_)]));
+        assert_eq!(sheet.body.len(), 2);
+        // What a reader would see has its title, so a page that waits on it finds it.
+        assert_eq!(parsed.text(), "Past sessions In shop. Fix the checkoutSplit the cart");
     }
 }

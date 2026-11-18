@@ -24,8 +24,6 @@ use super::{Active, HAIRLINE, Workspace, context_menu::MenuTarget, project::SIDE
 /// The desktop's `bg-blocked/10` behind an agent that needs you, and `/15` on hover.
 const BLOCKED_ROW: u32 = theme::BLOCKED << 8 | 0x1a;
 const BLOCKED_ROW_HOVER: u32 = theme::BLOCKED << 8 | 0x26;
-/// The Claude spark's brand orange, as in the desktop's `PaneIcon`.
-const CLAUDE: u32 = 0xd97757;
 
 impl Workspace {
     /// The agents in the desktop list's order (needs you, done, working, idle), or nothing while
@@ -577,7 +575,7 @@ fn tab_state(state: &str) -> AgentState {
 /// An agent's icon and its color, as the desktop's `PaneIcon` draws it.
 fn glyph(kind: AgentKind) -> (Icon, u32) {
     match kind {
-        AgentKind::Claude => (Icon::Claude, CLAUDE),
+        AgentKind::Claude => (Icon::Claude, theme::CLAUDE),
         AgentKind::Opencode => (Icon::Opencode, theme::FOREGROUND),
         _ => (Icon::Terminal, theme::FOREGROUND),
     }

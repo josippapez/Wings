@@ -29,6 +29,13 @@ pub(super) struct PluginTab {
     pub(super) focus: FocusHandle,
 }
 
+impl PluginTab {
+    /// What its tab shows: what its page named it, or its view's title.
+    pub(super) fn label(&self) -> SharedString {
+        self.state.title().map_or_else(|| self.title.clone(), SharedString::from)
+    }
+}
+
 impl Workspace {
     pub(super) fn has_tasks_board(&self) -> bool {
         self.plugins.iter().any(|plugin| {

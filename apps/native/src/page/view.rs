@@ -22,6 +22,8 @@ mod controls_view;
 mod graph_view;
 #[path = "rich_view.rs"]
 mod rich_view;
+#[path = "sheet_view.rs"]
+mod sheet_view;
 #[path = "sunburst_view.rs"]
 mod sunburst_view;
 
@@ -152,6 +154,12 @@ pub struct PageView {
     dialog_focus: gpui::FocusHandle,
     dialog_shown: Option<u64>,
     focus_before: Option<gpui::FocusHandle>,
+    /// The focus each `Sheet`'s panel tracks, by node id; the sheets drawn in this render, each with what takes the
+    /// keyboard when it opens; the ones the last render showed; and what had the keyboard before a sheet took it.
+    sheet_focus: RefCell<HashMap<u64, gpui::FocusHandle>>,
+    sheets_drawn: RefCell<Vec<(u64, gpui::FocusHandle)>>,
+    sheets_shown: Vec<u64>,
+    sheet_return: Option<gpui::FocusHandle>,
     _events: Task<()>,
 }
 
@@ -211,6 +219,9 @@ impl PageView {
         self.reveal = None;
         self.dialog_shown = None;
         self.focus_before = None;
+        self.sheet_focus.borrow_mut().clear();
+        self.sheets_shown.clear();
+        self.sheet_return = None;
         if self.stopped {
             self.restart_later(cx);
         }
@@ -402,6 +413,10 @@ impl PageView {
             dialog_focus: cx.focus_handle(),
             dialog_shown: None,
             focus_before: None,
+            sheet_focus: RefCell::default(),
+            sheets_drawn: RefCell::default(),
+            sheets_shown: Vec::new(),
+            sheet_return: None,
             _events: events,
         };
         if view.stopped {
@@ -1328,6 +1343,8 @@ impl PageView {
                 .gap(px(gap(bar.gap)))
                 .px(px(14.0))
                 .py(px(8.0))
+                // A terminal pane's header: 30 points tall with its 28 point buttons, and closer to its right edge.
+                .when(bar.slim, |el| el.py(px(1.0)).pr(px(4.0)))
                 .when(bar.edge == tree::Edge::Top, |el| {
                     el.border_t_1().border_color(rgba(ui::HAIRLINE))
                 })
@@ -1365,9 +1382,14 @@ impl PageView {
                     tree::IconName::ChevronDown => crate::icons::Icon::ChevronDown,
                     tree::IconName::Copy => crate::icons::Icon::Copy,
                     tree::IconName::Trash => crate::icons::Icon::Trash,
+                    tree::IconName::Claude => crate::icons::Icon::Claude,
                 },
-                16.0,
-                theme::FOREGROUND,
+                icon.size,
+                // The Claude spark is drawn in its own orange, as Wings draws it beside a Claude session.
+                match icon.name {
+                    tree::IconName::Claude => theme::CLAUDE,
+                    _ => theme::FOREGROUND,
+                },
             )
             .into_any_element(),
             // GPUI draws an svg as a mask in its text colour, which is the drawing's `currentColor`.
@@ -1394,6 +1416,7 @@ impl PageView {
             Node::Sunburst(map) => self.sunburst(map, cx),
             // Drawn over the whole page by `render`, not where it sits.
             Node::Dialog(_) => div().into_any_element(),
+            Node::Sheet(sheet) => self.sheet(sheet, cx),
         }
     }
 
@@ -1816,6 +1839,7 @@ impl Render for PageView {
             .and_then(|tree| dialog_in(&tree.children))
             .map(|dialog| self.dialog(dialog, cx));
         let fill = self.tree.as_ref().is_some_and(|tree| tree.fill);
+        self.settle_sheets(window, cx);
         // A field that took the keyboard in the last render is brought into view once it has been drawn.
         if let Some(field) = self.reveal.clone() {
             if self.reveal(&field, cx) {

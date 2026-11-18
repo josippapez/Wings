@@ -477,6 +477,7 @@ impl Env for AppEnv {
                 serde_json::json!({
                     "id": hit.id, "title": hit.name.or(hit.title), "firstPrompt": hit.first_prompt, "cwd": hit.cwd,
                     "gitBranch": hit.git_branch, "lastActiveMs": hit.last_active_ms, "messages": hit.messages,
+                    "matches": hit.matches,
                 })
             })
             .collect()

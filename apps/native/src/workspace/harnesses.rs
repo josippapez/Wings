@@ -49,7 +49,7 @@ fn state(h: &HarnessStatus) -> (String, u32) {
 
 fn glyph(h: &HarnessStatus) -> AnyElement {
     let mark = match h.id.as_str() {
-        "claude" => Some((Icon::Claude, 0xd97757)),
+        "claude" => Some((Icon::Claude, theme::CLAUDE)),
         "opencode" => Some((Icon::Opencode, theme::FOREGROUND)),
         "codex" => Some((Icon::Codex, theme::FOREGROUND)),
         "cursor" => Some((Icon::Cursor, theme::FOREGROUND)),

@@ -1,22 +1,22 @@
 //! What the chat page shows: the conversation in a reading column, newest at the bottom and kept there while you read
 //! the end, and a floating message box with the model, effort and mode pickers in it. Your messages are bubbles on the
 //! right; Claude's replies are plain text; its tool calls fold into one line per run of them; a question it asks is a
-//! card: Allow, Always allow and Deny with a reason; its questions with options to pick; its plan to approve. The project's past sessions open in place of the conversation.
+//! card: Allow, Always allow and Deny with a reason; its questions with options to pick; its plan to approve. A header
+//! like a terminal pane's names the session and holds the chat's actions, and the project's past sessions open over it
+//! all in a sheet (`past_view.rs`).
 
-use serde_json::Value;
 use wings_plugin::{
-    format::{ago, clock, plural, truncate},
+    format::{clock, plural, truncate},
     local_time::local,
-    host,
     markdown::{code_block, markdown},
     ui::{
-        Node, badge, button, card, chip, confirm, disclosure, empty, icon, list, list_button, loading, muted, notice, page,
-        row, search_field, select, spinner, stack, text, text_input, toolbar_with,
+        Node, badge, button, card, chip, confirm, disclosure, empty, icon, list, list_button, loading, muted, notice, row,
+        select, spinner, stack, text, text_input,
     },
 };
 
 use crate::{
-    chat::{self, Chat, PAGE, Past, State},
+    chat::{self, Chat, PAGE, State},
     prefs,
     session::{Ask, Detail, Diff, Draft, Item, MODES, Progress, Session, Todo, Tool, exit_code, files_found, first_lines, model_name},
 };
@@ -50,18 +50,10 @@ pub fn view() -> Vec<Node> {
 }
 
 fn chat_page(c: &Chat) -> Node {
-    // Usage view hook: its way back in the toolbar.
-    let facts = row().prop("gap", "s").child(muted(c.folder.as_str())).maybe(crate::usage_view::crumbs(c));
-    let sessions = button("Sessions", if c.past.is_some() { "secondary" } else { "ghost" }, false, chat::toggle_past);
-    let terminal = (c.session.id.is_some() && c.state != State::Moved).then(|| button("Open in terminal", "ghost", false, chat::to_terminal));
-    let settings = button("Settings", "ghost", false, chat::open_settings).prop("title", "The mode new chats start in, and how much of the tool calls shows");
-    let actions = row().prop("gap", "s").maybe(terminal).child(settings).child(sessions).child(button("New chat", "outline", false, chat::new_chat));
-    let toolbar = toolbar_with("Claude", facts, Some(actions));
-    let body = match (&c.panel, &c.past) {
+    let body = match &c.panel {
         // Usage view hook: /usage and /context open over the conversation.
-        (Some(panel), _) => crate::usage_view::body(c, *panel),
-        (None, Some(past)) => past_sessions(past),
-        (None, None) => conversation(c),
+        Some(panel) => crate::usage_view::body(c, *panel),
+        None => conversation(c),
     };
     // The conversation, the checklist and the message box in the main pane, and a card on the right that the app leaves out
     // of a narrow tab. An open subagent pins it: that is what you asked to see. Flush, so the conversation scrolls on its own
@@ -74,8 +66,54 @@ fn chat_page(c: &Chat) -> Node {
         .prop("pinned", c.subagent.as_ref().is_some_and(|id| c.session.subagents.contains_key(id)))
         .child(Node::new("Slot").prop("name", "start").children(main))
         .child(Node::new("Slot").prop("name", "end").children(side(c)));
-    // The plugins dialog, which the app draws over the whole page.
-    page(toolbar, [split].into_iter().chain(crate::plugins_view::dialog(c))).prop("flush", true)
+    // No page toolbar: the tab and the project's header over it already name the place, so the card starts with a
+    // header as a terminal pane's does. The plugins dialog, which the app draws over the whole page, and the past
+    // sessions, which open over it all as Wings' own sheet, come after.
+    let body = Node::new("Slot")
+        .prop("name", "body")
+        .child(header(c))
+        .child(split)
+        .maybe(crate::plugins_view::dialog(c))
+        .maybe(crate::past_view::sheet_of(c));
+    Node::new("Page").prop("flush", true).child(body)
+}
+
+/// Lucide's icons, as the app draws them in its headers: `square-terminal`, `rotate-ccw-clock` (Past sessions), `plus`
+/// and `settings`, in a 24-point box.
+const TERMINAL: [&str; 3] = ["m7 11 2-2-2-2", "M11 13h4", "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"];
+const HISTORY: [&str; 3] = ["M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8", "M3 3v5h5", "M12 7v5l4 2"];
+const PLUS: [&str; 2] = ["M5 12h14", "M12 5v14"];
+const SETTINGS: [&str; 2] = [
+    "M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915",
+    "M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0",
+];
+
+/// A quiet square button holding one of those icons, named by its tooltip, as the app's pane and header buttons are.
+fn icon_button(label: &str, paths: &[&str], on_click: impl Fn() + 'static) -> Node {
+    button("", "ghost", false, on_click).prop("size", "icon-sm").prop("label", label).prop("title", label).child(icon(24, 2.0, paths).prop("size", 16))
+}
+
+/// The card's header, as a terminal pane's: the Claude mark and the session's name, which the tab shows too, and the
+/// chat's actions as icon buttons.
+fn header(c: &Chat) -> Node {
+    let name = chat::name(c).unwrap_or_else(|| "Claude chat".into());
+    let title = row()
+        .prop("gap", "m")
+        .prop("align", "center")
+        .prop("grow", true)
+        .child(Node::new("Icon").prop("name", "claude").prop("size", 14))
+        .child(text(name.as_str()).prop("weight", "strong").prop("truncate", true).prop("title", name.as_str()))
+        // Usage view hook: its way back to the conversation.
+        .maybe(crate::usage_view::crumbs(c));
+    let terminal = (c.session.id.is_some() && c.state != State::Moved).then(|| icon_button("Open in terminal", &TERMINAL, chat::to_terminal));
+    let actions = row()
+        .prop("gap", "xs")
+        .prop("align", "center")
+        .maybe(terminal)
+        .child(icon_button("Past sessions", &HISTORY, chat::open_past))
+        .child(icon_button("New chat", &PLUS, chat::new_chat))
+        .child(icon_button("Settings", &SETTINGS, chat::open_settings));
+    Node::new("Bar").prop("variant", "slim").child(row().prop("gap", "m").prop("align", "center").child(title).child(actions))
 }
 
 fn column() -> Node {
@@ -551,30 +589,6 @@ fn plan_node(ask: &Ask, draft: &Draft) -> Node {
             .child(feedback_field(&ask.request, draft, "What to change", "What to change in the plan, to keep planning"))
             .child(actions),
     )
-}
-
-/// The project's past sessions, newest first, with a search box.
-fn past_sessions(past: &Past) -> Node {
-    let search = search_field("Search past sessions", past.query.as_str(), |query| chat::load_past(query.to_owned()));
-    let body = match (&past.sessions, &past.error) {
-        (_, Some(error)) => notice("danger", error.as_str()),
-        (None, None) => loading(),
-        (Some(sessions), None) if sessions.is_empty() => empty("No past sessions", "Claude Code sessions in this project show here."),
-        (Some(sessions), None) => list().children(sessions.iter().map(past_row)),
-    };
-    Node::new("Scroll").child(column().prop("gap", "m").child(search).child(body))
-}
-
-fn past_row(session: &Value) -> Node {
-    let id = session["id"].as_str().unwrap_or_default().to_owned();
-    let title = session["title"].as_str().filter(|title| !title.is_empty()).or(session["firstPrompt"].as_str()).unwrap_or("Untitled session");
-    let mut facts = vec![ago(session["lastActiveMs"].as_f64().unwrap_or(0.0), host::now())];
-    facts.extend(session["gitBranch"].as_str().map(str::to_owned));
-    facts.push(plural(session["messages"].as_u64().unwrap_or(0) as usize, "message"));
-    let open = id.clone();
-    list_button([text(truncate(title, 120)).prop("weight", "medium").prop("truncate", true), muted(facts.join(" · "))], move || chat::resume(&open))
-        .prop("layout", "column")
-        .key(id)
 }
 
 /// The message box, floating at the foot: what you type, then a paperclip to attach images, the pickers, and Send or Stop.

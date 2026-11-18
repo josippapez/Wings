@@ -21,6 +21,7 @@ struct Style {
     weight: Weight,
     mono: bool,
     click: Option<String>,
+    mark: bool,
 }
 
 /// A run of the line's text with a look of its own.
@@ -62,6 +63,7 @@ fn collect(
                     },
                     mono: outer.mono || inner.mono,
                     click: inner.on_click.clone().or_else(|| outer.click.clone()),
+                    mark: outer.mark || inner.mark,
                 };
                 if !collect(&inner.children, &style, text, spans, first) {
                     return false;
@@ -77,6 +79,14 @@ fn highlight(style: &Style) -> HighlightStyle {
     let tone = style
         .tone
         .or_else(|| style.click.is_some().then_some(Tone::Info));
+    // A word a search found reads in full colour on the search's mark, as Past sessions shows it.
+    if style.mark {
+        return HighlightStyle {
+            color: Some(rgb(theme::FOREGROUND).into()),
+            background_color: Some(rgba(crate::ui::SEARCH_MARK).into()),
+            ..Default::default()
+        };
+    }
     HighlightStyle {
         color: tone.map(|tone| rgb(tone_color(tone)).into()),
         font_weight: match style.weight {

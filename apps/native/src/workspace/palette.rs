@@ -438,7 +438,7 @@ impl Workspace {
                 .chain(
                     plugin_tabs
                         .iter()
-                        .map(|tab| (Active::Plugin(tab.id), tab.title.to_string())),
+                        .map(|tab| (Active::Plugin(tab.id), tab.label().to_string())),
                 )
                 .chain(project_page.then(|| (Active::Project, "Project page".to_string())));
             for (tab, title) in tabs {

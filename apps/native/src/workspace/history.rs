@@ -11,10 +11,9 @@ use std::{
 };
 
 use gpui::{
-    Anchor, AnyElement, BoxShadow, ClipboardItem, Context, Div, Entity, FocusHandle, FontWeight,
+    Anchor, AnyElement, ClipboardItem, Context, Div, Entity, FocusHandle, FontWeight,
     HighlightStyle, KeyDownEvent, MouseButton, Role, SharedString, Stateful, StyledText,
-    Subscription, Task, Toggled, Window, anchored, deferred, div, hsla, point, prelude::*, px,
-    relative, rgb, rgba,
+    Subscription, Task, Window, anchored, deferred, div, prelude::*, px, relative, rgb, rgba,
 };
 use wings_agents::{
     ai::{Ai, Made},
@@ -29,15 +28,13 @@ use crate::{
     projects::shell_quote,
     text_field::{FieldEvent, TextField},
     theme,
-    ui::{self, ButtonSize, HAIRLINE, Variant, motion},
+    ui::{self, ButtonSize, Variant, motion},
 };
 
 use super::Workspace;
 
 /// Sessions listed at first, and added by each "Show more".
 const PAGE: usize = 100;
-/// The sheet's width: the desktop's `data-[side=right]:w-[480px]`.
-const WIDTH: f32 = 480.0;
 /// Typing waits this long before searching, so a word typed at speed searches once.
 const TYPING: Duration = Duration::from_millis(150);
 /// OpenCode's sessions load in the background, so the sheet asks again this often while they do.
@@ -480,7 +477,7 @@ impl Workspace {
                 Role::SearchInput,
                 "Search past sessions",
                 "Search prompts, replies, titles, files",
-                px(388.0),
+                px(ui::SHEET_SEARCH_WIDTH),
                 cx,
             )
         });
@@ -837,37 +834,19 @@ impl Workspace {
             ),
             Some(results) => self.session_list(sheet, results, &terms(&query), cx),
         };
-        let (backdrop, panel) = ui::dialog("history", "Past sessions", &sheet.focus, WIDTH, 0.0);
+        let (backdrop, panel) = ui::sheet("history", "Past sessions", &sheet.focus);
         // The backdrop and the sheet each fade on their own, as the desktop's: the backdrop over 150ms, the sheet over
         // 200ms as it slides.
         let phase = motion::phase();
         let sheet_panel = |panel| motion::sheet_panel(panel, phase);
         Some(motion::sheet_backdrop(
             backdrop
-                .items_stretch()
-                .justify_end()
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _, window, cx| this.close_history(window, cx)),
                 )
                 .child(sheet_panel(
                     panel
-                        .h_full()
-                        .max_h(relative(1.0))
-                        .max_w(relative(0.92))
-                        .rounded(px(0.0))
-                        .border_0()
-                        .border_l_1()
-                        .border_color(rgba(theme::HAIRLINE_STRONG))
-                        .shadow(vec![BoxShadow {
-                            color: hsla(0.0, 0.0, 0.0, 0.5),
-                            offset: point(px(0.0), px(24.0)),
-                            blur_radius: px(64.0),
-                            spread_radius: px(0.0),
-                            inset: false,
-                        }])
-                        .flex_col()
-                        .bg(rgba(theme::POPOVER))
                         // Escape from a button the sheet's field doesn't have the keys for.
                         .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                             if event.keystroke.key == "escape" {
@@ -883,14 +862,12 @@ impl Workspace {
                                 .overflow_y_scroll()
                                 .child(body),
                         )
-                        .child(
-                            div().absolute().top(px(12.0)).right(px(12.0)).child(
-                                ui::icon_button("close-history", Icon::X, "Close", ButtonSize::Sm)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.close_history(window, cx)
-                                    })),
-                            ),
-                        ),
+                        .child(ui::sheet_corner(
+                            ui::icon_button("close-history", Icon::X, "Close", ButtonSize::Sm)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.close_history(window, cx)
+                                })),
+                        )),
                 )),
             ui::backdrop_color(),
             phase,
@@ -905,71 +882,30 @@ impl Workspace {
             .find(|project| project.path == self.config.project);
         let project_name = project.map_or("this project", |project| project.name.as_str());
         let loading = sheet.results.as_ref().is_some_and(|r| r.opencode_loading);
-        let heading = div()
-            .flex()
-            .flex_col()
-            .gap(px(2.0))
-            .child(
-                div()
-                    .text_size(px(16.0))
-                    .font_weight(FontWeight::MEDIUM)
-                    .child("Past sessions"),
-            )
-            .child(
-                div()
-                    .text_size(px(12.0))
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
-                    .child(if sheet.all {
-                        "Claude Code and OpenCode sessions in every project.".to_owned()
-                    } else {
-                        format!("Claude Code and OpenCode sessions in {project_name}.")
-                    }),
-            );
-        let scope = segmented([
-            segment("history-project", "This project", !sheet.all).on_click(cx.listener(
+        let description = if sheet.all {
+            "Claude Code and OpenCode sessions in every project.".to_owned()
+        } else {
+            format!("Claude Code and OpenCode sessions in {project_name}.")
+        };
+        let scope = ui::segmented([
+            ui::segment("history-project", "This project", !sheet.all).on_click(cx.listener(
                 |this, _, _, cx| {
                     this.refine_history(|sheet| (sheet.all, sheet.branch) = (false, None), cx)
                 },
             )),
-            segment("history-all", "All projects", sheet.all).on_click(cx.listener(
+            ui::segment("history-all", "All projects", sheet.all).on_click(cx.listener(
                 |this, _, _, cx| {
                     this.refine_history(|sheet| (sheet.all, sheet.branch) = (true, None), cx)
                 },
             )),
         ]);
-        let search = div()
-            .h(px(32.0))
-            .flex()
-            .items_center()
-            .gap(px(4.0))
-            .pl(px(10.0))
-            .pr(px(8.0))
-            .rounded(px(8.0))
-            .border_1()
-            .border_color(rgba(0xffffff1a))
-            .bg(rgba(theme::HOVER))
-            .child(icon(Icon::Search, 16.0, theme::MUTED_FOREGROUND))
-            .child(
-                div()
-                    .min_w_0()
-                    .flex_1()
-                    .overflow_hidden()
-                    .child(sheet.field.clone()),
-            )
-            .child(
-                div()
-                    .size(px(16.0))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .when(
-                        (sheet.searching || loading) && sheet.results.is_some(),
-                        |slot| slot.child(ui::status_dot(AgentState::Working)),
-                    ),
-            );
-        let since = segmented(Since::ALL.map(|since| {
-            segment(
+        let searching = (sheet.searching || loading) && sheet.results.is_some();
+        let search = ui::search_box(
+            sheet.field.clone(),
+            searching.then(|| ui::status_dot(AgentState::Working).into_any_element()),
+        );
+        let since = ui::segmented(Since::ALL.map(|since| {
+            ui::segment(
                 SharedString::from(format!("history-since-{since:?}")),
                 since.label(),
                 sheet.since == since,
@@ -978,15 +914,7 @@ impl Workspace {
                 this.refine_history(|sheet| sheet.since = since, cx)
             }))
         }));
-        div()
-            .flex_none()
-            .flex()
-            .flex_col()
-            .gap(px(12.0))
-            .p(px(16.0))
-            .border_b_1()
-            .border_color(rgba(HAIRLINE))
-            .child(heading)
+        ui::sheet_header("Past sessions", description)
             .child(scope)
             .child(search)
             .child(
@@ -1152,12 +1080,7 @@ impl Workspace {
                     .into_any_element(),
             );
         }
-        div()
-            .flex()
-            .flex_col()
-            .p(px(8.0))
-            .children(rows)
-            .into_any_element()
+        ui::sheet_list().children(rows).into_any_element()
     }
 
     /// One session: its agent and title, the account it ran under unless that's the default one, what matched, when and
@@ -1422,48 +1345,10 @@ fn menu_item(
         }))
 }
 
-/// The desktop's `ToggleGroup`: buttons side by side on a faint track.
-fn segmented(items: impl IntoIterator<Item = Stateful<Div>>) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .gap(px(2.0))
-        .p(px(2.0))
-        .rounded(px(8.0))
-        .bg(rgba(0xffffff0d))
-        .children(items)
-}
-
-fn segment(id: impl Into<gpui::ElementId>, label: &'static str, on: bool) -> Stateful<Div> {
-    div()
-        .id(id)
-        .role(Role::Button)
-        .aria_label(label)
-        .aria_toggled(if on { Toggled::True } else { Toggled::False })
-        .h(px(24.0))
-        .flex()
-        .items_center()
-        .px(px(10.0))
-        .rounded(px(6.0))
-        .cursor_pointer()
-        .text_size(px(12.0))
-        .text_color(rgb(if on {
-            theme::FOREGROUND
-        } else {
-            theme::MUTED_FOREGROUND
-        }))
-        .when(on, |item| item.bg(rgba(0xffffff17)))
-        .when(!on, |item| {
-            item.hover(|style| style.text_color(rgb(theme::FOREGROUND)))
-        })
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(label)
-}
-
 /// The agent's mark beside a session's name: Claude's spark in its orange, OpenCode's frame.
 fn agent_mark(agent: Agent) -> impl IntoElement {
     match agent {
-        Agent::Claude => icon(Icon::Claude, 12.0, 0xd97757),
+        Agent::Claude => icon(Icon::Claude, 12.0, theme::CLAUDE),
         Agent::OpenCode => icon(Icon::Opencode, 12.0, theme::FOREGROUND),
     }
 }
@@ -1493,7 +1378,7 @@ fn snippet_text(snippet: &Snippet, agent: Agent, words: &[String]) -> AnyElement
     };
     let mark = HighlightStyle {
         color: Some(rgb(theme::FOREGROUND).into()),
-        background_color: Some(rgba(theme::WORKING << 8 | 0x40).into()),
+        background_color: Some(rgba(ui::SEARCH_MARK).into()),
         ..Default::default()
     };
     let marks = highlights(&body, words)

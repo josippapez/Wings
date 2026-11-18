@@ -356,6 +356,12 @@ pub fn set_agent(agent: Option<(&str, &str, Option<&str>)>) -> Pending<Result<Va
     call("setAgent", json!({ "agent": agent }))
 }
 
+/// `wings.setTabTitle`: names the tab this page shows in, as a terminal's tab shows what runs in it: one line of at most
+/// 80 characters, or `None` for its view's title again. Wings 0.2.37.
+pub fn set_tab_title(title: Option<&str>) -> Pending<Result<Value, String>> {
+    call("setTabTitle", json!({ "title": title }))
+}
+
 /// `wings.closeTab`: closes the tab this page shows in, and no other tab of its view. Wings 0.2.36.
 pub fn close_tab() -> Pending<Result<Value, String>> {
     call("closeTab", json!({}))

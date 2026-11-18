@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.37 · 2026-11-18
+
+- **Claude chat looks like part of Wings.** Its tab is named after the session, as a terminal's tab after what runs in it, and its card starts with a slim header like a terminal pane's, with icon buttons in place of the old bar.
+- **Claude chat's past sessions open as a sheet** like Past sessions: search them with the words marked, narrow them to today, 7 or 30 days or a branch, and Resume one in the chat.
+- **For plugin authors:** a page can show a `Sheet` from the right edge, name its own tab with `wings.setTabTitle`, have a slim `Bar`, mark searched words in a `Text` and show the Claude mark as an `Icon`, and `wings.pastSessions` says how many messages matched. See `plugins/README.md`.
+
 ## 0.2.36 · 2026-11-18
 
 - **Claude chat lists your Claude sessions in the sidebar.** A Chats section under each project shows its newest five, and a click continues one in a chat tab. A session a terminal runs is marked running.

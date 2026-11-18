@@ -151,17 +151,23 @@ impl Env for FixtureEnv {
     }
     fn set_badge(&self, _: &str, _: &str, _: Option<Badge>) {}
     fn set_pane_status(&self, _: &str, _: &str, _: Option<PaneStatus>) {}
-    fn past_sessions(&self, project: &std::path::Path, _: &str, _: usize) -> Vec<serde_json::Value> {
+    fn past_sessions(&self, project: &std::path::Path, query: &str, _: usize) -> Vec<serde_json::Value> {
         let hours = |n: u64| now_ms() - n * 3_600_000;
-        let session = |id: &str, title: &str, branch: &str, ago: u64, messages: u64| {
-            json!({ "id": id, "title": title, "firstPrompt": title, "cwd": project, "gitBranch": branch, "lastActiveMs": hours(ago), "messages": messages })
+        let query = query.trim().to_lowercase();
+        // A search finds a session by its title here, and says some of its messages matched.
+        let session = |id: &str, title: &str, cwd: &std::path::Path, branch: &str, ago: u64, messages: u64| {
+            let matches = if query.is_empty() { 0 } else { messages / 8 };
+            json!({ "id": id, "title": title, "firstPrompt": title, "cwd": cwd, "gitBranch": branch, "lastActiveMs": hours(ago), "messages": messages, "matches": matches })
         };
         vec![
-            session("1d3f6a9e-0b2c-4f1d-8e7a-5c9b2d4e6f10", "Fix the flaky checkout test", "main", 1, 24),
-            session("2e4a7b0f-1c3d-4e2f-9f8b-6d0c3e5f7a21", "Split checkout into its own package", "checkout-pkg", 5, 61),
-            session("3f5b8c1a-2d4e-4f3a-8a9c-7e1d4f6a8b32", "Why is the rate limiter returning 429s?", "main", 26, 12),
-            session("4a6c9d2b-3e5f-4a4b-9bad-8f2e5a7b9c43", "Add Stripe webhooks for refunds", "refunds", 72, 88),
+            session("1d3f6a9e-0b2c-4f1d-8e7a-5c9b2d4e6f10", "Fix the flaky checkout test", project, "main", 1, 24),
+            session("2e4a7b0f-1c3d-4e2f-9f8b-6d0c3e5f7a21", "Split checkout into its own package", project, "checkout-pkg", 5, 61),
+            session("3f5b8c1a-2d4e-4f3a-8a9c-7e1d4f6a8b32", "Why is the rate limiter returning 429s?", &project.join("api"), "main", 26, 12),
+            session("4a6c9d2b-3e5f-4a4b-9bad-8f2e5a7b9c43", "Add Stripe webhooks for refunds", project, "refunds", 72, 88),
         ]
+        .into_iter()
+        .filter(|session| session["title"].as_str().unwrap_or_default().to_lowercase().contains(&query))
+        .collect()
     }
 }
 
@@ -949,7 +955,7 @@ cat "$CHAT_FIXTURE"; if [ -n "$CHAT_EXIT" ]; then echo "$CHAT_STDERR" >&2; exit 
         .extend(["toolbox:lint", "toolbox:format", "release-notes:write"].map(|name| json!({ "name": name, "description": "", "argumentHint": "" })));
     let installed: Vec<serde_json::Value> = include_str!("../../../plugins/claude-chat/rust/tests/plugins.jsonl").lines().map(|line| serde_json::from_str(line).unwrap()).collect();
     let plugins = opened([init.clone(), skilled].into_iter().chain(installed).collect());
-    let scenes: [Scene; 27] = [
+    let scenes: [Scene; 28] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -958,7 +964,9 @@ cat "$CHAT_FIXTURE"; if [ -n "$CHAT_EXIT" ]; then echo "$CHAT_STDERR" >&2; exit 
         // The model and effort menu open over the message box.
         ("models", opened(vec![init.clone()]), None, Some("select:Model and effort"), "resets"),
         ("slash", opened(vec![init.clone()]), None, Some("type:/re;keys:down"), "/review"),
-        ("sessions", opened(vec![init.clone()]), None, Some("press:Sessions"), "Fix the flaky checkout test"),
+        // The header's Past sessions button opens the sheet over the chat, and its search has the keyboard.
+        ("sessions", opened(vec![init.clone()]), None, Some("press:Past sessions"), "Past sessions"),
+        ("sessions-search", opened(vec![init.clone()]), None, Some("press:Past sessions;type:checkout"), "matching messages"),
         // /usage opens the usage view in place of the conversation instead of going to Claude as a message.
         ("usage", opened(vec![init.clone(), full_usage]), None, Some("type:/usage;keys:enter"), "Plan usage limits"),
         // /plugins and /mcp open the plugins dialog over the chat, each leading with its own list.

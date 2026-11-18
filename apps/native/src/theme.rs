@@ -23,3 +23,5 @@ pub const WORKING: u32 = 0xe9b65f;
 pub const BLOCKED: u32 = 0xf2786a;
 pub const DONE: u32 = 0x7dd3a7;
 pub const IDLE: u32 = 0x8a857e;
+/// The Claude spark's brand orange, as in the desktop's `PaneIcon`.
+pub const CLAUDE: u32 = 0xd97757;
