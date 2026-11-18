@@ -1160,8 +1160,8 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         ("new", opened(vec![init.clone()]), None, None, "What should Claude do?"),
         // The model and effort menu open over the message box.
         ("models", opened(vec![init.clone()]), None, Some("select:Model and effort"), "resets"),
-        // Fast mode and the output styles are in the same menu, after the models.
-        ("models-fast", fast, None, Some("select:Model and effort"), "resets"),
+        // A model with fast mode has its button by the model menu, and the output styles have a menu of their own.
+        ("models-fast", fast, None, None, "resets"),
         // Up twice from the empty box recalls the second newest of the prompts sent.
         ("recall", recalled, None, Some("keys:up;keys:up"), "Now bump the version."),
         ("slash", opened(vec![init.clone()]), None, Some("type:/re;keys:down"), "/review"),
@@ -1396,21 +1396,27 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         // The side panel is left out of a tab under 1,100 points, so a few scenes are drawn wider to show it.
         let widths: &[f32] = if ["conversation", "work", "ask-bash", "tasks", "terminal", "folder"].contains(&name) { &[1280.0, 1000.0, 640.0] } else { &[1000.0, 640.0] };
         for &width in widths {
+            // The shell of the terminal the workspace draws over the page, opened before the page so the fake `claude` the
+            // page starts is found under the scene's own shell.
+            let shot_terminal = (name == "terminal").then(|| {
+                let printed = b"$ make all\r\n  Compiling shop v0.4.0 (/work/shop)\r\n  Compiling checkout v0.4.0\r\n  Compiling cart v0.4.0\r\n    Building [=========>       ] 41/63: cart\r\n".to_vec();
+                // SAFETY: nothing else reads the environment while the shell starts.
+                unsafe { std::env::set_var("SHELL", "/bin/sh") };
+                let terminal = cx.update(|cx| wings_native::terminal_view::TerminalView::open(root.clone(), printed, None, cx).unwrap());
+                unsafe { std::env::set_var("SHELL", root.join("shell")) };
+                terminal
+            });
             let args = (name == "long").then(|| json!({ "resume": LONG, "cwd": root.canonicalize().unwrap() }));
             let handle = cx
                 .open_offscreen_window(size(px(width), px(760.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, &source, args.as_ref(), cx)))
                 .unwrap();
             let window = handle.into();
             handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
-            if name == "terminal" {
+            if let Some(terminal) = shot_terminal {
                 // What the workspace does over the page: it hands the tab the terminal its agent opened, and draws it there,
                 // here over made-up output of a build, in a shell of its own rather than the scene's fake one.
-                let printed = b"$ make all\r\n  Compiling shop v0.4.0 (/work/shop)\r\n  Compiling checkout v0.4.0\r\n  Compiling cart v0.4.0\r\n    Building [=========>       ] 41/63: cart\r\n".to_vec();
-                // SAFETY: nothing else reads the environment while the shell starts.
-                unsafe { std::env::set_var("SHELL", "/bin/sh") };
                 handle
                     .update(&mut cx, |view, _, cx| {
-                        let terminal = wings_native::terminal_view::TerminalView::open(root.clone(), printed.clone(), None, cx).unwrap();
                         let listed = json!([{ "paneId": "1", "title": "make all", "running": true }]).to_string();
                         view.set_terminals(vec![1], listed, cx);
                         view.draw_terminals_for_shots(move |_| {
@@ -1419,7 +1425,6 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
                         });
                     })
                     .unwrap();
-                unsafe { std::env::set_var("SHELL", root.join("shell")) };
             }
             let until = |cx: &mut VisualTestAppContext, expected: &str| {
                 let deadline = Instant::now() + Duration::from_secs(30);

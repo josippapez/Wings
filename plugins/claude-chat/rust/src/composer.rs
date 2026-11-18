@@ -146,42 +146,6 @@ impl Options {
     }
 }
 
-/// The values the model menu's extra entries have, which `Options::pick` answers.
-pub fn is_extra(choice: &str) -> bool {
-    choice.starts_with("fast:") || choice.starts_with("style:")
-}
-
-impl Options {
-    /// The entries the model menu holds after the models, as (value, label): fast mode when the model has it, which says
-    /// why when it can't be used, and each output style when there is a choice of them.
-    pub fn menu(&self, model_has_fast: bool) -> Vec<(String, String)> {
-        let mut entries = Vec::new();
-        if model_has_fast {
-            entries.push(match (&self.fast_blocked, self.fast) {
-                (Some(why), _) => ("fast:unavailable".to_owned(), format!("Fast mode can't be used: {}", why.replace('_', " "))),
-                (None, true) => ("fast:off".to_owned(), "Fast mode is on, turn it off".to_owned()),
-                (None, false) => ("fast:on".to_owned(), "Fast mode is off, turn it on (faster, costs more)".to_owned()),
-            });
-        }
-        if self.styles.len() > 1 {
-            entries.extend(self.styles.iter().map(|style| {
-                let current = if self.style.as_deref() == Some(style) { " (current)" } else { "" };
-                (format!("style:{style}"), format!("Output style: {style}{current}"))
-            }));
-        }
-        entries
-    }
-
-    /// The line a pick of one of the menu's extra entries asks for.
-    pub fn pick(&mut self, choice: &str, n: u32) -> Option<String> {
-        match choice {
-            "fast:on" => self.set_fast(true, n),
-            "fast:off" => self.set_fast(false, n),
-            _ => self.set_style(choice.strip_prefix("style:")?, n),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,25 +225,6 @@ mod tests {
         assert_eq!(options.style.as_deref(), Some("Concise"));
         assert_eq!(options.set_style("Made up", 6), None);
         assert_eq!(options.style.as_deref(), Some("Concise"));
-    }
-
-    #[test]
-    fn the_model_menu_holds_fast_mode_only_for_a_model_that_has_it_and_the_styles_with_the_current_one_marked() {
-        let mut options = Options::default();
-        options.initialized(&json!({ "fast_mode_state": "off", "output_style": "Concise", "available_output_styles": ["default", "Concise"] }));
-        let labels = |options: &Options, fast| options.menu(fast).into_iter().map(|(value, label)| format!("{value}={label}")).collect::<Vec<_>>();
-        assert_eq!(
-            labels(&options, true),
-            ["fast:on=Fast mode is off, turn it on (faster, costs more)", "style:default=Output style: default", "style:Concise=Output style: Concise (current)"]
-        );
-        assert_eq!(labels(&options, false).len(), 2, "no fast mode entry for a model without it");
-        assert_eq!(options.pick("fast:on", 1).map(|line| lines(&line)["request"]["settings"]["fastMode"].clone()), Some(json!(true)));
-        assert_eq!(labels(&options, true)[0], "fast:off=Fast mode is on, turn it off");
-        assert_eq!(options.pick("model:opus", 2), None);
-        options.initialized(&json!({ "fast_mode_disabled_reason": "org_disabled" }));
-        assert_eq!(labels(&options, true), ["fast:unavailable=Fast mode can't be used: org disabled"]);
-        assert_eq!(options.pick("fast:unavailable", 3), None);
-        assert!(is_extra("style:Concise") && is_extra("fast:on") && !is_extra("opus@high"));
     }
 
     #[test]

@@ -734,11 +734,20 @@ pub fn open_settings() {
 
 /// Switches to the model and effort picked together in the message box, as `<model>@<effort>`.
 pub fn pick_model_effort(choice: &str) {
-    // The menu's fast mode and output style entries come this way too.
-    if composer::is_extra(choice) {
-        return write(|c, n| c.session.options.pick(choice, n));
-    }
     write(|c, n| c.session.pick(choice, n));
+}
+
+/// Switches the output style for this session, from its menu in the message box.
+pub fn pick_style(name: &str) {
+    write(|c, n| c.session.options.set_style(name, n));
+}
+
+/// Turns fast mode on or off for this session, from its button in the message box.
+pub fn toggle_fast() {
+    write(|c, n| {
+        let on = !c.session.options.fast;
+        c.session.options.set_fast(on, n)
+    });
 }
 
 pub fn pick_mode(mode: &str) {

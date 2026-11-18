@@ -89,6 +89,8 @@ fn chat_page(c: &Chat) -> Node {
 const TERMINAL: [&str; 3] = ["m7 11 2-2-2-2", "M11 13h4", "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"];
 const HISTORY: [&str; 3] = ["M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8", "M3 3v5h5", "M12 7v5l4 2"];
 const PLUS: [&str; 2] = ["M5 12h14", "M12 5v14"];
+/// Lucide's `zap`, on the fast mode button.
+const FAST: [&str; 1] = ["M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"];
 const SETTINGS: [&str; 2] = [
     "M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915",
     "M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0",
@@ -999,9 +1001,28 @@ fn pickers(c: &Chat) -> Vec<Node> {
     let mut pickers = Vec::new();
     if !session.models.is_empty() {
         let (options, value) = model_options(session);
-        // Fast mode and the output style are in the same menu, after the models.
-        let options: Vec<(String, String)> = options.into_iter().chain(session.options.menu(session.current_model().is_some_and(|model| model.fast))).collect();
         pickers.push(select("Model and effort", &options, &value, chat::pick_model_effort).prop("variant", "ghost"));
+    }
+    // Fast mode, for a model that has it: a lit button while it is on.
+    if session.current_model().is_some_and(|model| model.fast) {
+        let options = &session.options;
+        let title = match (&options.fast_blocked, options.fast) {
+            (Some(why), _) => format!("Fast mode can't be used: {}", why.replace('_', " ")),
+            (None, true) => "Fast mode is on. Click to turn it off".to_owned(),
+            (None, false) => "Fast mode: faster replies that use more of your limits".to_owned(),
+        };
+        let fast = button("", if options.fast { "secondary" } else { "ghost" }, false, chat::toggle_fast)
+            .prop("size", "icon-sm")
+            .prop("label", if options.fast { "Fast mode, on" } else { "Fast mode" })
+            .prop("title", title.as_str())
+            .prop("disabled", options.fast_blocked.is_some())
+            .child(icon(24, 2.0, &FAST).prop("size", 14));
+        pickers.push(fast);
+    }
+    if session.options.styles.len() > 1 {
+        let options: Vec<(String, String)> = session.options.styles.iter().map(|style| (style.clone(), format!("Style: {style}"))).collect();
+        let value = session.options.style.clone().unwrap_or_default();
+        pickers.push(select("Output style", &options, &value, chat::pick_style).prop("variant", "ghost"));
     }
     if let Some(mode) = &session.mode {
         let options: Vec<(String, String)> = MODES.iter().map(|(value, name)| (value.to_string(), name.to_string())).collect();

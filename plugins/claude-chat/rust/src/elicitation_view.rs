@@ -59,8 +59,10 @@ fn field_node(asked: &Elicitation, field: &Field) -> Node {
             select(&label, &options, value, move |picked| edit(&request, &key, picked.to_owned()))
         }
     };
+    // A checkbox names itself; a box or a menu gets its name over it.
+    let name = (!matches!(field.input, Input::Bool)).then(|| text(label.as_str()).prop("size", "small").prop("weight", "medium"));
     let said = Some(field.description.as_str()).filter(|said| !said.is_empty()).map(|said| muted(said).prop("size", "small"));
-    stack().prop("gap", "xs").key(field.key.as_str()).child(control).maybe(said)
+    stack().prop("gap", "xs").key(field.key.as_str()).maybe(name).child(control).maybe(said)
 }
 
 fn edit(request: &str, key: &str, value: String) {
