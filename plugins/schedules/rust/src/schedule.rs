@@ -46,6 +46,8 @@ pub enum When {
     Every { hours: i64 },
     /// `time` is "HH:MM" and `days` are weekday numbers, 0 for Sunday.
     Daily { time: String, days: Vec<i64> },
+    /// One run, on `date` ("YYYY-MM-DD") at `time` ("HH:MM"), local time. Once it has started, it is never due again.
+    Once { date: String, time: String },
 }
 
 impl When {
@@ -53,6 +55,7 @@ impl When {
         match value["kind"].as_str()? {
             "every" => Some(When::Every { hours: int(&value["hours"])? }),
             "daily" => Some(When::Daily { time: value["time"].as_str()?.to_owned(), days: value["days"].as_array()?.iter().filter_map(int).collect() }),
+            "once" => Some(When::Once { date: value["date"].as_str()?.to_owned(), time: value["time"].as_str()?.to_owned() }),
             _ => None,
         }
     }
@@ -61,6 +64,7 @@ impl When {
         match self {
             When::Every { hours } => json!({ "kind": "every", "hours": hours }),
             When::Daily { time, days } => json!({ "kind": "daily", "time": time, "days": days }),
+            When::Once { date, time } => json!({ "kind": "once", "date": date, "time": time }),
         }
     }
 }
@@ -187,6 +191,41 @@ pub fn time_ok(time: &str) -> bool {
     b.len() == 5 && b[2] == b':' && b[..2].iter().chain(&b[3..]).all(u8::is_ascii_digit) && b[0] <= b'2' && (b[0] != b'2' || b[1] <= b'3') && b[3] <= b'5'
 }
 
+/// "YYYY-MM-DD" as a date the calendar has, as year, month and day.
+pub fn parse_date(date: &str) -> Option<(i64, u32, i64)> {
+    let b = date.as_bytes();
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' || !b[..4].iter().chain(&b[5..7]).chain(&b[8..]).all(u8::is_ascii_digit) {
+        return None;
+    }
+    let (year, month, day): (i64, u32, i64) = (date[..4].parse().ok()?, date[5..7].parse().ok()?, date[8..].parse().ok()?);
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let longest = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return None,
+    };
+    (1..=longest).contains(&day).then_some((year, month, day))
+}
+
+/// The moment a once schedule is set for, or none when its date or time isn't one.
+fn once_moment(date: &str, time: &str) -> Option<i64> {
+    let (year, month, day) = parse_date(date)?;
+    time_ok(time).then(|| {
+        let (hh, mm) = clock_of(time);
+        at(year, month, day, hh, mm)
+    })
+}
+
+/// Fails for a once schedule whose moment has passed: it would never run.
+pub fn refuse_past(when: &When, now: i64) -> Result<(), String> {
+    match when {
+        When::Once { date, time } if once_moment(date, time).is_some_and(|moment| moment <= now) => Err("That date and time have passed. Pick a later one.".into()),
+        _ => Ok(()),
+    }
+}
+
 fn clock_of(time: &str) -> (u32, u32) {
     let (hours, minutes) = time.split_once(':').unwrap_or_default();
     (hours.parse().unwrap_or(0), minutes.parse().unwrap_or(0))
@@ -196,6 +235,7 @@ fn clock_of(time: &str) -> (u32, u32) {
 pub fn next_run(s: &Schedule) -> Option<i64> {
     let (time, days) = match &s.when {
         When::Every { hours } => return Some(s.anchor + hours * HOUR),
+        When::Once { date, time } => return once_moment(date, time).filter(|moment| *moment > s.anchor),
         When::Daily { time, days } => (time, days),
     };
     if days.is_empty() {
@@ -219,9 +259,10 @@ pub fn claim(s: &Schedule, due: i64, now: i64) -> Schedule {
     Schedule { anchor: if now - due < LATE_MS { due } else { now }, ..s.clone() }
 }
 
-/// On start, a schedule that came due while Wings was closed counts from now: nothing is made up.
+/// On start, a schedule that came due while Wings was closed counts from now: nothing is made up. A once schedule is the
+/// exception: its moment doesn't come again, so it runs at the first tick instead of being lost.
 pub fn on_start(s: &Schedule, now: i64) -> Schedule {
-    if due_at(s, now).is_none() { s.clone() } else { Schedule { anchor: now, ..s.clone() } }
+    if due_at(s, now).is_none() || matches!(s.when, When::Once { .. }) { s.clone() } else { Schedule { anchor: now, ..s.clone() } }
 }
 
 pub fn name_of(name: &str, prompt: &str) -> String {
@@ -292,13 +333,48 @@ pub fn clean_draft(d: &Draft) -> Result<Draft, String> {
             }
             When::Daily { time: time.clone(), days: picked }
         }
+        When::Once { date, time } => {
+            if parse_date(date).is_none() {
+                return Err("Write the date as YYYY-MM-DD, like 2026-12-16.".into());
+            }
+            if !time_ok(time) {
+                return Err("Pick a time of day.".into());
+            }
+            When::Once { date: date.clone(), time: time.clone() }
+        }
     };
     Ok(Draft { name: d.name.trim().chars().take(80).collect(), project_id: d.project_id.clone(), agent: d.agent, prompt: clean_prompt(&d.prompt)?, when })
+}
+
+const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/// "16 Dec 2026".
+fn describe_date(year: i64, month: u32, day: i64) -> String {
+    format!("{day} {} {year}", MONTHS[month as usize - 1])
+}
+
+/// "16 Dec 2026, 09:00", the wall clock at `moment`.
+pub fn describe_moment(moment: i64) -> String {
+    let d = local(moment);
+    format!("{}, {:02}:{:02}", describe_date(d.year, d.month, i64::from(d.day)), d.hour, d.minute)
+}
+
+/// "in 25 min" up to tomorrow, then "in 12 days", "in 4 months" or "in 3 years": a weekday and a clock would hide how far
+/// off a one-off date is.
+pub fn describe_once_next(moment: i64, now: i64) -> String {
+    let days = ((start_of_day(moment) - start_of_day(now)) as f64 / (24 * HOUR) as f64).round();
+    match days {
+        ..2.0 => describe_next(moment, now),
+        ..60.0 => format!("in {days} days"),
+        ..730.0 => format!("in {} months", (days / 30.44).round()),
+        _ => format!("in {} years", (days / 365.25).round()),
+    }
 }
 
 pub fn describe_when(when: &When) -> String {
     let (time, days) = match when {
         When::Every { hours } => return if *hours == 1 { "Every hour".into() } else { format!("Every {hours} hours") },
+        When::Once { date, time } => return parse_date(date).map_or_else(|| format!("Once, {date} at {time}"), |(y, m, d)| format!("Once, {} at {time}", describe_date(y, m, d))),
         When::Daily { time, days } => (time, days),
     };
     let picked: Vec<i64> = DAY_NUMBERS.iter().copied().filter(|n| days.contains(n)).collect();
@@ -443,6 +519,52 @@ mod tests {
         // One that isn't due yet keeps its time.
         let waiting = make(When::Every { hours: 12 }, t(2026, 5, 6, 8, 0));
         assert_eq!(on_start(&waiting, now), waiting);
+    }
+
+    fn once(date: &str, time: &str) -> When {
+        When::Once { date: date.into(), time: time.into() }
+    }
+
+    #[test]
+    fn a_once_schedule_is_due_from_its_moment_and_never_again_after_it_ran() {
+        zagreb();
+        let moment = t(2026, 12, 16, 9, 0);
+        let s = make(once("2026-12-16", "09:00"), t(2026, 11, 18, 12, 0));
+        assert_eq!(next_run(&s), Some(moment));
+        assert_eq!(due_at(&s, moment - 1), None);
+        assert_eq!(due_at(&s, moment), Some(moment));
+        // Wings was closed at that moment: the first tick after it still runs it, and on_start doesn't swallow it.
+        let later = t(2026, 12, 18, 10, 0);
+        assert_eq!(due_at(&on_start(&s, later), later), Some(moment));
+        // Claimed on time or late, it has run: no next run, nothing due.
+        for now in [moment + 20_000, later] {
+            let claimed = claim(&s, moment, now);
+            assert_eq!((next_run(&claimed), due_at(&claimed, later + 1_000_000)), (None, None));
+        }
+        assert_eq!(due_at(&Schedule { enabled: false, ..s }, later), None);
+    }
+
+    #[test]
+    fn a_date_is_a_day_the_calendar_has_and_one_in_the_past_is_refused() {
+        zagreb();
+        assert_eq!(parse_date("2026-12-16"), Some((2026, 12, 16)));
+        assert_eq!(parse_date("2028-02-29"), Some((2028, 2, 29)));
+        assert!(["2026-02-30", "2026-13-01", "2026-00-10", "2026-12-00", "2026-1-16", "26-12-16", "2026/12/16", "2026-12-16 ", ""].iter().all(|d| parse_date(d).is_none()));
+        let now = t(2026, 12, 16, 9, 0);
+        assert!(refuse_past(&once("2026-12-16", "09:00"), now).unwrap_err().contains("passed"));
+        assert!(refuse_past(&once("2026-12-16", "09:01"), now).is_ok());
+        assert!(refuse_past(&once("2026-12-15", "23:59"), now).is_err());
+        assert!(refuse_past(&daily("09:00", &ALL), now).is_ok());
+        let draft = |when| Draft { name: String::new(), project_id: "p".into(), agent: Agent::Claude, prompt: "Go".into(), when };
+        assert!(clean_draft(&draft(once("2026-02-30", "09:00"))).unwrap_err().contains("YYYY-MM-DD"));
+        assert_eq!(clean_draft(&draft(once("2026-12-16", "9:00"))).unwrap_err(), "Pick a time of day.");
+        assert_eq!(clean_draft(&draft(once("2026-12-16", "09:00"))).unwrap().when, once("2026-12-16", "09:00"));
+        assert_eq!(When::from_json(&once("2026-12-16", "09:00").to_json()), Some(once("2026-12-16", "09:00")));
+        assert_eq!(describe_when(&once("2026-12-16", "09:00")), "Once, 16 Dec 2026 at 09:00");
+        assert_eq!(describe_moment(t(2026, 12, 16, 9, 5)), "16 Dec 2026, 09:05");
+        assert_eq!(describe_once_next(t(2026, 12, 16, 9, 0), t(2026, 12, 4, 12, 0)), "in 12 days");
+        assert_eq!(describe_once_next(t(2027, 4, 16, 9, 0), t(2026, 12, 4, 12, 0)), "in 4 months");
+        assert_eq!(describe_once_next(t(2099, 12, 16, 9, 0), t(2026, 12, 4, 12, 0)), "in 73 years");
     }
 
     #[test]

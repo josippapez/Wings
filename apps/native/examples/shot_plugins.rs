@@ -406,6 +406,13 @@ fn schedules(out: PathBuf) {
                   "prompt": "Update the dependencies that have a patch release and run the tests.",
                   "when": { "kind": "every", "hours": 6 }, "enabled": false, "anchor": now,
                   "lastRun": { "at": now - 26 * hour, "ok": false, "error": "The project is no longer in Wings." } },
+                { "id": "a3", "name": "Year-end check", "projectId": id, "agent": "claude",
+                  "prompt": "Check that the release notes list every change since the last tag.",
+                  "when": { "kind": "once", "date": "2099-12-16", "time": "09:00" }, "enabled": true, "anchor": now },
+                { "id": "a4", "name": "Migration dry run", "projectId": id, "agent": "claude",
+                  "prompt": "Dry-run the pending migrations against the staging copy.",
+                  "when": { "kind": "once", "date": "2026-11-03", "time": "09:00" }, "enabled": true, "anchor": now,
+                  "lastRun": { "at": now - 6 * 24 * hour, "paneId": "4", "ok": true } },
             ]),
         )
         .unwrap();
@@ -445,11 +452,12 @@ fn schedules(out: PathBuf) {
     let mut cx = app();
     let source = module("schedules");
     // What to press to reach each view, and a text it shows.
-    let views: [(&str, &PluginHost, &str, Option<(&str, usize)>, &str); 7] = [
+    let views: [(&str, &PluginHost, &str, Option<(&str, usize)>, &str); 8] = [
         ("list", &host, &source, None, "Frontend tickets"),
         ("new", &host, &source, Some(("Add entry", 0)), "Start an agent"),
         ("edit-schedule", &host, &source, Some(("Edit", 0)), "Prompt"),
-        ("edit-entry", &host, &source, Some(("Edit", 2)), "Keep free"),
+        ("edit-once", &host, &source, Some(("Edit", 2)), "Year, month, day"),
+        ("edit-entry", &host, &source, Some(("Edit", 4)), "Keep free"),
         ("empty", &empty_host, &source, None, "Nothing set up yet"),
         ("approve", &host, &module("approve"), None, "asks to add a schedule"),
         ("approve-start", &start_host, &module("approve"), None, "asks to start an agent"),

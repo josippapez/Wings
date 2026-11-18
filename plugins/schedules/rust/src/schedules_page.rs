@@ -5,7 +5,7 @@ use crate::{
     STATE, WANT,
     assigned::{AssignedTicket, DEFAULT_MIN_FREE_GB, DEFAULT_PROMPT, Project, Waiting, Watch, WatchDraft, WATCH_NAME, describe_check, started_elsewhere, state_options, title_wanted},
     page_ask::{ask, ask_quiet, busy, clear_error, error, listen},
-    schedule::{Agent, DAYS, DAY_NUMBERS, Draft, EVERY_HOURS, Schedule, When, describe_next, describe_when, next_run},
+    schedule::{Agent, DAYS, DAY_NUMBERS, Draft, EVERY_HOURS, Run, Schedule, When, describe_moment, describe_next, describe_once_next, describe_when, next_run},
     store::{read_schedules, read_watches},
     view::{busy_button, button, field, field_group, small_badge, textarea},
     worktree_setup::{WorktreeSetup, include_text, worktree_change},
@@ -50,6 +50,14 @@ enum Kind {
     Assigned,
 }
 
+/// How a schedule's timing is picked on the form.
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    Daily,
+    Every,
+    Once,
+}
+
 /// What the form holds. Both kinds keep their fields here, so a new entry that tries the other kind and comes back finds what it typed.
 struct Form {
     kind: Kind,
@@ -57,8 +65,9 @@ struct Form {
     project_id: String,
     agent: Agent,
     prompt: String,
-    daily: bool,
+    mode: Mode,
     hours: i64,
+    date: String,
     time: String,
     days: Vec<i64>,
     template: String,
@@ -85,9 +94,17 @@ impl Form {
             project_id: schedule.map(|s| s.project_id.clone()).or_else(|| watch.map(|w| w.project_id.clone())).or_else(|| here.map(str::to_owned)).or_else(|| projects.first().map(|p| p.id.clone())).unwrap_or_default(),
             agent: schedule.map(|s| s.agent).or_else(|| watch.map(|w| w.agent)).unwrap_or(Agent::Claude),
             prompt: schedule.map(|s| s.prompt.clone()).unwrap_or_default(),
-            daily: !matches!(when, Some(When::Every { .. })),
+            mode: match when {
+                Some(When::Every { .. }) => Mode::Every,
+                Some(When::Once { .. }) => Mode::Once,
+                _ => Mode::Daily,
+            },
             hours: if let Some(When::Every { hours }) = when { *hours } else { 24 },
-            time: if let Some(When::Daily { time, .. }) = when { time.clone() } else { "09:00".into() },
+            date: if let Some(When::Once { date, .. }) = when { date.clone() } else { String::new() },
+            time: match when {
+                Some(When::Daily { time, .. } | When::Once { time, .. }) => time.clone(),
+                _ => "09:00".into(),
+            },
             days: if let Some(When::Daily { days, .. }) = when { days.clone() } else { vec![1, 2, 3, 4, 5] },
             template: watch.map_or_else(|| DEFAULT_PROMPT.to_owned(), |w| w.prompt.clone()),
             min_free: watch.map_or(DEFAULT_MIN_FREE_GB, |w| w.min_free_gb).to_string(),
@@ -220,7 +237,11 @@ fn save() {
         let f = &p.form;
         let editing = if let Editing::Entry(id) = &p.editing { Some(id.clone()) } else { None };
         if f.kind == Kind::Schedule {
-            let when = if f.daily { When::Daily { time: f.time.clone(), days: f.days.clone() } } else { When::Every { hours: f.hours } };
+            let when = match f.mode {
+                Mode::Daily => When::Daily { time: f.time.clone(), days: f.days.clone() },
+                Mode::Every => When::Every { hours: f.hours },
+                Mode::Once => When::Once { date: f.date.trim().to_owned(), time: f.time.clone() },
+            };
             let draft = Draft { name: f.name.clone(), project_id: f.project_id.clone(), agent: f.agent, prompt: f.prompt.clone(), when };
             return ("save", json!({ "entry": editing, "draft": draft.to_json() }));
         }
@@ -255,8 +276,11 @@ fn agent_chips(f: &Form) -> Node {
 
 fn schedule_fields(f: &Form) -> Vec<Node> {
     let hours: Vec<(String, String)> = EVERY_HOURS.iter().map(|h| (h.to_string(), if *h == 1 { "1 hour".to_owned() } else { format!("{h} hours") })).collect();
-    let when = if f.daily {
-        row().prop("gap", "l").prop("wrap", true).prop("align", "start").child(field("Time", None, text_input("Time", &f.time, |time| with(|p| p.form.time = time)).prop("type", "time"))).child(field_group(
+    let time = field("Time", None, text_input("Time", &f.time, |time| with(|p| p.form.time = time)).prop("type", "time"));
+    let when = if f.mode == Mode::Once {
+        row().prop("gap", "l").prop("wrap", true).prop("align", "start").child(field("Date", Some("Year, month, day, like 2026-12-16. It runs once, then stays in the list.".into()), text_input("Date", &f.date, |date| with(|p| p.form.date = date)).prop("placeholder", "2026-12-16").prop("maxLength", 10))).child(time)
+    } else if f.mode == Mode::Daily {
+        row().prop("gap", "l").prop("wrap", true).prop("align", "start").child(time).child(field_group(
             "Days",
             None,
             row().prop("gap", "s").prop("wrap", true).children(DAYS.iter().zip(DAY_NUMBERS).map(|(label, number)| {
@@ -280,7 +304,24 @@ fn schedule_fields(f: &Form) -> Vec<Node> {
         field_group(
             "When",
             None,
-            stack().prop("gap", "m").child(chips("When", &[("daily", "At a time of day"), ("every", "Every few hours")], if f.daily { "daily" } else { "every" }, |mode| with(|p| p.form.daily = mode == "daily"))).child(when),
+            stack().prop("gap", "m").child(chips(
+                "When",
+                &[("daily", "At a time of day"), ("every", "Every few hours"), ("once", "On a date")],
+                match f.mode {
+                    Mode::Daily => "daily",
+                    Mode::Every => "every",
+                    Mode::Once => "once",
+                },
+                |mode| {
+                    with(|p| {
+                        p.form.mode = match mode {
+                            "every" => Mode::Every,
+                            "once" => Mode::Once,
+                            _ => Mode::Daily,
+                        }
+                    })
+                },
+            )).child(when),
         ),
     ]
 }
@@ -445,14 +486,19 @@ fn ago_text(prefix: &str, at: i64, now: i64) -> Node {
     muted(format!("{prefix}{}", ago(at as f64, now as f64))).prop("size", "small")
 }
 
-fn last_run(run: Option<&crate::schedule::Run>, now: i64, prefix: &str) -> Node {
+fn last_run(run: Option<&Run>, now: i64, prefix: &str) -> Node {
     let Some(run) = run else {
         return muted("Not run yet").prop("size", "small");
     };
+    run_line(run, ago_text(prefix, run.at, now))
+}
+
+/// `label` for a run, with how it went.
+fn run_line(run: &Run, label: Node) -> Node {
     row()
         .prop("gap", "s")
         .prop("wrap", true)
-        .child(ago_text(prefix, run.at, now))
+        .child(label)
         .child(if run.ok { small_badge("Started", Some("success"), None) } else { small_badge("Failed", Some("danger"), None) })
         .maybe((!run.ok).then(|| text(run.error.clone().unwrap_or_default()).prop("tone", "danger").prop("size", "small")))
 }
@@ -463,12 +509,20 @@ fn schedule_item(s: &Schedule, project: &str, now: i64, working: bool) -> Node {
     let run_id = s.id.clone();
     let mut actions = vec![button("Run now", "outline", Some("sm"), Some(format!("Run {name} now")), working, move || ask("runNow", json!({ "entry": run_id }), || {}))];
     actions.extend(entry_actions(&s.id, s.enabled, &name, working, "toggle"));
-    let when = if !s.enabled {
-        "Next run when resumed".to_owned()
+    let once = matches!(s.when, When::Once { .. });
+    let lines = if once && next.is_none() {
+        // A single run that has started is done for good: the list keeps it to show it ran.
+        vec![s.last_run.as_ref().map_or_else(|| muted("Did not run").prop("size", "small"), |run| run_line(run, muted(format!("Ran {}", describe_moment(run.at))).prop("size", "small")))]
     } else {
-        next.map_or_else(|| "No day picked".to_owned(), |at| format!("Next run {}", describe_next(at, now)))
+        let when = match next {
+            _ if !s.enabled => "Next run when resumed".to_owned(),
+            Some(at) if once => format!("Runs {}", describe_once_next(at, now)),
+            Some(at) => format!("Next run {}", describe_next(at, now)),
+            None => "No day picked".to_owned(),
+        };
+        vec![text(when).prop("size", "small"), last_run(s.last_run.as_ref(), now, "Last run ")]
     };
-    entry_card(s.id.clone(), s.enabled, &name, project, s.agent, &describe_when(&s.when), vec![text(when).prop("size", "small"), last_run(s.last_run.as_ref(), now, "Last run ")], actions, None)
+    entry_card(s.id.clone(), s.enabled, &name, project, s.agent, &describe_when(&s.when), lines, actions, None)
 }
 
 fn ticket_row(w: &Watch, t: &AssignedTicket, p: &Page, working: bool, now: i64) -> Node {

@@ -2,7 +2,7 @@
 //! allow. A timed schedule starts an agent by itself, so an agent can't add one, or change what or when it runs, unless the
 //! user allows it.
 
-use crate::schedule::{Agent, Draft, EVERY_HOURS, When};
+use crate::schedule::{Agent, Draft, EVERY_HOURS, When, parse_date};
 use serde_json::{Value, json};
 
 /// The tools' day names, at their weekday number.
@@ -13,6 +13,7 @@ pub struct WhenInput {
     pub every_hours: Option<i64>,
     pub time: Option<String>,
     pub days: Option<Vec<String>>,
+    pub date: Option<String>,
 }
 
 impl WhenInput {
@@ -20,16 +21,36 @@ impl WhenInput {
         WhenInput {
             every_hours: input["every_hours"].as_i64(),
             time: input["time"].as_str().map(str::to_owned),
+            date: input["date"].as_str().map(str::to_owned),
             days: input["days"].as_array().map(|days| days.iter().filter_map(|day| day.as_str().map(str::to_owned)).collect()),
         }
     }
 }
 
 /// The timing the tool's fields give, over `current` for a change. `time` without `days` keeps the current days, or is
-/// every day for a new one. None when no field is given. Fails with what to fix.
+/// every day for a new one. `date` with `time` is a single run; for a change of one, either alone keeps the other.
+/// None when no field is given. Fails with what to fix. Whether a date has passed is `refuse_past`'s to say.
 pub fn when_from(input: &WhenInput, current: Option<&When>) -> Result<Option<When>, String> {
     if input.every_hours.is_some() && (input.time.is_some() || input.days.is_some()) {
         return Err("Give every_hours, or time with days, not both.".into());
+    }
+    if let Some(date) = &input.date {
+        if input.every_hours.is_some() || input.days.is_some() {
+            return Err("date is for a single run: give it with time, without every_hours or days.".into());
+        }
+        if parse_date(date).is_none() {
+            return Err(format!("date must be a real day written YYYY-MM-DD, like 2026-12-16, this one is {}.", Value::String(date.clone())));
+        }
+        let kept = match current {
+            Some(When::Once { time, .. }) => Some(time),
+            _ => None,
+        };
+        let time = input.time.clone().or_else(|| kept.cloned()).ok_or("date goes with a time of day: give time too.")?;
+        return Ok(Some(When::Once { date: date.clone(), time }));
+    }
+    // A new time for a single run keeps its date.
+    if let (Some(When::Once { date, .. }), Some(time), None) = (current, &input.time, &input.days) {
+        return Ok(Some(When::Once { date: date.clone(), time: time.clone() }));
     }
     if let Some(hours) = input.every_hours {
         if !EVERY_HOURS.contains(&hours) {
@@ -145,10 +166,28 @@ mod tests {
         let hours = |n| WhenInput { every_hours: Some(n), ..Default::default() };
         assert_eq!(when_from(&hours(4), Some(&daily())).unwrap(), Some(When::Every { hours: 4 }));
         assert!(when_from(&hours(5), None).unwrap_err().contains("one of 1, 2, 3, 4, 6, 8, 12, 24"));
-        assert!(when_from(&WhenInput { every_hours: Some(4), time: Some("09:00".into()), days: None }, None).unwrap_err().contains("not both"));
+        assert!(when_from(&WhenInput { every_hours: Some(4), time: Some("09:00".into()), ..Default::default() }, None).unwrap_err().contains("not both"));
         let monday = WhenInput { days: Some(vec!["mon".into()]), ..Default::default() };
         assert!(when_from(&monday, Some(&When::Every { hours: 4 })).unwrap_err().contains("give time too"));
         assert_eq!(when_from(&WhenInput::default(), Some(&daily())).unwrap(), None);
+    }
+
+    #[test]
+    fn a_date_with_a_time_is_a_single_run_and_not_with_hours_or_days_or_without_a_time() {
+        let input = |date: &str, time: Option<&str>| WhenInput { date: Some(date.into()), time: time.map(str::to_owned), ..Default::default() };
+        let once = |date: &str, time: &str| When::Once { date: date.into(), time: time.into() };
+        assert_eq!(when_from(&input("2026-12-16", Some("09:00")), None).unwrap(), Some(once("2026-12-16", "09:00")));
+        assert!(when_from(&input("2026-12-16", None), None).unwrap_err().contains("give time too"));
+        let with_days = WhenInput { days: Some(vec!["mon".into()]), ..input("2026-12-16", Some("09:00")) };
+        assert!(when_from(&with_days, None).unwrap_err().contains("single run"));
+        let with_hours = WhenInput { every_hours: Some(4), date: Some("2026-12-16".into()), ..Default::default() };
+        assert!(when_from(&with_hours, None).is_err());
+        assert!(when_from(&input("2026-02-30", Some("09:00")), None).unwrap_err().contains("YYYY-MM-DD"));
+        assert!(when_from(&input("tomorrow", Some("09:00")), None).is_err());
+        // A change to a single run keeps what isn't given.
+        let current = once("2026-12-16", "09:00");
+        assert_eq!(when_from(&input("2027-01-05", None), Some(&current)).unwrap(), Some(once("2027-01-05", "09:00")));
+        assert_eq!(when_from(&time("18:30"), Some(&current)).unwrap(), Some(once("2026-12-16", "18:30")));
     }
 
     #[test]

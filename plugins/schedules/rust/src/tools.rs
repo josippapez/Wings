@@ -7,7 +7,7 @@ use crate::{
     assigned::{DEFAULT_MIN_FREE_GB, DEFAULT_PROMPT, Project, WatchDraft, describe_check, fill_prompt, resolve_project},
     list::format_list,
     main_frame::{remove_schedule, save_schedule},
-    schedule::{Agent, Draft, Schedule, clean_draft, describe_next, describe_when, next_run, time_ok},
+    schedule::{Agent, Draft, Schedule, clean_draft, describe_next, describe_when, next_run, refuse_past, time_ok},
     store::{read_schedules, read_watches},
     watches::{add_watch, check_one, plan_start, remove_watch, save_watch, start_ticket},
 };
@@ -98,9 +98,10 @@ pub fn register_all() {
         let here = context["project"].as_object().map(|p| p.get("parentId").and_then(Value::as_str).or_else(|| p.get("id").and_then(Value::as_str)).unwrap_or_default().to_owned());
         let wanted = input["project"].as_str().map(str::to_owned).or(here).ok_or("Give project: this call didn't come from a pane in Wings.")?;
         let found = resolve_project(&projects, &wanted)?;
-        let when = when_from(&WhenInput::of(&input), None)?.ok_or("Give every_hours, or time with days.")?;
+        let when = when_from(&WhenInput::of(&input), None)?.ok_or("Give every_hours, or time with days, or date with time.")?;
         let agent = input["agent"].as_str().and_then(Agent::from_id).unwrap_or(Agent::Claude);
         let draft = clean_draft(&Draft { name: input["name"].as_str().unwrap_or_default().to_owned(), project_id: found.id.clone(), agent, prompt: input["prompt"].as_str().unwrap_or_default().to_owned(), when })?;
+        refuse_past(&draft.when, host::now() as i64)?;
         allowed(ask_approval(context["session"]["name"].as_str().map(str::to_owned), &found.name, None, draft.clone(), &found.id).await, "Nothing changed.")?;
         let saved = save_schedule(None, &draft)?;
         text(format!("Added {} in {}: {}.", saved.id, found.name, describe_schedule(&saved)))
@@ -189,7 +190,7 @@ pub fn register_all() {
         let has = |name: &str| !input[name].is_null();
         if let Some(schedule) = read_schedules()?.into_iter().find(|x| x.id == id) {
             if has("min_free_gb") || has("states") || has("title_prefixes") || has("base") {
-                return Err("min_free_gb, states, title_prefixes and base are for assigned entries. A schedule takes agent, prompt, name, every_hours, time and days.".into());
+                return Err("min_free_gb, states, title_prefixes and base are for assigned entries. A schedule takes agent, prompt, name, every_hours, time, days and date.".into());
             }
             let current = schedule.draft();
             let proposed = clean_draft(&Draft {
@@ -199,6 +200,9 @@ pub fn register_all() {
                 when: when_from(&WhenInput::of(&input), Some(&current.when))?.unwrap_or(current.when.clone()),
                 project_id: current.project_id.clone(),
             })?;
+            if current.when != proposed.when {
+                refuse_past(&proposed.when, host::now() as i64)?;
+            }
             if needs_approval(&current, &proposed) {
                 let project_name = projects().await?.into_iter().find(|p| p.id == schedule.project_id).map_or_else(|| "missing project".into(), |p| p.name);
                 allowed(ask_approval(context["session"]["name"].as_str().map(str::to_owned), &project_name, Some(current), proposed.clone(), &schedule.project_id).await, "Nothing changed.")?;
@@ -207,8 +211,8 @@ pub fn register_all() {
             return text(format!("Updated {id}: {}.", describe_schedule(&saved)));
         }
         let w = read_watches()?.into_iter().find(|x| x.id == id).ok_or_else(|| format!("No schedule or assigned entry {id}. Use list to see the ids."))?;
-        if has("every_hours") || has("time") || has("days") {
-            return Err("every_hours, time and days are for schedules. An assigned entry checks for tickets by itself.".into());
+        if has("every_hours") || has("time") || has("days") || has("date") {
+            return Err("every_hours, time, days and date are for schedules. An assigned entry checks for tickets by itself.".into());
         }
         let saved = save_watch(
             &id,

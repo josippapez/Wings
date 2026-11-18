@@ -7,7 +7,7 @@ use crate::{
     ASK, DONE, STATE, WANT,
     approvals,
     assigned::{Project, Watch, WatchDraft},
-    schedule::{Draft, Run, Schedule, claim, clean_draft, describe_when, due_at, on_start},
+    schedule::{Draft, Run, Schedule, When, claim, clean_draft, describe_when, due_at, on_start, refuse_past},
     store::{read_schedules, read_watches, save_schedules, save_watches},
     tools,
     watches::{CHECK_MS, add_watch, check_all, check_one, check_watch, dismiss, install, remove_watch, save_watch, sign_in, sign_in_code, start_ticket, targets_of, toggle_watch},
@@ -108,11 +108,15 @@ pub fn save_schedule(id: Option<&str>, draft: &Draft) -> Result<Schedule, String
     let list = read_schedules()?;
     let now = host::now() as i64;
     let Some(id) = id else {
+        refuse_past(&clean.when, now)?;
         let added = Schedule { id: new_id(now), name: clean.name, project_id: clean.project_id, agent: clean.agent, prompt: clean.prompt, when: clean.when, enabled: true, anchor: now, last_run: None };
         write_schedules(&[list, vec![added.clone()]].concat())?;
         return Ok(added);
     };
     let old = list.iter().find(|s| s.id == id).ok_or("That schedule is gone.")?;
+    if old.when != clean.when {
+        refuse_past(&clean.when, now)?;
+    }
     // A changed time counts from now, so it never runs for a time it was already past when you saved it.
     let saved = Schedule { name: clean.name, project_id: clean.project_id, agent: clean.agent, prompt: clean.prompt, when: clean.when, anchor: now, ..old.clone() };
     write_schedules(&list.iter().map(|s| if s.id == id { saved.clone() } else { s.clone() }).collect::<Vec<_>>())?;
@@ -187,7 +191,7 @@ async fn tick() {
 
 fn toggle(id: &str) -> Result<(), String> {
     let now = host::now() as i64;
-    write_schedules(&read_schedules()?.into_iter().map(|s| if s.id == id { Schedule { enabled: !s.enabled, anchor: now, ..s } } else { s }).collect::<Vec<_>>())
+    write_schedules(&read_schedules()?.into_iter().map(|s| if s.id == id { Schedule { enabled: !s.enabled, anchor: if matches!(s.when, When::Once { .. }) { s.anchor } else { now }, ..s } } else { s }).collect::<Vec<_>>())
 }
 
 async fn run_now(id: &str) -> Result<(), String> {
