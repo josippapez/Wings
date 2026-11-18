@@ -5,7 +5,7 @@
 
 use serde_json::Value;
 use wings_plugin::{
-    format::{ago, clock, parse_time, plural, truncate},
+    format::{ago, clock, plural, truncate},
     local_time::local,
     host,
     markdown::{code_block, markdown},
@@ -657,7 +657,7 @@ fn side(c: &Chat) -> Vec<Node> {
         limits = limits.child(meter_row("Context", used * 100 / most.max(1), (70, 90), None));
     }
     for (label, used, resets) in &c.session.limits {
-        let resets = parse_time(resets).map(|ms| match *label {
+        let resets = resets.map(|ms| match *label {
             "5h" => format!("resets {}", clock(ms)),
             _ => format!("resets {} {}", WEEKDAYS[local(ms as i64).weekday as usize % 7], clock(ms)),
         });

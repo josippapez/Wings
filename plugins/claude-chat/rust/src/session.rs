@@ -5,6 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use serde_json::{Map, Value, json};
+use wings_plugin::format::parse_time;
 
 use crate::usage::{ContextDetail, Panel, Usage};
 
@@ -223,6 +224,8 @@ pub const INITIALIZE: &str = "initialize";
 pub const CONTEXT: &str = "context";
 pub const SETTINGS: &str = "settings";
 pub const USAGE: &str = "usage";
+/// The limits the chat shows, by Claude Code's names for them.
+const LIMITS: [(&str, &str); 2] = [("5h", "five_hour"), ("week", "seven_day")];
 /// The request that puts a new chat in the mode you set for them.
 pub const START_MODE: &str = "start-mode";
 /// The requests behind the usage and context views, apart from the opening ones: those ask for less.
@@ -244,8 +247,8 @@ pub struct Session {
     /// The effort your settings give each model by its full name (`modelSettings`), and the one for the rest.
     model_efforts: Vec<(String, String)>,
     default_effort: Option<String>,
-    /// How much of your plan's limits is used, as Claude Code's /usage says: ("5h", percent, when it resets) and the week's.
-    pub limits: Vec<(&'static str, u64, String)>,
+    /// How much of your plan's limits is used: ("5h", percent, when it resets in milliseconds) and the week's.
+    pub limits: Vec<(&'static str, u64, Option<f64>)>,
     /// The permission mode, one of `MODES`' or another Claude Code has.
     pub mode: Option<String>,
     /// The mode the opening input asked for, which `mode` shows once Claude Code has accepted it.
@@ -327,6 +330,16 @@ impl Session {
             }
             "system" if line["subtype"] == "session_state_changed" => self.changed(line["state"].as_str().unwrap_or_default()),
             "control_response" => self.answered(&line["response"]),
+            // Claude Code says how much is used when that changes, as when you hit a limit. The chat itself only asks when
+            // you send something, so without this it showed what was used at your last message.
+            "rate_limit_event" => {
+                let windows = &line["rate_limit_info"]["unifiedWindows"];
+                for (label, key) in LIMITS {
+                    if let Some(used) = windows[key]["utilization"].as_f64() {
+                        self.set_limit(label, used * 100.0, windows[key]["resetsAt"].as_f64().map(|at| at * 1000.0));
+                    }
+                }
+            }
             "stream_event" => self.stream(&line["event"]),
             "assistant" => {
                 self.told_you = false;
@@ -377,7 +390,12 @@ impl Session {
                     self.items.push(Item::Stopped);
                 } else if line["is_error"] == true || line["subtype"].as_str().is_some_and(|s| s != "success") {
                     let said = line["result"].as_str().map(str::to_owned).or_else(|| line["errors"].as_array().map(|e| texts(e).join("\n")));
-                    self.items.push(Item::Error(said.filter(|s| !s.is_empty()).unwrap_or_else(|| "The turn ended with an error.".into())));
+                    let said = said.filter(|s| !s.is_empty()).unwrap_or_else(|| "The turn ended with an error.".into());
+                    // Claude Code also writes some errors, like a hit limit, as its reply: shown once, as the error.
+                    if matches!(self.items.last(), Some(Item::Text(text)) if text.trim() == said.trim()) {
+                        self.items.pop();
+                    }
+                    self.items.push(Item::Error(said));
                 } else if !std::mem::replace(&mut self.told_you, true) {
                     let last = self.items.iter().rev().find_map(|item| if let Item::Text(text) = item { Some(text) } else { None });
                     let first = last.and_then(|text| text.lines().find(|line| !line.trim().is_empty())).unwrap_or_default();
@@ -473,15 +491,14 @@ impl Session {
                     .filter_map(|(model, set)| Some((model.clone(), set["effortLevel"].as_str()?.to_owned())))
                     .collect();
             }
+            // An answer can come without `rate_limits`: the limits shown stay.
             USAGE => {
                 let limits = &answer["rate_limits"];
-                self.limits = [("5h", "five_hour"), ("week", "seven_day")]
-                    .into_iter()
-                    .filter_map(|(label, key)| {
-                        let limit = &limits[key];
-                        Some((label, limit["utilization"].as_f64()?.round() as u64, limit["resets_at"].as_str().unwrap_or_default().to_owned()))
-                    })
-                    .collect();
+                for (label, key) in LIMITS {
+                    if let Some(used) = limits[key]["utilization"].as_f64() {
+                        self.set_limit(label, used, limits[key]["resets_at"].as_str().and_then(parse_time));
+                    }
+                }
             }
             _ => {}
         }
@@ -925,6 +942,13 @@ pub fn summary(tool: &str, input: &Value) -> String {
 }
 
 impl Session {
+    /// Shows `used` percent of the limit `label`, the 5-hour one first.
+    fn set_limit(&mut self, label: &'static str, used: f64, resets: Option<f64>) {
+        self.limits.retain(|(shown, ..)| *shown != label);
+        self.limits.push((label, used.round() as u64, resets));
+        self.limits.sort_by_key(|(shown, ..)| *shown != "5h");
+    }
+
     /// What Claude is doing now, as the line under the conversation says it: the tool it runs, else thinking or writing.
     pub fn activity(&self) -> String {
         let running = self.items.iter().rev().find_map(|item| match item {
@@ -1336,6 +1360,29 @@ mod tests {
         session.hear(&json!({ "type": "result", "subtype": "error_during_execution", "is_error": true, "errors": ["Credit balance is too low"] }));
         assert!(!session.working);
         assert_eq!(session.items[1], Item::Error("Credit balance is too low".into()));
+    }
+
+    #[test]
+    fn a_hit_limit_shows_at_once_in_the_limits_and_once_in_the_conversation() {
+        let answer = |response: Value| json!({ "type": "control_response", "response": { "subtype": "success", "request_id": USAGE, "response": response } });
+        let mut session = Session::default();
+        session.send("go on", &[]);
+        session.hear(&answer(json!({ "rate_limits": {
+            "five_hour": { "utilization": 67, "resets_at": "2026-11-18T19:30:00.262659+00:00" },
+            "seven_day": { "utilization": 97, "resets_at": "2026-11-19T10:59:59+00:00" } } })));
+        // As Claude Code 2.1.327 says it once the 5-hour limit is hit, past the last message's answer.
+        let limited = "You've hit your 5-hour limit · resets 8:30pm (Europe/Zagreb)";
+        session.hear(&json!({ "type": "rate_limit_event", "rate_limit_info": { "status": "rejected", "resetsAt": 1795030200,
+            "rateLimitType": "five_hour", "unifiedWindows": {
+                "five_hour": { "utilization": 1, "resetsAt": 1795030200, "status": "rejected", "surpassedThreshold": 1 },
+                "seven_day": { "utilization": 0.98, "resetsAt": 1795086000, "status": "allowed_warning", "surpassedThreshold": 0.75 } } } }));
+        session.hear(&json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": limited }] }, "error": "rate_limit" }));
+        session.hear(&json!({ "type": "result", "subtype": "success", "is_error": true, "result": limited }));
+        assert_eq!(session.limits, [("5h", 100, Some(1_795_030_200_000.0)), ("week", 98, Some(1_795_086_000_000.0))]);
+        assert_eq!(session.items, [Item::User("go on".into()), Item::Error(limited.into())]);
+        // An answer that comes without them keeps the limits shown.
+        session.hear(&answer(json!({ "rate_limits": null })));
+        assert_eq!(session.limits.len(), 2);
     }
 
     #[test]
