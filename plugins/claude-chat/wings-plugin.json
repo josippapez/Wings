@@ -7,6 +7,9 @@
   "api": 1,
   "main": "dist/native/main.wasm",
   "permissions": {
+    "exec": [
+      "git ls-files [--cached --others --exclude-standard -z]"
+    ],
     "processes": [
       "claude [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --resume]",
       "claude-rtk [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --resume]"

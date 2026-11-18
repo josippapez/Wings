@@ -288,7 +288,7 @@ fn composer(c: &Chat) -> Node {
     });
     let controls = row().prop("gap", "xs").prop("align", "center").children(pickers(c)).child(stack().prop("grow", true)).maybe(context).child(go);
     let message_box = card().prop("variant", "raised").child(field.prop("grow", true)).child(controls);
-    Node::new("Bar").prop("edge", "none").child(stack().prop("gap", "s").prop("maxWidth", COLUMN).maybe(commands(c)).child(message_box))
+    Node::new("Bar").prop("edge", "none").child(stack().prop("gap", "s").prop("maxWidth", COLUMN).maybe(commands(c).or_else(|| file_menu(c))).child(message_box))
 }
 
 /// The model, effort and permission mode, each a menu, once Claude Code has said what it has.
@@ -326,6 +326,22 @@ fn commands(c: &Chat) -> Option<Node> {
             .child(text(format!("/{}", command.name)).prop("mono", true).prop("weight", "medium"))
             .child(text(truncate(&command.description, 100)).prop("tone", "muted").prop("size", "small").prop("truncate", true).prop("grow", true));
         list_button([line], move || chat::insert_command(&name)).key(command.name.as_str())
+    });
+    Some(card().child(list().children(rows)))
+}
+
+/// The files that match the `@word` you typed, over the message box.
+fn file_menu(c: &Chat) -> Option<Node> {
+    let (_, found) = chat::mention_matches(c)?;
+    let rows = found.into_iter().map(|path| {
+        let (dir, name) = path.rsplit_once('/').unwrap_or(("", path));
+        let line = row()
+            .prop("gap", "s")
+            .prop("align", "baseline")
+            .child(text(name).prop("mono", true).prop("weight", "medium"))
+            .child(text(dir).prop("tone", "muted").prop("size", "small").prop("truncate", true).prop("grow", true));
+        let picked = path.to_owned();
+        list_button([line], move || chat::insert_mention(&picked)).key(path)
     });
     Some(card().child(list().children(rows)))
 }

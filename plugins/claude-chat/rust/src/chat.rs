@@ -15,7 +15,10 @@ use wings_plugin::{
     task,
 };
 
-use crate::session::{Command, Item, Session};
+use crate::{
+    mentions::{self, Files},
+    session::{Command, Item, Session},
+};
 
 /// What a chat may run Claude Code as: Claude Code itself, or the wrapper a terminal started it through.
 const PROGRAMS: [&str; 2] = ["claude", "claude-rtk"];
@@ -61,6 +64,8 @@ pub struct Chat {
     pub open_steps: HashSet<usize>,
     /// The tool calls whose output you opened, by their id.
     pub open_outputs: HashSet<String>,
+    /// The project's files, for @-mentions.
+    pub files: Files,
     /// Going on in a terminal once Claude Code here has ended.
     moving: bool,
     input: Option<ProcessInput>,
@@ -82,6 +87,7 @@ thread_local! {
         past: None,
         open_steps: HashSet::new(),
         open_outputs: HashSet::new(),
+        files: Files::default(),
         moving: false,
         input: None,
         requests: 0,
@@ -138,6 +144,7 @@ fn launch(resume: Option<String>) {
         c.moving = false;
         (c.run, c.cwd.clone(), c.program.clone())
     });
+    load_files(run, cwd.clone());
     task::spawn(async move {
         if let Some(id) = &resume {
             if let Ok(entries) = host::transcript(id, &["user", "assistant"], Some(HISTORY)).await {
@@ -188,6 +195,21 @@ fn launch(resume: Option<String>) {
         if moving {
             open_terminal();
         }
+    });
+}
+
+/// Lists the project's files for @-mentions: git's own list, so ignored files stay out. Done here, not by Claude Code's
+/// file suggestions, because Wings lets the page write to Claude Code only on a click or a key.
+fn load_files(run: u32, cwd: String) {
+    task::spawn(async move {
+        let listed = host::exec_in(&cwd, "git", &["ls-files", "--cached", "--others", "--exclude-standard", "-z"]).await;
+        // Not a git folder, or no git: no menu, and nothing to tell.
+        let files = listed.ok().filter(|out| out["code"] == 0).map(|out| Files::from_git(out["stdout"].as_str().unwrap_or_default()));
+        with(|c| {
+            if c.run == run {
+                c.files = files.unwrap_or_default();
+            }
+        });
     });
 }
 
@@ -314,6 +336,26 @@ pub fn command_matches(c: &Chat) -> Vec<&Command> {
     };
     let typed = typed.to_lowercase();
     c.session.commands.iter().filter(|command| command.name.to_lowercase().contains(&typed)).take(8).collect()
+}
+
+/// The files that match the `@word` the draft ends in, with where the word starts. None while a slash command is being
+/// typed: that menu wins.
+pub fn mention_matches(c: &Chat) -> Option<(usize, Vec<&str>)> {
+    if c.draft.starts_with('/') {
+        return None;
+    }
+    let (start, query) = mentions::active(&c.draft)?;
+    let found = c.files.matches(query);
+    (!found.is_empty()).then_some((start, found))
+}
+
+/// Replaces the `@word` the draft ends in with a mention of `path`.
+pub fn insert_mention(path: &str) {
+    with(|c| {
+        if let Some((start, _)) = mentions::active(&c.draft) {
+            c.draft = mentions::insert(&c.draft, start, path);
+        }
+    });
 }
 
 pub fn new_chat() {

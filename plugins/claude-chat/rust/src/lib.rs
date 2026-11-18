@@ -10,6 +10,8 @@
 mod chat;
 #[cfg(any(feature = "main", test))]
 mod main_frame;
+#[cfg(any(feature = "chat", test))]
+mod mentions;
 mod session;
 #[cfg(feature = "chat")]
 mod view;
