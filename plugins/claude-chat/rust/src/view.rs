@@ -74,7 +74,8 @@ fn chat_page(c: &Chat) -> Node {
         .prop("pinned", c.subagent.as_ref().is_some_and(|id| c.session.subagents.contains_key(id)))
         .child(Node::new("Slot").prop("name", "start").children(main))
         .child(Node::new("Slot").prop("name", "end").children(side(c)));
-    page(toolbar, [split]).prop("flush", true)
+    // The plugins dialog, which the app draws over the whole page.
+    page(toolbar, [split].into_iter().chain(crate::plugins_view::dialog(c))).prop("flush", true)
 }
 
 fn column() -> Node {

@@ -931,7 +931,16 @@ fn claude_chat(out: PathBuf) {
         json!({ "type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.0068 }),
         json!({ "type": "prompt_suggestion", "suggestion": "run it", "uuid": "cdab3e06-e878-423a-add5-9ed9174c610e", "session_id": "5b7e2c1a-0f3d-4c8e-9a61-2d4f8b3c7e90" }),
     ]);
-    let scenes: [Scene; 24] = [
+    // What `/plugins` and `/mcp` read (made-up plugins and servers, in Claude Code's shapes), and the plugins' skills among
+    // the commands, which the dialog counts.
+    let mut skilled = ready[0].clone();
+    skilled["response"]["response"]["commands"]
+        .as_array_mut()
+        .unwrap()
+        .extend(["toolbox:lint", "toolbox:format", "release-notes:write"].map(|name| json!({ "name": name, "description": "", "argumentHint": "" })));
+    let installed: Vec<serde_json::Value> = include_str!("../../../plugins/claude-chat/rust/tests/plugins.jsonl").lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+    let plugins = opened([init.clone(), skilled].into_iter().chain(installed).collect());
+    let scenes: [Scene; 26] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -943,6 +952,9 @@ fn claude_chat(out: PathBuf) {
         ("sessions", opened(vec![init.clone()]), None, Some("press:Sessions"), "Fix the flaky checkout test"),
         // /usage opens the usage view in place of the conversation instead of going to Claude as a message.
         ("usage", opened(vec![init.clone(), full_usage]), None, Some("type:/usage;keys:enter"), "Plan usage limits"),
+        // /plugins and /mcp open the plugins dialog over the chat, each leading with its own list.
+        ("plugins", plugins.clone(), None, Some("type:/plugins;keys:enter"), "toolbox"),
+        ("mcp", plugins, None, Some("type:/mcp;keys:enter"), "Needs sign-in"),
         ("failed", vec![], Some(("1", "Error: Invalid API key · Please run /login")), None, "Invalid API key"),
         ("work", worked, None, None, "Worked for 1m 23s"),
         ("work-open", work.clone(), None, Some("disclose:Ran 1 command"), "pnpm test discount"),

@@ -17,6 +17,9 @@ mod chat;
 mod main_frame;
 #[cfg(any(feature = "chat", test))]
 mod mentions;
+mod plugins;
+#[cfg(feature = "chat")]
+mod plugins_view;
 mod prefs;
 mod session;
 #[cfg(feature = "settings")]

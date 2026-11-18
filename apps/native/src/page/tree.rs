@@ -174,6 +174,7 @@ pub enum Node {
     Split(Split),
     Bar(Bar),
     Sunburst(Sunburst),
+    Dialog(Dialog),
 }
 
 /// A named part of the component it's in.
@@ -372,6 +373,19 @@ pub struct Bar {
     pub id: u64,
     pub edge: Edge,
     pub gap: Gap,
+    pub children: Vec<Node>,
+}
+
+/// A dialog over the page, wherever the page puts it: a dimmed backdrop over the whole page and, in its middle, a panel
+/// with the `title`, a close button and what the dialog holds, which scrolls. Escape, a press on the backdrop and the
+/// close button send `onClose`, and the page then leaves the dialog out.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Dialog {
+    pub id: u64,
+    pub title: String,
+    /// How wide the panel is, in points, at most: in a narrower page it narrows with it.
+    pub width: f32,
+    pub on_close: Option<String>,
     pub children: Vec<Node>,
 }
 
@@ -818,6 +832,7 @@ impl Node {
             Node::Split(n) => Some(n.id),
             Node::Bar(n) => Some(n.id),
             Node::Sunburst(n) => Some(n.id),
+            Node::Dialog(n) => Some(n.id),
         }
     }
 
@@ -856,6 +871,7 @@ impl Node {
             Node::Scroll(n) => vec![&n.children],
             Node::Split(n) => vec![&n.start, &n.end],
             Node::Bar(n) => vec![&n.children],
+            Node::Dialog(n) => vec![&n.children],
             Node::Gauge(n) => vec![&n.note],
             Node::Meter(_) => vec![],
             Node::Board(n) => vec![&n.header, &n.body],
@@ -950,6 +966,7 @@ impl Walk {
                 | "Bar"
                 | "Sunburst"
                 | "Menu"
+                | "Dialog"
         ) {
             return Ok(None);
         }
@@ -1153,6 +1170,15 @@ impl Walk {
                 })
             }
             "Sunburst" => Node::Sunburst(sunburst::parse(id, &props)?),
+            "Dialog" => Node::Dialog(Dialog {
+                id,
+                title: text_prop(&props, "title"),
+                width: number(&props, "width")
+                    .unwrap_or(560.0)
+                    .clamp(280.0, 1_000.0) as f32,
+                on_close: handler("onClose"),
+                children: parts(children),
+            }),
             "Gauge" => {
                 let mut slots = Slots(children);
                 Node::Gauge(Gauge {
@@ -2223,5 +2249,32 @@ mod tests {
         // Only "end" moves the pane, and a threshold that is no positive number is none.
         assert_eq!((splits[1].fixed_end, splits[1].collapse_below), (false, None));
         assert_eq!((splits[2].fixed_end, splits[2].collapse_below), (true, None));
+    }
+
+    #[test]
+    fn parses_a_dialog_with_its_title_width_and_close_and_bounds_its_width() {
+        let parsed = tree(json!([
+            {"id":1,"type":"Dialog","props":{"title":"Plugins","width":640,"onClose":"1:onClose"},"children":[
+                {"id":2,"type":"Text","props":{},"children":[{"id":3,"type":"#text","text":"Inside"}]}]},
+            {"id":4,"type":"Dialog","props":{"width":99999,"onClose":"no handler"},"children":[]},
+            {"id":5,"type":"Dialog","props":{"width":-3},"children":[]}
+        ]))
+        .unwrap();
+        let dialogs: Vec<&Dialog> = parsed
+            .children
+            .iter()
+            .map(|node| match node {
+                Node::Dialog(dialog) => dialog,
+                _ => panic!("a dialog"),
+            })
+            .collect();
+        assert_eq!(
+            (dialogs[0].title.as_str(), dialogs[0].width, dialogs[0].on_close.as_deref()),
+            ("Plugins", 640.0, Some("1:onClose"))
+        );
+        assert_eq!(plain_text(&parsed.children[..1]), "Inside");
+        // A width past the bounds is held to them, and a close that isn't a handler is none.
+        assert_eq!((dialogs[1].width, dialogs[1].on_close.as_deref()), (1_000.0, None));
+        assert_eq!(dialogs[2].width, 280.0);
     }
 }

@@ -202,6 +202,13 @@ pub fn disclosure(summary: impl Into<String>, body: Node) -> Node {
     Node::new("Disclosure").child(Node::new("Slot").prop("name", "summary").text(summary)).child(slot("body", body))
 }
 
+/// A dialog over the page with `title` and a close button, `width` points wide at most, holding the children you add.
+/// The app draws it over the whole page wherever it is in the tree, and calls `on_close` on Escape, a press beside it or
+/// its close button: leave it out of the page then. Needs Wings 0.2.36.
+pub fn dialog(title: &str, width: u32, on_close: impl Fn() + 'static) -> Node {
+    Node::new("Dialog").prop("title", title).prop("width", width).on("onClose", move |_| on_close())
+}
+
 /// What a page shows when it has nothing to list.
 pub fn empty(title: &str, description: &str) -> Node {
     Node::new("Empty").child(Node::new("Slot").prop("name", "title").text(title)).child(Node::new("Slot").prop("name", "description").text(description))

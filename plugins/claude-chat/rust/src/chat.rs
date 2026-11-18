@@ -17,7 +17,7 @@ use wings_plugin::{
 
 use crate::{
     mentions::{self, Files},
-    prefs,
+    plugins, prefs,
     session::{Command, Draft, Item, Session, exits, view_of},
     usage::Panel,
 };
@@ -72,6 +72,8 @@ pub struct Chat {
     /// contributors in place of the last day's.
     pub panel: Option<Panel>,
     pub panel_week: bool,
+    /// The plugins dialog, over the chat while it is open.
+    pub plugins: Option<plugins::Dialog>,
     /// The groups of tool calls you clicked, by the index of their first item: each flips what `detailed` shows.
     pub open_steps: HashSet<usize>,
     /// The tool calls whose output you clicked, by their id: each flips what `detailed` shows.
@@ -117,6 +119,7 @@ thread_local! {
         text_scale: 1.0,
         panel: None,
         panel_week: false,
+        plugins: None,
         open_steps: HashSet::new(),
         open_outputs: HashSet::new(),
         open_queued: HashSet::new(),
@@ -194,6 +197,7 @@ fn launch(resume: Option<String>) {
         c.shown = PAGE;
         c.past = None;
         c.panel = None;
+        c.plugins = None;
         c.open_steps.clear();
         c.open_outputs.clear();
         c.open_queued.clear();
@@ -419,7 +423,7 @@ fn report_agent() {
 }
 
 /// Writes what `make` makes of the chat and the next request number, while Claude Code runs.
-fn write(make: impl FnOnce(&mut Chat, u32) -> Option<String>) {
+pub(crate) fn write(make: impl FnOnce(&mut Chat, u32) -> Option<String>) {
     let written = with(|c| {
         let input = c.input.clone()?;
         c.requests += 1;
@@ -454,6 +458,12 @@ pub fn send() {
                 c.draft.clear();
                 c.past = None;
                 c.panel = Some(panel);
+                return Some(line);
+            }
+            // /plugins, /plugin and /mcp open their dialog over the chat, filled by what the line asks.
+            if let Some((show, line)) = c.session.dialog_command(&text) {
+                c.draft.clear();
+                c.plugins = Some(plugins::Dialog { show, query: String::new() });
                 return Some(line);
             }
         }
@@ -612,7 +622,7 @@ pub fn command_matches(c: &Chat) -> Vec<&Command> {
         return Vec::new();
     };
     // Typed out in full, the command is ready: a list over it would take the Enter that opens its view.
-    if view_of(&c.draft).is_some() || exits(&c.draft) {
+    if view_of(&c.draft).is_some() || exits(&c.draft) || plugins::command(&c.draft).is_some() {
         return Vec::new();
     }
     let typed = typed.to_lowercase();

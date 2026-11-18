@@ -148,6 +148,10 @@ pub struct PageView {
     actions_within: HashSet<u64>,
     /// A field that took the keyboard and is brought into view once it has been drawn.
     reveal: Option<gpui::Entity<crate::text_field::TextField>>,
+    /// The page's `Dialog` takes the keyboard while it shows, by this handle, and gives it back to what had it before.
+    dialog_focus: gpui::FocusHandle,
+    dialog_shown: Option<u64>,
+    focus_before: Option<gpui::FocusHandle>,
     _events: Task<()>,
 }
 
@@ -205,6 +209,8 @@ impl PageView {
         self.actions_focus.borrow_mut().clear();
         self.actions_within.clear();
         self.reveal = None;
+        self.dialog_shown = None;
+        self.focus_before = None;
         if self.stopped {
             self.restart_later(cx);
         }
@@ -393,6 +399,9 @@ impl PageView {
             menu_focus: cx.focus_handle(),
             actions_within: HashSet::new(),
             reveal: None,
+            dialog_focus: cx.focus_handle(),
+            dialog_shown: None,
+            focus_before: None,
             _events: events,
         };
         if view.stopped {
@@ -1383,6 +1392,8 @@ impl PageView {
             Node::Avatar(avatar) => rich_view::avatar(avatar),
             Node::Skeleton(skeleton) => rich_view::skeleton(skeleton),
             Node::Sunburst(map) => self.sunburst(map, cx),
+            // Drawn over the whole page by `render`, not where it sits.
+            Node::Dialog(_) => div().into_any_element(),
         }
     }
 
@@ -1595,6 +1606,94 @@ impl PageView {
             .into_any_element()
     }
 
+    /// A `Dialog` over the whole page, as Wings' own dialogs are (`ui::dialog`): its title and a close button at the top,
+    /// and what it holds under them, which scrolls. Escape, a press on the backdrop and the close button send `onClose`.
+    fn dialog(&self, dialog: &tree::Dialog, cx: &mut Context<Self>) -> AnyElement {
+        let id = dialog.id;
+        let (backdrop, panel) = ui::dialog(
+            ElementId::NamedInteger("page-dialog".into(), id),
+            dialog.title.clone(),
+            &self.dialog_focus,
+            dialog.width,
+            None,
+        );
+        let (on_backdrop, on_button, on_escape) =
+            (dialog.on_close.clone(), dialog.on_close.clone(), dialog.on_close.clone());
+        let header = div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .pl(px(24.0))
+            .pr(px(12.0))
+            .pt(px(14.0))
+            .pb(px(6.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(16.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(dialog.title.clone()),
+            )
+            .child(
+                ui::icon_button(
+                    ElementId::NamedInteger("page-dialog-close".into(), id),
+                    crate::icons::Icon::X,
+                    "Close",
+                    ui::ButtonSize::Sm,
+                )
+                .on_click(cx.listener(move |view, _, _, cx| {
+                    cx.stop_propagation();
+                    if let Some(handler) = &on_button {
+                        view.act(handler, None);
+                    }
+                })),
+            );
+        let body = div()
+            .id(ElementId::NamedInteger("page-dialog-body".into(), id))
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .px(px(24.0))
+            .pt(px(4.0))
+            .pb(px(24.0))
+            .overflow_y_scroll()
+            .children(self.nodes(&dialog.children, cx));
+        backdrop
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |view, _, _, _| {
+                    if let Some(handler) = &on_backdrop {
+                        view.act(handler, None);
+                    }
+                }),
+            )
+            .child(ui::dialog_panel(
+                panel
+                    .flex_col()
+                    // Before a field in it, which keeps Escape. A select's menu or a field's options open in the dialog
+                    // close first, on their own.
+                    .capture_key_down(cx.listener(move |view, event: &KeyDownEvent, window, cx| {
+                        if event.keystroke.key != "escape" || view.shows_menu() {
+                            return;
+                        }
+                        if let Some(handler) = &on_escape {
+                            view.send(handler, None);
+                        }
+                        window.prevent_default();
+                        cx.stop_propagation();
+                    }))
+                    .children(ui::spot(|| "page-dialog".into()))
+                    .child(header)
+                    .child(body),
+            ))
+            .into_any_element()
+    }
+
     fn list_item(&self, item: &tree::ListItem, cx: &mut Context<Self>) -> AnyElement {
         if item
             .children
@@ -1688,6 +1787,18 @@ impl Render for PageView {
             self.highlight = None;
         }
         self.listing.set(false);
+        // A dialog takes the keyboard from the page under it as it opens, and gives it back as it closes. A field in it
+        // that asks for the keyboard takes it after this.
+        let dialog = self.tree.as_ref().and_then(|tree| dialog_in(&tree.children)).map(|dialog| dialog.id);
+        if dialog.is_some() != self.dialog_shown.is_some() {
+            if dialog.is_some() {
+                self.focus_before = window.focused(cx);
+                window.focus(&self.dialog_focus, cx);
+            } else if let Some(before) = self.focus_before.take() {
+                window.focus(&before, cx);
+            }
+        }
+        self.dialog_shown = dialog;
         self.actions_within = self
             .actions_focus
             .borrow()
@@ -1700,6 +1811,10 @@ impl Render for PageView {
             .as_ref()
             .map(|tree| self.nodes(&tree.children, cx))
             .unwrap_or_default();
+        let overlay = dialog
+            .and(self.tree.as_ref())
+            .and_then(|tree| dialog_in(&tree.children))
+            .map(|dialog| self.dialog(dialog, cx));
         let fill = self.tree.as_ref().is_some_and(|tree| tree.fill);
         // A field that took the keyboard in the last render is brought into view once it has been drawn.
         if let Some(field) = self.reveal.clone() {
@@ -1750,6 +1865,7 @@ impl Render for PageView {
             .id("native-page")
             .key_context(page_context)
             .on_key_down(cx.listener(Self::tab))
+            .relative()
             .size_full()
             .min_w_0()
             .min_h_0()
@@ -1822,7 +1938,16 @@ impl Render for PageView {
                         }),
                 )
             })
+            .children(overlay)
     }
+}
+
+/// The dialog the page shows, wherever in its tree it put it.
+fn dialog_in(nodes: &[Node]) -> Option<&tree::Dialog> {
+    nodes.iter().rev().find_map(|node| match node {
+        Node::Dialog(dialog) => Some(dialog),
+        other => other.parts().into_iter().rev().find_map(dialog_in),
+    })
 }
 
 /// How long ago `since` was, at `now` (both ms since the epoch), as a status line counts: "16s", "2m 5s", "1h 4m".
@@ -1853,11 +1978,14 @@ impl PageView {
             return;
         }
         let page = cx.entity_id().to_string();
-        let inside = |window: &Window| {
-            window
+        let dialog = self.dialog_shown.is_some().then(|| self.dialog_focus.clone());
+        let inside = |window: &Window, cx: &gpui::App| match &dialog {
+            // A dialog keeps the keyboard in it, as a modal does.
+            Some(dialog) => dialog.contains_focused(window, cx),
+            None => window
                 .context_stack()
                 .iter()
-                .any(|context| context.get(PAGE_CONTEXT).is_some_and(|id| **id == page))
+                .any(|context| context.get(PAGE_CONTEXT).is_some_and(|id| **id == page)),
         };
         let from = window.focused(cx);
         // Bounded, as a page with no control besides the focused one comes back to it.
@@ -1867,7 +1995,7 @@ impl PageView {
             } else {
                 window.focus_next(cx);
             }
-            if inside(window) || window.focused(cx) == from {
+            if inside(window, &**cx) || window.focused(cx) == from {
                 break;
             }
         }

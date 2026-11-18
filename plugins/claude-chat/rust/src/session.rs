@@ -7,7 +7,10 @@ use std::collections::{HashMap, HashSet};
 use serde_json::{Map, Value, json};
 use wings_plugin::format::parse_time;
 
-use crate::usage::{ContextDetail, Panel, Usage};
+use crate::{
+    plugins::{self, Plugins, Show},
+    usage::{ContextDetail, Panel, Usage},
+};
 
 /// The most of a tool's output the chat keeps. A whole file read or a long build log is more than anyone reads in a card.
 const OUTPUT_KEPT: usize = 4000;
@@ -263,6 +266,8 @@ pub struct Session {
     pub usage_view: Option<Usage>,
     pub context_view: Option<ContextDetail>,
     pub view_error: Option<String>,
+    /// What the plugins dialog shows, and the toggles in it.
+    pub plugins: Plugins,
     /// A turn is running. Claude Code's own `session_state_changed` says so when it prints them, else it is from your
     /// message to its result. The result alone ends a turn, not the work: with a message of yours queued the next turn
     /// starts at once, and a background task can run on, while `idle` waits for all of that.
@@ -450,6 +455,13 @@ impl Session {
     fn answered(&mut self, response: &Value) {
         let answer = &response["response"];
         let id = response["request_id"].as_str().unwrap_or_default();
+        // A reload brings the commands as they are now: a plugin's skills come and go with it.
+        if id == plugins::RELOAD && response["subtype"] == "success" {
+            self.commands = commands(&answer["commands"]);
+        }
+        if self.plugins.answered(id, response) {
+            return;
+        }
         if response["subtype"] == "error" && (id == USAGE_VIEW || id == CONTEXT_VIEW) {
             self.view_error = Some(response["error"].as_str().unwrap_or("Claude Code didn't answer.").to_owned());
             return;
@@ -476,12 +488,7 @@ impl Session {
                         resolved: text(model, "resolvedModel"),
                     })
                     .collect();
-                self.commands = answer["commands"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .map(|command| Command { name: text(command, "name"), description: text(command, "description"), hint: text(command, "argumentHint") })
-                    .collect();
+                self.commands = commands(&answer["commands"]);
                 self.mode = answer["current_permission_mode"].as_str().map(str::to_owned).or(self.mode.take());
             }
             // It is answered after `initialize` and the init line, which still say the mode Claude Code started in.
@@ -726,6 +733,13 @@ impl Session {
         Some((panel, line))
     }
 
+    /// A draft that is `/plugins`, `/plugin` or `/mcp`, which open the plugins dialog over the chat: which list it leads
+    /// with, and the requests that fill it, which only read. Never sent as a message either.
+    pub fn dialog_command(&mut self, text: &str) -> Option<(Show, String)> {
+        let show = plugins::command(text)?;
+        Some((show, self.plugins.ask()))
+    }
+
     /// What the chat asks Claude Code as it starts: the models and commands it has, how full the context is, your
     /// settings and how much of your plan's limits is used, and, with a `mode`, to start in it.
     pub fn opening(mode: Option<&str>) -> String {
@@ -908,8 +922,18 @@ fn uuid(stamp: u64, n: u32) -> String {
 }
 
 /// A request of the chat's to Claude Code, answered under `id`.
-fn request(id: &str, request: Value) -> String {
+pub(crate) fn request(id: &str, request: Value) -> String {
     line(&json!({ "type": "control_request", "request_id": id, "request": request }))
+}
+
+/// The slash commands `initialize` or a reload of the plugins lists.
+fn commands(list: &Value) -> Vec<Command> {
+    let text = |value: &Value, key: &str| value[key].as_str().unwrap_or_default().to_owned();
+    list.as_array()
+        .into_iter()
+        .flatten()
+        .map(|command| Command { name: text(command, "name"), description: text(command, "description"), hint: text(command, "argumentHint") })
+        .collect()
 }
 
 /// The line that asks how much of your plan's limits is used.
@@ -2053,5 +2077,153 @@ mod tests {
         assert_eq!(requests(session.pick("haiku@", 5).unwrap()), [json!({ "subtype": "set_model", "model": "haiku" })]);
         assert_eq!(session.current_model().map(|model| model.name.as_str()), Some("Haiku 5.5"));
         assert_eq!(session.pick("haiku", 6), None, "not a pick");
+    }
+
+    /// Claude Code 2.1.327's answers to `get_settings` and `mcp_status`, with made-up plugins and servers.
+    const PLUGINS: &str = include_str!("../tests/plugins.jsonl");
+
+    fn with_plugins() -> Session {
+        heard(PLUGINS)
+    }
+
+    #[test]
+    fn plugins_plugin_and_mcp_open_the_dialog_ask_only_to_read_and_are_not_sent_as_messages() {
+        for (text, show) in [("/plugins", Show::Plugins), (" /plugin\n", Show::Plugins), ("/mcp", Show::Mcp)] {
+            let mut session = Session::default();
+            let (opened, line) = session.dialog_command(text).expect(text);
+            assert_eq!(opened, show);
+            // One write of two requests that read, no message, and nothing in the conversation.
+            let subtypes: Vec<Value> = parsed(&line).iter().map(|sent| sent["request"]["subtype"].clone()).collect();
+            assert_eq!(subtypes, [json!("get_settings"), json!("mcp_status")]);
+            assert!(parsed(&line).iter().all(|sent| sent["type"] == "control_request"));
+            assert!(session.items.is_empty() && !session.working);
+        }
+        let mut session = Session::default();
+        assert!(session.dialog_command("/plugins install toolbox").is_none());
+        assert!(session.dialog_command("what does /mcp do").is_none());
+    }
+
+    #[test]
+    fn the_settings_answer_lists_each_plugin_on_or_off_where_your_settings_decide_it() {
+        let session = with_plugins();
+        let list = session.plugins.list.as_ref().expect("the plugins");
+        let shown: Vec<(&str, &str, bool, bool, &str)> = list.iter().map(|p| (p.name.as_str(), p.marketplace.as_str(), p.on, p.saved, p.scope)).collect();
+        assert_eq!(
+            shown,
+            [
+                // Only your organization's settings name it, so the chat can't turn it off.
+                ("audit-log", "company-policy", true, true, "Managed"),
+                // The project's settings come after yours and turn it on.
+                ("code-search", "claude-plugins-official", true, true, "Project"),
+                ("lint-guard", "team-tools", false, false, "User"),
+                // On in your settings, off in this session's flags.
+                ("pixel-perfect", "claude-plugins-official", false, true, "User"),
+                ("release-notes", "team-tools", true, true, "User"),
+                ("toolbox", "team-tools", true, true, "User"),
+            ]
+        );
+        assert!(list[0].locked() && !list[1].locked());
+    }
+
+    #[test]
+    fn the_status_answer_lists_each_server_with_its_status_and_a_plugins_under_it() {
+        let session = with_plugins();
+        let servers = session.plugins.servers.as_ref().expect("the servers");
+        let files = &servers[0];
+        assert_eq!((files.of_plugin(), files.short_name(), files.status.as_str(), files.tools), (Some(("toolbox", "files")), "files", "connected", Some(3)));
+        let index = servers.iter().find(|server| server.short_name() == "index").unwrap();
+        assert_eq!((index.status.as_str(), index.error.as_deref(), index.tools), ("failed", Some("Connection closed"), None));
+        let own: Vec<(&str, &str, &str)> = servers.iter().filter(|server| server.of_plugin().is_none()).map(|s| (s.name.as_str(), s.status.as_str(), s.scope.as_str())).collect();
+        assert_eq!(
+            own,
+            [
+                ("notes", "connected", "user"),
+                ("design-files", "disabled", "user"),
+                ("tickets", "connected", "project"),
+                ("claude.ai Calendar", "needs-auth", "claudeai"),
+                ("claude.ai Drive", "pending", "claudeai"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_plugins_skills_are_the_commands_named_after_it() {
+        let commands = |names: &[&str]| names.iter().map(|name| Command { name: (*name).into(), description: String::new(), hint: String::new() }).collect::<Vec<_>>();
+        let all = commands(&["toolbox:lint", "toolbox:format", "toolbox-extra:x", "review", "release-notes:write"]);
+        assert_eq!([plugins::skills(&all, "toolbox"), plugins::skills(&all, "release-notes"), plugins::skills(&all, "lint-guard")], [2, 1, 0]);
+    }
+
+    #[test]
+    fn a_plugin_toggle_is_one_flag_settings_request_with_every_plugin_this_chat_set_and_never_a_settings_file() {
+        let mut session = with_plugins();
+        let line = session.plugins.set_plugin("toolbox@team-tools", false, 7).expect("a toggle");
+        assert_eq!(line.lines().count(), 1);
+        let sent = sent(&line);
+        assert_eq!(sent["request_id"], "plugin-toggle-7");
+        // The flag settings take a second `enabledPlugins` in place of the first, so the one already there goes too.
+        assert_eq!(
+            sent["request"],
+            json!({ "subtype": "apply_flag_settings", "settings": { "enabledPlugins": { "pixel-perfect@claude-plugins-official": false, "toolbox@team-tools": false } } })
+        );
+        let toolbox = session.plugins.list.as_ref().unwrap().iter().find(|p| p.name == "toolbox").unwrap();
+        assert!(!toolbox.on && toolbox.saved && session.plugins.unapplied);
+        // Off already, so nothing to send; and your organization's plugin can't be turned off here.
+        assert_eq!(session.plugins.set_plugin("toolbox@team-tools", false, 8), None);
+        assert_eq!(session.plugins.set_plugin("audit-log@company-policy", false, 9), None);
+        assert_eq!(session.plugins.set_plugin("unknown@nowhere", true, 10), None);
+    }
+
+    #[test]
+    fn a_server_toggle_is_one_mcp_toggle_request_by_its_full_name() {
+        let mut session = with_plugins();
+        let line = session.plugins.set_server("plugin:toolbox:files", false, 3).expect("a toggle");
+        assert_eq!(line.lines().count(), 1);
+        assert_eq!(sent(&line)["request"], json!({ "subtype": "mcp_toggle", "serverName": "plugin:toolbox:files", "enabled": false }));
+        assert_eq!(session.plugins.servers.as_ref().unwrap()[0].status, "disabled");
+        assert_eq!(session.plugins.set_server("plugin:toolbox:files", false, 4), None, "off already");
+        // Turned on, it connects anew, which only a new read shows.
+        let on = session.plugins.set_server("design-files", true, 5).expect("a toggle");
+        assert_eq!(sent(&on)["request"]["enabled"], true);
+        assert!(!session.plugins.stale);
+        session.hear(&json!({ "type": "control_response", "response": { "subtype": "success", "request_id": "server-toggle-5" } }));
+        assert!(session.plugins.stale);
+    }
+
+    #[test]
+    fn a_refused_toggle_is_put_back_and_says_why() {
+        let mut session = with_plugins();
+        session.plugins.set_plugin("toolbox@team-tools", false, 1).unwrap();
+        session.plugins.set_server("notes", false, 2).unwrap();
+        let refused = |id: &str, why: &str| json!({ "type": "control_response", "response": { "subtype": "error", "request_id": id, "error": why } });
+        session.hear(&refused("plugin-toggle-1", "apply_flag_settings failed"));
+        let toolbox = session.plugins.list.as_ref().unwrap().iter().find(|p| p.name == "toolbox").unwrap();
+        assert!(toolbox.on && !session.plugins.unapplied);
+        session.hear(&refused("server-toggle-2", "Server not found: notes"));
+        assert_eq!(session.plugins.servers.as_ref().unwrap()[3].status, "connected");
+        assert_eq!(session.plugins.error.as_deref(), Some("Server not found: notes"));
+        // The next toggle sends only what this chat set and Claude Code kept.
+        let line = session.plugins.set_plugin("lint-guard@team-tools", true, 3).unwrap();
+        assert_eq!(sent(&line)["request"]["settings"]["enabledPlugins"], json!({ "pixel-perfect@claude-plugins-official": false, "lint-guard@team-tools": true }));
+    }
+
+    #[test]
+    fn a_reload_applies_the_toggles_and_brings_the_servers_and_commands_as_they_are_now() {
+        let mut session = with_plugins();
+        session.plugins.set_plugin("toolbox@team-tools", false, 1).unwrap();
+        let reload = session.plugins.reload();
+        assert_eq!(reload.lines().count(), 1);
+        assert_eq!(sent(&reload)["request"], json!({ "subtype": "reload_plugins", "refuse_if_busy": true }));
+        session.hear(&json!({ "type": "control_response", "response": { "subtype": "success", "request_id": "plugins-reload", "response": {
+            "commands": [{ "name": "release-notes:write", "description": "Write the release notes", "argumentHint": "" }],
+            "agents": [], "plugins": [{ "name": "release-notes", "path": "/plugins/release-notes", "source": "release-notes@team-tools" }],
+            "mcpServers": [{ "name": "notes", "status": "connected", "scope": "user", "source": "user" }], "error_count": 0 } } }));
+        assert!(!session.plugins.unapplied);
+        assert_eq!(session.commands.iter().map(|command| command.name.as_str()).collect::<Vec<_>>(), ["release-notes:write"]);
+        assert_eq!(session.plugins.servers.as_ref().unwrap().len(), 1);
+        // A busy session reloads nothing, and says so.
+        session.plugins.reload();
+        session.hear(&json!({ "type": "control_response", "response": { "subtype": "error", "request_id": "plugins-reload", "error": "The session is busy" } }));
+        assert_eq!(session.plugins.error.as_deref(), Some("The session is busy"));
+        assert_eq!(session.commands.len(), 1);
     }
 }

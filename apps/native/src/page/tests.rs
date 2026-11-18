@@ -1970,6 +1970,60 @@ fn side_split(pinned: bool) -> String {
     })
 }
 
+/// A page with a button that opens a dialog, which the page leaves out once it hears `onClose`, and how often it has.
+fn dialog_page() -> String {
+    let (mut open, mut closed) = (false, 0);
+    fake::page("page", move |event| {
+        match event {
+            Some(("3:onClick", _)) => open = true,
+            Some(("6:onClose", _)) => {
+                open = false;
+                closed += 1;
+            }
+            _ => {}
+        }
+        let mut body = vec![
+            json!({ "id": 3, "type": "Button", "props": { "onClick": "3:onClick" }, "children": [text_node(4, "Open")] }),
+            text(10, 11, format!("Closed {closed}.")),
+        ];
+        if open {
+            body.push(json!({ "id": 6, "type": "Dialog", "props": { "title": "Plugins", "width": 360, "onClose": "6:onClose" },
+                "children": [text(7, 8, "Inside the dialog".into())] }));
+        }
+        json!({ "id": 0, "type": "#root", "children": [{ "id": 1, "type": "Page", "children": [
+            { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": body }] }] })
+    })
+}
+
+/// Inside the dialog page's Open button: under the shell's and the body's 14pt of padding each.
+const OPEN_BUTTON: (f32, f32) = (40.0, 40.0);
+
+/// A dialog is drawn over the middle of the page, wherever the page put it, and Escape or a press beside it close it.
+#[test]
+fn a_dialog_is_drawn_over_the_page_and_escape_or_the_backdrop_sends_on_close() {
+    let (app, mut window) = open(dialog_page());
+    settle(&app, &mut window, shows("Closed 0."));
+    click(&mut window, OPEN_BUTTON);
+    settle(&app, &mut window, shows("Inside the dialog"));
+    window.draw();
+    let panel = crate::ui::spot_at("page-dialog").expect("the dialog is drawn");
+    let page = window.update(|_, window, _| window.viewport_size());
+    // In the middle of the page, as wide as the page asked, and not in the body's flow under the button.
+    assert!((f32::from(panel.size.width) - 360.0).abs() < 1.0, "{panel:?}");
+    assert!((f32::from(panel.center().x) - f32::from(page.width) / 2.0).abs() < 1.0, "{panel:?} in {page:?}");
+    assert!((f32::from(panel.center().y) - f32::from(page.height) / 2.0).abs() < 1.0, "{panel:?} in {page:?}");
+
+    key(&mut window, "escape");
+    settle(&app, &mut window, shows("Closed 1."));
+    assert!(window.read(|view, _| !view.text().contains("Inside the dialog")));
+
+    click(&mut window, OPEN_BUTTON);
+    settle(&app, &mut window, shows("Inside the dialog"));
+    // The backdrop, beside the panel: the button under it doesn't hear the press.
+    click(&mut window, OPEN_BUTTON);
+    settle(&app, &mut window, shows("Closed 2."));
+}
+
 /// The split measures its own width while it is drawn, and a window under `collapseBelow` leaves the right pane out
 /// unless the page pins it.
 #[test]
