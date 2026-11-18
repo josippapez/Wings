@@ -160,6 +160,10 @@ pub struct PageView {
     sheets_drawn: RefCell<Vec<(u64, gpui::FocusHandle)>>,
     sheets_shown: Vec<u64>,
     sheet_return: Option<gpui::FocusHandle>,
+    /// The tab that shows the page, whose keyboard counts as the page's (`set_host_focus`).
+    host_focus: Option<gpui::FocusHandle>,
+    /// When you last clicked or pressed a key in the page.
+    gesture_at: Cell<Option<Instant>>,
     _events: Task<()>,
 }
 
@@ -417,6 +421,8 @@ impl PageView {
             sheets_drawn: RefCell::default(),
             sheets_shown: Vec::new(),
             sheet_return: None,
+            host_focus: None,
+            gesture_at: Cell::new(None),
             _events: events,
         };
         if view.stopped {
@@ -433,9 +439,37 @@ impl PageView {
 
     /// `send` for a click, a key press or a pick, which lets the page copy right after.
     fn act(&self, handler: &str, payload: Option<&serde_json::Value>) {
+        self.gesture_at.set(Some(Instant::now()));
         if let Some(runtime) = &self.runtime {
             runtime.dispatch_gesture(handler, payload);
         }
+    }
+
+    /// The tab that shows this page: while it has the keyboard, as it does once you open the tab, the page may move it
+    /// into a field of its own.
+    pub fn set_host_focus(&mut self, focus: gpui::FocusHandle) {
+        self.host_focus = Some(focus);
+    }
+
+    /// Whether the page may move the keyboard into itself, as a dialog, a sheet or a field with `autoFocus` does: when
+    /// the keyboard is in the page or on its tab already, nothing has it, or you just clicked or typed in the page. A
+    /// page never takes it from a terminal or another page you are typing in.
+    pub(super) fn may_take_keyboard(&self, window: &gpui::Window, cx: &gpui::App) -> bool {
+        if self.gesture_at.get().is_some_and(|at| at.elapsed() < GESTURE_TAKES_KEYBOARD) {
+            return true;
+        }
+        let Some(focused) = window.focused(cx) else {
+            return true;
+        };
+        // What can hold the keyboard in the page: its fields, menus, chips, action rows, dialog and sheets. Compared by
+        // handle, as a window that hasn't drawn yet can't say what holds what.
+        self.host_focus.as_ref() == Some(&focused)
+            || focused == self.dialog_focus
+            || focused == self.menu_focus
+            || self.inputs.borrow().values().any(|state| state.field.read(cx).focus_handle(cx) == focused)
+            || self.sheet_focus.borrow().values().any(|handle| *handle == focused)
+            || self.chip_focus.borrow().values().any(|handle| *handle == focused)
+            || self.actions_focus.borrow().values().any(|handle| *handle == focused)
     }
 
     fn toggle_disclosure(&mut self, id: u64, cx: &mut Context<Self>) {
@@ -1812,11 +1846,14 @@ impl Render for PageView {
         self.listing.set(false);
         // A dialog takes the keyboard from the page under it as it opens, and gives it back as it closes. A field in it
         // that asks for the keyboard takes it after this.
+        let may_take = self.may_take_keyboard(window, cx);
         let dialog = self.tree.as_ref().and_then(|tree| dialog_in(&tree.children)).map(|dialog| dialog.id);
         if dialog.is_some() != self.dialog_shown.is_some() {
             if dialog.is_some() {
-                self.focus_before = window.focused(cx);
-                window.focus(&self.dialog_focus, cx);
+                if may_take {
+                    self.focus_before = window.focused(cx);
+                    window.focus(&self.dialog_focus, cx);
+                }
             } else if let Some(before) = self.focus_before.take() {
                 window.focus(&before, cx);
             }
@@ -1853,7 +1890,7 @@ impl Render for PageView {
             if !state.initialized {
                 state.initialized = true;
                 let focus = state.field.read(cx).focus_handle(cx);
-                if state.auto_focus {
+                if state.auto_focus && may_take {
                     // As a browser scrolls a field it focuses into view: one that opens below the fold, like an entry's
                     // edit form, is brought up once it is drawn.
                     reveal = Some(state.field.clone());
@@ -1985,6 +2022,8 @@ fn took(since: i64, now: i64) -> String {
 }
 
 /// One pulse of a shimmering `Text`: bright, faint and bright again.
+/// How long after a click or key in a page it may still move the keyboard into itself, as a dialog it opened does.
+const GESTURE_TAKES_KEYBOARD: Duration = Duration::from_secs(2);
 const SHIMMER: std::time::Duration = std::time::Duration::from_millis(1600);
 
 /// How near its end, in points, a following `Scroll` still counts as there: a line's worth of a pointer's drift.

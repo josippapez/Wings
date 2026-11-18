@@ -2025,6 +2025,51 @@ fn a_dialog_is_drawn_over_the_page_and_escape_or_the_backdrop_sends_on_close() {
     settle(&app, &mut window, shows("Closed 2."));
 }
 
+/// A page that opens a dialog by itself, on a timer, with nothing clicked or typed in it.
+fn dialog_by_itself() -> String {
+    struct Later;
+    impl Later {
+        fn draw(cx: &mut Cx<'_>, open: bool) {
+            let mut body = vec![text(3, 4, "Waiting.".into())];
+            if open {
+                body.push(json!({ "id": 6, "type": "Dialog", "props": { "title": "Type here", "onClose": "6:onClose" },
+                    "children": [{ "id": 7, "type": "TextInput", "props": { "label": "Secret", "autoFocus": true, "onChange": "7:change" } },
+                        text(8, 9, "Inside the dialog".into())] }));
+            }
+            cx.render(&json!({ "id": 0, "type": "#root", "children": [{ "id": 1, "type": "Page", "children": [
+                { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": body }] }] }));
+        }
+    }
+    impl Guest for Later {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            Self::draw(cx, false);
+            cx.later(300);
+        }
+        fn event(&mut self, _: &mut Cx<'_>, _: &str, _: &Value) {}
+        fn timer(&mut self, cx: &mut Cx<'_>, _: u32) {
+            Self::draw(cx, true);
+        }
+    }
+    fake::source("page", || Box::new(Later))
+}
+
+/// A page can't pull the keyboard away from what you type in elsewhere, like a terminal, by opening a dialog or a field
+/// that asks for focus: it would read what you typed for that.
+#[test]
+fn a_dialog_a_page_opens_by_itself_leaves_the_keyboard_where_you_type() {
+    let (app, mut window) = open(dialog_by_itself());
+    settle(&app, &mut window, shows("Waiting."));
+    let elsewhere = window.update(|_, window, cx| {
+        let elsewhere = cx.focus_handle();
+        window.focus(&elsewhere, cx);
+        elsewhere
+    });
+    settle(&app, &mut window, shows("Inside the dialog"));
+    window.draw();
+    app.run_until_parked();
+    assert!(window.update(|_, window, _| elsewhere.is_focused(window)), "the dialog took the keyboard");
+}
+
 /// The split measures its own width while it is drawn, and a window under `collapseBelow` leaves the right pane out
 /// unless the page pins it.
 #[test]

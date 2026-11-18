@@ -152,6 +152,8 @@ impl Workspace {
     ) -> Option<usize> {
         let state = self.plugin_env.tab_state(initial);
         let (page, title) = self.plugin_page(plugin, view, args.as_ref(), state.clone(), cx)?;
+        let focus = cx.focus_handle().tab_stop(true);
+        page.update(cx, |page, _| page.set_host_focus(focus.clone()));
         let id = self.next_tab;
         self.next_tab += 1;
         self.plugin_tabs.push(PluginTab {
@@ -162,7 +164,7 @@ impl Workspace {
             args,
             state,
             page,
-            focus: cx.focus_handle().tab_stop(true),
+            focus,
         });
         Some(id)
     }

@@ -135,11 +135,12 @@ impl PageView {
         .into_any_element()
     }
 
-    /// After a render: a sheet that has just come gets the keyboard, and when the last one goes, what had the keyboard
-    /// before it gets it back.
+    /// After a render: a sheet that has just come gets the keyboard, if the page may take it, and when the last one goes,
+    /// what had the keyboard before it gets it back.
     pub(super) fn settle_sheets(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
         let drawn = std::mem::take(&mut *self.sheets_drawn.borrow_mut());
-        if let Some((_, target)) = drawn.iter().find(|(id, _)| !self.sheets_shown.contains(id)) {
+        let opened = drawn.iter().find(|(id, _)| !self.sheets_shown.contains(id));
+        if let Some((_, target)) = opened.filter(|_| self.may_take_keyboard(window, cx)) {
             if self.sheet_return.is_none() {
                 self.sheet_return = window.focused(cx);
             }
