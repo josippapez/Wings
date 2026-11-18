@@ -2,6 +2,16 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.40 · 2026-11-18
+
+- **Pictures in Claude chat.** Pictures you attach, files Claude reads and screenshots show in the conversation, also in a resumed chat. A click shows one large.
+- **Terminals Claude opens from a chat show in its side panel**, live, with Open in a tab and Close, instead of opening out of sight.
+- **Links in Claude chat.** An issue key opens that issue in Wings while Issues is on, and a localhost address opens in your browser.
+- **More of Claude Code in the chat:** /clear clears the chat, a compaction leaves a divider, retries and API errors show instead of "Working", /rename names the tab, and Claude's thinking folds under its turn. Replies and code blocks have a copy button, and /export, /status, /btw and `/plan <task>` work.
+- **Keys and modes:** Esc stops Claude, Up and Down bring back earlier messages, Shift-Tab changes the mode, and fast mode and the output style sit beside the model.
+- **Session tools:** fork the chat, or fork from one of your messages; add a folder with /add-dir; move a running command to the background; send a background agent a message; reconnect, sign in to and sign out of MCP servers; and answer an MCP server's questions in a form.
+- **Fixed:** under a named Claude account, /permissions and /hooks named `~/.claude/settings.json` as the file they change. They name that account's file now.
+
 ## 0.2.39 · 2026-11-18
 
 - **Claude chat works with every Claude Code account.** A session from your work account resumes in a chat instead of failing with "No conversation found": the chat runs Claude Code under the account the session is in, and a new chat under its project's account, as a terminal there does. Its past sessions name the account when it isn't the default.
