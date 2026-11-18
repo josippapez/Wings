@@ -125,6 +125,8 @@ type Done = Box<dyn FnOnce(Result<(), String>) + Send>;
 struct Actions {
     last: u32,
     waiting: HashMap<u32, Done>,
+    /// The pane of each badge button clicked and not yet answered: the only panes the plugin may close.
+    panes: HashMap<u32, String>,
 }
 
 /// Tool calls from other plugins that this plugin's main hasn't answered, by the token it answers with.
@@ -209,7 +211,11 @@ impl Shared {
                 *pending = None;
             }
         }
-        let done = self.actions.lock().unwrap().waiting.remove(&token);
+        let done = {
+            let mut actions = self.actions.lock().unwrap();
+            actions.panes.remove(&token);
+            actions.waiting.remove(&token)
+        };
         if let Some(done) = done {
             done(error.map_or(Ok(()), Err));
         }
@@ -354,8 +360,9 @@ impl Link for FrameLink {
             });
             return;
         }
-        if method == "copyText" {
-            // Each click or key lets the page try to copy once.
+        // Each click or key lets the page try once to copy, or to write to a program it runs: what reaches an agent,
+        // like the answer to its permission prompt, is what you just asked for in the page, never the plugin alone.
+        if matches!(method, "copyText" | "processWrite") {
             let acted = self
                 .acted
                 .lock()
@@ -363,8 +370,8 @@ impl Link for FrameLink {
                 .take()
                 .is_some_and(|at| at.elapsed() < USER_ACTION);
             if self.role != Role::Page || !acted {
-                return reply
-                    .err("A page can copy only right after you click or type in it".into());
+                let what = if method == "copyText" { "copy" } else { "write to a program" };
+                return reply.err(format!("A page can {what} only right after you click or type in it"));
             }
         }
         if matches!(method, "openDiff" | "updateDiff") {
@@ -677,14 +684,16 @@ impl PluginHost {
         done: impl FnOnce(Result<(), String>) + Send + 'static,
     ) {
         let text = serde_json::json!({ "paneId": pane_id, "actionId": action_id }).to_string();
-        self.send_action_message(Message::Action, text, done);
+        self.send_action_message(Message::Action, text, Some(pane_id), done);
     }
 
-    /// Sends the main frame `message`, which it answers with `actionDone`, and calls `done` with the answer.
+    /// Sends the main frame `message`, which it answers with `actionDone`, and calls `done` with the answer. A badge
+    /// button's `pane` may be closed by the plugin until then.
     fn send_action_message(
         &self,
         message: Message,
         text: String,
+        pane: Option<&str>,
         done: impl FnOnce(Result<(), String>) + Send + 'static,
     ) {
         let main = self
@@ -706,6 +715,9 @@ impl PluginHost {
             actions.last += 1;
             let token = actions.last;
             actions.waiting.insert(token, Box::new(done));
+            if let Some(pane) = pane {
+                actions.panes.insert(token, pane.to_owned());
+            }
             token
         };
         if main.send(message, token, text) != Delivery::Queued {

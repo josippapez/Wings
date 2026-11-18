@@ -515,6 +515,11 @@ impl Caller {
         assert!(self.frame._runtime.dispatch("call", Some(&json!({ "method": method, "params": params }))));
     }
 
+    /// `send`, right after a click of yours.
+    pub fn send_after_click(&self, method: &str, params: Value) {
+        assert!(self.frame._runtime.dispatch_gesture("call", Some(&json!({ "method": method, "params": params }))));
+    }
+
     /// What the frame heard next, of any of its calls.
     pub fn next(&self) -> Heard {
         self.answers.recv_timeout(WAIT).expect("waiting for the frame to hear from a call")

@@ -343,9 +343,15 @@ impl Shared {
                 if let Err(error) = self.require_pane(&pane) {
                     return reply.err(error);
                 }
+                // Closing ends what runs there, so only as the answer to your click on that pane's badge.
+                let clicked = || self.actions.lock().unwrap().panes.values().any(|clicked| *clicked == pane);
                 match method {
                     "focusPane" => access.env.focus_pane(&pane, reply),
-                    _ => access.env.close_pane(&pane, reply),
+                    _ if clicked() => access.env.close_pane(&pane, reply),
+                    _ => reply.err(format!(
+                        "{} may close a pane only while it answers your click on that pane's badge",
+                        self.config.id
+                    )),
                 }
             }
             "projects" => reply.done(to_json(&*self.projects.lock().unwrap())),

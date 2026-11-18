@@ -117,7 +117,10 @@ pub(super) fn access_groups(manifest: &Manifest) -> Vec<(&'static str, Vec<Strin
         ("Offer Claude these tools over MCP", list(&c.mcp_tools.iter().map(|tool| tool.name.clone()).collect::<Vec<_>>())),
         ("Answer these Claude Code hooks: add context to a session, or refuse a Bash command", list(&c.hooks)),
         ("Run these commands as you, with your own sign-ins", list(&p.exec)),
-        ("Keep these programs running as you, and talk to them", list(&p.processes)),
+        (
+            "Keep these programs running as you and talk to them. An agent like claude run this way does what the plugin tells it, with your permissions",
+            list(&p.processes),
+        ),
         ("Post to these addresses as you, like replying to a review comment", list(&p.post)),
         ("Open and close terminals in your projects, and move your typing to any pane", on(p.panes.is_some())),
         ("Start these commands in a new terminal, as you", p.panes.as_deref().and_then(list)),

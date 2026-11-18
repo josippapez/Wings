@@ -15,6 +15,7 @@ use serde::Serialize;
 use crate::{
     exec::{args_check, command, entries_allow, not_allowed},
     manifest::Plugin,
+    panes::AGENT_PROGRAMS,
 };
 
 /// The longest line a program may print. One stream-json line holds a whole message, tool results and all.
@@ -25,9 +26,24 @@ const STDERR_KEPT: usize = 16 * 1024;
 /// How long a program has to end once its input is closed, before it's killed. Claude ends at once.
 const STOP_GRACE: Duration = Duration::from_secs(3);
 
-/// Whether the manifest's `processes` lists this command.
-pub fn may_spawn(plugin: &Plugin, program: &str, args: &[String]) -> bool {
-    entries_allow(&plugin.manifest.permissions.processes, program, args)
+/// Everything `run` checks before it starts `program` in `cwd`: the manifest's `processes` lists it, and its arguments
+/// pass `exec`'s checks. An agent CLI takes a value only right after one of its flags, as in a pane (`pane_input`): a
+/// plain word of its own reads as a subcommand, like `claude mcp add`, which changes your setup for good.
+pub(crate) fn check(plugin: &Plugin, program: &str, args: &[String], cwd: &Path) -> Result<(), String> {
+    let id = &plugin.manifest.id;
+    if !entries_allow(&plugin.manifest.permissions.processes, program, args) {
+        return Err(not_allowed(plugin, program, args));
+    }
+    if AGENT_PROGRAMS.contains(&program) {
+        let stray = args.iter().enumerate().find(|(at, arg)| {
+            let after_flag = at.checked_sub(1).is_some_and(|before| args[before].starts_with('-') && !args[before].contains('='));
+            !arg.starts_with('-') && !after_flag
+        });
+        if let Some((_, word)) = stray {
+            return Err(format!("{id} may pass {program} a value only right after one of its flags, not {word:?}"));
+        }
+    }
+    args_check(plugin, program, args, Some(cwd))
 }
 
 /// How a program ended: its exit code (none when a signal ended it) and the end of what it printed to stderr.
@@ -129,8 +145,7 @@ fn writer(mut stdin: ChildStdin, writes: Writes) {
     }
 }
 
-/// Runs `process` as `program` with `args` in `cwd`, when the manifest's `processes` lists it and its arguments pass
-/// `exec`'s checks. `on_line` hears each line it prints to stdout, in order and without its line ending; when it returns
+/// Runs `process` as `program` with `args` in `cwd`, once `check` allows it. `on_line` hears each line it prints to stdout, in order and without its line ending; when it returns
 /// false nobody listens any more, and the program is stopped. Returns once the program's output has closed and it has
 /// ended.
 pub fn run(
@@ -184,10 +199,7 @@ pub fn run(
 
 /// Checks the command, starts it with the writer on its input, and gives its output pipes.
 fn start(plugin: &Plugin, process: &Process, program: &str, args: &[String], cwd: &Path) -> Result<(ChildStdout, ChildStderr), String> {
-    if !may_spawn(plugin, program, args) {
-        return Err(not_allowed(plugin, program, args));
-    }
-    args_check(plugin, program, args, Some(cwd))?;
+    check(plugin, program, args, cwd)?;
     let mut child = command(program, args, Some(cwd))?.stdin(Stdio::piped()).spawn().map_err(|error| error.to_string())?;
     let (stdout, stderr, stdin) = (child.stdout.take().unwrap(), child.stderr.take().unwrap(), child.stdin.take().unwrap());
     if let Some(writes) = process.writes.lock().unwrap().take() {
@@ -236,6 +248,20 @@ mod tests {
         let mut exec_only = plugin(Path::new("/tmp"), &["cat"], &[]);
         exec_only.manifest.permissions.processes.clear();
         assert!(run(&exec_only, &Process::new(), "cat", &[], Path::new("/tmp"), |_| true).unwrap_err().contains("may not run cat"));
+    }
+
+    #[test]
+    fn an_agent_takes_values_only_after_its_flags() {
+        let p = with_processes(&["claude [-p --input-format --output-format --permission-prompt-tool --resume]"]);
+        let tmp = Path::new("/tmp");
+        let headless = args(&["-p", "--input-format", "stream-json", "--permission-prompt-tool", "stdio", "--resume", "3c21b0c5"]);
+        assert_eq!(check(&p, "claude", &headless, tmp), Ok(()));
+        for stray in [&["mcp", "add", "x", "sh"][..], &["-p", "mcp", "add"], &["--resume", "a", "b"], &["--resume=a", "b"]] {
+            assert!(check(&p, "claude", &args(stray), tmp).unwrap_err().contains("only right after one of its flags"), "{stray:?}");
+        }
+        assert!(check(&p, "claude", &args(&["--mcp-config", "x.json"]), tmp).unwrap_err().contains("may not run claude"));
+        // Any other program keeps exec's rules alone.
+        assert_eq!(check(&with_processes(&["cat"]), "cat", &args(&["a", "b"]), tmp), Ok(()));
     }
 
     #[test]

@@ -1134,11 +1134,14 @@ fn focus_pane_needs_panes_granted_and_a_pane_that_is_there() {
 }
 
 #[test]
-fn close_pane_needs_panes_granted_and_a_pane_that_is_there() {
+fn close_pane_needs_panes_granted_a_pane_that_is_there_and_your_click_on_its_badge() {
     let rig = Rig::new(json!({ "permissions": { "panes": [] } }), panes());
-    assert_eq!(rig.allows("closePane", json!({ "paneId": "2" })), json!(null));
-    assert_eq!(rig.env.seen(), [Seen::ClosePane("2".into())]);
+    assert_eq!(
+        rig.refuses("closePane", json!({ "paneId": "2" })),
+        "probe may close a pane only while it answers your click on that pane's badge"
+    );
     assert_eq!(rig.refuses("closePane", json!({ "paneId": "9" })), "no pane 9");
+    assert!(rig.env.seen().is_empty());
     let without = Rig::new(json!({}), panes());
     assert_eq!(without.refuses("closePane", json!({ "paneId": "1" })), "probe may not close panes");
 }

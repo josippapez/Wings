@@ -37,7 +37,7 @@ fn a_page_writes_to_a_program_hears_its_lines_and_hears_when_it_ends() {
     let rig = rig(&["cat []"]);
     let caller = Caller::start(&rig.host);
     caller.send("spawn", spawn("chat", "cat", &[]));
-    caller.send("processWrite", json!({ "token": "chat", "text": "{\"type\":\"user\"}\nplain\n" }));
+    caller.send_after_click("processWrite", json!({ "token": "chat", "text": "{\"type\":\"user\"}\nplain\n" }));
     let (lines, answers) = hear(&caller, 3);
     assert_eq!(lines, ["{\"type\":\"user\"}", "plain"]);
     assert_eq!(answers, [Ok(Value::Null)]);
@@ -46,9 +46,24 @@ fn a_page_writes_to_a_program_hears_its_lines_and_hears_when_it_ends() {
     assert!(lines.is_empty());
     assert_eq!(answers, [Ok(Value::Null), Ok(json!({ "code": 0, "stderr": "" }))]);
     assert_eq!(
-        caller.call("processWrite", json!({ "token": "chat", "text": "late\n" })),
+        caller.call_after_click("processWrite", json!({ "token": "chat", "text": "late\n" })),
         Err("No program is running as chat".into())
     );
+}
+
+#[test]
+fn a_page_writes_to_a_program_only_right_after_you_click_or_type_in_it() {
+    let rig = rig(&["cat []"]);
+    let caller = Caller::start(&rig.host);
+    caller.send("spawn", spawn("chat", "cat", &[]));
+    let unasked = json!({ "token": "chat", "text": "{\"behavior\":\"allow\"}\n" });
+    assert_eq!(caller.call("processWrite", unasked.clone()), Err("A page can write to a program only right after you click or type in it".into()));
+    // One click lets one write through.
+    caller.send_after_click("processWrite", json!({ "token": "chat", "text": "yes\n" }));
+    let (lines, answers) = hear(&caller, 2);
+    assert_eq!((lines, answers), (vec!["yes".to_owned()], vec![Ok(Value::Null)]));
+    assert!(caller.call("processWrite", unasked).is_err());
+    caller.send("processStop", json!({ "token": "chat" }));
 }
 
 #[test]
@@ -72,7 +87,7 @@ fn a_program_stops_when_its_page_closes() {
     let script = format!("cat; touch '{}'", marker.display());
     caller.send("spawn", spawn("long", "sh", &["-c", &script]));
     // Answered once the program reads its input, so it is running.
-    caller.send("processWrite", json!({ "token": "long", "text": "x\n" }));
+    caller.send_after_click("processWrite", json!({ "token": "long", "text": "x\n" }));
     let (_, answers) = hear(&caller, 2);
     assert_eq!(answers, [Ok(Value::Null)]);
     drop(caller);
@@ -102,11 +117,11 @@ fn a_program_runs_only_as_the_manifest_and_the_token_allow() {
     assert_eq!(Caller::start(&exec_only.host).call("spawn", spawn("x", "cat", &[])), Err("probe may not run cat ".into()));
 
     caller.send("spawn", spawn("chat", "cat", &[]));
-    caller.send("processWrite", json!({ "token": "chat", "text": "ready\n" }));
+    caller.send_after_click("processWrite", json!({ "token": "chat", "text": "ready\n" }));
     hear(&caller, 2);
     assert_eq!(caller.call("spawn", spawn("chat", "cat", &[])), Err("A program is already running as chat".into()));
     // Another page's program of the same name is its own.
     let other = Caller::start(&rig.host);
-    assert_eq!(other.call("processWrite", json!({ "token": "chat", "text": "x\n" })), Err("No program is running as chat".into()));
+    assert_eq!(other.call_after_click("processWrite", json!({ "token": "chat", "text": "x\n" })), Err("No program is running as chat".into()));
     caller.send("processStop", json!({ "token": "chat" }));
 }

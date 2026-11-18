@@ -374,6 +374,40 @@ fn worktrees_native_sidebar_bundle_draws_the_empty_state_in_a_native_window() {
 }
 
 #[test]
+fn claude_chat_badges_claude_panes_and_its_button_moves_the_session_into_a_chat_tab() {
+    let mut claude = pane("1", "/work");
+    claude.session = Some(SessionEntry {
+        session_id: "3c21b0c5-8113-4f55-9493-fa156c3fa369".into(),
+        kind: "claude".into(),
+        name: None,
+        state: "idle".into(),
+        started_at: 1_700_000_000_000,
+        launcher: Some("claude-rtk".into()),
+    });
+    let rig = Rig::with(load("claude-chat"), false, vec![claude, pane("2", "/work")]);
+    let (on_event, main_errors) = errors();
+    rig.host.start_main(&module("claude-chat", "main"), on_event).unwrap();
+    let seen = rig.env.wait("the badges", |seen| seen.iter().any(|seen| matches!(seen, Seen::Badge(_, pane, Some(_)) if pane == "1")));
+    assert!(!seen.iter().any(|seen| matches!(seen, Seen::Badge(_, pane, Some(_)) if pane == "2")), "{seen:?}");
+
+    assert_eq!(action(&rig, "1", "open"), Ok(()));
+    let moved: Vec<Seen> = rig
+        .env
+        .seen()
+        .into_iter()
+        .filter(|seen| matches!(seen, Seen::ClosePane(_) | Seen::OpenView(_)))
+        .collect();
+    let [Seen::ClosePane(closed), Seen::OpenView(view)] = moved.as_slice() else { panic!("{moved:?}") };
+    assert_eq!(closed, "1");
+    assert_eq!((view.id.as_str(), view.place.as_str()), ("chat", "tab"));
+    assert_eq!(
+        view.args,
+        Some(json!({ "resume": "3c21b0c5-8113-4f55-9493-fa156c3fa369", "cwd": "/work", "program": "claude-rtk" }))
+    );
+    assert!(main_errors.try_recv().is_err());
+}
+
+#[test]
 fn dev_servers_badges_the_pane_with_a_listening_port_and_its_button_opens_the_browser() {
     let rig = Rig::with(
         load("dev-servers"),

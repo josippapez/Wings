@@ -7,7 +7,7 @@ What changed in each Wings release, newest first.
 - **Claude chat (experimental): Claude Code in a chat tab instead of a terminal.** Turn on the Claude chat plugin, then open a chat from the + menu, or click the Chat badge on a Claude terminal to carry its session on in a chat. Replies stream in, tool calls show as cards, permission prompts have Allow and Deny buttons, Enter sends and Shift+Enter starts a new line. A session started with `claude-rtk` goes on with `claude-rtk`.
 - **Red messages in plugin pages have a red border.** They had a green one.
 - **Long text in plugin pages isn't cut short.** A paragraph stopped at 2,000 characters.
-- **For plugin authors:** a plugin can keep a program running and talk to it (`wings.spawn`), close a terminal (`wings.closePane`), keep a scroll area at its end, and send a text box on Enter. See `plugins/README.md`.
+- **For plugin authors:** a plugin can keep a program running and talk to it (`wings.spawn`), close a terminal (`wings.closePane`), keep a scroll area at its end, and send a text box on Enter. See `plugins/README.md`. What a plugin sends a program needs your click or key in its page just before, so a plugin can't answer Claude's permission prompts for you, and it closes a terminal only when you click that terminal's badge.
 
 ## 0.2.28 · 2026-11-17
 

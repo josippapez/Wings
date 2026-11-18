@@ -15,7 +15,7 @@ pub(crate) fn plain_word(word: &str) -> bool {
 
 const PANE_COMMAND_MAX: usize = 1024;
 /// The agent CLIs whose flags a plugin may pass only when its `panes` entry names them.
-const AGENT_PROGRAMS: [&str; 2] = ["claude", "opencode"];
+pub(crate) const AGENT_PROGRAMS: [&str; 2] = ["claude", "opencode"];
 /// `openPane` `args` together: room for a prompt that names an issue and says what to do with it.
 const PANE_ARGS_MAX: usize = 4096;
 

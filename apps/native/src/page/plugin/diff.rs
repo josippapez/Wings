@@ -184,7 +184,7 @@ impl PluginHost {
         done: impl FnOnce(Result<(), String>) + Send + 'static,
     ) {
         let text = json!({ "diffId": id, "replyTo": reply_to, "body": body }).to_string();
-        self.send_action_message(Message::Reply, text, done);
+        self.send_action_message(Message::Reply, text, None, done);
     }
 
     /// Opens a link from a comment the plugin gave the viewer, if the plugin may open it, as its `openUrl` would.
