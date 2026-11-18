@@ -132,7 +132,7 @@ fn signed_in_hosts(program: &str) -> Result<Vec<String>, String> {
     }
     let args: Vec<String> =
         (if program == "gh" { &["auth", "status", "--json", "hosts"][..] } else { &["auth", "status", "--all"][..] }).iter().map(|a| a.to_string()).collect();
-    let out = run(program, &args, None, EXEC_TIMEOUT, None)?;
+    let out = run(program, &args, None, EXEC_TIMEOUT, None, None)?;
     // glab writes its report to stderr when a token is bad, so read both.
     let hosts = if program == "gh" { parse_gh_hosts(&out.stdout) } else { parse_glab_hosts(&format!("{}\n{}", out.stdout, out.stderr)) };
     cache.retain(|(p, ..)| p != program);
@@ -159,7 +159,7 @@ pub fn post(plugin: &Plugin, request: &PostRequest) -> Result<ExecResult, String
 pub(crate) fn post_checked(plugin: &Plugin, request: &PostRequest, hosts: &dyn Fn(&str) -> Result<Vec<String>, String>) -> Result<ExecResult, String> {
     let args = post_args(plugin, request)?;
     host_is_signed_in(&request.program, request.host.as_deref(), hosts)?;
-    run(&request.program, &args, None, EXEC_TIMEOUT, None)
+    run(&request.program, &args, None, EXEC_TIMEOUT, None, None)
 }
 
 #[cfg(test)]

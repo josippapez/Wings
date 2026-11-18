@@ -192,7 +192,10 @@ fn a_new_chat_runs_under_the_account_of_its_project_and_keeps_wings_own_without_
     assert_eq!(account_seen(&rig, &script, json!({})), format!("dir:{own}"), "the project has no account");
     // No `account` at all leaves the environment alone too.
     assert_eq!(account_seen_without(&rig, &script), format!("dir:{own}"));
-    rig.env.spaces.lock().unwrap().set_claude_account(&tmp().to_string_lossy(), Some("work"), |_| Ok(())).unwrap();
+    let spaces = rig.env.spaces.lock().unwrap();
+    let project = spaces.add(&tmp().to_string_lossy());
+    spaces.set_claude_account(&project.id, Some("work"), |_| Ok(())).unwrap();
+    drop(spaces);
     let work = wings_spaces::claude_accounts::dir(Some("work"));
     assert_eq!(account_seen(&rig, &script, json!({})), format!("dir:{}", work.display()));
     // A session that has no transcript is a new one.
