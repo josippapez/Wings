@@ -567,6 +567,9 @@ pub struct Input {
     pub on_change: Option<String>,
     pub on_key_down: Option<String>,
     pub on_blur: Option<String>,
+    /// `onPasteImage`: a paste of an image (png, jpeg, gif or webp, up to 3.75 MB) is sent here as
+    /// `{ mediaType, data }`, with `data` in base64. Without it a pasted image does nothing.
+    pub on_paste_image: Option<String>,
     pub auto_focus: bool,
     pub select_on_focus: bool,
     /// A combobox's field shows its options when it takes the keyboard, unless the page sends `openOnFocus: false`.
@@ -1226,6 +1229,7 @@ impl Walk {
                 on_change: handler("onChange"),
                 on_key_down: handler("onKeyDown"),
                 on_blur: handler("onBlur"),
+                on_paste_image: handler("onPasteImage"),
                 auto_focus: on("autoFocus"),
                 select_on_focus: on("selectOnFocus"),
                 open_on_focus: props.get("openOnFocus") != Some(&Value::Bool(false)),

@@ -883,6 +883,8 @@ fn claude_chat(out: PathBuf) {
         ("question", question, None, None, "Which formats"),
         ("plan", plan, None, None, "Keep planning"),
         ("mention", opened(vec![init.clone()]), None, Some("type:fix the rounding in @che"), "checkout.test.ts"),
+        // Two pasted pictures wait in the message box as chips, with a message under them.
+        ("paste", opened(vec![init.clone()]), None, Some("paste:;paste:;type:what is in these?"), "Image 2"),
     ];
     // Files for @-mentions, which the chat lists with git.
     for file in ["src/checkout.ts", "src/checkout.test.ts", "src/cart.ts", "api/limits.ts", "README.md"] {
@@ -941,6 +943,12 @@ fn claude_chat(out: PathBuf) {
                     match act.split_once(':') {
                         Some(("type", typed)) => cx.simulate_input(window, typed),
                         Some(("keys", keys)) => cx.simulate_keystrokes(window, keys),
+                        // The clipboard holds a picture, which Cmd-V gives the message box. The bytes needn't decode.
+                        Some(("paste", _)) => {
+                            let picture = gpui::Image::from_bytes(gpui::ImageFormat::Png, vec![0x89, b'P', b'N', b'G']);
+                            cx.update(|cx| cx.write_to_clipboard(gpui::ClipboardItem::new_image(&picture)));
+                            cx.simulate_keystrokes(window, "cmd-v");
+                        }
                         Some(("press", label)) => assert!(handle.read_with(&cx, |view, _| view.press(label, 0)).unwrap()),
                         _ => panic!("{act}"),
                     }

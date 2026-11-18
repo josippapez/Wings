@@ -22,6 +22,9 @@ const WRITE_KEPT: usize = 20;
 pub enum Item {
     /// What you sent.
     User(String),
+    /// What you sent with pictures: the text, which may be empty, and how many pictures. Their data stays out of the
+    /// item, as it is large and only Claude Code needs it.
+    UserImages(String, usize),
     /// What Claude wrote, as Markdown.
     Text(String),
     Tool(Tool),
@@ -114,6 +117,15 @@ pub struct Queued {
     /// What Claude Code knows it by, for cancelling it and for recognising it when it is read.
     pub uuid: String,
     pub text: String,
+    /// The pictures sent with it, as (media type, base64), kept in case it is sent again.
+    pub images: Vec<(String, String)>,
+}
+
+impl Queued {
+    /// The message as the conversation shows it once it is read.
+    fn read(self) -> Item {
+        sent_item(self.text, self.images.len())
+    }
 }
 
 /// What you have picked and typed on a card that isn't answered yet.
@@ -339,7 +351,7 @@ impl Session {
                 self.working = false;
                 // Nothing will read what is still queued now, so it was read without an echo.
                 let left = std::mem::take(&mut self.queued);
-                self.items.extend(left.into_iter().map(|queued| Item::User(queued.text)));
+                self.items.extend(left.into_iter().map(Queued::read));
             }
             "running" | "requires_action" => self.working = true,
             _ => {}
@@ -349,7 +361,7 @@ impl Session {
     /// Claude Code read the message `uuid`: from the queue into the conversation.
     fn echoed(&mut self, uuid: &str) {
         if let Some(at) = self.queued.iter().position(|queued| queued.uuid == uuid) {
-            self.items.push(Item::User(self.queued.remove(at).text));
+            self.items.push(self.queued.remove(at).read());
         }
     }
 
@@ -459,8 +471,11 @@ impl Session {
         if let Some(text) = content.as_str() {
             return self.items.extend(said(text));
         }
+        let first = self.items.len();
+        let mut images = 0;
         for block in content.as_array().into_iter().flatten() {
             match block["type"].as_str().unwrap_or_default() {
+                "image" => images += 1,
                 // What Claude Code writes in your name when a turn is stopped, which `Stopped` shows.
                 "text" if block["text"].as_str().is_some_and(|text| text.starts_with("[Request interrupted by user")) => {}
                 "text" => self.items.extend(said(block["text"].as_str().unwrap_or_default())),
@@ -488,6 +503,18 @@ impl Session {
                     }
                 }
                 _ => {}
+            }
+        }
+        if images > 0 {
+            // The pictures belong to the text of that message, else they are a message of their own.
+            match self.items[first..].iter().position(|item| matches!(item, Item::User(_))) {
+                Some(at) => {
+                    if let Item::User(text) = &mut self.items[first + at] {
+                        let text = std::mem::take(text);
+                        self.items[first + at] = Item::UserImages(text, images);
+                    }
+                }
+                None => self.items.insert(first, Item::UserImages(String::new(), images)),
             }
         }
     }
@@ -543,21 +570,22 @@ impl Session {
         }
     }
 
-    /// The line that sends `text` as your message, and the message shown at once.
-    pub fn send(&mut self, text: &str) -> String {
-        self.items.push(Item::User(text.to_owned()));
+    /// The line that sends `text` and the pictures `images` (media type and base64) as your message, and the message
+    /// shown at once.
+    pub fn send(&mut self, text: &str, images: &[(String, String)]) -> String {
+        self.items.push(sent_item(text.to_owned(), images.len()));
         self.working = true;
         // The limits are asked again with each message: the chat may only write when you send something.
-        line(&json!({ "type": "user", "message": { "role": "user", "content": text } })) + &usage()
+        line(&json!({ "type": "user", "message": { "role": "user", "content": content(text, images) } })) + &usage()
     }
 
     /// The line that sends `text` to be read after what Claude is doing, and the message queued. `stamp` (the time in
     /// milliseconds) and `n` (this write's number) make its uuid: the plugin has no randomness, and the uuid must differ
     /// from the ones of this session's earlier starts, which share its transcript.
-    pub fn queue(&mut self, text: &str, stamp: u64, n: u32) -> String {
+    pub fn queue(&mut self, text: &str, images: Vec<(String, String)>, stamp: u64, n: u32) -> String {
         let uuid = uuid(stamp, n);
-        let sent = user_line(text, "later", &uuid);
-        self.queued.push(Queued { uuid, text: text.to_owned() });
+        let sent = user_line(text, &images, "later", &uuid);
+        self.queued.push(Queued { uuid, text: text.to_owned(), images });
         sent
     }
 
@@ -573,7 +601,7 @@ impl Session {
     pub fn send_now(&mut self, uuid: &str, stamp: u64, n: u32) -> Option<String> {
         let queued = self.queued.iter_mut().find(|queued| queued.uuid == uuid)?;
         let fresh = self::uuid(stamp, n);
-        let lines = [cancel(uuid, n), user_line(&queued.text, "next", &fresh)].concat();
+        let lines = [cancel(uuid, n), user_line(&queued.text, &queued.images, "next", &fresh)].concat();
         queued.uuid = fresh;
         Some(lines)
     }
@@ -693,8 +721,26 @@ fn line(message: &Value) -> String {
 
 /// Your message `text` for Claude Code to read as `priority` says (`later`: after what it is doing, `next`: at its next
 /// step), stamped `uuid`, which it echoes when it reads it.
-fn user_line(text: &str, priority: &str, uuid: &str) -> String {
-    line(&json!({ "type": "user", "message": { "role": "user", "content": text }, "parent_tool_use_id": null, "priority": priority, "uuid": uuid }))
+fn user_line(text: &str, images: &[(String, String)], priority: &str, uuid: &str) -> String {
+    line(&json!({ "type": "user", "message": { "role": "user", "content": content(text, images) }, "parent_tool_use_id": null, "priority": priority, "uuid": uuid }))
+}
+
+/// A message's `content`: the text alone when there are no pictures, else a block for each picture and then the text,
+/// which may be left out when there is none.
+fn content(text: &str, images: &[(String, String)]) -> Value {
+    if images.is_empty() {
+        return json!(text);
+    }
+    let mut blocks: Vec<Value> = images.iter().map(|(media_type, data)| json!({ "type": "image", "source": { "type": "base64", "media_type": media_type, "data": data } })).collect();
+    if !text.is_empty() {
+        blocks.push(json!({ "type": "text", "text": text }));
+    }
+    Value::Array(blocks)
+}
+
+/// A message of yours as the conversation shows it.
+fn sent_item(text: String, images: usize) -> Item {
+    if images == 0 { Item::User(text) } else { Item::UserImages(text, images) }
 }
 
 fn cancel(uuid: &str, n: u32) -> String {
@@ -990,7 +1036,7 @@ mod tests {
     #[test]
     fn a_turn_becomes_the_tool_call_with_its_output_then_the_answer() {
         let mut session = Session::default();
-        session.send("How many files?");
+        session.send("How many files?", &[]);
         for line in TURN.lines().filter(|line| !line.trim().is_empty()) {
             session.hear(&serde_json::from_str(line).unwrap());
         }
@@ -1074,9 +1120,49 @@ mod tests {
     }
 
     #[test]
+    fn pictures_go_as_image_blocks_before_the_text_and_show_as_a_count() {
+        let pictures = [("image/png".to_owned(), "AAAA".to_owned()), ("image/jpeg".to_owned(), "BBBB".to_owned())];
+        let mut session = Session::default();
+        let sent: Value = serde_json::from_str(session.send("what is this?", &pictures).lines().next().unwrap()).unwrap();
+        assert_eq!(
+            sent["message"]["content"],
+            json!([
+                { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "AAAA" } },
+                { "type": "image", "source": { "type": "base64", "media_type": "image/jpeg", "data": "BBBB" } },
+                { "type": "text", "text": "what is this?" },
+            ])
+        );
+        // Without text there is no empty text block, which the API refuses.
+        let alone: Value = serde_json::from_str(session.send("", &pictures[..1]).lines().next().unwrap()).unwrap();
+        assert_eq!(alone["message"]["content"], json!([{ "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "AAAA" } }]));
+        assert_eq!(session.items, [Item::UserImages("what is this?".into(), 2), Item::UserImages(String::new(), 1)]);
+    }
+
+    #[test]
+    fn a_queued_message_keeps_its_pictures_for_send_now() {
+        let mut session = Session::default();
+        let sent = parsed(&session.queue("look", vec![("image/gif".into(), "CCCC".into())], 1, 1));
+        assert_eq!(sent[0]["message"]["content"][0]["source"]["media_type"], "image/gif");
+        assert_eq!(sent[0]["message"]["content"][1], json!({ "type": "text", "text": "look" }));
+        let uuid = session.queued[0].uuid.clone();
+        let again = parsed(&session.send_now(&uuid, 2, 2).unwrap());
+        assert_eq!(again[1]["message"]["content"][0]["source"]["data"], "CCCC");
+    }
+
+    #[test]
+    fn a_transcript_message_with_pictures_shows_how_many() {
+        let session = heard(concat!(
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}},{"type":"text","text":"what is this?"}]}}"#,
+            "\n",
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]}}"#,
+        ));
+        assert_eq!(session.items, [Item::UserImages("what is this?".into(), 1), Item::UserImages(String::new(), 1)]);
+    }
+
+    #[test]
     fn a_failed_turn_says_why_and_ends() {
         let mut session = Session::default();
-        session.send("hi");
+        session.send("hi", &[]);
         session.hear(&json!({ "type": "result", "subtype": "error_during_execution", "is_error": true, "errors": ["Credit balance is too low"] }));
         assert!(!session.working);
         assert_eq!(session.items[1], Item::Error("Credit balance is too low".into()));
@@ -1092,7 +1178,7 @@ mod tests {
     #[test]
     fn a_stopped_turn_shows_as_stopped_not_as_an_error() {
         let mut session = Session::default();
-        session.send("count to 400");
+        session.send("count to 400", &[]);
         let stop: Value = serde_json::from_str(&session.interrupt(4)).unwrap();
         assert_eq!(stop, json!({ "type": "control_request", "request_id": "interrupt-4", "request": { "subtype": "interrupt" } }));
         // As Claude Code 2.1.327 ended a stopped turn.
@@ -1113,8 +1199,8 @@ mod tests {
     #[test]
     fn a_message_sent_while_claude_works_is_queued_with_a_uuid_and_a_later_priority() {
         let mut session = Session::default();
-        session.send("count to 400");
-        let sent = parsed(&session.queue("and then stop", 1_700_000_000_123, 5));
+        session.send("count to 400", &[]);
+        let sent = parsed(&session.queue("and then stop", Vec::new(), 1_700_000_000_123, 5));
         assert_eq!(sent.len(), 1);
         let uuid = sent[0]["uuid"].as_str().unwrap().to_owned();
         assert_eq!(uuid.len(), 36);
@@ -1123,16 +1209,16 @@ mod tests {
             sent[0],
             json!({ "type": "user", "message": { "role": "user", "content": "and then stop" }, "parent_tool_use_id": null, "priority": "later", "uuid": uuid })
         );
-        assert_eq!(session.queued, [Queued { uuid: uuid.clone(), text: "and then stop".into() }]);
+        assert_eq!(session.queued, [Queued { uuid: uuid.clone(), text: "and then stop".into(), images: Vec::new() }]);
         // Another write, even in the same millisecond, has another uuid.
-        session.queue("more", 1_700_000_000_123, 6);
+        session.queue("more", Vec::new(), 1_700_000_000_123, 6);
         assert_ne!(session.queued[0].uuid, session.queued[1].uuid);
     }
 
     #[test]
     fn taking_a_queued_message_back_cancels_it_by_uuid() {
         let mut session = Session::default();
-        session.queue("one", 1, 1);
+        session.queue("one", Vec::new(), 1, 1);
         let uuid = session.queued[0].uuid.clone();
         let cancelled: Value = serde_json::from_str(&session.unqueue(&uuid, 2).unwrap()).unwrap();
         assert_eq!(cancelled, json!({ "type": "control_request", "request_id": "cancel-2", "request": { "subtype": "cancel_async_message", "message_uuid": uuid } }));
@@ -1143,8 +1229,8 @@ mod tests {
     #[test]
     fn send_now_cancels_and_sends_again_as_next_in_one_write() {
         let mut session = Session::default();
-        session.queue("first", 1, 1);
-        session.queue("second", 1, 2);
+        session.queue("first", Vec::new(), 1, 1);
+        session.queue("second", Vec::new(), 1, 2);
         let old = session.queued[1].uuid.clone();
         let written = session.send_now(&old, 2, 3).unwrap();
         let lines = parsed(&written);
@@ -1162,8 +1248,8 @@ mod tests {
     #[test]
     fn a_queued_message_moves_into_the_conversation_when_claude_echoes_it_and_only_once() {
         let mut session = Session::default();
-        session.send("count to 400");
-        session.queue("then say done", 1, 1);
+        session.send("count to 400", &[]);
+        session.queue("then say done", Vec::new(), 1, 1);
         let uuid = session.queued[0].uuid.clone();
         // The echo of the first message, sent while Claude was idle, is on the page already.
         session.hear(&json!({ "type": "user", "isReplay": true, "uuid": "x", "message": { "role": "user", "content": "count to 400" } }));
@@ -1178,9 +1264,9 @@ mod tests {
     #[test]
     fn stop_with_messages_queued_cancels_them_too() {
         let mut session = Session::default();
-        session.send("count to 400");
-        session.queue("one", 1, 1);
-        session.queue("two", 1, 2);
+        session.send("count to 400", &[]);
+        session.queue("one", Vec::new(), 1, 1);
+        session.queue("two", Vec::new(), 1, 2);
         let stop: Value = serde_json::from_str(&session.interrupt(3)).unwrap();
         assert_eq!(stop, json!({ "type": "control_request", "request_id": "interrupt-3", "request": { "subtype": "interrupt", "cancel_queued": true } }));
         assert!(session.queued.is_empty());
@@ -1192,13 +1278,13 @@ mod tests {
         let result = json!({ "type": "result", "subtype": "success", "is_error": false });
         // Without the events, the result ends the turn.
         let mut plain = Session::default();
-        plain.send("hi");
+        plain.send("hi", &[]);
         plain.hear(&result);
         assert!(!plain.working);
         // With them, a turn's result isn't the end: the next queued turn goes on, and `idle` ends it.
         let mut session = Session::default();
         session.hear(&state("running"));
-        session.queue("next", 1, 1);
+        session.queue("next", Vec::new(), 1, 1);
         let uuid = session.queued[0].uuid.clone();
         session.hear(&result);
         assert!(session.working);
@@ -1210,7 +1296,7 @@ mod tests {
         assert!(!session.working);
         // A message nothing echoed is shown once Claude is idle, not left in the queue.
         session.hear(&state("running"));
-        session.queue("lost", 1, 2);
+        session.queue("lost", Vec::new(), 1, 2);
         session.hear(&state("idle"));
         assert!(session.queued.is_empty());
         assert_eq!(session.items.last(), Some(&Item::User("lost".into())));
@@ -1220,7 +1306,7 @@ mod tests {
     fn you_are_told_once_a_turn_when_claude_needs_you_and_once_when_it_finishes() {
         let ask = |id: &str| json!({ "type": "control_request", "request_id": id, "request": { "subtype": "can_use_tool", "tool_name": "Bash", "input": { "command": "rm x" } } });
         let mut session = Session::default();
-        session.send("clean up");
+        session.send("clean up", &[]);
         session.hear(&ask("r1"));
         session.hear(&ask("r2"));
         assert_eq!(session.alerts, [("Claude needs you: Bash".to_owned(), "rm x".to_owned())]);
@@ -1294,13 +1380,13 @@ mod tests {
             "seven_day": { "utilization": 91, "resets_at": "2026-11-19T10:59:59+00:00" }, "seven_day_opus": null } })));
         assert_eq!(session.limits.iter().map(|(label, used, _)| (*label, *used)).collect::<Vec<_>>(), [("5h", 96), ("week", 91)]);
         // Each message asks for them again.
-        assert!(session.send("hi").contains(r#""request_id":"usage""#));
+        assert!(session.send("hi", &[]).contains(r#""request_id":"usage""#));
     }
 
     #[test]
     fn the_status_line_names_the_tool_that_runs() {
         let mut session = Session::default();
-        session.send("go");
+        session.send("go", &[]);
         assert_eq!(session.activity(), "Working");
         tool_call(&mut session, "a", "mcp__wings__tasks__list", json!({}));
         assert_eq!(session.activity(), "Calling wings");

@@ -6,9 +6,9 @@
 use std::{borrow::Cow, ops::Range};
 
 use gpui::{
-    App, AvailableSpace, Bounds, ClipboardItem, ContentMask, Context, DispatchPhase, Element,
+    App, AvailableSpace, Bounds, ClipboardEntry, ClipboardItem, ContentMask, Context, DispatchPhase, Element,
     ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle,
-    Focusable, GlobalElementId, InspectorElementId, IntoElement, KeyDownEvent, LayoutId, Modifiers,
+    Focusable, GlobalElementId, ImageFormat, InspectorElementId, IntoElement, KeyDownEvent, LayoutId, Modifiers,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Role, SharedString,
     Style, TextAlign, TextRun, TextStyle, UTF16Selection, UnderlineStyle, Window, WrappedLine, div,
     fill, point, prelude::*, px, relative, rgb, rgba, size,
@@ -32,7 +32,17 @@ pub enum FieldEvent {
         back: bool,
     },
     Cancel,
+    /// A paste of an image into a field with `pastes_images`: what to send the page.
+    PasteImage {
+        media_type: &'static str,
+        data: String,
+    },
 }
+
+/// The most image bytes a paste hands the page. The Claude API takes an image of up to 5 MB as base64 on its
+/// strictest platform (10 MB on its own API), and base64 is a third bigger than the bytes, so this is the bytes that
+/// still fit in 5 MB. A bigger image is dropped: the page would only get a request the API refuses.
+const MAX_PASTED_IMAGE_BYTES: usize = 3_750_000;
 
 pub struct TextField {
     focus: FocusHandle,
@@ -46,6 +56,8 @@ pub struct TextField {
     pub rows: Option<usize>,
     /// A multi-line field that submits on Enter and starts a new line on Shift-Enter, as a chat's message box does.
     pub enter_submits: bool,
+    /// A paste that holds an image becomes a `FieldEvent::PasteImage`, not text. Off, an image paste does nothing.
+    pub pastes_images: bool,
     /// Takes the width of its place, not `width`.
     pub fill: bool,
     /// Drawn with no frame of its own, inside a box that is its frame, as a chat's message box is.
@@ -109,6 +121,7 @@ impl TextField {
             text: String::new(),
             rows: None,
             enter_submits: false,
+            pastes_images: false,
             fill: false,
             bare: false,
             disabled: false,
@@ -268,7 +281,35 @@ impl TextField {
         }
     }
 
+    /// The first image of the clipboard that Claude takes (png, jpeg, gif or webp), as its media type and base64.
+    /// None for one it doesn't take, or one over `MAX_PASTED_IMAGE_BYTES`.
+    fn pasted_image(item: &ClipboardItem) -> Option<(&'static str, String)> {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        item.entries().iter().find_map(|entry| match entry {
+            ClipboardEntry::Image(image)
+                if matches!(
+                    image.format,
+                    ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::Gif | ImageFormat::Webp
+                ) && !image.bytes.is_empty()
+                    && image.bytes.len() <= MAX_PASTED_IMAGE_BYTES =>
+            {
+                Some((image.format.mime_type(), STANDARD.encode(&image.bytes)))
+            }
+            _ => None,
+        })
+    }
+
     fn paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A copied picture has no text, but a copied file or a web page's picture can have both: the picture wins.
+        if self.pastes_images {
+            if let Some((media_type, data)) = cx
+                .read_from_clipboard()
+                .and_then(|item| Self::pasted_image(&item))
+            {
+                cx.emit(FieldEvent::PasteImage { media_type, data });
+                return;
+            }
+        }
         let Some(pasted) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
@@ -1331,6 +1372,50 @@ mod tests {
 
     fn selected(window: &TestAppWindow<Host>, field: &Entity<TextField>) -> Range<usize> {
         window.read(|_, cx| field.read(cx).selection())
+    }
+
+    /// What a field with `pastes_images` told its owner of image pastes, as (media type, base64 length).
+    fn watch_image_pastes(
+        window: &mut TestAppWindow<Host>,
+        field: &Entity<TextField>,
+    ) -> std::rc::Rc<std::cell::RefCell<Vec<(&'static str, usize)>>> {
+        let heard = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let log = heard.clone();
+        window.update(|_, _, cx| {
+            cx.subscribe(field, move |_, event: &FieldEvent, _| {
+                if let FieldEvent::PasteImage { media_type, data } = event {
+                    log.borrow_mut().push((*media_type, data.len()));
+                }
+            })
+            .detach();
+            field.update(cx, |field, _| field.pastes_images = true);
+        });
+        heard
+    }
+
+    #[test]
+    fn an_image_paste_reaches_the_page_and_a_text_paste_stays_text() {
+        let (_app, mut window, field) = open("");
+        let heard = watch_image_pastes(&mut window, &field);
+        let image = |format, len| {
+            ClipboardItem::new_image(&gpui::Image::from_bytes(format, vec![7; len]))
+        };
+        window.update(|_, _, cx| cx.write_to_clipboard(image(ImageFormat::Png, 3)));
+        press(&mut window, "cmd-v");
+        assert_eq!(*heard.borrow(), vec![("image/png", 4)], "3 bytes are 4 base64 characters");
+        assert_eq!(text(&window, &field), "");
+        // Not an image Claude takes, and one past the cap, reach nobody.
+        window.update(|_, _, cx| cx.write_to_clipboard(image(ImageFormat::Tiff, 3)));
+        press(&mut window, "cmd-v");
+        window.update(|_, _, cx| {
+            cx.write_to_clipboard(image(ImageFormat::Png, MAX_PASTED_IMAGE_BYTES + 1))
+        });
+        press(&mut window, "cmd-v");
+        assert_eq!(heard.borrow().len(), 1);
+        window.update(|_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string("hello".into())));
+        press(&mut window, "cmd-v");
+        assert_eq!(heard.borrow().len(), 1);
+        assert_eq!(text(&window, &field), "hello");
     }
 
     #[test]

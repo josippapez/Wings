@@ -54,6 +54,8 @@ pub struct Chat {
     pub session: Session,
     /// The message being typed.
     pub draft: String,
+    /// The pictures pasted into the message, as (media type, base64), sent with it.
+    pub images: Vec<(String, String)>,
     /// How many of the newest items are shown.
     pub shown: usize,
     /// The name of the folder Claude Code runs in.
@@ -89,6 +91,7 @@ thread_local! {
     static CHAT: RefCell<Chat> = RefCell::new(Chat {
         session: Session::default(),
         draft: String::new(),
+        images: Vec::new(),
         shown: PAGE,
         folder: String::new(),
         state: State::Starting,
@@ -319,7 +322,7 @@ fn report_agent() {
             .items
             .iter()
             .find_map(|item| match item {
-                Item::User(said) => Some(truncate(said.lines().next().unwrap_or_default().trim(), 60)),
+                Item::User(said) | Item::UserImages(said, _) => Some(truncate(said.lines().next().unwrap_or_default().trim(), 60)),
                 _ => None,
             })
             .filter(|name| !name.is_empty())
@@ -357,19 +360,36 @@ fn write(make: impl FnOnce(&mut Chat, u32) -> Option<String>) {
 pub fn send() {
     write(|c, n| {
         let text = c.draft.trim().to_owned();
-        if text.is_empty() {
+        if text.is_empty() && c.images.is_empty() {
             return None;
         }
         c.draft.clear();
+        let images = std::mem::take(&mut c.images);
         if c.session.working {
-            return Some(c.session.queue(&text, host::now() as u64, n));
+            return Some(c.session.queue(&text, images, host::now() as u64, n));
         }
-        let line = c.session.send(&text);
+        let line = c.session.send(&text, &images);
         // The status line's time counts from here, not from the end of the turn before.
         c.doing = (c.session.activity(), host::now() as u64);
         Some(line)
     });
     report_agent();
+}
+
+/// Adds a picture pasted into the message box.
+pub fn add_image(media_type: &str, data: &str) {
+    if !media_type.is_empty() && !data.is_empty() {
+        with(|c| c.images.push((media_type.to_owned(), data.to_owned())));
+    }
+}
+
+/// Takes the `index`th pasted picture out of the message.
+pub fn remove_image(index: usize) {
+    with(|c| {
+        if index < c.images.len() {
+            c.images.remove(index);
+        }
+    });
 }
 
 /// Takes a queued message back.

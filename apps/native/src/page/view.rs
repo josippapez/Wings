@@ -51,6 +51,7 @@ struct InputState {
     field: gpui::Entity<crate::text_field::TextField>,
     handler: Option<String>,
     key_handler: Option<String>,
+    paste_image_handler: Option<String>,
     blur_handler: Option<String>,
     initialized: bool,
     auto_focus: bool,

@@ -372,6 +372,19 @@ impl PageView {
             });
             let id = input.id;
             cx.subscribe(&entity, move |view, entity, event, cx| {
+                if let crate::text_field::FieldEvent::PasteImage { media_type, data } = event {
+                    let handler = view
+                        .inputs
+                        .borrow()
+                        .get(&id)
+                        .and_then(|state| state.paste_image_handler.clone());
+                    if let Some(handler) = handler {
+                        let payload = serde_json::json!({ "mediaType": media_type, "data": data });
+                        // A paste is a key gesture, as Enter is.
+                        view.act(&handler, Some(&payload));
+                    }
+                    return;
+                }
                 if let crate::text_field::FieldEvent::Submit { .. }
                 | crate::text_field::FieldEvent::Cancel = event
                 {
@@ -418,6 +431,7 @@ impl PageView {
                 field: entity,
                 handler: None,
                 key_handler: None,
+                paste_image_handler: None,
                 blur_handler: None,
                 initialized: false,
                 auto_focus: input.auto_focus,
@@ -430,6 +444,7 @@ impl PageView {
         });
         state.handler = input.on_change.clone();
         state.key_handler = input.on_key_down.clone();
+        state.paste_image_handler = input.on_paste_image.clone();
         state.blur_handler = input.on_blur.clone();
         state.open_on_focus = input.open_on_focus;
         let (disabled, max_chars) = (input.disabled, input.max_length);
@@ -452,6 +467,8 @@ impl PageView {
                 cx.notify();
             }
             field.select_on_focus = input.select_on_focus;
+            // Without a handler a pasted image is left alone, so the field's text paste is all it does.
+            field.pastes_images = input.on_paste_image.is_some();
         });
         state.given = input.value.clone();
         state.field.clone().into_any_element()

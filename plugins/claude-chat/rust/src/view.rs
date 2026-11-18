@@ -128,7 +128,7 @@ fn folds(item: &Item) -> bool {
 /// An item too big to lay out, as one plain text.
 fn plain(at: usize, item: &Item) -> Node {
     let said = match item {
-        Item::Text(said) | Item::User(said) | Item::Error(said) => truncate(said, 20_000),
+        Item::Text(said) | Item::User(said) | Item::UserImages(said, _) | Item::Error(said) => truncate(said, 20_000),
         _ => "This is too long to show here.".to_owned(),
     };
     text(said).key(at.to_string())
@@ -143,6 +143,10 @@ fn asking(c: &Chat) -> bool {
 fn item_node(at: usize, item: &Item, c: &Chat) -> Option<Node> {
     let node = match item {
         Item::User(said) => row().prop("justify", "end").child(card().child(text(said.as_str()))),
+        Item::UserImages(said, images) => {
+            let bubble = card().child(muted(plural(*images, "image")));
+            row().prop("justify", "end").child(if said.is_empty() { bubble } else { bubble.child(text(said.as_str())) })
+        }
         Item::Text(said) => markdown(said),
         Item::Ask(ask) if ask.answer.is_none() => ask_node(ask, c),
         Item::Error(said) => notice("danger", said.as_str()),
@@ -461,6 +465,7 @@ fn composer(c: &Chat) -> Node {
         .prop("value", c.draft.as_str())
         .prop("disabled", !open)
         .on("onChange", |event| chat::with(|c| c.draft = event["value"].as_str().unwrap_or_default().to_owned()))
+        .on("onPasteImage", |event| chat::add_image(event["mediaType"].as_str().unwrap_or_default(), event["data"].as_str().unwrap_or_default()))
         .on("onKeyDown", |event| {
             if event["key"] == "Enter" {
                 chat::send();
@@ -468,7 +473,7 @@ fn composer(c: &Chat) -> Node {
         });
     // One button, as chat apps have: a square to stop while Claude works and nothing is typed, else an arrow to send.
     // What you send while Claude works waits in the queue.
-    let typed = !c.draft.trim().is_empty();
+    let typed = !c.draft.trim().is_empty() || !c.images.is_empty();
     let action = if c.session.working && !typed {
         button("", "default", false, chat::stop).prop("size", "icon-sm").prop("label", "Stop").prop("title", "Stop").child(icon(14, 2.0, &[STOP]))
     } else {
@@ -480,7 +485,7 @@ fn composer(c: &Chat) -> Node {
             .child(icon(14, 2.0, &[SEND]))
     };
     let controls = row().prop("gap", "xs").prop("align", "center").children(pickers(c)).child(stack().prop("grow", true)).child(action);
-    let message_box = card().prop("variant", "raised").child(field.prop("grow", true)).child(controls);
+    let message_box = card().prop("variant", "raised").maybe(pasted(c)).child(field.prop("grow", true)).child(controls);
     Node::new("Bar").prop("edge", "none").child(
         stack()
             .prop("gap", "s")
@@ -490,6 +495,28 @@ fn composer(c: &Chat) -> Node {
             .child(message_box)
             .maybe(usage(c)),
     )
+}
+
+/// The pictures pasted into the message, as chips above its text, each with a cross to take it out.
+fn pasted(c: &Chat) -> Option<Node> {
+    if c.images.is_empty() {
+        return None;
+    }
+    let chips = (0..c.images.len()).map(|at| {
+        row()
+            .prop("gap", "xs")
+            .prop("align", "center")
+            .child(badge(format!("Image {}", at + 1), None))
+            .child(
+                button("", "ghost", false, move || chat::remove_image(at))
+                    .prop("size", "icon-sm")
+                    .prop("label", format!("Remove image {}", at + 1))
+                    .prop("title", "Remove")
+                    .child(icon(14, 2.0, &[CLOSE])),
+            )
+            .key(at.to_string())
+    });
+    Some(row().prop("gap", "s").prop("wrap", true).children(chips))
 }
 
 /// How full the context is and how much of your plan's 5-hour and weekly limits is used, as bars under the message box,
