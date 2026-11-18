@@ -370,11 +370,18 @@ pub struct Bar {
     pub children: Vec<Node>,
 }
 
-/// Two panes side by side: `start` is `size` points wide, `end` takes the rest.
+/// Two panes side by side: `start` is `size` points wide, `end` takes the rest. With `side: "end"` it is the other
+/// way round: `end` is the fixed pane, on the right, and `start` takes the rest.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Split {
     pub id: u64,
     pub size: f32,
+    /// The fixed pane is `end`, on the right.
+    pub fixed_end: bool,
+    /// The fixed pane isn't drawn while the split itself is narrower than this many points.
+    pub collapse_below: Option<f32>,
+    /// The fixed pane stays however narrow the split is: the page wants it shown now.
+    pub pinned: bool,
     pub start: Vec<Node>,
     pub end: Vec<Node>,
 }
@@ -1127,6 +1134,11 @@ impl Walk {
                     size: number(&props, "defaultSize")
                         .unwrap_or(280.0)
                         .clamp(120.0, 1_000.0) as f32,
+                    fixed_end: str_prop(&props, "side") == Some("end"),
+                    collapse_below: number(&props, "collapseBelow")
+                        .filter(|below| *below > 0.0)
+                        .map(|below| below.min(10_000.0) as f32),
+                    pinned: on("pinned"),
                     start: slots.take("start"),
                     end: slots.take("end"),
                 })
@@ -2115,5 +2127,32 @@ mod tests {
         ));
         // A colour that isn't one is no colour.
         assert!(matches!(&split.end[0], Node::Dot(Dot { color: None, .. })));
+        // The fixed pane is the start one, always shown, unless the page says otherwise.
+        assert!(!split.fixed_end && split.collapse_below.is_none() && !split.pinned);
+    }
+
+    #[test]
+    fn parses_a_split_whose_fixed_pane_is_on_the_right_and_folds_when_narrow() {
+        let parsed = tree(json!([
+            {"id":1,"type":"Split","props":{"defaultSize":260,"side":"end","collapseBelow":1100,"pinned":true},"children":[]},
+            {"id":2,"type":"Split","props":{"side":"start","collapseBelow":-5},"children":[]},
+            {"id":3,"type":"Split","props":{"side":"end","collapseBelow":"wide"},"children":[]}
+        ]))
+        .unwrap();
+        let splits: Vec<&Split> = parsed
+            .children
+            .iter()
+            .map(|node| match node {
+                Node::Split(split) => split,
+                _ => panic!("a split"),
+            })
+            .collect();
+        assert_eq!(
+            (splits[0].size, splits[0].fixed_end, splits[0].collapse_below, splits[0].pinned),
+            (260.0, true, Some(1100.0), true)
+        );
+        // Only "end" moves the pane, and a threshold that is no positive number is none.
+        assert_eq!((splits[1].fixed_end, splits[1].collapse_below), (false, None));
+        assert_eq!((splits[2].fixed_end, splits[2].collapse_below), (true, None));
     }
 }

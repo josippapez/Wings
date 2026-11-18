@@ -93,6 +93,9 @@ pub struct PageView {
     /// Where each select and combobox was drawn, by node id, and how tall the window was: its menu is as wide, and as
     /// tall as the room on one side of it.
     select_bounds: HashMap<u64, (gpui::Bounds<Pixels>, Pixels)>,
+    /// Whether each `Split` was narrower than its `collapseBelow` when it was last drawn, by node id. A split not in
+    /// here hasn't been measured yet and draws its fixed pane.
+    split_narrow: HashMap<u64, bool>,
     /// The text input that has the keyboard, by node id, as of the last render: a combobox's shows its options under
     /// it.
     focused: Option<u64>,
@@ -180,6 +183,7 @@ impl PageView {
         self.menu = None;
         self.pressed_open = false;
         self.select_bounds.clear();
+        self.split_narrow.clear();
         self.focused = None;
         self.suggestions_closed = false;
         self.highlight = None;
@@ -355,6 +359,7 @@ impl PageView {
             menu: None,
             pressed_open: false,
             select_bounds: HashMap::new(),
+            split_narrow: HashMap::new(),
             focused: None,
             suggestions_closed: false,
             highlight: None,
@@ -703,6 +708,12 @@ impl PageView {
         let scrolls = self.follow_scrolls.borrow();
         let handle = &scrolls.get(&id)?.handle;
         Some(((-handle.offset().y).as_f32(), handle.max_offset().y.as_f32()))
+    }
+
+    /// Whether the split `id` was narrower than its `collapseBelow` when last drawn, none before it was measured.
+    #[cfg(all(test, feature = "test-support"))]
+    pub(super) fn split_narrow(&self, id: u64) -> Option<bool> {
+        self.split_narrow.get(&id).copied()
     }
 
     #[cfg(all(test, feature = "test-support"))]
@@ -1484,30 +1495,77 @@ impl PageView {
     }
 
     /// Each pane scrolls on its own, as plugin-ui.css's `.w-split-pane { overflow: auto }`: Disk usage's list of
-    /// files ran past the bottom of its tab.
+    /// files ran past the bottom of its tab. With `side: "end"` the fixed pane is on the right, borderless with 12
+    /// points round it, for floating cards, and the other pane doesn't scroll: it is a page that fills its frame and
+    /// scrolls what it holds itself. That fixed pane isn't drawn while the split is narrower than `collapseBelow`
+    /// (unless pinned), or when it holds nothing.
     fn split(&self, split: &tree::Split, cx: &mut Context<Self>) -> AnyElement {
-        div()
-            .flex_1()
-            .min_h_0()
-            .min_w_0()
-            .flex()
-            .child(
-                div()
-                    .id(ElementId::NamedInteger("page-split-start".into(), split.id))
-                    .overflow_y_scroll()
-                    .w(px(split.size))
-                    .max_w(relative(0.5))
-                    .flex_none()
-                    .min_h_0()
-                    .flex()
-                    .flex_col()
-                    .border_r_1()
-                    .border_color(rgba(ui::HAIRLINE))
-                    .children(self.nodes(&split.start, cx)),
+        let id = split.id;
+        // Measures the split's own width, which the fixed pane doesn't change, and draws again only when it crosses
+        // the threshold. A drag that crosses it shows or hides the pane a frame late, which nobody sees as wrong, and
+        // it saves sizing the split from what it holds.
+        let measure = split.collapse_below.map(|below| {
+            let entity = cx.entity();
+            canvas(
+                move |bounds, _, cx| {
+                    let narrow = bounds.size.width.as_f32() < below;
+                    entity.update(cx, |view, cx| {
+                        if view.split_narrow.insert(id, narrow) != Some(narrow) {
+                            cx.notify();
+                        }
+                    })
+                },
+                |_, _, _, _| {},
             )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+        });
+        let narrow = self.split_narrow.get(&id).copied().unwrap_or(false);
+        let fixed = if split.fixed_end { &split.end } else { &split.start };
+        let drawn = !fixed.is_empty() && (split.pinned || !narrow);
+        let fixed_pane = |name: &'static str| {
+            div()
+                .id(ElementId::NamedInteger(name.into(), id))
+                .overflow_y_scroll()
+                .w(px(split.size))
+                .max_w(relative(0.5))
+                .flex_none()
+                .min_h_0()
+                .flex()
+                .flex_col()
+        };
+        let container = div().relative().flex_1().min_h_0().min_w_0().flex().children(measure);
+        if split.fixed_end {
+            return container
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .min_h_0()
+                        .flex()
+                        .flex_col()
+                        .overflow_hidden()
+                        .children(self.nodes(&split.start, cx)),
+                )
+                .when(drawn, |el| {
+                    el.child(fixed_pane("page-split-end-fixed").p(px(12.0)).gap(px(8.0)).children(self.nodes(&split.end, cx)))
+                })
+                .into_any_element();
+        }
+        container
+            .when(drawn, |el| {
+                el.child(
+                    fixed_pane("page-split-start")
+                        .border_r_1()
+                        .border_color(rgba(ui::HAIRLINE))
+                        .children(self.nodes(&split.start, cx)),
+                )
+            })
             .child(
                 div()
-                    .id(ElementId::NamedInteger("page-split-end".into(), split.id))
+                    .id(ElementId::NamedInteger("page-split-end".into(), id))
                     .overflow_y_scroll()
                     .flex_1()
                     .min_w_0()

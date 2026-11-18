@@ -8,7 +8,9 @@
   "main": "dist/native/main.wasm",
   "permissions": {
     "exec": [
-      "git ls-files [--cached --others --exclude-standard -z]"
+      "git ls-files [--cached --others --exclude-standard -z]",
+      "git diff [--shortstat]",
+      "git rev-parse [--abbrev-ref]"
     ],
     "processes": [
       "claude [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --replay-user-messages --resume]",

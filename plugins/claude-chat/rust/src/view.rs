@@ -10,14 +10,14 @@ use wings_plugin::{
     host,
     markdown::{code_block, markdown},
     ui::{
-        Node, badge, button, card, chip, confirm, disclosure, empty, gauge, icon, list, list_button, loading, muted, notice, page,
+        Node, badge, button, card, chip, confirm, disclosure, empty, icon, list, list_button, loading, muted, notice, page,
         row, search_field, select, spinner, stack, text, text_input, toolbar_with,
     },
 };
 
 use crate::{
     chat::{self, Chat, PAGE, Past, State},
-    session::{Ask, Detail, Diff, Draft, Item, MODES, Progress, Todo, Tool, exit_code, files_found},
+    session::{Ask, Detail, Diff, Draft, Item, MODES, Progress, Session, Todo, Tool, exit_code, files_found, model_name},
 };
 
 /// An arrow up, a square and a cross, in a 14-point box.
@@ -30,6 +30,14 @@ const COLUMN: u32 = 760;
 /// The most nodes the conversation sends. The app draws a page of at most 5,000, and a long session's whole history
 /// made more: the page was refused and stayed on Loading. The toolbar and the message box take the rest.
 const BUDGET: usize = 3_500;
+/// The side panel's width, and the width of the tab under which it is left out. The column is 760 wide, drawn with 8 points
+/// of margin either side, so at 1,100 and up it keeps all of that beside the panel; a 1,000-wide tab has the chat as it was.
+const SIDE: u32 = 260;
+const SIDE_BELOW: u32 = 1_100;
+/// The most nodes a subagent's transcript in the side panel makes, apart from the conversation's own budget.
+const SUB_BUDGET: usize = 1_200;
+/// The most subagents the panel lists.
+const SUBAGENTS_LISTED: usize = 12;
 
 pub fn view() -> Vec<Node> {
     chat::with(|c| vec![chat_page(c)])
@@ -45,8 +53,18 @@ fn chat_page(c: &Chat) -> Node {
         Some(past) => past_sessions(past),
         None => conversation(c),
     };
-    // Flush, so the conversation scrolls on its own and the checklist and the message box stay at the foot.
-    page(toolbar, [body].into_iter().chain(todo_card(c)).chain([composer(c)])).prop("flush", true)
+    // The conversation, the checklist and the message box in the main pane, and a card on the right that the app leaves out
+    // of a narrow tab. An open subagent pins it: that is what you asked to see. Flush, so the conversation scrolls on its own
+    // and the checklist and the message box stay at the foot.
+    let main = [body].into_iter().chain(todo_card(c)).chain([composer(c)]);
+    let split = Node::new("Split")
+        .prop("defaultSize", SIDE)
+        .prop("side", "end")
+        .prop("collapseBelow", SIDE_BELOW)
+        .prop("pinned", c.subagent.as_ref().is_some_and(|id| c.session.subagents.contains_key(id)))
+        .child(Node::new("Slot").prop("name", "start").children(main))
+        .child(Node::new("Slot").prop("name", "end").children(side(c)));
+    page(toolbar, [split]).prop("flush", true)
 }
 
 fn column() -> Node {
@@ -169,15 +187,32 @@ fn item_node(at: usize, item: &Item, c: &Chat) -> Option<Node> {
 /// and shut once it ended showed the calls for a moment and hid them again. The line under the conversation says what
 /// runs. Closed, its calls aren't built at all.
 fn steps(first: usize, tools: &[&Tool], c: &Chat) -> Node {
-    let open = c.open_steps.contains(&first);
+    steps_in(first, None, tools, c)
+}
+
+/// `steps` for a run of the subagent `scope`, whose runs are numbered from its own first item and so are told apart from the
+/// conversation's by their name, and kept open or shut with the tool outputs.
+fn steps_in(first: usize, scope: Option<&str>, tools: &[&Tool], c: &Chat) -> Node {
+    let run = scope.map(|scope| format!("run-{scope}-{first}"));
+    let open = match &run {
+        Some(run) => c.open_outputs.contains(run),
+        None => c.open_steps.contains(&first),
+    };
     let failed = tools.iter().filter(|tool| matches!(tool.output, Some((_, true)))).count();
     let mut said = describe(tools);
     if failed > 0 {
         said.push_str(&format!(" · {failed} failed"));
     }
     let rows = stack().prop("gap", "s");
-    let rows = if open { rows.children(tools.iter().map(|tool| step(tool, c.open_outputs.contains(&tool.id)))) } else { rows };
-    disclosure(said, rows).prop("open", open).on("onOpenChange", move |_| chat::toggle_steps(first)).key(format!("steps-{first}"))
+    let rows = if open { rows.children(tools.iter().map(|tool| step(tool, c.open_outputs.contains(&tool.id), c))) } else { rows };
+    let key = format!("steps-{}{first}", scope.map(|scope| format!("{scope}-")).unwrap_or_default());
+    disclosure(said, rows)
+        .prop("open", open)
+        .on("onOpenChange", move |_| match &run {
+            Some(run) => chat::toggle_output(run),
+            None => chat::toggle_steps(first),
+        })
+        .key(key)
 }
 
 /// What a run of tool calls did, by kind: "Ran 2 commands · Read 3 files".
@@ -209,7 +244,7 @@ fn describe(tools: &[&Tool]) -> String {
 }
 
 /// One tool call: what it is, and what it did or printed, folded. The fold is built only once you open it.
-fn step(tool: &Tool, opened: bool) -> Node {
+fn step(tool: &Tool, opened: bool, c: &Chat) -> Node {
     let output = tool.output.as_ref().map(|(output, failed)| (output.as_str(), *failed)).filter(|(output, _)| !output.trim().is_empty());
     let mark = match &tool.output {
         None => spinner(),
@@ -222,7 +257,8 @@ fn step(tool: &Tool, opened: bool) -> Node {
         .child(mark)
         .child(text(tool.name.as_str()).prop("weight", "medium"))
         .child(text(tool.summary.as_str()).prop("mono", true).prop("size", "small").prop("tone", "muted").prop("truncate", true).prop("grow", true))
-        .children(facts(tool));
+        .children(facts(tool))
+        .maybe(open_subagent(tool, c));
     // What an edit or a write printed is only "updated successfully", which the diff already says.
     let label = match (&tool.detail, output) {
         (_, Some((_, true))) => Some("Error"),
@@ -252,6 +288,16 @@ fn step(tool: &Tool, opened: bool) -> Node {
         None => head,
     }
     .key(tool.id.as_str())
+}
+
+/// A subagent's call opens its transcript in the side panel, once it has said or done anything.
+fn open_subagent(tool: &Tool, c: &Chat) -> Option<Node> {
+    if !matches!(tool.name.as_str(), "Task" | "Agent") || !c.session.subagents.contains_key(&tool.id) {
+        return None;
+    }
+    let id = tool.id.clone();
+    let shown = c.subagent.as_deref() == Some(tool.id.as_str());
+    Some(button(if shown { "Close" } else { "Open" }, "ghost", false, move || chat::toggle_subagent(&id)).prop("size", "sm").prop("title", "Its transcript, in the side panel"))
 }
 
 /// A small mono text on a call's head line.
@@ -526,8 +572,7 @@ fn composer(c: &Chat) -> Node {
             .prop("gap", "s")
             .prop("maxWidth", COLUMN)
             .maybe(queued(c))
-            .child(message_box)
-            .maybe(usage(c)),
+            .child(message_box),
     )
 }
 
@@ -549,20 +594,208 @@ fn pasted(c: &Chat) -> Option<Node> {
     Some(row().prop("gap", "s").prop("wrap", true).children(chips))
 }
 
-/// How full the context is and how much of your plan's 5-hour and weekly limits is used, as bars under the message box,
-/// each with when it resets: what a terminal's status line shows.
-fn usage(c: &Chat) -> Option<Node> {
-    let context = c.session.context.map(|(used, most)| gauge("Context", (used * 100 / most.max(1)) as f64, (70, 90), None));
-    let limits = c.session.limits.iter().map(|(label, used, resets)| {
-        let name = if *label == "5h" { "5-hour limit" } else { "Weekly limit" };
+/// The panel on the right, quiet beside the conversation: the folder and branch, what the working tree changed, how full the
+/// context is and how much of your plan's limits is used, and the session's subagents. Holds a subagent's transcript in
+/// place of that while one is open. Nothing when there is nothing to say yet.
+fn side(c: &Chat) -> Vec<Node> {
+    if let Some((id, sub)) = c.subagent.as_ref().and_then(|id| Some((id, c.session.subagents.get(id)?))) {
+        return vec![subagent_card(id, sub, c)];
+    }
+    let small = |said: String| text(said).prop("size", "small");
+    let mut sections: Vec<Node> = Vec::new();
+    let place = match (c.folder.is_empty(), &c.branch) {
+        (true, _) => None,
+        (false, Some(branch)) => Some(format!("{} · {branch}", c.folder)),
+        (false, None) => Some(c.folder.clone()),
+    };
+    let mut head = stack().prop("gap", "xs");
+    if let Some(place) = place {
+        head = head.child(small(place.clone()).prop("tone", "muted").prop("truncate", true).prop("title", place));
+    }
+    if let Some((added, removed)) = c.changes {
+        head = head.child(
+            row()
+                .prop("gap", "s")
+                .prop("align", "baseline")
+                .child(small("Changes".into()).prop("grow", true))
+                .child(fact(format!("+{added}"), "success"))
+                .child(fact(format!("−{removed}"), "danger")),
+        );
+    }
+    sections.push(head);
+    let mut limits = stack().prop("gap", "s");
+    if let Some((used, most)) = c.session.context {
+        limits = limits.child(meter_row("Context", used * 100 / most.max(1), (70, 90), None));
+    }
+    for (label, used, resets) in &c.session.limits {
         let resets = parse_time(resets).map(|ms| match *label {
-            "5h" => format!("Resets {}", clock(ms)),
-            _ => format!("Resets {} {}", WEEKDAYS[local(ms as i64).weekday as usize % 7], clock(ms)),
+            "5h" => format!("resets {}", clock(ms)),
+            _ => format!("resets {} {}", WEEKDAYS[local(ms as i64).weekday as usize % 7], clock(ms)),
         });
-        gauge(name, *used as f64, (80, 95), resets)
+        limits = limits.child(meter_row(if *label == "5h" { "5-hour" } else { "Week" }, *used, (80, 95), resets));
+    }
+    sections.push(limits);
+    sections.extend(subagents(c));
+    // A stack with nothing in it takes room: leave out the sections that have nothing.
+    let sections: Vec<Node> = sections.into_iter().filter(|section| section.count() > 1).collect();
+    match sections.is_empty() {
+        true => Vec::new(),
+        false => vec![card().prop("variant", "raised").child(stack().prop("gap", "m").children(sections))],
+    }
+}
+
+/// One line of the panel: its name on the left and a percent on the right, a thin bar under it that turns amber at `levels`'
+/// first and red at its second, and when it resets in small muted text beside the name.
+fn meter_row(label: &str, percent: u64, levels: (u64, u64), resets: Option<String>) -> Node {
+    let line = row()
+        .prop("gap", "s")
+        .prop("align", "baseline")
+        .child(text(label).prop("size", "small"))
+        .child(stack().prop("grow", true).maybe(resets.map(|resets| muted(resets).prop("size", "small").prop("truncate", true))))
+        .child(fact(format!("{percent}%"), "muted"));
+    let meter = Node::new("Meter").prop("label", label).prop("percent", percent.min(100) as f64);
+    let meter = match level(percent, levels) {
+        Some(tone) => meter.prop("tone", tone),
+        None => meter,
+    };
+    stack().prop("gap", "xs").child(line).child(meter).key(label)
+}
+
+/// The tone a meter at `percent` takes: none below the first level, amber from it, red from the second.
+fn level(percent: u64, levels: (u64, u64)) -> Option<&'static str> {
+    match percent {
+        p if p >= levels.1 => Some("danger"),
+        p if p >= levels.0 => Some("warn"),
+        _ => None,
+    }
+}
+
+/// The subagents this session started, from its Task calls: each with its model, whether it runs, and how long it has or
+/// took, and a click opens its transcript. The newest few, as the panel is small.
+fn subagents(c: &Chat) -> Option<Node> {
+    let tasks: Vec<&Tool> = c.session.items.iter().filter_map(|item| match item {
+        Item::Tool(tool) if matches!(tool.name.as_str(), "Task" | "Agent") => Some(tool),
+        _ => None,
+    }).collect();
+    if tasks.is_empty() {
+        return None;
+    }
+    let running = tasks.iter().filter(|tool| tool.output.is_none()).count();
+    let title = if running > 0 { format!("Subagents · {running} running") } else { format!("Subagents · {} done", tasks.len()) };
+    let hidden = tasks.len().saturating_sub(SUBAGENTS_LISTED);
+    let rows = tasks[hidden..].iter().map(|tool| subagent_row(tool, c));
+    Some(
+        stack()
+            .prop("gap", "xs")
+            .child(muted(title).prop("size", "small"))
+            .maybe((hidden > 0).then(|| muted(format!("{hidden} earlier")).prop("size", "small")))
+            .child(stack().prop("gap", "none").children(rows)),
+    )
+}
+
+fn subagent_row(tool: &Tool, c: &Chat) -> Node {
+    let sub = c.session.subagents.get(&tool.id);
+    let mark = match &tool.output {
+        None => spinner(),
+        Some((_, true)) => text("✗").prop("tone", "danger"),
+        Some(_) => text("✓").prop("tone", "success"),
+    };
+    let model = sub.and_then(|sub| sub.reported_model.as_deref()).map(model_name);
+    let name = if tool.summary.is_empty() { "Subagent" } else { tool.summary.as_str() };
+    let time = match (&tool.output, sub.filter(|sub| sub.started > 0)) {
+        (None, Some(sub)) => Some(muted("working").prop("size", "small").prop("since", sub.started)),
+        (Some(_), Some(sub)) => Some(fact(took(sub.last.saturating_sub(sub.started)), "muted")),
+        _ => None,
+    };
+    let line = row()
+        .prop("gap", "s")
+        .prop("align", "center")
+        .child(mark)
+        .child(stack().prop("grow", true).prop("gap", "none").child(text(name).prop("size", "small").prop("truncate", true).prop("title", name)).maybe(model.map(|model| muted(model).prop("size", "small"))))
+        .maybe(time);
+    match sub {
+        Some(_) => {
+            let id = tool.id.clone();
+            list_button([line], move || chat::toggle_subagent(&id)).key(tool.id.as_str())
+        }
+        None => line.key(tool.id.as_str()),
+    }
+}
+
+/// How long, as "21s", "2m 5s", "1h 4m".
+fn took(ms: u64) -> String {
+    let seconds = ms / 1000;
+    match seconds {
+        0..60 => format!("{seconds}s"),
+        60..3600 => format!("{}m {}s", seconds / 60, seconds % 60),
+        _ => format!("{}h {}m", seconds / 3600, seconds % 3600 / 60),
+    }
+}
+
+/// The call that started the subagent `id`, in the conversation or in another subagent's.
+fn find_tool<'a>(c: &'a Chat, id: &str) -> Option<&'a Tool> {
+    let find = |session: &'a Session| session.items.iter().find_map(|item| match item {
+        Item::Tool(tool) if tool.id == id => Some(tool),
+        _ => None,
     });
-    let bars: Vec<Node> = context.into_iter().chain(limits).map(|bar| stack().prop("grow", true).child(bar)).collect();
-    (!bars.is_empty()).then(|| row().prop("gap", "l").prop("align", "start").children(bars))
+    find(&c.session).or_else(|| c.session.subagents.values().find_map(find))
+}
+
+/// A subagent's transcript in place of the session card: what its call was for, a Close button, and what it said and did,
+/// drawn as the conversation is: its text as Markdown and its tool calls folded.
+fn subagent_card(id: &str, sub: &Session, c: &Chat) -> Node {
+    let tool = find_tool(c, id);
+    let title = tool.map(|tool| tool.summary.as_str()).filter(|title| !title.is_empty()).unwrap_or("Subagent");
+    let state = match tool.map(|tool| &tool.output) {
+        Some(None) => Some("Running".to_owned()),
+        Some(Some((_, true))) => Some("Failed".to_owned()),
+        Some(Some(_)) => Some("Done".to_owned()),
+        None => None,
+    };
+    let facts: Vec<String> = sub.reported_model.as_deref().map(model_name).into_iter().chain(state).collect();
+    let head = row()
+        .prop("gap", "s")
+        .prop("align", "start")
+        .child(stack().prop("grow", true).prop("gap", "none").child(text(title).prop("weight", "medium")).maybe((!facts.is_empty()).then(|| muted(facts.join(" · ")).prop("size", "small"))))
+        .child(button("Close", "ghost", false, chat::close_subagent).prop("size", "sm"));
+    card().prop("variant", "raised").child(stack().prop("gap", "m").child(head).children(transcript(id, sub, c)))
+}
+
+/// What a subagent said and did, newest last, from the newest back until its budget is spent. Your own prompt to it, which
+/// is its first message, isn't repeated.
+fn transcript(id: &str, sub: &Session, c: &Chat) -> Vec<Node> {
+    let items = &sub.items;
+    let (mut blocks, mut spent, mut cut) = (Vec::new(), 0, false);
+    let mut end = items.len();
+    while end > 0 {
+        let mut start = end - 1;
+        while folds(&items[start]) && start > 0 && folds(&items[start - 1]) {
+            start -= 1;
+        }
+        let block = match &items[start] {
+            item if folds(item) => {
+                let tools: Vec<&Tool> = items[start..end].iter().filter_map(|item| if let Item::Tool(tool) = item { Some(tool) } else { None }).collect();
+                (!tools.is_empty()).then(|| steps_in(start, Some(id), &tools, c))
+            }
+            Item::User(_) => None,
+            item => item_node(start, item, c),
+        };
+        end = start;
+        let Some(block) = block else { continue };
+        spent += block.count();
+        if spent > SUB_BUDGET && !blocks.is_empty() {
+            cut = true;
+            break;
+        }
+        blocks.push(block);
+    }
+    blocks.reverse();
+    let mut nodes: Vec<Node> = (cut || items.len() >= crate::session::SUBAGENT_KEPT).then(|| muted("Earlier steps aren't shown.").prop("size", "small")).into_iter().collect();
+    nodes.extend(blocks);
+    if sub.thinking || (!sub.live.is_empty()) {
+        nodes.push(muted("Working").prop("shimmer", true).key("working"));
+    }
+    nodes
 }
 
 const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -661,4 +894,19 @@ fn suggestions(c: &Chat) -> Option<Node> {
 fn capital(word: &str) -> String {
     let mut chars = word.chars();
     chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_duration_is_told_in_seconds_minutes_and_hours() {
+        assert_eq!([took(21_400), took(125_000), took(3_900_000)], ["21s", "2m 5s", "1h 5m"]);
+    }
+
+    #[test]
+    fn a_meter_turns_amber_then_red_at_its_levels() {
+        assert_eq!([level(40, (70, 90)), level(70, (70, 90)), level(95, (70, 90))], [None, Some("warn"), Some("danger")]);
+    }
 }

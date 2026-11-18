@@ -1959,3 +1959,34 @@ fn a_following_scroll_asks_for_older_items_at_its_top_and_stays_on_what_it_showe
     // further down.
     settle(&app, &mut window, |view| view.text().contains("Older 0") && view.follow_scrolled(1).is_some_and(|(top, _)| top >= 300.0));
 }
+
+/// A chat's shape: a main pane and a pane on the right that folds away below 600 points, or stays when pinned.
+fn side_split(pinned: bool) -> String {
+    fake::page("page", move |_| {
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Split",
+            "props": { "defaultSize": 200, "side": "end", "collapseBelow": 600, "pinned": pinned }, "children": [
+            { "id": 2, "type": "Slot", "props": { "name": "start" }, "children": [text(3, 4, "Main".into())] },
+            { "id": 5, "type": "Slot", "props": { "name": "end" }, "children": [text(6, 7, "Side".into())] }] }] })
+    })
+}
+
+/// The split measures its own width while it is drawn, and a window under `collapseBelow` leaves the right pane out
+/// unless the page pins it.
+#[test]
+fn a_split_measures_its_width_and_folds_its_side_pane_when_narrow() {
+    for (width, pinned, narrow) in [(500.0, false, true), (900.0, false, false), (500.0, true, true)] {
+        let mut app = TestApp::new();
+        app.background_executor().allow_parking();
+        let host = hosted(&mut app);
+        let source = side_split(pinned);
+        let bounds = gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(width), px(300.0)));
+        let mut window = app.open_window_with_options(
+            gpui::WindowOptions {
+                window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
+                ..Default::default()
+            },
+            |_, cx| PageView::in_plugin(&host, &source, cx),
+        );
+        settle(&app, &mut window, |view| view.split_narrow(1) == Some(narrow));
+    }
+}

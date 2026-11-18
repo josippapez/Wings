@@ -76,6 +76,11 @@ pub struct Chat {
     pub todos_folded: bool,
     /// What Claude is doing, for the status line, and since when (ms).
     pub doing: (String, u64),
+    /// The subagent whose transcript the side panel shows, by the id of the tool call that started it.
+    pub subagent: Option<String>,
+    /// The lines added and removed in the working tree since the last commit, and the branch it is on.
+    pub changes: Option<(u64, u64)>,
+    pub branch: Option<String>,
     /// What the sidebar's Agents was last told of this chat: its state, name and what it does.
     agent: Option<(String, String, Option<String>)>,
     /// Going on in a terminal once Claude Code here has ended.
@@ -105,6 +110,9 @@ thread_local! {
         drafts: HashMap::new(),
         todos_folded: false,
         doing: (String::new(), 0),
+        subagent: None,
+        changes: None,
+        branch: None,
         agent: None,
         moving: false,
         input: None,
@@ -161,10 +169,12 @@ fn launch(resume: Option<String>) {
         c.open_outputs.clear();
         c.open_queued.clear();
         c.drafts.clear();
+        c.subagent = None;
         c.moving = false;
         (c.run, c.cwd.clone(), c.program.clone())
     });
     load_files(run, cwd.clone());
+    load_git(run, cwd.clone());
     task::spawn(async move {
         if let Some(id) = &resume {
             if let Ok(entries) = host::transcript(id, &["user", "assistant"], Some(HISTORY)).await {
@@ -238,6 +248,30 @@ fn load_files(run: u32, cwd: String) {
     });
 }
 
+/// What the working tree changed since the last commit, and the branch, for the side panel. Asked when the chat starts and
+/// when a turn ends, which is when files change, and not on a timer.
+fn load_git(run: u32, cwd: String) {
+    task::spawn(async move {
+        let stat = host::exec_in(&cwd, "git", &["diff", "--shortstat", "HEAD"]).await;
+        let branch = host::exec_in(&cwd, "git", &["rev-parse", "--abbrev-ref", "HEAD"]).await;
+        let stdout = |out: Result<Value, String>| out.ok().filter(|out| out["code"] == 0).map(|out| out["stdout"].as_str().unwrap_or_default().trim().to_owned());
+        with(|c| {
+            if c.run == run {
+                c.changes = stdout(stat).map(|out| shortstat(&out));
+                // A detached head has no branch to name.
+                c.branch = stdout(branch).filter(|name| !name.is_empty() && name != "HEAD");
+            }
+        });
+    });
+}
+
+/// The lines added and removed in `git diff --shortstat`'s " 3 files changed, 590 insertions(+), 277 deletions(-)", which
+/// leaves out a count that is zero, and is empty when nothing changed.
+fn shortstat(out: &str) -> (u64, u64) {
+    let count = |word: &str| out.split(',').find(|part| part.contains(word)).and_then(|part| part.split_whitespace().next()?.parse().ok()).unwrap_or(0);
+    (count("insertion"), count("deletion"))
+}
+
 /// Goes on with the session in a terminal, as Claude Code itself: once Claude Code here has ended, so that only one
 /// writes to the session.
 pub fn to_terminal() {
@@ -290,6 +324,7 @@ fn hear(run: u32, line: &Value) {
         }
         let before = c.session.id.clone();
         let was_working = c.session.working;
+        c.session.now = host::now() as u64;
         c.session.hear(line);
         let doing = c.session.activity();
         if doing != c.doing.0 {
@@ -310,7 +345,13 @@ fn hear(run: u32, line: &Value) {
     // The sidebar's Chats list reads sessions from their transcripts, which Claude Code has written by the end of a turn.
     if ended {
         messages::tell(crate::SESSION_SAVED, &Value::Null);
-    }    report_agent();
+    }
+    if line["type"] == "result" {
+        if let Some(cwd) = with(|c| (c.run == run).then(|| c.cwd.clone())) {
+            load_git(run, cwd);
+        }
+    }
+    report_agent();
 }
 
 /// Tells the sidebar's Agents what Claude does in this chat, when that changed: it needs you while a question of
@@ -589,6 +630,15 @@ pub fn toggle_output(id: &str) {
     });
 }
 
+/// Shows the subagent started by the tool call `id` in the side panel, or closes it when it is the one shown.
+pub fn toggle_subagent(id: &str) {
+    with(|c| c.subagent = if c.subagent.as_deref() == Some(id) { None } else { Some(id.to_owned()) });
+}
+
+pub fn close_subagent() {
+    with(|c| c.subagent = None);
+}
+
 pub fn toggle_todos() {
     with(|c| c.todos_folded = !c.todos_folded);
 }
@@ -599,4 +649,17 @@ pub fn toggle_steps(first: usize) {
             c.open_steps.insert(first);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shortstat;
+
+    #[test]
+    fn a_shortstat_gives_the_lines_added_and_removed() {
+        assert_eq!(shortstat(" 3 files changed, 590 insertions(+), 277 deletions(-)"), (590, 277));
+        assert_eq!(shortstat(" 1 file changed, 1 insertion(+)"), (1, 0));
+        assert_eq!(shortstat(" 2 files changed, 4 deletions(-)"), (0, 4));
+        assert_eq!(shortstat(""), (0, 0));
+    }
 }

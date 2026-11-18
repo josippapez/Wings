@@ -834,6 +834,25 @@ fn claude_chat(out: PathBuf) {
         json!({ "plan": "## Split the checkout into a package\n\n1. Move `src/checkout` to `packages/checkout`\n2. Give it its own `package.json` and tests\n3. Point the app at `@shop/checkout`\n\n- **Risk:** the cart imports private helpers; they move along" }),
         json!({}),
     );
+    // Two subagents the session started: one still at work, one done, each with the lines it printed, which carry the id of
+    // the call that started it. Opening the first shows its transcript in the side panel.
+    let within = |parent: &str, mut line: serde_json::Value| {
+        line["parent_tool_use_id"] = parent.into();
+        line
+    };
+    let haiku = |content: serde_json::Value| json!({ "type": "assistant", "message": { "role": "assistant", "model": "claude-haiku-5-5", "content": content } });
+    let subagent = opened(vec![
+        init.clone(),
+        user("Find every caller of applyDiscount and tell me which of them round."),
+        tool("s1", "Task", json!({ "description": "Survey the callers of applyDiscount", "subagent_type": "Explore", "prompt": "List every caller of applyDiscount." })),
+        tool("s2", "Task", json!({ "description": "Check the rounding in the cart", "subagent_type": "Explore", "prompt": "Does the cart round?" })),
+        within("s1", haiku(json!([{ "type": "tool_use", "id": "g1", "name": "Grep", "input": { "pattern": "applyDiscount" } }]))),
+        within("s1", output("g1", "Found 3 files\nsrc/checkout.ts\nsrc/discount.ts\nsrc/cart.ts", false)),
+        within("s1", haiku(json!([{ "type": "text", "text": "Found three callers:\n\n- `src/checkout.ts` re-exports it\n- `src/cart.ts` calls it once per line item\n- `src/discount.ts` defines it" }]))),
+        within("s1", haiku(json!([{ "type": "tool_use", "id": "g2", "name": "Read", "input": { "file_path": "/work/shop/src/cart.ts" } }]))),
+        within("s2", haiku(json!([{ "type": "text", "text": "The cart rounds once, at the end." }]))),
+        output("s2", "The cart rounds once, at the end.", false),
+    ]);
     let streaming = opened(vec![
         init.clone(),
         user("Explain what the rate limiter in api/limits.ts does."),
@@ -889,6 +908,8 @@ fn claude_chat(out: PathBuf) {
         ("mention", opened(vec![init.clone()]), None, Some("type:fix the rounding in @che"), "checkout.test.ts"),
         // Two pasted pictures wait in the message box as chips, with a message under them.
         ("paste", opened(vec![init.clone()]), None, Some("paste:;paste:;type:what is in these?"), "Image 2"),
+        // The subagent's transcript in the side panel, pinned open even in a narrow tab.
+        ("subagent", subagent, None, Some("disclose:Ran 2 subagents;press:Open"), "Found three callers"),
     ];
     // Files for @-mentions, which the chat lists with git.
     for file in ["src/checkout.ts", "src/checkout.test.ts", "src/cart.ts", "api/limits.ts", "README.md"] {
@@ -896,7 +917,13 @@ fn claude_chat(out: PathBuf) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, "").unwrap();
     }
-    assert!(std::process::Command::new("git").arg("init").arg("-q").current_dir(&root).status().unwrap().success());
+    // A repo with a commit and a change since, which the side panel's Changes line counts.
+    let git = |args: &[&str]| assert!(std::process::Command::new("git").args(["-c", "user.name=Shop", "-c", "user.email=shop@example.com"]).args(args).current_dir(&root).status().unwrap().success());
+    git(&["init", "-q", "-b", "main"]);
+    std::fs::write(root.join("src/checkout.ts"), "export const a = 1;\nexport const b = 2;\nexport const c = 3;\n").unwrap();
+    git(&["add", "src", "api", "README.md"]);
+    git(&["commit", "-q", "-m", "Start"]);
+    std::fs::write(root.join("src/checkout.ts"), "export const a = 1;\nexport const c = 30;\nexport const d = 4;\nexport const e = 5;\n").unwrap();
 
     let manifest = serde_json::from_str(include_str!("../../../plugins/claude-chat/wings-plugin.json")).unwrap();
     let storage = out.join("fixture-storage-claude-chat");
@@ -931,7 +958,9 @@ fn claude_chat(out: PathBuf) {
             std::env::set_var("CHAT_EXIT", exit.map_or("", |(code, _)| code));
             std::env::set_var("CHAT_STDERR", exit.map_or("", |(_, said)| said));
         }
-        for width in [1000.0, 640.0] {
+        // The side panel is left out of a tab under 1,100 points, so a few scenes are drawn wider to show it.
+        let widths: &[f32] = if ["conversation", "work", "ask-bash"].contains(&name) { &[1280.0, 1000.0, 640.0] } else { &[1000.0, 640.0] };
+        for &width in widths {
             let args = (name == "long").then(|| json!({ "resume": LONG, "cwd": root.canonicalize().unwrap() }));
             let handle = cx
                 .open_offscreen_window(size(px(width), px(760.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, &source, args.as_ref(), cx)))
@@ -947,7 +976,7 @@ fn claude_chat(out: PathBuf) {
             };
             if let Some(act) = act {
                 // Once Claude Code has answered, the model picker shows.
-                until(&mut cx, "Resets");
+                until(&mut cx, "resets");
                 for act in act.split(';') {
                     match act.split_once(':') {
                         Some(("type", typed)) => cx.simulate_input(window, typed),

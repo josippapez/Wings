@@ -17,6 +17,9 @@ const REASON_KEPT: usize = 300;
 /// The most lines of an edit's diff the chat keeps, and the most of a written file's start.
 const DIFF_KEPT: usize = 40;
 const WRITE_KEPT: usize = 20;
+/// The most items kept of each subagent's own transcript: a subagent that searches a repository makes hundreds of tool
+/// calls, and only the end of them is read in a side panel. Older ones go, as the page couldn't draw them all anyway.
+pub const SUBAGENT_KEPT: usize = 200;
 
 #[derive(Debug, PartialEq)]
 pub enum Item {
@@ -264,15 +267,40 @@ pub struct Session {
     creating: Vec<(String, String, String)>,
     /// You asked Claude to stop, and the turn hasn't ended yet.
     stopping: bool,
+    /// What each subagent said and did, by the id of the tool call that started it, from the lines that carry it as their
+    /// `parent_tool_use_id`. Each is a session of its own, so it is drawn with the same code as this one.
+    pub subagents: HashMap<String, Session>,
+    /// The time (ms) of the line being heard, which the page sets before each, as a session has no clock of its own.
+    pub now: u64,
+    /// When a subagent's first and last line came (ms), for how long it ran.
+    pub started: u64,
+    pub last: u64,
+    /// The model named on the last message of Claude's heard, like `claude-haiku-5-5`.
+    pub reported_model: Option<String>,
 }
 
 impl Session {
     /// Takes in one line Claude Code printed, or one transcript entry.
     pub fn hear(&mut self, line: &Value) {
-        // A subagent's own messages stay inside its tool call.
+        // A subagent's own messages are kept apart, under the tool call that started it, and stay out of the conversation.
         if !line["parent_tool_use_id"].is_null() {
+            if let Some(parent) = line["parent_tool_use_id"].as_str() {
+                let now = self.now;
+                let sub = self.subagents.entry(parent.to_owned()).or_default();
+                (sub.now, sub.last) = (now, now);
+                if sub.started == 0 {
+                    sub.started = now;
+                }
+                sub.hear_own(line);
+                let extra = sub.items.len().saturating_sub(SUBAGENT_KEPT);
+                sub.items.drain(..extra);
+            }
             return;
         }
+        self.hear_own(line);
+    }
+
+    fn hear_own(&mut self, line: &Value) {
         match line["type"].as_str().unwrap_or_default() {
             "system" if line["subtype"] == "init" => {
                 self.id = line["session_id"].as_str().map(str::to_owned);
@@ -448,6 +476,9 @@ impl Session {
     }
 
     fn assistant(&mut self, message: &Value) {
+        if let Some(model) = message["model"].as_str() {
+            self.reported_model = Some(model.to_owned());
+        }
         // What the window holds now: everything sent in, cached or not, and what came out.
         let usage = &message["usage"];
         let used: u64 = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens"].iter().filter_map(|key| usage[*key].as_u64()).sum();
@@ -855,6 +886,23 @@ impl Session {
     }
 }
 
+/// A model as a person says it: `claude-haiku-5-5` is "Haiku 5.5", `claude-opus-4-1-20250805` is "Opus 4.1". A name that
+/// isn't of that shape is shown as it is.
+pub fn model_name(model: &str) -> String {
+    let mut parts = model.strip_prefix("claude-").unwrap_or(model).split('-').filter(|part| !(part.len() == 8 && part.bytes().all(|b| b.is_ascii_digit())));
+    let family = parts.next().unwrap_or_default();
+    let version: Vec<&str> = parts.collect();
+    if family.is_empty() || version.iter().any(|part| !part.bytes().all(|b| b.is_ascii_digit())) {
+        return model.to_owned();
+    }
+    let mut name: String = family.chars().take(1).flat_map(char::to_uppercase).chain(family.chars().skip(1)).collect();
+    if !version.is_empty() {
+        name.push(' ');
+        name.push_str(&version.join("."));
+    }
+    name
+}
+
 /// A running tool call in a few words, as Claude Code's own status line puts it: "Running pnpm test", "Calling wings".
 fn doing(tool: &str, summary: &str) -> String {
     let file = summary.rsplit('/').next().unwrap_or(summary);
@@ -1100,6 +1148,51 @@ mod tests {
         let mut denied = heard(r#"{"type":"control_request","request_id":"r3","request":{"subtype":"can_use_tool","tool_name":"Write","input":{}}}"#);
         let deny: Value = serde_json::from_str(&denied.deny("r3", "  ").unwrap()).unwrap();
         assert_eq!(deny["response"]["response"], json!({ "behavior": "deny", "message": "The user said no to this in the chat." }));
+    }
+
+    #[test]
+    fn a_subagents_lines_are_kept_under_its_call_and_stay_out_of_the_conversation() {
+        let mut session = Session::default();
+        session.now = 1_000;
+        for line in [
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Task","input":{"description":"Survey"}}]}}"#,
+            r#"{"type":"assistant","parent_tool_use_id":"toolu_1","message":{"model":"claude-haiku-5-5","content":[{"type":"tool_use","id":"toolu_2","name":"Bash","input":{"command":"ls"}}]}}"#,
+            r#"{"type":"user","parent_tool_use_id":"toolu_1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_2","content":"a.txt"}]}}"#,
+            r#"{"type":"assistant","parent_tool_use_id":"toolu_1","message":{"content":[{"type":"text","text":"Found a.txt"}]}}"#,
+        ] {
+            session.hear(&serde_json::from_str(line).unwrap());
+            session.now += 500;
+        }
+        assert_eq!(session.items.len(), 1);
+        let sub = &session.subagents["toolu_1"];
+        assert_eq!(sub.items.len(), 2);
+        assert!(matches!(&sub.items[0], Item::Tool(Tool { output: Some((out, false)), .. }) if out == "a.txt"));
+        assert_eq!(sub.items[1], Item::Text("Found a.txt".into()));
+        assert_eq!((sub.started, sub.last), (1_500, 2_500));
+        assert_eq!(sub.reported_model.as_deref(), Some("claude-haiku-5-5"));
+        // Its words never reach the conversation's own state.
+        assert!(session.live.is_empty() && session.reported_model.is_none());
+    }
+
+    #[test]
+    fn a_subagents_list_keeps_only_its_newest_items() {
+        let mut session = Session::default();
+        for n in 0..SUBAGENT_KEPT + 30 {
+            let line = json!({ "type": "assistant", "parent_tool_use_id": "toolu_1", "message": { "content": [{ "type": "text", "text": format!("step {n}") }] } });
+            session.hear(&line);
+        }
+        let sub = &session.subagents["toolu_1"];
+        assert_eq!(sub.items.len(), SUBAGENT_KEPT);
+        assert_eq!(sub.items[0], Item::Text("step 30".into()));
+        assert_eq!(sub.items.last(), Some(&Item::Text(format!("step {}", SUBAGENT_KEPT + 29))));
+    }
+
+    #[test]
+    fn a_model_is_named_as_a_person_says_it() {
+        assert_eq!(model_name("claude-haiku-5-5"), "Haiku 5.5");
+        assert_eq!(model_name("claude-opus-4-1-20250805"), "Opus 4.1");
+        assert_eq!(model_name("claude-sonnet-5"), "Sonnet 5");
+        assert_eq!(model_name("gpt-4o"), "gpt-4o");
     }
 
     #[test]
