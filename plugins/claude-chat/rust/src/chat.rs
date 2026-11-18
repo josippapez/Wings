@@ -18,6 +18,8 @@ use wings_plugin::{
 use crate::{
     images,
     commands,
+    fork::{self, Launch},
+    fork_view,
     mentions::{self, Files},
     plugins, prefs,
     composer::{self, Escape},
@@ -114,6 +116,12 @@ pub struct Chat {
     pub subagent: Option<String>,
     /// The background task whose output is open in a dialog, by its id.
     pub task: Option<String>,
+    /// The folders you added with /add-dir, which Claude Code is let into each time it starts here, and the tab keeps.
+    pub dirs: Vec<String>,
+    /// The message the Fork from here dialog is about, by its uuid.
+    pub fork_from: Option<String>,
+    /// The background agent a message is being written to, by its id, and the message.
+    pub message_to: Option<(String, String)>,
     /// The lines added and removed in the working tree since the last commit, and the branch it is on.
     pub changes: Option<(u64, u64)>,
     pub branch: Option<String>,
@@ -159,6 +167,9 @@ thread_local! {
         doing: (String::new(), 0),
         subagent: None,
         task: None,
+        dirs: Vec::new(),
+        fork_from: None,
+        message_to: None,
         changes: None,
         branch: None,
         terminals: Vec::new(),
@@ -202,6 +213,7 @@ async fn open() {
     let args = host::view_args().unwrap_or(Value::Null);
     let saved = host::call("tabState", json!({})).await.unwrap_or(Value::Null);
     let resume = saved["sessionId"].as_str().or(args["resume"].as_str()).map(str::to_owned);
+    let dirs: Vec<String> = saved["dirs"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect();
     let cwd = match args["cwd"].as_str() {
         Some(cwd) => cwd.to_owned(),
         None => match host::call("project", json!({})).await.ok().and_then(|project| project["path"].as_str().map(str::to_owned)) {
@@ -214,13 +226,19 @@ async fn open() {
         c.folder = basename(&cwd).to_owned();
         c.cwd = cwd;
         c.program = program;
+        c.dirs = dirs;
     });
     launch(resume);
 }
 
 /// Starts Claude Code anew in the tab, going on with `resume` or in a new session, in place of the one running.
 fn launch(resume: Option<String>) {
-    let (run, cwd, program, start_mode) = with(|c| {
+    launch_with(resume, Launch::default());
+}
+
+/// `launch`, as a copy of the session when `how` says so, and with the folders you added.
+pub fn launch_with(resume: Option<String>, how: Launch) {
+    let (run, cwd, program, start_mode, dirs) = with(|c| {
         if let Some(input) = c.input.take() {
             input.stop();
         }
@@ -240,8 +258,10 @@ fn launch(resume: Option<String>) {
         c.drafts.clear();
         c.subagent = None;
         c.task = None;
+        c.fork_from = None;
+        c.message_to = None;
         c.moving = false;
-        (c.run, c.cwd.clone(), c.program.clone(), c.session.start_mode.clone())
+        (c.run, c.cwd.clone(), c.program.clone(), c.session.start_mode.clone(), c.dirs.clone())
     });
     load_files(run, cwd.clone());
     load_git(run, cwd.clone());
@@ -255,18 +275,20 @@ fn launch(resume: Option<String>) {
                 });
             }
             with(|c| c.session.id = Some(id.clone()));
-            drop(host::call("setTabState", json!({ "state": { "sessionId": id } })));
         }
+        save_tab();
         // Each value joined to its flag: Wings passes a program nothing else.
         let mut args: Vec<String> = ["-p", "--input-format=stream-json", "--output-format=stream-json", "--verbose", "--include-partial-messages", "--permission-prompt-tool=stdio", "--replay-user-messages", "--prompt-suggestions=true"]
             .map(str::to_owned)
             .to_vec();
-        args.extend(resume.as_ref().map(|id| format!("--resume={id}")));
+        args.extend(fork::flags(resume.as_deref(), &how, &dirs));
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         // Under the account the session's transcript is in, which a plain `claude --resume` would not find if it isn't the
         // default one; a new chat gets its project's, as a terminal there does.
         let account = host::Account::of_session(resume.as_deref());
-        let process = host::spawn_as(&account, &program, &args, &cwd, &Session::opening(start_mode.as_deref()), move |line| hear(run, line));
+        // A fork before a message asks for its rewind as it starts, as the opening requests do: the fork is a new session.
+        let opening = Session::opening(start_mode.as_deref()) + &with(|c| fork::opening(&how, &c.session.prompts));
+        let process = host::spawn_as(&account, &program, &args, &cwd, &opening, move |line| hear(run, line));
         let current = with(|c| {
             if c.run != run {
                 return false;
@@ -304,6 +326,12 @@ fn launch(resume: Option<String>) {
             report_agent();
         }
     });
+}
+
+/// What the tab keeps for when it opens again: the session, and the folders you added.
+fn save_tab() {
+    let (id, dirs) = with(|c| (c.session.id.clone(), c.dirs.clone()));
+    drop(host::call("setTabState", json!({ "state": { "sessionId": id, "dirs": dirs } })));
 }
 
 /// Lists the project's files for @-mentions: git's own list, so ignored files stay out. Done here, not by Claude Code's
@@ -430,8 +458,8 @@ fn hear(run: u32, line: &Value) {
             drop(host::notify(&title, &body));
         }
     }
-    if let Some(id) = named {
-        drop(host::call("setTabState", json!({ "state": { "sessionId": id } })));
+    if named.is_some() {
+        save_tab();
     }
     // The sidebar's Chats list reads sessions from their transcripts, which Claude Code has written by the end of a turn.
     if ended {
@@ -521,6 +549,10 @@ pub fn send() {
     if with(|c| c.images.is_empty() && exits(&c.draft)) {
         drop(host::close_tab());
         return;
+    }
+    // /add-dir starts Claude Code again with the folder, and isn't sent as a message.
+    if let Some(path) = with(|c| fork::add_dir_command(&c.draft).filter(|_| c.images.is_empty()).map(str::to_owned)) {
+        return fork_view::add_dir(path);
     }
     write(|c, n| {
         let text = c.draft.trim().to_owned();
@@ -798,10 +830,12 @@ pub fn insert_mention(path: &str) {
 }
 
 pub fn new_chat() {
+    with(|c| c.dirs.clear());
     launch(None);
 }
 
 pub fn resume(id: &str) {
+    with(|c| c.dirs.clear());
     launch(Some(id.to_owned()));
 }
 

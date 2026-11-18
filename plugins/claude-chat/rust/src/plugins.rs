@@ -21,6 +21,9 @@ pub const SERVERS: &str = "plugins-servers";
 pub const RELOAD: &str = "plugins-reload";
 const PLUGIN_TOGGLE: &str = "plugin-toggle-";
 const SERVER_TOGGLE: &str = "server-toggle-";
+const SERVER_RECONNECT: &str = "server-reconnect-";
+const SERVER_AUTH: &str = "server-auth-";
+const SERVER_SIGN_OUT: &str = "server-sign-out-";
 
 /// Which list the dialog leads with: `/plugins` and `/plugin` open it on the plugins, `/mcp` on the servers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -233,9 +236,16 @@ pub struct Server {
     pub tools: Option<usize>,
     /// Why it failed.
     pub error: Option<String>,
+    /// How it is reached: `stdio`, `http`, `sse`, or `claudeai-proxy` for claude.ai's own.
+    pub transport: String,
 }
 
 impl Server {
+    /// It is signed in to in a browser, which Claude Code starts: an http or sse server, not claude.ai's own.
+    pub fn signs_in(&self) -> bool {
+        matches!(self.transport.as_str(), "http" | "sse")
+    }
+
     /// The plugin it comes with, and its own name, for a plugin's.
     pub fn of_plugin(&self) -> Option<(&str, &str)> {
         self.name.strip_prefix("plugin:")?.split_once(':')
@@ -246,11 +256,19 @@ impl Server {
     }
 }
 
-/// What a toggle changed, to put back if Claude Code refuses it.
+/// What a toggle changed, to put back if Claude Code refuses it. A sign-in changes nothing until it is answered.
 #[derive(Debug)]
 enum Undo {
     Plugin { id: String, on: bool, set: Option<bool>, unapplied: bool },
     Server { name: String, status: String },
+    Auth { name: String },
+}
+
+/// The page Claude Code gave to sign in to a server, which a click opens.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Auth {
+    pub server: String,
+    pub url: String,
 }
 
 #[derive(Debug, Default)]
@@ -269,12 +287,14 @@ pub struct Plugins {
     set: BTreeMap<String, bool>,
     /// The toggles not answered yet, by request.
     pending: Vec<(String, Undo)>,
+    /// The sign-in page of the server you asked to sign in to, until you read the servers again.
+    pub auth: Option<Auth>,
 }
 
 impl Plugins {
     /// The requests that fill the dialog: your settings, for the plugins, and the servers' status. Both only read.
     pub fn ask(&mut self) -> String {
-        self.error = None;
+        (self.error, self.auth) = (None, None);
         [request(SETTINGS, json!({ "subtype": "get_settings" })), request(SERVERS, json!({ "subtype": "mcp_status" }))].concat()
     }
 
@@ -299,6 +319,44 @@ impl Plugins {
         self.pending.push((request_id.clone(), Undo::Server { name: name.to_owned(), status: server.status.clone() }));
         server.status = if on { "pending" } else { "disabled" }.to_owned();
         Some(request(&request_id, json!({ "subtype": "mcp_toggle", "serverName": name, "enabled": on })))
+    }
+
+    /// The one request that reconnects the server `name`, which failed, the `n`th write. None for a server that didn't fail.
+    pub fn reconnect(&mut self, name: &str, n: u32) -> Option<String> {
+        let server = self.servers.as_mut()?.iter_mut().find(|server| server.name == name && server.status == "failed")?;
+        let request_id = format!("{SERVER_RECONNECT}{n}");
+        self.pending.push((request_id.clone(), Undo::Server { name: name.to_owned(), status: server.status.clone() }));
+        server.status = "pending".to_owned();
+        Some(request(&request_id, json!({ "subtype": "mcp_reconnect", "serverName": name })))
+    }
+
+    /// The one request that has Claude Code start the sign-in to the server `name`, which wants one, the `n`th write. It
+    /// answers with the page to sign in at, which a second click opens. None for any other server.
+    pub fn authenticate(&mut self, name: &str, n: u32) -> Option<String> {
+        self.servers.iter().flatten().find(|server| server.name == name && server.status == "needs-auth" && server.signs_in())?;
+        let request_id = format!("{SERVER_AUTH}{n}");
+        self.pending.push((request_id.clone(), Undo::Auth { name: name.to_owned() }));
+        (self.error, self.auth) = (None, None);
+        Some(request(&request_id, json!({ "subtype": "mcp_authenticate", "serverName": name })))
+    }
+
+    /// The one request that signs the connected server `name` out, the `n`th write. None for any other server.
+    pub fn sign_out(&mut self, name: &str, n: u32) -> Option<String> {
+        let server = self.servers.as_mut()?.iter_mut().find(|server| server.name == name && server.status == "connected" && server.signs_in())?;
+        let request_id = format!("{SERVER_SIGN_OUT}{n}");
+        self.pending.push((request_id.clone(), Undo::Server { name: name.to_owned(), status: server.status.clone() }));
+        server.status = "needs-auth".to_owned();
+        Some(request(&request_id, json!({ "subtype": "mcp_clear_auth", "serverName": name })))
+    }
+
+    /// Takes in Claude Code's answer to the sign-in of `name`: the page to open, or none when it needs none.
+    fn signing_in(&mut self, name: &str, answer: &Value) {
+        match answer["authUrl"].as_str() {
+            Some(url) if url.starts_with("https://") => self.auth = Some(Auth { server: name.to_owned(), url: url.to_owned() }),
+            Some(_) => self.error = Some("Claude Code's sign-in address isn't https, so it isn't opened here. Sign in with /mcp in Claude Code in a terminal.".to_owned()),
+            // It is signed in already, and only a new read says so.
+            None => self.stale = true,
+        }
     }
 
     /// The request that reloads the plugins, which applies what was turned on or off. Not while Claude works: what it
@@ -331,6 +389,7 @@ impl Plugins {
                     self.stale |= connecting;
                 }
                 (None, Undo::Plugin { .. }) => {}
+                (None, Undo::Auth { name }) => self.signing_in(&name, answer),
             }
             return true;
         }
@@ -375,6 +434,7 @@ impl Plugins {
                     server.status = status;
                 }
             }
+            Undo::Auth { .. } => {}
         }
     }
 }
@@ -430,6 +490,7 @@ fn servers_of(list: &Value) -> Vec<Server> {
                 scope: server["scope"].as_str().unwrap_or_default().to_owned(),
                 tools: server["tools"].as_array().map(Vec::len),
                 error: server["error"].as_str().map(str::to_owned),
+                transport: server["transport"].as_str().unwrap_or_default().to_owned(),
             })
         })
         .collect()
@@ -549,6 +610,97 @@ mod tests {
         discover.installed("api-guard@claude-plugins-official", Err("boom".into()));
         assert_eq!((discover.error.as_deref(), discover.installing.as_ref(), discover.done.as_ref()), (Some("boom"), None, None));
         assert!(!discover.is_installed("api-guard@claude-plugins-official"));
+    }
+
+    /// Servers as `mcp_status` lists them (claude 2.1.327), cut down.
+    fn with_servers() -> Plugins {
+        let mut plugins = Plugins::default();
+        let servers = json!([
+            { "name": "broken", "status": "failed", "scope": "user", "transport": "stdio", "error": "spawn failed" },
+            { "name": "issues", "status": "needs-auth", "scope": "user", "transport": "http" },
+            { "name": "tickets", "status": "connected", "scope": "project", "transport": "http" },
+            { "name": "notes", "status": "connected", "scope": "user", "transport": "stdio" },
+            { "name": "claude.ai Drive", "status": "needs-auth", "scope": "claudeai", "transport": "claudeai-proxy" },
+        ]);
+        plugins.answered(SERVERS, &json!({ "subtype": "success", "request_id": SERVERS, "response": { "mcpServers": servers } }));
+        plugins
+    }
+
+    fn status(plugins: &Plugins, name: &str) -> String {
+        plugins.servers.iter().flatten().find(|server| server.name == name).map(|server| server.status.clone()).unwrap_or_default()
+    }
+
+    fn sent(line: &str) -> Value {
+        assert_eq!(line.matches('\n').count(), 1, "one request for the one click");
+        serde_json::from_str(line.trim()).unwrap()
+    }
+
+    #[test]
+    fn reconnect_is_one_request_for_a_server_that_failed() {
+        let mut plugins = with_servers();
+        let line = sent(&plugins.reconnect("broken", 7).expect("a request"));
+        assert_eq!((line["request_id"].as_str(), &line["request"]), (Some("server-reconnect-7"), &json!({ "subtype": "mcp_reconnect", "serverName": "broken" })));
+        assert_eq!(status(&plugins, "broken"), "pending");
+        for name in ["issues", "tickets", "notes", "nothere"] {
+            assert_eq!(plugins.reconnect(name, 8), None, "{name}");
+        }
+        // Claude Code reconnects, and only a new read says how it went.
+        plugins.answered("server-reconnect-7", &json!({ "subtype": "success", "request_id": "server-reconnect-7", "response": {} }));
+        assert!(plugins.stale);
+    }
+
+    #[test]
+    fn a_refused_reconnect_puts_the_status_back_and_says_why() {
+        let mut plugins = with_servers();
+        plugins.reconnect("broken", 3);
+        plugins.answered("server-reconnect-3", &json!({ "subtype": "error", "request_id": "server-reconnect-3", "error": "Server not found: broken" }));
+        assert_eq!((status(&plugins, "broken").as_str(), plugins.error.as_deref()), ("failed", Some("Server not found: broken")));
+    }
+
+    #[test]
+    fn sign_in_is_one_request_for_an_http_server_that_wants_it_and_its_page_comes_back_to_open() {
+        let mut plugins = with_servers();
+        let line = sent(&plugins.authenticate("issues", 4).expect("a request"));
+        assert_eq!((line["request_id"].as_str(), &line["request"]), (Some("server-auth-4"), &json!({ "subtype": "mcp_authenticate", "serverName": "issues" })));
+        // Not a server that is connected, one of claude.ai's own, a stdio one or one that isn't there.
+        for name in ["tickets", "claude.ai Drive", "broken", "nothere"] {
+            assert_eq!(plugins.authenticate(name, 5), None, "{name}");
+        }
+        let answer = json!({ "authUrl": "https://auth.example.com/authorize?state=x", "requiresUserAction": true, "callbackExpected": true, "callbackPort": 63305 });
+        plugins.answered("server-auth-4", &json!({ "subtype": "success", "request_id": "server-auth-4", "response": answer }));
+        assert_eq!(plugins.auth, Some(Auth { server: "issues".into(), url: "https://auth.example.com/authorize?state=x".into() }));
+        // Reading the servers again is what comes next, so the page goes.
+        plugins.ask();
+        assert_eq!(plugins.auth, None);
+    }
+
+    #[test]
+    fn a_sign_in_page_that_is_not_https_is_not_offered_and_one_with_no_page_asks_for_a_new_read() {
+        let mut plugins = with_servers();
+        plugins.authenticate("issues", 1);
+        let answer = json!({ "authUrl": "http://127.0.0.1:18765/authorize", "requiresUserAction": true });
+        plugins.answered("server-auth-1", &json!({ "subtype": "success", "request_id": "server-auth-1", "response": answer }));
+        assert!(plugins.auth.is_none() && plugins.error.as_deref().is_some_and(|why| why.contains("isn't https")));
+        plugins.error = None;
+        plugins.authenticate("issues", 2);
+        plugins.answered("server-auth-2", &json!({ "subtype": "success", "request_id": "server-auth-2", "response": {} }));
+        assert!(plugins.auth.is_none() && plugins.stale && plugins.error.is_none());
+        plugins.authenticate("issues", 3);
+        plugins.answered("server-auth-3", &json!({ "subtype": "error", "request_id": "server-auth-3", "error": "Server type \"stdio\" does not support OAuth authentication" }));
+        assert!(plugins.error.as_deref().is_some_and(|why| why.contains("does not support OAuth")));
+    }
+
+    #[test]
+    fn sign_out_is_one_request_for_a_connected_http_server_and_shows_it_needing_sign_in() {
+        let mut plugins = with_servers();
+        let line = sent(&plugins.sign_out("tickets", 6).expect("a request"));
+        assert_eq!((line["request_id"].as_str(), &line["request"]), (Some("server-sign-out-6"), &json!({ "subtype": "mcp_clear_auth", "serverName": "tickets" })));
+        assert_eq!(status(&plugins, "tickets"), "needs-auth");
+        for name in ["notes", "issues", "broken", "claude.ai Drive"] {
+            assert_eq!(plugins.sign_out(name, 9), None, "{name}");
+        }
+        plugins.answered("server-sign-out-6", &json!({ "subtype": "error", "request_id": "server-sign-out-6", "error": "Cannot clear auth" }));
+        assert_eq!(status(&plugins, "tickets"), "connected");
     }
 
     #[test]

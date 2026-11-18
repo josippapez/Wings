@@ -8,6 +8,8 @@ use serde_json::{Map, Value, json};
 use wings_plugin::format::parse_time;
 
 use crate::{
+    actions::Ops,
+    elicitation::Elicitation,
     images,
     commands::Commands,
     notices,
@@ -152,7 +154,7 @@ pub struct Prompt {
     pub at: usize,
     pub uuid: String,
     /// The transcript entry it follows, for one read from the transcript.
-    parent: Option<String>,
+    pub(crate) parent: Option<String>,
 }
 
 /// The rewind dialog, while it is open: the message it goes back to before.
@@ -417,6 +419,8 @@ pub struct Session {
     pub thought_since: u64,
     /// The dialogs and answers of `/status`, `/export` and `/btw`.
     pub cmds: Commands,
+    /// Commands you moved to the background, and what MCP servers ask you (`actions.rs`, `elicitation.rs`).
+    pub ops: Ops,
 }
 
 impl Session {
@@ -536,10 +540,22 @@ impl Session {
                     answer: None,
                 }));
             }
+            // An MCP server asks you for details or to open a link, and Claude Code waits for the answer.
+            "control_request" if line["request"]["subtype"] == "elicitation" => {
+                if let Some(asked) = Elicitation::parse(line) {
+                    if !std::mem::replace(&mut self.asked_you, true) {
+                        self.alerts.push((format!("{} asks you", asked.server), cut(&asked.message, SUMMARY_KEPT)));
+                    }
+                    self.ops.elicitations.push(asked);
+                }
+            }
             // Claude Code no longer needs the answer: the turn was stopped, or another client answered.
             "control_cancel_request" => {
                 if let Some(ask) = line["request_id"].as_str().and_then(|id| self.pending(id)) {
                     ask.answer = Some(false);
+                }
+                if let Some(id) = line["request_id"].as_str() {
+                    self.withdraw_elicitation(id);
                 }
             }
             "result" => {
@@ -672,7 +688,13 @@ impl Session {
         if id == plugins::RELOAD && response["subtype"] == "success" {
             self.commands = commands(&answer["commands"]);
         }
-        if self.plugins.answered(id, response) || self.answered_rewind(id, response) || self.answered_task(id, response) || self.setup.answered(id, response) || self.cmds.answered(id, response) {
+        if self.plugins.answered(id, response)
+            || self.ops.answered(id, response, &mut self.items)
+            || self.answered_rewind(id, response)
+            || self.answered_task(id, response)
+            || self.setup.answered(id, response)
+            || self.cmds.answered(id, response)
+        {
             return;
         }
         if response["subtype"] == "error" && (id == USAGE_VIEW || id == CONTEXT_VIEW) {

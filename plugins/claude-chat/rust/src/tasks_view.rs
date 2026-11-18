@@ -60,6 +60,7 @@ fn task_row(task: &Task) -> Node {
         .prop("align", "center")
         .key(task.id.as_str())
         .child(stack().prop("grow", true).child(line))
+        .maybe(crate::actions_view::message_button(task))
         .child(button("Stop", "ghost", task.stopping, move || chat::stop_task(&id)).prop("size", "sm").prop("title", "Stop this task"))
 }
 

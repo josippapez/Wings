@@ -75,6 +75,8 @@ fn chat_page(c: &Chat) -> Node {
         .maybe(crate::setup_view::dialog(c))
         .maybe(crate::tasks_view::dialog(c))
         .maybe(crate::rewind_view::dialog(c))
+        .maybe(crate::fork_view::dialog(c))
+        .maybe(crate::actions_view::message_dialog(c))
         .maybe(crate::usage_view::dialog(c))
         .maybe(crate::pictures_view::dialog_of(c))
         .maybe(crate::status_view::dialog(c))
@@ -112,6 +114,7 @@ fn header(c: &Chat) -> Node {
         .prop("gap", "xs")
         .prop("align", "center")
         .maybe(terminal)
+        .maybe(crate::fork_view::header_button(c))
         .child(icon_button("Past sessions", &HISTORY, chat::open_past))
         .child(icon_button("New chat", &PLUS, chat::new_chat))
         .child(icon_button("Settings", &SETTINGS, chat::open_settings));
@@ -169,6 +172,8 @@ fn conversation(c: &Chat) -> Node {
     let earlier = cut.then(|| muted("Older messages aren't shown here. Open the session in a terminal to see all of it.").key("earlier"));
     let more = from > 0 && !cut;
     let mut nodes: Vec<Node> = earlier.into_iter().chain(blocks).collect();
+    // What an MCP server asks you waits at the foot, where Claude's own questions do.
+    nodes.extend(crate::elicitation_view::cards(c));
     if !c.session.live.is_empty() {
         let live = markdown(&c.session.live).prop("links", true);
         let live = if live.count() > BUDGET / 4 { text(truncate(&c.session.live, 20_000)) } else { live };
@@ -183,7 +188,7 @@ fn conversation(c: &Chat) -> Node {
                 .child(button("Stop", "ghost", false, chat::stop).prop("size", "sm")),
             None => {
                 let what = if c.doing.0.is_empty() { "Working" } else { c.doing.0.as_str() };
-                row().child(text(what).prop("tone", "muted").prop("shimmer", true).prop("since", c.doing.1))
+                row().prop("gap", "s").prop("align", "center").child(text(what).prop("tone", "muted").prop("shimmer", true).prop("since", c.doing.1)).maybe(crate::actions_view::status_button(c))
             }
         };
         // While subagents of the turn run, how many, over the status line.
@@ -227,7 +232,7 @@ fn plain(at: usize, item: &Item) -> Node {
 /// Claude is waiting on you, or on a tool it started.
 /// A card waits for your answer, so the status line would only repeat it.
 fn asking(c: &Chat) -> bool {
-    c.session.items.iter().any(|item| matches!(item, Item::Ask(Ask { answer: None, .. })))
+    c.session.items.iter().any(|item| matches!(item, Item::Ask(Ask { answer: None, .. }))) || !c.session.ops.elicitations.is_empty()
 }
 
 /// Your message on the right, as chat apps show it, and never wider than the column less a margin on its left: a long one
@@ -238,7 +243,7 @@ fn bubble(card: Node, action: Option<Node>) -> Node {
 
 /// An item of the conversation, or with `own` false, of a subagent's, whose messages can't be rewound.
 fn item_node(at: usize, item: &Item, c: &Chat, own: bool) -> Option<Node> {
-    let rewind = || own.then(|| crate::rewind_view::button(at, c)).flatten();
+    let rewind = || own.then(|| crate::fork_view::message_actions(at, c)).flatten();
     let node = match item {
         Item::User(said) => bubble(card().child(text(said.as_str())), rewind()),
         Item::UserImages(said, pictures) => {
@@ -351,7 +356,8 @@ fn step(tool: &Tool, opened: bool, cap: Option<usize>, c: &Chat) -> Node {
         .child(text(tool.name.as_str()).prop("weight", "medium"))
         .child(text(tool.summary.as_str()).prop("mono", true).prop("size", "small").prop("tone", "muted").prop("truncate", true).prop("grow", true))
         .children(facts(tool))
-        .maybe(open_subagent(tool, c));
+        .maybe(open_subagent(tool, c))
+        .maybe(crate::actions_view::background_button(tool, c));
     // What an edit or a write printed is only "updated successfully", which the diff already says.
     let label = match (&tool.detail, output) {
         (_, Some((_, true))) => Some("Error"),
@@ -758,6 +764,7 @@ fn side(c: &Chat) -> Vec<Node> {
     }
     sections.push(limits);
     sections.extend(crate::tasks_view::section(c));
+    sections.extend(crate::fork_view::folders(c));
     sections.extend(subagents(c));
     // A stack with nothing in it takes room: leave out the sections that have nothing.
     let sections: Vec<Node> = sections.into_iter().filter(|section| section.count() > 1).collect();

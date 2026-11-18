@@ -11,12 +11,22 @@
 #[cfg(any(feature = "main", feature = "chat", test))]
 pub const SESSION_SAVED: &str = "session-saved";
 
+mod actions;
+#[cfg(feature = "chat")]
+mod actions_view;
 #[cfg(feature = "chat")]
 mod chat;
 mod composer;
 mod commands;
 #[cfg(any(feature = "chat", test))]
 mod copy;
+mod elicitation;
+#[cfg(feature = "chat")]
+mod elicitation_view;
+#[cfg(any(feature = "chat", test))]
+mod fork;
+#[cfg(feature = "chat")]
+mod fork_view;
 #[cfg(any(feature = "main", all(test, not(feature = "chat"))))]
 mod main_frame;
 mod images;

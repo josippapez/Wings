@@ -1108,7 +1108,51 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         user("What's left on the checkout work?"),
         text("ABC-12 is done: the discount rounds in cents now. ABC-14 still needs its tests (`ABC-14` on the board), and the dev server runs at http://localhost:5173 if you want to try the cart.\n\n- UTF-8 handling is unchanged\n- ABC-99 was never filed"),
     ]);
-    let scenes: [Scene; 53] = [
+    // /add-dir checks the folder with `test -d`, so the scene adds one that is there.
+    let add_dir = format!("type:/add-dir {}/api;keys:enter", root.canonicalize().unwrap().display());
+    // /mcp with a server that wants a sign-in in a browser, next to the one that failed and the one that is connected.
+    let mut signed_out: Vec<serde_json::Value> = vec![init.clone()];
+    signed_out.extend(include_str!("../../../plugins/claude-chat/rust/tests/plugins.jsonl").lines().map(|line| {
+        let mut line: serde_json::Value = serde_json::from_str(line).unwrap();
+        if line["response"]["request_id"] == "plugins-servers" {
+            line["response"]["response"]["mcpServers"].as_array_mut().unwrap().push(json!({ "name": "issues", "status": "needs-auth", "scope": "user", "transport": "http" }));
+        }
+        line
+    }));
+    let signed_out = opened(signed_out);
+    // A server asks for details in the middle of a turn: a form with a choice, a number, a text and a box.
+    let elicited = opened(vec![
+        init.clone(),
+        user("Order me an ice cream from the shop."),
+        json!({ "type": "system", "subtype": "session_state_changed", "state": "running" }),
+        tool("o1", "mcp__shop__order", json!({ "item": "ice cream" })),
+        json!({ "type": "control_request", "request_id": "e1", "request": { "subtype": "elicitation", "mcp_server_name": "shop", "message": "Pick a flavour and how many scoops.", "mode": "form",
+            "requested_schema": { "type": "object", "required": ["flavour"], "properties": {
+                "flavour": { "type": "string", "title": "Flavour", "enum": ["vanilla", "mint", "chocolate"] },
+                "scoops": { "type": "integer", "title": "Scoops", "default": 2 },
+                "note": { "type": "string", "title": "Note", "description": "Anything the shop should know." },
+                "cone": { "type": "boolean", "title": "In a cone" } },
+            }, "property_order": ["flavour", "scoops", "note", "cone"] } }),
+    ]);
+    // A command Claude waits on, which a button moves to the background.
+    let running = opened(vec![
+        init.clone(),
+        json!({ "type": "system", "subtype": "session_state_changed", "state": "running" }),
+        user("Run the whole test suite."),
+        tool("rb1", "Bash", json!({ "command": "pnpm test --run", "description": "Run the whole test suite" })),
+    ]);
+    // A background agent that runs, which a Message button reaches through Claude.
+    let agent = opened(vec![
+        init.clone(),
+        user("Have an agent audit the discount code in the background."),
+        tool("a1", "Agent", json!({ "description": "Audit the discount code", "subagent_type": "general-purpose", "run_in_background": true, "prompt": "Audit the discount code." })),
+        json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": [{ "task_id": "a4443e71dac390806", "run_id": "run-3", "task_type": "local_agent", "subagent_type": "general-purpose", "description": "Audit the discount code" }] }),
+        output("a1", "Async agent launched successfully. The agent is working in the background.", false),
+        text("The agent audits the discount code in the background."),
+        json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 9_400, "num_turns": 2, "result": "", "total_cost_usd": 0.05 }),
+    ]);
+    let (worked_again, rewound_again) = (worked.clone(), rewound.clone());
+    let scenes: [Scene; 60] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -1196,6 +1240,17 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         ("links", linked, None, None, "never filed"),
         // The terminal Claude opened, live in the side panel with what it runs and buttons to open it as a tab and close it.
         ("terminal", built, None, None, "beside the chat"),
+        // The button beside your message forks before it, and asks first what that does.
+        ("fork-from", rewound_again, None, Some("press:Fork from here"), "Start a new chat from this session"),
+        // /add-dir restarts the chat with the folder, which the side panel lists with a Remove.
+        ("folder", worked_again, None, Some(add_dir.as_str()), "Folders"),
+        // /mcp offers Reconnect on the server that failed, Sign in on the one that wants it and Sign out on a signed-in one.
+        ("mcp-actions", signed_out.clone(), None, Some("type:/mcp;keys:enter"), "Reconnect"),
+        // Sign in has Claude Code start it, and its answer is the page to open: the site is shown before the button opens it.
+        ("mcp-sign-in", signed_out, None, Some("type:/mcp;keys:enter;press:Sign in"), "Open sign-in page"),
+        ("elicitation", elicited, None, None, "Pick a flavour and how many scoops"),
+        ("run-background", running, None, None, "Run in background"),
+        ("agent-message", agent, None, Some("press:Message"), "SendMessage tool"),
     ];
     // Files for @-mentions, which the chat lists with git.
     for file in ["src/checkout.ts", "src/checkout.test.ts", "src/cart.ts", "api/limits.ts", "README.md"] {
@@ -1285,6 +1340,11 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
             let check = answer(&format!("rewind-check-{FIRST}"), json!({ "canRewind": true, "filesChanged": [format!("{project}/src/checkout.ts")], "insertions": 2, "deletions": 1 }));
             std::fs::write(answers.join("rewind_files"), format!("{check}\n")).unwrap();
         }
+        // Sign in is the chat's second request (the dialog's reads were the first), so Claude Code's answer is under its id.
+        if name == "mcp-sign-in" {
+            let page = answer("server-auth-2", json!({ "authUrl": "https://auth.issues.example.com/authorize?response_type=code&state=x", "requiresUserAction": true, "callbackExpected": true }));
+            std::fs::write(answers.join("mcp_authenticate"), format!("{page}\n")).unwrap();
+        }
         // Claude Code's answers to the reads of /hooks, /memory and /permissions, made up, each under the subtype it answers.
         if ["hooks", "memory", "permissions"].iter().any(|dialog| name.starts_with(dialog)) {
             for line in include_str!("../../../plugins/claude-chat/rust/tests/setup.jsonl").lines() {
@@ -1334,7 +1394,7 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
             std::env::set_var("CHAT_STDERR", exit.map_or("", |(_, said)| said));
         }
         // The side panel is left out of a tab under 1,100 points, so a few scenes are drawn wider to show it.
-        let widths: &[f32] = if ["conversation", "work", "ask-bash", "tasks", "terminal"].contains(&name) { &[1280.0, 1000.0, 640.0] } else { &[1000.0, 640.0] };
+        let widths: &[f32] = if ["conversation", "work", "ask-bash", "tasks", "terminal", "folder"].contains(&name) { &[1280.0, 1000.0, 640.0] } else { &[1000.0, 640.0] };
         for &width in widths {
             let args = (name == "long").then(|| json!({ "resume": LONG, "cwd": root.canonicalize().unwrap() }));
             let handle = cx

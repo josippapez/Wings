@@ -12,16 +12,20 @@
       "git diff [--shortstat]",
       "git rev-parse [--abbrev-ref]",
       "claude plugin list [--available --json]",
-      "claude plugin install [--json]"
+      "claude plugin install [--json]",
+      "test [-d]"
     ],
     "processes": [
-      "claude [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --replay-user-messages --prompt-suggestions --resume]",
-      "claude-rtk [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --replay-user-messages --prompt-suggestions --resume]",
+      "claude [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --replay-user-messages --prompt-suggestions --resume --fork-session --add-dir]",
+      "claude-rtk [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --replay-user-messages --prompt-suggestions --resume --fork-session --add-dir]",
       "claude edit-permission-rules [--json]",
       "claude edit-hook [--json]",
       "claude edit-memory-settings [--json]"
     ],
     "notify": true,
+    "openUrl": [
+      "https://"
+    ],
     "transcript": [
       "user",
       "assistant",

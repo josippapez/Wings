@@ -7,12 +7,12 @@
 use wings_plugin::{
     format::plural,
     host, task,
-    ui::{Node, badge, button, checkbox, chips, dialog as panel, empty, heading, loading, muted, notice, row, search_field, stack, text, title},
+    ui::{Node, badge, button, card, checkbox, chips, dialog as panel, empty, heading, loading, muted, notice, row, search_field, stack, text, title},
 };
 
 use crate::{
     chat::{self, Chat},
-    plugins::{Available, Dialog, Discover, Plugin, Server, Show, Tab, install_outcome, skills},
+    plugins::{Auth, Available, Dialog, Discover, Plugin, Server, Show, Tab, install_outcome, skills},
 };
 
 const WIDTH: u32 = 640;
@@ -47,6 +47,7 @@ pub fn dialog(c: &Chat) -> Option<Node> {
     };
     let stale = (plugins.stale && !discovering).then(|| small("Refresh to see how the servers you turned on connected."));
     let error = plugins.error.as_deref().map(|why| notice("danger", why));
+    let auth = plugins.auth.as_ref().map(auth_row);
     let body = if discovering {
         Some(discover(open))
     } else {
@@ -57,7 +58,7 @@ pub fn dialog(c: &Chat) -> Option<Node> {
         }
     };
     let footer = small("To add marketplaces, use /plugin in Claude Code in a terminal.");
-    Some(panel(title, WIDTH, close).child(tabs).child(bar).child(hint).maybe(stale).maybe(error).maybe(body).child(footer))
+    Some(panel(title, WIDTH, close).child(tabs).child(bar).child(hint).maybe(stale).maybe(error).maybe(auth).maybe(body).child(footer))
 }
 
 /// The plugins your marketplaces offer that match the search, the first `LISTED` of them, most installed first.
@@ -229,11 +230,11 @@ fn server_row(server: &Server, nested: bool) -> Node {
     let name = server.name.clone();
     let (said, tone) = status(&server.status);
     let mut state = text(said).prop("size", "small").prop("tone", tone);
-    if server.status == "needs-auth" {
+    if server.status == "needs-auth" && !server.signs_in() {
         state = state.prop("title", "Sign in with /mcp in Claude Code in a terminal");
     }
     let detail = match (&server.error, server.tools) {
-        (Some(why), _) => Some(muted(why.as_str()).prop("size", "small").prop("truncate", true).prop("title", why.as_str())),
+        (Some(why), _) if server.status != "pending" => Some(muted(why.as_str()).prop("size", "small").prop("truncate", true).prop("title", why.as_str())),
         (None, Some(tools)) if server.status == "connected" => Some(muted(plural(tools, "tool")).prop("size", "small")),
         _ => None,
     };
@@ -245,6 +246,30 @@ fn server_row(server: &Server, nested: bool) -> Node {
         .child(checkbox(server.short_name(), server.status != "disabled", move |on| set_server(&name, on)))
         .child(state)
         .child(stack().prop("grow", true).maybe(detail))
+        .maybe(server_action(server))
+}
+
+/// What a server's row offers: Reconnect for one that failed, Sign in for one that wants it, Sign out for one that is.
+fn server_action(server: &Server) -> Option<Node> {
+    let name = server.name.clone();
+    match (server.status.as_str(), server.signs_in()) {
+        ("failed", _) => Some(button("Reconnect", "ghost", false, move || reconnect(&name)).prop("size", "sm").prop("title", "Connect to it again")),
+        ("needs-auth", true) => Some(button("Sign in", "ghost", false, move || sign_in(&name)).prop("size", "sm").prop("title", "Claude Code starts the sign-in, and you finish it in your browser")),
+        ("connected", true) => Some(button("Sign out", "ghost", false, move || sign_out(&name)).prop("size", "sm").prop("title", "Forgets this server's sign-in")),
+        _ => None,
+    }
+}
+
+/// The page Claude Code gave to sign in at, with the site it is on, and a button that opens it.
+fn auth_row(auth: &Auth) -> Node {
+    let url = auth.url.clone();
+    let site = auth.url.trim_start_matches("https://").split(['/', '?', '#']).next().unwrap_or_default();
+    let said = stack()
+        .prop("grow", true)
+        .prop("gap", "xs")
+        .child(text(format!("Sign in to {} at {site}", auth.server)).prop("weight", "medium"))
+        .child(muted("Finish in your browser, then Refresh to see it connect.").prop("size", "small"));
+    card().child(row().prop("gap", "s").prop("align", "center").child(said).child(button("Open sign-in page", "default", false, move || host::open_url(&url))))
 }
 
 /// A server's status as the dialog says it, and its tone.
@@ -279,6 +304,21 @@ fn set_plugin(id: &str, on: bool) {
 fn set_server(name: &str, on: bool) {
     let name = name.to_owned();
     chat::write(move |c, n| c.session.plugins.set_server(&name, on, n));
+}
+
+fn reconnect(name: &str) {
+    let name = name.to_owned();
+    chat::write(move |c, n| c.session.plugins.reconnect(&name, n));
+}
+
+fn sign_in(name: &str) {
+    let name = name.to_owned();
+    chat::write(move |c, n| c.session.plugins.authenticate(&name, n));
+}
+
+fn sign_out(name: &str) {
+    let name = name.to_owned();
+    chat::write(move |c, n| c.session.plugins.sign_out(&name, n));
 }
 
 fn reload() {
