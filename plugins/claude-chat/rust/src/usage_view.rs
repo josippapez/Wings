@@ -1,11 +1,11 @@
-//! The usage and context views, which `/usage`, `/cost` and `/context` open in the chat column in place of the
-//! conversation, as Claude Code's own screens for them do: the plan's limits with when each resets, the credits, what
-//! fills the limits, and this session's totals; or how the context window is spent.
+//! The usage and context dialogs over the chat, which `/usage`, `/cost` and `/context` and a click on the side panel's
+//! rows open, as Claude Code's own screens for them do: the plan's limits with when each resets, the credits, what fills
+//! the limits, and this session's totals; or how the context window is spent.
 
 use wings_plugin::{
     format::{clock, grouped, parse_time, tokens},
     local_time::local,
-    ui::{Node, button, gauge, heading, loading, muted, notice, row, stack, text},
+    ui::{Node, button, dialog as panel, gauge, heading, loading, muted, notice, row, stack, text},
 };
 
 use crate::{
@@ -13,30 +13,20 @@ use crate::{
     usage::{ContextDetail, Credits, Kind, Panel, Share, Totals, Usage, Window},
 };
 
-/// The same column the conversation has.
-const COLUMN: u32 = 760;
+const WIDTH: u32 = 640;
 /// The most rows a table of contributors lists.
 const ROWS: usize = 8;
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-/// The header's way back to the conversation: `← Chat` and the view's name.
-pub fn crumbs(c: &Chat) -> Option<Node> {
-    let name = match c.panel? {
-        Panel::Usage => "Usage",
-        Panel::Context => "Context",
+/// The dialog that is open, over the conversation.
+pub fn dialog(c: &Chat) -> Option<Node> {
+    let (title, content) = match (c.panel?, &c.session.view_error) {
+        (Panel::Usage, Some(why)) => ("Usage", notice("danger", why.as_str())),
+        (Panel::Context, Some(why)) => ("Context", notice("danger", why.as_str())),
+        (Panel::Usage, None) => ("Usage", c.session.usage_view.as_ref().map_or_else(loading, |usage| usage_body(usage, c.panel_week))),
+        (Panel::Context, None) => ("Context", c.session.context_view.as_ref().map_or_else(loading, context_body)),
     };
-    // Small, as the header it sits in is no taller than its icon buttons.
-    Some(row().prop("gap", "s").prop("align", "center").child(button("← Chat", "ghost", false, chat::close_panel).prop("size", "sm")).child(muted(name)))
-}
-
-/// The view that is open.
-pub fn body(c: &Chat, panel: Panel) -> Node {
-    let content = match (&c.session.view_error, panel) {
-        (Some(why), _) => notice("danger", why.as_str()),
-        (None, Panel::Usage) => c.session.usage_view.as_ref().map_or_else(loading, |usage| usage_body(usage, c.panel_week)),
-        (None, Panel::Context) => c.session.context_view.as_ref().map_or_else(loading, context_body),
-    };
-    Node::new("Scroll").child(stack().prop("gap", "l").prop("maxWidth", COLUMN).child(content))
+    Some(panel(title, WIDTH, chat::close_panel).child(content))
 }
 
 fn section(title: &str, rows: impl IntoIterator<Item = Node>) -> Node {
@@ -164,4 +154,20 @@ fn context_body(context: &ContextDetail) -> Node {
 fn capital(word: &str) -> String {
     let mut chars = word.chars();
     chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_dialog_shows_only_while_a_panel_is_open() {
+        assert!(chat::with(|c| dialog(c)).is_none());
+        for panel in [Panel::Usage, Panel::Context] {
+            chat::with(|c| c.panel = Some(panel));
+            assert!(chat::with(|c| dialog(c)).is_some());
+            chat::close_panel();
+            assert!(chat::with(|c| dialog(c)).is_none());
+        }
+    }
 }

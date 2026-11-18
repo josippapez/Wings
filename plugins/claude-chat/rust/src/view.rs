@@ -19,6 +19,7 @@ use crate::{
     chat::{self, Chat, PAGE, State},
     prefs,
     session::{Ask, Detail, Diff, Draft, Item, MODES, Progress, Session, Todo, Tool, exit_code, files_found, first_lines, model_name},
+    usage::Panel,
 };
 
 /// An arrow up, a square and a cross, in a 14-point box.
@@ -50,11 +51,7 @@ pub fn view() -> Vec<Node> {
 }
 
 fn chat_page(c: &Chat) -> Node {
-    let body = match &c.panel {
-        // Usage view hook: /usage and /context open over the conversation.
-        Some(panel) => crate::usage_view::body(c, *panel),
-        None => conversation(c),
-    };
+    let body = conversation(c);
     // The conversation, the checklist and the message box in the main pane, and a card on the right that the app leaves out
     // of a narrow tab. An open subagent pins it: that is what you asked to see. Flush, so the conversation scrolls on its own
     // and the checklist and the message box stay at the foot.
@@ -67,7 +64,7 @@ fn chat_page(c: &Chat) -> Node {
         .child(Node::new("Slot").prop("name", "start").children(main))
         .child(Node::new("Slot").prop("name", "end").children(side(c)));
     // No page toolbar: the tab and the project's header over it already name the place, so the card starts with a
-    // header as a terminal pane's does. The plugins dialog, which the app draws over the whole page, and the past
+    // header as a terminal pane's does. The dialogs, which the app draws over the whole page, and the past
     // sessions, which open over it all as Wings' own sheet, come after.
     let body = Node::new("Slot")
         .prop("name", "body")
@@ -76,6 +73,7 @@ fn chat_page(c: &Chat) -> Node {
         .maybe(crate::plugins_view::dialog(c))
         .maybe(crate::tasks_view::dialog(c))
         .maybe(crate::rewind_view::dialog(c))
+        .maybe(crate::usage_view::dialog(c))
         .maybe(crate::past_view::sheet_of(c));
     Node::new("Page").prop("flush", true).child(body)
 }
@@ -104,9 +102,7 @@ fn header(c: &Chat) -> Node {
         .prop("align", "center")
         .prop("grow", true)
         .child(Node::new("Icon").prop("name", "claude").prop("size", 14))
-        .child(text(name.as_str()).prop("weight", "strong").prop("truncate", true).prop("title", name.as_str()))
-        // Usage view hook: its way back to the conversation.
-        .maybe(crate::usage_view::crumbs(c));
+        .child(text(name.as_str()).prop("weight", "strong").prop("truncate", true).prop("title", name.as_str()));
     let terminal = (c.session.id.is_some() && c.state != State::Moved).then(|| icon_button("Open in terminal", &TERMINAL, chat::to_terminal));
     let actions = row()
         .prop("gap", "xs")
@@ -625,10 +621,6 @@ fn composer(c: &Chat) -> Node {
             if event["key"] == "Tab" {
                 chat::accept_suggestion();
             }
-            // Usage view hook: Escape closes it.
-            if event["key"] == "Escape" {
-                chat::close_panel();
-            }
         });
     // One round button, as chat apps have: a square to stop while Claude works and nothing is typed, else an arrow to send.
     // What you send while Claude works waits in the queue.
@@ -723,14 +715,14 @@ fn side(c: &Chat) -> Vec<Node> {
     sections.push(head);
     let mut limits = stack().prop("gap", "s");
     if let Some((used, most)) = c.session.context {
-        limits = limits.child(meter_row("Context", used * 100 / most.max(1), (70, 90), None));
+        limits = limits.child(meter_button("Context", used * 100 / most.max(1), (70, 90), None, Panel::Context));
     }
     for (label, used, resets) in &c.session.limits {
         let resets = resets.map(|ms| match *label {
             "5h" => format!("resets {}", clock(ms)),
             _ => format!("resets {} {}", WEEKDAYS[local(ms as i64).weekday as usize % 7], clock(ms)),
         });
-        limits = limits.child(meter_row(if *label == "5h" { "5-hour" } else { "Week" }, *used, (80, 95), resets));
+        limits = limits.child(meter_button(if *label == "5h" { "5-hour" } else { "Week" }, *used, (80, 95), resets, Panel::Usage));
     }
     sections.push(limits);
     sections.extend(crate::tasks_view::section(c));
@@ -741,6 +733,15 @@ fn side(c: &Chat) -> Vec<Node> {
         true => Vec::new(),
         false => vec![card().prop("variant", "raised").child(stack().prop("gap", "m").children(sections))],
     }
+}
+
+/// A meter row that is a button: a click opens the dialog with the detail behind it.
+fn meter_button(label: &str, percent: u64, levels: (u64, u64), resets: Option<String>, panel: Panel) -> Node {
+    let title = match panel {
+        Panel::Context => "Open Context",
+        Panel::Usage => "Open Usage",
+    };
+    list_button([meter_row(label, percent, levels, resets)], move || chat::open_panel(panel)).prop("title", title).key(label)
 }
 
 /// One line of the panel: its name on the left and a percent on the right, a thin bar under it that turns amber at `levels`'

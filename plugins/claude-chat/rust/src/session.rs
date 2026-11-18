@@ -456,6 +456,13 @@ impl Session {
                 self.told_you = false;
                 self.assistant(&line["message"]);
             }
+            // After a rewind Claude Code leaves the dropped entries in the transcript and says what it cut after them.
+            "last-prompt" if line["rewound"] == true => {
+                let cut = line["cutUuid"].as_str().and_then(|uuid| self.prompts.iter().find(|prompt| prompt.uuid == uuid)).map(|prompt| prompt.at);
+                if let Some(at) = cut {
+                    self.cut(at);
+                }
+            }
             // Claude Code echoes each message of yours it reads when it runs with `--replay-user-messages`. The ones sent
             // while it was idle are on the page already.
             "user" if line["isReplay"] == true => self.echoed(line["uuid"].as_str().unwrap_or_default()),
@@ -869,18 +876,23 @@ impl Session {
         Some(lines)
     }
 
-    /// A draft that is a command with a view of the chat's own (`/usage`, `/cost`, `/context`): which view, and the
+    /// A draft that is a command with a dialog of the chat's own (`/usage`, `/cost`, `/context`): which dialog, and the
     /// request line that fills it. It is never sent as a message. Claude Code answers a control request at once, even
-    /// while a turn runs, so the view doesn't wait for the turn.
+    /// while a turn runs, so the dialog doesn't wait for the turn.
     pub fn view_command(&mut self, text: &str) -> Option<(Panel, String)> {
-        let (panel, line) = match view_of(text)? {
-            // Without `skip_behaviors`, so what fills the limits comes too.
-            Panel::Usage => (Panel::Usage, request(USAGE_VIEW, json!({ "subtype": "get_usage" }))),
-            Panel::Context => (Panel::Context, request(CONTEXT_VIEW, json!({ "subtype": "get_context_usage", "detail": "full" }))),
-        };
-        // What the view showed last stays until the new answer replaces it.
+        let panel = view_of(text)?;
+        Some((panel, self.open_view(panel)))
+    }
+
+    /// The request line that fills the usage or context dialog: one read, for the gesture that opens it.
+    pub fn open_view(&mut self, panel: Panel) -> String {
+        // What the dialog showed last stays until the new answer replaces it.
         self.view_error = None;
-        Some((panel, line))
+        match panel {
+            // Without `skip_behaviors`, so what fills the limits comes too.
+            Panel::Usage => request(USAGE_VIEW, json!({ "subtype": "get_usage" })),
+            Panel::Context => request(CONTEXT_VIEW, json!({ "subtype": "get_context_usage", "detail": "full" })),
+        }
     }
 
     /// A draft that is `/plugins`, `/plugin` or `/mcp`, which open the plugins dialog over the chat: which list it leads
@@ -2305,6 +2317,51 @@ mod tests {
         let mut session = Session::default();
         assert!(session.view_command("/usage now").is_none());
         assert!(session.view_command("tell me about /usage").is_none());
+    }
+
+    #[test]
+    fn a_click_on_a_side_panel_row_opens_the_dialog_with_one_read() {
+        for (panel, subtype) in [(Panel::Usage, "get_usage"), (Panel::Context, "get_context_usage")] {
+            let mut session = Session::default();
+            session.view_error = Some("Not signed in".into());
+            let line = session.open_view(panel);
+            assert_eq!(line.lines().count(), 1);
+            let sent: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!((sent["type"].as_str(), sent["request"]["subtype"].as_str()), (Some("control_request"), Some(subtype)));
+            assert_eq!(session.view_error, None, "the last answer's error goes with the new read");
+            assert!(session.items.is_empty() && !session.working);
+        }
+    }
+
+    // As a rewound session's transcript has them, ids made up: what the rewind dropped stays in the file, and a
+    // `last-prompt` line with `rewound` comes after it.
+    const FIRST_USER: &str = r#"{"type":"user","uuid":"11111111-1111-4111-8111-111111111111","parentUuid":"b70db500-0000-4000-8000-000000000001","message":{"role":"user","content":"Say only: one"}}"#;
+    const FIRST_REPLY: &str = r#"{"type":"assistant","uuid":"33469fd0-0000-4000-8000-000000000002","parentUuid":"bbc4a9ba-0000-4000-8000-000000000003","message":{"role":"assistant","content":[{"type":"text","text":"one"}]}}"#;
+    const SECOND_USER: &str = r#"{"type":"user","uuid":"22222222-2222-4222-8222-222222222222","parentUuid":"9936c70a-0000-4000-8000-000000000004","message":{"role":"user","content":"Say only: two"}}"#;
+    const SECOND_REPLY: &str = r#"{"type":"assistant","uuid":"f66a3fb3-0000-4000-8000-000000000005","parentUuid":"9aeba6c8-0000-4000-8000-000000000006","message":{"role":"assistant","content":[{"type":"text","text":"two"}]}}"#;
+    const PLAIN_LAST_PROMPT: &str = r#"{"type":"last-prompt","lastPrompt":"Say only: two","leafUuid":"9aeba6c8-0000-4000-8000-000000000006","sessionId":"c05c0eb5-0000-4000-8000-000000000007"}"#;
+
+    #[test]
+    fn a_transcript_leaves_out_what_a_rewind_dropped() {
+        let rewound = r#"{"type":"last-prompt","lastPrompt":"Say only: two","leafUuid":"33469fd0-0000-4000-8000-000000000002","explicit":true,"rewound":true,"cutUuid":"22222222-2222-4222-8222-222222222222","sessionId":"c05c0eb5-0000-4000-8000-000000000007"}"#;
+        let mut session = heard(&[FIRST_USER, FIRST_REPLY, PLAIN_LAST_PROMPT, SECOND_USER, SECOND_REPLY, rewound, PLAIN_LAST_PROMPT].join("\n"));
+        assert_eq!(session.items, [Item::User("Say only: one".into()), Item::Text("one".into())]);
+        assert_eq!(session.prompts.len(), 1);
+        // What is said after the rewind goes on from the reply it kept.
+        let next = r#"{"type":"user","uuid":"44444444-4444-4444-8444-444444444444","parentUuid":"33469fd0-0000-4000-8000-000000000002","message":{"role":"user","content":"Say only: three"}}"#;
+        session.hear(&serde_json::from_str(next).unwrap());
+        assert_eq!(session.items, [Item::User("Say only: one".into()), Item::Text("one".into()), Item::User("Say only: three".into())]);
+    }
+
+    #[test]
+    fn a_transcript_rewound_to_its_first_message_is_empty() {
+        // Claude Code writes a null `leafUuid` when nothing is left.
+        let rewound = r#"{"type":"last-prompt","lastPrompt":"Say only: two","leafUuid":null,"explicit":true,"rewound":true,"cutUuid":"11111111-1111-4111-8111-111111111111","sessionId":"c05c0eb5-0000-4000-8000-000000000007"}"#;
+        let bare = r#"{"type":"last-prompt","lastPrompt":"Say only: two","sessionId":"c05c0eb5-0000-4000-8000-000000000007"}"#;
+        let session = heard(&[FIRST_USER, FIRST_REPLY, SECOND_USER, SECOND_REPLY, rewound, bare].join("\n"));
+        assert!(session.items.is_empty() && session.prompts.is_empty());
+        // A last-prompt line that isn't a rewind drops nothing.
+        assert_eq!(heard(&[FIRST_USER, FIRST_REPLY, PLAIN_LAST_PROMPT].join("\n")).items.len(), 2);
     }
 
     #[test]

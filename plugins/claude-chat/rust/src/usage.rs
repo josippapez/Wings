@@ -1,9 +1,9 @@
-//! What Claude Code answers to `get_usage` and `get_context_usage`, cut down to what the usage and context views show.
-//! Only what the answer has is kept: a window or a section the answer lacks is not here, so the view doesn't draw it.
+//! What Claude Code answers to `get_usage` and `get_context_usage`, cut down to what the usage and context dialogs show.
+//! Only what the answer has is kept: a window or a section the answer lacks is not here, so the dialog doesn't draw it.
 
 use serde_json::Value;
 
-/// The views `/usage`, `/cost` and `/context` open in place of the conversation.
+/// The dialogs `/usage`, `/cost` and `/context` open over the chat.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
     Usage,

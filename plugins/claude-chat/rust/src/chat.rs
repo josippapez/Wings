@@ -72,7 +72,7 @@ pub struct Chat {
     pub detailed: bool,
     /// Your setting for the conversation's text size, as the `textScale` its scroll takes.
     pub text_scale: f32,
-    /// The usage or context view, open in place of the conversation, and whether the usage view lists the last week's
+    /// The usage or context dialog, over the chat while it is open, and whether the usage dialog lists the last week's
     /// contributors in place of the last day's.
     pub panel: Option<Panel>,
     pub panel_week: bool,
@@ -222,7 +222,7 @@ fn launch(resume: Option<String>) {
     load_git(run, cwd.clone());
     task::spawn(async move {
         if let Some(id) = &resume {
-            if let Ok(entries) = host::transcript(id, &["user", "assistant"], Some(HISTORY)).await {
+            if let Ok(entries) = host::transcript(id, &["user", "assistant", "last-prompt"], Some(HISTORY)).await {
                 with(|c| {
                     if c.run == run {
                         entries.as_array().into_iter().flatten().for_each(|entry| c.session.hear(entry));
@@ -483,7 +483,7 @@ pub fn send() {
         if text.is_empty() && c.images.is_empty() {
             return None;
         }
-        // /usage, /cost and /context open a view here, as in Claude Code, and aren't sent as a message, not even queued.
+        // /usage, /cost and /context open a dialog here, and aren't sent as a message, not even queued.
         if c.images.is_empty() {
             if let Some((panel, line)) = c.session.view_command(&text) {
                 c.draft.clear();
@@ -767,12 +767,21 @@ pub fn accept_suggestion() {
     });
 }
 
-/// Closes the usage or context view.
+/// Opens the usage or context dialog and reads what it shows: one request, from your click.
+pub fn open_panel(panel: Panel) {
+    write(|c, _| {
+        c.past = None;
+        c.panel = Some(panel);
+        Some(c.session.open_view(panel))
+    });
+}
+
+/// Closes the usage or context dialog.
 pub fn close_panel() {
     with(|c| c.panel = None);
 }
 
-/// Switches the usage view between the last day's contributors and the last week's.
+/// Switches the usage dialog between the last day's contributors and the last week's.
 pub fn set_panel_week(week: bool) {
     with(|c| c.panel_week = week);
 }

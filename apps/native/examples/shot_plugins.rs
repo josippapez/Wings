@@ -941,6 +941,15 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
             "day": { "recommendations": [{ "key": "long_context", "pct": 70, "title": "See what fills your context", "detail": "run /context" }],
                 "agents": [], "skills": [{ "name": "release-notes", "pct": 4 }], "plugins": [{ "name": "toolbox", "pct": 11 }], "mcp_servers": [{ "name": "files", "pct": 6 }] },
             "week": { "recommendations": [], "agents": [], "skills": [], "plugins": [], "mcp_servers": [] } } }));
+    // What `/context` asks for in full: the categories the window is spent on.
+    let full_context = answer("context-view", json!({
+        "model": "claude-opus-5-5", "totalTokens": 41_000, "maxTokens": 200_000,
+        "categories": [
+            { "name": "System prompt", "tokens": 6000, "color": "x", "kind": "used" },
+            { "name": "System tools", "tokens": 11_000, "color": "x", "kind": "used" },
+            { "name": "Messages", "tokens": 24_000, "color": "x", "kind": "used" },
+            { "name": "Free space", "tokens": 120_000, "color": "x", "kind": "free" },
+            { "name": "Autocompact buffer", "tokens": 39_000, "color": "x", "kind": "buffer" } ] }));
     // Claude Code's guess at your next message, printed after the turn's result: grey in the empty box, with a Tab chip.
     let suggested = opened(vec![
         init.clone(),
@@ -993,7 +1002,7 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         text("Fixed: the discount works in cents now, and all 24 checkout tests pass."),
         json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 52_800, "num_turns": 5, "result": "", "total_cost_usd": 0.2 }),
     ]);
-    let scenes: [Scene; 31] = [
+    let scenes: [Scene; 32] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -1005,8 +1014,9 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         // The header's Past sessions button opens the sheet over the chat, and its search has the keyboard.
         ("sessions", opened(vec![init.clone()]), None, Some("press:Past sessions"), "Past sessions"),
         ("sessions-search", opened(vec![init.clone()]), None, Some("press:Past sessions;type:checkout"), "matching messages"),
-        // /usage opens the usage view in place of the conversation instead of going to Claude as a message.
-        ("usage", opened(vec![init.clone(), full_usage]), None, Some("type:/usage;keys:enter"), "Plan usage limits"),
+        // /usage opens the usage dialog over the conversation instead of going to Claude as a message, and so does /context.
+        ("usage", work.iter().cloned().chain([full_usage]).collect(), None, Some("type:/usage;keys:enter"), "Plan usage limits"),
+        ("context", work.iter().cloned().chain([full_context]).collect(), None, Some("type:/context;keys:enter"), "Autocompact buffer"),
         // /plugins and /mcp open the plugins dialog over the chat, each leading with its own list.
         ("plugins", plugins.clone(), None, Some("type:/plugins;keys:enter"), "toolbox"),
         ("mcp", plugins.clone(), None, Some("type:/mcp;keys:enter"), "Needs sign-in"),
