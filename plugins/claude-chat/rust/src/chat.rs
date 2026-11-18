@@ -85,11 +85,12 @@ async fn begin() {
         }
         with(|c| c.session.id = Some(id.clone()));
     }
-    let mut claude = vec!["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages"];
-    claude.extend(["--permission-prompt-tool", "stdio"]);
-    if let Some(id) = &resume {
-        claude.extend(["--resume", id.as_str()]);
-    }
+    // Each value joined to its flag: Wings passes a program nothing else.
+    let mut claude: Vec<String> = ["-p", "--input-format=stream-json", "--output-format=stream-json", "--verbose", "--include-partial-messages", "--permission-prompt-tool=stdio"]
+        .map(str::to_owned)
+        .to_vec();
+    claude.extend(resume.as_ref().map(|id| format!("--resume={id}")));
+    let claude: Vec<&str> = claude.iter().map(String::as_str).collect();
     let process = host::spawn(&program, &claude, &cwd, hear);
     with(|c| {
         c.input = Some(process.input());

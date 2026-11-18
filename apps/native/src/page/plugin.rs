@@ -237,9 +237,13 @@ impl Shared {
         }
     }
 
-    /// Fails every button click still waiting for an answer.
+    /// Fails every button click still waiting for an answer, and the panes they let the plugin close with them.
     fn fail_actions(&self, why: &str) {
-        let waiting = std::mem::take(&mut self.actions.lock().unwrap().waiting);
+        let waiting = {
+            let mut actions = self.actions.lock().unwrap();
+            actions.panes.clear();
+            std::mem::take(&mut actions.waiting)
+        };
         for done in waiting.into_values() {
             done(Err(why.to_owned()));
         }
@@ -373,6 +377,10 @@ impl Link for FrameLink {
                 let what = if method == "copyText" { "copy" } else { "write to a program" };
                 return reply.err(format!("A page can {what} only right after you click or type in it"));
             }
+        }
+        // A badge button's click goes to main, so only main answers it by closing the pane.
+        if method == "closePane" && self.role != Role::Main {
+            return reply.err("Only a plugin's main closes a pane, as it answers your click on the pane's badge".into());
         }
         if matches!(method, "openDiff" | "updateDiff") {
             return self.shared.diff_call(self.id, method, params, reply);

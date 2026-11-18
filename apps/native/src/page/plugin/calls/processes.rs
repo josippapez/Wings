@@ -68,7 +68,7 @@ fn a_page_writes_to_a_program_only_right_after_you_click_or_type_in_it() {
 
 #[test]
 fn every_line_reaches_the_page_in_order_however_many_come_at_once() {
-    let rig = rig(&["seq"]);
+    let rig = rig(&["seq 1 5000"]);
     let caller = Caller::start(&rig.host);
     // Far more than the frame's queue holds.
     caller.send("spawn", spawn("count", "seq", &["1", "5000"]));
@@ -80,12 +80,14 @@ fn every_line_reaches_the_page_in_order_however_many_come_at_once() {
 
 #[test]
 fn a_program_stops_when_its_page_closes() {
-    let rig = rig(&["sh"]);
     let marker = tmp().join(format!("wings-process-ended-{}", std::process::id()));
     let _ = std::fs::remove_file(&marker);
+    let script = tmp().join(format!("wings-process-script-{}.sh", std::process::id()));
+    std::fs::write(&script, format!("cat; touch '{}'", marker.display())).unwrap();
+    let script = script.to_string_lossy().into_owned();
+    let rig = rig(&[&format!("sh {script}")]);
     let caller = Caller::start(&rig.host);
-    let script = format!("cat; touch '{}'", marker.display());
-    caller.send("spawn", spawn("long", "sh", &["-c", &script]));
+    caller.send("spawn", spawn("long", "sh", &[&script]));
     // Answered once the program reads its input, so it is running.
     caller.send_after_click("processWrite", json!({ "token": "long", "text": "x\n" }));
     let (_, answers) = hear(&caller, 2);
@@ -97,6 +99,7 @@ fn a_program_stops_when_its_page_closes() {
         std::thread::sleep(Duration::from_millis(20));
     }
     std::fs::remove_file(&marker).unwrap();
+    std::fs::remove_file(&script).unwrap();
 }
 
 #[test]

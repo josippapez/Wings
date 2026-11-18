@@ -1137,13 +1137,17 @@ fn focus_pane_needs_panes_granted_and_a_pane_that_is_there() {
 fn close_pane_needs_panes_granted_a_pane_that_is_there_and_your_click_on_its_badge() {
     let rig = Rig::new(json!({ "permissions": { "panes": [] } }), panes());
     assert_eq!(
-        rig.refuses("closePane", json!({ "paneId": "2" })),
-        "probe may close a pane only while it answers your click on that pane's badge"
+        call_from_main(&rig.host, "closePane", json!({ "paneId": "2" })),
+        Err("probe may close a pane only while it answers your click on that pane's badge".into())
     );
-    assert_eq!(rig.refuses("closePane", json!({ "paneId": "9" })), "no pane 9");
+    assert_eq!(call_from_main(&rig.host, "closePane", json!({ "paneId": "9" })), Err("no pane 9".into()));
+    assert_eq!(
+        rig.refuses("closePane", json!({ "paneId": "2" })),
+        "Only a plugin's main closes a pane, as it answers your click on the pane's badge"
+    );
     assert!(rig.env.seen().is_empty());
     let without = Rig::new(json!({}), panes());
-    assert_eq!(without.refuses("closePane", json!({ "paneId": "1" })), "probe may not close panes");
+    assert_eq!(call_from_main(&without.host, "closePane", json!({ "paneId": "1" })), Err("probe may not close panes".into()));
 }
 
 #[test]

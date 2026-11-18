@@ -343,8 +343,12 @@ impl Shared {
                 if let Err(error) = self.require_pane(&pane) {
                     return reply.err(error);
                 }
-                // Closing ends what runs there, so only as the answer to your click on that pane's badge.
-                let clicked = || self.actions.lock().unwrap().panes.values().any(|clicked| *clicked == pane);
+                // Closing ends what runs there, so only as the answer to your click on that pane's badge, once.
+                let clicked = || {
+                    let mut actions = self.actions.lock().unwrap();
+                    let token = actions.panes.iter().find(|(_, clicked)| **clicked == pane).map(|(token, _)| *token);
+                    token.and_then(|token| actions.panes.remove(&token)).is_some()
+                };
                 match method {
                     "focusPane" => access.env.focus_pane(&pane, reply),
                     _ if clicked() => access.env.close_pane(&pane, reply),

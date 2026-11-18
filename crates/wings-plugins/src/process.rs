@@ -13,9 +13,8 @@ use std::{
 use serde::Serialize;
 
 use crate::{
-    exec::{args_check, command, entries_allow, not_allowed},
+    exec::{allowing_entry, args_check, command, not_allowed},
     manifest::Plugin,
-    panes::AGENT_PROGRAMS,
 };
 
 /// The longest line a program may print. One stream-json line holds a whole message, tool results and all.
@@ -26,22 +25,18 @@ const STDERR_KEPT: usize = 16 * 1024;
 /// How long a program has to end once its input is closed, before it's killed. Claude ends at once.
 const STOP_GRACE: Duration = Duration::from_secs(3);
 
-/// Everything `run` checks before it starts `program` in `cwd`: the manifest's `processes` lists it, and its arguments
-/// pass `exec`'s checks. An agent CLI takes a value only right after one of its flags, as in a pane (`pane_input`): a
-/// plain word of its own reads as a subcommand, like `claude mcp add`, which changes your setup for good.
+/// Everything `run` checks before it starts `program` in `cwd`: the manifest's `processes` lists it, its arguments pass
+/// `exec`'s checks, and after the words its entry names come only flags, each value joined to its flag
+/// (`--resume=<id>`). A word of its own could be read as a subcommand whatever flag comes before it, like `mcp add` in
+/// `claude --verbose mcp --verbose add`, which changes your Claude setup for good, and a wrapper like `claude-rtk` reads it
+/// the same.
 pub(crate) fn check(plugin: &Plugin, program: &str, args: &[String], cwd: &Path) -> Result<(), String> {
     let id = &plugin.manifest.id;
-    if !entries_allow(&plugin.manifest.permissions.processes, program, args) {
+    let Some(named) = allowing_entry(&plugin.manifest.permissions.processes, program, args) else {
         return Err(not_allowed(plugin, program, args));
-    }
-    if AGENT_PROGRAMS.contains(&program) {
-        let stray = args.iter().enumerate().find(|(at, arg)| {
-            let after_flag = at.checked_sub(1).is_some_and(|before| args[before].starts_with('-') && !args[before].contains('='));
-            !arg.starts_with('-') && !after_flag
-        });
-        if let Some((_, word)) = stray {
-            return Err(format!("{id} may pass {program} a value only right after one of its flags, not {word:?}"));
-        }
+    };
+    if let Some(word) = args[named..].iter().find(|arg| !arg.starts_with('-')) {
+        return Err(format!("{id} may pass {program} only flags past its entry, each value joined as --flag=value, not {word:?}"));
     }
     args_check(plugin, program, args, Some(cwd))
 }
@@ -244,6 +239,7 @@ mod tests {
         let refused = |program: &str, words: &[&str]| run(&p, &Process::new(), program, &args(words), Path::new("/tmp"), |_| true).unwrap_err();
         assert!(refused("sh", &["-c", "echo hi"]).contains("may not run sh"));
         assert!(refused("cat", &["-u"]).contains("may not run cat"));
+        assert!(refused("cat", &["/etc/hosts"]).contains("only flags past its entry"));
         // Listed under exec isn't enough.
         let mut exec_only = plugin(Path::new("/tmp"), &["cat"], &[]);
         exec_only.manifest.permissions.processes.clear();
@@ -251,17 +247,18 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_takes_values_only_after_its_flags() {
-        let p = with_processes(&["claude [-p --input-format --output-format --permission-prompt-tool --resume]"]);
+    fn past_its_entry_a_program_gets_only_flags_with_their_values_joined() {
+        let p = with_processes(&["claude [-p --input-format --output-format --verbose --permission-prompt-tool --resume]", "claude-rtk [-p --verbose]"]);
         let tmp = Path::new("/tmp");
-        let headless = args(&["-p", "--input-format", "stream-json", "--permission-prompt-tool", "stdio", "--resume", "3c21b0c5"]);
+        let headless = args(&["-p", "--input-format=stream-json", "--permission-prompt-tool=stdio", "--resume=3c21b0c5"]);
         assert_eq!(check(&p, "claude", &headless, tmp), Ok(()));
-        for stray in [&["mcp", "add", "x", "sh"][..], &["-p", "mcp", "add"], &["--resume", "a", "b"], &["--resume=a", "b"]] {
-            assert!(check(&p, "claude", &args(stray), tmp).unwrap_err().contains("only right after one of its flags"), "{stray:?}");
+        for stray in [&["mcp", "add", "x", "sh"][..], &["--verbose", "mcp", "--verbose", "add"], &["--resume", "a"], &["-p", "prompt"]] {
+            assert!(check(&p, "claude", &args(stray), tmp).unwrap_err().contains("only flags past its entry"), "{stray:?}");
         }
-        assert!(check(&p, "claude", &args(&["--mcp-config", "x.json"]), tmp).unwrap_err().contains("may not run claude"));
-        // Any other program keeps exec's rules alone.
-        assert_eq!(check(&with_processes(&["cat"]), "cat", &args(&["a", "b"]), tmp), Ok(()));
+        assert!(check(&p, "claude-rtk", &args(&["-p", "mcp"]), tmp).unwrap_err().contains("only flags past its entry"));
+        assert!(check(&p, "claude", &args(&["--mcp-config=x.json"]), tmp).unwrap_err().contains("may not run claude"));
+        // Words the entry names are its own.
+        assert_eq!(check(&with_processes(&["seq 1 3"]), "seq", &args(&["1", "3"]), tmp), Ok(()));
     }
 
     #[test]
@@ -325,17 +322,20 @@ mod tests {
 
     #[test]
     fn a_line_over_the_limit_stops_the_program() {
-        let p = with_processes(&["head"]);
         let size = (LINE_LIMIT + 10).to_string();
+        let p = with_processes(&[&format!("head -c {size} /dev/zero")]);
         let err = run(&p, &Process::new(), "head", &args(&["-c", &size, "/dev/zero"]), Path::new("/tmp"), |_| true).unwrap_err();
         assert_eq!(err, LINE_TOO_LONG);
     }
 
     #[test]
     fn keeps_the_end_of_stderr() {
-        let p = with_processes(&["sh"]);
-        let script = "i=0; while [ $i -lt 3000 ]; do echo line-$i >&2; i=$((i+1)); done; exit 3";
-        let exit = run(&p, &Process::new(), "sh", &args(&["-c", script]), Path::new("/tmp"), |_| true).unwrap();
+        let script = std::env::temp_dir().join(format!("wings-stderr-{}.sh", std::process::id()));
+        std::fs::write(&script, "i=0; while [ $i -lt 3000 ]; do echo line-$i >&2; i=$((i+1)); done; exit 3").unwrap();
+        let script = script.to_string_lossy().into_owned();
+        let p = with_processes(&[&format!("sh {script}")]);
+        let exit = run(&p, &Process::new(), "sh", &args(&[&script]), Path::new("/tmp"), |_| true).unwrap();
+        std::fs::remove_file(&script).unwrap();
         assert_eq!(exit.code, Some(3));
         assert!(exit.stderr.len() <= STDERR_KEPT);
         assert!(exit.stderr.ends_with("line-2999\n"), "{}", &exit.stderr[exit.stderr.len() - 20..]);

@@ -76,7 +76,12 @@ pub(crate) fn may_exec(plugin: &Plugin, program: &str, args: &[String]) -> bool 
 
 /// Whether one of `entries`, written as `permissions.exec`'s are, covers `program` with `args`.
 pub(crate) fn entries_allow(entries: &[String], program: &str, args: &[String]) -> bool {
-    entries.iter().any(|entry| {
+    allowing_entry(entries, program, args).is_some()
+}
+
+/// The words after the program of the longest of `entries` that covers `program` with `args`.
+pub(crate) fn allowing_entry(entries: &[String], program: &str, args: &[String]) -> Option<usize> {
+    entries.iter().filter(|entry| {
         let (command, flags) = exec_entry(entry);
         let mut words = command.split_whitespace();
         words.next() == Some(program)
@@ -84,6 +89,8 @@ pub(crate) fn entries_allow(entries: &[String], program: &str, args: &[String]) 
             // Exact names only: az would take `--stat` for `--state`, so an abbreviation counts as another flag.
             && flags.is_none_or(|flags| args.iter().filter(|a| a.starts_with('-')).all(|a| flags.contains(&a.split('=').next().unwrap_or(a))))
     })
+    .map(|entry| exec_entry(entry).0.split_whitespace().count() - 1)
+    .max()
 }
 
 /// Runs a command the manifest allows. No shell, so arguments can't smuggle in commands.
