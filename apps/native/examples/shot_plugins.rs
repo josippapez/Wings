@@ -1011,6 +1011,22 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         text("Fixed: the discount works in cents now, and all 24 checkout tests pass."),
         json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 52_800, "num_turns": 5, "result": "", "total_cost_usd": 0.2 }),
     ]);
+    // A turn that edited one file and wrote another, with the results Claude Code prints (`tool_use_result`). The paths are
+    // `/work/shop`, which the loop below swaps for the scene's folder so they show as the project's own.
+    let edit_done = |id: &str, result: serde_json::Value| {
+        json!({ "type": "user", "message": { "role": "user", "content": [{ "type": "tool_result", "tool_use_id": id, "content": "done", "is_error": false }] }, "tool_use_result": result })
+    };
+    let edited = opened(vec![
+        init.clone(),
+        said("Add a discount to the cart, in its own file.", "6a2d9e41-3b7c-4f85-a1d2-9e0c4b6f8a37"),
+        tool("e1", "Edit", json!({ "file_path": "/work/shop/src/cart.ts", "old_string": "return total;", "new_string": "return applyDiscount(total);" })),
+        edit_done("e1", json!({ "filePath": "/work/shop/src/cart.ts", "oldString": "return total;", "newString": "return applyDiscount(total);", "originalFile": "export function cartTotal(items) {\n  const total = sum(items);\n  return total;\n}\n",
+            "structuredPatch": [{ "oldStart": 1, "oldLines": 4, "newStart": 1, "newLines": 4, "lines": [" export function cartTotal(items) {", "   const total = sum(items);", "-  return total;", "+  return applyDiscount(total);", " }"] }], "userModified": false, "replaceAll": false })),
+        tool("e2", "Write", json!({ "file_path": "/work/shop/src/discount.ts", "content": "" })),
+        edit_done("e2", json!({ "type": "create", "filePath": "/work/shop/src/discount.ts", "content": "export function applyDiscount(total) {\n  return total * 0.9;\n}", "structuredPatch": [], "originalFile": null, "userModified": false })),
+        text("I added `applyDiscount` in `src/discount.ts` and called it from `src/cart.ts:3`."),
+        json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 14_000, "num_turns": 3, "result": "", "total_cost_usd": 0.05 }),
+    ]);
     // Made-up pictures drawn in code: a bar chart you attach, and a window a Read of an image gives back.
     let png = |width: u32, height: u32, paint: &dyn Fn(u32, u32) -> [u8; 4]| {
         use base64::Engine;
@@ -1200,6 +1216,7 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
     );
     let finished_panel = finished.clone();
     let (worked_again, worked_forking, rewound_again) = (worked.clone(), worked.clone(), rewound.clone());
+    let edited_undo = edited.clone();
     let tasks_open = tasks.clone();
     // A long message of yours that wraps, with Rewind and Fork from here under it.
     let wrapped = opened(vec![
@@ -1208,7 +1225,7 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         text("The discount is applied in floating point, so `100 * 0.9` comes out a hair under 90 on CI's Node version."),
         json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 12_000, "num_turns": 2, "result": "", "total_cost_usd": 0.03 }),
     ]);
-    let scenes: [Scene; 65] = [
+    let scenes: [Scene; 67] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -1302,6 +1319,10 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         ("fork-ask", worked_forking, None, Some("press:Fork"), "A fork is a new session"),
         // A long message that wraps keeps Rewind and Fork from here clear of it, under it at the right.
         ("long-message", wrapped, None, None, "which of the two places"),
+        // A turn that changed files ends with a card of them, and the files its reply names are links.
+        ("edits", edited, None, None, "Edited 2 files"),
+        // Undo asks first, and says what goes back.
+        ("edits-undo", edited_undo, None, Some("press:Undo"), "Undo the changes to 2 files from this turn?"),
         // The side panel opened over a narrow tab from the header's button, with the conversation under it.
         ("panel-open", tasks_open, None, Some("press:Side panel"), "Background tasks"),
         // /add-dir restarts the chat with the folder, which the side panel lists with a Remove.
@@ -1397,7 +1418,9 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
             _ => &host,
         };
         let fixture = root.join(format!("{name}.jsonl"));
-        std::fs::write(&fixture, lines.iter().map(|line| format!("{line}\n")).collect::<String>()).unwrap();
+        let printed = lines.iter().map(|line| format!("{line}\n")).collect::<String>();
+        let printed = if name.starts_with("edits") { printed.replace("/work/shop", &project) } else { printed };
+        std::fs::write(&fixture, printed).unwrap();
         // What the fake answers a request with, by its subtype: the rewind dialog's dry run, with a path in the project.
         let answers = root.join(format!("answers-{name}"));
         let _ = std::fs::remove_dir_all(&answers);

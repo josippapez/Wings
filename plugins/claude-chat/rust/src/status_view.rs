@@ -142,7 +142,7 @@ pub fn reply(at: usize, said: &str, c: &Chat) -> Node {
     for part in &blocks {
         match part {
             // Words that name something in Wings, like an issue key, open it there.
-            Part::Text(markdown_text) => nodes.push(markdown(markdown_text).prop("links", true)),
+            Part::Text(markdown_text) => nodes.push(crate::edits_view::prose(markdown_text, c)),
             Part::Code { lang, text } => {
                 let head = row()
                     .prop("gap", "s")
@@ -158,7 +158,7 @@ pub fn reply(at: usize, said: &str, c: &Chat) -> Node {
         }
     }
     if blocks.is_empty() {
-        nodes.push(markdown(said).prop("links", true));
+        nodes.push(crate::edits_view::prose(said, c));
     }
     let foot = row().child(copy_button(&format!("reply-{at}"), "Copy this reply", c, move || copy_reply(at)));
     stack().prop("gap", "xs").children(nodes).child(foot)

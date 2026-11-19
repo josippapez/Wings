@@ -43,6 +43,7 @@
     "ui": [
       "agents",
       "badges",
+      "diff",
       "terminals"
     ],
     "projectSections": [

@@ -9,6 +9,7 @@ use wings_plugin::format::parse_time;
 
 use crate::{
     actions::Ops,
+    edits::Edits,
     elicitation::Elicitation,
     images,
     commands::Commands,
@@ -468,12 +469,16 @@ pub struct Session {
     pub cmds: Commands,
     /// Commands you moved to the background, and what MCP servers ask you (`actions.rs`, `elicitation.rs`).
     pub ops: Ops,
+    /// The files each turn changed, and Undo (`edits.rs`).
+    pub edits: Edits,
 }
 
 impl Session {
     /// Takes in one line Claude Code printed, or one transcript entry.
     pub fn hear(&mut self, line: &Value) {
         self.agents.learn(line);
+        // A subagent's edits count for the turn that started it.
+        self.edits.heard(line, self.items.len());
         // A subagent's own messages are kept apart, under the tool call that started it, and stay out of the conversation.
         if !line["parent_tool_use_id"].is_null() {
             if let Some(parent) = line["parent_tool_use_id"].as_str() {
@@ -711,6 +716,7 @@ impl Session {
         self.live.clear();
         self.thinking = false;
         self.prompts.clear();
+        self.edits.clear();
         self.rewind = None;
         self.restored = None;
         self.todos.clear();
@@ -751,6 +757,7 @@ impl Session {
     fn cut(&mut self, at: usize) {
         self.items.truncate(at);
         self.prompts.retain(|prompt| prompt.at < at);
+        self.edits.cut(at);
     }
 
     /// The live set of background tasks, as `background_tasks_changed` gives it whole. One that left it has ended; one
@@ -807,6 +814,7 @@ impl Session {
         if self.plugins.answered(id, response)
             || self.ops.answered(id, response, &mut self.items)
             || self.answered_rewind(id, response)
+            || self.edits.answered(id, response, &self.prompts, &mut self.items)
             || self.answered_task(id, response)
             || self.setup.answered(id, response)
             || self.cmds.answered(id, response)
@@ -1308,6 +1316,11 @@ impl Session {
             REWIND_CONVERSATION => (answer["rewound"] != true).then(|| format!("Couldn't restore the conversation: {}", why())),
             _ => return false,
         };
+        if id == REWIND_FILES && error.is_none() {
+            if let Some(rewind) = &self.rewind {
+                self.edits.mark_undone(&self.prompts, &rewind.uuid);
+            }
+        }
         if id == REWIND_CONVERSATION && error.is_none() {
             // Claude Code cut its conversation before the message, and gives its text back to send again.
             let target = answer["targetMessageUuid"].as_str().or(self.rewind.as_ref().map(|rewind| rewind.uuid.as_str()));

@@ -82,6 +82,7 @@ fn chat_page(c: &Chat) -> Node {
         .maybe(crate::tasks_view::dialog(c))
         .maybe(crate::rewind_view::dialog(c))
         .maybe(crate::fork_view::dialog(c))
+        .maybe(crate::edits_view::dialog(c))
         .maybe(crate::fork_view::header_dialog(c))
         .maybe(crate::actions_view::message_dialog(c))
         .maybe(crate::usage_view::dialog(c))
@@ -199,9 +200,11 @@ fn conversation(c: &Chat) -> Node {
             }
             false => item_node(start, &items[start], c, true),
         };
+        // A turn that changed files ends with a card of them, after its last item.
+        let edited = c.session.turn_ending_at(end).map(|(from, turn)| crate::edits_view::card_of(c, from, end, &turn));
         end = start;
         let Some(block) = block else { continue };
-        let size = block.count();
+        let size = block.count() + edited.as_ref().map_or(0, Node::count);
         if spent + size > BUDGET {
             cut = true;
             // The newest item always shows, as plain text when it is too big to lay out.
@@ -211,6 +214,7 @@ fn conversation(c: &Chat) -> Node {
             break;
         }
         spent += size;
+        blocks.extend(edited);
         blocks.push(block);
     }
     blocks.reverse();
@@ -307,7 +311,7 @@ pub(crate) fn item_node(at: usize, item: &Item, c: &Chat, own: bool) -> Option<N
         // A subagent's replies sit in its own list, which the Copy buttons' indexes don't name.
         Item::Text(said) if own => crate::status_view::reply(at, said, c),
         // Words that name something in Wings, like an issue key, open it there.
-        Item::Text(said) => markdown(said).prop("links", true),
+        Item::Text(said) => crate::edits_view::prose(said, c),
         Item::Divider(said) => row().prop("justify", "center").child(muted(format!("── {said} ──")).prop("size", "small")),
         Item::Notice(said) => muted(said.as_str()).prop("size", "small"),
         Item::Thought(said, ms) => thought(at, said, *ms, c.open_outputs.contains(&format!("thought-{at}"))),

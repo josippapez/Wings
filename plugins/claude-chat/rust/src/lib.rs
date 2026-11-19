@@ -20,9 +20,14 @@ mod composer;
 mod commands;
 #[cfg(any(feature = "chat", test))]
 mod copy;
+mod edits;
+#[cfg(feature = "chat")]
+mod edits_view;
 mod elicitation;
 #[cfg(feature = "chat")]
 mod elicitation_view;
+#[cfg(any(feature = "chat", test))]
+mod file_links;
 #[cfg(any(feature = "chat", test))]
 mod fork;
 #[cfg(feature = "chat")]
