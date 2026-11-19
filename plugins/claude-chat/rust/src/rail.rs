@@ -1,10 +1,9 @@
-//! The rail at the left of the conversation: one small mark for each message you sent (queued ones aren't in the
-//! conversation yet, so they have none), the mark of the prompt you are reading lit, a tooltip with the prompt's first
-//! line, and a click that scrolls the conversation so that prompt is at its top.
+//! The rail at the left of the conversation: one tick for each message you sent (queued ones aren't in the conversation
+//! yet, so they have none), the tick of the prompt you are reading long, a card on hover with the prompt's first line and
+//! the start of Claude's reply, and a click that scrolls the conversation so that prompt is at its top.
 //!
-//! Where the marks sit: evenly, from the top. The page can't know how tall what it sends will be drawn, so it can't space
-//! them by where each prompt is in the conversation. A session with more prompts than `MARKS` groups them, each mark
-//! standing for the run it starts, so the rail stays a few dozen nodes however long the session is.
+//! The page sends one `PromptRail` node (Wings 0.2.44) with each prompt's words. Wings draws the ticks, the fisheye and
+//! the hover card itself, so hovering never reaches the page, and a long session costs one node, not one for each prompt.
 //!
 //! How it scrolls and knows where you are: the conversation's `Scroll` takes `scrollTo` (the child of its column to bring
 //! to the top, once for each token) and `track` with `onTrack` (which prompt's child the view has reached), both Wings
@@ -14,10 +13,7 @@
 use std::cell::RefCell;
 
 use serde_json::{Value, json};
-use wings_plugin::{
-    format::truncate,
-    ui::{Node, button, dot, stack},
-};
+use wings_plugin::{format::truncate, ui::Node};
 
 use crate::{
     chat::{self, Chat},
@@ -25,14 +21,15 @@ use crate::{
     view::COLUMN,
 };
 
-/// How wide the rail is, in points.
-pub const WIDTH: u32 = 28;
+/// How wide the rail is, in points: the longest tick with its margin.
+pub const WIDTH: u32 = 64;
 /// The tab width below which the rail is left out: the column with its margins, and the rail either side of it.
 pub const BELOW: u32 = COLUMN + 16 + 2 * WIDTH;
-/// The most marks the rail draws.
-pub const MARKS: usize = 24;
-/// The longest first line a tooltip shows.
-const LINE: usize = 90;
+/// The most prompts sent to the rail, the newest: every render of the page carries them, and Wings takes 2,000.
+pub const MARKS: usize = 500;
+/// The longest first line, and the longest start of a reply, the card shows.
+const LINE: usize = 200;
+const REPLY: usize = 300;
 
 #[derive(Default)]
 struct State {
@@ -115,18 +112,7 @@ impl Rail {
     }
 }
 
-/// The mark whose run holds the prompt `current`, among `total`.
-pub fn lit_mark(total: usize, current: usize) -> Option<usize> {
-    groups(total).iter().position(|(start, end)| (*start..*end).contains(&current))
-}
-
-/// The runs of prompts the marks stand for, as (start, end) over `total` prompts, at most `MARKS`.
-pub fn groups(total: usize) -> Vec<(usize, usize)> {
-    let marks = total.min(MARKS);
-    (0..marks).map(|mark| (mark * total / marks, (mark + 1) * total / marks)).collect()
-}
-
-/// A click on a mark: the conversation scrolls so `item`, a message of yours, is at its top. A prompt older than what the
+/// A click on a tick: the conversation scrolls so `item`, a message of yours, is at its top. A prompt older than what the
 /// page shows is brought in first.
 pub fn go(item: usize) {
     STATE.with(|state| {
@@ -166,7 +152,7 @@ pub fn watch(scroll: Node, rail: &Rail) -> Node {
     }
 }
 
-/// The first line of a message, as the tooltip says it.
+/// The first line of a message, as the card says it.
 fn first_line(item: &Item) -> String {
     let (Item::User(said) | Item::UserImages(said, _)) = item else {
         return String::new();
@@ -177,27 +163,43 @@ fn first_line(item: &Item) -> String {
     }
 }
 
-/// The rail's marks, for the slot at the left of the conversation. None while there is no room, nothing to mark, or the
-/// tab hasn't been measured.
+/// The start of what Claude first wrote in answer to the message at `prompt`, on one line. Empty while it has written none.
+fn reply(items: &[Item], prompt: usize) -> String {
+    let answer = items[prompt + 1..].iter().take_while(|item| !matches!(item, Item::User(_) | Item::UserImages(..))).find_map(|item| match item {
+        Item::Text(text) if !text.trim().is_empty() => Some(text),
+        _ => None,
+    });
+    let Some(text) = answer else {
+        return String::new();
+    };
+    // Only the start is read: a long answer isn't walked whole for a card that clamps at three lines.
+    let start: String = text.chars().take(REPLY * 2).collect();
+    truncate(&start.split_whitespace().collect::<Vec<_>>().join(" "), REPLY)
+}
+
+/// The rail, for the slot at the left of the conversation. None while there is no room, nothing to mark, or the tab
+/// hasn't been measured.
 pub fn marks(c: &Chat, rail: &Rail) -> Vec<Node> {
     if !roomy() || rail.prompts.is_empty() {
         return Vec::new();
     }
-    let lit_at = lit_mark(rail.prompts.len(), rail.current);
-    let marks = groups(rail.prompts.len()).into_iter().enumerate().map(|(at, (start, end))| {
-        let lit = lit_at == Some(at);
-        let item = rail.prompts[start].item;
-        let line = first_line(&c.session.items[item]);
-        let said = if end - start > 1 { format!("{line} (and {} after it)", end - start - 1) } else { line };
-        let tone = if lit { "info" } else { "muted" };
-        button("", if lit { "secondary" } else { "ghost" }, false, move || go(item))
-            .prop("size", "icon-xs")
-            .prop("label", said.as_str())
-            .prop("title", said.as_str())
-            .child(dot().prop("tone", tone))
-            .key(item.to_string())
-    });
-    vec![stack().prop("gap", "xs").children(marks)]
+    // Past `MARKS` prompts only the newest are sent, and the numbers Wings says count from the first of them.
+    let skip = rail.prompts.len().saturating_sub(MARKS);
+    let items: Vec<usize> = rail.prompts[skip..].iter().map(|prompt| prompt.item).collect();
+    let node = Node::new("PromptRail")
+        .prop("marks", Value::Array(mark_values(&c.session.items, &items)))
+        .prop("current", rail.current.saturating_sub(skip))
+        .on("onSelect", move |payload| {
+            if let Some(item) = payload["index"].as_u64().and_then(|at| items.get(at as usize)) {
+                go(*item);
+            }
+        });
+    vec![node]
+}
+
+/// What the node is sent for each prompt in `prompts` (their items' indexes): its first line and the start of the reply.
+fn mark_values(items: &[Item], prompts: &[usize]) -> Vec<Value> {
+    prompts.iter().map(|item| json!({ "title": first_line(&items[*item]), "preview": reply(items, *item) })).collect()
 }
 
 #[cfg(test)]
@@ -243,25 +245,12 @@ mod tests {
         assert_eq!(rail.track(), [0, 2]);
     }
 
-    #[test]
-    fn a_long_session_has_a_few_dozen_marks_that_cover_every_prompt_once() {
-        assert_eq!(groups(0), []);
-        assert_eq!(groups(3), [(0, 1), (1, 2), (2, 3)]);
-        for total in [24, 25, 100, 999] {
-            let runs = groups(total);
-            assert_eq!(runs.len(), MARKS);
-            assert_eq!(runs[0].0, 0);
-            assert_eq!(runs.last().unwrap().1, total);
-            assert!(runs.windows(2).all(|pair| pair[0].1 == pair[1].0 && pair[0].0 < pair[0].1), "{total}");
-        }
-    }
-
     fn prompts_said(count: usize) -> Vec<Item> {
         (0..count).map(|n| said(&format!("Prompt {n}\nmore"))).collect()
     }
 
     #[test]
-    fn the_rail_costs_the_same_few_nodes_for_ten_prompts_or_five_hundred() {
+    fn the_rail_is_one_node_for_ten_prompts_or_for_a_thousand() {
         set_narrow(false);
         let build = |prompts: usize| {
             let built: Vec<(usize, usize)> = (0..prompts).map(|n| (n, n)).collect();
@@ -269,35 +258,31 @@ mod tests {
             let rail = Rail::of(&prompts_said(prompts), &built, None);
             chat::with(|c| marks(c, &rail).iter().map(Node::count).sum::<usize>())
         };
-        let (few, many) = (build(10), build(500));
-        assert!(few > 0 && many <= MARKS * 4 + 2, "{few} {many}");
-        assert!(many < 3 * few + 60, "{few} {many}");
+        assert_eq!((build(10), build(1_000)), (1, 1));
     }
 
     #[test]
-    fn the_lit_mark_is_the_one_whose_run_holds_the_prompt_in_view() {
-        assert_eq!(lit_mark(8, 3), Some(3));
-        assert_eq!(lit_mark(8, 7), Some(7));
-        // Fifty prompts in 24 marks: the run that holds the prompt.
-        let runs = groups(50);
-        let lit = lit_mark(50, 30).unwrap();
-        assert!((runs[lit].0..runs[lit].1).contains(&30));
-        assert_eq!(lit_mark(0, 0), None);
-        // The marks are as many as the groups, and one of them is built lit.
-        set_narrow(false);
-        chat::with(|c| c.session.items = prompts_said(8));
-        let built: Vec<(usize, usize)> = (0..8).map(|n| (n, n)).collect();
-        let (dim, lit) = (Rail::of(&prompts_said(8), &built, Some(Some(0))), Rail::of(&prompts_said(8), &built, Some(Some(5))));
-        assert_eq!((dim.current, lit.current), (0, 5));
-        assert_eq!(chat::with(|c| marks(c, &lit)[0].count()), chat::with(|c| marks(c, &dim)[0].count()));
-    }
-
-    #[test]
-    fn a_tooltip_is_the_prompts_first_line_and_says_how_many_a_mark_stands_for() {
+    fn a_card_is_the_prompts_first_line_over_the_start_of_the_reply() {
         assert_eq!(first_line(&said("Fix the build\nit fails on CI")), "Fix the build");
         assert_eq!(first_line(&said("\n  Ship it  ")), "Ship it");
         assert_eq!(first_line(&Item::UserImages(String::new(), Vec::new())), "Picture");
         assert!(first_line(&said(&"x".repeat(500))).chars().count() <= LINE + 1);
+        let items = vec![
+            said("Fix it"),
+            Item::Worked(5),
+            Item::Text("  \n".into()),
+            Item::Text("I found\n\n  the bug in `build.rs`.".into()),
+            said("And now?"),
+            Item::Stopped,
+            said("Again"),
+            Item::Text("x".repeat(2_000)),
+        ];
+        assert_eq!(reply(&items, 0), "I found the bug in `build.rs`.");
+        assert_eq!(reply(&items, 4), "", "a prompt Claude hasn't answered has no reply, not the next prompt's");
+        assert!(reply(&items, 6).chars().count() <= REPLY + 1);
+        let values = mark_values(&items, &[0, 4]);
+        assert_eq!(values[0], json!({ "title": "Fix it", "preview": "I found the bug in `build.rs`." }));
+        assert_eq!(values[1], json!({ "title": "And now?", "preview": "" }));
     }
 
     #[test]

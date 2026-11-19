@@ -10,9 +10,11 @@ use serde_json::{Map, Value};
 use std::fmt;
 
 mod picture;
+pub mod prompt_rail;
 mod sunburst;
 mod svg;
 pub use picture::{Picture, valid_id as valid_image_id};
+pub use prompt_rail::PromptRail;
 pub use sunburst::{Geometry, Hit, Sunburst, Wedge};
 pub use svg::Svg;
 
@@ -179,6 +181,7 @@ pub enum Node {
     Split(Split),
     Bar(Bar),
     Sunburst(Sunburst),
+    PromptRail(PromptRail),
     Dialog(Dialog),
     Sheet(Sheet),
     Terminal(Terminal),
@@ -820,6 +823,17 @@ impl Tree {
         })
     }
 
+    /// The prompt rail `id`, wherever it is in the tree.
+    pub fn find_rail(&self, id: u64) -> Option<&PromptRail> {
+        fn find(nodes: &[Node], id: u64) -> Option<&PromptRail> {
+            nodes.iter().find_map(|node| match node {
+                Node::PromptRail(rail) if rail.id == id => Some(rail),
+                other => other.parts().into_iter().find_map(|part| find(part, id)),
+            })
+        }
+        find(&self.children, id)
+    }
+
     /// Every string in the tree, in order: what a reader would see.
     pub fn text(&self) -> String {
         plain_text(&self.children)
@@ -892,6 +906,7 @@ impl Node {
             Node::Split(n) => Some(n.id),
             Node::Bar(n) => Some(n.id),
             Node::Sunburst(n) => Some(n.id),
+            Node::PromptRail(n) => Some(n.id),
             Node::Dialog(n) => Some(n.id),
             Node::Sheet(n) => Some(n.id),
             Node::Terminal(n) => Some(n.id),
@@ -931,6 +946,7 @@ impl Node {
             | Node::Avatar(_)
             | Node::Skeleton(_)
             | Node::Sunburst(_)
+            | Node::PromptRail(_)
             | Node::Terminal(_) => vec![],
             Node::Scroll(n) => vec![&n.children],
             Node::Split(n) => vec![&n.start, &n.end],
@@ -1031,6 +1047,7 @@ impl Walk {
                 | "Split"
                 | "Bar"
                 | "Sunburst"
+                | "PromptRail"
                 | "Menu"
                 | "Dialog"
                 | "Sheet"
@@ -1271,6 +1288,7 @@ impl Walk {
                 })
             }
             "Sunburst" => Node::Sunburst(sunburst::parse(id, &props)?),
+            "PromptRail" => Node::PromptRail(prompt_rail::parse(id, &props)),
             "Dialog" => Node::Dialog(Dialog {
                 id,
                 title: text_prop(&props, "title"),

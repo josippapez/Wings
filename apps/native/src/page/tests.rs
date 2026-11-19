@@ -2298,3 +2298,46 @@ fn a_sheet_takes_the_keys_to_its_search_and_escape_sends_its_on_close() {
     settle(&app, &mut window, shows("Closed 1,"));
     assert!(!window.read(|view, _| view.text().contains("Past sessions")));
 }
+
+/// A rail of ten prompts in a slim split, over a line that says which one was picked.
+fn prompt_rail_page() -> String {
+    let mut picked = "none".to_owned();
+    fake::page("page", move |event| {
+        if let Some(("2:onSelect", payload)) = event {
+            picked = payload["index"].to_string();
+        }
+        let marks: Vec<Value> = (0..10).map(|n| json!({ "title": format!("Prompt {n}"), "preview": format!("Reply {n}") })).collect();
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Split", "props": { "defaultSize": 64 }, "children": [
+            { "id": 4, "type": "Slot", "props": { "name": "start" }, "children": [
+                { "id": 2, "type": "PromptRail", "props": { "marks": marks, "current": 3, "onSelect": "2:onSelect" } }] },
+            { "id": 5, "type": "Slot", "props": { "name": "end" }, "children": [text(6, 7, format!("Picked {picked}."))] }] }] })
+    })
+}
+
+/// The middle of tick `at` of a rail of ten, a few points in from the rail's left.
+fn rail_tick(bounds: gpui::Bounds<gpui::Pixels>, at: usize) -> gpui::Point<gpui::Pixels> {
+    use super::tree::prompt_rail as rail;
+    let pitch = rail::pitch(10, f32::from(bounds.size.height));
+    point(bounds.origin.x + px(rail::PAD_X + 4.0), bounds.origin.y + px(rail::row_top(at, pitch) + pitch / 2.0))
+}
+
+/// Hovering a tick shows its card, which goes when the pointer leaves, and a click on a tick tells the page which prompt.
+#[test]
+fn a_prompt_rails_hover_shows_a_card_and_a_click_picks_the_prompt() {
+    let (app, mut window) = open(prompt_rail_page());
+    settle(&app, &mut window, |view| view.rail_bounds(2).is_some());
+    let bounds = window.read(|view, _| view.rail_bounds(2).unwrap());
+    // Nothing is hovered before the pointer is on a tick.
+    assert_eq!(window.read(|view, _| view.rail_card(2)), None);
+    window.simulate_mouse_move(rail_tick(bounds, 6));
+    settle(&app, &mut window, |view| view.rail_card(2) == Some((6, "Prompt 6".to_owned())));
+    // Another tick moves the card without the page hearing of it.
+    window.simulate_mouse_move(rail_tick(bounds, 2));
+    settle(&app, &mut window, |view| view.rail_card(2) == Some((2, "Prompt 2".to_owned())));
+    assert!(!window.read(|view, _| view.acted()));
+    window.simulate_click(rail_tick(bounds, 5), MouseButton::Left);
+    settle(&app, &mut window, shows("Picked 5."));
+    // Away from the rail, the card goes.
+    window.simulate_mouse_move(point(px(400.0), px(200.0)));
+    settle(&app, &mut window, |view| view.rail_card(2).is_none());
+}

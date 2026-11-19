@@ -26,6 +26,8 @@ mod picture_view;
 mod rich_view;
 #[path = "sheet_view.rs"]
 mod sheet_view;
+#[path = "prompt_rail_view.rs"]
+mod prompt_rail_view;
 #[path = "sunburst_view.rs"]
 mod sunburst_view;
 
@@ -151,6 +153,7 @@ pub struct PageView {
     inputs: RefCell<HashMap<u64, InputState>>,
     graphs: RefCell<HashMap<u64, graph_view::GraphState>>,
     sunbursts: RefCell<HashMap<u64, sunburst_view::SunburstState>>,
+    prompt_rails: RefCell<HashMap<u64, prompt_rail_view::RailState>>,
     /// The window's size and scale when the page was last drawn, which a picture sizes itself by, and the pictures
     /// still being decoded, by node id.
     viewport: Cell<(f32, f32, f32)>,
@@ -273,6 +276,7 @@ impl PageView {
         self.inputs.borrow_mut().clear();
         self.graphs.borrow_mut().clear();
         self.sunbursts.borrow_mut().clear();
+        self.prompt_rails.borrow_mut().clear();
         self.chip_focus.borrow_mut().clear();
         self.actions_focus.borrow_mut().clear();
         self.actions_within.clear();
@@ -394,6 +398,9 @@ impl PageView {
                                         Node::Sunburst(map) => {
                                             ids.insert(map.id);
                                         }
+                                        Node::PromptRail(rail) => {
+                                            ids.insert(rail.id);
+                                        }
                                         Node::Chips(chips) => {
                                             ids.insert(chips.id);
                                         }
@@ -420,6 +427,7 @@ impl PageView {
                             view.inputs.borrow_mut().retain(|id, _| ids.contains(id));
                             view.graphs.borrow_mut().retain(|id, _| ids.contains(id));
                             view.sunbursts.borrow_mut().retain(|id, _| ids.contains(id));
+                            view.prompt_rails.borrow_mut().retain(|id, _| ids.contains(id));
                             view.chip_focus
                                 .borrow_mut()
                                 .retain(|(id, _), _| ids.contains(id));
@@ -466,6 +474,7 @@ impl PageView {
             inputs: RefCell::new(HashMap::new()),
             graphs: RefCell::new(HashMap::new()),
             sunbursts: RefCell::new(HashMap::new()),
+            prompt_rails: RefCell::new(HashMap::new()),
             viewport: Cell::new((0.0, 0.0, 1.0)),
             images_waiting: RefCell::default(),
             chip_focus: RefCell::new(HashMap::new()),
@@ -948,6 +957,14 @@ impl PageView {
     #[cfg(all(test, feature = "test-support"))]
     pub(super) fn split_narrow(&self, id: u64) -> Option<bool> {
         self.split_narrow.get(&id).copied()
+    }
+
+    /// The mark of rail `id` the pointer is on, and that mark's title as its card shows it.
+    #[cfg(all(test, feature = "test-support"))]
+    pub(super) fn rail_card(&self, id: u64) -> Option<(usize, String)> {
+        let hover = self.prompt_rails.borrow().get(&id)?.hover?;
+        let rail = self.tree.as_ref()?.find_rail(id)?;
+        rail.marks.get(hover).map(|mark| (hover, mark.title.clone()))
     }
 
     #[cfg(all(test, feature = "test-support"))]
@@ -1690,6 +1707,7 @@ impl PageView {
             Node::Avatar(avatar) => rich_view::avatar(avatar),
             Node::Skeleton(skeleton) => rich_view::skeleton(skeleton),
             Node::Sunburst(map) => self.sunburst(map, cx),
+            Node::PromptRail(rail) => self.prompt_rail(rail, cx),
             // Drawn over the whole page by `render`, not where it sits.
             Node::Dialog(_) => div().into_any_element(),
             Node::Sheet(sheet) => self.sheet(sheet, cx),

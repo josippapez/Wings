@@ -8,6 +8,7 @@
 //! repos in that folder, popovers too (`shot_plugins/external.rs`).
 //! `--claude-chat` renders Claude chat's page over a fake `claude` that prints made-up sessions.
 //! `--tooltips` points at a titled Button and Text of a made-up page until their tooltips show.
+//! `--prompt-rail` renders a `PromptRail` of 40 prompts with one pointed at, and one of 300 that has scrolled.
 //! Nothing shows on screen and focus doesn't move. macOS only (real Metal rendering).
 //!
 //! cargo run --manifest-path apps/native/Cargo.toml --example shot_plugins --features test-support -- <out-dir>
@@ -109,6 +110,10 @@ fn main() {
     }
     if std::env::args().any(|arg| arg == "--tooltips") {
         tooltips(out);
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--prompt-rail") {
+        prompt_rail(out);
         return;
     }
     if std::env::args().any(|arg| arg == "--claude-chat") {
@@ -336,6 +341,42 @@ fn tooltips(out: PathBuf) {
             cx.simulate_mouse_move(window, point(px(width - 5.0), px(230.0)), None, Modifiers::default());
             wait(&mut cx, window, Duration::from_millis(100));
         }
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+    }
+}
+
+/// A `PromptRail` in a slim split beside some text: 40 prompts with the 13th in view and the 23rd pointed at, so its
+/// card shows, and then 300 prompts with the 250th in view, so the rail has scrolled to keep it there.
+fn prompt_rail(out: PathBuf) {
+    use wings_native::page::tree::prompt_rail as rail;
+    let host = PluginHost::new(PluginConfig { id: "prompt-rail".into(), root: out.join("fixture-storage-prompt-rail"), scope: "shot".into() });
+    let height = 560.0;
+    let mut cx = app();
+    for (name, count, current, hover) in [("hover", 40_usize, 12_usize, Some(22_usize)), ("scrolled", 300, 249, None)] {
+        let source = fake::page("page", move |_| {
+            let marks: Vec<_> = (0..count)
+                .map(|n| json!({
+                    "title": format!("Prompt {} about the checkout flow", n + 1),
+                    "preview": "I read the cart module first. The total is computed twice, once when a coupon applies and once on submit, and the two disagree by the tax. I would fix it in one place."
+                }))
+                .collect();
+            json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Split", "props": { "defaultSize": 64 }, "children": [
+                { "id": 2, "type": "Slot", "props": { "name": "start" }, "children": [
+                    { "id": 3, "type": "PromptRail", "props": { "marks": marks, "current": current, "onSelect": "3:onSelect" } }] },
+                { "id": 4, "type": "Slot", "props": { "name": "end" }, "children": [
+                    { "id": 5, "type": "Text", "children": [{ "id": 6, "type": "#text", "text": "The conversation sits here, to the right of the rail." }] }] }] }] })
+        });
+        let handle = cx.open_offscreen_window(size(px(640.0), px(height)), |_, cx| cx.new(|cx| PageView::in_plugin(&host, &source, cx))).unwrap();
+        let window = handle.into();
+        wait(&mut cx, window, Duration::from_millis(800));
+        if let Some(at) = hover {
+            // The rail fills the window's height, so its ticks are where the layout puts them.
+            let pitch = rail::pitch(count, height);
+            let y = rail::row_top(at, pitch) + pitch / 2.0;
+            cx.simulate_mouse_move(window, point(px(rail::PAD_X + 4.0), px(y)), None, Modifiers::default());
+            wait(&mut cx, window, Duration::from_millis(300));
+        }
+        save(&mut cx, window, out.join(format!("prompt-rail-{name}.png")));
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
     }
 }
