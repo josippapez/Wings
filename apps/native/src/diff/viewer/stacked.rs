@@ -1137,6 +1137,11 @@ mod tests {
     const PATCH: &str = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -5,3 +5,4 @@\n five\n+new six\n six\n seven\n@@ -20,3 +21,2 @@\n twenty\n-twenty-one\n twenty-two\ndiff --git a/b.rs b/b.rs\nnew file mode 100644\n--- /dev/null\n+++ b/b.rs\n@@ -0,0 +1,2 @@\n+one\n+two\ndiff --git a/c.png b/c.png\nBinary files a/c.png and b/c.png differ\n";
 
     fn open(payload: Value, cwd: &str) -> (TestApp, TestAppWindow<Viewer>) {
+        open_in(payload, cwd, None)
+    }
+
+    /// `open`, in a window `height` points tall from its first frame, so a list longer than that scrolls.
+    fn open_in(payload: Value, cwd: &str, height: Option<f32>) -> (TestApp, TestAppWindow<Viewer>) {
         let view = View {
             id: "test:5".into(),
             plugin_id: "test".into(),
@@ -1153,11 +1158,24 @@ mod tests {
             scope: "test".into(),
         }));
         let mut app = TestApp::new();
-        let window = app.open_window(move |_, cx| {
+        let build = move |_: &mut gpui::Window, cx: &mut gpui::Context<Viewer>| {
             let mut viewer = Viewer::new(view, host, cx);
             viewer.set_stacked(true, cx);
             viewer
-        });
+        };
+        let window = match height {
+            None => app.open_window(build),
+            Some(height) => app.open_window_with_options(
+                gpui::WindowOptions {
+                    window_bounds: Some(gpui::WindowBounds::Windowed(gpui::Bounds::new(
+                        gpui::point(px(0.0), px(0.0)),
+                        gpui::size(px(800.0), px(height)),
+                    ))),
+                    ..Default::default()
+                },
+                build,
+            ),
+        };
         (app, window)
     }
 
@@ -1189,9 +1207,11 @@ mod tests {
     #[test]
     fn every_file_stacks_and_its_folds_open_to_the_lines_in_the_repository() {
         let dir = repo("folds");
-        let (app, mut window) = open(
+        // Short enough that the stack scrolls.
+        let (app, mut window) = open_in(
             json!({ "patch": PATCH, "worktree": true, "focus": { "path": "b.rs" } }),
             &dir,
+            Some(220.0),
         );
         app.run_until_parked();
         window.draw();
@@ -1208,8 +1228,10 @@ mod tests {
             assert_eq!(v.stack.rows[10], StackRow::Fold { file: 0, fold: 2 });
             assert_eq!(v.stack.folds[0][2].len, 8);
             assert_eq!(v.stack.headers, [0, 12, 16]);
-            // Opened from b.rs in the sidebar, it starts there.
-            assert_eq!(v.stack.list.logical_scroll_top().item_ix, 12);
+            // Opened from b.rs in the sidebar, it starts there, as far down as a list that ends under it can go: here
+            // the whole stack is about two screens of this short window.
+            assert!(v.stack.list.logical_scroll_top().item_ix > 0, "it scrolled toward b.rs");
+            assert!(v.stack.list.bounds_for_item(12).is_some(), "b.rs's header is on screen");
             assert_eq!(v.counts, [(1, 1), (2, 0), (0, 0)]);
         });
 

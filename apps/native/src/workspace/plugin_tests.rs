@@ -2704,12 +2704,12 @@ fn a_plain_click_shows_one_sidebar_alone_and_a_shortcut_click_adds_a_split_below
     assert_eq!(right_sizes(&window), [0.5, 0.5]);
     window.update(|w, _, cx| w.toggle_sidebar("sider", "other", true, cx));
     assert_eq!(right_pages(&window), ["side", "other"], "no second copy");
-    // Both pages are started and stay so.
-    assert_eq!(window.read(|w, _| w.sidebar_pages.len()), 2);
+    // Every page opened is started and stays so: `third` from the start, and both splits.
+    assert_eq!(window.read(|w, _| w.sidebar_pages.len()), 3);
     // A plain click on one of two shows it alone, and the other page keeps running.
     window.update(|w, _, cx| w.toggle_sidebar("sider", "side", false, cx));
     assert_eq!(right_pages(&window), ["side"]);
-    assert_eq!(window.read(|w, _| w.sidebar_pages.len()), 2);
+    assert_eq!(window.read(|w, _| w.sidebar_pages.len()), 3);
 }
 
 /// The click itself, with the shortcut key held, on the button of a sidebar.

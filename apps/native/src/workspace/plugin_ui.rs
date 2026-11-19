@@ -669,10 +669,10 @@ impl Workspace {
                     button.title.clone(),
                 )
                 .children(label)
-                .on_click(cx.listener(move |this, _, window, cx| match &opens {
+                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| match &opens {
                     None => {
                         this.plugin_ui.buttons_menu = false;
-                        this.toggle_sidebar(&plugin, &page, cx);
+                        this.toggle_sidebar(&plugin, &page, event.modifiers().secondary(cx), cx);
                     }
                     Some(opens) => this.open_bar_view(&plugin, &page, opens, window, cx),
                 }))
@@ -1355,7 +1355,7 @@ pub(super) struct HoverPopover {
     /// Popovers a manifest declares that have no native build.
     missing: HashSet<(String, String)>,
     /// The sidebar the pointer was last on, and whether it is over its button and over its popover.
-    hovered: Option<(String, String)>,
+    pub(super) hovered: Option<(String, String)>,
     over: [bool; 2],
     /// Shows or hides it after its delay.
     timer: Option<Task<()>>,

@@ -410,7 +410,7 @@ mod tests {
         let folds: Vec<_> = diff.files.iter().map(|f| folds(f, None)).collect();
         let rows = rows(&diff.files, &folds, &HashSet::new());
         // b.rs's second line, and a.rs's removed line.
-        let second = key(rows[14], &diff.files, &folds);
+        let second = key(rows[13], &diff.files, &folds);
         assert_eq!(second, RowKey::Line("b.rs".into(), false, 2));
         assert_eq!(
             key(rows[8], &diff.files, &folds),
