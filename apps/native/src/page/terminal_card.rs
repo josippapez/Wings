@@ -75,6 +75,8 @@ pub fn terminal_card(
                 .id(("terminal-pane", pane))
                 .flex_1()
                 .min_h_0()
+                // Its text ran against the card's right border.
+                .pr(px(8.0))
                 .role(Role::Group)
                 .aria_label(title)
                 .child(view.cached(StyleRefinement::default().size_full())),

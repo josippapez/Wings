@@ -121,25 +121,30 @@ impl PageView {
         } else {
             code.text.as_str()
         };
-        let mut styled = StyledText::new(text.to_owned());
-        if let Some(found) = found {
-            styled = styled.with_highlights(runs(text, &found).into_iter().map(
-                |(range, color, italic)| {
+        let colours = found.map_or_else(Vec::new, |found| {
+            runs(text, &found)
+                .into_iter()
+                .map(|(range, color, italic)| {
                     let style = HighlightStyle {
                         color: Some(rgb(color).into()),
                         font_style: italic.then_some(FontStyle::Italic),
                         ..Default::default()
                     };
                     (range, style)
-                },
-            ));
-        }
+                })
+                .collect()
+        });
+        let id = code.id;
+        let marks = super::selection_view::with_selection(colours, self.selection_in(id, text));
+        let styled = StyledText::new(text.to_owned()).with_highlights(marks);
+        let layout = styled.layout().clone();
+        // Dragging over the block selects its text, as it does a paragraph's.
+        let selectable = self.selectable(id, text.to_owned(), layout, styled.into_any_element(), cx);
         let lines = div()
             .min_w_0()
             .font_family(DEFAULT_FONT_FAMILY)
             .text_size(px(scaled(12.0)))
-            .child(styled);
-        let id = code.id;
+            .child(selectable);
         let card = match code.tone {
             // A run of a diff's lines: a tinted band with a bar in the tone's colour, for the card round the diff to hold.
             Some(tone) => {

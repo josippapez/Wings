@@ -306,6 +306,8 @@ pub fn dialog(
         .flex()
         .items_center()
         .justify_center()
+        // A margin to the window's edges, so the panel never reaches what is under its end (the composer).
+        .py(px(32.0))
         .bg(rgba(BACKDROP))
         .occlude();
     let panel = div()
@@ -321,7 +323,7 @@ pub fn dialog(
             Some(height) => panel.h(px(height)),
             None => panel.h_auto(),
         })
-        .max_h(relative(0.9))
+        .max_h(relative(1.0))
         .flex()
         .overflow_hidden()
         .rounded(px(14.0))
@@ -479,7 +481,9 @@ pub fn option_item(
         .children(detail.map(|detail| {
             div()
                 .flex_none()
-                .max_w(relative(0.45))
+                // The label keeps what it needs up to the rest: a short name with a long description was cut at
+                // under half the menu with the room beside it empty.
+                .max_w(relative(0.7))
                 .truncate()
                 .text_size(px(12.0))
                 .text_color(rgb(theme::palette().muted_foreground))

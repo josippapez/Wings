@@ -779,11 +779,14 @@ impl TextField {
         } else {
             doc.clone()
         };
-        let color = rgb(if placeholder {
-            MUTED_FOREGROUND
+        // A field that takes Tab shows a suggestion to fill it with, not a hint: Claude chat's next message. Italic and
+        // nearer the text's colour, so it isn't the same grey as the placeholder of a field with none.
+        let suggestion = placeholder && self.takes_tab;
+        let color: gpui::Hsla = if suggestion {
+            gpui::Hsla::from(rgb(FOREGROUND)).opacity(0.62)
         } else {
-            FOREGROUND
-        });
+            rgb(if placeholder { MUTED_FOREGROUND } else { FOREGROUND }).into()
+        };
         let (range, selecting) = if !self.marked.is_empty() {
             (self.head()..self.head() + self.marked.len(), false)
         } else if focused && !placeholder {
@@ -796,14 +799,17 @@ impl TextField {
         } else {
             range
         };
-        let plain = |len| TextRun {
-            color: color.into(),
-            ..style.to_run(len)
+        let plain = |len| {
+            let mut run = TextRun { color, ..style.to_run(len) };
+            if suggestion {
+                run.font.style = gpui::FontStyle::Italic;
+            }
+            run
         };
         let special = TextRun {
             background_color: selecting.then(|| rgba(SELECTED).into()),
             underline: (!selecting && !range.is_empty()).then(|| UnderlineStyle {
-                color: Some(color.into()),
+                color: Some(color),
                 thickness: px(1.0),
                 wavy: false,
             }),

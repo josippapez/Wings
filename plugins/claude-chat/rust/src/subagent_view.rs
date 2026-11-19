@@ -35,8 +35,8 @@ fn page(c: &Chat, tab: &Tab) -> Node {
 fn status(tab: &Tab) -> Option<Node> {
     let state = &tab.state;
     match (state["running"].as_bool(), state["since"].as_u64(), state["took"].as_u64()) {
-        (Some(true), Some(since), _) => Some(muted("Running").prop("since", since)),
-        (Some(true), None, _) => Some(muted("Running")),
+        (Some(true), Some(since), _) => Some(muted("Working").prop("since", since)),
+        (Some(true), None, _) => Some(muted("Working")),
         (Some(false), _, Some(took)) => Some(muted(format!("Done · {}", view::took(took)))),
         (Some(false), _, None) => Some(muted("Done")),
         // Only the chat's Claude Code runs it, so with the chat closed it doesn't run.
@@ -97,9 +97,10 @@ fn header(tab: &Tab) -> Node {
     let status = status(tab);
     let model = state["model"].as_str().map(model_name);
     let facts: Vec<String> = model.into_iter().chain(chat_name.map(|name| format!("from {name}"))).collect();
+    // On the back button's text edge: 14 for the bar, 7 for a row's inset, and 4 for the button's own padding.
     let facts = (!facts.is_empty()).then(|| {
         let said = facts.join(" · ");
-        muted(said.as_str()).prop("size", "small").prop("truncate", true).prop("title", said.as_str())
+        view::inset(muted(said.as_str()).prop("size", "small").prop("truncate", true).prop("title", said.as_str())).prop("indent", 4)
     });
     let title = row()
         .prop("gap", "m")
@@ -107,8 +108,11 @@ fn header(tab: &Tab) -> Node {
         .prop("grow", true)
         .child(Node::new("Icon").prop("name", "claude").prop("size", 14))
         .child(text(tab.title.as_str()).prop("weight", "strong").prop("truncate", true).prop("title", tab.title.as_str()));
-    let line = row().prop("gap", "m").prop("align", "center").child(back).child(title).maybe(status.map(|status| status.prop("size", "small"))).maybe(facts);
-    Node::new("Bar").prop("variant", "slim").child(line)
+    // The model and chat go under the title, so they don't take the title's room in a narrow tab: they were cut by the
+    // line's end while the title was, with the status beside it, and the two groups ran together.
+    let line = row().prop("gap", "m").prop("align", "center").child(back).child(title).maybe(status.map(|status| status.prop("size", "small")));
+    // Not the slim bar, which is for a pane header's buttons: its 4 point right edge pressed the status against the window's.
+    Node::new("Bar").child(stack().prop("gap", "xs").child(line).maybe(facts))
 }
 
 /// The subagent's conversation, newest at the foot and kept there while you read the end, built from the newest back until
@@ -190,7 +194,7 @@ fn composer(c: &Chat, tab: &Tab) -> Node {
         .child(icon(14, 2.0, &[view::SEND]));
     let hint = match closed {
         Some(Some(why)) => text(why).prop("tone", "warn"),
-        _ => muted("Goes through the chat: its Claude passes it on with SendMessage, which wakes a subagent that has finished."),
+        _ => muted("Goes through the chat: Claude passes it on, and wakes the subagent if it has finished."),
     };
     let controls = row().prop("gap", "s").prop("align", "center").child(stack().prop("grow", true).child(hint.prop("size", "small"))).child(send);
     let message_box = card().prop("variant", "raised").child(field.key("field")).child(controls);

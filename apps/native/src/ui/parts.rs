@@ -159,7 +159,8 @@ pub fn disclosure_trigger(
         .aria_label(label)
         .aria_expanded(open)
         .flex()
-        .items_center()
+        // The chevron is on the summary's first line: a summary that wraps had it between its lines.
+        .items_start()
         .gap(px(4.0))
         .px(px(6.0))
         .py(px(4.0))
@@ -171,14 +172,16 @@ pub fn disclosure_trigger(
         .focusable()
         .tab_stop(true)
         .focus_visible(|style| style.bg(rgba(theme::HOVER)))
-        .child(icon(
-            if open {
-                Icon::ChevronDown
-            } else {
-                Icon::ChevronRight
-            },
-            12.0,
-            theme::palette().muted_foreground,
-        ))
+        .child(
+            div().flex_none().h(px(12.0 * 1.45)).flex().items_center().child(icon(
+                if open {
+                    Icon::ChevronDown
+                } else {
+                    Icon::ChevronRight
+                },
+                12.0,
+                theme::palette().muted_foreground,
+            )),
+        )
         .child(summary)
 }

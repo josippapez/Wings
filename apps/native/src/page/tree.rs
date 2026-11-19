@@ -720,6 +720,8 @@ pub struct Select {
     pub on_change: Option<String>,
     /// Chips drawn as `Tabs` of the "line" variant are: labels with a line under the picked one.
     pub line: bool,
+    /// Chips drawn as a toggle on a faint track, as a sheet's header draws them, wherever they are.
+    pub segmented: bool,
     /// `variant: "ghost"`: a select as wide as its choice, with no box until you point at it, for a row of settings
     /// beside a field, like a chat's model and effort.
     pub quiet: bool,
@@ -1691,6 +1693,7 @@ impl Walk {
                         .filter(|handler| valid_handler(handler))
                         .map(str::to_owned),
                     line: kind == "Chips" && on("line"),
+                    segmented: kind == "Chips" && on("segmented"),
                     quiet: kind == "Select" && str_prop(&props, "variant") == Some("ghost"),
                 };
                 if kind == "Chips" {
@@ -2370,6 +2373,16 @@ mod tests {
             Node::Select(select) => select,
             _ => panic!("a select"),
         }
+    }
+
+    #[test]
+    fn chips_can_be_a_segmented_toggle_and_a_select_cannot() {
+        let props = json!({"label":"Mode","segmented":true,"options":[{"value":"a"}]});
+        let Node::Chips(chips) = parse_one(json!({"id":1,"type":"Chips","props":props,"children":[]})) else {
+            panic!("chips")
+        };
+        assert!(chips.segmented);
+        assert!(!select(props).segmented);
     }
 
     #[test]

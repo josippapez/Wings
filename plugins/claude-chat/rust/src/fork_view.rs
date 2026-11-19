@@ -106,11 +106,12 @@ pub fn folders(c: &Chat) -> Option<Node> {
     }
     let rows = c.dirs.iter().map(|dir| {
         let remove = dir.clone();
+        let shown = shown_path(&c.cwd, dir);
         row()
             .prop("gap", "xs")
             .prop("align", "center")
             .key(dir.as_str())
-            .child(stack().prop("grow", true).child(text(dir.as_str()).prop("size", "small").prop("truncate", true).prop("title", dir.as_str())))
+            .child(stack().prop("grow", true).child(crate::view::inset(text(shown).prop("size", "small").prop("truncate", true).prop("title", dir.as_str()))))
             .child(
                 ui::button("", "ghost", false, move || remove_dir(&remove))
                     .prop("size", "icon-sm")
@@ -120,7 +121,24 @@ pub fn folders(c: &Chat) -> Option<Node> {
                     .child(icon(14, 2.0, &[CLOSE])),
             )
     });
-    Some(stack().prop("gap", "xs").child(Node::new("Heading").text("Folders")).child(stack().prop("gap", "none").children(rows)))
+    Some(stack().prop("gap", "xs").child(crate::view::heading("Folders")).child(stack().prop("gap", "none").children(rows)))
+}
+
+/// A folder as it reads best: under the chat's folder, its path from there; else with the home folder as "~". The plugin
+/// can't ask for the home folder, so it is the first two parts of a path under /Users or /home.
+pub(crate) fn shown_path(cwd: &str, dir: &str) -> String {
+    let inside = crate::edits::relative(cwd, dir);
+    if inside != dir && !inside.is_empty() {
+        return inside.to_owned();
+    }
+    let parts: Vec<&str> = dir.split('/').collect();
+    match parts.as_slice() {
+        ["", "Users" | "home", user, rest @ ..] if !user.is_empty() => match rest.is_empty() {
+            true => "~".to_owned(),
+            false => format!("~/{}", rest.join("/")),
+        },
+        _ => dir.to_owned(),
+    }
 }
 
 /// Why the chat can't start Claude Code again now, or None. A turn that runs would be lost, so it waits.
@@ -246,5 +264,18 @@ fn restart_with(change: impl FnOnce(&mut Chat)) {
     });
     if let Some(resume) = resume {
         chat::launch_with(resume, Launch::default());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_folder_shows_from_the_chats_folder_or_with_the_home_folder_as_a_tilde() {
+        assert_eq!(shown_path("/Users/me/shop", "/Users/me/shop/docs/api"), "docs/api");
+        assert_eq!(shown_path("/Users/me/shop", "/Users/me/other/lib"), "~/other/lib");
+        assert_eq!(shown_path("/home/me/shop", "/home/me"), "~");
+        assert_eq!(shown_path("/Users/me/shop", "/private/tmp/x"), "/private/tmp/x");
     }
 }

@@ -2649,6 +2649,16 @@ fn a_code_node_is_highlighted_off_the_window_thread_by_its_language() {
     assert_eq!(PageView::first_line_colours("no-such-language", plain), Some(Vec::new()));
 }
 
+/// Dragging over a `Code` block selects its text, across its lines, as it does a paragraph's.
+#[test]
+fn dragging_over_a_code_block_selects_its_text() {
+    let (app, mut window) = open(code_page("no-such-language", "let a = 1;\nlet b = 2;"));
+    settle(&app, &mut window, |view| view.text().contains("let b"));
+    drag(&mut window, point(px(20.0), px(14.0)), point(px(300.0), px(30.0)));
+    let selected = window.read(|view, _| view.selected_text()).unwrap_or_default();
+    assert!(selected.ends_with("1;\nlet b = 2;"), "{selected:?}");
+}
+
 /// A stack with `onContextMenu` of two 40 point blocks and a `Code`, over a line that says what the page heard.
 fn context_menu_page() -> String {
     let mut heard = "nothing".to_owned();
@@ -2801,6 +2811,21 @@ fn a_right_click_after_dragging_over_words_sends_them_as_the_selection() {
     assert_eq!(window.read(|view, _| view.selected_text()), None);
     right_click(&mut window, point(px(500.0), px(30.0)));
     settle(&app, &mut window, shows("Heard 1:onContextMenu selection=none."));
+}
+
+/// Dragging from one line into the next selects the end of the first and the start of the second, a line apart.
+#[test]
+fn dragging_from_one_line_into_the_next_selects_across_them() {
+    let (app, mut window) = open(selection_page());
+    settle(&app, &mut window, shows("Heard nothing."));
+    drag(&mut window, point(px(150.0), px(8.0)), point(px(40.0), px(30.0)));
+    let selected = window.read(|view, _| view.selected_text()).unwrap_or_default();
+    let (first, second) = selected.split_once('\n').unwrap_or_else(|| panic!("two lines: {selected:?}"));
+    assert!(first.ends_with("after it") && !second.is_empty() && "alpha beta gamma delta".starts_with(second), "{selected:?}");
+    // Dragged back up past the first line's start, it takes the whole of the first line and nothing of the second.
+    drag(&mut window, point(px(40.0), px(30.0)), point(px(0.0), px(0.0)));
+    let selected = window.read(|view, _| view.selected_text()).unwrap_or_default();
+    assert!(selected.ends_with("the docs and more words after it") || selected.starts_with("the docs"), "{selected:?}");
 }
 
 /// A double press selects the word under it.

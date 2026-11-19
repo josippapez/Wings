@@ -170,7 +170,7 @@ fn duration(ms: u64) -> String {
 
 fn context_body(context: &ContextDetail) -> Node {
     let used = context.used * 100 / context.most.max(1);
-    let model = if context.model.is_empty() { String::new() } else { format!(" · {}", context.model) };
+    let model = if context.model.is_empty() { String::new() } else { format!(" · {}", crate::session::model_name(&context.model)) };
     let total = gauge("Context window", used as f64, (70, 90), Some(format!("{} of {} tokens{model}", grouped(context.used), grouped(context.most))));
     // A thin bar each, as the share of the whole window. The reserve and the free space are not "used", so they stay calm.
     let rows = context.categories.iter().map(|(name, count, kind)| {

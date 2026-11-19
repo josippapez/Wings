@@ -257,6 +257,20 @@ pub fn outcome(exit: &Result<Value, String>, printed: &Value) -> Result<Vec<Stri
     }
 }
 
+/// What Claude Code said when it refused a change, as a sentence for the dialog: Wings says what happened, then Claude
+/// Code's reason, capitalised and without the name of the command that printed it (`edit_hook: `).
+pub fn refused(why: &str) -> String {
+    let why = why.trim();
+    let why = match why.split_once(": ") {
+        Some((command, rest)) if !command.is_empty() && command.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') => rest,
+        _ => why,
+    };
+    let mut chars = why.chars();
+    let reason: String = chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default();
+    let reason = reason.trim_end_matches('.');
+    if reason.is_empty() { "Claude Code didn't make this change.".to_owned() } else { format!("Claude Code didn't make this change. {reason}.") }
+}
+
 /// The new permission rule you are writing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuleForm {
@@ -394,7 +408,7 @@ impl Setup {
                 }
                 std::iter::once(("success", edit.done())).chain(warnings.into_iter().map(|warning| ("warn", warning))).collect()
             }
-            Err(why) => vec![("danger", why)],
+            Err(why) => vec![("danger", refused(&why))],
         };
     }
 
@@ -946,6 +960,13 @@ mod tests {
     }
 
     #[test]
+    fn a_refusal_is_a_sentence_in_wings_words() {
+        assert_eq!(refused("the rule looks like a secret\n"), "Claude Code didn't make this change. The rule looks like a secret.");
+        assert_eq!(refused("edit_hook: that hook is no longer in localSettings."), "Claude Code didn't make this change. That hook is no longer in localSettings.");
+        assert_eq!(refused(""), "Claude Code didn't make this change.");
+    }
+
+    #[test]
     fn a_refused_change_says_why_and_keeps_the_rule_you_wrote() {
         let refused = Ok(json!({ "code": 1, "stderr": "the rule looks like it contains a secret, so it was not saved to settings\n" }));
         let why = "the rule looks like it contains a secret, so it was not saved to settings";
@@ -964,7 +985,7 @@ mod tests {
         setup.review_rule();
         let edit = setup.confirm().unwrap();
         setup.saved(&edit, outcome(&refused, &Value::Null));
-        assert_eq!(setup.outcome, [("danger", why.to_owned())]);
+        assert_eq!(setup.outcome, [("danger", "Claude Code didn't make this change. The rule looks like it contains a secret, so it was not saved to settings.".to_owned())]);
         assert_eq!((&setup.pending, setup.saving), (&None, false));
         assert_eq!(setup.form.map(|form| form.rule), Some("Bash(curl -u admin:hunter2 https://ci.example.com)".into()));
     }

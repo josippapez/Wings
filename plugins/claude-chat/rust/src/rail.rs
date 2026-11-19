@@ -186,9 +186,9 @@ fn reply(items: &[Item], prompt: usize) -> String {
 }
 
 /// The rail, over the conversation against the left of its column, which the app shows where the tab has room for it.
-/// None with nothing to mark.
+/// None with fewer than two prompts to move between: one tick alone at the top-left jumps nowhere.
 pub fn marks(c: &Chat, rail: &Rail) -> Vec<Node> {
-    if rail.prompts.is_empty() {
+    if rail.prompts.len() < 2 {
         return Vec::new();
     }
     // Past `MARKS` prompts only the newest are sent, and the numbers Wings says count from the first of them.
@@ -276,6 +276,17 @@ mod tests {
             chat::with(|c| marks(c, &rail).iter().map(Node::count).sum::<usize>())
         };
         assert_eq!((build(10), build(1_000)), (1, 1));
+    }
+
+    #[test]
+    fn a_rail_of_one_prompt_draws_nothing() {
+        let build = |prompts: usize| {
+            let built: Vec<(usize, usize)> = (0..prompts).map(|n| (n, n)).collect();
+            chat::with(|c| c.session.items = prompts_said(prompts));
+            let rail = Rail::of(&prompts_said(prompts), &built, None);
+            chat::with(|c| marks(c, &rail).len())
+        };
+        assert_eq!((build(0), build(1), build(2)), (0, 0, 1));
     }
 
     #[test]

@@ -382,6 +382,9 @@ pub struct Session {
     /// Claude is thinking before it writes.
     pub thinking: bool,
     pub id: Option<String>,
+    /// The session id Claude Code names on its first lines, before its `init` and before anything is saved under it: only
+    /// for the session sidebar to follow a new chat from the start, as `id` then can't resume or open it in a terminal.
+    pub announced: Option<String>,
     /// The model the session runs on, as Claude Code names it (`claude-opus-5-5`) or as it was picked (`opus`).
     pub model: Option<String>,
     /// The effort picked in the chat.
@@ -484,6 +487,9 @@ pub struct Session {
 impl Session {
     /// Takes in one line Claude Code printed, or one transcript entry.
     pub fn hear(&mut self, line: &Value) {
+        if let Some(id) = line["session_id"].as_str().filter(|id| self.announced.as_deref() != Some(*id)) {
+            self.announced = Some(id.to_owned());
+        }
         self.agents.learn(line);
         // A subagent's edits count for the turn that started it.
         self.edits.heard(line, self.items.len());

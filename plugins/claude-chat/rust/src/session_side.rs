@@ -20,7 +20,7 @@ use std::{cell::RefCell, rc::Rc};
 use serde_json::{Value, json};
 use wings_plugin::{
     host, pages,
-    ui::{self, Handlers, Node, empty, loading, muted, page, toolbar, toolbar_with},
+    ui::{self, Handlers, Node, empty, loading, muted, page, toolbar},
 };
 
 use crate::{chat, prefs, subagents};
@@ -33,6 +33,12 @@ pub const IDLE: &str = "session-side";
 /// The name the sidebar takes while it shows `session`'s chat.
 pub fn page_name(session: &str) -> String {
     format!("{IDLE}:{session}")
+}
+
+/// The session the sidebar follows for this chat: a new chat's from Claude Code's first lines, so its meters show before
+/// you write.
+fn followed(c: &chat::Chat) -> Option<String> {
+    c.session.id.clone().or_else(|| c.session.announced.clone())
 }
 
 /// The sidebar's name among the names the plugin's pages have, whatever it shows.
@@ -90,7 +96,7 @@ fn names_changed(names: &[String]) {
         let mut relay = relay.borrow_mut();
         relay.names = names.to_vec();
         // The sidebar went to another chat, or closed: it is told all again when it follows this one again.
-        let followed = chat::with(|c| c.session.id.clone()).is_some_and(|session| names.contains(&page_name(&session)));
+        let followed = chat::with(|c| followed(c)).is_some_and(|session| names.contains(&page_name(&session)));
         if !followed {
             relay.told = None;
         }
@@ -125,7 +131,7 @@ fn claim() {
     if !in_wings() {
         return;
     }
-    let (session, on) = chat::with(|c| (c.session.id.clone(), c.side_open));
+    let (session, on) = chat::with(|c| (followed(c), c.side_open));
     let open = RELAY.with(|relay| {
         let mut relay = relay.borrow_mut();
         relay.wanted = Some(session.clone());
@@ -155,7 +161,7 @@ fn send_show() {
 /// After each line Claude Code printed: a chat in front that has its session now, as a new chat does after its first
 /// message, or a new one after /clear, has the sidebar follow that.
 pub fn sync() {
-    let session = chat::with(|c| c.session.id.clone());
+    let session = chat::with(|c| followed(c));
     let stale = RELAY.with(|relay| relay.borrow().wanted.as_ref().is_some_and(|wanted| *wanted != session));
     if stale && host::focused() {
         claim();
@@ -183,7 +189,7 @@ pub fn toggle() {
 
 /// Opens the sidebar on this chat, where another sidebar may have taken its place. Wings leaves one already on screen be.
 fn open_here() {
-    let session = chat::with(|c| c.session.id.clone());
+    let session = chat::with(|c| followed(c));
     RELAY.with(|relay| {
         let mut relay = relay.borrow_mut();
         relay.opened = true;
@@ -234,10 +240,10 @@ pub fn publish(c: &chat::Chat) {
     if !c.side_in_wings {
         return;
     }
-    let Some(session) = c.session.id.as_deref() else {
+    let Some(session) = followed(c) else {
         return;
     };
-    let name = page_name(session);
+    let name = page_name(&session);
     if !RELAY.with(|relay| relay.borrow().names.contains(&name)) {
         return;
     }
@@ -269,7 +275,7 @@ fn state_message(c: &chat::Chat, sections: Value) -> Value {
 
 /// What the sidebar hands the chat: a click on what the chat drew there, or whether it shows.
 fn told(message: &Value, from: Option<&str>, _write: bool) {
-    let Some(session) = chat::with(|c| c.session.id.clone()) else {
+    let Some(session) = chat::with(|c| followed(c)) else {
         return;
     };
     // A subagent's sidebar asks for the session back; it isn't the session sidebar, so it comes before the check below.
@@ -432,10 +438,9 @@ fn body(side: &Side) -> Node {
         Followed::Session(_) => {
             let state = &side.state;
             let title = state["title"].as_str().unwrap_or("Claude chat");
-            let bar = match state["place"].as_str() {
-                Some(place) => toolbar_with(title, muted(place).prop("truncate", true).prop("title", place), None),
-                None => toolbar(title, None),
-            };
+            // The app cuts a toolbar's title to 40% of its width, so the chat's name and its folder · branch are lines of
+            // the body, where each has the room of the panel.
+            let head = [Some(crate::view::inset(ui::text(title).prop("weight", "medium").prop("truncate", true).prop("title", title))), state["place"].as_str().map(|place| crate::view::inset(muted(place).prop("size", "small").prop("truncate", true).prop("title", place)))];
             let on: Rc<dyn Fn(&str, &Value)> = Rc::new(act);
             let sections = ui::import(&state["sections"], &on);
             // Only a terminal Wings handed this page draws: the chat's, while it is the tab in front.
@@ -452,7 +457,9 @@ fn body(side: &Side) -> Node {
             } else {
                 sections.into_iter().chain(terminals).collect()
             };
-            page(bar, shown)
+            // The title is a row-inset line, as the body's rows are: a toolbar's own title sits 7 points left of them.
+            let bar = Node::new("Toolbar").child(Node::new("Slot").prop("name", "children").child(crate::view::inset(ui::title("Session"))));
+            page(bar, head.into_iter().flatten().chain(shown))
         }
     }
 }
@@ -529,6 +536,20 @@ mod tests {
         sync();
         let shows: Vec<Value> = called(&calls, "tellPage").into_iter().filter(|told| told["message"]["kind"] == "session-show").map(|told| told["message"].clone()).collect();
         assert_eq!(shows, [show_message(None), show_message(Some("s2"))]);
+    }
+
+    #[test]
+    fn a_new_chat_has_the_sidebar_follow_it_before_its_first_message() {
+        let calls = record();
+        names_changed(&[IDLE.to_owned()]);
+        chat::with(|c| c.side_in_wings = true);
+        focused(true);
+        // Claude Code names the session on the lines it prints as it starts, long before the `init` a first message brings.
+        chat::with(|c| c.session.hear(&json!({ "type": "system", "subtype": "ui_status", "session_id": "s3" })));
+        sync();
+        let shows: Vec<Value> = called(&calls, "tellPage").into_iter().filter(|told| told["message"]["kind"] == "session-show").map(|told| told["message"].clone()).collect();
+        assert_eq!(shows, [show_message(None), show_message(Some("s3"))]);
+        assert_eq!(chat::with(|c| c.session.id.clone()), None, "nothing to resume yet");
     }
 
     #[test]
@@ -684,6 +705,8 @@ mod tests {
         with_side(|side| side.terminals = vec!["5".into()]);
         let drawn = sidebar_text();
         assert!(drawn.contains("Open Changes") && drawn.contains("shop · main"), "{drawn}");
+        // The chat's name and its folder · branch are body lines under the toolbar "Session", which the app would cut.
+        assert!(drawn.contains("\"Session\"") && drawn.contains("Claude chat"), "{drawn}");
         assert!(drawn.contains("\"pane\":\"5\"") && !drawn.contains("\"pane\":\"4\""));
         // A click there goes to the chat, with the click.
         act("7:onClick", &json!({}));

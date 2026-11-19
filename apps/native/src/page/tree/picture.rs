@@ -71,9 +71,10 @@ impl Picture {
 }
 
 /// What a dialog `width` points wide drawn over an `area` (the page's, not the window's, which sidebars share) leaves
-/// what it holds: it is at most 92% of the area wide with 24 points either side, and 90% tall with a title over it.
+/// what it holds: it is at most 92% of the area wide with 24 points either side, and as tall as the area less 32 points above and below,
+/// with the title over it and the padding under it.
 pub fn room_in(area: (f32, f32), width: f32) -> (f32, f32) {
-    (width.min(area.0 * 0.92) - 48.0, area.1 * 0.9 - 100.0)
+    (width.min(area.0 * 0.92) - 48.0, area.1 - 150.0)
 }
 
 #[cfg(test)]
@@ -131,12 +132,12 @@ mod tests {
     #[test]
     fn a_picture_shown_large_keeps_within_the_window() {
         let large = picture(json!({"src":"i0","maxWidth":1800,"maxHeight":1800,"fitWindow":true})).unwrap();
-        // A wide dialog over 1000 x 700: 92% less 48 wide, 90% less 100 tall.
+        // A wide dialog over 1000 x 700: 92% less 48 wide, the area less 150 tall.
         let room = Some(room_in((1000.0, 700.0), 2000.0));
         let (w, h) = large.size(2000, 1000, room);
         assert_eq!((w, h), (872.0, 436.0));
         let (w, h) = large.size(1000, 2000, room);
-        assert_eq!((w, h), (265.0, 530.0));
+        assert_eq!((w, h), (275.0, 550.0));
         // A dialog 760 wide holds it to its own width, less its sides, though the area would leave more.
         let (w, h) = large.size(2000, 1520, Some(room_in((1000.0, 1200.0), 760.0)));
         assert_eq!((w, h), (712.0, 541.0));

@@ -24,15 +24,22 @@ pub fn section(c: &Chat) -> Option<Node> {
     if running.is_empty() && done.is_empty() {
         return None;
     }
-    let title = match (running.len(), done.len()) {
-        (0, done) => format!("Background tasks · {done} done"),
-        (running, 0) => format!("Background tasks · {running} running"),
-        (running, done) => format!("Background tasks · {running} running · {done} done"),
-    };
+    let failed = done.iter().filter(|task| task.ended.as_deref() == Some("failed")).count();
+    let mut parts = vec![String::from("Background tasks")];
+    if !running.is_empty() {
+        parts.push(format!("{} running", running.len()));
+    }
+    if done.len() > failed {
+        parts.push(format!("{} done", done.len() - failed));
+    }
+    if failed > 0 {
+        parts.push(format!("{failed} failed"));
+    }
+    let title = parts.join(" · ");
     Some(
         stack()
             .prop("gap", "xs")
-            .child(Node::new("Heading").text(title))
+            .child(crate::view::heading(title))
             .child(stack().prop("gap", "none").children(running.into_iter().map(task_row)).children(done.into_iter().map(done_row))),
     )
 }
@@ -46,6 +53,7 @@ fn done_row(task: &Task) -> Node {
         "completed" => text("✓").prop("tone", "success"),
         _ => muted("■"),
     };
+    let mark = crate::view::lead(mark);
     let how = match ended {
         "failed" => "Failed",
         "completed" => "Done",
@@ -66,7 +74,7 @@ fn done_row(task: &Task) -> Node {
             let id = task.id.clone();
             list_button([line], move || chat::open_task(&id)).prop("title", "What it printed").key(task.id.as_str())
         }
-        false => line.key(task.id.as_str()),
+        false => crate::view::inset(line).key(task.id.as_str()),
     }
 }
 
@@ -75,15 +83,15 @@ fn done_row(task: &Task) -> Node {
 fn task_row(task: &Task) -> Node {
     let name = if task.description.is_empty() { task.id.as_str() } else { task.description.as_str() };
     let time = match task.stopping {
-        true => muted("stopping"),
-        false => muted("running").prop("since", task.started),
+        true => muted("Stopping"),
+        false => muted("Running").prop("since", task.started),
     };
     // The spinner, the name over how long it has run, and the small buttons at the right, on one row as a subagent's
     // is: the time and buttons sat on a line of their own, out of line with the name.
     let main = row()
         .prop("gap", "s")
         .prop("align", "center")
-        .child(spinner())
+        .child(crate::view::lead(spinner()))
         .child(stack().prop("grow", true).prop("gap", "none").child(text(name).prop("size", "small").prop("clamp", true).prop("title", name)).child(time.prop("size", "small")));
     let id = task.id.clone();
     let main = match (task.has_output(), task.kind == "local_agent") {
@@ -133,12 +141,12 @@ pub fn dialog(c: &Chat) -> Option<Node> {
         Some(_) => muted("Ended"),
     };
     let id = task.id.clone();
-    let stop = task.ended.is_none().then(|| button("Stop", "outline", task.stopping, move || chat::stop_task(&id)).prop("size", "sm"));
+    let stop = task.ended.is_none().then(|| button("Stop", "outline", task.stopping, move || chat::stop_task(&id)).prop("size", "sm").prop("title", "Stop this task"));
     let head = row()
         .prop("gap", "s")
         .prop("align", "center")
         .child(stack().prop("grow", true).child(state.prop("size", "small")))
-        .child(button("Refresh", "ghost", false, chat::refresh_task).prop("size", "sm").prop("title", "Read what it printed again"))
+        .child(button("Refresh", "outline", false, chat::refresh_task).prop("size", "sm").prop("title", "Read what it printed again"))
         .maybe(stop);
     let body = match &task.output {
         None => loading(),
@@ -150,4 +158,51 @@ pub fn dialog(c: &Chat) -> Option<Node> {
     let error = task.error.as_deref().map(|why| notice("danger", why));
     let title = if task.description.is_empty() { task.id.clone() } else { truncate(&task.description, 80) };
     Some(panel(&title, WIDTH, chat::close_task).child(head).maybe(error).maybe(cut).child(body))
+}
+
+#[cfg(test)]
+mod tests {
+    use wings_plugin::ui::tree_json;
+
+    use super::*;
+
+    fn task(id: &str, ended: Option<&str>) -> Task {
+        Task { id: id.into(), kind: "local_bash".into(), description: format!("build {id}"), call: String::new(), started: 1000, ended: ended.map(str::to_owned), ended_at: 8000, stopping: false, output: None, error: None }
+    }
+
+    #[test]
+    fn the_group_has_the_heading_of_the_other_groups_and_a_running_task_says_running_in_a_fixed_icon_box() {
+        chat::with(|c| {
+            c.session.tasks = vec![task("a", None), task("b", Some("completed"))];
+            let drawn = tree_json(section(c).expect("a group")).to_string();
+            // The heading is a row-inset one, as the Subagents group has.
+            assert!(drawn.contains("ListButton") && drawn.contains("Background tasks · 1 running · 1 done"), "{drawn}");
+            assert!(drawn.contains("\"Running\"") && !drawn.contains("\"running\""), "{drawn}");
+            // The spinner and the mark each sit in the 16-point box, so the names start at one x.
+            assert_eq!(drawn.matches("\"width\":16").count(), 2, "{drawn}");
+            c.session.tasks.clear();
+        });
+    }
+
+    #[test]
+    fn a_task_that_failed_is_counted_as_failed_not_done() {
+        chat::with(|c| {
+            c.session.tasks = vec![task("a", Some("failed")), task("b", Some("completed"))];
+            let drawn = tree_json(section(c).expect("a group")).to_string();
+            assert!(drawn.contains("Background tasks · 1 done · 1 failed"), "{drawn}");
+            c.session.tasks.clear();
+        });
+    }
+
+    #[test]
+    fn the_output_dialogs_refresh_and_stop_are_both_outline_buttons() {
+        chat::with(|c| {
+            c.session.tasks = vec![task("a", None)];
+            c.task = Some("a".into());
+            let drawn = tree_json(dialog(c).expect("a dialog")).to_string();
+            assert_eq!(drawn.matches("\"variant\":\"outline\"").count(), 2, "{drawn}");
+            c.task = None;
+            c.session.tasks.clear();
+        });
+    }
 }

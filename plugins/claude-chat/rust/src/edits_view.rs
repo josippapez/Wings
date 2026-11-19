@@ -44,11 +44,11 @@ pub fn card_of(c: &Chat, from: usize, end: usize, turn: &Turn) -> Node {
             .prop("grow", true)
             .maybe((!dir.is_empty()).then(|| muted(format!("{dir}/")).prop("size", "small").prop("truncate", true)))
             .child(text(name).prop("size", "small").prop("weight", "medium"));
-        let line = row().prop("gap", "s").prop("align", "baseline").child(name_line).child(counts(file.added, file.removed));
+        let line = row().prop("grow", true).prop("gap", "s").prop("align", "baseline").child(name_line).child(counts(file.added, file.removed));
         let shown = shown.to_owned();
         list_button([line], move || view_changes(from, end, Some(&shown))).key(file.path.as_str()).prop("title", file.path.as_str())
     });
-    let more = (turn.files.len() > FILES_SHOWN).then(|| muted(format!("{} more", plural(turn.files.len() - FILES_SHOWN, "file"))).prop("size", "small"));
+    let more = (turn.files.len() > FILES_SHOWN).then(|| crate::view::inset(muted(format!("{} more", plural(turn.files.len() - FILES_SHOWN, "file"))).prop("size", "small")));
     let waits = fork_view::busy(c).is_some();
     let undo = match (&uuid, undone) {
         (_, true) => Some(muted("Undone").prop("size", "small")),
@@ -64,7 +64,7 @@ pub fn card_of(c: &Chat, from: usize, end: usize, turn: &Turn) -> Node {
         .prop("align", "center")
         .maybe(undo)
         .child(ui::button("View changes", "outline", false, move || view_changes(from, end, None)).prop("size", "sm"));
-    card().child(stack().prop("gap", "s").child(head).child(stack().prop("gap", "xs").children(files).maybe(more)).child(actions)).key(format!("edits-{from}"))
+    card().child(stack().prop("gap", "s").child(crate::view::inset(head)).child(stack().prop("gap", "xs").children(files).maybe(more)).child(actions)).key(format!("edits-{from}"))
 }
 
 fn counts(added: usize, removed: usize) -> Node {

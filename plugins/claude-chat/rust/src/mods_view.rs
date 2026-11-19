@@ -459,7 +459,7 @@ pub fn panes(c: &Chat) -> Vec<Node> {
     if rows.is_empty() {
         return Vec::new();
     }
-    vec![stack().prop("gap", "xs").child(Node::new("Heading").text("Panes")).children(rows).key("panes")]
+    vec![stack().prop("gap", "xs").child(crate::view::heading("Panes")).children(rows).key("panes")]
 }
 
 /// A pane's tree as the sidebar page draws it, under a toolbar that already names it: the mod's own first text, when it
@@ -787,7 +787,7 @@ mod tests {
             c.session.mods.trees.insert("feedback".into(), tree.clone());
             let section = tree_json(panes(c).into_iter().next().expect("a section for the pane"));
             // A label and one row that opens it, not the pane's buttons and texts.
-            let rows: Vec<&Value> = section["children"].as_array().unwrap().iter().filter(|child| child["type"] == "ListButton").collect();
+            let rows: Vec<&Value> = section["children"].as_array().unwrap().iter().filter(|child| child["type"] == "ListButton" && child["props"]["disabled"] != true).collect();
             assert_eq!(rows.len(), 1);
             assert!(!section.to_string().contains("88 open"), "the pane itself isn't drawn in the panel");
             c.session.mods.panes.clear();

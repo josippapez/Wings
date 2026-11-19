@@ -1,12 +1,27 @@
 //! The Claude chat page in Wings Settings: the mode a new chat starts in, how much of its tool calls a chat shows and which
 //! kinds of fold Detailed opens, and how big its text is.
 
-use wings_plugin::ui::{Node, checkbox, chips, muted, stack};
+use wings_plugin::ui::{Node, checkbox, chips as choose, heading as section, muted as note, row, stack};
+
+/// The most points wide a description runs, so a line stays a readable length on a wide page.
+const MEASURE: u32 = 560;
 
 use crate::{folds::KINDS, prefs, session::MODES};
 
+/// A section's name, in the page's section heading style, stronger than the description under it.
 fn heading(text: &str) -> Node {
-    Node::new("Heading").text(text)
+    section(3, text)
+}
+
+/// A description, held to a readable line length. The app centres a stack with a `maxWidth`, so a growing stack after it
+/// in a row takes the room left and keeps it at the left edge.
+fn muted(text: &str) -> Node {
+    row().child(stack().prop("maxWidth", MEASURE).child(note(text))).child(stack().prop("grow", true))
+}
+
+/// A choice between a few, on the segmented track other Wings settings use.
+fn chips(label: &str, options: &[(&str, &str)], value: &str, on_change: impl Fn(&str) + 'static) -> Node {
+    choose(label, options, value, on_change).prop("segmented", true)
 }
 
 fn view() -> Vec<Node> {
@@ -41,4 +56,19 @@ fn view() -> Vec<Node> {
 #[unsafe(no_mangle)]
 pub fn start() {
     wings_plugin::run(view);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_description_is_held_to_a_readable_width_and_a_choice_sits_on_a_track() {
+        let tree = wings_plugin::ui::tree_json(muted("About"));
+        assert_eq!(tree["children"][0]["props"]["maxWidth"], MEASURE);
+        let tree = wings_plugin::ui::tree_json(chips("Mode", &[("a", "A")], "a", |_| {}));
+        assert_eq!(tree["props"]["segmented"], true);
+        let tree = wings_plugin::ui::tree_json(heading("Output"));
+        assert_eq!(tree["props"]["level"], 3);
+    }
 }

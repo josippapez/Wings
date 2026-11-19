@@ -39,24 +39,53 @@ pub fn dialog(c: &Chat) -> Option<Node> {
     let body = match status {
         None => loading(),
         Some(Err(why)) => notice("danger", why.as_str()),
-        Some(Ok(sections)) => stack().prop("gap", "l").children(sections.iter().map(section)),
+        Some(Ok(sections)) => stack().prop("gap", "l").children(sections.iter().map(|one| section(c, one))),
     };
     Some(panel("Status", WIDTH, close_status).child(body))
 }
 
-fn section(section: &Section) -> Node {
-    let rows = section.rows.iter().enumerate().map(|(at, (label, value))| match label.is_empty() {
-        // A row with no label is a sentence about the ones above it.
-        true => muted(value.as_str()).prop("size", "small").key(at.to_string()),
-        false => row()
-            .prop("gap", "m")
-            .prop("align", "baseline")
-            .child(stack().prop("width", 150).child(muted(label.as_str())))
-            .child(stack().prop("grow", true).child(text(value.as_str()).prop("truncate", true).prop("title", value.as_str())))
-            .key(at.to_string()),
-    });
+fn section(c: &Chat, section: &Section) -> Node {
+    // Runs of labelled rows sit close together, and a sentence about them (a row with no label) is set apart from them.
+    let mut runs: Vec<(bool, Vec<Node>)> = Vec::new();
+    for (at, (label, value)) in section.rows.iter().enumerate() {
+        let shown = shown_value(c, label, value);
+        let node = match label.is_empty() {
+            // A row with no label is a sentence about the ones above it.
+            true => muted(value.as_str()).prop("size", "small").key(at.to_string()),
+            false => row()
+                .prop("gap", "m")
+                .prop("align", "baseline")
+                .child(stack().prop("width", 150).child(muted(label_of(label))))
+                .child(stack().prop("grow", true).child(text(shown.as_str()).prop("truncate", true).prop("title", value.as_str())))
+                .key(at.to_string()),
+        };
+        match runs.last_mut() {
+            Some((labelled, nodes)) if *labelled == !label.is_empty() => nodes.push(node),
+            _ => runs.push((!label.is_empty(), vec![node])),
+        }
+    }
     let title = (!section.title.is_empty()).then(|| heading(3, section.title.as_str()));
-    stack().prop("gap", "s").maybe(title).children(rows)
+    let runs = runs.into_iter().map(|(_, nodes)| stack().prop("gap", "s").children(nodes));
+    // More room between a run and the sentence under it than inside a run.
+    stack().prop("gap", "l").maybe(title).children(runs)
+}
+
+/// A row's value as the chat shows it elsewhere: the model by the name the composer gives it, a folder from `~` or from
+/// the chat's folder.
+fn shown_value(c: &Chat, label: &str, value: &str) -> String {
+    match label_of(label) {
+        "Model" => {
+            let models = &c.session.models;
+            models.iter().find(|m| m.resolved == value && m.value != "default").or_else(|| models.iter().find(|m| m.resolved == value)).map_or(value, |m| m.name.as_str()).to_owned()
+        }
+        "Folder" => crate::fork_view::shown_path(&c.cwd, value),
+        _ => value.to_owned(),
+    }
+}
+
+/// A row's label in plain words: Claude Code names the folder `cwd`.
+fn label_of(label: &str) -> &str {
+    if label.eq_ignore_ascii_case("cwd") { "Folder" } else { label }
 }
 
 /// The side question and its answer, as Claude Code's own `/btw` shows them: apart from the conversation.
@@ -85,7 +114,7 @@ fn export_dialog(export: &Export) -> Node {
             .child(muted(facts))
             .child(code_block(&shown.join("\n")))
             .maybe((more > 0).then(|| muted(format!("{} more", plural(more, "line"))).prop("size", "small")))
-            .child(row().prop("gap", "s").child(button("Copy to clipboard", "default", false, copy_export)).child(button("Close", "ghost", false, close_export))),
+            .child(row().prop("gap", "s").prop("justify", "end").child(button("Close", "outline", false, close_export)).child(button("Copy to clipboard", "default", false, copy_export))),
     )
 }
 
@@ -193,5 +222,16 @@ fn copy_code(at: usize, n: usize) {
     });
     if let Some(code) = code {
         copy(format!("code-{at}-{n}"), &code);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_working_folder_is_named_in_plain_words() {
+        assert_eq!(label_of("cwd"), "Folder");
+        assert_eq!(label_of("Version"), "Version");
     }
 }

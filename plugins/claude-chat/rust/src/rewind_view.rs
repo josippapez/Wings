@@ -56,16 +56,17 @@ pub fn dialog(c: &Chat) -> Option<Node> {
     };
     let busy = !rewind.waiting.is_empty();
     let choice = |label: &str, variant: &str, how: Restore, ready: bool| ui::button(label, variant, false, move || chat::restore(how)).prop("disabled", busy || !ready);
-    let actions = row()
+    // Cancel at the left, and at the right what to restore: the two smaller choices, then the main one. Their labels are
+    // short, as the word before them says what they do.
+    let restore = row()
         .prop("gap", "s")
-        .prop("wrap", true)
-        .prop("justify", "end")
         .prop("align", "center")
-        .maybe(busy.then(|| row().prop("gap", "s").prop("align", "center").child(spinner()).child(muted("Restoring"))))
-        .child(ui::button("Cancel", "ghost", false, chat::close_rewind))
-        .child(choice("Restore code", "outline", Restore::Code, check.is_some()))
-        .child(choice("Restore conversation", "secondary", Restore::Conversation, true))
-        .child(choice("Restore code and conversation", "default", Restore::Both, check.is_some()));
+        .child(muted("Restore").prop("size", "small"))
+        .maybe(busy.then(|| spinner()))
+        .child(choice("Code", "outline", Restore::Code, check.is_some()))
+        .child(choice("Conversation", "outline", Restore::Conversation, true))
+        .child(choice("Code and conversation", "default", Restore::Both, check.is_some()));
+    let actions = row().prop("gap", "m").prop("justify", "between").prop("align", "center").prop("wrap", true).child(ui::button("Cancel", "ghost", false, chat::close_rewind)).child(restore);
     Some(
         panel("Rewind", WIDTH, chat::close_rewind)
             .child(muted("Go back to before this message of yours:").prop("size", "small"))

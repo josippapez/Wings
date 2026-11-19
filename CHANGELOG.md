@@ -2,6 +2,16 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.55 · 2026-11-19
+
+- **Remote Control in Claude chat**: /remote-control or the button by the model menu turns it on, and its menu opens the session on claude.ai, copies the link or turns it off.
+- **Select text across paragraphs and messages** in plugin pages by dragging, and select inside code blocks. Cmd-C copies it all.
+- **The session panel is back in the chat** by default. A Session panel setting moves it to Wings' right sidebar, which now shows your usage as soon as you switch accounts, before your first message.
+- **Claude chat looks more like the rest of Wings**: one width for the usage meters, rows and headings on one edge, buttons instead of plain-text actions in dialogs, aligned status pills and columns in the plugins, MCP, hooks and permissions dialogs, and a cleaner rewind dialog.
+- **Clearer words in Claude chat**: "Running" while calls still run, failed background tasks counted as failed, model names instead of ids, and a one-line message when Claude Code stops.
+- **Dialogs keep a margin from the window's edges**, and a large picture fits its dialog.
+- **Page menus with no room below open upward**, and the right sidebar's header lines up with the project bar.
+
 ## 0.2.54 · 2026-11-19
 
 - **Claude chat's account sits in its header**: a profile button names the account the chat runs under, and its menu checks it and lets you pick another.

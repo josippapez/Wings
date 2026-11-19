@@ -28,6 +28,9 @@ const FOLD_SIGN_IN: usize = 8;
 const CHECKBOX: u32 = 24;
 /// How far a fold's trigger sets its chevron in.
 const FOLD_PADDING: u32 = 6;
+/// The columns a server's status pill and its button keep, so the pills of every row line up whether it has a button or not.
+const PILL_COLUMN: u32 = 100;
+const ACTION_COLUMN: u32 = 84;
 
 pub fn dialog(c: &Chat) -> Option<Node> {
     let open = c.plugins.as_ref()?;
@@ -45,7 +48,7 @@ pub fn dialog(c: &Chat) -> Option<Node> {
         .prop("gap", "s")
         .prop("align", "center")
         .child(stack().prop("grow", true).child(search))
-        .child(button("Refresh", "ghost", false, refresh).prop("title", refresh_title))
+        .child(button("Refresh", "outline", false, refresh).prop("title", refresh_title))
         .maybe(apply);
     let small = |said: &str| muted(said).prop("size", "small");
     let hint = if discovering {
@@ -60,7 +63,7 @@ pub fn dialog(c: &Chat) -> Option<Node> {
         Some(discover(open))
     } else {
         match (&plugins.list, &plugins.servers) {
-            (Some(list), Some(servers)) => Some(lists(c, open, list, servers)),
+            (Some(list), Some(servers)) => Some(lists(c, open, list, servers, title)),
             _ if plugins.error.is_some() => None,
             _ => Some(loading()),
         }
@@ -131,7 +134,7 @@ impl Budget {
     }
 }
 
-fn lists(c: &Chat, open: &Dialog, list: &[Plugin], servers: &[Server]) -> Node {
+fn lists(c: &Chat, open: &Dialog, list: &[Plugin], servers: &[Server], dialog: &str) -> Node {
     let (query, show, unfolded) = (open.query.as_str(), open.show, &open.unfolded);
     if list.is_empty() && servers.is_empty() {
         return empty("No plugins or MCP servers", "Claude Code has none set up here. Install plugins with /plugin in a terminal.");
@@ -140,8 +143,8 @@ fn lists(c: &Chat, open: &Dialog, list: &[Plugin], servers: &[Server]) -> Node {
     let found = |name: &str| name.to_lowercase().contains(&wanted);
     let mut budget = Budget::default();
     let sections: Vec<Node> = match show {
-        Show::Plugins => [plugin_section(&mut budget, c, unfolded, list, servers, &found), server_section(&mut budget, unfolded, servers, &found, wanted.is_empty())],
-        Show::Mcp => [server_section(&mut budget, unfolded, servers, &found, wanted.is_empty()), plugin_section(&mut budget, c, unfolded, list, servers, &found)],
+        Show::Plugins => [plugin_section(&mut budget, c, unfolded, list, servers, &found, dialog), server_section(&mut budget, unfolded, servers, &found, wanted.is_empty(), dialog)],
+        Show::Mcp => [server_section(&mut budget, unfolded, servers, &found, wanted.is_empty(), dialog), plugin_section(&mut budget, c, unfolded, list, servers, &found, dialog)],
     }
     .into_iter()
     .flatten()
@@ -153,18 +156,19 @@ fn lists(c: &Chat, open: &Dialog, list: &[Plugin], servers: &[Server]) -> Node {
     stack().prop("gap", "l").children(sections).maybe(more)
 }
 
-/// A section of the dialog: its heading over its groups, each a label over its rows. None when no group has a row.
-fn section(title: &str, groups: Vec<(&str, Vec<Node>)>) -> Option<Node> {
+/// A section of the dialog: its heading over its groups, each a label over its rows. None when no group has a row. A
+/// section named as the dialog is has no heading, which would say it twice.
+fn section(title: &str, dialog: &str, groups: Vec<(&str, Vec<Node>)>) -> Option<Node> {
     let groups: Vec<Node> = groups
         .into_iter()
         .filter(|(_, rows)| !rows.is_empty())
         .map(|(label, rows)| stack().prop("gap", "xs").child(text(label).prop("size", "small").prop("weight", "medium").prop("tone", "muted")).children(rows))
         .collect();
-    (!groups.is_empty()).then(|| stack().prop("gap", "m").child(heading(3, title)).children(groups))
+    (!groups.is_empty()).then(|| stack().prop("gap", "m").maybe((title != dialog).then(|| heading(3, title))).children(groups))
 }
 
 /// The plugins by the settings that decide them, as Claude Code groups them, each with its servers under it.
-fn plugin_section(budget: &mut Budget, c: &Chat, unfolded: &BTreeSet<String>, list: &[Plugin], servers: &[Server], found: &dyn Fn(&str) -> bool) -> Option<Node> {
+fn plugin_section(budget: &mut Budget, c: &Chat, unfolded: &BTreeSet<String>, list: &[Plugin], servers: &[Server], found: &dyn Fn(&str) -> bool, dialog: &str) -> Option<Node> {
     let mut groups = Vec::new();
     for scope in ["User", "Project", "Local", "Managed", "Session"] {
         let mut rows = Vec::new();
@@ -185,13 +189,13 @@ fn plugin_section(budget: &mut Budget, c: &Chat, unfolded: &BTreeSet<String>, li
         }
         groups.push((scope, rows));
     }
-    section("Plugins", groups)
+    section("Plugins", dialog, groups)
 }
 
 /// The servers that aren't a plugin's, by where they are set up: yours, the project's, the local ones and claude.ai's.
 /// Each scope lists them connected first, and folds the ones that need a sign-in when there are many, unless a search
 /// has already cut the list down (`fold` is false then).
-fn server_section(budget: &mut Budget, unfolded: &BTreeSet<String>, servers: &[Server], found: &dyn Fn(&str) -> bool, fold: bool) -> Option<Node> {
+fn server_section(budget: &mut Budget, unfolded: &BTreeSet<String>, servers: &[Server], found: &dyn Fn(&str) -> bool, fold: bool, dialog: &str) -> Option<Node> {
     let own: Vec<&Server> = servers.iter().filter(|server| server.of_plugin().is_none() && found(&server.name)).collect();
     let mut scopes: Vec<&str> = Vec::new();
     for server in &own {
@@ -213,7 +217,7 @@ fn server_section(budget: &mut Budget, unfolded: &BTreeSet<String>, servers: &[S
         ranked.sort_by_key(|server| server.rank());
         groups.push((label, scope_rows(budget, unfolded, scope, &ranked, fold)));
     }
-    section("MCP servers", groups)
+    section("MCP servers", dialog, groups)
 }
 
 /// The rows of one scope's `ranked` servers. Past `FOLD_SIGN_IN` that need a sign-in they sit under one disclosure, in the
@@ -228,7 +232,9 @@ fn scope_rows(budget: &mut Budget, unfolded: &BTreeSet<String>, scope: &str, ran
     // Only an unfolded body is built, so a long list of them costs nothing while it is folded.
     let body: Vec<Node> = if open { ranked.iter().filter(|server| server.status == "needs-auth").filter_map(|server| budget.take(server_row(server, false, unfolded))).collect() } else { Vec::new() };
     let fold_key = key.clone();
-    let fold = disclosure(format!("{waiting} need sign-in"), stack().prop("gap", "xs").children(body)).prop("open", open).on("onOpenChange", move |_| toggle(&fold_key)).key(key);
+    let fold = disclosure(format!("{waiting} need sign-in"), stack().prop("gap", "xs").children(body)).prop("open", open).on("onOpenChange", move |_| toggle(&fold_key));
+    // Its chevron sits where a server's tools fold has its own.
+    let fold = indent(CHECKBOX - FOLD_PADDING, fold).key(key);
     let mut fold = Some(fold);
     let mut rows = Vec::new();
     for server in ranked {
@@ -249,9 +255,9 @@ fn plugin_row(plugin: &Plugin, skills: usize) -> Node {
     let toggle = checkbox(plugin.name.as_str(), plugin.on, move |on| set_plugin(&id, on)).prop("disabled", plugin.locked());
     let facts: Vec<String> = [plugin.marketplace.clone()].into_iter().chain((skills > 0).then(|| plural(skills, "skill"))).filter(|fact| !fact.is_empty()).collect();
     let note = if plugin.locked() {
-        Some(muted("Set by your organization"))
+        Some(badge("Set by your organization", Some("muted")))
     } else if plugin.on != plugin.saved {
-        Some(text(if plugin.on { "On in this chat" } else { "Off in this chat" }).prop("tone", "info"))
+        Some(badge(if plugin.on { "On in this chat" } else { "Off in this chat" }, Some("info")))
     } else {
         None
     };
@@ -261,7 +267,7 @@ fn plugin_row(plugin: &Plugin, skills: usize) -> Node {
         .key(plugin.id.as_str())
         .child(toggle)
         .child(muted(facts.join(" · ")).prop("size", "small").prop("truncate", true).prop("grow", true))
-        .maybe(note.map(|note| note.prop("size", "small")))
+        .maybe(note.map(|note| note.prop("size", "sm")))
 }
 
 /// An MCP server: its checkbox and name over its tools or why it failed, its status as a badge, and the button that
@@ -284,17 +290,26 @@ fn server_row(server: &Server, nested: bool, unfolded: &BTreeSet<String>) -> Nod
         .prop("gap", "s")
         .prop("align", "center")
         .child(stack().prop("grow", true).child(checkbox(server.short_name(), server.status != "disabled", move |on| set_server(&name, on))))
-        .child(badge(said, Some(tone)).prop("size", "sm"))
-        .maybe(server_action(server));
+        .child(column(PILL_COLUMN, "start", badge(said, Some(tone)).prop("size", "sm")))
+        .child(column(ACTION_COLUMN, "end", server_action(server)));
     // What's under the name starts where the name does: a fold's chevron sits in its trigger's padding, so it is set that
     // much less far in.
     let inset = if nested { CHECKBOX } else { 0 } + CHECKBOX - if folds { FOLD_PADDING } else { 0 };
-    let indent = |inset: u32, node: Node| row().prop("gap", "none").child(stack().prop("width", inset)).child(stack().prop("grow", true).child(node));
     stack()
         .prop("gap", "xs")
         .key(server.name.as_str())
         .child(if nested { indent(CHECKBOX, line) } else { line })
         .maybe(detail.map(|detail| indent(inset, detail)))
+}
+
+/// `node` set in by `inset` points.
+fn indent(inset: u32, node: Node) -> Node {
+    row().prop("gap", "none").child(stack().prop("width", inset)).child(stack().prop("grow", true).child(node))
+}
+
+/// A column `width` points wide holding `node` at its `justify` end, or nothing but the room.
+fn column(width: u32, justify: &str, node: impl Into<Option<Node>>) -> Node {
+    stack().prop("width", width).child(row().prop("justify", justify).maybe(node.into()))
 }
 
 /// A connected server's tool count, which unfolds to list them: each name over the start of its description.
@@ -322,9 +337,9 @@ fn tool_row(tool: &Tool) -> Node {
 fn server_action(server: &Server) -> Option<Node> {
     let name = server.name.clone();
     match (server.status.as_str(), server.signs_in()) {
-        ("failed", _) => Some(button("Reconnect", "ghost", false, move || reconnect(&name)).prop("size", "sm").prop("title", "Connect to it again")),
-        ("needs-auth", true) => Some(button("Sign in", "ghost", false, move || sign_in(&name)).prop("size", "sm").prop("title", "Claude Code starts the sign-in, and you finish it in your browser")),
-        ("connected", true) => Some(button("Sign out", "ghost", false, move || sign_out(&name)).prop("size", "sm").prop("title", "Forgets this server's sign-in")),
+        ("failed", _) => Some(button("Reconnect", "outline", false, move || reconnect(&name)).prop("size", "sm").prop("title", "Connect to it again")),
+        ("needs-auth", true) => Some(button("Sign in", "outline", false, move || sign_in(&name)).prop("size", "sm").prop("title", "Claude Code starts the sign-in, and you finish it in your browser")),
+        ("connected", true) => Some(button("Sign out", "outline", false, move || sign_out(&name)).prop("size", "sm").prop("title", "Forgets this server's sign-in")),
         _ => None,
     }
 }
@@ -540,6 +555,22 @@ mod tests {
         let all = many(8);
         let ranked: Vec<&Server> = all.iter().collect();
         assert_eq!(scope_rows(&mut Budget::default(), &BTreeSet::new(), "claudeai", &ranked, true).len(), 10);
+    }
+
+    #[test]
+    fn a_section_named_as_the_dialog_has_no_heading_and_another_has() {
+        let drawn = |dialog: &str| wings_plugin::ui::tree_json(section("MCP servers", dialog, vec![("User", vec![text("a")])]).expect("a section")).to_string();
+        assert!(!drawn("MCP servers").contains("Heading"), "said twice");
+        assert!(drawn("Plugins").contains("Heading"));
+    }
+
+    #[test]
+    fn every_server_row_keeps_a_column_for_its_pill_and_one_for_its_button() {
+        let drawn = |server: &Server| wings_plugin::ui::tree_json(server_row(server, false, &BTreeSet::new())).to_string();
+        for row in [drawn(&server("a", "disabled", "user")), drawn(&server("b", "failed", "user"))] {
+            assert_eq!(row.matches(&format!("\"width\":{PILL_COLUMN}")).count(), 1, "{row}");
+            assert_eq!(row.matches(&format!("\"width\":{ACTION_COLUMN}")).count(), 1, "{row}");
+        }
     }
 
     #[test]

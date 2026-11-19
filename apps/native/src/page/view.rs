@@ -259,6 +259,8 @@ pub struct PageView {
     pointed_chars: RefCell<HashMap<u64, Rc<Cell<Option<usize>>>>>,
     /// The words a person has selected by dragging over a line of text, for Cmd-C and a right-click's payload.
     selection: RefCell<Option<selection_view::Selection>>,
+    /// The lines of text a person can select, as the page drew them, for a selection that runs over several.
+    lines: RefCell<selection_view::Lines>,
     /// What takes the keyboard while words are selected, so Cmd-C reaches the page: a box with no size, drawn in it.
     selection_focus: gpui::FocusHandle,
     /// An open `PopupMenu` takes the keyboard, so Escape closes it; the node it was drawn for, and what had the keyboard
@@ -591,6 +593,7 @@ impl PageView {
             context_hit: RefCell::default(),
             pointed_chars: RefCell::default(),
             selection: RefCell::default(),
+            lines: RefCell::default(),
             selection_focus: cx.focus_handle(),
             popup_focus: cx.focus_handle(),
             popup_shown: None,
@@ -1629,14 +1632,34 @@ impl PageView {
             }
             cx.notify();
         }));
+        // The first line is centred in a button's height, as the toggle is and as the buttons beside it in a row are, so a row
+        // that starts its items at the top has Less, Send now and the cross all on the message's first line.
+        let line = match text.size {
+            TextSize::Normal => scaled(13.0 * 1.45),
+            TextSize::Small => scaled(12.0 * 1.45),
+            TextSize::Tiny => scaled(11.0 * 1.45),
+            TextSize::Large => scaled(26.0),
+            TextSize::Field => scaled(14.0 * 1.5),
+        };
+        let top = ((SM_BUTTON_HEIGHT - line) / 2.0).max(0.0);
         div()
             .flex_1()
             .min_w_0()
             .flex()
             .items_start()
             .gap(px(4.0))
-            .child(div().relative().flex_1().min_w_0().child(self.text_element(&shown, drop, cx)).child(measure))
-            .when(cut || open, |el| el.child(toggle))
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .pt(px(top))
+                    .child(self.text_element(&shown, drop, cx))
+                    .child(measure),
+            )
+            .when(cut || open, |el| {
+                el.child(div().flex_none().h(px(SM_BUTTON_HEIGHT)).flex().items_center().child(toggle))
+            })
             .into_any_element()
     }
 
@@ -1901,7 +1924,9 @@ impl PageView {
                 })
                 .into_any_element(),
             Node::Dot(dot) => match dot.state {
-                Some(state) => ui::status_dot_slot(state, format!("page-dot-{}", dot.id)),
+                // Turning in place, as the page's spinners do: a spinner in the window's spinner layer was left blank,
+                // as a page draws from its cache and doesn't name its slot in each draw.
+                Some(state) => ui::status_dot(state).into_any_element(),
                 None => ui::dot(
                     dot.color
                         .unwrap_or_else(|| dot.tone.map_or(theme::palette().done, tone_color)),
@@ -2382,15 +2407,23 @@ impl PageView {
             .min_h_0()
             .flex()
             .flex_col()
-            .gap(px(12.0))
-            .px(px(24.0))
-            .pt(px(4.0))
-            .pb(px(24.0))
             .overflow_y_scroll();
         let (window_w, window_h, _) = self.viewport.get();
         let area = self.dialog_area.get().unwrap_or((window_w, window_h));
         let room = DIALOG_ROOM.with(|cell| cell.replace(Some(tree::picture_room(area, dialog.width))));
-        let body = body.children(self.nodes(&dialog.children, cx));
+        // The padding is on a child, inside what scrolls: padding on the scroll box itself is clipped away with the overflow,
+        // so the last row met the panel's edge.
+        let body = body.child(
+            div()
+                .flex_none()
+                .flex()
+                .flex_col()
+                .gap(px(12.0))
+                .px(px(24.0))
+                .pt(px(4.0))
+                .pb(px(28.0))
+                .children(self.nodes(&dialog.children, cx)),
+        );
         DIALOG_ROOM.with(|cell| cell.set(room));
         let entity = cx.entity();
         let measure = canvas(
@@ -2516,6 +2549,7 @@ impl PageView {
 
 impl Render for PageView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.lines.borrow_mut().start();
         // A page with a palette of its own paints in it while it builds its elements, which read their colours then.
         let palette = self.tree.as_ref().and_then(|tree| tree.palette);
         let _painting = palette.map(theme::painting);
@@ -2660,6 +2694,7 @@ impl Render for PageView {
             .key_context(page_context)
             .on_key_down(cx.listener(Self::tab))
             .on_key_down(cx.listener(Self::copy_selection))
+            .on_mouse_move(cx.listener(Self::drag_selection))
             .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
                 if view.press_shortcut(&event.keystroke) {
                     window.prevent_default();
@@ -3105,6 +3140,9 @@ fn sized(button: gpui::Stateful<gpui::Div>, size: tree::ButtonSize) -> gpui::Sta
         Size::IconLg => button.size(px(36.0)).px_0(),
     }
 }
+
+/// How tall a small button is.
+const SM_BUTTON_HEIGHT: f32 = 28.0;
 
 #[cfg(test)]
 #[test]

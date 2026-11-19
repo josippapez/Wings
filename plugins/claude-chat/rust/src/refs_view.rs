@@ -72,9 +72,9 @@ pub fn section(c: &Chat) -> Option<Node> {
     Some(
         stack()
             .prop("gap", "xs")
-            .child(Node::new("Heading").text(title))
+            .child(crate::view::heading(title))
             .child(stack().prop("gap", "none").children(rows))
-            .maybe((hidden > 0).then(|| muted(format!("{hidden} earlier")).prop("size", "small"))),
+            .maybe((hidden > 0).then(|| crate::view::inset(muted(format!("{hidden} earlier")).prop("size", "small")))),
     )
 }
 
@@ -90,17 +90,19 @@ fn row_of(found: &Ref, detail: Option<&Detail>) -> Node {
         Some(Detail::Loading) | None => ("…".to_owned(), None, None),
         Some(Detail::Missing) => ("Pull request".to_owned(), None, None),
     };
+    // `grow`: a list button lays out its content as it is wide, so a row that doesn't grow ends right after its pill.
     let line = |label: Node| {
         row()
+            .prop("grow", true)
             .prop("gap", "s")
             .prop("align", "center")
             .child(label)
-            .child(small(title.as_str()).prop("tone", "muted").prop("truncate", true).prop("grow", true))
+            .child(stack().prop("grow", true).child(small(title.as_str()).prop("tone", "muted").prop("truncate", true)))
             .maybe(state.as_ref().map(|(said, tone)| badge(said.as_str(), *tone)))
     };
     let trigger = match found {
         // The key is a link Wings opens in Issues.
-        Ref::Issue(key) => line(small(key.as_str()).prop("mono", true).prop("links", true)),
+        Ref::Issue(key) => crate::view::inset(line(small(key.as_str()).prop("mono", true).prop("links", true))),
         Ref::GitHub { url, .. } | Ref::Azure { url, .. } => {
             let url = url.clone();
             list_button([line(small(found.label()).prop("mono", true))], move || open_pull_request(&url))

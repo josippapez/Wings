@@ -562,7 +562,9 @@ fn open_terminal() {
 fn why(exit: &Value) -> String {
     let said = exit["stderr"].as_str().unwrap_or_default().lines().rev().find(|line| !line.trim().is_empty()).map(str::trim);
     match said {
-        Some(line) => format!("Claude Code stopped: {line}"),
+        // One sentence: Claude Code's "Error: Invalid API key · Please run /login" has an "Error:" the banner's own "stopped"
+        // already says, and a dot between its two parts.
+        Some(line) => format!("Claude Code stopped: {}", line.trim_start_matches("Error:").trim().replace(" · ", ". ")),
         None => format!("Claude Code stopped with code {}", exit["code"]),
     }
 }
@@ -1307,6 +1309,12 @@ mod tests {
             c.session.working = working;
             c.run
         })
+    }
+
+    #[test]
+    fn the_failed_banner_is_one_sentence_without_a_doubled_error() {
+        let said = super::why(&json!({ "code": 1, "stderr": "Error: Invalid API key · Please run /login\n" }));
+        assert_eq!(said, "Claude Code stopped: Invalid API key. Please run /login");
     }
 
     #[test]

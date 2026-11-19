@@ -923,6 +923,9 @@ esac"##,
         output("w5", "Found 3 files\nsrc/checkout.ts\nsrc/discount.ts\nsrc/cart.ts", false),
         delta("The suite has no discount tests yet, so I'm writing them now."),
     ]);
+    // The same turn while it runs, for the scenes that type into the box mid-turn: the first message is queued, not sent.
+    let mut working = work.clone();
+    working.insert(working.len() - 1, json!({ "type": "system", "subtype": "status", "status": "requesting" }));
     // The same turn finished: Claude's answer, then the result that ends the turn and says how long it took.
     let mut worked = work.clone();
     worked.pop();
@@ -964,9 +967,12 @@ esac"##,
         line
     };
     let haiku = |content: serde_json::Value| json!({ "type": "assistant", "message": { "role": "assistant", "model": "claude-haiku-5-5", "content": content } });
+    // Claude Code prints this status at the start of every turn: it is what makes the chat consider the turn running.
+    let turn_start = json!({ "type": "system", "subtype": "status", "status": "requesting" });
     let subagent = opened(vec![
         init.clone(),
         user("Find every caller of applyDiscount and tell me which of them round."),
+        turn_start.clone(),
         tool("s1", "Task", json!({ "description": "Survey the callers of applyDiscount", "subagent_type": "Explore", "prompt": "List every caller of applyDiscount." })),
         tool("s2", "Task", json!({ "description": "Check the rounding in the cart", "subagent_type": "Explore", "prompt": "Does the cart round?" })),
         within("s1", haiku(json!([{ "type": "tool_use", "id": "g1", "name": "Grep", "input": { "pattern": "applyDiscount" } }]))),
@@ -982,6 +988,7 @@ esac"##,
         init.clone(),
         json!({ "type": "system", "subtype": "session_state_changed", "state": "running" }),
         user("Survey the discount code: who calls it, how the cart rounds, and which tests cover it."),
+        turn_start.clone(),
         tool("p1", "Task", json!({ "description": "Survey the callers of applyDiscount", "subagent_type": "Explore", "prompt": "List every caller." })),
         tool("p2", "Task", json!({ "description": "Check the rounding in the cart", "subagent_type": "Explore", "prompt": "Does the cart round?" })),
         tool("p3", "Task", json!({ "description": "List the discount tests", "subagent_type": "Explore", "prompt": "Which tests cover discounts?" })),
@@ -993,6 +1000,8 @@ esac"##,
     let streaming = opened(vec![
         init.clone(),
         user("Explain what the rate limiter in api/limits.ts does."),
+        // Claude Code prints this status at the start of every turn: it is what makes the chat consider the turn running.
+        turn_start.clone(),
         tool("t1", "Read", json!({ "file_path": "/work/shop/api/limits.ts" })),
         output("t1", "export const RATE = 5;", false),
         tool("t2", "Grep", json!({ "pattern": "takeToken" })),
@@ -1003,6 +1012,7 @@ esac"##,
     let thinking = opened(vec![
         init.clone(),
         user("Plan how to split the checkout into its own package."),
+        turn_start.clone(),
         json!({ "type": "stream_event", "event": { "type": "content_block_start", "index": 0, "content_block": { "type": "thinking", "thinking": "" } } }),
     ]);
     // A long session the chat goes on with, as a terminal's would be: far more than a page may draw.
@@ -1139,7 +1149,7 @@ esac"##,
         (_, 0..36) if (16..64).contains(&x) && y > 12 && y < 24 && x % 16 < 10 => [217, 119, 87, 255],
         (_, 0..36) => [46, 42, 56, 255],
         (40..160, 400..440) => [217, 119, 87, 255],
-        (40..720, 70..500) if (y - 70) % 28 < 10 && x < 40 + 640 - (y * 37 % 300) => [90, 86, 100, 255],
+        (40..720, 70..470) if (y - 70) % 28 < 10 && x < 40 + 640 - (y * 37 % 300) => [90, 86, 100, 255],
         _ => [30, 28, 38, 255],
     });
     // You attach a chart, Claude reads a screenshot, and both come back as thumbnails.
@@ -1455,9 +1465,9 @@ esac"##,
         ("work-open", work.clone(), None, Some("disclose:Ran 1 command"), "pnpm test discount"),
         ("detailed", work.clone(), None, None, "No test suite found"),
         ("large-text", work.clone(), None, None, "of 4 done"),
-        ("queue", work.clone(), None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter"), "Claude reads these"),
+        ("queue", working.clone(), None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter"), "Claude reads them"),
         // The same two, each opened to its whole message by its More button, which reads Less once it is open.
-        ("queue-open", work.clone(), None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter;more:"), "Claude reads these"),
+        ("queue-open", working.clone(), None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter;more:"), "Claude reads them"),
         ("ask-bash", ask_bash, None, None, "Allow Bash?"),
         ("question", question, None, None, "Which formats"),
         ("plan", plan, None, None, "Keep planning"),
@@ -1466,11 +1476,11 @@ esac"##,
         ("paste", opened(vec![init.clone()]), None, Some("paste:;paste:;type:what is in these?"), "Image 2"),
         // Each subagent's call has Open, which opens its conversation in Wings' sidebar (the `subagent-sidebar` scene); the
         // sidebar's Pop out makes it a tab (the `subagent-tab` scenes).
-        ("subagent", subagent, None, Some("disclose:Ran 2 subagents"), "Survey the callers of applyDiscount"),
+        ("subagent", subagent, None, Some("disclose:Ran 1 subagent · 1 running"), "Survey the callers of applyDiscount"),
         ("suggestion", suggested, None, None, "Tab"),
         ("subagents", subagents, None, None, "Waiting on 2 subagents"),
         // The prompt rail: a mark for each message, the one in view lit, and a tooltip on the one the pointer is over.
-        ("prompt-rail", railed, None, Some("hover:14,130"), "Write the release notes"),
+        ("prompt-rail", railed, None, Some("hover:45,87"), "Add a test for the rounding"),
         // The side panel shows by default, and lists the background tasks that run, each with how long it has and Stop.
         ("tasks", tasks.clone(), None, None, "Background tasks"),
         // A click on one opens the end of what it printed in a dialog.
@@ -1540,11 +1550,11 @@ esac"##,
         ("folder", worked_again, None, Some(add_dir.as_str()), "Folders"),
         ("elicitation", elicited, None, None, "Pick a flavour and how many scoops"),
         ("run-background", running, None, None, "Run in background"),
-        ("agent-message", agent, None, Some("press:Message"), "SendMessage tool"),
+        ("agent-message", agent, None, Some("press:Message"), "passes your message on"),
         // The agent and the command that ended each leave a line, the agent's report folded under its own.
         ("tasks-finished", finished, None, None, "Command “Run the tests” failed"),
         // The side panel lists them as done, the agent under Subagents and the command under Background tasks.
-        ("tasks-done", finished_panel, None, None, "Background tasks · 1 done"),
+        ("tasks-done", finished_panel, None, None, "Background tasks · 1 failed"),
     ];
     // Files for @-mentions, which the chat lists with git.
     for file in ["src/checkout.ts", "src/checkout.test.ts", "src/cart.ts", "api/limits.ts", "README.md"] {
@@ -1555,6 +1565,9 @@ esac"##,
     // A repo with a commit and a change since, which the side panel's Changes line counts.
     let git = |args: &[&str]| assert!(std::process::Command::new("git").args(["-c", "user.name=Shop", "-c", "user.email=shop@example.com"]).args(args).current_dir(&root).status().unwrap().success());
     git(&["init", "-q", "-b", "main"]);
+    // The folder is also the fake Claude home (bin/, projects/, the scenes' answers): only the shop's own files are the project's,
+    // so the @ list doesn't offer the fixture's.
+    std::fs::write(root.join(".git/info/exclude"), "/*\n!/src\n!/api\n!/README.md\n").unwrap();
     std::fs::write(root.join("src/checkout.ts"), "export const a = 1;\nexport const b = 2;\nexport const c = 3;\n").unwrap();
     git(&["add", "src", "api", "README.md"]);
     git(&["commit", "-q", "-m", "Start"]);
@@ -1752,6 +1765,9 @@ esac"##,
         // 1,280 just under it.
         let widths: &[f32] = if ["conversation", "work", "ask-bash", "tasks", "terminal", "folder", "long-message", "subagents", "subagent"].contains(&name) {
             &[1600.0, 1280.0, 1000.0, 640.0]
+        } else if name == "prompt-rail" {
+            // The rail is drawn only where the tab has room beside the conversation's column, so 640 has none to show.
+            &[1000.0]
         } else {
             &[1000.0, 640.0]
         };
@@ -1759,16 +1775,21 @@ esac"##,
             // The shell of the terminal the workspace draws over the page, opened before the page so the fake `claude` the
             // page starts is found under the scene's own shell.
             let shot_terminal = (name == "terminal").then(|| {
-                let printed = b"$ make all\r\n  Compiling shop v0.4.0 (/work/shop)\r\n  Compiling checkout v0.4.0\r\n  Compiling cart v0.4.0\r\n    Building [=========>       ] 41/63: cart\r\n".to_vec();
+                // A finished build, in lines that fit the card's columns, so nothing wraps mid-word and the card's Idle badge is true.
+                let printed = b"$ make all\r\n  Compiling shop v0.4.0\r\n  Compiling checkout v0.4.0\r\n  Compiling cart v0.4.0\r\n   Finished build in 2.4s\r\n".to_vec();
                 // SAFETY: nothing else reads the environment while the shell starts.
-                unsafe { std::env::set_var("SHELL", "/bin/sh") };
+                // A prompt of its own, not this machine's user and host: the pane starts its shell as a login shell, whose
+                // profile sets the prompt over any `PS1` it was given, so the shell is a script that runs one that reads no profile.
+                let quiet = root.join("quiet-shell");
+                script(quiet.clone(), "exec env -i HOME=\"$HOME\" PATH=/usr/bin:/bin TERM=xterm-256color BASH_SILENCE_DEPRECATION_WARNING=1 PS1='$ ' /bin/bash --noprofile --norc -i");
+                unsafe { std::env::set_var("SHELL", &quiet) };
                 let terminal = cx.update(|cx| wings_native::terminal_view::TerminalView::open(root.clone(), printed, None, cx).unwrap());
                 unsafe { std::env::set_var("SHELL", root.join("shell")) };
                 terminal
             });
             let args = matches!(name, "long" | "long-older" | "long-rail" | "long-rail-streaming").then(|| json!({ "resume": LONG, "cwd": root.canonicalize().unwrap() }));
             let handle = cx
-                .open_offscreen_window(size(px(width), px(760.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, &source, args.as_ref(), cx)))
+                .open_offscreen_window(size(px(width), px(if name == "read-ts" { 940.0 } else { 760.0 })), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, &source, args.as_ref(), cx)))
                 .unwrap();
             let window = handle.into();
             handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
@@ -1780,7 +1801,7 @@ esac"##,
                         let listed = json!([{ "paneId": "1", "title": "make all", "running": true }]).to_string();
                         view.set_terminals(vec![1], listed, cx);
                         view.draw_terminals_for_shots(move |_| {
-                            let card = wings_native::page::terminal_card(1, "make all".into(), true, terminal.clone(), |_, _| {}, |_, _| {});
+                            let card = wings_native::page::terminal_card(1, "make all".into(), false, terminal.clone(), |_, _| {}, |_, _| {});
                             vec![(wings_native::page::terminal_slot(1), card)]
                         });
                     })
@@ -1884,15 +1905,15 @@ esac"##,
         ("session-sidebar-mentioned", mentioned_side, None, "Mentioned", None, None),
         ("session-sidebar-mods", mods_side, None, "Panes", None, None),
         // The agent under Subagents and the command under Background tasks, both done.
-        ("session-sidebar-done", finished_side, None, "Background tasks · 1 done", None, None),
+        ("session-sidebar-done", finished_side, None, "Background tasks · 1 failed", None, None),
         // /add-dir restarts the chat with the folder, which the sidebar lists with a Remove.
         ("session-sidebar-folder", worked_again_side, Some(add_dir.as_str()), "Folders", None, None),
         // The terminal Claude opened, live in the sidebar with what it runs and buttons to open it as a tab and close it.
-        ("session-sidebar-terminal", built_side, None, "5-hour", None, None),
+        ("session-sidebar-terminal", built_side, None, "resets 18:00", None, None),
         // A click on a task opens the end of what it printed in a dialog over the chat.
         ("session-sidebar-task-output", tasks_open_side, None, "Background tasks", Some("row:Watch the test suite"), Some("Waiting for file changes")),
         // A background agent's Message opens the chat's dialog to write to it.
-        ("session-sidebar-agent-message", agent_side, None, "Background tasks", Some("press:Message"), Some("SendMessage tool")),
+        ("session-sidebar-agent-message", agent_side, None, "Background tasks", Some("press:Message"), Some("passes your message on")),
     ];
     let side_scenes: Vec<SideScene> = side_scenes.into_iter().filter(|scene| only.as_deref().is_none_or(|only| only.split(',').any(|one| one == scene.0))).collect();
     if !side_scenes.is_empty() {
@@ -1918,9 +1939,14 @@ esac"##,
             // The shell of the terminal the workspace draws over the sidebar, opened before the chat so the fake `claude` the
             // chat starts is found under the scene's own shell.
             let shot_terminal = (name == "session-sidebar-terminal").then(|| {
-                let printed = b"$ make all\r\n  Compiling shop v0.4.0 (/work/shop)\r\n  Compiling checkout v0.4.0\r\n  Compiling cart v0.4.0\r\n    Building [=========>       ] 41/63: cart\r\n".to_vec();
+                // A finished build, in lines that fit the card's columns, so nothing wraps mid-word and the card's Idle badge is true.
+                let printed = b"$ make all\r\n  Compiling shop v0.4.0\r\n  Compiling checkout v0.4.0\r\n  Compiling cart v0.4.0\r\n   Finished build in 2.4s\r\n".to_vec();
                 // SAFETY: nothing else reads the environment while the shell starts.
-                unsafe { std::env::set_var("SHELL", "/bin/sh") };
+                // A prompt of its own, not this machine's user and host: the pane starts its shell as a login shell, whose
+                // profile sets the prompt over any `PS1` it was given, so the shell is a script that runs one that reads no profile.
+                let quiet = root.join("quiet-shell");
+                script(quiet.clone(), "exec env -i HOME=\"$HOME\" PATH=/usr/bin:/bin TERM=xterm-256color BASH_SILENCE_DEPRECATION_WARNING=1 PS1='$ ' /bin/bash --noprofile --norc -i");
+                unsafe { std::env::set_var("SHELL", &quiet) };
                 let terminal = cx.update(|cx| wings_native::terminal_view::TerminalView::open(root.clone(), printed, None, cx).unwrap());
                 unsafe { std::env::set_var("SHELL", root.join("shell")) };
                 terminal
@@ -1953,7 +1979,7 @@ esac"##,
                 side.update(&mut cx, |view, _, cx| {
                     view.set_terminals(vec![1], listed, cx);
                     view.draw_terminals_for_shots(move |_| {
-                        let card = wings_native::page::terminal_card(1, "make all".into(), true, terminal.clone(), |_, _| {}, |_, _| {});
+                        let card = wings_native::page::terminal_card(1, "make all".into(), false, terminal.clone(), |_, _| {}, |_, _| {});
                         vec![(wings_native::page::terminal_slot(1), card)]
                     });
                 })
@@ -2083,7 +2109,7 @@ esac"##,
                         assert!(Instant::now() < deadline, "the sidebar did not start: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
                         wait(&mut cx, window, Duration::from_millis(20));
                     }
-                    assert!(chat_view.update(&mut cx, |view, _, cx| view.press_disclosure("Ran 1 subagent", cx)).unwrap());
+                    assert!(chat_view.update(&mut cx, |view, _, cx| view.press_disclosure("Running 1 subagent", cx)).unwrap());
                     wait(&mut cx, chat_view.into(), Duration::from_millis(300));
                     assert!(chat_view.read_with(&cx, |view, _| view.press("Open", 0)).unwrap());
                 }

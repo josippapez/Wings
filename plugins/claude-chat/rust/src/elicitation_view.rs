@@ -3,7 +3,7 @@
 
 use wings_plugin::{
     host,
-    ui::{Node, button, checkbox, confirm, muted, notice, select, stack, text, text_input},
+    ui::{Node, button, checkbox, confirm, muted, notice, row, select, stack, text, text_input},
 };
 
 use crate::{
@@ -21,9 +21,12 @@ fn card(asked: &Elicitation) -> Node {
     match &asked.kind {
         Kind::Form(fields) => {
             body.extend(fields.iter().map(|field| field_node(asked, field)));
-            // What stops Submit, so a disabled button isn't a mystery.
+            // What stops Submit, so a disabled button isn't a mystery. A missing required field is not said before you have
+            // done anything: its label already says it is required, and the button's tooltip says which.
             if let Err(why) = asked.content() {
-                body.push(muted(why).prop("size", "small"));
+                if !why.ends_with(" is required.") {
+                    body.push(muted(why).prop("size", "small"));
+                }
             }
         }
         Kind::Url(url) => {
@@ -35,13 +38,24 @@ fn card(asked: &Elicitation) -> Node {
     let (decline, cancel) = (asked.request.clone(), asked.request.clone());
     let accept = asked.request.clone();
     let go = match &asked.kind {
-        Kind::Form(_) => Some(button("Submit", "default", false, move || answer(&accept, Action::Accept)).prop("disabled", asked.content().is_err())),
+        Kind::Form(_) => {
+            let ready = asked.content();
+            let held = ready.as_ref().err().cloned().unwrap_or_default();
+            Some(button("Submit", "default", false, move || answer(&accept, Action::Accept)).prop("disabled", ready.is_err()).prop("title", held))
+        }
         Kind::Url(_) => Some(button("Open and continue", "default", false, move || open_and_continue(&accept))),
         Kind::Other(_) => None,
     };
-    let title = format!("{} asks", asked.server);
-    confirm(title, body, [button("Cancel", "outline", false, move || answer(&cancel, Action::Cancel)), button("Decline", "outline", false, move || answer(&decline, Action::Decline))].into_iter().chain(go))
-        .key(format!("elicitation-{}", asked.request))
+    let title = format!("Request from {}", asked.server);
+    // Cancel, the quieter Decline, then the one that goes ahead, at the right as a dialog's are.
+    let actions = row()
+        .prop("grow", true)
+        .prop("gap", "s")
+        .prop("justify", "end")
+        .child(button("Cancel", "ghost", false, move || answer(&cancel, Action::Cancel)))
+        .child(button("Decline", "outline", false, move || answer(&decline, Action::Decline)))
+        .maybe(go);
+    confirm(title, body, [actions]).key(format!("elicitation-{}", asked.request))
 }
 
 /// One field of the form: its control, and what the server says about it.

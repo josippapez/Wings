@@ -21,7 +21,7 @@ pub fn background_button(tool: &Tool, c: &Chat) -> Option<Node> {
     (tool.name == "Bash" && tool.output.is_none() && c.session.working && c.state == State::Running && !waiting).then(|| {
         let id = tool.id.clone();
         let moving = c.session.ops.moving.contains(&tool.id);
-        ui::button("Run in background", "ghost", moving, move || move_to_background(&id))
+        ui::button("Run in background", "outline", moving, move || move_to_background(&id))
             .prop("size", "sm")
             .prop("title", "Claude goes on without waiting for it, and it keeps running as a background task")
             .key(format!("background-{}", tool.id))
@@ -66,7 +66,7 @@ pub fn message_dialog(c: &Chat) -> Option<Node> {
         .child(ui::button("Send", "default", false, send_message).prop("disabled", said.trim().is_empty()));
     Some(
         panel(&truncate(name, 60), WIDTH, close_message)
-            .child(muted("Claude passes your message on to this agent with its SendMessage tool. It shows in the chat as a message of yours.").prop("size", "small"))
+            .child(muted("Claude passes your message on to this agent. It shows in the chat as a message of yours.").prop("size", "small"))
             .child(text_input("Message", said, edit_message).prop("placeholder", "What should the agent know?").prop("autoFocus", true))
             .child(buttons),
     )

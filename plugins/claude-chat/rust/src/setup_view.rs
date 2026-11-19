@@ -20,6 +20,14 @@ use crate::{
 };
 
 const WIDTH: u32 = 640;
+/// The width of the column the permissions list names each rule's source in.
+const SOURCE_WIDTH: u32 = 120;
+/// The width of the column the hooks list names each hook's source in.
+const HOOK_SOURCE_WIDTH: u32 = 112;
+/// The columns of the buttons a row ends in, which every row keeps whether it has the button or not, so what is left of
+/// them lines up.
+const OPEN_WIDTH: u32 = 56;
+const REMOVE_WIDTH: u32 = 72;
 /// The most saved memories listed: Claude Code lists up to 200.
 const SAVED_SHOWN: usize = 30;
 /// How long after a change the dialog reads its list again: Claude Code took 1.05 s to list a rule an edit command wrote.
@@ -47,6 +55,11 @@ fn filled<T>(answer: &Option<Result<T, String>>, body: impl FnOnce(&T) -> Node) 
     }
 }
 
+/// A column `width` points wide with `node` at its right, or only the room when a row has none.
+fn column(width: u32, node: Option<Node>) -> Node {
+    stack().prop("width", width).child(row().prop("justify", "end").maybe(node))
+}
+
 fn notices(list: &[(&'static str, String)]) -> impl Iterator<Item = Node> {
     list.iter().map(|(tone, said)| notice(tone, said.as_str()))
 }
@@ -62,12 +75,14 @@ fn asking(setup: &Setup, edit: &Edit) -> Node {
         allows.then(|| notice("warn", "Claude will do what this rule matches without asking you, in every session that reads this file.")),
     ];
     let variant = if matches!(edit, Edit::RemoveRule { .. } | Edit::RemoveHook { .. }) { "destructive" } else { "default" };
-    asks(question, body.into_iter().flatten(), [button(edit.verb(), variant, setup.saving, confirm), button("Cancel", "ghost", false, cancel).prop("disabled", setup.saving)])
+    // Cancel, then the button that does it, at the right.
+    let actions = row().prop("grow", true).prop("justify", "end").child(button("Cancel", "ghost", false, cancel).prop("disabled", setup.saving)).child(button(edit.verb(), variant, setup.saving, confirm));
+    asks(question, body.into_iter().flatten(), [actions])
 }
 
 /// The button that asks to remove a hook or a rule from the settings file it is in.
 fn remove_button(edit: Edit, from: &str) -> Node {
-    button("Remove", "ghost", false, move || ask(edit.clone())).prop("size", "sm").prop("title", format!("Removes it from {from}, once you confirm"))
+    button("Remove", "outline", false, move || ask(edit.clone())).prop("size", "sm").prop("title", format!("Removes it from {from}, once you confirm"))
 }
 
 fn hooks_dialog(setup: &Setup, cwd: &str) -> Node {
@@ -119,9 +134,10 @@ fn hook_row(setup: &Setup, at: usize, hook: &Hook, cwd: &str) -> Node {
         .maybe(kind)
         .child(what)
         .maybe(off)
-        .child(from)
-        .maybe(file.map(|file| open_button(&file)))
-        .maybe(remove.map(|edit| remove_button(edit, hook.from.as_str())))
+        // One width for every row, so the sources form a column.
+        .child(stack().prop("width", HOOK_SOURCE_WIDTH).child(from.prop("truncate", true)))
+        .child(column(OPEN_WIDTH, file.map(|file| open_button(&file))))
+        .child(column(REMOVE_WIDTH, remove.map(|edit| remove_button(edit, hook.from.as_str()))))
 }
 
 fn memory_dialog(setup: &Setup) -> Node {
@@ -167,7 +183,7 @@ fn switch_line(setup: &Setup, said: String, setting: &'static str, on: Option<bo
     }
     let switch = edit.map(|edit| {
         let label = edit.verb();
-        button(label, "ghost", false, move || ask(edit.clone())).prop("size", "sm").prop("title", "Changes your user settings, once you confirm")
+        button(label, "outline", false, move || ask(edit.clone())).prop("size", "sm").prop("title", "Changes your user settings, once you confirm")
     });
     row().prop("gap", "s").prop("align", "center").child(small(said).prop("grow", true)).maybe(switch)
 }
@@ -185,11 +201,11 @@ fn file_row(setup: &Setup, file: &File) -> Node {
 /// A file or folder by its name, a line about it, its path, a fact at its end, and the buttons that open a file that is
 /// there (`openable`) and copy its path.
 fn path_row(setup: &Setup, path: &str, name: &str, about: &str, fact: String, depth: usize, openable: bool) -> Node {
-    let head = row().prop("gap", "s").prop("align", "baseline").child(title(name)).maybe((!about.is_empty()).then(|| small(about).prop("truncate", true).prop("title", about)));
+    let head = row().prop("gap", "s").prop("align", "baseline").child(title(name).prop("truncate", true).prop("title", name)).maybe((!about.is_empty()).then(|| small(about).prop("truncate", true).prop("title", about)));
     let place = text(path).prop("mono", true).prop("size", "small").prop("tone", "muted").prop("truncate", true).prop("title", path);
     let copied = setup.copied.as_deref() == Some(path);
     let owned = path.to_owned();
-    let copy_button = button(if copied { "Copied" } else { "Copy path" }, "ghost", false, move || copy(&owned)).prop("size", "sm").prop("title", "Copies the path, to open it in Finder");
+    let copy_button = button(if copied { "Copied" } else { "Copy path" }, "outline", false, move || copy(&owned)).prop("size", "sm").prop("title", "Copies the path, to open it in Finder");
     row()
         .prop("gap", "s")
         .prop("align", "center")
@@ -233,7 +249,7 @@ fn permissions_dialog(setup: &Setup) -> Node {
                 .child(stack().prop("grow", true).child(search_field("Search rules", &setup.query, set_query)))
                 .maybe(add);
             let form = setup.form.as_ref().map(|form| rule_form(setup, form));
-            stack().prop("gap", "m").children(notices(&rules.notices)).child(bar).maybe(form).child(rule_list(setup, &rules.rules))
+            stack().prop("gap", "l").children(notices(&rules.notices)).child(bar).maybe(form).child(rule_list(setup, &rules.rules))
         }))
         .child(small("Remove changes the settings file a rule is in. Rules your organization, the command line or this session set stay as they are."))
 }
@@ -252,9 +268,9 @@ fn rule_form(setup: &Setup, form: &RuleForm) -> Node {
         .prop("wrap", true)
         .child(chips("Behavior", &[("allow", "Allow"), ("ask", "Ask"), ("deny", "Deny")], &form.behavior, set_rule_behavior))
         .child(select("Save in", &files, &form.file, set_rule_file));
-    let actions = row().prop("gap", "s").child(button("Review", "default", false, review).prop("disabled", form.rule.trim().is_empty())).child(button("Cancel", "ghost", false, close_form));
+    let actions = row().prop("gap", "s").prop("justify", "end").child(button("Cancel", "ghost", false, close_form)).child(button("Review", "default", false, review).prop("disabled", form.rule.trim().is_empty()));
     stack()
-        .prop("gap", "s")
+        .prop("gap", "l")
         .child(heading(3, "New rule"))
         .child(field)
         .child(small("A tool, or a tool and what it may do in parentheses, like Bash(npm run test:*) or WebFetch(domain:example.com)."))
@@ -275,7 +291,7 @@ fn rule_list(setup: &Setup, rules: &[Rule]) -> Node {
         return small(if wanted.is_empty() { format!("No {} rules.", setup.behavior) } else { format!("Nothing matches “{}”.", setup.query.trim()) });
     }
     let more = (budget.left > 0).then(|| small(format!("{} more. Search to find them.", budget.left)));
-    stack().prop("gap", "s").children(rows).maybe(more)
+    stack().prop("gap", "l").children(rows).maybe(more)
 }
 
 /// A rule: as it is written, Claude Code's reading of it, where it is set, and Remove when it is in one of your settings
@@ -290,18 +306,21 @@ fn rule_row(setup: &Setup, at: usize, rule: &Rule) -> Node {
         Node::new("Text").prop("size", "small").prop("tone", "muted").child(text(before.as_str())).child(text(part.as_str()).prop("weight", "medium")).child(text(after.as_str()))
     });
     let ignored = rule.ignored.then(|| badge("Not in effect", Some("warn")).prop("title", "Your organization's settings allow only their own rules"));
-    let mut from = small(source_label(&rule.source));
+    let mut from = small(source_label(&rule.source)).prop("truncate", true);
     if let Some(file) = source_path(&rule.source, setup.user_dir.as_deref()) {
         from = from.prop("title", file);
     }
     row()
         .prop("gap", "s")
+        // The source and Remove sit in the middle of the rule, whether it takes one line or two.
         .prop("align", "center")
         .key(format!("rule-{at}"))
         .child(stack().prop("grow", true).prop("gap", "xs").child(written).maybe(reading))
         .maybe(ignored)
-        .child(from)
-        .maybe(remove.map(|edit| remove_button(edit, source_label(&rule.source))))
+        // One width for every row, so the sources form a column.
+        .child(stack().prop("width", SOURCE_WIDTH).child(from))
+        // Reserved for a rule that has no Remove, so its source is in the column too.
+        .child(column(REMOVE_WIDTH, remove.map(|edit| remove_button(edit, source_label(&rule.source)))))
 }
 
 fn close() {

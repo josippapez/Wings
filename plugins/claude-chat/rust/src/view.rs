@@ -9,7 +9,7 @@ use wings_plugin::{
     local_time::local,
     markdown::{highlighted_code, markdown},
     ui::{
-        Node, badge, button, card, chip, confirm, disclosure, empty, icon, list, list_button, loading, muted, notice, row,
+        Node, badge, button, card, chip, confirm, disclosure, empty, gauge, icon, list, list_button, loading, muted, notice, row,
         select, spinner, stack, text, text_input,
     },
 };
@@ -65,7 +65,7 @@ fn chat_page(c: &Chat) -> Node {
     let body = crate::rail::watch(body, &rail, last);
     // The rail goes down to the checklist and the message box, not past them: it is laid over the conversation alone.
     let conversation = stack().prop("fill", true).prop("gap", "none").children(crate::rail::marks(c, &rail)).child(body);
-    let main: Vec<Node> = [conversation].into_iter().chain(todo_card(c)).chain([composer(c)]).collect();
+    let main: Vec<Node> = [conversation, composer(c)].into_iter().collect();
     // The session panel is a card on the right that the app leaves out of a narrow tab and that shows by default; only the
     // header's button puts it away and brings it back, also where it covers the conversation in a narrow tab. A panel left
     // out leaves its terminals out with it. In Wings' sidebar (`session_side.rs`) the conversation has the tab's width.
@@ -154,7 +154,8 @@ fn side_button(c: &Chat) -> Option<Node> {
     let button = button("", if shown { "secondary" } else { "ghost" }, false, chat::toggle_side).prop("label", "Side panel").prop("title", title.as_str()).shortcut("cmd-alt-b");
     Some(match live {
         0 => button.prop("size", "icon-sm").child(glyph),
-        n => button.prop("size", "sm").child(row().prop("gap", "xs").prop("align", "center").child(glyph).child(text(n.to_string()).prop("size", "small"))),
+        // The count is a small badge beside the icon, with room between them.
+        n => button.prop("size", "sm").child(row().prop("gap", "s").prop("align", "center").child(glyph).child(badge(n.to_string(), Some("info")))),
     })
 }
 
@@ -257,13 +258,16 @@ fn newest_end(c: &Chat, nodes: &mut Vec<Node>) {
                 .prop("gap", "s")
                 .prop("align", "center")
                 .child(text(format!("Waiting on {}", plural(n, "subagent"))).prop("tone", "muted").prop("shimmer", true).prop("since", c.doing.1))
-                .child(button("Stop", "ghost", false, chat::stop).prop("size", "sm")),
+                .child(button("Stop", "outline", false, chat::stop).prop("size", "sm")),
             None => {
                 // A mod may draw the line, or reword it.
                 let (drawn, said) = crate::mods_view::spinner(c);
                 let what = said.unwrap_or_else(|| if c.doing.0.is_empty() { "Working".to_owned() } else { c.doing.0.clone() });
+                // "Retrying in 5s" already names a time: the elapsed counter beside it would be a second timer.
+                let retrying = what.starts_with("Retrying in ");
                 let line = match drawn {
                     Some(drawn) => drawn,
+                    None if retrying => text(what).prop("tone", "muted").prop("shimmer", true),
                     None => text(what).prop("tone", "muted").prop("shimmer", true).prop("since", c.doing.1),
                 };
                 row().prop("gap", "s").prop("align", "center").child(line).maybe(crate::actions_view::status_button(c))
@@ -271,8 +275,10 @@ fn newest_end(c: &Chat, nodes: &mut Vec<Node>) {
         };
         // While subagents of the turn run, how many, over the status line.
         let (started, running) = c.session.turn_subagents();
+        // Waiting on subagents already says how many, and the line has its Stop beside it.
         nodes.push(match running {
             0 => status.key("working"),
+            _ if c.session.waiting_on_subagents().is_some() => status.key("working"),
             _ => stack()
                 .prop("gap", "xs")
                 .child(muted(format!("{} · {running} working", plural(started, "subagent"))).prop("size", "small"))
@@ -539,7 +545,15 @@ fn describe(tools: &[&Tool]) -> String {
         .filter_map(|(names, verb, noun)| {
             let n = tools.iter().filter(|tool| names.contains(&tool.name.as_str())).count();
             // The checklist shows above the message box: how often it changed says nothing.
-            (n > 0).then(|| if noun.is_empty() { (*verb).to_owned() } else { format!("{verb} {}", plural(n, noun)) })
+            // A call that has no result yet still runs: "Running 2 commands" when all do, "Ran 1 command · 1 running" when some
+            // are done, so the count never says running for one that has ended.
+            let running = if *verb == "Ran" { tools.iter().filter(|tool| names.contains(&tool.name.as_str()) && tool.output.is_none()).count() } else { 0 };
+            (n > 0).then(|| match (noun.is_empty(), running) {
+                (true, _) => (*verb).to_owned(),
+                (false, 0) => format!("{verb} {}", plural(n, noun)),
+                (false, all) if all == n => format!("Running {}", plural(n, noun)),
+                (false, some) => format!("Ran {} · {some} running", plural(n - some, noun)),
+            })
         })
         .collect();
     let others = tools.iter().filter(|tool| !known(tool)).count();
@@ -553,16 +567,21 @@ fn describe(tools: &[&Tool]) -> String {
 fn step(tool: &Tool, opened: bool, c: &Chat) -> Node {
     let output = tool.output.as_ref().map(|(output, failed)| (output.as_str(), *failed)).filter(|(output, _)| !output.trim().is_empty());
     let mark = match &tool.output {
-        None => spinner(),
-        Some((output, true)) => badge(exit_code(output).map_or("Failed".to_owned(), |code| format!("Failed · exit {code}")), Some("danger")),
-        Some(_) => text("✓").prop("tone", "success"),
+        None => lead(spinner()),
+        // The mark of a failure is in the same 16 point box as the others, so the names line up; its pill follows the name.
+        Some((_, true)) => lead(text("✗").prop("tone", "danger")),
+        Some(_) => lead(text("✓").prop("tone", "success")),
     };
+    let failure = tool.output.as_ref().filter(|(_, failed)| *failed).map(|(output, _)| badge(exit_code(output).map_or("Failed".to_owned(), |code| format!("Failed · exit {code}")), Some("danger")));
+    // A subagent's description is a sentence, not a command or a path: plain text.
+    let subagent = matches!(tool.name.as_str(), "Task" | "Agent");
     let head = row()
         .prop("gap", "s")
         .prop("align", "baseline")
         .child(mark)
         .child(text(tool.name.as_str()).prop("weight", "medium"))
-        .child(text(tool.summary.as_str()).prop("mono", true).prop("size", "small").prop("tone", "muted").prop("truncate", true).prop("grow", true))
+        .maybe(failure)
+        .child(text(tool.summary.as_str()).prop("mono", !subagent).prop("size", "small").prop("tone", "muted").prop("truncate", true).prop("grow", true))
         .children(facts(tool))
         .maybe(open_subagent(tool, c))
         .maybe(crate::actions_view::background_button(tool, c));
@@ -585,7 +604,8 @@ fn step(tool: &Tool, opened: bool, c: &Chat) -> Node {
     let error = output.filter(|(_, failed)| *failed && !opened).map(|(said, _)| {
         let lines: Vec<&str> = said.trim_end().lines().collect();
         let tail = lines[lines.len().saturating_sub(4)..].join("\n");
-        text(truncate(&tail, 600)).prop("mono", true).prop("size", "small").prop("tone", "danger")
+        // Under the name, not under the mark: past the 16 point box and the gap after it.
+        row().prop("gap", "s").child(stack().prop("width", 16)).child(text(truncate(&tail, 600)).prop("mono", true).prop("size", "small").prop("tone", "danger").prop("grow", true))
     });
     // What it gave back as pictures (a Read of an image, a screenshot) shows under its line, closed or not.
     let pictures = thumbs(&tool.images, "Picture from the tool");
@@ -684,7 +704,8 @@ fn diff_lines(key: &str, language: &str, diff: &Diff) -> Node {
 /// The most checklist lines shown at once.
 const TODOS_SHOWN: usize = 12;
 
-/// Claude's checklist, a raised card over the message box: how many are done, folded to that line when you fold it.
+/// Claude's checklist, a raised card at the top of the message box's own column, so it keeps the gap the queue card and the
+/// box have between them: how many are done, folded to that line when you fold it.
 fn todo_card(c: &Chat) -> Option<Node> {
     let todos = &c.session.todos;
     if todos.is_empty() {
@@ -707,7 +728,7 @@ fn todo_card(c: &Chat) -> Option<Node> {
         let more = (shown.len() > TODOS_SHOWN).then(|| muted(format!("{} more", plural(shown.len() - TODOS_SHOWN, "item"))));
         list = list.child(stack().prop("gap", "none").children(rows).maybe(more));
     }
-    Some(Node::new("Bar").prop("edge", "none").child(stack().prop("gap", "s").prop("maxWidth", COLUMN).child(list)).key("todos"))
+    Some(list.key("todos"))
 }
 
 /// One checklist line: done is muted with a check, the one in progress shimmers while Claude works.
@@ -753,10 +774,10 @@ fn finished(at: usize, done: &Finished, c: &Chat) -> Node {
     let title = text(title).prop("size", "small").prop("tone", if done.failed() { "danger" } else { "muted" });
     let open = if done.kind == "Agent" {
         let id = done.call.clone();
-        (!id.is_empty() && c.session.subagents.contains_key(&id)).then(|| button("Open", "ghost", false, move || crate::tasks_view::open_subagent(&id)).prop("title", "Its transcript"))
+        (!id.is_empty() && c.session.subagents.contains_key(&id)).then(|| button("Open", "outline", false, move || crate::tasks_view::open_subagent(&id)).prop("title", "Its transcript"))
     } else {
         let id = done.task.clone();
-        c.session.tasks.iter().any(|task| task.id == id && task.has_output()).then(|| button("Open", "ghost", false, move || chat::open_task(&id)).prop("title", "What it printed"))
+        c.session.tasks.iter().any(|task| task.id == id && task.has_output()).then(|| button("Open", "outline", false, move || chat::open_task(&id)).prop("title", "What it printed"))
     };
     let line = row().prop("gap", "s").prop("align", "center").child(mark).child(title).maybe(open.map(|open| open.prop("size", "sm")));
     let opened = crate::folds::is_open(c, Kind::Summary, c.open_outputs.contains(&format!("finished-{at}")));
@@ -807,6 +828,24 @@ fn permission_node(ask: &Ask, draft: &Draft) -> Node {
     )
 }
 
+/// Lucide's `circle` and `square` outlines (the same 18-point size in a 24-point box), with the dot a picked round mark
+/// holds and the tick a picked box holds.
+const RING: &str = "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18z";
+const BOX: &str = "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z";
+const DOT: &str = "M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6z";
+const TICK: &str = "m9 12 2 2 4-4";
+
+/// The mark before an option: a ring for one answer and a box for several, the same size, filled in when picked.
+fn choice_mark(multi: bool, picked: bool) -> Node {
+    let shapes: Vec<&str> = match (multi, picked) {
+        (false, false) => vec![RING],
+        (false, true) => vec![RING, DOT],
+        (true, false) => vec![BOX],
+        (true, true) => vec![BOX, TICK],
+    };
+    icon(24, 2.0, &shapes).prop("size", 16).prop("tone", if picked { "info" } else { "muted" })
+}
+
 /// Each question with its options as chips, and a field for another answer.
 fn questions_node(ask: &Ask, draft: &Draft) -> Node {
     let questions = ask.input["questions"].as_array().map(Vec::as_slice).unwrap_or_default();
@@ -819,16 +858,11 @@ fn questions_node(ask: &Ask, draft: &Draft) -> Node {
         let chips = list().children(options.iter().enumerate().map(|(o, option)| {
             let request = ask.request.clone();
             let picked = draft.is_picked(q, o);
-            let mark = match (multi, picked) {
-                (false, true) => "●",
-                (false, false) => "○",
-                (true, true) => "☑",
-                (true, false) => "☐",
-            };
+            let mark = choice_mark(multi, picked);
             let line = row()
                 .prop("gap", "s")
-                .prop("align", "baseline")
-                .child(text(mark).prop("tone", if picked { "info" } else { "muted" }))
+                .prop("align", "center")
+                .child(mark)
                 .child(text(option["label"].as_str().unwrap_or_default()).prop("weight", "medium"))
                 .maybe(option["description"].as_str().filter(|said| !said.is_empty()).map(|said| muted(truncate(said, 120)).prop("size", "small").prop("grow", true)));
             list_button([line], move || chat::edit(&request, |draft| draft.toggle(q, o, multi))).key(format!("{q}-{o}"))
@@ -924,7 +958,17 @@ fn composer(c: &Chat) -> Node {
             .prop("disabled", !open || !typed)
             .child(icon(14, 2.0, &[SEND]))
     };
-    let tab = suggested.map(|_| chip("Tab", false, chat::accept_suggestion).prop("title", "Use the suggested message (Tab)").key("tab"));
+    // A key to press, drawn as a keycap beside what it does, not a button that looks like one more control in the row.
+    let tab = suggested.map(|_| {
+        row()
+            .prop("gap", "xs")
+            .prop("align", "center")
+            .child(badge("Tab", None).prop("title", "Use the suggested message"))
+            .child(muted("to use it"))
+            // A gap before the send button, which the hint butted against.
+            .child(stack().prop("width", 6))
+            .key("tab")
+    });
     // As big and as round as the send button, so the row's ends match.
     let attach = button("", "ghost", false, chat::attach)
         .prop("size", "icon-sm")
@@ -946,11 +990,15 @@ fn composer(c: &Chat) -> Node {
     // list comes and goes, and keeps the keyboard.
     let field = stack().prop("gap", "s").key("message").child(field.prop("grow", true).key("field")).maybe(suggestions(c));
     let message_box = card().prop("variant", "raised").maybe(pasted(c)).child(field).child(controls);
-    Node::new("Bar").prop("edge", "none").child(
+    // Reading an older part, the conversation ends at the bar in a line of text cut through: a hairline makes it an edge, and the
+    // button over the message box has room round it.
+    let older = c.until.is_some();
+    Node::new("Bar").prop("edge", if older { "top" } else { "none" }).child(
         stack()
-            .prop("gap", "s")
+            .prop("gap", if older { "m" } else { "s" })
             .prop("maxWidth", COLUMN)
             .maybe(latest(c))
+            .maybe(todo_card(c))
             .maybe(crate::mods_view::above_prompt(c))
             .maybe(queued(c))
             .child(message_box)
@@ -960,7 +1008,7 @@ fn composer(c: &Chat) -> Node {
 
 /// While you read an older part of a long session, a button over the message box back to the newest.
 fn latest(c: &Chat) -> Option<Node> {
-    c.until.is_some().then(|| row().child(button("Jump to the latest", "outline", false, || chat::with(show_latest)).prop("size", "sm")))
+    c.until.is_some().then(|| row().prop("justify", "center").child(button("Jump to the latest", "outline", false, || chat::with(show_latest)).prop("size", "sm")))
 }
 
 /// The pictures pasted into the message, as chips above its text, each with a cross to take it out.
@@ -1004,7 +1052,7 @@ pub(crate) fn side_sections(c: &Chat, place: bool) -> Vec<Node> {
         (false, None) => Some(c.folder.clone()),
     });
     if let Some(Some(place)) = place {
-        head = head.child(small(place.clone()).prop("tone", "muted").prop("truncate", true).prop("title", place));
+        head = head.child(inset(small(place.clone()).prop("tone", "muted").prop("truncate", true).prop("title", place)));
     }
     if let Some((added, removed)) = c.changes {
         // A click shows Wings' Changes sidebar.
@@ -1059,33 +1107,25 @@ fn meter_button(label: &str, percent: u64, levels: (u64, u64), resets: Option<St
         Panel::Context => "Open Context",
         Panel::Usage => "Open Usage",
     };
-    list_button([meter_row(label, percent, levels, resets)], move || chat::open_panel(panel)).prop("title", title).key(label)
+    // The gauge takes the row's width, as the HUD sidebar's do: left alone in a row it is as wide as its label.
+    let gauge = gauge(label, percent as f64, (levels.0 as u32, levels.1 as u32), resets);
+    list_button([stack().prop("grow", true).child(gauge)], move || chat::open_panel(panel)).prop("title", title).key(label)
 }
 
-/// One line of the panel: its name on the left and a percent on the right, a thin bar under it that turns amber at `levels`'
-/// first and red at its second, and when it resets in small muted text beside the name.
-fn meter_row(label: &str, percent: u64, levels: (u64, u64), resets: Option<String>) -> Node {
-    let line = row()
-        .prop("gap", "s")
-        .prop("align", "baseline")
-        .child(text(label).prop("size", "small"))
-        .child(stack().prop("grow", true).maybe(resets.map(|resets| muted(resets).prop("size", "small").prop("truncate", true))))
-        .child(fact(format!("{percent}%"), "muted"));
-    let meter = Node::new("Meter").prop("label", label).prop("percent", percent.min(100) as f64);
-    let meter = match level(percent, levels) {
-        Some(tone) => meter.prop("tone", tone),
-        None => meter,
-    };
-    stack().prop("gap", "xs").child(line).child(meter).key(label)
+/// A section's heading, in the inset a list button has, so the heading and the rows under it share one left edge: a button
+/// is drawn 7 points in from its container, a bare heading is not.
+pub(crate) fn heading(title: impl Into<String>) -> Node {
+    inset(Node::new("Heading").text(title))
 }
 
-/// The tone a meter at `percent` takes: none below the first level, amber from it, red from the second.
-fn level(percent: u64, levels: (u64, u64)) -> Option<&'static str> {
-    match percent {
-        p if p >= levels.1 => Some("danger"),
-        p if p >= levels.0 => Some("warn"),
-        _ => None,
-    }
+/// `content` in the same inset as a row that is a list button, without being one: a button nothing presses.
+pub(crate) fn inset(content: Node) -> Node {
+    Node::new("ListButton").prop("disabled", true).child(content)
+}
+
+/// A row's lead icon (a spinner, a mark) in a box of one width, so the text after it starts at one x whichever it is.
+pub(crate) fn lead(mark: Node) -> Node {
+    stack().prop("width", 16).child(row().prop("justify", "center").prop("align", "center").child(mark))
 }
 
 /// The subagents this session started, from its Task calls: each with its model, whether it runs, and how long it has or
@@ -1105,8 +1145,8 @@ fn subagents(c: &Chat) -> Option<Node> {
     Some(
         stack()
             .prop("gap", "xs")
-            .child(Node::new("Heading").text(title))
-            .maybe((hidden > 0).then(|| muted(format!("{hidden} earlier")).prop("size", "small")))
+            .child(heading(title))
+            .maybe((hidden > 0).then(|| inset(muted(format!("{hidden} earlier")).prop("size", "small"))))
             .child(stack().prop("gap", "none").children(rows)),
     )
 }
@@ -1132,28 +1172,38 @@ fn subagent_row(tool: &Tool, c: &Chat) -> Node {
         (false, true) => text("✗").prop("tone", "danger"),
         (false, false) => text("✓").prop("tone", "success"),
     };
+    let mark = lead(mark);
     let model = sub.and_then(|sub| sub.reported_model.as_deref()).map(model_name);
     let name = if tool.summary.is_empty() { "Subagent" } else { tool.summary.as_str() };
     let ran = background.filter(|task| task.ended.is_some() && task.started > 0).map(|task| task.ended_at.saturating_sub(task.started));
-    let time = match (running, sub.filter(|sub| sub.started > 0)) {
-        (true, Some(sub)) => Some(muted("working").prop("size", "small").prop("since", sub.started)),
-        (false, Some(sub)) => Some(fact(took(ran.unwrap_or(sub.last.saturating_sub(sub.started))), "muted")),
-        (false, None) => ran.map(|ms| fact(took(ms), "muted")),
+    // "Haiku 5.5 · 12s", while it runs (the app counts the seconds up) and when it is done, in one small muted text.
+    let lapse = match (running, sub.filter(|sub| sub.started > 0)) {
+        (true, Some(sub)) => Some(Err(sub.started)),
+        (false, Some(sub)) => Some(Ok(took(ran.unwrap_or(sub.last.saturating_sub(sub.started))))),
+        (false, None) => ran.map(|ms| Ok(took(ms))),
         _ => None,
     };
-    // The name has the whole row, three lines at most; under it the model and the time on one muted line.
-    let facts = row().prop("gap", "s").prop("align", "center").maybe(model.map(|model| muted(model).prop("size", "small"))).maybe(time);
+    let facts = match (model, lapse) {
+        (Some(model), Some(Ok(time))) => Some(muted(format!("{model} · {time}"))),
+        (Some(model), Some(Err(since))) => Some(muted(model).prop("since", since)),
+        (None, Some(Ok(time))) => Some(muted(time)),
+        (None, Some(Err(since))) => Some(muted("Working").prop("since", since)),
+        (Some(model), None) => Some(muted(model)),
+        (None, None) => None,
+    }
+    .map(|facts| facts.prop("size", "small"));
     let line = row()
         .prop("gap", "s")
         .prop("align", "center")
         .child(mark)
-        .child(stack().prop("grow", true).prop("gap", "none").child(text(name).prop("size", "small").prop("clamp", true).prop("title", name)).child(facts));
+        .child(stack().prop("grow", true).prop("gap", "none").child(text(name).prop("size", "small").prop("clamp", true).prop("title", name)).maybe(facts));
     match crate::subagent_relay::can_open(c, &tool.id) {
         true => {
             let id = tool.id.clone();
             list_button([line], move || crate::tasks_view::open_subagent(&id)).prop("title", "Its conversation, in the sidebar").key(tool.id.as_str())
         }
-        false => line.key(tool.id.as_str()),
+        // In the inset a list button has: bare, the row sat 7 points left of the others.
+        false => inset(line).key(tool.id.as_str()),
     }
 }
 
@@ -1187,6 +1237,8 @@ fn queued(c: &Chat) -> Option<Node> {
         } else {
             text(said_text).prop("truncate", true).prop("expandable", true).prop("title", said_text)
         };
+        // From the top: an expanded message is many lines, and More or Less, Send now and the cross sit on its first. The app
+        // centres that line in a button's height, so the labels are level on one line too.
         row()
             .prop("gap", "xs")
             .prop("align", "start")
@@ -1201,7 +1253,12 @@ fn queued(c: &Chat) -> Option<Node> {
             )
             .key(queued.uuid.as_str())
     });
-    Some(card().child(muted("Claude reads these after its current step")).child(stack().prop("gap", "xs").children(rows)))
+    Some(card().child(muted(queued_note(c.session.queued.len()))).child(stack().prop("gap", "xs").children(rows)))
+}
+
+/// The queue card's line: one message is read, several are read together.
+fn queued_note(count: usize) -> &'static str {
+    if count == 1 { "Claude reads it after its current step" } else { "Claude reads them after its current step" }
 }
 
 /// The model with its effort in one menu, as "Opus 5.5 · High", and the permission mode, once Claude Code has said what
@@ -1386,6 +1443,22 @@ mod tests {
         let end = end_of(c);
         let (window, _) = window(c, end, end.saturating_sub(c.shown));
         (window.last().map_or(end, |block| block.start), end)
+    }
+
+    #[test]
+    fn a_fold_of_calls_still_running_says_running_not_ran() {
+        let done = call("a", "Bash", Detail::Plain, "ok");
+        let mut pending = call("b", "Bash", Detail::Plain, "");
+        pending.output = None;
+        assert_eq!(describe(&[&done]), "Ran 1 command");
+        assert_eq!(describe(&[&pending]), "Running 1 command");
+        assert_eq!(describe(&[&done, &pending]), "Ran 1 command · 1 running");
+    }
+
+    #[test]
+    fn the_queue_card_says_it_for_one_message_and_them_for_several() {
+        assert_eq!(queued_note(1), "Claude reads it after its current step");
+        assert_eq!(queued_note(2), "Claude reads them after its current step");
     }
 
     #[test]
@@ -1670,11 +1743,6 @@ mod tests {
     }
 
     #[test]
-    fn a_meter_turns_amber_then_red_at_its_levels() {
-        assert_eq!([level(40, (70, 90)), level(70, (70, 90)), level(95, (70, 90))], [None, Some("warn"), Some("danger")]);
-    }
-
-    #[test]
     fn the_header_names_the_account_the_chat_runs_under_and_checks_it_in_its_menu() {
         use wings_plugin::ui::tree_json;
         chat::with(|c| {
@@ -1784,5 +1852,22 @@ mod tests {
         println!("[measure] page at the newest: {newest:.1} ms; a click: {clicked:.1} ms to bring the prompt in, {built:.1} ms to the built page ({nodes} nodes)");
         assert!(scroll_to_of(page).is_some(), "the first page after the click scrolls to the prompt");
         chat::with(show_latest);
+    }
+}
+
+#[cfg(test)]
+mod choice_mark_tests {
+    use super::*;
+
+    #[test]
+    fn a_round_mark_and_a_box_are_drawn_the_same_size_and_filled_when_picked() {
+        let drawn = |multi, picked| wings_plugin::ui::tree_json(choice_mark(multi, picked));
+        for (multi, picked) in [(false, false), (false, true), (true, false), (true, true)] {
+            let mark = drawn(multi, picked);
+            assert_eq!(mark["type"], "Svg");
+            assert_eq!(mark["props"]["size"], 16);
+            assert_eq!(mark["props"]["tone"], if picked { "info" } else { "muted" });
+            assert_eq!(mark["props"]["shapes"].as_array().unwrap().len(), if picked { 2 } else { 1 });
+        }
     }
 }

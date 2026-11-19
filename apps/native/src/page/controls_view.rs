@@ -16,6 +16,9 @@ use crate::{theme, ui};
 /// The padding over and under a `ListButton`'s parts, inside its 1pt border.
 pub(super) const LIST_BUTTON_PADDING: f32 = 2.0;
 
+/// A raised card's 10pt padding and 1pt border over the field a message box's list opens upward from.
+const MESSAGE_CARD_EDGE: f32 = 11.0;
+
 impl PageView {
     pub(super) fn checkbox(&self, checkbox: &tree::Checkbox, cx: &mut Context<Self>) -> AnyElement {
         let label = plain_text(&checkbox.children);
@@ -91,6 +94,13 @@ impl PageView {
     }
 
     pub(super) fn chips(&self, select: &tree::Select, cx: &mut Context<Self>) -> AnyElement {
+        if !select.line && select.segmented {
+            // On a track as wide as its buttons, not as its row.
+            return div()
+                .flex()
+                .child(self.sheet_chips(select, cx))
+                .into_any_element();
+        }
         if !select.line && super::sheet_view::in_header() {
             return self.sheet_chips(select, cx);
         }
@@ -710,7 +720,8 @@ impl PageView {
         let measure = Self::measure_menu(id, cx);
         let list = shows(self).then(|| {
             let (bounds, window_height) = self.select_bounds.get(&id).copied().unwrap_or_default();
-            let room = if upward { bounds.top() - px(8.0) } else { menu_room(bounds, window_height) };
+            // A message box's field sits inside its card's edge and padding: the list ends above the card, not over its border.
+            let room = if upward { bounds.top() - px(8.0 + MESSAGE_CARD_EDGE) } else { menu_room(bounds, window_height) };
             let rows = options
                 .into_iter()
                 .enumerate()
@@ -744,7 +755,7 @@ impl PageView {
             // Over the page as `ui::popover` draws a select's menu, without its motion: the desktop's
             // `.w-combobox-popup` has `transition: none`, as a list that changes with each key has nothing to animate.
             let place = anchored().when(upward, |place| {
-                place.anchor(gpui::Anchor::BottomLeft).position(bounds.origin - gpui::point(px(0.0), px(4.0)))
+                place.anchor(gpui::Anchor::BottomLeft).position(bounds.origin - gpui::point(px(0.0), px(4.0 + MESSAGE_CARD_EDGE)))
             });
             deferred(
                 place.child(
