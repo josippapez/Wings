@@ -759,10 +759,21 @@ impl PluginHost {
     /// The project on screen, by its folder: every frame hears it with `onProject` when it is not the one they heard
     /// last, which is when the user switched projects or that project was renamed. Call after `publish_projects`.
     pub fn publish_project(&self, path: Option<&std::path::Path>) {
+        self.publish_project_in(path, None);
+    }
+
+    /// `publish_project`, with `folder`: where the tab on screen works when it is a page, not a terminal, as a Claude
+    /// chat tab's folder, which no pane carries. It goes with the project as its `folder`, and frames hear it again
+    /// when it changes, so the Changes sidebar follows a chat tab to its repo.
+    pub fn publish_project_in(&self, path: Option<&std::path::Path>, folder: Option<&str>) {
         let json = {
             let projects = self.shared.projects.lock().unwrap();
-            json(&path.and_then(|path| projects.iter().find(|project| std::path::Path::new(&project.path) == path)))
-                .unwrap()
+            let project = path.and_then(|path| projects.iter().find(|project| std::path::Path::new(&project.path) == path));
+            let mut value = serde_json::to_value(project).unwrap();
+            if let (Some(fields), Some(folder)) = (value.as_object_mut(), folder) {
+                fields.insert("folder".to_owned(), folder.into());
+            }
+            value.to_string()
         };
         let mut current = self.shared.current.lock().unwrap();
         if current.as_deref() != Some(json.as_str()) {

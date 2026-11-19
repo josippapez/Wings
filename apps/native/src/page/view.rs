@@ -192,6 +192,9 @@ pub struct PageView {
     /// Whether each `Split` was narrower than its `collapseBelow` when it was last drawn, by node id. A split not in
     /// here hasn't been measured yet and draws its fixed pane.
     split_narrow: HashMap<u64, bool>,
+    /// Whether each `expandable` text was cut short when it was last drawn, by node id, and the ones opened.
+    text_cut: HashMap<u64, bool>,
+    text_open: HashSet<u64>,
     /// The text input that has the keyboard, by node id, as of the last render: a combobox's shows its options under
     /// it.
     focused: Option<u64>,
@@ -551,6 +554,8 @@ impl PageView {
             pressed_open: false,
             select_bounds: HashMap::new(),
             split_narrow: HashMap::new(),
+            text_cut: HashMap::new(),
+            text_open: HashSet::new(),
             focused: None,
             suggestions_closed: false,
             highlight: None,
@@ -801,6 +806,15 @@ impl PageView {
 
     /// Opens or closes the first disclosure whose summary starts with `summary`, as a click on its line would. False when
     /// the page has none.
+    /// Presses the More of the first expandable text that is cut short, as a click on it would. False when none is.
+    #[cfg(feature = "test-support")]
+    pub fn press_more(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(id) = self.text_cut.iter().filter(|(_, cut)| **cut).map(|(id, _)| *id).min() else { return false };
+        self.text_open.insert(id);
+        cx.notify();
+        true
+    }
+
     #[cfg(feature = "test-support")]
     pub fn press_disclosure(&mut self, summary: &str, cx: &mut Context<Self>) -> bool {
         fn find<'a>(nodes: &'a [Node], summary: &str) -> Option<&'a tree::Disclosure> {
@@ -1047,6 +1061,12 @@ impl PageView {
         let scrolls = self.follow_scrolls.borrow();
         let handle = &scrolls.get(&id)?.handle;
         Some(((-handle.offset().y).as_f32(), handle.max_offset().y.as_f32()))
+    }
+
+    /// Whether the expandable text `id` was cut short when last drawn, and whether it is opened.
+    #[cfg(all(test, feature = "test-support"))]
+    pub(super) fn text_cut(&self, id: u64) -> (Option<bool>, bool) {
+        (self.text_cut.get(&id).copied(), self.text_open.contains(&id))
     }
 
     /// Whether the split `id` was narrower than its `collapseBelow` when last drawn, none before it was measured.
@@ -1409,6 +1429,9 @@ impl PageView {
         drop: Option<f32>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if text.expandable && text.truncate {
+            return self.expandable_text(text, drop, cx);
+        }
         // CSS breaks a line between words, and lets a word wider than its box run over it; GPUI breaks inside a
         // word when it has to. A text that grows in a row, squeezed by the buttons beside it, would come apart a
         // letter or two a line, so it is never narrower than its longest word, as in the desktop. A mono text that
@@ -1511,6 +1534,57 @@ impl PageView {
                 .into_any_element(),
             None => element.into_any_element(),
         }
+    }
+
+    /// A text cut short with More after it while it doesn't fit, and Less once opened: the queued messages over Claude
+    /// chat's message box guessed from their length and offered More for a line that fit. The text's whole line is
+    /// measured against the width it is drawn at, and a new width that cuts it, or stops cutting it, draws again.
+    fn expandable_text(&self, text: &tree::Text, drop: Option<f32>, cx: &mut Context<Self>) -> AnyElement {
+        let id = text.id;
+        let open = self.text_open.contains(&id);
+        let shown = tree::Text { truncate: !open, expandable: false, grow: false, ..text.clone() };
+        let said = plain_text(&text.children);
+        let (size, weight) = text_font(text);
+        let whole = line_width(&said, size, weight, text.mono, cx);
+        let lines = said.trim_end().contains('\n');
+        let entity = cx.entity();
+        let measure = canvas(
+            move |bounds, _, cx| {
+                let cut = lines || whole > bounds.size.width.as_f32() + 0.5;
+                entity.update(cx, |view, cx| {
+                    if view.text_cut.insert(id, cut) != Some(cut) {
+                        cx.notify();
+                    }
+                })
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
+        let cut = self.text_cut.get(&id).copied().unwrap_or(false);
+        let label = if open { "Less" } else { "More" };
+        let toggle = sized(
+            ui::button(ElementId::NamedInteger("page-text-more".into(), id), label, ui::Variant::Ghost, false, label),
+            tree::ButtonSize::Sm,
+        )
+        .on_click(cx.listener(move |view, _, _, cx| {
+            cx.stop_propagation();
+            if !view.text_open.remove(&id) {
+                view.text_open.insert(id);
+            }
+            cx.notify();
+        }));
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .items_start()
+            .gap(px(4.0))
+            .child(div().relative().flex_1().min_w_0().child(self.text_element(&shown, drop, cx)).child(measure))
+            .when(cut || open, |el| el.child(toggle))
+            .into_any_element()
     }
 
     /// A `Button`, or a chip. In a baseline row it starts `drop` points down, as a text there does.
@@ -2158,6 +2232,9 @@ impl PageView {
             .max_w(relative(0.5))
             .max_h(relative(1.0))
             .overflow_y_scroll()
+            // The pane, not its cards, keeps the pointer from the page under it: a card that did was hit first and hid
+            // the pane from the wheel, so a panel taller than the page didn't scroll.
+            .occlude()
             .p(px(12.0))
             .flex()
             .flex_col()
@@ -2191,7 +2268,6 @@ impl PageView {
             .gap(px(8.0))
             .rounded(px(14.0))
             .bg(rgb(theme::palette().background))
-            .occlude()
             .children(self.nodes(&split.end, cx));
         container.child(pane.child(under)).into_any_element()
     }
@@ -2857,6 +2933,30 @@ const LONGEST_WORD_KEPT: f32 = 240.0;
 
 /// The width of the widest word of `text` at `size`, in the page's font or the terminal's with `mono`, up to
 /// `LONGEST_WORD_KEPT`.
+/// A text's size and weight, as `text_element` sets them.
+fn text_font(text: &tree::Text) -> (f32, FontWeight) {
+    let size = match text.size {
+        TextSize::Small => scaled(12.0),
+        TextSize::Tiny => scaled(11.0),
+        TextSize::Large => scaled(20.0),
+        TextSize::Field => scaled(14.0),
+        TextSize::Normal => scaled(13.0),
+    };
+    let weight = match text.weight {
+        Weight::Normal => FontWeight::NORMAL,
+        Weight::Medium => FontWeight::MEDIUM,
+        Weight::Strong => FontWeight::SEMIBOLD,
+    };
+    (size, weight)
+}
+
+/// How wide `text` is on one line.
+fn line_width(text: &str, size: f32, weight: FontWeight, mono: bool, cx: &gpui::App) -> f32 {
+    let system = cx.text_system();
+    let font = page_font(weight, mono, cx);
+    text.chars().filter_map(|c| system.advance(font, px(size), c).ok()).map(|advance| advance.width.as_f32()).sum()
+}
+
 fn longest_word(text: &str, size: f32, weight: FontWeight, mono: bool, cx: &gpui::App) -> f32 {
     let system = cx.text_system();
     let font = page_font(weight, mono, cx);

@@ -165,17 +165,7 @@ fn build(p: &Page) -> Vec<Node> {
 pub fn start() {
     wings_plugin::run(view);
     host::on("project", |_, project| {
-        let now = project["path"].as_str().map(|path| (path.to_owned(), project["id"].as_str().unwrap_or_default().to_owned()));
-        // Another project starts over, as its page is its own.
-        let changed = with(|p| {
-            let changed = p.project.as_ref() != Some(&now);
-            if changed {
-                p.project = Some(now);
-                p.answer = None;
-            }
-            changed
-        });
-        if changed {
+        if moved_to(project) {
             read(true);
         }
     });
@@ -187,9 +177,37 @@ pub fn start() {
     poll::while_focused(REFETCH_MS, false, || read(false));
 }
 
+
+/// Takes the project on screen from Wings' project event, and says whether it is another one: another project starts
+/// over, as its page is its own. A folder of a page tab on screen (`folder`) is within the project and changes nothing.
+fn moved_to(project: &Value) -> bool {
+    let now = project["path"].as_str().map(|path| (path.to_owned(), project["id"].as_str().unwrap_or_default().to_owned()));
+    with(|p| {
+        let changed = p.project.as_ref() != Some(&now);
+        if changed {
+            p.project = Some(now);
+            p.answer = None;
+        }
+        changed
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn another_project_on_screen_starts_the_page_over() {
+        let wings = json!({ "id": "/wings", "name": "wings", "path": "/wings" });
+        assert!(moved_to(&wings), "the first project heard");
+        with(|p| p.answer = Some(Err("kept".into())));
+        // A Claude chat tab in a worktree of the same project: the same page.
+        assert!(!moved_to(&json!({ "id": "/wings", "name": "wings", "path": "/wings", "folder": "/wings-worktrees/fix" })));
+        assert!(with(|p| p.answer.is_some()), "what it shows stays");
+        assert!(moved_to(&json!({ "id": "/shop", "name": "shop", "path": "/shop" })), "another project");
+        assert!(with(|p| p.answer.is_none()), "what it showed of wings goes");
+        assert!(moved_to(&json!(null)), "no project open");
+    }
     use wings_plugin::task::block_on;
 
     /// A fake `git` and `az` for a folder in `acme/Web`, whose Sprint 14 runs the whole of the test clock's day.

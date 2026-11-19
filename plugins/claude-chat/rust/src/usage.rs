@@ -25,6 +25,9 @@ pub struct Credits {
     pub limit: Option<f64>,
     pub currency: String,
     pub used: Option<u64>,
+    /// They can cover messages now. Claude Code turns them off when the monthly limit is reached or the credits run
+    /// out, and what was spent still shows.
+    pub on: bool,
 }
 
 /// What the local transcripts say fills the limits over a day or a week: each a name and its share (percent).
@@ -108,14 +111,19 @@ impl Usage {
             windows.extend(scoped);
         }
         let extra = &limits["extra_usage"];
-        let credits = (extra["is_enabled"] == true).then(|| {
+        let on = extra["is_enabled"] == true;
+        // Turned off is also how Claude Code answers once the monthly limit is reached: the spend still shows then, as
+        // it does in Claude Code's own `/usage`. Never set up, nothing was spent.
+        let spent = extra["used_credits"].as_f64().filter(|spent| spent.is_finite() && *spent >= 0.0);
+        let credits = (on || spent.is_some_and(|spent| spent > 0.0)).then(|| {
             // Claude Code counts credits in the currency's minor unit (cents).
             let unit = 10f64.powi(extra["decimal_places"].as_i64().unwrap_or(2) as i32);
             Credits {
-                spent: extra["used_credits"].as_f64().unwrap_or(0.0) / unit,
+                spent: spent.unwrap_or(0.0) / unit,
                 limit: extra["monthly_limit"].as_f64().map(|limit| limit / unit),
                 currency: extra["currency"].as_str().unwrap_or("USD").to_owned(),
                 used: percent(&extra["utilization"]),
+                on,
             }
         });
         let behaviors = &answer["behaviors"];

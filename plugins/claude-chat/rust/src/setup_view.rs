@@ -318,11 +318,11 @@ fn cancel() {
 /// Makes the change shown, from your click on its button and nothing else, then reads its list again, which goes to
 /// Claude Code with that same click.
 fn confirm() {
-    let Some((edit, session, cwd)) = chat::with(|c| Some((c.session.setup.confirm()?, c.session.id.clone(), c.cwd.clone()))) else {
+    let Some((edit, account, cwd)) = chat::with(|c| Some((c.session.setup.confirm()?, chat::account(c, c.session.id.as_deref()), c.cwd.clone()))) else {
         return;
     };
     task::spawn(async move {
-        let outcome = setup::run(session.as_deref(), &cwd, &edit).await;
+        let outcome = setup::run(&account, &cwd, &edit).await;
         let saved = outcome.is_ok();
         chat::with(|c| c.session.setup.saved(&edit, outcome));
         if saved {

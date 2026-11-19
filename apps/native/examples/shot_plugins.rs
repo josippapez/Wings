@@ -145,6 +145,12 @@ impl Env for FixtureEnv {
     fn claude_dirs(&self) -> Vec<PathBuf> {
         vec![self.0.clone()]
     }
+    // Two Claude accounts, personal and work, so Claude chat shows its account menu.
+    fn claude_accounts(&self) -> Result<wings_spaces::claude_accounts::Accounts, String> {
+        use wings_spaces::claude_accounts::{Account, Accounts};
+        let account = |name: Option<&str>, email: &str| Account { name: name.map(String::from), dir: String::new(), email: Some(email.into()), signed_in: true, auth_method: None, shares_setup: false };
+        Ok(Accounts { accounts: vec![account(None, "me@example.com"), account(Some("work"), "me@work.example.com")], projects: Default::default() })
+    }
     fn ports(&self) -> Result<Vec<PanePort>, String> {
         Ok(vec![])
     }
@@ -763,6 +769,35 @@ fn hud(out: PathBuf) {
 /// Claude chat's real page, over a fake `claude` the scene puts first on the PATH, which prints a made-up session and
 /// then waits: the real Claude Code never runs. Each scene is a conversation, a reply streaming in, a new chat and one
 /// whose Claude Code couldn't start.
+/// The feedback plugin's pane, as its `Pane` render draws it: a header of a title, two plain buttons and a count spread
+/// apart, two rows of filters, and an entry in a bordered box each.
+fn feedback_pane() -> serde_json::Value {
+    let plain = |key: &str, label: &str, dim: bool, handle: u64| json!({ "type": "Button", "props": { "key": key, "plain": true, "dimColor": dim, "label": label }, "press": { "plugin": "feedback", "handle": handle } });
+    let entry = |severity: &str, color: &str, kind: &str, kind_color: &str, area: &str, title: &str, details: &str| json!({ "type": "Box", "props": { "flexDirection": "column", "marginTop": 1, "paddingX": 1, "borderStyle": "round", "borderColor": color }, "children": [
+        { "type": "Box", "props": { "gap": 1 }, "children": [
+            { "type": "Text", "props": { "backgroundColor": color, "color": "black", "bold": true }, "children": [format!(" {severity} ")] },
+            { "type": "Text", "props": { "color": kind_color, "bold": true }, "children": [kind] },
+            { "type": "Text", "props": { "dimColor": true }, "children": ["· ", area] }] },
+        { "type": "Text", "props": { "bold": true, "wrap": "wrap" }, "children": [title] },
+        { "type": "Text", "props": { "dimColor": true, "wrap": "wrap" }, "children": [details] },
+        { "type": "Text", "props": { "dimColor": true }, "children": ["2026-11-19 11:29 · wings · fb836969"] }] });
+    json!({ "type": "Box", "props": { "flexDirection": "column", "paddingX": 1 }, "children": [
+        { "type": "Box", "props": { "justifyContent": "space-between" }, "children": [
+            { "type": "Box", "props": { "gap": 2 }, "children": [
+                { "type": "Text", "props": { "bold": true }, "children": ["Feedback"] },
+                plain("scope-toggle", "This project 117 · 247 elsewhere", false, 20),
+                plain("close-pane", "✕ Close", false, 21)] },
+            { "type": "Text", "props": { "dimColor": true }, "children": ["88", " open · ", "11", " high"] }] },
+        { "type": "Box", "props": { "gap": 2, "marginTop": 1, "flexWrap": "wrap" }, "children": [
+            plain("show-open", "Open 88", false, 22), plain("show-resolved", "Resolved 22", true, 23), plain("show-wontfix", "Won't fix 7", true, 24), plain("show-all", "Everything 117", true, 25)] },
+        { "type": "Box", "props": { "gap": 2, "marginTop": 1, "flexWrap": "wrap" }, "children": [
+            plain("filter-all", "All 88", false, 26), plain("filter-bug", "Bug 40", true, 27), plain("filter-pain_point", "Pain point 44", true, 28), plain("filter-ambiguity", "Ambiguity 1", true, 29), plain("filter-idea", "Idea 3", true, 30)] },
+        { "type": "Text", "props": { "dimColor": true }, "children": [""] },
+        entry("MEDIUM", "yellow", "Bug", "red", "plugins test script / claude-chat crate features", "Claude chat's view and rail tests never run under plain cargo test / pnpm test", "The claude-chat crate gates view.rs, rail.rs and the other page modules behind the `chat` feature, and has no default features."),
+        entry("LOW", "gray", "Bug", "red", "wings builds rule hook", "Subagent build hook refuses read-only commands that merely mention cargo test or build-rust.sh", "The PreToolUse hook that stops subagents from building matches command text."),
+        entry("MEDIUM", "yellow", "Pain point", "yellow", "orchestration / Wings lead session", "Lead released and stopped with requested features unbuilt", "After a builder declined the stacked multi-file diff, the lead released anyway.")] })
+}
+
 fn claude_chat(out: PathBuf) {
     let root = out.join("fixture-claude-chat");
     let _ = std::fs::remove_dir_all(&root);
@@ -1349,12 +1384,14 @@ esac"##,
     let mods = opened(vec![
         init.clone(),
         answer("ui-attach", json!({ "surfaces": ["desktop"] })),
-        json!({ "type": "system", "subtype": "ui_panes", "panes": [{ "id": "probe", "title": "Deploys", "plugin": "deploy-watch" }], "shown_id": "probe", "focused_id": null, "focus_requested_id": null }),
+        json!({ "type": "system", "subtype": "ui_panes", "panes": [{ "id": "probe", "title": "Deploys", "plugin": "deploy-watch" }, { "id": "feedback", "title": "Feedback", "plugin": "feedback" }], "shown_id": "probe", "focused_id": null, "focus_requested_id": null }),
         json!({ "type": "system", "subtype": "ui_status", "plugin": "repo-docs", "text": "indexing docs 30% (3/10)" }),
         json!({ "type": "system", "subtype": "ui_toast", "plugin": "deploy-watch", "text": "staging is up", "timeout_ms": 60000 }),
         user("Ship the checkout fix to staging."),
         tool("deploy-1", "Bash", json!({ "command": "./deploy.sh staging", "description": "Deploy to staging" })),
         output("deploy-1", "Deployed 3f2a1c9 to staging in 41s", false),
+        tool("figma-1", "mcp__claude_ai_Figma__create_session", json!({ "task": "Check the updated sidebar menu button (btn-menu) padding after the designer's fix, to match code." })),
+        output("figma-1", "Session started", false),
         text("[Staging](https://staging.shop.example.com) has it now. The deploy pane has its link."),
     ]);
     // Right-clicked on the link: the chat's own rows and the one a mod adds.
@@ -1362,8 +1399,8 @@ esac"##,
     let scenes: [Scene; 80] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         // Scrolled up past what the page has room for: older steps come in, the newest go, and a button goes back to them.
-        ("mods", mods.clone(), None, Some("disclose:Ran 1 command"), "Roll back"),
-        ("mods-theme", mods, None, None, "Roll back"),
+        ("mods", mods.clone(), None, Some("disclose:Ran 1 command · Used 1 tool"), "Panes"),
+        ("mods-theme", mods, None, None, "Panes"),
         ("mods-menu", mods_menu, None, Some("rightclick:140,130"), "Summarize this page"),
         ("mentioned", mentioned.clone(), None, None, "Mentioned"),
         // The pointer on a pull request's row shows its card.
@@ -1405,7 +1442,7 @@ esac"##,
         ("large-text", work.clone(), None, None, "of 4 done"),
         ("queue", work.clone(), None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter"), "Claude reads these"),
         // The same two, each opened to its whole message by its More button, which reads Less once it is open.
-        ("queue-open", work.clone(), None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter;press:More"), "Less"),
+        ("queue-open", work.clone(), None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter;more:"), "Claude reads these"),
         ("ask-bash", ask_bash, None, None, "Allow Bash?"),
         ("question", question, None, None, "Which formats"),
         ("plan", plan, None, None, "Keep planning"),
@@ -1631,6 +1668,13 @@ esac"##,
             std::fs::write(answers.join("component-ToolUse-deploy-1"), format!("{row}\n")).unwrap();
             let result = answer("REQUEST_ID", json!({ "tree": { "type": "Box", "props": { "marginX": 1 }, "children": [{ "type": "Text", "props": { "color": "cyan" }, "children": ["3f2a1c9 is live on staging, and the smoke tests passed on checkout, cart, payment and the order history pages in 41 seconds"] }] }, "props": {}, "rewritten": false, "hooked": true }));
             std::fs::write(answers.join("component-ToolResult-deploy-1"), format!("{result}\n")).unwrap();
+            // quiet-tools' row of an MCP call: a plain button holding the call's whole summary, cut short.
+            let call = answer("REQUEST_ID", json!({ "tree": { "type": "Button", "props": { "key": "call-figma-1", "plain": true }, "press": { "plugin": "quiet-tools", "handle": 12 }, "children": [
+                { "type": "Text", "props": { "bold": true, "color": "magenta", "wrap": "truncate-end" }, "children": ["·", " ", "claude_ai_Figma › create_session Check the updated sidebar menu button (btn-menu) padding after the designer's fix, to match code."] }] }, "props": {}, "rewritten": false, "hooked": true }));
+            std::fs::write(answers.join("component-ToolUse-figma-1"), format!("{call}\n")).unwrap();
+            let feedback = feedback_pane();
+            let pane = answer("REQUEST_ID", json!({ "tree": feedback, "props": {}, "rewritten": false, "hooked": true }));
+            std::fs::write(answers.join("instance-feedback"), format!("{pane}\n")).unwrap();
             // What a mod adds to the menu on a link.
             let menu = answer("REQUEST_ID", json!({ "tree": { "type": "Box", "props": { "flexDirection": "column" }, "children": [
                 { "type": "Button", "props": { "key": "sum", "label": "Summarize this page" }, "press": { "plugin": "deploy-watch", "handle": 11 },
@@ -1774,6 +1818,7 @@ esac"##,
                         // A row of a list that is a button, like a task in the side panel.
                         Some(("row", text)) => assert!(handle.read_with(&cx, |view, _| view.press_list_button(text)).unwrap()),
                         Some(("image", label)) => assert!(handle.read_with(&cx, |view, _| view.press_image(label)).unwrap()),
+                        Some(("more", _)) => assert!(handle.update(&mut cx, |view, _, cx| view.press_more(cx)).unwrap()),
                         Some(("disclose", summary)) => assert!(handle.update(&mut cx, |view, _, cx| view.press_disclosure(summary, cx)).unwrap()),
                         Some(("select", label)) => assert!(handle.update(&mut cx, |view, _, cx| view.open_select(label, cx)).unwrap()),
                         _ => panic!("{act}"),
@@ -1902,6 +1947,59 @@ esac"##,
                 }
             }
         }
+    }
+    // A pane a Claude Code plugin opened, in Wings' sidebar: `/feedback` asks Claude Code to focus its pane, and the chat
+    // opens it in the pane sidebar, which it then feeds the pane's tree. As for the subagent sidebar, the chat runs in a
+    // window behind and the sidebar is drawn alone at the sidebar's width.
+    if only.as_deref().is_none_or(|only| only == "pane-sidebar") {
+        let side_page = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/claude-chat/dist/native/pane.wasm");
+        let side_page = side_page.canonicalize().expect("sh build-rust.sh claude-chat, in plugins/");
+        wings_native::page::runtime::wasm::compile_now(&side_page.to_string_lossy()).unwrap();
+        let side_source = format!("{}{}", wings_native::page::runtime::wasm::MARKER, side_page.display());
+        let lines = opened(vec![
+            init.clone(),
+            answer("ui-attach", json!({ "surfaces": ["desktop"] })),
+            user("/feedback"),
+            json!({ "type": "system", "subtype": "ui_panes", "panes": [{ "id": "feedback", "title": "Feedback", "plugin": "feedback" }], "shown_id": "feedback", "focused_id": null, "focus_requested_id": "feedback" }),
+            text("Feedback pane opened."),
+        ]);
+        let fixture = root.join("pane-sidebar.jsonl");
+        std::fs::write(&fixture, lines.iter().map(|line| format!("{line}\n")).collect::<String>()).unwrap();
+        let answers = root.join("answers-pane-sidebar");
+        let _ = std::fs::remove_dir_all(&answers);
+        std::fs::create_dir_all(&answers).unwrap();
+        let pane = answer("REQUEST_ID", json!({ "tree": feedback_pane(), "props": {}, "rewritten": false, "hooked": true }));
+        std::fs::write(answers.join("instance-feedback"), format!("{pane}\n")).unwrap();
+        // SAFETY: the pages of the scenes before are closed, so nothing reads these while they change.
+        unsafe {
+            std::env::set_var("CHAT_FIXTURE", &fixture);
+            std::env::set_var("CHAT_ANSWERS", &answers);
+            std::env::set_var("CHAT_EXIT", "");
+            std::env::set_var("CHAT_STDERR", "");
+        }
+        // The sidebar first, so it has its name when the chat asks it to show the pane.
+        let handle = cx.open_offscreen_window(size(px(420.0), px(760.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, &side_source, None, cx))).unwrap();
+        handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
+        let window: AnyWindowHandle = handle.into();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !handle.read_with(&cx, |view, _| view.text().contains("No pane open")).unwrap() {
+            assert!(Instant::now() < deadline, "the pane sidebar did not start: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
+            wait(&mut cx, window, Duration::from_millis(20));
+        }
+        let chat = cx.open_offscreen_window(size(px(1000.0), px(760.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, &source, None, cx))).unwrap();
+        chat.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
+        let chat: AnyWindowHandle = chat.into();
+        for expected in ["Feedback", "88 open", "Resolved 22", "Lead released"] {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !handle.read_with(&cx, |view, _| view.text().contains(expected)).unwrap() {
+                assert!(Instant::now() < deadline, "the pane sidebar did not show {expected:?}: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
+                wait(&mut cx, window, Duration::from_millis(20));
+            }
+        }
+        wait(&mut cx, window, Duration::from_millis(300));
+        save(&mut cx, window, out.join("claude-chat-pane-sidebar-420.png"));
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        let _ = cx.update_window(chat, |_, window, _| window.remove_window());
     }
     // The page in Wings Settings, with a mode, Detailed and Large text picked.
     if only.as_deref().is_none_or(|only| only == "settings") {

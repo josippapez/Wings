@@ -23,9 +23,17 @@ pub struct Edited {
     pub path: String,
     pub added: usize,
     pub removed: usize,
-    /// The patch's hunks, one line each, ending in a newline.
-    hunks: String,
+    /// The call's hunks, each against the file as the call found it.
+    hunks: Vec<Hunk>,
     created: bool,
+}
+
+/// One hunk of a call: where it starts in the file the call found, as the index of its first line there, and its lines,
+/// each with its ` `, `-` or `+`.
+#[derive(Debug, PartialEq)]
+struct Hunk {
+    at: usize,
+    lines: Vec<String>,
 }
 
 /// A file a turn changed, with the lines it added and took out over all the calls that touched it.
@@ -217,10 +225,10 @@ fn parse(result: &Value, at: usize) -> Option<Edited> {
         if result["type"] == "create" {
             let content = result["content"].as_str().unwrap_or_default();
             let count = content.lines().count();
-            let body: String = content.lines().take(PATCH_LINES).map(|line| format!("+{line}\n")).collect();
-            return Some(Edited { at, path: path.to_owned(), added: count, removed: 0, hunks: format!("@@ -0,0 +1,{count} @@\n{body}"), created: true });
+            let lines = content.lines().take(PATCH_LINES).map(|line| format!("+{line}")).collect();
+            return Some(Edited { at, path: path.to_owned(), added: count, removed: 0, hunks: vec![Hunk { at: 0, lines }], created: true });
         }
-        let (mut text, mut kept, mut added, mut removed) = (String::new(), 0, 0, 0);
+        let (mut list, mut kept, mut added, mut removed) = (Vec::new(), 0, 0, 0);
         for hunk in hunks {
             let lines: Vec<&str> = hunk["lines"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
             added += lines.iter().filter(|line| line.starts_with('+')).count();
@@ -229,17 +237,157 @@ fn parse(result: &Value, at: usize) -> Option<Edited> {
                 continue;
             }
             kept += lines.len();
-            let n = |key: &str| hunk[key].as_u64().unwrap_or(0);
-            text.push_str(&format!("@@ -{},{} +{},{} @@\n", n("oldStart"), n("oldLines"), n("newStart"), n("newLines")));
-            lines.iter().for_each(|line| text.push_str(&format!("{line}\n")));
+            // A hunk that takes no old lines starts after the line it names, as in a unified diff.
+            let (start, old) = (hunk["oldStart"].as_u64().unwrap_or(0) as usize, hunk["oldLines"].as_u64().unwrap_or(0));
+            let first = if old == 0 { start } else { start.saturating_sub(1) };
+            list.push(Hunk { at: first, lines: lines.iter().map(|line| (*line).to_owned()).collect() });
         }
-        return Some(Edited { at, path: path.to_owned(), added, removed, hunks: text, created: false });
+        return Some(Edited { at, path: path.to_owned(), added, removed, hunks: list, created: false });
     }
     let path = result["notebook_path"].as_str()?;
     let (old, new) = (result["old_source"].as_str().unwrap_or_default(), result["new_source"].as_str().unwrap_or_default());
     let (old_lines, new_lines) = (old.lines().count(), new.lines().count());
-    let body: String = old.lines().map(|line| format!("-{line}\n")).chain(new.lines().map(|line| format!("+{line}\n"))).take(PATCH_LINES).collect();
-    Some(Edited { at, path: path.to_owned(), added: new_lines, removed: old_lines, hunks: format!("@@ -1,{old_lines} +1,{new_lines} @@\n{body}"), created: false })
+    let lines = old.lines().map(|line| format!("-{line}")).chain(new.lines().map(|line| format!("+{line}"))).take(PATCH_LINES).collect();
+    Some(Edited { at, path: path.to_owned(), added: new_lines, removed: old_lines, hunks: vec![Hunk { at: 0, lines }], created: false })
+}
+
+/// A line of what a file's calls did to it, against the file before the first of them.
+#[derive(Debug)]
+enum Op {
+    /// Lines no call touched or showed, unchanged.
+    Gap(usize),
+    Keep(String),
+    Del(String),
+    Add(String),
+}
+
+/// The index in `ops` where the line `line` (counting from 0) of the file as it is now starts, splitting a gap there.
+fn split(ops: &mut Vec<Op>, line: usize) -> usize {
+    let (mut i, mut seen) = (0, 0);
+    while i < ops.len() && seen < line {
+        match ops[i] {
+            Op::Del(_) => {}
+            Op::Gap(n) if seen + n > line => {
+                let before = line - seen;
+                ops[i] = Op::Gap(before);
+                ops.insert(i + 1, Op::Gap(n - before));
+                return i + 1;
+            }
+            Op::Gap(n) => seen += n,
+            Op::Keep(_) | Op::Add(_) => seen += 1,
+        }
+        i += 1;
+    }
+    if seen < line {
+        ops.push(Op::Gap(line - seen));
+        return ops.len();
+    }
+    i
+}
+
+/// Takes in one call's hunks, each against the file as that call found it: after the calls before it.
+fn apply(ops: &mut Vec<Op>, hunks: &[Hunk]) {
+    // From the last, so the places of the ones before it stay where the call saw them.
+    let mut order: Vec<&Hunk> = hunks.iter().collect();
+    order.sort_by_key(|hunk| std::cmp::Reverse(hunk.at));
+    for hunk in order {
+        let mut j = split(ops, hunk.at);
+        for line in &hunk.lines {
+            let (kind, text) = (line.chars().next(), line.get(1..).unwrap_or_default().to_owned());
+            match kind {
+                Some('+') => {
+                    ops.insert(j, Op::Add(text));
+                    j += 1;
+                }
+                Some(kind @ (' ' | '-')) => {
+                    while matches!(ops.get(j), Some(Op::Del(_))) {
+                        j += 1;
+                    }
+                    // A line no call showed yet is the one this hunk names.
+                    let gap = match ops.get(j) {
+                        None => Some(1),
+                        Some(Op::Gap(n)) => Some(*n),
+                        Some(_) => None,
+                    };
+                    if let Some(n) = gap {
+                        if j == ops.len() {
+                            ops.push(Op::Keep(text.clone()));
+                        } else {
+                            ops[j] = Op::Keep(text.clone());
+                        }
+                        if n > 1 {
+                            ops.insert(j + 1, Op::Gap(n - 1));
+                        }
+                    }
+                    if kind == ' ' {
+                        j += 1;
+                    } else if matches!(ops[j], Op::Add(_)) {
+                        ops.remove(j);
+                    } else {
+                        let Op::Keep(kept) = std::mem::replace(&mut ops[j], Op::Gap(0)) else { unreachable!("a line of the file") };
+                        ops[j] = Op::Del(kept);
+                        j += 1;
+                    }
+                }
+                // "\ No newline at end of file" and the like.
+                _ => {}
+            }
+        }
+    }
+}
+
+/// The lines of context a hunk keeps round a change, as git's.
+const CONTEXT: usize = 3;
+
+/// The hunks of `ops`, with as much context round each change as is known, up to `CONTEXT` lines.
+fn hunks_text(ops: &[Op]) -> String {
+    let change = |op: &Op| matches!(op, Op::Del(_) | Op::Add(_));
+    // How many kept lines each one is from the nearest change before it (or after it, run backwards); a gap ends the count.
+    let distances = |ops: Vec<&Op>| -> Vec<usize> {
+        let mut since = usize::MAX;
+        ops.into_iter()
+            .map(|op| {
+                since = match op {
+                    _ if change(op) => 0,
+                    Op::Gap(_) => usize::MAX,
+                    _ => since.saturating_add(1),
+                };
+                since
+            })
+            .collect()
+    };
+    let after = distances(ops.iter().collect());
+    let mut before = distances(ops.iter().rev().collect());
+    before.reverse();
+    let shown: Vec<bool> = ops.iter().enumerate().map(|(i, op)| change(op) || (matches!(op, Op::Keep(_)) && after[i].min(before[i]) <= CONTEXT)).collect();
+    let (mut out, mut old, mut new, mut i) = (String::new(), 0, 0, 0);
+    while i < ops.len() {
+        if !shown[i] {
+            match &ops[i] {
+                Op::Gap(n) => (old, new) = (old + n, new + n),
+                Op::Keep(_) => (old, new) = (old + 1, new + 1),
+                _ => {}
+            }
+            i += 1;
+            continue;
+        }
+        let start = (old, new);
+        let mut body = String::new();
+        while i < ops.len() && shown[i] {
+            match &ops[i] {
+                Op::Keep(text) => (body, old, new) = (body + &format!(" {text}\n"), old + 1, new + 1),
+                Op::Del(text) => (body, old) = (body + &format!("-{text}\n"), old + 1),
+                Op::Add(text) => (body, new) = (body + &format!("+{text}\n"), new + 1),
+                Op::Gap(_) => {}
+            }
+            i += 1;
+        }
+        let (old_lines, new_lines) = (old - start.0, new - start.1);
+        // A side with no lines names the line before the hunk, as a unified diff does.
+        let first = |at: usize, lines: usize| if lines == 0 { at } else { at + 1 };
+        out.push_str(&format!("@@ -{},{old_lines} +{},{new_lines} @@\n{body}", first(start.0, old_lines), first(start.1, new_lines)));
+    }
+    out
 }
 
 /// Git-style patch text for `edits`, a file's calls together in the order they ran.
@@ -254,14 +402,19 @@ fn render(edits: &[&Edited], cwd: &str) -> String {
     for path in paths {
         let shown = relative(cwd, path).trim_start_matches('/');
         let calls: Vec<&&Edited> = edits.iter().filter(|edit| edit.path == path).collect();
+        // Each call's hunks are against the file as that call found it: put one after another they ran out of order or
+        // over each other, which the diff viewer refused. Together they are one change from the file before the first.
+        let mut ops = Vec::new();
+        calls.iter().for_each(|edit| apply(&mut ops, &edit.hunks));
+        let hunks = hunks_text(&ops);
+        // Calls that undid each other leave nothing to show.
+        if hunks.is_empty() {
+            continue;
+        }
         out.push_str(&format!("diff --git a/{shown} b/{shown}\n"));
         match calls[0].created {
-            // Later calls on a file written in the turn would overlap the hunk that holds the whole file.
-            true => out.push_str(&format!("new file mode 100644\n--- /dev/null\n+++ b/{shown}\n{}", calls[0].hunks)),
-            false => {
-                out.push_str(&format!("--- a/{shown}\n+++ b/{shown}\n"));
-                calls.iter().for_each(|edit| out.push_str(&edit.hunks));
-            }
+            true => out.push_str(&format!("new file mode 100644\n--- /dev/null\n+++ b/{shown}\n{hunks}")),
+            false => out.push_str(&format!("--- a/{shown}\n+++ b/{shown}\n{hunks}")),
         }
     }
     out
@@ -343,6 +496,61 @@ mod tests {
             "diff --git a/src/cart.ts b/src/cart.ts\n--- a/src/cart.ts\n+++ b/src/cart.ts\n@@ -1,3 +1,4 @@\n alpha\n-beta\n-gamma\n+BETA\n+GAMMA\n+extra\n\
              diff --git a/src/new.ts b/src/new.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/new.ts\n@@ -0,0 +1,2 @@\n+one\n+two\n"
         );
+    }
+
+    /// An Edit's result for `hunk`, as Claude Code's `structuredPatch` has it: against the file as that call found it.
+    fn edit_at(old_start: u64, lines: &[&str]) -> Value {
+        let (old, new) = (lines.iter().filter(|line| !line.starts_with('+')).count(), lines.iter().filter(|line| !line.starts_with('-')).count());
+        json!({ "type": "user", "message": { "content": [{ "type": "tool_result", "tool_use_id": "e", "content": "updated" }] },
+            "tool_use_result": { "filePath": "/work/shop/src/hold.ts", "structuredPatch": [{ "oldStart": old_start, "oldLines": old, "newStart": old_start, "newLines": new, "lines": lines }] } })
+    }
+
+    /// Whether the diff viewer's parser takes `patch`, as Wings reads View changes'.
+    fn parses(patch: &str) -> Result<(), String> {
+        use diffy::patch_set::{ParseOptions, PatchSet};
+        PatchSet::parse(patch, ParseOptions::gitdiff()).try_for_each(|file| file.map(drop).map_err(|error| error.to_string()))
+    }
+
+    #[test]
+    fn a_file_edited_twice_is_one_patch_against_the_file_before_the_first_edit() {
+        // The second edit is earlier in the file than the first: one after the other, its hunk came out of order, and
+        // View changes said "hunks not in order or overlap".
+        let mut edits = Edits::default();
+        edits.heard(&edit_at(6, &[" a6", " a7", " a8", "-a9", "+A9", " a10", " a11", " a12"]), 3);
+        edits.heard(&edit_at(1, &[" a1", "-a2", "+A2", "+new", " a3", " a4", " a5"]), 4);
+        let patch = edits.patch(1, 5, CWD);
+        assert_eq!(parses(&patch), Ok(()));
+        assert_eq!(
+            patch,
+            "diff --git a/src/hold.ts b/src/hold.ts\n--- a/src/hold.ts\n+++ b/src/hold.ts\n\
+             @@ -1,12 +1,13 @@\n a1\n-a2\n+A2\n+new\n a3\n a4\n a5\n a6\n a7\n a8\n-a9\n+A9\n a10\n a11\n a12\n"
+        );
+        // Two edits to lines next to each other, whose hunks lay over each other.
+        let mut edits = Edits::default();
+        edits.heard(&edit_at(2, &[" a2", " a3", " a4", "-a5", "+A5", " a6", " a7", " a8"]), 3);
+        edits.heard(&edit_at(3, &[" a3", " a4", " A5", "-a6", "+A6", " a7", " a8", " a9"]), 4);
+        let patch = edits.file_patch("/work/shop/src/hold.ts", CWD).unwrap();
+        assert_eq!(parses(&patch), Ok(()));
+        assert!(patch.ends_with("@@ -2,8 +2,8 @@\n a2\n a3\n a4\n-a5\n+A5\n-a6\n+A6\n a7\n a8\n a9\n"), "{patch}");
+        // Far apart, they stay two hunks, each with its own context.
+        let mut edits = Edits::default();
+        edits.heard(&edit_at(40, &[" b40", "-b41", "+B41", " b42"]), 3);
+        edits.heard(&edit_at(1, &[" a1", "+top", " a2"]), 4);
+        let patch = edits.patch(1, 5, CWD);
+        assert_eq!(parses(&patch), Ok(()));
+        assert!(patch.ends_with("@@ -1,2 +1,3 @@\n a1\n+top\n a2\n@@ -40,3 +41,3 @@\n b40\n-b41\n+B41\n b42\n"), "{patch}");
+    }
+
+    #[test]
+    fn edits_to_a_file_written_in_the_turn_show_in_the_new_file() {
+        let mut edits = Edits::default();
+        edits.heard(&written(), 3);
+        let mut edit = edit_at(1, &[" one", "-two", "+TWO"]);
+        edit["tool_use_result"]["filePath"] = json!("/work/shop/src/new.ts");
+        edits.heard(&edit, 4);
+        let patch = edits.patch(1, 5, CWD);
+        assert_eq!(parses(&patch), Ok(()));
+        assert!(patch.ends_with("new file mode 100644\n--- /dev/null\n+++ b/src/new.ts\n@@ -0,0 +1,2 @@\n+one\n+TWO\n"), "{patch}");
     }
 
     #[test]

@@ -424,7 +424,7 @@ impl Shared {
         let SpawnRequest { program, args, cwd, account, survive } =
             serde_json::from_value(params.clone()).map_err(|error| error.to_string())?;
         let cwd = exec_cwd(&program, Some(&cwd), &access.env.projects(), &self.pane_folders(), false)?;
-        let config_dir = access.claude_config_dir(account.as_ref(), &cwd);
+        let config_dir = access.claude_config_dir(account.as_ref(), &cwd)?;
         // What the program reads first, sent with its start: what the page asks as it opens, never an answer to the
         // program's questions, whose ids it makes up later.
         let input = match params.get("input") {

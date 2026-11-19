@@ -92,6 +92,10 @@ pub struct Mods {
     pub theme: Option<Value>,
     /// Whether Claude Code took the attach, so it may be asked to draw.
     pub attached: bool,
+    /// A pane Claude Code asked to show or focus that the chat hasn't opened in Wings' sidebar yet (`mod_pane.rs`).
+    pub to_open: Option<String>,
+    /// The last pane Claude Code said it shows and asked to focus, so each ask opens the sidebar once.
+    shown: (Option<String>, Option<String>),
     /// What is to be asked for again.
     stale: BTreeSet<String>,
 }
@@ -207,6 +211,15 @@ impl Mods {
                     })
                     .collect();
                 let open: Vec<String> = self.panes.iter().map(|pane| pane.id.clone()).collect();
+                // A pane newly shown or asked to be focused, as `/feedback` opens its pane, opens once; the same ask
+                // repeated with the next roster doesn't open it again.
+                let id = |key: &str| line[key].as_str().filter(|id| open.iter().any(|open| open == id)).map(str::to_owned);
+                let (shown, focus) = (id("shown_id"), id("focus_requested_id"));
+                let asked = focus.clone().filter(|_| focus != self.shown.1).or_else(|| shown.clone().filter(|_| shown != self.shown.0));
+                if asked.is_some() {
+                    self.to_open = asked;
+                }
+                self.shown = (shown, focus);
                 self.trees.retain(|instance, _| instance == BAND || open.contains(instance));
                 self.stale.extend(open.into_iter().filter(|id| !self.trees.contains_key(id)));
             }
@@ -378,6 +391,28 @@ mod tests {
         // A pane that closed goes with its tree.
         mods.hear(&system("ui_panes", json!({ "panes": [] })), 0, &mut logged);
         assert!(mods.panes.is_empty() && mods.trees.is_empty());
+    }
+
+    #[test]
+    fn a_pane_claude_code_shows_or_focuses_is_to_open_once_per_ask() {
+        let mut mods = Mods::default();
+        let mut logged = None;
+        let panes = json!([{ "id": "probe", "title": "Deploys", "plugin": "deploy-watch" }, { "id": "feedback", "title": "Feedback", "plugin": "feedback" }]);
+        mods.hear(&system("ui_panes", json!({ "panes": panes, "shown_id": "probe", "focused_id": null, "focus_requested_id": null })), 0, &mut logged);
+        assert_eq!(mods.to_open.take().as_deref(), Some("probe"));
+        // The same roster again asks nothing.
+        mods.hear(&system("ui_panes", json!({ "panes": panes, "shown_id": "probe", "focused_id": null, "focus_requested_id": null })), 0, &mut logged);
+        assert_eq!(mods.to_open, None);
+        // `/feedback` asks to focus its pane: once, though the ask stays in the rosters after.
+        for _ in 0..2 {
+            mods.hear(&system("ui_panes", json!({ "panes": panes, "shown_id": "probe", "focused_id": null, "focus_requested_id": "feedback" })), 0, &mut logged);
+        }
+        assert_eq!(mods.to_open.take().as_deref(), Some("feedback"));
+        mods.hear(&system("ui_panes", json!({ "panes": panes, "shown_id": "probe", "focused_id": null, "focus_requested_id": "feedback" })), 0, &mut logged);
+        assert_eq!(mods.to_open, None);
+        // A pane not in the roster isn't opened.
+        mods.hear(&system("ui_panes", json!({ "panes": [], "shown_id": "gone", "focus_requested_id": "gone" })), 0, &mut logged);
+        assert_eq!(mods.to_open, None);
     }
 
     #[test]

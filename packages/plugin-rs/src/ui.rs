@@ -139,6 +139,11 @@ fn build(children: Vec<Child>, parent: u64, handlers: &mut HashMap<String, Handl
     out
 }
 
+/// A node as the JSON the app reads, for a test to look at what a page drew. Its handlers are left behind.
+pub fn tree_json(node: Node) -> Value {
+    build(vec![Child::Node(node)], 0, &mut HashMap::new()).remove(0)
+}
+
 /// The page's JSON, as `wings.render` takes it. The handlers of this build replace the last one's.
 pub(crate) fn render(page: Vec<Node>) -> String {
     let mut handlers = HashMap::new();

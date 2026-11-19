@@ -2237,6 +2237,89 @@ fn a_floating_split_reports_its_width_and_keeps_its_pane() {
     }
 }
 
+/// How long a click that swaps a long conversation for another window of it, scrolled to its first message, takes to
+/// draw: as a click on a far prompt on Claude chat's rail does. Run with `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn measure_a_jump_to_a_far_window_of_a_long_conversation() {
+    let source = counting(|heard| {
+        // 600 messages of a few lines, about 1,800 nodes, as the chat's window holds.
+        let base = if heard == 0 { 1_000 } else { 100_000 };
+        let items: Vec<Value> = (0..600)
+            .map(|i| {
+                let id = base + 3 * i;
+                json!({ "id": id, "type": "Stack", "children": [text(id + 1, id + 2, format!("Message {} of window {heard}. {}", i, "Some words of a reply that wraps over a line or two. ".repeat(4)))] })
+            })
+            .collect();
+        let mut scroll = json!({ "id": 2, "type": "Scroll", "props": { "follow": "end" }, "children": items });
+        if heard > 0 {
+            scroll["props"]["scrollTo"] = json!({ "index": 0, "token": heard });
+        }
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            { "id": 1, "type": "Button", "props": { "onClick": "1:onClick" }, "children": [text_node(9, "Jump")] }, scroll] })
+    });
+    let (app, mut window) = open(source);
+    settle(&app, &mut window, shows("window 0."));
+    let clicked = Instant::now();
+    window.simulate_click(point(px(30.0), px(16.0)), MouseButton::Left);
+    settle(&app, &mut window, shows("window 1."));
+    let drawn = clicked.elapsed();
+    let frames = Instant::now();
+    window.draw();
+    window.draw();
+    eprintln!("[measure] click to the new window drawn: {drawn:?}; two frames after: {:?}", frames.elapsed());
+}
+
+/// An expandable text has More only while it is cut short, as Claude chat's queued messages: "skill" fit its line and still
+/// had More after it, because the page guessed from its length.
+#[test]
+fn only_a_text_cut_short_offers_more() {
+    let line = |id: usize, said: &str| json!({ "id": id, "type": "Row", "children": [
+        { "id": id + 1, "type": "Text", "props": { "truncate": true, "expandable": true, "grow": true }, "children": [text_node(id + 2, said)] }] });
+    let source = fake::page("page", move |_| {
+        json!({ "id": 0, "type": "#root", "children": [{ "id": 1, "type": "Stack", "children": [
+            line(10, "skill"),
+            line(20, &"i thought that this is given when you're doing a figma design diff ".repeat(4))] }] })
+    });
+    let (app, mut window) = open_narrow(source, 500.0);
+    settle(&app, &mut window, shows("skill"));
+    window.draw();
+    window.draw();
+    assert_eq!(window.read(|view, _| (view.text_cut(11), view.text_cut(21))), ((Some(false), false), (Some(true), false)));
+    // More sits at the long line's right end, under the short one, inside the page's padding: it opens the text, and Less closes it.
+    click(&mut window, (440.0, 48.0));
+    window.draw();
+    assert_eq!(window.read(|view, _| view.text_cut(21)), (Some(true), true));
+}
+
+/// A floating pane taller than its page scrolls under the pointer, and its last row can then be pressed: the chat's side
+/// panel with a mod's long Feedback pane wouldn't scroll at all.
+#[test]
+fn a_floating_pane_taller_than_its_page_scrolls() {
+    let source = fake::page("page", {
+        let mut pressed = "none".to_owned();
+        move |event| {
+            if let Some((handler, _)) = event {
+                pressed = handler.trim_end_matches(":onClick").to_owned();
+            }
+            let rows: Vec<Value> = (0..40)
+                .map(|i| json!({ "id": 100 + 2 * i, "type": "Button", "props": { "onClick": format!("{}:onClick", 100 + 2 * i) },
+                    "children": [text_node(101 + 2 * i, &format!("Row {i}"))] }))
+                .collect();
+            json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Split",
+                "props": { "defaultSize": 240, "side": "end", "float": true }, "children": [
+                { "id": 2, "type": "Slot", "props": { "name": "start" }, "children": [text(3, 4, format!("Pressed {pressed}."))] },
+                { "id": 5, "type": "Slot", "props": { "name": "end" }, "children": [{ "id": 6, "type": "Stack", "children": rows }] }] }] })
+        }
+    });
+    let (app, mut window) = open_narrow(source, 900.0);
+    settle(&app, &mut window, shows("Pressed none."));
+    window.simulate_scroll(point(px(780.0), px(200.0)), point(px(0.0), px(-10_000.0)));
+    window.draw();
+    // The last row's button, the 40th, is id 178.
+    assert!(pressed_at(&app, &mut window, (780.0, 370.0), "Pressed 178."), "{}", window.read(|view, _| view.text()));
+}
+
 /// A floating pane with `onClose` has the keyboard, and Escape in it sends `onClose`.
 #[test]
 fn escape_in_a_floating_pane_sends_its_on_close() {

@@ -2,6 +2,17 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.53 · 2026-11-19
+
+- **Start a Claude chat under another Claude account.** The message box has an account menu when you have more than one. In a new chat it restarts under the account you pick, and in a chat with messages it opens a new chat beside it.
+- **Mod panes open in their own sidebar**, full height, instead of squeezed into Claude chat's side panel, which now lists them with Open. A pane a mod opens, like Feedback, shows there on its own.
+- **Mod rows stay inside the conversation.** A long tool call row from a mod is cut short at the edge, and a mod's buttons wrap onto a new line instead of running over each other.
+- **Claude chat's side panel scrolls** when it is taller than the window.
+- **The Changes sidebar follows the chat on screen**, so it shows the project the chat works in, not the last terminal's. The commit graph, pull requests and sprint pages follow it too.
+- **More shows on a queued message only when it is cut off.**
+- **View changes works when Claude edits the same file more than once in a turn.**
+- **The Usage dialog keeps showing your usage credits** after they turn off at the monthly limit.
+
 ## 0.2.52 · 2026-11-19
 
 - **Claude Code mods can restyle Claude chat**: a tool call's row (with its line under the result), your messages and Claude's, and the line that shows what Claude is doing.

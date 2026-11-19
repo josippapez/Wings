@@ -442,6 +442,11 @@ pub trait Env: Send + Sync + 'static {
     fn claude_accounts(&self) -> Result<Accounts, String> {
         Err("Claude Code accounts aren't available in this host".into())
     }
+    /// `claude_accounts`, where whether an account is signed in is the hint its config gives instead of `claude auth
+    /// status`'s answer, so it is quick.
+    fn claude_accounts_quick(&self) -> Result<Accounts, String> {
+        self.claude_accounts()
+    }
     /// Makes new terminals in the project in folder `project` use the account `name`, or the default account with
     /// `None`. The host has checked the plugin may, and that `name` is an account name.
     fn set_claude_account(&self, _project: &str, _name: Option<&str>) -> Result<(), String> {
@@ -542,13 +547,16 @@ pub struct Access {
 
 impl Access {
     /// The folder for `CLAUDE_CONFIG_DIR` in a program the plugin runs in `cwd` with `account`, `None` to leave it as it
-    /// is: with no `account` asked, or for the default account.
+    /// is: with no `account` asked, or for the default account. Picking an account by name needs `claudeAccounts`.
     pub(super) fn claude_config_dir(
         &self,
         account: Option<&super::account::AccountRequest>,
         cwd: &std::path::Path,
-    ) -> Option<PathBuf> {
-        let request = account?;
+    ) -> Result<Option<PathBuf>, String> {
+        let Some(request) = account else { return Ok(None) };
+        if request.picks() && !wings_plugins::permissions::may_use_claude_accounts(&self.plugin) {
+            return Err(format!("{} may not use Claude Code accounts", self.plugin.manifest.id));
+        }
         super::account::config_dir(request, &self.env.claude_dirs(), || {
             let projects = self.env.projects();
             self.env.claude_config_dir(super::account::holder(&projects, cwd)?)

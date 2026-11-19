@@ -1145,8 +1145,6 @@ pub fn took(ms: u64) -> String {
 
 const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-/// A queued message longer than this gets a More button.
-const QUEUED_LINE: usize = 60;
 
 /// The messages waiting for Claude to finish, each with Send now and a way to take it back.
 fn queued(c: &Chat) -> Option<Node> {
@@ -1154,27 +1152,21 @@ fn queued(c: &Chat) -> Option<Node> {
         return None;
     }
     let rows = c.session.queued.iter().map(|queued| {
-        let (now, remove, fold) = (queued.uuid.clone(), queued.uuid.clone(), queued.uuid.clone());
-        let open = c.open_queued.contains(&queued.uuid);
+        let (now, remove) = (queued.uuid.clone(), queued.uuid.clone());
         // A message from a subagent's tab says what you sent, not how Claude is asked to pass it on.
         let shown = crate::actions::relayed_note(&queued.text);
         let said_text = shown.as_deref().unwrap_or(queued.text.as_str());
-        // Nothing here measures the text, so a message counts as long once it can't fit a line of the narrow card.
-        let long = said_text.chars().count() > QUEUED_LINE || said_text.contains('\n');
-        // The text takes the room the buttons leave and is cut short in it, so a long message keeps them in the card;
-        // opened, it wraps whole and the buttons stay by its first line.
+        // The text takes the room the buttons leave and is cut short in it, so a long message keeps them in the card. The
+        // app adds More only while it is cut short.
         let said = if queued.text.is_empty() {
             muted(plural(queued.images.len(), "image"))
-        } else if open {
-            text(said_text)
         } else {
-            text(said_text).prop("truncate", true).prop("title", said_text)
+            text(said_text).prop("truncate", true).prop("expandable", true).prop("title", said_text)
         };
         row()
             .prop("gap", "xs")
-            .prop("align", if open { "start" } else { "center" })
+            .prop("align", "start")
             .child(stack().prop("grow", true).child(said))
-            .maybe(long.then(|| button(if open { "Less" } else { "More" }, "ghost", false, move || chat::toggle_queued(&fold)).prop("size", "sm")))
             .child(button("Send now", "ghost", false, move || chat::send_now(&now)).prop("size", "sm").prop("title", "Claude puts what it runs aside and reads it now"))
             .child(
                 button("", "ghost", false, move || chat::unqueue(&remove))
@@ -1222,7 +1214,45 @@ fn pickers(c: &Chat) -> Vec<Node> {
         let options: Vec<(String, String)> = MODES.iter().map(|(value, name)| (value.to_string(), name.to_string())).collect();
         pickers.push(select("Permission mode", &options, mode, chat::pick_mode).prop("variant", "ghost"));
     }
+    pickers.extend(account_picker(c));
     pickers
+}
+
+/// The Claude Code account the chat runs under, with 2 or more to pick from: each by its email, else its name. Before you
+/// pick one the chat runs under its project's.
+fn account_picker(c: &Chat) -> Option<Node> {
+    if c.accounts.len() < 2 {
+        return None;
+    }
+    let (options, value) = account_options(c);
+    Some(
+        select("Claude account", &options, &value, chat::pick_account)
+            .prop("variant", "ghost")
+            .prop("title", "The Claude account this chat runs under. Picking another starts a new chat under it"),
+    )
+}
+
+/// The account menu's options and the one picked: the default account as `chat::DEFAULT_ACCOUNT`, and an empty value for
+/// the project's own until you pick.
+fn account_options(c: &Chat) -> (Vec<(String, String)>, String) {
+    let mut options: Vec<(String, String)> = Vec::new();
+    if c.picked.is_none() {
+        options.push((String::new(), "Project's account".to_owned()));
+    }
+    options.extend(c.accounts.iter().map(|account| {
+        let value = account.name.clone().unwrap_or_else(|| chat::DEFAULT_ACCOUNT.to_owned());
+        let label = match (&account.email, &account.name) {
+            (Some(email), _) => email.clone(),
+            (None, Some(name)) => name.clone(),
+            (None, None) => "Default".to_owned(),
+        };
+        (value, label)
+    }));
+    let value = match &c.picked {
+        None => String::new(),
+        Some(name) => name.clone().unwrap_or_else(|| chat::DEFAULT_ACCOUNT.to_owned()),
+    };
+    (options, value)
 }
 
 /// The model menu's options, as `<model>@<effort>` and its label: each model with each effort it takes, as "Opus 5.5 ·
@@ -1521,6 +1551,28 @@ mod tests {
     }
 
     #[test]
+    fn the_account_menu_names_each_account_by_its_email_else_its_name() {
+        chat::with(|c| {
+            let choice = |name: Option<&str>, email: Option<&str>| wings_plugin::host::AccountChoice { name: name.map(str::to_owned), email: email.map(str::to_owned), signed_in: true };
+            c.accounts = vec![choice(None, Some("me@home.example")), choice(Some("work"), None)];
+            c.picked = None;
+            let (options, value) = account_options(c);
+            assert_eq!(value, "");
+            let labels: Vec<&str> = options.iter().map(|(_, label)| label.as_str()).collect();
+            assert_eq!(labels, ["Project's account", "me@home.example", "work"]);
+            assert_eq!(options[1].0, chat::DEFAULT_ACCOUNT);
+            c.picked = Some(Some("work".into()));
+            let (options, value) = account_options(c);
+            assert_eq!((options.len(), value.as_str()), (2, "work"));
+            // One account, nothing to pick.
+            c.accounts.truncate(1);
+            assert!(account_picker(c).is_none());
+            c.accounts.clear();
+            c.picked = None;
+        });
+    }
+
+    #[test]
     fn the_model_menu_lists_each_model_with_the_efforts_it_takes() {
         let model = |value: &str, name: &str, efforts: &[&str]| crate::session::Model {
             value: value.into(),
@@ -1541,5 +1593,73 @@ mod tests {
         assert_eq!(model_options(&session).1, "opus@xhigh");
         session.model = Some("haiku".into());
         assert_eq!(model_options(&session).1, "haiku@");
+    }
+
+    /// A session as long as the ones the prompt rail is clicked through: `prompts` turns, each your message, a run of
+    /// tool calls and a reply in Markdown with a list and a code block.
+    fn long_session(prompts: usize) -> Vec<Item> {
+        let tool = |turn: usize, n: usize| {
+            Item::Tool(crate::session::Tool {
+                id: format!("t{turn}-{n}"),
+                name: "Bash".into(),
+                summary: format!("npm run check -- case_{n}"),
+                output: Some(("ok\n".repeat(20), false)),
+                detail: crate::session::Detail::Plain,
+                images: Vec::new(),
+            })
+        };
+        let reply = |turn: usize| {
+            let mut said = format!("## Turn {turn}\n\nI changed **three** files and ran the checks:\n\n");
+            said.push_str(&(0..8).map(|n| format!("- `src/file_{n}.rs`: the change number {n} of this turn\n")).collect::<String>());
+            said.push_str("\n```rust\nfn main() {\n    println!(\"hello\");\n}\n```\n\nAll green.");
+            said
+        };
+        (0..prompts)
+            .flat_map(|turn| {
+                let mut items = vec![Item::User(format!("Prompt {turn}: fix the next thing\nwith a second line"))];
+                items.extend((0..6).map(|n| tool(turn, n)));
+                items.push(Item::Text(reply(turn)));
+                items
+            })
+            .collect()
+    }
+
+    /// The `scrollTo` the conversation's `Scroll` carries in a built page, if any.
+    fn scroll_to_of(page: Vec<Node>) -> Option<serde_json::Value> {
+        fn find(node: &serde_json::Value) -> Option<serde_json::Value> {
+            if node["type"] == "Scroll" && !node["props"]["scrollTo"].is_null() {
+                return Some(node["props"]["scrollTo"].clone());
+            }
+            node["children"].as_array()?.iter().find_map(find)
+        }
+        page.into_iter().find_map(|node| find(&wings_plugin::ui::tree_json(node)))
+    }
+
+    /// What a click on the rail costs the page in a long session: the time to build the page at the newest message, and
+    /// from a click on the first prompt to the built page that scrolls there. Run with `--ignored --nocapture`. In Wings
+    /// the page runs as WebAssembly, slower than this native build, so compare the two numbers with each other.
+    #[test]
+    #[ignore]
+    fn measure_a_rail_click_on_a_far_prompt() {
+        chat::with(|c| {
+            c.session.items = long_session(400);
+            c.shown = PAGE;
+            c.until = None;
+        });
+        let rounds = 5;
+        let started = std::time::Instant::now();
+        for _ in 0..rounds {
+            drop(view());
+        }
+        let newest = started.elapsed().as_secs_f64() * 1000.0 / f64::from(rounds);
+        let started = std::time::Instant::now();
+        crate::rail::go(0);
+        let clicked = started.elapsed().as_secs_f64() * 1000.0;
+        let page = view();
+        let built = started.elapsed().as_secs_f64() * 1000.0;
+        let nodes: usize = page.iter().map(Node::count).sum();
+        println!("[measure] page at the newest: {newest:.1} ms; a click: {clicked:.1} ms to bring the prompt in, {built:.1} ms to the built page ({nodes} nodes)");
+        assert!(scroll_to_of(page).is_some(), "the first page after the click scrolls to the prompt");
+        chat::with(show_latest);
     }
 }

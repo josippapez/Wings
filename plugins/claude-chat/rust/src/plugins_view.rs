@@ -426,7 +426,7 @@ fn set_tab(tab: &str) {
 /// The account the `claude` commands here run under, and the folder they run in: the chat's own, so that plugins land in
 /// the account the chat's session is in.
 fn account() -> (host::Account, String) {
-    chat::with(|c| (host::Account::of_session(c.session.id.as_deref()), c.cwd.clone()))
+    chat::with(|c| (chat::account(c, c.session.id.as_deref()), c.cwd.clone()))
 }
 
 /// Reads what the marketplaces offer: one command, its output about 2.5 MB for 4,000 plugins, under Wings' 8 MB limit.

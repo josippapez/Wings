@@ -405,6 +405,25 @@ fn an_exec_runs_under_the_tabs_account_too() {
 }
 
 #[test]
+fn an_exec_runs_under_the_account_it_picked_by_name_only_with_the_accounts_permission() {
+    let dirs = accounts("pick");
+    let run = |permissions: Value, account: Value| {
+        let rig = Rig::new(json!({ "permissions": permissions }), vec![pane("1", "/a")]);
+        *rig.env.projects.lock().unwrap() = vec![tmp()];
+        *rig.env.claude.lock().unwrap() = dirs.to_vec();
+        let caller = Caller::start(&rig.host);
+        let params = json!({ "program": "printenv", "args": ["CLAUDE_CONFIG_DIR"], "cwd": tmp(), "timeoutMs": null, "stream": false, "account": account });
+        caller.call("exec", params).map(|out| out["stdout"].as_str().unwrap_or_default().to_owned())
+    };
+    let allowed = json!({ "exec": ["printenv CLAUDE_CONFIG_DIR"], "claudeAccounts": true });
+    assert_eq!(run(allowed.clone(), json!({ "pick": { "name": "work" } })), Ok(format!("{}\n", dirs[1].display())));
+    // An account folder that isn't there is refused, not made up.
+    assert!(run(allowed, json!({ "pick": { "name": "nobody" } })).is_err());
+    // Without `claudeAccounts` a plugin can't pick one.
+    assert!(run(json!({ "exec": ["printenv CLAUDE_CONFIG_DIR"] }), json!({ "pick": { "name": "work" } })).is_err());
+}
+
+#[test]
 fn a_page_cannot_name_an_account_folder_of_its_own() {
     let script = prints_account("raw");
     let rig = rig(&[&format!("sh {script}")]);

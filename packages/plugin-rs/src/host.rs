@@ -910,6 +910,37 @@ impl Account {
     pub fn of_session(session: Option<&str>) -> Self {
         Account(json!({ "session": session }))
     }
+
+    /// `of_session`, except that a new chat (no `session`, or one with no transcript yet) runs under the account named
+    /// `name` from `accounts`, `None` being the default one, instead of its project's. Needs the `claudeAccounts`
+    /// permission and Wings 0.2.53.
+    pub fn picked(session: Option<&str>, name: Option<&str>) -> Self {
+        Account(json!({ "session": session, "pick": { "name": name } }))
+    }
+}
+
+/// A Claude Code account a plugin may start Claude Code under (`Account::picked`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountChoice {
+    /// Its name, `None` for the default account.
+    pub name: Option<String>,
+    /// The email of who signed in to it, when its config names one.
+    pub email: Option<String>,
+    /// Whether its config says someone signed in to it. The sign-in may be gone since.
+    pub signed_in: bool,
+}
+
+/// `wings.claudeAccountChoices`: the Claude Code accounts there are, the default one first. Needs the `claudeAccounts`
+/// permission and Wings 0.2.53.
+pub async fn accounts() -> Result<Vec<AccountChoice>, String> {
+    let listed = call("claudeAccountChoices", json!({})).await?;
+    let text = |value: &Value| value.as_str().map(str::to_owned);
+    Ok(listed
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|account| AccountChoice { name: text(&account["name"]), email: text(&account["email"]), signed_in: account["signedIn"] == true })
+        .collect())
 }
 
 /// `spawn` under a Claude Code account.
@@ -999,6 +1030,22 @@ mod tests {
         drop(exec_as(&Account::of_session(None), "/repo", "claude", &["plugin", "list"], None));
         let sent: Vec<Value> = calls.borrow().iter().map(|(_, params)| params["account"].clone()).collect();
         assert_eq!(sent, [Value::Null, json!({ "session": "s1" }), json!({ "session": null })]);
+    }
+
+    #[test]
+    fn a_new_chat_picks_its_account_by_name_and_lists_them() {
+        let calls = record(&[]);
+        let _work = spawn_as(&Account::picked(None, Some("work")), "claude", &["-p"], "/repo", "", |_| {});
+        let _default = spawn_as(&Account::picked(Some("s1"), None), "claude", &["-p"], "/repo", "", |_| {});
+        let sent: Vec<Value> = calls.borrow().iter().map(|(_, params)| params["account"].clone()).collect();
+        assert_eq!(sent, [json!({ "session": null, "pick": { "name": "work" } }), json!({ "session": "s1", "pick": { "name": null } })]);
+        testing::answer(|method, _| match method {
+            "claudeAccountChoices" => Ok(json!([{ "name": null, "email": "me@home", "signedIn": true }, { "name": "work", "email": null, "signedIn": false }])),
+            _ => Ok(Value::Null),
+        });
+        let listed = block_on(accounts()).unwrap();
+        assert_eq!(listed[0], AccountChoice { name: None, email: Some("me@home".into()), signed_in: true });
+        assert_eq!(listed[1].name.as_deref(), Some("work"));
     }
 
     #[test]

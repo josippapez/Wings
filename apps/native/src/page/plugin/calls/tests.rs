@@ -1017,10 +1017,26 @@ fn a_project_is_given_an_account_and_claude_accounts_says_so() {
 }
 
 #[test]
+fn the_account_choices_name_each_account_without_its_folder() {
+    let (rig, folder) = accounts(true);
+    let choices = rig.allows("claudeAccountChoices", json!({}));
+    let choices = choices.as_array().unwrap();
+    // The default account leads, with no name.
+    assert_eq!(choices[0]["name"], json!(null));
+    for choice in choices {
+        let mut keys: Vec<&str> = choice.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["email", "name", "signedIn"], "{choice}");
+    }
+    let _ = fs::remove_dir_all(folder);
+}
+
+#[test]
 fn claude_accounts_are_refused_to_a_plugin_without_their_permission() {
     let (rig, folder) = accounts(false);
     for (method, params) in [
         ("claudeAccounts", json!({})),
+        ("claudeAccountChoices", json!({})),
         ("setClaudeAccount", json!({ "projectId": "/a", "name": "work" })),
     ] {
         assert_eq!(

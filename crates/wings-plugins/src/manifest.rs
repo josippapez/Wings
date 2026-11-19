@@ -59,7 +59,8 @@ pub struct Permissions {
     pub worktrees: bool,
     /// Lets the plugin list your Claude Code accounts with `wings.claudeAccounts`, choose the one each project's
     /// new terminals use with `wings.setClaudeAccount`, turn on or off that an account uses the default account's setup with
-    /// `wings.shareClaudeSetup`, and open a terminal in another account with `wings.openPane`'s `claudeAccount`.
+    /// `wings.shareClaudeSetup`, open a terminal in another account with `wings.openPane`'s `claudeAccount`, list the
+    /// accounts by name with `claudeAccountChoices`, and run a program under one picked by name (`account.pick`).
     pub claude_accounts: bool,
     /// Other plugins' tools the plugin may call with `wings.callTool`: a plugin id for all of its tools, or
     /// `<plugin> <tool>` for one, like `tasks list`.

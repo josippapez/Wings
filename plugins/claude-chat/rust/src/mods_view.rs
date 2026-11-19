@@ -10,7 +10,7 @@ use serde_json::Value;
 use wings_plugin::{
     host,
     markdown::{highlighted_code, markdown},
-    ui::{Node, button, muted, row, select, stack, text, text_input},
+    ui::{Node, badge, button, card, list_button, muted, row, select, stack, text, text_input},
 };
 
 use std::cell::RefCell;
@@ -438,16 +438,66 @@ fn collect<'a>(el: &'a Value, found: &mut Vec<&'a Value>) {
     }
 }
 
-/// Each pane a plugin opened, as a section of the side panel.
+/// The panes the plugins opened, as a section of the side panel: a row each, which opens the pane in Wings' sidebar,
+/// where it has the room a pane needs. Drawn in the panel itself, the Feedback pane's header and filters were squeezed
+/// a word or two a line.
 pub fn panes(c: &Chat) -> Vec<Node> {
-    let mods = &c.session.mods;
-    mods.panes
+    let rows: Vec<Node> = c
+        .session
+        .mods
+        .panes
         .iter()
-        .filter_map(|pane| {
-            let tree = drawn(mods.trees.get(&pane.id)?, &At { instance: &pane.id, drafts: &mods.drafts })?;
-            Some(stack().prop("gap", "xs").child(muted(pane.title.as_str()).prop("size", "small")).child(tree).key(format!("pane-{}", pane.id)))
+        .map(|pane| {
+            let id = pane.id.clone();
+            list_button([text(pane.title.as_str()).prop("size", "small").prop("grow", true).prop("truncate", true), muted("Open").prop("size", "small")], move || {
+                crate::mod_pane::open(&id)
+            })
+            .prop("title", format!("Open {} in the sidebar", pane.title))
+            .key(format!("pane-{}", pane.id))
         })
-        .collect()
+        .collect();
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    vec![stack().prop("gap", "xs").child(muted("Panes").prop("size", "small")).children(rows).key("panes")]
+}
+
+/// A pane's tree as the sidebar page draws it, under a toolbar that already names it: the mod's own first text, when it
+/// is that same title, is left out. None for a tree that shows nothing.
+pub fn pane_body(instance: &str, title: &str, tree: &Value, drafts: &HashMap<String, String>) -> Option<Node> {
+    let mut tree = tree.clone();
+    if !is_words(&tree) && first_words(&tree).is_some_and(|said| said.trim() == title.trim()) {
+        drop_first_text(&mut tree);
+    }
+    drawn(&tree, &At { instance, drafts })
+}
+
+/// Takes the first text out of a tree, wherever it sits, as `first_words` finds it. Says whether it found one.
+fn drop_first_text(el: &mut Value) -> bool {
+    let list = match el {
+        Value::Array(list) => list,
+        Value::Object(fields) => {
+            let key = if fields.get("children").is_some_and(|children| !children.is_null()) { "children" } else { "props" };
+            let holder = if key == "children" { fields.get_mut("children") } else { fields.get_mut("props").and_then(|props| props.get_mut("children")) };
+            match holder {
+                Some(Value::Array(list)) => list,
+                // A lone child: a text's own words are taken with the text by its parent.
+                Some(child) if !child.is_string() => return drop_first_text(child),
+                _ => return false,
+            }
+        }
+        _ => return false,
+    };
+    for at in 0..list.len() {
+        if list[at].is_string() || matches!(list[at]["type"].as_str(), Some("Text" | "span" | "b")) {
+            list.remove(at);
+            return true;
+        }
+        if drop_first_text(&mut list[at]) {
+            return true;
+        }
+    }
+    false
 }
 
 /// A mod's tree as the chat's nodes, for `at`, whose buttons it presses. None for one that shows nothing.
@@ -489,24 +539,31 @@ fn node(el: &Value, at: &At, budget: &mut usize) -> Option<Node> {
                 Some(cells) if cells >= 1.0 => "s",
                 _ => "xs",
             };
-            let mut boxed = if column { stack() } else { row().prop("wrap", props["flexWrap"] == "wrap") }.prop("gap", gap);
+            // A row of buttons or boxes wraps onto more lines where it is short of room, as a terminal row is cut at its
+            // width: kept on one line, the Feedback pane's header ran its buttons over each other in the side panel.
+            let words_only = children.iter().all(|child| is_words(child));
+            let wraps = !column && (props["flexWrap"] == "wrap" || !words_only);
+            let mut boxed = if column { stack() } else { row().prop("wrap", wraps) }.prop("gap", gap);
             if props["alignItems"] == "center" {
                 boxed = boxed.prop("align", "center");
             }
             if props["justifyContent"] == "space-between" {
                 boxed = boxed.prop("justify", "between");
             }
-            if column {
-                return Some(boxed.children(inner(budget)));
-            }
-            // A row's last text takes the room left and wraps or cuts short in it, as a row of Claude Code's ends in
-            // the long part (a title, a result's line), instead of running past the conversation's edge.
-            let last = children.iter().rposition(|child| child.is_string() || matches!(child["type"].as_str(), Some("Text" | "span" | "b")));
-            let drawn = children.iter().enumerate().filter_map(|(place, child)| {
-                let drawn = node(child, at, budget)?;
-                Some(if Some(place) == last { drawn.prop("grow", true) } else { drawn })
-            });
-            Some(boxed.children(drawn.collect::<Vec<_>>()))
+            let boxed = if column || wraps {
+                boxed.children(inner(budget))
+            } else {
+                // A row's last text takes the room left and wraps or cuts short in it, as a row of Claude Code's ends
+                // in the long part (a title, a result's line), instead of running past the conversation's edge.
+                let last = children.iter().rposition(|child| is_words(child));
+                let drawn = children.iter().enumerate().filter_map(|(place, child)| {
+                    let drawn = node(child, at, budget)?;
+                    Some(if Some(place) == last { drawn.prop("grow", true) } else { drawn })
+                });
+                boxed.children(drawn.collect::<Vec<_>>())
+            };
+            // A box with a border is a card, as an entry of the Feedback pane is.
+            Some(if props["borderStyle"].is_string() { card().child(boxed) } else { boxed })
         }
         "Text" | "span" | "b" => {
             let styled = |node: Node| {
@@ -520,22 +577,41 @@ fn node(el: &Value, at: &At, budget: &mut usize) -> Option<Node> {
             };
             if children.iter().all(|child| child.is_string() || child.is_number()) {
                 let said: String = children.iter().map(|child| child.as_str().map_or_else(|| child.to_string(), str::to_owned)).collect();
+                // A text on a colour of its own is a label, as the Feedback pane's " HIGH ".
+                if props["backgroundColor"].is_string() {
+                    return Some(badge(said.trim(), tone(&json!({ "color": props["backgroundColor"] }))).prop("size", "sm"));
+                }
                 return Some(styled(text(said)));
             }
             Some(row().prop("gap", "none").prop("wrap", true).children(inner(budget).into_iter().map(styled)))
         }
         "Button" => {
-            let label = props["label"].as_str().map(str::to_owned).unwrap_or_else(|| words(&children));
             let press = el["press"].clone();
             let key = props["key"].as_str().map(str::to_owned);
             let instance = instance.to_owned();
-            let variant = if props["variant"] == "primary" { "default" } else { "outline" };
-            let pressed = button(label, variant, false, move || {
-                let (instance, press, key) = (instance.clone(), press.clone(), key.clone());
-                chat::write(move |_, n| crate::mods::press(&instance, &press, key.as_deref(), n));
-            });
+            // A `plain` button is words you press, quiet, as Claude Code draws it: a dimmed one, as the filters not
+            // picked in a row of them, in muted words.
+            let plain = props["plain"] == true;
+            let variant = match props["variant"].as_str() {
+                Some("primary") => "default",
+                _ if plain => "ghost",
+                _ => "outline",
+            };
+            let pressed = Node::new("Button")
+                .prop("variant", variant)
+                .prop("size", "sm")
+                .on("onClick", move |_| crate::mod_pane::act(crate::mod_pane::act_message(&instance, "press", &press, key.as_deref(), None)));
+            let label = props["label"].as_str().map(str::to_owned).or_else(|| children.iter().all(|child| child.is_string()).then(|| words(&children)));
+            let pressed = match label {
+                Some(label) if props["dimColor"] == true => pressed.prop("label", label.as_str()).child(muted(label)),
+                Some(label) => pressed.text(label),
+                // What it holds goes inside it, and it narrows and wraps, or cuts its text short, to fit its column:
+                // quiet-tools' row of an MCP call, a button holding the call's whole summary, ran past the
+                // conversation's edge.
+                None => pressed.prop("label", all_words(&children)).prop("wrap", true).children(inner(budget)),
+            };
             // In a row, so it is as wide as its label, as in Claude Code, rather than the whole column.
-            Some(row().child(pressed.prop("size", "sm")))
+            Some(row().child(pressed))
         }
         "Link" => {
             let href = props["href"].as_str()?.to_owned();
@@ -556,8 +632,7 @@ fn node(el: &Value, at: &At, budget: &mut usize) -> Option<Node> {
                         return;
                     }
                     let said = chat::with(|c| c.session.mods.drafts.remove(&sent)).unwrap_or_default();
-                    let (instance, press, key) = (instance.clone(), press.clone(), key.clone());
-                    chat::write(move |_, n| crate::mods::input(&instance, &press, &key, &said, n));
+                    crate::mod_pane::act(crate::mod_pane::act_message(&instance, "input", &press, Some(key.as_str()), Some(said.as_str())));
                 });
             Some(field)
         }
@@ -576,8 +651,7 @@ fn node(el: &Value, at: &At, budget: &mut usize) -> Option<Node> {
             let (press, instance) = (el["press"].clone(), instance.to_owned());
             let label = props["label"].as_str().unwrap_or(&key).to_owned();
             Some(select(&label, &options, props["value"].as_str().unwrap_or_default(), move |value| {
-                let (instance, press, key, value) = (instance.clone(), press.clone(), key.clone(), value.to_owned());
-                chat::write(move |_, n| crate::mods::select(&instance, &press, &key, &value, n));
+                crate::mod_pane::act(crate::mod_pane::act_message(&instance, "select", &press, Some(key.as_str()), Some(value)));
             }))
         }
         "Code" => Some(highlighted_code(props["source"].as_str()?, props["language"].as_str().unwrap_or_default())),
@@ -592,6 +666,35 @@ fn node(el: &Value, at: &At, budget: &mut usize) -> Option<Node> {
 /// The words of what an element holds.
 fn words(children: &[&Value]) -> String {
     children.iter().filter_map(|child| child.as_str()).collect()
+}
+
+/// The words of what an element holds, however deep, as a button's name.
+fn all_words(children: &[&Value]) -> String {
+    children
+        .iter()
+        .map(|child| match child.as_str() {
+            Some(said) => said.to_owned(),
+            None if child.is_number() => child.to_string(),
+            None => all_words(&flat(if child["children"].is_null() { &child["props"]["children"] } else { &child["children"] })),
+        })
+        .collect()
+}
+
+/// The words of a tree's first text.
+fn first_words(el: &Value) -> Option<String> {
+    if let Some(said) = el.as_str() {
+        return Some(said.to_owned());
+    }
+    let children = flat(if el["children"].is_null() { &el["props"]["children"] } else { &el["children"] });
+    match el["type"].as_str()? {
+        "Text" | "span" | "b" => Some(all_words(&children)),
+        _ => children.into_iter().find_map(first_words),
+    }
+}
+
+/// Whether a row's child is words: a string or a text, which wraps in its room, not a box or a button.
+fn is_words(child: &Value) -> bool {
+    child.is_string() || child.is_number() || matches!(child["type"].as_str(), Some("Text" | "span" | "b"))
 }
 
 /// A text's tone from its terminal colours.
@@ -641,6 +744,61 @@ mod tests {
         // A tree too big for the page is cut off.
         let many = json!({ "type": "Box", "children": (0..1000).map(|n| json!({ "type": "Text", "children": [n.to_string()] })).collect::<Vec<_>>() });
         assert!(super::drawn(&many, &at("x")).unwrap().count() <= 2 * MOST);
+    }
+
+    #[test]
+    fn a_mods_rows_fit_their_column() {
+        use wings_plugin::ui::tree_json;
+        // The Feedback pane's header: a box of a title and two plain buttons, then a count, spread apart.
+        let header = json!({ "type": "Box", "props": { "justifyContent": "space-between" }, "children": [
+            { "type": "Box", "props": { "gap": 2 }, "children": [
+                { "type": "Text", "props": { "bold": true }, "children": ["Feedback"] },
+                { "type": "Button", "props": { "key": "scope-toggle", "plain": true, "label": "This project 117 · 247 elsewhere" }, "press": { "plugin": "feedback", "handle": 1 } },
+                { "type": "Button", "props": { "key": "filter", "plain": true, "dimColor": true, "label": "Bug 40" }, "press": { "plugin": "feedback", "handle": 2 } }] },
+            { "type": "Text", "props": { "dimColor": true }, "children": ["88", " open · ", "11", " high"] }] });
+        let drawn = tree_json(super::drawn(&header, &at("feedback")).unwrap());
+        // Both rows wrap, and the count keeps its width instead of growing into a column of words.
+        assert_eq!((&drawn["props"]["wrap"], &drawn["children"][0]["props"]["wrap"]), (&json!(true), &json!(true)));
+        assert!(drawn["children"][1]["props"]["grow"].is_null());
+        let [toggle, filter] = [1, 2].map(|at| drawn["children"][0]["children"][at]["children"][0].clone());
+        assert_eq!((&toggle["props"]["variant"], &filter["props"]["variant"]), (&json!("ghost"), &json!("ghost")), "plain buttons are quiet");
+        assert_eq!((&toggle["children"][0]["type"], &filter["children"][0]["props"]["tone"]), (&json!("#text"), &json!("muted")), "a dimmed one in muted words");
+        // quiet-tools' row of an MCP call: a button holding a text cut short, which narrows to fit.
+        let call = json!({ "type": "Button", "props": { "key": "call-t1", "plain": true }, "press": { "plugin": "quiet-tools", "handle": 3 }, "children": [
+            { "type": "Text", "props": { "bold": true, "wrap": "truncate-end" }, "children": ["·", " ", "claude_ai_Figma › create_session Check the updated sidebar menu button"] }] });
+        let pressed = tree_json(super::drawn(&call, &at("use:t1")).unwrap())["children"][0].clone();
+        assert_eq!((&pressed["props"]["wrap"], &pressed["props"]["label"]), (&json!(true), &json!("· claude_ai_Figma › create_session Check the updated sidebar menu button")));
+        assert_eq!(pressed["children"][0]["props"]["truncate"], true, "its text goes inside it, cut short");
+        // A row of words alone still ends in the long part, which takes the room left.
+        let words = json!({ "type": "Box", "children": [{ "type": "Text", "children": ["●"] }, { "type": "Text", "children": ["Reindex"] }] });
+        assert_eq!(tree_json(super::drawn(&words, &at("x")).unwrap())["children"][1]["props"]["grow"], true);
+    }
+
+    #[test]
+    fn the_side_panel_lists_a_row_per_pane_and_the_sidebar_draws_it_under_one_title() {
+        use wings_plugin::ui::tree_json;
+        let tree = json!({ "type": "Box", "props": { "flexDirection": "column" }, "children": [
+            { "type": "Box", "props": { "gap": 2 }, "children": [
+                { "type": "Text", "props": { "bold": true }, "children": ["Feedback"] },
+                { "type": "Button", "props": { "key": "close-pane", "plain": true, "label": "✕ Close" }, "press": { "plugin": "feedback", "handle": 21 } }] },
+            { "type": "Text", "props": { "dimColor": true }, "children": ["88 open"] }] });
+        chat::with(|c| {
+            c.session.mods.panes = vec![crate::mods::Pane { id: "feedback".into(), title: "Feedback".into(), plugin: "feedback".into() }];
+            c.session.mods.trees.insert("feedback".into(), tree.clone());
+            let section = tree_json(panes(c).into_iter().next().expect("a section for the pane"));
+            // A label and one row that opens it, not the pane's buttons and texts.
+            let rows: Vec<&Value> = section["children"].as_array().unwrap().iter().filter(|child| child["type"] == "ListButton").collect();
+            assert_eq!(rows.len(), 1);
+            assert!(!section.to_string().contains("88 open"), "the pane itself isn't drawn in the panel");
+            c.session.mods.panes.clear();
+            assert!(panes(c).is_empty());
+        });
+        // In the sidebar the toolbar names it, so its own "Feedback" goes; the rest stays.
+        let body = tree_json(pane_body("feedback", "Feedback", &tree, &HashMap::new()).unwrap()).to_string();
+        assert!(!body.contains("\"Feedback\"") && body.contains("Close") && body.contains("88 open"), "{body}");
+        // A pane whose first words aren't its title keeps them.
+        let other = tree_json(pane_body("feedback", "Inbox", &tree, &HashMap::new()).unwrap()).to_string();
+        assert!(other.contains("\"Feedback\""));
     }
 
     #[test]

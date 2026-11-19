@@ -23,6 +23,8 @@ thread_local! {
     static PANES: RefCell<Vec<Value>> = const { RefCell::new(Vec::new()) };
     /// The repo the graph view was last opened on.
     static GRAPH_ROOT: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// Where the tab on screen works, from the project event: a page tab's folder, else the project's.
+    static HERE: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 fn panes() -> Vec<Value> {
@@ -98,12 +100,22 @@ async fn refresh_badges(list: Vec<Value>, fresh: bool) {
     }
 }
 
-/// The repo a view shows when nothing says which: the focused pane's, else the first pane's that is in one.
+/// The repo a view shows when nothing says which: the focused pane's, else the repo of the tab on screen (a Claude
+/// chat tab, which no pane is), else the first pane's that is in one.
 async fn shown_root() -> Option<String> {
     let list = panes();
     let roots = roots_of(&list).await;
-    let focused = list.iter().position(|pane| pane["focused"] == true).and_then(|at| roots[at].clone());
-    focused.or_else(|| roots.into_iter().flatten().next())
+    let here = match HERE.with(|here| here.borrow().clone()) {
+        Some(here) => repo_root(&here).await,
+        None => None,
+    };
+    let focused: Vec<bool> = list.iter().map(|pane| pane["focused"] == true).collect();
+    shown_of(&focused, roots, here)
+}
+
+fn shown_of(focused: &[bool], roots: Vec<Option<String>>, here: Option<String>) -> Option<String> {
+    let selected = focused.iter().position(|focused| *focused).and_then(|at| roots.get(at).cloned().flatten());
+    selected.or(here).or_else(|| roots.into_iter().flatten().next())
 }
 
 /// Readable refs for Claude, like `git log --decorate` shows them.
@@ -186,6 +198,10 @@ async fn tell_graph_repo() {
 
 #[unsafe(no_mangle)]
 pub fn start() {
+    host::on("project", |_, project| {
+        let here = project["folder"].as_str().or(project["path"].as_str()).map(str::to_owned);
+        HERE.with(|kept| *kept.borrow_mut() = here);
+    });
     host::on_panes(|list| {
         let key = |pane: &Value| (pane["paneId"].clone(), pane["cwd"].clone());
         let moved = PANES.with(|panes| {
@@ -261,4 +277,23 @@ pub fn start() {
     });
     messages::on(GRAPH_WANT, |_| spawn(tell_graph_repo()));
     register_tools();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shown_of;
+
+    fn repo(root: &str) -> Option<String> {
+        Some(root.to_owned())
+    }
+
+    #[test]
+    fn the_graph_follows_the_tab_on_screen_when_no_pane_is_selected() {
+        // A Claude chat tab in another repo is on screen, a wings terminal open in a tab behind it.
+        assert_eq!(shown_of(&[false], vec![repo("/wings")], repo("/sciensus")), repo("/sciensus"));
+        // A selected pane decides.
+        assert_eq!(shown_of(&[false, true], vec![repo("/wings"), repo("/web")], repo("/sciensus")), repo("/web"));
+        // Nothing on screen in a repo: the first pane's.
+        assert_eq!(shown_of(&[false], vec![None, repo("/wings")], None), repo("/wings"));
+    }
 }

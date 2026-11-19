@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use wings_plugins::transcript::Line;
 
 use super::{
-    Workspace,
+    Active, Workspace,
     plugin_env::System,
     tests::{open_sized, press, wait_for},
 };
@@ -2233,6 +2233,43 @@ fn watcher() -> String {
             }
         }
     })
+}
+
+/// A main that saves every project on screen it is told of.
+fn project_watcher() -> String {
+    fake::script("main", || {
+        let mut heard = Vec::new();
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            if let Hear::Deliver("project", _, text) = hear {
+                heard.push(said(text));
+                cx.save("project", &json!(heard));
+            }
+        }
+    })
+}
+
+/// A Claude chat tab isn't a pane, so with it on screen no pane is focused: the project plugins hear carries the tab's
+/// folder, and drops it once a terminal is on screen again. The Changes sidebar showed wings while the chat on screen
+/// worked in another repo.
+#[test]
+fn plugins_hear_the_folder_of_a_page_tab_on_screen() {
+    let data = Data::temp();
+    let views = json!([{ "id": "chat", "title": "Chat", "page": "dist/chat.html", "opens": ["tab"], "multiple": true }]);
+    data.install_script("watcher", json!({ "contributes": { "views": views } }), &project_watcher(), &[("chat", &fake::idle("chat"))], "watcher-scope");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let last = || data.saved("watcher", "watcher-scope", "project").and_then(|heard| heard.as_array()?.last().cloned());
+    until(&app, &mut window, "the plugin was never told the project", |_| last().is_some());
+    assert!(last().unwrap()["folder"].is_null(), "a terminal on screen: no folder of its own");
+    let folder = data.root.join("elsewhere").to_string_lossy().into_owned();
+    window.update(|w, window, cx| assert!(w.open_plugin_view("watcher", "chat", Some(json!({ "cwd": folder })), window, cx)));
+    until(&app, &mut window, "the chat tab's folder never reached the plugin", |_| last().is_some_and(|project| project["folder"] == json!(folder)));
+    let project = window.read(|w, _| w.config.project.clone());
+    assert_eq!(last().unwrap()["path"], json!(project), "still the project on screen");
+    window.update(|w, window, cx| {
+        let terminal = w.terminals[0].id;
+        w.show(Active::Terminal(terminal), window, cx);
+    });
+    until(&app, &mut window, "the folder stayed after a terminal came back", |_| last().is_some_and(|project| project["folder"].is_null()));
 }
 
 #[test]

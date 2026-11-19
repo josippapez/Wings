@@ -2685,6 +2685,11 @@ mod tests {
         // No server-listed per-model windows: the fixed Opus one stands in.
         assert_eq!(usage.windows.iter().map(|window| window.name.as_str()).collect::<Vec<_>>(), ["Current session", "Current week (Opus)"]);
         assert!(usage.credits.is_none() && usage.day.is_none() && usage.week.is_none());
+        // Turned off once the monthly limit is reached, as Claude Code answers then: what was spent still shows.
+        session.hear(&answer(USAGE_VIEW, json!({ "session": {}, "rate_limits": {
+            "extra_usage": { "is_enabled": false, "monthly_limit": 5000, "used_credits": 5000, "utilization": 100, "currency": "USD" } } })));
+        let credits = session.usage_view.take().unwrap().credits.expect("the spend, though they are off");
+        assert_eq!((credits.spent, credits.limit, credits.used, credits.on), (50.0, Some(50.0), Some(100), false));
         session.hear(&json!({ "type": "control_response", "response": { "subtype": "error", "request_id": USAGE_VIEW, "error": "Not signed in" } }));
         assert_eq!(session.view_error.as_deref(), Some("Not signed in"));
     }

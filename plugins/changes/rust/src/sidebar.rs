@@ -66,6 +66,9 @@ struct Page {
     panes: Vec<(String, String, bool)>,
     /// The repo the sidebar follows, which it keeps while the selected pane isn't in one.
     followed: Option<String>,
+    /// The folder of the project on screen, which the sidebar follows while no terminal pane is selected: a Claude chat
+    /// tab or another page is on screen.
+    here: Option<String>,
     view: View,
     /// Files, or the commit graph, as picked for the repo the sidebar follows.
     section: Section,
@@ -98,7 +101,7 @@ struct Page {
 
 thread_local! {
     static PAGE: RefCell<Page> = RefCell::new(Page {
-        panes: Vec::new(), followed: None, view: View::Uncommitted, section: Section::Files, collapsed: BTreeSet::new(), repo: None, answered: false, changes: None,
+        panes: Vec::new(), followed: None, here: None, view: View::Uncommitted, section: Section::Files, collapsed: BTreeSet::new(), repo: None, answered: false, changes: None,
         history: Shown::default(), pending: true, loading_more: false, history_polled: false, loading: false, error: None, open_error: None,
         query: String::new(), typed: String::new(), all: false, loads: 0, typing: 0, asks: 0,
     });
@@ -111,17 +114,40 @@ fn with<T>(change: impl FnOnce(&mut Page) -> T) -> T {
 type Root = Pin<Box<dyn Future<Output = Option<String>>>>;
 
 /// The selected pane's repo, else the one the sidebar followed while a pane is still in it, else the first pane's that
-/// is in one.
+/// is in one. While no pane is selected, as when a Claude chat tab is on screen, the repo of the project on screen
+/// comes first.
 async fn followed_root() -> Option<String> {
-    let panes = with(|page| page.panes.clone());
+    let (panes, here) = with(|page| (page.panes.clone(), page.here.clone()));
     let asked: Vec<Root> = panes.iter().map(|(_, cwd, _)| -> Root { let cwd = cwd.clone(); Box::pin(async move { repo_root(&cwd).await }) }).collect();
-    let roots = join_all(asked).await;
-    let selected = panes.iter().position(|pane| pane.2).and_then(|at| roots[at].clone());
+    let (roots, here) = join(join_all(asked), async move {
+        match here {
+            Some(here) => repo_root(&here).await,
+            None => None,
+        }
+    })
+    .await;
+    let focused: Vec<bool> = panes.iter().map(|pane| pane.2).collect();
     with(|page| {
-        let kept = page.followed.take().filter(|kept| roots.iter().flatten().any(|root| root == kept));
-        page.followed = selected.or(kept).or_else(|| roots.into_iter().flatten().next());
+        page.followed = choose(&focused, roots, here, page.followed.take());
         page.followed.clone()
     })
+}
+
+/// Where the project event says the tab on screen works: a page tab's own folder (a Claude chat in a worktree or
+/// another repo), else the project's.
+fn place(project: &Value) -> Option<String> {
+    project["folder"].as_str().or(project["path"].as_str()).map(str::to_owned)
+}
+
+/// The repo to follow, from each pane's repo (`roots`) and whether it is the selected one (`focused`), the repo of the
+/// project on screen (`here`), and the repo followed until now (`kept`).
+fn choose(focused: &[bool], roots: Vec<Option<String>>, here: Option<String>, kept: Option<String>) -> Option<String> {
+    let at = focused.iter().position(|focused| *focused);
+    let selected = at.and_then(|at| roots.get(at).cloned().flatten());
+    // Without a selected pane the panes listed are other tabs' or other projects', so the project on screen says.
+    let here = if at.is_none() { here } else { None };
+    let kept = kept.filter(|kept| roots.iter().flatten().any(|root| root == kept));
+    selected.or(here).or(kept).or_else(|| roots.into_iter().flatten().next())
 }
 
 /// Whether Wings watches the repo at `root`: it does when a project is in it.
@@ -487,6 +513,14 @@ fn view() -> Vec<Node> {
     })
 }
 
+/// Reloads when the panes or the project on screen moved in a way that moves the sidebar's repo, or nothing shows yet.
+async fn follow() {
+    let (before, answered) = with(|page| (page.followed.clone(), page.answered));
+    if followed_root().await != before || !answered {
+        reload().await;
+    }
+}
+
 #[unsafe(no_mangle)]
 pub fn start() {
     wings_plugin::run(view);
@@ -496,13 +530,13 @@ pub fn start() {
         if with(|page| std::mem::replace(&mut page.panes, next.clone()) == next && page.answered) {
             return;
         }
-        // Only when the panes moved in a way that moves the sidebar's repo, or nothing shows yet.
-        spawn(async {
-            let (before, answered) = with(|page| (page.followed.clone(), page.answered));
-            if followed_root().await != before || !answered {
-                reload().await;
-            }
-        });
+        spawn(follow());
+    });
+    host::on("project", |_, project| {
+        let here = place(project);
+        if with(|page| std::mem::replace(&mut page.here, here.clone()) != here) {
+            spawn(follow());
+        }
     });
     // Edits to files in the working tree, which Wings doesn't watch, and the history of a repo it doesn't watch.
     poll::while_focused(POLL_MS, false, || {
@@ -525,4 +559,41 @@ pub fn start() {
             });
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{choose, place};
+
+    fn repo(root: &str) -> Option<String> {
+        Some(root.to_owned())
+    }
+
+    #[test]
+    fn with_a_chat_tab_on_screen_the_sidebar_follows_the_project_on_screen() {
+        // A terminal of wings' is still open in its own tab, none selected: a Claude chat tab of another project is.
+        assert_eq!(choose(&[false], vec![repo("/wings")], repo("/sciensus"), repo("/wings")), repo("/sciensus"));
+        // The project on screen isn't a repo: the one followed stays.
+        assert_eq!(choose(&[false], vec![repo("/wings")], None, repo("/wings")), repo("/wings"));
+    }
+
+    #[test]
+    fn a_selected_pane_decides_over_the_project_on_screen() {
+        assert_eq!(choose(&[false, true], vec![repo("/wings"), repo("/web")], repo("/wings"), repo("/wings")), repo("/web"));
+        // A selected pane outside any repo keeps the repo followed while a pane is in it.
+        assert_eq!(choose(&[false, true], vec![repo("/wings"), None], repo("/web"), repo("/wings")), repo("/wings"));
+        assert_eq!(choose(&[true], vec![None], None, None), None);
+    }
+
+    #[test]
+    fn a_chat_tab_working_in_another_folder_is_followed_there() {
+        // The project event as Wings sends it while a Claude chat tab in a worktree of the project is on screen.
+        let project = json!({ "id": "/wings", "name": "wings", "path": "/wings", "folder": "/wings-worktrees/fix", "hiddenSections": [] });
+        assert_eq!(place(&project), repo("/wings-worktrees/fix"));
+        // With a terminal on screen there is no folder: the project's own.
+        assert_eq!(place(&json!({ "id": "/wings", "path": "/wings" })), repo("/wings"));
+        assert_eq!(place(&json!(null)), None);
+    }
 }

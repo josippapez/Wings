@@ -404,6 +404,9 @@ impl Shared {
             "claudeAccounts" => {
                 self.off_thread(reply, move |_| claude_accounts(&access));
             }
+            "claudeAccountChoices" => {
+                self.off_thread(reply, move |_| claude_account_choices(&access));
+            }
             "setClaudeAccount" => {
                 self.off_thread(reply, move |_| set_claude_account(&access, &params));
             }
@@ -557,7 +560,7 @@ impl Shared {
             &self.pane_folders(),
             any_repo,
         )?;
-        let config_dir = access.claude_config_dir(account.as_ref(), &cwd);
+        let config_dir = access.claude_config_dir(account.as_ref(), &cwd)?;
         let result = exec::exec_under(
             &access.plugin,
             &program,
@@ -790,6 +793,18 @@ fn may_use_accounts(access: &Access) -> Result<(), String> {
 fn claude_accounts(access: &Access) -> Result<String, String> {
     may_use_accounts(access)?;
     to_json(&access.env.claude_accounts()?)
+}
+
+/// `claudeAccountChoices`: the accounts a plugin may start Claude Code under, `[{ name, email, signedIn }]`, the default
+/// one first with a `null` name. Without their folders, and quick: whether one is signed in is what its config says.
+fn claude_account_choices(access: &Access) -> Result<String, String> {
+    may_use_accounts(access)?;
+    let accounts = access.env.claude_accounts_quick()?.accounts;
+    let choices: Vec<Value> = accounts
+        .into_iter()
+        .map(|account| json!({ "name": account.name, "email": account.email, "signedIn": account.signed_in }))
+        .collect();
+    to_json(&choices)
 }
 
 /// `setClaudeAccount`: the account a project's new terminals use, or the default one with a `null` name.

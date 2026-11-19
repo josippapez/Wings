@@ -697,6 +697,13 @@ impl Env for AppEnv {
             .claude_accounts(|name| system.claude_auth(name)))
     }
 
+    fn claude_accounts_quick(&self) -> Result<Accounts, String> {
+        Ok(self.projects.claude_accounts(|name| claude_accounts::AuthStatus {
+            logged_in: claude_accounts::login(name).is_some(),
+            method: None,
+        }))
+    }
+
     fn set_claude_account(&self, project: &str, name: Option<&str>) -> Result<(), String> {
         let system = self.system();
         self.projects
@@ -1381,7 +1388,7 @@ impl Workspace {
                 .publish_projects(published_projects(&self.projects, &self.side));
             installed
                 .host
-                .publish_project(Some(self.config.project.as_path()));
+                .publish_project_in(Some(self.config.project.as_path()), self.page_tab_folder());
             installed.host.publish_focus(self.window_active);
         }
         let paths = self.plugin_env.projects();
@@ -1441,11 +1448,23 @@ impl Workspace {
             .map(|tab| tab.focused)
     }
 
-    /// What decides what the plugins are told: the projects, and each pane's place, folder, program, agent and focus.
+    /// Where the tab on screen works when it is a plugin page opened in a folder (`cwd` in its args), as a Claude chat
+    /// tab: no pane is focused then, so plugins that follow the focused pane follow this.
+    pub(super) fn page_tab_folder(&self) -> Option<&str> {
+        let Active::Plugin(id) = self.active else {
+            return None;
+        };
+        let tab = self.plugin_tabs.iter().find(|tab| tab.id == id)?;
+        tab.args.as_ref()?.get("cwd")?.as_str().filter(|cwd| !cwd.is_empty())
+    }
+
+    /// What decides what the plugins are told: the projects, the folder of a page tab on screen, and each pane's place,
+    /// folder, program, agent and focus.
     fn plugin_signature(&self, panes: &[(usize, &std::path::Path)]) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.config.project.hash(&mut hasher);
+        self.page_tab_folder().hash(&mut hasher);
         for project in &self.projects {
             (&project.path, &project.name).hash(&mut hasher);
             self.side.sections_off(&project.path).hash(&mut hasher);

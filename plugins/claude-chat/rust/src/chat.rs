@@ -117,8 +117,6 @@ pub struct Chat {
     pub open_steps: HashSet<usize>,
     /// The tool calls whose output you clicked, by their id: each flips what `detailed` shows.
     pub open_outputs: HashSet<String>,
-    /// The queued messages shown in full, by uuid.
-    pub open_queued: HashSet<String>,
     /// The project's files, for @-mentions.
     pub files: Files,
     /// What you have picked and typed on the cards that wait for an answer, by request.
@@ -167,6 +165,12 @@ pub struct Chat {
     /// The folder Claude Code runs in.
     pub cwd: String,
     program: String,
+    /// The Claude Code account you picked for this tab's new chats, by name, `Some(None)` being the default one. None
+    /// until you pick one: a new chat then runs under its project's account.
+    pub picked: Option<Option<String>>,
+    /// The Claude Code accounts there are, for the picker in the message box. Empty until Wings lists them, and in a
+    /// Wings that won't.
+    pub accounts: Vec<host::AccountChoice>,
 }
 
 thread_local! {
@@ -190,7 +194,6 @@ thread_local! {
         picture: None,
         open_steps: HashSet::new(),
         open_outputs: HashSet::new(),
-        open_queued: HashSet::new(),
         files: Files::default(),
         drafts: HashMap::new(),
         todos_folded: false,
@@ -216,6 +219,8 @@ thread_local! {
         run: 0,
         cwd: String::new(),
         program: "claude".into(),
+        picked: None,
+        accounts: Vec::new(),
     });
 }
 
@@ -223,7 +228,27 @@ pub fn with<T>(change: impl FnOnce(&mut Chat) -> T) -> T {
     CHAT.with(|chat| change(&mut chat.borrow_mut()))
 }
 
-#[cfg(not(feature = "subagent"))]
+/// The Claude Code account a program for `session` runs under: the one its transcript is in, else the one you picked
+/// for this tab, else its project's.
+pub fn account(c: &Chat, session: Option<&str>) -> host::Account {
+    match &c.picked {
+        Some(name) => host::Account::picked(session, name.as_deref()),
+        None => host::Account::of_session(session),
+    }
+}
+
+/// What a tab keeps of the account you picked: `{ "name": ... }`, or null for none.
+fn picked_json(picked: &Option<Option<String>>) -> Value {
+    picked.as_ref().map_or(Value::Null, |name| json!({ "name": name }))
+}
+
+/// The account a tab's saved state or its args picked: `{ "name": null | "<name>" }`.
+fn picked_of(saved: &Value, args: &Value) -> Option<Option<String>> {
+    let pick = saved.get("account").filter(|pick| pick.is_object()).or_else(|| args.get("account").filter(|pick| pick.is_object()))?;
+    Some(pick["name"].as_str().map(str::to_owned))
+}
+
+#[cfg(not(any(feature = "subagent", feature = "pane")))]
 #[unsafe(no_mangle)]
 pub fn start() {
     // A subagent's tab is a page of this view too, opened with the subagent in its args.
@@ -232,6 +257,7 @@ pub fn start() {
     }
     wings_plugin::run_filled(crate::view::view);
     crate::subagent_relay::start();
+    crate::mod_pane::start();
     with(|c| {
         c.detailed = prefs::detailed().get();
         c.text_scale = prefs::scale_of(&prefs::text_size().get());
@@ -250,6 +276,12 @@ pub fn start() {
     });
     crate::folds::follow();
     task::spawn(open());
+    // A Wings that doesn't list them, or doesn't let the chat, leaves the picker out.
+    task::spawn(async {
+        if let Ok(accounts) = host::accounts().await {
+            with(|c| c.accounts = accounts);
+        }
+    });
 }
 
 /// Finds the folder and the session the tab is for, and starts Claude Code there.
@@ -266,11 +298,13 @@ async fn open() {
         },
     };
     let program = args["program"].as_str().filter(|program| PROGRAMS.contains(program)).unwrap_or("claude").to_owned();
+    let picked = picked_of(&saved, &args);
     with(|c| {
         c.folder = basename(&cwd).to_owned();
         c.cwd = cwd;
         c.program = program;
         c.dirs = dirs;
+        c.picked = picked;
     });
     // After an update or restart of the plugin or of Wings, the Claude Code this tab ran is still going: the chat takes
     // it over, and never starts a second one on its session.
@@ -315,8 +349,8 @@ pub fn launch_with(resume: Option<String>, how: Launch) {
         args.extend(fork::flags(resume.as_deref(), &how, &dirs));
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         // Under the account the session's transcript is in, which a plain `claude --resume` would not find if it isn't the
-        // default one; a new chat gets its project's, as a terminal there does.
-        let account = host::Account::of_session(resume.as_deref());
+        // default one; a new chat gets the account you picked, else its project's, as a terminal there does.
+        let account = with(|c| account(c, resume.as_deref()));
         // A fork before a message asks for its rewind as it starts, as the opening requests do: the fork is a new session.
         let opening = Session::opening(start_mode.as_deref()) + &with(|c| fork::opening(&how, &c.session.prompts));
         // In Wings' terminal server, so the turn goes on while Wings restarts or updates, and this tab takes it over after.
@@ -344,7 +378,6 @@ pub(crate) fn begin(c: &mut Chat) -> u32 {
     c.picture = None;
     c.open_steps.clear();
     c.open_outputs.clear();
-    c.open_queued.clear();
     c.drafts.clear();
     c.task = None;
     c.fork_from = None;
@@ -396,8 +429,8 @@ pub(crate) async fn follow(run: u32, process: host::Process) {
 
 /// What the tab keeps for when it opens again: the session, and the folders you added.
 pub(crate) fn save_tab() {
-    let (id, dirs) = with(|c| (c.session.id.clone(), c.dirs.clone()));
-    drop(host::call("setTabState", json!({ "state": { "sessionId": id, "dirs": dirs } })));
+    let (id, dirs, picked) = with(|c| (c.session.id.clone(), c.dirs.clone(), picked_json(&c.picked)));
+    drop(host::call("setTabState", json!({ "state": { "sessionId": id, "dirs": dirs, "account": picked } })));
 }
 
 /// Lists the project's files for @-mentions: git's own list, so ignored files stay out. Done here, not by Claude Code's
@@ -543,7 +576,6 @@ pub(crate) fn hear(run: u32, line: &Value) {
             c.until = None;
             c.open_steps.clear();
             c.open_outputs.clear();
-            c.open_queued.clear();
             c.drafts.clear();
             c.task = None;
         }
@@ -565,6 +597,10 @@ pub(crate) fn hear(run: u32, line: &Value) {
     // goes once its time is up.
     for key in with(|c| if c.run == run { c.session.mods.take_stale() } else { Vec::new() }) {
         write(move |c, n| crate::mods_view::request_for(c, &key, n));
+    }
+    // A pane Claude Code asked to show, as `/feedback` opens its pane, opens in Wings' sidebar.
+    if let Some(pane) = with(|c| if c.run == run { c.session.mods.to_open.take() } else { None }) {
+        crate::mod_pane::open(&pane);
     }
     for (id, asked) in with(|c| if c.run == run { std::mem::take(&mut c.session.mods.asks) } else { Vec::new() }) {
         write(move |c, _| Some(crate::mods_view::answer_ask(c, &id, &asked)));
@@ -635,6 +671,7 @@ pub(crate) fn report_agent() {
         drop(host::set_tab_title(title.as_deref()));
     }
     crate::subagent_relay::sync();
+    crate::mod_pane::sync();
 }
 
 /// The session's name: the one Claude Code says (`/rename`), else the first line of your first message, cut short. None
@@ -774,30 +811,11 @@ pub fn remove_image(index: usize) {
 /// Takes a queued message back.
 pub fn unqueue(uuid: &str) {
     write(|c, n| c.session.unqueue(uuid, n));
-    forget_open_queued();
-}
-
-/// Shows a queued message in full, or folds it back to one line.
-pub fn toggle_queued(uuid: &str) {
-    with(|c| {
-        if !c.open_queued.remove(uuid) {
-            c.open_queued.insert(uuid.to_owned());
-        }
-    });
-}
-
-/// Drops the open state of queued messages that are gone: taken back, read, or sent now under a new uuid.
-fn forget_open_queued() {
-    with(|c| {
-        let queued = &c.session.queued;
-        c.open_queued.retain(|uuid| queued.iter().any(|queued| &queued.uuid == uuid));
-    });
 }
 
 /// Has Claude read a queued message at its next step instead of after the turn.
 pub fn send_now(uuid: &str) {
     write(|c, n| c.session.send_now(uuid, host::now() as u64, n));
-    forget_open_queued();
 }
 
 /// Changes what you have picked or typed on the card for `request`.
@@ -976,6 +994,29 @@ pub fn new_chat() {
         c.forked_from = None;
     });
     launch(None);
+}
+
+/// The value the account picker gives the default account: not a name an account can have.
+pub const DEFAULT_ACCOUNT: &str = "~";
+
+/// Starts a chat under the account you picked in the message box (`DEFAULT_ACCOUNT` for the default one): here, in place
+/// of a chat you haven't written in yet, else in a new tab beside this one, so a conversation never moves account.
+pub fn pick_account(value: &str) {
+    let name = match value {
+        "" => return,
+        DEFAULT_ACCOUNT => None,
+        name => Some(name.to_owned()),
+    };
+    let (written, cwd, program) = with(|c| {
+        let written = c.session.items.iter().any(|item| matches!(item, Item::User(_) | Item::UserImages(..)));
+        (written, c.cwd.clone(), c.program.clone())
+    });
+    if written {
+        drop(host::open_tab_beside("chat", &json!({ "cwd": cwd, "program": program, "account": { "name": name } })));
+        return;
+    }
+    with(|c| c.picked = Some(name));
+    new_chat();
 }
 
 pub fn resume(id: &str) {

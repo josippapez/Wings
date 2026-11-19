@@ -93,7 +93,8 @@ fn credits(credits: &Credits) -> Node {
         (Some(used), None) => gauge("Used", used as f64, (80, 95), Some(format!("{symbol}{:.2}", credits.spent))),
         (None, _) => line("Spent", format!("{symbol}{:.2}", credits.spent)),
     };
-    section("Usage credits", [body])
+    let off = (!credits.on).then(|| muted("Off for now: they can't cover more messages.").prop("size", "small"));
+    section("Usage credits", [body].into_iter().chain(off))
 }
 
 fn contributors(share: &Share, week: bool) -> Node {

@@ -230,15 +230,14 @@ fn on_off(on: bool) -> &'static str {
     if on { "on" } else { "off" }
 }
 
-/// Makes `edit` with Claude Code's own command for it, under the Claude account of the chat's `session` and in the chat's
-/// folder `cwd`, where Claude Code finds the project's settings files. Every change the dialogs make runs through here.
-/// It gives the warnings Claude Code printed, or why it refused.
-pub async fn run(session: Option<&str>, cwd: &str, edit: &Edit) -> Result<Vec<String>, String> {
+/// Makes `edit` with Claude Code's own command for it, under the chat's Claude `account` and in the chat's folder `cwd`,
+/// where Claude Code finds the project's settings files. Every change the dialogs make runs through here. It gives the
+/// warnings Claude Code printed, or why it refused.
+pub async fn run(account: &host::Account, cwd: &str, edit: &Edit) -> Result<Vec<String>, String> {
     let (command, input) = edit.command();
     let printed = Rc::new(RefCell::new(Value::Null));
     let kept = printed.clone();
-    let account = host::Account::of_session(session);
-    let process = host::spawn_as(&account, "claude", &[command, "--json"], cwd, &input.to_string(), move |line| *kept.borrow_mut() = line.clone());
+    let process = host::spawn_as(account, "claude", &[command, "--json"], cwd, &input.to_string(), move |line| *kept.borrow_mut() = line.clone());
     // It reads stdin to its end before it does anything.
     process.input().stop();
     let exit = process.await;
@@ -929,7 +928,7 @@ mod tests {
         setup.ask(add("deny", "Bash(ls)", "userSettings"));
         assert_eq!(setup.pending, Some(edit.clone()), "nothing else is asked while it is made");
         let made = edit.clone();
-        let outcome = task::block_on(async move { run(Some("5b7e2c1a-0f3d-4c8e-9a61-2d4f8b3c7e90"), "/work/shop", &made).await });
+        let outcome = task::block_on(async move { run(&host::Account::of_session(Some("5b7e2c1a-0f3d-4c8e-9a61-2d4f8b3c7e90")), "/work/shop", &made).await });
         assert_eq!(outcome, Ok(Vec::new()));
         let calls = calls.borrow();
         let methods: Vec<&str> = calls.iter().map(|(method, _)| method.as_str()).collect();

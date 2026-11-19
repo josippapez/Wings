@@ -258,6 +258,9 @@ pub struct Text {
     pub weight: Weight,
     pub mono: bool,
     pub truncate: bool,
+    /// `expandable: true` with `truncate`: the app adds More after the text while it is cut short, and Less once it
+    /// is opened, so a page never guesses from its length whether it fits.
+    pub expandable: bool,
     pub clamp: bool,
     pub grow: bool,
     /// What to send back to the page when the text is clicked, for a link inside a line of text.
@@ -1220,6 +1223,7 @@ impl Walk {
                 weight: choice(&props, "weight"),
                 mono: on("mono"),
                 truncate: on("truncate"),
+                expandable: on("expandable"),
                 clamp: on("clamp"),
                 grow: on("grow"),
                 on_click: str_prop(&props, "onClick")

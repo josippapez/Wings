@@ -11,10 +11,16 @@ crate-type = ["cdylib"]
 wings-plugin = { path = "../../../packages/plugin-rs" }
 serde_json = "1"
 
+[dev-dependencies]
+# The parser Wings' diff viewer reads View changes' patch with (`apps/native/src/diff/patch.rs`), to test the patch.
+diffy = { version = "=0.5.2", default-features = false }
+
 [features]
 # The frame this module is. `build-rust.sh` builds each one the manifest names.
 main = []
 chat = []
 # The sidebar for a subagent: the chat's code, started as that page (`subagent_sidebar.rs`).
 subagent = ["chat"]
+# The sidebar for a pane a Claude Code plugin opened: the chat's code, started as that page (`pane_sidebar.rs`).
+pane = ["chat"]
 settings = []

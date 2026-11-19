@@ -2,7 +2,8 @@
 //! main (`--features main`, `main_frame.rs`) puts a Chat badge on Claude's terminals, whose button moves the session
 //! into a chat tab. The chat page (`--features chat`, `chat.rs` and `view.rs`) runs Claude Code headless and draws the
 //! session from what it prints (`session.rs`). The subagent sidebar (`--features subagent`, which is the chat's code with
-//! `subagent_sidebar.rs` as its start) is Wings' right sidebar for one subagent. The settings page (`--features settings`,
+//! `subagent_sidebar.rs` as its start) is Wings' right sidebar for one subagent, and the pane sidebar (`--features pane`,
+//! `pane_sidebar.rs`) is that sidebar for one pane a Claude Code plugin opened (`mod_pane.rs`). The settings page (`--features settings`,
 //! `settings_page.rs`) is in Wings Settings and sets what every chat reads (`prefs.rs`).
 
 // Each frame uses its own part of the crate.
@@ -60,6 +61,10 @@ mod rewind_view;
 mod mods;
 #[cfg(feature = "chat")]
 mod mods_view;
+#[cfg(feature = "chat")]
+mod mod_pane;
+#[cfg(feature = "pane")]
+mod pane_sidebar;
 mod refs;
 #[cfg(feature = "chat")]
 mod refs_view;
