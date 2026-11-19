@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.48 · 2026-11-19
+
+- **Claude chat shows a long session all the way back.** Scroll up and older messages keep loading, where it used to stop at "Older messages aren't shown here". Scroll back down and newer ones return. **Jump to the latest**, over the message box, or sending a message takes you straight to the end.
+- **Plugin pages keep your place** when what's above or below the part you're reading changes.
+
 ## 0.2.47 · 2026-11-19
 
 - **Claude chat keeps running through a Wings update or restart.** Its Claude Code runs in Wings' terminal server, like your terminals, and the reopened tab picks it back up. Two tabs never run the same session at once: the second one says it's already running elsewhere.

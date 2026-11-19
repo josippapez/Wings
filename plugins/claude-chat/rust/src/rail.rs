@@ -35,6 +35,8 @@ struct State {
     token: u64,
     /// What Wings last said: none before it has said, then the position in the tracked prompts, or none above them all.
     at: Option<Option<usize>>,
+    /// "Jump to the latest" asked for the end of the conversation, with `token`.
+    end: bool,
 }
 
 thread_local! {
@@ -80,7 +82,7 @@ impl Rail {
             .into_iter()
             .map(|item| Prompt { item, child: built.binary_search_by_key(&item, |(built, _)| *built).ok().map(|at| built[at].1) })
             .collect();
-        // Those drawn are the newest, so the tracked positions count from the first of them.
+        // Those drawn are in a row, so the tracked positions count from the first of them.
         let first = prompts.iter().position(|prompt| prompt.child.is_some());
         let current = match (at, first) {
             (Some(Some(at)), Some(first)) => (first + at).min(prompts.len() - 1),
@@ -97,23 +99,37 @@ impl Rail {
     }
 }
 
-/// A click on a tick: the conversation scrolls so `item`, a message of yours, is at its top. A prompt older than what the
+/// A click on a tick: the conversation scrolls so `item`, a message of yours, is at its top. A prompt outside what the
 /// page shows is brought in first.
 pub fn go(item: usize) {
     STATE.with(|state| {
         let mut state = state.borrow_mut();
         state.token += 1;
         state.jump = Some(item);
+        state.end = false;
     });
-    chat::with(|c| c.shown = c.shown.max(c.session.items.len().saturating_sub(item)));
+    chat::with(|c| crate::view::show_item(c, item));
+}
+
+/// The conversation scrolls to its last child, once the page shows the newest items.
+pub fn to_end() {
+    STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        state.token += 1;
+        state.jump = None;
+        state.end = true;
+    });
 }
 
 /// What the conversation's `Scroll` is told after a click: the child to bring to the top, with the click's token. The page
 /// keeps saying it, which Wings acts on once. A prompt the page couldn't draw (it is past what the page may send) is given
 /// up on, so it isn't scrolled to later, when scrolling up draws it.
-pub fn scroll_to(rail: &Rail) -> Option<Value> {
+pub fn scroll_to(rail: &Rail, last: usize) -> Option<Value> {
     STATE.with(|state| {
         let mut state = state.borrow_mut();
+        if state.end {
+            return Some(json!({ "index": last, "token": state.token }));
+        }
         let item = state.jump?;
         match rail.prompts.iter().find(|prompt| prompt.item == item).and_then(|prompt| prompt.child) {
             Some(index) => Some(json!({ "index": index, "token": state.token })),
@@ -125,13 +141,14 @@ pub fn scroll_to(rail: &Rail) -> Option<Value> {
     })
 }
 
-/// What the page says of the rail to the conversation's `Scroll`: its props, and `None` while there are no prompts.
-pub fn watch(scroll: Node, rail: &Rail) -> Node {
+/// What the page says of the rail to the conversation's `Scroll`, whose column's last child is `last`: its props, and
+/// `None` while there are no prompts.
+pub fn watch(scroll: Node, rail: &Rail, last: usize) -> Node {
     if rail.prompts.is_empty() {
         return scroll;
     }
     let scroll = scroll.prop("track", json!(rail.track())).on("onTrack", |payload| tracked(payload["at"].as_u64().map(|at| at as usize)));
-    match scroll_to(rail) {
+    match scroll_to(rail, last) {
         Some(to) => scroll.prop("scrollTo", to),
         None => scroll,
     }
@@ -276,16 +293,16 @@ mod tests {
         let built = [(0, 0), (2, 2), (4, 4)];
         chat::with(|c| c.session.items = talk());
         // Nothing is scrolled to before a click.
-        assert_eq!(scroll_to(&Rail::of(&items, &built, None)), None);
+        assert_eq!(scroll_to(&Rail::of(&items, &built, None), 0), None);
         go(2);
-        let to = scroll_to(&Rail::of(&items, &built, None)).expect("the second prompt's place");
+        let to = scroll_to(&Rail::of(&items, &built, None), 0).expect("the second prompt's place");
         assert_eq!(to, json!({ "index": 2, "token": 1 }));
         // The same place keeps being said, with the same token, which Wings acts on once; a click on another has the next.
-        assert_eq!(scroll_to(&Rail::of(&items, &built, None)), Some(to));
+        assert_eq!(scroll_to(&Rail::of(&items, &built, None), 0), Some(to));
         go(4);
-        assert_eq!(scroll_to(&Rail::of(&items, &built, None)), Some(json!({ "index": 4, "token": 2 })));
+        assert_eq!(scroll_to(&Rail::of(&items, &built, None), 0), Some(json!({ "index": 4, "token": 2 })));
         // The column has grown a block above since: the same prompt, a new index, the same token.
-        assert_eq!(scroll_to(&Rail::of(&items, &[(0, 1), (2, 3), (4, 5)], None)), Some(json!({ "index": 5, "token": 2 })));
+        assert_eq!(scroll_to(&Rail::of(&items, &[(0, 1), (2, 3), (4, 5)], None), 0), Some(json!({ "index": 5, "token": 2 })));
     }
 
     #[test]
@@ -296,11 +313,15 @@ mod tests {
             c.shown = crate::chat::PAGE;
         });
         go(100);
-        assert!(chat::with(|c| c.session.items.len() - c.shown <= 100), "the page now reaches it");
+        let reached = chat::with(|c| {
+            let end = crate::view::end_of(c);
+            crate::view::window(c, end, end.saturating_sub(c.shown)).0.last().is_some_and(|block| block.start <= 100 && 100 < end)
+        });
+        assert!(reached, "the page now shows it");
         // The page drew from the newest back and ran out of room before it: no place, and no jump left pending.
         let built: Vec<(usize, usize)> = (500..600).step_by(2).enumerate().map(|(child, item)| (item, child)).collect();
-        assert_eq!(scroll_to(&Rail::of(&items, &built, None)), None);
+        assert_eq!(scroll_to(&Rail::of(&items, &built, None), 0), None);
         let all: Vec<(usize, usize)> = (0..300).map(|n| (n * 2, n)).collect();
-        assert_eq!(scroll_to(&Rail::of(&items, &all, None)), None, "it stays given up when scrolling up draws it");
+        assert_eq!(scroll_to(&Rail::of(&items, &all, None), 0), None, "it stays given up when scrolling up draws it");
     }
 }

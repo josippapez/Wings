@@ -89,8 +89,10 @@ pub struct Chat {
     took_suggestion: Option<String>,
     /// The pictures pasted into the message, as (media type, base64), sent with it.
     pub images: Vec<(String, String)>,
-    /// How many of the newest items are shown.
+    /// How many items are shown, back from where they end.
     pub shown: usize,
+    /// Where the items shown end while you read an older part of a session too long to show whole, none at the newest.
+    pub until: Option<usize>,
     /// The name of the folder Claude Code runs in.
     pub folder: String,
     pub state: State,
@@ -172,6 +174,7 @@ thread_local! {
         took_suggestion: None,
         images: Vec::new(),
         shown: PAGE,
+        until: None,
         folder: String::new(),
         state: State::Starting,
         past: None,
@@ -331,6 +334,7 @@ pub(crate) fn begin(c: &mut Chat) -> u32 {
     c.session.start_mode = prefs::start_mode();
     c.state = State::Starting;
     c.shown = PAGE;
+    c.until = None;
     c.past = None;
     c.panel = None;
     c.plugins = None;
@@ -533,6 +537,7 @@ pub(crate) fn hear(run: u32, line: &Value) {
         // A cleared conversation takes what the page kept of it along: which folds were open, what was half answered.
         if std::mem::take(&mut c.session.cleared) {
             c.shown = PAGE;
+            c.until = None;
             c.open_steps.clear();
             c.open_outputs.clear();
             c.open_queued.clear();
@@ -691,6 +696,10 @@ pub fn send() {
         }
         c.draft.clear();
         composer::forget();
+        // Sent while reading an older part, the conversation goes to the newest, where the message shows.
+        if c.until.is_some() {
+            crate::view::show_latest(c);
+        }
         let images = std::mem::take(&mut c.images);
         if c.session.working {
             return Some(c.session.queue(&text, images, host::now() as u64, n));

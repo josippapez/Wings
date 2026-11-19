@@ -389,6 +389,10 @@ pub struct Scroll {
     /// `onReachStart`, with `follow: "end"`: sent when the scroll comes within a screen of its top, once until what
     /// is above it grows. The page then adds older items, and the view stays on what it showed.
     pub on_reach_start: Option<String>,
+    /// `onReachEnd`, with `follow: "end"`: sent when the scroll comes within a screen of its end, once until what is
+    /// below it grows, while the page shows an older part of a list too long to send whole. It doesn't follow its end
+    /// then. The page adds newer items below and may take older ones away above, and the view stays on what it showed.
+    pub on_reach_end: Option<String>,
     /// `textScale`: every text inside is this many times its size (0.5 to 2), as a page's text size setting asks.
     /// None keeps the scale the scroll is in.
     pub text_scale: Option<f32>,
@@ -1245,6 +1249,7 @@ impl Walk {
                 id,
                 follow_end: str_prop(&props, "follow") == Some("end"),
                 on_reach_start: handler("onReachStart"),
+                on_reach_end: handler("onReachEnd"),
                 text_scale: number(&props, "textScale").map(|scale| scale.clamp(0.5, 2.0) as f32),
                 scroll_to: props.get("scrollTo").and_then(|to| {
                     let index = to.get("index")?.as_u64()?;

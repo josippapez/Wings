@@ -1997,6 +1997,75 @@ fn a_following_scroll_asks_for_older_items_at_its_top_and_stays_on_what_it_showe
     settle(&app, &mut window, |view| view.text().contains("Older 0") && view.follow_scrolled(1).is_some_and(|(top, _)| top >= 300.0));
 }
 
+/// A chat too long to send whole: 300 rows, of which the page sends 60, ending at the newest. `onReachStart` moves them 30
+/// rows older and `onReachEnd` 30 newer, and each is there while there is more that way.
+fn sliding_rows() -> String {
+    let mut end = 300;
+    fake::page("page", move |event| {
+        match event {
+            Some(("1:onReachStart", _)) => end -= 30,
+            Some(("1:onReachEnd", _)) => end += 30,
+            _ => {}
+        }
+        let rows: Vec<Value> = (end - 60..end).map(|i| text(100 + i, 1_000 + i, format!("Row {i}"))).collect();
+        let mut props = json!({ "follow": "end" });
+        if end > 60 {
+            props["onReachStart"] = json!("1:onReachStart");
+        }
+        if end < 300 {
+            props["onReachEnd"] = json!("1:onReachEnd");
+        }
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            { "id": 1, "type": "Scroll", "props": props, "children": [{ "id": 2, "type": "Stack", "props": {}, "children": rows }] }] })
+    })
+}
+
+/// A following `Scroll` over part of a long list moves along it both ways: at its top the page sends older rows and
+/// drops the newest, at its end newer ones and drops the oldest, and each time the view stays on what it showed instead
+/// of jumping to the end.
+#[test]
+fn a_following_scroll_moves_along_a_list_too_long_to_send_whole_and_stays_on_what_it_showed() {
+    let mut app = TestApp::new();
+    app.background_executor().allow_parking();
+    let host = hosted(&mut app);
+    let source = sliding_rows();
+    let bounds = gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(500.0), px(300.0)));
+    let mut window = app.open_window_with_options(
+        gpui::WindowOptions { window_bounds: Some(gpui::WindowBounds::Windowed(bounds)), ..Default::default() },
+        |_, cx| PageView::in_plugin(&host, &source, cx),
+    );
+    settle(&app, &mut window, |view| view.text().contains("Row 299") && view.follow_scrolled(1).is_some_and(|(top, max)| max > 300.0 && top >= max - 24.0));
+    let scroll = |window: &mut View, by: f32| {
+        window.simulate_event(gpui::ScrollEvent {
+            position: point(px(60.0), px(150.0)),
+            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(by))),
+            modifiers: gpui::Modifiers::default(),
+            touch_phase: gpui::TouchPhase::Moved,
+            source: Default::default(),
+        })
+    };
+    // Up to the top: rows 210 to 269 come, and the 30 older rows are above the view, which stays where it was.
+    scroll(&mut window, 100_000.0);
+    settle(&app, &mut window, |view| {
+        let text = view.text();
+        text.contains("Row 210") && !text.contains("Row 299") && view.follow_scrolled(1).is_some_and(|(top, _)| top >= 300.0)
+    });
+    // Down to the end: rows 240 to 299 again, and the view stays on the rows it showed rather than follow to the newest.
+    scroll(&mut window, -100_000.0);
+    settle(&app, &mut window, |view| {
+        let text = view.text();
+        text.contains("Row 299") && !text.contains("Row 210") && view.follow_scrolled(1).is_some_and(|(top, max)| top < max - 200.0)
+    });
+    // It stays there, and only scrolling on to the end follows it again.
+    for _ in 0..5 {
+        app.run_until_parked();
+        window.draw();
+    }
+    assert!(window.read(|view, _| view.follow_scrolled(1).is_some_and(|(top, max)| top < max - 200.0)));
+    scroll(&mut window, -100_000.0);
+    settle(&app, &mut window, |view| view.follow_scrolled(1).is_some_and(|(top, max)| top >= max - 24.0));
+}
+
 /// A column of 60 rows in a plain `Scroll` that is asked to scroll to row 40 and to track rows 10, 20, 30 and 40, over a
 /// line that says what `onTrack` last said.
 fn aimed_rows() -> String {

@@ -50,12 +50,12 @@ pub fn view() -> Vec<Node> {
 }
 
 fn chat_page(c: &Chat) -> Node {
-    let (body, built) = conversation(c);
+    let (body, built, last) = conversation(c);
     // The conversation, the checklist and the message box in the main pane, and a card on the right that the app leaves out
     // of a narrow tab. Flush, so the conversation scrolls on its own and the checklist and the message box stay at the foot.
     // The prompt rail sits over them against the column's left, where the app has room for it.
     let rail = crate::rail::Rail::of(&c.session.items, &built, crate::rail::state_at());
-    let body = crate::rail::watch(body, &rail);
+    let body = crate::rail::watch(body, &rail, last);
     let main: Vec<Node> = crate::rail::marks(c, &rail).into_iter().chain([body]).chain(todo_card(c)).chain([composer(c)]).collect();
     // The panel floats over the right of the tab and shows by default; only the header's button puts it away and brings it
     // back, also where it covers the conversation in a narrow tab. A panel left out leaves its terminals out with it.
@@ -165,8 +165,8 @@ fn column() -> Node {
 }
 
 /// The conversation, or what shows before it has any, with where each of your messages is among the children of its column,
-/// as (item, child), oldest first.
-fn conversation(c: &Chat) -> (Node, Vec<(usize, usize)>) {
+/// as (item, child), oldest first, and the column's last child.
+fn conversation(c: &Chat) -> (Node, Vec<(usize, usize)>, usize) {
     if c.session.items.is_empty() && c.session.live.is_empty() {
         let body = match &c.state {
             State::Starting => loading(),
@@ -174,57 +174,49 @@ fn conversation(c: &Chat) -> (Node, Vec<(usize, usize)>) {
             State::Moved => muted("This session goes on in a terminal."),
             _ => empty("What should Claude do?", "It works in this folder with your Claude Code setup, and asks here before it does anything you haven't allowed."),
         };
-        return (Node::new("Scroll").child(column().child(body)), Vec::new());
+        return (Node::new("Scroll").child(column().child(body)), Vec::new(), 0);
     }
     let items = &c.session.items;
-    let from = items.len().saturating_sub(c.shown);
-    // Built from the newest back until the budget is spent, so a long session's oldest items stay out of the page.
-    let (mut blocks, mut spent, mut cut) = (Vec::new(), 0, false);
+    let (end, newest) = (end_of(c), c.until.is_none());
+    let (window, _) = window(c, end, end.saturating_sub(c.shown));
+    let first = window.last().map_or(end, |block| block.start);
+    let mut blocks = Vec::new();
     let mut prompts: Vec<(usize, usize)> = Vec::new();
-    let mut end = items.len();
-    while end > from {
-        let mut start = end - 1;
-        while folds(&items[start]) && start > from && folds(&items[start - 1]) {
-            start -= 1;
+    for block in window {
+        blocks.extend(block.edited);
+        if matches!(items[block.start], Item::User(_) | Item::UserImages(..)) {
+            prompts.push((block.start, blocks.len()));
         }
-        let block = match folds(&items[start]) {
-            true => {
-                let tools: Vec<&Tool> = items[start..end].iter().filter_map(|item| if let Item::Tool(tool) = item { Some(tool) } else { None }).collect();
-                (!tools.is_empty()).then(|| steps(start, &tools, c))
-            }
-            false => item_node(start, &items[start], c, true),
-        };
-        // A turn that changed files ends with a card of them, after its last item.
-        let edited = c.session.turn_ending_at(end).map(|(from, turn)| crate::edits_view::card_of(c, from, end, &turn));
-        end = start;
-        let Some(block) = block else { continue };
-        let size = block.count() + edited.as_ref().map_or(0, Node::count);
-        if spent + size > BUDGET {
-            cut = true;
-            // The newest item always shows, as plain text when it is too big to lay out.
-            if blocks.is_empty() {
-                blocks.push(plain(start, &items[start]));
-            }
-            break;
-        }
-        spent += size;
-        blocks.extend(edited);
-        if matches!(items[start], Item::User(_) | Item::UserImages(..)) {
-            prompts.push((start, blocks.len()));
-        }
-        blocks.push(block);
+        blocks.push(block.node);
     }
     // Counted from the newest back while the blocks were collected, so they turn round with them.
     let built = blocks.len();
     blocks.reverse();
-    // Older items load as you scroll up to them. What the budget cut can't be added to, so a note stands for it.
-    let earlier = cut.then(|| muted("Older messages aren't shown here. Open the session in a terminal to see all of it.").key("earlier"));
-    let more = from > 0 && !cut;
     // A fork says where it came from, at the top.
     let forked = c.forked_from.as_ref().map(|from| muted(format!("Forked from {}", truncate(from, 80))).prop("size", "small").key("forked"));
-    let lead = usize::from(forked.is_some()) + usize::from(earlier.is_some());
+    let lead = usize::from(forked.is_some());
     let prompts: Vec<(usize, usize)> = prompts.into_iter().rev().map(|(item, back)| (item, lead + built - 1 - back)).collect();
-    let mut nodes: Vec<Node> = forked.into_iter().chain(earlier).chain(blocks).collect();
+    let mut nodes: Vec<Node> = forked.into_iter().chain(blocks).collect();
+    // Reading an older part, what Claude does now isn't here: it shows once you are back at the newest.
+    if newest {
+        newest_end(c, &mut nodes);
+    }
+    let last = nodes.len().saturating_sub(1);
+    let scroll = Node::new("Scroll").prop("follow", "end").prop("textScale", c.text_scale as f64).child(column().prop("enter", "rise").children(nodes));
+    // Older items load as you scroll up to them, and newer ones as you scroll back down.
+    let scroll = match first > 0 {
+        true => scroll.on("onReachStart", |_| chat::with(show_older)),
+        false => scroll,
+    };
+    let scroll = match newest {
+        true => scroll,
+        false => scroll.on("onReachEnd", |_| chat::with(show_newer)),
+    };
+    (scroll, prompts, last)
+}
+
+/// What follows the newest item: what an MCP server asks you, what Claude is writing or doing, and how the session ended.
+fn newest_end(c: &Chat, nodes: &mut Vec<Node>) {
     // What an MCP server asks you waits at the foot, where Claude's own questions do.
     nodes.extend(crate::elicitation_view::cards(c));
     if !c.session.live.is_empty() {
@@ -261,12 +253,142 @@ fn conversation(c: &Chat) -> (Node, Vec<(usize, usize)>) {
         State::Moved => nodes.push(muted("This session goes on in a terminal.").key("ended")),
         _ => {}
     }
-    let scroll = Node::new("Scroll").prop("follow", "end").prop("textScale", c.text_scale as f64).child(column().prop("enter", "rise").children(nodes));
-    let scroll = match more {
-        true => scroll.on("onReachStart", |_| chat::with(|c| c.shown += PAGE)),
-        false => scroll,
+}
+
+/// One block of the conversation: an item, or a run of tool calls, from `start` to before `end`, with the card of the
+/// files its turn changed when it ends one.
+pub(crate) struct Block {
+    pub start: usize,
+    pub end: usize,
+    node: Node,
+    edited: Option<Node>,
+}
+
+impl Block {
+    fn size(&self) -> usize {
+        self.node.count() + self.edited.as_ref().map_or(0, Node::count)
+    }
+}
+
+/// The block that ends before `end`, not reaching before `from`, and where it starts. None for one that shows nothing.
+fn block_before(c: &Chat, end: usize, from: usize) -> (usize, Option<Block>) {
+    let items = &c.session.items;
+    let mut start = end - 1;
+    while folds(&items[start]) && start > from && folds(&items[start - 1]) {
+        start -= 1;
+    }
+    let node = match folds(&items[start]) {
+        true => {
+            let tools: Vec<&Tool> = items[start..end].iter().filter_map(|item| if let Item::Tool(tool) = item { Some(tool) } else { None }).collect();
+            (!tools.is_empty()).then(|| steps(start, &tools, c))
+        }
+        false => item_node(start, &items[start], c, true),
     };
-    (scroll, prompts)
+    // A turn that changed files ends with a card of them, after its last item.
+    let edited = c.session.turn_ending_at(end).map(|(from, turn)| crate::edits_view::card_of(c, from, end, &turn));
+    (start, node.map(|node| Block { start, end, node, edited }))
+}
+
+/// The blocks the page shows of what ends before `end`, newest first: from there back to `from` until the page's budget is
+/// spent, so a long session's other items stay out of it. Says whether the budget cut them short of `from`.
+pub(crate) fn window(c: &Chat, end: usize, from: usize) -> (Vec<Block>, bool) {
+    let (mut blocks, mut spent, mut at) = (Vec::new(), 0, end);
+    while at > from {
+        let (start, block) = block_before(c, at, from);
+        at = start;
+        let Some(block) = block else { continue };
+        let size = block.size();
+        if spent + size > BUDGET {
+            // The newest item always shows, as plain text when it is too big to lay out.
+            if blocks.is_empty() {
+                blocks.push(Block { node: plain(start, &c.session.items[start]), edited: None, ..block });
+            }
+            return (blocks, true);
+        }
+        spent += size;
+        blocks.push(block);
+    }
+    (blocks, false)
+}
+
+/// Where the conversation the page shows ends: at the newest item, or where an older part you are reading ends.
+pub(crate) fn end_of(c: &Chat) -> usize {
+    let len = c.session.items.len();
+    c.until.map_or(len, |until| until.min(len))
+}
+
+/// The end of the blocks from `start` on that make about `size` nodes, at least one: what to show after `start`.
+fn forward(c: &Chat, start: usize, size: usize) -> usize {
+    let items = &c.session.items;
+    let (mut at, mut spent) = (start, 0);
+    while at < items.len() && spent < size {
+        let mut end = at + 1;
+        while folds(&items[at]) && end < items.len() && folds(&items[end]) {
+            end += 1;
+        }
+        spent += block_before(c, end, at).1.map_or(0, |block| block.size());
+        at = end;
+    }
+    at
+}
+
+/// Shows the conversation up to `end`, or to the newest item, from as far back as the page has room for.
+fn show_until(c: &mut Chat, end: usize) {
+    let len = c.session.items.len();
+    c.until = (end < len).then_some(end);
+    c.shown = end;
+}
+
+/// Scrolled to the top of what shows: older items come in, and where the page has no room for them, the newest of what
+/// shows goes to make it. What shows ends then where the older half of it does, so what you read stays.
+pub fn show_older(c: &mut Chat) {
+    let end = end_of(c);
+    let (shown, cut) = window(c, end, end.saturating_sub(c.shown));
+    let Some(oldest) = shown.last().filter(|_| cut) else {
+        c.shown += PAGE;
+        return;
+    };
+    let (mut kept, mut until) = (0, end);
+    for block in shown.iter().rev() {
+        kept += block.size();
+        until = block.end;
+        if kept >= BUDGET / 2 {
+            break;
+        }
+    }
+    // What is kept is too big to leave room for anything older: what shows ends where it starts instead.
+    if window(c, until, 0).0.last().is_none_or(|block| block.start >= oldest.start) {
+        until = oldest.start;
+    }
+    show_until(c, until);
+}
+
+/// Scrolled to the end of an older part: newer items come in, half a page of them, and the oldest of what shows goes.
+pub fn show_newer(c: &mut Chat) {
+    let end = end_of(c);
+    show_until(c, forward(c, end, BUDGET / 2));
+}
+
+/// Shows the newest items, as when the chat opened, and scrolls to them.
+pub fn show_latest(c: &mut Chat) {
+    c.until = None;
+    c.shown = PAGE;
+    crate::rail::to_end();
+}
+
+/// Brings the item at `item` (a message of yours, which starts a block) into what shows, with half a page after it.
+pub fn show_item(c: &mut Chat, item: usize) {
+    let end = end_of(c);
+    let (shown, _) = window(c, end, end.saturating_sub(c.shown));
+    if item < end && shown.last().is_some_and(|block| block.start <= item) {
+        return;
+    }
+    let until = forward(c, item, BUDGET / 2);
+    let shown = c.shown;
+    show_until(c, until);
+    if c.until.is_none() {
+        c.shown = shown.max(c.session.items.len() - item);
+    }
 }
 
 /// An item that folds into the line of the tool calls around it: a call, or a question you answered about one.
@@ -778,9 +900,15 @@ fn composer(c: &Chat) -> Node {
         stack()
             .prop("gap", "s")
             .prop("maxWidth", COLUMN)
+            .maybe(latest(c))
             .maybe(queued(c))
             .child(message_box),
     )
+}
+
+/// While you read an older part of a long session, a button over the message box back to the newest.
+fn latest(c: &Chat) -> Option<Node> {
+    c.until.is_some().then(|| row().child(button("Jump to the latest", "outline", false, || chat::with(show_latest)).prop("size", "sm")))
 }
 
 /// The pictures pasted into the message, as chips above its text, each with a cross to take it out.
@@ -1128,6 +1256,51 @@ mod tests {
         crate::chat::Terminal { pane: pane.into() }
     }
 
+    /// Where what the page shows of the conversation starts and ends, as items.
+    fn shows(c: &Chat) -> (usize, usize) {
+        let end = end_of(c);
+        let (window, _) = window(c, end, end.saturating_sub(c.shown));
+        (window.last().map_or(end, |block| block.start), end)
+    }
+
+    #[test]
+    fn a_session_too_long_for_the_page_moves_along_as_you_scroll_so_all_of_it_can_be_read() {
+        chat::with(|c| {
+            c.session.items = (0..1_500).flat_map(|n| [Item::User(format!("Prompt {n}")), Item::Text(format!("Answer {n}"))]).collect();
+            c.shown = PAGE;
+            c.until = None;
+        });
+        // Up to the very first message: older items come in, and once the page is full the newest go to make room, while
+        // what was at the top stays.
+        let mut steps = 0;
+        while let (first, _) = chat::with(|c| shows(c))
+            && first > 0
+        {
+            chat::with(show_older);
+            let (next, end) = chat::with(|c| shows(c));
+            assert!(next < first && first < end, "{first} → {next}..{end}");
+            assert!(chat::with(|c| chat_page(c).count()) <= 5_000, "the page stays within what Wings draws");
+            steps += 1;
+            assert!(steps < 200);
+        }
+        assert!(chat::with(|c| c.until.is_some()), "the newest no longer show");
+        // Back down to the newest: newer items come in and the oldest go, while what was at the end stays.
+        while chat::with(|c| c.until.is_some()) {
+            let (_, end) = chat::with(|c| shows(c));
+            chat::with(show_newer);
+            let (first, next) = chat::with(|c| shows(c));
+            assert!(first < end && end < next, "{end} → {first}..{next}");
+            steps += 1;
+            assert!(steps < 400);
+        }
+        assert_eq!(chat::with(|c| shows(c)).1, 3_000);
+        // And "Jump to the latest" goes straight back from anywhere.
+        chat::with(show_older);
+        chat::with(|c| c.until = Some(10));
+        chat::with(show_latest);
+        assert_eq!(chat::with(|c| (c.until, shows(c).1)), (None, 3_000));
+    }
+
     #[test]
     fn a_suggestion_taken_with_tab_shows_again_once_the_box_is_emptied_and_typing_your_own_dismisses_it() {
         chat::with(|c| {
@@ -1218,7 +1391,7 @@ mod tests {
             ];
             c.forked_from = Some("Fix the build".into());
         });
-        let (_, found) = chat::with(|c| conversation(c));
+        let (_, found, _) = chat::with(|c| conversation(c));
         // A fork's note is the first child, so the first message is the second.
         assert_eq!(found, [(0, 1), (3, 4)]);
     }

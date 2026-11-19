@@ -95,10 +95,53 @@ struct FollowScroll {
     max: Cell<Pixels>,
     /// `onReachStart` was sent and what is above hasn't grown since, so it isn't sent again.
     asked: Cell<bool>,
+    /// `onReachEnd` was sent and what is below hasn't grown since. Until it has, the scroll doesn't follow its end, which
+    /// the newer items would take it to.
+    asked_end: Cell<bool>,
+    /// The children in view at the last frame, so a new tree that adds or takes away children above or below them
+    /// leaves them where they were.
+    anchor: RefCell<Anchor>,
     /// The `scrollTo` token the scroll last acted on.
     jumped: Cell<u64>,
     /// What `onTrack` last said: none before it was said at all, then the tracked child or none.
     tracked: Cell<Option<Option<usize>>>,
+}
+
+/// What a following `Scroll` with one column had in view.
+#[derive(Default)]
+struct Anchor {
+    /// The tree it was drawn from, by `PageView::trees`.
+    tree: u64,
+    /// The column's children in view, by id, with how far each one's top was below the view's top. The first of them
+    /// still in the next tree is kept in place.
+    seen: Vec<(u64, Pixels)>,
+}
+
+/// What the column of a following `Scroll` needs to keep its view in place and ask for more at either end.
+struct Edges {
+    start: Option<String>,
+    end: Option<String>,
+    /// The id of each element the column's children make, in order.
+    ids: Vec<Option<u64>>,
+    tree: u64,
+}
+
+/// The id of each element a stack's children make, in order, as `PageView::stack` draws them: in a stack that doesn't
+/// rise, a run of plain strings is one element, which has none.
+fn element_ids(stack: &tree::Stack) -> Vec<Option<u64>> {
+    if stack.enter {
+        return stack.children.iter().map(Node::id).collect();
+    }
+    let mut ids = Vec::new();
+    let mut run = false;
+    for child in &stack.children {
+        let string = matches!(child, Node::Str { .. });
+        if !string || !run {
+            ids.push(child.id().filter(|_| !string));
+        }
+        run = string;
+    }
+    ids
 }
 
 /// The layer of the window that draws the terminals a tab's agent opened, each at the place its page's `Terminal` leaves.
@@ -182,6 +225,8 @@ pub struct PageView {
     combobox_scroll: gpui::ScrollHandle,
     /// Where each `Scroll` that follows its end is scrolled, by node id.
     follow_scrolls: RefCell<HashMap<u64, Rc<FollowScroll>>>,
+    /// How many trees the page has sent, so a scroll can tell a new one from the frames of the last.
+    trees: u64,
     /// A focus handle round each list item's `actions`, by node id, and the items one of whose actions had the
     /// keyboard when the page was last drawn: those show their actions without the pointer on them.
     actions_focus: RefCell<HashMap<u64, gpui::FocusHandle>>,
@@ -434,6 +479,7 @@ impl PageView {
                                 .borrow_mut()
                                 .retain(|(id, _), _| ids.contains(id));
                             view.tree = Some(tree);
+                            view.trees += 1;
                             view.error = None;
                         }
                         if let Some(error) = taken.error {
@@ -490,6 +536,7 @@ impl PageView {
             shell_scroll: gpui::ScrollHandle::new(),
             combobox_scroll: gpui::ScrollHandle::new(),
             follow_scrolls: RefCell::default(),
+            trees: 0,
             actions_focus: RefCell::default(),
             menu_focus: cx.focus_handle(),
             actions_within: HashSet::new(),
@@ -1015,12 +1062,13 @@ impl PageView {
     }
 
     /// The handle of a `Scroll` that follows its end, which keeps it at its end through this draw while it is there, as
-    /// a chat stays on its newest message. Scrolled up, it stays where it is.
-    fn follow_end(&self, id: u64) -> Rc<FollowScroll> {
+    /// a chat stays on its newest message. Scrolled up, it stays where it is, and so it does while the page shows an older
+    /// part of its list (`newest` false) or newer items it asked for are on their way.
+    fn follow_end(&self, id: u64, newest: bool) -> Rc<FollowScroll> {
         let state = self.follow_scrolls.borrow_mut().entry(id).or_default().clone();
         let handle = &state.handle;
         // Its offset grows negative as it scrolls down, to minus the most it can scroll. Not laid out yet, both are 0.
-        if -handle.offset().y >= handle.max_offset().y - px(FOLLOW_SLACK) {
+        if newest && !state.asked_end.get() && -handle.offset().y >= handle.max_offset().y - px(FOLLOW_SLACK) {
             handle.scroll_to_bottom();
         }
         state
@@ -1034,8 +1082,10 @@ impl PageView {
     /// Runs once the column of a `Scroll` with `scrollTo` or `track` is laid out, with the bounds of its children: scrolls to
     /// the child `scrollTo` names, once for each token, and tells the page, with `onTrack`, which tracked child the view has
     /// scrolled to when that changes. Only the children's tops are read, so it never lays anything out again.
+    /// `edges`, for a following scroll, first keeps its view in place and asks for more at its ends (`keep_in_place`).
     fn scroll_watch(
         state: Rc<FollowScroll>,
+        edges: Option<Edges>,
         to: Option<(usize, u64)>,
         track: Vec<usize>,
         on_track: Option<String>,
@@ -1048,6 +1098,11 @@ impl PageView {
             if view.size.height <= px(0.0) {
                 // Not laid out yet: look again next frame.
                 window.refresh();
+                return;
+            }
+            if let Some(edges) = &edges
+                && Self::keep_in_place(&state, edges, &children, window, &entity, cx)
+            {
                 return;
             }
             if let Some((index, token)) = to.filter(|(_, token)| state.jumped.get() != *token)
@@ -1079,6 +1134,79 @@ impl PageView {
             let entity = entity.clone();
             cx.defer(move |cx| entity.update(cx, |view, _| view.send(&handler, Some(&serde_json::json!({ "at": at })))));
         }
+    }
+
+    /// For a following scroll's column, with the bounds of its children: when a new tree adds or takes away children
+    /// above or below what was in view, moves the view so the first of those children still there is where it was, as a
+    /// list too long to send whole is moved along. Then asks the page for older items within a screen of the top
+    /// (`onReachStart`) and newer ones within a screen of the end (`onReachEnd`). Says whether it moved the view, which
+    /// this frame then drew in the wrong place.
+    fn keep_in_place(state: &FollowScroll, edges: &Edges, children: &[gpui::Bounds<Pixels>], window: &mut Window, entity: &gpui::Entity<Self>, cx: &mut gpui::App) -> bool {
+        let handle = &state.handle;
+        let view = handle.bounds();
+        let (max, offset) = (handle.max_offset().y, handle.offset());
+        let before = state.max.replace(max);
+        let mut anchor = state.anchor.borrow_mut();
+        if anchor.tree != edges.tree {
+            anchor.tree = edges.tree;
+            // Newer items on their way aren't followed to (`follow_end`), so the view is kept on what it showed.
+            let following = edges.end.is_none() && !state.asked_end.get() && -offset.y >= max - px(FOLLOW_SLACK);
+            let seen = std::mem::take(&mut anchor.seen);
+            // How far down the first child still here has gone: by what was added above it, less what was taken away.
+            let moved = seen.iter().find_map(|(id, below)| {
+                let at = edges.ids.iter().position(|el| *el == Some(*id))?;
+                Some(children.get(at)?.top() - view.top() - *below)
+            });
+            let Some(moved) = moved else {
+                // Nothing of what was in view is left to keep in place, so what was asked for has come.
+                state.asked.set(false);
+                state.asked_end.set(false);
+                return false;
+            };
+            if moved > px(0.0) {
+                state.asked.set(false);
+            }
+            if max - before - moved > px(0.0) {
+                state.asked_end.set(false);
+            }
+            // At the newest end the scroll follows it instead.
+            if !following && moved.abs() > px(0.5) {
+                handle.set_offset(point(offset.x, offset.y - moved));
+                window.refresh();
+                return true;
+            }
+        }
+        anchor.seen = children
+            .iter()
+            .zip(&edges.ids)
+            .skip_while(|(child, _)| child.bottom() <= view.top())
+            .take_while(|(child, _)| child.top() < view.bottom())
+            .filter_map(|(child, id)| Some(((*id)?, child.top() - view.top())))
+            .take(8)
+            .collect();
+        drop(anchor);
+        let height = view.size.height;
+        let mut ask = |handler: &String| {
+            let (handler, entity) = (handler.clone(), entity.clone());
+            cx.defer(move |cx| entity.update(cx, |view, _| view.send(&handler, None)));
+        };
+        match &edges.start {
+            Some(handler) if !state.asked.get() && -offset.y <= height => {
+                state.asked.set(true);
+                ask(handler);
+            }
+            Some(_) => {}
+            None => state.asked.set(false),
+        }
+        match &edges.end {
+            Some(handler) if !state.asked_end.get() && max + offset.y <= height => {
+                state.asked_end.set(true);
+                ask(handler);
+            }
+            Some(_) => {}
+            None => state.asked_end.set(false),
+        }
+        false
     }
 
     /// Asks the page for older items when `area` is scrolled within a screen of its top, and keeps the view on what
@@ -1593,11 +1721,23 @@ impl PageView {
             Node::Scroll(scroll) => {
                 let watches = scroll.scroll_to.is_some() || scroll.on_track.is_some();
                 let state = match (scroll.follow_end, watches) {
-                    (true, _) => Some(self.follow_end(scroll.id)),
+                    (true, _) => Some(self.follow_end(scroll.id, scroll.on_reach_end.is_none())),
                     (false, true) => Some(self.watched_scroll(scroll.id)),
                     (false, false) => None,
                 };
-                let reach = state.as_ref().filter(|_| scroll.follow_end).map(|state| Self::reach_start(state.clone(), scroll.on_reach_start.clone(), cx));
+                // A following scroll with one column keeps what is in view in place by the column's children, as children
+                // come and go at either end; another keeps it by how much grew above.
+                let column = match &scroll.children[..] {
+                    [Node::Stack(column)] => Some(column),
+                    _ => None,
+                };
+                let edges = column.filter(|_| scroll.follow_end).map(|column| Edges {
+                    start: scroll.on_reach_start.clone(),
+                    end: scroll.on_reach_end.clone(),
+                    ids: element_ids(column),
+                    tree: self.trees,
+                });
+                let reach = state.as_ref().filter(|_| scroll.follow_end && edges.is_none()).map(|state| Self::reach_start(state.clone(), scroll.on_reach_start.clone(), cx));
                 let mut base = div();
                 if let Some(reach) = reach {
                     base = base.on_children_prepainted(reach);
@@ -1606,10 +1746,10 @@ impl PageView {
                 let before = TEXT_SCALE.with(Cell::get);
                 let scale = scroll.text_scale.unwrap_or(before);
                 TEXT_SCALE.with(|cell| cell.set(scale));
-                // With a place to scroll to or children to track, its one column reports where its children are.
-                let children = match (&scroll.children[..], state.as_ref().filter(|_| watches)) {
-                    ([Node::Stack(column)], Some(state)) => {
-                        let watch = Self::scroll_watch(state.clone(), scroll.scroll_to, scroll.track.clone(), scroll.on_track.clone(), cx);
+                // Following, or with a place to scroll to or children to track, its one column reports where its children are.
+                let children = match (column, state.as_ref().filter(|_| watches || edges.is_some())) {
+                    (Some(column), Some(state)) => {
+                        let watch = Self::scroll_watch(state.clone(), edges, scroll.scroll_to, scroll.track.clone(), scroll.on_track.clone(), cx);
                         vec![self.stack(column, cx).on_children_prepainted(watch).into_any_element()]
                     }
                     _ => self.nodes(&scroll.children, cx),

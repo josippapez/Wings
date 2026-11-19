@@ -1312,8 +1312,11 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         }
         opened(lines)
     };
-    let scenes: [Scene; 70] = [
+    let older = vec!["scroll:up"; 12].join(";");
+    let scenes: [Scene; 71] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
+        // Scrolled up past what the page has room for: older steps come in, the newest go, and a button goes back to them.
+        ("long-older", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, Some(older.as_str()), "Jump to the latest"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
         ("thinking", thinking, None, None, "Thinking"),
@@ -1595,7 +1598,7 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
                 unsafe { std::env::set_var("SHELL", root.join("shell")) };
                 terminal
             });
-            let args = (name == "long").then(|| json!({ "resume": LONG, "cwd": root.canonicalize().unwrap() }));
+            let args = matches!(name, "long" | "long-older").then(|| json!({ "resume": LONG, "cwd": root.canonicalize().unwrap() }));
             let handle = cx
                 .open_offscreen_window(size(px(width), px(760.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, &source, args.as_ref(), cx)))
                 .unwrap();
@@ -1647,6 +1650,14 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
                             cx.simulate_event(window, gpui::MouseMoveEvent { position, pressed_button: None, modifiers: gpui::Modifiers::default() });
                             wait(&mut cx, window, Duration::from_millis(1200));
                         }
+                        // The wheel all the way up or down the conversation.
+                        Some(("scroll", way)) => cx.simulate_event(window, gpui::ScrollEvent {
+                            position: point(px(width / 2.0), px(300.0)),
+                            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(if way == "up" { 100_000.0 } else { -100_000.0 }))),
+                            modifiers: gpui::Modifiers::default(),
+                            touch_phase: gpui::TouchPhase::Moved,
+                            source: Default::default(),
+                        }),
                         Some(("chip", label)) => assert!(handle.read_with(&cx, |view, _| view.press_chip(label)).unwrap()),
                         Some(("press", label)) => assert!(handle.read_with(&cx, |view, _| view.press(label, 0)).unwrap()),
                         // A row of a list that is a button, like a task in the side panel.
