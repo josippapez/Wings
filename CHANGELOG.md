@@ -2,6 +2,21 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.42 · 2026-11-19
+
+- **Updating a plugin keeps your sessions.** Its tabs and sidebars reload in place with the new version, and a Claude chat in the middle of a turn keeps going.
+- **The Changes sidebar shows every file's diff in one scroll**, with unchanged lines folded until you open them, a picker for uncommitted or branch changes, and a button that opens each file in your editor.
+- **The right sidebar holds several pages**, one above the other: Cmd+click a sidebar button to add it below the open one, and drag the line between them.
+- **Claude chat:**
+  - A rail at the left jumps between the messages you sent.
+  - The side panel shows by default, and its header button hides it or shows it at any width.
+  - A subagent opens in the right sidebar beside the chat, with a button to pop it out into a tab.
+  - Each turn that changed files ends with "Edited N files", with Undo and View changes.
+  - File names in Claude's replies open in your editor at the line.
+  - The side panel's Changes count matches the Changes sidebar, new files included, and updates as Claude edits.
+  - A suggested message taken with Tab comes back when you empty the message box.
+- **Folds show what they hold indented under their title**, so a command sits inside "Ran 2 commands" and its output inside the command.
+
 ## 0.2.41 · 2026-11-18
 
 - **Subagents open in a tab of their own** in Claude chat, right after the chat's tab: read what the subagent does as it goes, and message it from there. Back to chat stays at the top.
