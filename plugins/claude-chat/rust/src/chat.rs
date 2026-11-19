@@ -33,7 +33,7 @@ const PROGRAMS: [&str; 2] = ["claude", "claude-rtk"];
 /// How many of the newest items the chat shows at first, and how many more each scroll up to the top adds.
 pub const PAGE: usize = 80;
 /// How many entries of a resumed session's transcript are read back.
-const HISTORY: u32 = 400;
+pub(crate) const HISTORY: u32 = 400;
 /// How many past sessions the list shows.
 const PAST: u32 = 60;
 
@@ -151,7 +151,7 @@ pub struct Chat {
     /// Each request the chat writes gets the next number, for its id.
     requests: u32,
     /// Which start of Claude Code the page shows: one started before it is let go of, and its lines are dropped.
-    run: u32,
+    pub(crate) run: u32,
     /// The folder Claude Code runs in.
     pub cwd: String,
     program: String,
@@ -256,6 +256,10 @@ async fn open() {
         c.program = program;
         c.dirs = dirs;
     });
+    // After an update or restart of the plugin, the Claude Code this tab ran is still going: the chat takes it over.
+    if crate::reattach::take_over(resume.clone()).await {
+        return;
+    }
     launch(resume);
 }
 
@@ -270,29 +274,8 @@ pub fn launch_with(resume: Option<String>, how: Launch) {
         if how.fork {
             c.forked_from = Some(name(c).unwrap_or_else(|| "an earlier session".into()));
         }
-        if let Some(input) = c.input.take() {
-            input.stop();
-        }
-        c.run += 1;
-        composer::forget();
-        c.session = Session::default();
-        c.session.start_mode = prefs::start_mode();
-        c.state = State::Starting;
-        c.shown = PAGE;
-        c.past = None;
-        c.panel = None;
-        c.plugins = None;
-        c.picture = None;
-        c.open_steps.clear();
-        c.open_outputs.clear();
-        c.open_queued.clear();
-        c.drafts.clear();
-        c.task = None;
-        c.fork_from = None;
-        c.fork_ask = false;
-        c.message_to = None;
-        c.moving = false;
-        (c.run, c.cwd.clone(), c.program.clone(), c.session.start_mode.clone(), c.dirs.clone())
+        let run = begin(c);
+        (run, c.cwd.clone(), c.program.clone(), c.session.start_mode.clone(), c.dirs.clone())
     });
     load_files(run, cwd.clone());
     load_git(run, cwd.clone());
@@ -320,54 +303,87 @@ pub fn launch_with(resume: Option<String>, how: Launch) {
         // A fork before a message asks for its rewind as it starts, as the opening requests do: the fork is a new session.
         let opening = Session::opening(start_mode.as_deref()) + &with(|c| fork::opening(&how, &c.session.prompts));
         let process = host::spawn_as(&account, &program, &args, &cwd, &opening, move |line| hear(run, line));
-        let current = with(|c| {
-            if c.run != run {
-                return false;
-            }
-            c.input = Some(process.input());
-            c.state = State::Running;
-            true
-        });
-        if !current {
-            return process.input().stop();
-        }
-        let ended = match process.await {
-            Ok(exit) if exit["code"] == 0 => State::Ended,
-            Ok(exit) => State::Failed(why(&exit)),
-            Err(error) => State::Failed(error),
-        };
-        let moving = with(|c| {
-            if c.run != run {
-                return false;
-            }
-            c.session.stopped_running();
-            c.input = None;
-            if c.moving {
-                return true;
-            }
-            c.state = ended;
-            false
-        });
-        if moving {
-            // The session goes on in a terminal, which the sidebar lists by itself.
-            with(|c| c.agent = None);
-            drop(host::set_agent(None));
-            open_terminal();
-        } else {
-            report_agent();
-        }
+        crate::reattach::started(run, process.input());
+        follow(run, process).await;
     });
 }
 
+/// Starts the chat over for a new start of Claude Code, in place of the one running: the number of that start.
+pub(crate) fn begin(c: &mut Chat) -> u32 {
+    if let Some(input) = c.input.take() {
+        input.stop();
+    }
+    c.run += 1;
+    composer::forget();
+    c.session = Session::default();
+    c.session.start_mode = prefs::start_mode();
+    c.state = State::Starting;
+    c.shown = PAGE;
+    c.past = None;
+    c.panel = None;
+    c.plugins = None;
+    c.picture = None;
+    c.open_steps.clear();
+    c.open_outputs.clear();
+    c.open_queued.clear();
+    c.drafts.clear();
+    c.task = None;
+    c.fork_from = None;
+    c.fork_ask = false;
+    c.message_to = None;
+    c.moving = false;
+    c.run
+}
+
+/// Follows the Claude Code of the start `run` until it ends.
+pub(crate) async fn follow(run: u32, process: host::Process) {
+    let current = with(|c| {
+        if c.run != run {
+            return false;
+        }
+        c.input = Some(process.input());
+        c.state = State::Running;
+        true
+    });
+    if !current {
+        return process.input().stop();
+    }
+    let ended = match process.await {
+        Ok(exit) if exit["code"] == 0 => State::Ended,
+        Ok(exit) => State::Failed(why(&exit)),
+        Err(error) => State::Failed(error),
+    };
+    let moving = with(|c| {
+        if c.run != run {
+            return false;
+        }
+        c.session.stopped_running();
+        c.input = None;
+        if c.moving {
+            return true;
+        }
+        c.state = ended;
+        false
+    });
+    if moving {
+        // The session goes on in a terminal, which the sidebar lists by itself.
+        with(|c| c.agent = None);
+        drop(host::set_agent(None));
+        open_terminal();
+    } else {
+        report_agent();
+    }
+}
+
 /// What the tab keeps for when it opens again: the session, and the folders you added.
-fn save_tab() {
+pub(crate) fn save_tab() {
     let (id, dirs) = with(|c| (c.session.id.clone(), c.dirs.clone()));
     drop(host::call("setTabState", json!({ "state": { "sessionId": id, "dirs": dirs } })));
 }
 
 /// Lists the project's files for @-mentions: git's own list, so ignored files stay out. Done here, not by Claude Code's
 /// file suggestions, because Wings lets the page write to Claude Code only on a click or a key.
-fn load_files(run: u32, cwd: String) {
+pub(crate) fn load_files(run: u32, cwd: String) {
     task::spawn(async move {
         let listed = host::exec_in(&cwd, "git", &["ls-files", "--cached", "--others", "--exclude-standard", "-z"]).await;
         // Not a git folder, or no git: no menu, and nothing to tell.
@@ -383,7 +399,7 @@ fn load_files(run: u32, cwd: String) {
 /// What the working tree changed since the last commit, and the branch, for the side panel. Asked when the chat starts,
 /// when a call that can change files ends, and when a turn ends, not on a timer. One count runs at a time: one asked for
 /// meanwhile runs once after it.
-fn load_git(run: u32, cwd: String) {
+pub(crate) fn load_git(run: u32, cwd: String) {
     let start = with(|c| {
         if c.counting {
             c.count_next = Some((run, cwd.clone()));
@@ -487,7 +503,7 @@ fn why(exit: &Value) -> String {
 }
 
 /// One line Claude Code printed, from the start `run`. The tab keeps the session's id once Claude Code names it.
-fn hear(run: u32, line: &Value) {
+pub(crate) fn hear(run: u32, line: &Value) {
     let (named, alerts, ended) = with(|c| {
         if c.run != run {
             return (None, Vec::new(), false);
@@ -542,6 +558,7 @@ fn hear(run: u32, line: &Value) {
         }
     }
     report_agent();
+    crate::reattach::heard(run, line);
 }
 
 /// Tells the sidebar's Agents what Claude does in this chat, when that changed: it needs you while a question of
@@ -613,6 +630,8 @@ pub(crate) fn write(make: impl FnOnce(&mut Chat, u32) -> Option<String>) {
             with(|c| c.session.items.push(Item::Error(format!("Claude Code didn't get that: {error}"))));
         }
     });
+    // An answer or a queued message is the page's own to know: kept with Claude Code for the page after an update.
+    crate::reattach::sync();
 }
 
 /// Sends the draft as your message, or queues it while Claude works.

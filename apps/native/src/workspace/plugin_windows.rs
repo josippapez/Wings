@@ -1,6 +1,12 @@
 //! Plugin view windows retain their own frame and report focus separately from the workspace.
 use super::Workspace;
-use crate::page::{PageView, plugin::PluginWindow};
+use crate::{
+    installed::Installed,
+    page::{
+        PageView,
+        plugin::{PluginHost, PluginWindow},
+    },
+};
 use gpui::{
     Bounds, Context, Entity, FocusHandle, Focusable, Subscription, Window, WindowBounds,
     WindowOptions, div, prelude::*, px, size,
@@ -33,6 +39,51 @@ impl Render for PluginViewWindow {
     }
 }
 
+impl PluginViewWindow {
+    /// Loads the page from `host`, the plugin's next run after an update or restart, in place of the run `old` it
+    /// showed: the window stays open.
+    pub(super) fn reload(
+        &mut self,
+        host: &PluginHost,
+        old: Option<&PluginHost>,
+        source: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let registered = host.register_window();
+        registered.set_active(window.is_window_active());
+        let opener = host.page(true, registered.id, None, None, source);
+        if let Some(old) = old {
+            self.windows.retain(|registered| !registered.is_of(old));
+        }
+        self.windows.push(registered);
+        self.page.update(cx, |page, cx| page.reload_from(opener, cx));
+    }
+}
+
+/// The page source, title and size of `installed`'s view `id` that opens as a window.
+pub(super) fn window_view(installed: &Installed, id: &str) -> Result<(String, String, (u32, u32)), String> {
+    let plugin = &installed.id;
+    let view = installed
+        .plugin
+        .manifest
+        .contributes
+        .views
+        .iter()
+        .find(|view| view.id == id && view.opens.iter().any(|place| place == "window"))
+        .ok_or_else(|| format!("{plugin} has no window view {id}"))?;
+    let stem = std::path::Path::new(&view.page)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or("The view has no native page")?;
+    let file = crate::installed::frame_file(&installed.plugin.dir, stem)
+        .ok_or("The view has no native window page")?;
+    let source = crate::installed::page_source(&installed.plugin.dir, &file)
+        .map_err(|error| error.to_string())?;
+    let size = (view.width.unwrap_or(1100), view.height.unwrap_or(760));
+    Ok((source, view.title.clone(), size))
+}
+
 impl Workspace {
     pub(super) fn open_plugin_window(
         &mut self,
@@ -53,25 +104,8 @@ impl Workspace {
             .iter()
             .find(|installed| installed.id == plugin)
             .ok_or_else(|| format!("{plugin} is turned off or not installed"))?;
-        let view = installed
-            .plugin
-            .manifest
-            .contributes
-            .views
-            .iter()
-            .find(|view| view.id == id && view.opens.iter().any(|place| place == "window"))
-            .ok_or_else(|| format!("{plugin} has no window view {id}"))?;
-        let stem = std::path::Path::new(&view.page)
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .ok_or("The view has no native page")?;
-        let file = crate::installed::frame_file(&installed.plugin.dir, stem)
-            .ok_or("The view has no native window page")?;
-        let source = crate::installed::page_source(&installed.plugin.dir, &file)
-            .map_err(|error| error.to_string())?;
-        let title = view.title.clone();
-        let (width, height) = (view.width.unwrap_or(1100), view.height.unwrap_or(760));
-        self.show_plugin_window(key, plugin, &source, title, (width, height), cx)
+        let (source, title, size) = window_view(installed, id)?;
+        self.show_plugin_window(key, plugin, &source, title, size, cx)
     }
 
     fn show_plugin_window(

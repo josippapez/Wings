@@ -18,7 +18,7 @@ use super::{
 use crate::{
     installed::fixture::Data,
     page::runtime::{
-        fake::{self, Cx, Hear},
+        fake::{self, Cx, Hear, Pending},
         wasm::MARKER,
     },
 };
@@ -725,6 +725,125 @@ fn turning_a_plugin_off_or_removing_it_stops_its_main_and_closes_its_tabs() {
     assert!(window.read(|w, _| w.plugin_views().is_empty()));
     assert!(!data.paths().dir.join("demo").exists());
     assert!(state(&data).get("demo").is_none());
+}
+
+/// A `.wings-plugin` of `demo` at `version`, whose tab `chat` runs the page `page`, which may run `cat`.
+fn chat_package(version: &str, page: &str) -> Vec<u8> {
+    let manifest = json!({ "id": "demo", "name": "Plugin demo", "version": version, "api": 1, "main": "dist/main.js",
+        "permissions": { "processes": ["cat []"] },
+        "contributes": { "views": [{ "id": "chat", "title": "Chat", "page": "dist/chat.html", "opens": ["tab"], "newTab": true, "multiple": true }] } });
+    // A stand-in's file is what the package ships as the frame's module.
+    let built = |source: &str| std::fs::read(source.strip_prefix(MARKER).unwrap()).unwrap();
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, body) in [
+        ("wings-plugin.json", manifest.to_string().into_bytes()),
+        ("dist/main.js", Vec::new()),
+        ("dist/chat.html", Vec::new()),
+        ("dist/native/main.wasm", built(&fake::idle("main"))),
+        ("dist/native/chat.wasm", built(page)),
+    ] {
+        zip.start_file(name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(&body).unwrap();
+    }
+    zip.finish().unwrap().into_inner()
+}
+
+/// What `demo` keeps under `key`, read where the desktop reads it.
+fn kept(data: &Data, w: &Workspace, key: &str) -> Option<Value> {
+    let scope = w.plugin_env.store.as_ref()?.lock().unwrap().known_storage_scope("demo")?;
+    data.saved("demo", &scope, key)
+}
+
+#[test]
+fn an_update_reloads_a_tab_in_place_and_its_new_page_takes_over_the_program_the_old_one_ran() {
+    let data = Data::temp();
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let project = window.read(|w, _| w.config.project.clone());
+    // The old page runs `cat` and notes it has what it needs of the line it heard.
+    let old = fake::script("chat", move || {
+        let project = project.clone();
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+            Hear::Start => {
+                cx.call("spawn", json!({ "token": "chat", "program": "cat", "args": [], "cwd": project, "input": "hello\n" }));
+            }
+            Hear::Deliver("output", _, line) => {
+                cx.save("old", &json!(line));
+                cx.call("processNote", json!({ "token": "chat", "note": { "from": "old" }, "heard": 1 }));
+            }
+            _ => {}
+        }
+    });
+    // The new page takes over what its tab's page before left running, and writes to it when you click Again.
+    let new = fake::script("chat", || {
+        let mut wait = Pending::default();
+        let mut heard: Vec<String> = Vec::new();
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+            Hear::Start => {
+                let args = cx.link().view_args().map_or(Value::Null, |args| serde_json::from_str(&args).unwrap());
+                cx.save("new-args", &args);
+                cx.render(&json!({ "id": 0, "type": "#root", "props": {}, "children": [
+                    { "id": 2, "type": "Button", "props": { "onClick": "2:onClick" }, "children": [{ "id": 1, "type": "#text", "text": "Again" }] }] }));
+                wait.call(cx, "processes", json!({}), ());
+            }
+            Hear::Event(..) => {
+                cx.call("processWrite", json!({ "token": "mine", "text": "again\n" }));
+            }
+            Hear::Deliver("output", _, line) => {
+                heard.push(line.to_owned());
+                cx.save("new-heard", &json!(heard));
+            }
+            Hear::Deliver(kind, id, text) => {
+                if let Some(((), Ok(left))) = wait.answered(kind, id, text) {
+                    cx.save("new-left", &left);
+                    cx.call("adopt", json!({ "from": left[0]["id"], "token": "mine" }));
+                }
+            }
+        }
+    });
+    install(&mut window, chat_package("1.0.0", &old), github(), None).unwrap();
+    approve(&mut window, "demo");
+    let args = json!({ "session": "s1" });
+    window.update(|w, window, cx| assert!(w.open_plugin_view("demo", "chat", Some(args.clone()), window, cx)));
+    until(&app, &mut window, "the old page never heard its program", |w| kept(&data, w, "old") == Some(json!("hello")));
+    let (tab, state) = window.read(|w, _| (w.plugin_tabs[0].id, w.plugin_tabs[0].state.clone()));
+    let pids = window.read(|w, _| w.plugins[0].host.pids(&state));
+    assert_eq!(pids.len(), 1);
+
+    let view = install(&mut window, chat_package("1.1.0", &new), github(), Some("demo")).unwrap();
+    assert!(view.enabled && view.approved);
+    // The tab stays, with its args, and shows the new page.
+    let tabs = window.read(|w, _| w.plugin_tabs.iter().map(|tab| (tab.id, tab.args.clone())).collect::<Vec<_>>());
+    assert_eq!(tabs, [(tab, Some(args.clone()))]);
+    until(&app, &mut window, "the new page never loaded", |w| kept(&data, w, "new-args") == Some(args.clone()));
+    until(&app, &mut window, "the new page never found the program", |w| kept(&data, w, "new-left").is_some());
+    let left = window.read(|w, _| kept(&data, w, "new-left")).unwrap();
+    assert_eq!((&left[0]["program"], &left[0]["note"]), (&json!("cat"), &json!({ "from": "old" })));
+    // The same program, still running.
+    assert_eq!(window.read(|w, _| w.plugins[0].host.pids(&state)), pids);
+    // Your click lets the new page write to it; it hears the answer, and not the line the old page had.
+    let start = std::time::Instant::now();
+    while !window.update(|w, _, cx| w.plugin_tabs[0].page.read(cx).press("Again", 0)) {
+        assert!(start.elapsed() < Duration::from_secs(15), "the new page never drew its button");
+        app.run_until_parked();
+        window.draw();
+    }
+    until(&app, &mut window, "the new page never heard the program", |w| kept(&data, w, "new-heard") == Some(json!(["again"])));
+
+    // Turned off, the plugin closes the tab and the program stops.
+    window.update(|w, window, cx| {
+        w.set_plugin_enabled("demo", false, None, window, cx).unwrap();
+    });
+    assert!(window.read(|w, _| w.plugin_tabs.is_empty()));
+    #[cfg(unix)]
+    {
+        let start = std::time::Instant::now();
+        // SAFETY: signal 0 only asks whether the process is there.
+        while unsafe { libc::kill(pids[0] as i32, 0) } == 0 {
+            assert!(start.elapsed() < Duration::from_secs(10), "the program kept running after the plugin was turned off");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
 }
 
 fn agent(pane: usize, state: crate::agents::AgentState) -> crate::agents::Agent {

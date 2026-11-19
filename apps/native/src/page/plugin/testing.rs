@@ -456,6 +456,17 @@ impl Rig {
         Caller::start(&self.host).call(method, params)
     }
 
+    /// The plugin's next run, as an update or restart starts it, with the manifest `manifest` adds (this run's without
+    /// one): it takes the programs this run's tabs left running, which its pages have `grace` to take over.
+    pub fn next_run(&self, manifest: Option<Value>, grace: Duration) -> PluginHost {
+        let access = self.host.shared.access.clone().unwrap();
+        let plugin = manifest.map_or(access.plugin, plugin);
+        let config = self.root.config(&plugin.manifest.id);
+        let next = PluginHost::with_access(config, Access { plugin, builtin: access.builtin, env: access.env });
+        next.take_handover_within(self.host.hand_over(), grace);
+        next
+    }
+
     /// The call's error, which the test expects.
     pub fn refuses(&self, method: &str, params: Value) -> String {
         match self.call(method, params) {

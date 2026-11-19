@@ -28,7 +28,7 @@ use wings_plugins::{loading, manifest::Plugin, store::Store};
 use crate::{
     host::PluginPaths,
     page::{
-        plugin::{Access, Env, PluginConfig, PluginHost},
+        plugin::{Access, Env, Handover, PluginConfig, PluginHost},
         runtime::Event,
     },
 };
@@ -226,6 +226,17 @@ pub fn discover_in(store: &Store) -> Vec<Found> {
 /// its manifest grants. A plugin that can't be read or started is skipped with a line on stderr, and so is a page that
 /// can't be read.
 pub fn start(found: Vec<Found>, paths: &PluginPaths, env: &Arc<dyn Env>) -> Vec<Installed> {
+    start_with(found, paths, env, None)
+}
+
+/// `start` for a plugin that was updated or restarted, whose run before handed on the programs its frames left running
+/// (`PluginHost::hand_over`): its new run takes them before its main starts.
+pub fn start_with(
+    found: Vec<Found>,
+    paths: &PluginPaths,
+    env: &Arc<dyn Env>,
+    mut handover: Option<Handover>,
+) -> Vec<Installed> {
     found
         .into_iter()
         .filter_map(|found| {
@@ -251,6 +262,9 @@ pub fn start(found: Vec<Found>, paths: &PluginPaths, env: &Arc<dyn Env>) -> Vec<
                     env: env.clone(),
                 },
             ));
+            if let Some(handover) = handover.take() {
+                host.take_handover(handover);
+            }
             let reported = id.clone();
             host.keep_main(
                 main.into(),

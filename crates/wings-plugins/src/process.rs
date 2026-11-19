@@ -29,8 +29,8 @@ const STOP_GRACE: Duration = Duration::from_secs(3);
 /// `exec`'s checks, and after the words its entry names come only flags, each value joined to its flag
 /// (`--resume=<id>`). A word of its own could be read as a subcommand whatever flag comes before it, like `mcp add` in
 /// `claude --verbose mcp --verbose add`, which changes your Claude setup for good, and a wrapper like `claude-rtk` reads it
-/// the same.
-pub(crate) fn check(plugin: &Plugin, program: &str, args: &[String], cwd: &Path) -> Result<(), String> {
+/// the same. The host checks a program again with a plugin's new manifest when the plugin is updated.
+pub fn check(plugin: &Plugin, program: &str, args: &[String], cwd: &Path) -> Result<(), String> {
     let id = &plugin.manifest.id;
     let Some(named) = allowing_entry(&plugin.manifest.permissions.processes, program, args) else {
         return Err(not_allowed(plugin, program, args));

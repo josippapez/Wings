@@ -142,6 +142,161 @@ fn a_program_runs_only_as_the_manifest_and_the_token_allow() {
     caller.send("processStop", json!({ "token": "chat" }));
 }
 
+// Through an update or restart of the plugin
+
+/// A tab's state, which the pages of one tab share.
+fn tab() -> crate::page::plugin::FrameState {
+    crate::page::plugin::FrameState::new(crate::page::plugin::StatePlace::Tab, None, |_| Ok(()))
+}
+
+/// A script that prints the first line it reads, then `during` once `flag` is there, then what it reads, as `cat`.
+fn waits_for(flag: &std::path::Path, name: &str) -> String {
+    let script = tmp().join(format!("wings-reload-{name}-{}.sh", std::process::id()));
+    let body = format!("read a; echo \"$a\"; while [ ! -f '{}' ]; do sleep 0.05; done; echo during; cat", flag.display());
+    std::fs::write(&script, body).unwrap();
+    script.to_string_lossy().into_owned()
+}
+
+/// A script that runs `cat` and touches `marker` once it has ended.
+fn marks_its_end(marker: &std::path::Path, name: &str) -> String {
+    let _ = std::fs::remove_file(marker);
+    let script = tmp().join(format!("wings-reload-{name}-{}.sh", std::process::id()));
+    std::fs::write(&script, format!("cat; touch '{}'", marker.display())).unwrap();
+    script.to_string_lossy().into_owned()
+}
+
+fn wait_for_file(file: &std::path::Path, what: &str) {
+    let start = Instant::now();
+    while !file.exists() {
+        assert!(start.elapsed() < Duration::from_secs(5), "{what}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// The page of `tab` that started the program `chat` from `script`, once the program reads.
+fn running_in(rig: &Rig, tab: &crate::page::plugin::FrameState, script: &str) -> Caller {
+    let page = Caller::in_tab(&rig.host, tab.clone());
+    page.send("spawn", spawn("chat", "sh", &[script]));
+    page.send_after_click("processWrite", json!({ "token": "chat", "text": "first\n" }));
+    page
+}
+
+#[test]
+fn a_program_goes_on_through_a_reload_and_the_next_page_of_its_tab_takes_it_over() {
+    let flag = tmp().join(format!("wings-reload-flag-{}", std::process::id()));
+    let _ = std::fs::remove_file(&flag);
+    let script = waits_for(&flag, "over");
+    let rig = rig(&[&format!("sh {script}")]);
+    let tab = tab();
+    let before = running_in(&rig, &tab, &script);
+    assert_eq!(hear(&before, 2), (vec!["first".to_owned()], vec![Ok(Value::Null)]));
+    // The page has what it needs of the line it heard, and keeps a note for the page after it.
+    assert_eq!(before.call("processNote", json!({ "token": "chat", "note": { "turn": 1 }, "heard": 1 })), Ok(Value::Null));
+    let next = rig.next_run(None, Duration::from_secs(30));
+    drop(before);
+    // Printed while no page listens.
+    std::fs::write(&flag, "").unwrap();
+    let after = Caller::in_tab(&next, tab.clone());
+    let start = Instant::now();
+    let left = loop {
+        let left = after.call("processes", json!({})).unwrap();
+        if left[0]["kept"] == 1 {
+            break left[0].clone();
+        }
+        assert!(start.elapsed() < Duration::from_secs(5), "the program's line never was kept: {left}");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!((&left["token"], &left["program"], &left["note"]), (&json!("chat"), &json!("sh"), &json!({ "turn": 1 })));
+    after.send("adopt", json!({ "from": left["id"], "token": "mine" }));
+    // What came while it reloaded, and not what the page before had.
+    assert_eq!(hear(&after, 1).0, ["during"]);
+    // Taking it over is no write: writing still needs your click.
+    let unasked = json!({ "token": "mine", "text": "x\n" });
+    assert_eq!(after.call("processWrite", unasked), Err("A page can write to a program only right after you click or type in it".into()));
+    after.send_after_click("processWrite", json!({ "token": "mine", "text": "again\n" }));
+    assert_eq!(hear(&after, 2), (vec!["again".to_owned()], vec![Ok(Value::Null)]));
+    after.send("processStop", json!({ "token": "mine" }));
+    assert_eq!(hear(&after, 2).1, [Ok(Value::Null), Ok(json!({ "code": 0, "stderr": "" }))]);
+    std::fs::remove_file(&flag).unwrap();
+    std::fs::remove_file(&script).unwrap();
+}
+
+#[test]
+fn only_the_next_page_of_its_own_tab_can_take_a_program_over() {
+    let rig = rig(&["cat []"]);
+    let (tab, other) = (tab(), tab());
+    let before = Caller::in_tab(&rig.host, tab.clone());
+    before.send("spawn", spawn("chat", "cat", &[]));
+    before.send_after_click("processWrite", json!({ "token": "chat", "text": "ready\n" }));
+    hear(&before, 2);
+    let next = rig.next_run(None, Duration::from_secs(30));
+    drop(before);
+    let elsewhere = Caller::in_tab(&next, other);
+    assert_eq!(elsewhere.call("processes", json!({})), Ok(json!([])));
+    let own = Caller::in_tab(&next, tab.clone());
+    let id = own.call("processes", json!({})).unwrap()[0]["id"].clone();
+    let refused = format!("No program was left running as {} for this page", id.as_str().unwrap());
+    assert_eq!(elsewhere.call("adopt", json!({ "from": id, "token": "theirs" })), Err(refused.clone()));
+    // A page in no tab, and a page of the run before, find none either.
+    assert_eq!(Caller::start(&next).call("adopt", json!({ "from": id, "token": "theirs" })), Err(refused));
+    assert_eq!(Caller::in_tab(&rig.host, tab.clone()).call("processes", json!({})), Ok(json!([])));
+    own.send("adopt", json!({ "from": id, "token": "mine" }));
+    own.send_after_click("processWrite", json!({ "token": "mine", "text": "hi\n" }));
+    // Nothing was noted, so it hears the line its tab's page before heard too.
+    assert_eq!(hear(&own, 3), (vec!["ready".to_owned(), "hi".to_owned()], vec![Ok(Value::Null)]));
+    assert_eq!(own.call("processes", json!({})), Ok(json!([])), "it was taken over");
+    own.send("processStop", json!({ "token": "mine" }));
+}
+
+#[test]
+fn turning_the_plugin_off_stops_the_programs_its_tabs_left_running() {
+    let marker = tmp().join(format!("wings-reload-off-{}", std::process::id()));
+    let script = marks_its_end(&marker, "off");
+    let rig = rig(&[&format!("sh {script}")]);
+    let before = running_in(&rig, &tab(), &script);
+    hear(&before, 2);
+    let next = rig.next_run(None, Duration::from_secs(30));
+    drop(before);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!marker.exists(), "it waits for a page to take it over");
+    drop(next);
+    wait_for_file(&marker, "the program kept running after the plugin was turned off");
+    std::fs::remove_file(&marker).unwrap();
+    std::fs::remove_file(&script).unwrap();
+}
+
+#[test]
+fn a_program_no_page_takes_over_stops_after_the_grace_time() {
+    let marker = tmp().join(format!("wings-reload-grace-{}", std::process::id()));
+    let script = marks_its_end(&marker, "grace");
+    let rig = rig(&[&format!("sh {script}")]);
+    let tab = tab();
+    let before = running_in(&rig, &tab, &script);
+    hear(&before, 2);
+    let next = rig.next_run(None, Duration::from_millis(200));
+    drop(before);
+    wait_for_file(&marker, "the program kept running though no page took it over");
+    assert_eq!(Caller::in_tab(&next, tab).call("processes", json!({})), Ok(json!([])));
+    std::fs::remove_file(&marker).unwrap();
+    std::fs::remove_file(&script).unwrap();
+}
+
+#[test]
+fn a_program_the_new_version_does_not_allow_stops_at_once() {
+    let marker = tmp().join(format!("wings-reload-denied-{}", std::process::id()));
+    let script = marks_its_end(&marker, "denied");
+    let rig = rig(&[&format!("sh {script}")]);
+    let tab = tab();
+    let before = running_in(&rig, &tab, &script);
+    hear(&before, 2);
+    let next = rig.next_run(Some(json!({ "permissions": { "processes": ["cat []"] } })), Duration::from_secs(30));
+    drop(before);
+    wait_for_file(&marker, "the program the new version doesn't allow kept running");
+    assert_eq!(Caller::in_tab(&next, tab).call("processes", json!({})), Ok(json!([])));
+    std::fs::remove_file(&marker).unwrap();
+    std::fs::remove_file(&script).unwrap();
+}
+
 const SESSION: &str = "11111111-2222-4333-8444-555555555555";
 
 /// Prints the account folder the program runs under.

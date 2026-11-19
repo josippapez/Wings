@@ -18,7 +18,7 @@ use wings_plugins::store::{
     self, Available, Grant, Linked, PluginView, SecretScope, Source, Store,
 };
 
-use crate::{installed, markdown};
+use crate::{installed, markdown, page::plugin::PluginHost};
 
 use super::{Active, Workspace, settings::Section};
 
@@ -333,18 +333,30 @@ impl Workspace {
     }
 
     /// Stops the plugin if it runs, then starts what the store says may run of it now, and tells Claude Code's sessions
-    /// its tools may have changed.
+    /// its tools may have changed. A plugin that runs on, updated or restarted, keeps its tabs, sidebars and windows
+    /// where they are and loads its new code into them, and the programs they run go on into it. One that is turned off,
+    /// removed, or waits for you to approve what it now asks for closes everything of its own.
     pub(super) fn restart_plugin(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let settings_shown = self.settings_plugin() == Some(id);
-        let had_blocks = self.stop_plugin(id, window, cx);
-        let started = match (&self.config.plugins, &self.plugin_env.store) {
-            (Some(paths), Some(store)) => {
-                let found: Vec<_> = installed::discover_in(&store.lock().unwrap())
-                    .into_iter()
-                    .filter(|found| found.id == id)
-                    .collect();
+        let found: Vec<_> = match (&self.config.plugins, &self.plugin_env.store) {
+            (Some(_), Some(store)) => installed::discover_in(&store.lock().unwrap())
+                .into_iter()
+                .filter(|found| found.id == id)
+                .collect(),
+            _ => Vec::new(),
+        };
+        let old = self
+            .plugins
+            .iter()
+            .find(|installed| installed.id == id)
+            .map(|installed| installed.host.clone());
+        let in_place = old.is_some() && !found.is_empty();
+        let handover = old.as_ref().filter(|_| in_place).map(|host| host.hand_over());
+        let had_blocks = self.stop_plugin(id, in_place, window, cx);
+        let started = match &self.config.plugins {
+            Some(paths) if !found.is_empty() => {
                 let env: Arc<dyn crate::page::plugin::Env> = self.plugin_env.clone();
-                installed::start(found, paths, &env)
+                installed::start_with(found, paths, &env, handover)
             }
             _ => Vec::new(),
         };
@@ -355,6 +367,11 @@ impl Workspace {
         self.plugins.extend(started);
         self.plugins
             .sort_by_key(|installed| installed.name.to_lowercase());
+        if in_place {
+            self.reload_plugin_pages(id, old.as_deref(), window, cx);
+        }
+        // The run before goes now, once none of its pages shows.
+        drop(old);
         // Its settings page loads again, as the desktop's does when the plugin restarts.
         if settings_shown && let Some(section) = self.plugin_settings_page(id, cx) {
             self.set_settings_section(section, cx);
@@ -362,11 +379,52 @@ impl Workspace {
         self.after_plugins_changed(had_blocks || has_blocks, cx);
     }
 
-    /// Closes everything of the plugin's that shows, in every project, and drops its main. Whether it had blocks.
-    fn stop_plugin(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    /// Closes everything of the plugin's that shows, in every project, but with `keep_pages` its tabs, sidebars and
+    /// windows, which its next run loads into (`reload_plugin_pages`), and drops its main. Whether it had blocks.
+    fn stop_plugin(&mut self, id: &str, keep_pages: bool, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(at) = self.plugins.iter().position(|installed| installed.id == id) else {
             return false;
         };
+        if !keep_pages {
+            self.close_plugin_pages(id, window, cx);
+        }
+        // Settings shows Plugins instead of its page, as the desktop's does for a plugin that isn't on.
+        if self.settings_plugin() == Some(id) {
+            self.set_settings_section(Section::Plugins, cx);
+        }
+        if self
+            .plugin_ui
+            .diff
+            .as_ref()
+            .is_some_and(|(viewer, _)| viewer.read(cx).view.plugin_id == id)
+        {
+            self.close_diff_view(window, cx);
+        }
+        for shown in self.plugin_ui.badges.values_mut() {
+            shown.remove(id);
+        }
+        self.plugin_ui.badges.retain(|_, shown| !shown.is_empty());
+        for shown in self.plugin_ui.statuses.values_mut() {
+            shown.remove(id);
+        }
+        self.plugin_ui.statuses.retain(|_, shown| !shown.is_empty());
+        self.plugin_ui.labels.retain(|(plugin, _), _| plugin != id);
+        self.plugin_ui.popover.forget(id);
+        if self
+            .badge_card
+            .as_ref()
+            .is_some_and(|card| card.plugin == id)
+        {
+            self.badge_card = None;
+        }
+        self.sections.forget_plugin(id);
+        self.plugin_env.running.remove(id);
+        let stopped = self.plugins.remove(at);
+        !stopped.plugin.manifest.contributes.blocks.is_empty()
+    }
+
+    /// Closes the plugin's tabs in every project, its sidebars and its windows.
+    fn close_plugin_pages(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         while let Some(index) = self.plugin_tabs.iter().position(|tab| tab.plugin == id) {
             self.close_plugin_tab(index, window, cx);
         }
@@ -398,10 +456,6 @@ impl Workspace {
         }
         self.right.remove_plugin(id);
         self.sidebar_pages.retain(|(plugin, _), _| plugin != id);
-        // Settings shows Plugins instead of its page, as the desktop's does for a plugin that isn't on.
-        if self.settings_plugin() == Some(id) {
-            self.set_settings_section(Section::Plugins, cx);
-        }
         let windows: Vec<_> = self
             .plugin_ui
             .windows
@@ -414,35 +468,85 @@ impl Workspace {
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
             }
         }
-        if self
+    }
+
+    /// Loads the plugin's new run into each of its pages that shows, where it shows, in place of the run `old`: a tab
+    /// keeps its place, args and saved state, and its page finds the programs its page before left running. A page the
+    /// plugin no longer has closes, and so does every one when it didn't start again.
+    fn reload_plugin_pages(&mut self, id: &str, old: Option<&PluginHost>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(installed) = self.plugins.iter().find(|installed| installed.id == id) else {
+            return self.close_plugin_pages(id, window, cx);
+        };
+        let host = installed.host.clone();
+        let pages: HashMap<String, Arc<str>> =
+            installed.pages.iter().map(|page| (page.id.clone(), page.source.clone())).collect();
+        let sidebars: HashMap<String, Arc<str>> =
+            installed.sidebars.iter().map(|page| (page.id.clone(), page.source.clone())).collect();
+        let window_pages: HashMap<(String, String), String> = self
             .plugin_ui
-            .diff
-            .as_ref()
-            .is_some_and(|(viewer, _)| viewer.read(cx).view.plugin_id == id)
-        {
-            self.close_diff_view(window, cx);
+            .windows
+            .keys()
+            .filter(|(plugin, _)| plugin == id)
+            .filter_map(|key| Some((key.clone(), super::plugin_windows::window_view(installed, &key.1).ok()?.0)))
+            .collect();
+        let reload = |tab: &super::plugins::PluginTab, cx: &mut Context<Self>| {
+            let Some(source) = pages.get(&tab.view) else {
+                return false;
+            };
+            let opener = host.page(false, 0, tab.args.as_ref(), Some(tab.state.clone()), source);
+            tab.page.update(cx, |page, cx| page.reload_from(opener, cx));
+            true
+        };
+        let gone: Vec<usize> = self
+            .plugin_tabs
+            .iter()
+            .chain(self.parked.values().flat_map(|parked| parked.plugin_tabs.iter()))
+            .filter(|tab| tab.plugin == id && !reload(tab, cx))
+            .map(|tab| tab.id)
+            .collect();
+        for tab in &gone {
+            if let Some(index) = self.plugin_tabs.iter().position(|open| open.id == *tab) {
+                self.close_plugin_tab(index, window, cx);
+            } else {
+                self.release_page_terminals(*tab, cx);
+            }
         }
-        for shown in self.plugin_ui.badges.values_mut() {
-            shown.remove(id);
+        let no_sidebar = |key: &(String, String)| key.0 == id && !sidebars.contains_key(&key.1);
+        for parked in self.parked.values_mut() {
+            parked.plugin_tabs.retain(|tab| !gone.contains(&tab.id));
+            if let Some(right) = &mut parked.right {
+                right.remove_where(no_sidebar);
+            }
+            if matches!(parked.active, Active::Plugin(tab) if gone.contains(&tab)) {
+                parked.active = parked
+                    .terminals
+                    .first()
+                    .map_or(Active::Issues, |tab| Active::Terminal(tab.id));
+            }
         }
-        self.plugin_ui.badges.retain(|_, shown| !shown.is_empty());
-        for shown in self.plugin_ui.statuses.values_mut() {
-            shown.remove(id);
+        self.right.remove_where(no_sidebar);
+        self.sidebar_pages.retain(|key, _| !no_sidebar(key));
+        for (key, page) in self.sidebar_pages.iter().filter(|(key, _)| key.0 == id) {
+            let opener = host.page(false, 0, None, None, &sidebars[&key.1]);
+            page.update(cx, |page, cx| page.reload_from(opener, cx));
         }
-        self.plugin_ui.statuses.retain(|_, shown| !shown.is_empty());
-        self.plugin_ui.labels.retain(|(plugin, _), _| plugin != id);
-        self.plugin_ui.popover.forget(id);
-        if self
-            .badge_card
-            .as_ref()
-            .is_some_and(|card| card.plugin == id)
-        {
-            self.badge_card = None;
+        let windows: Vec<_> = self
+            .plugin_ui
+            .windows
+            .iter()
+            .filter(|((plugin, _), _)| plugin == id)
+            .map(|(key, handle)| (key.clone(), *handle))
+            .collect();
+        for (key, handle) in windows {
+            let reloaded = window_pages.get(&key).is_some_and(|source| {
+                handle.update(cx, |view, window, cx| view.reload(&host, old, source, window, cx)).is_ok()
+            });
+            if !reloaded {
+                self.plugin_ui.windows.remove(&key);
+                let _ = handle.update(cx, |_, window, _| window.remove_window());
+            }
         }
-        self.sections.forget_plugin(id);
-        self.plugin_env.running.remove(id);
-        let stopped = self.plugins.remove(at);
-        !stopped.plugin.manifest.contributes.blocks.is_empty()
+        self.sync_plugin_visibility(cx);
     }
 
     /// What every start or stop changes besides the plugin's own things: who reads transcripts, the project page's

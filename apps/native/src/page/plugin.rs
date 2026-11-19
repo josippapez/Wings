@@ -50,6 +50,7 @@ mod pick;
 mod process;
 mod state;
 pub use pick::{MAX_IMAGE_BYTES, picked_images};
+pub use process::Handover;
 pub use state::{FrameState, StatePlace, TabAgent};
 #[cfg(test)]
 mod focus_tests;
@@ -80,6 +81,11 @@ pub struct PluginWindow {
 impl PluginWindow {
     pub fn set_active(&self, active: bool) {
         self.shared.window_focus(self.id, Some(active));
+    }
+
+    /// Whether it was registered with `host`.
+    pub fn is_of(&self, host: &PluginHost) -> bool {
+        Arc::ptr_eq(&self.shared, &host.shared)
     }
 }
 
@@ -162,7 +168,10 @@ struct Shared {
     next_diff: AtomicU64,
     scans: Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>>,
     /// The programs the frames keep running, by token (see `process`).
-    processes: Mutex<HashMap<String, Arc<wings_plugins::process::Process>>>,
+    processes: Mutex<HashMap<String, Arc<process::Running>>>,
+    /// The programs the plugin's run before this one left running, until a frame takes them over.
+    orphans: Mutex<Vec<process::Orphan>>,
+    next_orphan: AtomicU64,
     /// The names the pages took, and the writes handed between them (see `pages`).
     pages: Mutex<pages::Pages>,
 }
@@ -449,7 +458,7 @@ impl Link for FrameLink {
         // A scan or a program is named by a token of the frame's, which only that frame can reach.
         let owner = match method {
             "diskFind" | "diskUsage" | "diskUsageCancel" => Some("A scan"),
-            "spawn" | "processWrite" | "processStop" => Some("A program"),
+            "spawn" | "processWrite" | "processStop" | "processNote" | "adopt" => Some("A program"),
             _ => None,
         };
         if let Some(owner) = owner {
@@ -463,7 +472,22 @@ impl Link for FrameLink {
             let token = format!("{}:{token}", self.id);
             params["token"] = token.into();
         }
+        if process::CALLS.contains(&method) {
+            return self.shared.process_call(self.place(), method, params, reply);
+        }
         self.shared.call(method, params, reply)
+    }
+}
+
+impl FrameLink {
+    /// Where the frame runs, which the programs it starts stay with through an update or restart of the plugin: main,
+    /// or the tab or block that holds its state. A page without state has none, and its programs stop with it.
+    fn place(&self) -> Option<process::Place> {
+        match (self.role, &self.state) {
+            (Role::Main, _) => Some(process::Place::Main),
+            (Role::Page, Some(state)) => Some(process::Place::Page(state.clone())),
+            (Role::Page, None) => None,
+        }
     }
 }
 
@@ -655,6 +679,8 @@ impl PluginHost {
                 next_diff: AtomicU64::new(1),
                 scans: Mutex::default(),
                 processes: Mutex::default(),
+                orphans: Mutex::default(),
+                next_orphan: AtomicU64::new(0),
                 pages: Mutex::default(),
             }),
             main: Mutex::default(),
@@ -895,16 +921,26 @@ impl PluginHost {
     /// The process ids of the programs `spawn` started for the page that holds `state`, while they run: a call from one
     /// of them comes from that page.
     pub fn pids(&self, state: &FrameState) -> Vec<u32> {
-        let Some(frame) = state.frame() else {
-            return Vec::new();
-        };
-        let prefix = format!("{frame}:");
-        let processes = self.shared.processes.lock().unwrap();
-        processes
-            .iter()
-            .filter(|(token, _)| token.starts_with(&prefix))
-            .filter_map(|(_, process)| process.pid())
-            .collect()
+        self.shared.pids(state.frame(), &process::Place::Page(state.clone()))
+    }
+
+    /// The programs of the plugin's tabs and main, for its next run to take over (`take_handover`), as an update or a
+    /// restart of the plugin hands them on. They no longer reach the frames that started them.
+    pub fn hand_over(&self) -> Handover {
+        self.shared.hand_over()
+    }
+
+    /// Takes the programs of the plugin's run before this one that this run's manifest allows: the frame that runs next
+    /// where each one's frame ran may take it over (`processes`, `adopt`) in `process::GRACE`, after which it is stopped.
+    /// The rest are stopped now.
+    pub fn take_handover(&self, handover: Handover) {
+        self.shared.take_handover(handover, process::GRACE);
+    }
+
+    /// `take_handover` with a shorter wait, for tests.
+    #[cfg(test)]
+    pub(crate) fn take_handover_within(&self, handover: Handover, grace: Duration) {
+        self.shared.take_handover(handover, grace);
     }
 
     /// How many frames the plugin has open, its main included: a frame leaves when what holds it is let go of.
@@ -1144,6 +1180,7 @@ impl Drop for PluginHost {
             flag.store(true, Ordering::Relaxed);
         }
         self.shared.stop_processes("");
+        self.shared.stop_left(true);
         self.shared.fail_actions("The plugin was turned off");
         self.shared.fail_tools(&format!(
             "{} was turned off in Wings",

@@ -429,9 +429,6 @@ impl Shared {
             "exec" => {
                 self.off_thread(reply, move |reply| this.exec(&access, &params, reply));
             }
-            "spawn" | "processWrite" | "processStop" => {
-                self.process_call(method, params, reply, access)
-            }
             "pastSessions" => self.off_thread(reply, move |_| this.past_sessions(&access, &params)),
             "transcript" => {
                 self.off_thread(reply, move |_| transcript(&access, &params));

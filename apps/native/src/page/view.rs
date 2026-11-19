@@ -233,6 +233,13 @@ impl PageView {
         self.stopped
     }
 
+    /// Loads the page from `source`, its plugin's next run after an update or restart: it stays where it shows, and
+    /// starts over with the new code.
+    pub fn reload_from(&mut self, source: PageOpener, cx: &mut Context<Self>) {
+        self.source = source;
+        self.reload(cx);
+    }
+
     /// Starts a stopped page again now, as the Reload by its error does.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         self._restart = None;

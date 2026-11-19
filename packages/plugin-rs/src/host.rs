@@ -802,6 +802,61 @@ impl ProcessInput {
     pub fn stop(&self) {
         drop(call("processStop", json!({ "token": self.0 })));
     }
+
+    /// `wings.processNote`: keeps `note` (up to 1 MB of JSON) with the program, for the page that takes it over after an
+    /// update or restart of the plugin (`processes`). With `heard`, the number of lines this page has heard of it, it has
+    /// what it needs of those lines: Wings lets go of them, and the page that takes it over hears only the ones after.
+    /// Until then Wings keeps what the program printed, up to 16 MB. Not a write. Needs Wings 0.2.42.
+    pub fn note(&self, note: &Value, heard: Option<u64>) {
+        drop(call("processNote", json!({ "token": self.0, "note": note, "heard": heard })));
+    }
+}
+
+/// A program the page before this one, in the same tab (or the main before this one), left running when the plugin was
+/// updated or restarted.
+pub struct Left {
+    /// What `adopt` takes it over by.
+    pub id: String,
+    pub program: String,
+    pub args: Vec<String>,
+    pub cwd: String,
+    /// What that page kept with it (`ProcessInput::note`), or null.
+    pub note: Value,
+    /// How many lines it printed past that page's note, which the page that takes it over hears first.
+    pub kept: u64,
+}
+
+/// `wings.processes`: the programs this page's tab ran when the plugin was updated or restarted, which Wings kept
+/// running for this page to take over with `adopt`. Wings stops each one no page takes over within 30 s, and one the
+/// new version's manifest no longer allows. Empty for a page that didn't load in place of another. Needs Wings 0.2.42.
+pub async fn processes() -> Result<Vec<Left>, String> {
+    let listed = call("processes", json!({})).await?;
+    let text = |value: &Value| value.as_str().unwrap_or_default().to_owned();
+    Ok(listed
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|left| Left {
+            id: text(&left["id"]),
+            program: text(&left["program"]),
+            args: left["args"].as_array().into_iter().flatten().map(text).collect(),
+            cwd: text(&left["cwd"]),
+            note: left["note"].clone(),
+            kept: left["kept"].as_u64().unwrap_or(0),
+        })
+        .collect())
+}
+
+/// `wings.adopt`: takes over the program `left` (a `Left`'s id), which is then this page's as if it had spawned it.
+/// `on_line` hears the lines `kept` names first, in order, then each new one; when Wings let go of some of them for
+/// room, a line `{"wingsDropped": n}` comes before them. It resolves when the program ends. Taking it over writes
+/// nothing to it. Needs Wings 0.2.42.
+pub fn adopt(left: &str, on_line: impl Fn(&Value) + 'static) -> Process {
+    let id = next_id();
+    let token = format!("process-{id}");
+    OUTPUTS.with(|outputs| outputs.borrow_mut().insert(id, Rc::new(on_line)));
+    let answer = call_as(id, "adopt", json!({ "from": left, "token": token }));
+    Process { input: ProcessInput(token), answer }
 }
 
 /// `wings.spawn`: runs a program the manifest's `processes` lists, in the folder `cwd`, which has to be in one of your
@@ -900,6 +955,24 @@ mod tests {
         drop(exec_as(&Account::of_session(None), "/repo", "claude", &["plugin", "list"], None));
         let sent: Vec<Value> = calls.borrow().iter().map(|(_, params)| params["account"].clone()).collect();
         assert_eq!(sent, [Value::Null, json!({ "session": "s1" }), json!({ "session": null })]);
+    }
+
+    #[test]
+    fn a_page_takes_over_a_program_it_was_left_by_its_id_under_a_token_of_its_own() {
+        testing::answer(|method, params| match method {
+            "processes" => Ok(json!([{ "id": "left-0", "token": "process-3", "program": "claude", "args": ["-p"], "cwd": "/repo", "note": { "cut": "u1" }, "kept": 2 }])),
+            _ => Ok(params.clone()),
+        });
+        let left = block_on(processes()).unwrap();
+        assert_eq!((left[0].id.as_str(), left[0].args.as_slice(), left[0].kept), ("left-0", &["-p".to_owned()][..], 2));
+        assert_eq!(left[0].note, json!({ "cut": "u1" }));
+        let calls = record(&[]);
+        let taken = adopt(&left[0].id, |_| {});
+        taken.input().note(&json!({ "cut": "u2" }), Some(5));
+        let sent: Vec<(String, Value)> = calls.borrow().clone();
+        let token = sent[0].1["token"].clone();
+        assert_eq!(sent[0], ("adopt".to_owned(), json!({ "from": "left-0", "token": token })));
+        assert_eq!(sent[1], ("processNote".to_owned(), json!({ "token": token, "note": { "cut": "u2" }, "heard": 5 })));
     }
 
     #[test]

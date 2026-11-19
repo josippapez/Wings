@@ -49,6 +49,8 @@ mod plugins_view;
 mod prefs;
 #[cfg(feature = "chat")]
 mod rail;
+#[cfg(any(feature = "chat", test))]
+mod reattach;
 #[cfg(feature = "chat")]
 mod rewind_view;
 mod session;
