@@ -82,6 +82,16 @@ impl Node {
 thread_local! {
     static HANDLERS: RefCell<HashMap<String, Handler>> = RefCell::new(HashMap::new());
     static FILL: Cell<bool> = const { Cell::new(false) };
+    static PALETTE: RefCell<Option<Value>> = const { RefCell::new(None) };
+}
+
+/// Paints the page in `colors` in place of the app's, from its next render: each of `base` (under a floating pane),
+/// `page`, `dialog`, `popover`, `text`,
+/// `muted`, `info`, `danger`, `done` and `working` as `#rrggbb`, and `ground`, what the page lies on, as
+/// `{ "from": "#rrggbb", "to": "#rrggbb", "angle": degrees }`. A role left out keeps the app's colour. None gives the
+/// app's palette back. Needs Wings 0.2.52.
+pub fn palette(colors: Option<Value>) {
+    PALETTE.with(|palette| *palette.borrow_mut() = colors);
 }
 
 /// Has the page laid out edge to edge with no padding round it, as `showTab(element, { fill: true })` does.
@@ -134,7 +144,10 @@ pub(crate) fn render(page: Vec<Node>) -> String {
     let mut handlers = HashMap::new();
     let children = build(page.into_iter().map(Child::Node).collect(), 0, &mut handlers);
     HANDLERS.with(|slot| *slot.borrow_mut() = handlers);
-    let props = if FILL.with(Cell::get) { json!({ "fill": true }) } else { json!({}) };
+    let mut props = if FILL.with(Cell::get) { json!({ "fill": true }) } else { json!({}) };
+    if let Some(palette) = PALETTE.with(|palette| palette.borrow().clone()) {
+        props["palette"] = palette;
+    }
     json!({ "id": 0, "type": "#root", "props": props, "children": children }).to_string()
 }
 

@@ -4,15 +4,17 @@
 //! click, and a search goes over them all. Its Discover view lists the plugins your marketplaces offer, each with an
 //! Install button.
 
+use std::collections::BTreeSet;
+
 use wings_plugin::{
     format::plural,
     host, task,
-    ui::{Node, badge, button, card, checkbox, chips, dialog as panel, empty, heading, loading, muted, notice, row, search_field, stack, text, title},
+    ui::{Node, badge, button, card, checkbox, chips, dialog as panel, disclosure, empty, heading, loading, muted, notice, row, search_field, stack, text, title},
 };
 
 use crate::{
     chat::{self, Chat},
-    plugins::{Auth, Available, Dialog, Discover, Plugin, Server, Show, Tab, install_outcome, skills},
+    plugins::{Auth, Available, Dialog, Discover, Plugin, Server, Show, Tab, Tool, install_outcome, skills},
 };
 
 const WIDTH: u32 = 640;
@@ -20,6 +22,12 @@ const WIDTH: u32 = 640;
 const INSTALL_MS: u32 = 120_000;
 /// The most nodes the dialog sends: the conversation under it may take 3,500 of the 5,000 a page may draw.
 const BUDGET: usize = 1_000;
+/// A scope with more servers than this that need a sign-in folds them under one line.
+const FOLD_SIGN_IN: usize = 8;
+/// Width of the checkbox, which what sits under a server's name is set in by.
+const CHECKBOX: u32 = 24;
+/// How far a fold's trigger sets its chevron in.
+const FOLD_PADDING: u32 = 6;
 
 pub fn dialog(c: &Chat) -> Option<Node> {
     let open = c.plugins.as_ref()?;
@@ -52,7 +60,7 @@ pub fn dialog(c: &Chat) -> Option<Node> {
         Some(discover(open))
     } else {
         match (&plugins.list, &plugins.servers) {
-            (Some(list), Some(servers)) => Some(lists(c, &open.query, open.show, list, servers)),
+            (Some(list), Some(servers)) => Some(lists(c, open, list, servers)),
             _ if plugins.error.is_some() => None,
             _ => Some(loading()),
         }
@@ -123,7 +131,8 @@ impl Budget {
     }
 }
 
-fn lists(c: &Chat, query: &str, show: Show, list: &[Plugin], servers: &[Server]) -> Node {
+fn lists(c: &Chat, open: &Dialog, list: &[Plugin], servers: &[Server]) -> Node {
+    let (query, show, unfolded) = (open.query.as_str(), open.show, &open.unfolded);
     if list.is_empty() && servers.is_empty() {
         return empty("No plugins or MCP servers", "Claude Code has none set up here. Install plugins with /plugin in a terminal.");
     }
@@ -131,8 +140,8 @@ fn lists(c: &Chat, query: &str, show: Show, list: &[Plugin], servers: &[Server])
     let found = |name: &str| name.to_lowercase().contains(&wanted);
     let mut budget = Budget::default();
     let sections: Vec<Node> = match show {
-        Show::Plugins => [plugin_section(&mut budget, c, list, servers, &found), server_section(&mut budget, servers, &found)],
-        Show::Mcp => [server_section(&mut budget, servers, &found), plugin_section(&mut budget, c, list, servers, &found)],
+        Show::Plugins => [plugin_section(&mut budget, c, unfolded, list, servers, &found), server_section(&mut budget, unfolded, servers, &found, wanted.is_empty())],
+        Show::Mcp => [server_section(&mut budget, unfolded, servers, &found, wanted.is_empty()), plugin_section(&mut budget, c, unfolded, list, servers, &found)],
     }
     .into_iter()
     .flatten()
@@ -155,22 +164,23 @@ fn section(title: &str, groups: Vec<(&str, Vec<Node>)>) -> Option<Node> {
 }
 
 /// The plugins by the settings that decide them, as Claude Code groups them, each with its servers under it.
-fn plugin_section(budget: &mut Budget, c: &Chat, list: &[Plugin], servers: &[Server], found: &dyn Fn(&str) -> bool) -> Option<Node> {
+fn plugin_section(budget: &mut Budget, c: &Chat, unfolded: &BTreeSet<String>, list: &[Plugin], servers: &[Server], found: &dyn Fn(&str) -> bool) -> Option<Node> {
     let mut groups = Vec::new();
     for scope in ["User", "Project", "Local", "Managed", "Session"] {
         let mut rows = Vec::new();
         for plugin in list.iter().filter(|plugin| plugin.scope == scope) {
             let itself = found(&plugin.name) || found(&plugin.marketplace);
-            let own: Vec<&Server> = servers
+            let mut own: Vec<&Server> = servers
                 .iter()
                 .filter(|server| server.of_plugin().is_some_and(|(of, _)| of == plugin.name) && (itself || found(server.short_name())))
                 .collect();
+            own.sort_by_key(|server| server.rank());
             if !itself && own.is_empty() {
                 continue;
             }
             rows.extend(budget.take(plugin_row(plugin, skills(&c.session.commands, &plugin.name))));
             for server in own {
-                rows.extend(budget.take(server_row(server, true)));
+                rows.extend(budget.take(server_row(server, true, unfolded)));
             }
         }
         groups.push((scope, rows));
@@ -179,7 +189,9 @@ fn plugin_section(budget: &mut Budget, c: &Chat, list: &[Plugin], servers: &[Ser
 }
 
 /// The servers that aren't a plugin's, by where they are set up: yours, the project's, the local ones and claude.ai's.
-fn server_section(budget: &mut Budget, servers: &[Server], found: &dyn Fn(&str) -> bool) -> Option<Node> {
+/// Each scope lists them connected first, and folds the ones that need a sign-in when there are many, unless a search
+/// has already cut the list down (`fold` is false then).
+fn server_section(budget: &mut Budget, unfolded: &BTreeSet<String>, servers: &[Server], found: &dyn Fn(&str) -> bool, fold: bool) -> Option<Node> {
     let own: Vec<&Server> = servers.iter().filter(|server| server.of_plugin().is_none() && found(&server.name)).collect();
     let mut scopes: Vec<&str> = Vec::new();
     for server in &own {
@@ -197,10 +209,37 @@ fn server_section(budget: &mut Budget, servers: &[Server], found: &dyn Fn(&str) 
             "claudeai" => "claude.ai",
             other => other,
         };
-        let rows: Vec<Node> = own.iter().filter(|server| server.scope == scope).filter_map(|server| budget.take(server_row(server, false))).collect();
-        groups.push((label, rows));
+        let mut ranked: Vec<&Server> = own.iter().copied().filter(|server| server.scope == scope).collect();
+        ranked.sort_by_key(|server| server.rank());
+        groups.push((label, scope_rows(budget, unfolded, scope, &ranked, fold)));
     }
     section("MCP servers", groups)
+}
+
+/// The rows of one scope's `ranked` servers. Past `FOLD_SIGN_IN` that need a sign-in they sit under one disclosure, in the
+/// place the first of them would have, which lists them only once it is unfolded.
+fn scope_rows(budget: &mut Budget, unfolded: &BTreeSet<String>, scope: &str, ranked: &[&Server], fold: bool) -> Vec<Node> {
+    let waiting = ranked.iter().filter(|server| server.status == "needs-auth").count();
+    if !fold || waiting <= FOLD_SIGN_IN {
+        return ranked.iter().filter_map(|server| budget.take(server_row(server, false, unfolded))).collect();
+    }
+    let key = format!("signin:{scope}");
+    let open = unfolded.contains(&key);
+    // Only an unfolded body is built, so a long list of them costs nothing while it is folded.
+    let body: Vec<Node> = if open { ranked.iter().filter(|server| server.status == "needs-auth").filter_map(|server| budget.take(server_row(server, false, unfolded))).collect() } else { Vec::new() };
+    let fold_key = key.clone();
+    let fold = disclosure(format!("{waiting} need sign-in"), stack().prop("gap", "xs").children(body)).prop("open", open).on("onOpenChange", move |_| toggle(&fold_key)).key(key);
+    let mut fold = Some(fold);
+    let mut rows = Vec::new();
+    for server in ranked {
+        if server.status != "needs-auth" {
+            rows.extend(budget.take(server_row(server, false, unfolded)));
+        } else {
+            // In the place the first of them would have, so the connected ones stay above it.
+            rows.extend(fold.take());
+        }
+    }
+    rows
 }
 
 /// A plugin: its checkbox and name, its marketplace and how many skills it brings, and whether this chat turned it on or
@@ -225,28 +264,58 @@ fn plugin_row(plugin: &Plugin, skills: usize) -> Node {
         .maybe(note.map(|note| note.prop("size", "small")))
 }
 
-/// An MCP server: its checkbox and name, its status, and its tools or why it failed. A plugin's is set in under it.
-fn server_row(server: &Server, nested: bool) -> Node {
+/// An MCP server: its checkbox and name over its tools or why it failed, its status as a badge, and the button that
+/// fits its status. The tools are under a disclosure, unfolded when `unfolded` has it. A plugin's server is set in under
+/// its plugin.
+fn server_row(server: &Server, nested: bool, unfolded: &BTreeSet<String>) -> Node {
     let name = server.name.clone();
     let (said, tone) = status(&server.status);
-    let mut state = text(said).prop("size", "small").prop("tone", tone);
-    if server.status == "needs-auth" && !server.signs_in() {
-        state = state.prop("title", "Sign in with /mcp in Claude Code in a terminal");
-    }
+    let key = format!("tools:{}", server.name);
+    let folds = server.error.is_none() && server.status == "connected" && server.tools.is_some_and(|tools| tools > 0);
     let detail = match (&server.error, server.tools) {
-        (Some(why), _) if server.status != "pending" => Some(muted(why.as_str()).prop("size", "small").prop("truncate", true).prop("title", why.as_str())),
-        (None, Some(tools)) if server.status == "connected" => Some(muted(plural(tools, "tool")).prop("size", "small")),
+        (Some(why), _) if server.status != "pending" => Some(muted(why.as_str()).prop("size", "small").prop("clamp", true).prop("title", why.as_str())),
+        (None, Some(tools)) if server.status == "connected" && tools > 0 => Some(tools_fold(server, unfolded.contains(&key), key)),
+        (None, Some(_)) if server.status == "connected" => Some(muted("No tools").prop("size", "small")),
+        _ if server.status == "needs-auth" && !server.signs_in() => Some(muted("Sign in with /mcp in Claude Code in a terminal").prop("size", "small")),
         _ => None,
     };
-    row()
+    // The status and button keep to the name's line, so an unfolded tool list doesn't pull them down with it.
+    let line = row()
         .prop("gap", "s")
         .prop("align", "center")
+        .child(stack().prop("grow", true).child(checkbox(server.short_name(), server.status != "disabled", move |on| set_server(&name, on))))
+        .child(badge(said, Some(tone)).prop("size", "sm"))
+        .maybe(server_action(server));
+    // What's under the name starts where the name does: a fold's chevron sits in its trigger's padding, so it is set that
+    // much less far in.
+    let inset = if nested { CHECKBOX } else { 0 } + CHECKBOX - if folds { FOLD_PADDING } else { 0 };
+    let indent = |inset: u32, node: Node| row().prop("gap", "none").child(stack().prop("width", inset)).child(stack().prop("grow", true).child(node));
+    stack()
+        .prop("gap", "xs")
         .key(server.name.as_str())
-        .maybe(nested.then(|| stack().prop("width", 24)))
-        .child(checkbox(server.short_name(), server.status != "disabled", move |on| set_server(&name, on)))
-        .child(state)
-        .child(stack().prop("grow", true).maybe(detail))
-        .maybe(server_action(server))
+        .child(if nested { indent(CHECKBOX, line) } else { line })
+        .maybe(detail.map(|detail| indent(inset, detail)))
+}
+
+/// A connected server's tool count, which unfolds to list them: each name over the start of its description.
+fn tools_fold(server: &Server, open: bool, key: String) -> Node {
+    let count = server.tools.unwrap_or(server.listed.len());
+    // Only an unfolded body is built.
+    let body = if open {
+        let left = count.saturating_sub(server.listed.len());
+        let more = (left > 0).then(|| muted(format!("{left} more")).prop("size", "small"));
+        stack().prop("gap", "m").children(server.listed.iter().map(tool_row)).maybe(more)
+    } else {
+        stack()
+    };
+    let fold_key = key.clone();
+    disclosure(plural(count, "tool"), body).prop("open", open).on("onOpenChange", move |_| toggle(&fold_key)).key(key)
+}
+
+/// One tool: its name in mono over its description, cut to a line with the whole in a tooltip.
+fn tool_row(tool: &Tool) -> Node {
+    let note = (!tool.description.is_empty()).then(|| muted(tool.description.as_str()).prop("size", "small").prop("truncate", true).prop("title", tool.description.as_str()));
+    stack().prop("gap", "none").key(tool.name.as_str()).child(text(tool.name.as_str()).prop("mono", true).prop("size", "small")).maybe(note)
 }
 
 /// What a server's row offers: Reconnect for one that failed, Sign in for one that wants it, Sign out for one that is.
@@ -276,7 +345,7 @@ fn auth_row(auth: &Auth) -> Node {
 fn status(status: &str) -> (&str, &'static str) {
     match status {
         "connected" => ("Connected", "success"),
-        "pending" => ("Connecting", "muted"),
+        "pending" => ("Connecting", "info"),
         "needs-auth" => ("Needs sign-in", "warn"),
         "failed" => ("Failed", "danger"),
         "disabled" => ("Off", "muted"),
@@ -286,6 +355,15 @@ fn status(status: &str) -> (&str, &'static str) {
 
 fn close() {
     chat::with(|c| c.plugins = None);
+}
+
+/// Unfolds or folds what `key` names in the dialog.
+fn toggle(key: &str) {
+    chat::with(|c| {
+        if let Some(open) = &mut c.plugins {
+            open.toggle(key);
+        }
+    });
 }
 
 fn set_query(query: &str) {
@@ -387,4 +465,89 @@ fn install(id: &str) {
             chat::write(|c, _| Some(c.session.plugins.after_install()));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn server(name: &str, status: &str, scope: &str) -> Server {
+        Server { name: name.into(), status: status.into(), scope: scope.into(), tools: None, listed: Vec::new(), error: None, transport: "http".into() }
+    }
+
+    fn tool(name: &str, description: &str) -> Tool {
+        Tool { name: name.into(), description: description.into() }
+    }
+
+    /// A connected server with two kept tools, one of them without a description, and `extra` more it didn't keep.
+    fn with_tools(extra: usize) -> Server {
+        Server { tools: Some(2 + extra), listed: vec![tool("read_tree", "Lists a folder."), tool("find", "")], ..server("files", "connected", "user") }
+    }
+
+    #[test]
+    fn a_connected_servers_tools_are_built_only_once_unfolded() {
+        let server = with_tools(0);
+        let closed = server_row(&server, false, &BTreeSet::new());
+        let open = server_row(&server, false, &BTreeSet::from(["tools:files".to_owned()]));
+        // A tool with a description is a stack, its mono name and its muted line, each with its text: 5 nodes. One
+        // without is 3.
+        assert_eq!(open.count(), closed.count() + 5 + 3);
+        // Tools the dialog didn't keep are counted: "N more" is a text node and its text.
+        let more = with_tools(7);
+        let open_more = server_row(&more, false, &BTreeSet::from(["tools:files".to_owned()]));
+        assert_eq!(open_more.count(), open.count() + 2);
+    }
+
+    #[test]
+    fn a_row_has_its_status_as_a_badge_and_a_line_under_the_name() {
+        let plain = server_row(&server("a", "disabled", "user"), false, &BTreeSet::new());
+        let connected = server_row(&with_tools(0), false, &BTreeSet::new());
+        let mut failed = server("b", "failed", "user");
+        failed.error = Some("Connection closed".into());
+        let failed = server_row(&failed, false, &BTreeSet::new());
+        // The badge and its text come to 2 nodes in every row, and the line under the name adds its own row.
+        assert!(connected.count() > plain.count() && failed.count() > plain.count());
+        // Set in by a row holding a spacer and the line.
+        assert_eq!(server_row(&server("a", "disabled", "user"), true, &BTreeSet::new()).count(), plain.count() + 3, "a plugin's server is set in");
+    }
+
+    fn many(waiting: usize) -> Vec<Server> {
+        let mut all = vec![with_tools(0), server("down", "failed", "claudeai")];
+        all.extend((0..waiting).map(|n| server(&format!("claude.ai {n}"), "needs-auth", "claudeai")));
+        all.sort_by_key(Server::rank);
+        all
+    }
+
+    #[test]
+    fn more_than_eight_that_need_a_sign_in_fold_under_one_line_below_the_connected_ones() {
+        let all = many(9);
+        let ranked: Vec<&Server> = all.iter().collect();
+        let mut budget = Budget::default();
+        // The connected one, the fold, and the failed one.
+        assert_eq!(scope_rows(&mut budget, &BTreeSet::new(), "claudeai", &ranked, true).len(), 3);
+        let folded = budget.spent;
+        // Searching has cut the list already, so nothing folds.
+        assert_eq!(scope_rows(&mut Budget::default(), &BTreeSet::new(), "claudeai", &ranked, false).len(), 11);
+        // Unfolded, the nine rows are built and take their share of the budget.
+        let mut unfolded_budget = Budget::default();
+        let rows = scope_rows(&mut unfolded_budget, &BTreeSet::from(["signin:claudeai".to_owned()]), "claudeai", &ranked, true);
+        assert_eq!(rows.len(), 3);
+        assert!(unfolded_budget.spent > folded + 9 * 5);
+    }
+
+    #[test]
+    fn eight_or_fewer_that_need_a_sign_in_are_listed_each_in_its_own_row() {
+        let all = many(8);
+        let ranked: Vec<&Server> = all.iter().collect();
+        assert_eq!(scope_rows(&mut Budget::default(), &BTreeSet::new(), "claudeai", &ranked, true).len(), 10);
+    }
+
+    #[test]
+    fn a_status_has_a_tone() {
+        assert_eq!(status("connected"), ("Connected", "success"));
+        assert_eq!(status("needs-auth"), ("Needs sign-in", "warn"));
+        assert_eq!(status("failed"), ("Failed", "danger"));
+        assert_eq!(status("disabled"), ("Off", "muted"));
+        assert_eq!(status("pending"), ("Connecting", "info"));
+    }
 }

@@ -45,12 +45,12 @@ impl PageView {
                     .border_1()
                     .border_color(rgba(ui::HAIRLINE))
                     .bg(rgba(if checkbox.checked {
-                        theme::INFO << 8 | 0xff
+                        theme::palette().info << 8 | 0xff
                     } else {
                         0
                     }))
                     .text_size(px(12.0))
-                    .text_color(rgb(theme::BACKGROUND))
+                    .text_color(rgb(theme::palette().background))
                     .child(if checkbox.checked {
                         "✓".into_any_element()
                     } else {
@@ -64,7 +64,7 @@ impl PageView {
                 element
                     .focusable()
                     .tab_stop(true)
-                    .focus_visible(|style| style.border_color(rgb(theme::FOREGROUND)))
+                    .focus_visible(|style| style.border_color(rgb(theme::palette().foreground)))
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_key_down(cx.listener(move |view, event: &KeyDownEvent, _, _| {
                         if !event.keystroke.modifiers.modified()
@@ -247,7 +247,7 @@ impl PageView {
                         crate::icons::Icon::ChevronRight
                     },
                     12.0,
-                    theme::MUTED_FOREGROUND,
+                    theme::palette().muted_foreground,
                 );
                 // On a row lined up on its first lines, the chevron is centred on the first.
                 let first = line_height(&button.children).filter(|_| item.baseline);
@@ -268,7 +268,7 @@ impl PageView {
                 .tab_stop(true)
                 .cursor_pointer()
                 .hover(|s| s.bg(rgba(theme::HOVER)))
-                .focus_visible(|s| s.border_color(rgb(theme::FOREGROUND)))
+                .focus_visible(|s| s.border_color(rgb(theme::palette().foreground)))
                 .on_key_down(cx.listener(move |view, event: &KeyDownEvent, window, cx| {
                     if let Some(handler) = &key_handler
                         && send_shortcut(view, handler, event, window, cx)
@@ -592,7 +592,7 @@ impl PageView {
                 .pl(px(8.0))
                 .pr(px(6.0))
                 .text_size(px(13.0))
-                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .text_color(rgb(theme::palette().muted_foreground))
                 .border_color(gpui::transparent_black())
                 .bg(gpui::transparent_black()),
             false => trigger.w_full(),
@@ -737,7 +737,7 @@ impl PageView {
                     .px(px(6.0))
                     .py(px(8.0))
                     .text_center()
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                    .text_color(rgb(theme::palette().muted_foreground))
                     .child(self.inline(&combobox.empty, cx))
                     .into_any_element()
             });
@@ -987,17 +987,17 @@ fn line_tab(
         .font_weight(FontWeight::MEDIUM)
         .whitespace_nowrap()
         .text_color(rgb(if selected {
-            theme::FOREGROUND
+            theme::palette().foreground
         } else {
-            theme::MUTED_FOREGROUND
+            theme::palette().muted_foreground
         }))
         .child(div().px(px(6.0)).pt(px(2.0)).child(label))
         .child(
             div()
                 .h(px(2.0))
-                .when(selected, |line| line.bg(rgb(theme::FOREGROUND))),
+                .when(selected, |line| line.bg(rgb(theme::palette().foreground))),
         )
-        .focus_visible(|style| style.border_color(rgb(theme::FOREGROUND)))
+        .focus_visible(|style| style.border_color(rgb(theme::palette().foreground)))
         .when(disabled, |tab| {
             tab.opacity(0.5).a11y_synthetic_children(|builder| {
                 builder.parent_node().set_disabled();
@@ -1007,6 +1007,6 @@ fn line_tab(
             tab.focusable()
                 .tab_stop(true)
                 .cursor_pointer()
-                .hover(|style| style.text_color(rgb(theme::FOREGROUND)))
+                .hover(|style| style.text_color(rgb(theme::palette().foreground)))
         })
 }

@@ -5,7 +5,7 @@
 use wings_plugin::{
     format::{clock, grouped, parse_time, tokens},
     local_time::local,
-    ui::{Node, button, dialog as panel, gauge, heading, loading, muted, notice, row, stack, text},
+    ui::{Node, button, card, dialog as panel, gauge, heading, loading, muted, notice, row, stack, text},
 };
 
 use crate::{
@@ -35,7 +35,17 @@ fn section(title: &str, rows: impl IntoIterator<Item = Node>) -> Node {
 
 /// A label on the left and its value, right-aligned.
 fn line(label: impl Into<String>, value: impl Into<String>) -> Node {
-    row().prop("gap", "s").prop("align", "center").child(stack().prop("grow", true).child(text(label))).child(text(value).prop("tone", "muted"))
+    row().prop("gap", "s").prop("align", "center").child(stack().prop("grow", true).child(text(label))).child(figure(value).prop("tone", "muted"))
+}
+
+// Not in the mono font: its slashed zeros read as a different number in a column of percents.
+fn figure(value: impl Into<String>) -> Node {
+    text(value)
+}
+
+/// A fact about the session: its muted label on the left, the value in full tone on the right.
+fn fact(label: &str, value: impl Into<String>) -> Node {
+    row().prop("gap", "s").prop("align", "center").child(stack().prop("grow", true).child(muted(label))).child(figure(value))
 }
 
 fn usage_body(usage: &Usage, week: bool) -> Node {
@@ -55,7 +65,8 @@ fn limits(usage: &Usage) -> Node {
     if usage.windows.is_empty() {
         return section(&title, [muted("Your plan has no usage limits to show here. Claude Code reports them for a claude.ai account.")]);
     }
-    section(&title, usage.windows.iter().map(window))
+    // Each limit is one block of label, bar and reset time, so the gap between blocks is wider than any gap inside one.
+    section(&title, [stack().prop("gap", "l").children(usage.windows.iter().map(window))])
 }
 
 fn window(window: &Window) -> Node {
@@ -76,13 +87,11 @@ fn credits(credits: &Credits) -> Node {
         "GBP" => "£".to_owned(),
         other => format!("{other} "),
     };
-    let spent = match credits.limit {
-        Some(limit) => format!("{symbol}{:.2} / {symbol}{limit:.2} spent", credits.spent),
-        None => format!("{symbol}{:.2} spent", credits.spent),
-    };
-    let body = match credits.used {
-        Some(used) => gauge("Usage credits", used as f64, (80, 95), Some(spent)),
-        None => line("Usage credits", spent),
+    // The section is headed "Usage credits", so what's in it doesn't say so again.
+    let body = match (credits.used, credits.limit) {
+        (Some(used), Some(limit)) => gauge("Used", used as f64, (80, 95), Some(format!("{symbol}{:.2} of {symbol}{limit:.2}", credits.spent))),
+        (Some(used), None) => gauge("Used", used as f64, (80, 95), Some(format!("{symbol}{:.2}", credits.spent))),
+        (None, _) => line("Spent", format!("{symbol}{:.2}", credits.spent)),
     };
     section("Usage credits", [body])
 }
@@ -92,40 +101,60 @@ fn contributors(share: &Share, week: bool) -> Node {
         button(label, if on { "secondary" } else { "ghost" }, false, move || chat::set_panel_week(week)).prop("size", "sm")
     };
     let switch = row().prop("gap", "xs").child(pick("Last 24h", !week, false)).child(pick("Last 7 days", week, true));
-    let mut rows = vec![muted("Approximate · sessions on this computer only"), switch];
+    // The note and the switch share a line, so the toggle does not take a row of its own.
+    let header = row()
+        .prop("gap", "s")
+        .prop("align", "center")
+        .prop("wrap", true)
+        .child(stack().prop("grow", true).child(muted("Approximate share of usage · sessions on this computer only")))
+        .child(switch);
+    let mut rows = vec![header];
     if share.is_empty() {
         rows.push(muted("Nothing to show for this period."));
     }
-    // What Claude Code suggests, each with the share of usage it touches.
-    rows.extend(share.tips.iter().map(|(pct, title, detail)| {
-        let said = if detail.is_empty() { title.clone() } else { format!("{title} · {detail}") };
-        line(said, format!("{pct}%"))
-    }));
+    // What Claude Code suggests, as callouts apart from the data: the advice on top, what it is about under it.
+    if !share.tips.is_empty() {
+        rows.push(stack().prop("gap", "xs").children(share.tips.iter().map(|(pct, title, detail)| tip(*pct, title, detail))));
+    }
     for (name, items) in [("Skills", &share.skills), ("Plugins", &share.plugins), ("MCP servers", &share.mcp_servers), ("Agents", &share.agents)] {
         if items.is_empty() {
             continue;
         }
-        rows.push(row().prop("gap", "s").child(stack().prop("grow", true).child(text(name).prop("weight", "medium"))).child(muted("% of usage")));
-        rows.extend(items.iter().take(ROWS).map(|(item, pct)| line(item.as_str(), format!("{pct}%"))));
+        // A small muted header over its items, which sit indented under it.
+        let list = stack().prop("gap", "xs").children(items.iter().take(ROWS).map(|(item, pct)| line(item.as_str(), format!("{pct}%"))));
+        rows.push(
+            stack()
+                .prop("gap", "xs")
+                .child(text(name).prop("tone", "muted").prop("size", "small").prop("weight", "medium"))
+                .child(row().prop("gap", "s").child(stack().prop("width", 12)).child(stack().prop("grow", true).child(list))),
+        );
     }
-    section("What's contributing to your usage?", rows)
+    section("What's contributing to your usage?", [stack().prop("gap", "m").children(rows)])
+}
+
+/// One of Claude Code's suggestions in a card: the advice and the share of usage it touches, and what to do under them.
+fn tip(pct: u64, title: &str, detail: &str) -> Node {
+    let head = row().prop("gap", "s").prop("align", "center").child(stack().prop("grow", true).child(text(title).prop("weight", "medium"))).child(figure(format!("{pct}%")).prop("tone", "muted"));
+    let body = stack().prop("gap", "xs").child(head);
+    card().child(if detail.is_empty() { body } else { body.child(muted(detail).prop("size", "small")) })
 }
 
 fn session(totals: &Totals) -> Node {
     let tokens = grouped;
-    section(
-        "Session",
-        [
-            line("Estimated cost", format!("${:.2}", totals.cost)),
-            line("Total duration (API)", duration(totals.api_ms)),
-            line("Total duration (wall)", duration(totals.wall_ms)),
-            line("Total code changes", format!("{} added, {} removed", totals.added, totals.removed)),
-            line("Input tokens", tokens(totals.input)),
-            line("Output tokens", tokens(totals.output)),
-            line("Cache read tokens", tokens(totals.cache_read)),
-            line("Cache write tokens", tokens(totals.cache_write)),
-        ],
-    )
+    // Cost and time apart from the tokens, as two short blocks rather than one run of eight rows.
+    let spent = stack().prop("gap", "xs").children([
+        fact("Estimated cost", format!("${:.2}", totals.cost)),
+        fact("Total duration (API)", duration(totals.api_ms)),
+        fact("Total duration (wall)", duration(totals.wall_ms)),
+        fact("Total code changes", format!("{} added, {} removed", totals.added, totals.removed)),
+    ]);
+    let used = stack().prop("gap", "xs").children([
+        fact("Input tokens", tokens(totals.input)),
+        fact("Output tokens", tokens(totals.output)),
+        fact("Cache read tokens", tokens(totals.cache_read)),
+        fact("Cache write tokens", tokens(totals.cache_write)),
+    ]);
+    section("Session", [stack().prop("gap", "m").child(spent).child(used)])
 }
 
 /// "840ms", "12.5s", "4m 12s", "1h 5m".
@@ -169,5 +198,13 @@ mod tests {
             chat::close_panel();
             assert!(chat::with(|c| dialog(c)).is_none());
         }
+    }
+
+    #[test]
+    fn a_duration_reads_in_its_largest_units() {
+        assert_eq!(duration(840), "840ms");
+        assert_eq!(duration(12_500), "12.5s");
+        assert_eq!(duration(252_000), "4m 12s");
+        assert_eq!(duration(3_900_000), "1h 5m");
     }
 }

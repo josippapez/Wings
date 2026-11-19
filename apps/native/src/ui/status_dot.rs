@@ -41,11 +41,11 @@ fn paint_ring(bounds: Bounds<Pixels>, angle: f32, window: &mut Window) {
         path.build().ok()
     };
     if let Some(ring) = arc(0.0, TAU) {
-        window.paint_path(ring, rgba(theme::WORKING << 8 | 0x4d));
+        window.paint_path(ring, rgba(theme::palette().working << 8 | 0x4d));
     }
     let top = -TAU / 4.0 + angle;
     if let Some(quarter) = arc(top - TAU / 8.0, top + TAU / 8.0) {
-        window.paint_path(quarter, rgb(theme::WORKING));
+        window.paint_path(quarter, rgb(theme::palette().working));
     }
 }
 
@@ -240,7 +240,7 @@ pub fn status_dot(state: AgentState) -> impl IntoElement {
     let shape = match state {
         AgentState::Working => div().size(px(10.0)).child(spinning()).into_any_element(),
         AgentState::Blocked => dot(10.0).bg(rgb(theme::BLOCKED)).into_any_element(),
-        AgentState::Done => dot(8.0).bg(rgb(theme::DONE)).into_any_element(),
+        AgentState::Done => dot(8.0).bg(rgb(theme::palette().done)).into_any_element(),
         AgentState::Idle => dot(8.0)
             .border(px(1.5))
             .border_color(rgb(theme::IDLE))

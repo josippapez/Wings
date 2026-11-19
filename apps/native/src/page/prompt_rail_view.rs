@@ -75,11 +75,11 @@ impl PageView {
                 let last = ((((scroll + height - geo::PAD_Y) / pitch).ceil()).max(0.0) as usize).min(count);
                 for at in first..last {
                     let color = if at == current {
-                        rgb(theme::FOREGROUND)
+                        rgb(theme::palette().foreground)
                     } else if hover == Some(at) {
-                        rgba(theme::FOREGROUND << 8 | 0xcc)
+                        rgba(theme::palette().foreground << 8 | 0xcc)
                     } else {
-                        rgba(theme::MUTED_FOREGROUND << 8 | 0x80)
+                        rgba(theme::palette().muted_foreground << 8 | 0x80)
                     };
                     let centre = geo::row_top(at, pitch) + pitch / 2.0 - scroll;
                     let tick = Bounds::new(
@@ -225,7 +225,7 @@ impl PageView {
             .rounded(px(14.0))
             .border_1()
             .border_color(rgba(theme::HAIRLINE_STRONG))
-            .bg(rgba(theme::POPOVER))
+            .bg(rgba(theme::palette().popover))
             .shadow(vec![gpui::BoxShadow {
                 color: gpui::hsla(0.0, 0.0, 0.0, 0.28),
                 offset: point(px(0.0), px(6.0)),
@@ -240,7 +240,7 @@ impl PageView {
                     .truncate()
                     .text_size(px(13.0))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(theme::FOREGROUND))
+                    .text_color(rgb(theme::palette().foreground))
                     .child(mark.title.clone()),
             )
             .when(!mark.preview.is_empty(), |el| {
@@ -251,7 +251,7 @@ impl PageView {
                         .line_clamp(3)
                         .text_ellipsis()
                         .text_size(px(12.0))
-                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                        .text_color(rgb(theme::palette().muted_foreground))
                         .child(mark.preview.clone()),
                 )
             });

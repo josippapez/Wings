@@ -9,9 +9,10 @@
 //! plugins: Claude Code refuses `enabledPlugins` in `update_settings`, so the chat never writes your settings files. A
 //! server is turned on or off as `/mcp` does it, for this project, by Claude Code itself.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Value, json};
+use wings_plugin::format::truncate;
 
 use crate::session::{Command, request};
 
@@ -46,13 +47,28 @@ pub struct Dialog {
     pub query: String,
     pub tab: Tab,
     pub discover: Discover,
+    /// What is unfolded, by key: `tools:<server>` for a server's tools, `signin:<scope>` for a scope's servers that need
+    /// a sign-in. Kept here so a new read of the servers doesn't close them.
+    pub unfolded: BTreeSet<String>,
 }
 
 impl Dialog {
     pub fn new(show: Show) -> Self {
-        Dialog { show, query: String::new(), tab: Tab::Installed, discover: Discover::default() }
+        Dialog { show, query: String::new(), tab: Tab::Installed, discover: Discover::default(), unfolded: BTreeSet::new() }
+    }
+
+    /// Unfolds what `key` names, or folds it again.
+    pub fn toggle(&mut self, key: &str) {
+        if !self.unfolded.remove(key) {
+            self.unfolded.insert(key.to_owned());
+        }
     }
 }
+
+/// How many of a server's tools the dialog keeps: past that it says how many more there are.
+pub const TOOLS_KEPT: usize = 40;
+/// The longest a tool's description is kept, in characters.
+const TOOL_NOTE: usize = 160;
 
 /// How many matches Discover lists: the marketplaces offer thousands.
 pub const LISTED: usize = 50;
@@ -224,6 +240,14 @@ impl Plugin {
     }
 }
 
+/// A tool a server has, as `mcp_status` lists it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Tool {
+    pub name: String,
+    /// Its first words, on one line, cut short. Empty when the server gave none.
+    pub description: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Server {
     /// As `mcp_status` names it and `mcp_toggle` takes it: a plugin's is `plugin:<plugin>:<server>`.
@@ -234,6 +258,8 @@ pub struct Server {
     pub scope: String,
     /// How many tools it has, once connected.
     pub tools: Option<usize>,
+    /// The first `TOOLS_KEPT` of them, for the dialog to list.
+    pub listed: Vec<Tool>,
     /// Why it failed.
     pub error: Option<String>,
     /// How it is reached: `stdio`, `http`, `sse`, or `claudeai-proxy` for claude.ai's own.
@@ -249,6 +275,18 @@ impl Server {
     /// The plugin it comes with, and its own name, for a plugin's.
     pub fn of_plugin(&self) -> Option<(&str, &str)> {
         self.name.strip_prefix("plugin:")?.split_once(':')
+    }
+
+    /// Where it goes in a list: connected first, then connecting, needing a sign-in, failed, and off last.
+    pub fn rank(&self) -> u8 {
+        match self.status.as_str() {
+            "connected" => 0,
+            "pending" => 1,
+            "needs-auth" => 2,
+            "failed" => 3,
+            "disabled" => 5,
+            _ => 4,
+        }
     }
 
     pub fn short_name(&self) -> &str {
@@ -489,11 +527,18 @@ fn servers_of(list: &Value) -> Vec<Server> {
                 status: server["status"].as_str().unwrap_or("pending").to_owned(),
                 scope: server["scope"].as_str().unwrap_or_default().to_owned(),
                 tools: server["tools"].as_array().map(Vec::len),
+                listed: server["tools"].as_array().into_iter().flatten().filter_map(tool_of).take(TOOLS_KEPT).collect(),
                 error: server["error"].as_str().map(str::to_owned),
                 transport: server["transport"].as_str().unwrap_or_default().to_owned(),
             })
         })
         .collect()
+}
+
+/// A tool of a server's `tools`: its name and the start of its description. None for one with no name.
+fn tool_of(tool: &Value) -> Option<Tool> {
+    let description = tool["description"].as_str().unwrap_or_default().split_whitespace().collect::<Vec<_>>().join(" ");
+    Some(Tool { name: tool["name"].as_str().filter(|name| !name.is_empty())?.to_owned(), description: truncate(&description, TOOL_NOTE) })
 }
 
 #[cfg(test)]
@@ -710,5 +755,50 @@ mod tests {
         let subtypes: Vec<&str> = sent.iter().filter_map(|line| line["request"]["subtype"].as_str()).collect();
         assert_eq!(subtypes, ["reload_plugins", "get_settings"]);
         assert!(plugins.unapplied);
+    }
+
+    #[test]
+    fn a_connected_servers_tools_are_kept_by_name_with_the_start_of_their_description() {
+        let long = "word ".repeat(100);
+        let servers = json!([{ "name": "files", "status": "connected", "tools": [
+            { "name": "read_tree", "description": "Lists a folder.\n\nSecond   paragraph.", "annotations": {} },
+            { "name": "find", "annotations": {} },
+            { "description": "no name" },
+            { "name": "long", "description": long },
+        ] }]);
+        let servers = servers_of(&servers);
+        let files = &servers[0];
+        // The count is what Claude Code listed, nameless tools too.
+        assert_eq!(files.tools, Some(4));
+        let kept: Vec<(&str, &str)> = files.listed.iter().map(|tool| (tool.name.as_str(), tool.description.as_str())).collect();
+        assert_eq!(kept[..2], [("read_tree", "Lists a folder. Second paragraph."), ("find", "")]);
+        assert_eq!(kept.len(), 3);
+        assert!(kept[2].1.chars().count() <= TOOL_NOTE && kept[2].1.ends_with('…'));
+    }
+
+    #[test]
+    fn only_the_first_tools_are_kept_but_all_are_counted() {
+        let tools: Vec<Value> = (0..TOOLS_KEPT + 25).map(|n| json!({ "name": format!("tool_{n}") })).collect();
+        let servers = servers_of(&json!([{ "name": "big", "status": "connected", "tools": tools }]));
+        assert_eq!((servers[0].tools, servers[0].listed.len()), (Some(TOOLS_KEPT + 25), TOOLS_KEPT));
+    }
+
+    #[test]
+    fn servers_rank_connected_then_connecting_then_sign_in_then_failed_then_off() {
+        let mut servers = servers_of(&json!([
+            { "name": "off", "status": "disabled" }, { "name": "bad", "status": "failed" }, { "name": "auth", "status": "needs-auth" },
+            { "name": "wait", "status": "pending" }, { "name": "ok", "status": "connected" },
+        ]));
+        servers.sort_by_key(Server::rank);
+        assert_eq!(servers.iter().map(|server| server.name.as_str()).collect::<Vec<_>>(), ["ok", "wait", "auth", "bad", "off"]);
+    }
+
+    #[test]
+    fn toggle_unfolds_what_a_key_names_and_folds_it_again() {
+        let mut dialog = Dialog::new(Show::Mcp);
+        dialog.toggle("tools:notes");
+        assert!(dialog.unfolded.contains("tools:notes"));
+        dialog.toggle("tools:notes");
+        assert!(dialog.unfolded.is_empty());
     }
 }

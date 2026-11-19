@@ -623,6 +623,7 @@ impl Session {
                     self.cut(at);
                 }
                 let first = self.items.len();
+                self.mods.tool_answered(line);
                 self.user(&line["message"]["content"]);
                 let said = (first..self.items.len()).find(|at| matches!(self.items[*at], Item::User(_) | Item::UserImages(..)));
                 if let (Some(at), Some(uuid)) = (said, line["uuid"].as_str()) {
@@ -976,6 +977,7 @@ impl Session {
                     let name = block["name"].as_str().unwrap_or("Tool").to_owned();
                     let id = block["id"].as_str().unwrap_or_default().to_owned();
                     self.track(&name, &id, &block["input"]);
+                    self.mods.tool_called(&id, &block["input"]);
                     self.items.push(Item::Tool(Tool { id, summary: summary(&name, &block["input"]), detail: detail(&name, &block["input"]), name, output: None, images: Vec::new() }));
                 }
                 "image" => {

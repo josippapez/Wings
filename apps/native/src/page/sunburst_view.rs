@@ -158,14 +158,14 @@ fn paint(
             PathBuilder::stroke(px(2.0)),
         );
         if let Some(path) = path {
-            window.paint_path(path, rgb(theme::FOREGROUND));
+            window.paint_path(path, rgb(theme::palette().foreground));
         }
     }
     if let Some(Hit::Wedge(index)) = hover
         && let Some(wedge) = map.wedges.get(index)
         && let Some(path) = wedge_path(centre, &geometry, wedge, GAP, PathBuilder::fill())
     {
-        window.paint_path(path, rgba(theme::FOREGROUND << 8 | 0x52));
+        window.paint_path(path, rgba(theme::palette().foreground << 8 | 0x52));
     }
 
     // The middle.
@@ -185,13 +185,13 @@ fn paint(
         path.build().ok()
     };
     if let Some(path) = disc(geometry.inner - 1.0, PathBuilder::fill()) {
-        window.paint_path(path, rgb(theme::SURFACE));
+        window.paint_path(path, rgb(theme::palette().surface));
     }
     if hover == Some(Hit::Center)
         && map.up
         && let Some(path) = disc(geometry.inner - 1.0, PathBuilder::fill())
     {
-        window.paint_path(path, rgba(theme::FOREGROUND << 8 | 0x1a));
+        window.paint_path(path, rgba(theme::palette().foreground << 8 | 0x1a));
     }
     if let Some(path) = disc(geometry.inner - 1.0, PathBuilder::stroke(px(1.0))) {
         window.paint_path(path, rgba(ui::HAIRLINE));
@@ -316,7 +316,7 @@ fn words(
         &map.title,
         size,
         true,
-        theme::FOREGROUND,
+        theme::palette().foreground,
         room(gap + size / 2.0),
         -gap,
         window,
@@ -325,7 +325,7 @@ fn words(
         &map.detail,
         small,
         false,
-        theme::MUTED_FOREGROUND,
+        theme::palette().muted_foreground,
         room(gap + small / 2.0),
         gap,
         window,

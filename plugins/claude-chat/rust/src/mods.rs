@@ -22,8 +22,27 @@ pub const BAND: &str = "above-prompt";
 /// The hint line under the message box, and the mode labels of its footer: one instance each, named by the chat.
 pub const HINT: &str = "prompt-hint";
 pub const MODES: &str = "session-mode";
+/// A mod's look, as Claude Code names its instance: its colours and what the conversation lies on.
+pub const THEME: &str = "theme";
 /// What the chat asks for once attached, beside the panes.
-const SITES: [&str; 3] = [BAND, HINT, MODES];
+const SITES: [&str; 4] = [BAND, HINT, MODES, THEME];
+/// The right-click menu's instance: its rows are asked for when it opens.
+pub const MENU: &str = "context-menu";
+/// The keys of a tool call's row and of its result among the trees: the call's id after these.
+pub const USE: &str = "use:";
+pub const RESULT: &str = "result:";
+/// The keys of your messages and Claude's among the trees: the item's place and a hash of its text after these, so
+/// another message at that place after a rewind is another key.
+pub const YOURS: &str = "yours:";
+pub const CLAUDES: &str = "claudes:";
+/// The line under the conversation while Claude works, which a mod may reword or draw.
+pub const SPINNER: &str = "spinner";
+/// The keys of Claude's questions (its permission request's id after it) and of a folded run of tool calls (the first
+/// call's place and how many calls it has, so a run that grows is asked for again).
+pub const QUESTION: &str = "question:";
+pub const GROUP: &str = "group:";
+/// The longest text of a tool call's input or result a mod gets: a file's whole content isn't what a row reads.
+pub const KEPT: usize = 4_000;
 /// The attach's request, whose answer a page that takes the chat's Claude Code over hears again (`reattach.rs`).
 pub const ATTACH: &str = "ui-attach";
 const RENDER: &str = "ui-render-";
@@ -60,6 +79,17 @@ pub struct Mods {
     pub props: HashMap<String, Value>,
     /// What you typed in a mod's field and haven't submitted, by its instance and key.
     pub drafts: HashMap<String, String>,
+    /// Each tool call's input and result as Claude Code printed them, long text cut, for the mods that draw its row.
+    pub tool_inputs: HashMap<String, Value>,
+    pub tool_results: HashMap<String, Value>,
+    /// Claude Code's requests the chat answers, by request id: a plugin's read or fill of the message box.
+    pub asks: Vec<(String, Value)>,
+    /// What was asked of each tool row, by key, and whether its call had ended then.
+    asked: HashMap<String, bool>,
+    /// The right-click menu open, as Wings said where and on what (`x`, `y`, `link`, `code`).
+    pub menu: Option<Value>,
+    /// The look a mod set (`$.theme.set`): its `colors` and `backdrop`.
+    pub theme: Option<Value>,
     /// Whether Claude Code took the attach, so it may be asked to draw.
     pub attached: bool,
     /// What is to be asked for again.
@@ -67,9 +97,39 @@ pub struct Mods {
 }
 
 /// The request that attaches the chat as a surface, among those it opens with. A docked layout, so a pane a plugin opens
-/// unasked is a sidebar, as the chat's side panel is.
+/// unasked is a sidebar, as the chat's side panel is. The chat answers a plugin's read and fill of the message box.
 pub fn attach() -> String {
-    request(ATTACH, json!({ "subtype": "ui_attach", "surface": SURFACE, "client_id": CLIENT, "viewport": { "columns": 100, "rows": 40, "isFullscreen": true } }))
+    let viewport = json!({ "columns": 100, "rows": 40, "isFullscreen": true });
+    request(ATTACH, json!({ "subtype": "ui_attach", "surface": SURFACE, "client_id": CLIENT, "viewport": viewport, "answers": ["ui_prompt_read", "ui_prompt_fill"] }))
+}
+
+/// The request for a tool call's row (`ToolUse`) or its result (`ToolResult`), kept under `key`, with the props Claude
+/// Code's own row reads.
+pub fn render_row(key: &str, component: &str, call: &str, props: Value, n: u32) -> String {
+    request(
+        &format!("{RENDER}{key}-{n}"),
+        json!({ "subtype": "ui_render", "surface": SURFACE, "client_id": CLIENT, "component": component, "instance_id": call, "props": props }),
+    )
+}
+
+/// The request for the rows mods add to a right-click menu on what `props` names: a `link` or `code`.
+pub fn render_menu(props: Value, n: u32) -> String {
+    request(&format!("{RENDER}{MENU}-{n}"), json!({ "subtype": "ui_render", "surface": SURFACE, "client_id": CLIENT, "component": "ContextMenu", "instance_id": MENU, "props": props }))
+}
+
+/// The answer to Claude Code's request `id`.
+pub fn answer(id: &str, response: Value) -> String {
+    format!("{}\n", json!({ "type": "control_response", "response": { "subtype": "success", "request_id": id, "response": response } }))
+}
+
+/// `value` with each text longer than `KEPT` cut to it.
+pub fn trimmed(value: &Value) -> Value {
+    match value {
+        Value::String(text) if text.len() > KEPT => Value::String(text.chars().take(KEPT).collect()),
+        Value::Array(list) => Value::Array(list.iter().map(trimmed).collect()),
+        Value::Object(fields) => Value::Object(fields.iter().map(|(key, value)| (key.clone(), trimmed(value))).collect()),
+        other => other.clone(),
+    }
 }
 
 /// The request for the tree of `instance`, a pane's id or one of `SITES`, numbered `n`. The hint and the mode labels go
@@ -79,6 +139,7 @@ pub fn render(instance: &str, n: u32) -> String {
         BAND => ("AbovePrompt", json!({})),
         HINT => ("PromptHint", json!({ "isDraft": false, "isWorking": false, "hint": "" })),
         MODES => ("SessionMode", json!({ "modes": [] })),
+        THEME => ("Theme", json!({})),
         _ => ("Pane", json!({})),
     };
     request(
@@ -115,6 +176,10 @@ impl Mods {
     /// Takes in a line Claude Code printed about its plugins' UI, and says whether it was one. A log line becomes `logged`,
     /// for the conversation to show.
     pub fn hear(&mut self, line: &Value, now: u64, logged: &mut Option<String>) -> bool {
+        if line["type"] == "control_request" && matches!(line["request"]["subtype"].as_str(), Some("ui_prompt_read" | "ui_prompt_fill")) {
+            self.asks.push((line["request_id"].as_str().unwrap_or_default().to_owned(), line["request"].clone()));
+            return true;
+        }
         if line["type"] != "system" {
             return false;
         }
@@ -146,7 +211,16 @@ impl Mods {
                 self.stale.extend(open.into_iter().filter(|id| !self.trees.contains_key(id)));
             }
             "ui_invalidate" => match line["instances"].as_array() {
-                Some(instances) => self.stale.extend(instances.iter().filter_map(|instance| instance["instance_id"].as_str().map(str::to_owned))),
+                Some(instances) => self.stale.extend(instances.iter().filter_map(|instance| {
+                    let id = instance["instance_id"].as_str()?;
+                    Some(match instance["component"].as_str() {
+                        Some("ToolUse") => format!("{USE}{id}"),
+                        Some("ToolResult") => format!("{RESULT}{id}"),
+                        // Its scene changing (`backdrop`) comes with the look, which carries the backdrop too.
+                        Some("Theme") => THEME.to_owned(),
+                        _ => id.to_owned(),
+                    })
+                })),
                 None => self.stale.extend(self.panes.iter().map(|pane| pane.id.clone()).chain(SITES.map(str::to_owned))),
             },
             _ => return false,
@@ -166,6 +240,12 @@ impl Mods {
             return true;
         }
         if let Some(instance) = id.strip_prefix(RENDER).and_then(|rest| Some(rest.rsplit_once('-')?.0)) {
+            if instance == THEME {
+                // The look is in the props, with no rewrite: Claude Code draws no theme of its own.
+                let props = &response["response"]["props"];
+                self.theme = (ok && props["colors"].is_object()).then(|| props.clone());
+                return true;
+            }
             let tree = &response["response"]["tree"];
             // Claude Code's own component, which a hook left as it is (`{ type: "engine" }`), is nothing of a mod's but
             // the props a mod changed for it.
@@ -194,6 +274,36 @@ impl Mods {
             return Vec::new();
         }
         std::mem::take(&mut self.stale).into_iter().collect()
+    }
+
+    /// Whether the row under `key` is to be asked for: not asked yet, or asked while its call still ran and `ended` now.
+    pub fn want_row(&mut self, key: &str, ended: bool) -> bool {
+        if !self.attached || self.asked.get(key) == Some(&ended) || self.asked.get(key) == Some(&true) {
+            return false;
+        }
+        self.asked.insert(key.to_owned(), ended);
+        true
+    }
+
+    /// Keeps what a mod gets of a tool call: its input when it is called, its result when it ends.
+    pub fn tool_called(&mut self, call: &str, input: &Value) {
+        self.tool_inputs.insert(call.to_owned(), trimmed(input));
+    }
+
+    /// Keeps a tool call's result from the line that carries it (`tool_use_result`).
+    pub fn tool_answered(&mut self, line: &Value) {
+        if !line["tool_use_result"].is_object() {
+            return;
+        }
+        let call = line["message"]["content"].as_array().into_iter().flatten().find_map(|block| block["tool_use_id"].as_str());
+        if let Some(call) = call {
+            self.tool_results.insert(call.to_owned(), trimmed(&line["tool_use_result"]));
+        }
+    }
+
+    /// Asks for `key` again once attached, as when what Claude Code's own drawing of it reads changed.
+    pub fn redraw(&mut self, key: &str) {
+        self.stale.insert(key.to_owned());
     }
 
     /// Lets the toasts whose time is up go.
@@ -240,7 +350,7 @@ mod tests {
         // Nothing is asked of a Claude Code that hasn't taken the attach.
         assert!(mods.take_stale().is_empty());
         assert!(mods.answered(ATTACH, &json!({ "subtype": "success", "request_id": ATTACH, "response": { "surfaces": ["desktop"] } })));
-        assert_eq!(mods.take_stale(), [BAND, "probe", HINT, MODES]);
+        assert_eq!(mods.take_stale(), [BAND, "probe", HINT, MODES, THEME]);
         assert!(mods.take_stale().is_empty());
         let drawn = json!({ "type": "Box", "props": { "flexDirection": "column" }, "children": [{ "type": "Text", "children": ["Probe pane"] }] });
         let id = "ui-render-probe-3";
@@ -254,7 +364,10 @@ mod tests {
         mods.hear(&system("ui_invalidate", json!({ "event": "ui.render", "instances": [{ "surface": "desktop", "component": "Pane", "instance_id": "probe" }] })), 0, &mut logged);
         assert_eq!(mods.take_stale(), ["probe"]);
         mods.hear(&system("ui_invalidate", json!({ "event": "ui.render" })), 0, &mut logged);
-        assert_eq!(mods.take_stale(), [BAND, "probe", HINT, MODES]);
+        assert_eq!(mods.take_stale(), [BAND, "probe", HINT, MODES, THEME]);
+        // A look's scene changing asks for the look, which carries it.
+        mods.hear(&system("ui_invalidate", json!({ "event": "ui.render", "instances": [{ "surface": "desktop", "component": "Theme", "instance_id": "backdrop" }] })), 0, &mut logged);
+        assert_eq!(mods.take_stale(), [THEME]);
         // A mod that adds to the hint or the mode labels keeps Claude Code's drawing and changes its props, as measured.
         let hint = "ui-render-prompt-hint-5";
         let rewritten = json!({ "isDraft": false, "isWorking": false, "hint": "", "tail": "probe tail" });
@@ -268,9 +381,38 @@ mod tests {
     }
 
     #[test]
+    fn tool_rows_are_asked_for_once_and_again_when_the_call_ends_and_a_menu_and_box_requests_are_heard() {
+        let mut mods = Mods::default();
+        // Not before Claude Code took the attach.
+        assert!(!mods.want_row("use:t1", false));
+        mods.attached = true;
+        assert!(mods.want_row("use:t1", false));
+        assert!(!mods.want_row("use:t1", false));
+        assert!(mods.want_row("use:t1", true));
+        assert!(!mods.want_row("use:t1", true) && !mods.want_row("use:t1", false));
+        // Told a tool row changed, the chat asks for it under its own key.
+        let mut logged = None;
+        mods.hear(&system("ui_invalidate", json!({ "event": "ui.render", "instances": [{ "surface": "desktop", "component": "ToolResult", "instance_id": "t1" }] })), 0, &mut logged);
+        assert_eq!(mods.take_stale(), ["result:t1"]);
+        // A plugin's fill of the message box waits for the chat to answer it.
+        let fill = json!({ "type": "control_request", "request_id": "q1", "request": { "subtype": "ui_prompt_fill", "surface": "desktop", "client_id": "wings", "text": "Summarize https://example.com", "mode": "insert" } });
+        assert!(mods.hear(&fill, 0, &mut logged));
+        assert_eq!(mods.asks[0].0, "q1");
+        assert_eq!(serde_json::from_str::<Value>(answer("q1", json!({ "filled": true })).trim()).unwrap()["response"]["response"], json!({ "filled": true }));
+        // What a mod reads of a call is cut short where it is long.
+        mods.tool_called("t1", &json!({ "command": "ls", "content": "x".repeat(10_000) }));
+        assert_eq!(mods.tool_inputs["t1"]["content"].as_str().unwrap().len(), KEPT);
+        mods.tool_answered(&json!({ "type": "user", "message": { "content": [{ "type": "tool_result", "tool_use_id": "t1" }] }, "tool_use_result": { "stdout": "ok" } }));
+        assert_eq!(mods.tool_results["t1"], json!({ "stdout": "ok" }));
+    }
+
+    #[test]
     fn the_requests_are_the_ones_claude_code_takes() {
         let line: Value = serde_json::from_str(attach().trim()).unwrap();
         assert_eq!((&line["request"]["subtype"], &line["request"]["surface"], &line["request"]["client_id"]), (&json!("ui_attach"), &json!("desktop"), &json!("wings")));
+        assert_eq!(line["request"]["answers"], json!(["ui_prompt_read", "ui_prompt_fill"]));
+        let line: Value = serde_json::from_str(render_row("use:t1", "ToolUse", "t1", json!({ "tool": "Bash" }), 3).trim()).unwrap();
+        assert_eq!((&line["request_id"], &line["request"]["instance_id"], &line["request"]["component"]), (&json!("ui-render-use:t1-3"), &json!("t1"), &json!("ToolUse")));
         let line: Value = serde_json::from_str(render(BAND, 7).trim()).unwrap();
         assert_eq!((&line["request_id"], &line["request"]["component"]), (&json!("ui-render-above-prompt-7"), &json!("AbovePrompt")));
         let line: Value = serde_json::from_str(render("probe", 8).trim()).unwrap();

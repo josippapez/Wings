@@ -25,3 +25,60 @@ pub const DONE: u32 = 0x7dd3a7;
 pub const IDLE: u32 = 0x8a857e;
 /// The Claude spark's brand orange, as in the desktop's `PaneIcon`.
 pub const CLAUDE: u32 = 0xd97757;
+
+/// The colours a plugin page may paint in place of the app's, from a mod's theme.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Palette {
+    /// The window's ground, darker than a page, under a pane floating over one; what a page lies on; and a dialog or
+    /// popover over it.
+    pub background: u32,
+    pub surface: u32,
+    pub dialog: u32,
+    pub popover: u32,
+    pub foreground: u32,
+    pub muted_foreground: u32,
+    pub info: u32,
+    pub danger: u32,
+    pub done: u32,
+    pub working: u32,
+    /// The page's ground from one colour to another, at an angle in degrees as in CSS. None lies on `surface`.
+    pub ground: Option<(u32, u32, f32)>,
+}
+
+impl Palette {
+    pub const APP: Palette = Palette {
+        background: BACKGROUND,
+        surface: SURFACE,
+        dialog: crate::ui::DIALOG,
+        popover: POPOVER,
+        foreground: FOREGROUND,
+        muted_foreground: MUTED_FOREGROUND,
+        info: INFO,
+        danger: DANGER,
+        done: DONE,
+        working: WORKING,
+        ground: None,
+    };
+}
+
+thread_local! {
+    static PAINTING: std::cell::Cell<Palette> = const { std::cell::Cell::new(Palette::APP) };
+}
+
+/// The palette what is drawn now paints in: a page's own while it builds its elements, the app's otherwise.
+pub fn palette() -> Palette {
+    PAINTING.with(std::cell::Cell::get)
+}
+
+/// Paints in `palette` until the guard drops. The colours are read as elements are built, so it holds for a render.
+pub fn painting(palette: Palette) -> PaintingGuard {
+    PaintingGuard(PAINTING.with(|painting| painting.replace(palette)))
+}
+
+pub struct PaintingGuard(Palette);
+
+impl Drop for PaintingGuard {
+    fn drop(&mut self) {
+        PAINTING.with(|painting| painting.set(self.0));
+    }
+}

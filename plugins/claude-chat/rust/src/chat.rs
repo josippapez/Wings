@@ -550,6 +550,10 @@ pub(crate) fn hear(run: u32, line: &Value) {
         let doing = c.session.activity();
         if doing != c.doing.0 {
             c.doing = (doing, host::now() as u64);
+            // A mod that rewords the line under the conversation hears what it says now.
+            if c.session.working {
+                c.session.mods.redraw(crate::mods::SPINNER);
+            }
         }
         let named = c.session.id.clone().filter(|id| Some(id) != before.as_ref());
         (named, std::mem::take(&mut c.session.alerts), was_working && !c.session.working)
@@ -557,9 +561,13 @@ pub(crate) fn hear(run: u32, line: &Value) {
     // Pictures in what was heard go to Wings once, as the page names them by id.
     images::flush();
     crate::subagent_relay::heard(line);
-    // What a mod shows that changed is asked for again, and a toast goes once its time is up.
-    for instance in with(|c| if c.run == run { c.session.mods.take_stale() } else { Vec::new() }) {
-        write(move |_, n| Some(crate::mods::render(&instance, n)));
+    // What a mod shows that changed is asked for again, Claude Code's requests of the chat are answered, and a toast
+    // goes once its time is up.
+    for key in with(|c| if c.run == run { c.session.mods.take_stale() } else { Vec::new() }) {
+        write(move |c, n| crate::mods_view::request_for(c, &key, n));
+    }
+    for (id, asked) in with(|c| if c.run == run { std::mem::take(&mut c.session.mods.asks) } else { Vec::new() }) {
+        write(move |c, _| Some(crate::mods_view::answer_ask(c, &id, &asked)));
     }
     if line["type"] == "system" && line["subtype"] == "ui_toast" {
         let shown = line["timeout_ms"].as_u64().unwrap_or(4_000).min(60_000) as u32;

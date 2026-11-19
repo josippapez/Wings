@@ -990,10 +990,10 @@ fn a_gauge_bar_is_blue_until_its_level_and_then_warn_and_danger() {
         };
         level_color(gauge.level())
     };
-    assert_eq!(color("40"), theme::INFO);
-    assert_eq!(color("85"), theme::WORKING);
-    assert_eq!(color("96"), theme::DANGER);
-    assert_eq!(level_color(Level::Normal), theme::INFO);
+    assert_eq!(color("40"), theme::palette().info);
+    assert_eq!(color("85"), theme::palette().working);
+    assert_eq!(color("96"), theme::palette().danger);
+    assert_eq!(level_color(Level::Normal), theme::palette().info);
 }
 
 /// A page in a frame `width` points wide.
@@ -2532,4 +2532,191 @@ fn a_code_node_is_highlighted_off_the_window_thread_by_its_language() {
     let (app, mut window) = open(code_page("no-such-language", plain));
     settle(&app, &mut window, |_| PageView::first_line_colours("no-such-language", plain).is_some());
     assert_eq!(PageView::first_line_colours("no-such-language", plain), Some(Vec::new()));
+}
+
+/// A stack with `onContextMenu` of two 40 point blocks and a `Code`, over a line that says what the page heard.
+fn context_menu_page() -> String {
+    let mut heard = "nothing".to_owned();
+    fake::page("page", move |event| {
+        if let Some(("1:onContextMenu", payload)) = event {
+            heard = format!(
+                "x={} y={} child={} code={}",
+                payload["x"].as_f64().unwrap(),
+                payload["y"].as_f64().unwrap(),
+                payload["child"],
+                payload["code"]["text"].as_str().map_or("none".to_owned(), |text| format!("{}:{}", text.lines().next().unwrap(), payload["code"]["isBlock"])),
+            );
+        }
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            { "id": 1, "type": "Stack", "props": { "onContextMenu": "1:onContextMenu" }, "children": [
+                { "id": 2, "type": "Skeleton", "props": { "height": 40 } },
+                { "id": 3, "type": "Skeleton", "props": { "height": 40 } },
+                { "id": 4, "type": "Code", "props": { "code": "let a = 1;\nlet b = 2;\nlet c = 3;" } }] },
+            text(5, 6, format!("Heard {heard}."))] })
+    })
+}
+
+/// The right button pressed and let go at `at`.
+fn right_click(window: &mut View, at: gpui::Point<gpui::Pixels>) {
+    window.simulate_mouse_move(at);
+    window.simulate_event(gpui::MouseDownEvent { button: MouseButton::Right, position: at, modifiers: Default::default(), click_count: 1, first_mouse: false });
+    window.simulate_event(gpui::MouseUpEvent { button: MouseButton::Right, position: at, modifiers: Default::default(), click_count: 1 });
+}
+
+/// A right press in a stack with `onContextMenu` tells the page where it was and which child was under it, and a `Code`
+/// under it adds its text.
+#[test]
+fn a_right_click_in_a_stack_with_on_context_menu_tells_the_page_the_child_and_what_it_hit() {
+    let (app, mut window) = open(context_menu_page());
+    settle(&app, &mut window, shows("Heard nothing."));
+    // A left click is not one.
+    window.simulate_click(point(px(10.0), px(60.0)), MouseButton::Left);
+    nothing_happens(&app);
+    assert!(!window.read(|view, _| view.text().contains("x=")));
+    // The second block.
+    right_click(&mut window, point(px(10.0), px(60.0)));
+    settle(&app, &mut window, shows("Heard x=10 y=60 child=1 code=none."));
+    // The code block, the third child: its whole text, as a block.
+    right_click(&mut window, point(px(20.0), px(120.0)));
+    settle(&app, &mut window, shows("Heard x=20 y=120 child=2 code=let a = 1;:true."));
+}
+
+/// A line with a link in it, in a stack with `onContextMenu`, over a line that says what the page heard.
+fn link_menu_page() -> String {
+    let mut heard = "nothing".to_owned();
+    fake::page("page", move |event| {
+        if let Some(("1:onContextMenu", payload)) = event {
+            heard = format!("link={} text={}", payload["link"]["href"].as_str().unwrap_or("none"), payload["link"]["text"].as_str().unwrap_or("none"));
+        }
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            { "id": 1, "type": "Stack", "props": { "onContextMenu": "1:onContextMenu" }, "children": [
+                { "id": 2, "type": "Text", "children": [
+                    { "id": 3, "type": "Text", "props": { "href": "https://example.com/docs", "onClick": "3:onClick" }, "children": [text_node(4, "the docs")] },
+                    text_node(5, " and more words after it")] }] },
+            text(6, 7, format!("Heard {heard}."))] })
+    })
+}
+
+/// A right-click on a link in a line tells the page its address and its words; one beside it doesn't.
+#[test]
+fn a_right_click_on_a_link_tells_the_page_its_address() {
+    let (app, mut window) = open(link_menu_page());
+    settle(&app, &mut window, shows("Heard nothing."));
+    right_click(&mut window, point(px(20.0), px(8.0)));
+    settle(&app, &mut window, shows("Heard link=https://example.com/docs text=the docs."));
+    right_click(&mut window, point(px(160.0), px(8.0)));
+    settle(&app, &mut window, shows("Heard link=none text=none."));
+}
+
+/// A `PopupMenu` over the page with two items and a close handler.
+fn popup_menu_page() -> String {
+    let mut heard = "nothing".to_owned();
+    fake::page("page", move |event| {
+        if let Some((handler, _)) = event {
+            heard = handler.to_owned();
+        }
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            text(1, 2, format!("Heard {heard}.")),
+            { "id": 3, "type": "PopupMenu", "props": { "x": 100, "y": 100, "onClose": "3:onClose" }, "children": [
+                { "id": 4, "type": "Button", "props": { "onClick": "4:onCopy", "description": "Puts it on the clipboard" }, "children": [text_node(5, "Copy link")] },
+                { "id": 6, "type": "Button", "props": { "onClick": "6:onOpen" }, "children": [text_node(7, "Open")] }] }] })
+    })
+}
+
+/// A `PopupMenu` draws its items, a click on one sends its `onClick`, and Escape sends `onClose`.
+#[test]
+fn a_popup_menu_draws_its_items_sends_a_click_on_one_and_hears_escape() {
+    let (app, mut window) = open(popup_menu_page());
+    settle(&app, &mut window, shows("Copy link"));
+    assert!(window.read(|view, _| view.text().contains("Open")));
+    // Inside the first item, under the menu's corner at (100, 100).
+    window.simulate_click(point(px(130.0), px(118.0)), MouseButton::Left);
+    settle(&app, &mut window, shows("Heard 4:onCopy."));
+    key(&mut window, "escape");
+    settle(&app, &mut window, shows("Heard 3:onClose."));
+}
+
+/// A press outside a `PopupMenu` sends `onClose`.
+#[test]
+fn a_press_outside_a_popup_menu_sends_its_on_close() {
+    let (app, mut window) = open(popup_menu_page());
+    settle(&app, &mut window, shows("Copy link"));
+    window.simulate_click(point(px(600.0), px(400.0)), MouseButton::Left);
+    settle(&app, &mut window, shows("Heard 3:onClose."));
+}
+
+/// A line of words in a stack with `onContextMenu`, over a line that says what the page heard: which handler, and the
+/// selection the right-click carried.
+fn selection_page() -> String {
+    let mut heard = "nothing".to_owned();
+    fake::page("page", move |event| {
+        if let Some((handler, payload)) = event {
+            heard = format!("{handler} selection={}", payload["selection"]["text"].as_str().unwrap_or("none"));
+        }
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            { "id": 1, "type": "Stack", "props": { "onContextMenu": "1:onContextMenu" }, "children": [
+                { "id": 2, "type": "Text", "children": [
+                    { "id": 3, "type": "Text", "props": { "onClick": "3:onClick" }, "children": [text_node(4, "the docs")] },
+                    text_node(5, " and more words after it")] },
+                text(6, 7, "alpha beta gamma delta".into())] },
+            text(8, 9, format!("Heard {heard}."))] })
+    })
+}
+
+/// The left button pressed at `from`, dragged to `to` and let go.
+fn drag(window: &mut View, from: gpui::Point<gpui::Pixels>, to: gpui::Point<gpui::Pixels>) {
+    window.simulate_mouse_move(from);
+    window.simulate_event(gpui::MouseDownEvent { button: MouseButton::Left, position: from, modifiers: Default::default(), click_count: 1, first_mouse: false });
+    window.simulate_event(gpui::MouseMoveEvent { position: to, pressed_button: Some(MouseButton::Left), modifiers: Default::default() });
+    window.simulate_event(gpui::MouseUpEvent { button: MouseButton::Left, position: to, modifiers: Default::default(), click_count: 1 });
+}
+
+/// Dragging over a line selects its words, and a right-click in the stack sends them with the press.
+#[test]
+fn a_right_click_after_dragging_over_words_sends_them_as_the_selection() {
+    let (app, mut window) = open(selection_page());
+    settle(&app, &mut window, shows("Heard nothing."));
+    // The second line, from its left edge to well past its end, takes all of it.
+    drag(&mut window, point(px(0.0), px(30.0)), point(px(500.0), px(30.0)));
+    assert_eq!(window.read(|view, _| view.selected_text()).as_deref(), Some("alpha beta gamma delta"));
+    right_click(&mut window, point(px(500.0), px(30.0)));
+    settle(&app, &mut window, shows("Heard 1:onContextMenu selection=alpha beta gamma delta."));
+    // A press elsewhere lets go of it.
+    window.simulate_click(point(px(300.0), px(200.0)), MouseButton::Left);
+    assert_eq!(window.read(|view, _| view.selected_text()), None);
+    right_click(&mut window, point(px(500.0), px(30.0)));
+    settle(&app, &mut window, shows("Heard 1:onContextMenu selection=none."));
+}
+
+/// A double press selects the word under it.
+#[test]
+fn a_double_press_selects_a_word() {
+    let (app, mut window) = open(selection_page());
+    settle(&app, &mut window, shows("Heard nothing."));
+    let at = point(px(3.0), px(30.0));
+    window.simulate_mouse_move(at);
+    window.simulate_event(gpui::MouseDownEvent { button: MouseButton::Left, position: at, modifiers: Default::default(), click_count: 2, first_mouse: false });
+    assert_eq!(window.read(|view, _| view.selected_text()).as_deref(), Some("alpha"));
+}
+
+/// A press and release on a clickable span without moving is a click, and selects nothing.
+#[test]
+fn a_plain_click_on_a_clickable_span_still_clicks_and_selects_nothing() {
+    let (app, mut window) = open(selection_page());
+    settle(&app, &mut window, shows("Heard nothing."));
+    window.simulate_mouse_move(point(px(10.0), px(8.0)));
+    window.simulate_click(point(px(10.0), px(8.0)), MouseButton::Left);
+    settle(&app, &mut window, shows("Heard 3:onClick selection=none."));
+    assert_eq!(window.read(|view, _| view.selected_text()), None);
+}
+
+/// Cmd-C with words selected puts them on the clipboard.
+#[test]
+fn cmd_c_copies_the_selected_words() {
+    let (app, mut window) = open(selection_page());
+    settle(&app, &mut window, shows("Heard nothing."));
+    drag(&mut window, point(px(0.0), px(30.0)), point(px(500.0), px(30.0)));
+    key(&mut window, "cmd-c");
+    let copied = app.read(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    assert_eq!(copied.as_deref(), Some("alpha beta gamma delta"));
 }

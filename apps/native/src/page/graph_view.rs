@@ -144,7 +144,7 @@ impl PageView {
             .tab_stop(true)
             .border_1()
             .border_color(rgba(0))
-            .focus_visible(|s| s.border_color(rgb(theme::FOREGROUND)))
+            .focus_visible(|s| s.border_color(rgb(theme::palette().foreground)))
             .on_key_down(cx.listener(move |view, event: &KeyDownEvent, window, cx| {
                 if event.keystroke.modifiers.modified() {
                     return;
@@ -297,9 +297,9 @@ impl PageView {
             .iter()
             .map(|value| {
                 let color = match value.chars().next() {
-                    Some('H') => Some(theme::INFO),
-                    Some('b') => Some(theme::DONE),
-                    Some('t') => Some(theme::WORKING),
+                    Some('H') => Some(theme::palette().info),
+                    Some('b') => Some(theme::palette().done),
+                    Some('t') => Some(theme::palette().working),
                     _ => None,
                 };
                 let name = value.get(2..).unwrap_or(value);
@@ -330,7 +330,7 @@ impl PageView {
                 div()
                     .flex_none()
                     .text_size(px(11.0))
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                    .text_color(rgb(theme::palette().muted_foreground))
                     .child(row.hash.chars().take(7).collect::<String>()),
             )
             .when(columns == Columns::All, |element| {
@@ -339,7 +339,7 @@ impl PageView {
                         .w(px(110.0))
                         .flex_none()
                         .truncate()
-                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                        .text_color(rgb(theme::palette().muted_foreground))
                         .child(row.author.clone()),
                 )
             })
@@ -347,7 +347,7 @@ impl PageView {
                 element.child(
                     div()
                         .flex_none()
-                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                        .text_color(rgb(theme::palette().muted_foreground))
                         .child(row.date.clone()),
                 )
             })
@@ -372,10 +372,10 @@ impl PageView {
 
 fn palette(index: usize) -> u32 {
     [
-        theme::INFO,
-        theme::DONE,
-        theme::WORKING,
-        theme::DANGER,
+        theme::palette().info,
+        theme::palette().done,
+        theme::palette().working,
+        theme::palette().danger,
         0xc4a7ff,
         0x6fd3d0,
         0xf0a3d0,

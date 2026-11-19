@@ -86,6 +86,21 @@ fn a_page_writes_to_a_program_only_right_after_you_click_or_type_in_it() {
     let press = "{\"type\":\"control_request\",\"request_id\":\"p\",\"request\":{\"subtype\":\"ui_press\"}}\n";
     assert!(caller.call("processWrite", json!({ "token": "chat", "text": press })).is_err());
     caller.send("processStop", json!({ "token": "chat" }));
+    hear(&caller, 2);
+    // A plugin's fill of the message box that the program asked for may be answered once, in its shape: the program here
+    // prints the ask, as Claude Code does.
+    let ask = "{\"type\":\"control_request\",\"request_id\":\"f1\",\"request\":{\"subtype\":\"ui_prompt_fill\",\"text\":\"x\",\"mode\":\"insert\"}}\n";
+    caller.send("spawn", json!({ "token": "asker", "program": "cat", "args": [], "cwd": tmp(), "input": ask }));
+    assert_eq!(hear(&caller, 1).0.len(), 1, "the ask, as the program printed it");
+    let answer = |id: &str, fields: &str| format!("{{\"type\":\"control_response\",\"response\":{{\"subtype\":\"success\",\"request_id\":\"{id}\",\"response\":{fields}}}}}\n");
+    // Not in another shape, nor for a request it never made.
+    assert!(caller.call("processWrite", json!({ "token": "asker", "text": answer("f1", "{\"filled\":true,\"behavior\":\"allow\"}") })).is_err());
+    assert!(caller.call("processWrite", json!({ "token": "asker", "text": answer("other", "{\"filled\":true}") })).is_err());
+    caller.send("processWrite", json!({ "token": "asker", "text": answer("f1", "{\"filled\":true}") }));
+    assert_eq!(hear(&caller, 2).1, vec![Ok(Value::Null)]);
+    // Once answered, it is no longer pending.
+    assert!(caller.call("processWrite", json!({ "token": "asker", "text": answer("f1", "{\"filled\":true}") })).is_err());
+    caller.send("processStop", json!({ "token": "asker" }));
 }
 
 #[test]

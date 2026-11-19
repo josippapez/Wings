@@ -25,7 +25,7 @@ pub(super) fn meter(meter: &tree::Meter) -> AnyElement {
                 .h_full()
                 .w(relative((meter.percent / 100.0) as f32))
                 .rounded(px(2.0))
-                .bg(rgb(meter.tone.map_or(theme::INFO, tone_color))),
+                .bg(rgb(meter.tone.map_or(theme::palette().info, tone_color))),
         )
         .into_any_element()
 }

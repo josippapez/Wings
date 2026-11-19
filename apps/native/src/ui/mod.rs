@@ -130,17 +130,17 @@ pub fn untipped_ghost_button(
         .cursor_pointer()
         .text_size(px(13.0))
         .text_color(rgb(if pressed {
-            theme::FOREGROUND
+            theme::palette().foreground
         } else {
-            theme::MUTED_FOREGROUND
+            theme::palette().muted_foreground
         }))
         .when(pressed, |button| button.bg(rgba(theme::HOVER)))
         .hover(|style| {
             style
                 .bg(rgba(theme::HOVER))
-                .text_color(rgb(theme::FOREGROUND))
+                .text_color(rgb(theme::palette().foreground))
         })
-        .focus_visible(|style| style.border_color(rgb(theme::FOREGROUND)))
+        .focus_visible(|style| style.border_color(rgb(theme::palette().foreground)))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(content)
 }
@@ -169,7 +169,7 @@ pub fn shortcut_icon_button(
         shortcut,
         size,
         None,
-        icon(glyph, size.icon(), theme::MUTED_FOREGROUND),
+        icon(glyph, size.icon(), theme::palette().muted_foreground),
     )
 }
 
@@ -190,7 +190,7 @@ pub fn switch(id: impl Into<ElementId>, on: bool) -> Stateful<Div> {
         .cursor_pointer()
         // Off, `dark:bg-input/80`.
         .bg(rgba(if on {
-            theme::FOREGROUND << 8 | 0xff
+            theme::palette().foreground << 8 | 0xff
         } else {
             0xffffff14
         }))
@@ -198,7 +198,7 @@ pub fn switch(id: impl Into<ElementId>, on: bool) -> Stateful<Div> {
         .child(div().size(px(16.0)).rounded_full().bg(rgb(if on {
             0x17151a
         } else {
-            theme::FOREGROUND
+            theme::palette().foreground
         })))
 }
 
@@ -269,7 +269,7 @@ pub fn setting_row(
                         div()
                             .text_size(px(12.0))
                             .line_height(px(16.5))
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .text_color(rgb(theme::palette().muted_foreground))
                             .child(description),
                     )
                 })
@@ -277,7 +277,7 @@ pub fn setting_row(
                     text.child(
                         div()
                             .text_size(px(12.0))
-                            .text_color(rgb(theme::DANGER))
+                            .text_color(rgb(theme::palette().danger))
                             .child(error),
                     )
                 }),
@@ -327,8 +327,8 @@ pub fn dialog(
         .rounded(px(14.0))
         .border_1()
         .border_color(rgba(DIALOG_RING))
-        .bg(rgb(DIALOG))
-        .text_color(rgb(theme::FOREGROUND));
+        .bg(rgb(theme::palette().dialog))
+        .text_color(rgb(theme::palette().foreground));
     (backdrop, panel)
 }
 
@@ -431,9 +431,9 @@ pub fn select_trigger(
         .cursor_pointer()
         .text_size(px(14.0))
         .hover(|style| style.bg(rgba(INPUT_FILL_HOVER)))
-        .focus_visible(|style| style.border_color(rgb(theme::FOREGROUND)))
+        .focus_visible(|style| style.border_color(rgb(theme::palette().foreground)))
         .child(div().truncate().child(value.into()))
-        .child(icon(Icon::ChevronDown, 16.0, theme::MUTED_FOREGROUND))
+        .child(icon(Icon::ChevronDown, 16.0, theme::palette().muted_foreground))
 }
 
 /// One choice in a select's menu, with a check on the chosen one.
@@ -482,7 +482,7 @@ pub fn option_item(
                 .max_w(relative(0.45))
                 .truncate()
                 .text_size(px(12.0))
-                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .text_color(rgb(theme::palette().muted_foreground))
                 .child(detail)
         }));
     select_row(id.into(), label, content.into_any_element(), false)
@@ -514,7 +514,7 @@ fn select_row(
         // A label wider than the menu, like a Cyclops project's name and client, ends in an ellipsis inside it.
         .child(div().flex_1().min_w_0().truncate().child(content))
         .when(selected, |item| {
-            item.child(icon(Icon::Check, 14.0, theme::FOREGROUND))
+            item.child(icon(Icon::Check, 14.0, theme::palette().foreground))
         })
 }
 
@@ -531,7 +531,7 @@ pub fn select_menu(items: impl IntoIterator<Item = AnyElement>) -> Div {
         .rounded(px(10.0))
         .border_1()
         .border_color(rgba(theme::HAIRLINE_STRONG))
-        .bg(rgb(DIALOG))
+        .bg(rgb(theme::palette().dialog))
         .shadow(vec![BoxShadow {
             color: hsla(0.0, 0.0, 0.0, 0.4),
             offset: point(px(0.0), px(8.0)),

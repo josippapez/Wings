@@ -9,7 +9,9 @@ use gpui::{
 };
 
 use super::{
-    PageView, tone_color,
+    PageView,
+    selection_view::with_selection,
+    tone_color,
     tree::{Avatar, Length, Node, Skeleton, Tone, Weight},
 };
 use crate::{
@@ -29,6 +31,8 @@ struct Style {
     mark: bool,
     /// One of Wings' links, by its place among the line's.
     link: Option<usize>,
+    /// The address of a link the page drew, for a right-click on it.
+    href: Option<String>,
 }
 
 /// A run of the line's text with a look of its own.
@@ -72,6 +76,7 @@ fn collect(
                     click: inner.on_click.clone().or_else(|| outer.click.clone()),
                     mark: outer.mark || inner.mark,
                     link: None,
+                    href: inner.href.clone().or_else(|| outer.href.clone()),
                 };
                 if !collect(&inner.children, &style, text, spans, first) {
                     return false;
@@ -89,7 +94,7 @@ fn highlight(style: &Style) -> HighlightStyle {
     // A word a search found reads in full colour on the search's mark, as Past sessions shows it.
     if style.mark {
         return HighlightStyle {
-            color: Some(rgb(theme::FOREGROUND).into()),
+            color: Some(rgb(theme::palette().foreground).into()),
             background_color: Some(rgba(crate::ui::SEARCH_MARK).into()),
             ..Default::default()
         };
@@ -113,18 +118,23 @@ fn highlight(style: &Style) -> HighlightStyle {
 
 impl PageView {
     /// `nodes` as one wrapping line of text, when they are strings and `Text` spans; None for anything else. Spans
-    /// that are clicked send the page their `onClick`.
-    pub(super) fn rich_text(&self, nodes: &[Node], cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// that are clicked send the page their `onClick`. With `select`, dragging over it selects words.
+    pub(super) fn rich_text(&self, nodes: &[Node], select: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (mut text, mut spans, mut first) = (String::new(), Vec::new(), None);
         if !collect(nodes, &Style::default(), &mut text, &mut spans, &mut first) {
             return None;
         }
         let id = first?;
-        let mut styled = StyledText::new(text).with_highlights(
-            spans
-                .iter()
-                .map(|span| (span.range.clone(), highlight(&span.style))),
+        let links: Vec<(Range<usize>, String, String)> = spans
+            .iter()
+            .filter_map(|span| Some((span.range.clone(), span.style.href.clone()?, text.get(span.range.clone())?.to_owned())))
+            .collect();
+        let marks = with_selection(
+            spans.iter().map(|span| (span.range.clone(), highlight(&span.style))).collect(),
+            select.then(|| self.selection_in(id, &text)).flatten(),
         );
+        let mut styled = StyledText::new(text.clone()).with_highlights(marks);
+        let layout = styled.layout().clone();
         let families: Vec<_> = spans
             .iter()
             .filter(|span| span.style.mono)
@@ -137,19 +147,43 @@ impl PageView {
             .into_iter()
             .filter_map(|span| span.style.click.map(|handler| (span.range, handler)))
             .unzip();
+        let finish = |element: AnyElement, cx: &mut Context<Self>| {
+            if select { self.selectable(id, text.clone(), layout.clone(), element, cx) } else { element }
+        };
         if ranges.is_empty() {
-            return Some(styled.into_any_element());
+            return Some(finish(styled.into_any_element(), cx));
         }
         let view = cx.weak_entity();
-        Some(
-            InteractiveText::new(ElementId::NamedInteger("page-rich".into(), id), styled)
-                .on_click(ranges, move |index, _, cx| {
-                    if let Some(handler) = handlers.get(index) {
-                        let _ = view.update(cx, |view, _| view.act(handler, None));
-                    }
-                })
-                .into_any_element(),
-        )
+        // The character the pointer is on, so a right-click on a link can say which one it was. Kept by the line's id: a
+        // move redraws the page, and the text says where the pointer is only when that changes.
+        let pointed = self.pointed_chars.borrow_mut().entry(id).or_default().clone();
+        let on = pointed.clone();
+        let interactive = InteractiveText::new(ElementId::NamedInteger("page-rich".into(), id), styled)
+            .on_click(ranges, move |index, _, cx| {
+                if let Some(handler) = handlers.get(index) {
+                    let _ = view.update(cx, |view, _| view.act(handler, None));
+                }
+            })
+            .on_hover(move |index, _, _, _| on.set(index));
+        if links.is_empty() {
+            return Some(finish(interactive.into_any_element(), cx));
+        }
+        let linked = div()
+                .child(interactive)
+                .on_mouse_down(
+                    gpui::MouseButton::Right,
+                    cx.listener(move |view, event: &gpui::MouseDownEvent, _, _| {
+                        let Some(at) = pointed.get() else {
+                            return;
+                        };
+                        if let Some((_, href, text)) = links.iter().find(|(range, ..)| range.contains(&at)) {
+                            let hit = serde_json::json!({ "link": { "href": href, "text": text } });
+                            *view.context_hit.borrow_mut() = Some((event.position, hit));
+                        }
+                    }),
+                )
+                .into_any_element();
+        Some(finish(linked, cx))
     }
 }
 
@@ -221,8 +255,12 @@ impl PageView {
             })
             .collect();
         let runs = with_links(&spans, &links);
-        let mut styled = StyledText::new(text)
-            .with_highlights(runs.iter().map(|run| (run.range.clone(), highlight(&run.style))));
+        let marks = with_selection(
+            runs.iter().map(|run| (run.range.clone(), highlight(&run.style))).collect(),
+            self.selection_in(id, &text),
+        );
+        let mut styled = StyledText::new(text.clone()).with_highlights(marks);
+        let layout = styled.layout().clone();
         let families: Vec<_> = runs
             .iter()
             .filter(|run| run.style.mono)
@@ -240,7 +278,7 @@ impl PageView {
             })
             .unzip();
         let view = cx.weak_entity();
-        Some(
+        let linked =
             InteractiveText::new(ElementId::NamedInteger("page-linked".into(), id), styled)
                 .on_click(ranges, move |index, window, cx| match clicks.get(index) {
                     Some(Click::Page(handler)) => {
@@ -254,8 +292,8 @@ impl PageView {
                     }
                     None => {}
                 })
-                .into_any_element(),
-        )
+                .into_any_element();
+        Some(self.selectable(id, text, layout, linked, cx))
     }
 }
 
@@ -287,7 +325,7 @@ pub(super) fn avatar(avatar: &Avatar) -> AnyElement {
         .items_center()
         .justify_center()
         .bg(hsla(hue as f32 / 360.0, 0.42, 0.36, 1.0))
-        .text_color(rgb(theme::FOREGROUND))
+        .text_color(rgb(theme::palette().foreground))
         .text_size(px(if avatar.large { 11.0 } else { 9.0 }))
         .font_weight(FontWeight::SEMIBOLD)
         .child(initials(&avatar.name))

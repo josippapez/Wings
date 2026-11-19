@@ -124,6 +124,7 @@ pub(super) fn take(host: &Arc<Shared>, left: &LeftJob) -> Option<(Arc<Job>, JobE
         host: Mutex::new(Arc::downgrade(host)),
         out: Mutex::new(out),
         order: Mutex::default(),
+        asks: Mutex::default(),
     });
     Some((job, events, running))
 }

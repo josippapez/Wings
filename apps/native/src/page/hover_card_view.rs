@@ -54,7 +54,7 @@ impl PageView {
             .rounded(px(14.0))
             .border_1()
             .border_color(rgba(theme::HAIRLINE_STRONG))
-            .bg(rgba(theme::POPOVER))
+            .bg(rgba(theme::palette().popover))
             .shadow(vec![gpui::BoxShadow {
                 color: gpui::hsla(0.0, 0.0, 0.0, 0.28),
                 offset: point(px(0.0), px(6.0)),

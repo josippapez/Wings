@@ -33,7 +33,7 @@ pub fn terminal_card(
         .border_b_1()
         .border_color(rgba(ui::HAIRLINE))
         .text_size(px(12.0))
-        .child(icon(Icon::SquareTerminal, 14.0, theme::MUTED_FOREGROUND))
+        .child(icon(Icon::SquareTerminal, 14.0, theme::palette().muted_foreground))
         .child(
             div()
                 .min_w_0()
@@ -46,9 +46,9 @@ pub fn terminal_card(
             div()
                 .flex_none()
                 .text_color(rgb(if running {
-                    theme::WORKING
+                    theme::palette().working
                 } else {
-                    theme::MUTED_FOREGROUND
+                    theme::palette().muted_foreground
                 }))
                 .child(if running { "Running" } else { "Idle" }),
         )
@@ -67,7 +67,7 @@ pub fn terminal_card(
         .rounded(px(10.0))
         .border_1()
         .border_color(rgba(theme::HAIRLINE_STRONG))
-        .bg(rgb(theme::SURFACE))
+        .bg(rgb(theme::palette().surface))
         .overflow_hidden()
         .child(header)
         .child(

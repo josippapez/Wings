@@ -57,7 +57,7 @@ fn pill(label: SharedString, shortcut: Option<SharedString>) -> Div {
         .py(px(6.0))
         .when(shortcut.is_some(), |pill| pill.pr(px(6.0)))
         .rounded(px(6.0))
-        .bg(rgb(theme::FOREGROUND))
+        .bg(rgb(theme::palette().foreground))
         .text_size(px(12.0))
         .text_color(rgb(theme::BACKGROUND))
         // GPUI measures a text leaf at its full one-line width when it asks how small it can get, so a bare label

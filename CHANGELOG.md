@@ -2,6 +2,16 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.52 · 2026-11-19
+
+- **Claude Code mods can restyle Claude chat**: a tool call's row (with its line under the result), your messages and Claude's, and the line that shows what Claude is doing.
+- **Right-click in Claude chat opens a menu**: copy or open a link, copy a code block, and the rows your mods add, like "Summarize this page", which can fill the message box for you.
+- **Select text in plugin pages** by dragging (double-click takes a word) and copy it with Cmd-C or from Claude chat's right-click menu.
+- **A mod's theme colours Claude chat**: its text, surfaces, accents and a still backdrop.
+- **Mods can add to Claude's questions and restyle a folded run of tool calls** ("Ran 2 commands").
+- **The MCP servers dialog is easier to read.** Each server shows its status as a badge, and its tool count opens to list the tools with what each does. Servers that need a sign-in fold into one line when there are many.
+- **The Usage dialog is easier to scan**: each limit stands apart, tips show as cards, skills, plugins, MCP servers and agents sit under their own headings, and the session's totals are grouped.
+
 ## 0.2.51 · 2026-11-19
 
 - **Claude chat shows your Claude Code mods**, as Claude Code Desktop does: a plugin's status line and toasts over the message box, its log lines in the conversation, what it adds to the hint line and mode labels under the message box, and the panes it opens in the side panel, with buttons, text fields and dropdowns that work.

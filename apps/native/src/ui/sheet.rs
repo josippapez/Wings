@@ -43,7 +43,7 @@ pub fn sheet(
             inset: false,
         }])
         .flex_col()
-        .bg(rgba(theme::POPOVER));
+        .bg(rgba(theme::palette().popover));
     (backdrop.items_stretch().justify_end(), panel)
 }
 
@@ -63,7 +63,7 @@ pub fn sheet_header(title: impl IntoElement, description: impl IntoElement) -> D
         .child(
             div()
                 .text_size(px(12.0))
-                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .text_color(rgb(theme::palette().muted_foreground))
                 .child(description),
         );
     div()
@@ -100,7 +100,7 @@ pub fn search_box(field: impl IntoElement, status: Option<AnyElement>) -> Div {
         .border_1()
         .border_color(rgba(INPUT_BORDER))
         .bg(rgba(theme::HOVER))
-        .child(icon(Icon::Search, 16.0, theme::MUTED_FOREGROUND))
+        .child(icon(Icon::Search, 16.0, theme::palette().muted_foreground))
         .child(div().min_w_0().flex_1().overflow_hidden().child(field))
         .child(
             div()
@@ -141,13 +141,13 @@ pub fn segment(id: impl Into<ElementId>, label: impl Into<SharedString>, on: boo
         .cursor_pointer()
         .text_size(px(12.0))
         .text_color(rgb(if on {
-            theme::FOREGROUND
+            theme::palette().foreground
         } else {
-            theme::MUTED_FOREGROUND
+            theme::palette().muted_foreground
         }))
         .when(on, |item| item.bg(rgba(0xffffff17)))
         .when(!on, |item| {
-            item.hover(|style| style.text_color(rgb(theme::FOREGROUND)))
+            item.hover(|style| style.text_color(rgb(theme::palette().foreground)))
         })
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(label)

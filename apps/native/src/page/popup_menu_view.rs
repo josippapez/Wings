@@ -1,0 +1,201 @@
+//! A page's right-click menu, in two halves. A `Stack` with `onContextMenu` tells the page where the right button went
+//! down and what was under the pointer, and a `PopupMenu` is the list of actions the page then opens at that point.
+use super::*;
+use gpui::{
+    Bounds, MouseButton, MouseDownEvent, Point, anchored, deferred,
+};
+use serde_json::{Value, json};
+
+/// What a stack's listener for the children's places hears: where each child of the stack was drawn.
+pub(super) type ChildrenWatch = Box<dyn Fn(Vec<Bounds<Pixels>>, &mut Window, &mut gpui::App) + 'static>;
+
+/// The index in `stack.children` of the node behind each element the stack draws, in order: `PageView::items` makes one
+/// element of a run of plain strings, and none of an empty run, and `rising` one of each child.
+fn element_children(stack: &tree::Stack) -> Vec<usize> {
+    if stack.enter {
+        return (0..stack.children.len()).collect();
+    }
+    let mut slots = Vec::new();
+    // Where the run of strings under way started, and whether any of it has text.
+    let mut run: Option<(usize, bool)> = None;
+    for (at, child) in stack.children.iter().enumerate() {
+        match child {
+            Node::Str { text, .. } => {
+                let run = run.get_or_insert((at, false));
+                run.1 |= !text.is_empty();
+            }
+            _ => {
+                slots.extend(run.take().filter(|(_, text)| *text).map(|(first, _)| first));
+                slots.push(at);
+            }
+        }
+    }
+    slots.extend(run.filter(|(_, text)| *text).map(|(first, _)| first));
+    slots
+}
+
+/// The `Code` node `id`, wherever in the tree it is.
+fn find_code(nodes: &[Node], id: u64) -> Option<&tree::Code> {
+    nodes.iter().find_map(|node| match node {
+        Node::Code(code) if code.id == id => Some(code),
+        other => other.parts().into_iter().find_map(|part| find_code(part, id)),
+    })
+}
+
+impl PageView {
+    /// `element`, a `Stack`'s box, with what its `onContextMenu` needs: its children's places, kept as they are drawn,
+    /// and a listener for the right button that comes after what is inside it (GPUI hands a press to the innermost
+    /// element first), so it finds what they recorded under the pointer. It sends the page where the press was, which
+    /// child was under it, and the link or code that was, then stops the press there. `watch` is what else wants the
+    /// children's places, which GPUI keeps one listener for.
+    pub(super) fn with_context_menu(
+        &self,
+        element: gpui::Div,
+        stack: &tree::Stack,
+        watch: Option<ChildrenWatch>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let Some(handler) = stack.on_context_menu.clone() else {
+            return match watch {
+                Some(watch) => element.on_children_prepainted(watch),
+                None => element,
+            };
+        };
+        let places: Rc<RefCell<Vec<Bounds<Pixels>>>> = Rc::default();
+        let kept = places.clone();
+        let slots = element_children(stack);
+        element
+            .on_children_prepainted(move |bounds, window, cx| {
+                if let Some(watch) = &watch {
+                    watch(bounds.clone(), window, cx);
+                }
+                *kept.borrow_mut() = bounds;
+            })
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                    let child = places
+                        .borrow()
+                        .iter()
+                        .position(|place| place.contains(&event.position))
+                        .and_then(|at| slots.get(at).copied());
+                    let mut payload = json!({ "x": f32::from(event.position.x), "y": f32::from(event.position.y), "child": child });
+                    // Only what was recorded by this very press: one left by a press somewhere else is not under it.
+                    if let Some((at, Value::Object(hit))) = view.context_hit.take()
+                        && at == event.position
+                        && let Value::Object(payload) = &mut payload
+                    {
+                        payload.extend(hit);
+                    }
+                    if let Some(text) = view.selected_text()
+                        && let Value::Object(payload) = &mut payload
+                    {
+                        payload.insert("selection".to_owned(), json!({ "text": text }));
+                    }
+                    view.act(&handler, Some(&payload));
+                    cx.stop_propagation();
+                }),
+            )
+    }
+
+    /// A `Code` node was pressed with the right button at `at`: remembers its whole text for the `Stack` round it that
+    /// asks, without stopping the press.
+    pub(super) fn record_code_hit(&mut self, id: u64, at: Point<Pixels>) {
+        let Some(code) = self.tree.as_ref().and_then(|tree| find_code(&tree.children, id)) else {
+            return;
+        };
+        let hit = json!({ "code": { "text": code.text, "isBlock": true } });
+        *self.context_hit.borrow_mut() = Some((at, hit));
+    }
+}
+
+/// The desktop's `--accent` under the item you point at, as `ui::menu` draws it.
+const ACCENT: u32 = 0xffffff14;
+
+impl PageView {
+    /// A `PopupMenu`: its items in the look of a `Menu`'s list, over the page at the point the page gave, moved in to
+    /// stay in the window. A click on an item sends its `onClick` and the page then leaves the menu out; Escape and a
+    /// press outside send `onClose`. It is drawn only while the page sends it, so the menu has no state of its own
+    /// besides the keyboard (`render` gives it that).
+    pub(super) fn popup_menu(&self, menu: &tree::PopupMenu, cx: &mut Context<Self>) -> AnyElement {
+        let id = menu.id;
+        let items = menu.items.iter().enumerate().filter_map(|(at, node)| {
+            let Node::Button(item) = node else {
+                return None;
+            };
+            let text = plain_text(&item.children);
+            let label = if text.trim().is_empty() {
+                item.label.clone().unwrap_or_default()
+            } else {
+                text
+            };
+            let destructive = item.variant == tree::Variant::Destructive;
+            let row = div()
+                .id(ElementId::NamedInteger(format!("page-popup-{id}-item").into(), at as u64))
+                .role(Role::MenuItem)
+                .aria_label(label.clone())
+                .flex()
+                .flex_col()
+                .gap(px(1.0))
+                .px(px(6.0))
+                .py(px(4.0))
+                .rounded(px(6.0))
+                .text_color(rgb(if destructive { theme::palette().danger } else { theme::palette().foreground }))
+                .whitespace_nowrap()
+                .child(div().min_w_0().truncate().text_size(px(14.0)).child(label))
+                .children(item.description.clone().map(|description| {
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(12.0))
+                        .text_color(rgb(theme::palette().muted_foreground))
+                        .child(description)
+                }));
+            Some(match item.on_click.clone() {
+                Some(handler) if !item.disabled => row
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(rgba(if destructive { theme::palette().danger << 8 | 0x33 } else { ACCENT })))
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        cx.stop_propagation();
+                        view.act(&handler, None);
+                    }))
+                    .into_any_element(),
+                _ => row
+                    .opacity(0.5)
+                    .a11y_synthetic_children(|builder| {
+                        builder.parent_node().set_disabled();
+                    })
+                    .into_any_element(),
+            })
+        });
+        let (on_escape, on_outside) = (menu.on_close.clone(), menu.on_close.clone());
+        let list = ui::menu(ElementId::NamedInteger("page-popup-menu".into(), id), "Menu")
+            .track_focus(&self.popup_focus)
+            .children(items)
+            .on_key_down(cx.listener(move |view, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" {
+                    cx.stop_propagation();
+                    if let Some(handler) = &on_escape {
+                        view.send(handler, None);
+                    }
+                }
+            }))
+            // A press outside closes it without counting as a click in the page, which could then write or copy.
+            .on_mouse_down_out(cx.listener(move |view, _, _, _| {
+                if let Some(handler) = &on_outside {
+                    view.send(handler, None);
+                }
+            }));
+        div()
+            .child(
+                deferred(
+                    anchored()
+                        .position(point(px(menu.x), px(menu.y)))
+                        .snap_to_window_with_margin(px(8.0))
+                        .child(list),
+                )
+                .with_priority(1),
+            )
+            .into_any_element()
+    }
+}

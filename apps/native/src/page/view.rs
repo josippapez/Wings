@@ -26,12 +26,16 @@ mod graph_view;
 mod picture_view;
 #[path = "rich_view.rs"]
 mod rich_view;
+#[path = "selection_view.rs"]
+mod selection_view;
 #[path = "sheet_view.rs"]
 mod sheet_view;
 #[path = "prompt_rail_view.rs"]
 mod prompt_rail_view;
 #[path = "hover_card_view.rs"]
 mod hover_card_view;
+#[path = "popup_menu_view.rs"]
+mod popup_menu_view;
 #[path = "sunburst_view.rs"]
 mod sunburst_view;
 
@@ -245,6 +249,20 @@ pub struct PageView {
     dialog_focus: gpui::FocusHandle,
     dialog_shown: Option<u64>,
     focus_before: Option<gpui::FocusHandle>,
+    /// What an element under a right press recorded (a `Code`'s text), with where the press was, for the `Stack` round it
+    /// that has an `onContextMenu` to send. GPUI hands the press to the inner element first.
+    context_hit: RefCell<Option<(gpui::Point<Pixels>, serde_json::Value)>>,
+    /// The character the pointer is on in each line of text with a link, by the line's id, for a right-click on a link.
+    pointed_chars: RefCell<HashMap<u64, Rc<Cell<Option<usize>>>>>,
+    /// The words a person has selected by dragging over a line of text, for Cmd-C and a right-click's payload.
+    selection: RefCell<Option<selection_view::Selection>>,
+    /// What takes the keyboard while words are selected, so Cmd-C reaches the page: a box with no size, drawn in it.
+    selection_focus: gpui::FocusHandle,
+    /// An open `PopupMenu` takes the keyboard, so Escape closes it; the node it was drawn for, and what had the keyboard
+    /// before it, which gets it back as the menu goes.
+    popup_focus: gpui::FocusHandle,
+    popup_shown: Option<u64>,
+    popup_before: Option<gpui::FocusHandle>,
     /// The focus each `Sheet`'s panel tracks, by node id; the sheets drawn in this render, each with what takes the
     /// keyboard when it opens; the ones the last render showed; and what had the keyboard before a sheet took it.
     sheet_focus: RefCell<HashMap<u64, gpui::FocusHandle>>,
@@ -339,6 +357,11 @@ impl PageView {
         self.reveal = None;
         self.dialog_shown = None;
         self.focus_before = None;
+        self.popup_shown = None;
+        self.popup_before = None;
+        *self.context_hit.borrow_mut() = None;
+        self.pointed_chars.borrow_mut().clear();
+        *self.selection.borrow_mut() = None;
         self.sheet_focus.borrow_mut().clear();
         self.sheets_shown.clear();
         self.sheet_return = None;
@@ -491,6 +514,7 @@ impl PageView {
                             view.chip_focus
                                 .borrow_mut()
                                 .retain(|(id, _), _| ids.contains(id));
+                            view.keep_selection_in(&tree.children);
                             view.tree = Some(tree);
                             view.trees += 1;
                             view.error = None;
@@ -559,6 +583,13 @@ impl PageView {
             dialog_focus: cx.focus_handle(),
             dialog_shown: None,
             focus_before: None,
+            context_hit: RefCell::default(),
+            pointed_chars: RefCell::default(),
+            selection: RefCell::default(),
+            selection_focus: cx.focus_handle(),
+            popup_focus: cx.focus_handle(),
+            popup_shown: None,
+            popup_before: None,
             sheet_focus: RefCell::default(),
             sheets_drawn: RefCell::default(),
             sheets_shown: Vec::new(),
@@ -611,7 +642,7 @@ impl PageView {
         let Some(pane) = embeddable(&self.terminals, &terminal.pane) else {
             return div()
                 .text_size(px(12.0))
-                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .text_color(rgb(theme::palette().muted_foreground))
                 .child("Only a terminal this tab's agent opened shows here.")
                 .into_any_element();
         };
@@ -684,6 +715,7 @@ impl PageView {
         // handle, as a window that hasn't drawn yet can't say what holds what.
         self.host_focus.as_ref() == Some(&focused)
             || focused == self.dialog_focus
+            || focused == self.popup_focus
             || focused == self.menu_focus
             || self.inputs.borrow().values().any(|state| state.field.read(cx).focus_handle(cx) == focused)
             || self.former_inputs.borrow().iter().any(|field| *field == focused)
@@ -1261,8 +1293,9 @@ impl PageView {
         }
     }
 
-    /// A `Stack` as a box, before it is made an element, so a `Scroll` that watches its children can ask for their bounds.
-    fn stack(&self, stack: &tree::Stack, cx: &mut Context<Self>) -> gpui::Div {
+    /// A `Stack` as a box, before it is made an element, so a `Scroll` that watches its children can ask for their bounds
+    /// with `watch`.
+    fn stack(&self, stack: &tree::Stack, watch: Option<popup_menu_view::ChildrenWatch>, cx: &mut Context<Self>) -> gpui::Div {
         // The texts it holds find links when it asks, as a Scroll's take its `textScale`.
         let before = LINKED.with(Cell::get);
         LINKED.with(|cell| cell.set(before || stack.links));
@@ -1280,7 +1313,7 @@ impl PageView {
                 false => el.children(self.items(&stack.children, cx)),
             });
         LINKED.with(|cell| cell.set(before));
-        element
+        self.with_context_menu(element, stack, watch, cx)
     }
 
     fn nodes(&self, nodes: &[Node], cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -1289,10 +1322,19 @@ impl PageView {
 
     /// What `nodes` say as one piece of text, or as inline parts when they hold more than strings.
     fn inline(&self, nodes: &[Node], cx: &mut Context<Self>) -> AnyElement {
+        self.inline_of(nodes, false, cx)
+    }
+
+    /// `inline` for the words of a `Text`, which a person can select with the mouse (`select`), unlike a button's label.
+    fn inline_of(&self, nodes: &[Node], select: bool, cx: &mut Context<Self>) -> AnyElement {
         if nodes.iter().all(|node| matches!(node, Node::Str { .. })) {
-            return plain_text(nodes).into_any_element();
+            let text = plain_text(nodes);
+            return match nodes.first() {
+                Some(Node::Str { id, .. }) if select && !text.is_empty() => self.selectable_string(*id, text, cx),
+                _ => text.into_any_element(),
+            };
         }
-        if let Some(rich) = self.rich_text(nodes, cx) {
+        if let Some(rich) = self.rich_text(nodes, select, cx) {
             return rich;
         }
         div()
@@ -1426,9 +1468,9 @@ impl PageView {
                     }
                     None if text.links || LINKED.with(Cell::get) => el.child(
                         self.linked_text(&text.children, text.id, cx)
-                            .unwrap_or_else(|| self.inline(&text.children, cx)),
+                            .unwrap_or_else(|| self.inline_of(&text.children, true, cx)),
                     ),
-                    None => el.child(self.inline(&text.children, cx)),
+                    None => el.child(self.inline_of(&text.children, true, cx)),
                 },
             );
         // A shimmer pulses as the page's spinners turn: at most 30 frames a second, and still under Reduce motion. Each
@@ -1464,7 +1506,7 @@ impl PageView {
         match text.on_click.clone() {
             Some(handler) => element
                 .cursor_pointer()
-                .text_color(rgb(text.tone.map_or(theme::INFO, tone_color)))
+                .text_color(rgb(text.tone.map_or(theme::palette().info, tone_color)))
                 .on_click(cx.listener(move |view, _, _, _| view.act(&handler, None)))
                 .into_any_element(),
             None => element.into_any_element(),
@@ -1601,7 +1643,7 @@ impl PageView {
                     .into_any_element()
             }
             Node::Toolbar(toolbar) => self.toolbar(toolbar, cx),
-            Node::Stack(stack) => self.stack(stack, cx).into_any_element(),
+            Node::Stack(stack) => self.stack(stack, None, cx).into_any_element(),
             Node::Row(row) => self.row(row, cx),
             Node::Text(text) => self.text_element(text, None, cx),
             Node::Button(button) => self.button(button, 0.0, cx),
@@ -1615,14 +1657,14 @@ impl PageView {
                 .rounded(px(8.0))
                 .border_1()
                 // The tone is 0xRRGGBB: alpha goes below it, as the ground's does.
-                .border_color(rgba(notice.tone.map_or(theme::INFO, tone_color) << 8 | 0x66))
+                .border_color(rgba(notice.tone.map_or(theme::palette().info, tone_color) << 8 | 0x66))
                 .bg(rgba(
-                    notice.tone.map_or(theme::INFO, tone_color) << 8 | 0x20,
+                    notice.tone.map_or(theme::palette().info, tone_color) << 8 | 0x20,
                 ))
                 .px(px(10.0))
                 .py(px(7.0))
                 .text_size(px(12.0))
-                .text_color(rgb(notice.tone.map_or(theme::INFO, tone_color)))
+                .text_color(rgb(notice.tone.map_or(theme::palette().info, tone_color)))
                 .child(self.inline(&notice.children, cx))
                 .into_any_element(),
             Node::Spinner(spinner) => div()
@@ -1687,7 +1729,7 @@ impl PageView {
                     .tab_stop(true)
                     .cursor_pointer()
                     .hover(|style| style.bg(rgba(theme::HOVER)))
-                    .focus_visible(|style| style.border_color(rgb(theme::FOREGROUND)))
+                    .focus_visible(|style| style.border_color(rgb(theme::palette().foreground)))
                     .on_click(cx.listener(move |view, _, _, cx| {
                         cx.stop_propagation();
                         view.act(&handler, None);
@@ -1699,7 +1741,7 @@ impl PageView {
                 .flex()
                 .items_center()
                 .gap(px(8.0))
-                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .text_color(rgb(theme::palette().muted_foreground))
                 .child(if loading.children.is_empty() {
                     "Loading…".into_any_element()
                 } else {
@@ -1725,12 +1767,12 @@ impl PageView {
                 .when(heading.section, |el| {
                     el.text_size(px(14.0))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(theme::FOREGROUND))
+                        .text_color(rgb(theme::palette().foreground))
                 })
                 .into_any_element(),
             Node::Dot(dot) => ui::dot(
                 dot.color
-                    .unwrap_or_else(|| dot.tone.map_or(theme::DONE, tone_color)),
+                    .unwrap_or_else(|| dot.tone.map_or(theme::palette().done, tone_color)),
             )
             .into_any_element(),
             // A scroll keeps 8 points either side and 12 below, as a list under a header does.
@@ -1766,7 +1808,7 @@ impl PageView {
                 let children = match (column, state.as_ref().filter(|_| watches || edges.is_some())) {
                     (Some(column), Some(state)) => {
                         let watch = Self::scroll_watch(state.clone(), edges, scroll.scroll_to, scroll.track.clone(), scroll.on_track.clone(), cx);
-                        vec![self.stack(column, cx).on_children_prepainted(watch).into_any_element()]
+                        vec![self.stack(column, Some(Box::new(watch)), cx).into_any_element()]
                     }
                     _ => self.nodes(&scroll.children, cx),
                 };
@@ -1824,6 +1866,7 @@ impl PageView {
             Node::ListItem(item) => self.list_item(item, cx),
             Node::Disclosure(disclosure) => self.disclosure(disclosure, cx),
             Node::HoverCard(card) => self.hover_card(card, cx),
+            Node::PopupMenu(menu) => self.popup_menu(menu, cx),
             Node::Select(select) => self.select(select, cx),
             Node::Combobox(combobox) => self.combobox(combobox, cx),
             Node::Menu(menu) => self.menu(menu, cx),
@@ -1843,7 +1886,7 @@ impl PageView {
                 // The Claude spark is drawn in its own orange, as Wings draws it beside a Claude session.
                 match icon.name {
                     tree::IconName::Claude => theme::CLAUDE,
-                    _ => theme::FOREGROUND,
+                    _ => theme::palette().foreground,
                 },
             )
             .into_any_element(),
@@ -1853,7 +1896,7 @@ impl PageView {
                     .data(drawing.markup.as_bytes())
                     .size(px(drawing.size))
                     .flex_none()
-                    .text_color(rgb(drawing.tone.map_or(theme::FOREGROUND, tone_color)));
+                    .text_color(rgb(drawing.tone.map_or(theme::palette().foreground, tone_color)));
                 match &drawing.label {
                     Some(label) => div()
                         .id(ElementId::NamedInteger("page-svg".into(), drawing.id))
@@ -1996,7 +2039,7 @@ impl PageView {
                         header.child(
                             div()
                                 .text_size(px(14.0))
-                                .text_color(rgb(theme::MUTED_FOREGROUND))
+                                .text_color(rgb(theme::palette().muted_foreground))
                                 .child(self.inline(&empty.description, cx)),
                         )
                     }),
@@ -2147,7 +2190,7 @@ impl PageView {
             .flex_col()
             .gap(px(8.0))
             .rounded(px(14.0))
-            .bg(rgb(theme::BACKGROUND))
+            .bg(rgb(theme::palette().background))
             .occlude()
             .children(self.nodes(&split.end, cx));
         container.child(pane.child(under)).into_any_element()
@@ -2338,6 +2381,9 @@ impl PageView {
 
 impl Render for PageView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // A page with a palette of its own paints in it while it builds its elements, which read their colours then.
+        let palette = self.tree.as_ref().and_then(|tree| tree.palette);
+        let _painting = palette.map(theme::painting);
         // A change of focus redraws every view, cached ones too. A combobox field that has just taken the keyboard
         // shows its options afresh.
         let focused = self
@@ -2374,6 +2420,20 @@ impl Render for PageView {
             }
         }
         self.dialog_shown = dialog;
+        // A popup menu takes the keyboard as it opens, from a right-click, and gives it back as it goes.
+        let popup = self.tree.as_ref().and_then(|tree| popup_in(&tree.children)).map(|menu| menu.id);
+        if popup.is_some() != self.popup_shown.is_some() {
+            // Only where the page may take the keyboard, as a dialog: a menu never pulls it from a terminal.
+            if popup.is_some() {
+                if may_take {
+                    self.popup_before = window.focused(cx);
+                    window.focus(&self.popup_focus, cx);
+                }
+            } else if let Some(before) = self.popup_before.take() {
+                window.focus(&before, cx);
+            }
+        }
+        self.popup_shown = popup;
         self.actions_within = self
             .actions_focus
             .borrow()
@@ -2458,11 +2518,13 @@ impl Render for PageView {
         let shot_terminals: Option<AnyElement> = None;
         div()
             .id("native-page")
-            .capture_any_mouse_down(cx.listener(|view, _, window, cx| {
+            .capture_any_mouse_down(cx.listener(|view, event, window, cx| {
                 *view.pressed_with.borrow_mut() = Some(window.focused(cx));
+                view.release_selection(event, cx);
             }))
             .key_context(page_context)
             .on_key_down(cx.listener(Self::tab))
+            .on_key_down(cx.listener(Self::copy_selection))
             .relative()
             .size_full()
             .min_w_0()
@@ -2473,11 +2535,14 @@ impl Render for PageView {
             // The desktop's page is transparent on the `bg-surface` of the card, panel or window that holds it, or on the
             // `bg-popover` of a popover.
             .bg(rgb(if self.popover {
-                ui::DIALOG
+                theme::palette().dialog
             } else {
-                theme::SURFACE
+                theme::palette().surface
             }))
-            .text_color(rgb(theme::FOREGROUND))
+            .when_some(palette.and_then(|palette| palette.ground).filter(|_| !self.popover), |page, (from, to, angle)| {
+                page.bg(gpui::linear_gradient(angle, gpui::linear_color_stop(rgb(from), 0.0), gpui::linear_color_stop(rgb(to), 1.0)))
+            })
+            .text_color(rgb(theme::palette().foreground))
             .text_size(px(13.0))
             // plugin-ui.css's body line height, so rows come out as tall as the desktop's.
             .line_height(relative(1.45))
@@ -2525,7 +2590,7 @@ impl Render for PageView {
                                 .flex_1()
                                 .min_w_0()
                                 .text_size(px(12.0))
-                                .text_color(rgb(theme::DANGER))
+                                .text_color(rgb(theme::palette().danger))
                                 .child(error),
                         )
                         .when_some(reload, |row, reload| {
@@ -2536,6 +2601,7 @@ impl Render for PageView {
                         }),
                 )
             })
+            .child(div().absolute().size_0().track_focus(&self.selection_focus))
             .children(overlay)
             .children(shot_terminals)
     }
@@ -2553,6 +2619,14 @@ fn dialog_in(nodes: &[Node]) -> Option<&tree::Dialog> {
     nodes.iter().rev().find_map(|node| match node {
         Node::Dialog(dialog) => Some(dialog),
         other => other.parts().into_iter().rev().find_map(dialog_in),
+    })
+}
+
+/// The popup menu the page shows, wherever in its tree it put it.
+fn popup_in(nodes: &[Node]) -> Option<&tree::PopupMenu> {
+    nodes.iter().rev().find_map(|node| match node {
+        Node::PopupMenu(menu) => Some(menu),
+        other => other.parts().into_iter().rev().find_map(popup_in),
     })
 }
 
@@ -2748,18 +2822,18 @@ fn row_text(node: &Node) -> Option<(&tree::Text, f32)> {
 
 fn tone_color(tone: Tone) -> u32 {
     match tone {
-        Tone::Muted => theme::MUTED_FOREGROUND,
-        Tone::Info => theme::INFO,
-        Tone::Success => theme::DONE,
-        Tone::Warn => theme::WORKING,
-        Tone::Danger => theme::DANGER,
+        Tone::Muted => theme::palette().muted_foreground,
+        Tone::Info => theme::palette().info,
+        Tone::Success => theme::palette().done,
+        Tone::Warn => theme::palette().working,
+        Tone::Danger => theme::palette().danger,
     }
 }
 
 /// A gauge's bar is `--wings-info` until it reaches a level.
 pub(super) fn level_color(level: Level) -> u32 {
     match level {
-        Level::Normal => theme::INFO,
+        Level::Normal => theme::palette().info,
         Level::Warn => tone_color(Tone::Warn),
         Level::Danger => tone_color(Tone::Danger),
     }

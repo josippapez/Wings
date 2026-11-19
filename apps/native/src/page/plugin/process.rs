@@ -214,12 +214,30 @@ pub(super) struct Running {
     /// Held while lines go to a frame, so they reach it in order, and one that takes the program over hears what was
     /// kept before what comes next.
     order: Mutex<()>,
+    /// What Claude Code asked of the chat's message box and the page hasn't answered yet, by request id: a plugin's
+    /// read (`ui_prompt_read`) or fill (`ui_prompt_fill`), the only answers a page may write unprompted (`unprompted`).
+    pub(super) asks: Mutex<HashMap<String, &'static str>>,
 }
 
 impl Running {
     /// A line the program printed: kept for a frame that may take it over, and handed to the frame that hears it. `n` is
     /// its number when the terminal server counted it.
     fn heard(&self, n: Option<u64>, line: &str) {
+        // Only a line that names one is read as JSON: most are a turn's messages.
+        if line.contains("\"ui_prompt_")
+            && let Ok(asked) = serde_json::from_str::<Value>(line)
+            && asked["type"] == "control_request"
+            && let Some(id) = asked["request_id"].as_str()
+        {
+            let kind = match asked["request"]["subtype"].as_str() {
+                Some("ui_prompt_read") => Some("read"),
+                Some("ui_prompt_fill") => Some("fill"),
+                _ => None,
+            };
+            if let Some(kind) = kind {
+                self.asks.lock().unwrap().insert(id.to_owned(), kind);
+            }
+        }
         let _order = self.order.lock().unwrap();
         let lines = {
             let mut out = self.out.lock().unwrap();
@@ -432,6 +450,7 @@ impl Shared {
                 host: Mutex::new(Arc::downgrade(self)),
                 out: Mutex::new(Out { listener: Some(listener), ..Out::default() }),
                 order: Mutex::default(),
+                asks: Mutex::default(),
             })
         };
         // Only a tab's page has a place that comes back after a restart, and only Wings' own plugins keep a program
@@ -501,6 +520,52 @@ impl Shared {
         let at_here = |running: &Running| here.is_some_and(|here| running.place.as_ref().is_some_and(|at| at.same(here)));
         let running = self.processes.lock().unwrap().values().any(|running| running.runs(session));
         running || self.orphans.lock().unwrap().iter().any(|orphan| orphan.running.runs(session) && !at_here(&orphan.running))
+    }
+
+    /// Whether `text` is only what a page may write to its program `token` without a click: Claude Code control requests
+    /// that draw what its plugins show (`ui_attach`, `ui_render`, `ui_panes`), and answers to the reads and fills of the
+    /// message box the program asked for (`asks`) and nobody answered yet, each in its ask's shape: `{ text, cursor }` for
+    /// a read, `{ filled }` for a fill. None of it reaches the agent, answers its questions or starts a turn. The answers
+    /// it lets through are no longer pending.
+    pub(super) fn unprompted(&self, token: &str, text: &str) -> bool {
+        let Some(running) = self.processes.lock().unwrap().get(token).cloned() else {
+            return false;
+        };
+        let mut asks = running.asks.lock().unwrap();
+        let mut answered = Vec::new();
+        let mut lines = text.lines().filter(|line| !line.trim().is_empty()).peekable();
+        let allowed = lines.peek().is_some()
+            && lines.all(|line| {
+                let Ok(line) = serde_json::from_str::<Value>(line) else {
+                    return false;
+                };
+                match line["type"].as_str() {
+                    Some("control_request") => matches!(line["request"]["subtype"].as_str(), Some("ui_attach" | "ui_render" | "ui_panes")),
+                    Some("control_response") if line["response"]["subtype"] == "success" => {
+                        let id = line["response"]["request_id"].as_str().unwrap_or_default();
+                        let Some(fields) = line["response"]["response"].as_object() else {
+                            return false;
+                        };
+                        let keys: Vec<&str> = fields.keys().map(String::as_str).collect();
+                        let fits = match asks.get(id) {
+                            Some(&"read") => fields.contains_key("text") && keys.iter().all(|key| matches!(*key, "text" | "cursor")),
+                            Some(&"fill") => keys == ["filled"],
+                            _ => false,
+                        };
+                        if fits {
+                            answered.push(id.to_owned());
+                        }
+                        fits
+                    }
+                    _ => false,
+                }
+            });
+        if allowed {
+            for id in answered {
+                asks.remove(&id);
+            }
+        }
+        allowed
     }
 
     fn write(&self, token: &str, params: &Value, reply: Reply) -> Result<(), String> {

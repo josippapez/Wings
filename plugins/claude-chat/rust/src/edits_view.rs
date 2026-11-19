@@ -245,7 +245,7 @@ fn spans_node(source: &str, cwd: &str, known: &dyn Fn(&str) -> bool) -> Node {
             },
             Span::Strong(words) => line.child(Node::new("Text").prop("weight", "strong").text(words)),
             Span::Del(words) => line.child(Node::new("Text").prop("tone", "muted").text(words)),
-            Span::Link { text: label, href } => line.child(Node::new("Text").on("onClick", move |_| host::open_url(&href)).text(label)),
+            Span::Link { text: label, href } => line.child(Node::new("Text").prop("href", href.as_str()).on("onClick", move |_| host::open_url(&href)).text(label)),
         };
     }
     line

@@ -46,10 +46,14 @@ const SIDE_BELOW: u32 = COLUMN + 16 + 2 * (SIDE + 12);
 /// The most subagents the panel lists.
 const SUBAGENTS_LISTED: usize = 12;
 pub fn view() -> Vec<Node> {
-    chat::with(|c| {
+    let page = chat::with(|c| {
         crate::refs_view::scan(c);
+        wings_plugin::ui::palette(crate::mods_view::palette(c));
         vec![chat_page(c)]
-    })
+    });
+    // The tool rows the page drew are asked of the mods once it is built, as asking writes to Claude Code.
+    crate::mods_view::ask_rows();
+    page
 }
 
 fn chat_page(c: &Chat) -> Node {
@@ -92,6 +96,7 @@ fn chat_page(c: &Chat) -> Node {
         .maybe(crate::usage_view::dialog(c))
         .maybe(crate::pictures_view::dialog_of(c))
         .maybe(crate::status_view::dialog(c))
+        .maybe(crate::mods_view::menu(c))
         .maybe(crate::past_view::sheet_of(c));
     Node::new("Page").prop("flush", true).child(body)
 }
@@ -207,7 +212,9 @@ fn conversation(c: &Chat) -> (Node, Vec<(usize, usize)>, usize) {
         newest_end(c, &mut nodes);
     }
     let last = nodes.len().saturating_sub(1);
-    let scroll = Node::new("Scroll").prop("follow", "end").prop("textScale", c.text_scale as f64).child(column().prop("enter", "rise").children(nodes));
+    // A right-click on a message, a link or a code block opens a menu with what mods add to it.
+    let column = column().prop("enter", "rise").on("onContextMenu", |payload| crate::mods_view::open_menu(payload)).children(nodes);
+    let scroll = Node::new("Scroll").prop("follow", "end").prop("textScale", c.text_scale as f64).child(column);
     // Older items load as you scroll up to them, and newer ones as you scroll back down.
     let scroll = match first > 0 {
         true => scroll.on("onReachStart", |_| chat::with(show_older)),
@@ -237,8 +244,14 @@ fn newest_end(c: &Chat, nodes: &mut Vec<Node>) {
                 .child(text(format!("Waiting on {}", plural(n, "subagent"))).prop("tone", "muted").prop("shimmer", true).prop("since", c.doing.1))
                 .child(button("Stop", "ghost", false, chat::stop).prop("size", "sm")),
             None => {
-                let what = if c.doing.0.is_empty() { "Working" } else { c.doing.0.as_str() };
-                row().prop("gap", "s").prop("align", "center").child(text(what).prop("tone", "muted").prop("shimmer", true).prop("since", c.doing.1)).maybe(crate::actions_view::status_button(c))
+                // A mod may draw the line, or reword it.
+                let (drawn, said) = crate::mods_view::spinner(c);
+                let what = said.unwrap_or_else(|| if c.doing.0.is_empty() { "Working".to_owned() } else { c.doing.0.clone() });
+                let line = match drawn {
+                    Some(drawn) => drawn,
+                    None => text(what).prop("tone", "muted").prop("shimmer", true).prop("since", c.doing.1),
+                };
+                row().prop("gap", "s").prop("align", "center").child(line).maybe(crate::actions_view::status_button(c))
             }
         };
         // While subagents of the turn run, how many, over the status line.
@@ -430,15 +443,20 @@ fn bubble(card: Node, action: Option<Node>) -> Node {
 /// An item of the conversation, or with `own` false, of a subagent's, whose messages can't be rewound.
 pub(crate) fn item_node(at: usize, item: &Item, c: &Chat, own: bool) -> Option<Node> {
     let rewind = || own.then(|| crate::fork_view::message_actions(at, c)).flatten();
+    // What a mod made of a message of yours or Claude's: its own tree in its place, or its words reworded.
+    let (drawn, reworded) = if own { crate::mods_view::message(c, at, item) } else { (None, None) };
+    let said_now = |said: &str| reworded.clone().unwrap_or_else(|| said.to_owned());
     let node = match item {
-        Item::User(said) => bubble(card().child(text(said.as_str())), rewind()),
+        Item::User(_) if drawn.is_some() => bubble(card().maybe(drawn), rewind()),
+        Item::User(said) => bubble(card().child(text(said_now(said))), rewind()),
         Item::UserImages(said, pictures) => {
             let card = card().maybe(thumbs(pictures, "Attached picture"));
             bubble(if said.is_empty() { card } else { card.child(text(said.as_str())) }, rewind())
         }
         Item::Images(pictures) => thumbs(pictures, "Picture").unwrap_or_else(stack),
         // A subagent's replies sit in its own list, which the Copy buttons' indexes don't name.
-        Item::Text(said) if own => crate::status_view::reply(at, said, c),
+        Item::Text(_) if own && drawn.is_some() => drawn.unwrap_or_else(stack),
+        Item::Text(said) if own => crate::status_view::reply(at, &said_now(said), c),
         // Words that name something in Wings, like an issue key, open it there.
         Item::Text(said) => crate::edits_view::prose(said, c),
         Item::Divider(said) => row().prop("justify", "center").child(muted(format!("── {said} ──")).prop("size", "small")),
@@ -480,7 +498,12 @@ pub(crate) fn steps(first: usize, tools: &[&Tool], c: &Chat) -> Node {
     } else {
         stack().prop("gap", "s")
     };
-    disclosure(said, rows).prop("open", open).on("onOpenChange", move |_| chat::toggle_steps(first)).key(format!("steps-{first}"))
+    // A mod may draw the count line in place of the chat's.
+    let fold = match crate::mods_view::group(c, first, tools) {
+        Some(drawn) => Node::new("Disclosure").child(Node::new("Slot").prop("name", "summary").child(drawn)).child(Node::new("Slot").prop("name", "body").child(rows)),
+        None => disclosure(said, rows),
+    };
+    fold.prop("open", open).on("onOpenChange", move |_| chat::toggle_steps(first)).key(format!("steps-{first}"))
 }
 
 /// What a run of tool calls did, by kind: "Ran 2 commands · Read 3 files".
@@ -528,6 +551,9 @@ fn step(tool: &Tool, opened: bool, c: &Chat) -> Node {
         .children(facts(tool))
         .maybe(open_subagent(tool, c))
         .maybe(crate::actions_view::background_button(tool, c));
+    // A mod that draws the call's row draws it here instead, and its result under it.
+    let head = crate::mods_view::tool_head(c, tool, head);
+    let mod_result = crate::mods_view::tool_result(c, tool);
     // What an edit or a write printed is only "updated successfully", which the diff already says.
     let label = match (&tool.detail, output) {
         (_, Some((_, true))) => Some("Error"),
@@ -554,11 +580,11 @@ fn step(tool: &Tool, opened: bool, c: &Chat) -> Node {
             let body = if opened { body(tool, output) } else { stack() };
             let label = if error.is_some() { "Whole error" } else { label };
             let fold = disclosure(label, body).prop("open", opened).on("onOpenChange", move |_| chat::toggle_output(&id));
-            stack().prop("gap", "xs").child(head).maybe(error).maybe(pictures).child(fold)
+            stack().prop("gap", "xs").child(head).maybe(mod_result).maybe(error).maybe(pictures).child(fold)
         }
-        None => match pictures {
-            Some(pictures) => stack().prop("gap", "xs").child(head).child(pictures),
-            None => head,
+        None => match (pictures, mod_result) {
+            (None, None) => head,
+            (pictures, drawn) => stack().prop("gap", "xs").child(head).maybe(drawn).maybe(pictures),
         },
     }
     .key(tool.id.as_str())
@@ -732,7 +758,11 @@ fn ask_node(ask: &Ask, c: &Chat) -> Node {
     let none = Draft::default();
     let draft = c.drafts.get(&ask.request).unwrap_or(&none);
     match ask.tool.as_str() {
-        "AskUserQuestion" if ask.input["questions"].as_array().is_some_and(|questions| !questions.is_empty()) => questions_node(ask, draft),
+        // What mods add to the dialog shows above it.
+        "AskUserQuestion" if ask.input["questions"].as_array().is_some_and(|questions| !questions.is_empty()) => match crate::mods_view::question(c, &ask.request) {
+            Some(added) => stack().prop("gap", "s").child(added).child(questions_node(ask, draft)),
+            None => questions_node(ask, draft),
+        },
         "ExitPlanMode" if ask.input["plan"].as_str().is_some() => plan_node(ask, draft),
         _ => permission_node(ask, draft),
     }

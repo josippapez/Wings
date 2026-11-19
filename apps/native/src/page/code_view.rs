@@ -139,7 +139,8 @@ impl PageView {
             .font_family(DEFAULT_FONT_FAMILY)
             .text_size(px(scaled(12.0)))
             .child(styled);
-        match code.tone {
+        let id = code.id;
+        let card = match code.tone {
             // A run of a diff's lines: a tinted band with a bar in the tone's colour, for the card round the diff to hold.
             Some(tone) => {
                 let color = tone_color(tone);
@@ -149,10 +150,15 @@ impl PageView {
                     .border_l_2()
                     .border_color(rgb(color))
                     .bg(rgba(color << 8 | 0x1a))
-                    .into_any_element()
             }
-            None => ui::plain_card([lines.into_any_element()]).into_any_element(),
-        }
+            None => ui::plain_card([lines.into_any_element()]),
+        };
+        // A right press tells the `Stack` round it with an `onContextMenu`, which asks after this, what it hit.
+        card.on_mouse_down(
+            gpui::MouseButton::Right,
+            cx.listener(move |view, event: &gpui::MouseDownEvent, _, _| view.record_code_hit(id, event.position)),
+        )
+        .into_any_element()
     }
 
     /// The colours for `text` as `language`, or the ones this node last had while new ones are made on a thread of

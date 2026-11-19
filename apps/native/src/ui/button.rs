@@ -27,16 +27,16 @@ const PRIMARY_FG: u32 = 0x17151a;
 /// A variant's text colour, background and hover background, as plugin-ui.css sets them.
 fn colors(variant: Variant) -> (u32, u32, u32) {
     match variant {
-        Variant::Default => (PRIMARY_FG, theme::FOREGROUND << 8 | 0xff, 0xece9e4cc),
-        Variant::Secondary => (theme::FOREGROUND, 0xffffff14, 0xffffff1d),
-        Variant::Outline => (theme::FOREGROUND, theme::HOVER, theme::HOVER_STRONG),
-        Variant::Ghost => (theme::FOREGROUND, 0, 0xffffff08),
+        Variant::Default => (PRIMARY_FG, theme::palette().foreground << 8 | 0xff, 0xece9e4cc),
+        Variant::Secondary => (theme::palette().foreground, 0xffffff14, 0xffffff1d),
+        Variant::Outline => (theme::palette().foreground, theme::HOVER, theme::HOVER_STRONG),
+        Variant::Ghost => (theme::palette().foreground, 0, 0xffffff08),
         Variant::Destructive => (
-            theme::DANGER,
-            theme::DANGER << 8 | 0x33,
-            theme::DANGER << 8 | 0x4d,
+            theme::palette().danger,
+            theme::palette().danger << 8 | 0x33,
+            theme::palette().danger << 8 | 0x4d,
         ),
-        Variant::Link => (theme::FOREGROUND, 0, 0),
+        Variant::Link => (theme::palette().foreground, 0, 0),
     }
 }
 
@@ -73,7 +73,7 @@ pub fn button(
         .text_size(px(14.0))
         .font_weight(gpui::FontWeight::MEDIUM)
         .whitespace_nowrap()
-        .focus_visible(|style| style.border_color(rgb(theme::FOREGROUND)))
+        .focus_visible(|style| style.border_color(rgb(theme::palette().foreground)))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .when(disabled, |button| {
             button.opacity(0.5).a11y_synthetic_children(|builder| {
@@ -124,11 +124,11 @@ pub fn chip(
         .border_1()
         .border_color(rgba(0))
         .when(pressed, |chip| chip.bg(rgba(theme::HOVER)))
-        .text_color(rgb(theme::FOREGROUND))
+        .text_color(rgb(theme::palette().foreground))
         .text_size(px(12.8))
         .font_weight(gpui::FontWeight::MEDIUM)
         .whitespace_nowrap()
-        .focus_visible(|style| style.border_color(rgb(theme::FOREGROUND)))
+        .focus_visible(|style| style.border_color(rgb(theme::palette().foreground)))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .when(disabled, |chip| {
             chip.opacity(0.5).a11y_synthetic_children(|builder| {

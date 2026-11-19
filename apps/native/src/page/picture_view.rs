@@ -62,7 +62,7 @@ impl PageView {
                 .items_center()
                 .justify_center()
                 .text_size(px(11.0))
-                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .text_color(rgb(theme::palette().muted_foreground))
                 .children(inside),
         };
         match picture.on_click.clone() {

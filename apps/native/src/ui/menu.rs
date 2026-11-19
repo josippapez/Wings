@@ -6,7 +6,7 @@ use gpui::{
     Stateful, anchored, deferred, div, hsla, point, prelude::*, px, rgb, rgba,
 };
 
-use super::{DIALOG, motion};
+use super::motion;
 use crate::{
     icons::{Icon, icon},
     theme,
@@ -48,8 +48,8 @@ pub fn menu(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Statefu
         .rounded(px(8.0))
         .border_1()
         .border_color(rgba(0xece9e41a))
-        .bg(rgb(DIALOG))
-        .text_color(rgb(theme::FOREGROUND))
+        .bg(rgb(theme::palette().dialog))
+        .text_color(rgb(theme::palette().foreground))
         .shadow(vec![BoxShadow {
             color: hsla(0.0, 0.0, 0.0, 0.3),
             offset: point(px(0.0), px(4.0)),
@@ -72,9 +72,9 @@ pub fn menu_item(
         glyph,
         16.0,
         if destructive {
-            theme::DANGER
+            theme::palette().danger
         } else {
-            theme::MUTED_FOREGROUND
+            theme::palette().muted_foreground
         },
     );
     menu_item_with(id, glyph, label, destructive, disabled)
@@ -110,9 +110,9 @@ fn item(
 ) -> Stateful<Div> {
     let label = label.into();
     let color = if destructive {
-        theme::DANGER
+        theme::palette().danger
     } else {
-        theme::FOREGROUND
+        theme::palette().foreground
     };
     div()
         .id(id)
@@ -139,7 +139,7 @@ fn item(
         .when(!disabled, |item| {
             item.cursor_pointer().hover(move |style| {
                 style.bg(rgba(if destructive {
-                    theme::DANGER << 8 | 0x33
+                    theme::palette().danger << 8 | 0x33
                 } else {
                     ACCENT
                 }))

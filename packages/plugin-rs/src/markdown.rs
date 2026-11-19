@@ -403,7 +403,8 @@ fn spans(source: &str) -> Node {
             Span::Code(t) => line.child(Node::new("Text").prop("mono", true).text(t)),
             Span::Strong(t) => line.child(Node::new("Text").prop("weight", "strong").text(t)),
             Span::Del(t) => line.child(Node::new("Text").prop("tone", "muted").text(t)),
-            Span::Link { text, href } => line.child(Node::new("Text").on("onClick", open_link(href)).text(text)),
+            // `href` tells Wings the address, for a right-click on it.
+            Span::Link { text, href } => line.child(Node::new("Text").prop("href", href.as_str()).on("onClick", open_link(href)).text(text)),
         };
     }
     line

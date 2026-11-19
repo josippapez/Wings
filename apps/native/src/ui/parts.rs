@@ -50,7 +50,7 @@ pub fn heading(content: impl IntoElement) -> Div {
         .mt(px(6.0))
         .text_size(px(12.0))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(theme::MUTED_FOREGROUND))
+        .text_color(rgb(theme::palette().muted_foreground))
         .child(content)
 }
 
@@ -141,7 +141,7 @@ pub fn gauge(
                 ),
         )
         .when_some(note, |gauge, note| {
-            gauge.child(div().text_color(rgb(theme::MUTED_FOREGROUND)).child(note))
+            gauge.child(div().text_color(rgb(theme::palette().muted_foreground)).child(note))
         })
 }
 
@@ -166,8 +166,8 @@ pub fn disclosure_trigger(
         .rounded(px(6.0))
         .cursor_pointer()
         .text_size(px(12.0))
-        .text_color(rgb(theme::MUTED_FOREGROUND))
-        .hover(|style| style.text_color(rgb(theme::FOREGROUND)))
+        .text_color(rgb(theme::palette().muted_foreground))
+        .hover(|style| style.text_color(rgb(theme::palette().foreground)))
         .focusable()
         .tab_stop(true)
         .focus_visible(|style| style.bg(rgba(theme::HOVER)))
@@ -178,7 +178,7 @@ pub fn disclosure_trigger(
                 Icon::ChevronRight
             },
             12.0,
-            theme::MUTED_FOREGROUND,
+            theme::palette().muted_foreground,
         ))
         .child(summary)
 }

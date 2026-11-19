@@ -777,7 +777,8 @@ fn claude_chat(out: PathBuf) {
     // `claude edit-...` is what a change in the /hooks, /memory and /permissions dialogs runs: it reads the edit to the end
     // of its input, and refuses it with the text of `$CHAT_ANSWERS/<subcommand>` when the scene has one, as Claude Code does.
     // A request the chat writes whose subtype names a file in `$CHAT_ANSWERS` gets that file as its answer, as Claude Code
-    // answers a request made after it started. One that draws a mod's `instance_id` gets `instance-<id>`'s, under its own id.
+    // answers a request made after it started. One that draws a mod's `instance_id` gets `instance-<id>`'s, under its own id,
+    // or `component-<Component>-<id>`'s, for one of the component.
     std::fs::write(root.join("available.json"), include_str!("../../../plugins/claude-chat/rust/tests/available.json")).unwrap();
     script(
         bin.join("claude"),
@@ -785,7 +786,8 @@ fn claude_chat(out: PathBuf) {
 case "$1" in edit-*) cat >/dev/null; if [ -f "$CHAT_ANSWERS/$1" ]; then cat "$CHAT_ANSWERS/$1" >&2; exit 1; fi; echo '{"ok":true}'; exit 0;; esac
 cat "$CHAT_FIXTURE"; if [ -n "$CHAT_EXIT" ]; then echo "$CHAT_STDERR" >&2; exit "$CHAT_EXIT"; fi
 while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ] && case "$line" in *"\"subtype\":\"${answer##*/}\""*) cat "$answer";; esac; done
-for answer in "$CHAT_ANSWERS"/instance-*; do [ -f "$answer" ] && case "$line" in *"\"instance_id\":\"${answer##*/instance-}\""*) id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p'); sed "s/REQUEST_ID/$id/" "$answer";; esac; done; done"##,
+for answer in "$CHAT_ANSWERS"/instance-*; do [ -f "$answer" ] && case "$line" in *"\"instance_id\":\"${answer##*/instance-}\""*) id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p'); sed "s/REQUEST_ID/$id/" "$answer";; esac; done
+for answer in "$CHAT_ANSWERS"/component-*; do [ -f "$answer" ] && name=${answer##*/component-} && case "$line" in *"\"component\":\"${name%%-*}\",\"instance_id\":\"${name#*-}\""*) id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p'); sed "s/REQUEST_ID/$id/" "$answer";; esac; done; done"##,
     );
     // `gh pr view <url> --json ...` is how the side panel reads a pull request the conversation names: made-up ones.
     script(
@@ -997,8 +999,10 @@ esac"##,
             "model_scoped": [{ "display_name": "Fable", "utilization": 0, "resets_at": "2026-11-22T15:59:00+00:00" }],
             "extra_usage": { "is_enabled": true, "monthly_limit": 20000, "used_credits": 1174, "utilization": 6, "currency": "EUR", "decimal_places": 2 } },
         "behaviors": {
-            "day": { "recommendations": [{ "key": "long_context", "pct": 70, "title": "See what fills your context", "detail": "run /context" }],
-                "agents": [], "skills": [{ "name": "release-notes", "pct": 4 }], "plugins": [{ "name": "toolbox", "pct": 11 }], "mcp_servers": [{ "name": "files", "pct": 6 }] },
+            "day": { "recommendations": [{ "key": "long_context", "pct": 70, "title": "See what fills your context", "detail": "run /context" },
+                    { "key": "subagents", "pct": 90, "title": "Check which models your subagents use", "detail": "share covers whole sessions, not only subagents" }],
+                "agents": [{ "name": "dev-core:mid-tier-coder", "pct": 4 }, { "name": "general-purpose", "pct": 2 }],
+                "skills": [{ "name": "release-notes", "pct": 4 }, { "name": "wings-performance", "pct": 3 }], "plugins": [{ "name": "toolbox", "pct": 11 }], "mcp_servers": [{ "name": "files", "pct": 6 }] },
             "week": { "recommendations": [], "agents": [], "skills": [], "plugins": [], "mcp_servers": [] } } }));
     // What `/context` asks for in full: the categories the window is spent on.
     let full_context = answer("context-view", json!({
@@ -1214,6 +1218,19 @@ esac"##,
         line
     }));
     let signed_out = opened(signed_out);
+    // /mcp with ten more claude.ai connectors that need a sign-in, which fold with the fixture's Calendar under one line.
+    let mut crowded: Vec<serde_json::Value> = vec![init.clone()];
+    crowded.extend(include_str!("../../../plugins/claude-chat/rust/tests/plugins.jsonl").lines().map(|line| {
+        let mut line: serde_json::Value = serde_json::from_str(line).unwrap();
+        if line["response"]["request_id"] == "plugins-servers" {
+            let servers = line["response"]["response"]["mcpServers"].as_array_mut().unwrap();
+            for name in ["Asana", "Box", "Canva", "Figma", "GitHub", "Jira", "Linear", "Notion", "Slack", "Zoom"] {
+                servers.push(json!({ "name": format!("claude.ai {name}"), "status": "needs-auth", "scope": "claudeai", "transport": "claudeai-proxy" }));
+            }
+        }
+        line
+    }));
+    let crowded = opened(crowded);
     // A server asks for details in the middle of a turn: a form with a choice, a number, a text and a box.
     let elicited = opened(vec![
         init.clone(),
@@ -1336,12 +1353,18 @@ esac"##,
         json!({ "type": "system", "subtype": "ui_status", "plugin": "repo-docs", "text": "indexing docs 30% (3/10)" }),
         json!({ "type": "system", "subtype": "ui_toast", "plugin": "deploy-watch", "text": "staging is up", "timeout_ms": 60000 }),
         user("Ship the checkout fix to staging."),
-        text("It's on staging. The deploy pane has its link."),
+        tool("deploy-1", "Bash", json!({ "command": "./deploy.sh staging", "description": "Deploy to staging" })),
+        output("deploy-1", "Deployed 3f2a1c9 to staging in 41s", false),
+        text("[Staging](https://staging.shop.example.com) has it now. The deploy pane has its link."),
     ]);
-    let scenes: [Scene; 74] = [
+    // Right-clicked on the link: the chat's own rows and the one a mod adds.
+    let mods_menu = mods.clone();
+    let scenes: [Scene; 80] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         // Scrolled up past what the page has room for: older steps come in, the newest go, and a button goes back to them.
-        ("mods", mods, None, None, "Roll back"),
+        ("mods", mods.clone(), None, Some("disclose:Ran 1 command"), "Roll back"),
+        ("mods-theme", mods, None, None, "Roll back"),
+        ("mods-menu", mods_menu, None, Some("rightclick:140,130"), "Summarize this page"),
         ("mentioned", mentioned.clone(), None, None, "Mentioned"),
         // The pointer on a pull request's row shows its card.
         ("mentioned-card", mentioned, None, Some("hover:800,267"), "Mentioned"),
@@ -1361,11 +1384,17 @@ esac"##,
         ("sessions", opened(vec![init.clone()]), None, Some("press:Past sessions"), "Past sessions"),
         ("sessions-search", opened(vec![init.clone()]), None, Some("press:Past sessions;type:checkout"), "matching messages"),
         // /usage opens the usage dialog over the conversation instead of going to Claude as a message, and so does /context.
-        ("usage", work.iter().cloned().chain([full_usage]).collect(), None, Some("type:/usage;keys:enter"), "Plan usage limits"),
+        ("usage", work.iter().cloned().chain([full_usage.clone()]).collect(), None, Some("type:/usage;keys:enter"), "Plan usage limits"),
+        ("usage-end", work.iter().cloned().chain([full_usage]).collect(), None, Some("type:/usage;keys:enter;scroll:down"), "Cache read tokens"),
         ("context", work.iter().cloned().chain([full_context]).collect(), None, Some("type:/context;keys:enter"), "41,000 of 200,000 tokens"),
         // /plugins and /mcp open the plugins dialog over the chat, each leading with its own list.
         ("plugins", plugins.clone(), None, Some("type:/plugins;keys:enter"), "toolbox"),
         ("mcp", plugins.clone(), None, Some("type:/mcp;keys:enter"), "Needs sign-in"),
+        // A connected server opens to list its tools, each with the start of its description.
+        ("mcp-tools", plugins.clone(), None, Some("type:/mcp;keys:enter;disclose:2 tools"), "Read one ticket by its key"),
+        // Eleven that need a sign-in fold under one line, which a click opens.
+        ("mcp-fold", crowded.clone(), None, Some("type:/mcp;keys:enter"), "11 need sign-in"),
+        ("mcp-fold-open", crowded, None, Some("type:/mcp;keys:enter;disclose:11 need sign-in"), "claude.ai Zoom"),
         // The dialog's Discover view lists what the fake `claude plugin list` prints; three tabs reach its search field (the
         // close button and the two chips come first), and the filter leaves api-guard.
         ("discover", plugins, None, Some("type:/plugins;keys:enter;chip:Discover;keys:tab tab tab;type:guard"), "api-guard"),
@@ -1532,10 +1561,10 @@ esac"##,
             open: std::rc::Rc::new(|_: wings_native::page::links::LinkTarget, _: &mut gpui::Window, _: &mut gpui::App| {}),
         })
     });
-    // `CHAT_SCENE=<name>` renders that scene alone.
+    // `CHAT_SCENE=<name>[,<name>...]` renders those scenes alone.
     let only = std::env::var("CHAT_SCENE").ok();
     for (name, lines, exit, act, expected) in scenes {
-        if only.as_deref().is_some_and(|only| only != name) {
+        if only.as_deref().is_some_and(|only| !only.split(',').any(|one| one == name)) {
             continue;
         }
         let host = match name {
@@ -1575,7 +1604,7 @@ esac"##,
             }
         }
         // The pane's tree, drawn by the plugin, for whichever request asks for it.
-        if name == "mods" {
+        if name.starts_with("mods") {
             let tree = json!({ "type": "Box", "props": { "flexDirection": "column", "gap": 1 }, "children": [
                 { "type": "Box", "props": { "gap": 1 }, "children": [
                     { "type": "Text", "props": { "color": "green" }, "children": ["●"] },
@@ -1592,6 +1621,29 @@ esac"##,
             std::fs::write(answers.join("instance-prompt-hint"), format!("{hint}\n")).unwrap();
             let modes = answer("REQUEST_ID", json!({ "tree": { "type": "engine", "ref": 1 }, "props": { "modes": ["staging"] }, "rewritten": true, "hooked": true }));
             std::fs::write(answers.join("instance-session-mode"), format!("{modes}\n")).unwrap();
+            // A mod's row for the deploy command, and its line under the result.
+            let row = answer("REQUEST_ID", json!({ "tree": { "type": "Box", "props": { "gap": 1 }, "children": [
+                { "type": "Text", "props": { "color": "green" }, "children": ["●"] },
+                { "type": "Text", "props": { "bold": true }, "children": ["Deploy"] },
+                { "type": "Text", "props": { "dimColor": true }, "children": ["staging · 41s"] }] }, "props": {}, "rewritten": false, "hooked": true }));
+            std::fs::write(answers.join("component-ToolUse-deploy-1"), format!("{row}\n")).unwrap();
+            let result = answer("REQUEST_ID", json!({ "tree": { "type": "Text", "props": { "color": "cyan" }, "children": ["3f2a1c9 is live on staging"] }, "props": {}, "rewritten": false, "hooked": true }));
+            std::fs::write(answers.join("component-ToolResult-deploy-1"), format!("{result}\n")).unwrap();
+            // What a mod adds to the menu on a link.
+            let menu = answer("REQUEST_ID", json!({ "tree": { "type": "Box", "props": { "flexDirection": "column" }, "children": [
+                { "type": "Button", "props": { "key": "sum", "label": "Summarize this page" }, "press": { "plugin": "deploy-watch", "handle": 11 },
+                  "children": [{ "type": "Text", "props": { "dimColor": true }, "children": ["into the message box"] }] }] }, "props": {}, "rewritten": false, "hooked": true }));
+            std::fs::write(answers.join("instance-context-menu"), format!("{menu}\n")).unwrap();
+        }
+        // A mod's look, a paper notebook's browns, as Claude Code answered for one made with `makeColors`, cut to the
+        // colours the chat reads, lying on a gradient.
+        if name == "mods-theme" {
+            let dark = json!({ "gray-900": "#1f1a15", "gray-850": "#28221b", "gray-830": "#312a22", "gray-800": "#3a3229", "gray-50": "#f0e7d7", "gray-400": "#aca08d",
+                "role-accent-250": "#93b7d9", "role-danger-250": "#ed9792", "role-success-250": "#96c185", "role-warning-250": "#eaa318" });
+            let look = answer("REQUEST_ID", json!({ "tree": { "type": "engine", "ref": 0 }, "props": { "plugin": "paper",
+                "colors": { "v": 1, "label": "Paper notebook", "inputs": { "dark": dark } },
+                "backdrop": { "gradient": { "stops": ["surface-0", "surface-2"] } } }, "rewritten": false, "hooked": true }));
+            std::fs::write(answers.join("component-Theme-theme"), format!("{look}\n")).unwrap();
         }
         if name == "permissions-refused" {
             std::fs::write(answers.join("edit-permission-rules"), "the rule looks like it contains a secret, so it was not saved to settings\n").unwrap();
@@ -1697,6 +1749,15 @@ esac"##,
                             let position = point(px(x.parse().unwrap()), px(y.parse().unwrap()));
                             cx.simulate_event(window, gpui::MouseMoveEvent { position, pressed_button: None, modifiers: gpui::Modifiers::default() });
                             wait(&mut cx, window, Duration::from_millis(1200));
+                        }
+                        // The right button at a point of the page, after the pointer moved there.
+                        Some(("rightclick", at)) => {
+                            let (x, y) = at.split_once(',').unwrap();
+                            let position = point(px(x.parse().unwrap()), px(y.parse().unwrap()));
+                            cx.simulate_event(window, gpui::MouseMoveEvent { position, pressed_button: None, modifiers: gpui::Modifiers::default() });
+                            wait(&mut cx, window, Duration::from_millis(100));
+                            cx.simulate_event(window, gpui::MouseDownEvent { button: gpui::MouseButton::Right, position, modifiers: gpui::Modifiers::default(), click_count: 1, first_mouse: false });
+                            cx.simulate_event(window, gpui::MouseUpEvent { button: gpui::MouseButton::Right, position, modifiers: gpui::Modifiers::default(), click_count: 1 });
                         }
                         // The wheel all the way up or down the conversation.
                         Some(("scroll", way)) => cx.simulate_event(window, gpui::ScrollEvent {

@@ -132,6 +132,8 @@ pub struct Tree {
     pub children: Vec<Node>,
     /// The page lays itself out edge to edge with no padding, as a `{ fill: true }` page does on the desktop.
     pub fill: bool,
+    /// The colours the page paints in place of the app's, as a mod's theme gave them. None paints in the app's.
+    pub palette: Option<crate::theme::Palette>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -187,6 +189,7 @@ pub enum Node {
     Dialog(Dialog),
     Sheet(Sheet),
     HoverCard(HoverCard),
+    PopupMenu(PopupMenu),
     Terminal(Terminal),
     Code(Code),
 }
@@ -230,6 +233,9 @@ pub struct Stack {
     pub enter: bool,
     /// `links: true`: every `Text` in it finds Wings' links, as one with `links: true` does.
     pub links: bool,
+    /// What to send back to the page when the right mouse button is pressed inside it: where, which of its children was
+    /// under the pointer and what link or code was (`onContextMenu`).
+    pub on_context_menu: Option<String>,
     pub children: Vec<Node>,
 }
 
@@ -267,6 +273,9 @@ pub struct Text {
     pub since: Option<i64>,
     /// `links: true`: words in it that a plugin that is on declares in `contributes.links` are links to that plugin.
     pub links: bool,
+    /// `href`: the `https:` address a link inside a line goes to, which a right-click on it tells the page
+    /// (`onContextMenu`). The page still opens it with its `onClick`.
+    pub href: Option<String>,
     pub children: Vec<Node>,
 }
 
@@ -300,6 +309,8 @@ pub struct Button {
     /// What to send back to the page when it's clicked. A disabled button has none.
     pub on_click: Option<String>,
     pub on_key_down: Option<String>,
+    /// A dim second line under the text of an item of a `PopupMenu`.
+    pub description: Option<String>,
     pub children: Vec<Node>,
 }
 
@@ -576,6 +587,21 @@ pub struct HoverCard {
     pub width: f32,
 }
 
+/// A list of actions over the page at a point of the window, as a right-click menu: the page opens it by sending the node
+/// and closes it by leaving it out.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PopupMenu {
+    pub id: u64,
+    /// Where the menu's top-left corner opens, in window points. It is moved in to stay inside the window.
+    pub x: f32,
+    pub y: f32,
+    /// What to send back to the page when Escape or a press outside the menu asks for it to close.
+    pub on_close: Option<String>,
+    /// The items, each a `Node::Button`: its text or `label`, its `description`, its click, and red when its variant is
+    /// destructive.
+    pub items: Vec<Node>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Disclosure {
     pub id: u64,
@@ -842,6 +868,7 @@ impl Tree {
         Ok(Tree {
             children: walk.children(root.children, 0)?,
             fill: root.props.get("fill").and_then(Value::as_bool) == Some(true),
+            palette: root.props.get("palette").and_then(palette),
         })
     }
 
@@ -860,6 +887,48 @@ impl Tree {
     pub fn text(&self) -> String {
         plain_text(&self.children)
     }
+}
+
+/// A page's `palette`: each role (`base`, `page`, `dialog`, `popover`, `text`, `muted`, `info`, `danger`, `done`,
+/// `working`) a `#rrggbb` colour, a role left out or not a colour keeping the app's, and `ground`
+/// the colours the page lies on from `from` to `to` at `angle` degrees. None when it names no colour at all.
+fn palette(props: &Value) -> Option<crate::theme::Palette> {
+    let color = |value: &Value| {
+        let hex = value.as_str()?.strip_prefix('#')?;
+        (hex.len() == 6 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())).then(|| u32::from_str_radix(hex, 16).ok())?
+    };
+    let mut palette = crate::theme::Palette::APP;
+    let mut named = false;
+    for (role, slot) in [
+        ("base", &mut palette.background),
+        ("page", &mut palette.surface),
+        ("dialog", &mut palette.dialog),
+        ("text", &mut palette.foreground),
+        ("muted", &mut palette.muted_foreground),
+        ("info", &mut palette.info),
+        ("danger", &mut palette.danger),
+        ("done", &mut palette.done),
+        ("working", &mut palette.working),
+    ] {
+        if let Some(found) = props.get(role).and_then(color) {
+            *slot = found;
+            named = true;
+        }
+    }
+    // A popover is see-through by as much as the app's.
+    if let Some(found) = props.get("popover").and_then(color) {
+        palette.popover = found << 8 | (crate::theme::POPOVER & 0xff);
+        named = true;
+    }
+    let ground = props.get("ground").filter(|ground| ground.is_object());
+    if let Some(ground) = ground
+        && let (Some(from), Some(to)) = (color(&ground["from"]), color(&ground["to"]))
+    {
+        let angle = (ground["angle"].as_f64().filter(|angle| angle.is_finite()).unwrap_or(180.0) as f32).rem_euclid(360.0);
+        palette.ground = Some((from, to, angle));
+        named = true;
+    }
+    named.then_some(palette)
 }
 
 /// The strings under `nodes`: what a reader would see. Strings next to each other run together, and the parts of a
@@ -914,6 +983,7 @@ impl Node {
             Node::ListItem(n) => Some(n.id),
             Node::Disclosure(n) => Some(n.id),
             Node::HoverCard(n) => Some(n.id),
+            Node::PopupMenu(n) => Some(n.id),
             Node::Select(n) => Some(n.id),
             Node::Chips(n) => Some(n.id),
             Node::Combobox(n) => Some(n.id),
@@ -988,6 +1058,7 @@ impl Node {
             Node::ListItem(n) => vec![&n.children, &n.actions],
             Node::Disclosure(n) => vec![&n.summary, &n.body],
             Node::HoverCard(n) => vec![&n.children, &n.card],
+            Node::PopupMenu(n) => vec![&n.items],
             Node::Combobox(n) => vec![&n.field, &n.options, &n.empty],
             Node::Menu(n) => vec![&n.trigger, &n.items],
             Node::Sheet(n) => vec![&n.title, &n.description, &n.header, &n.body],
@@ -1060,6 +1131,7 @@ impl Walk {
                 | "ListItem"
                 | "Disclosure"
                 | "HoverCard"
+                | "PopupMenu"
                 | "Select"
                 | "Chips"
                 | "ListButton"
@@ -1129,6 +1201,7 @@ impl Walk {
                     .map(|width| width as f32),
                 enter: str_prop(&props, "enter") == Some("rise"),
                 links: on("links"),
+                on_context_menu: handler("onContextMenu"),
                 children: parts(children),
             }),
             "Row" => Node::Row(Row {
@@ -1157,6 +1230,7 @@ impl Walk {
                 mark: on("mark"),
                 since: props.get("since").and_then(Value::as_f64).map(|ms| ms as i64),
                 links: on("links"),
+                href: str_prop(&props, "href").filter(|href| href.starts_with("https://") && href.len() <= 2048).map(str::to_owned),
                 children: parts(children),
             }),
             "Terminal" => Node::Terminal(Terminal {
@@ -1198,6 +1272,9 @@ impl Walk {
                 round: on("round"),
                 on_click: handler("onClick"),
                 on_key_down: handler("onKeyDown"),
+                description: str_prop(&props, "description")
+                    .filter(|text| !text.is_empty())
+                    .map(|text| cut(text.to_owned())),
                 children: parts(children),
             }),
             "Notice" => Node::Notice(Notice {
@@ -1402,6 +1479,14 @@ impl Walk {
                     width: number(&props, "width").map_or(300.0, |width| width.clamp(160.0, 480.0) as f32),
                 })
             }
+            "PopupMenu" => Node::PopupMenu(PopupMenu {
+                id,
+                // A point far outside any window is as good as none: the menu is moved in to stay in the window.
+                x: number(&props, "x").map_or(0.0, |x| x.clamp(-100_000.0, 100_000.0) as f32),
+                y: number(&props, "y").map_or(0.0, |y| y.clamp(-100_000.0, 100_000.0) as f32),
+                on_close: handler("onClose"),
+                items: children.into_iter().filter(|node| matches!(node, Node::Button(_))).collect(),
+            }),
             "Disclosure" => {
                 let mut slots = Slots(children);
                 Node::Disclosure(Disclosure {
@@ -1484,6 +1569,7 @@ impl Walk {
                     round: false,
                     on_click: handler("onClick"),
                     on_key_down: handler("onKeyDown"),
+                    description: None,
                     children: parts(children),
                 },
                 indent: number(&props, "indent")
@@ -1603,8 +1689,9 @@ fn valid_handler(handler: &str) -> bool {
 /// blur handler of its own, then its options as plain chips in a wrapping row, or a small muted line when none match.
 /// When the field holds an option, or is empty with none to suggest, the stack is the field alone and stays a stack.
 fn combobox(stack: Stack) -> Node {
-    let plain =
-        stack.gap == Gap::S && !stack.grow && stack.width.is_none() && stack.max_width.is_none();
+    let plain = stack.on_context_menu.is_none()
+        && stack.gap == Gap::S
+        && !stack.grow && stack.width.is_none() && stack.max_width.is_none();
     // A picker's field selects its text when it takes the keyboard, and hears when it loses it. A message box that
     // sends on Enter takes suggestions too, like a chat's slash commands: it keeps its Enter while none show.
     let field = |node: &Node| {
@@ -1708,6 +1795,30 @@ mod tests {
 
     fn button(props: Value) -> Value {
         json!({"id":2,"type":"Button","props":props,"children":[{"id":3,"type":"#text","text":"Go"}]})
+    }
+
+    #[test]
+    fn a_page_paints_in_the_colours_of_its_palette_and_the_apps_for_the_rest() {
+        let painted = |palette: Value| {
+            Tree::parse(&json!({"id":0,"type":"#root","props":{"palette":palette},"children":[]}).to_string())
+                .unwrap()
+                .palette
+        };
+        let palette = painted(json!({
+            "page": "#1f1a15", "text": "#F0E7D7", "popover": "#3a3229",
+            // Not colours: the app's stay.
+            "muted": "red", "info": "#12345", "danger": 7,
+            "ground": {"from": "#1f1a15", "to": "#312a22", "angle": -90},
+        }))
+        .unwrap();
+        assert_eq!((palette.surface, palette.foreground), (0x1f1a15, 0xf0e7d7));
+        assert_eq!(palette.popover, 0x3a3229f2, "see-through as the app's popover");
+        let app = crate::theme::Palette::APP;
+        assert_eq!((palette.muted_foreground, palette.info, palette.danger), (app.muted_foreground, app.info, app.danger));
+        assert_eq!(palette.ground, Some((0x1f1a15, 0x312a22, 270.0)));
+        // Nothing it can paint is no palette at all.
+        assert_eq!(painted(json!({"page": "url(x)"})), None);
+        assert_eq!(tree(json!([])).unwrap().palette, None);
     }
 
     #[test]
