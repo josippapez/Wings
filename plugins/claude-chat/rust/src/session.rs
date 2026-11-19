@@ -510,6 +510,17 @@ impl Session {
             return;
         }
         match line["type"].as_str().unwrap_or_default() {
+            // A message you sent while Claude worked, or a task's notice, as a session read back has it: the transcript
+            // keeps it as an attachment of the turn that read it, not as a message. What another agent sent stays out.
+            "attachment" if line["attachment"]["type"] == "queued_command" => {
+                let queued = &line["attachment"];
+                let yours = matches!(queued["origin"]["kind"].as_str(), None | Some("human"));
+                match queued["commandMode"].as_str() {
+                    Some("prompt") if yours => self.user(&queued["prompt"]),
+                    Some("task-notification") => self.user(&queued["prompt"]),
+                    _ => {}
+                }
+            }
             "system" if line["subtype"] == "init" => {
                 self.id = line["session_id"].as_str().map(str::to_owned);
                 // It names the model in full (`claude-opus-5-5`), which more than one choice stands for: the one picked, or
@@ -2470,6 +2481,31 @@ mod tests {
 
     fn tool_result(session: &mut Session, id: &str, content: &str, error: bool) {
         session.hear(&json!({ "type": "user", "message": { "content": [{ "type": "tool_result", "tool_use_id": id, "content": content, "is_error": error }] } }));
+    }
+
+    /// A session read back: what you sent while Claude worked is an attachment of the turn that read it, with text or
+    /// with pictures; another agent's message and a task's notice are not yours.
+    #[test]
+    fn messages_you_sent_while_claude_worked_come_back_from_the_transcript() {
+        let mut session = Session::default();
+        let queued = |prompt: Value, mode: &str, origin: Value| {
+            json!({ "type": "attachment", "uuid": "u", "attachment": { "type": "queued_command", "prompt": prompt, "commandMode": mode, "origin": origin } })
+        };
+        session.hear(&queued(json!("ANd we are missing when the subagents finish"), "prompt", Value::Null));
+        session.hear(&queued(json!("see this"), "prompt", json!({ "kind": "human" })));
+        session.hear(&queued(json!([{ "type": "text", "text": "it's too narrow" }]), "prompt", Value::Null));
+        session.hear(&queued(json!("Message from a teammate"), "prompt", json!({ "kind": "peer" })));
+        session.hear(&queued(
+            json!("<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n<summary>Background command \"Build\" completed (exit code 0)</summary>\n</task-notification>"),
+            "task-notification",
+            json!({ "kind": "task-notification" }),
+        ));
+        assert_eq!(
+            session.items[..3],
+            [Item::User("ANd we are missing when the subagents finish".into()), Item::User("see this".into()), Item::User("it's too narrow".into())]
+        );
+        assert_eq!(session.items.len(), 4, "{:?}", session.items);
+        assert!(matches!(&session.items[3], Item::Finished(done) if done.description == "Build"));
     }
 
     #[test]

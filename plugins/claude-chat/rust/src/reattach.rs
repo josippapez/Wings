@@ -334,7 +334,7 @@ mod page {
         // Read before the lines are counted, so that what it says is said before the lines Wings counts.
         let entries = match &resume {
             Some(id) => {
-                let read = host::transcript_with_images(id, &["user", "assistant", "last-prompt"], Some(chat::HISTORY)).await;
+                let read = host::transcript_cut(id, &chat::HISTORY_KINDS, chat::HISTORY_ALL, chat::HISTORY_CUT).await;
                 read.ok().and_then(|entries| entries.as_array().cloned()).unwrap_or_default()
             }
             None => Vec::new(),

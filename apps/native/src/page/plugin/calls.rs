@@ -106,6 +106,8 @@ struct TranscriptRequest {
     images: Option<String>,
     /// A subagent of the session, by Claude Code's agent id: its own transcript, in the session's folder.
     agent: Option<String>,
+    /// Each string of an entry cut to this many characters, which lets `last` ask for more entries.
+    cut: Option<f64>,
 }
 
 /// What the desktop's wrapper makes of an `exec`'s `timeoutMs`: a number of milliseconds, whole and not negative. The
@@ -895,6 +897,7 @@ fn transcript(access: &Access, params: &Value) -> Result<String, String> {
     let request: TranscriptRequest =
         serde_json::from_value(params.clone()).map_err(|error| error.to_string())?;
     let last = request.last.map(|last| last as usize);
+    let cut = request.cut.filter(|cut| cut.is_finite() && *cut >= 0.0).map(|cut| cut as usize);
     let mut entries = agent_entries(
         &access.plugin,
         &access.env.claude_dirs(),
@@ -902,6 +905,7 @@ fn transcript(access: &Access, params: &Value) -> Result<String, String> {
         request.agent.as_deref(),
         &request.types,
         last,
+        cut,
     )?;
     if request.images.as_deref() == Some("register") {
         pictures::register_in(&access.plugin.manifest.id, &mut entries);

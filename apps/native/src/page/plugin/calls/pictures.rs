@@ -16,6 +16,10 @@ pub(super) fn register_in(plugin: &str, entries: &mut [Value]) {
         if let Some(blocks) = entry.pointer_mut("/message/content").and_then(Value::as_array_mut) {
             swap(plugin, blocks);
         }
+        // A message you sent while Claude worked, which the transcript keeps as an attachment of the turn that read it.
+        if let Some(blocks) = entry.pointer_mut("/attachment/prompt").and_then(Value::as_array_mut) {
+            swap(plugin, blocks);
+        }
     }
 }
 

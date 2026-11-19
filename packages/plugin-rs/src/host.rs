@@ -442,6 +442,13 @@ pub fn transcript(session: &str, kinds: &[&str], last: Option<u32>) -> Pending<R
     call("transcript", json!({ "sessionId": session, "types": kinds, "last": last }))
 }
 
+/// `transcript_with_images` with each string of an entry cut to `cut` characters, a long tool output or a whole file
+/// that would be, which lets `last` ask for up to 10,000 entries: a long session's whole history reads in a few MB, about
+/// what 400 whole entries take. Needs Wings 0.2.43; an older one reads the newest 1,000 whole.
+pub fn transcript_cut(session: &str, kinds: &[&str], last: u32, cut: u32) -> Pending<Result<Value, String>> {
+    call("transcript", json!({ "sessionId": session, "types": kinds, "last": last, "images": "register", "cut": cut }))
+}
+
 /// `wings.transcript` that keeps the pictures out of the page (Wings 0.2.40). Each image block of an entry, in a message
 /// or in a tool result, comes back as `{ "type": "image", "source": { "type": "registered", "id": ... } }`, the id to
 /// give `ui::image`, and as `{ "type": "unavailable" }` when Wings won't keep it. A page has 64 MB, and a transcript with

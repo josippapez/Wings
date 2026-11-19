@@ -33,7 +33,13 @@ const PROGRAMS: [&str; 2] = ["claude", "claude-rtk"];
 /// How many of the newest items the chat shows at first, and how many more each scroll up to the top adds.
 pub const PAGE: usize = 80;
 /// How many entries of a resumed session's transcript are read back.
-pub(crate) const HISTORY: u32 = 400;
+/// How many entries of a session read back the chat asks for, and how much of each string of them: a whole long session,
+/// its tool outputs cut as the conversation cuts them anyway.
+pub(crate) const HISTORY_ALL: u32 = 10_000;
+pub(crate) const HISTORY_CUT: u32 = 4_000;
+/// What a session read back is made of: your messages (those sent while Claude worked are attachments), Claude's, and
+/// where a rewind cut it.
+pub(crate) const HISTORY_KINDS: [&str; 4] = ["user", "assistant", "last-prompt", "attachment:queued_command"];
 /// How many past sessions the list shows.
 const PAST: u32 = 60;
 
@@ -281,7 +287,7 @@ pub fn launch_with(resume: Option<String>, how: Launch) {
     load_git(run, cwd.clone());
     task::spawn(async move {
         if let Some(id) = &resume {
-            if let Ok(entries) = host::transcript_with_images(id, &["user", "assistant", "last-prompt"], Some(HISTORY)).await {
+            if let Ok(entries) = host::transcript_cut(id, &HISTORY_KINDS, HISTORY_ALL, HISTORY_CUT).await {
                 with(|c| {
                     if c.run == run {
                         entries.as_array().into_iter().flatten().for_each(|entry| c.session.hear(entry));

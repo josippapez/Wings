@@ -32,6 +32,27 @@ fn type_marker(allowed: &str) -> String {
 /// Entries of the allowed types from a Claude Code session transcript, oldest first.
 /// The most entries `last` can ask for.
 pub const TRANSCRIPT_LAST_MAX: usize = 1000;
+/// The most with `cut`, whose entries are small: a 2,000-entry session of 65 MB reads as about 8 MB with its strings cut
+/// to 4,000 characters (measured), much what 400 whole entries of it take.
+pub const TRANSCRIPT_CUT_LAST_MAX: usize = 10_000;
+/// The fewest characters `cut` keeps of a string.
+pub const TRANSCRIPT_CUT_MIN: usize = 200;
+
+/// `value` with each string over `cut` characters cut to that many, as a long tool output or a whole file is. A picture
+/// stays whole, since it can't be shown in part.
+fn cut_strings(value: &mut Value, cut: usize) {
+    match value {
+        Value::String(text) => {
+            if let Some((at, _)) = text.char_indices().nth(cut) {
+                text.truncate(at);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(|item| cut_strings(item, cut)),
+        Value::Object(map) if map.get("type").and_then(Value::as_str) == Some("image") => {}
+        Value::Object(map) => map.values_mut().for_each(|item| cut_strings(item, cut)),
+        _ => {}
+    }
+}
 
 /// The transcript of `session_id` in any of the Claude Code account folders `claude_dirs`.
 pub fn find_transcript(claude_dirs: &[PathBuf], session_id: &str) -> Option<PathBuf> {
@@ -58,11 +79,20 @@ pub fn find_subagent_transcript(claude_dirs: &[PathBuf], session_id: &str, agent
 /// With `last`, only the newest that many entries, read from the end. A long session's transcript runs to tens
 /// of MB, and most callers want only its latest state.
 pub fn transcript_entries(plugin: &Plugin, claude_dirs: &[PathBuf], session_id: &str, types: &[String], last: Option<usize>) -> Result<Vec<Value>, String> {
-    agent_entries(plugin, claude_dirs, session_id, None, types, last)
+    agent_entries(plugin, claude_dirs, session_id, None, types, last, None)
 }
 
-/// `transcript_entries` of the session's subagent `agent`, or of the session itself without one.
-pub fn agent_entries(plugin: &Plugin, claude_dirs: &[PathBuf], session_id: &str, agent: Option<&str>, types: &[String], last: Option<usize>) -> Result<Vec<Value>, String> {
+/// `transcript_entries` of the session's subagent `agent`, or of the session itself without one. With `cut`, each string
+/// in an entry keeps at most that many characters (`TRANSCRIPT_CUT_MIN` at least), and `last` can ask for more entries.
+pub fn agent_entries(
+    plugin: &Plugin,
+    claude_dirs: &[PathBuf],
+    session_id: &str,
+    agent: Option<&str>,
+    types: &[String],
+    last: Option<usize>,
+    cut: Option<usize>,
+) -> Result<Vec<Value>, String> {
     let allowed = &plugin.manifest.permissions.transcript;
     if let Some(t) = types.iter().find(|t| !allowed.contains(t)) {
         return Err(format!("{} may not read {t:?} transcript entries", plugin.manifest.id));
@@ -78,10 +108,18 @@ pub fn agent_entries(plugin: &Plugin, claude_dirs: &[PathBuf], session_id: &str,
     let patterns: Vec<String> = types.iter().map(|t| type_marker(t)).collect();
     let mentions = |l: &&str| patterns.iter().any(|p| l.contains(p.as_str()));
     // A nested object can say `"type":"user"` too, so the entry's own type is checked once it's parsed.
-    let entry = |l: &str| serde_json::from_str::<Value>(l).ok().filter(|v| types.iter().any(|t| is_type(t, v)));
+    let cut = cut.map(|cut| cut.max(TRANSCRIPT_CUT_MIN));
+    let entry = |l: &str| {
+        let mut entry = serde_json::from_str::<Value>(l).ok().filter(|v| types.iter().any(|t| is_type(t, v)))?;
+        if let Some(cut) = cut {
+            cut_strings(&mut entry, cut);
+        }
+        Some(entry)
+    };
+    let most = if cut.is_some() { TRANSCRIPT_CUT_LAST_MAX } else { TRANSCRIPT_LAST_MAX };
     Ok(match last {
         Some(n) => {
-            let mut newest: Vec<Value> = text.lines().rev().filter(mentions).filter_map(entry).take(n.min(TRANSCRIPT_LAST_MAX)).collect();
+            let mut newest: Vec<Value> = text.lines().rev().filter(mentions).filter_map(entry).take(n.min(most)).collect();
             newest.reverse();
             newest
         }
@@ -171,6 +209,23 @@ mod tests {
     }
 
     #[test]
+    fn cut_entries_keep_their_shape_with_long_strings_cut_and_pictures_whole() {
+        let mut entry = serde_json::json!({
+            "type": "user",
+            "message": { "content": [
+                { "type": "tool_result", "content": "é".repeat(300) },
+                { "type": "image", "source": { "data": "A".repeat(500) } },
+            ] },
+            "toolUseResult": { "structuredPatch": [{ "lines": ["+short"] }], "originalFile": "x".repeat(1000) },
+        });
+        cut_strings(&mut entry, 200);
+        assert_eq!(entry["message"]["content"][0]["content"].as_str().unwrap().chars().count(), 200);
+        assert_eq!(entry["message"]["content"][1]["source"]["data"].as_str().unwrap().len(), 500);
+        assert_eq!(entry["toolUseResult"]["structuredPatch"][0]["lines"][0], "+short");
+        assert_eq!(entry["toolUseResult"]["originalFile"].as_str().unwrap().len(), 200);
+    }
+
+    #[test]
     fn a_subagents_transcript_is_found_only_in_its_sessions_folder() {
         let claude = std::env::temp_dir().join(format!("wings-tr-agent-{}", std::process::id()));
         let (id, other) = ("6c21b0c5-8113-4f55-9493-fa156c3fa369", "7c21b0c5-8113-4f55-9493-fa156c3fa369");
@@ -188,7 +243,7 @@ mod tests {
         fs::write(claude.join("projects/-x/secret.jsonl"), "{\"type\":\"user\",\"n\":9}\n").unwrap();
         let p = plugin(&claude, &[], &["user"]);
         let dirs = std::slice::from_ref(&claude);
-        let read = |agent: &str| agent_entries(&p, dirs, id, Some(agent), &["user".into()], None);
+        let read = |agent: &str| agent_entries(&p, dirs, id, Some(agent), &["user".into()], None, None);
         assert_eq!(read("a1b2c3d4e5f60718a").unwrap()[0]["n"], 1);
         // Another session's subagent isn't this session's, and a page can't name a path.
         assert!(read("a9f8e7d6c5b4a3921").is_err());
@@ -196,9 +251,9 @@ mod tests {
             assert!(read(name).is_err(), "{name}");
         }
         // The types the manifest allows still hold.
-        assert!(agent_entries(&p, dirs, id, Some("a1b2c3d4e5f60718a"), &["assistant".into()], None).is_err());
+        assert!(agent_entries(&p, dirs, id, Some("a1b2c3d4e5f60718a"), &["assistant".into()], None, None).is_err());
         // Without an agent it is the session's own file, as before.
-        assert_eq!(agent_entries(&p, dirs, id, None, &["user".into()], None).unwrap()[0]["n"], 0);
+        assert_eq!(agent_entries(&p, dirs, id, None, &["user".into()], None, None).unwrap()[0]["n"], 0);
         let _ = fs::remove_dir_all(&claude);
     }
 
