@@ -242,6 +242,7 @@ fn the_desktops_workspace_becomes_native_tabs_and_settings() {
             ],
             active_plugin: Some(0),
             issues_closed: false,
+            right: None,
         }
     );
 

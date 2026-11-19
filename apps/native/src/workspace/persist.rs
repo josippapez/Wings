@@ -303,6 +303,7 @@ impl Workspace {
                 .iter()
                 .position(|tab| self.active == Active::Plugin(tab.id)),
             issues_closed: !self.issues_open,
+            right: Some(self.right.to_saved()),
         };
         let look = look(cx);
         let settings = saved::Settings {

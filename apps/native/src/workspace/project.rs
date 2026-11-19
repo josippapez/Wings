@@ -26,6 +26,9 @@ impl Workspace {
         self.issues_open = !restored
             .as_ref()
             .is_some_and(|project| project.issues_closed);
+        if let Some(right) = restored.as_ref().and_then(|project| project.right.as_deref()) {
+            self.apply_right(super::right_stack::Stack::from_saved(right), cx);
+        }
         let just_added = std::mem::take(&mut self.just_added);
         match restored {
             Some(project) if !(project.tabs.is_empty() && project.plugin_tabs.is_empty()) => {
@@ -99,6 +102,7 @@ impl Workspace {
                     terminals.push(tab);
                 }
             }
+            let right = project.right.as_deref().map(super::right_stack::Stack::from_saved);
             let agents = panes.iter().any(|pane| pane.session.is_some());
             if !attached && adopted.is_none() && !agents {
                 continue;
@@ -112,6 +116,7 @@ impl Workspace {
                     issues_open: !project.issues_closed,
                     // Decided when it's first shown, once its pages are open.
                     active: super::Active::Issues,
+                    right,
                     waiting: Some(super::persist::Waiting {
                         panes,
                         project,
@@ -184,6 +189,9 @@ impl Workspace {
                 self.plugin_tabs = parked.plugin_tabs;
                 self.project_page = parked.project_page;
                 self.issues_open = parked.issues_open;
+                if let Some(right) = parked.right {
+                    self.apply_right(right, cx);
+                }
                 match parked.waiting {
                     Some(waiting) => self.start_waiting(waiting, window, cx),
                     None => self.show(parked.active, window, cx),
@@ -201,6 +209,7 @@ impl Workspace {
             project_page: self.project_page.take(),
             issues_open: self.issues_open,
             active: self.active,
+            right: Some(self.right.clone()),
             waiting: None,
         };
         self.parked.insert(self.config.project.clone(), current);

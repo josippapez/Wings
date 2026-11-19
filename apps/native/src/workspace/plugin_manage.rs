@@ -386,6 +386,9 @@ impl Workspace {
                 .map(|tab| tab.id)
                 .collect();
             parked.plugin_tabs.retain(|tab| tab.plugin != id);
+            if let Some(right) = &mut parked.right {
+                right.remove_plugin(id);
+            }
             if matches!(parked.active, Active::Plugin(tab) if gone.contains(&tab)) {
                 parked.active = parked
                     .terminals
@@ -393,9 +396,7 @@ impl Workspace {
                     .map_or(Active::Issues, |tab| Active::Terminal(tab.id));
             }
         }
-        if self.right.as_ref().is_some_and(|(plugin, _)| plugin == id) {
-            self.right = None;
-        }
+        self.right.remove_plugin(id);
         self.sidebar_pages.retain(|(plugin, _), _| plugin != id);
         // Settings shows Plugins instead of its page, as the desktop's does for a plugin that isn't on.
         if self.settings_plugin() == Some(id) {

@@ -23,7 +23,7 @@ use super::{
 };
 
 /// A divider's line while the pointer is on it (`bg-white/25`).
-const DIVIDER_HOVER: u32 = 0xffffff40;
+pub(super) const DIVIDER_HOVER: u32 = 0xffffff40;
 /// A pane card's corners.
 const CARD_RADIUS: f32 = 14.0;
 

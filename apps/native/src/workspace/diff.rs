@@ -109,7 +109,7 @@ impl Workspace {
             .sidebar
             .clone()
             .map(|id| (view.plugin_id.clone(), id))
-            .filter(|key| self.right.as_ref() == Some(key));
+            .filter(|key| self.right.contains(key));
         let in_sidebar = sidebar.is_some();
         let dock = &mut self.plugin_ui.diff_dock;
         if in_sidebar && dock.sidebar != sidebar {
@@ -225,7 +225,7 @@ impl Workspace {
         self.plugin_ui.diff.as_ref()?;
         let dock = &self.plugin_ui.diff_dock;
         if let Some(key) = &dock.sidebar {
-            return (self.right.as_ref() == Some(key)).then_some(Shown::Sidebar);
+            return self.right.contains(key).then_some(Shown::Sidebar);
         }
         match &dock.tab {
             Some(_) if dock.expanded || !dock.fits => Some(Shown::Full),
@@ -241,7 +241,7 @@ impl Workspace {
     pub(super) fn close_diff_without_tab(&mut self) {
         // A sidebar's diff goes with its sidebar: closed, or another one shown in the panel.
         if let Some(key) = &self.plugin_ui.diff_dock.sidebar {
-            if self.right.as_ref() != Some(key) {
+            if !self.right.contains(key) {
                 self.plugin_ui.diff = None;
                 self.plugin_ui.diff_dock.sidebar = None;
             }
@@ -274,7 +274,7 @@ impl Workspace {
     /// The width beside the sidebars and the tab's 320.
     fn diff_space(&self, viewport: Pixels) -> f32 {
         let left = if self.sidebar { self.side.width } else { 0.0 };
-        let right = if self.right.is_some() {
+        let right = if !self.right.is_empty() {
             self.right_width(viewport)
         } else {
             0.0

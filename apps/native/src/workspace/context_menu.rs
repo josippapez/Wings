@@ -26,6 +26,8 @@ pub(super) enum MenuTarget {
     Project(PathBuf),
     /// An agent in the sidebar, by its pane.
     Agent(usize),
+    /// A plugin's sidebar page, by its title bar button or its header in the right sidebar.
+    Sidebar(super::right_stack::Key),
 }
 
 pub(super) struct Menu {
@@ -76,6 +78,7 @@ impl Workspace {
             MenuTarget::Pane(pane) => self.pane_items(*pane),
             MenuTarget::Project(path) => self.project_items(path),
             MenuTarget::Agent(pane) => self.agent_items(*pane),
+            MenuTarget::Sidebar(key) => self.sidebar_items(key),
         };
         let mut children = Vec::new();
         let mut checks = match &menu.target {
@@ -184,6 +187,39 @@ impl Workspace {
                 run(move |this, window, cx| this.close_tab_of(tab, window, cx)),
             )],
         ]
+    }
+
+    /// A sidebar page's menu: show it alone or as a split below the open ones, or close its split.
+    fn sidebar_items(&self, key: &super::right_stack::Key) -> Vec<Vec<Item>> {
+        let (plugin, page) = (key.0.clone(), key.1.clone());
+        let alone = {
+            let (plugin, page) = (plugin.clone(), page.clone());
+            run(move |this, _, cx| this.show_sidebar(&plugin, &page, cx))
+        };
+        if !self.right.contains(key) {
+            return vec![vec![
+                Item(
+                    Icon::Rows,
+                    "Open as a split".into(),
+                    false,
+                    run(move |this, _, cx| this.split_sidebar(&plugin, &page, cx)),
+                ),
+                Item(Icon::PanelRight, "Show alone".into(), false, alone),
+            ]];
+        }
+        let key = key.clone();
+        let many = self.right.len() > 1;
+        let mut items = Vec::new();
+        if many {
+            items.push(Item(Icon::PanelRight, "Show alone".into(), false, alone));
+        }
+        items.push(Item(
+            Icon::X,
+            if many { "Close split" } else { "Close sidebar" }.into(),
+            true,
+            run(move |this, _, cx| this.close_split(&key, cx)),
+        ));
+        vec![items]
     }
 
     /// A pane header's menu: rename it, or give it back its program's name. "Move to tab" follows, with its list.

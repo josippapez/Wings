@@ -10,8 +10,8 @@ use std::{
 
 use gpui::{
     Anchor, AnyElement, Bounds, BoxShadow, Context, ElementId, Entity, FocusHandle, FontWeight,
-    HoverListenerMode, IntoElement, MouseButton, MouseDownEvent, Pixels, Render, Role,
-    SharedString, StyleRefinement, Subscription, Task, Window, anchored, canvas, deferred, div,
+    ClickEvent, HoverListenerMode, IntoElement, MouseButton, MouseDownEvent, Pixels, Render, Role,
+    SharedString, Subscription, Task, Window, anchored, canvas, deferred, div,
     hsla, point, prelude::*, px, relative, rgb, rgba,
 };
 
@@ -65,7 +65,7 @@ pub(super) fn palette(tone: Tone) -> Palette {
 
 /// The icon of `installed`'s sidebar `sidebar`, as the desktop's `PluginGlyph`: the one its manifest names, else the
 /// plugin's own SVG.
-fn sidebar_glyph(installed: &Installed, sidebar: &str, size: f32) -> AnyElement {
+pub(super) fn sidebar_glyph(installed: &Installed, sidebar: &str, size: f32) -> AnyElement {
     let named = installed
         .plugin
         .manifest
@@ -519,48 +519,6 @@ impl Workspace {
         }
     }
 
-    /// Opens the plugin's sidebar in the panel on the right, starting its page the first time. The page keeps running
-    /// while the panel is closed or shows another, as the desktop's does.
-    pub(super) fn show_sidebar(&mut self, plugin: &str, sidebar: &str, cx: &mut Context<Self>) {
-        let key = (plugin.to_owned(), sidebar.to_owned());
-        if !self.sidebar_pages.contains_key(&key) {
-            let Some(installed) = self.plugins.iter().find(|installed| installed.id == plugin)
-            else {
-                return;
-            };
-            let Some(page) = installed.sidebars.iter().find(|page| page.id == sidebar) else {
-                return;
-            };
-            let (host, source) = (installed.host.clone(), page.source.clone());
-            let page = cx.new(|cx| PageView::in_plugin(&host, &source, cx));
-            self.sidebar_pages.insert(key.clone(), page);
-        }
-        self.right = Some(key);
-        self.sync_plugin_visibility(cx);
-        cx.notify();
-    }
-
-    /// The title bar button of a sidebar: open, it closes the panel.
-    fn toggle_sidebar(&mut self, plugin: &str, sidebar: &str, cx: &mut Context<Self>) {
-        let shown = self
-            .right
-            .as_ref()
-            .is_some_and(|(open, page)| open == plugin && page == sidebar);
-        if shown {
-            self.right = None;
-            self.sync_plugin_visibility(cx);
-            cx.notify();
-        } else {
-            self.show_sidebar(plugin, sidebar, cx);
-            // Not over its own open sidebar: closed rather than hidden, so it doesn't come back when the sidebar closes.
-            let key = (plugin.to_owned(), sidebar.to_owned());
-            if self.plugin_ui.popover.open.as_ref() == Some(&key) {
-                self.hide_popover(cx);
-            }
-            self.plugin_ui.popover.hovered = None;
-        }
-    }
-
     /// The plugins' sidebar buttons, at the project bar's right end: each opens its page in the panel on the right. A
     /// label the plugin set (`setSidebarLabel`) follows the icon behind a tone dot, as the desktop's `ProjectBar` draws
     /// it, and its rows show when you point at the button. A sidebar with a popover page shows that instead, under the
@@ -803,7 +761,7 @@ impl Workspace {
             {
                 let (plugin, page) = (installed.id.clone(), sidebar.id.clone());
                 let key = (plugin.clone(), page.clone());
-                let open = self.right.as_ref() == Some(&key);
+                let open = self.right.contains(&key);
                 let mark = sidebar_glyph(installed, &page, 16.0);
                 let label = self.plugin_ui.labels.get(&key);
                 let name = match label {
@@ -857,12 +815,22 @@ impl Workspace {
                 } else {
                     button.tooltip(ui::tooltip(name, None))
                 };
-                let button = button.on_click(
-                    cx.listener(move |this, _, _, cx| this.toggle_sidebar(&plugin, &page, cx)),
-                );
+                let menu_key = key.clone();
+                let button = button.on_click(cx.listener(
+                    move |this, event: &ClickEvent, _, cx| {
+                        let split = event.modifiers().secondary(cx);
+                        this.toggle_sidebar(&plugin, &page, split, cx)
+                    },
+                ));
                 let card = has_popover.then(|| self.popover_card(&key, cx)).flatten();
                 div()
                     .relative()
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                            this.open_sidebar_menu(menu_key.clone(), event, cx)
+                        }),
+                    )
                     .flex_none()
                     .child(button)
                     .children(card)
@@ -986,7 +954,7 @@ impl Workspace {
         }
         let over = popover.hovered.as_ref() == Some(&key) && popover.over.contains(&true);
         let shown = popover.open.as_ref() == Some(&key);
-        if over && (shown || self.right.as_ref() == Some(&key)) {
+        if over && (shown || self.right.contains(&key)) {
             popover.timer = None;
         } else if over {
             popover.timer = Some(cx.spawn(async move |this, cx| {
@@ -1050,7 +1018,7 @@ impl Workspace {
 
     /// Shows the popover page of the sidebar `key`, loading it the first time or after it was unloaded.
     pub(super) fn show_popover(&mut self, key: (String, String), cx: &mut Context<Self>) {
-        if self.right.as_ref() == Some(&key) {
+        if self.right.contains(&key) {
             return;
         }
         if !self.plugin_ui.popover.pages.contains_key(&key) {
@@ -1120,10 +1088,10 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let now = cx.background_executor().now();
-        let open = self.right.is_some();
+        let open = !self.right.is_empty();
         let reduced = motion::reduced(cx);
         let slide = &mut self.plugin_ui.right_slide;
-        if self.right.is_some() {
+        if open && slide.shown != self.right {
             slide.shown = self.right.clone();
         }
         match slide.open {
@@ -1162,24 +1130,20 @@ impl Workspace {
         }
         let share = slide.share;
         if !open && share.is_none() {
-            slide.shown = None;
+            slide.shown.clear();
         }
         let count = slide.count;
-        let (plugin, sidebar) = slide.shown.as_ref()?;
-        let page: Entity<PageView> = self
-            .sidebar_pages
-            .get(&(plugin.clone(), sidebar.clone()))?
-            .clone();
-        let installed = self
-            .plugins
-            .iter()
-            .find(|installed| installed.id == *plugin)?;
-        let title = installed
-            .sidebars
-            .iter()
-            .find(|page| page.id == *sidebar)
-            .map(|page| page.title.clone())?;
-        let glyph = sidebar_glyph(installed, sidebar, 14.0);
+        let shown = slide.shown.clone();
+        let pages = self.right_pages(&shown, cx)?;
+        let title = match shown.only() {
+            Some((plugin, sidebar)) => self
+                .plugins
+                .iter()
+                .find(|installed| installed.id == *plugin)
+                .and_then(|installed| installed.sidebars.iter().find(|page| page.id == *sidebar))
+                .map_or_else(|| "Sidebar".to_owned(), |page| page.title.clone()),
+            None => "Sidebars".to_owned(),
+        };
         let width = self.right_width(viewport);
         let panel = div()
             .id("right-sidebar")
@@ -1194,56 +1158,7 @@ impl Workspace {
             .pb(px(8.0))
             .pl(px(4.0))
             .pr(px(8.0))
-            .child(
-                div()
-                    .h(px(32.0))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap(px(4.0))
-                    .pl(px(4.0))
-                    // The desktop's `h2`: the sidebar's icon, then its title.
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.0))
-                            .pl(px(8.0))
-                            .text_size(px(12.0))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
-                            .child(glyph)
-                            .child(div().min_w_0().truncate().child(title)),
-                    )
-                    .child(
-                        ui::icon_button(
-                            "close-right-sidebar",
-                            Icon::X,
-                            "Close sidebar",
-                            ButtonSize::Xs,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.right = None;
-                            this.sync_plugin_visibility(cx);
-                            cx.notify();
-                        })),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .rounded(px(14.0))
-                    .border_1()
-                    .border_color(rgba(HAIRLINE))
-                    .bg(rgb(theme::SURFACE))
-                    // The page pads itself, as the desktop's `.w-shell` does, 14px in from the card's edge. It keeps its
-                    // last drawing until it changes, so a busy terminal doesn't rebuild it every frame.
-                    .child(page.cached(StyleRefinement::default().size_full())),
-            );
+            .child(pages);
         let panel = panel.child(self.right_resize_edge(cx));
         let Some(share) = share else {
             return Some(panel.w(px(width)).into_any_element());
@@ -1411,8 +1326,8 @@ fn rows_grid(rows: &[Row], tinted: bool) -> AnyElement {
 pub(super) struct RightSlide {
     /// Whether it was open in the last render, from the first one on.
     open: Option<bool>,
-    /// The sidebar it shows, kept while it slides shut.
-    shown: Option<(String, String)>,
+    /// The sidebars it shows, kept while it slides shut.
+    shown: super::right_stack::Stack,
     /// The share of its width it takes, while it slides.
     share: Option<motion::Transition>,
     /// Tells one slide from the next, so each starts over.
@@ -1549,6 +1464,11 @@ impl Workspace {
         self.show_sidebar(plugin, sidebar, cx);
     }
 
+    /// Adds the plugin's sidebar as a split below the open ones, as a Cmd+click on its button does.
+    pub fn shot_split_sidebar(&mut self, plugin: &str, sidebar: &str, cx: &mut Context<Self>) {
+        self.split_sidebar(plugin, sidebar, cx);
+    }
+
     /// Opens a diff from the plugin's open sidebar, as its `openDiff` with `sidebar` does.
     pub fn shot_sidebar_diff(
         &mut self,
@@ -1574,7 +1494,7 @@ impl Workspace {
     }
 
     pub fn shot_popover(&mut self, plugin: &str, sidebar: &str, cx: &mut Context<Self>) {
-        self.right = None;
+        self.right.clear();
         self.sync_plugin_visibility(cx);
         self.show_popover((plugin.to_owned(), sidebar.to_owned()), cx);
     }

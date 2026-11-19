@@ -113,6 +113,45 @@ pub struct SavedProject {
     /// The Issues tab was closed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub issues_closed: bool,
+    /// The sidebar pages in the right sidebar, top to bottom. Absent when the project never kept any, which leaves the
+    /// right sidebar as it is when the project is shown.
+    #[serde(
+        default,
+        deserialize_with = "splits_or_one",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub right: Option<Vec<SavedSplit>>,
+}
+
+/// One sidebar page of the right sidebar and its share of the height, which all of them together make 1.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedSplit {
+    pub plugin: String,
+    pub page: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<f32>,
+}
+
+/// The right sidebar as a list, or as the one page older files kept: `{ plugin, page }` or `[plugin, page]`.
+fn splits_or_one<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<SavedSplit>>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Any {
+        Many(Vec<SavedSplit>),
+        One(SavedSplit),
+        Pair((String, String)),
+    }
+    Ok(Option::<Any>::deserialize(deserializer)?.map(|any| match any {
+        Any::Many(many) => many,
+        Any::One(one) => vec![one],
+        Any::Pair((plugin, page)) => vec![SavedSplit {
+            plugin,
+            page,
+            size: None,
+        }],
+    }))
 }
 
 /// The sound for new notifications, as the desktop's `notifySound`. Cleaned when read, so an unknown sound or a
@@ -533,6 +572,7 @@ mod tests {
             ],
             active_plugin: None,
             issues_closed: false,
+            right: None,
         }
     }
 

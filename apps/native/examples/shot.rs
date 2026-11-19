@@ -434,6 +434,10 @@ fn main() {
     if std::env::args().nth(2).as_deref() == Some("diff-sidebar") {
         return diff_sidebar(&mut cx, &config, &out);
     }
+    // `-- <out-dir> right-splits` renders only two sidebar pages split in the right sidebar at 1280 and 640 points.
+    if std::env::args().nth(2).as_deref() == Some("right-splits") {
+        return right_splits(&mut cx, &config, &out);
+    }
     // `-- <out-dir> diff-comments` renders only a plugin's diff with review threads: under their lines docked and filling
     // the window, a reply being written, and the discussion.
     if std::env::args().nth(2).as_deref() == Some("diff-comments") {
@@ -2215,6 +2219,52 @@ fn stack_repo() -> (PathBuf, String) {
 
 /// A diff opened from the Changes sidebar: every file stacked in the sidebar's place, widened over the panes, with the
 /// unchanged lines between the hunks folded, and one fold opened.
+fn right_splits(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+    let data = Data::temp();
+    data.install_script(
+        "changes",
+        serde_json::json!({ "name": "Changes", "contributes": {
+            "sidebars": [{ "id": "side", "title": "Changes", "page": "dist/side.html" }],
+        } }),
+        &fake::idle("main"),
+        &[("side", &words("3 changed files: src/config.rs, src/client/retry.rs, README.md"))],
+        "changes-scope",
+    );
+    data.install_script(
+        "agents",
+        serde_json::json!({ "name": "Subagent", "contributes": {
+            "sidebars": [{ "id": "agent", "title": "Subagent", "page": "dist/agent.html", "icon": "bot" }],
+        } }),
+        &fake::idle("main"),
+        &[("agent", &words("Reading src/client/retry.rs"))],
+        "agents-scope",
+    );
+    let mut config = base.clone();
+    config.plugins = Some(data.paths());
+    for width in [1280.0, 640.0] {
+        let config = config.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        let name = |state: &str| out.join(format!("right-splits-{state}-{width}.png"));
+        wait(cx, window, Duration::from_secs(1));
+        handle
+            .update(cx, |w, _, cx| w.shot_sidebar("changes", "side", cx))
+            .unwrap();
+        wait(cx, window, Duration::from_millis(500));
+        save(cx, window, &name("one"));
+        handle
+            .update(cx, |w, _, cx| w.shot_split_sidebar("agents", "agent", cx))
+            .unwrap();
+        wait(cx, window, Duration::from_millis(500));
+        save(cx, window, &name("two"));
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+    }
+}
+
 fn diff_sidebar(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     let (repo, patch) = stack_repo();
     let data = Data::temp();

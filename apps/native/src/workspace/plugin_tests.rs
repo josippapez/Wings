@@ -917,7 +917,7 @@ fn a_diff_from_a_sidebar_shows_in_its_place_over_the_panes_and_back_returns_the_
     settle_slide(&app, &mut window);
     window.read(|w, _| {
         assert!(w.plugin_ui.diff.is_none() && w.diff_shown().is_none());
-        assert_eq!(w.right.as_ref(), Some(&key));
+        assert_eq!(w.right.only(), Some(&key));
         assert_eq!(w.sidebar_pages[&key].entity_id(), page);
         assert_eq!(w.right_width(px(1000.0)), super::right_edge::INITIAL_WIDTH);
     });
@@ -938,7 +938,7 @@ fn escape_in_a_sidebar_diff_goes_back_to_the_sidebar() {
     until(&app, &mut window, "diff stayed open", |w| {
         w.plugin_ui.diff.is_none()
     });
-    assert!(window.read(|w, _| w.right.is_some()));
+    assert!(window.read(|w, _| !w.right.is_empty()));
 }
 
 /// A window with no room for the widened sidebar beside a sliver of the panes shows the diff filling it.
@@ -979,7 +979,7 @@ fn a_sidebar_diff_closes_with_its_sidebar_and_one_from_a_closed_sidebar_docks() 
         Some(super::diff::Shown::Sidebar)
     );
     window.update(|w, _, cx| {
-        w.right = None;
+        w.right.clear();
         cx.notify();
     });
     window.draw();
@@ -1237,7 +1237,7 @@ fn plugin_frame_focus_follows_tabs_sidebars_projects_and_window_activation() {
         focused(&app, &mut window, key, false);
     }
     window.update(|w, _, cx| {
-        w.right = None;
+        w.right.clear();
         w.sync_plugin_visibility(cx);
     });
     focused(&app, &mut window, "other", false);
@@ -1373,7 +1373,7 @@ fn a_sidebar_page_that_stopped_starts_again_in_the_panel_by_itself() {
     // The same page in the same place, drawn again and running.
     wait(&mut window, "the page never started again", &|page| page.text().contains("Up") && !page.stopped());
     assert_eq!(first.entity_id(), window.read(|w, _| w.sidebar_pages[&key].entity_id()));
-    window.read(|w, _| assert_eq!(w.right.as_ref(), Some(&key)));
+    window.read(|w, _| assert_eq!(w.right.only(), Some(&key)));
 }
 
 /// One of the tasks Cyclops' task field offers, as a chip.
@@ -2554,7 +2554,7 @@ fn a_plugins_sidebar_opens_in_the_right_hand_panel_from_its_project_bar_button_a
     install_sider(&data);
     let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
     assert_eq!(window.read(|w, _| w.plugins[0].sidebars.len()), 1);
-    assert!(window.read(|w, _| w.right.is_none() && w.sidebar_pages.is_empty()));
+    assert!(window.read(|w, _| w.right.is_empty() && w.sidebar_pages.is_empty()));
 
     let right_edge = |window: &TestAppWindow<Workspace>| {
         window.read(|w, cx| {
@@ -2572,7 +2572,7 @@ fn a_plugins_sidebar_opens_in_the_right_hand_panel_from_its_project_bar_button_a
     // The button is the last thing in the project bar under the 40px title bar, 8px from the right edge.
     window.simulate_click(point(px(978.0), px(58.0)), MouseButton::Left);
     assert_eq!(
-        window.read(|w, _| w.right.clone()),
+        window.read(|w, _| w.right.only().cloned()),
         Some(("sider".into(), "side".into()))
     );
     let text = |window: &TestAppWindow<Workspace>| {
@@ -2618,10 +2618,10 @@ fn a_plugins_sidebar_opens_in_the_right_hand_panel_from_its_project_bar_button_a
         point(px(978.0 - super::right_edge::INITIAL_WIDTH), px(58.0)),
         MouseButton::Left,
     );
-    assert!(window.read(|w, _| w.right.is_none()));
+    assert!(window.read(|w, _| w.right.is_empty()));
     assert_eq!(window.read(|w, _| w.plugins[0].host.frames()), 2);
     window.update(|w, _, cx| w.show_sidebar("sider", "side", cx));
-    assert!(window.read(|w, _| w.right.is_some() && w.sidebar_pages.len() == 1));
+    assert!(window.read(|w, _| !w.right.is_empty() && w.sidebar_pages.len() == 1));
 }
 
 #[test]
@@ -2640,7 +2640,7 @@ fn a_click_on_a_status_strip_that_names_a_sidebar_opens_it() {
     window.draw();
     window.simulate_click(point(px(290.0), px(620.0)), MouseButton::Left);
     assert_eq!(
-        window.read(|w, _| w.right.clone()),
+        window.read(|w, _| w.right.only().cloned()),
         Some(("sider".into(), "side".into()))
     );
     // The close button shuts the panel.
@@ -2649,7 +2649,328 @@ fn a_click_on_a_status_strip_that_names_a_sidebar_opens_it() {
         point(px(1000.0 - 8.0 - 12.0 - 8.0), px(40.0 + 16.0)),
         MouseButton::Left,
     );
-    assert!(window.read(|w, _| w.right.is_none()));
+    assert!(window.read(|w, _| w.right.is_empty()));
+}
+
+// Splits in the right sidebar.
+
+/// The `sider` plugin with three sidebars, `side`, `other` and `third`, all showing "Side page".
+fn install_sider_three(data: &Data) {
+    let page = side_page();
+    data.install_script(
+        "sider",
+        json!({ "contributes": { "sidebars": [
+            { "id": "side", "title": "Side", "page": "dist/side.html" },
+            { "id": "other", "title": "Other", "page": "dist/other.html" },
+            { "id": "third", "title": "Third", "page": "dist/third.html" }
+        ] } }),
+        &idle("main"),
+        &[("side", &page), ("other", &page), ("third", &page)],
+        "sider-scope",
+    );
+}
+
+fn right_pages(window: &TestAppWindow<Workspace>) -> Vec<String> {
+    window.read(|w, _| w.right.keys().iter().map(|key| key.1.clone()).collect())
+}
+
+fn right_sizes(window: &TestAppWindow<Workspace>) -> Vec<f32> {
+    window.read(|w, _| w.right.sizes().to_vec())
+}
+
+/// A plain click on a title bar button shows its sidebar alone, or closes the panel when it is the only one showing; a
+/// click with the shortcut key down adds it below the open ones, and one already open gets no second copy.
+#[test]
+fn a_plain_click_shows_one_sidebar_alone_and_a_shortcut_click_adds_a_split_below() {
+    let data = Data::temp();
+    install_sider_three(&data);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.draw();
+
+    // The last button is `third`, 8px from the right edge.
+    window.simulate_click(point(px(978.0), px(58.0)), MouseButton::Left);
+    assert_eq!(right_pages(&window), ["third"]);
+    settle_slide(&app, &mut window);
+    // The open panel narrows the project bar by its width, so the buttons move left with it. `other` is the one before
+    // `third`: a plain click shows it alone, in `third`'s place.
+    window.update(|w, _, cx| w.toggle_sidebar("sider", "other", false, cx));
+    assert_eq!(right_pages(&window), ["other"]);
+    window.update(|w, _, cx| w.toggle_sidebar("sider", "other", false, cx));
+    assert!(window.read(|w, _| w.right.is_empty()));
+
+    window.update(|w, _, cx| w.toggle_sidebar("sider", "side", false, cx));
+    window.update(|w, _, cx| w.toggle_sidebar("sider", "other", true, cx));
+    assert_eq!(right_pages(&window), ["side", "other"]);
+    assert_eq!(right_sizes(&window), [0.5, 0.5]);
+    window.update(|w, _, cx| w.toggle_sidebar("sider", "other", true, cx));
+    assert_eq!(right_pages(&window), ["side", "other"], "no second copy");
+    // Both pages are started and stay so.
+    assert_eq!(window.read(|w, _| w.sidebar_pages.len()), 2);
+    // A plain click on one of two shows it alone, and the other page keeps running.
+    window.update(|w, _, cx| w.toggle_sidebar("sider", "side", false, cx));
+    assert_eq!(right_pages(&window), ["side"]);
+    assert_eq!(window.read(|w, _| w.sidebar_pages.len()), 2);
+}
+
+/// The click itself, with the shortcut key held, on the button of a sidebar.
+#[test]
+fn a_shortcut_click_on_a_title_bar_button_opens_a_split() {
+    let data = Data::temp();
+    install_sider_three(&data);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.draw();
+    window.update(|w, _, cx| w.show_sidebar("sider", "side", cx));
+    settle_slide(&app, &mut window);
+    let held = gpui::Modifiers {
+        platform: true,
+        control: true,
+        ..Default::default()
+    };
+    // `third` is the last button, in the project bar the open panel narrowed.
+    let at = point(px(978.0 - super::right_edge::INITIAL_WIDTH), px(58.0));
+    window.simulate_event(gpui::MouseDownEvent {
+        position: at,
+        button: MouseButton::Left,
+        modifiers: held,
+        click_count: 1,
+        first_mouse: false,
+    });
+    window.simulate_event(gpui::MouseUpEvent {
+        position: at,
+        button: MouseButton::Left,
+        modifiers: held,
+        click_count: 1,
+    });
+    assert_eq!(right_pages(&window), ["side", "third"]);
+}
+
+/// `openView(id, { as: "sidebar" })`: an open sidebar stays where it is, else it joins the splits when there are two or
+/// more, and is shown alone otherwise.
+#[test]
+fn opening_a_sidebar_from_a_plugin_joins_the_splits_only_when_the_user_has_them() {
+    let data = Data::temp();
+    install_sider_three(&data);
+    let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let open = |window: &mut TestAppWindow<Workspace>, id: &str| {
+        window.update(|w, _, cx| assert!(w.open_sidebar_from_plugin("sider", id, cx)));
+    };
+    open(&mut window, "side");
+    assert_eq!(right_pages(&window), ["side"]);
+    open(&mut window, "other");
+    assert_eq!(right_pages(&window), ["other"], "no splits yet: shown alone");
+    window.update(|w, _, cx| w.toggle_sidebar("sider", "side", true, cx));
+    assert_eq!(right_pages(&window), ["other", "side"]);
+    open(&mut window, "other");
+    assert_eq!(right_pages(&window), ["other", "side"], "an open one stays");
+    open(&mut window, "third");
+    assert_eq!(right_pages(&window), ["other", "side", "third"]);
+    window.update(|w, _, cx| assert!(!w.open_sidebar_from_plugin("sider", "missing", cx)));
+}
+
+/// Closing a split closes that page only, from its header's button or its menu, and the rest share its height. A lone
+/// page has no slim header and its close button shuts the panel as ever.
+#[test]
+fn closing_one_split_leaves_the_others() {
+    let data = Data::temp();
+    install_sider_three(&data);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.update(|w, _, cx| {
+        w.show_sidebar("sider", "side", cx);
+        w.split_sidebar("sider", "other", cx);
+        w.split_sidebar("sider", "third", cx);
+    });
+    settle_slide(&app, &mut window);
+    assert_eq!(right_pages(&window), ["side", "other", "third"]);
+    window.update(|w, _, cx| w.close_split(&("sider".into(), "other".into()), cx));
+    assert_eq!(right_pages(&window), ["side", "third"]);
+    assert!((right_sizes(&window).iter().sum::<f32>() - 1.0).abs() < 1e-5);
+    assert_eq!(window.read(|w, _| w.sidebar_pages.len()), 3, "its page keeps running");
+    window.update(|w, _, cx| w.close_split(&("sider".into(), "side".into()), cx));
+    assert_eq!(right_pages(&window), ["third"]);
+    assert_eq!(right_sizes(&window), [1.0]);
+}
+
+/// Dragging the divider between two splits moves it and changes only the sidebar: the panes' terminal keeps its size.
+/// The sizes are written when the pointer is released.
+#[test]
+fn dragging_a_divider_between_splits_resizes_them_and_saves_when_it_is_released() {
+    let data = Data::temp();
+    install_sider_three(&data);
+    let dir = crate::projects::test_dir("right-splits");
+    let file = dir.join("workspace.json");
+    let (app, mut window) = open_sized(Some(size(px(1000.0), px(640.0))), |config| {
+        config.plugins = Some(data.paths());
+        config.state = Some(file.clone());
+    });
+    window.update(|w, _, cx| {
+        w.show_sidebar("sider", "side", cx);
+        w.split_sidebar("sider", "other", cx);
+    });
+    settle_slide(&app, &mut window);
+    let grid = settled_grid(&app, &mut window);
+    let right = terminal_right(&window, 0);
+    let divider = crate::ui::spot_at("right-divider-0").expect("the divider is drawn");
+    let (x, y) = (divider.center().x, divider.center().y);
+    window.simulate_mouse_down(point(x, y), MouseButton::Left);
+    window.draw();
+    window.simulate_event(gpui::MouseMoveEvent {
+        position: point(x, y + px(80.0)),
+        pressed_button: Some(MouseButton::Left),
+        modifiers: gpui::Modifiers::default(),
+    });
+    window.draw();
+    let sizes = right_sizes(&window);
+    assert!(sizes[0] > 0.5 && sizes[0] < 0.9, "{sizes:?}");
+    assert!((sizes.iter().sum::<f32>() - 1.0).abs() < 1e-5);
+    let key = window.read(|w, _| w.project_key());
+    let kept = || crate::saved::load(&file, &key).and_then(|project| project.right);
+    assert_eq!(
+        kept().map(|right| right.iter().map(|split| split.page.clone()).collect::<Vec<_>>()),
+        Some(vec!["side".into(), "other".into()]),
+        "opening them saved the pages"
+    );
+    let before = kept().unwrap()[0].size;
+    assert_eq!(before, Some(0.5), "nothing is saved while the pointer is down");
+    window.simulate_mouse_up(point(x, y + px(80.0)), MouseButton::Left);
+    window.draw();
+    assert_eq!(kept().unwrap()[0].size, Some(sizes[0]));
+    assert_eq!(terminal_right(&window, 0), right, "the panes keep their size");
+    assert_eq!(settled_grid(&app, &mut window), grid);
+    // Dragged all the way up it stops at the least height.
+    let divider = crate::ui::spot_at("right-divider-0").unwrap();
+    let (x, y) = (divider.center().x, divider.center().y);
+    window.simulate_mouse_down(point(x, y), MouseButton::Left);
+    window.draw();
+    window.simulate_event(gpui::MouseMoveEvent {
+        position: point(x, px(0.0)),
+        pressed_button: Some(MouseButton::Left),
+        modifiers: gpui::Modifiers::default(),
+    });
+    window.simulate_mouse_up(point(x, px(0.0)), MouseButton::Left);
+    window.draw();
+    assert!(right_sizes(&window)[0] > 0.05);
+    drop((window, app));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// What the project kept comes back on the next launch, in its order and sizes, and the older single page, in each form
+/// it could have been written, is one split.
+#[test]
+fn the_splits_come_back_after_a_relaunch_and_an_older_single_page_loads_as_one() {
+    let data = Data::temp();
+    install_sider_three(&data);
+    let dir = crate::projects::test_dir("right-restore");
+    let file = dir.join("workspace.json");
+    let open = || {
+        let (app, mut window) = open_plugins(&data, &Arc::default(), |config| {
+            config.state = Some(file.clone());
+        });
+        window.draw();
+        (app, window)
+    };
+    let (key, kept) = {
+        let (app, mut window) = open();
+        window.update(|w, _, cx| {
+            w.show_sidebar("sider", "third", cx);
+            w.split_sidebar("sider", "side", cx);
+            w.right.set_boundary(0, 0.3, 0.1);
+            w.save(cx);
+        });
+        let key = window.read(|w, _| w.project_key());
+        let kept = right_sizes(&window);
+        drop((window, app));
+        (key, kept)
+    };
+    {
+        let (_app, window) = open();
+        assert_eq!(right_pages(&window), ["third", "side"]);
+        let sizes = right_sizes(&window);
+        assert!(sizes.iter().zip(&kept).all(|(a, b)| (a - b).abs() < 1e-4), "{sizes:?} {kept:?}");
+        assert_eq!(window.read(|w, _| w.sidebar_pages.len()), 2, "both pages run");
+    }
+    for old in [
+        json!(["sider", "other"]),
+        json!({ "plugin": "sider", "page": "other" }),
+        json!([{ "plugin": "sider", "page": "other" }]),
+    ] {
+        let state = json!({ "version": 1, "projects": { (key.clone()): { "tabs": [], "active": null, "right": old } } });
+        std::fs::write(&file, state.to_string()).unwrap();
+        let (_app, window) = open();
+        assert_eq!(right_pages(&window), ["other"], "{old}");
+        assert_eq!(right_sizes(&window), [1.0]);
+    }
+    // A sidebar no plugin has any more is left out.
+    let state = json!({ "version": 1, "projects": { key: { "tabs": [], "active": null, "right": [
+        { "plugin": "gone", "page": "x", "size": 0.5 }, { "plugin": "sider", "page": "side", "size": 0.5 }
+    ] } } });
+    std::fs::write(&file, state.to_string()).unwrap();
+    let (_app, window) = open();
+    assert_eq!(right_pages(&window), ["side"]);
+    assert_eq!(right_sizes(&window), [1.0]);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A diff a sidebar opens covers the right sidebar's whole area, whatever splits are open, and Back puts the same
+/// splits back.
+#[test]
+fn a_diff_from_one_split_covers_the_right_sidebar_and_back_returns_the_splits() {
+    let data = Data::temp();
+    install_sider_three(&data);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.update(|w, _, cx| {
+        w.show_sidebar("sider", "side", cx);
+        w.split_sidebar("sider", "other", cx);
+    });
+    settle_slide(&app, &mut window);
+    let key = ("sider".to_owned(), "other".to_owned());
+    let page = window.read(|w, _| w.sidebar_pages[&key].entity_id());
+    let sizes = right_sizes(&window);
+    open_diff_from(&mut window, "other");
+    settle_slide(&app, &mut window);
+    assert_eq!(
+        window.read(|w, _| w.diff_shown()),
+        Some(super::diff::Shown::Sidebar)
+    );
+    let back = crate::ui::spot_at("diff-back").unwrap().center();
+    window.simulate_click(back, MouseButton::Left);
+    settle_slide(&app, &mut window);
+    assert!(window.read(|w, _| w.plugin_ui.diff.is_none()));
+    assert_eq!(right_pages(&window), ["side", "other"]);
+    assert_eq!(right_sizes(&window), sizes);
+    assert_eq!(window.read(|w, _| w.sidebar_pages[&key].entity_id()), page);
+    // Closing the split it came from takes the diff with it.
+    open_diff_from(&mut window, "other");
+    settle_slide(&app, &mut window);
+    window.update(|w, _, cx| w.close_split(&("sider".into(), "other".into()), cx));
+    window.draw();
+    assert!(window.read(|w, _| w.plugin_ui.diff.is_none()));
+    assert_eq!(right_pages(&window), ["side"]);
+}
+
+/// A plugin turned off takes its splits with it, and the others stay.
+#[test]
+fn a_plugin_turned_off_removes_its_splits() {
+    let data = Data::temp();
+    install_sider_three(&data);
+    data.install_script(
+        "lone",
+        json!({ "contributes": { "sidebars": [{ "id": "only", "title": "Only", "page": "dist/only.html" }] } }),
+        &idle("main"),
+        &[("only", &side_page())],
+        "lone-scope",
+    );
+    let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.update(|w, _, cx| {
+        w.show_sidebar("sider", "side", cx);
+        w.split_sidebar("lone", "only", cx);
+        w.split_sidebar("sider", "other", cx);
+    });
+    assert_eq!(right_pages(&window), ["side", "only", "other"]);
+    window.update(|w, window, cx| {
+        w.set_plugin_enabled("sider", false, None, window, cx).unwrap();
+    });
+    assert_eq!(right_pages(&window), ["only"]);
+    assert_eq!(window.read(|w, _| w.sidebar_pages.len()), 1);
 }
 
 /// The right-hand panel's edge drags within the desktop's `SIDES.right`, leaving the panes their 320, and the width is

@@ -186,9 +186,7 @@ impl Workspace {
             self.close_plugin_tab(index, window, cx);
         }
         let key = (plugin.to_owned(), view.to_owned());
-        if self.right.as_ref() == Some(&key) {
-            self.right = None;
-        }
+        self.right.remove(&key);
         self.sidebar_pages.remove(&key);
         if let Some(handle) = self.plugin_ui.windows.remove(&key) {
             let _ = handle.update(cx, |_, window, _| window.remove_window());

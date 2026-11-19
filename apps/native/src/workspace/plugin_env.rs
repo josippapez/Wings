@@ -874,6 +874,7 @@ pub(super) struct PluginUi {
     notice_timers: Vec<Task<()>>,
     pub(super) right_slide: super::plugin_ui::RightSlide,
     pub(super) right_size: super::right_edge::Size,
+    pub(super) right_split: super::right_stack::SplitDrag,
 }
 
 impl AppEnv {
@@ -899,7 +900,7 @@ impl Workspace {
             }
         }
         for (key, page) in &self.sidebar_pages {
-            page.read(cx).set_visible(self.right.as_ref() == Some(key));
+            page.read(cx).set_visible(self.right.contains(key));
         }
     }
     /// What the window is doing for plugins, on its own thread.
@@ -970,11 +971,7 @@ impl Workspace {
             }
             UiEvent::OpenView { plan, reply } => {
                 if plan.place == "sidebar" {
-                    self.show_sidebar(&plan.plugin, &plan.id, cx);
-                    let shown = self
-                        .right
-                        .as_ref()
-                        .is_some_and(|(plugin, id)| plugin == &plan.plugin && id == &plan.id);
+                    let shown = self.open_sidebar_from_plugin(&plan.plugin, &plan.id, cx);
                     reply.done(if shown {
                         Ok("null".into())
                     } else {

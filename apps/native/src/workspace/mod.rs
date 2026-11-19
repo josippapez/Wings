@@ -57,6 +57,7 @@ mod project_sections;
 mod quick;
 mod rank;
 mod right_edge;
+mod right_stack;
 mod settings;
 mod setup_approval;
 mod sidebar;
@@ -152,6 +153,8 @@ struct Parked {
     project_page: Option<Entity<project_page::ProjectPage>>,
     issues_open: bool,
     active: Active,
+    /// The right sidebar's pages, when the project kept any, for when it comes back.
+    right: Option<right_stack::Stack>,
     /// Restored at launch without being shown (`restore_hidden`): what it restores when it's first shown.
     waiting: Option<persist::Waiting>,
 }
@@ -197,8 +200,8 @@ pub struct Workspace {
     badge_card: Option<plugin_ui::BadgeCard>,
     /// The running plugins that may read Claude's transcripts, for sending them each entry.
     transcript_plugins: Vec<wings_plugins::manifest::Plugin>,
-    /// The plugin sidebar shown in the panel on the right: its plugin's id and its own.
-    right: Option<(String, String)>,
+    /// The plugin sidebars shown in the panel on the right, stacked top to bottom.
+    right: right_stack::Stack,
     /// The sidebar pages started so far, which keep running while the panel is closed or shows another.
     sidebar_pages: HashMap<(String, String), Entity<PageView>>,
     panes: HashMap<usize, Pane>,
@@ -400,7 +403,7 @@ impl Workspace {
             project_page_focus: cx.focus_handle().tab_stop(true),
             badge_card: None,
             transcript_plugins: Vec::new(),
-            right: None,
+            right: right_stack::Stack::default(),
             sidebar_pages: HashMap::new(),
             panes: HashMap::new(),
             next_tab: 0,
@@ -933,7 +936,7 @@ impl Render for Workspace {
             window.viewport_size().width,
             self.sidebar,
             self.sidebar.then_some(self.side.width),
-            self.right.is_some(),
+            !self.right.is_empty(),
             self.plugins
                 .iter()
                 .map(|plugin| plugin.sidebars.len())
