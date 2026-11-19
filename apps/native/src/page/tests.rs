@@ -2044,6 +2044,44 @@ fn a_scroll_goes_to_the_child_it_is_told_to_and_says_which_tracked_child_it_is_a
     settle(&app, &mut window, |view| view.text().contains("Tracked null."));
 }
 
+/// The rows of `aimed_rows`, tracking one near the end that a scroll to the end shows below the top of the view.
+fn end_rows() -> String {
+    let mut said = "nothing".to_owned();
+    fake::page("page", move |event| {
+        if let Some(("2:onTrack", payload)) = event {
+            said = payload["at"].to_string();
+        }
+        let rows: Vec<Value> = (0..60).map(|i| text(100 + i, 1_000 + i, format!("Row {i}"))).collect();
+        let props = json!({ "track": [10, 20, 57], "onTrack": "2:onTrack" });
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            text(50, 51, format!("Tracked {said}.")),
+            { "id": 2, "type": "Scroll", "props": props, "children": [{ "id": 3, "type": "Stack", "props": {}, "children": rows }] }] })
+    })
+}
+
+/// Scrolled to its end, a `Scroll` is at its last tracked child, though that child's top never reaches the view's top.
+#[test]
+fn at_the_end_of_a_scroll_its_last_tracked_child_in_view_is_the_one_it_is_at() {
+    let mut app = TestApp::new();
+    app.background_executor().allow_parking();
+    let host = hosted(&mut app);
+    let source = end_rows();
+    let bounds = gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(500.0), px(300.0)));
+    let mut window = app.open_window_with_options(
+        gpui::WindowOptions { window_bounds: Some(gpui::WindowBounds::Windowed(bounds)), ..Default::default() },
+        |_, cx| PageView::in_plugin(&host, &source, cx),
+    );
+    settle(&app, &mut window, |view| view.text().contains("Tracked null."));
+    window.simulate_event(gpui::ScrollEvent {
+        position: point(px(60.0), px(150.0)),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-100_000.0))),
+        modifiers: gpui::Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+        source: Default::default(),
+    });
+    settle(&app, &mut window, |view| view.text().contains("Tracked 2."));
+}
+
 /// A chat's shape: a main pane and a pane on the right that folds away below 600 points, or stays when pinned.
 fn side_split(pinned: bool) -> String {
     fake::page("page", move |_| {

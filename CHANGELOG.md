@@ -5,6 +5,7 @@ What changed in each Wings release, newest first.
 ## 0.2.46 · 2026-11-19
 
 - **Text in narrow pages lines up with their header and message box**, as in the subagent sidebar, instead of running close to the edge.
+- **The prompt rail marks the message you're reading**: the one above a line a third down the view, and the last one once you're at the end, where it marked the one before.
 
 ## 0.2.45 · 2026-11-19
 

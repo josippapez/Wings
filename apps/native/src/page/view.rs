@@ -1064,9 +1064,12 @@ impl PageView {
             let Some(handler) = on_track.as_ref() else {
                 return;
             };
-            // The last tracked child whose top has reached the top of the view (a point of slack for rounding).
-            let top = view.top() + px(1.0);
-            let reached = track.partition_point(|index| children.get(*index).is_some_and(|child| child.top() <= top));
+            // The last tracked child whose top is above a line a third of the way down the view, as a reader's eye is; at the
+            // end of the scroll, the last one in view, since a short last child never reaches that line. A point of slack
+            // for rounding.
+            let at_end = handle.offset().y <= -handle.max_offset().y + px(1.0);
+            let line = if at_end { view.bottom() } else { view.top() + view.size.height / 3.0 } + px(1.0);
+            let reached = track.partition_point(|index| children.get(*index).is_some_and(|child| child.top() <= line));
             let at = reached.checked_sub(1);
             if state.tracked.get() == Some(at) {
                 return;
