@@ -2,6 +2,15 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.45 · 2026-11-19
+
+- **Claude pauses near your plan's limit.** When your 5-hour or weekly usage passes 90%, Claude is told to finish the step it's on and ask you before more work, in every Claude Code session in Wings. Past the limit it's told to stop, since more work is billed as extra usage. Turn it off in Claude chat's settings.
+- **Choose what Detailed opens**: runs of tool calls, command output, file reads, edits, search results, web fetches, subagents, thinking and summaries each have a checkbox in Claude chat's settings.
+- **Code is highlighted in Claude chat**: code blocks in replies, files Claude reads or writes, and edits.
+- **Long code blocks fold** after 20 lines, with "Show N more lines" to open the rest.
+- **A file Claude reads shows its content** in the chat, folded like any output.
+- The prompt rail leaves a little room before the conversation.
+
 ## 0.2.44 · 2026-11-19
 
 - **A new prompt rail in Claude chat**, right against the left of the conversation: a tick for each message you sent, the one in view longer. Hover a tick to see the message and the start of Claude's reply, and click it to jump there.

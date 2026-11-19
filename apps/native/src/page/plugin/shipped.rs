@@ -2198,6 +2198,44 @@ fn tasks_main_answers_claude_codes_tools_and_hooks() {
     assert_eq!(hook("PreToolUse", json!({ "session_id": "s-1", "tool_name": "Bash", "tool_input": { "command": "ls" } })), json!({}));
 }
 
+/// Near the plan's limit, Claude chat's main tells every Claude Code session to pause: with each message, and before a
+/// run of commands once; under it, nothing.
+#[test]
+fn claude_chat_tells_claude_to_pause_near_the_plan_limit() {
+    let rig = Rig::with(load("claude-chat"), false, vec![]);
+    let (on_event, _errors) = errors();
+    rig.host.start_main(&module("claude-chat", "main"), on_event).unwrap();
+    let session = "3c21b0c5-8113-4f55-9493-fa156c3fa369";
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap();
+    let report = |five: u64| {
+        let status = json!({ "session_id": session, "rate_limits": {
+            "five_hour": { "used_percentage": five, "resets_at": now.as_secs() + 3600 },
+            "seven_day": { "used_percentage": 40, "resets_at": now.as_secs() + 86_400 },
+        } });
+        rig.env.statusline.lock().unwrap().record(&status, &serde_json::Value::Null, None, now.as_millis() as u64 + five);
+    };
+    let caller = super::ClaudeCaller { pane_id: Some("p1".into()), project: serde_json::Value::Null, session: json!({ "id": session }) };
+    let hook = |event: &str, input: serde_json::Value| -> serde_json::Value {
+        let (reply, answer) = crate::page::runtime::Reply::channel();
+        rig.host.run_for_claude(event, input, &caller, true, reply);
+        let said: serde_json::Value = serde_json::from_str(&answer.wait(WAIT).expect("an answer").expect("a result")).unwrap();
+        serde_json::from_str(said["text"].as_str().unwrap()).unwrap()
+    };
+    let prompt = || hook("UserPromptSubmit", json!({ "session_id": session, "prompt": "go on" }));
+    let command = || hook("PreToolUse", json!({ "session_id": session, "tool_name": "Bash", "tool_input": { "command": "ls" } }));
+    report(50);
+    assert_eq!(prompt(), json!({}));
+    report(93);
+    let told = prompt();
+    let note = told["context"].as_str().unwrap_or_default();
+    assert!(note.contains("5-hour limit is at 93%") && note.contains("Pause"), "{told}");
+    // Before commands, once for this level, not before each one.
+    assert!(command()["context"].as_str().is_some_and(|said| said.contains("Pause")));
+    assert_eq!(command(), json!({}));
+    report(100);
+    assert!(command()["context"].as_str().is_some_and(|said| said.contains("used up") && said.contains("extra usage")));
+}
+
 /// A note typed on the Issue tab is saved through main and shows in the activity.
 #[test]
 fn tasks_issue_tab_adds_a_note_through_its_main() {

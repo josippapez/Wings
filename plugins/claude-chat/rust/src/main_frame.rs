@@ -113,6 +113,7 @@ fn chat_args(pane: &Value) -> Option<Value> {
 
 #[unsafe(no_mangle)]
 pub fn start() {
+    crate::plan_limit::listen();
     host::on_panes(|list| {
         PANES.with(|panes| *panes.borrow_mut() = list.to_vec());
         show();

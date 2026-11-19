@@ -1,12 +1,13 @@
 {
   "id": "claude-chat",
   "name": "Claude chat",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "minWingsVersion": "0.2.45",
   "description": "Experimental. Runs Claude Code as a chat in a tab instead of a terminal: messages, tool calls and permission prompts as cards, with Enter to send. Open a new chat from the + menu, or move a Claude terminal into one with its Chat badge.",
   "api": 1,
   "main": "dist/native/main.wasm",
   "permissions": {
+    "statusline": true,
     "callTools": ["changes changed_files"],
     "exec": [
       "git ls-files [--cached --others --exclude-standard -z]",
@@ -31,7 +32,9 @@
       "user",
       "assistant",
       "last-prompt",
-      "attachment:queued_command"
+      "attachment:queued_command",
+      "ai-title",
+      "custom-title"
     ],
     "panes": [
       "claude --resume",
@@ -39,6 +42,7 @@
     ]
   },
   "contributes": {
+    "hooks": ["UserPromptSubmit", "PreToolUse"],
     "settings": {
       "page": "dist/native/settings.wasm"
     },

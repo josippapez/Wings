@@ -46,6 +46,7 @@ mod notices;
 mod past_view;
 #[cfg(feature = "chat")]
 mod pictures_view;
+mod plan_limit;
 mod plugins;
 #[cfg(feature = "chat")]
 mod plugins_view;

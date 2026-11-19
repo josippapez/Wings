@@ -12,6 +12,7 @@ type Run = Rc<dyn Fn(Value, Value) -> Pin<Box<dyn Future<Output = Result<Value, 
 
 thread_local! {
     static TOOLS: RefCell<HashMap<String, (Value, Run)>> = RefCell::new(HashMap::new());
+    static LISTENING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Answers calls of the tool `name` with `run`, which gets the input and `{ paneId, project, session }` of who called.
@@ -25,24 +26,25 @@ where
     F: Fn(Value, Value) -> Fut + 'static,
     Fut: Future<Output = Result<Value, String>> + 'static,
 {
-    let first = TOOLS.with(|tools| {
-        let mut tools = tools.borrow_mut();
-        let first = tools.is_empty();
-        tools.insert(name.to_owned(), (schema, Rc::new(move |input, context| Box::pin(run(input, context)))));
-        first
-    });
-    if first {
-        host::on("tool", |token, call| {
-            let call = call.clone();
-            task::spawn(async move {
-                let (text, is_error) = match answer(&call).await {
-                    Ok(text) => (text, false),
-                    Err(text) => (text, true),
-                };
-                drop(host::call("toolDone", json!({ "token": token, "text": text, "isError": is_error })));
-            });
-        });
+    TOOLS.with(|tools| tools.borrow_mut().insert(name.to_owned(), (schema, Rc::new(move |input, context| Box::pin(run(input, context))))));
+    listen();
+}
+
+/// Hears the host's `tool` messages, which carry both tool calls and Claude Code hooks, once for the frame.
+pub(crate) fn listen() {
+    if LISTENING.with(|listening| listening.replace(true)) {
+        return;
     }
+    host::on("tool", |token, call| {
+        let call = call.clone();
+        task::spawn(async move {
+            let (text, is_error) = match answer(&call).await {
+                Ok(text) => (text, false),
+                Err(text) => (text, true),
+            };
+            drop(host::call("toolDone", json!({ "token": token, "text": text, "isError": is_error })));
+        });
+    });
 }
 
 fn has_pattern(schema: &Value) -> bool {

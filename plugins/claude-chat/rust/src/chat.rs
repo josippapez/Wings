@@ -37,9 +37,9 @@ pub const PAGE: usize = 80;
 /// its tool outputs cut as the conversation cuts them anyway.
 pub(crate) const HISTORY_ALL: u32 = 10_000;
 pub(crate) const HISTORY_CUT: u32 = 4_000;
-/// What a session read back is made of: your messages (those sent while Claude worked are attachments), Claude's, and
-/// where a rewind cut it.
-pub(crate) const HISTORY_KINDS: [&str; 4] = ["user", "assistant", "last-prompt", "attachment:queued_command"];
+/// What a session read back is made of: your messages (those sent while Claude worked are attachments), Claude's, where a
+/// rewind cut it, and its name.
+pub(crate) const HISTORY_KINDS: [&str; 6] = ["user", "assistant", "last-prompt", "attachment:queued_command", "ai-title", "custom-title"];
 /// How many past sessions the list shows.
 const PAST: u32 = 60;
 

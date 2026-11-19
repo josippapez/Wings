@@ -850,6 +850,8 @@ pub fn plain_text(nodes: &[Node]) -> String {
         .iter()
         .map(|node| match node {
             Node::Str { text, .. } => text.clone(),
+            // Its text is a prop, not a child, and a reader still sees it.
+            Node::Code(code) => code.text.clone(),
             other => other
                 .parts()
                 .into_iter()

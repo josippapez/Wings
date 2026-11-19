@@ -15,7 +15,7 @@ const CARD_GAP: f32 = 8.0;
 const CARD_RISE: f32 = 18.0;
 /// How wide a rail beside a column is: the longest tick with its margin, and the room it leaves before the column.
 const BESIDE_WIDTH: f32 = 64.0;
-const BESIDE_GAP: f32 = 16.0;
+const BESIDE_GAP: f32 = 28.0;
 
 /// What the view keeps of a rail between renders.
 #[derive(Default)]

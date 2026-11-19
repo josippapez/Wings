@@ -27,6 +27,9 @@ fn view() -> Vec<Node> {
         .child(heading("What Detailed opens"))
         .child(muted("Each kind starts open in Detailed unless you clear it here. A click on a fold still opens or shuts it, and Compact keeps all of them shut."))
         .child(stack().prop("gap", "s").children(opens))
+        .child(heading("Plan limit"))
+        .child(muted("When your plan's 5-hour or weekly usage passes 90%, Claude is told to pause and ask you before more work, in every Claude Code session in Wings, chat or terminal. Past the limit, work is billed as extra usage."))
+        .child(checkbox("Tell Claude to pause near the limit", prefs::pause_near_limit().get(), |on| drop(prefs::pause_near_limit().set(on))).key("pause-near-limit"))
         .child(heading("Text size"))
         .child(muted("The size of the text in the conversation, in every chat. A chat that is open follows a change at once."))
         .child(chips("Text size", &prefs::TEXT_SIZES, &prefs::text_size().get(), |size| drop(prefs::text_size().set(size.to_owned()))))]

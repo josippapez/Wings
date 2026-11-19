@@ -1,5 +1,5 @@
-//! The Claude Code hooks a plugin answers: `wings.onHook`. The host sends a hook to the same `tool` message a tool call
-//! comes in, so `tools::register` has to have been called for the plugin to hear one.
+//! The Claude Code hooks a plugin answers: `wings.onHook`. The host sends a hook in the same `tool` message a tool call
+//! comes in, which answering a hook listens for too, so a plugin with no tools hears its hooks.
 
 use serde_json::{Map, Value, json};
 use std::{cell::RefCell, collections::HashMap, future::Future, pin::Pin, rc::Rc};
@@ -26,6 +26,7 @@ where
     Fut: Future<Output = Option<Say>> + 'static,
 {
     HOOKS.with(|hooks| hooks.borrow_mut().insert(event.to_owned(), Rc::new(move |input, context| Box::pin(run(input, context)))));
+    crate::tools::listen();
 }
 
 /// The JSON a hook call is answered with: `{ context?, deny? }`, empty for a hook the plugin has no handler for.

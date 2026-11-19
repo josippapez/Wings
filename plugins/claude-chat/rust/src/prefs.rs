@@ -11,6 +11,13 @@ pub const MODE: &str = "default-mode";
 /// Every run of tool calls shows open with each call's output, as Claude Code's own verbose transcript does.
 pub const DETAILED: &str = "detailed-output";
 
+/// Claude is told to pause in every Claude Code session when your plan's usage nears its limit (`plan_limit.rs`).
+pub const PAUSE_NEAR_LIMIT: &str = "pause-near-limit";
+
+pub fn pause_near_limit() -> Setting<bool> {
+    Setting::boolean(PAUSE_NEAR_LIMIT, true)
+}
+
 /// The side panel shows beside or over the conversation, in every chat.
 pub const SIDE_PANEL: &str = "side-panel";
 

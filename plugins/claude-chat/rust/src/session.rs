@@ -463,6 +463,8 @@ pub struct Session {
     pub status: Option<String>,
     /// The session's name, as Claude Code last said it (`/rename`, or the one it gave).
     pub title: Option<String>,
+    /// The title is one you gave the session, which the one Claude Code makes up doesn't replace.
+    pub titled: bool,
     /// The conversation was cleared (`/clear`, `/new`, `/reset`), which the page reads once to drop what it kept of it.
     pub cleared: bool,
     /// When the thinking block being streamed began (ms), for how long the thought took.
@@ -510,6 +512,19 @@ impl Session {
             return;
         }
         match line["type"].as_str().unwrap_or_default() {
+            // The session's name as Claude Code keeps it in the transcript, as Wings' session lists name it: one you gave it
+            // with /rename wins over the one Claude Code made up.
+            "custom-title" => {
+                if let Some(title) = line["customTitle"].as_str().map(str::trim).filter(|title| !title.is_empty()) {
+                    self.title = Some(title.to_owned());
+                    self.titled = true;
+                }
+            }
+            "ai-title" if !self.titled => {
+                if let Some(title) = line["aiTitle"].as_str().map(str::trim).filter(|title| !title.is_empty()) {
+                    self.title = Some(title.to_owned());
+                }
+            }
             // A message you sent while Claude worked, or a task's notice, as a session read back has it: the transcript
             // keeps it as an attachment of the turn that read it, not as a message. What another agent sent stays out.
             "attachment" if line["attachment"]["type"] == "queued_command" => {
@@ -740,6 +755,7 @@ impl Session {
         self.suggestion = None;
         self.status = None;
         self.title = None;
+        self.titled = false;
         self.stopping = false;
         self.cmds = Commands::default();
         self.id = Some(id.to_owned());
@@ -2487,6 +2503,16 @@ mod tests {
 
     /// A session read back: what you sent while Claude worked is an attachment of the turn that read it, with text or
     /// with pictures; another agent's message and a task's notice are not yours.
+    #[test]
+    fn a_session_read_back_is_named_as_claude_code_titled_it_and_your_own_title_wins() {
+        let mut session = Session::default();
+        session.hear(&json!({ "type": "ai-title", "aiTitle": "HUD plugin limits display" }));
+        assert_eq!(session.title.as_deref(), Some("HUD plugin limits display"));
+        session.hear(&json!({ "type": "custom-title", "customTitle": "Wings chat work" }));
+        session.hear(&json!({ "type": "ai-title", "aiTitle": "A later made-up title" }));
+        assert_eq!(session.title.as_deref(), Some("Wings chat work"));
+    }
+
     #[test]
     fn messages_you_sent_while_claude_worked_come_back_from_the_transcript() {
         let mut session = Session::default();

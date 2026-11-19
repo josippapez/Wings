@@ -1402,7 +1402,7 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         // A block of more than 20 lines shows its first 20, coloured as Rust, with a row that opens the other 35.
         ("code-fold", long_block, None, None, "Show 35 more lines"),
         // A Read in Detailed shows its file coloured as TypeScript, folded after 20 lines.
-        ("read-ts", read_ts, None, None, "Show 6 more lines"),
+        ("read-ts", read_ts, None, None, "Show 5 more lines"),
         // Issue keys Issues knows and a dev server's address are links; UTF-8 and a key never filed aren't.
         ("links", linked, None, None, "never filed"),
         // The terminal Claude opened, live in the side panel with what it runs and buttons to open it as a tab and close it.
