@@ -1619,7 +1619,8 @@ impl PageView {
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .px(px(8.0))
+                    // As far in as a Bar's content, so a page's text lines up with its header and footer in a narrow pane.
+                    .px(px(14.0))
                     .pb(px(12.0))
                     .overflow_y_scroll()
                     .when(scale != 1.0, |el| el.text_size(px(13.0 * scale)))
