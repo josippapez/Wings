@@ -29,7 +29,12 @@ use wings_connect::{
     },
 };
 use wings_plugins::permissions::NotifyLog;
-use wings_spaces::{claude_accounts, project_info::Store, spaces::Space};
+use wings_spaces::{
+    claude_accounts,
+    project_info::Store,
+    spaces::{Made, Space},
+    worktree::Existing,
+};
 
 use crate::{
     page::{
@@ -39,7 +44,11 @@ use crate::{
     projects::with_setup,
 };
 
-use super::{Workspace, history::Sessions, plugin_env::AppEnv};
+use super::{
+    Workspace,
+    history::Sessions,
+    plugin_env::{AppEnv, UiEvent},
+};
 
 /// How long a plugin's tool has to answer Claude, as on the desktop.
 const CALL_TIMEOUT: Duration = Duration::from_secs(120);
@@ -204,7 +213,14 @@ impl Workspace {
                 .find(|tab| tab.layout.panes().contains(&pane))
                 .map(|tab| tab.id)
         });
-        let input = with_setup(self.spaces.take_setup(&project).as_deref(), typed);
+        // The setup line runs in an agent's pane only while the user lets Claude run commands in new tabs, and not before a
+        // command that waits for the user's Enter. Otherwise it stays for the next pane, like one the user opens.
+        let setup = match &typed {
+            _ if !self.prefs.agents_run_commands => None,
+            Some(typed) if !typed.ends_with('\r') => None,
+            _ => self.spaces.take_setup(&project),
+        };
+        let input = with_setup(setup.as_deref(), typed);
         let cwd = plan
             .cwd
             .clone()
@@ -693,6 +709,23 @@ impl Host for NativeHost<'_> {
             .env
             .spaces()
             .update_worktree_settings(space_id, include, setup)
+    }
+
+    fn create_worktree(
+        &self,
+        space_id: &str,
+        branch: &str,
+        base: Option<&str>,
+    ) -> Result<Made, String> {
+        let made = self.server.env.spaces().create_worktree_with(
+            space_id,
+            branch,
+            base,
+            Existing::Use,
+        )?;
+        // Before the answer, so the window lists it by the time the agent opens a pane there.
+        self.server.env.send(UiEvent::Projects);
+        Ok(made)
     }
 
     /// Asks in the window, as the desktop's `approve_setup`: one prompt per project at a time, so a second request can't

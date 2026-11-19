@@ -1112,6 +1112,107 @@ fn a_setup_command_an_agent_proposes_is_saved_only_once_you_allow_it() {
     assert_eq!(setup(&window).as_deref(), Some("pnpm install"));
 }
 
+/// Claude's `create_worktree` on the app's socket: the worktree is made, listed under its project and its setup line
+/// kept for the first terminal opened there, and a branch that exists is checked out, not refused.
+#[test]
+fn create_worktree_lists_the_worktree_and_keeps_the_setup_line_for_its_first_terminal() {
+    use std::io::{BufRead, BufReader};
+    let data = Data::temp();
+    let alpha = data.path().canonicalize().unwrap().join("alpha");
+    std::fs::create_dir_all(&alpha).unwrap();
+    let git = |args: &[&str]| {
+        let ok = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(&alpha)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success());
+        assert_eq!(ok.ok(), Some(true), "{args:?}");
+    };
+    git(&["init", "-b", "main"]);
+    git(&["commit", "--allow-empty", "-m", "first"]);
+    git(&["branch", "pr/existing"]);
+    let list = data.path().join("spaces.json");
+    std::fs::write(
+        &list,
+        json!([{ "id": "a", "name": "alpha", "path": alpha, "worktreeSetup": "pnpm install" }])
+            .to_string(),
+    )
+    .unwrap();
+    let socket = data.path().join("mcp.sock");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |config| {
+        config.project = alpha.clone();
+        config.projects = Some(list.clone());
+        config.socket = Some(socket.clone());
+    });
+    let call = |window: &mut TestAppWindow<Workspace>, branch: &str| {
+        let answer = Arc::new(Mutex::new(None));
+        let (found, socket) = (answer.clone(), socket.clone());
+        let request = json!({ "id": 1, "op": "call", "name": "create_worktree", "arguments": { "project": "alpha", "branch": branch } });
+        std::thread::spawn(move || {
+            let stream = std::os::unix::net::UnixStream::connect(socket).unwrap();
+            writeln!(&stream, "{request}").unwrap();
+            for line in BufReader::new(&stream).lines() {
+                let message: Value = serde_json::from_str(&line.unwrap()).unwrap_or(Value::Null);
+                if message.get("id") == Some(&json!(1)) {
+                    *found.lock().unwrap() = Some(message);
+                    return;
+                }
+            }
+        });
+        until(&app, window, "the tool never answered", |_| {
+            answer.lock().unwrap().is_some()
+        });
+        let reply = answer.lock().unwrap().take().unwrap();
+        assert_eq!(reply["result"]["isError"], false, "{reply}");
+        serde_json::from_str::<Value>(reply["result"]["content"][0]["text"].as_str().unwrap())
+            .unwrap()
+    };
+
+    let existing = call(&mut window, "pr/existing");
+    assert_eq!(existing["created"], "existing", "{existing}");
+    let path = alpha.parent().unwrap().join("alpha-worktrees/pr-existing");
+    assert_eq!(existing["path"].as_str(), path.to_str());
+    assert_eq!(existing["setup"], "pnpm install");
+    let new = call(&mut window, "pr/new");
+    assert_eq!(new["created"], "new", "{new}");
+    // Listed under its project, and its setup line waits for its first terminal, once.
+    let spaces = window.read(|w, _| w.spaces.spaces());
+    assert_eq!(
+        spaces.iter().filter(|s| s.parent.as_deref() == Some("a")).count(),
+        2
+    );
+    let took = |window: &TestAppWindow<Workspace>, path: &std::path::Path| {
+        window.read(|w, _| w.spaces.take_setup(path))
+    };
+    assert_eq!(took(&window, &path).as_deref(), Some("pnpm install"));
+    assert_eq!(took(&window, &path), None);
+
+    // An agent's terminal runs the setup line only while the user lets Claude run commands in new tabs.
+    let open = |window: &mut TestAppWindow<Workspace>, path: &std::path::Path| {
+        until(&app, window, "the worktree never opened as a project", |w| {
+            w.projects.iter().any(|project| project.path == path)
+        });
+        let plan = wings_connect::panes::OpenPlan {
+            space_id: path.to_string_lossy().into_owned(),
+            cwd: None,
+            input: None,
+            run: false,
+            next_to: None,
+        };
+        window.update(|w, window, cx| w.claude_open_pane(plan, window, cx).unwrap());
+    };
+    let off = std::path::PathBuf::from(call(&mut window, "pr/off")["path"].as_str().unwrap());
+    open(&mut window, &off);
+    assert_eq!(took(&window, &off).as_deref(), Some("pnpm install"), "ran with the setting off");
+    window.update(|w, _, cx| w.set_prefs(|prefs| prefs.agents_run_commands = true, cx));
+    let on = std::path::PathBuf::from(call(&mut window, "pr/on")["path"].as_str().unwrap());
+    open(&mut window, &on);
+    assert_eq!(took(&window, &on), None, "the setting on, the terminal runs it");
+}
+
 /// A zip of `files`, as a hand-made or hostile `.wings-plugin` would be, with `links` as symlink entries.
 fn zip_of(files: &[(&str, &str)], links: &[(&str, &str)]) -> Vec<u8> {
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));

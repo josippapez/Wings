@@ -1,5 +1,5 @@
 //! Wings' built-in MCP tools about the panes themselves: `list_sessions`, `read_pane`, `open_pane`, `close_pane`,
-//! `send_to_agent`, `notify` and `worktree_setup`.
+//! `send_to_agent`, `notify`, `worktree_setup` and `create_worktree`.
 //! They let one Claude session see and use the others. Everything reaches this code through the `0600` socket in
 //! `server`, so only processes of this user can call it, and the first three are described to Claude as the
 //! cross-session reach they are. The logic works on plain data behind `Host`, so the tests need no app.
@@ -9,7 +9,10 @@ use std::path::PathBuf;
 use serde_json::{json, Value};
 
 use wings_agents::detect::{Agent, AgentState};
-use wings_spaces::spaces::Space;
+use wings_spaces::{
+    spaces::{Made, Space},
+    worktree::Checkout,
+};
 
 /// Most lines, and most bytes, `read_pane` returns, so one call can't fill Claude's context.
 const READ_LINES_DEFAULT: usize = 100;
@@ -79,6 +82,10 @@ pub trait Host {
     /// Saves worktree settings for the project `space_id` belongs to (see `spaces::update_worktree_settings`) in
     /// memory and on disk, and tells the window.
     fn set_worktree_setup(&self, space_id: &str, include: Option<&str>, setup: Option<&str>) -> Result<(), String>;
+    /// Makes a worktree of the project `space_id` through the same path the app's own dialog uses: its include files
+    /// copied, listed under the project, its setup line kept for the first terminal opened there. A branch that
+    /// exists is checked out, one that doesn't is cut from `base` (the default branch without one).
+    fn create_worktree(&self, space_id: &str, branch: &str, base: Option<&str>) -> Result<Made, String>;
     /// Asks the user, in the window, to allow an agent's change of `project`'s setup command, and waits for the answer
     /// for up to `SETUP_APPROVAL_WAIT`. `pane` names who asks, `current` is the command now. Whether the user allowed it;
     /// an error when they didn't answer in time.
@@ -156,8 +163,21 @@ pub fn tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "create_worktree",
+            "description": "Make a git worktree of one of the user's Wings projects for a branch, the way Wings' own new-agent dialog does: in <repo>-worktrees/<branch> beside the repo, listed under its project in Wings, with the project's local files (.env, .claude/ and the rest of its include list, see worktree_setup) copied in. Use this instead of git worktree add whenever you are asked to set up a worktree. A branch that exists locally is checked out as it is; one that exists only on the remote (origin, or the repo's only remote) becomes a local branch tracking it; otherwise a new branch is cut from base. Nothing is fetched: run git fetch first when the branch may be new on the remote. Git's own error comes back when the branch is checked out in another worktree. The reply has the path, the branch, whether it was new, existing or tracking (with the upstream), how many files were copied, the project's setup command if it has one (an install step, say) and a next hint. The setup command does not run by itself: it waits for the first terminal opened in the worktree, so follow the hint to run it before you build or test there.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": { "type": "string", "description": "A project's name or folder path (a worktree means its project). Leave out for your own project." },
+                    "branch": { "type": "string", "description": "The branch to work on, like feature/login. Also names the folder." },
+                    "base": { "type": "string", "description": "Only for a new branch: what to cut it from. Leave out for the repo's default branch (origin/main, say)." }
+                },
+                "required": ["branch"]
+            }
+        }),
+        json!({
             "name": "worktree_setup",
-            "description": "Read what a project's new worktrees get, the gitignored local files copied in and a setup command, and change the file list. Without include it only reads. With setup it proposes a new setup command (one shell line, or an empty string to clear it): Wings asks the user to allow it in a dialog, since it runs in every new worktree, and this call waits for their answer (up to 5 minutes) and fails when they decline or don't answer. Returns the project, hasIncludeFile (a .worktreeinclude in the repo, which takes precedence over the include list), the effective include list with whether it is the default or custom (includeIsDefault), the defaults, and the setup command. Patterns use .gitignore syntax and only files the repo ignores are copied, never tracked ones; a line starting with ! removes files. A custom list replaces the defaults, so include the default lines you still want. Files are copied, not linked, so leave big folders (node_modules, build output) out. The setup command is one shell line that runs in a new worktree's folder, in the first terminal opened there, before the agent starts. The Worktree setup dialog and Schedules show the same settings and pick up a change at once.",
+            "description": "Read what a project's new worktrees get, the gitignored local files copied in and a setup command, and change the file list. To make a worktree, use create_worktree. Without include it only reads. With setup it proposes a new setup command (one shell line, or an empty string to clear it): Wings asks the user to allow it in a dialog, since it runs in every new worktree, and this call waits for their answer (up to 5 minutes) and fails when they decline or don't answer. Returns the project, hasIncludeFile (a .worktreeinclude in the repo, which takes precedence over the include list), the effective include list with whether it is the default or custom (includeIsDefault), the defaults, and the setup command. Patterns use .gitignore syntax and only files the repo ignores are copied, never tracked ones; a line starting with ! removes files. A custom list replaces the defaults, so include the default lines you still want. Files are copied, not linked, so leave big folders (node_modules, build output) out. The setup command is one shell line that runs in a new worktree's folder, in the first terminal opened there, before the agent starts. The Worktree setup dialog and Schedules show the same settings and pick up a change at once.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -221,28 +241,76 @@ pub fn call_tool(host: &dyn Host, name: &str, args: &Value, caller: &dyn Fn() ->
             None => Err("notify needs a title".into()),
         },
         "worktree_setup" => worktree_setup(host, caller().as_deref(), args),
+        "create_worktree" => create_worktree(host, caller().as_deref(), args),
         _ => return None,
     })
+}
+
+/// The project a worktree tool is about: the one `project` names (by name, folder path or id), else the caller's own.
+fn project_id(host: &dyn Host, spaces: &[Space], caller: Option<&str>, args: &Value) -> Result<String, String> {
+    match args.get("project").and_then(Value::as_str).map(str::trim).filter(|p| !p.is_empty()) {
+        Some(name) => {
+            let named: Vec<&Space> = spaces.iter().filter(|s| s.id == name || s.path == name.trim_end_matches('/') || s.name == name).collect();
+            match named.as_slice() {
+                [one] => Ok(one.id.clone()),
+                [] => Err(format!("No project {name} in Wings. Pass a project's name or folder path.")),
+                _ => Err(format!("More than one project is called {name}. Pass its folder path.")),
+            }
+        }
+        None => {
+            let pane = caller.and_then(|id| host.row(id));
+            pane.map(|p| p.space_id).ok_or_else(|| "Call this from a Wings pane, or pass project".to_string())
+        }
+    }
+}
+
+/// Makes a worktree of a project, through the host's own path for it, and says how to get its setup command run.
+fn create_worktree(host: &dyn Host, caller: Option<&str>, args: &Value) -> Result<String, String> {
+    let spaces = host.spaces();
+    let id = project_id(host, &spaces, caller, args)?;
+    let branch = args.get("branch").and_then(Value::as_str).map(str::trim).filter(|b| !b.is_empty()).ok_or("create_worktree needs a branch")?;
+    let base = match args.get("base") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(base)) => Some(base.trim()).filter(|b| !b.is_empty()),
+        Some(_) => return Err("base is a branch or commit to cut a new branch from".into()),
+    };
+    let made = host.create_worktree(&id, branch, base)?;
+    let mut reply = json!({
+        "project": wings_spaces::spaces::settings_owner_in(&spaces, &id).map(|s| s.name.as_str()),
+        "path": made.space.path,
+        "branch": branch,
+        "copiedFiles": made.local.copied,
+        "setup": made.setup,
+    });
+    match &made.checkout {
+        Checkout::New { base } => {
+            reply["created"] = json!("new");
+            reply["base"] = json!(base);
+        }
+        Checkout::Local => reply["created"] = json!("existing"),
+        Checkout::Tracking { upstream } => {
+            reply["created"] = json!("tracking");
+            reply["upstream"] = json!(upstream);
+        }
+    }
+    if !made.local.errors.is_empty() {
+        reply["copyErrors"] = json!(made.local.errors);
+    }
+    reply["next"] = json!(match &made.setup {
+        Some(setup) => format!(
+            "The setup command ({setup}) is waiting for the first terminal opened in {}. Run it with open_pane: cwd set to that path, command \"true\", run true. It runs the setup, then true, and the reply has a waitCommand to run with Bash in the background; wait for it before building or testing there. If commandRun is false, running commands in new tabs is off in Wings Settings, Agents: the setup stays queued, so run it yourself with Bash in that folder.",
+            made.space.path
+        ),
+        None => "This project has no setup command, so the worktree is ready. Work in it with Bash (cd to path), or open a terminal there with open_pane (cwd = path).".to_string(),
+    });
+    Ok(reply.to_string())
 }
 
 /// Reads, or changes, the worktree settings of a project: the one named, else the caller's. The same code path as the
 /// Worktree setup dialog writes through.
 fn worktree_setup(host: &dyn Host, caller: Option<&str>, args: &Value) -> Result<String, String> {
     let spaces = host.spaces();
-    let id = match args.get("project").and_then(Value::as_str).map(str::trim).filter(|p| !p.is_empty()) {
-        Some(name) => {
-            let named: Vec<&Space> = spaces.iter().filter(|s| s.id == name || s.path == name.trim_end_matches('/') || s.name == name).collect();
-            match named.as_slice() {
-                [one] => one.id.clone(),
-                [] => return Err(format!("No project {name} in Wings. Pass a project's name or folder path.")),
-                _ => return Err(format!("More than one project is called {name}. Pass its folder path.")),
-            }
-        }
-        None => {
-            let pane = caller.and_then(|id| host.row(id));
-            pane.map(|p| p.space_id).ok_or("Call this from a Wings pane, or pass project")?
-        }
-    };
+    let id = project_id(host, &spaces, caller, args)?;
     let include = match args.get("include") {
         None | Some(Value::Null) => None,
         Some(Value::Array(items)) => {
@@ -496,6 +564,9 @@ mod tests {
         /// What the user answers to a setup approval: `None` is no answer in time.
         approval: Option<bool>,
         asked: RefCell<Vec<Asked>>,
+        /// What a worktree made through the host looks like, and the (project, branch, base) it was asked for.
+        made: RefCell<Option<Made>>,
+        worktrees: RefCell<Vec<(String, String, Option<String>)>>,
     }
 
     impl Host for Fake {
@@ -513,6 +584,10 @@ mod tests {
         }
         fn set_worktree_setup(&self, space_id: &str, include: Option<&str>, setup: Option<&str>) -> Result<(), String> {
             wings_spaces::spaces::update_worktree_settings(&mut self.spaces.borrow_mut(), space_id, include, setup)
+        }
+        fn create_worktree(&self, space_id: &str, branch: &str, base: Option<&str>) -> Result<Made, String> {
+            self.worktrees.borrow_mut().push((space_id.into(), branch.into(), base.map(str::to_string)));
+            self.made.borrow().clone().ok_or_else(|| "'main' is already checked out at '/work/app'".to_string())
         }
         fn approve_setup(&self, project: &str, pane: &str, current: Option<&str>, proposed: &str) -> Result<bool, String> {
             self.asked.borrow_mut().push((project.into(), pane.into(), current.map(str::to_string), proposed.into()));
@@ -577,7 +652,7 @@ mod tests {
     fn tools_have_valid_shapes_and_other_names_are_left_alone() {
         let tools = tools();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["list_sessions", "read_pane", "open_pane", "close_pane", "send_to_agent", "notify", "worktree_setup"]);
+        assert_eq!(names, ["list_sessions", "read_pane", "open_pane", "close_pane", "send_to_agent", "notify", "create_worktree", "worktree_setup"]);
         for tool in &tools {
             assert!(!tool["name"].as_str().unwrap().contains("__"));
             assert!(tool["description"].as_str().unwrap().len() < 2048);
@@ -767,6 +842,48 @@ mod tests {
         let sent = host.notified.borrow();
         assert_eq!(sent[0].2.as_deref(), Some("p1"));
         assert_eq!(sent[1].2, None);
+    }
+
+    fn made(checkout: Checkout, setup: Option<&str>) -> Made {
+        let local = wings_spaces::worktree::LocalCopy { copied: 3, ..Default::default() };
+        Made { space: Space { parent: Some("s1".into()), ..space("s2", "app-fix", "/work/app-worktrees/fix") }, local, setup: setup.map(str::to_string), checkout }
+    }
+
+    #[test]
+    fn create_worktree_goes_through_the_host_and_says_how_to_run_the_setup() {
+        let new = Checkout::New { base: "origin/main".into() };
+        let host = Fake { panes: vec![row("p1", "s1", "/work/app")], spaces: vec![space("s1", "app", "/work/app")].into(), made: Some(made(new, Some("pnpm install"))).into(), ..Fake::default() };
+        let call = |host: &Fake, args: Value, caller: Option<&str>| run(host, "create_worktree", args, caller).map(|t| serde_json::from_str::<Value>(&t).unwrap());
+
+        // From a pane, in its own project; the base is the host's to choose.
+        let out = call(&host, json!({ "branch": " fix " }), Some("p1")).unwrap();
+        assert_eq!(host.worktrees.borrow()[0], ("s1".to_string(), "fix".to_string(), None));
+        assert_eq!((out["project"].as_str(), out["path"].as_str(), out["branch"].as_str()), (Some("app"), Some("/work/app-worktrees/fix"), Some("fix")));
+        assert_eq!((out["created"].as_str(), out["base"].as_str(), out["copiedFiles"].as_u64(), out["setup"].as_str()), (Some("new"), Some("origin/main"), Some(3), Some("pnpm install")));
+        assert!(out["upstream"].is_null() && out["copyErrors"].is_null());
+        let next = out["next"].as_str().unwrap();
+        assert!(next.contains("pnpm install") && next.contains("open_pane") && next.contains("/work/app-worktrees/fix") && next.contains("waitCommand"), "{next}");
+
+        // By name from anywhere, with a base, onto a branch only the remote had; no setup command to run.
+        *host.made.borrow_mut() = Some(made(Checkout::Tracking { upstream: "origin/fix".into() }, None));
+        let out = call(&host, json!({ "project": "app", "branch": "fix", "base": " main " }), None).unwrap();
+        assert_eq!(host.worktrees.borrow()[1], ("s1".to_string(), "fix".to_string(), Some("main".to_string())));
+        assert_eq!((out["created"].as_str(), out["upstream"].as_str()), (Some("tracking"), Some("origin/fix")));
+        assert!(out["setup"].is_null() && out["base"].is_null() && !out["next"].as_str().unwrap().contains("waitCommand"));
+        *host.made.borrow_mut() = Some(made(Checkout::Local, None));
+        assert_eq!(call(&host, json!({ "project": "/work/app/", "branch": "fix" }), None).unwrap()["created"], "existing");
+        assert_eq!(host.worktrees.borrow().len(), 3);
+
+        // Refused before the host is asked: no branch, a project that isn't in Wings, no project and no Wings pane.
+        assert!(call(&host, json!({ "project": "app" }), None).unwrap_err().contains("needs a branch"));
+        assert!(call(&host, json!({ "project": "other", "branch": "x" }), None).unwrap_err().contains("No project other"));
+        assert!(call(&host, json!({ "branch": "x" }), None).unwrap_err().contains("from a Wings pane"));
+        assert!(call(&host, json!({ "branch": "x", "base": 5 }), Some("p1")).unwrap_err().contains("base is"));
+        assert_eq!(host.worktrees.borrow().len(), 3);
+
+        // The host's refusal, git's text included, reaches the caller as it is.
+        *host.made.borrow_mut() = None;
+        assert_eq!(call(&host, json!({ "branch": "main" }), Some("p1")).unwrap_err(), "'main' is already checked out at '/work/app'");
     }
 
     #[test]

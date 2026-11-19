@@ -16,6 +16,7 @@ use std::{
 use wings_spaces::{
     claude_accounts,
     spaces::{self, Space, SpaceStore, WorktreeSetup},
+    worktree::Existing,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -181,15 +182,27 @@ impl Projects {
         branch: &str,
         base: Option<&str>,
     ) -> Result<Space, String> {
+        self.create_worktree_with(project, branch, base, Existing::Refuse)
+            .map(|made| made.space)
+    }
+
+    /// `create_worktree`, with a choice for a branch that already exists, and what came of it.
+    pub fn create_worktree_with(
+        &self,
+        project: &str,
+        branch: &str,
+        base: Option<&str>,
+        existing: Existing,
+    ) -> Result<spaces::Made, String> {
         let id = self.id_of(&mut self.store.lock().unwrap(), project, true);
-        let made = spaces::make_worktree(&self.store, &id, branch, base)?;
-        if let Some(line) = made.setup {
+        let made = spaces::make_worktree_with(&self.store, &id, branch, base, existing)?;
+        if let Some(line) = &made.setup {
             self.setup
                 .lock()
                 .unwrap()
-                .insert(PathBuf::from(&made.space.path), line);
+                .insert(PathBuf::from(&made.space.path), line.clone());
         }
-        Ok(made.space)
+        Ok(made)
     }
 
     pub fn worktree_setup(&self, project: &str) -> Result<WorktreeSetup, String> {

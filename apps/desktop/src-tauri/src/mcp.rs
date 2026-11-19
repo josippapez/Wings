@@ -176,6 +176,11 @@ impl crate::mcp_panes::Host for WingsHost<'_> {
         crate::set_worktree_setup(self.0, space_id, include, setup)
     }
 
+    /// The desktop's window makes the worktree and lists it itself, so a call from outside it can't.
+    fn create_worktree(&self, _space_id: &str, _branch: &str, _base: Option<&str>) -> Result<crate::spaces::Made, String> {
+        Err("create_worktree works in the native Wings app only. Make the worktree with git worktree add.".to_string())
+    }
+
     fn approve_setup(&self, project: &str, pane: &str, current: Option<&str>, proposed: &str) -> Result<bool, String> {
         // One prompt per project at a time, so a second request can't take the place of the one the user is reading.
         static WAITING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());

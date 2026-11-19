@@ -481,7 +481,7 @@ impl AppEnv {
         self.system.lock().unwrap().clone()
     }
 
-    fn send(&self, event: UiEvent) {
+    pub(super) fn send(&self, event: UiEvent) {
         // Closed when the window is, and a plugin that outlives it has no one to show anything to.
         let _ = self.events.try_send(event);
     }

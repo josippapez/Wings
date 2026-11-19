@@ -170,10 +170,31 @@ pub struct LocalCopy {
     pub errors: Vec<String>,
 }
 
+/// What `create_with` does when the branch already exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Existing {
+    /// Refuse: the new-agent dialog and plugins always start a branch of their own.
+    Refuse,
+    /// Check it out: a local branch as it is, one only on the remote as a local branch tracking it.
+    Use,
+}
+
+/// How the worktree's branch came to be.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Checkout {
+    /// A new branch cut from `base`.
+    New { base: String },
+    /// A local branch that was already there.
+    Local,
+    /// A new local branch tracking `upstream`, a branch that only existed on the remote.
+    Tracking { upstream: String },
+}
+
 #[derive(Debug, Clone)]
 pub struct Created {
     pub path: PathBuf,
     pub local: LocalCopy,
+    pub checkout: Checkout,
 }
 
 /// Runs git with raw output, optionally feeding `input` to stdin. `ok` lists exit codes that aren't failures.
@@ -300,8 +321,17 @@ fn within(path: &Path, root: &Path) -> bool {
 /// is the project's own pattern list, see `copy_local`). Refuses when the folder or the branch exists. On failure
 /// the error is git's own text.
 pub fn create(dir: &Path, branch: &str, base: &str, include: Option<&str>) -> Result<Created, String> {
+    create_with(dir, branch, Some(base), include, Existing::Refuse)
+}
+
+/// `create`, with a choice for a branch that exists (`existing`) and the repo's default branch as the base when none
+/// is given. `base` only matters for a new branch. Nothing is fetched: a branch the remote has but this repo hasn't
+/// heard of yet needs a `git fetch` first.
+pub fn create_with(dir: &Path, branch: &str, base: Option<&str>, include: Option<&str>, existing: Existing) -> Result<Created, String> {
     validate_branch(branch)?;
-    validate_base(base)?;
+    if let Some(base) = base {
+        validate_base(base)?;
+    }
     let root = PathBuf::from(git(dir, &["rev-parse", "--show-toplevel"]).map_err(|_| format!("{} isn't a git repository", dir.display()))?);
     // From a linked worktree, `--show-toplevel` is that worktree: use the main one, so they all end up together.
     let root = match git(&root, &["rev-parse", "--path-format=absolute", "--git-common-dir"]) {
@@ -312,20 +342,57 @@ pub fn create(dir: &Path, branch: &str, base: &str, include: Option<&str>) -> Re
     if path.exists() {
         return Err(format!("{} already exists", path.display()));
     }
-    if git_ok(&root, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{branch}")]) {
+    let local = git_ok(&root, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{branch}")]);
+    if local && existing == Existing::Refuse {
         return Err(format!("A branch named {branch} already exists"));
     }
-    if !git_ok(&root, &["rev-parse", "--verify", "--quiet", &format!("{base}^{{commit}}")]) {
-        return Err(format!("{base} isn't a branch or commit in this repo"));
-    }
+    let remote = if local || existing == Existing::Refuse { None } else { remote_branch(&root, branch) };
+    let new_base = if local || remote.is_some() {
+        None
+    } else {
+        let base = match base {
+            Some(base) => base.to_string(),
+            None => info(&root)?.default_branch.ok_or("This repo has no default branch to start from: pass base")?,
+        };
+        validate_base(&base)?;
+        if !git_ok(&root, &["rev-parse", "--verify", "--quiet", &format!("{base}^{{commit}}")]) {
+            return Err(format!("{base} isn't a branch or commit in this repo"));
+        }
+        Some(base)
+    };
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Couldn't create {}: {e}", parent.display()))?;
     }
-    // `--no-track`: a branch cut from `origin/main` would otherwise push to and pull from main.
     let path_arg = path.to_str().ok_or("The worktree's path isn't valid text")?;
-    git(&root, &["worktree", "add", "--no-track", "-b", branch, path_arg, base])?;
+    let checkout = if local {
+        // Git's own error passes through when the branch is checked out in another worktree.
+        git(&root, &["worktree", "add", path_arg, branch])?;
+        Checkout::Local
+    } else if let Some(upstream) = remote {
+        git(&root, &["worktree", "add", "--track", "-b", branch, path_arg, &upstream])?;
+        Checkout::Tracking { upstream }
+    } else {
+        let base = new_base.ok_or("No branch to start from")?;
+        // `--no-track`: a branch cut from `origin/main` would otherwise push to and pull from main.
+        git(&root, &["worktree", "add", "--no-track", "-b", branch, path_arg, &base])?;
+        Checkout::New { base }
+    };
     let local = copy_local(&root, &path, include);
-    Ok(Created { path, local })
+    Ok(Created { path, local, checkout })
+}
+
+/// `<remote>/<branch>` when a remote has the branch as of the last fetch: `origin`, else the repo's only remote.
+fn remote_branch(root: &Path, branch: &str) -> Option<String> {
+    let has = |remote: &str| git_ok(root, &["show-ref", "--verify", "--quiet", &format!("refs/remotes/{remote}/{branch}")]);
+    if has("origin") {
+        return Some(format!("origin/{branch}"));
+    }
+    let remotes = git(root, &["remote"]).ok()?;
+    let mut names = remotes.lines().map(str::trim).filter(|n| !n.is_empty());
+    match (names.next(), names.next()) {
+        (Some(only), None) if has(only) => Some(format!("{only}/{branch}")),
+        _ => None,
+    }
 }
 
 /// What the delete dialog shows about a worktree.
@@ -559,6 +626,69 @@ mod tests {
         let one = create(&repo, "wings/three", "main", None).unwrap().path;
         assert_eq!(create(&one, "wings/four", "main", None).unwrap().path, base.join("app-worktrees/wings-four"));
         assert!(create(&base, "x", "main", None).unwrap_err().contains("isn't a git repository"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A repo with a remote: a branch only the remote has, one that is local, and one checked out elsewhere.
+    #[test]
+    fn checks_out_an_existing_branch_only_when_asked() {
+        if find_program("git").is_none() {
+            return;
+        }
+        let base = std::env::temp_dir().join(format!("wings-wt-existing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("app")).unwrap();
+        std::fs::create_dir_all(base.join("origin.git")).unwrap();
+        let base = base.canonicalize().unwrap();
+        let (repo, origin) = (base.join("app"), base.join("origin.git"));
+        let run = |args: &[&str]| {
+            let ok = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"])
+                .args(args)
+                .current_dir(&repo)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "{args:?}");
+        };
+        let out = |dir: &Path, args: &[&str]| git(dir, args).unwrap();
+        assert!(Command::new("git").args(["init", "--bare", "-b", "main"]).arg(&origin).stdout(Stdio::null()).status().unwrap().success());
+        run(&["init"]);
+        run(&["commit", "--allow-empty", "-m", "first"]);
+        run(&["remote", "add", "origin", origin.to_str().unwrap()]);
+        run(&["branch", "pr/remote"]);
+        run(&["branch", "pr/local"]);
+        run(&["push", "origin", "main", "pr/remote"]);
+        // pr/remote now exists only as origin/pr/remote.
+        run(&["branch", "-D", "pr/remote"]);
+
+        // Without the flag, a branch that exists is refused as before, and an unknown one is made new.
+        assert!(create(&repo, "pr/local", "main", None).unwrap_err().contains("already exists"));
+        let new = create_with(&repo, "pr/new", None, None, Existing::Use).unwrap();
+        // The default base is origin's main here, as the app's dialog picks it.
+        assert_eq!(new.checkout, Checkout::New { base: "origin/main".into() });
+        assert_eq!(out(&new.path, &["rev-parse", "--abbrev-ref", "HEAD"]), "pr/new");
+        assert!(git(&repo, &["config", "branch.pr/new.remote"]).is_err(), "a new branch doesn't track main");
+
+        // A local branch is checked out as it is.
+        assert!(create_with(&repo, "pr/local", None, None, Existing::Refuse).unwrap_err().contains("already exists"));
+        let local = create_with(&repo, "pr/local", Some("nope"), None, Existing::Use).unwrap();
+        assert_eq!(local.checkout, Checkout::Local);
+        assert_eq!(local.path, base.join("app-worktrees/pr-local"));
+        assert_eq!(out(&local.path, &["rev-parse", "--abbrev-ref", "HEAD"]), "pr/local");
+
+        // A branch only the remote has becomes a local one tracking it.
+        let tracking = create_with(&repo, "pr/remote", None, None, Existing::Use).unwrap();
+        assert_eq!(tracking.checkout, Checkout::Tracking { upstream: "origin/pr/remote".into() });
+        assert_eq!(out(&tracking.path, &["rev-parse", "--abbrev-ref", "HEAD"]), "pr/remote");
+        assert_eq!(out(&tracking.path, &["rev-parse", "--abbrev-ref", "pr/remote@{upstream}"]), "origin/pr/remote");
+
+        // Checked out elsewhere: git's own text, and no worktree.
+        let err = create_with(&repo, "main", None, None, Existing::Use).unwrap_err();
+        assert!(err.contains("main") && err.contains("already"), "{err}");
+        assert!(!base.join("app-worktrees/main").exists());
         let _ = std::fs::remove_dir_all(&base);
     }
 

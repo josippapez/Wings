@@ -263,12 +263,19 @@ pub struct Made {
     pub space: Space,
     pub local: worktree::LocalCopy,
     pub setup: Option<String>,
+    /// Whether the branch is new, was already there, or tracks a remote one.
+    pub checkout: worktree::Checkout,
 }
 
 /// Makes the worktree of `space_id` on a new branch from `base` (the repo's default branch without one), copies the
 /// project's gitignored local setup into it, and adds it to the store as a project under `space_id`. Git runs without
 /// the store locked.
 pub fn make_worktree(store: &Mutex<SpaceStore>, space_id: &str, branch: &str, base: Option<&str>) -> Result<Made, String> {
+    make_worktree_with(store, space_id, branch, base, worktree::Existing::Refuse)
+}
+
+/// `make_worktree`, with a choice for a branch that already exists (see `worktree::create_with`).
+pub fn make_worktree_with(store: &Mutex<SpaceStore>, space_id: &str, branch: &str, base: Option<&str>, existing: worktree::Existing) -> Result<Made, String> {
     let (path, include, setup) = {
         let store = store.lock().unwrap();
         let path = store.get(space_id).ok_or("No such project in Wings")?.path.clone();
@@ -276,13 +283,9 @@ pub fn make_worktree(store: &Mutex<SpaceStore>, space_id: &str, branch: &str, ba
         (path, owner.and_then(|s| s.worktree_include.clone()), owner.and_then(|s| s.worktree_setup.clone()))
     };
     let dir = Path::new(&path);
-    let base = match base {
-        Some(base) => base.to_string(),
-        None => worktree::info(dir)?.default_branch.ok_or("This repo has no default branch to start from: pass base")?,
-    };
-    let made = worktree::create(dir, branch, &base, include.as_deref())?;
+    let made = worktree::create_with(dir, branch, base, include.as_deref(), existing)?;
     let space = store.lock().unwrap().add_worktree(&made.path.to_string_lossy(), space_id);
-    Ok(Made { space, local: made.local, setup })
+    Ok(Made { space, local: made.local, setup, checkout: made.checkout })
 }
 
 pub fn view(space: &Space) -> SpaceView {
