@@ -13,8 +13,9 @@ const CARD_WIDTH: f32 = 280.0;
 const CARD_GAP: f32 = 8.0;
 /// The card's top above the tick's centre, which puts the first line level with the tick.
 const CARD_RISE: f32 = 18.0;
-/// How wide a rail beside a column is: the longest tick with its margin.
+/// How wide a rail beside a column is: the longest tick with its margin, and the room it leaves before the column.
 const BESIDE_WIDTH: f32 = 64.0;
+const BESIDE_GAP: f32 = 16.0;
 
 /// What the view keeps of a rail between renders.
 #[derive(Default)]
@@ -164,7 +165,7 @@ impl PageView {
         };
         // Over the page, against the left of its centred column: only the ticks take the pointer, so the page under the
         // rest scrolls and clicks as before. It shows once the page is known to leave it room.
-        let wide = column + 2.0 * BESIDE_WIDTH;
+        let wide = column + 2.0 * (BESIDE_WIDTH + BESIDE_GAP);
         let entity = cx.entity();
         let measure = canvas(
             move |bounds, _, cx| {
