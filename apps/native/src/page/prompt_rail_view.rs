@@ -13,6 +13,8 @@ const CARD_WIDTH: f32 = 280.0;
 const CARD_GAP: f32 = 8.0;
 /// The card's top above the tick's centre, which puts the first line level with the tick.
 const CARD_RISE: f32 = 18.0;
+/// How wide a rail beside a column is: the longest tick with its margin.
+const BESIDE_WIDTH: f32 = 64.0;
 
 /// What the view keeps of a rail between renders.
 #[derive(Default)]
@@ -25,6 +27,8 @@ pub(super) struct RailState {
     followed: Option<(usize, usize)>,
     over_rail: bool,
     over_card: bool,
+    /// How wide the page beside a `beside` rail is, as last drawn: it shows only where the column leaves it room.
+    room: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -38,13 +42,14 @@ impl PageView {
         let id = rail.id;
         let count = rail.marks.len();
         let current = rail.current;
-        let (hover, bounds, scroll) = {
+        let (hover, bounds, scroll, room) = {
             let states = self.prompt_rails.borrow();
             let state = states.get(&id);
             (
                 state.and_then(|state| state.hover).filter(|at| *at < count),
                 state.map(|state| state.bounds).unwrap_or_default(),
                 state.map_or(0.0, |state| state.scroll),
+                state.map_or(0.0, |state| state.room),
             )
         };
         let entity = cx.entity();
@@ -91,7 +96,7 @@ impl PageView {
         .size_full();
         let handler = rail.on_select.clone();
         let titles = format!("{count} prompts");
-        div()
+        let rail_view = div()
             .id(ElementId::NamedInteger("page-prompt-rail".into(), id))
             .role(Role::List)
             .aria_label(titles)
@@ -153,6 +158,45 @@ impl PageView {
                     bounds.origin.y + px(centre - CARD_RISE),
                 );
                 el.child(self.prompt_rail_card(rail, id, at, top_left, handler, cx))
+            });
+        let Some(column) = rail.beside else {
+            return rail_view.into_any_element();
+        };
+        // Over the page, against the left of its centred column: only the ticks take the pointer, so the page under the
+        // rest scrolls and clicks as before. It shows once the page is known to leave it room.
+        let wide = column + 2.0 * BESIDE_WIDTH;
+        let entity = cx.entity();
+        let measure = canvas(
+            move |bounds, _, cx| {
+                let width = f32::from(bounds.size.width);
+                entity.update(cx, |view, cx| {
+                    let changed = {
+                        let mut states = view.prompt_rails.borrow_mut();
+                        let state = states.entry(id).or_default();
+                        let changed = (state.room - width).abs() > 0.5;
+                        state.room = width;
+                        changed
+                    };
+                    if changed {
+                        cx.notify();
+                    }
+                });
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full();
+        div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left_0()
+            .right_0()
+            .flex()
+            .justify_center()
+            .child(measure)
+            .when(room >= wide, |el| {
+                el.child(div().h_full().w(px(wide)).flex().child(rail_view.w(px(BESIDE_WIDTH)).flex_none()))
             })
             .into_any_element()
     }
@@ -204,6 +248,7 @@ impl PageView {
                         .w_full()
                         .min_w_0()
                         .line_clamp(3)
+                        .text_ellipsis()
                         .text_size(px(12.0))
                         .text_color(rgb(theme::MUTED_FOREGROUND))
                         .child(mark.preview.clone()),
@@ -288,7 +333,7 @@ impl PageView {
 
     /// Where rail `id` was last drawn.
     #[cfg(all(test, feature = "test-support"))]
-    pub(super) fn rail_bounds(&self, id: u64) -> Option<Bounds<Pixels>> {
+    pub(crate) fn rail_bounds(&self, id: u64) -> Option<Bounds<Pixels>> {
         let bounds = self.prompt_rails.borrow().get(&id)?.bounds;
         (bounds.size.height > px(0.0)).then_some(bounds)
     }

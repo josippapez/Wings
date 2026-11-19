@@ -1596,7 +1596,9 @@ pub fn summary(tool: &str, input: &Value) -> String {
         _ => "",
     };
     let text = input[key].as_str().or_else(|| input.as_object()?.values().find_map(Value::as_str)).unwrap_or_default();
-    cut(text.lines().next().unwrap_or_default(), SUMMARY_KEPT)
+    // A command's indented script or aligned text, said on one line, would show its runs of spaces as gaps.
+    let line: Vec<&str> = text.lines().next().unwrap_or_default().split_whitespace().collect();
+    cut(&line.join(" "), SUMMARY_KEPT)
 }
 
 impl Session {
@@ -2520,6 +2522,12 @@ mod tests {
             tool_result(&mut session, id, "done", false);
             assert!(std::mem::take(&mut session.files_touched), "{name}");
         }
+    }
+
+    #[test]
+    fn a_summary_says_a_command_on_one_line_without_its_runs_of_spaces() {
+        let command = json!({ "command": "sed -i '' '206s/                        .line_clamp(3)/x/' src/a.rs\nmore" });
+        assert_eq!(summary("Bash", &command), "sed -i '' '206s/ .line_clamp(3)/x/' src/a.rs");
     }
 
     #[test]

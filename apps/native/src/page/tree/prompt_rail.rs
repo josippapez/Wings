@@ -41,6 +41,9 @@ pub struct PromptRail {
     pub current: usize,
     /// Gets `{ index }` on a click on a tick or the card.
     pub on_select: Option<String>,
+    /// `beside`: the width of the centred column the rail sits against, at its left, over the page beside it rather than
+    /// in a pane of its own. Left out where the page has no room for it there.
+    pub beside: Option<f32>,
 }
 
 fn clip(text: &str, chars: usize) -> String {
@@ -80,6 +83,7 @@ pub(super) fn parse(id: u64, props: &Map<String, Value>) -> PromptRail {
         on_select: str_prop(props, "onSelect")
             .filter(|handler| valid_handler(handler))
             .map(str::to_owned),
+        beside: number(props, "beside").filter(|width| width.is_finite() && *width > 0.0).map(|width| width.min(4000.0) as f32),
     }
 }
 
@@ -155,6 +159,9 @@ mod tests {
         assert_eq!(long.marks[1], Mark { title: String::new(), preview: String::new() });
         assert_eq!(long.current, 1, "a current past the last is the last");
         assert_eq!(parse(3, &props(json!({ "onSelect": "bad handler" }))).on_select, None);
+        assert_eq!(parse(3, &props(json!({ "beside": 760 }))).beside, Some(760.0));
+        assert_eq!(parse(3, &props(json!({ "beside": -1 }))).beside, None);
+        assert_eq!(parse(3, &props(json!({}))).beside, None);
         assert!(parse(3, &props(json!({}))).marks.is_empty());
     }
 

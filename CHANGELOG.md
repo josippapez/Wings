@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.44 · 2026-11-19
+
+- **A new prompt rail in Claude chat**, right against the left of the conversation: a tick for each message you sent, the one in view longer. Hover a tick to see the message and the start of Claude's reply, and click it to jump there.
+- **Commands read on one line in Claude chat**, without the long gaps an indented script left in them.
+
 ## 0.2.43 · 2026-11-19
 
 - **A Claude chat you open again shows its whole history**, with the messages you sent while Claude was working. Before, a long session showed only its last few messages.

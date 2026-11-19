@@ -55,15 +55,10 @@ fn chat_page(c: &Chat) -> Node {
     let (body, built) = conversation(c);
     // The conversation, the checklist and the message box in the main pane, and a card on the right that the app leaves out
     // of a narrow tab. Flush, so the conversation scrolls on its own and the checklist and the message box stay at the foot.
-    // The prompt rail is the slim pane at their left, which the app leaves out of a narrow tab.
+    // The prompt rail sits over them against the column's left, where the app has room for it.
     let rail = crate::rail::Rail::of(&c.session.items, &built, crate::rail::state_at());
     let body = crate::rail::watch(body, &rail);
-    let main = Node::new("Split")
-        .prop("defaultSize", crate::rail::WIDTH)
-        .prop("collapseBelow", crate::rail::BELOW)
-        .on("onNarrow", |payload| crate::rail::set_narrow(payload["narrow"].as_bool().unwrap_or(false)))
-        .child(Node::new("Slot").prop("name", "start").children(crate::rail::marks(c, &rail)))
-        .child(Node::new("Slot").prop("name", "end").children([body].into_iter().chain(todo_card(c)).chain([composer(c)])));
+    let main: Vec<Node> = crate::rail::marks(c, &rail).into_iter().chain([body]).chain(todo_card(c)).chain([composer(c)]).collect();
     // The panel floats over the right of the tab and shows by default; only the header's button puts it away and brings it
     // back, also where it covers the conversation in a narrow tab. A panel left out leaves its terminals out with it.
     let shown = side_shown(c);
@@ -74,7 +69,7 @@ fn chat_page(c: &Chat) -> Node {
         .prop("collapseBelow", SIDE_BELOW)
         .on("onNarrow", |payload| chat::set_narrow(payload["narrow"].as_bool().unwrap_or(false)));
     let split = split
-        .child(Node::new("Slot").prop("name", "start").child(main))
+        .child(Node::new("Slot").prop("name", "start").children(main))
         .child(Node::new("Slot").prop("name", "end").children(if shown { side(c) } else { Vec::new() }));
     // No page toolbar: the tab and the project's header over it already name the place, so the card starts with a
     // header as a terminal pane's does. The dialogs, which the app draws over the whole page, and the past

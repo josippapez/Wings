@@ -21,10 +21,6 @@ use crate::{
     view::COLUMN,
 };
 
-/// How wide the rail is, in points: the longest tick with its margin.
-pub const WIDTH: u32 = 64;
-/// The tab width below which the rail is left out: the column with its margins, and the rail either side of it.
-pub const BELOW: u32 = COLUMN + 16 + 2 * WIDTH;
 /// The most prompts sent to the rail, the newest: every render of the page carries them, and Wings takes 2,000.
 pub const MARKS: usize = 500;
 /// The longest first line, and the longest start of a reply, the card shows.
@@ -39,21 +35,10 @@ struct State {
     token: u64,
     /// What Wings last said: none before it has said, then the position in the tracked prompts, or none above them all.
     at: Option<Option<usize>>,
-    /// Whether the tab is narrower than `BELOW`, as the rail's split says.
-    narrow: Option<bool>,
 }
 
 thread_local! {
     static STATE: RefCell<State> = RefCell::new(State::default());
-}
-
-/// Whether the rail has room, as the tab's width says: no, until the split has measured it.
-pub fn roomy() -> bool {
-    STATE.with(|state| state.borrow().narrow == Some(false))
-}
-
-pub fn set_narrow(narrow: bool) {
-    STATE.with(|state| state.borrow_mut().narrow = Some(narrow));
 }
 
 /// What Wings says of the tracked prompts: the position of the last whose top the view has reached.
@@ -177,16 +162,17 @@ fn reply(items: &[Item], prompt: usize) -> String {
     truncate(&start.split_whitespace().collect::<Vec<_>>().join(" "), REPLY)
 }
 
-/// The rail, for the slot at the left of the conversation. None while there is no room, nothing to mark, or the tab
-/// hasn't been measured.
+/// The rail, over the conversation against the left of its column, which the app shows where the tab has room for it.
+/// None with nothing to mark.
 pub fn marks(c: &Chat, rail: &Rail) -> Vec<Node> {
-    if !roomy() || rail.prompts.is_empty() {
+    if rail.prompts.is_empty() {
         return Vec::new();
     }
     // Past `MARKS` prompts only the newest are sent, and the numbers Wings says count from the first of them.
     let skip = rail.prompts.len().saturating_sub(MARKS);
     let items: Vec<usize> = rail.prompts[skip..].iter().map(|prompt| prompt.item).collect();
     let node = Node::new("PromptRail")
+        .prop("beside", COLUMN)
         .prop("marks", Value::Array(mark_values(&c.session.items, &items)))
         .prop("current", rail.current.saturating_sub(skip))
         .on("onSelect", move |payload| {
@@ -251,7 +237,6 @@ mod tests {
 
     #[test]
     fn the_rail_is_one_node_for_ten_prompts_or_for_a_thousand() {
-        set_narrow(false);
         let build = |prompts: usize| {
             let built: Vec<(usize, usize)> = (0..prompts).map(|n| (n, n)).collect();
             chat::with(|c| c.session.items = prompts_said(prompts));
@@ -317,16 +302,5 @@ mod tests {
         assert_eq!(scroll_to(&Rail::of(&items, &built, None)), None);
         let all: Vec<(usize, usize)> = (0..300).map(|n| (n * 2, n)).collect();
         assert_eq!(scroll_to(&Rail::of(&items, &all, None)), None, "it stays given up when scrolling up draws it");
-    }
-
-    #[test]
-    fn the_rail_is_left_out_of_a_tab_too_narrow_to_hold_it_beside_the_column() {
-        assert!(!roomy(), "not before the tab is measured");
-        set_narrow(true);
-        assert!(!roomy());
-        set_narrow(false);
-        assert!(roomy());
-        // The column with its margins and the rail at each side fit in the width the rail needs.
-        assert!(BELOW >= COLUMN + 16 + 2 * WIDTH);
     }
 }
