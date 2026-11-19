@@ -861,16 +861,12 @@ pub fn cycle_mode() {
 /// Escape: closes the dialog or sheet that is open, else stops the turn while Claude works.
 pub fn escape() {
     let (dialog, working) = with(|c| {
-        let open = over_conversation(c) || c.past.is_some() || c.panel.is_some() || c.plugins.is_some() || c.task.is_some() || c.session.rewind.is_some() || c.session.setup.open.is_some();
+        let open = c.past.is_some() || c.panel.is_some() || c.plugins.is_some() || c.task.is_some() || c.session.rewind.is_some() || c.session.setup.open.is_some();
         (open, c.session.working)
     });
     match composer::escape(dialog, working) {
         Escape::Close => with(|c| {
             // The one opened last is on top: the setup dialog's form, then the dialogs over the chat, then the sheet.
-            if over_conversation(c) {
-                c.side_open = false;
-                return;
-            }
             if c.session.setup.form.take().is_none() && c.session.setup.open.take().is_none() && c.session.rewind.take().is_none() && c.task.take().is_none() && c.plugins.take().is_none() && c.panel.take().is_none() {
                 c.past = None;
             }
@@ -1078,11 +1074,6 @@ pub fn set_narrow(narrow: bool) {
     with(|c| c.narrow = Some(narrow));
 }
 
-/// Whether the side panel shows over the conversation, which then has Escape and a press outside to put it away.
-fn over_conversation(c: &Chat) -> bool {
-    c.side_open && c.narrow == Some(true)
-}
-
 /// The header's button for the side panel, at any width: shows it or puts it away in every chat, and keeps the choice.
 pub fn toggle_side() {
     let shown = with(|c| {
@@ -1092,10 +1083,6 @@ pub fn toggle_side() {
     drop(prefs::side_panel().set(shown));
 }
 
-/// Escape or a press outside a panel over the conversation: put away in this tab only, so the choice you made stands.
-pub fn close_side() {
-    with(|c| c.side_open = false);
-}
 
 /// Opens what the background task `id` printed in a dialog, and reads it again: one request, from your click.
 pub fn open_task(id: &str) {

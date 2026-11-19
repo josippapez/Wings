@@ -64,9 +64,8 @@ fn chat_page(c: &Chat) -> Node {
         .on("onNarrow", |payload| crate::rail::set_narrow(payload["narrow"].as_bool().unwrap_or(false)))
         .child(Node::new("Slot").prop("name", "start").children(crate::rail::marks(c, &rail)))
         .child(Node::new("Slot").prop("name", "end").children([body].into_iter().chain(todo_card(c)).chain([composer(c)])));
-    // The panel floats over the right of the tab and shows by default. The split says when the tab is narrow; then it covers
-    // the conversation, and Escape or a press outside it puts it away until the header's button brings it back. A panel
-    // left out leaves its terminals out with it.
+    // The panel floats over the right of the tab and shows by default; only the header's button puts it away and brings it
+    // back, also where it covers the conversation in a narrow tab. A panel left out leaves its terminals out with it.
     let shown = side_shown(c);
     let split = Node::new("Split")
         .prop("defaultSize", SIDE)
@@ -74,7 +73,6 @@ fn chat_page(c: &Chat) -> Node {
         .prop("float", true)
         .prop("collapseBelow", SIDE_BELOW)
         .on("onNarrow", |payload| chat::set_narrow(payload["narrow"].as_bool().unwrap_or(false)));
-    let split = if shown && c.narrow == Some(true) { split.on("onClose", |_| chat::close_side()) } else { split };
     let split = split
         .child(Node::new("Slot").prop("name", "start").child(main))
         .child(Node::new("Slot").prop("name", "end").children(if shown { side(c) } else { Vec::new() }));
@@ -1171,18 +1169,16 @@ mod tests {
     }
 
     #[test]
-    fn escape_puts_away_a_panel_over_a_narrow_tab_only_and_the_choice_stands() {
+    fn only_the_button_puts_the_panel_away_even_over_a_narrow_tab() {
         chat::set_narrow(true);
         chat::with(|c| c.side_open = true);
         chat::escape();
-        assert!(!chat::with(|c| c.side_open));
-        // The button brings it back.
+        assert!(chat::with(|c| c.side_open), "Escape leaves it");
+        assert!(chat::with(|c| side_shown(c)));
         chat::toggle_side();
-        assert!(chat::with(|c| c.side_open));
-        // Beside a wide tab's conversation it covers nothing, so Escape leaves it.
-        chat::set_narrow(false);
-        chat::escape();
-        assert!(chat::with(|c| c.side_open));
+        assert!(!chat::with(|c| side_shown(c)));
+        chat::toggle_side();
+        assert!(chat::with(|c| side_shown(c)));
     }
 
     #[test]
