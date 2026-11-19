@@ -29,7 +29,7 @@ const ASK_KEPT: usize = 16_000;
 const REASON_KEPT: usize = 300;
 /// The most lines of an edit's diff the chat keeps, and the most of a written file's start.
 const DIFF_KEPT: usize = 40;
-const WRITE_KEPT: usize = 20;
+const WRITE_KEPT: usize = 40;
 /// The most items kept of each subagent's own transcript: a subagent that searches a repository makes hundreds of tool
 /// calls, and its own tab reads them from its transcript. Older ones go.
 pub const SUBAGENT_KEPT: usize = 200;

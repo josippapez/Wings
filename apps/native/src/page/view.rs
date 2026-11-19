@@ -16,6 +16,8 @@ use gpui::{
 
 #[path = "board_view.rs"]
 mod board_view;
+#[path = "code_view.rs"]
+mod code_view;
 #[path = "controls_view.rs"]
 mod controls_view;
 #[path = "graph_view.rs"]
@@ -1708,6 +1710,7 @@ impl PageView {
             Node::Skeleton(skeleton) => rich_view::skeleton(skeleton),
             Node::Sunburst(map) => self.sunburst(map, cx),
             Node::PromptRail(rail) => self.prompt_rail(rail, cx),
+            Node::Code(code) => self.code(code, cx),
             // Drawn over the whole page by `render`, not where it sits.
             Node::Dialog(_) => div().into_any_element(),
             Node::Sheet(sheet) => self.sheet(sheet, cx),

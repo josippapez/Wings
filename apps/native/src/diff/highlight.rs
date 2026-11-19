@@ -318,6 +318,39 @@ pub fn text_colors(path: &str, lines: &[String]) -> Vec<Vec<Span>> {
     lines.iter().map(|line| side.line(line)).collect()
 }
 
+/// The names a Markdown fence gives languages, each with the extension `grammar` knows it by. A fence that already
+/// names an extension (`rs`, `ts`, `sh`) needs no entry.
+const FENCE_NAMES: &[(&str, &str)] = &[
+    ("rust", "rs"),
+    ("typescript", "ts"),
+    ("javascript", "js"),
+    ("python", "py"),
+    ("python3", "py"),
+    ("bash", "sh"),
+    ("shell", "sh"),
+    ("console", "sh"),
+    ("golang", "go"),
+    ("csharp", "cs"),
+    ("c#", "cs"),
+    ("c++", "cpp"),
+    ("ruby", "rb"),
+    ("kotlin", "kt"),
+    ("markdown", "md"),
+    ("docker", "Dockerfile"),
+    ("make", "Makefile"),
+];
+
+/// The colours of `lines` in the language a fence or a file extension names, highlighted from the first line. Empty for
+/// a name with no grammar, as `text_colors`. Slow on a long block: run it off the window's thread.
+pub fn language_colors(language: &str, lines: &[String]) -> Vec<Vec<Span>> {
+    let name = language.trim().to_ascii_lowercase();
+    let ext = FENCE_NAMES
+        .iter()
+        .find(|(fence, _)| *fence == name)
+        .map_or(name.as_str(), |(_, ext)| ext);
+    text_colors(&format!("file.{ext}"), lines)
+}
+
 /// One side of a hunk, highlighted a line at a time from its first.
 struct Side<'a> {
     lines: HighlightLines<'a>,
@@ -577,5 +610,19 @@ mod tests {
             "+x\n".repeat(MAX_LINES + 1)
         );
         assert!(file_colors(&parse_patch(&big).unwrap().files[0]).is_empty());
+    }
+
+    #[test]
+    fn a_fence_or_an_extension_names_the_language() {
+        let lines = vec!["fn main() { let x = 1; }".to_owned()];
+        let rust = language_colors("rust", &lines);
+        assert_eq!(rust, language_colors("rs", &lines));
+        assert_eq!(rust, language_colors("Rust", &lines));
+        // Keywords and numbers take colours of their own.
+        let colours: std::collections::HashSet<u32> = rust[0].iter().map(|span| span.color).collect();
+        assert!(colours.len() > 1);
+        assert_eq!(language_colors("typescript", &lines), language_colors("ts", &lines));
+        assert!(language_colors("no-such-language", &lines).is_empty());
+        assert!(language_colors("", &lines).is_empty());
     }
 }

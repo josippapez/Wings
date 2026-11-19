@@ -107,6 +107,7 @@ fn begin() {
         c.text_scale = prefs::scale_of(&prefs::text_size().get());
     });
     prefs::text_size().on_change(|size| chat::with(|c| c.text_scale = prefs::scale_of(size)));
+    crate::folds::follow();
     pages::on_names(|names| {
         change(|tab| {
             tab.names = names.to_vec();

@@ -2,11 +2,13 @@
 //! Undo asks first with, and Claude's replies with file references as links (`file_links.rs`). The numbers and the patch
 //! are in `edits.rs`.
 
+use std::{cell::Cell, collections::hash_map::DefaultHasher, hash::{Hash, Hasher}};
+
 use serde_json::json;
 use wings_plugin::{
     diff, host,
     format::plural,
-    markdown::{Block, code_block, markdown, parse_blocks, parse_inline, Span},
+    markdown::{Block, markdown, parse_blocks, parse_inline, Span},
     task,
     ui::{self, Node, card, dialog as panel, muted, notice, row, stack, text},
 };
@@ -173,16 +175,26 @@ fn open(shown: serde_json::Value) {
 /// Claude's text as Markdown, with the files it names as links: the project's files and the ones the session changed.
 /// Without either it is the plain renderer. This repeats that renderer's blocks, which can't link a word of its own choosing.
 pub fn prose(said: &str, c: &Chat) -> Node {
+    let mut hasher = DefaultHasher::new();
+    said.hash(&mut hasher);
+    prose_in(&format!("prose-{:x}", hasher.finish()), said, c)
+}
+
+/// `prose` for text that keeps its place on the page while it changes, as a reply streaming in: `scope` names it, so its
+/// code blocks keep whether you opened them (`code_view.rs`).
+pub fn prose_in(scope: &str, said: &str, c: &Chat) -> Node {
     let changed = c.session.edits.files();
-    if changed.is_empty() && c.files.is_empty() {
+    // Code blocks are this renderer's: the plain one draws them without colours or a fold.
+    if changed.is_empty() && c.files.is_empty() && !said.contains("```") && !said.contains("~~~") {
         return markdown(said).prop("links", true);
     }
     let known = file_links::known(changed, &c.cwd, &c.files);
+    let blocks = Cell::new(0);
     // `links` also gives Wings' own links (an issue key) in every text below.
-    stack().prop("gap", "m").prop("links", true).children(parse_blocks(said, 0).iter().map(|block| block_node(block, &c.cwd, &known)))
+    stack().prop("gap", "m").prop("links", true).children(parse_blocks(said, 0).iter().map(|block| block_node(block, &c.cwd, &known, scope, &blocks)))
 }
 
-fn block_node(block: &Block, cwd: &str, known: &dyn Fn(&str) -> bool) -> Node {
+fn block_node(block: &Block, cwd: &str, known: &dyn Fn(&str) -> bool, scope: &str, blocks: &Cell<usize>) -> Node {
     let spans = |source: &str| spans_node(source, cwd, known);
     match block {
         Block::Heading(level, source) => Node::new("Text").prop("weight", "strong").prop("size", if *level <= 2 { "field" } else { "small" }).child(spans(source)),
@@ -196,15 +208,19 @@ fn block_node(block: &Block, cwd: &str, known: &dyn Fn(&str) -> bool) -> Node {
             };
             row().prop("gap", "s").prop("align", "start").child(stack().prop("width", item.depth * 16)).child(text(mark).prop("tone", "muted")).child(spans(&item.text))
         })),
-        Block::Code { text: code, .. } => code_block(code),
+        Block::Code { lang, text: code } => {
+            let at = blocks.get();
+            blocks.set(at + 1);
+            crate::code_view::block(&format!("{scope}-{at}"), code, crate::code_view::fence_language(lang))
+        }
         Block::Quote(source) => row().prop("gap", "s").prop("align", "start").child(text("\u{258e}").prop("tone", "muted")).child(spans(source).prop("tone", "muted")),
         Block::Rule => text("────────────────").prop("tone", "muted"),
         Block::Table { head, rows } => stack()
             .prop("gap", "xs")
             .child(row().prop("gap", "m").children(head.iter().map(|cell| spans(cell).prop("weight", "strong"))))
             .children(rows.iter().map(|cells| row().prop("gap", "m").prop("align", "start").children(cells.iter().map(|cell| spans(cell))))),
-        Block::Details { summary, blocks } => {
-            let body = stack().prop("gap", "m").children(blocks.iter().map(|block| block_node(block, cwd, known)));
+        Block::Details { summary, blocks: blocks_in } => {
+            let body = stack().prop("gap", "m").children(blocks_in.iter().map(|block| block_node(block, cwd, known, scope, blocks)));
             Node::new("Disclosure").child(Node::new("Slot").prop("name", "summary").child(spans(summary))).child(Node::new("Slot").prop("name", "body").child(body))
         }
     }

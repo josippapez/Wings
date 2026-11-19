@@ -9,10 +9,12 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::fmt;
 
+pub mod code;
 mod picture;
 pub mod prompt_rail;
 mod sunburst;
 mod svg;
+pub use code::Code;
 pub use picture::{Picture, valid_id as valid_image_id};
 pub use prompt_rail::PromptRail;
 pub use sunburst::{Geometry, Hit, Sunburst, Wedge};
@@ -185,6 +187,7 @@ pub enum Node {
     Dialog(Dialog),
     Sheet(Sheet),
     Terminal(Terminal),
+    Code(Code),
 }
 
 /// A named part of the component it's in.
@@ -910,6 +913,7 @@ impl Node {
             Node::Dialog(n) => Some(n.id),
             Node::Sheet(n) => Some(n.id),
             Node::Terminal(n) => Some(n.id),
+            Node::Code(n) => Some(n.id),
         }
     }
 
@@ -947,7 +951,8 @@ impl Node {
             | Node::Skeleton(_)
             | Node::Sunburst(_)
             | Node::PromptRail(_)
-            | Node::Terminal(_) => vec![],
+            | Node::Terminal(_)
+            | Node::Code(_) => vec![],
             Node::Scroll(n) => vec![&n.children],
             Node::Split(n) => vec![&n.start, &n.end],
             Node::Bar(n) => vec![&n.children],
@@ -1052,6 +1057,7 @@ impl Walk {
                 | "Dialog"
                 | "Sheet"
                 | "Terminal"
+                | "Code"
         ) {
             return Ok(None);
         }
@@ -1289,6 +1295,7 @@ impl Walk {
             }
             "Sunburst" => Node::Sunburst(sunburst::parse(id, &props)?),
             "PromptRail" => Node::PromptRail(prompt_rail::parse(id, &props)),
+            "Code" => Node::Code(code::parse(id, &props, tone)),
             "Dialog" => Node::Dialog(Dialog {
                 id,
                 title: text_prop(&props, "title"),

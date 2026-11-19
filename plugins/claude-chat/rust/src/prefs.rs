@@ -4,7 +4,7 @@
 use serde_json::{Value, json};
 use wings_plugin::settings::Setting;
 
-use crate::session::MODES;
+use crate::{folds::Kind, session::MODES};
 
 /// The permission mode a chat starts in.
 pub const MODE: &str = "default-mode";
@@ -33,6 +33,11 @@ pub fn side_panel() -> Setting<bool> {
 
 pub fn detailed() -> Setting<bool> {
     Setting::boolean(DETAILED, false)
+}
+
+/// Whether a kind of fold starts open in Detailed (`folds.rs`): on, as Detailed has always opened everything.
+pub fn opens(kind: Kind) -> Setting<bool> {
+    Setting::boolean(kind.key(), true)
 }
 
 fn text_size_of(stored: &Value) -> Option<String> {

@@ -1152,6 +1152,32 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         user("Show me the rounding fix."),
         text("Work in cents and round once at the end:\n\n```ts\nconst cents = Math.round(total * 100);\nreturn Math.round(cents * (1 - rate)) / 100;\n```\n\nThat keeps `100 * 0.9` at exactly 90."),
     ]);
+    // A long block in a reply shows its first 20 lines, coloured as Rust, and a row opens the other 30.
+    let limiter = "use std::time::{Duration, Instant};\n\n/// A token bucket that refills at a steady rate.\npub struct Bucket {\n    capacity: u32,\n    tokens: f64,\n    rate: f64,\n    last: Instant,\n}\n\nimpl Bucket {\n    pub fn new(capacity: u32, per_second: f64) -> Self {\n        Self { capacity, tokens: f64::from(capacity), rate: per_second, last: Instant::now() }\n    }\n\n    fn refill(&mut self, now: Instant) {\n        let gained = now.duration_since(self.last).as_secs_f64() * self.rate;\n        self.tokens = (self.tokens + gained).min(f64::from(self.capacity));\n        self.last = now;\n    }\n\n    /// Takes one token, or says how long to wait for it.\n    pub fn take(&mut self) -> Result<(), Duration> {\n        self.refill(Instant::now());\n        if self.tokens >= 1.0 {\n            self.tokens -= 1.0;\n            Ok(())\n        } else {\n            let missing = 1.0 - self.tokens;\n            Err(Duration::from_secs_f64(missing / self.rate))\n        }\n    }\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn a_full_bucket_gives_its_capacity_then_asks_to_wait() {\n        let mut bucket = Bucket::new(3, 1.0);\n        for _ in 0..3 {\n            assert!(bucket.take().is_ok());\n        }\n        assert!(bucket.take().is_err());\n    }\n\n    #[test]\n    fn the_wait_is_what_one_token_takes_to_refill() {\n        let mut bucket = Bucket::new(1, 2.0);\n        bucket.take().unwrap();\n        let wait = bucket.take().unwrap_err();\n        assert!(wait <= Duration::from_millis(500));\n    }\n}";
+    let long_block = opened(vec![
+        init.clone(),
+        user("Sketch the rate limiter for the API."),
+        text(&format!("A token bucket does it. Here is the whole module with its tests:\n\n```rust\n{limiter}\n```\n\nEach request takes a token, and one that finds none is told how long to wait.")),
+    ]);
+    // A Read in Detailed shows the file it gave back, coloured as TypeScript, folded after 20 lines.
+    let numbered = (1..=26)
+        .zip([
+            "import { applyDiscount } from './discount';", "import type { Cart } from './cart';", "", "export interface Receipt {", "  total: number;", "  discount: number;", "  lines: string[];", "}", "",
+            "const TAX = 0.2; // VAT on every line", "", "export function checkout(cart: Cart, rate: number): Receipt {", "  const subtotal = cart.items.reduce((sum, item) => sum + item.price * item.qty, 0);",
+            "  const total = applyDiscount(subtotal, rate);", "  const lines = cart.items.map((item) => `${item.qty} x ${item.name}`);", "  if (total < 0) {", "    throw new Error('negative total');", "  }",
+            "  return { total: total * (1 + TAX), discount: subtotal - total, lines };", "}", "", "export async function pay(receipt: Receipt): Promise<boolean> {", "  const response = await fetch('/api/pay', { method: 'POST', body: JSON.stringify(receipt) });",
+            "  return response.ok;", "}", "",
+        ])
+        .map(|(n, line)| format!("{n:>6}→{line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let read_ts = opened(vec![
+        init.clone(),
+        user("What does checkout do with the discount?"),
+        tool("rt1", "Read", json!({ "file_path": "/work/shop/src/checkout.ts" })),
+        output("rt1", &numbered, false),
+        text("`checkout` takes the discount off the subtotal first, then adds the VAT on what is left."),
+    ]);
     // Claude ran a build with Wings' open_pane: the terminal shows live in the side panel, which floats over the tab's right side
     // when the tab is wide and opens from the header's button when it is narrow.
     let built = opened(vec![
@@ -1286,7 +1312,7 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         }
         opened(lines)
     };
-    let scenes: [Scene; 68] = [
+    let scenes: [Scene; 70] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -1373,6 +1399,10 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         ("export", work, None, Some("type:/export;keys:enter"), "Copy to clipboard"),
         // Each reply and each code block has a Copy button.
         ("copy", copyable, None, None, "at exactly 90"),
+        // A block of more than 20 lines shows its first 20, coloured as Rust, with a row that opens the other 35.
+        ("code-fold", long_block, None, None, "Show 35 more lines"),
+        // A Read in Detailed shows its file coloured as TypeScript, folded after 20 lines.
+        ("read-ts", read_ts, None, None, "Show 6 more lines"),
         // Issue keys Issues knows and a dev server's address are links; UTF-8 and a key never filed aren't.
         ("links", linked, None, None, "never filed"),
         // The terminal Claude opened, live in the side panel with what it runs and buttons to open it as a tab and close it.
@@ -1477,7 +1507,7 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
             continue;
         }
         let host = match name {
-            "detailed" => &detailed,
+            "detailed" | "read-ts" => &detailed,
             "large-text" => &large,
             _ => &host,
         };
@@ -1753,14 +1783,14 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
     }
     // The page in Wings Settings, with a mode, Detailed and Large text picked.
     if only.as_deref().is_none_or(|only| only == "settings") {
-        let settings = host_over("fixture-storage-claude-chat-settings", &[("default-mode", json!("auto")), ("detailed-output", json!(true)), ("text-size", json!("large"))]);
+        let settings = host_over("fixture-storage-claude-chat-settings", &[("default-mode", json!("auto")), ("detailed-output", json!(true)), ("open-command", json!(false)), ("open-thought", json!(false)), ("text-size", json!("large"))]);
         let page = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/claude-chat/dist/native/settings.wasm");
         let page = page.canonicalize().expect("the claude-chat settings page is built, in plugins/");
         wings_native::page::runtime::wasm::compile_now(&page.to_string_lossy()).unwrap();
         let source = format!("{}{}", wings_native::page::runtime::wasm::MARKER, page.display());
         for width in [1000.0, 640.0] {
             let handle = cx
-                .open_offscreen_window(size(px(width), px(560.0)), |_, cx| cx.new(|cx| PageView::in_plugin(&settings, &source, cx)))
+                .open_offscreen_window(size(px(width), px(900.0)), |_, cx| cx.new(|cx| PageView::in_plugin(&settings, &source, cx)))
                 .unwrap();
             let window = handle.into();
             handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();

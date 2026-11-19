@@ -2341,3 +2341,27 @@ fn a_prompt_rails_hover_shows_a_card_and_a_click_picks_the_prompt() {
     window.simulate_mouse_move(point(px(400.0), px(200.0)));
     settle(&app, &mut window, |view| view.rail_card(2).is_none());
 }
+
+/// A page of one `Code` node.
+fn code_page(language: &'static str, code: &'static str) -> String {
+    fake::page("page", move |_| {
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            { "id": 1, "type": "Code", "props": { "code": code, "language": language } }] })
+    })
+}
+
+/// A `Code` node with a language is coloured by the app on a thread of its own, once, and the page draws it again when
+/// the colours are ready; one in a language with no grammar is kept as having none.
+#[test]
+fn a_code_node_is_highlighted_off_the_window_thread_by_its_language() {
+    let code = "let answer = 42; // the question\nfn f() {}";
+    let (app, mut window) = open(code_page("rust", code));
+    settle(&app, &mut window, |_| PageView::first_line_colours("rust", code).is_some());
+    let colours = PageView::first_line_colours("rust", code).unwrap();
+    assert!(colours.iter().collect::<std::collections::HashSet<_>>().len() > 1, "{colours:?}");
+
+    let plain = "let answer = 42;";
+    let (app, mut window) = open(code_page("no-such-language", plain));
+    settle(&app, &mut window, |_| PageView::first_line_colours("no-such-language", plain).is_some());
+    assert_eq!(PageView::first_line_colours("no-such-language", plain), Some(Vec::new()));
+}

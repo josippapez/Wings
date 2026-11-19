@@ -415,6 +415,13 @@ pub fn code_block(code: &str) -> Node {
     card().child(stack().prop("gap", "none").children(rows))
 }
 
+/// Lines of code in one box that Wings colours as `language`, a Markdown fence's name (`rust`) or a file's extension
+/// (`ts`); one it has no grammar for stays plain. Unlike `code_block` it is a single node however long the code, and an
+/// older Wings leaves it out, so a plugin that uses it needs Wings 0.2.45.
+pub fn highlighted_code(code: &str, language: &str) -> Node {
+    Node::new("Code").prop("code", code).prop("language", language)
+}
+
 fn node_of(block: &Block) -> Node {
     match block {
         Block::Heading(level, t) => Node::new("Text").prop("weight", "strong").prop("size", if *level <= 2 { "field" } else { "small" }).child(spans(t)),

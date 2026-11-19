@@ -152,7 +152,7 @@ pub fn reply(at: usize, said: &str, c: &Chat) -> Node {
                         let n = n;
                         move || copy_code(at, n)
                     }));
-                nodes.push(stack().prop("gap", "xs").child(head).child(code_block(text)).key(format!("code-{at}-{n}")));
+                nodes.push(stack().prop("gap", "xs").child(head).child(crate::code_view::block(&format!("code-{at}-{n}"), text, lang)).key(format!("code-{at}-{n}")));
                 n += 1;
             }
         }

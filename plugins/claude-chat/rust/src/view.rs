@@ -8,7 +8,7 @@
 use wings_plugin::{
     format::{clock, plural, truncate},
     local_time::local,
-    markdown::{code_block, markdown},
+    markdown::{highlighted_code, markdown},
     ui::{
         Node, badge, button, card, chip, confirm, disclosure, empty, icon, list, list_button, loading, muted, notice, row,
         select, spinner, stack, text, text_input,
@@ -17,9 +17,11 @@ use wings_plugin::{
 
 use crate::{
     chat::{self, Chat, PAGE, State},
+    code_view,
+    folds::Kind,
     pictures_view::thumbs,
     prefs,
-    session::{Ask, Detail, Diff, Draft, Finished, Item, MODES, Progress, Session, Task, Todo, Tool, exit_code, files_found, first_lines, model_name},
+    session::{Ask, Detail, Diff, Draft, Finished, Item, MODES, Progress, Session, Task, Todo, Tool, exit_code, files_found, model_name},
     usage::Panel,
 };
 
@@ -43,10 +45,6 @@ const SIDE: u32 = 340;
 const SIDE_BELOW: u32 = COLUMN + 16 + 2 * (SIDE + 12);
 /// The most subagents the panel lists.
 const SUBAGENTS_LISTED: usize = 12;
-/// The most lines of one call's output Detailed shows, about 3 nodes each: a long output is cut to this and says how many
-/// lines it leaves out. Opening one yourself in Compact shows it whole, as before.
-const DETAILED_LINES: usize = 30;
-
 pub fn view() -> Vec<Node> {
     chat::with(|c| vec![chat_page(c)])
 }
@@ -230,7 +228,7 @@ fn conversation(c: &Chat) -> (Node, Vec<(usize, usize)>) {
     // What an MCP server asks you waits at the foot, where Claude's own questions do.
     nodes.extend(crate::elicitation_view::cards(c));
     if !c.session.live.is_empty() {
-        let live = markdown(&c.session.live).prop("links", true);
+        let live = crate::edits_view::prose_in("live", &c.session.live, c);
         let live = if live.count() > BUDGET / 4 { text(truncate(&c.session.live, 20_000)) } else { live };
         nodes.push(live.key("live"));
     } else if c.session.thinking || (c.session.working && !asking(c)) {
@@ -318,7 +316,7 @@ pub(crate) fn item_node(at: usize, item: &Item, c: &Chat, own: bool) -> Option<N
         Item::Text(said) => crate::edits_view::prose(said, c),
         Item::Divider(said) => row().prop("justify", "center").child(muted(format!("── {said} ──")).prop("size", "small")),
         Item::Notice(said) => muted(said.as_str()).prop("size", "small"),
-        Item::Thought(said, ms) => thought(at, said, *ms, c.open_outputs.contains(&format!("thought-{at}"))),
+        Item::Thought(said, ms) => thought(at, said, *ms, crate::folds::is_open(c, Kind::Thought, c.open_outputs.contains(&format!("thought-{at}")))),
         Item::Ask(ask) if ask.answer.is_none() => ask_node(ask, c),
         Item::Error(said) => notice("danger", said.as_str()),
         Item::Stopped => muted("Stopped"),
@@ -334,20 +332,22 @@ pub(crate) fn item_node(at: usize, item: &Item, c: &Chat, own: bool) -> Option<N
 /// it): one that opened while a call ran and shut once it ended showed the calls for a moment and hid them again. The
 /// line under the conversation says what runs. Closed, its calls aren't built at all.
 pub(crate) fn steps(first: usize, tools: &[&Tool], c: &Chat) -> Node {
-    let open = prefs::is_open(c.detailed, c.open_steps.contains(&first));
+    let open = crate::folds::is_open(c, Kind::Steps, c.open_steps.contains(&first));
     let failed = tools.iter().filter(|tool| matches!(tool.output, Some((_, true)))).count();
     let mut said = describe(tools);
     if failed > 0 {
         said.push_str(&format!(" · {failed} failed"));
     }
-    // With `outputs_open` each call's output shows unless you shut it, else only what you opened.
+    // With `outputs_open` each call's output shows unless its kind starts shut or you shut it, else only what you opened.
     let calls = |outputs_open: bool| {
-        let cap = c.detailed.then_some(DETAILED_LINES);
-        stack().prop("gap", "s").children(tools.iter().map(|tool| step(tool, prefs::is_open(outputs_open, c.open_outputs.contains(&tool.id)), cap, c)))
+        stack().prop("gap", "s").children(tools.iter().map(|tool| {
+            let opened = prefs::is_open(outputs_open && c.opens.get(Kind::of_tool(&tool.name)), c.open_outputs.contains(&tool.id));
+            step(tool, opened, c)
+        }))
     };
     let rows = if open {
         let rows = calls(c.detailed);
-        // Every output of a long run, even cut to its first lines, would take most of the page's nodes and push the rest
+        // Every output of a long run, even folded to its first lines, would take most of the page's nodes and push the rest
         // of the conversation out: its calls then show as lines, with the outputs for you to open.
         if c.detailed && rows.count() > BUDGET / 2 { calls(false) } else { rows }
     } else {
@@ -384,9 +384,8 @@ fn describe(tools: &[&Tool]) -> String {
     parts.join(" · ")
 }
 
-/// One tool call: what it is, and what it did or printed, folded. The fold is built only once you open it. With a `cap`
-/// its output shows no more lines than that.
-fn step(tool: &Tool, opened: bool, cap: Option<usize>, c: &Chat) -> Node {
+/// One tool call: what it is, and what it did or printed, folded. The fold is built only once you open it.
+fn step(tool: &Tool, opened: bool, c: &Chat) -> Node {
     let output = tool.output.as_ref().map(|(output, failed)| (output.as_str(), *failed)).filter(|(output, _)| !output.trim().is_empty());
     let mark = match &tool.output {
         None => spinner(),
@@ -409,7 +408,7 @@ fn step(tool: &Tool, opened: bool, cap: Option<usize>, c: &Chat) -> Node {
         _ if matches!(tool.name.as_str(), "TodoWrite" | "TaskCreate" | "TaskUpdate") => None,
         (Detail::Diff(diff), _) if !diff.lines.is_empty() => Some("Changes"),
         (Detail::Write { head, .. }, _) if !head.is_empty() => Some("Content"),
-        (Detail::Read(_), _) => None,
+        (Detail::Read(_), Some(_)) => Some("Content"),
         (_, Some(_)) => Some("Output"),
         (Detail::Command(command), None) if command.contains('\n') => Some("Command"),
         _ => None,
@@ -425,7 +424,7 @@ fn step(tool: &Tool, opened: bool, cap: Option<usize>, c: &Chat) -> Node {
     match label {
         Some(label) => {
             let id = tool.id.clone();
-            let body = if opened { body(tool, output, cap) } else { stack() };
+            let body = if opened { body(tool, output) } else { stack() };
             let label = if error.is_some() { "Whole error" } else { label };
             let fold = disclosure(label, body).prop("open", opened).on("onOpenChange", move |_| chat::toggle_output(&id));
             stack().prop("gap", "xs").child(head).maybe(error).maybe(pictures).child(fold)
@@ -467,39 +466,51 @@ fn facts(tool: &Tool) -> Vec<Node> {
     }
 }
 
-/// What a call's fold holds: the diff, the start of the file, a command of several lines, and what it printed.
-fn body(tool: &Tool, output: Option<(&str, bool)>, cap: Option<usize>) -> Node {
+/// What a call's fold holds: the diff, the start of the file, a command of several lines, and what it printed. A long block
+/// shows its first lines with a row that opens the rest (`code_view.rs`), in the file's language where the call names a file.
+fn body(tool: &Tool, output: Option<(&str, bool)>) -> Node {
     let failed = output.is_some_and(|(_, failed)| failed);
+    let language = code_view::language_of_path(&tool.summary);
     let mut body = stack().prop("gap", "s");
     match &tool.detail {
-        Detail::Diff(diff) if !failed => body = body.child(diff_lines(diff)),
+        Detail::Diff(diff) if !failed => body = body.child(diff_lines(&format!("diff-{}", tool.id), language, diff)),
         Detail::Write { lines, head } if !failed => {
-            body = body.child(code_block(&head.join("\n")));
-            if *lines > head.len() {
+            let key = format!("write-{}", tool.id);
+            body = body.child(code_view::block(&key, &head.join("\n"), language));
+            if *lines > head.len() && (code_view::is_open(&key) || head.len() <= code_view::FOLD_LINES) {
                 body = body.child(muted(format!("{} more", plural(lines - head.len(), "line"))));
             }
         }
-        Detail::Command(command) if command.contains('\n') => body = body.child(code_block(command)),
+        Detail::Command(command) if command.contains('\n') => body = body.child(code_view::block(&format!("cmd-{}", tool.id), command, "sh")),
         _ => {}
     }
     match output {
         Some((output, _)) if failed || !matches!(tool.detail, Detail::Diff(_) | Detail::Write { .. }) => {
-            let (shown, more) = cap.map_or((output, 0), |cap| first_lines(output, cap));
-            let rest = (more > 0).then(|| muted(format!("{} more", plural(more, "line"))));
-            body.child(code_block(shown)).maybe(rest)
+            let key = format!("out-{}", tool.id);
+            // A file read is the file: its language comes from its name. What a command or a search printed stays plain.
+            match (&tool.detail, failed) {
+                (Detail::Read(_), false) => body.child(code_view::block(&key, &code_view::unnumbered(output), language)),
+                _ => body.child(code_view::block(&key, output, "")),
+            }
         }
         _ => body,
     }
 }
 
-/// An edit's lines: each taken out in red with a minus, each put in in green with a plus.
-fn diff_lines(diff: &Diff) -> Node {
-    let rows = diff.lines.iter().map(|(added, line)| {
-        let (mark, tone) = if *added { ("+", "success") } else { ("−", "danger") };
-        text(format!("{mark} {line}")).prop("mono", true).prop("size", "small").prop("tone", tone)
+/// An edit's lines, in the file's language: each run of lines taken out is a red band with minuses, each run put in a
+/// green one with pluses. The first lines show, and a row opens the rest.
+fn diff_lines(key: &str, language: &str, diff: &Diff) -> Node {
+    let kept = diff.lines.len();
+    let open = code_view::is_open(key);
+    let shown = if open { kept } else { kept.min(code_view::FOLD_LINES) };
+    let bands = diff.lines[..shown].chunk_by(|a, b| a.0 == b.0).enumerate().map(|(at, run)| {
+        let added = run[0].0;
+        let lines: Vec<String> = run.iter().map(|(_, line)| format!("{} {line}", if added { "+" } else { "−" })).collect();
+        highlighted_code(&lines.join("\n"), language).prop("tone", if added { "success" } else { "danger" }).key(format!("run-{at}"))
     });
-    let more = (diff.more > 0).then(|| muted(format!("{} more", plural(diff.more, "line"))));
-    card().child(stack().prop("gap", "none").children(rows).maybe(more))
+    let fold = (kept > code_view::FOLD_LINES).then(|| code_view::toggle_row(key, code_view::label(kept - shown, open)));
+    let more = (diff.more > 0 && (open || kept <= code_view::FOLD_LINES)).then(|| muted(format!("{} more", plural(diff.more, "line"))));
+    card().child(stack().prop("gap", "none").children(bands).maybe(more).maybe(fold))
 }
 
 /// The most checklist lines shown at once.
@@ -580,7 +591,7 @@ fn finished(at: usize, done: &Finished, c: &Chat) -> Node {
         c.session.tasks.iter().any(|task| task.id == id && task.has_output()).then(|| button("Open", "ghost", false, move || chat::open_task(&id)).prop("title", "What it printed"))
     };
     let line = row().prop("gap", "s").prop("align", "center").child(mark).child(title).maybe(open.map(|open| open.prop("size", "sm")));
-    let opened = c.open_outputs.contains(&format!("finished-{at}"));
+    let opened = crate::folds::is_open(c, Kind::Summary, c.open_outputs.contains(&format!("finished-{at}")));
     let id = format!("finished-{at}");
     let body = if opened { text(done.report.as_str()).prop("tone", "muted").prop("size", "small") } else { stack() };
     stack()
@@ -1230,6 +1241,61 @@ mod tests {
         assert!(chat::with(|c| crate::fork_view::header_dialog(c).is_some() && c.state == State::Running));
         crate::fork_view::close_ask();
         assert!(chat::with(|c| crate::fork_view::header_dialog(c).is_none() && c.state == State::Running));
+    }
+
+    fn call(id: &str, name: &str, detail: Detail, output: &str) -> Tool {
+        Tool { id: id.into(), name: name.into(), summary: "src/a.ts".into(), output: Some((output.into(), false)), detail, images: Vec::new() }
+    }
+
+    #[test]
+    fn detailed_opens_each_kind_its_setting_leaves_on_and_a_click_still_flips_it() {
+        let tools = [call("a", "Bash", Detail::Command("ls".into()), "one\ntwo"), call("b", "Read", Detail::Read(None), "     1→let a = 1;")];
+        let refs: Vec<&Tool> = tools.iter().collect();
+        chat::with(|c| {
+            c.detailed = true;
+            c.opens = crate::folds::Opens::default();
+            c.open_steps.clear();
+            c.open_outputs.clear();
+            // Every kind on: the run is open with both outputs.
+            let all = steps(0, &refs, c).count();
+            // Command output off: the run is open and that output is left out.
+            c.opens.set(Kind::Command, false);
+            let no_command = steps(0, &refs, c).count();
+            assert!(no_command < all);
+            // A click on that output opens it, as a click flips what a fold starts as.
+            c.open_outputs.insert("a".into());
+            assert_eq!(steps(0, &refs, c).count(), all);
+            c.open_outputs.clear();
+            // The file read off as well: only the run's lines are left.
+            c.opens.set(Kind::Read, false);
+            let neither = steps(0, &refs, c).count();
+            assert!(neither < no_command);
+            // The runs off: shut, and a click opens it with its outputs still shut.
+            c.opens.set(Kind::Steps, false);
+            let shut = steps(0, &refs, c).count();
+            assert!(shut < neither);
+            c.open_steps.insert(0);
+            assert_eq!(steps(0, &refs, c).count(), neither);
+            // Compact keeps everything shut whatever the settings say.
+            c.detailed = false;
+            c.opens = crate::folds::Opens::default();
+            c.open_steps.clear();
+            assert_eq!(steps(0, &refs, c).count(), shut);
+            c.open_steps.insert(0);
+            assert_eq!(steps(0, &refs, c).count(), neither);
+        });
+    }
+
+    #[test]
+    fn a_read_shows_its_file_as_a_block_in_the_files_language() {
+        // Its fold is there once the call printed the file, and not before.
+        let printed = call("r", "Read", Detail::Read(None), "     1→let a = 1;");
+        let empty = call("r", "Read", Detail::Read(None), "");
+        chat::with(|c| {
+            c.detailed = true;
+            let (with, without) = (step(&printed, true, c).count(), step(&empty, true, c).count());
+            assert!(with > without);
+        });
     }
 
     #[test]

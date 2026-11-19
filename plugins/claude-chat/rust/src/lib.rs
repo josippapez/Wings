@@ -17,6 +17,8 @@ mod actions;
 mod actions_view;
 #[cfg(feature = "chat")]
 mod chat;
+#[cfg(any(feature = "chat", test))]
+mod code_view;
 mod composer;
 mod commands;
 #[cfg(any(feature = "chat", test))]
@@ -27,6 +29,7 @@ mod edits_view;
 mod elicitation;
 #[cfg(feature = "chat")]
 mod elicitation_view;
+mod folds;
 #[cfg(any(feature = "chat", test))]
 mod file_links;
 #[cfg(any(feature = "chat", test))]

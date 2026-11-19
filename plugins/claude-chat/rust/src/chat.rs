@@ -97,6 +97,8 @@ pub struct Chat {
     pub past: Option<Past>,
     /// Your setting for how tool calls show: Compact folds them, Detailed opens every run and each call's output.
     pub detailed: bool,
+    /// Your settings for which kinds of fold Detailed starts open (`folds.rs`).
+    pub opens: crate::folds::Opens,
     /// Your setting for the conversation's text size, as the `textScale` its scroll takes.
     pub text_scale: f32,
     /// The usage or context dialog, over the chat while it is open, and whether the usage dialog lists the last week's
@@ -174,6 +176,7 @@ thread_local! {
         state: State::Starting,
         past: None,
         detailed: false,
+        opens: crate::folds::Opens::default(),
         text_scale: 1.0,
         panel: None,
         panel_week: false,
@@ -239,6 +242,7 @@ pub fn start() {
             c.open_outputs.clear();
         })
     });
+    crate::folds::follow();
     task::spawn(open());
 }
 
