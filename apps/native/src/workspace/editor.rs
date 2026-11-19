@@ -63,6 +63,23 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Opens `file` at `line` in the editor chosen in Settings, else the first one found, and says why when it can't.
+    pub(super) fn open_file_in_editor(&mut self, file: std::path::PathBuf, line: Option<u32>, cx: &mut Context<Self>) {
+        let Some(editor) = self.default_editor().cloned() else {
+            self.show_notice("No editor to open it in".into(), "Wings finds VS Code, Cursor, Zed and other editors once they're installed.".into(), cx);
+            return;
+        };
+        let opened = cx.background_executor().spawn(async move {
+            wings_editors::open_file(&editor.id, &file, line).map_err(|e| (editor.name, e))
+        });
+        cx.spawn(async move |this, cx| {
+            if let Err((name, error)) = opened.await {
+                this.update(cx, |this, cx| this.show_notice(format!("Couldn't open {name}"), error, cx)).ok();
+            }
+        })
+        .detach();
+    }
+
     /// The project bar's "Open in <editor>", and with more editors a menu of the others. Nothing without one.
     pub(super) fn editor_button(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let main = self.default_editor()?.clone();

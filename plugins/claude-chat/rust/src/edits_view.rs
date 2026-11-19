@@ -14,7 +14,7 @@ use wings_plugin::{
 use crate::{
     chat::{self, Chat},
     edits::{Turn, relative},
-    file_links::{Piece, Reference, pieces, resolve},
+    file_links::{self, Piece, Reference, pieces, resolve},
     fork_view,
     session::Item,
 };
@@ -134,18 +134,32 @@ fn view_changes(from: usize, end: usize) {
     open(json!({ "title": "Changes in this turn", "subtitle": folder, "cwd": cwd, "patch": patch }));
 }
 
-/// Opens what the session changed in a file in the diff viewer, at `line` when there is one. Wings has no call that opens
-/// a file in an editor, so a reference shows the file as the session changed it.
+/// Opens a file a reply names in your editor, at its line. Where that fails (no editor, or an older Wings), a file the
+/// session changed shows in the diff viewer instead, at the line.
 fn open_file(reference: &Reference) {
+    let opening = host::open_file(&reference.path, reference.line);
+    let reference = reference.clone();
+    task::spawn(async move {
+        if let Err(why) = opening.await
+            && !show_changes(&reference)
+        {
+            say(format!("Couldn't open {}: {why}", reference.path));
+        }
+    });
+}
+
+/// What the session changed in the file, in the diff viewer, at the line. False when it changed nothing there.
+fn show_changes(reference: &Reference) -> bool {
     let found = chat::with(|c| c.session.edits.file_patch(&reference.path, &c.cwd).map(|patch| (patch, relative(&c.cwd, &reference.path).to_owned(), c.cwd.clone(), c.folder.clone())));
     let Some((patch, path, cwd, folder)) = found else {
-        return;
+        return false;
     };
     let mut shown = json!({ "title": path, "subtitle": folder, "cwd": cwd, "patch": patch });
     if let Some(line) = reference.line {
         shown["focus"] = json!({ "path": path, "line": line, "side": "new" });
     }
     open(shown);
+    true
 }
 
 fn open(shown: serde_json::Value) {
@@ -156,18 +170,19 @@ fn open(shown: serde_json::Value) {
     });
 }
 
-/// Claude's text as Markdown, with the files the session changed named in it as links. Without any changed file it is the
-/// plain renderer. This repeats that renderer's blocks, which can't link a word of its own choosing.
+/// Claude's text as Markdown, with the files it names as links: the project's files and the ones the session changed.
+/// Without either it is the plain renderer. This repeats that renderer's blocks, which can't link a word of its own choosing.
 pub fn prose(said: &str, c: &Chat) -> Node {
-    let known = c.session.edits.files();
-    if known.is_empty() {
+    let changed = c.session.edits.files();
+    if changed.is_empty() && c.files.is_empty() {
         return markdown(said).prop("links", true);
     }
+    let known = file_links::known(changed, &c.cwd, &c.files);
     // `links` also gives Wings' own links (an issue key) in every text below.
-    stack().prop("gap", "m").prop("links", true).children(parse_blocks(said, 0).iter().map(|block| block_node(block, &c.cwd, known)))
+    stack().prop("gap", "m").prop("links", true).children(parse_blocks(said, 0).iter().map(|block| block_node(block, &c.cwd, &known)))
 }
 
-fn block_node(block: &Block, cwd: &str, known: &[String]) -> Node {
+fn block_node(block: &Block, cwd: &str, known: &dyn Fn(&str) -> bool) -> Node {
     let spans = |source: &str| spans_node(source, cwd, known);
     match block {
         Block::Heading(level, source) => Node::new("Text").prop("weight", "strong").prop("size", if *level <= 2 { "field" } else { "small" }).child(spans(source)),
@@ -196,7 +211,7 @@ fn block_node(block: &Block, cwd: &str, known: &[String]) -> Node {
 }
 
 /// A line of inline Markdown, a file reference in its words or in backticks a link.
-fn spans_node(source: &str, cwd: &str, known: &[String]) -> Node {
+fn spans_node(source: &str, cwd: &str, known: &dyn Fn(&str) -> bool) -> Node {
     let file = |shown: &str, reference: Reference, mono: bool| {
         let node = Node::new("Text").on("onClick", move |_| open_file(&reference)).text(shown);
         if mono { node.prop("mono", true) } else { node }

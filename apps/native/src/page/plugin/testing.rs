@@ -40,6 +40,8 @@ pub(super) enum Seen {
     Badge(String, String, Option<Badge>),
     Status(String, String, Option<PaneStatus>),
     Url(String),
+    /// A file opened in the editor, at a line.
+    File(std::path::PathBuf, Option<u32>),
     Notice(String, String),
     Copied(String),
     /// The file picker opened, for several files or one.
@@ -330,6 +332,11 @@ impl Env for FakeEnv {
             return Err(why);
         }
         self.record(Seen::Url(url.into()));
+        Ok(())
+    }
+
+    fn open_file(&self, file: &std::path::Path, line: Option<u32>) -> Result<(), String> {
+        self.record(Seen::File(file.to_owned(), line));
         Ok(())
     }
 

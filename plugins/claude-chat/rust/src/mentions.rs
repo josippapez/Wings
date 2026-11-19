@@ -12,6 +12,8 @@ pub const MENU: usize = 8;
 pub struct Files {
     paths: Vec<String>,
     lower: Vec<String>,
+    /// The same paths, for whether a reply names one of them, word by word as it shows.
+    set: std::collections::HashSet<String>,
 }
 
 impl Files {
@@ -19,7 +21,17 @@ impl Files {
     pub fn from_git(stdout: &str) -> Files {
         let paths: Vec<String> = stdout.split('\0').filter(|path| !path.is_empty()).take(MOST_FILES).map(str::to_owned).collect();
         let lower = paths.iter().map(|path| path.to_lowercase()).collect();
-        Files { paths, lower }
+        let set = paths.iter().cloned().collect();
+        Files { paths, lower, set }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.paths.is_empty()
+    }
+
+    /// Whether `path`, relative to the project, is one of its files.
+    pub fn contains(&self, path: &str) -> bool {
+        self.set.contains(path)
     }
 
     /// Up to `MENU` files that match `query`, best first.

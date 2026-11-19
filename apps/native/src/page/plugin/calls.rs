@@ -443,6 +443,8 @@ impl Shared {
             }
             "ports" => self.off_thread(reply, move |_| ports(&access)),
             "openUrl" => self.off_thread(reply, move |_| open_url(&access, &params)),
+            // Right after your click or key, which the frame has checked, as a link in a page is clicked.
+            "openFile" => self.off_thread(reply, move |_| open_file(&access, &params)),
             "notify" => {
                 self.off_thread(reply, move |_| this.notify(&access, &params));
             }
@@ -946,6 +948,25 @@ fn ports(access: &Access) -> Result<String, String> {
         ));
     }
     to_json(&access.env.ports()?)
+}
+
+/// `openFile`: `path`, a file in one of your Wings projects, in your editor, at `line` when there is one.
+fn open_file(access: &Access, params: &Value) -> Result<String, String> {
+    let path = params.get("path").and_then(Value::as_str).ok_or("openFile needs the file's full path")?;
+    let line = match params.get("line") {
+        None | Some(Value::Null) => None,
+        Some(line) => Some(line.as_u64().and_then(|line| u32::try_from(line).ok()).filter(|line| *line > 0).ok_or("openFile line is a number from 1")?),
+    };
+    let asked = std::path::Path::new(path);
+    if !asked.is_absolute() {
+        return Err("openFile needs the file's full path".into());
+    }
+    // Where it really is, past `..` and links, so the check below is of the file that opens.
+    let file = asked.canonicalize().ok().filter(|file| file.is_file()).ok_or_else(|| format!("{path} isn't a file"))?;
+    let folder = file.parent().ok_or_else(|| format!("{path} isn't a file"))?;
+    wings_plugins::panes::pane_cwd(folder, &access.env.projects(), None).map_err(|_| format!("{path} isn't inside any of your Wings projects"))?;
+    access.env.open_file(&file, line)?;
+    Ok("null".into())
 }
 
 fn open_url(access: &Access, params: &Value) -> Result<String, String> {

@@ -159,6 +159,11 @@ pub(super) enum UiEvent {
     Notified(Notification),
     /// A page's `copyText`.
     Copy(String),
+    /// A page's `openFile`, checked to be a file in one of your projects.
+    OpenFile {
+        file: PathBuf,
+        line: Option<u32>,
+    },
     ProjectSection {
         plugin: String,
         project: String,
@@ -705,6 +710,12 @@ impl Env for AppEnv {
         self.system().open_url(url)
     }
 
+    fn open_file(&self, file: &std::path::Path, line: Option<u32>) -> Result<(), String> {
+        self.events
+            .try_send(UiEvent::OpenFile { file: file.to_owned(), line })
+            .map_err(|_| "The Wings window is closed or busy".into())
+    }
+
     fn notify(&self, notification: Notification) -> Result<(), String> {
         let title = notification.system_title();
         // Where the system has no way to show it, the window does, so a notification is never lost.
@@ -931,6 +942,7 @@ impl Workspace {
                 reply.done(self.close_pane_on_screen(&pane, window, cx).map(|()| "null".into()))
             }
             UiEvent::OpenDiff(view) => self.open_diff_view(view, window, cx),
+            UiEvent::OpenFile { file, line } => self.open_file_in_editor(file, line, cx),
             UiEvent::UpdateDiff { plugin, id, update } => {
                 if let Some((viewer, _)) = &self.plugin_ui.diff {
                     let current = &viewer.read(cx).view;

@@ -416,11 +416,11 @@ impl Link for FrameLink {
                 Err(error) => reply.err(error),
             };
         }
-        // Each click or key lets the page try once to copy, to write to a program it runs, or to open the file picker:
-        // what reaches an agent, like the answer to its permission prompt, is what you just asked for in the page, never
-        // the plugin alone, and a picker never opens by itself. A write another page handed on with your click there
-        // counts as one here (`pages`), and goes before a click of this page's own.
-        if matches!(method, "copyText" | "processWrite" | "pickFiles") {
+        // Each click or key lets the page try once to copy, to write to a program it runs, to open the file picker, or to
+        // open a file in your editor: what reaches an agent, like the answer to its permission prompt, is what you just
+        // asked for in the page, never the plugin alone, and a picker never opens by itself. A write another page handed
+        // on with your click there counts as one here (`pages`), and goes before a click of this page's own.
+        if matches!(method, "copyText" | "processWrite" | "pickFiles" | "openFile") {
             let handed = method == "processWrite" && self.role == Role::Page && self.shared.take_grant(self.id);
             let acted = handed
                 || self
@@ -433,6 +433,7 @@ impl Link for FrameLink {
                 let what = match method {
                     "copyText" => "copy",
                     "pickFiles" => "open the file picker",
+                    "openFile" => "open a file",
                     _ => "write to a program",
                 };
                 return reply.err(format!("A page can {what} only right after you click or type in it"));

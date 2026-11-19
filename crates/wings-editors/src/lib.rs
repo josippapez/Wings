@@ -1,4 +1,4 @@
-//! Open a project or worktree folder in an editor: VS Code, Cursor and Zed through their command-line tools,
+//! Open a project or worktree folder, or a file at a line, in an editor: VS Code, Cursor and Zed through their command-line tools,
 //! and on macOS any other editor app found in /Applications through `open -a`. No shell is involved: the
 //! folder is one argument of the program Wings starts.
 //!
@@ -76,6 +76,21 @@ fn argv(launch: &Launch, folder: &Path) -> (PathBuf, Vec<OsString>) {
     }
 }
 
+/// The program and arguments that open `file` at `line`: VS Code and Cursor take `--goto file:line`, Zed and Sublime Text
+/// `file:line` (each CLI's documented form). An app without a CLI opens the file, at its top.
+fn file_argv(id: &str, launch: &Launch, file: &Path, line: Option<u32>) -> (PathBuf, Vec<OsString>) {
+    let at = |line: u32| {
+        let mut at = OsString::from(file);
+        at.push(format!(":{line}"));
+        at
+    };
+    match (launch, line) {
+        (Launch::Cli(cli), Some(line)) if matches!(id, "vscode" | "cursor") => (cli.clone(), vec!["--goto".into(), at(line)]),
+        (Launch::Cli(cli), Some(line)) if matches!(id, "zed" | "sublime") => (cli.clone(), vec![at(line)]),
+        _ => argv(launch, file),
+    }
+}
+
 fn app_installed(app: &str) -> bool {
     if !cfg!(target_os = "macos") {
         return false;
@@ -99,6 +114,22 @@ pub fn open(editor_id: &str, folder: &Path) -> Result<(), String> {
     }
     let (editor, launch) = installed().into_iter().find(|(e, _)| e.id == editor_id).ok_or("That editor isn't installed")?;
     let (program, args) = argv(&launch, folder);
+    let out = Command::new(program).args(args).stdin(Stdio::null()).output().map_err(|e| format!("Couldn't start {}: {e}", editor.name))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let text = String::from_utf8_lossy(&out.stderr);
+    Err(if text.trim().is_empty() { format!("{} exited with {}", editor.name, out.status) } else { text.trim().to_string() })
+}
+
+/// Opens `file` in the editor with this id, at `line` where the editor can. The error is the editor's own text when it
+/// fails.
+pub fn open_file(editor_id: &str, file: &Path, line: Option<u32>) -> Result<(), String> {
+    if !file.is_absolute() || !file.is_file() {
+        return Err(format!("{} isn't a file", file.display()));
+    }
+    let (editor, launch) = installed().into_iter().find(|(e, _)| e.id == editor_id).ok_or("That editor isn't installed")?;
+    let (program, args) = file_argv(editor.id, &launch, file, line);
     let out = Command::new(program).args(args).stdin(Stdio::null()).output().map_err(|e| format!("Couldn't start {}: {e}", editor.name))?;
     if out.status.success() {
         return Ok(());
@@ -146,6 +177,29 @@ mod tests {
         let (program, args) = argv(&Launch::App("Visual Studio Code"), folder);
         assert_eq!(program, PathBuf::from("/usr/bin/open"));
         assert_eq!(args, vec![OsString::from("-a"), "Visual Studio Code".into(), folder.into()]);
+    }
+
+    #[test]
+    fn a_file_opens_at_its_line_in_the_form_each_editor_takes() {
+        let file = Path::new("/code/my app/src/cart.ts");
+        let cli = |p: &str| Launch::Cli(PathBuf::from(p));
+        let at = OsString::from("/code/my app/src/cart.ts:42");
+        assert_eq!(file_argv("vscode", &cli("/bin/code"), file, Some(42)).1, vec![OsString::from("--goto"), at.clone()]);
+        assert_eq!(file_argv("cursor", &cli("/bin/cursor"), file, Some(42)).1, vec![OsString::from("--goto"), at.clone()]);
+        assert_eq!(file_argv("zed", &cli("/bin/zed"), file, Some(42)).1, vec![at.clone()]);
+        assert_eq!(file_argv("sublime", &cli("/bin/subl"), file, Some(42)).1, vec![at]);
+        // No line, or an app without a CLI: the file alone.
+        assert_eq!(file_argv("vscode", &cli("/bin/code"), file, None).1, vec![OsString::from(file)]);
+        let (program, args) = file_argv("idea", &Launch::App("IntelliJ IDEA"), file, Some(42));
+        assert_eq!(program, PathBuf::from("/usr/bin/open"));
+        assert_eq!(args, vec![OsString::from("-a"), "IntelliJ IDEA".into(), file.into()]);
+    }
+
+    #[test]
+    fn refuses_a_relative_missing_or_folder_path_as_a_file() {
+        assert!(open_file("vscode", Path::new("relative.ts"), None).is_err());
+        assert!(open_file("vscode", Path::new("/definitely/not/here.ts"), Some(1)).is_err());
+        assert!(open_file("vscode", Path::new("/"), None).is_err());
     }
 
     #[test]

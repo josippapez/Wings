@@ -472,6 +472,11 @@ pub trait Env: Send + Sync + 'static {
     fn ports(&self) -> Result<Vec<PanePort>, String>;
     /// Opens `url` in the browser. The host has checked the plugin may.
     fn open_url(&self, url: &str) -> Result<(), String>;
+    /// Opens `file` in the editor chosen in Settings, at `line` where the editor can. The host has checked the file is in
+    /// one of your projects and that you just clicked.
+    fn open_file(&self, _file: &std::path::Path, _line: Option<u32>) -> Result<(), String> {
+        Err("Opening a file isn't available in this host".into())
+    }
     /// Shows a notification and keeps it in the inbox.
     fn notify(&self, notification: Notification) -> Result<(), String>;
     /// Puts `text` on the clipboard, for a page's `copyText`.

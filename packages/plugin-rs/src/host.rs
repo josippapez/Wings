@@ -710,6 +710,13 @@ pub fn open_url(url: &str) {
     drop(call("openUrl", json!({ "url": url })));
 }
 
+/// `wings.openFile`: `path`, the full path of a file in one of your Wings projects, in the editor chosen in Wings'
+/// Settings, at `line` where the editor can. Wings opens it only right after your click or key in the page, once per
+/// click. Needs Wings 0.2.42. The call goes out now.
+pub fn open_file(path: &str, line: Option<u32>) -> Pending<Result<Value, String>> {
+    call("openFile", json!({ "path": path, "line": line }))
+}
+
 /// `wings.pickFiles` for pictures: the system's file picker, `multiple` or one, and each png, jpeg, gif or webp picked as
 /// its media type and base64, as a pasted one comes. Wings opens it only right after your click in the page. A file that
 /// isn't one, or is over 3.75 MB, is left out, and so is what would take the pick past 7.5 MB. Cancelled, it gives none.

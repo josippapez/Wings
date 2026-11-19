@@ -740,6 +740,41 @@ fn only_a_page_opens_the_file_picker_and_only_right_after_a_click_and_gets_the_p
     let _ = fs::remove_dir_all(&folder);
 }
 
+// openFile
+
+#[test]
+fn a_page_opens_a_file_of_a_project_in_the_editor_only_right_after_a_click() {
+    const REFUSED: &str = "A page can open a file only right after you click or type in it";
+    let rig = Rig::new(json!({}), panes());
+    let project = tmp().join(format!("wings-native-calls-open-file-{}", std::process::id()));
+    let outside = tmp().join(format!("wings-native-calls-open-file-out-{}", std::process::id()));
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(project.join("src/cart.ts"), "export {}").unwrap();
+    fs::write(outside.join("secret.txt"), "x").unwrap();
+    *rig.env.projects.lock().unwrap() = vec![project.clone()];
+    let open = |path: &std::path::Path, line: Value| json!({ "path": path, "line": line });
+    let cart = project.join("src/cart.ts");
+    assert_eq!(call_from_main(&rig.host, "openFile", open(&cart, json!(3))), Err(REFUSED.into()));
+    let page = Caller::start(&rig.host);
+    assert_eq!(page.call("openFile", open(&cart, json!(3))), Err(REFUSED.into()));
+    assert_eq!(page.call_after_click("openFile", open(&cart, json!(42))), Ok(Value::Null));
+    // The click is used up.
+    assert_eq!(page.call("openFile", open(&cart, Value::Null)), Err(REFUSED.into()));
+    // Never a file outside your projects, also through `..`, a folder, or a missing file.
+    let sneaky = project.join("src/../../").join(outside.file_name().unwrap()).join("secret.txt");
+    for path in [outside.join("secret.txt"), sneaky] {
+        assert!(page.call_after_click("openFile", open(&path, Value::Null)).unwrap_err().ends_with("isn't inside any of your Wings projects"));
+    }
+    assert!(page.call_after_click("openFile", open(&project.join("src"), Value::Null)).unwrap_err().ends_with("isn't a file"));
+    assert!(page.call_after_click("openFile", open(&project.join("gone.ts"), Value::Null)).unwrap_err().ends_with("isn't a file"));
+    assert_eq!(page.call_after_click("openFile", json!({ "path": "src/cart.ts" })), Err("openFile needs the file's full path".into()));
+    assert_eq!(page.call_after_click("openFile", open(&cart, json!(0))), Err("openFile line is a number from 1".into()));
+    assert_eq!(rig.env.seen(), [Seen::File(cart.canonicalize().unwrap(), Some(42))]);
+    let _ = fs::remove_dir_all(&project);
+    let _ = fs::remove_dir_all(&outside);
+}
+
 #[test]
 fn notifications_are_rate_limited_per_plugin() {
     let rig = notifier();
