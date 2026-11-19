@@ -538,7 +538,9 @@ impl PageView {
             .child(trigger)
             // The body rises in each time it opens: closed, it isn't drawn, so its tween starts over.
             .when(open, |el| {
-                let body = div().min_w_0().flex().flex_col().children(self.nodes(&disclosure.body, cx));
+                // Under the summary's words, past the trigger's padding, chevron and gap: what it holds is inside it, and a
+                // fold in it sits a step further in.
+                let body = div().min_w_0().pl(px(22.0)).flex().flex_col().children(self.nodes(&disclosure.body, cx));
                 el.child(crate::ui::motion::tween(
                     body,
                     ElementId::NamedInteger("page-disclosure-body".into(), id),
