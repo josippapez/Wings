@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.46 · 2026-11-19
+
+- **Text in narrow pages lines up with their header and message box**, as in the subagent sidebar, instead of running close to the edge.
+
 ## 0.2.45 · 2026-11-19
 
 - **Claude pauses near your plan's limit.** When your 5-hour or weekly usage passes 90%, Claude is told to finish the step it's on and ask you before more work, in every Claude Code session in Wings. Past the limit it's told to stop, since more work is billed as extra usage. Turn it off in Claude chat's settings.
