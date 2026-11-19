@@ -21,7 +21,7 @@ use gpui::{Context, Window};
 use serde_json::{Value, json};
 use wings_agents::detect::{Agent, AgentState};
 use wings_connect::{
-    panes::{self, Host, OpenPlan, Opened, PaneRow},
+    panes::{self, Host, OpenPlan, Opened, PaneRow, TabRow},
     register::{self, Status},
     server::{
         self, Handler, SEPARATOR, ToolResult, caller, hook_event, hook_session, merge_hook_answers,
@@ -70,6 +70,8 @@ pub(super) struct Snapshot {
     /// The plugin tabs whose agent, like a chat's Claude, has the terminals it opens in the tab's page. Its programs are
     /// in `shells`, so a call from it comes from the tab, though it isn't a pane.
     pages: Vec<PaneRow>,
+    /// The tabs whose page runs an agent, which `send_to_agent` reaches.
+    tabs: Vec<TabRow>,
 }
 
 impl Snapshot {
@@ -146,6 +148,7 @@ impl Workspace {
                 .map(|(id, _)| id.to_string())
                 .collect(),
             pages: pages.into_iter().map(|(row, _)| row).collect(),
+            tabs: self.agent_tabs(),
         }
     }
 
@@ -244,6 +247,46 @@ impl Workspace {
             ran,
             reused: false,
         })
+    }
+
+    /// The tabs whose page runs an agent and says so, like Claude chat's, in every project, as Wings' MCP tools list them.
+    fn agent_tabs(&self) -> Vec<TabRow> {
+        let shown = self.plugin_tabs.iter().map(|tab| (&self.config.project, tab));
+        let parked = self
+            .parked
+            .iter()
+            .flat_map(|(path, parked)| parked.plugin_tabs.iter().map(move |tab| (path, tab)));
+        shown
+            .chain(parked)
+            .filter_map(|(project, tab)| {
+                let agent = tab.state.agent()?;
+                Some(TabRow {
+                    id: super::agent_terminals::page_caller(tab.id),
+                    space_id: project.to_string_lossy().into_owned(),
+                    cwd: project.clone(),
+                    plugin: tab.plugin.clone(),
+                    title: tab.label().to_string(),
+                    state: super::agent_list::tab_state(&agent.state),
+                    name: agent.name,
+                    summary: agent.summary,
+                    session_id: agent.session_id,
+                    account: agent.account,
+                })
+            })
+            .collect()
+    }
+
+    /// `send_to_agent` to the agent of the plugin tab `tab`, like a chat's Claude: its page puts `text` in its message
+    /// box, and sends it only while "Let agents message each other" is on. `reply` gets the page's `{ text, isError }`.
+    pub(super) fn send_to_tab_agent(&self, tab: usize, text: &str, reply: Reply) {
+        let parked = self.parked.values().flat_map(|parked| parked.plugin_tabs.iter());
+        let Some(found) = self.plugin_tabs.iter().chain(parked).find(|t| t.id == tab) else {
+            return reply.err(format!("No tab {}. It was closed.", super::agent_terminals::page_caller(tab)));
+        };
+        let Some(installed) = self.plugins.iter().find(|installed| installed.id == found.plugin) else {
+            return reply.err(format!("{} isn't running", found.plugin));
+        };
+        installed.host.send_agent_message(&found.state, text, self.prefs.agents_message, reply);
     }
 
     /// Closes a pane of the project on screen, by the id plugins and Claude know it by: Claude's `close_pane` and a
@@ -354,6 +397,11 @@ impl Server {
     /// `pane_busy`, for `wings wait`: whether the pane runs a command, or for an agent's pane whether the agent works.
     fn pane_busy(&self, pane: &str) -> Result<Value, String> {
         let snapshot = self.snapshot(WINDOW_WAIT)?;
+        if let Some(tab) = snapshot.tabs.iter().find(|t| t.id == pane) {
+            return Ok(
+                json!({ "busy": tab.state == AgentState::Working, "agent": true, "tab": true, "sessionId": tab.session_id }),
+            );
+        }
         if !snapshot.panes.iter().any(|p| p.id == pane) {
             return Err(format!("No pane {pane}. It was closed."));
         }
@@ -605,6 +653,10 @@ impl Host for NativeHost<'_> {
         self.snapshot.agents.clone()
     }
 
+    fn tabs(&self) -> Vec<TabRow> {
+        self.snapshot.tabs.clone()
+    }
+
     fn spaces(&self) -> Vec<Space> {
         self.snapshot.spaces.clone()
     }
@@ -683,19 +735,31 @@ impl Host for NativeHost<'_> {
     }
 
     fn send(&self, pane_id: &str, text: &str) -> Result<bool, String> {
+        let tab = super::agent_terminals::page_of_caller(pane_id);
         let (pane, text) = (pane_id.to_owned(), text.to_owned());
         let answer = self
             .server
             .env
             .on_window(WINDOW_WAIT, move |workspace, _, cx| {
                 let (reply, answer) = Reply::channel();
-                workspace.send_to_agent(&pane, &text, reply, cx);
+                match tab {
+                    Some(tab) => workspace.send_to_tab_agent(tab, &text, reply),
+                    None => workspace.send_to_agent(&pane, &text, reply, cx),
+                }
                 answer
             })?;
         // With Enter on, the answer comes once Enter was pressed or skipped, a moment after the paste.
         let answer = answer.wait(WINDOW_WAIT);
-        let answer: Value = serde_json::from_str(&answer.ok_or("The window didn't answer")??)
+        let mut answer: Value = serde_json::from_str(&answer.ok_or("The window didn't answer")??)
             .map_err(|e| e.to_string())?;
+        // A tab's page answers as a tool does: `{ text, isError }`, the text being its `{ submitted }`.
+        if tab.is_some() {
+            let said = answer["text"].as_str().unwrap_or_default().to_owned();
+            if answer["isError"] == true {
+                return Err(said);
+            }
+            answer = serde_json::from_str(&said).map_err(|e| e.to_string())?;
+        }
         Ok(answer["submitted"] == true)
     }
 

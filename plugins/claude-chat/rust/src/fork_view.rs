@@ -153,14 +153,21 @@ pub fn close_ask() {
 pub fn fork() {
     let started = chat::with(|c| {
         c.fork_ask = false;
+        if chat::in_use(c) {
+            if let Some(id) = c.session.id.clone() {
+                return Some(Err(chat::fork_beside(c, &id, None)));
+            }
+        }
         if let Some(why) = busy(c) {
             c.session.items.push(Item::Error(why.into()));
             return None;
         }
-        c.session.id.clone()
+        c.session.id.clone().map(Ok)
     });
-    if let Some(id) = started {
-        chat::launch_with(Some(id), Launch { fork: true, before: None });
+    match started {
+        Some(Ok(id)) => chat::launch_with(Some(id), Launch { fork: true, before: None }),
+        Some(Err(args)) => chat::open_beside(&args),
+        None => {}
     }
 }
 
@@ -178,14 +185,21 @@ pub fn close_fork_from() {
 pub fn fork_from() {
     let started = chat::with(|c| {
         let uuid = c.fork_from.take()?;
+        if chat::in_use(c) {
+            if let Some(id) = c.session.id.clone() {
+                return Some(Err(chat::fork_beside(c, &id, Some(&uuid))));
+            }
+        }
         if let Some(why) = busy(c) {
             c.session.items.push(Item::Error(why.into()));
             return None;
         }
-        Some((c.session.id.clone()?, uuid))
+        Some(Ok((c.session.id.clone()?, uuid)))
     });
-    if let Some((id, uuid)) = started {
-        chat::launch_with(Some(id), Launch { fork: true, before: Some(uuid) });
+    match started {
+        Some(Ok((id, uuid))) => chat::launch_with(Some(id), Launch { fork: true, before: Some(uuid) }),
+        Some(Err(args)) => chat::open_beside(&args),
+        None => {}
     }
 }
 

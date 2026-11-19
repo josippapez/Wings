@@ -891,6 +891,22 @@ impl PageView {
         })
     }
 
+    /// Clicks the tick of prompt `index` on the first prompt rail, as a click there would. False when the page has none.
+    #[cfg(feature = "test-support")]
+    pub fn press_rail(&self, index: usize) -> bool {
+        fn find(nodes: &[Node]) -> Option<&str> {
+            nodes.iter().find_map(|node| match node {
+                Node::PromptRail(rail) => rail.on_select.as_deref(),
+                other => other.parts().into_iter().find_map(find),
+            })
+        }
+        let handler = self.tree.as_ref().and_then(|tree| find(&tree.children));
+        handler.is_some_and(|handler| {
+            self.act(handler, Some(&serde_json::json!({ "index": index })));
+            true
+        })
+    }
+
     /// Presses the first `ListButton` that shows `text`, as a click would. False when the page has none.
     #[cfg(feature = "test-support")]
     pub fn press_list_button(&self, text: &str) -> bool {
@@ -1053,6 +1069,12 @@ impl PageView {
     #[cfg(feature = "test-support")]
     pub fn text(&self) -> String {
         self.tree.as_ref().map(Tree::text).unwrap_or_default()
+    }
+
+    /// How many trees the page has sent.
+    #[cfg(feature = "test-support")]
+    pub fn trees_sent(&self) -> u64 {
+        self.trees
     }
 
     /// How far the following `Scroll` `id` is scrolled from its top, and how far it can scroll at most, in points.

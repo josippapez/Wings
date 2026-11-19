@@ -811,6 +811,7 @@ fn claude_chat(out: PathBuf) {
     // `claude plugin ...` is what the plugins dialog's Discover view runs: the list prints a made-up one, an install says it went well.
     // `claude edit-...` is what a change in the /hooks, /memory and /permissions dialogs runs: it reads the edit to the end
     // of its input, and refuses it with the text of `$CHAT_ANSWERS/<subcommand>` when the scene has one, as Claude Code does.
+    // `$CHAT_DRIP`, when set, is printed again every 20 ms, as Claude Code streams a reply.
     // A request the chat writes whose subtype names a file in `$CHAT_ANSWERS` gets that file as its answer, as Claude Code
     // answers a request made after it started. One that draws a mod's `instance_id` gets `instance-<id>`'s, under its own id,
     // or `component-<Component>-<id>`'s, for one of the component.
@@ -819,7 +820,8 @@ fn claude_chat(out: PathBuf) {
         bin.join("claude"),
         r##"if [ "$1" = plugin ]; then case "$2" in list) cat "$CHAT_AVAILABLE";; install) echo '{"command":"install","outcome":"ok","scope":"user"}';; esac; exit 0; fi
 case "$1" in edit-*) cat >/dev/null; if [ -f "$CHAT_ANSWERS/$1" ]; then cat "$CHAT_ANSWERS/$1" >&2; exit 1; fi; echo '{"ok":true}'; exit 0;; esac
-cat "$CHAT_FIXTURE"; if [ -n "$CHAT_EXIT" ]; then echo "$CHAT_STDERR" >&2; exit "$CHAT_EXIT"; fi
+cat "$CHAT_FIXTURE"; if [ -n "$CHAT_DRIP" ]; then (n=0; while [ $n -lt 2000 ] && cat "$CHAT_DRIP" 2>/dev/null; do n=$((n+1)); sleep 0.02; done) & fi
+if [ -n "$CHAT_EXIT" ]; then echo "$CHAT_STDERR" >&2; exit "$CHAT_EXIT"; fi
 while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ] && case "$line" in *"\"subtype\":\"${answer##*/}\""*) cat "$answer";; esac; done
 for answer in "$CHAT_ANSWERS"/instance-*; do [ -f "$answer" ] && case "$line" in *"\"instance_id\":\"${answer##*/instance-}\""*) id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p'); sed "s/REQUEST_ID/$id/" "$answer";; esac; done
 for answer in "$CHAT_ANSWERS"/component-*; do [ -f "$answer" ] && name=${answer##*/component-} && case "$line" in *"\"component\":\"${name%%-*}\",\"instance_id\":\"${name#*-}\""*) id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p'); sed "s/REQUEST_ID/$id/" "$answer";; esac; done; done"##,
@@ -1396,11 +1398,17 @@ esac"##,
     ]);
     // Right-clicked on the link: the chat's own rows and the one a mod adds.
     let mods_menu = mods.clone();
-    let scenes: [Scene; 80] = [
+    let scenes: [Scene; 84] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
+        // A click on the first prompt's tick on the rail of the long session, timed.
+        ("long-rail", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, Some("rail:0"), "Step 0 passes"),
+        // The same click while Claude Code streams a reply.
+        ("long-rail-streaming", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, Some("rail:0"), "Step 0 passes"),
         // Scrolled up past what the page has room for: older steps come in, the newest go, and a button goes back to them.
         ("mods", mods.clone(), None, Some("disclose:Ran 1 command · Used 1 tool"), "Panes"),
-        ("mods-theme", mods, None, None, "Panes"),
+        ("mods-theme", mods.clone(), None, None, "Panes"),
+        // The side panel put away: the rows a mod draws stay inside the conversation's column.
+        ("mods-noside", mods.clone(), None, Some("press:Side panel;disclose:Ran 1 command · Used 1 tool"), "deploy pane"),
         ("mods-menu", mods_menu, None, Some("rightclick:140,130"), "Summarize this page"),
         ("mentioned", mentioned.clone(), None, None, "Mentioned"),
         // The pointer on a pull request's row shows its card.
@@ -1410,6 +1418,8 @@ esac"##,
         ("streaming", streaming, None, None, "token bucket"),
         ("thinking", thinking, None, None, "Thinking"),
         ("new", opened(vec![init.clone()]), None, None, "What should Claude do?"),
+        // The header's account button, open: the accounts with the one in use checked.
+        ("accounts", opened(vec![init.clone()]), None, Some("menu:Claude account"), "What should Claude do?"),
         // The model and effort menu open over the message box.
         ("models", opened(vec![init.clone()]), None, Some("select:Model and effort"), "resets"),
         // A model with fast mode has its button by the model menu, and the output styles have a menu of their own.
@@ -1718,8 +1728,13 @@ esac"##,
             let export = answer("export-dialog", json!({ "text": "User: Move the discount maths into its own module and test it.\n\nClaude: The discount maths is in src/discount.ts now, and checkout.ts re-exports it.\n", "default_filename": "conversation-2026-11-18-101500.txt" }));
             std::fs::write(answers.join("export_conversation"), format!("{export}\n")).unwrap();
         }
+        let drip = root.join(format!("drip-{name}.jsonl"));
+        if name == "long-rail-streaming" {
+            std::fs::write(&drip, format!("{}\n", delta("and the next few words of the reply as they stream in, "))).unwrap();
+        }
         // SAFETY: the page from the scene before is closed, so nothing reads these while they change.
         unsafe {
+            std::env::set_var("CHAT_DRIP", if name == "long-rail-streaming" { drip.as_os_str() } else { std::ffi::OsStr::new("") });
             std::env::set_var("CHAT_FIXTURE", &fixture);
             std::env::set_var("CHAT_ANSWERS", &answers);
             std::env::set_var("CHAT_EXIT", exit.map_or("", |(code, _)| code));
@@ -1744,7 +1759,7 @@ esac"##,
                 unsafe { std::env::set_var("SHELL", root.join("shell")) };
                 terminal
             });
-            let args = matches!(name, "long" | "long-older").then(|| json!({ "resume": LONG, "cwd": root.canonicalize().unwrap() }));
+            let args = matches!(name, "long" | "long-older" | "long-rail" | "long-rail-streaming").then(|| json!({ "resume": LONG, "cwd": root.canonicalize().unwrap() }));
             let handle = cx
                 .open_offscreen_window(size(px(width), px(760.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, &source, args.as_ref(), cx)))
                 .unwrap();
@@ -1818,8 +1833,22 @@ esac"##,
                         // A row of a list that is a button, like a task in the side panel.
                         Some(("row", text)) => assert!(handle.read_with(&cx, |view, _| view.press_list_button(text)).unwrap()),
                         Some(("image", label)) => assert!(handle.read_with(&cx, |view, _| view.press_image(label)).unwrap()),
+                        // A click on prompt N's tick on the rail, timed until the window around it is drawn.
+                        Some(("rail", at)) => {
+                            until(&mut cx, "Step 99 passes");
+                            wait(&mut cx, window, Duration::from_millis(300));
+                            let sent = handle.read_with(&cx, |view, _| view.trees_sent()).unwrap();
+                            wait(&mut cx, window, Duration::from_secs(1));
+                            let sent = handle.read_with(&cx, |view, _| view.trees_sent()).unwrap() - sent;
+                            eprintln!("[measure] {name} {width}: trees the page sent in the second before the click: {sent}");
+                            let started = Instant::now();
+                            assert!(handle.read_with(&cx, |view, _| view.press_rail(at.parse().unwrap())).unwrap());
+                            until(&mut cx, "Step 0 passes");
+                            eprintln!("[measure] {name} {width}: rail click to the far prompt's window drawn: {:?}", started.elapsed());
+                        }
                         Some(("more", _)) => assert!(handle.update(&mut cx, |view, _, cx| view.press_more(cx)).unwrap()),
                         Some(("disclose", summary)) => assert!(handle.update(&mut cx, |view, _, cx| view.press_disclosure(summary, cx)).unwrap()),
+                        Some(("menu", label)) => assert!(handle.update(&mut cx, |view, _, cx| view.open_menu(label, 0, cx)).unwrap()),
                         Some(("select", label)) => assert!(handle.update(&mut cx, |view, _, cx| view.open_select(label, cx)).unwrap()),
                         _ => panic!("{act}"),
                     }

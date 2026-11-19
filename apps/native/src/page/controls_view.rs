@@ -884,12 +884,20 @@ impl PageView {
                 } else {
                     text
                 };
+                // A `pressed` item is the one in use, as a select's picked option: checked at its end.
                 let row = ui::menu_item_text(
                     ElementId::NamedInteger(format!("page-menu-{id}-item").into(), at as u64),
                     label,
                     item.variant == tree::Variant::Destructive,
                     item.disabled,
-                );
+                )
+                .when(item.pressed, |row| {
+                    row.aria_selected(true).child(crate::icons::icon(
+                        crate::icons::Icon::Check,
+                        14.0,
+                        crate::theme::palette().foreground,
+                    ))
+                });
                 Some(match item.on_click.clone() {
                     Some(handler) if !item.disabled => row
                         .on_click(cx.listener(move |view, _, _, cx| {

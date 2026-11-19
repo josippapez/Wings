@@ -4065,6 +4065,66 @@ fn claude_code_reaches_the_app_through_its_socket_and_a_hook_reaches_the_plugin(
     assert_eq!(view["rateLimits"][0]["account"], "work");
 }
 
+/// A chat page as far as other Claude Code sessions see it: it says its agent works, in session `s-1` under the default
+/// account, keeps each message another agent sends it under `message`, and answers that it sent it when it may.
+fn messaged_page() -> String {
+    fake::script("page", || {
+        let mut started = false;
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            if !std::mem::replace(&mut started, true) {
+                let agent = json!({ "state": "working", "name": "Fix the checkout", "sessionId": "s-1", "account": { "name": null } });
+                cx.call("setAgent", json!({ "agent": agent }));
+            }
+            if let Hear::Deliver("agentMessage", token, text) = hear {
+                let message = said(text);
+                cx.save("message", &message);
+                let done = json!({ "submitted": message["submit"] }).to_string();
+                cx.call("toolDone", json!({ "token": token, "text": done, "isError": false }));
+            }
+        }
+    })
+}
+
+/// Claude Code in another session finds the agent of a chat tab with `list_sessions`, messages it with `send_to_agent`,
+/// and waits for its turn with `wings wait` (`pane_busy`), as it does an agent in a pane.
+#[test]
+fn another_session_lists_a_chat_tabs_agent_and_messages_it() {
+    let data = Data::temp();
+    let views = json!([{ "id": "chat", "title": "Chat", "page": "dist/chat.html", "opens": ["tab"] }]);
+    data.install_script("chatty", json!({ "contributes": { "ui": ["agents"], "views": views } }), &fake::idle("main"),
+        &[("chat", &messaged_page())], "chatty-scope");
+    let socket = data.root.join("app-data/mcp.sock");
+    fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |config| config.socket = Some(socket.clone()));
+    window.update(|w, window, cx| assert!(w.open_plugin_view("chatty", "chat", None, window, cx)));
+    until(&app, &mut window, "the chat never said what its agent does", |w| !w.tab_agents().is_empty());
+    let tab = window.read(|w, _| format!("tab-{}", w.plugin_tabs[0].id));
+    let call = |window: &mut TestAppWindow<Workspace>, name: &str, arguments: Value| -> Value {
+        let answer = ask_socket(&app, window, &socket, json!({ "id": 1, "op": "call", "name": name, "arguments": arguments }));
+        assert_eq!(answer["result"]["isError"], false, "{answer}");
+        serde_json::from_str(answer["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
+    };
+
+    let listed = call(&mut window, "list_sessions", json!({}));
+    let found = &listed["tabs"][0];
+    assert_eq!((found["tabId"].as_str(), found["plugin"].as_str()), (Some(tab.as_str()), Some("chatty")));
+    assert_eq!(found["agent"], json!({ "state": "working", "summary": null, "sessionId": "s-1", "name": "Fix the checkout", "account": "default" }));
+
+    // "Let agents message each other" is off: the message waits in the chat's box.
+    let sent = call(&mut window, "send_to_agent", json!({ "pane_id": tab, "message": "Review my change." }));
+    assert_eq!((sent["sent"].as_bool(), sent["submitted"].as_bool()), (Some(true), Some(false)), "{sent}");
+    let heard = data.saved("chatty", "chatty-scope", "message").unwrap();
+    assert_eq!(heard, json!({ "text": "(Message from another agent, sent through Wings.)\nReview my change.", "submit": false }));
+    // On: the chat sends it, and the caller gets a command that waits for the chat's turn.
+    window.update(|w, _, cx| w.set_prefs(|prefs| prefs.agents_message = true, cx));
+    let sent = call(&mut window, "send_to_agent", json!({ "pane_id": tab, "message": "Go." }));
+    assert_eq!(sent["submitted"], true, "{sent}");
+    assert!(sent["waitCommand"].as_str().unwrap().ends_with(&format!("wait {tab}")), "{sent}");
+    assert_eq!(data.saved("chatty", "chatty-scope", "message").unwrap()["submit"], true);
+    let busy = ask_socket(&app, &mut window, &socket, json!({ "id": 1, "op": "pane_busy", "pane": tab }));
+    assert_eq!(busy["result"], json!({ "busy": true, "agent": true, "tab": true, "sessionId": "s-1" }));
+}
+
 /// A page with a button in its bottom right corner that counts its presses. `props` is what `mount` puts on the root.
 fn corner_page(props: Value) -> String {
     let mut pressed = 0;

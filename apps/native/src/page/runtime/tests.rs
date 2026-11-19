@@ -225,3 +225,31 @@ fn a_timer_that_sets_itself_again_does_not_keep_the_frame_from_its_events() {
     assert!(page.runtime.dispatch("clicked", None));
     assert_eq!(shown(&page.tree()), "clicked");
 }
+
+#[test]
+fn a_click_goes_ahead_of_the_messages_the_frame_has_queued() {
+    /// A page whose every message takes a while, as an answer that builds the whole page does, and that shows how many
+    /// it had heard when the click came.
+    struct Busy(u32);
+    impl Guest for Busy {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            show(cx, serde_json::json!("started"));
+        }
+        fn deliver(&mut self, _cx: &mut Cx<'_>, _kind: &str, _id: u32, _text: &str) {
+            std::thread::sleep(Duration::from_millis(20));
+            self.0 += 1;
+        }
+        fn event(&mut self, cx: &mut Cx<'_>, _handler: &str, _payload: &serde_json::Value) {
+            show(cx, serde_json::json!(self.0));
+        }
+    }
+    let page = start_in_plugin(&fake::source("page", || Box::new(Busy(0))));
+    assert_eq!(shown(&page.tree()), "started");
+    let inbox = page.runtime.inbox();
+    for _ in 0..50 {
+        assert_eq!(inbox.send(Message::Panes, 0, "[]".into()), Delivery::Queued);
+    }
+    assert!(page.runtime.dispatch_gesture("clicked", None));
+    let heard = shown(&page.tree()).as_u64().unwrap();
+    assert!(heard < 5, "the click waited for {heard} of the 50 messages queued before it");
+}

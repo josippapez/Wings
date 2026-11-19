@@ -127,6 +127,15 @@ impl Shared {
         Err(format!("{name} didn't get the message"))
     }
 
+    /// Lets `frame` make one write in the next few seconds, as `tellPage` with `write` does: for another agent's message
+    /// the user lets agents send (`PluginHost::send_agent_message`).
+    pub(super) fn grant_write(&self, frame: u64) {
+        let mut pages = self.pages.lock().unwrap();
+        let granted = pages.granted.entry(frame).or_default();
+        granted.retain(|at| at.elapsed() < USER_ACTION);
+        granted.push(Instant::now());
+    }
+
     /// Takes the oldest write handed to `frame` that is still fresh, if there is one.
     pub(super) fn take_grant(&self, frame: u64) -> bool {
         let mut pages = self.pages.lock().unwrap();

@@ -37,6 +37,25 @@ pub struct PaneRow {
     pub title: String,
 }
 
+/// An agent that runs in a tab's page instead of a terminal, like Claude chat's, as its page says of it.
+#[derive(Clone)]
+pub struct TabRow {
+    /// What the tools name it by, as they name a pane by its id.
+    pub id: String,
+    pub space_id: String,
+    pub cwd: PathBuf,
+    /// The plugin whose page it is.
+    pub plugin: String,
+    pub title: String,
+    pub state: AgentState,
+    pub name: String,
+    /// What it does now, or what it waits for.
+    pub summary: Option<String>,
+    pub session_id: Option<String>,
+    /// The Claude Code account it runs under, by name, `Some(None)` being the default one. `None` while the page hasn't said.
+    pub account: Option<Option<String>>,
+}
+
 /// The new tab `open_pane` asks the window for.
 #[derive(Debug, PartialEq)]
 pub struct OpenPlan {
@@ -67,6 +86,8 @@ pub trait Host {
         self.panes().into_iter().find(|p| p.id == id)
     }
     fn agents(&self) -> Vec<Agent>;
+    /// The tabs whose page runs an agent, which `send` reaches by their id as it reaches a pane.
+    fn tabs(&self) -> Vec<TabRow>;
     fn spaces(&self) -> Vec<Space>;
     /// The raw bytes a pane has printed lately, oldest first.
     fn output(&self, pane_id: &str) -> Option<Vec<u8>>;
@@ -76,8 +97,8 @@ pub trait Host {
     fn close(&self, pane_id: &str) -> Result<(), String>;
     /// A system notification, if the rate limit allows one. `pane` is the calling Claude's, where a click on it goes.
     fn notify(&self, title: String, body: String, pane: Option<String>) -> Result<(), String>;
-    /// Pastes `text` into an agent's prompt through the window, which presses Enter only while the user lets agents
-    /// message each other. Whether it pressed Enter.
+    /// Pastes `text` into an agent's prompt through the window, or a tab agent's message box, which presses Enter (sends
+    /// it) only while the user lets agents message each other. Whether it pressed Enter.
     fn send(&self, pane_id: &str, text: &str) -> Result<bool, String>;
     /// Saves worktree settings for the project `space_id` belongs to (see `spaces::update_worktree_settings`) in
     /// memory and on disk, and tells the window.
@@ -101,7 +122,7 @@ pub fn tools() -> Vec<Value> {
     vec![
         json!({
             "name": "list_sessions",
-            "description": format!("List the terminal panes open in Wings, with each one's project, folder, running program and, for a pane running an agent (Claude Code or opencode), its kind, state (working, blocked, done or idle), what it is waiting for, session id and name. thisPane marks the pane you run in. Read one pane's output with read_pane. {CROSS_SESSION}"),
+            "description": format!("List the terminal panes open in Wings, with each one's project, folder, running program and, for a pane running an agent (Claude Code or opencode), its kind, state (working, blocked, done or idle), what it is waiting for, session id and name. thisPane marks the pane you run in. Read one pane's output with read_pane. tabs lists the agents that run in a tab instead of a terminal, like a Claude chat: each one's tabId (send_to_agent takes it as pane_id), project, folder, state, what it does, session id, name and Claude Code account; thisTab marks the one you run in. {CROSS_SESSION}"),
             "inputSchema": { "type": "object", "properties": {} }
         }),
         json!({
@@ -140,11 +161,11 @@ pub fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "send_to_agent",
-            "description": format!("Send a message to the coding agent (Claude Code or opencode) running in another Wings pane, as if the user typed it into its prompt, for example to hand it a task or ask it something. Wings adds a first line saying which pane it came from, so the agent can answer you with send_to_agent. Wings presses Enter only if the user turned on \"Let agents message each other\" in Wings Settings, Agents; otherwise the message waits in its prompt for the user. Refused for a pane that isn't running an agent, for an agent waiting on a permission prompt, and for your own pane. When it was sent, the reply has a waitCommand: run it with Bash in the background and it exits once that agent finishes its turn, printing where to read its answer. Up to {} KB. {CROSS_SESSION}", MESSAGE_MAX / 1024),
+            "description": format!("Send a message to the coding agent (Claude Code or opencode) running in another Wings pane, or in a Claude chat tab, as if the user typed it into its prompt, for example to hand it a task or ask it something. Wings adds a first line saying which pane or tab it came from, so the agent can answer you with send_to_agent. Wings presses Enter only if the user turned on \"Let agents message each other\" in Wings Settings, Agents; otherwise the message waits in its prompt for the user. Refused for a pane that isn't running an agent, for an agent waiting on a permission prompt, and for your own pane. When it was sent, the reply has a waitCommand: run it with Bash in the background and it exits once that agent finishes its turn, printing where to read its answer. Up to {} KB. {CROSS_SESSION}", MESSAGE_MAX / 1024),
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "pane_id": { "type": "string", "description": "The agent's pane, from list_sessions." },
+                    "pane_id": { "type": "string", "description": "The agent's pane, or a tab's tabId, from list_sessions." },
                     "message": { "type": "string", "description": "What to tell it. Newlines are fine." }
                 },
                 "required": ["pane_id", "message"]
@@ -381,7 +402,25 @@ fn list_sessions(host: &dyn Host, caller: Option<&str>) -> Value {
             })
         })
         .collect();
-    json!({ "panes": panes })
+    let tabs: Vec<Value> = host
+        .tabs()
+        .into_iter()
+        .map(|t| {
+            let space = spaces.iter().find(|s| s.id == t.space_id);
+            let account = t.account.map(|name| name.unwrap_or_else(|| "default".into()));
+            json!({
+                "tabId": t.id,
+                "project": space.map(|s| s.name.as_str()),
+                "projectPath": space.map(|s| s.path.as_str()),
+                "cwd": t.cwd,
+                "plugin": t.plugin,
+                "title": t.title,
+                "agent": { "state": t.state, "summary": t.summary, "sessionId": t.session_id, "name": t.name, "account": account },
+                "thisTab": caller == Some(t.id.as_str()),
+            })
+        })
+        .collect();
+    json!({ "panes": panes, "tabs": tabs })
 }
 
 /// Types a message into another agent's prompt, with a first line naming the pane it came from. Only an agent: a
@@ -401,15 +440,32 @@ fn send_to_agent(host: &dyn Host, caller: Option<&str>, id: &str, message: &str)
     if caller == Some(id) {
         return Err("That's your own pane".into());
     }
-    let agents = host.agents();
-    let agent = agents.iter().find(|a| a.pane_id == id).ok_or_else(|| {
-        format!("Pane {id} isn't running an agent, so Wings won't type into it: a shell would run the text. list_sessions shows which panes run one.")
-    })?;
-    if agent.state == AgentState::Blocked {
-        let what = agent.waiting_for.as_deref().unwrap_or("an answer");
-        return Err(format!("The agent in pane {id} is waiting for {what}. Typing now would answer that, so try again once it's past it."));
+    let tabs = host.tabs();
+    let tab = tabs.iter().find(|t| t.id == id);
+    // What the agent waits for, the way a sentence after "waiting for" reads.
+    let waiting = match tab {
+        // A tab's page says it in its own words, like "Asks to use Bash".
+        Some(tab) => (tab.state == AgentState::Blocked).then(|| match &tab.summary {
+            Some(said) => format!("an answer ({said})"),
+            None => "an answer".into(),
+        }),
+        None => {
+            let agents = host.agents();
+            let agent = agents.iter().find(|a| a.pane_id == id).ok_or_else(|| {
+                format!("Pane {id} isn't running an agent, so Wings won't type into it: a shell would run the text. list_sessions shows which panes and tabs run one.")
+            })?;
+            (agent.state == AgentState::Blocked).then(|| agent.waiting_for.clone().unwrap_or_else(|| "an answer".into()))
+        }
+    };
+    if let Some(what) = waiting {
+        let place = if tab.is_some() { "tab" } else { "pane" };
+        return Err(format!("The agent in {place} {id} is waiting for {what}. Typing now would answer that, so try again once it's past it."));
     }
-    let from = caller.map_or_else(|| "another agent".to_string(), |pane| format!("the agent in Wings pane {pane}"));
+    let from = match caller {
+        Some(own) if tabs.iter().any(|t| t.id == own) => format!("the agent in Wings tab {own}"),
+        Some(pane) => format!("the agent in Wings pane {pane}"),
+        None => "another agent".to_string(),
+    };
     let submitted = host.send(id, &format!("(Message from {from}, sent through Wings.)\n{message}"))?;
     let mut reply = json!({ "sent": true, "submitted": submitted });
     if submitted {
@@ -417,7 +473,8 @@ fn send_to_agent(host: &dyn Host, caller: Option<&str>, id: &str, message: &str)
             reply["waitCommand"] = json!(format!("'{}' wait {id}", wait_program(exe).display()));
         }
     } else {
-        reply["note"] = json!("Letting agents message each other is off in Wings Settings, Agents, so the message waits in that agent's prompt for the user to press Enter.");
+        let waits_in = if tab.is_some() { "message box for the user to send it" } else { "prompt for the user to press Enter" };
+        reply["note"] = json!(format!("Letting agents message each other is off in Wings Settings, Agents, so the message waits in that agent's {waits_in}."));
     }
     Ok(reply.to_string())
 }
@@ -554,6 +611,7 @@ mod tests {
         /// Places agents run in that aren't terminals, like a chat in a tab.
         pages: Vec<PaneRow>,
         agents: Vec<Agent>,
+        tabs: Vec<TabRow>,
         spaces: RefCell<Vec<Space>>,
         output: HashMap<String, Vec<u8>>,
         opened: RefCell<Vec<OpenPlan>>,
@@ -578,6 +636,9 @@ mod tests {
         }
         fn agents(&self) -> Vec<Agent> {
             self.agents.clone()
+        }
+        fn tabs(&self) -> Vec<TabRow> {
+            self.tabs.clone()
         }
         fn spaces(&self) -> Vec<Space> {
             self.spaces.borrow().clone()
@@ -820,6 +881,64 @@ mod tests {
         assert_eq!(host.opened.borrow()[0], OpenPlan { space_id: "s1".into(), cwd: None, input: Some("make all".into()), run: false, next_to: Some("tab-4".into()) });
         let listed: Value = serde_json::from_str(&run(&host, "list_sessions", json!({}), Some("tab-4")).unwrap()).unwrap();
         assert_eq!(listed["panes"].as_array().unwrap().len(), 1);
+    }
+
+    fn chat_tab(id: &str, state: AgentState, account: Option<Option<&str>>) -> TabRow {
+        TabRow {
+            id: id.into(),
+            space_id: "s1".into(),
+            cwd: "/work/app".into(),
+            plugin: "claude-chat".into(),
+            title: "Fix login".into(),
+            state,
+            name: "Fix login".into(),
+            summary: (state == AgentState::Blocked).then(|| "Asks to use Bash".into()),
+            session_id: Some("s-9".into()),
+            account: account.map(|name| name.map(str::to_string)),
+        }
+    }
+
+    #[test]
+    fn list_sessions_lists_the_agents_in_chat_tabs_and_marks_the_callers() {
+        let host = Fake {
+            panes: vec![row("p1", "s1", "/work/app")],
+            tabs: vec![chat_tab("tab-4", AgentState::Working, Some(Some("work"))), chat_tab("tab-5", AgentState::Idle, Some(None)), chat_tab("tab-6", AgentState::Done, None)],
+            spaces: vec![space("s1", "app", "/work/app")].into(),
+            ..Fake::default()
+        };
+        let listed: Value = serde_json::from_str(&run(&host, "list_sessions", json!({}), Some("tab-4")).unwrap()).unwrap();
+        assert_eq!(listed["panes"][0]["thisPane"], false);
+        let tabs = listed["tabs"].as_array().unwrap();
+        assert_eq!((tabs[0]["tabId"].as_str(), tabs[0]["project"].as_str(), tabs[0]["thisTab"].as_bool()), (Some("tab-4"), Some("app"), Some(true)));
+        assert_eq!(tabs[0]["agent"], json!({ "state": "working", "summary": null, "sessionId": "s-9", "name": "Fix login", "account": "work" }));
+        assert_eq!((tabs[1]["agent"]["account"].as_str(), tabs[1]["thisTab"].as_bool()), (Some("default"), Some(false)));
+        assert!(tabs[2]["agent"]["account"].is_null(), "an account the page hasn't said is unknown");
+    }
+
+    #[test]
+    fn send_to_agent_reaches_a_chat_tab_and_names_the_tab_it_came_from() {
+        let host = Fake {
+            panes: vec![row("p1", "s1", "/r")],
+            agents: vec![agent("p1", AgentState::Idle)],
+            tabs: vec![chat_tab("tab-4", AgentState::Idle, None), chat_tab("tab-5", AgentState::Blocked, None)],
+            ..Fake::default()
+        };
+        let reply: Value = serde_json::from_str(&run(&host, "send_to_agent", json!({ "pane_id": "tab-4", "message": "Review my change." }), Some("p1")).unwrap()).unwrap();
+        assert_eq!((reply["sent"].as_bool(), reply["submitted"].as_bool()), (Some(true), Some(false)));
+        assert!(reply["note"].as_str().unwrap().contains("message box"), "{reply}");
+        assert_eq!(host.sent.borrow()[0], ("tab-4".into(), "(Message from the agent in Wings pane p1, sent through Wings.)\nReview my change.".into()));
+        // A chat waiting on its permission card would take the text for its answer.
+        let refused = run(&host, "send_to_agent", json!({ "pane_id": "tab-5", "message": "hi" }), Some("p1")).unwrap_err();
+        assert!(refused.contains("tab tab-5 is waiting for an answer (Asks to use Bash)"), "{refused}");
+        assert!(run(&host, "send_to_agent", json!({ "pane_id": "tab-4", "message": "hi" }), Some("tab-4")).unwrap_err().contains("your own"));
+        assert_eq!(host.sent.borrow().len(), 1);
+        // From a chat tab to a pane, the first line names the tab; with the setting on, the caller can wait for the reply.
+        let allowed = Fake { allow_run: true, ..host };
+        let reply: Value = serde_json::from_str(&run(&allowed, "send_to_agent", json!({ "pane_id": "p1", "message": "Done." }), Some("tab-4")).unwrap()).unwrap();
+        assert!(allowed.sent.borrow()[1].1.starts_with("(Message from the agent in Wings tab tab-4,"));
+        assert_eq!(reply["waitCommand"], json!(format!("'{}' wait p1", std::env::current_exe().unwrap().display())));
+        let reply: Value = serde_json::from_str(&run(&allowed, "send_to_agent", json!({ "pane_id": "tab-4", "message": "go" }), Some("p1")).unwrap()).unwrap();
+        assert_eq!(reply["waitCommand"], json!(format!("'{}' wait tab-4", std::env::current_exe().unwrap().display())));
     }
 
     #[test]

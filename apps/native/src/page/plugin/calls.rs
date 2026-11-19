@@ -405,7 +405,7 @@ impl Shared {
                 self.off_thread(reply, move |_| claude_accounts(&access));
             }
             "claudeAccountChoices" => {
-                self.off_thread(reply, move |_| claude_account_choices(&access));
+                self.off_thread(reply, move |_| claude_account_choices(&access, &params));
             }
             "setClaudeAccount" => {
                 self.off_thread(reply, move |_| set_claude_account(&access, &params));
@@ -795,14 +795,33 @@ fn claude_accounts(access: &Access) -> Result<String, String> {
     to_json(&access.env.claude_accounts()?)
 }
 
-/// `claudeAccountChoices`: the accounts a plugin may start Claude Code under, `[{ name, email, signedIn }]`, the default
-/// one first with a `null` name. Without their folders, and quick: whether one is signed in is what its config says.
-fn claude_account_choices(access: &Access) -> Result<String, String> {
+/// `claudeAccountChoices`: the accounts a plugin may start Claude Code under, `[{ name, email, signedIn, current }]`, the
+/// default one first with a `null` name. Without their folders, and quick: whether one is signed in is what its config
+/// says. Given `{ account, cwd }`, as a `spawn` would be, `current` marks the account that program runs under, so a chat
+/// can name the account it is in before you pick one.
+fn claude_account_choices(access: &Access, params: &Value) -> Result<String, String> {
     may_use_accounts(access)?;
     let accounts = access.env.claude_accounts_quick()?.accounts;
+    let current = match (params.get("account"), params.get("cwd").and_then(Value::as_str)) {
+        (Some(account), Some(cwd)) => {
+            let request: AccountRequest =
+                serde_json::from_value(account.clone()).map_err(|error| error.to_string())?;
+            let dir = access.claude_config_dir(Some(&request), std::path::Path::new(cwd))?;
+            let dirs = access.env.claude_dirs();
+            let name = match (&dir, dirs.first()) {
+                (Some(dir), Some(default)) => wings_spaces::claude_accounts::label(dir, default),
+                _ => None,
+            };
+            Some(name.map(str::to_owned))
+        }
+        _ => None,
+    };
     let choices: Vec<Value> = accounts
         .into_iter()
-        .map(|account| json!({ "name": account.name, "email": account.email, "signedIn": account.signed_in }))
+        .map(|account| {
+            let is_current = current.as_ref() == Some(&account.name);
+            json!({ "name": account.name, "email": account.email, "signedIn": account.signed_in, "current": is_current })
+        })
         .collect();
     to_json(&choices)
 }

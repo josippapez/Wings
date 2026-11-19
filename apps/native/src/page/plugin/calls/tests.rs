@@ -1026,8 +1026,31 @@ fn the_account_choices_name_each_account_without_its_folder() {
     for choice in choices {
         let mut keys: Vec<&str> = choice.as_object().unwrap().keys().map(String::as_str).collect();
         keys.sort_unstable();
-        assert_eq!(keys, ["email", "name", "signedIn"], "{choice}");
+        assert_eq!(keys, ["current", "email", "name", "signedIn"], "{choice}");
     }
+    let _ = fs::remove_dir_all(folder);
+}
+
+#[test]
+fn the_account_choices_mark_the_one_a_new_chat_runs_under() {
+    use wings_spaces::claude_accounts::{claude_dir, dir};
+    let (rig, folder) = accounts(true);
+    let name = "wings-native-current";
+    rig.allows("setClaudeAccount", json!({ "projectId": "/a", "name": name }));
+    *rig.env.claude.lock().unwrap() = vec![claude_dir(), dir(Some(name))];
+    *rig.env.projects.lock().unwrap() = vec!["/a".into(), "/b".into()];
+    let current = |params: Value| -> Vec<Value> {
+        let choices = rig.allows("claudeAccountChoices", params);
+        choices.as_array().unwrap().iter().filter(|c| c["current"] == true).map(|c| c["name"].clone()).collect()
+    };
+    let new_chat = json!({ "session": null });
+    // In project /a, its account; in /b, which has none, the default one.
+    assert_eq!(current(json!({ "account": new_chat, "cwd": "/a" })), [json!(name)]);
+    assert_eq!(current(json!({ "account": new_chat, "cwd": "/b" })), [json!(null)]);
+    // A pick decides over the project's.
+    assert_eq!(current(json!({ "account": { "session": null, "pick": { "name": null } }, "cwd": "/a" })), [json!(null)]);
+    // Asked without a program, none is current.
+    assert!(current(json!({})).is_empty());
     let _ = fs::remove_dir_all(folder);
 }
 

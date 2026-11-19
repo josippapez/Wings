@@ -52,6 +52,10 @@ pub struct TabAgent {
     pub name: String,
     /// What it does now, or what it waits for.
     pub summary: Option<String>,
+    /// The Claude Code session it runs, for Wings' `list_sessions`.
+    pub session_id: Option<String>,
+    /// The Claude Code account it runs under, by name, `Some(None)` being the default one. `None` while the page hasn't said.
+    pub account: Option<Option<String>>,
 }
 
 #[derive(Clone)]

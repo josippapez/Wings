@@ -80,6 +80,35 @@ fn a_page_hands_the_page_it_names_one_write_for_each_click_and_no_more() {
     chat.send("processStop", json!({ "token": "chat" }));
 }
 
+/// Another Claude Code session's message for a tab's agent, like a chat's (`send_to_agent`). Sent, it lets the page make
+/// one write to its program, as your click would; left in the message box, none. The page's answer is the reply.
+#[test]
+fn another_agents_message_lets_the_tabs_page_write_once_only_when_it_is_sent() {
+    let rig = Rig::new(json!({ "permissions": { "processes": ["cat []"] } }), vec![]);
+    *rig.env.projects.lock().unwrap() = vec![tmp()];
+    let state = FrameState::new(StatePlace::Tab, None, |_| Ok(()));
+    let chat = Caller::in_tab(&rig.host, state.clone());
+    chat.send("spawn", json!({ "token": "chat", "program": "cat", "args": [], "cwd": tmp() }));
+    let message = |submit: bool| {
+        let (reply, answer) = crate::page::runtime::Reply::channel();
+        rig.host.send_agent_message(&state, "hi", submit, reply);
+        answer
+    };
+    let unasked = json!({ "token": "chat", "text": "unasked\n" });
+    let _waits = message(false);
+    assert_eq!(chat.call("processWrite", unasked.clone()), Err(WRITE_REFUSED.into()));
+    let sent = message(true);
+    chat.send("processWrite", json!({ "token": "chat", "text": "hi\n" }));
+    assert_eq!(heard(&chat, 2), (vec!["hi".to_owned()], vec![Ok(Value::Null)]));
+    assert_eq!(chat.call("processWrite", unasked), Err(WRITE_REFUSED.into()));
+    // The second message is the second the host numbered.
+    let done = json!({ "token": 2, "text": "{\"submitted\":true}", "isError": false });
+    assert_eq!(chat.call("toolDone", done), Ok(Value::Null));
+    let answer: Value = serde_json::from_str(&sent.wait(std::time::Duration::from_secs(10)).unwrap().unwrap()).unwrap();
+    assert_eq!(answer, json!({ "text": "{\"submitted\":true}", "isError": false }));
+    chat.send("processStop", json!({ "token": "chat" }));
+}
+
 /// A subagent's sidebar is a page with no tab. It still takes a name, which the chat reaches it by, hears what the chat
 /// tells it to show, and has the chat make one write for each of its own clicks. Which subagent it shows comes from the chat
 /// by `tellPage`, because `openView` keeps `args` to a tab.

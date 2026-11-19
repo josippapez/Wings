@@ -90,6 +90,9 @@ pub enum Message {
     Pages,
     /// The JSON `{ from, message, write }` another page of the plugin told this one (`tellPage`).
     PageMessage,
+    /// Another agent's message for the agent this tab's page runs (`send_to_agent`): `id` names it for
+    /// `Link::call("toolDone")`, the text is the JSON of `{ text, submit }`.
+    AgentMessage,
     /// A badge action was clicked: `id` names it for `Link::call("actionDone")`, the text is the JSON of `{ paneId, actionId }`.
     Action,
     /// Another plugin calls one of this plugin's tools: `id` names the call for `Link::call("toolDone")`, the text is
@@ -122,6 +125,7 @@ impl Message {
             Message::Terminals => "terminals",
             Message::Pages => "pages",
             Message::PageMessage => "pageMessage",
+            Message::AgentMessage => "agentMessage",
             Message::Action => "action",
             Message::Tool => "tool",
             Message::Resolve => "resolve",
@@ -310,6 +314,8 @@ pub struct PageRuntime {
     /// What the host keeps alive for as long as the frame is, like its place among a plugin's frames.
     _attached: Option<Box<dyn Any + Send>>,
     jobs: mpsc::SyncSender<Job>,
+    /// What you do on the page: its own queue, which the frame takes from before `jobs`.
+    inputs: mpsc::SyncSender<Command>,
 }
 
 impl Drop for PageRuntime {
@@ -354,17 +360,20 @@ impl PageRuntime {
     }
 
     /// Sends the frame an event for the handler it named in its tree. False when it can't take it: it has stopped, or
-    /// is too far behind.
+    /// is too far behind. It goes ahead of the lines and answers the frame has queued, which a streaming agent keeps
+    /// coming and each answer builds the whole page for: a click waits for the turn that runs, not for all of them.
     pub fn dispatch(&self, handler: &str, payload: Option<&serde_json::Value>) -> bool {
-        !self.inbox.stopped.load(Ordering::Relaxed)
-            && self
-                .inbox
-                .queue
-                .try_send(Command::Event {
-                    handler: handler.to_owned(),
-                    payload: payload.map(ToString::to_string).unwrap_or_default(),
-                })
-                .is_ok()
+        let event = Command::Event {
+            handler: handler.to_owned(),
+            payload: payload.map(ToString::to_string).unwrap_or_default(),
+        };
+        if self.inbox.stopped.load(Ordering::Relaxed) || self.inputs.try_send(event).is_err() {
+            return false;
+        }
+        // Wakes a frame that waits on its queue. A full queue needs no wake: the frame is busy, and looks at its
+        // inputs before the next job.
+        let _ = self.jobs.try_send(Job::Wake);
+        true
     }
 
     /// `dispatch` for a click, a key press or a pick of yours, which lets the page copy for a moment after, as a

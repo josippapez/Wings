@@ -563,7 +563,7 @@ fn elapsed(ms: u64) -> String {
 }
 
 /// A tab agent's state, as `setAgent` checked it.
-fn tab_state(state: &str) -> AgentState {
+pub(super) fn tab_state(state: &str) -> AgentState {
     match state {
         "working" => AgentState::Working,
         "blocked" => AgentState::Blocked,

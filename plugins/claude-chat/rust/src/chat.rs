@@ -153,6 +153,9 @@ pub struct Chat {
     pub terminals: Vec<Terminal>,
     /// What the sidebar's Agents was last told of this chat: its state, name and what it does.
     agent: Option<(String, String, Option<String>)>,
+    /// And the session and account it was told with them, by name (`Some(None)` the default one), for the other Claude
+    /// Code sessions that list and message this chat through Wings.
+    told: (Option<String>, Option<Option<String>>),
     /// What the tab was last named, none for its view's title.
     titled: Option<String>,
     /// Going on in a terminal once Claude Code here has ended.
@@ -212,6 +215,7 @@ thread_local! {
         branch: None,
         terminals: Vec::new(),
         agent: None,
+        told: (None, None),
         titled: None,
         moving: false,
         input: None,
@@ -266,6 +270,7 @@ pub fn start() {
     prefs::text_size().on_change(|size| with(|c| c.text_scale = prefs::scale_of(size)));
     prefs::side_panel().on_change(|shown| with(|c| c.side_open = *shown));
     host::on_terminals(|listed| with(|c| c.terminals = listed.iter().filter_map(Terminal::of).collect()));
+    host::on_agent_message(take_agent_message);
     // The clicks were made against the old setting, so they go with it.
     prefs::detailed().on_change(|detailed| {
         with(|c| {
@@ -276,12 +281,6 @@ pub fn start() {
     });
     crate::folds::follow();
     task::spawn(open());
-    // A Wings that doesn't list them, or doesn't let the chat, leaves the picker out.
-    task::spawn(async {
-        if let Ok(accounts) = host::accounts().await {
-            with(|c| c.accounts = accounts);
-        }
-    });
 }
 
 /// Finds the folder and the session the tab is for, and starts Claude Code there.
@@ -289,7 +288,14 @@ async fn open() {
     let args = host::view_args().unwrap_or(Value::Null);
     let saved = host::call("tabState", json!({})).await.unwrap_or(Value::Null);
     let resume = saved["sessionId"].as_str().or(args["resume"].as_str()).map(str::to_owned);
-    let dirs: Vec<String> = saved["dirs"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect();
+    // A fork opened beside a chat in use (`fork_beside`) starts as one only the first time: after a restart the tab goes on
+    // with the session it saved.
+    let how = match saved["sessionId"].as_str() {
+        Some(_) => Launch::default(),
+        None => Launch { fork: args["fork"] == true, before: args["before"].as_str().map(str::to_owned) },
+    };
+    let dirs = if saved["dirs"].is_array() { &saved["dirs"] } else { &args["dirs"] };
+    let dirs: Vec<String> = dirs.as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect();
     let cwd = match args["cwd"].as_str() {
         Some(cwd) => cwd.to_owned(),
         None => match host::call("project", json!({})).await.ok().and_then(|project| project["path"].as_str().map(str::to_owned)) {
@@ -305,13 +311,15 @@ async fn open() {
         c.program = program;
         c.dirs = dirs;
         c.picked = picked;
+        c.forked_from = args["forkedFrom"].as_str().filter(|_| how.fork).map(str::to_owned);
     });
     // After an update or restart of the plugin or of Wings, the Claude Code this tab ran is still going: the chat takes
-    // it over, and never starts a second one on its session.
-    if crate::reattach::take_over(resume.clone()).await {
+    // it over, and never starts a second one on its session. A fork is a new session, while the chat it came from still
+    // runs the one it copies.
+    if !how.fork && crate::reattach::take_over(resume.clone()).await {
         return;
     }
-    launch(resume);
+    launch_with(resume, how);
 }
 
 /// Starts Claude Code anew in the tab, going on with `resume` or in a new session, in place of the one running.
@@ -323,7 +331,8 @@ fn launch(resume: Option<String>) {
 pub fn launch_with(resume: Option<String>, how: Launch) {
     let (run, cwd, program, start_mode, dirs) = with(|c| {
         if how.fork {
-            c.forked_from = Some(name(c).unwrap_or_else(|| "an earlier session".into()));
+            // A fork in a new tab has no conversation yet to name it by: the chat it came from named it.
+            c.forked_from = Some(name(c).or_else(|| c.forked_from.clone()).unwrap_or_else(|| "an earlier session".into()));
         }
         let run = begin(c);
         (run, c.cwd.clone(), c.program.clone(), c.session.start_mode.clone(), c.dirs.clone())
@@ -351,6 +360,18 @@ pub fn launch_with(resume: Option<String>, how: Launch) {
         // Under the account the session's transcript is in, which a plain `claude --resume` would not find if it isn't the
         // default one; a new chat gets the account you picked, else its project's, as a terminal there does.
         let account = with(|c| account(c, resume.as_deref()));
+        // The accounts, with the one this chat runs under marked, for the header's account button. A Wings that doesn't
+        // list them, or doesn't let the chat, leaves the button out.
+        let (asked, folder) = (with(|c| self::account(c, resume.as_deref())), cwd.clone());
+        task::spawn(async move {
+            if let Ok(accounts) = host::accounts_under(&asked, &folder).await {
+                with(|c| {
+                    if c.run == run {
+                        c.accounts = accounts;
+                    }
+                });
+            }
+        });
         // A fork before a message asks for its rewind as it starts, as the opening requests do: the fork is a new session.
         let opening = Session::opening(start_mode.as_deref()) + &with(|c| fork::opening(&how, &c.session.prompts));
         // In Wings' terminal server, so the turn goes on while Wings restarts or updates, and this tab takes it over after.
@@ -658,14 +679,18 @@ pub(crate) fn report_agent() {
             title.clone()
         });
         let agent = (state.to_owned(), title.unwrap_or_else(|| "Claude chat".into()), summary);
-        let agent = (c.agent.as_ref() != Some(&agent)).then(|| {
+        let told = (c.session.id.clone(), c.accounts.iter().find(|account| account.current).map(|account| account.name.clone()));
+        let agent = (c.agent.as_ref() != Some(&agent) || c.told != told).then(|| {
             c.agent = Some(agent.clone());
-            agent
+            c.told = told.clone();
+            (agent, told)
         });
         (agent, retitled)
     });
-    if let Some((state, name, summary)) = agent {
-        drop(host::set_agent(Some((&state, &name, summary.as_deref()))));
+    if let Some(((state, name, summary), (session, account))) = agent {
+        let account = account.as_ref().map(Option::as_deref);
+        let report = host::AgentReport { state: &state, name: &name, summary: summary.as_deref(), session: session.as_deref(), account };
+        drop(host::set_agent_report(Some(report)));
     }
     if let Some(title) = retitled {
         drop(host::set_tab_title(title.as_deref()));
@@ -770,6 +795,27 @@ pub fn send() {
     });
     images::flush();
     report_agent();
+}
+
+/// A message another agent sent this chat through Wings' `send_to_agent`: it goes in the message box, and with `submit`,
+/// which only your "Let agents message each other" gives, it is sent as yours would be, or queued while Claude works.
+/// Whether it was sent, or why the chat won't take it.
+pub(crate) fn take_agent_message(text: &str, submit: bool) -> Result<bool, String> {
+    with(|c| {
+        if c.input.is_none() {
+            return Err("Claude Code isn't running in this chat, so it can't take a message now".to_owned());
+        }
+        // What you started typing stays yours, as in a terminal's prompt.
+        if !c.draft.trim().is_empty() || !c.images.is_empty() {
+            return Err("Someone typed into this chat's message box and hasn't sent it. Wings won't type over it.".to_owned());
+        }
+        c.draft = text.to_owned();
+        Ok(())
+    })?;
+    if submit {
+        send();
+    }
+    Ok(submit)
 }
 
 /// Shows the picture `id` large, in a dialog.
@@ -988,12 +1034,44 @@ pub fn insert_mention(path: &str) {
     });
 }
 
+/// Whether Claude Code is doing something in this chat that starting another one in its tab would cut off: a turn, messages
+/// waiting for it, or a background task or subagent. A new chat, a resume or a fork then opens in a new tab beside this one,
+/// and this one keeps running.
+pub fn in_use(c: &Chat) -> bool {
+    let subagent = |item: &Item| matches!(item, Item::Tool(tool) if matches!(tool.name.as_str(), "Task" | "Agent") && tool.output.is_none());
+    c.state == State::Running
+        && (c.session.working || !c.session.queued.is_empty() || c.session.tasks.iter().any(|task| task.ended.is_none()) || c.session.items.iter().any(subagent))
+}
+
+/// The args of a chat opened beside this one, in its folder and with its program, and `more`.
+fn beside(c: &Chat, more: Value) -> Value {
+    let mut args = json!({ "cwd": c.cwd, "program": c.program });
+    if let (Some(args), Value::Object(more)) = (args.as_object_mut(), more) {
+        args.extend(more);
+    }
+    args
+}
+
+/// Opens a chat with `args` in a new tab right after this one. Always a new tab: another chat of the same folder has the same
+/// args, and opening by them would show that one.
+pub(crate) fn open_beside(args: &Value) {
+    drop(host::open_new_tab_beside("chat", args));
+}
+
+/// The header's +: a new chat here, or, while this one is in use, in a new tab beside it, under the account you picked here.
 pub fn new_chat() {
-    with(|c| {
+    let beside = with(|c| {
+        if in_use(c) {
+            return Some(beside(c, json!({ "account": picked_json(&c.picked) })));
+        }
         c.dirs.clear();
         c.forked_from = None;
+        None
     });
-    launch(None);
+    match beside {
+        Some(args) => open_beside(&args),
+        None => launch(None),
+    }
 }
 
 /// The value the account picker gives the default account: not a name an account can have.
@@ -1007,24 +1085,38 @@ pub fn pick_account(value: &str) {
         DEFAULT_ACCOUNT => None,
         name => Some(name.to_owned()),
     };
-    let (written, cwd, program) = with(|c| {
+    let written = with(|c| {
         let written = c.session.items.iter().any(|item| matches!(item, Item::User(_) | Item::UserImages(..)));
-        (written, c.cwd.clone(), c.program.clone())
+        written.then(|| beside(c, json!({ "account": { "name": name } })))
     });
-    if written {
-        drop(host::open_tab_beside("chat", &json!({ "cwd": cwd, "program": program, "account": { "name": name } })));
-        return;
+    if let Some(args) = written {
+        return open_beside(&args);
     }
     with(|c| c.picked = Some(name));
     new_chat();
 }
 
+/// Goes on with a past session here, or, while this chat is in use, in a new tab beside it.
 pub fn resume(id: &str) {
-    with(|c| {
+    let beside = with(|c| {
+        if in_use(c) {
+            c.past = None;
+            return Some(beside(c, json!({ "resume": id })));
+        }
         c.dirs.clear();
         c.forked_from = None;
+        None
     });
-    launch(Some(id.to_owned()));
+    match beside {
+        Some(args) => open_beside(&args),
+        None => launch(Some(id.to_owned())),
+    }
+}
+
+/// Starts a fork of the session `id` in a new tab beside this chat, which goes on running: the session as it is, or cut
+/// before your message `before`. It keeps the folders you added here.
+pub fn fork_beside(c: &Chat, id: &str, before: Option<&str>) -> Value {
+    beside(c, json!({ "resume": id, "fork": true, "before": before, "dirs": c.dirs, "forkedFrom": name(c) }))
 }
 
 /// Opens the sheet of the project's past sessions over the chat.
@@ -1211,6 +1303,94 @@ pub fn toggle_steps(first: usize) {
 #[cfg(test)]
 mod tests {
     use super::{changes_counted, shortstat};
+    use super::{State, new_chat, resume, with};
+    use serde_json::{Value, json};
+    use std::{cell::RefCell, rc::Rc};
+    use wings_plugin::host;
+
+    /// Wings, as far as the chat asks it, keeping every `openView` it is asked for.
+    fn opened() -> Rc<RefCell<Vec<Value>>> {
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let kept = opened.clone();
+        host::testing::answer(move |method, params| {
+            if method == "openView" {
+                kept.borrow_mut().push(params.clone());
+            }
+            Ok(Value::Null)
+        });
+        opened
+    }
+
+    fn running(working: bool) -> u32 {
+        with(|c| {
+            c.cwd = "/work/shop".into();
+            c.program = "claude".into();
+            c.picked = Some(Some("work".into()));
+            c.state = State::Running;
+            c.session.working = working;
+            c.run
+        })
+    }
+
+    #[test]
+    fn a_new_chat_while_a_turn_runs_opens_in_a_new_tab_and_leaves_this_chat_running() {
+        let opened = opened();
+        let run = running(true);
+        new_chat();
+        assert_eq!(with(|c| (c.run, c.state == State::Running)), (run, true));
+        assert_eq!(
+            *opened.borrow(),
+            [json!({ "id": "chat", "as": "tab", "args": { "cwd": "/work/shop", "program": "claude", "account": { "name": "work" } }, "newTab": true, "after": "self" })]
+        );
+    }
+
+    #[test]
+    fn a_resume_while_a_turn_runs_opens_in_a_new_tab_too() {
+        let opened = opened();
+        let run = running(true);
+        resume("s1");
+        assert_eq!(with(|c| c.run), run);
+        assert_eq!(opened.borrow()[0]["args"]["resume"], "s1");
+        assert_eq!(opened.borrow()[0]["newTab"], true);
+    }
+
+    #[test]
+    fn a_new_chat_while_idle_starts_here_and_opens_no_tab() {
+        let opened = opened();
+        let run = running(false);
+        new_chat();
+        assert_eq!(with(|c| c.run), run + 1);
+        assert!(opened.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_message_from_another_agent_fills_the_message_box_and_is_sent_only_when_wings_says_so() {
+        use super::take_agent_message;
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let kept = calls.clone();
+        host::testing::answer(move |method, params| {
+            kept.borrow_mut().push((method.to_owned(), params.clone()));
+            Ok(Value::Null)
+        });
+        running(false);
+        with(|c| (c.input, c.draft) = (None, String::new()));
+        assert!(take_agent_message("hi", true).unwrap_err().contains("isn't running"));
+        let process = host::spawn("claude", &[], "/work/shop", "", |_| {});
+        with(|c| c.input = Some(process.input()));
+        // Without "Let agents message each other" it waits in the message box for you.
+        assert_eq!(take_agent_message("(Message from another agent)\nReview it.", false), Ok(false));
+        assert_eq!(with(|c| c.draft.clone()), "(Message from another agent)\nReview it.");
+        // What is in the box stays yours.
+        assert!(take_agent_message("Run the tests.", true).unwrap_err().contains("hasn't sent it"));
+        with(|c| c.draft.clear());
+        // With it, it is sent as your message, in one write.
+        assert_eq!(take_agent_message("Run the tests.", true), Ok(true));
+        wings_plugin::task::block_on(async {});
+        let writes: Vec<String> = calls.borrow().iter().filter(|(method, _)| method == "processWrite").map(|(_, params)| params["text"].as_str().unwrap().to_owned()).collect();
+        assert_eq!(writes.len(), 1, "{writes:?}");
+        assert!(writes[0].contains("Run the tests."), "{}", writes[0]);
+        assert!(with(|c| c.draft.is_empty() && c.session.working));
+    }
 
     #[test]
     fn the_changes_plugins_totals_are_the_count() {

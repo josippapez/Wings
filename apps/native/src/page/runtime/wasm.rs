@@ -120,6 +120,7 @@ pub(super) fn open(
     on_event: impl FnMut(Event) + Send + 'static,
 ) -> PageRuntime {
     let (jobs, received) = mpsc::sync_channel(QUEUED_COMMANDS);
+    let (inputs, input_received) = mpsc::sync_channel(QUEUED_COMMANDS);
     let closed = Arc::new(AtomicBool::new(false));
     let stopped = Arc::new(AtomicBool::new(false));
     let queue = Queue {
@@ -135,7 +136,7 @@ pub(super) fn open(
             move || {
                 let emit: Emit = Rc::new(RefCell::new(Box::new(on_event)));
                 let host = Host::new(role == Role::Page, link, queue, emit.clone());
-                serve(&path, host, &emit, &received, &closed, &stopped)
+                serve(&path, host, &emit, &Received { inputs: input_received, jobs: received }, &closed, &stopped)
             }
         });
     if spawned.is_err() {
@@ -147,6 +148,7 @@ pub(super) fn open(
         closed,
         _attached: None,
         jobs,
+        inputs,
     }
 }
 
@@ -307,11 +309,17 @@ impl Frame for Page {
     }
 }
 
+/// A frame's two queues: what you do on the page, and everything else.
+struct Received {
+    inputs: mpsc::Receiver<Command>,
+    jobs: mpsc::Receiver<Job>,
+}
+
 fn serve(
     path: &str,
     host: Host,
     emit: &Emit,
-    jobs: &mpsc::Receiver<Job>,
+    received: &Received,
     closed: &AtomicBool,
     stopped: &AtomicBool,
 ) {
@@ -326,37 +334,41 @@ fn serve(
     #[cfg(any(test, feature = "test-support"))]
     if let Some(guest) = super::fake::claim(path) {
         return match super::fake::start(guest, host) {
-            Ok(frame) => run(frame, jobs, closed, fail),
+            Ok(frame) => run(frame, received, closed, fail),
             Err(error) => fail(error),
         };
     }
     match Page::start(path, host) {
-        Ok(page) => run(page, jobs, closed, fail),
+        Ok(page) => run(page, received, closed, fail),
         Err(error) => fail(error),
     }
 }
 
 fn run(
     mut page: impl Frame,
-    jobs: &mpsc::Receiver<Job>,
+    received: &Received,
     closed: &AtomicBool,
     fail: impl Fn(wasmtime::Error),
 ) {
+    let jobs = &received.jobs;
     loop {
         let wait = page
             .timers()
             .iter()
             .map(|(due, _)| due.saturating_duration_since(Instant::now()))
             .min();
-        let job = match wait {
-            Some(wait) => match jobs.recv_timeout(wait) {
-                Ok(job) => Some(job),
-                Err(mpsc::RecvTimeoutError::Timeout) => None,
-                Err(mpsc::RecvTimeoutError::Disconnected) => return,
-            },
-            None => match jobs.recv() {
-                Ok(job) => Some(job),
-                Err(_) => return,
+        let job = match received.inputs.try_recv() {
+            Ok(input) => Some(Job::Frame(input)),
+            Err(_) => match wait {
+                Some(wait) => match jobs.recv_timeout(wait) {
+                    Ok(job) => Some(job),
+                    Err(mpsc::RecvTimeoutError::Timeout) => None,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                },
+                None => match jobs.recv() {
+                    Ok(job) => Some(job),
+                    Err(_) => return,
+                },
             },
         };
         if closed.load(Ordering::Relaxed) {

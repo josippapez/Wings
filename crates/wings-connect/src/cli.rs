@@ -281,6 +281,14 @@ pub fn wait(args: &[String]) -> i32 {
     if let Err(e) = wait_until_done(busy, std::time::Duration::from_secs(1), START_GRACE) {
         return fail(&e);
     }
+    // A tab's agent, like a Claude chat's, has no screen for read_pane.
+    if last["tab"] == true {
+        println!("The agent in tab {pane} finished its turn.");
+        if let Some(id) = last["sessionId"].as_str() {
+            println!("Read its answer with read_session, session_id {id}.");
+        }
+        return 0;
+    }
     if last["agent"] == true {
         println!("The agent in pane {pane} finished its turn.");
         if let Some(id) = last["sessionId"].as_str() {

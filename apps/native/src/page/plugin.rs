@@ -514,10 +514,26 @@ fn tab_agent(agent: &serde_json::Value) -> Result<TabAgent, String> {
             text => Ok(text.map(str::to_owned).filter(|text| !text.trim().is_empty())),
         }
     };
+    // Other sessions read both in `list_sessions`, so they are checked to be what they say.
+    let session_id = match &agent["sessionId"] {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(id) if (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') => Some(id.clone()),
+        _ => return Err("An agent's sessionId is a Claude Code session id or null".into()),
+    };
+    let account = match agent.get("account") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(account) => match &account["name"] {
+            serde_json::Value::Null => Some(None),
+            serde_json::Value::String(name) if wings_spaces::claude_accounts::valid_name(name) => Some(Some(name.clone())),
+            _ => return Err("An agent's account is { name } with the name of a Claude Code account, or null for the default one".into()),
+        },
+    };
     Ok(TabAgent {
         state: state.to_owned(),
         name: text("name", 80)?.ok_or("An agent needs a name")?,
         summary: text("summary", 200)?,
+        session_id,
+        account,
     })
 }
 
@@ -935,6 +951,41 @@ impl PluginHost {
             let waiting = self.shared.tools.lock().unwrap().waiting.remove(&token);
             if let Some(reply) = waiting {
                 reply.err("The plugin didn't respond".into());
+            }
+        }
+    }
+
+    /// Another agent's `text` for the agent the page of the tab holding `state` runs, like a chat's Claude
+    /// (`send_to_agent`). The page hears `agentMessage` `{ text, submit }` and answers with `toolDone`, so `reply` gets
+    /// `{ text, isError }`, `text` being the page's JSON `{ submitted }`. With `submit`, which only the user's "Let agents
+    /// message each other" gives, the page may make one write to its program in the next few seconds, as a write handed
+    /// on by `tellPage`: a page never starts a turn of its own accord.
+    pub fn send_agent_message(&self, state: &FrameState, text: &str, submit: bool, reply: Reply) {
+        let inbox = state.frame().and_then(|frame| {
+            let frames = self.shared.frames.lock().unwrap();
+            frames.iter().find(|f| f.id == frame).map(|f| (frame, f.inbox.clone()))
+        });
+        let Some((frame, inbox)) = inbox else {
+            return reply.err("The tab's page isn't running".into());
+        };
+        let token = {
+            let mut tools = self.shared.tools.lock().unwrap();
+            tools.last += 1;
+            let token = tools.last;
+            tools.waiting.insert(token, reply);
+            token
+        };
+        if submit {
+            self.shared.grant_write(frame);
+        }
+        let message = serde_json::json!({ "text": text, "submit": submit }).to_string();
+        if inbox.send(Message::AgentMessage, token, message) != Delivery::Queued {
+            if submit {
+                self.shared.take_grant(frame);
+            }
+            let waiting = self.shared.tools.lock().unwrap().waiting.remove(&token);
+            if let Some(reply) = waiting {
+                reply.err("The tab's page didn't get the message".into());
             }
         }
     }

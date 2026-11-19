@@ -375,6 +375,48 @@ pub fn set_agent(agent: Option<(&str, &str, Option<&str>)>) -> Pending<Result<Va
     call("setAgent", json!({ "agent": agent }))
 }
 
+/// What `set_agent_report` tells Wings of the agent a tab's page runs.
+pub struct AgentReport<'a> {
+    /// `working`, `blocked`, `done` or `idle`.
+    pub state: &'a str,
+    pub name: &'a str,
+    /// What it does now, or what it waits for.
+    pub summary: Option<&'a str>,
+    /// The Claude Code session it runs, once it has one.
+    pub session: Option<&'a str>,
+    /// The Claude Code account it runs under, by name, `Some(None)` being the default one; `None` while unknown.
+    pub account: Option<Option<&'a str>>,
+}
+
+/// `set_agent`, with the session and the account, which other Claude Code sessions see in Wings' `list_sessions` and
+/// reach it by with `send_to_agent` (`on_agent_message`). Needs Wings 0.2.54 for those two; an older one lists the agent
+/// in the sidebar without them.
+pub fn set_agent_report(agent: Option<AgentReport>) -> Pending<Result<Value, String>> {
+    let agent = agent.map(|agent| {
+        let mut said = json!({ "state": agent.state, "name": agent.name, "summary": agent.summary, "sessionId": agent.session });
+        if let Some(name) = agent.account {
+            said["account"] = json!({ "name": name });
+        }
+        said
+    });
+    call("setAgent", json!({ "agent": agent }))
+}
+
+/// Hears what another agent sends this tab's agent with Wings' `send_to_agent`: the text, and whether to send it now,
+/// which only the user's "Let agents message each other" setting gives. Then, and only then, Wings lets the page make one
+/// write to its program in the next few seconds, so `listener` sends it right away. `listener` answers whether it sent
+/// it, or why it won't take it, which is what the other agent is told. Needs a page that says it runs an agent
+/// (`set_agent_report`) and Wings 0.2.54.
+pub fn on_agent_message(listener: impl Fn(&str, bool) -> Result<bool, String> + 'static) {
+    on("agentMessage", move |token, message| {
+        let (text, is_error) = match listener(message["text"].as_str().unwrap_or_default(), message["submit"] == true) {
+            Ok(submitted) => (json!({ "submitted": submitted }).to_string(), false),
+            Err(why) => (why, true),
+        };
+        drop(call("toolDone", json!({ "token": token, "text": text, "isError": is_error })));
+    });
+}
+
 /// `wings.setTabTitle`: names the tab this page shows in, as a terminal's tab shows what runs in it: one line of at most
 /// 80 characters, or `None` for its view's title again. Wings 0.2.37.
 pub fn set_tab_title(title: Option<&str>) -> Pending<Result<Value, String>> {
@@ -696,6 +738,12 @@ pub fn open_tab_beside(id: &str, args: &Value) -> Pending<Result<Value, String>>
     call("openView", json!({ "id": id, "as": "tab", "args": args, "newTab": false, "after": "self" }))
 }
 
+/// `open_tab_beside`, always in a new tab, even where a tab of the view has the same `args`, as a second chat of the same
+/// folder does.
+pub fn open_new_tab_beside(id: &str, args: &Value) -> Pending<Result<Value, String>> {
+    call("openView", json!({ "id": id, "as": "tab", "args": args, "newTab": true, "after": "self" }))
+}
+
 /// `wings.setProjectSection`: the rows of the plugin's section `section` under the project `project` in the sidebar, or
 /// none for null to take the section away.
 pub fn set_project_section(project: &str, section: &str, rows: &Value) -> Pending<Result<Value, String>> {
@@ -928,18 +976,36 @@ pub struct AccountChoice {
     pub email: Option<String>,
     /// Whether its config says someone signed in to it. The sign-in may be gone since.
     pub signed_in: bool,
+    /// The account the program asked about in `accounts_under` runs under. Always false from `accounts`, and from a
+    /// Wings older than 0.2.54.
+    pub current: bool,
 }
 
 /// `wings.claudeAccountChoices`: the Claude Code accounts there are, the default one first. Needs the `claudeAccounts`
 /// permission and Wings 0.2.53.
 pub async fn accounts() -> Result<Vec<AccountChoice>, String> {
-    let listed = call("claudeAccountChoices", json!({})).await?;
+    choices(json!({})).await
+}
+
+/// `accounts`, with `current` on the one a program started under `account` in the folder `cwd` runs under, as `spawn_as`
+/// would start it. Needs Wings 0.2.54 for `current`.
+pub async fn accounts_under(account: &Account, cwd: &str) -> Result<Vec<AccountChoice>, String> {
+    choices(json!({ "account": account.0, "cwd": cwd })).await
+}
+
+async fn choices(params: Value) -> Result<Vec<AccountChoice>, String> {
+    let listed = call("claudeAccountChoices", params).await?;
     let text = |value: &Value| value.as_str().map(str::to_owned);
     Ok(listed
         .as_array()
         .into_iter()
         .flatten()
-        .map(|account| AccountChoice { name: text(&account["name"]), email: text(&account["email"]), signed_in: account["signedIn"] == true })
+        .map(|account| AccountChoice {
+            name: text(&account["name"]),
+            email: text(&account["email"]),
+            signed_in: account["signedIn"] == true,
+            current: account["current"] == true,
+        })
         .collect())
 }
 
@@ -1044,7 +1110,7 @@ mod tests {
             _ => Ok(Value::Null),
         });
         let listed = block_on(accounts()).unwrap();
-        assert_eq!(listed[0], AccountChoice { name: None, email: Some("me@home".into()), signed_in: true });
+        assert_eq!(listed[0], AccountChoice { name: None, email: Some("me@home".into()), signed_in: true, current: false });
         assert_eq!(listed[1].name.as_deref(), Some("work"));
     }
 
@@ -1104,6 +1170,29 @@ mod tests {
         });
         let picked = block_on(pick_images(true)).unwrap();
         assert_eq!(picked, [("image/png".to_owned(), "AAAA".to_owned()), ("image/gif".to_owned(), "BBBB".to_owned())]);
+    }
+
+    #[test]
+    fn an_agent_message_is_answered_with_what_the_page_did_and_a_report_says_the_session_and_account() {
+        let calls = record(&[]);
+        on_agent_message(|text, submit| match text {
+            "busy" => Err("Someone typed into the message box".into()),
+            _ => Ok(submit),
+        });
+        deliver("agentMessage", 3, r#"{"text":"hi","submit":true}"#.into());
+        deliver("agentMessage", 4, r#"{"text":"busy","submit":false}"#.into());
+        let report = AgentReport { state: "idle", name: "Fix", summary: None, session: Some("s1"), account: Some(None) };
+        drop(set_agent_report(Some(report)));
+        drop(set_agent_report(Some(AgentReport { state: "idle", name: "Fix", summary: None, session: None, account: None })));
+        assert_eq!(
+            *calls.borrow(),
+            [
+                ("toolDone".to_owned(), json!({ "token": 3, "text": "{\"submitted\":true}", "isError": false })),
+                ("toolDone".to_owned(), json!({ "token": 4, "text": "Someone typed into the message box", "isError": true })),
+                ("setAgent".to_owned(), json!({ "agent": { "state": "idle", "name": "Fix", "summary": null, "sessionId": "s1", "account": { "name": null } } })),
+                ("setAgent".to_owned(), json!({ "agent": { "state": "idle", "name": "Fix", "summary": null, "sessionId": null } })),
+            ]
+        );
     }
 
     #[test]
