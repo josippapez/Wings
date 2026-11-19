@@ -53,13 +53,13 @@ pub fn parse(id: u64, props: &Map<String, Value>) -> Option<Picture> {
 
 impl Picture {
     /// The box to draw a `width` by `height` picture in, in points: the picture scaled down to fit the most the page
-    /// allows (never up), or with `cover` the most itself. `window` is the window's size, which `fit_window` keeps within.
-    pub fn size(&self, width: u32, height: u32, window: Option<(f32, f32)>) -> (f32, f32) {
+    /// allows (never up), or with `cover` the most itself. `room` is what its dialog leaves it (`room_in`), which
+    /// `fit_window` keeps within.
+    pub fn size(&self, width: u32, height: u32, room: Option<(f32, f32)>) -> (f32, f32) {
         let (mut most_w, mut most_h) = (self.max_width, self.max_height);
-        if let (true, Some((window_w, window_h))) = (self.fit_window, window) {
-            // A dialog is 92% of the window wide with 24 points either side, and 90% tall with a title over it.
-            most_w = most_w.min((window_w * 0.92 - 48.0).max(64.0));
-            most_h = most_h.min((window_h * 0.9 - 100.0).max(64.0));
+        if let (true, Some((room_w, room_h))) = (self.fit_window, room) {
+            most_w = most_w.min(room_w.max(64.0));
+            most_h = most_h.min(room_h.max(64.0));
         }
         if self.cover {
             return (most_w, most_h);
@@ -68,6 +68,12 @@ impl Picture {
         let scale = (most_w / width).min(most_h / height).min(1.0);
         ((width * scale).round().max(1.0), (height * scale).round().max(1.0))
     }
+}
+
+/// What a dialog `width` points wide drawn over an `area` (the page's, not the window's, which sidebars share) leaves
+/// what it holds: it is at most 92% of the area wide with 24 points either side, and 90% tall with a title over it.
+pub fn room_in(area: (f32, f32), width: f32) -> (f32, f32) {
+    (width.min(area.0 * 0.92) - 48.0, area.1 * 0.9 - 100.0)
 }
 
 #[cfg(test)]
@@ -125,11 +131,15 @@ mod tests {
     #[test]
     fn a_picture_shown_large_keeps_within_the_window() {
         let large = picture(json!({"src":"i0","maxWidth":1800,"maxHeight":1800,"fitWindow":true})).unwrap();
-        // 1000 x 700: 92% less 48 wide, 90% less 100 tall.
-        let (w, h) = large.size(2000, 1000, Some((1000.0, 700.0)));
+        // A wide dialog over 1000 x 700: 92% less 48 wide, 90% less 100 tall.
+        let room = Some(room_in((1000.0, 700.0), 2000.0));
+        let (w, h) = large.size(2000, 1000, room);
         assert_eq!((w, h), (872.0, 436.0));
-        let (w, h) = large.size(1000, 2000, Some((1000.0, 700.0)));
+        let (w, h) = large.size(1000, 2000, room);
         assert_eq!((w, h), (265.0, 530.0));
+        // A dialog 760 wide holds it to its own width, less its sides, though the area would leave more.
+        let (w, h) = large.size(2000, 1520, Some(room_in((1000.0, 1200.0), 760.0)));
+        assert_eq!((w, h), (712.0, 541.0));
         // Without the window it is as the page said.
         assert_eq!(large.size(2000, 1000, None), (1800.0, 900.0));
     }

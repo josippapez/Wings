@@ -46,7 +46,10 @@ const SIDE_BELOW: u32 = COLUMN + 16 + 2 * (SIDE + 12);
 /// The most subagents the panel lists.
 const SUBAGENTS_LISTED: usize = 12;
 pub fn view() -> Vec<Node> {
-    chat::with(|c| vec![chat_page(c)])
+    chat::with(|c| {
+        crate::refs_view::scan(c);
+        vec![chat_page(c)]
+    })
 }
 
 fn chat_page(c: &Chat) -> Node {
@@ -970,6 +973,7 @@ fn side(c: &Chat) -> Vec<Node> {
     sections.push(limits);
     sections.extend(crate::tasks_view::section(c));
     sections.extend(crate::fork_view::folders(c));
+    sections.extend(crate::refs_view::section(c));
     sections.extend(subagents(c));
     // A stack with nothing in it takes room: leave out the sections that have nothing.
     let sections: Vec<Node> = sections.into_iter().filter(|section| section.count() > 1).collect();

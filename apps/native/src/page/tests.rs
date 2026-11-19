@@ -2485,6 +2485,31 @@ fn a_prompt_rails_hover_shows_a_card_and_a_click_picks_the_prompt() {
     settle(&app, &mut window, |view| view.rail_card(2).is_none());
 }
 
+/// A page of an issue key that shows a card of the issue on hover, over a line elsewhere.
+fn hover_card_page() -> String {
+    fake::page("page", |_| {
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            { "id": 1, "type": "HoverCard", "props": { "width": 240 }, "children": [
+                text(2, 3, "WIN-12".into()),
+                { "id": 4, "type": "Slot", "props": { "name": "card" }, "children": [text(5, 6, "Fix the build".into())] }] },
+            text(7, 8, "Elsewhere".into())] })
+    })
+}
+
+#[test]
+fn a_hover_card_shows_while_the_pointer_is_on_what_it_is_for_and_goes_once_it_leaves() {
+    let (app, mut window) = open(hover_card_page());
+    settle(&app, &mut window, shows("Elsewhere"));
+    window.simulate_mouse_move(point(px(400.0), px(280.0)));
+    settle(&app, &mut window, |view| !view.hover_card_shown(1));
+    window.simulate_mouse_move(point(px(10.0), px(8.0)));
+    settle(&app, &mut window, |view| view.hover_card_shown(1));
+    // The page never hears of it.
+    assert!(!window.read(|view, _| view.acted()));
+    window.simulate_mouse_move(point(px(400.0), px(280.0)));
+    settle(&app, &mut window, |view| !view.hover_card_shown(1));
+}
+
 /// A page of one `Code` node.
 fn code_page(language: &'static str, code: &'static str) -> String {
     fake::page("page", move |_| {

@@ -15,7 +15,7 @@ pub mod prompt_rail;
 mod sunburst;
 mod svg;
 pub use code::Code;
-pub use picture::{Picture, valid_id as valid_image_id};
+pub use picture::{Picture, room_in as picture_room, valid_id as valid_image_id};
 pub use prompt_rail::PromptRail;
 pub use sunburst::{Geometry, Hit, Sunburst, Wedge};
 pub use svg::Svg;
@@ -186,6 +186,7 @@ pub enum Node {
     PromptRail(PromptRail),
     Dialog(Dialog),
     Sheet(Sheet),
+    HoverCard(HoverCard),
     Terminal(Terminal),
     Code(Code),
 }
@@ -565,6 +566,17 @@ pub struct ListItem {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct HoverCard {
+    pub id: u64,
+    /// What the pointer rests on, drawn where the node sits.
+    pub children: Vec<Node>,
+    /// The `card` slot: what the card over the page shows while the pointer is on the children or on it.
+    pub card: Vec<Node>,
+    /// `width`: how wide the card is, in points (300 by default, from 160 to 480).
+    pub width: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Disclosure {
     pub id: u64,
     pub open: Option<bool>,
@@ -901,6 +913,7 @@ impl Node {
             Node::List(n) => Some(n.id),
             Node::ListItem(n) => Some(n.id),
             Node::Disclosure(n) => Some(n.id),
+            Node::HoverCard(n) => Some(n.id),
             Node::Select(n) => Some(n.id),
             Node::Chips(n) => Some(n.id),
             Node::Combobox(n) => Some(n.id),
@@ -974,6 +987,7 @@ impl Node {
             Node::List(n) => vec![&n.children],
             Node::ListItem(n) => vec![&n.children, &n.actions],
             Node::Disclosure(n) => vec![&n.summary, &n.body],
+            Node::HoverCard(n) => vec![&n.children, &n.card],
             Node::Combobox(n) => vec![&n.field, &n.options, &n.empty],
             Node::Menu(n) => vec![&n.trigger, &n.items],
             Node::Sheet(n) => vec![&n.title, &n.description, &n.header, &n.body],
@@ -1045,6 +1059,7 @@ impl Walk {
                 | "List"
                 | "ListItem"
                 | "Disclosure"
+                | "HoverCard"
                 | "Select"
                 | "Chips"
                 | "ListButton"
@@ -1375,6 +1390,16 @@ impl Walk {
                     id,
                     children: parts(slots.0),
                     actions,
+                })
+            }
+            "HoverCard" => {
+                let mut slots = Slots(children);
+                let card = slots.take("card");
+                Node::HoverCard(HoverCard {
+                    id,
+                    card,
+                    children: parts(slots.0),
+                    width: number(&props, "width").map_or(300.0, |width| width.clamp(160.0, 480.0) as f32),
                 })
             }
             "Disclosure" => {

@@ -30,6 +30,8 @@ mod rich_view;
 mod sheet_view;
 #[path = "prompt_rail_view.rs"]
 mod prompt_rail_view;
+#[path = "hover_card_view.rs"]
+mod hover_card_view;
 #[path = "sunburst_view.rs"]
 mod sunburst_view;
 
@@ -80,6 +82,8 @@ thread_local! {
     static TEXT_SCALE: Cell<f32> = const { Cell::new(1.0) };
     /// A `Stack` being drawn asked for links in its texts (`links: true`).
     static LINKED: Cell<bool> = const { Cell::new(false) };
+    /// What the `Dialog` being drawn leaves what it holds, for a picture that keeps within it (`fitWindow`).
+    static DIALOG_ROOM: Cell<Option<(f32, f32)>> = const { Cell::new(None) };
 }
 
 /// A text size in points as the `Scroll` being drawn scales it.
@@ -199,9 +203,13 @@ pub struct PageView {
     graphs: RefCell<HashMap<u64, graph_view::GraphState>>,
     sunbursts: RefCell<HashMap<u64, sunburst_view::SunburstState>>,
     prompt_rails: RefCell<HashMap<u64, prompt_rail_view::RailState>>,
+    /// Each `HoverCard`'s place and whether its card shows, by node id.
+    hover_cards: RefCell<HashMap<u64, hover_card_view::HoverState>>,
     /// The window's size and scale when the page was last drawn, which a picture sizes itself by, and the pictures
     /// still being decoded, by node id.
     viewport: Cell<(f32, f32, f32)>,
+    /// The size of the page's area a `Dialog` covers, as last drawn: less than the window's where sidebars share it.
+    dialog_area: Cell<Option<(f32, f32)>>,
     images_waiting: RefCell<HashSet<u64>>,
     chip_focus: RefCell<HashMap<(u64, String), gpui::FocusHandle>>,
     /// What the page last threw, shown under it until it renders again.
@@ -324,6 +332,7 @@ impl PageView {
         self.graphs.borrow_mut().clear();
         self.sunbursts.borrow_mut().clear();
         self.prompt_rails.borrow_mut().clear();
+        self.hover_cards.borrow_mut().clear();
         self.chip_focus.borrow_mut().clear();
         self.actions_focus.borrow_mut().clear();
         self.actions_within.clear();
@@ -448,6 +457,9 @@ impl PageView {
                                         Node::PromptRail(rail) => {
                                             ids.insert(rail.id);
                                         }
+                                        Node::HoverCard(card) => {
+                                            ids.insert(card.id);
+                                        }
                                         Node::Chips(chips) => {
                                             ids.insert(chips.id);
                                         }
@@ -475,6 +487,7 @@ impl PageView {
                             view.graphs.borrow_mut().retain(|id, _| ids.contains(id));
                             view.sunbursts.borrow_mut().retain(|id, _| ids.contains(id));
                             view.prompt_rails.borrow_mut().retain(|id, _| ids.contains(id));
+                            view.hover_cards.borrow_mut().retain(|id, _| ids.contains(id));
                             view.chip_focus
                                 .borrow_mut()
                                 .retain(|(id, _), _| ids.contains(id));
@@ -523,7 +536,9 @@ impl PageView {
             graphs: RefCell::new(HashMap::new()),
             sunbursts: RefCell::new(HashMap::new()),
             prompt_rails: RefCell::new(HashMap::new()),
+            hover_cards: RefCell::default(),
             viewport: Cell::new((0.0, 0.0, 1.0)),
+            dialog_area: Cell::new(None),
             images_waiting: RefCell::default(),
             chip_focus: RefCell::new(HashMap::new()),
             error,
@@ -1808,6 +1823,7 @@ impl PageView {
             Node::List(list) => ui::list(self.nodes(&list.children, cx)).into_any_element(),
             Node::ListItem(item) => self.list_item(item, cx),
             Node::Disclosure(disclosure) => self.disclosure(disclosure, cx),
+            Node::HoverCard(card) => self.hover_card(card, cx),
             Node::Select(select) => self.select(select, cx),
             Node::Combobox(combobox) => self.combobox(combobox, cx),
             Node::Menu(menu) => self.menu(menu, cx),
@@ -2192,9 +2208,28 @@ impl PageView {
             .px(px(24.0))
             .pt(px(4.0))
             .pb(px(24.0))
-            .overflow_y_scroll()
-            .children(self.nodes(&dialog.children, cx));
+            .overflow_y_scroll();
+        let (window_w, window_h, _) = self.viewport.get();
+        let area = self.dialog_area.get().unwrap_or((window_w, window_h));
+        let room = DIALOG_ROOM.with(|cell| cell.replace(Some(tree::picture_room(area, dialog.width))));
+        let body = body.children(self.nodes(&dialog.children, cx));
+        DIALOG_ROOM.with(|cell| cell.set(room));
+        let entity = cx.entity();
+        let measure = canvas(
+            move |bounds, _, cx| {
+                let area = Some((f32::from(bounds.size.width), f32::from(bounds.size.height)));
+                entity.update(cx, |view, cx| {
+                    if view.dialog_area.replace(area) != area {
+                        cx.notify();
+                    }
+                });
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full();
         backdrop
+            .child(measure)
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(move |view, _, _, _| {

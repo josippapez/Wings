@@ -8,7 +8,8 @@ use gpui::{ObjectFit, StyledImage, img};
 impl PageView {
     pub(super) fn picture(&self, picture: &tree::Picture, cx: &mut Context<Self>) -> AnyElement {
         let (window_w, window_h, scale) = self.viewport.get();
-        let window = (window_w > 0.0).then_some((window_w, window_h));
+        // In a dialog, what it leaves; elsewhere, what a wide dialog over the whole window would.
+        let window = DIALOG_ROOM.with(Cell::get).or_else(|| (window_w > 0.0).then(|| tree::picture_room((window_w, window_h), f32::INFINITY)));
         // The pixels it needs on its longest side: its box's, as a screen of this density has them.
         let level = (picture.max_width.max(picture.max_height) * scale.max(1.0)).ceil() as u32;
         // A render that finds it still decoding doesn't ask to be woken again: the first one's wake is enough.

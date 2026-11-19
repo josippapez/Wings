@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.50 · 2026-11-19
+
+- **Claude chat lists the pull requests and issues a conversation mentions** in its side panel, newest first. Hover one for a card with its title, status, author, branch, checks and review, and click a pull request to open it in the browser. Issues come from Wings Issues, GitHub pull requests from `gh` and Azure DevOps ones from `az`, so Wings asks you to approve that access once.
+- **A large picture in Claude chat fits its viewer** instead of being cut off when a sidebar is open.
+
 ## 0.2.49 · 2026-11-19
 
 - **Claude chat's prompt rail stops above the message box** instead of running down beside it.

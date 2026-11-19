@@ -786,6 +786,14 @@ case "$1" in edit-*) cat >/dev/null; if [ -f "$CHAT_ANSWERS/$1" ]; then cat "$CH
 cat "$CHAT_FIXTURE"; if [ -n "$CHAT_EXIT" ]; then echo "$CHAT_STDERR" >&2; exit "$CHAT_EXIT"; fi
 while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ] && case "$line" in *"\"subtype\":\"${answer##*/}\""*) cat "$answer";; esac; done; done"##,
     );
+    // `gh pr view <url> --json ...` is how the side panel reads a pull request the conversation names: made-up ones.
+    script(
+        bin.join("gh"),
+        r##"case "$3" in
+*/pull/42) echo '{"title":"Round the discount in cents","state":"OPEN","isDraft":false,"author":{"login":"ana"},"headRefName":"fix/discount","baseRefName":"main","reviewDecision":"REVIEW_REQUIRED","additions":12,"deletions":3,"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"},{"status":"COMPLETED","conclusion":"FAILURE"},{"status":"IN_PROGRESS","conclusion":""}]}';;
+*) echo '{"title":"Checkout: one test for the rounding","state":"MERGED","isDraft":false,"author":{"login":"ivo"},"headRefName":"test/rounding","baseRefName":"main","reviewDecision":"APPROVED","additions":40,"deletions":0,"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"}]}';;
+esac"##,
+    );
     // Wings finds programs on the login shell's PATH, so the scene's shell names the fake's folder.
     script(root.join("shell"), &format!("printf '__WINGS_PATH__{}__WINGS_PATH__'", bin.display()));
     // SAFETY: set before anything in this process reads the environment from another thread.
@@ -1313,9 +1321,18 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         opened(lines)
     };
     let older = vec!["scroll:up"; 12].join(";");
-    let scenes: [Scene; 71] = [
+    // A conversation that names two pull requests, which the side panel lists with a card of each.
+    let mentioned = opened(vec![
+        init.clone(),
+        user("Review https://github.com/acme/shop/pull/42 before we merge it."),
+        text("It rounds the discount in cents now, and one check fails. The test for it went in with https://github.com/acme/shop/pull/37."),
+    ]);
+    let scenes: [Scene; 73] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         // Scrolled up past what the page has room for: older steps come in, the newest go, and a button goes back to them.
+        ("mentioned", mentioned.clone(), None, None, "Mentioned"),
+        // The pointer on a pull request's row shows its card.
+        ("mentioned-card", mentioned, None, Some("hover:800,267"), "Mentioned"),
         ("long-older", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, Some(older.as_str()), "Jump to the latest"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),

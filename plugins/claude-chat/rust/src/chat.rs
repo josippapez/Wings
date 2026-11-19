@@ -93,6 +93,8 @@ pub struct Chat {
     pub shown: usize,
     /// Where the items shown end while you read an older part of a session too long to show whole, none at the newest.
     pub until: Option<usize>,
+    /// The pull requests and issues the conversation names, for the side panel.
+    pub refs: crate::refs::Refs,
     /// The name of the folder Claude Code runs in.
     pub folder: String,
     pub state: State,
@@ -175,6 +177,7 @@ thread_local! {
         images: Vec::new(),
         shown: PAGE,
         until: None,
+        refs: crate::refs::Refs::default(),
         folder: String::new(),
         state: State::Starting,
         past: None,
