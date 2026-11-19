@@ -1398,22 +1398,26 @@ esac"##,
     ]);
     // Right-clicked on the link: the chat's own rows and the one a mod adds.
     let mods_menu = mods.clone();
-    // The same sessions, with the session sidebar beside them (the scenes after the chat's).
+    // The same sessions in Wings' sidebar, with the setting that moves the panel there (the scenes after the chat's).
     let (tasks_side, subagents_side, mentioned_side, mods_side, finished_side, built_side, agent_side) =
         (tasks.clone(), subagents.clone(), mentioned.clone(), mods.clone(), finished_panel.clone(), built.clone(), agent.clone());
+    let (tasks_open_side, worked_again_side) = (tasks_open.clone(), worked_again.clone());
     let fresh: Vec<serde_json::Value> = ready.to_vec();
-    let scenes: [Scene; 75] = [
+    let scenes: [Scene; 84] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         // A click on the first prompt's tick on the rail of the long session, timed.
         ("long-rail", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, Some("rail:0"), "Step 0 passes"),
         // The same click while Claude Code streams a reply.
         ("long-rail-streaming", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, Some("rail:0"), "Step 0 passes"),
         // Scrolled up past what the page has room for: older steps come in, the newest go, and a button goes back to them.
-        // The rows a mod draws stay inside the conversation's column.
-        ("mods", mods.clone(), None, Some("disclose:Ran 1 command · Used 1 tool"), "deploy pane"),
-        ("mods-theme", mods.clone(), None, None, "deploy pane"),
+        ("mods", mods.clone(), None, Some("disclose:Ran 1 command · Used 1 tool"), "Panes"),
+        ("mods-theme", mods.clone(), None, None, "Panes"),
+        // The side panel put away: the rows a mod draws stay inside the conversation's column.
+        ("mods-noside", mods.clone(), None, Some("press:Side panel;disclose:Ran 1 command · Used 1 tool"), "deploy pane"),
         ("mods-menu", mods_menu, None, Some("rightclick:140,130"), "Summarize this page"),
-        ("mentioned", mentioned, None, None, "one check fails"),
+        ("mentioned", mentioned.clone(), None, None, "Mentioned"),
+        // The pointer on a pull request's row shows its card.
+        ("mentioned-card", mentioned, None, Some("hover:800,267"), "Mentioned"),
         ("long-older", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, Some(older.as_str()), "Jump to the latest"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -1421,10 +1425,13 @@ esac"##,
         ("new", opened(vec![init.clone()]), None, None, "What should Claude do?"),
         // The header's account button, open: the accounts with the one in use checked.
         ("accounts", opened(vec![init.clone()]), None, Some("menu:Claude account"), "What should Claude do?"),
+        // Remote Control on: the lit button by the model menu, and its menu open.
+        ("remote", opened(vec![init.clone(), answer("remote-control", json!({ "session_url": "https://claude.ai/code/session_01", "bridge_session_id": "b1" }))]), None, None, "Remote"),
+        ("remote-menu", opened(vec![init.clone(), answer("remote-control", json!({ "session_url": "https://claude.ai/code/session_01", "bridge_session_id": "b1" }))]), None, Some("menu:Remote Control"), "Remote"),
         // The model and effort menu open over the message box.
-        ("models", opened(vec![init.clone()]), None, Some("select:Model and effort"), "resets"),
+        ("models", opened(vec![init.clone()]), None, Some("select:Model and effort"), "What should Claude do?"),
         // A model with fast mode has its button by the model menu, and the output styles have a menu of their own.
-        ("models-fast", fast, None, None, "resets"),
+        ("models-fast", fast, None, None, "What should Claude do?"),
         // Up twice from the empty box recalls the second newest of the prompts sent.
         ("recall", recalled, None, Some("keys:up;keys:up"), "Now bump the version."),
         ("slash", opened(vec![init.clone()]), None, Some("type:/re;keys:down"), "/review"),
@@ -1464,8 +1471,10 @@ esac"##,
         ("subagents", subagents, None, None, "Waiting on 2 subagents"),
         // The prompt rail: a mark for each message, the one in view lit, and a tooltip on the one the pointer is over.
         ("prompt-rail", railed, None, Some("hover:14,130"), "Write the release notes"),
-        // The session sidebar lists the background tasks that run (the `session-sidebar` scene).
-        ("tasks", tasks, None, None, "Both run in the background"),
+        // The side panel shows by default, and lists the background tasks that run, each with how long it has and Stop.
+        ("tasks", tasks.clone(), None, None, "Background tasks"),
+        // A click on one opens the end of what it printed in a dialog.
+        ("task-output", tasks, None, Some("row:Watch the test suite"), "Waiting for file changes"),
         // The Rewind button beside your first message opens its dialog, with the files restoring the code writes back.
         ("rewind", rewound, None, Some("press:Rewind"), "src/checkout.ts"),
         // /hooks, /memory and /permissions open their dialog over the chat, filled by the reads the Enter sends.
@@ -1509,6 +1518,8 @@ esac"##,
         ("read-ts", read_ts, None, None, "Show 5 more lines"),
         // Issue keys Issues knows and a dev server's address are links; UTF-8 and a key never filed aren't.
         ("links", linked, None, None, "never filed"),
+        // The terminal Claude opened, live in the side panel with what it runs and buttons to open it as a tab and close it.
+        ("terminal", built, None, None, "beside the chat"),
         // The button beside your message forks before it, and asks first what that does.
         ("fork-from", rewound_again, None, Some("press:Fork from here"), "Start a new chat from this session"),
         // The header's Fork asks first, and says what a fork is.
@@ -1523,12 +1534,17 @@ esac"##,
         ("mcp-actions", signed_out.clone(), None, Some("type:/mcp;keys:enter"), "Reconnect"),
         // Sign in has Claude Code start it, and its answer is the page to open: the site is shown before the button opens it.
         ("mcp-sign-in", signed_out, None, Some("type:/mcp;keys:enter;press:Sign in"), "Open sign-in page"),
+        // The header's Side panel button turns the panel off, at any width, and the conversation has the room.
+        ("panel-off", tasks_open, None, Some("press:Side panel"), "Both run in the background"),
+        // /add-dir restarts the chat with the folder, which the side panel lists with a Remove.
+        ("folder", worked_again, None, Some(add_dir.as_str()), "Folders"),
         ("elicitation", elicited, None, None, "Pick a flavour and how many scoops"),
         ("run-background", running, None, None, "Run in background"),
+        ("agent-message", agent, None, Some("press:Message"), "SendMessage tool"),
         // The agent and the command that ended each leave a line, the agent's report folded under its own.
         ("tasks-finished", finished, None, None, "Command “Run the tests” failed"),
-        // The session sidebar lists them as done (the `session-sidebar-done` scene).
-        ("tasks-done", finished_panel, None, None, "the tests fail on it"),
+        // The side panel lists them as done, the agent under Subagents and the command under Background tasks.
+        ("tasks-done", finished_panel, None, None, "Background tasks · 1 done"),
     ];
     // Files for @-mentions, which the chat lists with git.
     for file in ["src/checkout.ts", "src/checkout.test.ts", "src/cart.ts", "api/limits.ts", "README.md"] {
@@ -1570,6 +1586,8 @@ esac"##,
     let detailed = host_over("fixture-storage-claude-chat-detailed", &[("detailed-output", json!(true))]);
     // Large text: the conversation's text a fifth bigger.
     let large = host_over("fixture-storage-claude-chat-large", &[("text-size", json!("large"))]);
+    // The session panel in Wings' sidebar, as the Settings page moves it there.
+    let side_host = host_over("fixture-storage-claude-chat-sidebar", &[("session-panel", json!("sidebar"))]);
     let page = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/claude-chat/dist/native/chat.wasm");
     let page = page.canonicalize().expect("sh build-rust.sh claude-chat, in plugins/");
     // Compiled before the first scene waits on it: on a busy Mac a debug build's compile ran past the scene's wait.
@@ -1729,15 +1747,45 @@ esac"##,
             std::env::set_var("CHAT_EXIT", exit.map_or("", |(code, _)| code));
             std::env::set_var("CHAT_STDERR", exit.map_or("", |(_, said)| said));
         }
-        // The conversation has the whole tab, so a wide tab only centres it: a few scenes are drawn at 1,600 too.
-        let widths: &[f32] = if ["conversation", "work", "long-message"].contains(&name) { &[1600.0, 1000.0, 640.0] } else { &[1000.0, 640.0] };
+        // The side panel shows by default and floats over a tab's right side, beside the conversation while the tab is wide
+        // enough to leave it clear (1,480 points) and over it in a narrower one, so a few scenes are drawn at 1,600 too and at
+        // 1,280 just under it.
+        let widths: &[f32] = if ["conversation", "work", "ask-bash", "tasks", "terminal", "folder", "long-message", "subagents", "subagent"].contains(&name) {
+            &[1600.0, 1280.0, 1000.0, 640.0]
+        } else {
+            &[1000.0, 640.0]
+        };
         for &width in widths {
+            // The shell of the terminal the workspace draws over the page, opened before the page so the fake `claude` the
+            // page starts is found under the scene's own shell.
+            let shot_terminal = (name == "terminal").then(|| {
+                let printed = b"$ make all\r\n  Compiling shop v0.4.0 (/work/shop)\r\n  Compiling checkout v0.4.0\r\n  Compiling cart v0.4.0\r\n    Building [=========>       ] 41/63: cart\r\n".to_vec();
+                // SAFETY: nothing else reads the environment while the shell starts.
+                unsafe { std::env::set_var("SHELL", "/bin/sh") };
+                let terminal = cx.update(|cx| wings_native::terminal_view::TerminalView::open(root.clone(), printed, None, cx).unwrap());
+                unsafe { std::env::set_var("SHELL", root.join("shell")) };
+                terminal
+            });
             let args = matches!(name, "long" | "long-older" | "long-rail" | "long-rail-streaming").then(|| json!({ "resume": LONG, "cwd": root.canonicalize().unwrap() }));
             let handle = cx
                 .open_offscreen_window(size(px(width), px(760.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, &source, args.as_ref(), cx)))
                 .unwrap();
             let window = handle.into();
             handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
+            if let Some(terminal) = shot_terminal {
+                // What the workspace does over the page: it hands the tab the terminal its agent opened, and draws it there,
+                // here over made-up output of a build, in a shell of its own rather than the scene's fake one.
+                handle
+                    .update(&mut cx, |view, _, cx| {
+                        let listed = json!([{ "paneId": "1", "title": "make all", "running": true }]).to_string();
+                        view.set_terminals(vec![1], listed, cx);
+                        view.draw_terminals_for_shots(move |_| {
+                            let card = wings_native::page::terminal_card(1, "make all".into(), true, terminal.clone(), |_, _| {}, |_, _| {});
+                            vec![(wings_native::page::terminal_slot(1), card)]
+                        });
+                    })
+                    .unwrap();
+            }
             let until = |cx: &mut VisualTestAppContext, expected: &str| {
                 let deadline = Instant::now() + Duration::from_secs(30);
                 while !handle.read_with(cx, |view, _| view.text().contains(expected)).unwrap() {
@@ -1838,13 +1886,13 @@ esac"##,
         // The agent under Subagents and the command under Background tasks, both done.
         ("session-sidebar-done", finished_side, None, "Background tasks · 1 done", None, None),
         // /add-dir restarts the chat with the folder, which the sidebar lists with a Remove.
-        ("session-sidebar-folder", worked_again, Some(add_dir.as_str()), "Folders", None, None),
+        ("session-sidebar-folder", worked_again_side, Some(add_dir.as_str()), "Folders", None, None),
         // The terminal Claude opened, live in the sidebar with what it runs and buttons to open it as a tab and close it.
         ("session-sidebar-terminal", built_side, None, "5-hour", None, None),
         // A click on a task opens the end of what it printed in a dialog over the chat.
-        ("task-output", tasks_open, None, "Background tasks", Some("row:Watch the test suite"), Some("Waiting for file changes")),
+        ("session-sidebar-task-output", tasks_open_side, None, "Background tasks", Some("row:Watch the test suite"), Some("Waiting for file changes")),
         // A background agent's Message opens the chat's dialog to write to it.
-        ("agent-message", agent_side, None, "Background tasks", Some("press:Message"), Some("SendMessage tool")),
+        ("session-sidebar-agent-message", agent_side, None, "Background tasks", Some("press:Message"), Some("SendMessage tool")),
     ];
     let side_scenes: Vec<SideScene> = side_scenes.into_iter().filter(|scene| only.as_deref().is_none_or(|only| only.split(',').any(|one| one == scene.0))).collect();
     if !side_scenes.is_empty() {
@@ -1878,7 +1926,7 @@ esac"##,
                 terminal
             });
             // The sidebar first, so it has its name when the chat asks it to follow.
-            let side = cx.open_offscreen_window(size(px(420.0), px(760.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, &side_source, None, cx))).unwrap();
+            let side = cx.open_offscreen_window(size(px(420.0), px(760.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&side_host, &side_source, None, cx))).unwrap();
             side.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
             let side_window: AnyWindowHandle = side.into();
             let until = |cx: &mut VisualTestAppContext, handle: gpui::WindowHandle<PageView>, expected: &str| {
@@ -1894,7 +1942,7 @@ esac"##,
                 save(&mut cx, side_window, out.join("claude-chat-session-sidebar-empty-420.png"));
                 idle_saved = true;
             }
-            let chat = cx.open_offscreen_window(size(px(1000.0), px(760.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, &source, None, cx))).unwrap();
+            let chat = cx.open_offscreen_window(size(px(1000.0), px(760.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&side_host, &source, None, cx))).unwrap();
             chat.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
             let chat_window: AnyWindowHandle = chat.into();
             if let Some(terminal) = shot_terminal {

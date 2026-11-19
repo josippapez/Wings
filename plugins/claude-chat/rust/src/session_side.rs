@@ -8,6 +8,9 @@
 //! (`ui::export`). The sidebar draws that JSON (`ui::import`) and hands each click back to the chat with your click, so it
 //! runs there as a click in the chat would: a task's dialog opens over the chat, Stop writes to its Claude Code.
 //!
+//! This is one of the two places the panel can be (`prefs::session_panel`): the other is a card over the chat's right
+//! side (`view::side`), which is the default. While it is there, none of this runs.
+//!
 //! The sidebar takes the name `session-side` while it follows no chat, and `session-side:<session>` while it shows that
 //! session's chat. A chat tab that comes to the front (Wings tells a tab's page it is shown with its focus) asks the
 //! sidebar to follow it, so with several chats open the sidebar shows the one you look at.
@@ -26,8 +29,6 @@ use crate::{chat, prefs, subagents};
 pub const SIDEBAR: &str = "session";
 /// The name the sidebar takes while it follows no chat, and the start of the names it takes for one.
 pub const IDLE: &str = "session-side";
-/// How tall each terminal Claude opened is in the sidebar.
-const TERMINAL_HEIGHT: u32 = 220;
 
 /// The name the sidebar takes while it shows `session`'s chat.
 pub fn page_name(session: &str) -> String {
@@ -43,6 +44,11 @@ fn sidebar_of(names: &[String]) -> Option<&str> {
 /// to say so.
 pub fn show_message(session: Option<&str>) -> Value {
     json!({ "kind": "session-show", "session": session })
+}
+
+/// What a subagent's sidebar tells the chat to have the session back in the sidebar.
+pub fn reopen_message() -> Value {
+    json!({ "kind": "session-reopen" })
 }
 
 // ---------- the chat's side ----------
@@ -109,8 +115,16 @@ fn focused(focused: bool) {
     }
 }
 
+/// Whether the panel is in Wings' sidebar, as you set for every chat.
+fn in_wings() -> bool {
+    chat::with(|c| c.side_in_wings)
+}
+
 /// Has the sidebar follow this chat. The first time, with your setting on, it opens it too.
 fn claim() {
+    if !in_wings() {
+        return;
+    }
     let (session, on) = chat::with(|c| (c.session.id.clone(), c.side_open));
     let open = RELAY.with(|relay| {
         let mut relay = relay.borrow_mut();
@@ -153,25 +167,62 @@ pub fn shown() -> bool {
     RELAY.with(|relay| relay.borrow().open)
 }
 
-/// The header's button: opens the sidebar on this chat, or closes it, and keeps the choice for every chat as the one
-/// that opens the sidebar with a chat.
+/// The header's button: opens the sidebar on this chat unless it is the sidebar on screen, in which case it closes it, and
+/// keeps the choice for every chat as the one that opens the sidebar with a chat.
 pub fn toggle() {
     let open = !shown();
     chat::with(|c| c.side_open = open);
     drop(prefs::side_panel().set(open));
     if open {
-        RELAY.with(|relay| relay.borrow_mut().opened = true);
-        let session = chat::with(|c| c.session.id.clone());
-        RELAY.with(|relay| {
-            let mut relay = relay.borrow_mut();
-            relay.show = Some(show_message(session.as_deref()));
-            relay.wanted = Some(session);
-            relay.open = true;
-        });
-        drop(host::open_view_with(SIDEBAR, "sidebar", &Value::Null));
-        send_show();
+        open_here();
     } else {
         RELAY.with(|relay| relay.borrow_mut().open = false);
+        drop(host::call("closeView", json!({ "id": SIDEBAR })));
+    }
+}
+
+/// Opens the sidebar on this chat, where another sidebar may have taken its place. Wings leaves one already on screen be.
+fn open_here() {
+    let session = chat::with(|c| c.session.id.clone());
+    RELAY.with(|relay| {
+        let mut relay = relay.borrow_mut();
+        relay.opened = true;
+        relay.show = Some(show_message(session.as_deref()));
+        relay.wanted = Some(session);
+        relay.open = true;
+    });
+    drop(host::open_view_with(SIDEBAR, "sidebar", &Value::Null));
+    send_show();
+}
+
+/// This chat opened another sidebar (a subagent's, a plugin's pane), which takes the session's place in a lone sidebar:
+/// the button is then to bring the session back, not to close what is gone. Wings tells the sidebar's page it isn't shown
+/// too, but that comes after, and not when the other sidebar joins it as a split.
+pub fn covered() {
+    if in_wings() {
+        RELAY.with(|relay| relay.borrow_mut().open = false);
+    }
+}
+
+/// The setting moved the panel: into Wings' sidebar, where a chat in front opens it as one does when it starts; or into the
+/// chat, where the sidebar this chat had open is closed and nothing is published to it.
+pub fn moved(sidebar: bool) {
+    if sidebar {
+        RELAY.with(|relay| relay.borrow_mut().opened = false);
+        if host::focused() {
+            claim();
+        }
+        return;
+    }
+    let open = RELAY.with(|relay| {
+        let mut relay = relay.borrow_mut();
+        relay.wanted = None;
+        relay.show = None;
+        relay.told = None;
+        relay.opened = false;
+        std::mem::take(&mut relay.open)
+    });
+    if open {
         drop(host::call("closeView", json!({ "id": SIDEBAR })));
     }
 }
@@ -180,6 +231,9 @@ pub fn toggle() {
 /// with the handlers their clicks run, and the terminals Claude opened. Called as the chat's page is built, so it goes
 /// with every change; it is sent only when it changed.
 pub fn publish(c: &chat::Chat) {
+    if !c.side_in_wings {
+        return;
+    }
     let Some(session) = c.session.id.as_deref() else {
         return;
     };
@@ -187,7 +241,7 @@ pub fn publish(c: &chat::Chat) {
     if !RELAY.with(|relay| relay.borrow().names.contains(&name)) {
         return;
     }
-    let (sections, handlers) = ui::export(crate::view::side(c));
+    let (sections, handlers) = ui::export(crate::view::side_sections(c, false));
     HANDLERS.with(|slot| *slot.borrow_mut() = Rc::new(handlers));
     let message = state_message(c, sections);
     let changed = RELAY.with(|relay| {
@@ -218,6 +272,13 @@ fn told(message: &Value, from: Option<&str>, _write: bool) {
     let Some(session) = chat::with(|c| c.session.id.clone()) else {
         return;
     };
+    // A subagent's sidebar asks for the session back; it isn't the session sidebar, so it comes before the check below.
+    if message["kind"] == "session-reopen" {
+        if in_wings() {
+            open_here();
+        }
+        return;
+    }
     if from != Some(page_name(&session).as_str()) {
         return;
     }
@@ -384,7 +445,7 @@ fn body(side: &Side) -> Node {
                 .flatten()
                 .filter_map(Value::as_str)
                 .filter(|pane| side.terminals.iter().any(|shown| shown == pane))
-                .map(|pane| Node::new("Terminal").prop("pane", pane).prop("height", TERMINAL_HEIGHT).key(format!("terminal-{pane}")))
+                .map(|pane| Node::new("Terminal").prop("pane", pane).prop("height", crate::view::TERMINAL_HEIGHT).key(format!("terminal-{pane}")))
                 .collect();
             let shown: Vec<Node> = if sections.is_empty() && terminals.is_empty() {
                 vec![empty("Nothing yet", "What Claude changes, runs and starts in this chat shows here.")]
@@ -418,6 +479,7 @@ mod tests {
     /// A chat whose session `s1` changed the working tree and has its context measured.
     fn chat_with_changes() {
         chat::with(|c| {
+            c.side_in_wings = true;
             c.session.id = Some("s1".into());
             c.folder = "shop".into();
             c.branch = Some("main".into());
@@ -461,6 +523,7 @@ mod tests {
     fn a_new_chat_has_the_sidebar_follow_it_once_its_session_starts() {
         let calls = record();
         names_changed(&[IDLE.to_owned()]);
+        chat::with(|c| c.side_in_wings = true);
         focused(true);
         chat::with(|c| c.session.id = Some("s2".into()));
         sync();
@@ -521,6 +584,84 @@ mod tests {
         assert!(!chat::with(|c| c.side_open), "your choice for every chat");
     }
 
+    #[test]
+    fn after_a_subagents_sidebar_took_its_place_the_button_brings_the_session_sidebar_back() {
+        let calls = record();
+        chat_with_changes();
+        names_changed(&[IDLE.to_owned()]);
+        toggle();
+        assert!(shown());
+        // The chat opens a subagent in the sidebar, which replaces the session's.
+        covered();
+        assert!(!shown(), "the button offers to show it");
+        toggle();
+        assert!(shown());
+        assert_eq!(called(&calls, "openView").len(), 2, "opened again");
+        assert!(called(&calls, "closeView").is_empty(), "not closed as if it were on screen");
+        assert!(chat::with(|c| c.side_open));
+        // Now it is the one on screen, and the button closes it.
+        toggle();
+        assert_eq!(called(&calls, "closeView"), [json!({ "id": "session" })]);
+    }
+
+    #[test]
+    fn the_sidebar_that_replaced_it_reports_the_session_sidebar_away_and_the_button_opens_it() {
+        let calls = record();
+        chat_with_changes();
+        told(&json!({ "kind": "session-open", "open": true }), Some(&page_name("s1")), false);
+        assert!(shown());
+        told(&json!({ "kind": "session-open", "open": false }), Some(&page_name("s1")), false);
+        assert!(!shown());
+        toggle();
+        assert_eq!(called(&calls, "openView").len(), 1);
+    }
+
+    #[test]
+    fn a_subagent_sidebars_session_button_has_the_chat_open_the_session_sidebar() {
+        let calls = record();
+        chat_with_changes();
+        told(&reopen_message(), Some("subagent-side:s1:a1"), false);
+        assert_eq!(called(&calls, "openView"), [json!({ "id": "session", "as": "sidebar", "args": null, "newTab": false })]);
+        assert!(shown());
+        // In the chat there is no session sidebar to open.
+        let calls = record();
+        chat::with(|c| c.side_in_wings = false);
+        told(&reopen_message(), Some("subagent-side:s1:a1"), false);
+        assert!(called(&calls, "openView").is_empty());
+    }
+
+    #[test]
+    fn with_the_panel_in_the_chat_the_sidebar_is_neither_opened_nor_told_anything() {
+        let calls = record();
+        chat_with_changes();
+        chat::with(|c| c.side_in_wings = false);
+        focused(true);
+        names_changed(&[page_name("s1")]);
+        chat::with(|c| publish(c));
+        assert!(called(&calls, "openView").is_empty());
+        assert!(called(&calls, "tellPage").iter().all(|told| told["message"]["kind"] != "session-state"));
+    }
+
+    #[test]
+    fn the_setting_moves_the_panel_between_the_chat_and_the_sidebar_in_an_open_chat() {
+        let calls = record();
+        chat_with_changes();
+        chat::with(|c| c.side_in_wings = false);
+        // Into the sidebar: a chat in front opens it, as it does when it starts.
+        chat::with(|c| c.side_in_wings = true);
+        moved(true);
+        assert_eq!(called(&calls, "openView").len(), 1);
+        names_changed(&[page_name("s1")]);
+        told(&json!({ "kind": "session-open", "open": true }), Some(&page_name("s1")), false);
+        chat::with(|c| publish(c));
+        assert!(last_state(&calls).is_some());
+        // Back into the chat: the sidebar it had open is closed.
+        chat::with(|c| c.side_in_wings = false);
+        moved(false);
+        assert_eq!(called(&calls, "closeView"), [json!({ "id": "session" })]);
+        assert!(!shown());
+    }
+
     fn sidebar_text() -> String {
         view().into_iter().map(|node| ui::tree_json(node).to_string()).collect()
     }
@@ -536,7 +677,7 @@ mod tests {
         // What another chat says isn't shown.
         chat_with_changes();
         chat::with(|c| c.terminals = vec![chat::Terminal { pane: "4".into() }, chat::Terminal { pane: "5".into() }]);
-        let state = chat::with(|c| state_message(c, ui::export(crate::view::side(c)).0));
+        let state = chat::with(|c| state_message(c, ui::export(crate::view::side_sections(c, false)).0));
         told_side(&state, Some("chat:s9"), false);
         assert!(!sidebar_text().contains("Open Changes"));
         told_side(&state, Some("chat:s1"), false);
@@ -568,7 +709,7 @@ mod tests {
             }
             let tasks: Vec<Value> = (0..10).map(|n| json!({ "task_id": format!("b{n:08}"), "run_id": format!("run-{n}"), "task_type": "local_bash", "description": long })).collect();
             c.session.hear(&json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": tasks }));
-            let state = state_message(c, ui::export(crate::view::side(c)).0);
+            let state = state_message(c, ui::export(crate::view::side_sections(c, false)).0);
             // What `pages::tell` takes at most.
             assert!(state.to_string().len() < 64_000, "{} bytes", state.to_string().len());
         });

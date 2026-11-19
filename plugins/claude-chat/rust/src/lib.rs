@@ -65,6 +65,7 @@ mod mod_pane;
 #[cfg(feature = "pane")]
 mod pane_sidebar;
 mod refs;
+mod remote;
 #[cfg(feature = "chat")]
 mod refs_view;
 mod session;

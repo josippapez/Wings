@@ -45,7 +45,7 @@ fn status(tab: &Tab) -> Option<Node> {
     }
 }
 
-/// The sidebar's header: the subagent's name, its chat and how it stands, and under them the way back to the chat and the
+/// The sidebar's header: the subagent's name, its chat and how it stands, and under them the way back to the chat, the session (when it is in the sidebar) and the
 /// button that pops the subagent out into a tab.
 fn sidebar_header(tab: &Tab) -> Node {
     let idle = tab.session.is_empty();
@@ -73,6 +73,9 @@ fn sidebar_header(tab: &Tab) -> Node {
             .prop("gap", "xs")
             .prop("align", "center")
             .child(button("Chat", "ghost", false, subagent_tab::back).prop("size", "sm").prop("disabled", !chat_open).prop("title", back_title))
+            .maybe(crate::prefs::in_sidebar(&crate::prefs::session_panel().get()).then(|| {
+                button("Session", "ghost", false, subagent_tab::show_session).prop("size", "sm").prop("disabled", !chat_open).prop("title", "Show the chat's session in the sidebar again")
+            }))
             .child(button("Pop out", "ghost", false, subagent_tab::pop_out).prop("size", "sm").prop("title", "Open it as a tab beside its chat"))
             .child(stack().prop("grow", true))
             .maybe(status(tab).map(|status| status.prop("size", "small")))

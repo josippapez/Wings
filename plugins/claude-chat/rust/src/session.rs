@@ -374,6 +374,8 @@ pub const TASK_STOP: &str = "task-stop-";
 
 #[derive(Debug, Default)]
 pub struct Session {
+    /// Whether this chat is on claude.ai and in the Claude app too.
+    pub remote: crate::remote::Remote,
     pub items: Vec<Item>,
     /// Claude's text of the message it is writing now, before the whole message comes.
     pub live: String,
@@ -848,6 +850,10 @@ impl Session {
         // A reload brings the commands as they are now: a plugin's skills come and go with it.
         if id == plugins::RELOAD && response["subtype"] == "success" {
             self.commands = commands(&answer["commands"]);
+        }
+        if let Some(refused) = crate::remote::answered(&mut self.remote, id, response) {
+            self.items.extend(refused.map(Item::Notice));
+            return;
         }
         if self.plugins.answered(id, response)
             || self.ops.answered(id, response, &mut self.items)

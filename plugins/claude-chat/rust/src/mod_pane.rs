@@ -115,6 +115,7 @@ pub fn open(pane: &str) {
         return;
     };
     RELAY.with(|relay| relay.borrow_mut().show = Some(message));
+    crate::session_side::covered();
     drop(host::open_view_with(SIDEBAR, "sidebar", &Value::Null));
     send_show();
 }

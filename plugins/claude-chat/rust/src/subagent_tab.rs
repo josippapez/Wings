@@ -230,6 +230,13 @@ pub fn send() {
     });
 }
 
+/// The sidebar's Session button: the chat shows its session in the sidebar again, in place of this subagent.
+pub fn show_session() {
+    if let Some(session) = with(|tab| tab.session.clone()).filter(|session| !session.is_empty()) {
+        drop(pages::tell(&subagents::chat_page(&session), &crate::session_side::reopen_message(), false));
+    }
+}
+
 /// The header's way back: the chat's tab, in front.
 pub fn back() {
     if let Some(session) = with(|tab| tab.session.clone()) {

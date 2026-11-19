@@ -3202,11 +3202,12 @@ fn a_sidebar_shows_the_icon_its_manifest_names_on_its_button_and_over_its_panel(
     app.advance_clock(crate::ui::motion::SLIDE * 2);
     app.run_until_parked();
     window.draw();
-    // Then before the sidebar's title over the 360 panel, after its 4, 4 and 8 of padding.
+    // Then before the sidebar's title over the 360 panel, after its 4, 4 and 8 of padding, level with the project bar's
+    // middle beside it.
     let title = glyph_at("clock").unwrap();
     assert_eq!(
         (title.left(), title.center().y),
-        (px(1000.0 - 360.0 + 16.0), px(40.0 + 16.0))
+        (px(1000.0 - 360.0 + 16.0), px(40.0 + 36.0 / 2.0))
     );
 }
 

@@ -34,6 +34,16 @@ pub fn dropdown_menu(at: Point<Pixels>, end: bool, menu: Stateful<Div>) -> AnyEl
         .into_any_element()
 }
 
+/// `dropdown_menu` for a button near the window's foot, as a chat's message box is: the menu's bottom corner is at `at`, and
+/// it rises into place, so it doesn't cover the button.
+pub fn dropup_menu(at: Point<Pixels>, end: bool, menu: Stateful<Div>) -> AnyElement {
+    let menu = motion::popup("menu", motion::From::Below, motion::POPUP_IN, menu);
+    let corner = if end { Anchor::BottomRight } else { Anchor::BottomLeft };
+    deferred(anchored().anchor(corner).position(at).child(menu))
+        .with_priority(1)
+        .into_any_element()
+}
+
 /// The menu's box, 144px wide at least, around `items`.
 pub fn menu(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
     div()

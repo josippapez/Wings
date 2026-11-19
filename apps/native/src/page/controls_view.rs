@@ -868,12 +868,16 @@ impl PageView {
                 }
             }));
         let popup = (self.menu == Some(id)).then(|| {
-            let (bounds, _) = self.select_bounds.get(&id).copied().unwrap_or_default();
+            let (bounds, window_height) = self.select_bounds.get(&id).copied().unwrap_or_default();
             let x = if menu.end {
                 bounds.right()
             } else {
                 bounds.left()
             };
+            // About as tall as `ui::menu_item_text`'s 28pt rows and the box's padding: a menu with no room under its
+            // button opens over it, as a chat's Remote Control menu at the foot of the window covered its own button.
+            let tall = px(menu.items.len() as f32 * 28.0 + 10.0);
+            let upward = window_height - bounds.bottom() - px(12.0) < tall && bounds.top() > window_height - bounds.bottom();
             let items = menu.items.iter().enumerate().filter_map(|(at, node)| {
                 let Node::Button(item) = node else {
                     return None;
@@ -910,8 +914,9 @@ impl PageView {
                     _ => row.into_any_element(),
                 })
             });
-            ui::dropdown_menu(
-                gpui::point(x, bounds.bottom() + px(4.0)),
+            let open = if upward { ui::dropup_menu } else { ui::dropdown_menu };
+            open(
+                gpui::point(x, if upward { bounds.top() - px(4.0) } else { bounds.bottom() + px(4.0) }),
                 menu.end,
                 ui::menu(ElementId::NamedInteger("page-menu".into(), id), name)
                     .track_focus(&self.menu_focus)

@@ -14,7 +14,7 @@ mod tooltip;
 pub use button::{Variant, badge, button, chip};
 pub use drag::{RESIZE_EDGE, Side, resize_edge, window_drag};
 pub use menu::{
-    context_menu, dropdown_menu, menu, menu_item, menu_item_text, menu_item_with, menu_separator,
+    context_menu, dropdown_menu, dropup_menu, menu, menu_item, menu_item_text, menu_item_with, menu_separator,
 };
 pub use parts::{board_box, disclosure_trigger, dot, gauge, heading, list, list_item, plain_card};
 pub use sheet::{

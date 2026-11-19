@@ -2,18 +2,21 @@
 
 use std::path::PathBuf;
 
-use gpui::{AnyElement, Context, Role, Window, div, prelude::*, px, rgb, rgba};
+use gpui::{AnyElement, Context, Role, Window, div, prelude::*, px, rgb};
 
 use crate::{
     icons::{Icon, icon},
     saved, theme,
 };
 
-use super::{HAIRLINE, Parked, Workspace};
+use super::{Parked, Workspace};
 
 /// The desktop's `--sidebar-accent` behind the shown project, and `--sidebar-foreground`.
 pub(super) const SIDEBAR_ACCENT: u32 = 0xffffff14;
 pub(super) const SIDEBAR_FOREGROUND: u32 = 0xe4e0da;
+
+/// The project bar's height, which the right sidebar's header matches.
+pub(super) const PROJECT_BAR: f32 = 36.0;
 
 impl Workspace {
     /// The current project's saved tabs, or one new terminal.
@@ -283,7 +286,7 @@ impl Workspace {
             .id("project-bar")
             .role(Role::Toolbar)
             .aria_label("Project")
-            .h(px(36.0))
+            .h(px(PROJECT_BAR))
             .flex_none()
             // Kept inside its column, as the desktop's panel keeps it: a narrow one never draws it over the sidebar.
             .min_w_0()
@@ -293,8 +296,8 @@ impl Workspace {
             .gap(px(6.0))
             .pl(px(12.0))
             .pr(px(8.0))
-            .border_b_1()
-            .border_color(rgba(HAIRLINE))
+            // No hairline under it: the tab's card starts just below, and its rounded corners left a notch of the
+            // window's background against the line. The sidebar's header beside it has none either.
             .child(
                 div()
                     .min_w_0()

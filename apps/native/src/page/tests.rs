@@ -980,6 +980,38 @@ fn a_menu_opens_over_the_page_under_its_button_and_closes_on_a_pick_a_press_outs
     assert!(window.read(|view, _| view.text().contains("picked reveal")));
 }
 
+/// `row_menu` at the foot of a 400pt window, under lines that fill it, as a chat's menus by its message box are.
+fn foot_menu() -> String {
+    fake::page("page", move |_| {
+        let lines: Vec<Value> = (0..17).map(|n| text(100 + 2 * n, 101 + 2 * n, format!("Line {n}"))).collect();
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "Stack", "props": { "gap": "none" }, "children": lines },
+            { "id": 2, "type": "Row", "children": [
+                { "id": 3, "type": "Menu", "props": { "align": "end" }, "children": [
+                    { "id": 4, "type": "Button", "props": { "variant": "ghost", "size": "icon-xs", "label": "More" }, "children": [text_node(10, "⋯")] },
+                    { "id": 5, "type": "Button", "props": { "onClick": "5:onClick" }, "children": [text_node(11, "Reveal")] },
+                    { "id": 7, "type": "Button", "props": { "onClick": "7:onClick" }, "children": [text_node(12, "Trash")] },
+                ]},
+            ]},
+        ]})
+    })
+}
+
+#[test]
+fn a_menu_with_no_room_under_its_button_opens_over_it() {
+    let (app, mut window) = open_narrow(foot_menu(), 300.0);
+    settle(&app, &mut window, shows("Line 16"));
+    window.draw();
+    let trigger = crate::ui::spot_at("page-menu:More").expect("the menu's button is drawn");
+    assert!(trigger.bottom() > px(330.0), "the button is at the window's foot: {trigger:?}");
+    click(&mut window, center(trigger));
+    settle(&app, &mut window, PageView::menu_open);
+    window.draw();
+    // It covered the button, pushed up into the window from under it.
+    let trash = crate::ui::spot_at("menu:Trash").expect("the item is drawn");
+    assert!(trash.bottom() < trigger.top(), "{trash:?} over {trigger:?}");
+}
+
 #[test]
 fn a_gauge_bar_is_blue_until_its_level_and_then_warn_and_danger() {
     let json = r##"{"id":0,"type":"#root","children":[{"id":1,"type":"Gauge","props":{"label":"x","percent":PERCENT,"levels":[70,90]}}]}"##;

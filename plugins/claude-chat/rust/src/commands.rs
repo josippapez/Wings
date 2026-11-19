@@ -170,6 +170,7 @@ pub fn own_commands(listed: &[Command]) -> impl Iterator<Item = Command> + '_ {
         ("export", "Export the conversation as text", ""),
         ("btw", "Ask a side question without adding it to the conversation", "<question>"),
         ("plan", "Switch to plan mode, and plan a task", "<task>"),
+        ("remote-control", "Continue this chat from claude.ai or the Claude app", "<name>"),
         // Dialogs the chat opens itself, which headless Claude Code leaves out of the commands it lists.
         ("plugins", "Turn plugins on or off for this chat", ""),
         ("mcp", "Turn MCP servers on or off for this project", ""),
@@ -287,8 +288,8 @@ mod tests {
     fn the_slash_menu_offers_these_commands_unless_claude_code_lists_them() {
         let listed = |names: &[&str]| names.iter().map(|name| Command { name: (*name).into(), description: String::new(), hint: String::new() }).collect::<Vec<_>>();
         let own: Vec<String> = own_commands(&listed(&["clear"])).map(|command| command.name).collect();
-        assert_eq!(own, ["status", "export", "btw", "plan", "plugins", "mcp", "usage", "cost", "context", "hooks", "memory", "permissions"]);
+        assert_eq!(own, ["status", "export", "btw", "plan", "remote-control", "plugins", "mcp", "usage", "cost", "context", "hooks", "memory", "permissions"]);
         let own: Vec<String> = own_commands(&listed(&["plan", "status", "usage"])).map(|command| command.name).collect();
-        assert_eq!(own, ["export", "btw", "plugins", "mcp", "cost", "context", "hooks", "memory", "permissions"]);
+        assert_eq!(own, ["export", "btw", "remote-control", "plugins", "mcp", "cost", "context", "hooks", "memory", "permissions"]);
     }
 }

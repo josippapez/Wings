@@ -30,6 +30,9 @@ fn view() -> Vec<Node> {
         .child(heading("Plan limit"))
         .child(muted("When your plan's 5-hour or weekly usage passes 90%, Claude is told to pause and ask you before more work, in every Claude Code session in Wings, chat or terminal. Past the limit, work is billed as extra usage."))
         .child(checkbox("Tell Claude to pause near the limit", prefs::pause_near_limit().get(), |on| drop(prefs::pause_near_limit().set(on))).key("pause-near-limit"))
+        .child(heading("Session panel"))
+        .child(muted("Where a chat shows its session: what changed, the context and usage meters, background tasks, subagents and terminals. In the chat it sits beside the conversation, and over it in a narrow tab. In Wings' sidebar it opens in the right panel and follows the chat in front. A chat that is open follows a change at once."))
+        .child(chips("Session panel", &prefs::SESSION_PANELS, &prefs::session_panel().get(), |place| drop(prefs::session_panel().set(place.to_owned()))))
         .child(heading("Text size"))
         .child(muted("The size of the text in the conversation, in every chat. A chat that is open follows a change at once."))
         .child(chips("Text size", &prefs::TEXT_SIZES, &prefs::text_size().get(), |size| drop(prefs::text_size().set(size.to_owned()))))]

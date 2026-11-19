@@ -18,8 +18,13 @@ pub fn pause_near_limit() -> Setting<bool> {
     Setting::boolean(PAUSE_NEAR_LIMIT, true)
 }
 
-/// The session sidebar opens with a chat, in every chat (`session_side.rs`).
+/// The session panel shows, in every chat: over the chat's right side, or as Wings' sidebar that opens with a chat
+/// (`session_side.rs`).
 pub const SIDE_PANEL: &str = "side-panel";
+
+/// Where the session panel is: in the chat, or in Wings' right sidebar.
+pub const SESSION_PANEL: &str = "session-panel";
+pub const SESSION_PANELS: [(&str, &str); 2] = [("chat", "In the chat"), ("sidebar", "Wings sidebar")];
 
 /// How big the conversation's text is, in every chat.
 pub const TEXT_SIZE: &str = "text-size";
@@ -36,6 +41,19 @@ pub fn mode() -> Setting<String> {
 
 pub fn side_panel() -> Setting<bool> {
     Setting::boolean(SIDE_PANEL, true)
+}
+
+fn session_panel_of(stored: &Value) -> Option<String> {
+    stored.as_str().filter(|place| SESSION_PANELS.iter().any(|(value, _)| value == place)).map(str::to_owned)
+}
+
+pub fn session_panel() -> Setting<String> {
+    Setting::new(SESSION_PANEL, "chat".to_owned(), session_panel_of, |place| json!(place))
+}
+
+/// Whether a value of the session panel setting is Wings' sidebar.
+pub fn in_sidebar(place: &str) -> bool {
+    place == "sidebar"
 }
 
 pub fn detailed() -> Setting<bool> {
@@ -103,6 +121,15 @@ mod tests {
         assert_eq!(mode_of(&json!("auto")).as_deref(), Some("auto"));
         assert_eq!(mode_of(&json!("bypassEverything")), None);
         assert_eq!(mode_of(&json!(3)), None);
+    }
+
+    #[test]
+    fn the_session_panel_is_in_the_chat_unless_you_picked_wings_sidebar() {
+        assert_eq!(session_panel().get(), "chat");
+        assert!(!in_sidebar(&session_panel().get()));
+        assert_eq!(session_panel_of(&json!("sidebar")).as_deref(), Some("sidebar"));
+        assert_eq!(session_panel_of(&json!("floating")), None);
+        assert!(in_sidebar("sidebar"));
     }
 
     #[test]

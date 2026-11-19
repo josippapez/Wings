@@ -119,8 +119,15 @@ pub struct Chat {
     pub fork_ask: bool,
     /// Where this chat was forked from, as the note at its top says: the name of the original session.
     pub forked_from: Option<String>,
-    /// Your choice for every chat of whether the session sidebar opens with a chat (`prefs::side_panel`, on by default).
+    /// Whether the tab is narrower than the side panel and the conversation need side by side, as the page's split says: None
+    /// until it has measured. Then the panel floats over the conversation, and Escape or a press outside puts it away.
+    pub narrow: Option<bool>,
+    /// Your choice for every chat of whether the session panel shows (`prefs::side_panel`, on by default): in the chat, or
+    /// opened with it in Wings' sidebar, as `side_in_wings` says.
     pub side_open: bool,
+    /// Where the session panel is, as you set for every chat (`prefs::session_panel`): in Wings' sidebar, else over the
+    /// chat's right side.
+    pub side_in_wings: bool,
     /// The background agent a message is being written to, by its id, and the message.
     pub message_to: Option<(String, String)>,
     /// The lines added and removed in the working tree since the last commit, and the branch it is on.
@@ -185,7 +192,9 @@ thread_local! {
         fork_from: None,
         fork_ask: false,
         forked_from: None,
+        narrow: None,
         side_open: true,
+        side_in_wings: false,
         message_to: None,
         changes: None,
         counting: false,
@@ -244,9 +253,12 @@ pub fn start() {
         c.detailed = prefs::detailed().get();
         c.text_scale = prefs::scale_of(&prefs::text_size().get());
         c.side_open = prefs::side_panel().get();
+        c.side_in_wings = prefs::in_sidebar(&prefs::session_panel().get());
     });
     prefs::text_size().on_change(|size| with(|c| c.text_scale = prefs::scale_of(size)));
     prefs::side_panel().on_change(|shown| with(|c| c.side_open = *shown));
+    // The panel moves with the setting, in every open chat.
+    prefs::session_panel().on_change(|place| session_panel_moved(place));
     // After your setting is read: a chat in front opens the session sidebar with it.
     crate::session_side::start();
     host::on_terminals(|listed| with(|c| c.terminals = listed.iter().filter_map(Terminal::of).collect()));
@@ -734,6 +746,11 @@ pub fn send() {
         }
         // /usage, /cost and /context open a dialog here, and aren't sent as a message, not even queued.
         if c.images.is_empty() {
+            // /remote-control turns Remote Control on, or off when it is on, as in Claude Code.
+            if let Some(name) = crate::remote::command(&text) {
+                c.draft.clear();
+                return Some(remote_line(c, name));
+            }
             if let Some((panel, line)) = c.session.view_command(&text) {
                 c.draft.clear();
                 c.panel = Some(panel);
@@ -1051,6 +1068,22 @@ pub fn new_chat() {
     }
 }
 
+/// The line that turns Remote Control on, under `name` when given, or off when it is on.
+fn remote_line(c: &mut Chat, name: Option<&str>) -> String {
+    match &c.session.remote {
+        crate::remote::Remote::On(_) => crate::remote::disconnect(&mut c.session.remote),
+        _ => crate::remote::connect(&mut c.session.remote, name),
+    }
+}
+
+/// The composer's Remote Control button: on when it is off, and off when it is on.
+pub fn toggle_remote() {
+    write(|c, _| match c.session.remote {
+        crate::remote::Remote::Connecting | crate::remote::Remote::Disconnecting(_) => None,
+        _ => Some(remote_line(c, None)),
+    });
+}
+
 /// The value the account picker gives the default account: not a name an account can have.
 pub const DEFAULT_ACCOUNT: &str = "~";
 
@@ -1110,6 +1143,7 @@ pub fn open_past() {
 
 /// Asks the Changes plugin to show its sidebar: a plugin can only open its own pages, so it hears this event instead.
 pub fn open_changes() {
+    crate::session_side::covered();
     drop(host::call("emit", json!({ "name": "open-changes" })));
 }
 
@@ -1167,10 +1201,31 @@ pub fn toggle_output(id: &str) {
     });
 }
 
-/// The header's button for the session sidebar, at any width: opens it on this chat or closes it, and keeps the choice
-/// for every chat (`session_side::toggle`).
+/// The session panel setting changed to `place`: the panel moves between the chat and Wings' sidebar.
+pub(crate) fn session_panel_moved(place: &str) {
+    let sidebar = prefs::in_sidebar(place);
+    if with(|c| std::mem::replace(&mut c.side_in_wings, sidebar)) != sidebar {
+        crate::session_side::moved(sidebar);
+    }
+}
+
+/// The page's split says whether the tab is narrower than `view::SIDE_BELOW`, so the side panel covers the conversation.
+pub fn set_narrow(narrow: bool) {
+    with(|c| c.narrow = Some(narrow));
+}
+
+/// The header's button for the session panel, at any width: in Wings' sidebar it opens it on this chat or closes it
+/// (`session_side::toggle`); in the chat it shows the panel or puts it away in every chat. Either way the choice is kept.
 pub fn toggle_side() {
-    crate::session_side::toggle();
+    if with(|c| c.side_in_wings) {
+        crate::session_side::toggle();
+        return;
+    }
+    let shown = with(|c| {
+        c.side_open = !c.side_open;
+        c.side_open
+    });
+    drop(prefs::side_panel().set(shown));
 }
 
 

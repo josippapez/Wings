@@ -670,12 +670,15 @@ pub enum From {
     Corner,
     /// It opens to the right of its trigger, so it comes in from the left, and zooms about its top left corner.
     Left,
+    /// It opens above its trigger, so it comes up, and zooms about its bottom edge's middle.
+    Below,
 }
 
 impl From {
     fn origin(self) -> (f32, f32) {
         match self {
             From::Above => (0.5, 0.0),
+            From::Below => (0.5, 1.0),
             From::Corner | From::Left => (0.0, 0.0),
         }
     }
@@ -684,6 +687,7 @@ impl From {
 fn slide<E: Styled>(element: E, from: From, offset: f32) -> E {
     match from {
         From::Above | From::Corner => element.top(px(-offset)),
+        From::Below => element.top(px(offset)),
         From::Left => element.left(px(-offset)),
     }
 }

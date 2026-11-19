@@ -29,9 +29,11 @@ pub(super) type Key = (String, String);
 pub(super) const MAX_PAGES: usize = 4;
 /// The least a split can be dragged down to, its header and card.
 const MIN_SPLIT_HEIGHT: f32 = 96.0;
-/// A split's header when there are two or more: slimmer than the lone page's 32.
+/// A split's header when there are two or more: slimmer than the lone page's.
 const SPLIT_HEADER: f32 = 28.0;
-const LONE_HEADER: f32 = 32.0;
+/// As tall as the project bar beside it, so the sidebar's card starts level with the tab's: at 32 it started 4 points
+/// higher.
+const LONE_HEADER: f32 = super::project::PROJECT_BAR;
 
 /// The open pages, top to bottom, and each one's share of the height, which together make 1.
 #[derive(Clone, Debug, Default, PartialEq)]
