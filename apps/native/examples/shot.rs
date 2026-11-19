@@ -2233,7 +2233,7 @@ fn right_splits(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     data.install_script(
         "agents",
         serde_json::json!({ "name": "Subagent", "contributes": {
-            "sidebars": [{ "id": "agent", "title": "Subagent", "page": "dist/agent.html", "icon": "bot" }],
+            "sidebars": [{ "id": "agent", "title": "Subagent", "page": "dist/agent.html", "icon": "message" }],
         } }),
         &fake::idle("main"),
         &[("agent", &words("Reading src/client/retry.rs"))],
