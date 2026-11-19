@@ -124,6 +124,22 @@ pub fn length(index: usize, current: usize, hover: Option<usize>) -> f32 {
     LENGTHS[distance]
 }
 
+/// `length` for a current tick that is between marks (`focus`, easing from one to the next): the lengths blend by the
+/// fractional distance, so a tick lengthens and shortens smoothly as the long one passes.
+pub fn length_near(index: usize, focus: f32, hover: Option<usize>) -> f32 {
+    let top = (LENGTHS.len() - 1) as f32;
+    let near = |at: f32| (index as f32 - at).abs().min(top);
+    let distance = hover.map_or(near(focus), |hover| near(focus).min(near(hover as f32)));
+    let low = distance.floor() as usize;
+    let high = (low + 1).min(LENGTHS.len() - 1);
+    LENGTHS[low] + (LENGTHS[high] - LENGTHS[low]) * (distance - low as f32)
+}
+
+/// How much tick `index` is the current one while `focus` passes: 1 on it, 0 a mark or more away.
+pub fn weight(index: usize, focus: f32) -> f32 {
+    (1.0 - (index as f32 - focus).abs()).clamp(0.0, 1.0)
+}
+
 /// The scroll that keeps `current` in view, a couple of rows from the edge, starting from `scroll`.
 pub fn keep_in_view(scroll: f32, current: usize, count: usize, pitch: f32, height: f32) -> f32 {
     let (top, bottom) = (
@@ -173,6 +189,20 @@ mod tests {
         assert_eq!(length(5, 1, Some(5)), 50.0);
         assert_eq!(length(4, 1, Some(5)), 40.0);
         assert_eq!(length(1, 1, Some(5)), 50.0);
+    }
+
+    #[test]
+    fn the_long_tick_blends_between_marks_and_matches_length_on_them() {
+        for at in 0..6 {
+            for focus in 0..6 {
+                assert_eq!(length_near(at, focus as f32, None), length(at, focus, None));
+                assert_eq!(length_near(at, focus as f32, Some(5)), length(at, focus, Some(5)));
+            }
+        }
+        // Half way from mark 1 to 2: both are between long and step-down, so neither jumps.
+        assert_eq!(length_near(1, 1.5, None), 45.0);
+        assert_eq!(length_near(2, 1.5, None), 45.0);
+        assert_eq!((weight(1, 1.0), weight(1, 1.5), weight(1, 2.5)), (1.0, 0.5, 0.0));
     }
 
     #[test]

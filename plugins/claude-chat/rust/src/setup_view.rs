@@ -10,7 +10,7 @@ use serde_json::json;
 use wings_plugin::{
     format::{ago, tokens},
     host, task,
-    ui::{Node, badge, button, chips, confirm as asks, dialog as panel, empty, heading, loading, muted, notice, row, search_field, select, stack, text, text_input, title},
+    ui::{Node, actions, badge, button, chips, confirm as asks, dialog as panel, empty, heading, loading, muted, notice, row, search_field, select, stack, text, text_input, title},
 };
 
 use crate::{
@@ -75,9 +75,8 @@ fn asking(setup: &Setup, edit: &Edit) -> Node {
         allows.then(|| notice("warn", "Claude will do what this rule matches without asking you, in every session that reads this file.")),
     ];
     let variant = if matches!(edit, Edit::RemoveRule { .. } | Edit::RemoveHook { .. }) { "destructive" } else { "default" };
-    // Cancel, then the button that does it, at the right.
-    let actions = row().prop("grow", true).prop("justify", "end").child(button("Cancel", "ghost", false, cancel).prop("disabled", setup.saving)).child(button(edit.verb(), variant, setup.saving, confirm));
-    asks(question, body.into_iter().flatten(), [actions])
+    let buttons = actions(Some(button("Cancel", "ghost", false, cancel).prop("disabled", setup.saving)), [button(edit.verb(), variant, setup.saving, confirm)]);
+    asks(question, body.into_iter().flatten(), [buttons])
 }
 
 /// The button that asks to remove a hook or a rule from the settings file it is in.
@@ -268,14 +267,14 @@ fn rule_form(setup: &Setup, form: &RuleForm) -> Node {
         .prop("wrap", true)
         .child(chips("Behavior", &[("allow", "Allow"), ("ask", "Ask"), ("deny", "Deny")], &form.behavior, set_rule_behavior))
         .child(select("Save in", &files, &form.file, set_rule_file));
-    let actions = row().prop("gap", "s").prop("justify", "end").child(button("Cancel", "ghost", false, close_form)).child(button("Review", "default", false, review).prop("disabled", form.rule.trim().is_empty()));
+    let buttons = actions(Some(button("Cancel", "ghost", false, close_form)), [button("Review", "default", false, review).prop("disabled", form.rule.trim().is_empty())]);
     stack()
         .prop("gap", "l")
         .child(heading(3, "New rule"))
         .child(field)
         .child(small("A tool, or a tool and what it may do in parentheses, like Bash(npm run test:*) or WebFetch(domain:example.com)."))
         .child(choices)
-        .child(actions)
+        .child(buttons)
 }
 
 fn rule_list(setup: &Setup, rules: &[Rule]) -> Node {

@@ -6,7 +6,7 @@
 use serde_json::{Value, json};
 use wings_plugin::{
     host, task,
-    ui::{Node, badge, list_button, muted, row, stack, text},
+    ui::{self, Node, badge, list_button, muted, row, stack, text},
 };
 
 use crate::{
@@ -69,13 +69,8 @@ pub fn section(c: &Chat) -> Option<Node> {
     let hidden = shown.len().saturating_sub(LISTED);
     let title = format!("Mentioned · {}", shown.len());
     let rows = shown.iter().take(LISTED).map(|(found, detail)| row_of(found, *detail));
-    Some(
-        stack()
-            .prop("gap", "xs")
-            .child(crate::view::heading(title))
-            .child(stack().prop("gap", "none").children(rows))
-            .maybe((hidden > 0).then(|| crate::view::inset(muted(format!("{hidden} earlier")).prop("size", "small")))),
-    )
+    let earlier = (hidden > 0).then(|| ui::entry(ui::Entry { lead: None, title: muted(format!("{hidden} earlier")).prop("size", "small"), detail: None, trailing: None }));
+    Some(ui::section(title, None, rows.chain(earlier)))
 }
 
 fn small(said: impl Into<String>) -> Node {

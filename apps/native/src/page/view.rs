@@ -234,6 +234,9 @@ pub struct PageView {
     _restart: Option<Task<()>>,
     /// Shown in a title bar button's popover (`place: "popover"`), whose shell and ground are the popover's.
     popover: bool,
+    /// Whether a rounded card holds the page (`in_card`): its ground follows the card's inner corners, which a clip
+    /// doesn't (gpui clips to a rectangle), so a square ground shows past the curve against the window.
+    in_card: bool,
     /// Where the page's shell is scrolled, so a field that takes the keyboard can be brought into view.
     shell_scroll: gpui::ScrollHandle,
     /// Where the open combobox's list is scrolled, so the option the arrow keys reach is brought into view.
@@ -392,6 +395,14 @@ impl PageView {
     /// Opens `source` as a page of the plugin `host` runs, which can talk to its main and its other pages.
     pub fn in_plugin(host: &PluginHost, source: &str, cx: &mut Context<Self>) -> Self {
         Self::start(cx, host.page(false, 0, None, None, source))
+    }
+
+    /// The page, shown in a card with a 14px corner and a 1px border (`workspace::page_card`, the sidebar's cards).
+    pub fn in_card(self) -> Self {
+        Self {
+            in_card: true,
+            ..self
+        }
     }
 
     /// Like `in_plugin`, for a page shown in the popover under its sidebar's title bar button.
@@ -579,6 +590,7 @@ impl PageView {
             restart_wait: RESTART_FIRST,
             _restart: None,
             popover: false,
+            in_card: false,
             shell_scroll: gpui::ScrollHandle::new(),
             combobox_scroll: gpui::ScrollHandle::new(),
             follow_scrolls: RefCell::default(),
@@ -1379,6 +1391,11 @@ impl PageView {
             .when(stack.fill, |el| el.flex_1().min_h_0())
             .when_some(stack.width, |el, width| el.w(px(width)).flex_none())
             .when_some(stack.max_width, |el, width| el.w_full().max_w(px(width)).mx_auto())
+            .when_some(stack.measure, |el, width| el.max_w(px(width)))
+            // A list button's 1pt border and its padding, so it starts where the list buttons beside it do.
+            .when(stack.inset, |el| {
+                el.px(px(7.0)).py(px(1.0 + controls_view::LIST_BUTTON_PADDING))
+            })
             .map(|el| match stack.enter {
                 true => el.children(stack.children.iter().map(|child| self.rising(child, cx))),
                 false => el.children(self.items(&stack.children, cx)),
@@ -2077,6 +2094,17 @@ impl PageView {
             Node::Dialog(_) => div().into_any_element(),
             Node::Sheet(sheet) => self.sheet(sheet, cx),
             Node::Terminal(terminal) => self.terminal(terminal),
+            // At the end of the line whether it is in a column (a dialog) or a row (a confirm's actions).
+            Node::Actions(actions) => div()
+                .w_full()
+                .min_w_0()
+                .flex()
+                .flex_wrap()
+                .justify_end()
+                .items_center()
+                .gap(px(8.0))
+                .children(self.nodes(&actions.children, cx))
+                .into_any_element(),
         }
     }
 
@@ -2724,6 +2752,8 @@ impl Render for PageView {
             .flex()
             .flex_col()
             .overflow_hidden()
+            // The card's radius less its border: the ground is as round as the card's inside.
+            .when(self.in_card, |page| page.rounded(px(13.0)))
             // The desktop's page is transparent on the `bg-surface` of the card, panel or window that holds it, or on the
             // `bg-popover` of a popover.
             .bg(rgb(if self.popover {

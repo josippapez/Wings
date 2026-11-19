@@ -169,6 +169,9 @@ pub struct TerminalView {
     cell_width: Pixels,
     line_height: f32,
     geometry: Option<Geometry>,
+    /// The radius of the terminal's bottom corners, where a rounded card holds it and the terminal reaches its corners:
+    /// gpui clips to a rectangle, so the background has to be as round as the card's inside.
+    bottom_radius: std::cell::Cell<f32>,
     resize_task: Option<Task<()>>,
     _updates: Task<()>,
     _clipboard: Task<()>,
@@ -355,6 +358,7 @@ impl TerminalView {
         });
         let mut view = Self {
             focus: cx.focus_handle(),
+            bottom_radius: std::cell::Cell::new(0.0),
             runtime,
             snapshot: Arc::default(),
             rows: paint::Rows::default(),
@@ -557,6 +561,11 @@ impl TerminalView {
     /// The title the program in the terminal set, if any.
     pub fn title(&self) -> Option<String> {
         self.runtime.title.lock().unwrap().clone()
+    }
+
+    /// Rounds the bottom corners of the terminal's background to `radius` points (0 for square ones).
+    pub fn round_bottom(&self, radius: f32) {
+        self.bottom_radius.set(radius);
     }
 
     /// Tab owners call this when unmounting/hiding a retained view. Parsing continues, painting stops.

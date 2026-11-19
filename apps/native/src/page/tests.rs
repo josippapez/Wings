@@ -2870,3 +2870,38 @@ fn cmd_c_copies_the_selected_words() {
     let copied = app.read(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
     assert_eq!(copied.as_deref(), Some("alpha beta gamma delta"));
 }
+
+/// A dialog's `Actions` (Cancel and Save) over a clickable `ListRow`, on a page that fills its frame: what each click
+/// reached.
+fn kit() -> String {
+    let (mut cancelled, mut saved, mut opened) = (0, 0, 0);
+    fake::page("page", move |event| {
+        match event {
+            Some(("3:click", _)) => cancelled += 1,
+            Some(("5:click", _)) => saved += 1,
+            Some(("10:click", _)) => opened += 1,
+            _ => {}
+        }
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            { "id": 1, "type": "Actions", "children": [
+                { "id": 2, "type": "Slot", "props": { "name": "dismiss" }, "children": [
+                    { "id": 3, "type": "Button", "props": { "variant": "outline", "onClick": "3:click" }, "children": [text_node(4, "Cancel")] }] },
+                { "id": 5, "type": "Button", "props": { "onClick": "5:click" }, "children": [text_node(6, "Save")] }] },
+            { "id": 10, "type": "ListRow", "props": { "onClick": "10:click" }, "children": [
+                { "id": 11, "type": "Slot", "props": { "name": "title" }, "children": [text_node(12, "Build")] }] },
+            text(20, 21, format!("Cancelled {cancelled}, saved {saved}, opened {opened}.")) ] })
+    })
+}
+
+#[test]
+fn actions_sit_at_the_end_of_the_line_with_the_acting_button_last_and_a_list_row_is_clickable_across_its_width() {
+    let (app, mut window) = open(kit());
+    settle(&app, &mut window, shows("Cancelled 0, saved 0, opened 0."));
+    let width = window.update(|_, window, _| window.viewport_size().width.as_f32());
+    // The start of the line is empty, and its end is Save, the button that acts.
+    click_along(&app, &mut window, [6.0, width - 6.0]);
+    settle(&app, &mut window, shows("Cancelled 0, saved 1, opened 0."));
+    // Under the 32pt buttons, the row's far end opens it as its title does.
+    window.simulate_click(point(px(width - 6.0), px(40.0)), MouseButton::Left);
+    settle(&app, &mut window, shows("Cancelled 0, saved 1, opened 1."));
+}

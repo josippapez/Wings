@@ -121,7 +121,7 @@ pub fn folders(c: &Chat) -> Option<Node> {
                     .child(icon(14, 2.0, &[CLOSE])),
             )
     });
-    Some(stack().prop("gap", "xs").child(crate::view::heading("Folders")).child(stack().prop("gap", "none").children(rows)))
+    Some(ui::section("Folders", None, rows))
 }
 
 /// A folder as it reads best: under the chat's folder, its path from there; else with the home folder as "~". The plugin

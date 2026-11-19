@@ -127,7 +127,7 @@ impl Workspace {
             page.source.clone(),
             page.title.clone(),
         );
-        let page = cx.new(|cx| PageView::in_plugin_with_state(&host, &source, args, state, cx));
+        let page = cx.new(|cx| PageView::in_plugin_with_state(&host, &source, args, state, cx).in_card());
         Some((page, title))
     }
 

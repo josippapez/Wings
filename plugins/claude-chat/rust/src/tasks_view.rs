@@ -3,7 +3,7 @@
 
 use wings_plugin::{
     format::truncate,
-    ui::{Node, button, card, dialog as panel, icon, list_button, loading, muted, notice, row, spinner, stack, text},
+    ui::{self, Entry, Node, button, card, dialog as panel, entry, icon, loading, muted, notice, row, spinner, stack, text},
 };
 
 use crate::{
@@ -36,12 +36,7 @@ pub fn section(c: &Chat) -> Option<Node> {
         parts.push(format!("{failed} failed"));
     }
     let title = parts.join(" · ");
-    Some(
-        stack()
-            .prop("gap", "xs")
-            .child(crate::view::heading(title))
-            .child(stack().prop("gap", "none").children(running.into_iter().map(task_row)).children(done.into_iter().map(done_row))),
-    )
+    Some(ui::section(title, None, running.into_iter().map(task_row).chain(done.into_iter().map(done_row))))
 }
 
 /// One task that ended: how it ended, its name and how long it ran, with its output on a click when Claude Code keeps it.
@@ -53,7 +48,6 @@ fn done_row(task: &Task) -> Node {
         "completed" => text("✓").prop("tone", "success"),
         _ => muted("■"),
     };
-    let mark = crate::view::lead(mark);
     let how = match ended {
         "failed" => "Failed",
         "completed" => "Done",
@@ -64,17 +58,13 @@ fn done_row(task: &Task) -> Node {
         ms if task.started > 0 && ms >= 1000 => format!("{how} · {}", crate::view::took(ms)),
         _ => how.to_owned(),
     };
-    let line = row()
-        .prop("gap", "s")
-        .prop("align", "center")
-        .child(mark)
-        .child(stack().prop("grow", true).prop("gap", "none").child(text(name).prop("size", "small").prop("clamp", true).prop("title", name)).child(muted(time).prop("size", "small")));
+    let line = entry(Entry { lead: Some(mark), title: text(name).prop("size", "small").prop("clamp", true).prop("title", name), detail: Some(muted(time).prop("size", "small")), trailing: None }).key(task.id.as_str());
     match task.has_output() {
         true => {
             let id = task.id.clone();
-            list_button([line], move || chat::open_task(&id)).prop("title", "What it printed").key(task.id.as_str())
+            line.on("onClick", move |_| chat::open_task(&id)).prop("title", "What it printed")
         }
-        false => crate::view::inset(line).key(task.id.as_str()),
+        false => line,
     }
 }
 
@@ -88,15 +78,12 @@ fn task_row(task: &Task) -> Node {
     };
     // The spinner, the name over how long it has run, and the small buttons at the right, on one row as a subagent's
     // is: the time and buttons sat on a line of their own, out of line with the name.
-    let main = row()
-        .prop("gap", "s")
-        .prop("align", "center")
-        .child(crate::view::lead(spinner()))
-        .child(stack().prop("grow", true).prop("gap", "none").child(text(name).prop("size", "small").prop("clamp", true).prop("title", name)).child(time.prop("size", "small")));
+    let main = entry(Entry { lead: Some(spinner()), title: text(name).prop("size", "small").prop("clamp", true).prop("title", name), detail: Some(time.prop("size", "small")), trailing: None });
     let id = task.id.clone();
     let main = match (task.has_output(), task.kind == "local_agent") {
-        (true, _) => list_button([main], move || chat::open_task(&id)).prop("title", "What it printed"),
-        (false, true) => list_button([main], move || open_subagent(&id)).prop("title", "Its conversation, in the sidebar"),
+        (true, _) => main.on("onClick", move |_| chat::open_task(&id)).prop("title", "What it printed"),
+        (false, true) => main.on("onClick", move |_| open_subagent(&id)).prop("title", "Its conversation, in the sidebar"),
+        // In the inset a clickable row has, so its name starts where theirs do.
         _ => main,
     };
     let id = task.id.clone();
@@ -175,11 +162,12 @@ mod tests {
         chat::with(|c| {
             c.session.tasks = vec![task("a", None), task("b", Some("completed"))];
             let drawn = tree_json(section(c).expect("a group")).to_string();
-            // The heading is a row-inset one, as the Subagents group has.
-            assert!(drawn.contains("ListButton") && drawn.contains("Background tasks · 1 running · 1 done"), "{drawn}");
+            // A section, as the Subagents group is, so its heading is on the rows' left edge.
+            assert!(drawn.contains("\"Section\"") && drawn.contains("Background tasks · 1 running · 1 done"), "{drawn}");
             assert!(drawn.contains("\"Running\"") && !drawn.contains("\"running\""), "{drawn}");
-            // The spinner and the mark each sit in the 16-point box, so the names start at one x.
-            assert_eq!(drawn.matches("\"width\":16").count(), 2, "{drawn}");
+            // The spinner and the mark are each a row's lead, which the app sets in one box, so the names start at one x.
+            assert_eq!(drawn.matches("\"type\":\"ListRow\"").count(), 2, "{drawn}");
+            assert_eq!(drawn.matches("\"name\":\"lead\"").count(), 2, "{drawn}");
             c.session.tasks.clear();
         });
     }

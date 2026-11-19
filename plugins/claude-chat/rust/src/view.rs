@@ -9,8 +9,8 @@ use wings_plugin::{
     local_time::local,
     markdown::{highlighted_code, markdown},
     ui::{
-        Node, badge, button, card, chip, confirm, disclosure, empty, gauge, icon, list, list_button, loading, muted, notice, row,
-        select, spinner, stack, text, text_input,
+        Entry, Node, badge, button, card, chip, confirm, disclosure, empty, entry, gauge, icon, list, list_button, loading, muted,
+        notice, row, section, select, spinner, stack, text, text_input,
     },
 };
 
@@ -1141,14 +1141,9 @@ fn subagents(c: &Chat) -> Option<Node> {
     let running = tasks.iter().filter(|tool| subagent_runs(tool, c)).count();
     let title = if running > 0 { format!("Subagents · {running} running") } else { format!("Subagents · {} done", tasks.len()) };
     let hidden = tasks.len().saturating_sub(SUBAGENTS_LISTED);
+    let earlier = (hidden > 0).then(|| entry(Entry { lead: None, title: muted(format!("{hidden} earlier")).prop("size", "small"), detail: None, trailing: None }));
     let rows = tasks[hidden..].iter().map(|tool| subagent_row(tool, c));
-    Some(
-        stack()
-            .prop("gap", "xs")
-            .child(heading(title))
-            .maybe((hidden > 0).then(|| inset(muted(format!("{hidden} earlier")).prop("size", "small"))))
-            .child(stack().prop("gap", "none").children(rows)),
-    )
+    Some(section(title, None, earlier.into_iter().chain(rows)))
 }
 
 /// The background task a subagent's call started, when it went to the background.
@@ -1172,7 +1167,6 @@ fn subagent_row(tool: &Tool, c: &Chat) -> Node {
         (false, true) => text("✗").prop("tone", "danger"),
         (false, false) => text("✓").prop("tone", "success"),
     };
-    let mark = lead(mark);
     let model = sub.and_then(|sub| sub.reported_model.as_deref()).map(model_name);
     let name = if tool.summary.is_empty() { "Subagent" } else { tool.summary.as_str() };
     let ran = background.filter(|task| task.ended.is_some() && task.started > 0).map(|task| task.ended_at.saturating_sub(task.started));
@@ -1192,18 +1186,13 @@ fn subagent_row(tool: &Tool, c: &Chat) -> Node {
         (None, None) => None,
     }
     .map(|facts| facts.prop("size", "small"));
-    let line = row()
-        .prop("gap", "s")
-        .prop("align", "center")
-        .child(mark)
-        .child(stack().prop("grow", true).prop("gap", "none").child(text(name).prop("size", "small").prop("clamp", true).prop("title", name)).maybe(facts));
+    let line = entry(Entry { lead: Some(mark), title: text(name).prop("size", "small").prop("clamp", true).prop("title", name), detail: facts, trailing: None }).key(tool.id.as_str());
     match crate::subagent_relay::can_open(c, &tool.id) {
         true => {
             let id = tool.id.clone();
-            list_button([line], move || crate::tasks_view::open_subagent(&id)).prop("title", "Its conversation, in the sidebar").key(tool.id.as_str())
+            line.on("onClick", move |_| crate::tasks_view::open_subagent(&id)).prop("title", "Its conversation, in the sidebar")
         }
-        // In the inset a list button has: bare, the row sat 7 points left of the others.
-        false => inset(line).key(tool.id.as_str()),
+        false => line,
     }
 }
 

@@ -544,8 +544,16 @@ impl Render for TerminalView {
                     |view, event, cx| view.mouse_up(event, cx),
                 );
                 let mut paint_error = None;
+                let bottom = px(paint_view.read(cx).bottom_radius.get());
                 window.with_content_mask(Some(ContentMask { bounds }), |window| {
-                    window.paint_quad(fill(bounds, rgb(data.snapshot.background)));
+                    window.paint_quad(
+                        fill(bounds, rgb(data.snapshot.background)).corner_radii(Corners {
+                            top_left: px(0.0),
+                            top_right: px(0.0),
+                            bottom_right: bottom,
+                            bottom_left: bottom,
+                        }),
+                    );
                     paint_images(window, bounds, &data, ImageLayer::BelowBackground);
                     let span = |(row, col, cells): (usize, usize, usize)| {
                         Bounds::new(

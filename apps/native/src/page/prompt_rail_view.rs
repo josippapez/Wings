@@ -30,6 +30,18 @@ pub(super) struct RailState {
     over_card: bool,
     /// How wide the page beside a `beside` rail is, as last drawn: it shows only where the column leaves it room.
     room: f32,
+    /// Where the long tick is, as a mark position that eases toward `current` when the page moves it.
+    focus: Option<crate::ui::motion::Transition>,
+    /// When the ease ends: the rail asks for frames until then.
+    focus_until: Option<std::time::Instant>,
+}
+
+/// How long the long tick takes to move to the prompt now in view.
+const FOCUS_EASE: std::time::Duration = std::time::Duration::from_millis(150);
+
+fn mix(from: gpui::Rgba, to: gpui::Rgba, by: f32) -> gpui::Rgba {
+    let lerp = |a: f32, b: f32| a + (b - a) * by;
+    gpui::Rgba { r: lerp(from.r, to.r), g: lerp(from.g, to.g), b: lerp(from.b, to.b), a: lerp(from.a, to.a) }
 }
 
 #[derive(Clone, Copy)]
@@ -59,35 +71,53 @@ impl PageView {
             move |bounds, _, window, cx| {
                 let height = f32::from(bounds.size.height);
                 let pitch = geo::pitch(count, height);
-                let scroll = entity.update(cx, |view, _| {
+                let now = cx.background_executor().now();
+                let snap = crate::ui::motion::reduced(cx);
+                let (scroll, focus, easing) = entity.update(cx, |view, _| {
                     let mut states = view.prompt_rails.borrow_mut();
                     let state = states.entry(id).or_default();
                     state.bounds = bounds;
+                    // The long tick follows `current` along an ease, so a page that moves it doesn't make it jump.
+                    let to = current as f32;
+                    let moving = state.focus.unwrap_or_else(|| crate::ui::motion::Transition::at(to, now));
+                    if snap {
+                        state.focus = Some(crate::ui::motion::Transition::at(to, now));
+                        state.focus_until = None;
+                    } else if moving.target() != to {
+                        state.focus = Some(moving.retarget(to, FOCUS_EASE, crate::ui::motion::EASE_OUT_SOFT, now));
+                        state.focus_until = Some(now + FOCUS_EASE);
+                    } else {
+                        state.focus = Some(moving);
+                    }
+                    let easing = state.focus_until.is_some_and(|end| now < end);
+                    let focus = state.focus.map_or(to, |focus| focus.value(now));
                     state.scroll = if state.followed == Some((current, count)) {
                         state.scroll.clamp(0.0, geo::max_scroll(count, pitch, height))
                     } else {
                         state.followed = Some((current, count));
                         geo::keep_in_view(state.scroll, current, count, pitch, height)
                     };
-                    state.scroll
+                    (state.scroll, focus, easing)
                 });
+                if easing {
+                    window.request_animation_frame();
+                }
                 let first = (((scroll - geo::PAD_Y) / pitch).floor().max(0.0)) as usize;
                 let last = ((((scroll + height - geo::PAD_Y) / pitch).ceil()).max(0.0) as usize).min(count);
                 for at in first..last {
-                    let color = if at == current {
-                        rgb(theme::palette().foreground)
-                    } else if hover == Some(at) {
+                    let rest = if hover == Some(at) {
                         rgba(theme::palette().foreground << 8 | 0xcc)
                     } else {
                         rgba(theme::palette().muted_foreground << 8 | 0x80)
                     };
+                    let color = mix(rest, rgb(theme::palette().foreground), geo::weight(at, focus));
                     let centre = geo::row_top(at, pitch) + pitch / 2.0 - scroll;
                     let tick = Bounds::new(
                         point(
                             bounds.origin.x + px(geo::PAD_X),
                             bounds.origin.y + px(centre - geo::TICK_HEIGHT / 2.0),
                         ),
-                        size(px(geo::length(at, current, hover)), px(geo::TICK_HEIGHT)),
+                        size(px(geo::length_near(at, focus, hover)), px(geo::TICK_HEIGHT)),
                     );
                     window.paint_quad(fill(tick, color).corner_radii(px(geo::TICK_HEIGHT / 2.0)));
                 }

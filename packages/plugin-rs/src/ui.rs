@@ -347,6 +347,43 @@ pub fn list_row(key: impl Into<String>, content: Node) -> Node {
     Node::new("ListItem").key(key).child(content)
 }
 
+/// What an `entry` shows: an optional `lead` (an icon, a spinner, a ✓), its `title`, a `detail` under the title, and
+/// `trailing` at the row's end (a badge, a small button, a count).
+pub struct Entry {
+    pub lead: Option<Node>,
+    pub title: Node,
+    pub detail: Option<Node>,
+    pub trailing: Option<Node>,
+}
+
+/// A row of a list, laid out by the app: the lead in a box of one width, so every row's title starts at one x, the
+/// title over its detail, and `trailing` at the end. Add `.on("onClick", ...)` and it is a list button; without one it
+/// sits in the same inset, so it lines up with the rows that are buttons and isn't called one. `.prop("title", ...)`
+/// is a clickable one's hover text. Put entries in a `section`. Needs Wings 0.2.57.
+pub fn entry(entry: Entry) -> Node {
+    Node::new("ListRow")
+        .maybe(entry.lead.map(|lead| slot("lead", lead)))
+        .child(slot("title", entry.title))
+        .maybe(entry.detail.map(|detail| slot("detail", detail)))
+        .maybe(entry.trailing.map(|trailing| slot("trailing", trailing)))
+}
+
+/// A group of rows under a heading, laid out by the app: the heading and the `description` start where the rows' text
+/// does, the description is muted and at most about 80 characters wide, and the `rows` (`entry`s, `list_button`s) are
+/// one under the other. Needs Wings 0.2.57.
+pub fn section(title: impl Into<String>, description: Option<&str>, rows: impl IntoIterator<Item = Node>) -> Node {
+    Node::new("Section")
+        .child(Node::new("Slot").prop("name", "title").text(title))
+        .maybe(description.map(|said| Node::new("Slot").prop("name", "description").text(said)))
+        .children(rows)
+}
+
+/// A dialog's or a confirm's buttons at the end of the line: `dismiss` (Cancel, Close) first, which the app draws
+/// ghost whatever its variant, then `act`, the buttons that do something, last of which the main one. Needs Wings 0.2.57.
+pub fn actions(dismiss: Option<Node>, act: impl IntoIterator<Item = Node>) -> Node {
+    Node::new("Actions").maybe(dismiss.map(|dismiss| slot("dismiss", dismiss))).children(act)
+}
+
 /// A search box. The app keeps its text: `on_input` hears it after each change, and `text` is only what it starts with.
 pub fn search_field(label: &str, text: &str, on_input: impl Fn(&str) + 'static) -> Node {
     Node::new("SearchField")
@@ -579,5 +616,23 @@ mod tests {
         // The same nodes exported again name their handlers the same, so a click on an older drawing still lands.
         let (_, later) = export(vec![drawn().child(button("Open", "ghost", false, || {}).key("open"))]);
         assert!(names.iter().all(|name| later.call(name, &json!({}))));
+    }
+
+    /// The names of the slots `node` sends, in order.
+    fn slots(node: Node) -> Vec<String> {
+        tree_json(node)["children"].as_array().unwrap().iter().filter(|child| child["type"] == "Slot").map(|slot| slot["props"]["name"].as_str().unwrap().to_owned()).collect()
+    }
+
+    #[test]
+    fn an_entry_a_section_and_actions_send_their_parts_as_the_slots_the_app_reads() {
+        let full = Entry { lead: Some(spinner()), title: text("Build"), detail: Some(muted("Running")), trailing: Some(badge("2", None)) };
+        assert_eq!(slots(entry(full)), ["lead", "title", "detail", "trailing"]);
+        assert_eq!(slots(entry(Entry { lead: None, title: text("Earlier"), detail: None, trailing: None })), ["title"]);
+        assert_eq!(slots(section("Folders", Some("Added with /add-dir."), [text("a")])), ["title", "description"]);
+        assert_eq!(slots(section("Folders", None, Vec::new())), ["title"]);
+        let drawn = tree_json(actions(Some(button("Cancel", "outline", false, || {})), [button("Save", "default", false, || {})]));
+        assert_eq!(drawn["type"], "Actions");
+        assert_eq!(drawn["children"][0]["props"]["name"], "dismiss");
+        assert_eq!(drawn["children"][1]["children"][0]["text"], "Save");
     }
 }

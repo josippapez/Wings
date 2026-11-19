@@ -149,11 +149,15 @@ impl Workspace {
         .into();
         // Where the card is, for its border over the terminal.
         let card = Rc::new(Cell::new(None));
+        let strip = self.status_strip(pane, cx);
         let body = match self.panes.get(&pane).map(|p| (&p.view, &p.focus)) {
             // The terminal draws in the window's terminal layer at this slot, so its output draws neither the main
             // column again nor the other terminals in it (`Workspace::render`). As a child of the card would, it has
             // the card's border over it, where its corners curve over the terminal.
-            Some((Ok(_), _)) => {
+            Some((Ok(view), _)) => {
+                // Its background follows the card's inside corners, where nothing (the status strip) is under it.
+                view.read(cx)
+                    .round_bottom(if strip.is_none() { CARD_RADIUS - 1.0 } else { 0.0 });
                 let card = card.clone();
                 let terminal = ui::slot(
                     TERMINALS,
@@ -228,7 +232,6 @@ impl Workspace {
         let older_server: Option<AnyElement> = None;
         let opened_terminals = self.agent_terminals_button(pane, zoomed, cx);
         let opened_buttons = self.opened_buttons(pane, cx);
-        let strip = self.status_strip(pane, cx);
         let header = div()
             .id(SharedString::from(format!("pane-header-{pane}")))
             .h(px(30.0))

@@ -10,6 +10,7 @@ use serde_json::{Map, Value};
 use std::fmt;
 
 pub mod code;
+mod kit;
 mod picture;
 pub mod prompt_rail;
 mod sunburst;
@@ -192,6 +193,15 @@ pub enum Node {
     PopupMenu(PopupMenu),
     Terminal(Terminal),
     Code(Code),
+    Actions(Actions),
+}
+
+/// A dialog's or a confirm's buttons, as the app lays them out: at the end of the line, the ones that dismiss first and
+/// in the ghost variant, then the ones that act.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Actions {
+    pub id: u64,
+    pub children: Vec<Node>,
 }
 
 /// A named part of the component it's in.
@@ -239,6 +249,12 @@ pub struct Stack {
     /// What to send back to the page when the right mouse button is pressed inside it: where, which of its children was
     /// under the pointer and what link or code was (`onContextMenu`).
     pub on_context_menu: Option<String>,
+    /// Set only by a component the app lays out (`ListRow`, `Section`), never by a page: in by a `ListButton`'s border and
+    /// padding, so what it holds lines up with the list buttons beside it without being a button.
+    pub inset: bool,
+    /// Set only by a `Section`: at most this wide from its left edge, so a description reads at a measure without being
+    /// centred as a `maxWidth` column is.
+    pub measure: Option<f32>,
     pub children: Vec<Node>,
 }
 
@@ -1099,6 +1115,7 @@ impl Node {
             Node::Sheet(n) => Some(n.id),
             Node::Terminal(n) => Some(n.id),
             Node::Code(n) => Some(n.id),
+            Node::Actions(n) => Some(n.id),
         }
     }
 
@@ -1142,6 +1159,7 @@ impl Node {
             Node::Split(n) => vec![&n.start, &n.end],
             Node::Bar(n) => vec![&n.children],
             Node::Dialog(n) => vec![&n.children],
+            Node::Actions(n) => vec![&n.children],
             Node::Gauge(n) => vec![&n.note],
             Node::Meter(_) => vec![],
             Node::Board(n) => vec![&n.header, &n.body],
@@ -1247,6 +1265,9 @@ impl Walk {
                 | "Sheet"
                 | "Terminal"
                 | "Code"
+                | "ListRow"
+                | "Section"
+                | "Actions"
         ) {
             return Ok(None);
         }
@@ -1296,8 +1317,13 @@ impl Walk {
                 enter: str_prop(&props, "enter") == Some("rise"),
                 links: on("links"),
                 on_context_menu: handler("onContextMenu"),
+                inset: false,
+                measure: None,
                 children: parts(children),
             }),
+            "ListRow" => kit::list_row(id, children, handler("onClick"), title(&props)),
+            "Section" => kit::section(id, children),
+            "Actions" => kit::actions(id, children),
             "Row" => Node::Row(Row {
                 id,
                 gap: choice(&props, "gap"),
@@ -2785,5 +2811,88 @@ mod tests {
         let parsed = tree(json!([{"id":1,"type":"Page","props":{"onTextScale":"1:onTextScale"},"children":[]}])).unwrap();
         let Node::Page(page) = &parsed.children[0] else { panic!("a page") };
         assert_eq!(page.on_text_scale.as_deref(), Some("1:onTextScale"));
+    }
+
+    fn slot_text(id: u64, name: &str, text: &str) -> Value {
+        json!({"id":id,"type":"Slot","props":{"name":name},"children":[{"id":id + 1,"type":"#text","text":text}]})
+    }
+
+    /// The row a `ListRow` lays out: the lead's box, then the title over the detail, then what trails.
+    fn row_line(node: &Node) -> &Row {
+        let children = match node {
+            Node::ListButton(item) => &item.button.children,
+            Node::Stack(stack) => &stack.children,
+            _ => panic!("a list button or a stack"),
+        };
+        let [Node::Row(line)] = children.as_slice() else { panic!("one row") };
+        line
+    }
+
+    #[test]
+    fn a_list_row_with_a_click_is_a_list_button_and_one_without_sits_in_its_inset() {
+        let lead = json!({"id":20,"type":"Slot","props":{"name":"lead"},"children":[{"id":21,"type":"Spinner","props":{}}]});
+        let trailing = json!({"id":30,"type":"Slot","props":{"name":"trailing"},"children":[button(json!({}))]});
+        let parsed = tree(json!([
+            {"id":1,"type":"ListRow","props":{"onClick":"1:onClick","title":"Open it"},"children":[lead, slot_text(10, "title", "Build"), slot_text(12, "detail", "Done · 2s"), trailing]},
+            {"id":40,"type":"ListRow","props":{},"children":[slot_text(41, "title", "Earlier")]},
+            // A disabled one takes no click: it is drawn as one without.
+            {"id":50,"type":"ListRow","props":{"onClick":"50:onClick","disabled":true},"children":[slot_text(51, "title", "Off")]},
+        ]))
+        .unwrap();
+        let Node::ListButton(clickable) = &parsed.children[0] else { panic!("a list button") };
+        assert_eq!((clickable.button.on_click.as_deref(), clickable.button.title.as_deref()), (Some("1:onClick"), Some("Open it")));
+        let line = row_line(&parsed.children[0]);
+        assert!(line.grow, "it takes the button's width, so what trails sits at its end");
+        let [Node::Stack(lead), Node::Stack(words), Node::Button(_)] = line.children.as_slice() else { panic!("lead, words, trailing: {line:?}") };
+        assert_eq!(lead.width, Some(16.0));
+        assert!(words.grow);
+        assert_eq!(plain_text(&words.children), "BuildDone · 2s");
+        for plain in &parsed.children[1..] {
+            let Node::Stack(inset) = plain else { panic!("a stack") };
+            assert!(inset.inset && !inset.grow);
+            // No lead: the title is the row's first part, at the inset's edge.
+            assert!(matches!(row_line(plain).children.as_slice(), [Node::Stack(words)] if words.width.is_none()));
+        }
+    }
+
+    #[test]
+    fn a_section_puts_its_heading_and_description_in_the_rows_inset_and_its_rows_under_them() {
+        let parsed = tree(json!([{"id":1,"type":"Section","props":{},"children":[
+            slot_text(2, "title", "Subagents"),
+            slot_text(4, "description", "What this session started."),
+            {"id":6,"type":"ListRow","props":{"onClick":"6:onClick"},"children":[slot_text(7, "title", "Explore")]},
+        ]}]))
+        .unwrap();
+        let Node::Stack(section) = &parsed.children[0] else { panic!("a stack") };
+        assert_eq!((section.id, section.gap), (1, Gap::Xs));
+        let [Node::Stack(head), Node::Stack(about), Node::Stack(rows)] = section.children.as_slice() else { panic!("{section:?}") };
+        assert!(head.inset && matches!(head.children.as_slice(), [Node::Heading(heading)] if plain_text(&heading.children) == "Subagents"));
+        assert!(about.inset && about.measure.is_some() && about.max_width.is_none(), "read at a measure, not centred");
+        assert!(matches!(about.children.as_slice(), [Node::Text(text)] if text.tone == Some(Tone::Muted) && text.size == TextSize::Small));
+        assert_eq!(rows.gap, Gap::None);
+        assert!(matches!(rows.children.as_slice(), [Node::ListButton(_)]));
+        // Without a description there is no line for one.
+        let bare = tree(json!([{"id":1,"type":"Section","props":{},"children":[slot_text(2, "title", "Folders")]}])).unwrap();
+        let Node::Stack(bare) = &bare.children[0] else { panic!("a stack") };
+        assert_eq!(bare.children.len(), 2);
+    }
+
+    #[test]
+    fn actions_put_the_dismissing_buttons_first_and_ghost_whatever_variant_they_came_in() {
+        let parsed = tree(json!([{"id":1,"type":"Actions","props":{},"children":[
+            {"id":5,"type":"Button","props":{"variant":"default"},"children":[{"id":6,"type":"#text","text":"Review"}]},
+            {"id":3,"type":"Slot","props":{"name":"dismiss"},"children":[button(json!({"variant":"outline"}))]},
+        ]}]))
+        .unwrap();
+        let Node::Actions(actions) = &parsed.children[0] else { panic!("actions") };
+        let variants: Vec<_> = actions
+            .children
+            .iter()
+            .map(|node| match node {
+                Node::Button(button) => (plain_text(&button.children), button.variant),
+                _ => panic!("a button"),
+            })
+            .collect();
+        assert_eq!(variants, [("Go".to_owned(), Variant::Ghost), ("Review".to_owned(), Variant::Default)]);
     }
 }

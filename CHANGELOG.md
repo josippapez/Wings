@@ -2,6 +2,14 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.57 · 2026-11-19
+
+- **Remote Control is on in every new Claude chat**, with a setting in Claude chat's settings to leave it off.
+- **The prompt rail glides** from one prompt to the next as you scroll, instead of jumping.
+- **No square corners behind rounded cards**: a plugin page in a tab or sidebar card, and a terminal's bottom corners, follow the card's curve.
+- **Pictures and the right-click menu work in a subagent's pane**, and a closed subagent tab still names its model.
+- **Plugins get list rows, sections and dialog actions from Wings**, laid out on one edge with the actions in one order, so pages stop drifting apart. Claude chat's subagents, background tasks, mentions, folders and permission dialogs use them.
+
 ## 0.2.56 · 2026-11-19
 
 - **Claude chat's account button stays in its header after Wings updates or restarts**, for a chat that goes on with the Claude Code it ran before.
