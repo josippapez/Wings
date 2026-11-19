@@ -80,6 +80,39 @@ fn a_page_hands_the_page_it_names_one_write_for_each_click_and_no_more() {
     chat.send("processStop", json!({ "token": "chat" }));
 }
 
+/// A subagent's sidebar is a page with no tab. It still takes a name, which the chat reaches it by, hears what the chat
+/// tells it to show, and has the chat make one write for each of its own clicks. Which subagent it shows comes from the chat
+/// by `tellPage`, because `openView` keeps `args` to a tab.
+#[test]
+fn a_sidebar_page_takes_a_name_hears_the_chat_and_hands_on_one_write_for_each_click() {
+    let sidebars = json!([{ "id": "subagent", "title": "Subagent", "page": "subagent.wasm" }]);
+    let rig = Rig::new(json!({ "permissions": { "processes": ["cat []"] }, "contributes": { "sidebars": sidebars } }), vec![pane("1", "/a")]);
+    *rig.env.projects.lock().unwrap() = vec![tmp()];
+    let chat = Caller::start(&rig.host);
+    assert_eq!(chat.call("namePage", json!({ "name": "chat:s1" })), Ok(Value::Null));
+    chat.send("spawn", json!({ "token": "chat", "program": "cat", "args": [], "cwd": tmp() }));
+    let side = Caller::start(&rig.host);
+    // The sidebar opens, with no args: they are for a tab.
+    let open = |args: Value| json!({ "id": "subagent", "as": "sidebar", "args": args, "newTab": false });
+    assert_eq!(chat.call("openView", open(Value::Null)), Ok(Value::Null));
+    assert_eq!(chat.call("openView", open(json!({ "agent": "a1" }))), Err("openView args only work with as: \"tab\"".into()));
+    // It names itself, hears the chat, and isn't a tab to bring to the front. Showing a subagent renames it.
+    assert_eq!(side.call("namePage", json!({ "name": "subagent-side" })), Ok(Value::Null));
+    assert_eq!(chat.call("tellPage", json!({ "name": "subagent-side", "message": { "kind": "show" } })), Ok(Value::Null));
+    assert_eq!(chat.call("showPage", json!({ "name": "subagent-side" })), Err("subagent-side isn't shown as a tab".into()));
+    assert_eq!(side.call("namePage", json!({ "name": "subagent-side:s1:a1" })), Ok(Value::Null));
+    assert_eq!(chat.call("tellPage", json!({ "name": "subagent-side", "message": null })), Err("No page is named subagent-side".into()));
+    // Its click is one write in the chat, and a second needs a second click.
+    let tell = |write: bool| json!({ "name": "chat:s1", "message": { "kind": "send" }, "write": write });
+    assert_eq!(side.call("tellPage", tell(true)), Err(NO_CLICK.into()));
+    assert_eq!(side.call_after_click("tellPage", tell(true)), Ok(Value::Null));
+    chat.send("processWrite", json!({ "token": "chat", "text": "hi\n" }));
+    assert_eq!(heard(&chat, 2), (vec!["hi".to_owned()], vec![Ok(Value::Null)]));
+    assert_eq!(chat.call("processWrite", json!({ "token": "chat", "text": "again\n" })), Err(WRITE_REFUSED.into()));
+    assert_eq!(side.call("tellPage", tell(true)), Err(NO_CLICK.into()));
+    chat.send("processStop", json!({ "token": "chat" }));
+}
+
 #[test]
 fn a_page_hears_what_another_tells_it_and_who_did() {
     let rig = Rig::new(json!({}), vec![]);

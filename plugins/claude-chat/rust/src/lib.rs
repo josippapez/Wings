@@ -1,8 +1,9 @@
 //! Claude chat (experimental): Claude Code as a chat in a tab instead of a terminal. The crate builds three frames. The
 //! main (`--features main`, `main_frame.rs`) puts a Chat badge on Claude's terminals, whose button moves the session
 //! into a chat tab. The chat page (`--features chat`, `chat.rs` and `view.rs`) runs Claude Code headless and draws the
-//! session from what it prints (`session.rs`). The settings page (`--features settings`, `settings_page.rs`) is in Wings
-//! Settings and sets what every chat reads (`prefs.rs`).
+//! session from what it prints (`session.rs`). The subagent sidebar (`--features subagent`, which is the chat's code with
+//! `subagent_sidebar.rs` as its start) is Wings' right sidebar for one subagent. The settings page (`--features settings`,
+//! `settings_page.rs`) is in Wings Settings and sets what every chat reads (`prefs.rs`).
 
 // Each frame uses its own part of the crate.
 #![allow(dead_code)]
@@ -47,6 +48,8 @@ mod plugins;
 mod plugins_view;
 mod prefs;
 #[cfg(feature = "chat")]
+mod rail;
+#[cfg(feature = "chat")]
 mod rewind_view;
 mod session;
 #[cfg(feature = "settings")]
@@ -58,6 +61,8 @@ mod setup_view;
 mod status_view;
 #[cfg(feature = "chat")]
 mod subagent_relay;
+#[cfg(feature = "subagent")]
+mod subagent_sidebar;
 #[cfg(feature = "chat")]
 mod subagent_tab;
 #[cfg(feature = "chat")]

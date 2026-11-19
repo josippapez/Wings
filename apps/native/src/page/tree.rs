@@ -25,6 +25,8 @@ pub const MAX_TEXT_CHARS: usize = 20_000;
 const MAX_HANDLER_BYTES: usize = 64;
 /// A select shows this many of its options; the rest are dropped.
 pub const MAX_OPTIONS: usize = 200;
+/// The most children a `Scroll`'s `track` names.
+const MAX_TRACKED: usize = 2_000;
 /// A text input holds this many characters of what the page gave it. The rest of the page's text is cut to
 /// `MAX_TEXT_CHARS`, which would cut what the person typed in a long field.
 pub const MAX_INPUT_CHARS: usize = 20_000;
@@ -384,6 +386,14 @@ pub struct Scroll {
     /// `textScale`: every text inside is this many times its size (0.5 to 2), as a page's text size setting asks.
     /// None keeps the scale the scroll is in.
     pub text_scale: Option<f32>,
+    /// `scrollTo: { index, token }`: scrolls so the `index`th child of its first child is at the top of the view, once for
+    /// each new `token`. The page keeps sending the same pair until it scrolls on its own; an unchanged token does nothing.
+    pub scroll_to: Option<(usize, u64)>,
+    /// `track: [index, ...]` (ascending) with `onTrack`: the children of its first child whose place the page wants to
+    /// know. `onTrack` hears `{ at }`, the position in `track` of the last one whose top is at or above the top of the
+    /// view (null when the view is above them all), whenever that changes.
+    pub track: Vec<usize>,
+    pub on_track: Option<String>,
     pub children: Vec<Node>,
 }
 
@@ -1211,6 +1221,16 @@ impl Walk {
                 follow_end: str_prop(&props, "follow") == Some("end"),
                 on_reach_start: handler("onReachStart"),
                 text_scale: number(&props, "textScale").map(|scale| scale.clamp(0.5, 2.0) as f32),
+                scroll_to: props.get("scrollTo").and_then(|to| {
+                    let index = to.get("index")?.as_u64()?;
+                    Some((usize::try_from(index).ok()?, to.get("token")?.as_u64()?))
+                }),
+                track: props
+                    .get("track")
+                    .and_then(Value::as_array)
+                    .map(|track| track.iter().filter_map(Value::as_u64).take(MAX_TRACKED).filter_map(|at| usize::try_from(at).ok()).collect())
+                    .unwrap_or_default(),
+                on_track: handler("onTrack"),
                 children: parts(children),
             }),
             "Bar" => Node::Bar(Bar {
@@ -1237,7 +1257,7 @@ impl Walk {
                     id,
                     size: number(&props, "defaultSize")
                         .unwrap_or(280.0)
-                        .clamp(120.0, 1_000.0) as f32,
+                        .clamp(16.0, 1_000.0) as f32,
                     fixed_end: str_prop(&props, "side") == Some("end"),
                     collapse_below: number(&props, "collapseBelow")
                         .filter(|below| *below > 0.0)
@@ -1853,6 +1873,26 @@ mod tests {
         ]})) else { panic!() };
         assert!(!plain.follow_end);
         assert!(matches!(&plain.children[0], Node::Stack(stack) if !stack.enter));
+    }
+
+    #[test]
+    fn a_scroll_takes_a_place_to_scroll_to_and_children_to_track() {
+        let scroll = |props: Value| match parse_one(json!({"id":1,"type":"Scroll","props":props,"children":[]})) {
+            Node::Scroll(scroll) => scroll,
+            _ => panic!(),
+        };
+        let plain = scroll(json!({}));
+        assert_eq!((plain.scroll_to, plain.track.is_empty(), plain.on_track), (None, true, None));
+        let aimed = scroll(json!({"scrollTo":{"index":7,"token":3},"track":[2,5,9,"x",-1],"onTrack":"1:onTrack"}));
+        assert_eq!(aimed.scroll_to, Some((7, 3)));
+        assert_eq!(aimed.track, [2, 5, 9]);
+        assert_eq!(aimed.on_track.as_deref(), Some("1:onTrack"));
+        // A place that isn't two whole numbers is no place.
+        assert_eq!(scroll(json!({"scrollTo":{"index":-1,"token":3}})).scroll_to, None);
+        assert_eq!(scroll(json!({"scrollTo":{"index":1}})).scroll_to, None);
+        // A slim pane, like a rail, is as narrow as asked down to 16 points.
+        let Node::Split(rail) = parse_one(json!({"id":1,"type":"Split","props":{"defaultSize":26},"children":[]})) else { panic!() };
+        assert_eq!(rail.size, 26.0);
     }
 
     #[test]

@@ -1225,7 +1225,27 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         text("The discount is applied in floating point, so `100 * 0.9` comes out a hair under 90 on CI's Node version."),
         json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 12_000, "num_turns": 2, "result": "", "total_cost_usd": 0.03 }),
     ]);
-    let scenes: [Scene; 67] = [
+    // Eight prompts, each answered, for the rail at the left of the conversation.
+    let railed = {
+        let asks = [
+            "Why does the checkout test fail on CI but pass here?",
+            "Move the discount maths into its own module.",
+            "Add a test for the rounding.",
+            "Does the cart round the same way?",
+            "Bump the plugin's version and the changelog.",
+            "Run the whole suite again.",
+            "Why is the dev server slow to start?",
+            "Write the release notes for Friday.",
+        ];
+        let mut lines = vec![init.clone()];
+        for (n, ask) in asks.iter().enumerate() {
+            lines.push(said(ask, &format!("rail-{n}")));
+            lines.push(text(&format!("Done with step {}: it is in src/discount.ts and its test passes.", n + 1)));
+            lines.push(json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 9_000, "num_turns": 2, "result": "", "total_cost_usd": 0.02 }));
+        }
+        opened(lines)
+    };
+    let scenes: [Scene; 68] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -1264,11 +1284,14 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         ("mention", opened(vec![init.clone()]), None, Some("type:fix the rounding in @che"), "checkout.test.ts"),
         // Two pasted pictures wait in the message box as chips, with a message under them.
         ("paste", opened(vec![init.clone()]), None, Some("paste:;paste:;type:what is in these?"), "Image 2"),
-        // Each subagent's call has Open, which opens its conversation in a tab of its own (the `subagent-tab` scenes).
+        // Each subagent's call has Open, which opens its conversation in Wings' sidebar (the `subagent-sidebar` scene); the
+        // sidebar's Pop out makes it a tab (the `subagent-tab` scenes).
         ("subagent", subagent, None, Some("disclose:Ran 2 subagents"), "Survey the callers of applyDiscount"),
         ("suggestion", suggested, None, None, "Tab"),
         ("subagents", subagents, None, None, "Waiting on 2 subagents"),
-        // The side panel lists the background tasks that run, each with how long it has and Stop.
+        // The prompt rail: a mark for each message, the one in view lit, and a tooltip on the one the pointer is over.
+        ("prompt-rail", railed, None, Some("hover:14,130"), "Write the release notes"),
+        // The side panel shows by default, and lists the background tasks that run, each with how long it has and Stop.
         ("tasks", tasks.clone(), None, None, "Background tasks"),
         // A click on one opens the end of what it printed in a dialog.
         ("task-output", tasks, None, Some("row:Watch the test suite"), "Waiting for file changes"),
@@ -1323,8 +1346,8 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         ("edits", edited, None, None, "Edited 2 files"),
         // Undo asks first, and says what goes back.
         ("edits-undo", edited_undo, None, Some("press:Undo"), "Undo the changes to 2 files from this turn?"),
-        // The side panel opened over a narrow tab from the header's button, with the conversation under it.
-        ("panel-open", tasks_open, None, Some("press:Side panel"), "Background tasks"),
+        // The header's Side panel button turns the panel off, at any width, and the conversation has the room.
+        ("panel-off", tasks_open, None, Some("press:Side panel"), "Both run in the background"),
         // /add-dir restarts the chat with the folder, which the side panel lists with a Remove.
         ("folder", worked_again, None, Some(add_dir.as_str()), "Folders"),
         // /mcp offers Reconnect on the server that failed, Sign in on the one that wants it and Sign out on a signed-in one.
@@ -1337,7 +1360,7 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
         // The agent and the command that ended each leave a line, the agent's report folded under its own.
         ("tasks-finished", finished, None, None, "Command “Run the tests” failed"),
         // The side panel lists them as done, the agent under Subagents and the command under Background tasks.
-        ("tasks-done", finished_panel, None, Some("press:Side panel"), "Background tasks · 1 done"),
+        ("tasks-done", finished_panel, None, None, "Background tasks · 1 done"),
     ];
     // Files for @-mentions, which the chat lists with git.
     for file in ["src/checkout.ts", "src/checkout.test.ts", "src/cart.ts", "api/limits.ts", "README.md"] {
@@ -1482,25 +1505,15 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
             std::env::set_var("CHAT_EXIT", exit.map_or("", |(code, _)| code));
             std::env::set_var("CHAT_STDERR", exit.map_or("", |(_, said)| said));
         }
-        // The side panel floats over a tab's right side while the tab is wide enough to leave the conversation clear (1,480
-        // points), and is behind the header's button in a narrower one, so a few scenes are drawn at 1,600 too to show it and
-        // at 1,280 for the button just under it.
+        // The side panel shows by default and floats over a tab's right side, beside the conversation while the tab is wide
+        // enough to leave it clear (1,480 points) and over it in a narrower one, so a few scenes are drawn at 1,600 too and at
+        // 1,280 just under it.
         let widths: &[f32] = if ["conversation", "work", "ask-bash", "tasks", "terminal", "folder", "long-message", "subagents", "subagent"].contains(&name) {
             &[1600.0, 1280.0, 1000.0, 640.0]
         } else {
             &[1000.0, 640.0]
         };
         for &width in widths {
-            // What these scenes look for is in the side panel, which a narrow tab opens from the header's button, after the
-            // restart that /add-dir makes.
-            let opening = ["tasks", "task-output", "terminal", "folder", "agent-message"].contains(&name) && width < 1_480.0;
-            let acted = match (act, opening) {
-                (Some(act), true) if name == "folder" => Some(format!("{act};wait:1500;press:Side panel")),
-                (Some(act), true) => Some(format!("press:Side panel;{act}")),
-                (None, true) => Some("press:Side panel".to_owned()),
-                (act, false) => act.map(str::to_owned),
-            };
-            let act = acted.as_deref();
             // The shell of the terminal the workspace draws over the page, opened before the page so the fake `claude` the
             // page starts is found under the scene's own shell.
             let shot_terminal = (name == "terminal").then(|| {
@@ -1556,6 +1569,13 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
                             cx.simulate_keystrokes(window, "cmd-v");
                         }
                         Some(("wait", ms)) => wait(&mut cx, window, Duration::from_millis(ms.parse().unwrap())),
+                        // The pointer over a point of the page, which shows the tooltip of what is there once it has rested.
+                        Some(("hover", at)) => {
+                            let (x, y) = at.split_once(',').unwrap();
+                            let position = point(px(x.parse().unwrap()), px(y.parse().unwrap()));
+                            cx.simulate_event(window, gpui::MouseMoveEvent { position, pressed_button: None, modifiers: gpui::Modifiers::default() });
+                            wait(&mut cx, window, Duration::from_millis(1200));
+                        }
                         Some(("chip", label)) => assert!(handle.read_with(&cx, |view, _| view.press_chip(label)).unwrap()),
                         Some(("press", label)) => assert!(handle.read_with(&cx, |view, _| view.press(label, 0)).unwrap()),
                         // A row of a list that is a button, like a task in the side panel.
@@ -1577,8 +1597,14 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
     }
     // A subagent's tab: the subagent's transcript, read from its session's folder, how it stands as its chat tells it, and the
     // message box, which sends through the chat. The chat runs in a window behind, as in a tab beside; without it the box
-    // says why it can't send.
-    if only.as_deref().is_none_or(|only| only.starts_with("subagent-tab")) {
+    // says why it can't send. The sidebar scene is the same page as Wings' sidebar shows it, in a window of the sidebar's
+    // width of its own: the harness draws one page to a window, so Wings' window around it, with the Changes sidebar beside
+    // it, isn't in the picture. The chat's own Open button, pressed here, is what tells the sidebar which subagent to show.
+    if only.as_deref().is_none_or(|only| only.starts_with("subagent-")) {
+        let side_page = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/claude-chat/dist/native/subagent.wasm");
+        let side_page = side_page.canonicalize().expect("sh build-rust.sh claude-chat, in plugins/");
+        wings_native::page::runtime::wasm::compile_now(&side_page.to_string_lossy()).unwrap();
+        let side_source = format!("{}{}", wings_native::page::runtime::wasm::MARKER, side_page.display());
         const SUB_SESSION: &str = "8c2e4a6b-1d3f-4a5c-9e7b-0f2d4c6e8a13";
         let (call, agent, title) = ("sa1", "asa1", "Survey the callers of applyDiscount");
         let prompt = "List every caller of applyDiscount, and say which of them round.";
@@ -1625,12 +1651,13 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
             std::env::set_var("CHAT_STDERR", "");
         }
         let args = json!({ "subagent": { "session": SUB_SESSION, "agent": agent, "title": title } });
-        for (state, chat_open) in [("subagent-tab", true), ("subagent-tab-closed", false)] {
+        for (state, chat_open, sidebar) in [("subagent-tab", true, false), ("subagent-tab-closed", false, false), ("subagent-sidebar", true, true)] {
             if only.as_deref().is_some_and(|only| only != state) {
                 continue;
             }
-            for width in [1000.0, 640.0] {
-                let chat: Option<AnyWindowHandle> = chat_open.then(|| {
+            let widths: &[f32] = if sidebar { &[420.0] } else { &[1000.0, 640.0] };
+            for &width in widths {
+                let chat_view = chat_open.then(|| {
                     let handle = cx
                         .open_offscreen_window(size(px(1000.0), px(760.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, &source, None, cx)))
                         .unwrap();
@@ -1641,15 +1668,32 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
                         assert!(Instant::now() < deadline, "the chat did not start: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
                         wait(&mut cx, window, Duration::from_millis(20));
                     }
-                    window
+                    handle
                 });
+                let chat: Option<AnyWindowHandle> = chat_view.map(Into::into);
+                let (page, page_args) = if sidebar { (&side_source, None) } else { (&source, Some(&args)) };
                 let handle = cx
-                    .open_offscreen_window(size(px(width), px(760.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, &source, Some(&args), cx)))
+                    .open_offscreen_window(size(px(width), px(760.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, page, page_args, cx)))
                     .unwrap();
                 handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
                 let window = handle.into();
+                if let Some(chat_view) = chat_view.filter(|_| sidebar) {
+                    // The sidebar is empty until a click in the chat says which subagent: the call's Open button.
+                    let deadline = Instant::now() + Duration::from_secs(30);
+                    while !handle.read_with(&cx, |view, _| view.text().contains("No subagent open")).unwrap() {
+                        assert!(Instant::now() < deadline, "the sidebar did not start: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
+                        wait(&mut cx, window, Duration::from_millis(20));
+                    }
+                    assert!(chat_view.update(&mut cx, |view, _, cx| view.press_disclosure("Ran 1 subagent", cx)).unwrap());
+                    wait(&mut cx, chat_view.into(), Duration::from_millis(300));
+                    assert!(chat_view.read_with(&cx, |view, _| view.press("Open", 0)).unwrap());
+                }
                 // Open, the box says how a message goes once the chat has said it can pass one on; closed, it says why not.
-                let shown = if chat_open { ["Found three callers", "Goes through the chat"] } else { ["Found three callers", "is closed"] };
+                let shown = match (chat_open, sidebar) {
+                    (true, true) => ["Found three callers", "Pop out"],
+                    (true, false) => ["Found three callers", "Goes through the chat"],
+                    (false, _) => ["Found three callers", "is closed"],
+                };
                 for expected in shown {
                     let deadline = Instant::now() + Duration::from_secs(30);
                     while !handle.read_with(&cx, |view, _| view.text().contains(expected)).unwrap() {

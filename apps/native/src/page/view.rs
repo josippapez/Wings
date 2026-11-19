@@ -91,6 +91,10 @@ struct FollowScroll {
     max: Cell<Pixels>,
     /// `onReachStart` was sent and what is above hasn't grown since, so it isn't sent again.
     asked: Cell<bool>,
+    /// The `scrollTo` token the scroll last acted on.
+    jumped: Cell<u64>,
+    /// What `onTrack` last said: none before it was said at all, then the tracked child or none.
+    tracked: Cell<Option<Option<usize>>>,
 }
 
 /// The layer of the window that draws the terminals a tab's agent opened, each at the place its page's `Terminal` leaves.
@@ -996,6 +1000,58 @@ impl PageView {
         state
     }
 
+    /// The handle of a `Scroll` that doesn't follow its end but is told where to scroll or which children to watch.
+    fn watched_scroll(&self, id: u64) -> Rc<FollowScroll> {
+        self.follow_scrolls.borrow_mut().entry(id).or_default().clone()
+    }
+
+    /// Runs once the column of a `Scroll` with `scrollTo` or `track` is laid out, with the bounds of its children: scrolls to
+    /// the child `scrollTo` names, once for each token, and tells the page, with `onTrack`, which tracked child the view has
+    /// scrolled to when that changes. Only the children's tops are read, so it never lays anything out again.
+    fn scroll_watch(
+        state: Rc<FollowScroll>,
+        to: Option<(usize, u64)>,
+        track: Vec<usize>,
+        on_track: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> impl Fn(Vec<gpui::Bounds<Pixels>>, &mut Window, &mut gpui::App) + 'static {
+        let entity = cx.entity();
+        move |children, window, cx| {
+            let handle = &state.handle;
+            let view = handle.bounds();
+            if view.size.height <= px(0.0) {
+                // Not laid out yet: look again next frame.
+                window.refresh();
+                return;
+            }
+            if let Some((index, token)) = to.filter(|(_, token)| state.jumped.get() != *token)
+                && let Some(child) = children.get(index)
+            {
+                state.jumped.set(token);
+                let (max, offset) = (handle.max_offset().y, handle.offset());
+                // The offset is how far the content moved up, so it is minus what the child is below the view's top.
+                let wanted = offset.y + view.top() - child.top();
+                handle.set_offset(point(offset.x, wanted.max(-max).min(px(0.0))));
+                window.refresh();
+                return;
+            }
+            let Some(handler) = on_track.as_ref() else {
+                return;
+            };
+            // The last tracked child whose top has reached the top of the view (a point of slack for rounding).
+            let top = view.top() + px(1.0);
+            let reached = track.partition_point(|index| children.get(*index).is_some_and(|child| child.top() <= top));
+            let at = reached.checked_sub(1);
+            if state.tracked.get() == Some(at) {
+                return;
+            }
+            state.tracked.set(Some(at));
+            let handler = handler.clone();
+            let entity = entity.clone();
+            cx.defer(move |cx| entity.update(cx, |view, _| view.send(&handler, Some(&serde_json::json!({ "at": at })))));
+        }
+    }
+
     /// Asks the page for older items when `area` is scrolled within a screen of its top, and keeps the view on what
     /// it showed when they arrive. It runs once the area is laid out, so it sees how far it scrolls now.
     /// `handler` is `None` once there is nothing older to ask for, which is also how the last older items arrive.
@@ -1031,6 +1087,27 @@ impl PageView {
             let entity = entity.clone();
             cx.defer(move |cx| entity.update(cx, |view, _| view.send(&handler, None)));
         }
+    }
+
+    /// A `Stack` as a box, before it is made an element, so a `Scroll` that watches its children can ask for their bounds.
+    fn stack(&self, stack: &tree::Stack, cx: &mut Context<Self>) -> gpui::Div {
+        // The texts it holds find links when it asks, as a Scroll's take its `textScale`.
+        let before = LINKED.with(Cell::get);
+        LINKED.with(|cell| cell.set(before || stack.links));
+        let element = div()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(gap(stack.gap)))
+            .when(stack.grow, |el| el.flex_1())
+            .when_some(stack.width, |el, width| el.w(px(width)).flex_none())
+            .when_some(stack.max_width, |el, width| el.w_full().max_w(px(width)).mx_auto())
+            .map(|el| match stack.enter {
+                true => el.children(stack.children.iter().map(|child| self.rising(child, cx))),
+                false => el.children(self.items(&stack.children, cx)),
+            });
+        LINKED.with(|cell| cell.set(before));
+        element
     }
 
     fn nodes(&self, nodes: &[Node], cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -1351,28 +1428,7 @@ impl PageView {
                     .into_any_element()
             }
             Node::Toolbar(toolbar) => self.toolbar(toolbar, cx),
-            Node::Stack(stack) => {
-                // The texts it holds find links when it asks, as a Scroll's take its `textScale`.
-                let before = LINKED.with(Cell::get);
-                LINKED.with(|cell| cell.set(before || stack.links));
-                let element = div()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .gap(px(gap(stack.gap)))
-                    .when(stack.grow, |el| el.flex_1())
-                    .when_some(stack.width, |el, width| el.w(px(width)).flex_none())
-                    .when_some(stack.max_width, |el, width| {
-                        el.w_full().max_w(px(width)).mx_auto()
-                    })
-                    .map(|el| match stack.enter {
-                        true => el.children(stack.children.iter().map(|child| self.rising(child, cx))),
-                        false => el.children(self.items(&stack.children, cx)),
-                    })
-                    .into_any_element();
-                LINKED.with(|cell| cell.set(before));
-                element
-            }
+            Node::Stack(stack) => self.stack(stack, cx).into_any_element(),
             Node::Row(row) => self.row(row, cx),
             Node::Text(text) => self.text_element(text, None, cx),
             Node::Button(button) => self.button(button, 0.0, cx),
@@ -1506,8 +1562,13 @@ impl PageView {
             .into_any_element(),
             // A scroll keeps 8 points either side and 12 below, as a list under a header does.
             Node::Scroll(scroll) => {
-                let state = scroll.follow_end.then(|| self.follow_end(scroll.id));
-                let reach = state.as_ref().map(|state| Self::reach_start(state.clone(), scroll.on_reach_start.clone(), cx));
+                let watches = scroll.scroll_to.is_some() || scroll.on_track.is_some();
+                let state = match (scroll.follow_end, watches) {
+                    (true, _) => Some(self.follow_end(scroll.id)),
+                    (false, true) => Some(self.watched_scroll(scroll.id)),
+                    (false, false) => None,
+                };
+                let reach = state.as_ref().filter(|_| scroll.follow_end).map(|state| Self::reach_start(state.clone(), scroll.on_reach_start.clone(), cx));
                 let mut base = div();
                 if let Some(reach) = reach {
                     base = base.on_children_prepainted(reach);
@@ -1516,7 +1577,14 @@ impl PageView {
                 let before = TEXT_SCALE.with(Cell::get);
                 let scale = scroll.text_scale.unwrap_or(before);
                 TEXT_SCALE.with(|cell| cell.set(scale));
-                let children = self.nodes(&scroll.children, cx);
+                // With a place to scroll to or children to track, its one column reports where its children are.
+                let children = match (&scroll.children[..], state.as_ref().filter(|_| watches)) {
+                    ([Node::Stack(column)], Some(state)) => {
+                        let watch = Self::scroll_watch(state.clone(), scroll.scroll_to, scroll.track.clone(), scroll.on_track.clone(), cx);
+                        vec![self.stack(column, cx).on_children_prepainted(watch).into_any_element()]
+                    }
+                    _ => self.nodes(&scroll.children, cx),
+                };
                 TEXT_SCALE.with(|cell| cell.set(before));
                 let area = base
                     .id(ElementId::NamedInteger("page-scroll".into(), scroll.id))

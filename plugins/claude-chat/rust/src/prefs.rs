@@ -11,6 +11,9 @@ pub const MODE: &str = "default-mode";
 /// Every run of tool calls shows open with each call's output, as Claude Code's own verbose transcript does.
 pub const DETAILED: &str = "detailed-output";
 
+/// The side panel shows beside or over the conversation, in every chat.
+pub const SIDE_PANEL: &str = "side-panel";
+
 /// How big the conversation's text is, in every chat.
 pub const TEXT_SIZE: &str = "text-size";
 pub const TEXT_SIZES: [(&str, &str); 3] = [("small", "Small"), ("default", "Default"), ("large", "Large")];
@@ -22,6 +25,10 @@ fn mode_of(stored: &Value) -> Option<String> {
 
 pub fn mode() -> Setting<String> {
     Setting::new(MODE, "default".to_owned(), mode_of, |mode| json!(mode))
+}
+
+pub fn side_panel() -> Setting<bool> {
+    Setting::boolean(SIDE_PANEL, true)
 }
 
 pub fn detailed() -> Setting<bool> {

@@ -15,4 +15,6 @@ serde_json = "1"
 # The frame this module is. `build-rust.sh` builds each one the manifest names.
 main = []
 chat = []
+# The sidebar for a subagent: the chat's code, started as that page (`subagent_sidebar.rs`).
+subagent = ["chat"]
 settings = []

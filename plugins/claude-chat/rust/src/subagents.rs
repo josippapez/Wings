@@ -1,5 +1,9 @@
-//! A subagent in a tab of its own, right after the chat that started it: `subagent_tab.rs` runs the tab, and
-//! `subagent_relay.rs` is the chat's side of it. This is what both share and needs no page.
+//! A subagent in Wings' right sidebar, or popped out into a tab right after the chat that started it: `subagent_tab.rs`
+//! runs either page, and `subagent_relay.rs` is the chat's side of it. This is what both share and needs no page.
+//!
+//! The sidebar is one page for the whole plugin, so it learns which subagent to show from the chat's message (`show`), not
+//! from args, which `openView` allows only for a tab. A page named for its subagent is what the chat feeds, so the
+//! sidebar takes the name `subagent-side:<session>:<agent>` once it shows one, and a tab `subagent:<session>:<agent>`.
 //!
 //! Claude Code 2.1.327 keeps a subagent's transcript beside its session's, in `<session>/subagents/agent-<id>.jsonl`, and
 //! knows the subagent by that id: `task_started`'s `task_id`, the `agent_id` on each of its lines and `agentId` in the
@@ -87,10 +91,42 @@ pub fn tab_page(session: &str, agent: &str) -> String {
     format!("subagent:{session}:{agent}")
 }
 
-/// The subagents of `session` whose tab is open, from the names the plugin's pages have.
-pub fn open_tabs(names: &[String], session: &str) -> HashSet<String> {
-    let prefix = format!("subagent:{session}:");
-    names.iter().filter_map(|name| name.strip_prefix(&prefix)).map(str::to_owned).collect()
+/// The name the sidebar takes while it shows no subagent, and the start of the names it takes for one.
+pub const SIDE_IDLE: &str = "subagent-side";
+
+/// The name the sidebar takes while it shows `agent` of `session`.
+pub fn side_page(session: &str, agent: &str) -> String {
+    format!("subagent-side:{session}:{agent}")
+}
+
+/// The sidebar's name among the names the plugin's pages have, whatever it shows.
+pub fn side_name(names: &[String]) -> Option<&str> {
+    names.iter().map(String::as_str).find(|name| *name == SIDE_IDLE || name.starts_with("subagent-side:"))
+}
+
+/// The pages that show `agent` of `session`, a tab or the sidebar, from the names the plugin's pages have.
+pub fn pages_of(names: &[String], session: &str, agent: &str) -> Vec<String> {
+    let wanted = [tab_page(session, agent), side_page(session, agent)];
+    names.iter().filter(|name| wanted.contains(name)).cloned().collect()
+}
+
+/// Each page that shows a subagent of `session` as (its name, the subagent).
+pub fn watching(names: &[String], session: &str) -> Vec<(String, String)> {
+    let prefixes = [format!("subagent:{session}:"), format!("subagent-side:{session}:")];
+    names
+        .iter()
+        .filter_map(|name| prefixes.iter().find_map(|prefix| name.strip_prefix(prefix.as_str())).map(|agent| (name.clone(), agent.to_owned())))
+        .collect()
+}
+
+/// What the chat tells the sidebar to show: `agent` of `session`, which `title` says what it is for.
+pub fn show_message(session: &str, agent: &str, title: &str) -> Value {
+    json!({ "kind": "show", "session": session, "agent": agent, "title": title })
+}
+
+/// What the sidebar tells the chat to open as a tab: its subagent, popped out.
+pub fn pop_message(agent: &str, title: &str) -> Value {
+    json!({ "kind": "pop", "agent": agent, "name": title })
 }
 
 /// The call `call` in the session's conversation or in a subagent's.
@@ -453,9 +489,21 @@ mod tests {
     }
 
     #[test]
-    fn the_tabs_of_a_sessions_subagents_are_known_by_their_names() {
-        let names = [chat_page("s1"), tab_page("s1", "a1"), tab_page("s2", "a2"), tab_page("s1", "a3")].map(String::from);
-        let open = open_tabs(&names, "s1");
-        assert_eq!(open, HashSet::from(["a1".to_owned(), "a3".to_owned()]));
+    fn the_pages_showing_a_sessions_subagents_are_known_by_their_names() {
+        let names = [chat_page("s1"), tab_page("s1", "a1"), tab_page("s2", "a2"), side_page("s1", "a3"), side_page("s2", "a4")].map(String::from);
+        let watching = watching(&names, "s1");
+        assert_eq!(watching, [("subagent:s1:a1".to_owned(), "a1".to_owned()), ("subagent-side:s1:a3".to_owned(), "a3".to_owned())]);
+        // The same subagent in a tab and in the sidebar is fed in both.
+        let both = [tab_page("s1", "a1"), side_page("s1", "a1"), side_page("s1", "a2")].map(String::from);
+        assert_eq!(pages_of(&both, "s1", "a1"), ["subagent:s1:a1", "subagent-side:s1:a1"]);
+        assert_eq!(side_name(&both), Some("subagent-side:s1:a1"));
+        assert_eq!(side_name(&[SIDE_IDLE.to_owned()]), Some(SIDE_IDLE));
+        assert_eq!(side_name(&[chat_page("s1"), tab_page("s1", "a1")]), None);
+    }
+
+    #[test]
+    fn the_sidebar_is_told_which_subagent_to_show_and_asks_for_it_as_a_tab() {
+        assert_eq!(show_message("s1", "a1", "count"), json!({ "kind": "show", "session": "s1", "agent": "a1", "title": "count" }));
+        assert_eq!(pop_message("a1", "count"), json!({ "kind": "pop", "agent": "a1", "name": "count" }));
     }
 }

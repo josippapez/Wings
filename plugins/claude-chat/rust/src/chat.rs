@@ -126,8 +126,10 @@ pub struct Chat {
     /// Where this chat was forked from, as the note at its top says: the name of the original session.
     pub forked_from: Option<String>,
     /// Whether the tab is narrower than the side panel and the conversation need side by side, as the page's split says: None
-    /// until it has measured. Then the panel stays out of the way, and `side_open` has it over the conversation.
+    /// until it has measured. Then the panel floats over the conversation, and Escape or a press outside puts it away.
     pub narrow: Option<bool>,
+    /// Whether the side panel shows: your choice for every chat (`prefs::side_panel`, on by default), which Escape or a press
+    /// outside a panel over a narrow tab sets off for this tab only, until the header's button.
     pub side_open: bool,
     /// The background agent a message is being written to, by its id, and the message.
     pub message_to: Option<(String, String)>,
@@ -184,7 +186,7 @@ thread_local! {
         fork_ask: false,
         forked_from: None,
         narrow: None,
-        side_open: false,
+        side_open: true,
         message_to: None,
         changes: None,
         counting: false,
@@ -206,6 +208,7 @@ pub fn with<T>(change: impl FnOnce(&mut Chat) -> T) -> T {
     CHAT.with(|chat| change(&mut chat.borrow_mut()))
 }
 
+#[cfg(not(feature = "subagent"))]
 #[unsafe(no_mangle)]
 pub fn start() {
     // A subagent's tab is a page of this view too, opened with the subagent in its args.
@@ -217,8 +220,10 @@ pub fn start() {
     with(|c| {
         c.detailed = prefs::detailed().get();
         c.text_scale = prefs::scale_of(&prefs::text_size().get());
+        c.side_open = prefs::side_panel().get();
     });
     prefs::text_size().on_change(|size| with(|c| c.text_scale = prefs::scale_of(size)));
+    prefs::side_panel().on_change(|shown| with(|c| c.side_open = *shown));
     host::on_terminals(|listed| with(|c| c.terminals = listed.iter().filter_map(Terminal::of).collect()));
     // The clicks were made against the old setting, so they go with it.
     prefs::detailed().on_change(|detailed| {
@@ -831,13 +836,14 @@ pub fn cycle_mode() {
 /// Escape: closes the dialog or sheet that is open, else stops the turn while Claude works.
 pub fn escape() {
     let (dialog, working) = with(|c| {
-        let open = c.side_open || c.past.is_some() || c.panel.is_some() || c.plugins.is_some() || c.task.is_some() || c.session.rewind.is_some() || c.session.setup.open.is_some();
+        let open = over_conversation(c) || c.past.is_some() || c.panel.is_some() || c.plugins.is_some() || c.task.is_some() || c.session.rewind.is_some() || c.session.setup.open.is_some();
         (open, c.session.working)
     });
     match composer::escape(dialog, working) {
         Escape::Close => with(|c| {
             // The one opened last is on top: the setup dialog's form, then the dialogs over the chat, then the sheet.
-            if std::mem::take(&mut c.side_open) {
+            if over_conversation(c) {
+                c.side_open = false;
                 return;
             }
             if c.session.setup.form.take().is_none() && c.session.setup.open.take().is_none() && c.session.rewind.take().is_none() && c.task.take().is_none() && c.plugins.take().is_none() && c.panel.take().is_none() {
@@ -1042,22 +1048,26 @@ pub fn toggle_output(id: &str) {
     });
 }
 
-/// The page's split says whether the tab is narrower than `view::SIDE_BELOW`. A panel left open over the conversation
-/// goes away once the tab is wide enough to hold it beside.
+/// The page's split says whether the tab is narrower than `view::SIDE_BELOW`, so the side panel covers the conversation.
 pub fn set_narrow(narrow: bool) {
-    with(|c| {
-        c.narrow = Some(narrow);
-        if !narrow {
-            c.side_open = false;
-        }
-    });
+    with(|c| c.narrow = Some(narrow));
 }
 
-/// The header's button for the side panel: opens it over the conversation, or puts it away.
+/// Whether the side panel shows over the conversation, which then has Escape and a press outside to put it away.
+fn over_conversation(c: &Chat) -> bool {
+    c.side_open && c.narrow == Some(true)
+}
+
+/// The header's button for the side panel, at any width: shows it or puts it away in every chat, and keeps the choice.
 pub fn toggle_side() {
-    with(|c| c.side_open = !c.side_open);
+    let shown = with(|c| {
+        c.side_open = !c.side_open;
+        c.side_open
+    });
+    drop(prefs::side_panel().set(shown));
 }
 
+/// Escape or a press outside a panel over the conversation: put away in this tab only, so the choice you made stands.
 pub fn close_side() {
     with(|c| c.side_open = false);
 }

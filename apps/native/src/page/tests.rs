@@ -1997,6 +1997,53 @@ fn a_following_scroll_asks_for_older_items_at_its_top_and_stays_on_what_it_showe
     settle(&app, &mut window, |view| view.text().contains("Older 0") && view.follow_scrolled(1).is_some_and(|(top, _)| top >= 300.0));
 }
 
+/// A column of 60 rows in a plain `Scroll` that is asked to scroll to row 40 and to track rows 10, 20, 30 and 40, over a
+/// line that says what `onTrack` last said.
+fn aimed_rows() -> String {
+    let mut said = "nothing".to_owned();
+    fake::page("page", move |event| {
+        if let Some(("2:onTrack", payload)) = event {
+            said = payload["at"].to_string();
+        }
+        let rows: Vec<Value> = (0..60).map(|i| text(100 + i, 1_000 + i, format!("Row {i}"))).collect();
+        let props = json!({ "scrollTo": { "index": 40, "token": 1 }, "track": [10, 20, 30, 40], "onTrack": "2:onTrack" });
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            text(50, 51, format!("Tracked {said}.")),
+            { "id": 2, "type": "Scroll", "props": props, "children": [{ "id": 3, "type": "Stack", "props": {}, "children": rows }] }] })
+    })
+}
+
+/// A `Scroll` told to scroll to a child puts it at the top of the view once, and says which tracked child that is.
+#[test]
+fn a_scroll_goes_to_the_child_it_is_told_to_and_says_which_tracked_child_it_is_at() {
+    let mut app = TestApp::new();
+    app.background_executor().allow_parking();
+    let host = hosted(&mut app);
+    let source = aimed_rows();
+    let bounds = gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(500.0), px(300.0)));
+    let mut window = app.open_window_with_options(
+        gpui::WindowOptions { window_bounds: Some(gpui::WindowBounds::Windowed(bounds)), ..Default::default() },
+        |_, cx| PageView::in_plugin(&host, &source, cx),
+    );
+    // Row 40 is at the top, so the last tracked row at or above the top is the fourth, and the view is well down the column.
+    settle(&app, &mut window, |view| view.text().contains("Tracked 3.") && view.follow_scrolled(2).is_some_and(|(top, max)| top > 300.0 && top <= max));
+    // It stays there: the same token is not acted on again.
+    for _ in 0..5 {
+        app.run_until_parked();
+        window.draw();
+    }
+    assert!(window.read(|view, _| view.follow_scrolled(2).is_some_and(|(top, _)| top > 300.0) && view.text().contains("Tracked 3.")));
+    // Scrolled back to the top, the view is above every tracked row.
+    window.simulate_event(gpui::ScrollEvent {
+        position: point(px(60.0), px(150.0)),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(100_000.0))),
+        modifiers: gpui::Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+        source: Default::default(),
+    });
+    settle(&app, &mut window, |view| view.text().contains("Tracked null."));
+}
+
 /// A chat's shape: a main pane and a pane on the right that folds away below 600 points, or stays when pinned.
 fn side_split(pinned: bool) -> String {
     fake::page("page", move |_| {
