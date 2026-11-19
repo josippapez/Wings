@@ -354,7 +354,7 @@ pub fn launch_with(resume: Option<String>, how: Launch) {
         let account = with(|c| account(c, resume.as_deref()));
         load_accounts(run, resume.as_deref(), cwd.clone());
         // A fork before a message asks for its rewind as it starts, as the opening requests do: the fork is a new session.
-        let opening = Session::opening(start_mode.as_deref()) + &with(|c| fork::opening(&how, &c.session.prompts));
+        let opening = Session::opening(start_mode.as_deref()) + &with(|c| fork::opening(&how, &c.session.prompts)) + &with(remote_on_start);
         // In Wings' terminal server, so the turn goes on while Wings restarts or updates, and this tab takes it over after.
         let process = host::spawn_surviving(&account, &program, &args, &cwd, &opening, move |line| hear(run, line));
         crate::reattach::started(run, process.input());
@@ -1073,6 +1073,11 @@ pub fn new_chat() {
         Some(args) => open_beside(&args),
         None => launch(None),
     }
+}
+
+/// The line that turns Remote Control on as the chat starts, with your setting on; nothing with it off.
+fn remote_on_start(c: &mut Chat) -> String {
+    if prefs::remote_on_start().get() { crate::remote::connect(&mut c.session.remote, None) } else { String::new() }
 }
 
 /// The line that turns Remote Control on, under `name` when given, or off when it is on.

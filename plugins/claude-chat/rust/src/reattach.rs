@@ -24,7 +24,7 @@ fn lasting(line: &Value) -> Option<&str> {
     match line["type"].as_str()? {
         "control_response" => {
             let id = line["response"]["request_id"].as_str()?;
-            [session::INITIALIZE, session::CONTEXT, session::SETTINGS, session::USAGE, session::START_MODE, crate::mods::ATTACH].contains(&id).then_some(id)
+            [session::INITIALIZE, session::CONTEXT, session::SETTINGS, session::USAGE, session::START_MODE, crate::mods::ATTACH, crate::remote::REQUEST].contains(&id).then_some(id)
         }
         // The panes a plugin has open, which Claude Code says once: the new page asks for each again.
         "system" if line["subtype"] == "ui_panes" => Some("ui_panes"),
@@ -525,6 +525,9 @@ mod page {
             assert_eq!(spawned.len(), 1);
             assert_eq!(spawned[0]["survive"], true);
             assert!(spawned[0]["args"].as_array().unwrap().contains(&json!(format!("--resume={SESSION}"))));
+            // Remote Control is on in every new chat unless you turned the setting off.
+            assert!(spawned[0]["input"].as_str().unwrap().contains(r#""enabled":true,"subtype":"remote_control""#), "{}", spawned[0]["input"]);
+            assert_eq!(chat::with(|c| c.session.remote.clone()), crate::remote::Remote::Connecting);
         }
     }
 }

@@ -18,6 +18,14 @@ pub fn pause_near_limit() -> Setting<bool> {
     Setting::boolean(PAUSE_NEAR_LIMIT, true)
 }
 
+/// Every new chat turns Remote Control on as it starts (`remote.rs`), so you can go on with it on claude.ai or in the Claude
+/// app.
+pub const REMOTE_ON_START: &str = "remote-on-start";
+
+pub fn remote_on_start() -> Setting<bool> {
+    Setting::boolean(REMOTE_ON_START, true)
+}
+
 /// The session panel shows, in every chat: over the chat's right side, or as Wings' sidebar that opens with a chat
 /// (`session_side.rs`).
 pub const SIDE_PANEL: &str = "side-panel";

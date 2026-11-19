@@ -23,11 +23,14 @@ fn page(c: &Chat, tab: &Tab) -> Node {
     // The sidebar before the chat has said which subagent: a header and a line, and no message box.
     if tab.sidebar && tab.session.is_empty() {
         let idle = empty("No subagent open", "Click a subagent in a chat, in its side panel or on its call, to read it here and message it.");
-        let body = Node::new("Slot").prop("name", "body").child(sidebar_header(tab)).child(idle);
+        let body = Node::new("Slot").prop("name", "body").child(sidebar_header(c, tab)).child(idle);
         return Node::new("Page").prop("flush", true).on_text_scale(crate::prefs::step_text_size).child(body);
     }
-    let header = if tab.sidebar { sidebar_header(tab) } else { header(tab) };
-    let body = Node::new("Slot").prop("name", "body").child(header).child(conversation(c, tab)).child(composer(c, tab));
+    let header = if tab.sidebar { sidebar_header(c, tab) } else { header(c, tab) };
+    // A picture clicked in the subagent's conversation opens over its pane, as it does over the chat.
+    let body = Node::new("Slot").prop("name", "body").child(header).child(conversation(c, tab)).child(composer(c, tab)).maybe(crate::pictures_view::dialog_of(c));
+    // The right-click menu (Copy, Copy link, Copy code) opens over the pane as it does over the chat.
+    let body = body.maybe(crate::mods_view::menu(c));
     Node::new("Page").prop("flush", true).on_text_scale(crate::prefs::step_text_size).child(body)
 }
 
@@ -47,7 +50,7 @@ fn status(tab: &Tab) -> Option<Node> {
 
 /// The sidebar's header: the subagent's name, its chat and how it stands, and under them the way back to the chat, the session (when it is in the sidebar) and the
 /// button that pops the subagent out into a tab.
-fn sidebar_header(tab: &Tab) -> Node {
+fn sidebar_header(c: &Chat, tab: &Tab) -> Node {
     let idle = tab.session.is_empty();
     let name = if idle { "Subagent" } else { tab.title.as_str() };
     let title = row()
@@ -57,7 +60,7 @@ fn sidebar_header(tab: &Tab) -> Node {
         .child(text(name).prop("weight", "strong").prop("truncate", true).prop("grow", true).prop("title", name));
     let chat_open = tab.chat_open == Some(true);
     let chat_name = tab.state["chat"].as_str().map(|chat| truncate(chat, 40));
-    let model = tab.state["model"].as_str().map(model_name);
+    let model = model_of(c, tab);
     let facts: Vec<String> = model.into_iter().chain(chat_name.as_ref().map(|chat| format!("from {chat}"))).collect();
     let facts = (!idle && !facts.is_empty()).then(|| {
         let said = facts.join(" · ");
@@ -83,8 +86,13 @@ fn sidebar_header(tab: &Tab) -> Node {
     Node::new("Bar").child(stack().prop("gap", "xs").child(title).maybe(facts).maybe(actions))
 }
 
+/// The subagent's model as its chat last said, else as its own transcript says: a closed chat says nothing.
+fn model_of(c: &Chat, tab: &Tab) -> Option<String> {
+    tab.state["model"].as_str().map(model_name).or_else(|| c.session.reported_model.as_deref().map(model_name))
+}
+
 /// As the chat's header: back to the chat, the subagent's name, and how it stands, with its model and its chat.
-fn header(tab: &Tab) -> Node {
+fn header(c: &Chat, tab: &Tab) -> Node {
     let state = &tab.state;
     let open = tab.chat_open == Some(true);
     let chat_name = state["chat"].as_str().map(|name| truncate(name, 40));
@@ -95,7 +103,7 @@ fn header(tab: &Tab) -> Node {
     };
     let back = button("← Back to chat", "ghost", false, subagent_tab::back).prop("size", "sm").prop("disabled", !open).prop("title", back_title);
     let status = status(tab);
-    let model = state["model"].as_str().map(model_name);
+    let model = model_of(c, tab);
     let facts: Vec<String> = model.into_iter().chain(chat_name.map(|name| format!("from {name}"))).collect();
     // On the back button's text edge: 14 for the bar, 7 for a row's inset, and 4 for the button's own padding.
     let facts = (!facts.is_empty()).then(|| {
@@ -118,7 +126,8 @@ fn header(tab: &Tab) -> Node {
 /// The subagent's conversation, newest at the foot and kept there while you read the end, built from the newest back until
 /// the page's budget is spent.
 fn conversation(c: &Chat, tab: &Tab) -> Node {
-    let column = stack().prop("gap", "l").prop("maxWidth", view::COLUMN);
+    // A right-click on a message, a link or a code block opens the chat's menu: Copy, Copy link, Copy code.
+    let column = stack().prop("gap", "l").prop("maxWidth", view::COLUMN).on("onContextMenu", |payload| crate::mods_view::open_menu(payload));
     let items = &c.session.items;
     if items.is_empty() {
         let body = match (&tab.error, tab.heard.loaded) {
@@ -200,4 +209,39 @@ fn composer(c: &Chat, tab: &Tab) -> Node {
     let message_box = card().prop("variant", "raised").child(field.key("field")).child(controls);
     let refused = tab.refused.as_deref().map(|why| notice("danger", why));
     Node::new("Bar").prop("edge", "none").child(stack().prop("gap", "s").prop("maxWidth", view::COLUMN).maybe(refused).child(message_box))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_tab_whose_chat_is_closed_names_the_model_its_transcript_says() {
+        crate::chat::with(|c| {
+            c.session.reported_model = Some("claude-haiku-5-5".into());
+            assert_eq!(model_of(c, &Tab::default()).as_deref(), Some("Haiku 5.5"));
+            let told = Tab { state: serde_json::json!({ "model": "claude-opus-5-5" }), ..Tab::default() };
+            assert_eq!(model_of(c, &told).as_deref(), Some("Opus 5.5"), "what the chat says comes first");
+        });
+    }
+
+    #[test]
+    fn a_picture_clicked_in_the_subagents_pane_opens_over_it() {
+        crate::chat::with(|c| {
+            c.picture = Some("pic-1".into());
+            let tree = wings_plugin::ui::tree_json(page(c, &Tab { session: "s".into(), ..Tab::default() })).to_string();
+            c.picture = None;
+            assert!(tree.contains("\"Dialog\"") && tree.contains("Picture, enlarged"), "{tree}");
+        });
+    }
+
+    #[test]
+    fn a_right_click_in_the_subagents_pane_opens_the_copy_menu() {
+        crate::chat::with(|c| {
+            c.session.mods.menu = Some(serde_json::json!({ "x": 10, "y": 20, "selection": { "text": "some words" } }));
+            let tree = wings_plugin::ui::tree_json(page(c, &Tab { session: "s".into(), ..Tab::default() })).to_string();
+            c.session.mods.menu = None;
+            assert!(tree.contains("\"PopupMenu\"") && tree.contains("\"Copy\"") && tree.contains("onContextMenu"), "{tree}");
+        });
+    }
 }
