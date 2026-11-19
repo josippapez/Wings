@@ -34,9 +34,11 @@ pub fn repo(root: &Path) -> Result<PathBuf, String> {
 /// are followed. A path is plain names: no `..`, no root, nothing in `.git`.
 pub fn inside(repo: &Path, path: &str) -> Result<PathBuf, String> {
     let relative = Path::new(path);
+    // `.GIT` is the same folder on a Mac's disk, which ignores case.
+    let git = |name: &std::ffi::OsStr| name.eq_ignore_ascii_case(".git");
     let plain = !path.is_empty()
         && relative.components().all(
-            |part| matches!(part, Component::Normal(name) if name != ".git"),
+            |part| matches!(part, Component::Normal(name) if !git(name)),
         );
     if !plain {
         return Err(format!("{path} isn't a path inside the repository"));
@@ -45,8 +47,12 @@ pub fn inside(repo: &Path, path: &str) -> Result<PathBuf, String> {
         .join(relative)
         .canonicalize()
         .map_err(|error| format!("Can't read {path}: {error}"))?;
-    if !file.starts_with(repo) {
+    let Ok(within) = file.strip_prefix(repo) else {
         return Err(format!("{path} leads outside the repository"));
+    };
+    // A link inside the repository can still lead into its `.git`.
+    if within.components().any(|part| matches!(part, Component::Normal(name) if git(name))) {
+        return Err(format!("{path} isn't a path inside the repository"));
     }
     if !file.is_file() {
         return Err(format!("{path} isn't a file"));
@@ -200,13 +206,16 @@ mod tests {
         let outside = folder("outside", false);
         std::fs::write(outside.join("secret.txt"), "secret").unwrap();
         assert!(confined(&dir, "src/a.rs").is_ok());
-        for path in ["", "../outside/secret.txt", "src/../../x", "/etc/hosts", ".git/config", "src"] {
+        std::fs::write(dir.join(".git/config"), "[core]").unwrap();
+        for path in ["", "../outside/secret.txt", "src/../../x", "/etc/hosts", ".git/config", ".GIT/config", ".Git/config", "src"] {
             assert!(confined(&dir, path).is_err(), "{path} was read");
         }
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(outside.join("secret.txt"), dir.join("link.txt")).unwrap();
             assert!(confined(&dir, "link.txt").unwrap_err().contains("outside"));
+            std::os::unix::fs::symlink(dir.join(".git/config"), dir.join("config.txt")).unwrap();
+            assert!(confined(&dir, "config.txt").is_err(), "a link into .git was read");
         }
         // A folder that isn't a repository, or not an absolute path, reads nothing.
         assert!(confined(&outside, "secret.txt").is_err());
