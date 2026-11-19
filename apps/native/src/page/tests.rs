@@ -980,6 +980,33 @@ fn a_menu_opens_over_the_page_under_its_button_and_closes_on_a_pick_a_press_outs
     assert!(window.read(|view, _| view.text().contains("picked reveal")));
 }
 
+#[test]
+fn a_menu_s_items_are_picked_with_the_arrow_keys_and_enter() {
+    let (app, mut window) = open(row_menu());
+    settle(&app, &mut window, shows("picked nothing"));
+    window.draw();
+    let trigger = crate::ui::spot_at("page-menu:More").expect("the menu's button is drawn");
+
+    click(&mut window, center(trigger));
+    settle(&app, &mut window, PageView::menu_open);
+    // Down twice reaches Trash; Enter picks it and closes the menu.
+    key(&mut window, "down");
+    key(&mut window, "down");
+    key(&mut window, "enter");
+    settle(&app, &mut window, shows("picked trash"));
+    assert!(!window.read(|view, _| view.menu_open()));
+
+    // Down wraps past the end, Home and End jump.
+    click(&mut window, center(trigger));
+    settle(&app, &mut window, PageView::menu_open);
+    key(&mut window, "end");
+    key(&mut window, "down");
+    key(&mut window, "end");
+    key(&mut window, "home");
+    key(&mut window, "enter");
+    settle(&app, &mut window, shows("picked reveal"));
+}
+
 /// `row_menu` at the foot of a 400pt window, under lines that fill it, as a chat's menus by its message box are.
 fn foot_menu() -> String {
     fake::page("page", move |_| {

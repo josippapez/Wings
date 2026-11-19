@@ -9,9 +9,9 @@ use std::{
 };
 
 use gpui::{
-    Anchor, AnyElement, Bounds, BoxShadow, Context, ElementId, Entity, FocusHandle, FontWeight,
+    AnyElement, Bounds, BoxShadow, Context, ElementId, Entity, FocusHandle, FontWeight,
     ClickEvent, HoverListenerMode, IntoElement, MouseButton, MouseDownEvent, Pixels, Render, Role,
-    SharedString, Subscription, Task, Window, anchored, canvas, deferred, div,
+    SharedString, Subscription, Task, Window, canvas, div,
     hsla, point, prelude::*, px, relative, rgb, rgba,
 };
 
@@ -23,7 +23,11 @@ use crate::{
         plugin::ui::{Badge, CountIcon, PaneStatus, Row, StatusItem, Tone},
     },
     theme,
-    ui::{self, ButtonSize, HAIRLINE, Variant, motion},
+    ui::{
+        self, ButtonSize, HAIRLINE, Variant,
+        behaviors::{Align, DismissReason, bind_layer, popup_on_parent},
+        motion,
+    },
 };
 
 use super::{Workspace, plugin_env::ACTION_TIMEOUT};
@@ -268,17 +272,6 @@ impl Workspace {
             }])
             .text_size(px(12.0))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                let on_pill = this
-                    .badge_card
-                    .as_ref()
-                    .and_then(|card| card.pill)
-                    .is_some_and(|pill| pill.contains(&event.position));
-                if !on_pill {
-                    this.badge_card = None;
-                    cx.notify();
-                }
-            }))
             .when(badge.title.is_some() || badge.subtitle.is_some(), |card| {
                 card.child(
                     div()
@@ -314,20 +307,31 @@ impl Workspace {
             .when(!badge.actions.is_empty(), |card| {
                 card.child(div().flex().flex_wrap().gap(px(6.0)).children(actions))
             });
-        // Zero-size, at the pill's bottom right: the card hangs from it, right edge to right edge.
-        div()
-            .absolute()
-            .top(px(32.0))
-            .right_0()
-            .w(px(0.0))
-            .h(px(0.0))
-            .child(deferred(
-                anchored()
-                    .anchor(Anchor::TopRight)
-                    .snap_to_window_with_margin(px(8.0))
-                    .child(card),
-            ))
-            .into_any_element()
+        // A press on the pill is its own: it toggles the card.
+        let card = bind_layer(
+            card,
+            cx.listener(|this, reason: &DismissReason, _, cx| {
+                let on_pill = this
+                    .badge_card
+                    .as_ref()
+                    .and_then(|card| card.pill)
+                    .zip(match reason {
+                        DismissReason::OutsidePress(at) => Some(*at),
+                        DismissReason::EscapeKey => None,
+                    })
+                    .is_some_and(|(pill, at)| pill.contains(&at));
+                if !on_pill {
+                    this.badge_card = None;
+                    cx.notify();
+                }
+            }),
+        );
+        // 8pt under the pill, right edge to right edge: the pill's box is the card's parent.
+        popup_on_parent(card)
+            .align(Align::End)
+            .side_offset(8.0)
+            .priority(0)
+            .layer()
     }
 
     pub(super) fn toggle_badge_card(
@@ -900,26 +904,14 @@ impl Workspace {
             .child(page.clone())
             .children(ui::spot(|| "plugin-popover".to_owned()));
         Some(motion::with_phase(phase, || {
-            // Zero-size, at the button's bottom right: the popover hangs 6pt under it, right edge to right edge, as the
-            // desktop's `align="end" sideOffset={6}`.
-            div()
-                .absolute()
-                .top(px(28.0 + 6.0))
-                .right_0()
-                .w(px(0.0))
-                .h(px(0.0))
-                .child(deferred(
-                    anchored()
-                        .anchor(Anchor::TopRight)
-                        .snap_to_window_with_margin(px(8.0))
-                        .child(motion::popup(
-                            "plugin-popover",
-                            motion::From::Above,
-                            motion::POPUP_IN,
-                            card,
-                        )),
-                ))
-                .into_any_element()
+            // 6pt under the button, right edge to right edge, as the desktop's `align="end" sideOffset={6}`: the
+            // button's box is the popover's parent.
+            let card = motion::popup("plugin-popover", motion::From::Above, motion::POPUP_IN, card);
+            popup_on_parent(card)
+                .align(Align::End)
+                .side_offset(6.0)
+                .priority(0)
+                .layer()
         }))
     }
 

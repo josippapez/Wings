@@ -2,11 +2,14 @@
 //! pointer, each an icon and a label, with hairlines between groups. It fades and slides in as the desktop's does.
 
 use gpui::{
-    Anchor, AnyElement, BoxShadow, Div, ElementId, IntoElement, Pixels, Point, Role, SharedString,
-    Stateful, anchored, deferred, div, hsla, point, prelude::*, px, rgb, rgba,
+    AnyElement, Bounds, BoxShadow, Div, ElementId, IntoElement, Pixels, Point, Role, SharedString,
+    Stateful, div, hsla, point, prelude::*, px, rgb, rgba,
 };
 
-use super::motion;
+use super::{
+    behaviors::{Align, Side, popup, popup_at},
+    motion,
+};
 use crate::{
     icons::{Icon, icon},
     theme,
@@ -15,33 +18,30 @@ use crate::{
 /// The desktop's `--accent` under the item you point at.
 const ACCENT: u32 = 0xffffff14;
 
-/// The open menu, drawn above everything else with its corner at `at` (in window coordinates), turned to stay in the
-/// window. Add the close handler (`on_mouse_down_out`) to `menu`.
+/// The open menu, drawn above everything else with its corner at `at` (in window coordinates), or its bottom corner
+/// there when it doesn't fit under it (`behaviors::popup_at`). Add the close handler (`behaviors::bind_layer`) to `menu`.
 pub fn context_menu(at: Point<Pixels>, menu: Stateful<Div>) -> AnyElement {
     let menu = motion::popup("menu", motion::From::Corner, motion::POPUP_IN, menu);
-    deferred(anchored().position(at).child(menu))
-        .with_priority(1)
-        .into_any_element()
+    popup_at(at, menu).layer()
 }
 
-/// A menu opened from a button, drawn above everything else with its top-left corner at `at` (in window coordinates),
-/// or its top-right with `end`, sliding down into place as a select's menu does. Add the close handler to `menu`.
-pub fn dropdown_menu(at: Point<Pixels>, end: bool, menu: Stateful<Div>) -> AnyElement {
+/// A menu opened from a button whose bounds are `trigger` (in window coordinates): under it, or over it when it doesn't
+/// fit under it, lined up with its left edge, or its right with `end`, sliding down into place as a select's menu
+/// does. Add the close handler to `menu`.
+pub fn dropdown_menu(trigger: Bounds<Pixels>, end: bool, menu: Stateful<Div>) -> AnyElement {
     let menu = motion::popup("menu", motion::From::Above, motion::POPUP_IN, menu);
-    let corner = if end { Anchor::TopRight } else { Anchor::TopLeft };
-    deferred(anchored().anchor(corner).position(at).child(menu))
-        .with_priority(1)
-        .into_any_element()
+    popup(trigger, menu).align(align(end)).layer()
 }
 
-/// `dropdown_menu` for a button near the window's foot, as a chat's message box is: the menu's bottom corner is at `at`, and
-/// it rises into place, so it doesn't cover the button.
-pub fn dropup_menu(at: Point<Pixels>, end: bool, menu: Stateful<Div>) -> AnyElement {
+/// `dropdown_menu` for a button near the window's foot, as a chat's message box is: over it unless it only fits under
+/// it, rising into place, so it doesn't cover the button.
+pub fn dropup_menu(trigger: Bounds<Pixels>, end: bool, menu: Stateful<Div>) -> AnyElement {
     let menu = motion::popup("menu", motion::From::Below, motion::POPUP_IN, menu);
-    let corner = if end { Anchor::BottomRight } else { Anchor::BottomLeft };
-    deferred(anchored().anchor(corner).position(at).child(menu))
-        .with_priority(1)
-        .into_any_element()
+    popup(trigger, menu).side(Side::Top).align(align(end)).layer()
+}
+
+fn align(end: bool) -> Align {
+    if end { Align::End } else { Align::Start }
 }
 
 /// The menu's box, 144px wide at least, around `items`.

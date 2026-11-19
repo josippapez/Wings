@@ -11,9 +11,9 @@ use std::{
 };
 
 use gpui::{
-    Anchor, AnyElement, ClipboardItem, Context, Div, Entity, FocusHandle, FontWeight,
+    AnyElement, ClipboardItem, Context, Div, Entity, FocusHandle, FontWeight,
     HighlightStyle, KeyDownEvent, MouseButton, Role, SharedString, Stateful, StyledText,
-    Subscription, Task, Window, anchored, deferred, div, prelude::*, px, relative, rgb, rgba,
+    Subscription, Task, Window, div, prelude::*, px, relative, rgb, rgba,
 };
 use wings_agents::{
     ai::{Ai, Made},
@@ -29,7 +29,11 @@ use crate::{
     projects::shell_quote,
     text_field::{FieldEvent, TextField},
     theme,
-    ui::{self, ButtonSize, Variant, motion},
+    ui::{
+        self, ButtonSize, Variant,
+        behaviors::{Align, popup_on_parent},
+        motion,
+    },
 };
 
 use super::Workspace;
@@ -1125,7 +1129,6 @@ impl Workspace {
                     .into_any_element()
                 }));
                 slot.child(menu_below(
-                    32.0,
                     ui::select_menu(items)
                         .mt(px(0.0))
                         .max_h(px(320.0))
@@ -1430,7 +1433,6 @@ impl Workspace {
             .into_any_element(),
         );
         menu_below(
-            32.0,
             ui::select_menu(items)
                 .mt(px(0.0))
                 .w(px(220.0))
@@ -1444,16 +1446,10 @@ impl Workspace {
     }
 }
 
-/// A menu drawn above everything, under `top` points down the box it sits in and with its right edge on that box's.
-fn menu_below(top: f32, menu: impl IntoElement) -> AnyElement {
-    div()
-        .absolute()
-        .top(px(top))
-        .right_0()
-        .w_0()
-        .h_0()
-        .child(deferred(anchored().anchor(Anchor::TopRight).child(menu)))
-        .into_any_element()
+/// A menu drawn above everything, 4pt under the box it sits in, or over it without room there, with its right edge on
+/// that box's.
+fn menu_below(menu: impl IntoElement) -> AnyElement {
+    popup_on_parent(menu).align(Align::End).priority(0).layer()
 }
 
 /// One line of a session's menu. `note` says why it is off.

@@ -5,19 +5,25 @@ use std::{collections::HashMap, rc::Rc};
 
 use gpui::{
     AnyElement, Context, ElementId, FontWeight, KeyDownEvent, Pixels, Role, SharedString, Toggled,
-    anchored, canvas, deferred, div, prelude::*, px, rgb, rgba,
+    canvas, div, prelude::*, px, rgb, rgba,
 };
 
 use super::{
     InputState, Node, PageView, SearchState, line_height, plain_text, scaled, send_shortcut, tree,
 };
-use crate::{theme, ui};
+use crate::{
+    theme, ui,
+    ui::behaviors::{DismissReason, Placement, Side, bind_layer, listbox, popup_on_parent, position},
+};
 
 /// The padding over and under a `ListButton`'s parts, inside its 1pt border.
 pub(super) const LIST_BUTTON_PADDING: f32 = 2.0;
 
 /// A raised card's 10pt padding and 1pt border over the field a message box's list opens upward from.
 const MESSAGE_CARD_EDGE: f32 = 11.0;
+
+/// `ui::menu_item`'s fill under the pointer, the desktop's `--accent`, on the item the arrow keys picked out.
+const MENU_ACCENT: u32 = 0xffffff14;
 
 impl PageView {
     pub(super) fn checkbox(&self, checkbox: &tree::Checkbox, cx: &mut Context<Self>) -> AnyElement {
@@ -640,17 +646,22 @@ impl PageView {
                 )
                 .into_any_element()
             });
-            ui::popover(
-                ui::select_menu(items)
-                    .w(width)
-                    .max_h(room)
-                    .id(ElementId::NamedInteger("page-select-menu".into(), id))
-                    .overflow_y_scroll()
-                    .on_mouse_down_out(cx.listener(|view, _, _, cx| {
-                        view.menu = None;
-                        cx.notify();
-                    })),
-            )
+            let list = ui::select_menu(items)
+                .mt(px(0.0))
+                .w(width)
+                .max_h(room)
+                .id(ElementId::NamedInteger("page-select-menu".into(), id))
+                .overflow_y_scroll();
+            let list = bind_layer(
+                list,
+                cx.listener(|view, _: &DismissReason, _, cx| {
+                    view.menu = None;
+                    cx.notify();
+                }),
+            );
+            let list = ui::motion::popup("popover", ui::motion::From::Above, ui::motion::POPUP_IN, list);
+            // Beside the select as it's laid out in this frame, which is the popup's parent.
+            popup_on_parent(list).priority(0).layer()
         });
         div()
             .relative()
@@ -720,8 +731,10 @@ impl PageView {
         let measure = Self::measure_menu(id, cx);
         let list = shows(self).then(|| {
             let (bounds, window_height) = self.select_bounds.get(&id).copied().unwrap_or_default();
-            // A message box's field sits inside its card's edge and padding: the list ends above the card, not over its border.
-            let room = if upward { bounds.top() - px(8.0 + MESSAGE_CARD_EDGE) } else { menu_room(bounds, window_height) };
+            // A message box's field sits inside its card's edge and padding: the list ends above the card, not over its
+            // border.
+            let offset = if upward { 4.0 + MESSAGE_CARD_EDGE } else { 4.0 };
+            let room = menu_room(bounds, window_height) - px(offset - 4.0);
             let rows = options
                 .into_iter()
                 .enumerate()
@@ -752,42 +765,39 @@ impl PageView {
                     .child(self.inline(&combobox.empty, cx))
                     .into_any_element()
             });
-            // Over the page as `ui::popover` draws a select's menu, without its motion: the desktop's
-            // `.w-combobox-popup` has `transition: none`, as a list that changes with each key has nothing to animate.
-            let place = anchored().when(upward, |place| {
-                place.anchor(gpui::Anchor::BottomLeft).position(bounds.origin - gpui::point(px(0.0), px(4.0 + MESSAGE_CARD_EDGE)))
-            });
-            deferred(
-                place.child(
-                    div().child(
-                        ui::select_menu(rows.into_iter().chain(empty))
-                            // As wide as the field, and no taller than 252pt, as the desktop's `.w-combobox-popup`:
-                            // Cyclops' 165 projects filled the window over the field they were picked for.
-                            .w(bounds.size.width)
-                            .max_h(room.min(px(252.0)))
-                            .id(ElementId::NamedInteger("page-combobox-list".into(), id))
-                            .overflow_y_scroll()
-                            .track_scroll(&self.combobox_scroll)
-                            // A press on the list is the list's: the button under it doesn't hear it, and a
-                            // focusable frame around the page doesn't take the keyboard from the field.
-                            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
-                                cx.stop_propagation()
-                            })
-                            .on_mouse_down_out(cx.listener(
-                                move |view, event: &gpui::MouseDownEvent, _, cx| {
-                                    let in_field =
-                                        view.select_bounds.get(&id).is_some_and(|(bounds, _)| {
-                                            bounds.contains(&event.position)
-                                        });
-                                    if !in_field {
-                                        view.suggestions_closed = true;
-                                        cx.notify();
-                                    }
-                                },
-                            )),
-                    ),
-                ),
-            )
+            let list = ui::select_menu(rows.into_iter().chain(empty))
+                .mt(px(0.0))
+                // As wide as the field, and no taller than 252pt, as the desktop's `.w-combobox-popup`: Cyclops' 165
+                // projects filled the window over the field they were picked for.
+                .w(bounds.size.width)
+                .max_h(room.min(px(252.0)))
+                .id(ElementId::NamedInteger("page-combobox-list".into(), id))
+                .overflow_y_scroll()
+                .track_scroll(&self.combobox_scroll)
+                // A press on the list is the list's: the button under it doesn't hear it, and a focusable frame around
+                // the page doesn't take the keyboard from the field.
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation());
+            // The field keeps the keyboard, so its own keys close the list on Escape; a press in it keeps the list.
+            let list = bind_layer(
+                list,
+                cx.listener(move |view, reason: &DismissReason, _, cx| {
+                    if let DismissReason::OutsidePress(at) = reason
+                        && view.select_bounds.get(&id).is_some_and(|(bounds, _)| bounds.contains(at))
+                    {
+                        return;
+                    }
+                    view.suggestions_closed = true;
+                    cx.notify();
+                }),
+            );
+            // Without motion, unlike a select's menu: the desktop's `.w-combobox-popup` has `transition: none`, as a
+            // list that changes with each key has nothing to animate.
+            // Beside the field as it's laid out in this frame, which is the popup's parent.
+            popup_on_parent(list)
+                .side(if upward { Side::Top } else { Side::Bottom })
+                .side_offset(offset)
+                .priority(0)
+                .layer()
         });
         if list.is_some() {
             self.listing.set(true);
@@ -806,14 +816,10 @@ impl PageView {
                 }
                 let count = handlers.len();
                 let highlight = view.highlight.or(picker.then_some(0));
-                match event.keystroke.key.as_str() {
-                    "down" if count > 0 => {
-                        view.highlight = Some(highlight.map_or(0, |at| (at + 1) % count));
-                    }
-                    "up" if count > 0 => {
-                        view.highlight =
-                            Some(highlight.map_or(count - 1, |at| (at + count - 1) % count));
-                    }
+                let key = event.keystroke.key.as_str();
+                let moved = listbox::highlight_after(key, listbox::Focus::Virtual, highlight, count, |_| true);
+                match key {
+                    _ if moved.is_some() => view.highlight = moved.flatten(),
                     "enter" => match highlight.and_then(|at| handlers.get(at)) {
                         Some(handler) => view.pick_suggestion(handler, cx),
                         None => return,
@@ -875,18 +881,15 @@ impl PageView {
                 cx.stop_propagation();
                 view.toggle_menu(id, cx);
                 if view.menu == Some(id) {
-                    window.focus(&view.menu_focus, cx);
+                    view.menu_highlight = None;
+                    view.menu_recovery.open(&view.menu_focus, window, cx);
                 }
             }));
         let popup = (self.menu == Some(id)).then(|| {
             let (bounds, window_height) = self.select_bounds.get(&id).copied().unwrap_or_default();
-            let x = if menu.end {
-                bounds.right()
-            } else {
-                bounds.left()
-            };
             // About as tall as `ui::menu_item_text`'s 28pt rows and the box's padding: a menu with no room under its
-            // button opens over it, as a chat's Remote Control menu at the foot of the window covered its own button.
+            // button is tried over it first and rises into place, as a chat's Remote Control menu at the foot of the
+            // window covered its own button. The popup checks the side against its measured height.
             let tall = px(menu.items.len() as f32 * 28.0 + 10.0);
             let upward = window_height - bounds.bottom() - px(12.0) < tall && bounds.top() > window_height - bounds.bottom();
             let items = menu.items.iter().enumerate().filter_map(|(at, node)| {
@@ -906,6 +909,8 @@ impl PageView {
                     item.variant == tree::Variant::Destructive,
                     item.disabled,
                 )
+                // The arrow keys' item, in the look of the one under the pointer.
+                .when(self.menu_highlight == Some(at), |row| row.bg(rgba(MENU_ACCENT)))
                 .when(item.pressed, |row| {
                     row.aria_selected(true).child(crate::icons::icon(
                         crate::icons::Icon::Check,
@@ -915,35 +920,53 @@ impl PageView {
                 });
                 Some(match item.on_click.clone() {
                     Some(handler) if !item.disabled => row
-                        .on_click(cx.listener(move |view, _, _, cx| {
+                        .on_click(cx.listener(move |view, _, window, cx| {
                             cx.stop_propagation();
-                            view.menu = None;
-                            view.act(&handler, None);
-                            cx.notify();
+                            view.pick_menu_item(&handler, window, cx);
                         }))
                         .into_any_element(),
                     _ => row.into_any_element(),
                 })
             });
+            // What Enter picks for each item, none for one that's off or isn't a button.
+            let picks: Vec<Option<String>> = menu
+                .items
+                .iter()
+                .map(|node| match node {
+                    Node::Button(item) if !item.disabled => item.on_click.clone(),
+                    _ => None,
+                })
+                .collect();
+            let list = ui::menu(ElementId::NamedInteger("page-menu".into(), id), name)
+                .track_focus(&self.menu_focus)
+                .children(items)
+                .on_key_down(cx.listener(move |view, event: &KeyDownEvent, window, cx| {
+                    let key = event.keystroke.key.as_str();
+                    let enabled = |at: usize| picks[at].is_some();
+                    if let Some(moved) =
+                        listbox::highlight_after(key, listbox::Focus::Real, view.menu_highlight, picks.len(), enabled)
+                    {
+                        view.menu_highlight = moved;
+                    } else if key == "enter"
+                        && let Some(handler) = view.menu_highlight.and_then(|at| picks.get(at)?.clone())
+                    {
+                        view.pick_menu_item(&handler, window, cx);
+                    } else {
+                        return;
+                    }
+                    cx.stop_propagation();
+                    cx.notify();
+                }));
+            let list = bind_layer(
+                list,
+                cx.listener(|view, _: &DismissReason, window, cx| {
+                    view.menu = None;
+                    view.menu_recovery.restore(&view.menu_focus, window, cx);
+                    cx.notify();
+                }),
+            );
             let open = if upward { ui::dropup_menu } else { ui::dropdown_menu };
-            open(
-                gpui::point(x, if upward { bounds.top() - px(4.0) } else { bounds.bottom() + px(4.0) }),
-                menu.end,
-                ui::menu(ElementId::NamedInteger("page-menu".into(), id), name)
-                    .track_focus(&self.menu_focus)
-                    .children(items)
-                    .on_key_down(cx.listener(|view, event: &KeyDownEvent, _, cx| {
-                        if event.keystroke.key == "escape" {
-                            view.menu = None;
-                            cx.stop_propagation();
-                            cx.notify();
-                        }
-                    }))
-                    .on_mouse_down_out(cx.listener(|view, _, _, cx| {
-                        view.menu = None;
-                        cx.notify();
-                    })),
-            )
+            open(bounds, menu.end, list)
         });
         div()
             .relative()
@@ -976,11 +999,13 @@ fn widest_option(select: &tree::Select, cx: &gpui::App) -> Pixels {
     px((widest.ceil() + 48.0).min(360.0))
 }
 
-/// How tall a select's or combobox's menu may be: as the desktop's, no taller than the room under it, or over it when
-/// there is more there, and it scrolls. Cyclops' hundred projects ran off the window, and once taller than the window
-/// it was moved up to cover it from the top. Its box starts 36pt down, under the select, or ends at the select's top.
-fn menu_room(bounds: gpui::Bounds<Pixels>, window_height: Pixels) -> Pixels {
-    (window_height - bounds.top()).max(bounds.top()) - px(36.0 + 8.0)
+/// How tall a select's or combobox's menu may be: as the desktop's, no taller than the room under `anchor`, or over it
+/// when there is more there, and it scrolls; the popup then opens on that side. Cyclops' hundred projects ran off the
+/// window, and once taller than the window it was moved up to cover it from the top.
+fn menu_room(anchor: gpui::Bounds<Pixels>, window_height: Pixels) -> Pixels {
+    let window = gpui::size(Pixels::ZERO, window_height);
+    let (below, above) = position::room(anchor, window, Placement::default());
+    below.max(above)
 }
 
 /// plugin-ui.css's tab of `.w-tabs[data-variant="line"]`: its label at 14px, muted until it's picked, with a 2px line

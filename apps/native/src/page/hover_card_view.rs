@@ -1,7 +1,8 @@
 //! The `HoverCard`: what it holds, drawn where it sits, and a card over the page under it while the pointer is on
 //! either, as a link's preview. The card is the view's own state, so hovering never reaches the page.
 use super::*;
-use gpui::{Anchor, Bounds, anchored, canvas, deferred};
+use crate::ui::behaviors::popup;
+use gpui::{Bounds, canvas};
 
 /// The room between what the card is for and the card, which the pointer crosses without the card going away.
 const GAP: f32 = 6.0;
@@ -69,9 +70,9 @@ impl PageView {
             .pt(px(GAP))
             .child(body)
             .on_hover(cx.listener(move |view, over: &bool, _, cx| view.hover_card_over(id, true, *over, cx)));
-        let at = point(bounds.left(), bounds.bottom());
+        // The strip's own top is the gap, so the pointer crosses no hole.
         trigger
-            .child(deferred(anchored().anchor(Anchor::TopLeft).position(at).snap_to_window_with_margin(px(8.0)).child(strip)).with_priority(1))
+            .child(popup(bounds, strip).side_offset(0.0).layer())
             .into_any_element()
     }
 

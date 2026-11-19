@@ -25,6 +25,7 @@ Plugin pages are built with `wings_plugin::ui` (`packages/plugin-rs/src/ui.rs`).
 6. **States.** Each page has a designed loading, empty and error state, using `loading`, `empty` and a `notice` card.
 7. **Tooltips.** A `button` or `text` that is only an icon, or whose text is cut short, takes a `title` prop (`.prop("title", "...")`), which the app shows as a tooltip on hover (4dbefc8d).
 8. **App pages** (Settings, the plugin manager) follow the controls in `apps/native/src/ui` and the direction in memory `wings-ui-direction`. They don't use one-off styles.
+9. **Popups.** A menu, select list, combobox list, hover card or any card that opens beside a trigger in `apps/native` is built from the behaviors in `apps/native/src/ui/behaviors` (`popup`/`popup_at`/`popup_on_parent` for placement, `bind_layer` for Escape and press-outside, `FocusRecovery`, `listbox`), or from `ui::dropdown_menu`/`ui::context_menu`, which use them. Never hand-build one with `anchored()`/`deferred()`: each hand-built popup placed and closed itself differently, and opened off the window's foot (see `apps/native/README.md`).
 
 ## Check before done
 

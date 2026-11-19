@@ -186,6 +186,10 @@ pub struct PageView {
     pressed_open: bool,
     /// An open `Menu`'s box takes the keyboard, so Escape closes it: a click leaves the button that opened it without.
     menu_focus: gpui::FocusHandle,
+    /// What had the keyboard before the open `Menu` took it, its button, which gets it back as the menu closes.
+    menu_recovery: crate::ui::behaviors::FocusRecovery,
+    /// The open `Menu`'s item the arrow keys picked out, by its index in the menu's items, which Enter picks.
+    menu_highlight: Option<usize>,
     /// Where each select and combobox was drawn, by node id, and how tall the window was: its menu is as wide, and as
     /// tall as the room on one side of it.
     select_bounds: HashMap<u64, (gpui::Bounds<Pixels>, Pixels)>,
@@ -597,6 +601,8 @@ impl PageView {
             trees: 0,
             actions_focus: RefCell::default(),
             menu_focus: cx.focus_handle(),
+            menu_recovery: Default::default(),
+            menu_highlight: None,
             actions_within: HashSet::new(),
             reveal: None,
             dialog_focus: cx.focus_handle(),
@@ -780,6 +786,15 @@ impl PageView {
     fn toggle_menu(&mut self, id: u64, cx: &mut Context<Self>) {
         let was_open = std::mem::take(&mut self.pressed_open) || self.menu == Some(id);
         self.menu = (!was_open).then_some(id);
+        cx.notify();
+    }
+
+    /// The person picked an open `Menu`'s item, whose click is `handler`, by a click or Enter: the menu closes, the
+    /// keyboard goes back to its button, and the page hears the click.
+    fn pick_menu_item(&mut self, handler: &str, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        self.menu = None;
+        self.menu_recovery.restore(&self.menu_focus, window, cx);
+        self.act(handler, None);
         cx.notify();
     }
 

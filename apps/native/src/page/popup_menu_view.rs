@@ -1,9 +1,8 @@
 //! A page's right-click menu, in two halves. A `Stack` with `onContextMenu` tells the page where the right button went
 //! down and what was under the pointer, and a `PopupMenu` is the list of actions the page then opens at that point.
 use super::*;
-use gpui::{
-    Bounds, MouseButton, MouseDownEvent, Point, anchored, deferred,
-};
+use crate::ui::behaviors::{DismissReason, bind_layer, popup_at};
+use gpui::{Bounds, MouseButton, MouseDownEvent, Point};
 use serde_json::{Value, json};
 
 /// What a stack's listener for the children's places hears: where each child of the stack was drawn.
@@ -168,34 +167,22 @@ impl PageView {
                     .into_any_element(),
             })
         });
-        let (on_escape, on_outside) = (menu.on_close.clone(), menu.on_close.clone());
+        let on_close = menu.on_close.clone();
         let list = ui::menu(ElementId::NamedInteger("page-popup-menu".into(), id), "Menu")
             .track_focus(&self.popup_focus)
-            .children(items)
-            .on_key_down(cx.listener(move |view, event: &KeyDownEvent, _, cx| {
-                if event.keystroke.key == "escape" {
-                    cx.stop_propagation();
-                    if let Some(handler) = &on_escape {
-                        view.send(handler, None);
-                    }
-                }
-            }))
-            // A press outside closes it without counting as a click in the page, which could then write or copy.
-            .on_mouse_down_out(cx.listener(move |view, _, _, _| {
-                if let Some(handler) = &on_outside {
+            .children(items);
+        // Escape, or a press outside, which closes it without counting as a click in the page, which could then write or
+        // copy. `render` gives the keyboard back as the page leaves the menu out.
+        let list = bind_layer(
+            list,
+            cx.listener(move |view, _: &DismissReason, _, _| {
+                if let Some(handler) = &on_close {
                     view.send(handler, None);
                 }
-            }));
+            }),
+        );
         div()
-            .child(
-                deferred(
-                    anchored()
-                        .position(point(px(menu.x), px(menu.y)))
-                        .snap_to_window_with_margin(px(8.0))
-                        .child(list),
-                )
-                .with_priority(1),
-            )
+            .child(popup_at(point(px(menu.x), px(menu.y)), list).layer())
             .into_any_element()
     }
 }

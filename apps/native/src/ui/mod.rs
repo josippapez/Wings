@@ -1,6 +1,7 @@
 //! Wings' native UI kit: the desktop app's shadcn components (`apps/desktop/src/components/ui`) as
 //! GPUI elements, so every screen shares one look. Each returns an element to add handlers to.
 
+pub mod behaviors;
 mod button;
 mod drag;
 mod menu;

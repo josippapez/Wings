@@ -1079,7 +1079,7 @@ impl Viewer {
             })
             .collect();
         Some(ui::dropdown_menu(
-            point(trigger.left(), trigger.bottom() + px(4.0)),
+            trigger,
             false,
             ui::menu("diff-scope-menu", "Changes to show")
                 .children(items)
@@ -1111,7 +1111,8 @@ impl Viewer {
             .chain(full.map(|full| copy("diff-copy-full-path", "Copy full path", full)))
             .collect();
         Some(ui::dropdown_menu(
-            point(at.x, at.y + px(6.0)),
+            // The point under the pointer as an empty trigger, 6pt over the menu's top right corner.
+            gpui::Bounds::new(point(at.x, at.y + px(2.0)), gpui::Size::default()),
             true,
             ui::menu("diff-file-menu", "File actions")
                 .children(items)
