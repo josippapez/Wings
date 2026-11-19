@@ -67,7 +67,7 @@ fn normal(path: &str) -> Option<String> {
 pub fn pieces(cwd: &str, text: &str, known: &[String]) -> Vec<Piece> {
     let mut out: Vec<Piece> = Vec::new();
     let mut plain = String::new();
-    let mut flush = |out: &mut Vec<Piece>, plain: &mut String| {
+    let flush = |out: &mut Vec<Piece>, plain: &mut String| {
         if !plain.is_empty() {
             out.push(Piece::Text(std::mem::take(plain)));
         }
