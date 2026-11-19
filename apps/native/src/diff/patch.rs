@@ -9,6 +9,9 @@ use diffy::patch_set::{FileOperation, ParseOptions, PatchKind, PatchSet};
 /// The desktop host accepts patches up to 8 MiB. Keep parsing within that same
 /// transport boundary rather than imposing the Changes plugin's smaller view limit.
 pub const MAX_PATCH_BYTES: usize = 8 * 1024 * 1024;
+/// The furthest line a hunk header may name. The headers are the plugin's, and the stacked view's folds count lines
+/// from them.
+pub const MAX_LINE_NUMBER: usize = 100_000_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diff {
@@ -128,6 +131,19 @@ fn adapt_file(file: diffy::patch_set::FilePatch<'_, str>) -> Result<DiffFile, Pa
         PatchKind::Text(patch) => patch.hunks().iter().map(adapt_hunk).collect(),
         PatchKind::Binary(_) => Vec::new(),
     };
+    let far = |range: &LineRange| range.start.max(range.len) > MAX_LINE_NUMBER;
+    if hunks
+        .iter()
+        .any(|hunk: &DiffHunk| far(&hunk.old_range) || far(&hunk.new_range))
+    {
+        let path = new_path
+            .as_deref()
+            .or(old_path.as_deref())
+            .unwrap_or("unknown file");
+        return Err(ParseError::new(format!(
+            "Invalid Git patch: a hunk of '{path}' is past line {MAX_LINE_NUMBER}."
+        )));
+    }
     let is_placeholder = hunks.len() == 1
         && hunks[0].lines.len() == 1
         && hunks[0].lines[0].kind == DiffLineKind::Context
@@ -330,6 +346,18 @@ mod tests {
         let preamble = "x\n".repeat((MAX_PATCH_BYTES - fixture.len()) / 2);
         assert!(parse_patch(&format!("{preamble}{fixture}")).is_ok());
         assert!(parse_patch(&"x".repeat(MAX_PATCH_BYTES + 1)).is_err());
+    }
+
+    #[test]
+    fn rejects_hunk_headers_past_the_furthest_line() {
+        let error =
+            parse_patch("diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1,1 +4000000000,1 @@\n-a\n+b\n")
+                .unwrap_err();
+        assert!(error.to_string().contains("past line"));
+        assert!(
+            parse_patch("diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1,1 +4000000,1 @@\n-a\n+b\n")
+                .is_ok()
+        );
     }
 
     #[test]

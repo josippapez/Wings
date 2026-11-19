@@ -8,7 +8,7 @@ use crate::{
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use wings_plugin::{
-    diff::{open_live, open_while},
+    diff::{open_live_scoped, open_while},
     format::{basename, plural},
     git::{raw, run},
     task::join,
@@ -93,25 +93,33 @@ async fn patch_of(c: &Changes, path: Option<&str>) -> Result<(String, String), S
 }
 
 /// Opens the viewer at once in its loading state, fills it when git answers, and keeps it up to date while it's open.
-/// From the sidebar (`from_sidebar`) the viewer takes the sidebar's place, with every changed file in its list and `path`
-/// selected, so another file is a click away. Only a change too large for that falls back to `path` alone.
+/// From the sidebar (`from_sidebar`) the viewer takes the sidebar's place and shows every changed file stacked, scrolled
+/// to `path`, with a picker between the uncommitted changes and the branch's. Only a change too large for that falls
+/// back to `path` alone.
 pub async fn open_changes(root: String, mode: Mode, path: Option<String>, from_sidebar: bool) -> Result<(), String> {
     let all = from_sidebar && path.is_some();
     let title = match &path {
-        Some(path) if !all => path.clone(),
-        _ => if mode == Mode::Branch { "Changes on this branch" } else { "Uncommitted changes" }.to_owned(),
+        _ if from_sidebar => "Changes".to_owned(),
+        Some(path) => path.clone(),
+        None => if mode == Mode::Branch { "Changes on this branch" } else { "Uncommitted changes" }.to_owned(),
     };
-    let subtitle = format!("{} · {}", basename(&root), if mode == Mode::Branch { "This branch" } else { "Working tree against HEAD" });
+    // From the sidebar the scope is picked in the viewer, so the subtitle names only the repo.
+    let subtitle = if from_sidebar { basename(&root).to_owned() } else { format!("{} · {}", basename(&root), if mode == Mode::Branch { "This branch" } else { "Working tree against HEAD" }) };
     let key = root.clone();
     let mut open = json!({ "title": title, "cwd": root, "subtitle": subtitle });
     if from_sidebar {
         open["sidebar"] = SIDEBAR.into();
+        open["scopes"] = json!([{ "id": Mode::Uncommitted.name(), "label": "Uncommitted" }, { "id": Mode::Branch.name(), "label": "Branch" }]);
+        open["scope"] = mode.name().into();
+        // Both diff against the working tree, so the viewer may read the lines between the hunks from the repo.
+        open["worktree"] = true.into();
     }
     if all {
         open["focus"] = json!({ "path": path });
     }
-    open_live(open, &key, move |fresh| {
+    open_live_scoped(open, &key, move |fresh, scope| {
         let (root, path) = (root.clone(), path.clone());
+        let mode = scope.as_deref().map_or(mode, Mode::named);
         async move {
             let c = changes(&root, mode, fresh).await?;
             if c.files.is_empty() {
@@ -125,6 +133,7 @@ pub async fn open_changes(root: String, mode: Mode, path: Option<String>, from_s
         }
     })
     .await
+    .map(drop)
 }
 
 /// `git show` for one commit, a merge against its first parent, so it shows what the merge brought in.
@@ -220,6 +229,45 @@ mod tests {
              diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,2 @@\n+one\n+two\n\
              diff --git a/pic.png b/pic.png\nnew file mode 100644\nBinary files /dev/null and b/pic.png differ\n"
         );
+    }
+
+    /// From the sidebar the viewer stacks every file with the uncommitted changes and the branch's to pick from, may read
+    /// the repo's files for its folds, and starts on the scope the sidebar showed.
+    #[test]
+    fn from_the_sidebar_the_viewer_offers_both_scopes_and_starts_on_the_one_asked_for() {
+        let git: &'static [(&'static str, i64, &'static str)] = &[
+            ("branch --show-current", 0, "feature\n"),
+            ("rev-parse --verify --quiet HEAD", 0, "abc\n"),
+            ("rev-parse --abbrev-ref origin/HEAD", 0, "origin/main\n"),
+            ("merge-base HEAD origin/main", 0, "base1\n"),
+            ("diff base1 --numstat", 0, "1\t0\ta.rs\0"),
+            ("diff base1 --name-status", 0, "M\0a.rs\0"),
+            ("ls-files", 0, ""),
+            ("diff base1 -M", 0, "diff --git a/a.rs b/a.rs\n@@ -1 +1,2 @@\n+x\n"),
+        ];
+        let calls: Rc<RefCell<Vec<(String, Value)>>> = Rc::default();
+        let seen = calls.clone();
+        host::testing::answer(move |method, params| {
+            if method != "exec" {
+                seen.borrow_mut().push((method.to_owned(), params.clone()));
+                return Ok(json!({ "id": 1 }));
+            }
+            let line = params["args"].as_array().unwrap().iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ");
+            Ok(match git.iter().find(|answer| line.starts_with(answer.0)) {
+                Some((_, code, stdout)) => json!({ "code": code, "stdout": stdout, "stderr": "" }),
+                None => json!({ "code": 1, "stdout": "", "stderr": format!("fake git has no answer for {line}") }),
+            })
+        });
+        block_on(open_changes("/r".into(), Mode::Branch, Some("a.rs".into()), true)).unwrap();
+        let calls = calls.borrow();
+        let sent = |method: &str| calls.iter().find(|call| call.0 == method).map(|call| call.1.clone()).unwrap();
+        let opened = sent("openDiff");
+        assert_eq!((opened["title"].as_str(), opened["subtitle"].as_str(), opened["sidebar"].as_str()), (Some("Changes"), Some("r"), Some("changes")));
+        assert_eq!(opened["scopes"], json!([{ "id": "uncommitted", "label": "Uncommitted" }, { "id": "branch", "label": "Branch" }]));
+        assert_eq!((opened["scope"].as_str(), opened["worktree"].as_bool(), opened["focus"]["path"].as_str()), (Some("branch"), Some(true), Some("a.rs")));
+        let update = sent("updateDiff");
+        assert_eq!(update["scope"], "branch");
+        assert!(update["patch"].as_str().unwrap().starts_with("diff --git a/a.rs"));
     }
 
     #[test]

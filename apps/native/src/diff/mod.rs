@@ -4,8 +4,10 @@ pub mod comments;
 pub mod highlight;
 pub mod patch;
 pub mod rows;
+pub mod stack;
 #[cfg(feature = "ui")]
 pub mod viewer;
+pub mod worktree;
 
 use serde_json::Value;
 use std::sync::Arc;
@@ -17,7 +19,26 @@ pub struct Update {
     pub comments: Option<Arc<Vec<comments::Comment>>>,
     pub error: Option<String>,
     pub focus: Option<Focus>,
+    /// Which of `scopes` the patch is of. An update for a scope other than the one picked is dropped: it was on its way
+    /// when another was picked.
+    pub scope: Option<String>,
+    /// What else the diff can show, like a repo's uncommitted changes and its branch's. The viewer offers them in a
+    /// picker and asks the plugin's refresh handler for the one picked.
+    pub scopes: Option<Arc<Vec<Scope>>>,
+    /// The patch's new side is the files in the diff's `cwd` as they are now, so the viewer may read the unchanged lines
+    /// its folds leave out from there.
+    pub worktree: Option<bool>,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Scope {
+    pub id: String,
+    pub label: String,
+}
+
+/// The most scopes a diff offers, and the longest id or label, in UTF-16 units.
+const MAX_SCOPES: usize = 6;
+const MAX_SCOPE_TEXT: usize = 60;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Focus {
@@ -86,11 +107,33 @@ pub fn clean_update(params: &Value) -> Result<Update, String> {
             old: focus.get("side").and_then(Value::as_str) == Some("old"),
         })
     });
+    let scope = params
+        .get("scope")
+        .and_then(Value::as_str)
+        .map(|_| text(params.get("scope"), MAX_SCOPE_TEXT))
+        .filter(|scope| !scope.is_empty());
+    let scopes = match params.get("scopes") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(list)) => Some(Arc::new(
+            list.iter()
+                .map(|scope| Scope {
+                    id: text(scope.get("id"), MAX_SCOPE_TEXT),
+                    label: text(scope.get("label"), MAX_SCOPE_TEXT),
+                })
+                .filter(|scope| !scope.id.is_empty() && !scope.label.is_empty())
+                .take(MAX_SCOPES)
+                .collect(),
+        )),
+        Some(_) => return Err("scopes must be a list".into()),
+    };
     Ok(Update {
         patch,
         comments,
         error,
         focus,
+        scope,
+        scopes,
+        worktree: params.get("worktree").and_then(Value::as_bool),
     })
 }
 
@@ -133,6 +176,30 @@ mod tests {
                 .unwrap()
                 .focus
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn scopes_are_bounded_and_need_an_id_and_a_label() {
+        let scope = |id: &str, label: &str| json!({ "id": id, "label": label });
+        let mut list = vec![scope("uncommitted", "Uncommitted"), scope("", "No id"), json!("branch")];
+        list.extend((0..10).map(|n| scope(&format!("s{n}"), "More")));
+        let update = clean_update(&json!({ "scopes": list, "scope": "x".repeat(100), "worktree": true })).unwrap();
+        let scopes = update.scopes.unwrap();
+        assert_eq!(scopes.len(), MAX_SCOPES);
+        assert_eq!(
+            scopes[0],
+            Scope {
+                id: "uncommitted".into(),
+                label: "Uncommitted".into()
+            }
+        );
+        assert_eq!(update.scope.unwrap().len(), MAX_SCOPE_TEXT);
+        assert_eq!(update.worktree, Some(true));
+        assert!(clean_update(&json!({})).unwrap().scopes.is_none());
+        assert_eq!(
+            clean_update(&json!({ "scopes": "branch" })),
+            Err("scopes must be a list".into())
         );
     }
 }

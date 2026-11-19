@@ -2105,7 +2105,118 @@ fn diff_dock(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     }
 }
 
+/// One file's part of a made-up change: lines both sides have, lines removed, and lines added.
+enum Part {
+    Same(Vec<String>),
+    Removed(Vec<String>),
+    Added(Vec<String>),
+}
+
+/// The file `parts` make, and a git patch of them with 3 lines of context, as `git diff` writes one. `new` makes it an
+/// added file.
+fn file_patch(path: &str, parts: &[Part], new: bool) -> (String, String) {
+    let lines: Vec<(char, &str)> = parts
+        .iter()
+        .flat_map(|part| {
+            let (mark, lines) = match part {
+                Part::Same(lines) => (' ', lines),
+                Part::Removed(lines) => ('-', lines),
+                Part::Added(lines) => ('+', lines),
+            };
+            lines.iter().map(move |line| (mark, line.as_str()))
+        })
+        .collect();
+    let text: String = lines
+        .iter()
+        .filter(|(mark, _)| *mark != '-')
+        .map(|(_, line)| format!("{line}\n"))
+        .collect();
+    let mut patch = if new {
+        format!("diff --git a/{path} b/{path}\nnew file mode 100644\n--- /dev/null\n+++ b/{path}\n")
+    } else {
+        format!("diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n")
+    };
+    let changed: Vec<usize> = (0..lines.len()).filter(|&at| lines[at].0 != ' ').collect();
+    let mut at = 0;
+    while at < changed.len() {
+        // Changes 6 or fewer lines apart share a hunk.
+        let mut last = at;
+        while last + 1 < changed.len() && changed[last + 1] - changed[last] <= 7 {
+            last += 1;
+        }
+        let (from, to) = (changed[at].saturating_sub(3), (changed[last] + 4).min(lines.len()));
+        let before = &lines[..from];
+        let number = |side: char| before.iter().filter(|(mark, _)| *mark != side).count();
+        let count = |side: char| lines[from..to].iter().filter(|(mark, _)| *mark != side).count();
+        let (old, new) = (count('+'), count('-'));
+        let start = |len: usize, side: char| if len == 0 { 0 } else { number(side) + 1 };
+        patch += &format!("@@ -{},{old} +{},{new} @@\n", start(old, '+'), start(new, '-'));
+        for (mark, line) in &lines[from..to] {
+            patch += &format!("{mark}{line}\n");
+        }
+        at = last + 1;
+    }
+    (text, patch)
+}
+
+/// `diff-sidebar`'s stacked change, in a made-up repository folder: `src/config.rs` changed in two places with
+/// unchanged lines between and after them, `src/client/retry.rs` new, and `README.md` changed in its middle. Gives the
+/// folder and the patch.
+fn stack_repo() -> (PathBuf, String) {
+    let lines = |list: &[&str]| list.iter().map(|line| line.to_string()).collect::<Vec<_>>();
+    let limits = |from: usize, to: usize| {
+        (from..to)
+            .flat_map(|n| [format!("pub fn limit_{n}() -> u64 {{"), format!("    {n} * 1_000"), "}".into()])
+            .collect::<Vec<_>>()
+    };
+    let config = [
+        Part::Same(lines(&["use std::time::Duration;", "", "pub fn load() -> Config {"])),
+        Part::Removed(lines(&["    let timeout = 10;"])),
+        Part::Added(lines(&[
+            "    // A slow network gets room to answer before the client gives up.",
+            "    let timeout = 30;",
+            "    validate(timeout);",
+        ])),
+        Part::Same(lines(&["    Config {", "        timeout: Duration::from_secs(timeout),"])),
+        Part::Removed(lines(&["        retries: 1,"])),
+        Part::Added(lines(&["        retries: 3,"])),
+        Part::Same([lines(&["    }", "}", ""]), limits(0, 10), lines(&["pub fn validate(timeout: u64) {"])].concat()),
+        Part::Added(lines(&["    assert!(timeout > 0, \"a timeout of zero never answers\");"])),
+        Part::Same([lines(&["}", ""]), limits(10, 14)].concat()),
+    ];
+    let retry = [Part::Added(lines(&[
+        "pub fn backoff(attempt: u32) -> u64 {",
+        "    200 * 2u64.pow(attempt)",
+        "}",
+    ]))];
+    let readme_lines = |from: usize, to: usize| (from..to).map(|n| format!("Step {n} of the setup.")).collect::<Vec<_>>();
+    let readme = [
+        Part::Same([lines(&["# acme-web", ""]), readme_lines(1, 11), lines(&["", "## Configuration"])].concat()),
+        Part::Removed(lines(&["The client waits 10 seconds."])),
+        Part::Added(lines(&["The client waits 30 seconds and retries three times."])),
+        Part::Same([lines(&[""]), readme_lines(11, 20)].concat()),
+    ];
+    let dir = std::env::temp_dir().join("wings-shot-stack");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join(".git")).expect("make the made-up repository");
+    std::fs::create_dir_all(dir.join("src/client")).expect("make its folders");
+    let mut patch = String::new();
+    for (path, parts, new) in [
+        ("src/config.rs", &config[..], false),
+        ("src/client/retry.rs", &retry[..], true),
+        ("README.md", &readme[..], false),
+    ] {
+        let (text, part) = file_patch(path, parts, new);
+        std::fs::write(dir.join(path), text).expect("write a made-up file");
+        patch += &part;
+    }
+    (dir, patch)
+}
+
+/// A diff opened from the Changes sidebar: every file stacked in the sidebar's place, widened over the panes, with the
+/// unchanged lines between the hunks folded, and one fold opened.
 fn diff_sidebar(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+    let (repo, patch) = stack_repo();
     let data = Data::temp();
     data.install_script(
         "changes",
@@ -2133,13 +2244,30 @@ fn diff_sidebar(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             .unwrap();
         wait(cx, window, Duration::from_millis(500));
         save(cx, window, &name("list"));
+        let payload = serde_json::json!({
+            "patch": patch,
+            "worktree": true,
+            "scopes": [{ "id": "uncommitted", "label": "Uncommitted" }, { "id": "branch", "label": "Branch" }],
+            "scope": "uncommitted",
+        });
+        let cwd = repo.to_string_lossy().into_owned();
         handle
             .update(cx, |w, window, cx| {
-                w.shot_sidebar_diff("changes", "side", DOCK_PATCH, window, cx)
+                w.shot_sidebar_stack("changes", "side", payload, &cwd, window, cx)
             })
             .unwrap();
+        // The widening, and the files read for the folds.
         wait(cx, window, Duration::from_millis(2000));
         save(cx, window, &name("open"));
+        // The fold between config.rs's hunks opens; README.md's stay closed.
+        click(cx, window, spot("diff-fold-0-0"));
+        wait(cx, window, Duration::from_millis(500));
+        save(cx, window, &name("fold"));
+        click(cx, window, spot("diff-scope"));
+        wait(cx, window, Duration::from_millis(300));
+        save(cx, window, &name("scopes"));
+        cx.simulate_keystrokes(window, "escape");
+        wait(cx, window, Duration::from_millis(300));
         click(cx, window, spot("diff-back"));
         wait(cx, window, Duration::from_millis(300));
         save(cx, window, &name("back"));

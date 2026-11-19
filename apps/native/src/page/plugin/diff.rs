@@ -141,6 +141,26 @@ impl PluginHost {
         id: &str,
         done: impl FnOnce(Result<(), String>) + Send + 'static,
     ) {
+        self.ask_diff(id, None, done);
+    }
+
+    /// A refresh for another of the viewer's scopes: the main frame's `onDiffRefresh` gets `{ diffId, scope }` and loads
+    /// that scope's patch.
+    pub fn send_diff_scope(
+        &self,
+        id: &str,
+        scope: &str,
+        done: impl FnOnce(Result<(), String>) + Send + 'static,
+    ) {
+        self.ask_diff(id, Some(scope), done);
+    }
+
+    fn ask_diff(
+        &self,
+        id: &str,
+        scope: Option<&str>,
+        done: impl FnOnce(Result<(), String>) + Send + 'static,
+    ) {
         let main = self
             .shared
             .frames
@@ -165,11 +185,11 @@ impl PluginHost {
         };
         *pending = Some(token);
         drop(diffs);
-        if main.send(
-            Message::DiffRefresh,
-            token,
-            json!({ "diffId": id }).to_string(),
-        ) != Delivery::Queued
+        let mut asked = json!({ "diffId": id });
+        if let Some(scope) = scope {
+            asked["scope"] = scope.into();
+        }
+        if main.send(Message::DiffRefresh, token, asked.to_string()) != Delivery::Queued
         {
             self.shared
                 .settle_action(token, Some("The plugin didn't respond".into()));
@@ -224,6 +244,8 @@ mod tests {
         Reloads,
         /// Fails when it is refreshed.
         Throws,
+        /// Shows the scope a refresh asked for, as an error.
+        Echoes,
         /// Is stopped a moment after it opened the viewer.
         Stops,
     }
@@ -265,6 +287,13 @@ mod tests {
                     let call = cx.call(
                         "updateDiff",
                         json!({ "id": heard["diffId"], "error": "reloaded" }),
+                    );
+                    self.reloads.insert(call, id);
+                }
+                ("diffRefresh", Then::Echoes) => {
+                    let call = cx.call(
+                        "updateDiff",
+                        json!({ "id": heard["diffId"], "error": heard["scope"].as_str().unwrap_or("no scope") }),
                     );
                     self.reloads.insert(call, id);
                 }
@@ -446,6 +475,36 @@ mod tests {
         assert!(rig.env.seen().iter().any(|seen| matches!(seen, Seen::DiffUpdate(_, _, update) if update.error.as_deref() == Some("reloaded"))));
         rig.host.diff_closed(&id);
         reporter.report("close event", |r| r["closed"] == id);
+    }
+
+    /// A scope picked in the viewer reaches the main's refresh handler with the refresh.
+    #[test]
+    fn a_scope_picked_in_the_viewer_reaches_the_refresh_handler() {
+        let rig = Rig::new(json!({ "contributes": { "ui": ["diff"] } }), vec![]);
+        let reporter = Frame::start(&rig.host, &echoes());
+        rig.host
+            .start_main(
+                &opens(json!({ "title": "Live", "refresh": true }), Then::Echoes),
+                |_| {},
+            )
+            .unwrap();
+        let id = reporter.report("main opens diff", |r| r["id"].is_string())["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        for scope in [Some("branch"), None] {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let done = move |result: Result<(), String>| {
+                let _ = tx.send(result);
+            };
+            match scope {
+                Some(scope) => rig.host.send_diff_scope(&id, scope, done),
+                None => rig.host.send_diff_refresh(&id, done),
+            }
+            assert_eq!(rx.recv_timeout(WAIT).unwrap(), Ok(()));
+            let heard = scope.unwrap_or("no scope");
+            assert!(rig.env.seen().iter().any(|seen| matches!(seen, Seen::DiffUpdate(_, _, update) if update.error.as_deref() == Some(heard))));
+        }
     }
 
     #[test]

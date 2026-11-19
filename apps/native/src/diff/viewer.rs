@@ -1,5 +1,6 @@
-//! A plugin's diff, docked beside a tab or filling the window, with its review threads under their lines. Only viewport
-//! rows become GPUI elements.
+//! A plugin's diff, docked beside a tab or filling the window, with its review threads under their lines, or every
+//! file stacked in one scroll in a sidebar's place (`stacked.rs`). Only viewport rows become GPUI elements.
+mod stacked;
 mod threads;
 
 use super::{
@@ -41,6 +42,8 @@ pub enum Event {
     Expand(bool),
     /// The docked file list was shown or hidden, for the app to keep, as the desktop's `wings.diff.dockFiles`.
     DockFiles(bool),
+    /// A file header's Open in editor: the file's path in the patch, and the line to open it at.
+    OpenInEditor { path: String, line: Option<u32> },
 }
 
 /// A code row's height, unwrapped.
@@ -118,6 +121,10 @@ pub struct Viewer {
     opener: Opener,
     /// Why the last comment link didn't open.
     link_error: Option<String>,
+    /// Every file in one scroll, when the workspace asks for it.
+    stack: stacked::Stack,
+    /// The editor a file header opens its file in, by its name, when the app knows one.
+    editor: Option<SharedString>,
     #[cfg(feature = "test-support")]
     rendered_rows: std::cell::Cell<usize>,
 }
@@ -157,6 +164,7 @@ impl Viewer {
         let opener: Opener = Rc::new(move |url, _, cx| {
             let _ = viewer.update(cx, |this, cx| this.open_link(url.to_owned(), cx));
         });
+        let stack = stacked::Stack::new(view.update.focus.is_some());
         let mut this = Self {
             view,
             host,
@@ -202,6 +210,8 @@ impl Viewer {
             bodies: RefCell::default(),
             opener,
             link_error: None,
+            stack,
+            editor: None,
             #[cfg(feature = "test-support")]
             rendered_rows: std::cell::Cell::new(0),
         };
@@ -311,13 +321,22 @@ impl Viewer {
     /// What the plugin sent: a new patch starts the file again, at its focus or its top. Comments alone, or with the patch
     /// already shown, as after a reply and on each of a live diff's loads, leave the code where it's scrolled to.
     pub fn update(&mut self, update: Update, cx: &mut Context<Self>) {
+        // One for a scope other than the one picked was on its way when another was picked.
+        if let (Some(scope), Some(now)) = (&update.scope, &self.view.update.scope)
+            && scope != now
+        {
+            return;
+        }
+        let stacked = self.stacked();
         let mut rebuild = update.focus.is_some();
         if let Some(patch) = update.patch {
             rebuild |= self.view.update.patch.as_ref() != Some(&patch);
             // A file that didn't change keeps its colours, so a live diff's reload doesn't draw it plain again.
-            let old = self.view.update.patch.as_deref();
-            self.colors
-                .retain(|at, _| old.and_then(|old| old.files.get(*at)) == patch.files.get(*at));
+            let old = self.view.update.patch.clone();
+            self.colors.retain(|at, _| {
+                old.as_ref().and_then(|old| old.files.get(*at)) == patch.files.get(*at)
+            });
+            self.keep_texts(old.as_deref(), &patch);
             self.view.update.patch = Some(patch);
             self.view.update.error = None;
         }
@@ -326,13 +345,27 @@ impl Viewer {
         }
         if let Some(focus) = update.focus {
             self.view.update.focus = Some(focus);
+            self.stack.focus_pending = true;
+        }
+        if let Some(scope) = update.scope {
+            self.view.update.scope = Some(scope);
+        }
+        if let Some(scopes) = update.scopes {
+            self.view.update.scopes = Some(scopes);
+        }
+        if let Some(worktree) = update.worktree {
+            self.view.update.worktree = Some(worktree);
         }
         let comments = update.comments.is_some();
         if let Some(list) = update.comments {
             self.view.update.comments = Some(list);
         }
+        // Review threads show one file at a time, so comments coming or going change the layout.
+        rebuild |= self.stacked() != stacked;
         if rebuild {
             self.rebuild(cx);
+        } else if comments && self.stacked() {
+            self.group_comments();
         } else if comments {
             self.rethread();
         }
@@ -473,20 +506,15 @@ impl Viewer {
         self.relist(cx);
         self.group_comments();
         let Some(diff) = &self.view.update.patch else {
+            self.restack(cx);
             return;
         };
-        self.counts = diff
-            .files
-            .iter()
-            .map(|file| {
-                let lines = file.hunks.iter().flat_map(|hunk| &hunk.lines);
-                lines.fold((0, 0), |(added, removed), line| match line.kind {
-                    DiffLineKind::Added => (added + 1, removed),
-                    DiffLineKind::Deleted => (added, removed + 1),
-                    DiffLineKind::Context => (added, removed),
-                })
-            })
-            .collect();
+        self.counts = diff.files.iter().map(super::stack::counts).collect();
+        if self.stacked() {
+            self.restack(cx);
+            self.read_texts(cx);
+            return;
+        }
         if let Some(focus) = &self.view.update.focus
             && let Some(index) = diff.files.iter().position(|file| {
                 file.new_path.as_deref() == Some(&focus.path)
@@ -595,6 +623,13 @@ impl Viewer {
     }
 
     pub fn select_file(&mut self, index: usize, cx: &mut Context<Self>) {
+        // Stacked, every file is open: it scrolls to the file.
+        if self.stacked() {
+            self.selected = index;
+            self.scroll_to_file(index);
+            cx.notify();
+            return;
+        }
         if self
             .view
             .update
@@ -653,12 +688,21 @@ impl Viewer {
         if !self.view.refresh || self.refreshing {
             return;
         }
+        self.ask_plugin(None, cx);
+    }
+
+    /// Asks the plugin to load the diff again, of `scope` when one was picked, and spins until it's done.
+    fn ask_plugin(&mut self, scope: Option<String>, cx: &mut Context<Self>) {
         self.refreshing = true;
         self.refresh_error = None;
         let (sent, received) = async_channel::bounded(1);
-        self.host.send_diff_refresh(&self.view.id, move |result| {
+        let done = move |result: Result<(), String>| {
             let _ = sent.try_send(result);
-        });
+        };
+        match scope {
+            Some(scope) => self.host.send_diff_scope(&self.view.id, &scope, done),
+            None => self.host.send_diff_refresh(&self.view.id, done),
+        }
         self.refresh_task = Some(cx.spawn(async move |this, cx| {
             if let Ok(result) = received.recv().await {
                 let _ = this.update(cx, |this, cx| {
@@ -687,7 +731,9 @@ impl Viewer {
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = &event.keystroke;
         let pressed = matches!(key.key.as_str(), "enter" | "space");
-        if key.key == "escape"
+        if key.key == "escape" && self.close_menus() {
+            cx.notify();
+        } else if key.key == "escape"
             || (key.modifiers.platform && key.key == "w")
             || (pressed && self.close_focus.is_focused(window))
         {
@@ -720,6 +766,10 @@ impl Viewer {
             match listed[next] {
                 Some(index) => self.select_file(index, cx),
                 None => self.open_discussion(cx),
+            }
+        } else if self.code_focus.is_focused(window) && self.stacked() {
+            if !self.stack_key(key.key.as_str(), cx) {
+                return;
             }
         } else if self.code_focus.is_focused(window) {
             if matches!(key.key.as_str(), "left" | "right")
@@ -869,6 +919,11 @@ impl Viewer {
     /// A line's text in its syntax colours, moved left by `shift` when unwrapped side by side. As on the desktop, a
     /// changed line keeps its colours on its green or red background.
     fn code_text(&self, line: &DiffLine, spans: &[Span], shift: Pixels) -> Div {
+        self.styled_code(&line.text, line.missing_newline, spans, shift)
+    }
+
+    /// `code_text` for any text: a hunk's line, or one an open fold shows.
+    fn styled_code(&self, text: &str, missing_newline: bool, spans: &[Span], shift: Pixels) -> Div {
         let mut start = 0;
         let highlights = spans.iter().map(|span| {
             let range = start..span.end;
@@ -882,8 +937,8 @@ impl Viewer {
         });
         let text = format!(
             "{}{}",
-            line.text,
-            if line.missing_newline {
+            text,
+            if missing_newline {
                 "  ⏎ No newline at end of file"
             } else {
                 ""
@@ -1077,6 +1132,9 @@ impl Viewer {
         if diff.files.is_empty() && self.discussion.is_empty() {
             return self.message("No changed files", false);
         }
+        if self.stacked() {
+            return self.stack_content(cx);
+        }
         let files = uniform_list(
             "diff-files",
             self.list_rows.len(),
@@ -1099,20 +1157,7 @@ impl Viewer {
             .min_h_0()
             .into_any_element()
         } else if let Some(file) = file.filter(|_| self.rows.is_empty()) {
-            let detail = if file.is_binary {
-                "Binary file changed. No text diff."
-            } else if file.is_placeholder {
-                "This file is too large to show."
-            } else {
-                match file.status {
-                    DiffStatus::Added => "Empty file added.",
-                    DiffStatus::Deleted => "Empty file deleted.",
-                    DiffStatus::Renamed => "File renamed. No changed text lines.",
-                    DiffStatus::Copied => "File copied. No changed text lines.",
-                    DiffStatus::Modified => "File metadata changed. No changed text lines.",
-                }
-            };
-            self.message(detail, false)
+            self.message(no_lines(file), false)
         } else if file.is_none() {
             self.message("No changed files", false)
         } else if self.varied_rows() {
@@ -1276,6 +1321,23 @@ impl Viewer {
     }
 }
 
+/// Why a file shows no lines.
+fn no_lines(file: &super::patch::DiffFile) -> &'static str {
+    if file.is_binary {
+        "Binary file changed. No text diff."
+    } else if file.is_placeholder {
+        "This file is too large to show."
+    } else {
+        match file.status {
+            DiffStatus::Added => "Empty file added.",
+            DiffStatus::Deleted => "Empty file deleted.",
+            DiffStatus::Renamed => "File renamed. No changed text lines.",
+            DiffStatus::Copied => "File copied. No changed text lines.",
+            DiffStatus::Modified => "File metadata changed. No changed text lines.",
+        }
+    }
+}
+
 /// A line's mark, the mark's colour and the line's background.
 fn colors(kind: DiffLineKind) -> (&'static str, u32, u32) {
     match kind {
@@ -1390,10 +1452,13 @@ impl Render for Viewer {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key))
             .children(ui::spot(|| "diff".into()))
+            .children(self.stack_menus(cx))
             // The desktop's header: `py-3 pr-3` and a 15px title when the diff fills the window, `py-2 pr-2 pl-4` and
             // 13px docked. Under the title, the subtitle, the number of files and the lines added and removed. Filling
             // the window, it starts right of the window's buttons, which sit over its top-left corner.
-            .child(
+            .child(if self.stacked() {
+                self.stack_bar(cx)
+            } else {
                 div()
                     .flex_none()
                     .flex()
@@ -1596,8 +1661,9 @@ impl Render for Viewer {
                             .track_focus(&self.close_focus)
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::Close))),
                         )
-                    }),
-            )
+                    })
+                    .into_any_element()
+            })
             .when_some(self.link_error.clone(), |body, error| {
                 body.child(
                     div()

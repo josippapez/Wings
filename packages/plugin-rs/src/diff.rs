@@ -41,8 +41,10 @@ pub async fn open_while(diff: Value, load: impl Future<Output = Result<Value, St
 }
 
 struct Viewer {
-    load: Box<dyn Fn(bool) -> Loaded>,
+    load: Box<dyn Fn(bool, Option<String>) -> Loaded>,
     key: String,
+    /// The scope picked in the viewer, for one opened with `scopes`.
+    scope: RefCell<Option<String>>,
     /// What it shows, as JSON, so an update it already shows isn't sent again.
     shown: RefCell<Option<String>>,
     /// One load at a time: a reload asked for meanwhile runs when this one is done, `fresh` if any of them was.
@@ -62,7 +64,16 @@ async fn reload(id: Value, viewer: Rc<Viewer>, fresh: bool) {
     }
     let mut fresh = fresh;
     loop {
-        let now = shown((viewer.load)(fresh).await);
+        let scope = viewer.scope.borrow().clone();
+        let mut now = shown((viewer.load)(fresh, scope.clone()).await);
+        // Another scope was picked meanwhile: load that one instead.
+        if *viewer.scope.borrow() != scope {
+            fresh = viewer.again.take().unwrap_or(fresh);
+            continue;
+        }
+        if let (Some(scope), Some(fields)) = (scope, now.as_object_mut()) {
+            fields.insert("scope".into(), scope.into());
+        }
         let text = now.to_string();
         let open = LIVE.with(|live| live.borrow().contains_key(&id.to_string()));
         if open && viewer.shown.borrow().as_deref() != Some(&text) {
@@ -85,16 +96,37 @@ fn id_of(key: &str) -> Value {
 /// button, and `load` runs again every 15 s while Wings is in front. An update the viewer already shows isn't sent
 /// again, and nothing runs once it's closed. `load` gets whether to skip a cache, which the Refresh button asks for.
 /// `key` names what it shows, like a repo folder, for `refresh_live`.
-pub async fn open_live_id<F, Fut>(mut diff: Value, key: &str, load: F) -> Result<Value, String>
+pub async fn open_live_id<F, Fut>(diff: Value, key: &str, load: F) -> Result<Value, String>
 where
     F: Fn(bool) -> Fut + 'static,
     Fut: Future<Output = Result<Value, String>> + 'static,
 {
+    start_live(diff, key, Box::new(move |fresh, _| Box::pin(load(fresh)))).await
+}
+
+/// `open_live_id` for a diff with `scopes` to pick from in the viewer, like a repo's uncommitted changes and its
+/// branch's: `load` also gets the scope picked, at first `diff`'s `scope`, and each update says which scope it is of,
+/// so the viewer drops one that comes after another scope was picked. Needs Wings 0.2.42 for the picker.
+pub async fn open_live_scoped<F, Fut>(diff: Value, key: &str, load: F) -> Result<Value, String>
+where
+    F: Fn(bool, Option<String>) -> Fut + 'static,
+    Fut: Future<Output = Result<Value, String>> + 'static,
+{
+    start_live(diff, key, Box::new(move |fresh, scope| Box::pin(load(fresh, scope)))).await
+}
+
+async fn start_live(mut diff: Value, key: &str, load: Box<dyn Fn(bool, Option<String>) -> Loaded>) -> Result<Value, String> {
     if !HOOKED.replace(true) {
         host::on("diffRefresh", |token, asked| {
             let id = asked["diffId"].clone();
+            let scope = asked["scope"].as_str().map(str::to_owned);
             task::spawn(async move {
                 if let Some(viewer) = LIVE.with(|live| live.borrow().get(&id.to_string()).cloned()) {
+                    if scope.is_some() {
+                        // The viewer cleared what it showed, so the next load is sent even if it was shown before.
+                        *viewer.scope.borrow_mut() = scope;
+                        *viewer.shown.borrow_mut() = None;
+                    }
                     reload(id, viewer, true).await;
                 }
                 drop(host::call("actionDone", json!({ "token": token, "error": null })));
@@ -106,8 +138,9 @@ where
         poll::while_focused(LIVE_EVERY, false, || refresh_live(None));
     }
     diff["refresh"] = true.into();
+    let scope = diff["scope"].as_str().map(str::to_owned);
     let id = open(diff).await?;
-    let viewer = Rc::new(Viewer { load: Box::new(move |fresh| Box::pin(load(fresh))), key: key.to_owned(), shown: RefCell::new(None), running: Cell::new(false), again: Cell::new(None) });
+    let viewer = Rc::new(Viewer { load, key: key.to_owned(), scope: RefCell::new(scope), shown: RefCell::new(None), running: Cell::new(false), again: Cell::new(None) });
     LIVE.with(|live| live.borrow_mut().insert(id.to_string(), viewer.clone()));
     reload(id.clone(), viewer, false).await;
     Ok(id)
@@ -166,5 +199,32 @@ mod tests {
             ]
         );
         assert_eq!(loads.get(), 3);
+    }
+
+    /// The viewer's picker asks for another scope through a refresh: it loads that one, and each update names its scope.
+    #[test]
+    fn a_scoped_viewer_loads_the_scope_picked_and_names_it_in_each_update() {
+        let calls: Rc<RefCell<Vec<(String, Value)>>> = Rc::default();
+        let seen = calls.clone();
+        host::testing::answer(move |method, params| {
+            seen.borrow_mut().push((method.to_owned(), params.clone()));
+            Ok(json!({ "id": 8 }))
+        });
+        let opened = json!({ "title": "Changes", "scope": "uncommitted" });
+        let id = block_on(open_live_scoped(opened, "/repo", |_, scope| async move { Ok(json!({ "patch": scope.unwrap_or_default() })) })).unwrap();
+        host::deliver("diffRefresh", 3, json!({ "diffId": id, "scope": "branch" }).to_string());
+        block_on(async {});
+        // Back to the first scope, whose patch the viewer let go of when the branch was picked: it comes again.
+        host::deliver("diffRefresh", 4, json!({ "diffId": id, "scope": "uncommitted" }).to_string());
+        block_on(async {});
+        let sent: Vec<Value> = calls.borrow().iter().filter(|call| call.0 == "updateDiff").map(|call| call.1.clone()).collect();
+        assert_eq!(
+            sent,
+            [
+                json!({ "patch": "uncommitted", "scope": "uncommitted", "id": 8 }),
+                json!({ "patch": "branch", "scope": "branch", "id": 8 }),
+                json!({ "patch": "uncommitted", "scope": "uncommitted", "id": 8 }),
+            ]
+        );
     }
 }

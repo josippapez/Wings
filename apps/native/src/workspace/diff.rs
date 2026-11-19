@@ -6,8 +6,8 @@
 use std::{path::PathBuf, time::Duration};
 
 use gpui::{
-    AnyElement, AppContext, BoxShadow, Context, ElementId, Focusable, Pixels, StyleRefinement,
-    Window, div, hsla, point, prelude::*, px, rgb, rgba,
+    AnyElement, AppContext, BoxShadow, Context, ElementId, Focusable, Pixels, SharedString,
+    StyleRefinement, Window, div, hsla, point, prelude::*, px, rgb, rgba,
 };
 
 use super::{Active, HAIRLINE, Workspace};
@@ -123,12 +123,18 @@ impl Workspace {
         let can_dock = dock.tab.is_some() && dock.fits;
         let prefs = &self.prefs;
         let (wrap, tree, files) = (prefs.diff_wrap, prefs.diff_tree, prefs.diff_dock_files);
+        let editor = self
+            .default_editor()
+            .map(|editor| SharedString::from(editor.name.clone()));
         let viewer = cx.new(|cx| {
             let mut viewer = Viewer::new(view, host, cx);
             viewer.set_layout(wrap, tree, cx);
             viewer.set_dock_files(files, cx);
             viewer.set_dock(can_dock || in_sidebar, can_dock, cx);
             viewer.set_back(in_sidebar, cx);
+            // In a sidebar's place it shows every file in one scroll, as the sidebar lists them.
+            viewer.set_stacked(in_sidebar, cx);
+            viewer.set_editor(editor, cx);
             viewer
         });
         let events = cx.subscribe_in(&viewer, window, |this, _, event, window, cx| match event {
@@ -142,6 +148,7 @@ impl Workspace {
             ),
             Event::Expand(expanded) => this.expand_diff(*expanded, window, cx),
             Event::DockFiles(shown) => this.set_prefs(|prefs| prefs.diff_dock_files = *shown, cx),
+            Event::OpenInEditor { path, line } => this.open_diff_file(path.clone(), *line, cx),
         });
         // Docked, the keys stay with the tab, as the desktop's dock is no dialog.
         if !can_dock {
@@ -149,6 +156,27 @@ impl Workspace {
         }
         self.plugin_ui.diff = Some((viewer, events));
         cx.notify();
+    }
+
+    /// Opens a file of the diff in the editor at `line`. Its path comes from the plugin's patch, so it opens only from
+    /// inside the diff's repository folder.
+    fn open_diff_file(&mut self, path: String, line: Option<u32>, cx: &mut Context<Self>) {
+        let Some((viewer, _)) = &self.plugin_ui.diff else {
+            return;
+        };
+        let root = PathBuf::from(&viewer.read(cx).view.cwd);
+        let found = cx
+            .background_executor()
+            .spawn(async move { crate::diff::worktree::confined(&root, &path) });
+        cx.spawn(async move |this, cx| {
+            let found = found.await;
+            this.update(cx, |this, cx| match found {
+                Ok(file) => this.open_file_in_editor(file, line, cx),
+                Err(error) => this.show_notice("Couldn't open the file".into(), error, cx),
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub(super) fn close_diff_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -443,5 +471,33 @@ impl Workspace {
         )
         .left(px(-ui::RESIZE_EDGE))
         .into_any_element()
+    }
+}
+
+/// For the screenshots: a diff opened from a plugin's open sidebar, as its `openDiff` with `sidebar` does.
+#[cfg(feature = "test-support")]
+impl Workspace {
+    /// `payload` is what `openDiff` takes besides the title, like `patch`, `scopes` and `worktree`, and `cwd` the folder
+    /// the diff is of.
+    pub fn shot_sidebar_stack(
+        &mut self,
+        plugin: &str,
+        sidebar: &str,
+        payload: serde_json::Value,
+        cwd: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let view = View {
+            id: format!("{plugin}:stack"),
+            plugin_id: plugin.to_owned(),
+            sidebar: Some(sidebar.to_owned()),
+            title: "Changes".into(),
+            subtitle: "acme-web".into(),
+            cwd: cwd.to_owned(),
+            refresh: true,
+            update: crate::diff::clean_update(&payload).expect("a diff to show"),
+        };
+        self.open_diff_view(view, window, cx);
     }
 }

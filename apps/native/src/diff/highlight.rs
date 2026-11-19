@@ -299,6 +299,25 @@ pub fn file_colors(file: &DiffFile) -> FileColors {
         .collect()
 }
 
+/// The colours of a whole file's lines, highlighted from its first, for the unchanged lines a stacked diff's folds open
+/// to show. None, as in `file_colors`, for a language with no grammar or a file of more than `MAX_LINES`. Slow on a big
+/// file: run it off the window's thread.
+pub fn text_colors(path: &str, lines: &[String]) -> Vec<Vec<Span>> {
+    let Some(name) = language(path) else {
+        return Vec::new();
+    };
+    if lines.len() > MAX_LINES {
+        return Vec::new();
+    }
+    let (syntaxes, theme) = assets();
+    let Some(syntax) = syntaxes.find_syntax_by_name(name) else {
+        return Vec::new();
+    };
+    let mut side = Side::new(syntax, syntaxes, theme);
+    side.rust = name == "Rust";
+    lines.iter().map(|line| side.line(line)).collect()
+}
+
 /// One side of a hunk, highlighted a line at a time from its first.
 struct Side<'a> {
     lines: HighlightLines<'a>,
