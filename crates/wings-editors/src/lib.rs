@@ -123,10 +123,15 @@ pub fn open(editor_id: &str, folder: &Path) -> Result<(), String> {
 }
 
 /// Whether an editor opens `file` as a workspace or project, whose settings and tasks it takes up, rather than as a
-/// document: VS Code's and Cursor's `.code-workspace` and Sublime Text's project files.
+/// document: VS Code's and Cursor's `.code-workspace`, Sublime Text's project files, IntelliJ's `.ipr`/`.iws`, and Xcode's
+/// project and workspace data (its `.xcodeproj` and `.xcworkspace` are folders, which never open as a file). The same
+/// editors open the whole project folder from Wings' "Open in" button; this only keeps a click on a file a file.
 fn opens_as_workspace(file: &Path) -> bool {
     let extension = file.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
-    matches!(extension.as_deref(), Some("code-workspace" | "sublime-project" | "sublime-workspace"))
+    matches!(
+        extension.as_deref(),
+        Some("code-workspace" | "sublime-project" | "sublime-workspace" | "ipr" | "iws" | "xcworkspacedata" | "pbxproj")
+    )
 }
 
 /// Opens `file` in the editor with this id, at `line` where the editor can. The error is the editor's own text when it
@@ -209,7 +214,7 @@ mod tests {
     fn refuses_a_workspace_file_which_an_editor_opens_with_its_settings() {
         let folder = std::env::temp_dir().join(format!("wings-editors-workspace-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
-        for name in ["shop.code-workspace", "shop.sublime-project", "shop.SUBLIME-WORKSPACE"] {
+        for name in ["shop.code-workspace", "shop.sublime-project", "shop.SUBLIME-WORKSPACE", "shop.ipr", "shop.iws", "contents.xcworkspacedata", "project.pbxproj"] {
             let file = folder.join(name);
             std::fs::write(&file, "{}").unwrap();
             assert!(open_file("vscode", &file, None).unwrap_err().ends_with("not as a file"), "{name}");
