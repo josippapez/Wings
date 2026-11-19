@@ -130,6 +130,9 @@ pub struct Chat {
     pub message_to: Option<(String, String)>,
     /// The lines added and removed in the working tree since the last commit, and the branch it is on.
     pub changes: Option<(u64, u64)>,
+    /// A count of the changes runs, and the one asked for while it did, which runs after it.
+    counting: bool,
+    count_next: Option<(u32, String)>,
     pub branch: Option<String>,
     /// The terminals Claude opened with Wings' `open_pane`, as Wings lists them: shown in the side panel.
     pub terminals: Vec<Terminal>,
@@ -180,6 +183,8 @@ thread_local! {
         side_open: false,
         message_to: None,
         changes: None,
+        counting: false,
+        count_next: None,
         branch: None,
         terminals: Vec::new(),
         agent: None,
@@ -366,21 +371,59 @@ fn load_files(run: u32, cwd: String) {
     });
 }
 
-/// What the working tree changed since the last commit, and the branch, for the side panel. Asked when the chat starts and
-/// when a turn ends, which is when files change, and not on a timer.
+/// What the working tree changed since the last commit, and the branch, for the side panel. Asked when the chat starts,
+/// when a call that can change files ends, and when a turn ends, not on a timer. One count runs at a time: one asked for
+/// meanwhile runs once after it.
 fn load_git(run: u32, cwd: String) {
-    task::spawn(async move {
-        let stat = host::exec_in(&cwd, "git", &["diff", "--shortstat", "HEAD"]).await;
-        let branch = host::exec_in(&cwd, "git", &["rev-parse", "--abbrev-ref", "HEAD"]).await;
-        let stdout = |out: Result<Value, String>| out.ok().filter(|out| out["code"] == 0).map(|out| out["stdout"].as_str().unwrap_or_default().trim().to_owned());
-        with(|c| {
-            if c.run == run {
-                c.changes = stdout(stat).map(|out| shortstat(&out));
-                // A detached head has no branch to name.
-                c.branch = stdout(branch).filter(|name| !name.is_empty() && name != "HEAD");
-            }
-        });
+    let start = with(|c| {
+        if c.counting {
+            c.count_next = Some((run, cwd.clone()));
+        }
+        !std::mem::replace(&mut c.counting, true)
     });
+    if !start {
+        return;
+    }
+    task::spawn(async move {
+        let (mut run, mut cwd) = (run, cwd);
+        loop {
+            let changes = counted(&cwd).await;
+            let branch = host::exec_in(&cwd, "git", &["rev-parse", "--abbrev-ref", "HEAD"]).await;
+            let next = with(|c| {
+                if c.run == run {
+                    c.changes = changes;
+                    // A detached head has no branch to name.
+                    c.branch = stdout(branch).filter(|name| !name.is_empty() && name != "HEAD");
+                }
+                let next = c.count_next.take();
+                c.counting = next.is_some();
+                next
+            });
+            let Some(next) = next else { break };
+            (run, cwd) = next;
+        }
+    });
+}
+
+/// What a git call printed, when it succeeded.
+fn stdout(out: Result<Value, String>) -> Option<String> {
+    out.ok().filter(|out| out["code"] == 0).map(|out| out["stdout"].as_str().unwrap_or_default().trim().to_owned())
+}
+
+/// The lines added and removed, as the Changes plugin counts them for its sidebar: new files too. With Changes off, git's
+/// count of the files it already tracks.
+async fn counted(cwd: &str) -> Option<(u64, u64)> {
+    let asked = host::call("callTool", json!({ "name": "changes__changed_files", "arguments": { "cwd": cwd } })).await;
+    if let Some(counts) = asked.ok().filter(|answer| answer["isError"] != true).and_then(|answer| changes_counted(answer["text"].as_str()?)) {
+        return Some(counts);
+    }
+    stdout(host::exec_in(cwd, "git", &["diff", "--shortstat", "HEAD"]).await).map(|out| shortstat(&out))
+}
+
+/// The totals in what Changes' `changed_files` answers: `{ "added": 12, "removed": 3, ... }`.
+fn changes_counted(text: &str) -> Option<(u64, u64)> {
+    let found: Value = serde_json::from_str(text).ok()?;
+    Some((found["added"].as_u64()?, found["removed"].as_u64()?))
 }
 
 /// The lines added and removed in `git diff --shortstat`'s " 3 files changed, 590 insertions(+), 277 deletions(-)", which
@@ -482,8 +525,9 @@ fn hear(run: u32, line: &Value) {
     if ended {
         messages::tell(crate::SESSION_SAVED, &Value::Null);
     }
-    // Files change in a turn, and when the code is rewound.
-    if line["type"] == "result" || line["response"]["request_id"] == session::REWIND_FILES {
+    // Files change in a turn, as each edit, command or subagent ends, and when the code is rewound.
+    let touched = with(|c| c.run == run && std::mem::take(&mut c.session.files_touched));
+    if touched || line["type"] == "result" || line["response"]["request_id"] == session::REWIND_FILES {
         if let Some(cwd) = with(|c| (c.run == run).then(|| c.cwd.clone())) {
             load_git(run, cwd);
         }
@@ -1052,7 +1096,15 @@ pub fn toggle_steps(first: usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::shortstat;
+    use super::{changes_counted, shortstat};
+
+    #[test]
+    fn the_changes_plugins_totals_are_the_count() {
+        let answer = serde_json::to_string_pretty(&serde_json::json!({ "repo": "/r", "added": 120, "removed": 7, "total": 3, "files": [] })).unwrap();
+        assert_eq!(changes_counted(&answer), Some((120, 7)));
+        assert_eq!(changes_counted("wings is not inside a git repo."), None);
+        assert_eq!(changes_counted(r#"{ "added": 1 }"#), None);
+    }
 
     #[test]
     fn a_shortstat_gives_the_lines_added_and_removed() {

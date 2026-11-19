@@ -410,6 +410,8 @@ pub struct Session {
     /// Wings can't set, so this is worked out from the turn's own lines (`settle`). A turn can start with no message of
     /// yours, when a background task ends, and a message sent while one runs starts the next at once.
     pub working: bool,
+    /// A call that can change files (an edit, a command, a subagent) ended since the chat last counted the changes.
+    pub files_touched: bool,
     /// Between a turn's first `requesting` status and its `result`.
     turn_open: bool,
     /// The uuids of messages Claude Code has queued or started and not yet finished, from `command_lifecycle`.
@@ -976,6 +978,7 @@ impl Session {
                     if let Some(tool) = tool {
                         tool.output = Some((cut(&output, OUTPUT_KEPT), block["is_error"] == true));
                         tool.images = shots;
+                        self.files_touched |= matches!(tool.name.as_str(), "Edit" | "MultiEdit" | "Write" | "NotebookEdit" | "Bash" | "Task" | "Agent");
                     }
                     if let Some(at) = self.creating.iter().position(|(call, ..)| call == id) {
                         let (_, text, active) = self.creating.remove(at);
@@ -2467,6 +2470,20 @@ mod tests {
 
     fn tool_result(session: &mut Session, id: &str, content: &str, error: bool) {
         session.hear(&json!({ "type": "user", "message": { "content": [{ "type": "tool_result", "tool_use_id": id, "content": content, "is_error": error }] } }));
+    }
+
+    #[test]
+    fn a_call_that_can_change_files_asks_for_the_changes_to_be_counted_again_as_it_ends() {
+        let mut session = Session::default();
+        tool_call(&mut session, "r1", "Read", json!({ "file_path": "/a/b.rs" }));
+        tool_result(&mut session, "r1", "fn main() {}", false);
+        assert!(!session.files_touched, "a read changes nothing");
+        for (id, name) in [("e1", "Edit"), ("w1", "Write"), ("b1", "Bash"), ("t1", "Agent")] {
+            tool_call(&mut session, id, name, json!({}));
+            assert!(!session.files_touched, "not before {name} has ended");
+            tool_result(&mut session, id, "done", false);
+            assert!(std::mem::take(&mut session.files_touched), "{name}");
+        }
     }
 
     #[test]
