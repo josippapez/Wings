@@ -906,8 +906,10 @@ fn composer(c: &Chat) -> Node {
             .prop("gap", "s")
             .prop("maxWidth", COLUMN)
             .maybe(latest(c))
+            .maybe(crate::mods_view::above_prompt(c))
             .maybe(queued(c))
-            .child(message_box),
+            .child(message_box)
+            .maybe(crate::mods_view::under_prompt(c)),
     )
 }
 
@@ -974,6 +976,7 @@ fn side(c: &Chat) -> Vec<Node> {
     sections.extend(crate::tasks_view::section(c));
     sections.extend(crate::fork_view::folders(c));
     sections.extend(crate::refs_view::section(c));
+    sections.extend(crate::mods_view::panes(c));
     sections.extend(subagents(c));
     // A stack with nothing in it takes room: leave out the sections that have nothing.
     let sections: Vec<Node> = sections.into_iter().filter(|section| section.count() > 1).collect();

@@ -2490,7 +2490,7 @@ fn hover_card_page() -> String {
     fake::page("page", |_| {
         json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
             { "id": 1, "type": "HoverCard", "props": { "width": 240 }, "children": [
-                text(2, 3, "WIN-12".into()),
+                text(2, 3, "ABC-12".into()),
                 { "id": 4, "type": "Slot", "props": { "name": "card" }, "children": [text(5, 6, "Fix the build".into())] }] },
             text(7, 8, "Elsewhere".into())] })
     })

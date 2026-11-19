@@ -25,8 +25,18 @@ use crate::{
 
 /// A `.wings-plugin` of plugin `id` whose native main saves `version` under `started`, asking to run `exec`.
 pub(super) fn package(id: &str, version: &str, exec: &[&str]) -> Vec<u8> {
-    let manifest = json!({ "id": id, "name": format!("Plugin {id}"), "version": version, "api": 1,
+    package_with_page(id, version, exec, false)
+}
+
+/// `package`, and with `page` a view `page` that opens in several tabs, which does nothing.
+fn package_with_page(id: &str, version: &str, exec: &[&str], page: bool) -> Vec<u8> {
+    let mut manifest = json!({ "id": id, "name": format!("Plugin {id}"), "version": version, "api": 1,
         "main": "dist/main.js", "permissions": { "exec": exec } });
+    if page {
+        manifest["contributes"] = json!({ "views": [
+            { "id": "page", "title": "Page", "page": "dist/page.html", "opens": ["tab"], "newTab": true, "multiple": true }
+        ] });
+    }
     let version = version.to_owned();
     let main = fake::script("main", move || {
         let version = version.clone();
@@ -38,12 +48,19 @@ pub(super) fn package(id: &str, version: &str, exec: &[&str]) -> Vec<u8> {
     });
     // The stand-in's file is what the package ships as the main's module.
     let main = std::fs::read(main.strip_prefix(MARKER).unwrap()).unwrap();
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    for (name, body) in [
+    let idle = fake::idle("page");
+    let idle = std::fs::read(idle.strip_prefix(MARKER).unwrap()).unwrap();
+    let mut files = vec![
         ("wings-plugin.json", manifest.to_string().into_bytes()),
         ("dist/main.js", Vec::new()),
         ("dist/native/main.wasm", main),
-    ] {
+    ];
+    if page {
+        files.push(("dist/page.html", Vec::new()));
+        files.push(("dist/native/page.wasm", idle));
+    }
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, body) in files {
         zip.start_file(name, zip::write::SimpleFileOptions::default())
             .unwrap();
         zip.write_all(&body).unwrap();
@@ -569,6 +586,50 @@ fn a_package_installs_off_asks_for_review_and_runs_once_approved() {
         state(&data)["demo"]["approved"]["permissions"]["exec"],
         json!(["git status"])
     );
+}
+
+/// An update that asks for more access turns the plugin off until it is approved; its tabs close, and come back, with
+/// the same view, args and key, once it runs again. Turning it off on purpose is not that.
+#[test]
+fn a_plugin_that_waits_for_approval_after_an_update_gets_its_tabs_back_once_approved() {
+    let data = Data::temp();
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let file = Source::File;
+    install(&mut window, package_with_page("demo", "1.0.0", &["git status"], true), file.clone(), None).unwrap();
+    approve(&mut window, "demo");
+    window.update(|w, window, cx| {
+        for n in [1, 2] {
+            assert!(w.open_plugin_view("demo", "page", Some(json!({ "n": n })), window, cx));
+        }
+    });
+    let tabs = |window: &TestAppWindow<Workspace>| {
+        window.read(|w, _| {
+            w.plugin_tabs
+                .iter()
+                .map(|tab| (tab.view.clone(), tab.args.clone(), tab.state.key()))
+                .collect::<Vec<_>>()
+        })
+    };
+    let before = tabs(&window);
+    assert_eq!(before.len(), 2);
+
+    // Asking for more access stops it, and its tabs close.
+    install(&mut window, package_with_page("demo", "1.1.0", &["git status", "gh api"], true), file, Some("demo")).unwrap();
+    app.run_until_parked();
+    assert!(!runs(&window, "demo"));
+    assert!(tabs(&window).is_empty());
+
+    approve(&mut window, "demo");
+    until(&app, &mut window, "the tabs never came back", |w| w.plugin_tabs.len() == 2);
+    assert_eq!(tabs(&window), before);
+
+    // Turned off by the user, nothing is kept to bring back.
+    window.update(|w, window, cx| {
+        w.set_plugin_enabled("demo", false, None, window, cx).unwrap();
+    });
+    approve(&mut window, "demo");
+    app.run_until_parked();
+    assert!(tabs(&window).is_empty());
 }
 
 #[test]

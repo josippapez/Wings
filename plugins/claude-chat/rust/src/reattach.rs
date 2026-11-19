@@ -24,8 +24,10 @@ fn lasting(line: &Value) -> Option<&str> {
     match line["type"].as_str()? {
         "control_response" => {
             let id = line["response"]["request_id"].as_str()?;
-            [session::INITIALIZE, session::CONTEXT, session::SETTINGS, session::USAGE, session::START_MODE].contains(&id).then_some(id)
+            [session::INITIALIZE, session::CONTEXT, session::SETTINGS, session::USAGE, session::START_MODE, crate::mods::ATTACH].contains(&id).then_some(id)
         }
+        // The panes a plugin has open, which Claude Code says once: the new page asks for each again.
+        "system" if line["subtype"] == "ui_panes" => Some("ui_panes"),
         "system" if line["subtype"] == "background_tasks_changed" => Some("tasks"),
         "rate_limit_event" => Some("limits"),
         _ => None,

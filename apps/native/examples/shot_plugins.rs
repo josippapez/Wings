@@ -777,14 +777,15 @@ fn claude_chat(out: PathBuf) {
     // `claude edit-...` is what a change in the /hooks, /memory and /permissions dialogs runs: it reads the edit to the end
     // of its input, and refuses it with the text of `$CHAT_ANSWERS/<subcommand>` when the scene has one, as Claude Code does.
     // A request the chat writes whose subtype names a file in `$CHAT_ANSWERS` gets that file as its answer, as Claude Code
-    // answers a request made after it started.
+    // answers a request made after it started. One that draws a mod's `instance_id` gets `instance-<id>`'s, under its own id.
     std::fs::write(root.join("available.json"), include_str!("../../../plugins/claude-chat/rust/tests/available.json")).unwrap();
     script(
         bin.join("claude"),
         r##"if [ "$1" = plugin ]; then case "$2" in list) cat "$CHAT_AVAILABLE";; install) echo '{"command":"install","outcome":"ok","scope":"user"}';; esac; exit 0; fi
 case "$1" in edit-*) cat >/dev/null; if [ -f "$CHAT_ANSWERS/$1" ]; then cat "$CHAT_ANSWERS/$1" >&2; exit 1; fi; echo '{"ok":true}'; exit 0;; esac
 cat "$CHAT_FIXTURE"; if [ -n "$CHAT_EXIT" ]; then echo "$CHAT_STDERR" >&2; exit "$CHAT_EXIT"; fi
-while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ] && case "$line" in *"\"subtype\":\"${answer##*/}\""*) cat "$answer";; esac; done; done"##,
+while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ] && case "$line" in *"\"subtype\":\"${answer##*/}\""*) cat "$answer";; esac; done
+for answer in "$CHAT_ANSWERS"/instance-*; do [ -f "$answer" ] && case "$line" in *"\"instance_id\":\"${answer##*/instance-}\""*) id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p'); sed "s/REQUEST_ID/$id/" "$answer";; esac; done; done"##,
     );
     // `gh pr view <url> --json ...` is how the side panel reads a pull request the conversation names: made-up ones.
     script(
@@ -1327,9 +1328,20 @@ esac"##,
         user("Review https://github.com/acme/shop/pull/42 before we merge it."),
         text("It rounds the discount in cents now, and one check fails. The test for it went in with https://github.com/acme/shop/pull/37."),
     ]);
-    let scenes: [Scene; 73] = [
+    // A Claude Code plugin's mod: a status line, a toast and a pane with a button, as Claude Code sends a surface them.
+    let mods = opened(vec![
+        init.clone(),
+        answer("ui-attach", json!({ "surfaces": ["desktop"] })),
+        json!({ "type": "system", "subtype": "ui_panes", "panes": [{ "id": "probe", "title": "Deploys", "plugin": "deploy-watch" }], "shown_id": "probe", "focused_id": null, "focus_requested_id": null }),
+        json!({ "type": "system", "subtype": "ui_status", "plugin": "repo-docs", "text": "indexing docs 30% (3/10)" }),
+        json!({ "type": "system", "subtype": "ui_toast", "plugin": "deploy-watch", "text": "staging is up", "timeout_ms": 60000 }),
+        user("Ship the checkout fix to staging."),
+        text("It's on staging. The deploy pane has its link."),
+    ]);
+    let scenes: [Scene; 74] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         // Scrolled up past what the page has room for: older steps come in, the newest go, and a button goes back to them.
+        ("mods", mods, None, None, "Roll back"),
         ("mentioned", mentioned.clone(), None, None, "Mentioned"),
         // The pointer on a pull request's row shows its card.
         ("mentioned-card", mentioned, None, Some("hover:800,267"), "Mentioned"),
@@ -1561,6 +1573,25 @@ esac"##,
                 };
                 std::fs::write(answers.join(subtype), format!("{line}\n")).unwrap();
             }
+        }
+        // The pane's tree, drawn by the plugin, for whichever request asks for it.
+        if name == "mods" {
+            let tree = json!({ "type": "Box", "props": { "flexDirection": "column", "gap": 1 }, "children": [
+                { "type": "Box", "props": { "gap": 1 }, "children": [
+                    { "type": "Text", "props": { "color": "green" }, "children": ["●"] },
+                    { "type": "Text", "props": { "bold": true }, "children": ["staging"] },
+                    { "type": "Text", "props": { "dimColor": true }, "children": ["deployed 2 min ago"] }] },
+                { "type": "Link", "props": { "href": "https://staging.shop.example.com" } },
+                { "type": "Select", "props": { "key": "target", "options": [{ "value": "staging", "label": "Staging" }, { "value": "production", "label": "Production" }], "value": "staging" }, "press": { "plugin": "deploy-watch", "handle": 8 } },
+                { "type": "Input", "props": { "key": "note", "placeholder": "Note for the deploy" }, "press": { "plugin": "deploy-watch", "handle": 9 } },
+                { "type": "Button", "props": { "key": "rollback", "label": "Roll back" }, "press": { "plugin": "deploy-watch", "handle": 7 } }] });
+            let drawn = answer("REQUEST_ID", json!({ "tree": tree, "props": {}, "rewritten": false, "hooked": true }));
+            std::fs::write(answers.join("instance-probe"), format!("{drawn}\n")).unwrap();
+            // A mod that adds to the hint under the message box and to its mode labels keeps Claude Code's drawing.
+            let hint = answer("REQUEST_ID", json!({ "tree": { "type": "engine", "ref": 1 }, "props": { "isDraft": false, "isWorking": false, "hint": "", "tail": "deploys watched" }, "rewritten": true, "hooked": true }));
+            std::fs::write(answers.join("instance-prompt-hint"), format!("{hint}\n")).unwrap();
+            let modes = answer("REQUEST_ID", json!({ "tree": { "type": "engine", "ref": 1 }, "props": { "modes": ["staging"] }, "rewritten": true, "hooked": true }));
+            std::fs::write(answers.join("instance-session-mode"), format!("{modes}\n")).unwrap();
         }
         if name == "permissions-refused" {
             std::fs::write(answers.join("edit-permission-rules"), "the rule looks like it contains a secret, so it was not saved to settings\n").unwrap();

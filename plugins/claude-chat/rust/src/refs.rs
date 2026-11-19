@@ -1,7 +1,7 @@
-//! The pull requests and issues a conversation names, for the chat's side panel: Wings issue keys (`WIN-12`) in what you
-//! and Claude wrote, and the addresses of GitHub and Azure DevOps pull requests anywhere in it, a command's output too,
-//! as `gh pr create` prints one. Each comes once, in the order the conversation first named it. What the Issues plugin,
-//! `gh` and `az` say of each is read once and kept (`Detail`).
+//! The pull requests and issues a conversation names, for the chat's side panel: Wings issue keys (`ABC-12`) and the
+//! addresses of GitHub and Azure DevOps pull requests in what you and Claude wrote. What a command printed isn't read: a
+//! look at another project's pull request isn't one the chat is about. Each comes once, in the order the conversation
+//! first named it. What the Issues plugin, `gh` and `az` say of each is read once and kept (`Detail`).
 
 use std::collections::{HashMap, HashSet};
 
@@ -26,7 +26,7 @@ impl Ref {
         }
     }
 
-    /// How a row names it: `WIN-12`, `cli/cli#123`, `shop !45`.
+    /// How a row names it: `ABC-12`, `cli/cli#123`, `shop !45`.
     pub fn label(&self) -> String {
         match self {
             Ref::Issue(key) => key.clone(),
@@ -82,7 +82,7 @@ pub struct Refs {
     pub list: Vec<Ref>,
     pub details: HashMap<String, Detail>,
     seen: HashSet<String>,
-    /// The first item not read for good: one that may still change, as a tool call before its output.
+    /// The first item not read yet.
     read: usize,
     /// How many items there were, so a conversation that got shorter, rewound or cleared, is read again.
     len: usize,
@@ -96,29 +96,18 @@ impl Refs {
         }
         self.len = items.len();
         let mut new = Vec::new();
-        let mut settled = true;
-        for (at, item) in items.iter().enumerate().skip(self.read) {
-            let (said, issues) = match item {
-                Item::User(said) | Item::UserImages(said, _) | Item::Text(said) => (said.as_str(), true),
-                Item::Tool(tool) => match &tool.output {
-                    Some((output, _)) => (output.as_str(), false),
-                    None => {
-                        settled = false;
-                        continue;
-                    }
-                },
-                _ => continue,
+        for item in &items[self.read.min(items.len())..] {
+            let (Item::User(said) | Item::UserImages(said, _) | Item::Text(said)) = item else {
+                continue;
             };
-            if settled {
-                self.read = at + 1;
-            }
-            for found in found_in(said, issues) {
+            for found in found_in(said) {
                 if self.seen.insert(found.key().to_owned()) {
                     self.list.push(found.clone());
                     new.push(found);
                 }
             }
         }
+        self.read = items.len();
         new
     }
 
@@ -133,8 +122,8 @@ impl Refs {
     }
 }
 
-/// The pull requests `text` names, and with `issues` the issue keys, in order.
-pub fn found_in(text: &str, issues: bool) -> Vec<Ref> {
+/// The pull requests and issue keys `text` names, in order.
+pub fn found_in(text: &str) -> Vec<Ref> {
     let mut found = Vec::new();
     let bytes = text.as_bytes();
     let mut at = 0;
@@ -145,7 +134,7 @@ pub fn found_in(text: &str, issues: bool) -> Vec<Ref> {
             at = end;
             continue;
         }
-        if issues && bytes[at].is_ascii_uppercase() && (at == 0 || !bytes[at - 1].is_ascii_alphanumeric()) {
+        if bytes[at].is_ascii_uppercase() && (at == 0 || !bytes[at - 1].is_ascii_alphanumeric()) {
             let letters = bytes[at..].iter().take_while(|b| b.is_ascii_uppercase()).count();
             let digits = bytes.get(at + letters + 1..).map_or(0, |rest| rest.iter().take_while(|b| b.is_ascii_digit()).count());
             let end = at + letters + 1 + digits;
@@ -193,8 +182,8 @@ fn pull_request(url: &str) -> Option<Ref> {
     None
 }
 
-/// The issue in what the Issues plugin's `get` answers: `WIN-12 [in_progress] (bug) Fix the build`, then lines such as
-/// `Priority: High` and `Parent: WIN-3 [todo] (epic) Checkout`.
+/// The issue in what the Issues plugin's `get` answers: `ABC-12 [in_progress] (bug) Fix the build`, then lines such as
+/// `Priority: High` and `Parent: ABC-3 [todo] (epic) Checkout`.
 pub fn issue_of(text: &str) -> Option<Issue> {
     let mut lines = text.lines();
     let first = lines.next()?;
@@ -296,14 +285,12 @@ mod tests {
 
     #[test]
     fn issue_keys_and_pull_request_addresses_are_found_in_order_and_nothing_else_is() {
-        let said = "Fixed WIN-12 and (WIN-7). See https://github.com/cli/cli/pull/15094/files, and \
-            https://dev.azure.com/Org/Shop/_git/web/pullrequest/6762. Not UTF8, ABCD-1, A-1234567890, WIN-12a or xWIN-3.";
-        let found = found_in(said, true);
-        assert_eq!(found.iter().map(Ref::label).collect::<Vec<_>>(), ["WIN-12", "WIN-7", "cli/cli#15094", "web !6762"]);
+        let said = "Fixed ABC-12 and (ABC-7). See https://github.com/cli/cli/pull/15094/files, and \
+            https://dev.azure.com/Org/Shop/_git/web/pullrequest/6762. Not UTF8, ABCD-1, A-1234567890, ABC-12a or xABC-3.";
+        let found = found_in(said);
+        assert_eq!(found.iter().map(Ref::label).collect::<Vec<_>>(), ["ABC-12", "ABC-7", "cli/cli#15094", "web !6762"]);
         assert_eq!(found[2].key(), "https://github.com/cli/cli/pull/15094");
-        // A command's output names pull requests, but its capitals are no issue keys.
-        assert_eq!(found_in("SHA-256 ok\nhttps://github.com/o/r/pull/9\n", false).iter().map(Ref::label).collect::<Vec<_>>(), ["o/r#9"]);
-        assert!(found_in("https://github.com/o/r/issues/9 https://github.com/o/r/pull/x", true).is_empty());
+        assert!(found_in("https://github.com/o/r/issues/9 https://github.com/o/r/pull/x").is_empty());
     }
 
     #[test]
@@ -318,27 +305,26 @@ mod tests {
                 images: Vec::new(),
             })
         };
-        let mut items = vec![Item::User("Look at WIN-1 and UTF-8".into()), tool(None)];
+        let mut items = vec![Item::User("Look at ABC-1 and UTF-8".into()), tool(Some("https://github.com/cli/cli/pull/15094"))];
         let mut refs = Refs::default();
-        assert_eq!(refs.scan(&items).iter().map(Ref::label).collect::<Vec<_>>(), ["WIN-1", "UTF-8"]);
-        // The call's output comes later, and is read then.
-        items[1] = tool(Some("https://github.com/o/r/pull/3"));
-        items.push(Item::Text("WIN-1 again".into()));
+        // What a command printed, like a look at another project's pull request, isn't what the chat is about.
+        assert_eq!(refs.scan(&items).iter().map(Ref::label).collect::<Vec<_>>(), ["ABC-1", "UTF-8"]);
+        items.push(Item::Text("Opened https://github.com/o/r/pull/3 for ABC-1".into()));
         assert_eq!(refs.scan(&items).iter().map(Ref::label).collect::<Vec<_>>(), ["o/r#3"]);
-        refs.details.insert("WIN-1".into(), Detail::Issue(issue_of("WIN-1 [todo] (bug) Fix it").unwrap()));
+        refs.details.insert("ABC-1".into(), Detail::Issue(issue_of("ABC-1 [todo] (bug) Fix it").unwrap()));
         refs.details.insert("UTF-8".into(), Detail::Missing);
-        assert_eq!(refs.shown().iter().map(|(found, _)| found.label()).collect::<Vec<_>>(), ["o/r#3", "WIN-1"]);
+        assert_eq!(refs.shown().iter().map(|(found, _)| found.label()).collect::<Vec<_>>(), ["o/r#3", "ABC-1"]);
         // A conversation that got shorter is read again.
-        assert_eq!(refs.scan(&items[..1]).iter().map(Ref::label).collect::<Vec<_>>(), ["WIN-1", "UTF-8"]);
+        assert_eq!(refs.scan(&items[..1]).iter().map(Ref::label).collect::<Vec<_>>(), ["ABC-1", "UTF-8"]);
     }
 
     #[test]
     fn an_issue_reads_from_what_the_issues_plugin_says_of_it() {
-        let said = "WIN-231 [in_review] (bug) Load a long session\nPriority: High\ncreated 2026-11-19T11:01Z\n\nParent: WIN-220 [in_progress] (epic) Agent UI: a chat view\nRelated:";
+        let said = "ABC-31 [in_review] (bug) Load a long session\nPriority: High\ncreated 2026-11-19T11:01Z\n\nParent: ABC-20 [in_progress] (epic) Chat view\nRelated:";
         let issue = issue_of(said).unwrap();
         assert_eq!((issue.title.as_str(), issue.status.as_str(), issue.kind.as_str()), ("Load a long session", "in_review", "bug"));
-        assert_eq!((issue.priority.as_deref(), issue.parent.as_deref()), (Some("High"), Some("WIN-220 Agent UI: a chat view")));
-        assert_eq!(issue_of("No issue WIN-9 in wings. Use list to see the keys."), None);
+        assert_eq!((issue.priority.as_deref(), issue.parent.as_deref()), (Some("High"), Some("ABC-20 Chat view")));
+        assert_eq!(issue_of("No issue ABC-9 in wings. Use list to see the keys."), None);
     }
 
     #[test]

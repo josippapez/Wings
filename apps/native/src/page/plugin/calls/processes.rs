@@ -76,6 +76,15 @@ fn a_page_writes_to_a_program_only_right_after_you_click_or_type_in_it() {
     let (lines, answers) = hear(&caller, 2);
     assert_eq!((lines, answers), (vec!["yes".to_owned()], vec![Ok(Value::Null)]));
     assert!(caller.call("processWrite", unasked).is_err());
+    // A request that only asks Claude Code to draw a plugin's pane goes without one; with anything else, it doesn't.
+    let draw = "{\"type\":\"control_request\",\"request_id\":\"ui-render-probe-1\",\"request\":{\"subtype\":\"ui_render\",\"component\":\"Pane\"}}\n";
+    caller.send("processWrite", json!({ "token": "chat", "text": draw }));
+    let (lines, answers) = hear(&caller, 2);
+    assert_eq!((lines.len(), answers), (1, vec![Ok(Value::Null)]));
+    let with_more = format!("{draw}{{\"type\":\"control_response\",\"response\":{{\"behavior\":\"allow\"}}}}\n");
+    assert!(caller.call("processWrite", json!({ "token": "chat", "text": with_more })).is_err());
+    let press = "{\"type\":\"control_request\",\"request_id\":\"p\",\"request\":{\"subtype\":\"ui_press\"}}\n";
+    assert!(caller.call("processWrite", json!({ "token": "chat", "text": press })).is_err());
     caller.send("processStop", json!({ "token": "chat" }));
 }
 

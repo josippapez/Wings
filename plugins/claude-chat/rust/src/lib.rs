@@ -57,6 +57,9 @@ mod rail;
 mod reattach;
 #[cfg(feature = "chat")]
 mod rewind_view;
+mod mods;
+#[cfg(feature = "chat")]
+mod mods_view;
 mod refs;
 #[cfg(feature = "chat")]
 mod refs_view;

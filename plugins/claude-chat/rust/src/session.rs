@@ -473,6 +473,8 @@ pub struct Session {
     pub cmds: Commands,
     /// Commands you moved to the background, and what MCP servers ask you (`actions.rs`, `elicitation.rs`).
     pub ops: Ops,
+    /// What Claude Code's plugins show in the chat (`mods.rs`).
+    pub mods: crate::mods::Mods,
     /// The files each turn changed, and Undo (`edits.rs`).
     pub edits: Edits,
 }
@@ -509,6 +511,12 @@ impl Session {
             self.settle();
         }
         if notices::hear(self, line) {
+            return;
+        }
+        let mut logged = None;
+        if self.mods.hear(line, self.now, &mut logged) {
+            // A plugin's log line is a notice in the conversation, which Claude doesn't read.
+            self.items.extend(logged.map(Item::Notice));
             return;
         }
         match line["type"].as_str().unwrap_or_default() {
@@ -847,6 +855,7 @@ impl Session {
             || self.answered_task(id, response)
             || self.setup.answered(id, response)
             || self.cmds.answered(id, response)
+            || self.mods.answered(id, response)
         {
             return;
         }
@@ -1173,6 +1182,8 @@ impl Session {
             // A terminal's Claude Code keeps them for /rewind by itself; with -p it answers "File rewinding is not
             // enabled." unless this variable is set, which its flag settings do as well as the environment.
             request(CHECKPOINTS, json!({ "subtype": "apply_flag_settings", "settings": { "env": { "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING": "1" } } })),
+            // Claude Code's plugins show their status lines, toasts and panes to the chat as a surface of their own.
+            crate::mods::attach(),
         ]
         .into_iter()
         .chain(mode)
@@ -2300,7 +2311,7 @@ mod tests {
         let lines = |mode| Session::opening(mode).lines().map(sent).collect::<Vec<_>>();
         assert!(lines(None).iter().all(|line| line["request"]["subtype"] != "set_permission_mode"));
         let asked = lines(Some("auto"));
-        assert_eq!(asked.len(), 7);
+        assert_eq!(asked.len(), 8);
         let last = asked.last().unwrap();
         assert_eq!(last["request_id"], START_MODE);
         assert_eq!(last["request"], json!({ "subtype": "set_permission_mode", "mode": "auto" }));

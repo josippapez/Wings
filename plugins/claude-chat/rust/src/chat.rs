@@ -557,6 +557,17 @@ pub(crate) fn hear(run: u32, line: &Value) {
     // Pictures in what was heard go to Wings once, as the page names them by id.
     images::flush();
     crate::subagent_relay::heard(line);
+    // What a mod shows that changed is asked for again, and a toast goes once its time is up.
+    for instance in with(|c| if c.run == run { c.session.mods.take_stale() } else { Vec::new() }) {
+        write(move |_, n| Some(crate::mods::render(&instance, n)));
+    }
+    if line["type"] == "system" && line["subtype"] == "ui_toast" {
+        let shown = line["timeout_ms"].as_u64().unwrap_or(4_000).min(60_000) as u32;
+        task::spawn(async move {
+            host::sleep(shown + 50).await;
+            with(|c| c.session.mods.expire(host::now() as u64));
+        });
+    }
     // Only for what you'd miss: someone looking at this tab sees it happen.
     if !host::focused() {
         for (title, body) in alerts {

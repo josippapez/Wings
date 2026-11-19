@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.51 · 2026-11-19
+
+- **Claude chat shows your Claude Code mods**, as Claude Code Desktop does: a plugin's status line and toasts over the message box, its log lines in the conversation, what it adds to the hint line and mode labels under the message box, and the panes it opens in the side panel, with buttons, text fields and dropdowns that work.
+- **Tabs come back after you approve a plugin update.** When an update asks for more access, the plugin's tabs close until you approve it, and now reopen once you do.
+- **Claude chat's Mentioned list only has the pull requests and issues you and Claude wrote**, not ones a command printed while looking at another project.
+
 ## 0.2.50 · 2026-11-19
 
 - **Claude chat lists the pull requests and issues a conversation mentions** in its side panel, newest first. Hover one for a card with its title, status, author, branch, checks and review, and click a pull request to open it in the browser. Issues come from Wings Issues, GitHub pull requests from `gh` and Azure DevOps ones from `az`, so Wings asks you to approve that access once.

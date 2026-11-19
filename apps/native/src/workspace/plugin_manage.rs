@@ -18,7 +18,7 @@ use wings_plugins::store::{
     self, Available, Grant, Linked, PluginView, SecretScope, Source, Store,
 };
 
-use crate::{installed, markdown, page::plugin::PluginHost};
+use crate::{installed, markdown, page::plugin::PluginHost, saved::SavedPluginTab};
 
 use super::{Active, Workspace, settings::Section};
 
@@ -49,6 +49,9 @@ pub(super) struct Manage {
     pub(super) announced: HashSet<String>,
     /// One persistent notice each for installed updates and newly available plugins.
     pub(super) announcements: Vec<Announcement>,
+    /// The tabs a plugin had open when an update asking for more access turned it off, by plugin id, with the project
+    /// each was in, for when it is approved and runs again.
+    closed_for_approval: HashMap<String, Vec<(PathBuf, SavedPluginTab)>>,
     plugin_timer: Option<Task<()>>,
     plugin_check: Option<Task<()>>,
     pub(super) update_source: Option<Arc<dyn UpdateSource>>,
@@ -351,6 +354,9 @@ impl Workspace {
             .find(|installed| installed.id == id)
             .map(|installed| installed.host.clone());
         let in_place = old.is_some() && !found.is_empty();
+        if old.is_some() && found.is_empty() && self.waits_for_approval(id) {
+            self.note_tabs_for_approval(id);
+        }
         let handover = old.as_ref().filter(|_| in_place).map(|host| host.hand_over());
         let had_blocks = self.stop_plugin(id, in_place, window, cx);
         let started = match &self.config.plugins {
@@ -367,6 +373,7 @@ impl Workspace {
         self.plugins.extend(started);
         self.plugins
             .sort_by_key(|installed| installed.name.to_lowercase());
+        self.reopen_tabs_closed_for_approval(id, cx);
         if in_place {
             self.reload_plugin_pages(id, old.as_deref(), window, cx);
         }
@@ -377,6 +384,71 @@ impl Workspace {
             self.set_settings_section(section, cx);
         }
         self.after_plugins_changed(had_blocks || has_blocks, cx);
+    }
+
+    /// Whether the plugin is installed but its access isn't approved, as after an update asked for more. One the user
+    /// turned off, or removed, keeps its approval or has none to wait for, so its tabs don't come back.
+    fn waits_for_approval(&self, id: &str) -> bool {
+        self.plugin_env
+            .store
+            .as_ref()
+            .and_then(|store| store.lock().unwrap().view(id))
+            .is_some_and(|view| !view.approved)
+    }
+
+    /// Remembers the plugin's tabs, in the shown project and the parked ones, before they close, in the order they were.
+    fn note_tabs_for_approval(&mut self, id: &str) {
+        let saved = |tab: &super::plugins::PluginTab| SavedPluginTab {
+            plugin: tab.plugin.clone(),
+            view: tab.view.clone(),
+            args: tab.args.clone(),
+            state: Some(tab.state.value()).filter(|value| !value.is_null()),
+            key: Some(tab.state.key()),
+        };
+        let mut noted: Vec<(PathBuf, SavedPluginTab)> = Vec::new();
+        let projects = std::iter::once((&self.config.project, &self.plugin_tabs))
+            .chain(self.parked.iter().map(|(path, parked)| (path, &parked.plugin_tabs)));
+        for (path, tabs) in projects {
+            noted.extend(tabs.iter().filter(|tab| tab.plugin == id).map(|tab| (path.clone(), saved(tab))));
+        }
+        if !noted.is_empty() {
+            self.manage.closed_for_approval.insert(id.to_owned(), noted);
+        }
+    }
+
+    /// Opens the tabs `note_tabs_for_approval` kept, each in its project and place, now the plugin runs again. A tab whose
+    /// view the new version no longer has is dropped, as at launch.
+    fn reopen_tabs_closed_for_approval(&mut self, id: &str, cx: &mut Context<Self>) {
+        if !self.plugins.iter().any(|installed| installed.id == id) {
+            return;
+        }
+        let Some(noted) = self.manage.closed_for_approval.remove(id) else {
+            return;
+        };
+        let shown = self.config.project.clone();
+        let projects: Vec<PathBuf> = noted.iter().fold(Vec::new(), |mut seen, (path, _)| {
+            if !seen.contains(path) {
+                seen.push(path.clone());
+            }
+            seen
+        });
+        for path in projects {
+            let tabs: Vec<SavedPluginTab> =
+                noted.iter().filter(|(at, _)| *at == path).map(|(_, tab)| tab.clone()).collect();
+            if path == shown {
+                self.restore_plugin_tabs(&tabs, cx);
+            } else if self.parked.contains_key(&path) {
+                // Opened aside, so the shown project's tabs stay as they are, then handed to the parked project.
+                let kept = std::mem::take(&mut self.plugin_tabs);
+                self.restore_plugin_tabs(&tabs, cx);
+                let opened = std::mem::replace(&mut self.plugin_tabs, kept);
+                if let Some(parked) = self.parked.get_mut(&path) {
+                    parked.plugin_tabs.extend(opened);
+                }
+            }
+        }
+        self.save(cx);
+        cx.notify();
     }
 
     /// Closes everything of the plugin's that shows, in every project, but with `keep_pages` its tabs, sidebars and

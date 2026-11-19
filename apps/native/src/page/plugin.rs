@@ -52,6 +52,21 @@ mod state;
 pub use pick::{MAX_IMAGE_BYTES, picked_images};
 pub use process::Handover;
 pub use state::{FrameState, StatePlace, TabAgent};
+
+/// Whether a write to a program only asks Claude Code to draw what its plugins show the chat (`ui_attach`, `ui_render`,
+/// `ui_panes`), which a page may send unprompted, when Claude Code says a pane changed: none of it reaches the agent,
+/// answers its questions or starts a turn. Anything else waits for your click.
+fn only_draws(params: &serde_json::Value) -> bool {
+    let text = params["text"].as_str().unwrap_or_default();
+    let mut lines = text.lines().filter(|line| !line.trim().is_empty()).peekable();
+    lines.peek().is_some()
+        && lines.all(|line| {
+            serde_json::from_str::<serde_json::Value>(line).is_ok_and(|line| {
+                line["type"] == "control_request" && matches!(line["request"]["subtype"].as_str(), Some("ui_attach" | "ui_render" | "ui_panes"))
+            })
+        })
+}
+
 #[cfg(test)]
 mod focus_tests;
 pub mod ui;
@@ -429,7 +444,7 @@ impl Link for FrameLink {
         // open a file in your editor: what reaches an agent, like the answer to its permission prompt, is what you just
         // asked for in the page, never the plugin alone, and a picker never opens by itself. A write another page handed
         // on with your click there counts as one here (`pages`), and goes before a click of this page's own.
-        if matches!(method, "copyText" | "processWrite" | "pickFiles" | "openFile") {
+        if matches!(method, "copyText" | "processWrite" | "pickFiles" | "openFile") && !(method == "processWrite" && only_draws(&params)) {
             let handed = method == "processWrite" && self.role == Role::Page && self.shared.take_grant(self.id);
             let acted = handed
                 || self
