@@ -8,6 +8,7 @@ What changed in each Wings release, newest first.
 - **The prompt rail glides** from one prompt to the next as you scroll, instead of jumping.
 - **No square corners behind rounded cards**: a plugin page in a tab or sidebar card, and a terminal's bottom corners, follow the card's curve.
 - **Pictures and the right-click menu work in a subagent's pane**, and a closed subagent tab still names its model.
+- **Menus, lists and cards open where there's room**: they flip above their button near the window's foot, stay inside the window, close the same way on Escape or a press outside, and give the keyboard back. Page menus move with the arrow keys and pick with Enter.
 - **Plugins get list rows, sections and dialog actions from Wings**, laid out on one edge with the actions in one order, so pages stop drifting apart. Claude chat's subagents, background tasks, mentions, folders and permission dialogs use them.
 
 ## 0.2.56 · 2026-11-19
