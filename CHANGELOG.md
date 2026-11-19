@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.43 · 2026-11-19
+
+- **A Claude chat you open again shows its whole history**, with the messages you sent while Claude was working. Before, a long session showed only its last few messages.
+- **The side panel stays open until you press its button.** A click elsewhere in the chat no longer closes it, and the button no longer reopens what that click closed.
+
 ## 0.2.42 · 2026-11-19
 
 - **Updating a plugin keeps your sessions.** Its tabs and sidebars reload in place with the new version, and a Claude chat in the middle of a turn keeps going.
