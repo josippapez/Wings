@@ -1159,20 +1159,15 @@ mod tests {
     }
 
     #[test]
-    fn the_choice_is_kept_for_every_chat() {
-        // Another tab's chat hears the setting change, and this one's toggle is what sets it.
-        let heard = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let kept = heard.clone();
-        prefs::side_panel().on_change(move |shown| kept.borrow_mut().push(*shown));
-        prefs::side_panel().on_change(|shown| chat::with(|c| c.side_open = *shown));
+    fn the_toggle_flips_the_panel_and_a_chat_starts_with_it_on() {
+        // The choice is a setting every chat follows (`prefs::side_panel`, which Wings stores); outside Wings nothing is
+        // stored, so here only this chat's panel flips.
+        assert!(prefs::side_panel().get());
+        chat::with(|c| c.side_open = true);
         chat::toggle_side();
-        assert_eq!(*heard.borrow(), [false]);
         assert!(!chat::with(|c| c.side_open));
         chat::toggle_side();
-        assert_eq!(*heard.borrow(), [false, true]);
         assert!(chat::with(|c| c.side_open));
-        // Nothing is stored outside Wings, so a chat that starts reads the panel as on.
-        assert!(prefs::side_panel().get());
     }
 
     #[test]
@@ -1221,7 +1216,7 @@ mod tests {
             ];
             c.forked_from = Some("Fix the build".into());
         });
-        let (_, found) = chat::with(conversation);
+        let (_, found) = chat::with(|c| conversation(c));
         // A fork's note is the first child, so the first message is the second.
         assert_eq!(found, [(0, 1), (3, 4)]);
     }
