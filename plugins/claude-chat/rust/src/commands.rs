@@ -154,12 +154,31 @@ impl Session {
 
 /// The commands the chat answers itself that Claude Code doesn't list, for the slash menu to offer: each a name, what it does
 /// and what it takes. One Claude Code lists itself stays as it lists it.
+/// The first eight commands whose name holds `typed`, Claude Code's and the chat's own. A name that starts with it goes
+/// first, so `/p` offers `/plugins` before the many skills with a `p` inside.
+pub fn menu(listed: &[Command], typed: &str) -> Vec<Command> {
+    let typed = typed.to_lowercase();
+    let mut matches: Vec<Command> = listed.iter().cloned().chain(own_commands(listed)).filter(|command| command.name.to_lowercase().contains(&typed)).collect();
+    matches.sort_by_key(|command| !command.name.to_lowercase().starts_with(&typed));
+    matches.truncate(8);
+    matches
+}
+
 pub fn own_commands(listed: &[Command]) -> impl Iterator<Item = Command> + '_ {
     [
         ("status", "Show the version, account, model and settings sources", ""),
         ("export", "Export the conversation as text", ""),
         ("btw", "Ask a side question without adding it to the conversation", "<question>"),
         ("plan", "Switch to plan mode, and plan a task", "<task>"),
+        // Dialogs the chat opens itself, which headless Claude Code leaves out of the commands it lists.
+        ("plugins", "Turn plugins on or off for this chat", ""),
+        ("mcp", "Turn MCP servers on or off for this project", ""),
+        ("usage", "Show your plan's limits and credits", ""),
+        ("cost", "Show what this session has cost", ""),
+        ("context", "Show how the context window is spent", ""),
+        ("hooks", "List the hooks Claude Code runs", ""),
+        ("memory", "Show the instruction files and memories Claude Code loads", ""),
+        ("permissions", "List the allow, ask and deny rules", ""),
     ]
     .into_iter()
     .filter(move |(name, ..)| listed.iter().all(|command| command.name != *name))
@@ -176,6 +195,15 @@ mod tests {
 
     fn success(id: &str, response: Value) -> Value {
         json!({ "type": "control_response", "response": { "subtype": "success", "request_id": id, "response": response } })
+    }
+
+    #[test]
+    fn the_menu_puts_the_names_that_start_with_what_was_typed_first() {
+        let skill = |name: &str| Command { name: name.into(), description: String::new(), hint: String::new() };
+        let listed: Vec<Command> = (0..10).map(|n| skill(&format!("dev-core:skill-{n}-plan"))).collect();
+        let names: Vec<String> = menu(&listed, "P").into_iter().map(|command| command.name).collect();
+        assert_eq!(names.len(), 8);
+        assert_eq!(names[..4], ["plan", "plugins", "permissions", "dev-core:skill-0-plan"], "{names:?}");
     }
 
     #[test]
@@ -259,8 +287,8 @@ mod tests {
     fn the_slash_menu_offers_these_commands_unless_claude_code_lists_them() {
         let listed = |names: &[&str]| names.iter().map(|name| Command { name: (*name).into(), description: String::new(), hint: String::new() }).collect::<Vec<_>>();
         let own: Vec<String> = own_commands(&listed(&["clear"])).map(|command| command.name).collect();
-        assert_eq!(own, ["status", "export", "btw", "plan"]);
-        let own: Vec<String> = own_commands(&listed(&["plan", "status"])).map(|command| command.name).collect();
-        assert_eq!(own, ["export", "btw"]);
+        assert_eq!(own, ["status", "export", "btw", "plan", "plugins", "mcp", "usage", "cost", "context", "hooks", "memory", "permissions"]);
+        let own: Vec<String> = own_commands(&listed(&["plan", "status", "usage"])).map(|command| command.name).collect();
+        assert_eq!(own, ["export", "btw", "plugins", "mcp", "cost", "context", "hooks", "memory", "permissions"]);
     }
 }

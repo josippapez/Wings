@@ -916,9 +916,7 @@ pub fn command_matches(c: &Chat) -> Vec<Command> {
     if view_of(&c.draft).is_some() || exits(&c.draft) || plugins::command(&c.draft).is_some() || setup::command(&c.draft).is_some() || commands::is_whole(&c.draft) {
         return Vec::new();
     }
-    let typed = typed.to_lowercase();
-    let own = commands::own_commands(&c.session.commands);
-    c.session.commands.iter().cloned().chain(own).filter(|command| command.name.to_lowercase().contains(&typed)).take(8).collect()
+    commands::menu(&c.session.commands, typed)
 }
 
 /// The files that match the `@word` the draft ends in, with where the word starts. None while a slash command is being

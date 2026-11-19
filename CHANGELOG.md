@@ -2,6 +2,13 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.47 · 2026-11-19
+
+- **Claude chat keeps running through a Wings update or restart.** Its Claude Code runs in Wings' terminal server, like your terminals, and the reopened tab picks it back up. Two tabs never run the same session at once: the second one says it's already running elsewhere.
+- **Claude can make a worktree through Wings**, for a new branch or one that already exists, like a pull request's. It gets your project's local files and setup command, as a worktree you make yourself does.
+- **The setup command in a terminal Claude opens runs only if you let Claude run commands in new tabs.** Otherwise it waits for the next terminal you open there.
+- **/plugins, /mcp, /usage, /context and the other commands Claude chat answers itself show in the slash menu**, and commands that start with what you typed come first.
+
 ## 0.2.46 · 2026-11-19
 
 - **Text in narrow pages lines up with their header and message box**, as in the subagent sidebar, instead of running close to the edge.
