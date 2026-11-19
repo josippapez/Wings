@@ -350,6 +350,7 @@ mod page {
         let resume = here.session.clone().or(resume);
         let (run, cwd) = chat::with(|c| (chat::begin(c), c.cwd.clone()));
         chat::load_files(run, cwd.clone());
+        chat::load_accounts(run, resume.as_deref(), cwd.clone());
         chat::load_git(run, cwd);
         // Read before the lines are counted, so that what it says is said before the lines Wings counts.
         let entries = match &resume {
@@ -502,6 +503,9 @@ mod page {
             assert_eq!(called(&calls, "adopt").len(), 1);
             assert!(called(&calls, "spawn").is_empty());
             assert_eq!(chat::with(|c| c.session.id.clone()).as_deref(), Some(SESSION));
+            // The header's account button needs the accounts, which a chat that took over still asks for.
+            task::block_on(async {});
+            assert_eq!(called(&calls, "claudeAccountChoices").len(), 1, "{:?}", calls.borrow().iter().map(|(name, _)| name.clone()).collect::<Vec<_>>());
         }
 
         #[test]

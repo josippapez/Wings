@@ -4,8 +4,9 @@
 use std::ops::Range;
 
 use gpui::{
-    AnyElement, Context, ElementId, FontWeight, HighlightStyle, InteractiveText, IntoElement,
-    SharedString, StyledText, UnderlineStyle, div, hsla, prelude::*, px, relative, rgb, rgba,
+    AnyElement, Bounds, Context, ElementId, FontWeight, HighlightStyle, InteractiveText, IntoElement, Pixels, Point,
+    SharedString, StyledText, TextLayout, UnderlineStyle, canvas, div, fill, hsla, point, prelude::*, px, relative, rgb,
+    rgba,
 };
 
 use super::{
@@ -106,7 +107,6 @@ fn highlight(style: &Style) -> HighlightStyle {
             Weight::Medium => Some(FontWeight::MEDIUM),
             Weight::Strong => Some(FontWeight::SEMIBOLD),
         },
-        background_color: style.mono.then(|| rgba(0xffffff14).into()),
         underline: clicks.then(|| UnderlineStyle {
             thickness: px(1.0),
             color: None,
@@ -140,6 +140,7 @@ impl PageView {
             .filter(|span| span.style.mono)
             .map(|span| (span.range.clone(), SharedString::from(DEFAULT_FONT_FAMILY)))
             .collect();
+        let chips: Vec<Range<usize>> = families.iter().map(|(range, _)| range.clone()).collect();
         if !families.is_empty() {
             styled = styled.with_font_family_overrides(families);
         }
@@ -148,6 +149,7 @@ impl PageView {
             .filter_map(|span| span.style.click.map(|handler| (span.range, handler)))
             .unzip();
         let finish = |element: AnyElement, cx: &mut Context<Self>| {
+            let element = with_chips(element, layout.clone(), &text, &chips);
             if select { self.selectable(id, text.clone(), layout.clone(), element, cx) } else { element }
         };
         if ranges.is_empty() {
@@ -185,6 +187,73 @@ impl PageView {
                 .into_any_element();
         Some(finish(linked, cx))
     }
+}
+
+/// The background of a code span: the desktop's `--code-bg`.
+const CHIP: u32 = 0xffffff14;
+
+/// `element`, the line of `text` that `layout` draws, over a rounded background for each code span in `chips`. It is
+/// painted from where the text laid the span out, a little shorter than a line and wider than its letters, so a span
+/// reads as a chip and spans on lines one under the other keep apart; a background in the text's own runs fills the
+/// whole line's height, square.
+fn with_chips(element: AnyElement, layout: TextLayout, text: &str, chips: &[Range<usize>]) -> AnyElement {
+    let chips = merged(chips);
+    if chips.is_empty() {
+        return element;
+    }
+    // Each chip's character starts, as the layout is known only once it is drawn.
+    let starts: Vec<Vec<usize>> = chips
+        .iter()
+        .map(|range| text[range.clone()].char_indices().map(|(at, _)| range.start + at).chain([range.end]).collect())
+        .collect();
+    let paint = move |_: Bounds<Pixels>, _: (), window: &mut gpui::Window, _: &mut gpui::App| {
+        let height = layout.line_height();
+        let inset = (height * 0.12).round();
+        for chip in &starts {
+            for (from, to) in pieces(&layout, chip, height) {
+                let bounds = Bounds::from_corners(point(from.x - px(3.0), from.y + inset), point(to.x + px(3.0), to.y + height - inset));
+                window.paint_quad(fill(bounds, rgba(CHIP)).corner_radii(px(4.0)));
+            }
+        }
+    };
+    div()
+        .relative()
+        .child(canvas(|_, _, _| (), paint).absolute().top_0().left_0().size_full())
+        .child(element)
+        .into_any_element()
+}
+
+/// Code spans that touch made one, so a span a link cuts in two is one chip.
+fn merged(chips: &[Range<usize>]) -> Vec<Range<usize>> {
+    let mut sorted = chips.to_vec();
+    sorted.sort_by_key(|range| range.start);
+    let mut out: Vec<Range<usize>> = Vec::new();
+    for range in sorted {
+        match out.last_mut() {
+            Some(last) if last.end >= range.start => last.end = last.end.max(range.end),
+            _ => out.push(range),
+        }
+    }
+    out
+}
+
+/// A chip's stretches, one for each line it is laid out on, from the positions of its characters' starts: a stretch ends
+/// at the start after its last character, or, where the line wraps, one character's width past its last one's start.
+fn pieces(layout: &TextLayout, starts: &[usize], height: Pixels) -> Vec<(Point<Pixels>, Point<Pixels>)> {
+    let at: Vec<Point<Pixels>> = starts.iter().filter_map(|index| layout.position_for_index(*index)).collect();
+    let Some(first) = at.first() else {
+        return Vec::new();
+    };
+    let (mut out, mut from) = (Vec::new(), *first);
+    for i in 1..at.len() {
+        if at[i].y > at[i - 1].y + height / 2.0 {
+            let width = if i >= 2 && at[i - 2].y == at[i - 1].y { at[i - 1].x - at[i - 2].x } else { height / 2.0 };
+            out.push((from, point(at[i - 1].x + width, at[i - 1].y)));
+            from = at[i];
+        }
+    }
+    out.push((from, at[at.len() - 1]));
+    out
 }
 
 /// The runs of a line with its links laid over its spans, in order and none overlapping another, as `StyledText` takes
@@ -266,6 +335,7 @@ impl PageView {
             .filter(|run| run.style.mono)
             .map(|run| (run.range.clone(), SharedString::from(DEFAULT_FONT_FAMILY)))
             .collect();
+        let chips: Vec<Range<usize>> = families.iter().map(|(range, _)| range.clone()).collect();
         if !families.is_empty() {
             styled = styled.with_font_family_overrides(families);
         }
@@ -293,6 +363,7 @@ impl PageView {
                     None => {}
                 })
                 .into_any_element();
+        let linked = with_chips(linked, layout.clone(), &text, &chips);
         Some(self.selectable(id, text, layout, linked, cx))
     }
 }
@@ -367,5 +438,15 @@ mod tests {
             .map(|run| (run.range, run.style.mono, run.style.link))
             .collect();
         assert_eq!(runs, [(0..4, true, None), (4..6, true, Some(0)), (6..9, false, Some(0))]);
+    }
+}
+
+#[cfg(test)]
+mod chip_tests {
+    use super::merged;
+
+    #[test]
+    fn code_spans_that_touch_are_one_chip() {
+        assert_eq!(merged(&[4..9, 0..2, 2..3, 12..14]), [0..3, 4..9, 12..14]);
     }
 }

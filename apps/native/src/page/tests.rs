@@ -2659,6 +2659,16 @@ fn dragging_over_a_code_block_selects_its_text() {
     assert!(selected.ends_with("1;\nlet b = 2;"), "{selected:?}");
 }
 
+/// A copy of a code block's lines keeps their indent, which the block draws as a margin so a wrapped line stays under it.
+#[test]
+fn a_copy_of_code_lines_keeps_their_indent() {
+    let (app, mut window) = open(code_page("no-such-language", "fn a() {\n    let x = 1;\n}"));
+    settle(&app, &mut window, |view| view.text().contains("let x"));
+    drag(&mut window, point(px(20.0), px(14.0)), point(px(300.0), px(30.0)));
+    let selected = window.read(|view, _| view.selected_text()).unwrap_or_default();
+    assert!(selected.ends_with("\n    let x = 1;"), "{selected:?}");
+}
+
 /// A stack with `onContextMenu` of two 40 point blocks and a `Code`, over a line that says what the page heard.
 fn context_menu_page() -> String {
     let mut heard = "nothing".to_owned();

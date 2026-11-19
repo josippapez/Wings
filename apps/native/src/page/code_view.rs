@@ -121,7 +121,7 @@ impl PageView {
         } else {
             code.text.as_str()
         };
-        let colours = found.map_or_else(Vec::new, |found| {
+        let colours: Vec<(Range<usize>, HighlightStyle)> = found.map_or_else(Vec::new, |found| {
             runs(text, &found)
                 .into_iter()
                 .map(|(range, color, italic)| {
@@ -135,16 +135,38 @@ impl PageView {
                 .collect()
         });
         let id = code.id;
-        let marks = super::selection_view::with_selection(colours, self.selection_in(id, text));
-        let styled = StyledText::new(text.to_owned()).with_highlights(marks);
-        let layout = styled.layout().clone();
-        // Dragging over the block selects its text, as it does a paragraph's.
-        let selectable = self.selectable(id, text.to_owned(), layout, styled.into_any_element(), cx);
+        let size = px(scaled(12.0));
+        let system = cx.text_system();
+        let column = system.ch_advance(system.resolve_font(&gpui::font(DEFAULT_FONT_FAMILY)), size).unwrap_or(size * 0.6);
+        // Each source line on its own, its indent drawn as a margin, so a line that wraps goes on under its first
+        // character and not at the block's left edge. Each line selects as a line of its own, and a drag runs over them.
+        let mut start = 0;
+        let mut rows = Vec::new();
+        for (at, line) in text.split('\n').enumerate() {
+            let lead = line.len() - line.trim_start_matches([' ', '\t']).len();
+            let columns: usize = line[..lead].chars().map(|c| if c == '\t' { 4 } else { 1 }).sum();
+            let from = start + lead;
+            let shown = if lead == line.len() { " " } else { &line[lead..] };
+            let colours = colours
+                .iter()
+                .filter_map(|(range, style)| {
+                    let (a, b) = (range.start.max(from), range.end.min(start + line.len()));
+                    (a < b).then(|| (a - from..b - from, *style))
+                })
+                .collect();
+            let line_id = super::selection_view::line_id(id, at);
+            let marks = super::selection_view::with_selection(colours, self.selection_in(line_id, shown));
+            let styled = StyledText::new(shown.to_owned()).with_highlights(marks);
+            let layout = styled.layout().clone();
+            let row = self.selectable_after(line_id, shown.to_owned(), line[..lead].to_owned(), layout, styled.into_any_element(), cx);
+            rows.push(div().pl(column * columns as f32).child(row).into_any_element());
+            start += line.len() + 1;
+        }
         let lines = div()
             .min_w_0()
             .font_family(DEFAULT_FONT_FAMILY)
-            .text_size(px(scaled(12.0)))
-            .child(selectable);
+            .text_size(size)
+            .children(rows);
         let card = match code.tone {
             // A run of a diff's lines: a tinted band with a bar in the tone's colour, for the card round the diff to hold.
             Some(tone) => {

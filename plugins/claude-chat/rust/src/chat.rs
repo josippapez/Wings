@@ -352,18 +352,7 @@ pub fn launch_with(resume: Option<String>, how: Launch) {
         // Under the account the session's transcript is in, which a plain `claude --resume` would not find if it isn't the
         // default one; a new chat gets the account you picked, else its project's, as a terminal there does.
         let account = with(|c| account(c, resume.as_deref()));
-        // The accounts, with the one this chat runs under marked, for the header's account button. A Wings that doesn't
-        // list them, or doesn't let the chat, leaves the button out.
-        let (asked, folder) = (with(|c| self::account(c, resume.as_deref())), cwd.clone());
-        task::spawn(async move {
-            if let Ok(accounts) = host::accounts_under(&asked, &folder).await {
-                with(|c| {
-                    if c.run == run {
-                        c.accounts = accounts;
-                    }
-                });
-            }
-        });
+        load_accounts(run, resume.as_deref(), cwd.clone());
         // A fork before a message asks for its rewind as it starts, as the opening requests do: the fork is a new session.
         let opening = Session::opening(start_mode.as_deref()) + &with(|c| fork::opening(&how, &c.session.prompts));
         // In Wings' terminal server, so the turn goes on while Wings restarts or updates, and this tab takes it over after.
@@ -463,6 +452,22 @@ pub(crate) fn load_files(run: u32, cwd: String) {
 /// What the working tree changed since the last commit, and the branch, for the side panel. Asked when the chat starts,
 /// when a call that can change files ends, and when a turn ends, not on a timer. One count runs at a time: one asked for
 /// meanwhile runs once after it.
+/// The accounts, with the one the chat runs `session` under marked, for the header's account button. A Wings that doesn't
+/// list them, or doesn't let the chat, leaves the button out. A chat that took over the Claude Code it ran before Wings
+/// restarted asks too, or it would lose the button with the update.
+pub(crate) fn load_accounts(run: u32, session: Option<&str>, folder: String) {
+    let asked = with(|c| account(c, session));
+    task::spawn(async move {
+        if let Ok(accounts) = host::accounts_under(&asked, &folder).await {
+            with(|c| {
+                if c.run == run {
+                    c.accounts = accounts;
+                }
+            });
+        }
+    });
+}
+
 pub(crate) fn load_git(run: u32, cwd: String) {
     let start = with(|c| {
         if c.counting {

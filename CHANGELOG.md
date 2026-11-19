@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.56 · 2026-11-19
+
+- **Claude chat's account button stays in its header after Wings updates or restarts**, for a chat that goes on with the Claude Code it ran before.
+- **A wrapped line in a code block goes on under its indent**, not at the block's left edge, and a copy keeps each line's indent.
+- **Inline code reads as a chip**: a rounded background a little shorter than the line, so code on lines one under the other keeps apart.
+
 ## 0.2.55 · 2026-11-19
 
 - **Remote Control in Claude chat**: /remote-control or the button by the model menu turns it on, and its menu opens the session on claude.ai, copies the link or turns it off.

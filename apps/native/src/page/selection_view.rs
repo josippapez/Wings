@@ -20,6 +20,19 @@ use super::{PageView, tree::Node};
 /// The desktop terminal's `selectionBackground`, as a text field draws its selection.
 const SELECTED: u32 = 0xffffff33;
 
+/// Where a code block's line numbers start in a line's id: the node's id is under it, so a line is known as its block's.
+const LINE_SHIFT: u32 = 40;
+
+/// The id of the `at`th line of the code block `node`, as a line of text a person selects.
+pub(super) fn line_id(node: u64, at: usize) -> u64 {
+    node | ((at as u64 + 1) << LINE_SHIFT)
+}
+
+/// The node a line of text is in: itself, or the code block it is a line of.
+fn node_of(id: u64) -> u64 {
+    id & ((1 << LINE_SHIFT) - 1)
+}
+
 /// A place in the line of text `id`: the byte `at`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Spot {
@@ -67,6 +80,8 @@ impl Selection {
 pub(super) struct Line {
     id: u64,
     text: String,
+    /// What the line starts with that isn't drawn as text, a code line's indent, which a copy of the whole line keeps.
+    lead: String,
     layout: TextLayout,
     bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
@@ -166,7 +181,7 @@ pub(super) fn with_selection(
 fn has_node(nodes: &[Node], id: u64) -> bool {
     nodes
         .iter()
-        .any(|node| node.id() == Some(id) || node.parts().into_iter().any(|part| has_node(part, id)))
+        .any(|node| node.id() == Some(node_of(id)) || node.parts().into_iter().any(|part| has_node(part, id)))
 }
 
 impl PageView {
@@ -180,10 +195,14 @@ impl PageView {
         }
         let lines = self.lines.borrow();
         let order = order_of(&lines.drawing);
-        let parts: Vec<&str> = lines
+        let parts: Vec<String> = lines
             .drawing
             .iter()
-            .filter_map(|line| line.text.get(selection.range_in(line.id, line.text.len(), &order)?))
+            .filter_map(|line| {
+                let range = selection.range_in(line.id, line.text.len(), &order)?;
+                let lead = if range.start == 0 { line.lead.as_str() } else { "" };
+                Some(format!("{lead}{}", line.text.get(range)?))
+            })
             .collect();
         (!parts.is_empty()).then(|| parts.join("\n"))
     }
@@ -227,8 +246,21 @@ impl PageView {
         element: AnyElement,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        self.selectable_after(id, text, String::new(), layout, element, cx)
+    }
+
+    /// `selectable`, for a line drawn after a `lead` that isn't part of its text, which a copy of the whole line keeps.
+    pub(super) fn selectable_after(
+        &self,
+        id: u64,
+        text: String,
+        lead: String,
+        layout: TextLayout,
+        element: AnyElement,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let bounds = Rc::new(Cell::new(None));
-        self.lines.borrow_mut().drawing.push(Line { id, text: text.clone(), layout: layout.clone(), bounds: bounds.clone() });
+        self.lines.borrow_mut().drawing.push(Line { id, text: text.clone(), lead, layout: layout.clone(), bounds: bounds.clone() });
         div()
             .relative()
             .child(element)
