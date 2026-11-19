@@ -776,6 +776,54 @@ fn a_page_opens_a_file_of_a_project_in_the_editor_only_right_after_a_click() {
 }
 
 #[test]
+fn a_page_opens_claude_codes_own_instruction_settings_and_memory_files_and_nothing_else_outside_projects() {
+    let rig = Rig::new(json!({}), panes());
+    let root = tmp().join(format!("wings-native-calls-open-claude-{}", std::process::id()));
+    let (account, other, project) = (root.join("account"), root.join("elsewhere"), root.join("project"));
+    let memory = account.join("projects/-work-app/memory");
+    fs::create_dir_all(&memory).unwrap();
+    fs::create_dir_all(&other).unwrap();
+    fs::create_dir_all(&project).unwrap();
+    for file in ["CLAUDE.md", "settings.json", "settings.local.json", "credentials.json", "notes.md", "projects/-work-app/memory/MEMORY.md", "projects/-work-app/memory/data.json", "projects/-work-app/session.md"] {
+        fs::write(account.join(file), "x").unwrap();
+    }
+    fs::write(other.join("CLAUDE.md"), "x").unwrap();
+    *rig.env.claude.lock().unwrap() = vec![account.clone()];
+    *rig.env.projects.lock().unwrap() = vec![project.clone()];
+    let page = Caller::start(&rig.host);
+    let open = |path: std::path::PathBuf| page.call_after_click("openFile", json!({ "path": path }));
+    let allowed = ["CLAUDE.md", "settings.json", "settings.local.json", "projects/-work-app/memory/MEMORY.md"];
+    for file in allowed {
+        assert_eq!(open(account.join(file)), Ok(Value::Null), "{file}");
+    }
+    for file in ["credentials.json", "notes.md", "projects/-work-app/memory/data.json", "projects/-work-app/session.md"] {
+        assert!(open(account.join(file)).unwrap_err().ends_with("isn't inside any of your Wings projects"), "{file}");
+    }
+    // `..` out of the account's folder, and a link out of it, lead to a file that isn't Claude Code's.
+    assert!(open(account.join("../elsewhere/CLAUDE.md")).is_err());
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(other.join("CLAUDE.md"), memory.join("linked.md")).unwrap();
+        assert!(open(memory.join("linked.md")).is_err());
+    }
+    assert!(open(other.join("CLAUDE.md")).is_err());
+    let seen = rig.env.seen();
+    assert_eq!(seen.len(), allowed.len());
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_page_opens_a_link_for_a_text_only_right_after_a_click() {
+    const REFUSED: &str = "A page can open a link only right after you click or type in it";
+    let rig = Rig::new(json!({}), panes());
+    let page = Caller::start(&rig.host);
+    assert_eq!(page.call("openLink", json!({ "text": "ABC-12" })), Err(REFUSED.into()));
+    assert_eq!(page.call_after_click("openLink", json!({ "text": "https://github.com/o/r/pull/1" })), Ok(Value::Null));
+    assert_eq!(page.call_after_click("openLink", json!({ "text": "" })), Err("openLink needs the link's text".into()));
+    assert_eq!(rig.env.seen(), [Seen::Link("https://github.com/o/r/pull/1".into())]);
+}
+
+#[test]
 fn notifications_are_rate_limited_per_plugin() {
     let rig = notifier();
     let page = Caller::start(&rig.host);

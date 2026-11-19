@@ -18,7 +18,7 @@ pub fn pause_near_limit() -> Setting<bool> {
     Setting::boolean(PAUSE_NEAR_LIMIT, true)
 }
 
-/// The side panel shows beside or over the conversation, in every chat.
+/// The session sidebar opens with a chat, in every chat (`session_side.rs`).
 pub const SIDE_PANEL: &str = "side-panel";
 
 /// How big the conversation's text is, in every chat.
@@ -64,6 +64,23 @@ pub fn scale_of(size: &str) -> f32 {
     }
 }
 
+/// The text size Wings' font keys take `size` to while a chat has the keyboard: one size up or down, held at the ends,
+/// or back to the default.
+pub fn stepped(size: &str, step: &str) -> &'static str {
+    let at = TEXT_SIZES.iter().position(|(value, _)| *value == size).unwrap_or(1);
+    let to = match step {
+        "bigger" => (at + 1).min(TEXT_SIZES.len() - 1),
+        "smaller" => at.saturating_sub(1),
+        _ => 1,
+    };
+    TEXT_SIZES[to].0
+}
+
+/// Cmd-+, Cmd-- and Cmd-0 in a chat, as the page's `onTextScale` hears them: the text size of every chat, as in Settings.
+pub fn step_text_size(step: &str) {
+    drop(text_size().set(stepped(&text_size().get(), step).to_owned()));
+}
+
 /// The mode to ask Claude Code for as a chat starts. None while it is Claude Code's own default, which it starts in.
 pub fn start_mode() -> Option<String> {
     Some(mode().get()).filter(|mode| mode != "default")
@@ -97,6 +114,15 @@ mod tests {
         assert_eq!(scale_of("default"), 1.0);
         assert!(scale_of("small") < 1.0 && scale_of("large") > 1.0);
         assert_eq!(scale_of("anything else"), 1.0);
+    }
+
+    #[test]
+    fn the_font_keys_step_the_text_size_and_stop_at_its_ends() {
+        assert_eq!(stepped("default", "bigger"), "large");
+        assert_eq!(stepped("large", "bigger"), "large");
+        assert_eq!(stepped("default", "smaller"), "small");
+        assert_eq!(stepped("small", "smaller"), "small");
+        assert_eq!(stepped("large", "reset"), "default");
     }
 
     #[test]

@@ -32,7 +32,7 @@ pub fn section(c: &Chat) -> Option<Node> {
     Some(
         stack()
             .prop("gap", "xs")
-            .child(muted(title).prop("size", "small"))
+            .child(Node::new("Heading").text(title))
             .child(stack().prop("gap", "none").children(running.into_iter().map(task_row)).children(done.into_iter().map(done_row))),
     )
 }
@@ -78,13 +78,18 @@ fn task_row(task: &Task) -> Node {
         true => muted("stopping"),
         false => muted("running").prop("since", task.started),
     };
-    // The name has the whole row, three lines at most; under it the time, and the small buttons at the right.
-    let title = row().prop("gap", "s").prop("align", "center").child(spinner()).child(stack().prop("grow", true).child(text(name).prop("size", "small").prop("clamp", true).prop("title", name)));
+    // The spinner, the name over how long it has run, and the small buttons at the right, on one row as a subagent's
+    // is: the time and buttons sat on a line of their own, out of line with the name.
+    let main = row()
+        .prop("gap", "s")
+        .prop("align", "center")
+        .child(spinner())
+        .child(stack().prop("grow", true).prop("gap", "none").child(text(name).prop("size", "small").prop("clamp", true).prop("title", name)).child(time.prop("size", "small")));
     let id = task.id.clone();
-    let title = match (task.has_output(), task.kind == "local_agent") {
-        (true, _) => list_button([title], move || chat::open_task(&id)).prop("title", "What it printed"),
-        (false, true) => list_button([title], move || open_subagent(&id)).prop("title", "Its conversation, in the sidebar"),
-        _ => title,
+    let main = match (task.has_output(), task.kind == "local_agent") {
+        (true, _) => list_button([main], move || chat::open_task(&id)).prop("title", "What it printed"),
+        (false, true) => list_button([main], move || open_subagent(&id)).prop("title", "Its conversation, in the sidebar"),
+        _ => main,
     };
     let id = task.id.clone();
     let actions = row()
@@ -101,8 +106,7 @@ fn task_row(task: &Task) -> Node {
     stack()
         .prop("gap", "none")
         .key(task.id.as_str())
-        .child(title)
-        .child(row().prop("gap", "xs").prop("align", "center").child(stack().prop("grow", true).child(time.prop("size", "small"))).child(actions))
+        .child(row().prop("gap", "xs").prop("align", "center").child(stack().prop("grow", true).child(main)).child(actions))
         .maybe(task.error.as_deref().map(|why| text(why).prop("size", "small").prop("tone", "danger").prop("clamp", true).prop("title", why)))
 }
 

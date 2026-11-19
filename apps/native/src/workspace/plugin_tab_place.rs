@@ -88,4 +88,37 @@ mod tests {
         assert_eq!(window.read(|w, _| order(w)), [json!(1), json!(3), json!(2)]);
         until(&app, &mut window, "the third tab's page didn't bring the first tab to the front", |w| w.active == Active::Plugin(w.plugin_tabs[0].id));
     }
+
+    /// A chat page that hands its session to a terminal as it starts, in its second tab only.
+    fn handing_over() -> String {
+        fake::script("page", || {
+            |cx: &mut Cx<'_>, hear: Hear<'_>| {
+                let args: Value = cx.link().view_args().and_then(|args| serde_json::from_str(&args).ok()).unwrap_or_default();
+                if matches!(hear, Hear::Start) && args["n"] == 2 {
+                    cx.call("openPane", json!({ "command": null, "args": [], "cwd": null, "placement": "replace" }));
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn a_terminal_a_page_opens_in_place_of_its_tab_closes_that_tab_and_no_other() {
+        let data = Data::temp();
+        let project = data.root.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let views = json!([{ "id": "chat", "title": "Chat", "page": "dist/chat.html", "opens": ["tab"], "multiple": true }]);
+        data.install_script("chatty", json!({ "permissions": { "panes": [] }, "contributes": { "views": views } }), &fake::idle("main"), &[("chat", &handing_over())], "chatty-scope");
+        let (app, mut window) = open_plugins(&data, &Arc::default(), |config| config.project = project.clone());
+        let terminals = window.read(|w, _| w.terminals.len());
+        window.update(|w, window, cx| {
+            assert!(w.open_plugin_view("chatty", "chat", Some(json!({ "n": 1 })), window, cx));
+            assert!(w.open_plugin_view("chatty", "chat", Some(json!({ "n": 2 })), window, cx));
+        });
+        until(&app, &mut window, "the page's tab didn't give way to a terminal", |w| w.plugin_tabs.len() == 1);
+        window.read(|w, _| {
+            assert_eq!(w.plugin_tabs[0].args, Some(json!({ "n": 1 })));
+            assert_eq!(w.terminals.len(), terminals + 1);
+            assert_eq!(w.active, Active::Terminal(w.terminals.last().unwrap().id));
+        });
+    }
 }

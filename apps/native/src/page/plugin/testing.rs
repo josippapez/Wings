@@ -34,6 +34,8 @@ pub(super) enum Seen {
     DiffClose(String, String),
     OpenPane(super::OpenPane),
     OpenView(super::OpenView),
+    /// The Past sessions sheet opened, resuming in the page for these agents.
+    OpenHistory(Vec<String>),
     FocusPane(String),
     ClosePane(String),
     CloseView(String, String),
@@ -42,6 +44,8 @@ pub(super) enum Seen {
     Url(String),
     /// A file opened in the editor, at a line.
     File(std::path::PathBuf, Option<u32>),
+    /// The text a link was opened for.
+    Link(String),
     Notice(String, String),
     Copied(String),
     /// The file picker opened, for several files or one.
@@ -178,6 +182,11 @@ impl Env for FakeEnv {
     fn open_view(&self, plan: super::OpenView, reply: crate::page::runtime::Reply) {
         self.record(Seen::OpenView(plan));
         reply.ok("null".into());
+    }
+    /// You resume `s1` in the page.
+    fn open_history(&self, agents: Vec<String>, reply: crate::page::runtime::Reply) {
+        self.record(Seen::OpenHistory(agents));
+        reply.ok(json!({ "resume": "s1", "cwd": "/proj" }).to_string());
     }
     fn focus_pane(&self, pane: &str, reply: crate::page::runtime::Reply) {
         self.record(Seen::FocusPane(pane.into()));
@@ -340,6 +349,11 @@ impl Env for FakeEnv {
 
     fn open_file(&self, file: &std::path::Path, line: Option<u32>) -> Result<(), String> {
         self.record(Seen::File(file.to_owned(), line));
+        Ok(())
+    }
+
+    fn open_link(&self, text: &str) -> Result<(), String> {
+        self.record(Seen::Link(text.into()));
         Ok(())
     }
 

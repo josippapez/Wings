@@ -120,7 +120,7 @@ pub fn folders(c: &Chat) -> Option<Node> {
                     .child(icon(14, 2.0, &[CLOSE])),
             )
     });
-    Some(stack().prop("gap", "xs").child(muted("Folders").prop("size", "small")).child(stack().prop("gap", "none").children(rows)))
+    Some(stack().prop("gap", "xs").child(Node::new("Heading").text("Folders")).child(stack().prop("gap", "none").children(rows)))
 }
 
 /// Why the chat can't start Claude Code again now, or None. A turn that runs would be lost, so it waits.

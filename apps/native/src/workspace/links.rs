@@ -67,6 +67,20 @@ impl Workspace {
         })
     }
 
+    /// What a page asked to open with `openLink`: the link whose pattern matches all of `text`, as a click on it would.
+    pub(super) fn open_link_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(links) = cx.try_global::<PageLinks>() else { return };
+        let found = wings_plugins::links::find(text, &links.rules);
+        let target = match found[..] {
+            [only] if only.start == 0 && only.end == text.len() => {
+                let rule = &links.rules[only.rule];
+                LinkTarget { plugin: rule.plugin.clone(), link: rule.link.clone(), text: text.to_owned() }
+            }
+            _ => return self.show_notice("Couldn't open the link".into(), format!("No plugin opens {text}"), cx),
+        };
+        self.open_link(&target, window, cx);
+    }
+
     /// A click on a link in a page: its plugin's view opens as a tab with the text, or the address it names in the browser.
     pub(super) fn open_link(&mut self, target: &LinkTarget, window: &mut Window, cx: &mut Context<Self>) {
         match self.link_opens(target) {

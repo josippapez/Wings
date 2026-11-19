@@ -23,4 +23,6 @@ chat = []
 subagent = ["chat"]
 # The sidebar for a pane a Claude Code plugin opened: the chat's code, started as that page (`pane_sidebar.rs`).
 pane = ["chat"]
+# The sidebar for the session of the chat in front: the chat's code, started as that page (`session_sidebar.rs`).
+session = ["chat"]
 settings = []

@@ -234,6 +234,7 @@ impl Workspace {
             input,
             placement: "tab".into(),
             claude_account: None,
+            replace: None,
         };
         let owner = owner.filter(|_| tab.is_some());
         let pane = match (page, tab, owner) {

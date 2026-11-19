@@ -820,6 +820,60 @@ fn a_work_account_session_resumes_in_the_view_with_the_args_the_badge_gives() {
     });
 }
 
+/// A chat page that opens Past sessions to resume in its own tab as it starts, and again after each answer, which it
+/// keeps under `answers`.
+fn resuming_here() -> crate::installed::fixture::Data {
+    use crate::page::runtime::fake::{self, Cx, Hear, Pending};
+    let data = crate::installed::fixture::Data::temp();
+    let page = fake::script("page", || {
+        let mut wait = Pending::default();
+        let mut answers = Vec::new();
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            match hear {
+                Hear::Start => {}
+                Hear::Deliver(kind, id, text) => {
+                    let Some(((), answer)) = wait.answered(kind, id, text) else { return };
+                    answers.push(answer.unwrap_or_else(serde_json::Value::String));
+                    cx.save("answers", &serde_json::json!(answers));
+                }
+                Hear::Event(..) => return,
+            }
+            wait.call(cx, "openHistory", serde_json::json!({ "resumeIn": "this tab" }), ());
+        }
+    });
+    let views = serde_json::json!([{ "id": "chat", "title": "Claude chat", "page": "dist/chat.html", "opens": ["tab"], "resumes": ["claude"] }]);
+    data.install_script("chatty", serde_json::json!({ "contributes": { "views": views } }), &fake::idle("main"), &[("chat", &page)], "chatty-scope");
+    data
+}
+
+#[test]
+fn a_page_opens_past_sessions_to_resume_its_agents_sessions_of_this_project_in_its_own_tab() {
+    use super::plugin_tests::until;
+    let data = &resuming_here();
+    let (app, mut window, gone, _, _) = two_accounts_with("here", Some(data));
+    window.update(|w, window, cx| assert!(w.open_plugin_view("chatty", "chat", None, window, cx)));
+    until(&app, &mut window, "the page didn't open Past sessions", |w| w.sheet.is_some());
+    let login = listed(&app, &mut window).into_iter().find(|(s, _)| s.id == LOGIN).unwrap().0;
+    window.read(|w, _| {
+        assert!(w.page_resumes(&login));
+        let opencode = SessionRef { agent: wings_agents::history::Agent::OpenCode, ..login.clone() };
+        assert!(!w.page_resumes(&opencode), "the page doesn't resume OpenCode's sessions");
+        assert!(!w.page_resumes(&session(LOGIN, Path::new("/elsewhere"))), "nor sessions of another project");
+    });
+    window.update(|w, window, cx| w.resume_in_page(&login, window, cx));
+    let answers = |n: usize| move |_: &Workspace| data.saved("chatty", "chatty-scope", "answers").is_some_and(|a| a.as_array().unwrap().len() == n);
+    until(&app, &mut window, "the page wasn't told the session", answers(1));
+    assert_eq!(
+        data.saved("chatty", "chatty-scope", "answers"),
+        Some(serde_json::json!([{ "resume": LOGIN, "cwd": gone }]))
+    );
+    // Closing the sheet without resuming one tells the page so.
+    until(&app, &mut window, "the page didn't open Past sessions again", |w| w.sheet.is_some());
+    window.update(|w, window, cx| w.close_history(window, cx));
+    until(&app, &mut window, "the page wasn't told the sheet closed", answers(2));
+    assert_eq!(data.saved("chatty", "chatty-scope", "answers").unwrap()[1], serde_json::Value::Null);
+}
+
 #[test]
 fn a_view_that_is_not_there_says_so_instead_of_opening_nothing() {
     let data = resuming_plugins();

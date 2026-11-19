@@ -690,6 +690,32 @@ impl PageView {
         }
     }
 
+    /// Clicks the button whose `shortcut` is `keystroke`, and says whether one had it. While a dialog is open only its
+    /// buttons count, as only they can be clicked.
+    pub fn press_shortcut(&self, keystroke: &gpui::Keystroke) -> bool {
+        let mods = keystroke.modifiers;
+        let Some(tree) = self.tree.as_ref().filter(|_| mods.platform || mods.control) else {
+            return false;
+        };
+        let nodes = dialog_in(&tree.children).map_or(&tree.children[..], |dialog| &dialog.children[..]);
+        match shortcut_in(nodes, keystroke) {
+            Some(handler) => {
+                self.act(&handler, None);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Sends the page's `onTextScale` the `step` (`bigger`, `smaller` or `reset`), and says whether it has one.
+    pub fn scale_text(&self, step: &str) -> bool {
+        let Some(handler) = self.tree.as_ref().and_then(|tree| text_scale_in(&tree.children)) else {
+            return false;
+        };
+        self.act(&handler, Some(&serde_json::json!({ "step": step })));
+        true
+    }
+
     /// Whether a click or a key of yours has reached the page.
     #[cfg(test)]
     pub(super) fn acted(&self) -> bool {
@@ -1540,7 +1566,12 @@ impl PageView {
         if text.on_click.is_none() && text.title.is_none() {
             return element;
         }
-        let element = div().child(element);
+        // The box round it narrows and grows as the text would, or a title cut short with a tooltip ran its whole
+        // length under the buttons beside it, as Claude chat's header title did in a narrow tab.
+        let element = div()
+            .when(text.truncate || code, |el| el.min_w_0())
+            .when(text.grow, |el| el.flex_1())
+            .child(element);
         // A tooltip needs an id to hang on.
         let element = element
             .id(ElementId::NamedInteger("page-text".into(), text.id))
@@ -1635,6 +1666,7 @@ impl PageView {
             .label
             .clone()
             .unwrap_or_else(|| plain_text(&button.children));
+        let tip = button.title.clone().or_else(|| button.shortcut.as_ref().map(|_| label.clone()));
         // plugin-ui.css's gap between a button's parts: 6px, and 4px for a chip and a small button.
         let between =
             if button.chip || matches!(button.size, tree::ButtonSize::Xs | tree::ButtonSize::Sm) {
@@ -1693,10 +1725,12 @@ impl PageView {
                     .whitespace_normal()
             })
             .when(drop > 0.0, |el| el.mt(px(drop)))
-            .when_some(button.title.clone(), |el, title| {
-                el.aria_description(title.clone())
-                    .tooltip(ui::tooltip(title, None))
-            });
+            .when_some(button.title.clone(), |el, title| el.aria_description(title))
+            // As the app's own header buttons show theirs: the shortcut beside what the tooltip says.
+            .when_some(tip, |el, tip| {
+                el.tooltip(ui::tooltip(tip, button.shortcut.as_ref().map(|key| key.label().into())))
+            })
+            .when_some(button.shortcut.as_ref(), |el, key| el.aria_keyshortcuts(key.aria()));
         let key_handler = button.on_key_down.clone();
         element.on_key_down(cx.listener(move |view, event: &KeyDownEvent, window, cx| {
             if let Some(handler) = &key_handler {
@@ -1866,11 +1900,14 @@ impl PageView {
                         .text_color(rgb(theme::palette().foreground))
                 })
                 .into_any_element(),
-            Node::Dot(dot) => ui::dot(
-                dot.color
-                    .unwrap_or_else(|| dot.tone.map_or(theme::palette().done, tone_color)),
-            )
-            .into_any_element(),
+            Node::Dot(dot) => match dot.state {
+                Some(state) => ui::status_dot_slot(state, format!("page-dot-{}", dot.id)),
+                None => ui::dot(
+                    dot.color
+                        .unwrap_or_else(|| dot.tone.map_or(theme::palette().done, tone_color)),
+                )
+                .into_any_element(),
+            },
             // A scroll keeps 8 points either side and 12 below, as a list under a header does.
             Node::Scroll(scroll) => {
                 let watches = scroll.scroll_to.is_some() || scroll.on_track.is_some();
@@ -2623,6 +2660,28 @@ impl Render for PageView {
             .key_context(page_context)
             .on_key_down(cx.listener(Self::tab))
             .on_key_down(cx.listener(Self::copy_selection))
+            .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
+                if view.press_shortcut(&event.keystroke) {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                }
+            }))
+            // Unless the page sizes its own text, the font keys go on to the workspace, which sizes the terminals'.
+            .on_action(cx.listener(|view, _: &crate::actions::IncreaseFontSize, _, cx| {
+                if !view.scale_text("bigger") {
+                    cx.propagate();
+                }
+            }))
+            .on_action(cx.listener(|view, _: &crate::actions::DecreaseFontSize, _, cx| {
+                if !view.scale_text("smaller") {
+                    cx.propagate();
+                }
+            }))
+            .on_action(cx.listener(|view, _: &crate::actions::ResetFontSize, _, cx| {
+                if !view.scale_text("reset") {
+                    cx.propagate();
+                }
+            }))
             .relative()
             .size_full()
             .min_w_0()
@@ -2717,6 +2776,35 @@ fn dialog_in(nodes: &[Node]) -> Option<&tree::Dialog> {
     nodes.iter().rev().find_map(|node| match node {
         Node::Dialog(dialog) => Some(dialog),
         other => other.parts().into_iter().rev().find_map(dialog_in),
+    })
+}
+
+/// The click handler of the button in `nodes` whose `shortcut` is `keystroke`.
+fn shortcut_in(nodes: &[Node], keystroke: &gpui::Keystroke) -> Option<String> {
+    let mods = keystroke.modifiers;
+    nodes.iter().find_map(|node| {
+        let button = match node {
+            Node::Button(button) => Some(button),
+            Node::ListButton(item) => Some(&item.button),
+            _ => None,
+        };
+        button
+            .filter(|button| {
+                button.shortcut.as_ref().is_some_and(|key| {
+                    (key.cmd, key.ctrl, key.alt, key.shift) == (mods.platform, mods.control, mods.alt, mods.shift)
+                        && key.key == keystroke.key
+                })
+            })
+            .and_then(|button| button.on_click.clone())
+            .or_else(|| node.parts().into_iter().find_map(|nodes| shortcut_in(nodes, keystroke)))
+    })
+}
+
+/// The `onTextScale` of the page's `Page`, wherever in its tree it is.
+fn text_scale_in(nodes: &[Node]) -> Option<String> {
+    nodes.iter().find_map(|node| match node {
+        Node::Page(page) if page.on_text_scale.is_some() => page.on_text_scale.clone(),
+        other => other.parts().into_iter().find_map(text_scale_in),
     })
 }
 

@@ -431,7 +431,7 @@ impl Link for FrameLink {
         // open a file in your editor: what reaches an agent, like the answer to its permission prompt, is what you just
         // asked for in the page, never the plugin alone, and a picker never opens by itself. A write another page handed
         // on with your click there counts as one here (`pages`), and goes before a click of this page's own.
-        if matches!(method, "copyText" | "processWrite" | "pickFiles" | "openFile") && !(method == "processWrite" && self.unprompted_write(&params)) {
+        if matches!(method, "copyText" | "processWrite" | "pickFiles" | "openFile" | "openLink") && !(method == "processWrite" && self.unprompted_write(&params)) {
             let handed = method == "processWrite" && self.role == Role::Page && self.shared.take_grant(self.id);
             let acted = handed
                 || self
@@ -445,6 +445,7 @@ impl Link for FrameLink {
                     "copyText" => "copy",
                     "pickFiles" => "open the file picker",
                     "openFile" => "open a file",
+                    "openLink" => "open a link",
                     _ => "write to a program",
                 };
                 return reply.err(format!("A page can {what} only right after you click or type in it"));
@@ -476,6 +477,10 @@ impl Link for FrameLink {
         }
         if process::CALLS.contains(&method) {
             return self.shared.process_call(self.place(), method, params, reply);
+        }
+        if matches!(method, "openPane" | "openHistory") {
+            let tab = self.state.as_ref().filter(|state| state.is_tab()).map(|_| self.id);
+            return self.shared.tab_call(method, params, tab, reply);
         }
         self.shared.call(method, params, reply)
     }

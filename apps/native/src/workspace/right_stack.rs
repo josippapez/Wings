@@ -216,6 +216,7 @@ impl Workspace {
         let (host, source) = (installed.host.clone(), page.source.clone());
         let page = cx.new(|cx| PageView::in_plugin(&host, &source, cx));
         self.sidebar_pages.insert(key.clone(), page);
+        self.sync_page_terminals(cx);
         true
     }
 

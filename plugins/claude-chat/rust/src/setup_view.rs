@@ -3,7 +3,8 @@
 //! permission rules by allow, ask and deny with the mode a session starts in. A hook or a rule in one of your settings
 //! files has a Remove button, the permissions dialog adds a rule, and the memory dialog turns auto memory on or off.
 //! Each change first asks, in place of what it changes, with what it writes and to which file, and is made by the click
-//! that confirms it. Wings has no call that opens a file, so a file's path is copied, to open in your editor or Finder.
+//! that confirms it. A file opens in your editor from its Open button, which Wings allows for Claude Code's own files; its
+//! path can be copied instead, and a folder's only is.
 
 use serde_json::json;
 use wings_plugin::{
@@ -27,7 +28,7 @@ const RELIST_MS: u32 = 1_500;
 pub fn dialog(c: &Chat) -> Option<Node> {
     let setup = &c.session.setup;
     Some(match setup.open? {
-        Which::Hooks => hooks_dialog(setup),
+        Which::Hooks => hooks_dialog(setup, &c.cwd),
         Which::Memory => memory_dialog(setup),
         Which::Permissions => permissions_dialog(setup),
     })
@@ -69,21 +70,21 @@ fn remove_button(edit: Edit, from: &str) -> Node {
     button("Remove", "ghost", false, move || ask(edit.clone())).prop("size", "sm").prop("title", format!("Removes it from {from}, once you confirm"))
 }
 
-fn hooks_dialog(setup: &Setup) -> Node {
+fn hooks_dialog(setup: &Setup, cwd: &str) -> Node {
     panel("Hooks", WIDTH, close)
         .children(notices(&setup.outcome))
-        .child(filled(&setup.hooks, |hooks| hooks_body(setup, hooks)))
+        .child(filled(&setup.hooks, |hooks| hooks_body(setup, hooks, cwd)))
         .child(small("Remove takes a hook out of the settings file it is in. To add or change one, edit that file, or ask Claude."))
 }
 
-fn hooks_body(setup: &Setup, hooks: &Hooks) -> Node {
+fn hooks_body(setup: &Setup, hooks: &Hooks, cwd: &str) -> Node {
     let body = stack().prop("gap", "l").children(notices(&hooks.notices));
     if hooks.hooks.is_empty() {
         return body.child(empty("No hooks", "Claude Code runs no hooks of yours here."));
     }
     let mut budget = Budget::default();
     let events = hooks.events.iter().filter_map(|(event, summary)| {
-        let rows: Vec<Node> = hooks.hooks.iter().enumerate().filter(|(_, hook)| hook.event == *event).filter_map(|(at, hook)| budget.take(hook_row(setup, at, hook))).collect();
+        let rows: Vec<Node> = hooks.hooks.iter().enumerate().filter(|(_, hook)| hook.event == *event).filter_map(|(at, hook)| budget.take(hook_row(setup, at, hook, cwd))).collect();
         let head = row().prop("gap", "s").prop("align", "baseline").child(heading(3, event.as_str())).child(small(summary.as_str()));
         (!rows.is_empty()).then(|| stack().prop("gap", "s").child(head).children(rows))
     });
@@ -93,7 +94,7 @@ fn hooks_body(setup: &Setup, hooks: &Hooks) -> Node {
 
 /// A hook: what it runs for, what it runs, whether it is kept from running, where it is set, and Remove when it is in one
 /// of your settings files.
-fn hook_row(setup: &Setup, at: usize, hook: &Hook) -> Node {
+fn hook_row(setup: &Setup, at: usize, hook: &Hook, cwd: &str) -> Node {
     let remove = Edit::remove_hook(hook);
     if let Some(edit) = remove.as_ref().filter(|edit| setup.pending.as_ref() == Some(*edit)) {
         return asking(setup, edit).key(format!("hook-{at}"));
@@ -104,6 +105,12 @@ fn hook_row(setup: &Setup, at: usize, hook: &Hook) -> Node {
     let kind = (hook.kind != "Command" && !hook.kind.is_empty()).then(|| small(hook.kind.as_str()));
     let off = hook.off.then(|| badge("Off", Some("warn")).prop("title", "It doesn't run in this session"));
     let from = small(hook.from.as_str()).prop("title", setup.where_set(&hook.from_detail));
+    // Your user settings are named `~/.claude/...` until Claude Code has said which account's folder they are in; a project's
+    // are in the project.
+    let file = hook.stored.as_ref().and_then(|(source, ..)| source_path(source, setup.user_dir.as_deref())).and_then(|file| match file.strip_prefix(".claude/") {
+        Some(rest) => Some(format!("{}/.claude/{rest}", cwd.trim_end_matches('/'))),
+        None => file.starts_with('/').then_some(file),
+    });
     row()
         .prop("gap", "s")
         .prop("align", "center")
@@ -113,6 +120,7 @@ fn hook_row(setup: &Setup, at: usize, hook: &Hook) -> Node {
         .child(what)
         .maybe(off)
         .child(from)
+        .maybe(file.map(|file| open_button(&file)))
         .maybe(remove.map(|edit| remove_button(edit, hook.from.as_str())))
 }
 
@@ -120,7 +128,7 @@ fn memory_dialog(setup: &Setup) -> Node {
     panel("Memory", WIDTH, close)
         .children(notices(&setup.outcome))
         .child(filled(&setup.memory, |memory| memory_body(setup, memory)))
-        .child(small("Copy a path to open the file in your editor or Finder."))
+        .child(small("Open a file in your editor, or copy its path."))
 }
 
 fn memory_body(setup: &Setup, memory: &Memory) -> Node {
@@ -131,10 +139,10 @@ fn memory_body(setup: &Setup, memory: &Memory) -> Node {
         let when = (saved.modified > 0.0).then(|| ago(saved.modified, now));
         let facts: Vec<String> = [saved.kind.clone(), size, when].into_iter().flatten().collect();
         let about = saved.description.as_deref().unwrap_or_default();
-        path_row(setup, &saved.path, saved.name.as_str(), about, facts.join(" · "), 0)
+        path_row(setup, &saved.path, saved.name.as_str(), about, facts.join(" · "), 0, true)
     });
     let more = (memory.saved.len() > SAVED_SHOWN).then(|| small(format!("{} more in the folder", memory.saved.len() - SAVED_SHOWN)));
-    let folders = memory.folders.iter().map(|folder| path_row(setup, &folder.path, folder.label.as_str(), "", String::new(), 0));
+    let folders = memory.folders.iter().map(|folder| path_row(setup, &folder.path, folder.label.as_str(), "", String::new(), 0, false));
     let dream = memory.dream.as_ref().map(|(status, on)| switch_line(setup, format!("Auto dream is {status}."), "autoDreamEnabled", *on));
     let auto = stack()
         .prop("gap", "s")
@@ -171,16 +179,17 @@ fn file_row(setup: &Setup, file: &File) -> Node {
         (true, Some(size)) => format!("{} tokens", tokens(size as f64)),
         (true, None) => String::new(),
     };
-    path_row(setup, &file.path, file.label.as_str(), file.description.as_str(), size, file.depth)
+    path_row(setup, &file.path, file.label.as_str(), file.description.as_str(), size, file.depth, file.exists)
 }
 
-/// A file or folder by its name, a line about it, its path, a fact at its end, and the button that copies its path.
-fn path_row(setup: &Setup, path: &str, name: &str, about: &str, fact: String, depth: usize) -> Node {
+/// A file or folder by its name, a line about it, its path, a fact at its end, and the buttons that open a file that is
+/// there (`openable`) and copy its path.
+fn path_row(setup: &Setup, path: &str, name: &str, about: &str, fact: String, depth: usize, openable: bool) -> Node {
     let head = row().prop("gap", "s").prop("align", "baseline").child(title(name)).maybe((!about.is_empty()).then(|| small(about).prop("truncate", true).prop("title", about)));
     let place = text(path).prop("mono", true).prop("size", "small").prop("tone", "muted").prop("truncate", true).prop("title", path);
     let copied = setup.copied.as_deref() == Some(path);
     let owned = path.to_owned();
-    let copy_button = button(if copied { "Copied" } else { "Copy path" }, "ghost", false, move || copy(&owned)).prop("size", "sm").prop("title", path);
+    let copy_button = button(if copied { "Copied" } else { "Copy path" }, "ghost", false, move || copy(&owned)).prop("size", "sm").prop("title", "Copies the path, to open it in Finder");
     row()
         .prop("gap", "s")
         .prop("align", "center")
@@ -188,7 +197,14 @@ fn path_row(setup: &Setup, path: &str, name: &str, about: &str, fact: String, de
         .maybe((depth > 0).then(|| stack().prop("width", 20 * depth as u32)))
         .child(stack().prop("grow", true).prop("gap", "xs").child(head).child(place))
         .maybe((!fact.is_empty()).then(|| small(fact)))
+        .maybe(openable.then(|| open_button(path)))
         .child(copy_button)
+}
+
+/// The button that opens the file at `path` in your editor.
+fn open_button(path: &str) -> Node {
+    let owned = path.to_owned();
+    button("Open", "outline", false, move || open(&owned)).prop("size", "sm").prop("title", format!("Opens {path} in your editor"))
 }
 
 fn permissions_dialog(setup: &Setup) -> Node {
@@ -298,6 +314,16 @@ fn set_behavior(behavior: &str) {
 
 fn set_query(query: &str) {
     chat::with(|c| c.session.setup.query = query.to_owned());
+}
+
+/// Opens `path` in your editor, from your click on its button; a refusal shows in the dialog.
+fn open(path: &str) {
+    let opening = host::open_file(path, None);
+    task::spawn(async move {
+        if let Err(why) = opening.await {
+            chat::with(|c| c.session.setup.outcome = vec![("danger", why)]);
+        }
+    });
 }
 
 /// Puts `path` on the clipboard, from your click on its button, and marks that row Copied.

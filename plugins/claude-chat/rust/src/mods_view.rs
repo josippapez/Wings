@@ -459,7 +459,7 @@ pub fn panes(c: &Chat) -> Vec<Node> {
     if rows.is_empty() {
         return Vec::new();
     }
-    vec![stack().prop("gap", "xs").child(muted("Panes").prop("size", "small")).children(rows).key("panes")]
+    vec![stack().prop("gap", "xs").child(Node::new("Heading").text("Panes")).children(rows).key("panes")]
 }
 
 /// A pane's tree as the sidebar page draws it, under a toolbar that already names it: the mod's own first text, when it

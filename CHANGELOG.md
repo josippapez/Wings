@@ -2,6 +2,19 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.54 · 2026-11-19
+
+- **Claude chat's account sits in its header**: a profile button names the account the chat runs under, and its menu checks it and lets you pick another.
+- **Claude chat's side panel is a Wings sidebar** on the right, beside Changes and the others, so the conversation has the whole tab. It follows the chat in front.
+- **Past sessions in Claude chat opens Wings' own Past sessions**, with search, all projects and running sessions. Resume there goes on in the chat.
+- **Open in terminal swaps the chat tab for a terminal** instead of leaving an empty chat behind.
+- **New chat, resume and fork open in a new tab while the chat is busy**, so a running turn keeps going.
+- **The chat's header shows its state** with the same dot as a terminal pane's, and the folder and branch after the title. A long title is cut short instead of running under the buttons.
+- **Shortcuts in Claude chat**: ⇧⌘N new chat, ⌘Y past sessions, ⌥⌘B the session sidebar, ⌥⌘T open in terminal. ⌘+, ⌘− and ⌘0 size the chat's text.
+- **Edited files open in the diff viewer** from a turn's Edited card, **memory and settings files open in your editor**, and **pull requests open in Wings' pull request tab**.
+- **Other agents can find and message a Claude chat** through Wings' session tools, as they can a terminal's.
+- **Clicks in a plugin page go ahead of work it has queued**, and are no longer dropped while Claude streams.
+
 ## 0.2.53 · 2026-11-19
 
 - **Start a Claude chat under another Claude account.** The message box has an account menu when you have more than one. In a new chat it restarts under the account you pick, and in a chat with messages it opens a new chat beside it.

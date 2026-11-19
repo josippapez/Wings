@@ -40,8 +40,6 @@ pub(crate) const HISTORY_CUT: u32 = 4_000;
 /// What a session read back is made of: your messages (those sent while Claude worked are attachments), Claude's, where a
 /// rewind cut it, and its name.
 pub(crate) const HISTORY_KINDS: [&str; 6] = ["user", "assistant", "last-prompt", "attachment:queued_command", "ai-title", "custom-title"];
-/// How many past sessions the list shows.
-const PAST: u32 = 60;
 
 #[derive(Debug, PartialEq)]
 pub enum State {
@@ -53,19 +51,6 @@ pub enum State {
     Failed(String),
     /// The session went on in a terminal.
     Moved,
-}
-
-/// The project's past sessions, while their sheet is open.
-#[derive(Default)]
-pub struct Past {
-    pub query: String,
-    /// None while they load.
-    pub sessions: Option<Vec<Value>>,
-    pub error: Option<String>,
-    /// How recently a listed one was last active: `today`, `week` or `month`, and any time when empty.
-    pub since: String,
-    /// The branch a listed one ran on, or any.
-    pub branch: Option<String>,
 }
 
 /// A terminal Claude opened in Wings, which Wings draws where the page puts its `Terminal` node.
@@ -98,7 +83,6 @@ pub struct Chat {
     /// The name of the folder Claude Code runs in.
     pub folder: String,
     pub state: State,
-    pub past: Option<Past>,
     /// Your setting for how tool calls show: Compact folds them, Detailed opens every run and each call's output.
     pub detailed: bool,
     /// Your settings for which kinds of fold Detailed starts open (`folds.rs`).
@@ -135,11 +119,7 @@ pub struct Chat {
     pub fork_ask: bool,
     /// Where this chat was forked from, as the note at its top says: the name of the original session.
     pub forked_from: Option<String>,
-    /// Whether the tab is narrower than the side panel and the conversation need side by side, as the page's split says: None
-    /// until it has measured. Then the panel floats over the conversation, and Escape or a press outside puts it away.
-    pub narrow: Option<bool>,
-    /// Whether the side panel shows: your choice for every chat (`prefs::side_panel`, on by default), which Escape or a press
-    /// outside a panel over a narrow tab sets off for this tab only, until the header's button.
+    /// Your choice for every chat of whether the session sidebar opens with a chat (`prefs::side_panel`, on by default).
     pub side_open: bool,
     /// The background agent a message is being written to, by its id, and the message.
     pub message_to: Option<(String, String)>,
@@ -152,7 +132,7 @@ pub struct Chat {
     /// The terminals Claude opened with Wings' `open_pane`, as Wings lists them: shown in the side panel.
     pub terminals: Vec<Terminal>,
     /// What the sidebar's Agents was last told of this chat: its state, name and what it does.
-    agent: Option<(String, String, Option<String>)>,
+    pub(crate) agent: Option<(String, String, Option<String>)>,
     /// And the session and account it was told with them, by name (`Some(None)` the default one), for the other Claude
     /// Code sessions that list and message this chat through Wings.
     told: (Option<String>, Option<Option<String>>),
@@ -187,7 +167,6 @@ thread_local! {
         refs: crate::refs::Refs::default(),
         folder: String::new(),
         state: State::Starting,
-        past: None,
         detailed: false,
         opens: crate::folds::Opens::default(),
         text_scale: 1.0,
@@ -206,7 +185,6 @@ thread_local! {
         fork_from: None,
         fork_ask: false,
         forked_from: None,
-        narrow: None,
         side_open: true,
         message_to: None,
         changes: None,
@@ -252,7 +230,7 @@ fn picked_of(saved: &Value, args: &Value) -> Option<Option<String>> {
     Some(pick["name"].as_str().map(str::to_owned))
 }
 
-#[cfg(not(any(feature = "subagent", feature = "pane")))]
+#[cfg(not(any(feature = "subagent", feature = "pane", feature = "session")))]
 #[unsafe(no_mangle)]
 pub fn start() {
     // A subagent's tab is a page of this view too, opened with the subagent in its args.
@@ -269,6 +247,8 @@ pub fn start() {
     });
     prefs::text_size().on_change(|size| with(|c| c.text_scale = prefs::scale_of(size)));
     prefs::side_panel().on_change(|shown| with(|c| c.side_open = *shown));
+    // After your setting is read: a chat in front opens the session sidebar with it.
+    crate::session_side::start();
     host::on_terminals(|listed| with(|c| c.terminals = listed.iter().filter_map(Terminal::of).collect()));
     host::on_agent_message(take_agent_message);
     // The clicks were made against the old setting, so they go with it.
@@ -393,7 +373,6 @@ pub(crate) fn begin(c: &mut Chat) -> u32 {
     c.state = State::Starting;
     c.shown = PAGE;
     c.until = None;
-    c.past = None;
     c.panel = None;
     c.plugins = None;
     c.picture = None;
@@ -555,7 +534,8 @@ fn open_terminal() {
         return;
     };
     task::spawn(async move {
-        let opened = host::call("openPane", json!({ "command": format!("{program} --resume"), "args": [id], "cwd": cwd, "placement": "tab" })).await;
+        // The terminal takes this tab's place, as a chat takes a terminal's when a session moves the other way.
+        let opened = host::open_pane_in_place(&format!("{program} --resume"), &[&id], &cwd).await;
         with(|c| {
             c.moving = false;
             c.state = match opened {
@@ -697,6 +677,7 @@ pub(crate) fn report_agent() {
     }
     crate::subagent_relay::sync();
     crate::mod_pane::sync();
+    crate::session_side::sync();
 }
 
 /// The session's name: the one Claude Code says (`/rename`), else the first line of your first message, cut short. None
@@ -755,7 +736,6 @@ pub fn send() {
         if c.images.is_empty() {
             if let Some((panel, line)) = c.session.view_command(&text) {
                 c.draft.clear();
-                c.past = None;
                 c.panel = Some(panel);
                 return Some(line);
             }
@@ -773,7 +753,6 @@ pub fn send() {
             // /status, /export and /btw open a dialog, and /plan sets the mode and sends its task, all in this one write.
             if let Some(line) = c.session.typed_command(&text, host::now() as u64, n) {
                 c.draft.clear();
-                c.past = None;
                 c.doing = (c.session.activity(), host::now() as u64);
                 return Some(line);
             }
@@ -962,15 +941,13 @@ pub fn cycle_mode() {
 /// Escape: closes the dialog or sheet that is open, else stops the turn while Claude works.
 pub fn escape() {
     let (dialog, working) = with(|c| {
-        let open = c.past.is_some() || c.panel.is_some() || c.plugins.is_some() || c.task.is_some() || c.session.rewind.is_some() || c.session.setup.open.is_some();
+        let open = c.panel.is_some() || c.plugins.is_some() || c.task.is_some() || c.session.rewind.is_some() || c.session.setup.open.is_some();
         (open, c.session.working)
     });
     match composer::escape(dialog, working) {
         Escape::Close => with(|c| {
-            // The one opened last is on top: the setup dialog's form, then the dialogs over the chat, then the sheet.
-            if c.session.setup.form.take().is_none() && c.session.setup.open.take().is_none() && c.session.rewind.take().is_none() && c.task.take().is_none() && c.plugins.take().is_none() && c.panel.take().is_none() {
-                c.past = None;
-            }
+            // The one opened last is on top: the setup dialog's form, then the dialogs over the chat.
+            let _ = c.session.setup.form.take().is_some() || c.session.setup.open.take().is_some() || c.session.rewind.take().is_some() || c.task.take().is_some() || c.plugins.take().is_some() || c.panel.take().is_some();
         }),
         Escape::Stop => stop(),
         Escape::Nothing => {}
@@ -1100,7 +1077,6 @@ pub fn pick_account(value: &str) {
 pub fn resume(id: &str) {
     let beside = with(|c| {
         if in_use(c) {
-            c.past = None;
             return Some(beside(c, json!({ "resume": id })));
         }
         c.dirs.clear();
@@ -1119,61 +1095,16 @@ pub fn fork_beside(c: &Chat, id: &str, before: Option<&str>) -> Value {
     beside(c, json!({ "resume": id, "fork": true, "before": before, "dirs": c.dirs, "forkedFrom": name(c) }))
 }
 
-/// Opens the sheet of the project's past sessions over the chat.
+/// Opens Wings' Past sessions over the project, whose Resume goes on with a session in this chat (`resume`). One that ran
+/// in another folder of the project goes on in a new chat beside this one, in that folder.
 pub fn open_past() {
-    let opened = with(|c| {
-        let closed = c.past.is_none();
-        if closed {
-            c.past = Some(Past::default());
+    task::spawn(async {
+        let Ok(picked) = host::open_history_here().await else { return };
+        let (Some(id), Some(cwd)) = (picked["resume"].as_str(), picked["cwd"].as_str()) else { return };
+        match with(|c| (c.cwd != cwd).then(|| beside(c, json!({ "resume": id, "cwd": cwd })))) {
+            Some(args) => open_beside(&args),
+            None => resume(id),
         }
-        closed
-    });
-    if opened {
-        load_past(String::new());
-    }
-}
-
-/// Closes the sheet of past sessions.
-pub fn close_past() {
-    with(|c| c.past = None);
-}
-
-/// Lists only the past sessions last active `since` (`today`, `week` or `month`), or at any time.
-pub fn set_since(since: &str) {
-    with(|c| {
-        if let Some(past) = &mut c.past {
-            past.since = since.to_owned();
-        }
-    });
-}
-
-/// Lists only the past sessions on `branch`, or on every branch when it is empty.
-pub fn set_branch(branch: &str) {
-    with(|c| {
-        if let Some(past) = &mut c.past {
-            past.branch = Some(branch.to_owned()).filter(|branch| !branch.is_empty());
-        }
-    });
-}
-
-/// Lists the past sessions that match `query`.
-pub fn load_past(query: String) {
-    with(|c| {
-        if let Some(past) = &mut c.past {
-            past.query = query.clone();
-        }
-    });
-    task::spawn(async move {
-        let found = host::past_sessions(&query, PAST).await;
-        with(|c| {
-            let Some(past) = c.past.as_mut().filter(|past| past.query == query) else {
-                return;
-            };
-            match found {
-                Ok(list) => past.sessions = Some(list.as_array().cloned().unwrap_or_default()),
-                Err(error) => past.error = Some(error),
-            }
-        });
     });
 }
 
@@ -1213,7 +1144,6 @@ pub fn typed(value: &str) {
 /// Opens the usage or context dialog and reads what it shows: one request, from your click.
 pub fn open_panel(panel: Panel) {
     write(|c, _| {
-        c.past = None;
         c.panel = Some(panel);
         Some(c.session.open_view(panel))
     });
@@ -1237,18 +1167,10 @@ pub fn toggle_output(id: &str) {
     });
 }
 
-/// The page's split says whether the tab is narrower than `view::SIDE_BELOW`, so the side panel covers the conversation.
-pub fn set_narrow(narrow: bool) {
-    with(|c| c.narrow = Some(narrow));
-}
-
-/// The header's button for the side panel, at any width: shows it or puts it away in every chat, and keeps the choice.
+/// The header's button for the session sidebar, at any width: opens it on this chat or closes it, and keeps the choice
+/// for every chat (`session_side::toggle`).
 pub fn toggle_side() {
-    let shown = with(|c| {
-        c.side_open = !c.side_open;
-        c.side_open
-    });
-    drop(prefs::side_panel().set(shown));
+    crate::session_side::toggle();
 }
 
 
@@ -1352,6 +1274,68 @@ mod tests {
         assert_eq!(with(|c| c.run), run);
         assert_eq!(opened.borrow()[0]["args"]["resume"], "s1");
         assert_eq!(opened.borrow()[0]["newTab"], true);
+    }
+
+    /// Wings, answering `openHistory` with `picked` and keeping every call.
+    fn wings_picks(picked: Value) -> Rc<RefCell<Vec<(String, Value)>>> {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let kept = calls.clone();
+        host::testing::answer(move |method, params| {
+            kept.borrow_mut().push((method.to_owned(), params.clone()));
+            Ok(if method == "openHistory" { picked.clone() } else { Value::Null })
+        });
+        calls
+    }
+
+    fn asked(calls: &Rc<RefCell<Vec<(String, Value)>>>, method: &str) -> Vec<Value> {
+        calls.borrow().iter().filter(|(called, _)| called == method).map(|(_, params)| params.clone()).collect()
+    }
+
+    #[test]
+    fn past_sessions_opens_wings_own_sheet_and_a_session_picked_there_goes_on_in_this_chat() {
+        use super::open_past;
+        let calls = wings_picks(json!({ "resume": "s2", "cwd": "/work/shop" }));
+        let run = running(false);
+        open_past();
+        wings_plugin::task::block_on(async {});
+        assert_eq!(asked(&calls, "openHistory"), [json!({ "resumeIn": "this tab" })]);
+        // Here, as the chat is idle.
+        assert_eq!(with(|c| c.run), run + 1);
+        assert!(asked(&calls, "openView").is_empty());
+        // While a turn runs, beside this chat.
+        let calls = wings_picks(json!({ "resume": "s2", "cwd": "/work/shop" }));
+        let run = running(true);
+        open_past();
+        wings_plugin::task::block_on(async {});
+        assert_eq!(with(|c| c.run), run);
+        assert_eq!(asked(&calls, "openView")[0]["args"]["resume"], "s2");
+    }
+
+    #[test]
+    fn a_past_session_of_another_folder_goes_on_in_a_new_chat_in_that_folder() {
+        use super::open_past;
+        let calls = wings_picks(json!({ "resume": "s3", "cwd": "/work/shop/api" }));
+        let run = running(false);
+        open_past();
+        wings_plugin::task::block_on(async {});
+        assert_eq!(with(|c| c.run), run);
+        let opened = asked(&calls, "openView");
+        assert_eq!((&opened[0]["args"]["resume"], &opened[0]["args"]["cwd"]), (&json!("s3"), &json!("/work/shop/api")));
+    }
+
+    #[test]
+    fn open_in_terminal_puts_the_terminal_in_this_tabs_place() {
+        use super::to_terminal;
+        let calls = wings_picks(Value::Null);
+        running(false);
+        with(|c| (c.input, c.session.id) = (None, Some("s1".into())));
+        to_terminal();
+        wings_plugin::task::block_on(async {});
+        assert_eq!(
+            asked(&calls, "openPane"),
+            [json!({ "command": "claude --resume", "args": ["s1"], "cwd": "/work/shop", "placement": "replace" })]
+        );
+        assert!(with(|c| c.state == State::Moved));
     }
 
     #[test]

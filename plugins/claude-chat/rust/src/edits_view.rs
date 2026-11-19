@@ -10,7 +10,7 @@ use wings_plugin::{
     format::plural,
     markdown::{Block, markdown, parse_blocks, parse_inline, Span},
     task,
-    ui::{self, Node, card, dialog as panel, muted, notice, row, stack, text},
+    ui::{self, Node, card, dialog as panel, list_button, muted, notice, row, stack, text},
 };
 
 use crate::{
@@ -44,7 +44,9 @@ pub fn card_of(c: &Chat, from: usize, end: usize, turn: &Turn) -> Node {
             .prop("grow", true)
             .maybe((!dir.is_empty()).then(|| muted(format!("{dir}/")).prop("size", "small").prop("truncate", true)))
             .child(text(name).prop("size", "small").prop("weight", "medium"));
-        row().prop("gap", "s").prop("align", "baseline").key(file.path.as_str()).prop("title", file.path.as_str()).child(name_line).child(counts(file.added, file.removed))
+        let line = row().prop("gap", "s").prop("align", "baseline").child(name_line).child(counts(file.added, file.removed));
+        let shown = shown.to_owned();
+        list_button([line], move || view_changes(from, end, Some(&shown))).key(file.path.as_str()).prop("title", file.path.as_str())
     });
     let more = (turn.files.len() > FILES_SHOWN).then(|| muted(format!("{} more", plural(turn.files.len() - FILES_SHOWN, "file"))).prop("size", "small"));
     let waits = fork_view::busy(c).is_some();
@@ -61,7 +63,7 @@ pub fn card_of(c: &Chat, from: usize, end: usize, turn: &Turn) -> Node {
         .prop("wrap", true)
         .prop("align", "center")
         .maybe(undo)
-        .child(ui::button("View changes", "outline", false, move || view_changes(from, end)).prop("size", "sm"));
+        .child(ui::button("View changes", "outline", false, move || view_changes(from, end, None)).prop("size", "sm"));
     card().child(stack().prop("gap", "s").child(head).child(stack().prop("gap", "xs").children(files).maybe(more)).child(actions)).key(format!("edits-{from}"))
 }
 
@@ -130,10 +132,15 @@ fn say(why: String) {
     chat::with(|c| c.session.items.push(Item::Error(why)));
 }
 
-/// Opens the turn's changes in the diff viewer, from the card's View changes.
-fn view_changes(from: usize, end: usize) {
+/// Opens the turn's changes in the diff viewer, from the card's View changes, or from a file's row, at that file.
+fn view_changes(from: usize, end: usize, file: Option<&str>) {
     let (patch, cwd, folder) = chat::with(|c| (c.session.edits.patch(from, end, &c.cwd), c.cwd.clone(), c.folder.clone()));
-    open(json!({ "title": "Changes in this turn", "subtitle": folder, "cwd": cwd, "patch": patch }));
+    let mut shown = json!({ "title": "Changes in this turn", "subtitle": folder, "cwd": cwd, "patch": patch });
+    // The viewer lists every file of the turn and scrolls to this one, as a file's row on the card asks.
+    if let Some(file) = file {
+        shown["focus"] = json!({ "path": file, "side": "new" });
+    }
+    open(shown);
 }
 
 /// Opens a file a reply names in your editor, at its line. Where that fails (no editor, or an older Wings), a file the

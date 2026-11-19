@@ -1,7 +1,7 @@
 //! The side panel's list of the pull requests and issues the conversation names (`refs.rs`), newest first, each with a
 //! card of what it is while the pointer is on it. An issue is read from the Issues plugin, and listed only once it knows
-//! the key; a pull request from `gh` or `az`, and listed either way. A pull request's row opens it in the browser, and an
-//! issue's key opens it in Issues, as any issue key in the chat does.
+//! the key; a pull request from `gh` or `az`, and listed either way. A pull request's row opens it in the PR tracker's tab,
+//! or in the browser where no plugin opens it, and an issue's key opens it in Issues, as any issue key in the chat does.
 
 use serde_json::{Value, json};
 use wings_plugin::{
@@ -72,7 +72,7 @@ pub fn section(c: &Chat) -> Option<Node> {
     Some(
         stack()
             .prop("gap", "xs")
-            .child(muted(title).prop("size", "small"))
+            .child(Node::new("Heading").text(title))
             .child(stack().prop("gap", "none").children(rows))
             .maybe((hidden > 0).then(|| muted(format!("{hidden} earlier")).prop("size", "small"))),
     )
@@ -103,7 +103,7 @@ fn row_of(found: &Ref, detail: Option<&Detail>) -> Node {
         Ref::Issue(key) => line(small(key.as_str()).prop("mono", true).prop("links", true)),
         Ref::GitHub { url, .. } | Ref::Azure { url, .. } => {
             let url = url.clone();
-            list_button([line(small(found.label()).prop("mono", true))], move || host::open_url(&url))
+            list_button([line(small(found.label()).prop("mono", true))], move || open_pull_request(&url))
         }
     };
     let hover = Node::new("HoverCard").prop("width", 300).child(trigger);
@@ -112,6 +112,18 @@ fn row_of(found: &Ref, detail: Option<&Detail>) -> Node {
         None => hover,
     }
     .key(found.key())
+}
+
+/// Opens a pull request in Wings' own tab, which the PR tracker's link for its address does; the browser where nothing
+/// does (no PR tracker, or an older Wings).
+fn open_pull_request(url: &str) {
+    let opening = host::open_link(url);
+    let url = url.to_owned();
+    task::spawn(async move {
+        if opening.await.is_err() {
+            host::open_url(&url);
+        }
+    });
 }
 
 fn issue_card(found: &Ref, issue: &Issue) -> Node {

@@ -1,7 +1,7 @@
 use crate::page::{
     plugin::{
-        Project,
-        testing::{Frame, Rig, Seen, barrier, hears, open_pane, show},
+        FrameState, Project, StatePlace,
+        testing::{Caller, Frame, Rig, Seen, barrier, hears, open_pane, show},
     },
     runtime::fake::{self, Cx, Guest},
 };
@@ -220,6 +220,46 @@ fn opening_a_pane_uses_shared_permissions_and_resolves_its_project() {
         Rig::new(json!({}), vec![]).refuses("openPane", open_pane(json!({}))),
         "probe may not open panes"
     );
+}
+
+fn tab() -> FrameState {
+    FrameState::new(StatePlace::Tab, None, |_| Ok(()))
+}
+
+#[test]
+fn a_pane_takes_the_place_of_the_tab_of_the_page_that_asks_and_only_a_page_shown_as_a_tab_may_ask() {
+    let rig = Rig::new(json!({ "permissions": { "panes": ["echo"] } }), vec![]);
+    let path = rig.root.config("probe").root.canonicalize().unwrap();
+    *rig.env.projects.lock().unwrap() = vec![path];
+    let state = tab();
+    let page = Caller::in_tab(&rig.host, state.clone());
+    let replace = open_pane(json!({ "command": "echo", "placement": "replace" }));
+    assert_eq!(page.call("openPane", replace.clone()), Ok(json!({ "paneId": "3" })));
+    let Seen::OpenPane(plan) = &rig.env.seen()[0] else {
+        panic!("no pane plan")
+    };
+    assert_eq!(plan.placement, "tab");
+    assert_eq!(plan.replace, Some(("probe".into(), state.frame().unwrap())));
+    assert_eq!(
+        rig.refuses("openPane", replace),
+        "openPane placement \"replace\" works only from a page shown as a tab"
+    );
+}
+
+#[test]
+fn past_sessions_open_to_resume_in_the_tab_of_a_page_whose_plugin_resumes_sessions() {
+    let views = json!([{ "id": "chat", "title": "Chat", "page": "chat.html", "opens": ["tab"], "resumes": ["claude"] }]);
+    let rig = Rig::new(json!({ "contributes": { "views": views } }), vec![]);
+    let page = Caller::in_tab(&rig.host, tab());
+    let here = json!({ "resumeIn": "this tab" });
+    // The answer waits for the sheet: the session you resumed in the page.
+    assert_eq!(page.call("openHistory", here.clone()), Ok(json!({ "resume": "s1", "cwd": "/proj" })));
+    assert_eq!(rig.env.seen(), [Seen::OpenHistory(vec!["claude".into()])]);
+    assert_eq!(page.call("openHistory", json!({})), Err("openHistory resumeIn is \"this tab\"".into()));
+    assert_eq!(rig.refuses("openHistory", here.clone()), "openHistory works only from a page shown as a tab");
+    let plain = Rig::new(json!({}), vec![]);
+    let page = Caller::in_tab(&plain.host, tab());
+    assert_eq!(page.call("openHistory", here), Err("probe has no view that resumes sessions".into()));
 }
 
 #[test]

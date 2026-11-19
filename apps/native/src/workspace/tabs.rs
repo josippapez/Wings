@@ -128,6 +128,10 @@ impl Workspace {
         }
         self.sync_plugin_visibility(cx);
         self.sync_pane_visibility(cx);
+        if moved {
+            // The plugin's sidebars show the terminals of its tab in front.
+            self.sync_page_terminals(cx);
+        }
         match active {
             Active::Terminal(id) => {
                 let focused = self

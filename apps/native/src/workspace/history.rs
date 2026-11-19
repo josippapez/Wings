@@ -469,7 +469,15 @@ pub(super) struct Sheet {
     /// The search under way; a newer one replaces it.
     load: Option<Task<()>>,
     reset_copied: Option<Task<()>>,
+    /// The page that opened the sheet to continue a session in its own tab, like a Claude chat.
+    resume_in: Option<ResumeIn>,
     _events: Subscription,
+}
+
+/// A page's `openHistory`: Resume continues a session of one of `agents` in the page, which `reply` tells.
+pub(super) struct ResumeIn {
+    agents: Vec<String>,
+    reply: crate::page::runtime::Reply,
 }
 
 impl Workspace {
@@ -520,10 +528,47 @@ impl Workspace {
             copied: None,
             load: None,
             reset_copied: None,
+            resume_in: None,
             _events: events,
         });
         self.search_history(cx);
         cx.notify();
+    }
+
+    /// Opens the sheet for a page that continues sessions of `agents` in its own tab: Resume of one of those, in this
+    /// project, goes to the page (`resume_in_page`). A page that asked before and is still waiting gets null.
+    pub(super) fn open_history_resuming(
+        &mut self,
+        agents: Vec<String>,
+        reply: crate::page::runtime::Reply,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_history(window, cx);
+        let Some(sheet) = &mut self.sheet else {
+            return reply.ok("null".into());
+        };
+        if let Some(before) = sheet.resume_in.replace(ResumeIn { agents, reply }) {
+            before.reply.ok("null".into());
+        }
+        cx.notify();
+    }
+
+    /// Whether Resume continues `session` in the page that opened the sheet: one of its agents', in the project on screen,
+    /// where the page's tab is.
+    pub(super) fn page_resumes(&self, session: &SessionRef) -> bool {
+        let agent = agent_key(session.agent);
+        let page = self.sheet.as_ref().and_then(|sheet| sheet.resume_in.as_ref());
+        page.is_some_and(|page| page.agents.iter().any(|name| name == agent))
+            && self.holder(Path::new(&session.cwd)).as_deref() == Some(self.config.project.as_path())
+    }
+
+    /// Hands `session` to the page that opened the sheet, which continues it in its tab, and closes the sheet.
+    pub(super) fn resume_in_page(&mut self, session: &SessionRef, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(page) = self.sheet.as_mut().and_then(|sheet| sheet.resume_in.take()) {
+            page.reply.ok(serde_json::json!({ "resume": session.id, "cwd": session.cwd }).to_string());
+        }
+        self.close_history(window, cx);
     }
 
     /// Escape: closes an open menu first, then the sheet.
@@ -542,7 +587,10 @@ impl Workspace {
 
     /// Closes the sheet and gives the keys back to what had them: the pane you were in.
     pub(super) fn close_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(sheet) = self.sheet.take() {
+        if let Some(mut sheet) = self.sheet.take() {
+            if let Some(page) = sheet.resume_in.take() {
+                page.reply.ok("null".into());
+            }
             self.leave("sheet", sheet, motion::SHEET_IN, cx);
             self.show(self.active, window, cx);
         }
@@ -655,13 +703,7 @@ impl Workspace {
     /// The project that holds the folder `cwd`, else a new project made of it.
     fn project_holding(&mut self, cwd: &str) -> Result<PathBuf, String> {
         let folder = Path::new(cwd);
-        let holder = self
-            .projects
-            .iter()
-            .filter(|project| folder.starts_with(&project.path))
-            .max_by_key(|project| project.path.as_os_str().len())
-            .map(|project| project.path.clone());
-        match holder {
+        match self.holder(folder) {
             Some(path) => Ok(path),
             None if folder.is_dir() => {
                 let added = self.spaces.add(cwd);
@@ -670,6 +712,15 @@ impl Workspace {
             }
             None => Err(format!("{cwd} isn't there any more.")),
         }
+    }
+
+    /// The innermost project that holds `folder`.
+    fn holder(&self, folder: &Path) -> Option<PathBuf> {
+        self.projects
+            .iter()
+            .filter(|project| folder.starts_with(&project.path))
+            .max_by_key(|project| project.path.as_os_str().len())
+            .map(|project| project.path.clone())
     }
 
     /// The views of running plugins that can continue a session of `agent`, as (plugin, view, title).
@@ -1253,7 +1304,11 @@ impl Workspace {
                         .text_size(px(12.0));
                         if let (false, Some(session)) = (disabled, session) {
                             button.on_click(cx.listener(move |this, _, window, cx| {
-                                this.start_session(&session, false, window, cx)
+                                if this.page_resumes(&session) {
+                                    this.resume_in_page(&session, window, cx)
+                                } else {
+                                    this.start_session(&session, false, window, cx)
+                                }
                             }))
                         } else {
                             button
@@ -1297,19 +1352,25 @@ impl Workspace {
         let can_fork = session
             .as_ref()
             .is_some_and(|s| fork_command(s.agent, &s.id).is_some());
-        let here = session.clone().filter(|_| prompt.is_ok());
+        // The page that opened the sheet is "this tab" for its own sessions; else the focused terminal is.
+        let in_page = session.as_ref().is_some_and(|s| self.page_resumes(s));
+        let here = session.clone().filter(|_| in_page || prompt.is_ok());
         let mut items = vec![
             menu_item(
                 ("history-here", at),
-                Icon::SquareTerminal,
+                if in_page { Icon::MessageSquareText } else { Icon::SquareTerminal },
                 "Resume in this tab",
-                prompt.err().filter(|_| session.is_some()),
+                prompt.err().filter(|_| session.is_some() && !in_page),
                 here.is_none(),
             )
             .when_some(here, |item, session| {
-                item.on_click(
-                    cx.listener(move |this, _, window, cx| this.resume_here(&session, window, cx)),
-                )
+                item.on_click(cx.listener(move |this, _, window, cx| {
+                    if in_page {
+                        this.resume_in_page(&session, window, cx)
+                    } else {
+                        this.resume_here(&session, window, cx)
+                    }
+                }))
             })
             .into_any_element(),
         ];

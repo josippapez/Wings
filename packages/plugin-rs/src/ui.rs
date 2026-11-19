@@ -4,15 +4,16 @@
 //! next as long as it stays where it is, and a row of a list keeps them when it is keyed.
 
 use serde_json::{Map, Value, json};
-use std::{cell::{Cell, RefCell}, collections::HashMap, rc::Rc};
+use std::{borrow::Cow, cell::{Cell, RefCell}, collections::HashMap, rc::Rc};
 
 type Handler = Rc<dyn Fn(&Value)>;
 
 pub struct Node {
-    kind: &'static str,
+    // Owned only for a node `import` made from another page's JSON.
+    kind: Cow<'static, str>,
     key: Option<String>,
     props: Map<String, Value>,
-    handlers: Vec<(&'static str, Handler)>,
+    handlers: Vec<(Cow<'static, str>, Handler)>,
     children: Vec<Child>,
 }
 
@@ -35,7 +36,7 @@ impl Node {
     }
 
     pub fn new(kind: &'static str) -> Self {
-        Self { kind, key: None, props: Map::new(), handlers: Vec::new(), children: Vec::new() }
+        Self { kind: Cow::Borrowed(kind), key: None, props: Map::new(), handlers: Vec::new(), children: Vec::new() }
     }
 
     /// Names the node among its siblings, so it keeps its id when they change order or number.
@@ -52,8 +53,23 @@ impl Node {
 
     /// The handler the app calls for `name` (`onClick`, `onChange`...), with the event's payload.
     pub fn on(mut self, name: &'static str, handler: impl Fn(&Value) + 'static) -> Self {
-        self.handlers.push((name, Rc::new(handler)));
+        self.handlers.push((Cow::Borrowed(name), Rc::new(handler)));
         self
+    }
+
+    /// The key that clicks a `Button` while its page's tab has the keyboard, shown in its tooltip as the app's own
+    /// buttons show theirs. Written as `"cmd-shift-p"`: Cmd or Ctrl, maybe Alt and Shift, and a letter, a digit, a
+    /// punctuation key or F1 to F12. The app drops one it or a text field already answers to (Cmd-T, Cmd-W, Cmd-N,
+    /// Cmd-comma, Cmd-1 to 9, Cmd-A, Cmd-Z...) and Ctrl-Shift without Cmd, which are the app's keys off macOS.
+    /// Needs Wings 0.2.54.
+    pub fn shortcut(self, keys: &str) -> Self {
+        self.prop("shortcut", keys)
+    }
+
+    /// On a `Page`: the page sizes its own text, so while its tab has the keyboard Cmd-+, Cmd-- and Cmd-0 call
+    /// `on_step` with `"bigger"`, `"smaller"` or `"reset"` in place of changing the terminals' font. Needs Wings 0.2.54.
+    pub fn on_text_scale(self, on_step: impl Fn(&str) + 'static) -> Self {
+        self.on("onTextScale", move |payload| on_step(payload["step"].as_str().unwrap_or_default()))
     }
 
     pub fn child(mut self, node: Node) -> Self {
@@ -115,11 +131,11 @@ fn place(key: Option<&String>, index: usize) -> String {
 fn build(children: Vec<Child>, parent: u64, handlers: &mut HashMap<String, Handler>) -> Vec<Value> {
     let mut out = Vec::new();
     let mut node = |node: Node, parent: u64, index: usize, out: &mut Vec<Value>| {
-        let id = id_of(parent, &place(node.key.as_ref(), index), node.kind);
+        let id = id_of(parent, &place(node.key.as_ref(), index), &node.kind);
         let mut props = node.props;
         for (name, handler) in node.handlers {
             let named = format!("{id}:{name}");
-            props.insert(name.to_owned(), named.clone().into());
+            props.insert(name.into_owned(), named.clone().into());
             handlers.insert(named, handler);
         }
         out.push(json!({ "id": id, "type": node.kind, "props": props, "children": build(node.children, id, handlers) }));
@@ -142,6 +158,63 @@ fn build(children: Vec<Child>, parent: u64, handlers: &mut HashMap<String, Handl
 /// A node as the JSON the app reads, for a test to look at what a page drew. Its handlers are left behind.
 pub fn tree_json(node: Node) -> Value {
     build(vec![Child::Node(node)], 0, &mut HashMap::new()).remove(0)
+}
+
+/// The handlers of an `export`, by the name the exported JSON gives each.
+#[derive(Default)]
+pub struct Handlers(HashMap<String, Handler>);
+
+impl Handlers {
+    /// Runs the handler named `name` with the event's payload: false when this export has none by that name.
+    pub fn call(&self, name: &str, payload: &Value) -> bool {
+        let Some(handler) = self.0.get(name).cloned() else {
+            return false;
+        };
+        handler(payload);
+        true
+    }
+}
+
+/// Nodes drawn for another page of the plugin to show, as a chat draws its summary for a sidebar: the JSON the app reads,
+/// to send with `pages::tell`, and the handlers, which stay here. The other page shows the JSON with `import`, and hands
+/// each event back by its handler's name to be run with `Handlers::call`. A node's handler name is the same from one
+/// export to the next while the node keeps its place, so an event for an older export still reaches it.
+pub fn export(nodes: Vec<Node>) -> (Value, Handlers) {
+    let mut handlers = HashMap::new();
+    let tree = build(nodes.into_iter().map(Child::Node).collect(), 0, &mut handlers);
+    (Value::Array(tree), Handlers(handlers))
+}
+
+/// The nodes of an `export`'s JSON, to draw in this page: each event of theirs calls `on` with the handler's name and the
+/// payload, for the page that exported them to run. Each node is keyed by its exported id, so it keeps its place here as
+/// it does there.
+pub fn import(tree: &Value, on: &Rc<dyn Fn(&str, &Value)>) -> Vec<Node> {
+    tree.as_array().into_iter().flatten().filter_map(|node| imported(node, on)).collect()
+}
+
+fn imported(tree: &Value, on: &Rc<dyn Fn(&str, &Value)>) -> Option<Node> {
+    let kind = tree["type"].as_str().filter(|kind| !kind.starts_with('#'))?;
+    let id = tree["id"].as_u64()?;
+    let mut node = Node { kind: Cow::Owned(kind.to_owned()), key: Some(id.to_string()), props: Map::new(), handlers: Vec::new(), children: Vec::new() };
+    for (name, value) in tree["props"].as_object().into_iter().flatten() {
+        // `build` writes a handler as the string `<id>:<prop>`, which no other prop of this node holds.
+        match value.as_str().filter(|named| *named == format!("{id}:{name}")) {
+            Some(named) => {
+                let (on, named) = (on.clone(), named.to_owned());
+                node.handlers.push((Cow::Owned(name.clone()), Rc::new(move |payload: &Value| on(&named, payload))));
+            }
+            None => {
+                node.props.insert(name.clone(), value.clone());
+            }
+        }
+    }
+    for child in tree["children"].as_array().into_iter().flatten() {
+        match child["type"].as_str() {
+            Some("#text") => node.children.push(Child::Text(child["text"].as_str().unwrap_or_default().to_owned())),
+            _ => node.children.extend(imported(child, on).map(Child::Node)),
+        }
+    }
+    Some(node)
 }
 
 /// The page's JSON, as `wings.render` takes it. The handlers of this build replace the last one's.
@@ -471,4 +544,40 @@ pub fn combobox(o: Combobox, on_text: impl Fn(Option<String>) + 'static, on_pick
     });
     let nothing = (!done && found.is_empty() && !search.is_empty()).then(|| muted(o.empty).prop("size", "small"));
     stack().prop("gap", "s").child(field).maybe(options.or(nothing))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_imported_export_draws_the_same_and_hands_its_clicks_back_to_the_exported_handlers() {
+        let clicked = Rc::new(Cell::new(0));
+        let counted = clicked.clone();
+        let drawn = || stack().prop("gap", "s").child(text("Changes")).child(button("Stop", "ghost", false, || {}).key("task-1"));
+        let (tree, handlers) = export(vec![drawn().child(button("Open", "ghost", false, move || counted.set(counted.get() + 1)).key("open"))]);
+        // Drawn again in another page, it has the same nodes, props and text.
+        let heard = Rc::new(RefCell::new(Vec::new()));
+        let kept = heard.clone();
+        let on: Rc<dyn Fn(&str, &Value)> = Rc::new(move |name, payload| kept.borrow_mut().push((name.to_owned(), payload.clone())));
+        let shown = import(&tree, &on);
+        assert_eq!(shown.len(), 1);
+        let again = render(shown);
+        assert!(again.contains("\"Changes\"") && again.contains("\"Open\"") && again.contains("\"gap\":\"s\""), "{again}");
+        // A click there names the handler, which runs here.
+        let open = HANDLERS.with(|handlers| handlers.borrow().keys().filter(|name| name.ends_with(":onClick")).cloned().collect::<Vec<_>>());
+        for name in open {
+            dispatch(&name, json!({}));
+        }
+        let names: Vec<String> = heard.borrow().iter().map(|(name, _)| name.clone()).collect();
+        assert_eq!(names.len(), 2);
+        for name in &names {
+            assert!(handlers.call(name, &json!({})));
+        }
+        assert_eq!(clicked.get(), 1);
+        assert!(!handlers.call("1:onClick", &json!({})));
+        // The same nodes exported again name their handlers the same, so a click on an older drawing still lands.
+        let (_, later) = export(vec![drawn().child(button("Open", "ghost", false, || {}).key("open"))]);
+        assert!(names.iter().all(|name| later.call(name, &json!({}))));
+    }
 }

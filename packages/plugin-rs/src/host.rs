@@ -367,6 +367,19 @@ pub fn past_sessions_in(project_id: &str, query: &str, limit: u32) -> Pending<Re
     call("pastSessions", json!({ "projectId": project_id, "query": query, "limit": limit }))
 }
 
+/// `wings.openHistory`: Wings' Past sessions sheet over the project on screen, whose Resume continues a session of an
+/// agent the plugin's views resume (a view's `resumes`), of this project, in this tab's page. It answers once the sheet
+/// closes: `{ resume, cwd }` with the session you resumed here, or null. Needs a page shown as a tab and Wings 0.2.54.
+pub fn open_history_here() -> Pending<Result<Value, String>> {
+    call("openHistory", json!({ "resumeIn": "this tab" }))
+}
+
+/// `wings.openPane` running `command` with `args` in the folder `cwd`, in a new terminal tab that takes the place of this
+/// page's tab, which closes. Needs a page shown as a tab and Wings 0.2.54.
+pub fn open_pane_in_place(command: &str, args: &[&str], cwd: &str) -> Pending<Result<Value, String>> {
+    call("openPane", json!({ "command": command, "args": args, "cwd": cwd, "placement": "replace" }))
+}
+
 /// `wings.setAgent`: this tab's page runs an agent, which the sidebar's Agents lists with the terminals' agents: its
 /// state (`working`, `blocked`, `done` or `idle`), its name and what it does now. `None` takes it off the list. Needs
 /// `"agents"` in `contributes.ui` and Wings 0.2.34.
@@ -770,6 +783,13 @@ pub fn open_url(url: &str) {
 /// click. Needs Wings 0.2.42. The call goes out now.
 pub fn open_file(path: &str, line: Option<u32>) -> Pending<Result<Value, String>> {
     call("openFile", json!({ "path": path, "line": line }))
+}
+
+/// `wings.openLink`: opens what the plugins' `contributes.links` make of `text`, as a click on that text in a page would,
+/// like a pull request's address in the pr-tracker's tab. The whole text must be one link. Wings opens it only right after
+/// your click or key in the page, once per click. The call goes out now.
+pub fn open_link(text: &str) -> Pending<Result<Value, String>> {
+    call("openLink", json!({ "text": text }))
 }
 
 /// `wings.pickFiles` for pictures: the system's file picker, `multiple` or one, and each png, jpeg, gif or webp picked as

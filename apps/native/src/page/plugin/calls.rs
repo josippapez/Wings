@@ -125,14 +125,23 @@ fn timeout_ms(value: Option<f64>) -> Result<Option<u64>, String> {
 }
 
 impl Shared {
-    fn open_pane(&self, access: &Access, params: &Value, reply: Reply) -> Result<(), String> {
-        let placement = match params.get("placement") {
+    /// `openPane` from the frame `tab`, when that frame's page is shown as a tab: `"replace"` puts the new tab in that tab's
+    /// place.
+    fn open_pane(&self, access: &Access, params: &Value, tab: Option<u64>, reply: Reply) -> Result<(), String> {
+        const PLACEMENTS: &str = "openPane placement is \"tab\", \"right\", \"down\" or \"replace\"";
+        let mut placement = match params.get("placement") {
             None | Some(Value::Null) => "tab",
             Some(Value::String(value)) => value,
-            _ => return Err("openPane placement is \"tab\", \"right\" or \"down\"".into()),
+            _ => return Err(PLACEMENTS.into()),
         };
-        if !["tab", "right", "down"].contains(&placement) {
-            return Err("openPane placement is \"tab\", \"right\" or \"down\"".into());
+        if !["tab", "right", "down", "replace"].contains(&placement) {
+            return Err(PLACEMENTS.into());
+        }
+        let mut replace = None;
+        if placement == "replace" {
+            let frame = tab.ok_or("openPane placement \"replace\" works only from a page shown as a tab")?;
+            replace = Some((access.plugin.manifest.id.clone(), frame));
+            placement = "tab";
         }
         let text = |key: &str| match params.get(key) {
             None | Some(Value::Null) => Ok(None),
@@ -193,6 +202,7 @@ impl Shared {
             input: input.map(|line| line + "\r"),
             placement: placement.into(),
             claude_account,
+            replace,
         };
         let Some(name) = name else {
             access.env.open_pane(plan, reply);
@@ -217,6 +227,19 @@ impl Shared {
             return reply.err(format!("{} is turned off or not installed", self.config.id));
         };
         reply_if_error(reply.clone(), self.open_view(&access, &params, after, reply));
+    }
+
+    /// `openPane` and `openHistory`, which can act on the tab of the page that asks: `tab` is its frame when its page is
+    /// shown as a tab.
+    pub(super) fn tab_call(&self, method: &str, params: Value, tab: Option<u64>, reply: Reply) {
+        let Some(access) = self.access.clone() else {
+            return reply.err(format!("{} is turned off or not installed", self.config.id));
+        };
+        let called = match method {
+            "openPane" => self.open_pane(&access, &params, tab, reply.clone()),
+            _ => open_history(&access, &params, tab, reply.clone()),
+        };
+        reply_if_error(reply, called);
     }
 
     fn open_view(&self, access: &Access, params: &Value, after: Option<u64>, reply: Reply) -> Result<(), String> {
@@ -384,7 +407,6 @@ impl Shared {
             "disks" | "diskFind" | "diskUsage" | "diskUsageCancel" => {
                 self.disk_call(method, params, reply, access)
             }
-            "openPane" => reply_if_error(reply.clone(), self.open_pane(&access, &params, reply)),
             "openView" => reply_if_error(reply.clone(), self.open_view(&access, &params, None, reply)),
             "project" => reply.done(self.project(&access)),
             "closeView" => reply.done(self.close_view(&access, &params)),
@@ -447,6 +469,7 @@ impl Shared {
             "openUrl" => self.off_thread(reply, move |_| open_url(&access, &params)),
             // Right after your click or key, which the frame has checked, as a link in a page is clicked.
             "openFile" => self.off_thread(reply, move |_| open_file(&access, &params)),
+            "openLink" => self.off_thread(reply, move |_| open_link(&access, &params)),
             "notify" => {
                 self.off_thread(reply, move |_| this.notify(&access, &params));
             }
@@ -916,6 +939,24 @@ fn reply_if_error(reply: Reply, result: Result<(), String>) {
     }
 }
 
+/// `openHistory`: the Past sessions sheet, whose Resume continues a session in the tab of the page that asks, for the
+/// agents the plugin's views resume. `reply` waits for the sheet: `{ resume, cwd }`, or null.
+fn open_history(access: &Access, params: &Value, tab: Option<u64>, reply: Reply) -> Result<(), String> {
+    if params.get("resumeIn").and_then(Value::as_str) != Some("this tab") {
+        return Err("openHistory resumeIn is \"this tab\"".into());
+    }
+    tab.ok_or("openHistory works only from a page shown as a tab")?;
+    let views = &access.plugin.manifest.contributes.views;
+    let mut agents: Vec<String> = views.iter().flat_map(|view| view.resumes.iter().cloned()).collect();
+    agents.sort();
+    agents.dedup();
+    if agents.is_empty() {
+        return Err(format!("{} has no view that resumes sessions", access.plugin.manifest.id));
+    }
+    access.env.open_history(agents, reply);
+    Ok(())
+}
+
 /// What Claude Code last told `wings statusline`, which the app keeps.
 fn statusline(access: &Access) -> Result<String, String> {
     if !may_read_statusline(&access.plugin) {
@@ -999,8 +1040,33 @@ fn open_file(access: &Access, params: &Value) -> Result<String, String> {
     // Where it really is, past `..` and links, so the check below is of the file that opens.
     let file = asked.canonicalize().ok().filter(|file| file.is_file()).ok_or_else(|| format!("{path} isn't a file"))?;
     let folder = file.parent().ok_or_else(|| format!("{path} isn't a file"))?;
-    wings_plugins::panes::pane_cwd(folder, &access.env.projects(), None).map_err(|_| format!("{path} isn't inside any of your Wings projects"))?;
+    if !is_claude_file(&file, &access.env.claude_dirs()) {
+        wings_plugins::panes::pane_cwd(folder, &access.env.projects(), None).map_err(|_| format!("{path} isn't inside any of your Wings projects"))?;
+    }
     access.env.open_file(&file, line)?;
+    Ok("null".into())
+}
+
+/// Claude Code's own files a page may open outside your projects: `CLAUDE.md`, `settings.json` and `settings.local.json`
+/// in an account's folder, and the memories (`.md`) in `projects/<project>/memory/`. `file` is already past `..` and
+/// links, and so are the folders, so a link can't lead out of them.
+pub(super) fn is_claude_file(file: &std::path::Path, claude_dirs: &[std::path::PathBuf]) -> bool {
+    claude_dirs.iter().filter_map(|dir| dir.canonicalize().ok()).any(|dir| {
+        let Ok(inside) = file.strip_prefix(&dir) else { return false };
+        let parts: Vec<_> = inside.components().map(|part| part.as_os_str().to_str().unwrap_or_default()).collect();
+        match parts[..] {
+            [name] => ["CLAUDE.md", "settings.json", "settings.local.json"].contains(&name),
+            [projects, _, memory, ..] => projects == "projects" && memory == "memory" && file.extension().is_some_and(|ext| ext == "md"),
+            _ => false,
+        }
+    })
+}
+
+/// `openLink`: what a link in a page opens for `text`, as a click on it would: one of the plugins' `contributes.links`
+/// must match the whole text. Right after your click or key, which the frame has checked.
+fn open_link(access: &Access, params: &Value) -> Result<String, String> {
+    let text = params.get("text").and_then(Value::as_str).filter(|text| !text.is_empty() && text.len() <= 2048).ok_or("openLink needs the link's text")?;
+    access.env.open_link(text)?;
     Ok("null".into())
 }
 

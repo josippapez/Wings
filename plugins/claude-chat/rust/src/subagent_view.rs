@@ -24,11 +24,11 @@ fn page(c: &Chat, tab: &Tab) -> Node {
     if tab.sidebar && tab.session.is_empty() {
         let idle = empty("No subagent open", "Click a subagent in a chat, in its side panel or on its call, to read it here and message it.");
         let body = Node::new("Slot").prop("name", "body").child(sidebar_header(tab)).child(idle);
-        return Node::new("Page").prop("flush", true).child(body);
+        return Node::new("Page").prop("flush", true).on_text_scale(crate::prefs::step_text_size).child(body);
     }
     let header = if tab.sidebar { sidebar_header(tab) } else { header(tab) };
     let body = Node::new("Slot").prop("name", "body").child(header).child(conversation(c, tab)).child(composer(c, tab));
-    Node::new("Page").prop("flush", true).child(body)
+    Node::new("Page").prop("flush", true).on_text_scale(crate::prefs::step_text_size).child(body)
 }
 
 /// How the subagent stands, as a muted line: running since, done in how long, or not running with its chat closed.

@@ -112,6 +112,11 @@ pub(super) enum UiEvent {
         plan: OpenView,
         reply: crate::page::runtime::Reply,
     },
+    /// A page's `openHistory`: the Past sessions sheet, resuming sessions of `agents` in the page.
+    OpenHistory {
+        agents: Vec<String>,
+        reply: crate::page::runtime::Reply,
+    },
     CloseView {
         plugin: String,
         view: String,
@@ -164,6 +169,8 @@ pub(super) enum UiEvent {
         file: PathBuf,
         line: Option<u32>,
     },
+    /// A page's `openLink`: what the plugins' links make of the text.
+    OpenLink(String),
     ProjectSection {
         plugin: String,
         project: String,
@@ -586,6 +593,19 @@ impl Env for AppEnv {
         }
     }
 
+    fn open_history(&self, agents: Vec<String>, reply: crate::page::runtime::Reply) {
+        if self
+            .events
+            .try_send(UiEvent::OpenHistory {
+                agents,
+                reply: reply.clone(),
+            })
+            .is_err()
+        {
+            reply.err("The Wings window is closed or busy".into());
+        }
+    }
+
     fn open_view(&self, plan: OpenView, reply: crate::page::runtime::Reply) {
         if self
             .events
@@ -752,6 +772,10 @@ impl Env for AppEnv {
         self.events
             .try_send(UiEvent::OpenFile { file: file.to_owned(), line })
             .map_err(|_| "The Wings window is closed or busy".into())
+    }
+
+    fn open_link(&self, text: &str) -> Result<(), String> {
+        self.events.try_send(UiEvent::OpenLink(text.to_owned())).map_err(|_| "The Wings window is closed or busy".into())
     }
 
     fn notify(&self, notification: Notification) -> Result<(), String> {
@@ -982,6 +1006,7 @@ impl Workspace {
             }
             UiEvent::OpenDiff(view) => self.open_diff_view(view, window, cx),
             UiEvent::OpenFile { file, line } => self.open_file_in_editor(file, line, cx),
+            UiEvent::OpenLink(text) => self.open_link_text(&text, window, cx),
             UiEvent::UpdateDiff { plugin, id, update } => {
                 if let Some((viewer, _)) = &self.plugin_ui.diff {
                     let current = &viewer.read(cx).view;
@@ -1007,6 +1032,7 @@ impl Workspace {
             UiEvent::OpenPane { plan, reply } => {
                 self.open_plugin_pane(plan, reply, window, cx);
             }
+            UiEvent::OpenHistory { agents, reply } => self.open_history_resuming(agents, reply, window, cx),
             UiEvent::OpenView { plan, reply } => {
                 if plan.place == "sidebar" {
                     let shown = self.open_sidebar_from_plugin(&plan.plugin, &plan.id, cx);
@@ -1160,9 +1186,17 @@ impl Workspace {
         window: &mut gpui::Window,
         cx: &mut Context<Self>,
     ) {
+        let replace = plan.replace.clone();
         match self.place_plugin_pane(plan, window, cx) {
             Ok((pane, tab)) => {
                 self.show(tab, window, cx);
+                // The page's tab goes once its terminal is on screen, as a terminal goes when its session moves to a chat.
+                let replaced = replace.and_then(|(plugin, frame)| {
+                    self.plugin_tabs.iter().position(|tab| tab.plugin == plugin && tab.state.frame() == Some(frame))
+                });
+                if let Some(index) = replaced {
+                    self.close_plugin_tab(index, window, cx);
+                }
                 self.sync_plugins(cx);
                 reply.ok(serde_json::json!({ "paneId": pane.to_string() }).to_string());
             }

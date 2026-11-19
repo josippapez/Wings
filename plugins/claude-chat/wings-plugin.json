@@ -1,8 +1,8 @@
 {
   "id": "claude-chat",
   "name": "Claude chat",
-  "version": "0.24.0",
-  "minWingsVersion": "0.2.53",
+  "version": "0.25.0",
+  "minWingsVersion": "0.2.54",
   "description": "Experimental. Runs Claude Code as a chat in a tab instead of a terminal: messages, tool calls and permission prompts as cards, with Enter to send. Open a new chat from the + menu, or move a Claude terminal into one with its Chat badge.",
   "api": 1,
   "main": "dist/native/main.wasm",
@@ -74,6 +74,12 @@
         "title": "Claude Code pane",
         "icon": "message",
         "page": "dist/native/pane.wasm"
+      },
+      {
+        "id": "session",
+        "title": "Claude session",
+        "icon": "message",
+        "page": "dist/native/session.wasm"
       }
     ],
     "views": [

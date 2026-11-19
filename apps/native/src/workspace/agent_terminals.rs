@@ -1027,12 +1027,12 @@ impl Workspace {
 
     /// Tells the page of each plugin tab whose agent's terminals show there which they are, what each was opened to run
     /// and whether it still runs (`terminals`). A page hears the list again only when it changed.
+    ///
+    /// The sidebar pages of the plugin of the tab on screen hear that tab's list too, and the others an empty one: the
+    /// chat's session sidebar shows the terminals of the chat in front, where the chat's page no longer does.
     pub(super) fn sync_page_terminals(&self, cx: &mut Context<Self>) {
-        for tab in &self.plugin_tabs {
-            if !self.shows_terminals(tab.id) {
-                continue;
-            }
-            let panes = self.page_terminals_of(tab.id);
+        let listed = |tab: usize| {
+            let panes = self.page_terminals_of(tab);
             let list: Vec<serde_json::Value> = panes
                 .iter()
                 .map(|pane| {
@@ -1041,8 +1041,31 @@ impl Workspace {
                     serde_json::json!({ "paneId": pane.to_string(), "title": title, "running": running })
                 })
                 .collect();
-            let json = serde_json::Value::Array(list).to_string();
+            (panes, serde_json::Value::Array(list).to_string())
+        };
+        for tab in &self.plugin_tabs {
+            if !self.shows_terminals(tab.id) {
+                continue;
+            }
+            let (panes, json) = listed(tab.id);
             tab.page.update(cx, |page, cx| page.set_terminals(panes, json, cx));
+        }
+        let front = match self.active {
+            Active::Plugin(id) => self.plugin_tabs.iter().find(|tab| tab.id == id && self.shows_terminals(id)),
+            _ => None,
+        };
+        for ((plugin, _), page) in &self.sidebar_pages {
+            let shows = self.plugins.iter().any(|installed| {
+                installed.id == *plugin && installed.plugin.manifest.contributes.ui.iter().any(|ui| ui == "terminals")
+            });
+            if !shows {
+                continue;
+            }
+            let (panes, json) = match front.filter(|tab| tab.plugin == *plugin) {
+                Some(tab) => listed(tab.id),
+                None => (Vec::new(), "[]".to_owned()),
+            };
+            page.update(cx, |page, cx| page.set_terminals(panes, json, cx));
         }
     }
 

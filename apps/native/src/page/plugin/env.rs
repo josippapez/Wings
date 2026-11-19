@@ -55,6 +55,8 @@ pub struct OpenPane {
     pub placement: String,
     /// The Claude Code account the pane's shell runs under instead of its project's (`openPane`'s `claudeAccount`).
     pub claude_account: Option<AccountPick>,
+    /// The plugin and frame of the page whose tab the new tab takes the place of (`openPane`'s `"replace"`).
+    pub replace: Option<(String, u64)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -352,6 +354,12 @@ pub trait Env: Send + Sync + 'static {
     fn focus_pane(&self, _pane: &str, reply: crate::page::runtime::Reply) {
         reply.err("Focusing panes isn't available".into());
     }
+    /// Opens the Past sessions sheet over the project on screen, whose Resume continues a session of one of `agents` (as
+    /// a view's `resumes` names them) in the page that asked: `reply` gets `{ resume, cwd }` then, or null once the sheet
+    /// closes otherwise.
+    fn open_history(&self, _agents: Vec<String>, reply: crate::page::runtime::Reply) {
+        reply.err("Past sessions aren't available in this host".into());
+    }
     /// The Claude Code sessions of the project in `project`, most recent first, matching `query`: each its `id`,
     /// `title`, `firstPrompt`, `cwd`, `gitBranch`, `lastActiveMs` and `messages`. Reads transcripts: off the frame's thread.
     fn past_sessions(&self, _project: &std::path::Path, _query: &str, _limit: usize) -> Vec<serde_json::Value> {
@@ -481,6 +489,11 @@ pub trait Env: Send + Sync + 'static {
     /// one of your projects and that you just clicked.
     fn open_file(&self, _file: &std::path::Path, _line: Option<u32>) -> Result<(), String> {
         Err("Opening a file isn't available in this host".into())
+    }
+    /// Opens what the plugins' links make of `text`, as a click on that text in a page would. The host has checked that you
+    /// just clicked.
+    fn open_link(&self, _text: &str) -> Result<(), String> {
+        Err("Opening a link isn't available in this host".into())
     }
     /// Shows a notification and keeps it in the inbox.
     fn notify(&self, notification: Notification) -> Result<(), String>;

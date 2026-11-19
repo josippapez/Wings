@@ -47,6 +47,8 @@ mod plugin_modal;
 mod plugin_tab_place;
 #[cfg(all(test, feature = "test-support"))]
 mod plugin_tests;
+#[cfg(all(test, feature = "test-support"))]
+mod page_keys_tests;
 mod plugin_ui;
 mod plugin_updates;
 mod plugin_windows;
@@ -680,6 +682,20 @@ impl Workspace {
         this
     }
 
+    /// The page of the plugin tab whose tab itself has the keyboard, as it does once the tab opens. The page isn't on
+    /// the keyboard's way then, so its shortcuts and font keys come here; with the keyboard in the page it takes them.
+    fn page_on_tab(&self, window: &Window) -> Option<Entity<PageView>> {
+        let Active::Plugin(id) = self.active else {
+            return None;
+        };
+        let tab = self.plugin_tabs.iter().find(|tab| tab.id == id)?;
+        tab.focus.is_focused(window).then(|| tab.page.clone())
+    }
+
+    fn page_scales_text(&self, step: &str, window: &Window, cx: &gpui::App) -> bool {
+        self.page_on_tab(window).is_some_and(|page| page.read(cx).scale_text(step))
+    }
+
     /// Every terminal picks the new size up on its next frame and refits its shell.
     fn set_font_size(&mut self, size: f32, cx: &mut Context<Self>) {
         cx.set_global(TerminalFont(size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE)));
@@ -1060,14 +1076,26 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &FocusDown, window, cx| {
                 this.focus_toward(Toward::Down, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &IncreaseFontSize, _, cx| {
-                this.set_font_size(font_size(cx) + 1.0, cx)
+            .on_action(cx.listener(|this, _: &IncreaseFontSize, window, cx| {
+                if !this.page_scales_text("bigger", window, cx) {
+                    this.set_font_size(font_size(cx) + 1.0, cx)
+                }
             }))
-            .on_action(cx.listener(|this, _: &DecreaseFontSize, _, cx| {
-                this.set_font_size(font_size(cx) - 1.0, cx)
+            .on_action(cx.listener(|this, _: &DecreaseFontSize, window, cx| {
+                if !this.page_scales_text("smaller", window, cx) {
+                    this.set_font_size(font_size(cx) - 1.0, cx)
+                }
             }))
-            .on_action(cx.listener(|this, _: &ResetFontSize, _, cx| {
-                this.set_font_size(DEFAULT_FONT_SIZE, cx)
+            .on_action(cx.listener(|this, _: &ResetFontSize, window, cx| {
+                if !this.page_scales_text("reset", window, cx) {
+                    this.set_font_size(DEFAULT_FONT_SIZE, cx)
+                }
+            }))
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if this.page_on_tab(window).is_some_and(|page| page.read(cx).press_shortcut(&event.keystroke)) {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                }
             }))
             .on_action(|_: &CloseWindow, _, cx| cx.quit())
             .on_action(|_: &Minimize, window, _| window.minimize_window())
@@ -1141,11 +1169,6 @@ impl Render for Workspace {
                         agent_terminals::FLOATS,
                         self.float_layer(cx),
                     ))
-                    // The terminals a chat's agent opened, where its page shows them.
-                    .child(ui::slot_layer(
-                        crate::page::TERMINALS,
-                        self.page_terminals_layer(cx),
-                    ))
                     .child(ui::slot_layer(
                         QUICK,
                         self.quick_layer(cx)
@@ -1157,6 +1180,12 @@ impl Render for Workspace {
                             .collect(),
                     ))
                     .children(right)
+                    // The terminals a chat's agent opened, where its session sidebar shows them: after the sidebar, so
+                    // they draw over its card and find the places it left in this draw.
+                    .child(ui::slot_layer(
+                        crate::page::TERMINALS,
+                        self.page_terminals_layer(cx),
+                    ))
                     .children(self.sidebar_diff(window.viewport_size().width, cx))
                     .children(self.sidebar_peek(cx)),
             )

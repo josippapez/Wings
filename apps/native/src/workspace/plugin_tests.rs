@@ -4371,6 +4371,52 @@ fn a_chat_tabs_agent_opens_its_terminals_in_the_tabs_page() {
     window.read(|w, _| assert!(w.panes.contains_key(&terminal) && in_a_tab(w, terminal)));
 }
 
+/// A page that saves the terminals Wings tells it of, under `key`.
+fn terminals_page_saving(key: &'static str) -> String {
+    fake::script("page", move || {
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            if let Hear::Deliver("terminals", _, text) = hear {
+                cx.save(key, &said(text));
+            }
+        }
+    })
+}
+
+/// The chat's session sidebar shows the terminals of the chat in front: a sidebar of the plugin hears the list of its tab
+/// on screen, and an empty one once another tab is in front.
+#[test]
+fn a_plugins_sidebar_hears_the_terminals_of_its_tab_in_front() {
+    let data = Data::temp();
+    let contributes = json!({ "ui": ["agents", "terminals"],
+        "views": [{ "id": "chat", "title": "Chat", "page": "dist/chat.html", "opens": ["tab"], "multiple": true }],
+        "sidebars": [{ "id": "side", "title": "Side", "page": "dist/side.html" }] });
+    data.install_script("chatty", json!({ "contributes": contributes }), &fake::idle("main"),
+        &[("chat", &terminals_page()), ("side", &terminals_page_saving("side-terminals"))], "chatty-scope");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let chat = window.update(|w, window, cx| {
+        assert!(w.open_plugin_view("chatty", "chat", None, window, cx));
+        assert!(w.open_sidebar_from_plugin("chatty", "side", cx));
+        w.plugin_tabs.iter().find(|tab| tab.plugin == "chatty").unwrap().id
+    });
+    let terminal = window.update(|w, window, cx| {
+        let plan = wings_connect::panes::OpenPlan {
+            space_id: w.config.project.to_string_lossy().into_owned(),
+            cwd: None,
+            input: Some("make all".into()),
+            run: false,
+            next_to: Some(format!("tab-{chat}")),
+        };
+        w.claude_open_pane(plan, window, cx).unwrap().pane_id
+    });
+    until(&app, &mut window, "the sidebar wasn't told of the chat's terminal", |_| {
+        data.saved("chatty", "chatty-scope", "side-terminals").is_some_and(|list| list[0]["paneId"] == terminal.as_str())
+    });
+    window.update(|w, window, cx| w.new_terminal(window, cx));
+    until(&app, &mut window, "the sidebar still lists the chat's terminal behind another tab", |_| {
+        data.saved("chatty", "chatty-scope", "side-terminals") == Some(json!([]))
+    });
+}
+
 /// A plugin with an issue view and two links: keys that open it, and local addresses it may open in the browser.
 fn install_tracker(data: &Data, main: &str) {
     let views = json!([{ "id": "issue", "title": "Issue", "page": "dist/issue.html", "opens": ["tab"], "button": false }]);

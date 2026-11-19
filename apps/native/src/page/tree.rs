@@ -207,6 +207,9 @@ pub struct Page {
     pub toolbar: Vec<Node>,
     pub flush: bool,
     pub body: Vec<Node>,
+    /// `onTextScale`: the page sizes its own text, so Cmd-+, Cmd-- and Cmd-0 send it `{ "step": "bigger" | "smaller" |
+    /// "reset" }` while its tab has the keyboard, in place of changing the terminals' font.
+    pub on_text_scale: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -312,9 +315,91 @@ pub struct Button {
     /// What to send back to the page when it's clicked. A disabled button has none.
     pub on_click: Option<String>,
     pub on_key_down: Option<String>,
+    /// The key that clicks it while its page's tab has the keyboard, shown in its tooltip.
+    pub shortcut: Option<Shortcut>,
     /// A dim second line under the text of an item of a `PopupMenu`.
     pub description: Option<String>,
     pub children: Vec<Node>,
+}
+
+/// A `Button`'s `shortcut`, as `"cmd-shift-p"` writes it: Cmd or Ctrl and maybe Alt and Shift, with a letter, a digit, a
+/// punctuation key or F1 to F12. A key the app or a text field answers to is refused, so a page can't take one away.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Shortcut {
+    pub cmd: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    /// As GPUI names the key: lower case, `"f5"`.
+    pub key: String,
+}
+
+/// The app's keys (`actions.rs`) and a text field's, as `Shortcut::canonical` writes them, with Cmd-N kept for a new
+/// window as on macOS. Elsewhere the app's keys are Ctrl-Shift, which `Shortcut::parse` refuses as a whole.
+const RESERVED: &[&str] = &[
+    "cmd-q", "cmd-w", "shift-cmd-w", "cmd-t", "cmd-n", "cmd-,", "ctrl-,", "cmd-[", "cmd-]", "alt-cmd-[", "alt-cmd-]",
+    "cmd-d", "shift-cmd-d", "cmd-f", "cmd-c", "cmd-v", "cmd-x", "cmd-a", "cmd-z", "shift-cmd-z", "cmd-=",
+    "shift-cmd-=", "cmd--", "cmd-0", "cmd-1", "cmd-2", "cmd-3", "cmd-4", "cmd-5", "cmd-6", "cmd-7", "cmd-8", "cmd-9",
+    "cmd-b", "cmd-\\", "cmd-k", "ctrl-`", "cmd-h", "alt-cmd-h", "cmd-m", "ctrl-cmd-f", "ctrl-a", "ctrl-c", "ctrl-v",
+    "ctrl-x", "ctrl-z",
+];
+
+impl Shortcut {
+    pub fn parse(text: &str) -> Option<Self> {
+        let text = text.trim().to_ascii_lowercase();
+        let (mods, key) = match text.strip_suffix("--") {
+            Some(mods) => (mods, "-"),
+            None => text.rsplit_once('-')?,
+        };
+        let mut shortcut = Self { cmd: false, ctrl: false, alt: false, shift: false, key: key.to_owned() };
+        for part in mods.split('-') {
+            match part {
+                "cmd" => shortcut.cmd = true,
+                "ctrl" => shortcut.ctrl = true,
+                "alt" => shortcut.alt = true,
+                "shift" => shortcut.shift = true,
+                _ => return None,
+            }
+        }
+        let plain = matches!(key.as_bytes(), [b'a'..=b'z' | b'0'..=b'9' | b'`' | b'-' | b'=' | b'[' | b']' | b'\\' | b';' | b'\'' | b',' | b'.' | b'/']);
+        let function = key.strip_prefix('f').and_then(|n| n.parse::<u8>().ok()).is_some_and(|n| (1..=12).contains(&n));
+        let usable = (plain || function)
+            && (shortcut.cmd || shortcut.ctrl)
+            && !(shortcut.ctrl && shortcut.shift && !shortcut.cmd)
+            && !RESERVED.contains(&shortcut.canonical().as_str());
+        usable.then_some(shortcut)
+    }
+
+    /// GPUI's order: `ctrl-alt-shift-cmd-key`.
+    pub fn canonical(&self) -> String {
+        let flag = |on: bool, name: &'static str| if on { name } else { "" };
+        format!("{}{}{}{}{}", flag(self.ctrl, "ctrl-"), flag(self.alt, "alt-"), flag(self.shift, "shift-"), flag(self.cmd, "cmd-"), self.key)
+    }
+
+    /// As the app writes a shortcut in a tooltip: "⇧⌘P" on macOS, "Ctrl+Shift+P" elsewhere.
+    pub fn label(&self) -> String {
+        let key = self.key.to_uppercase();
+        if cfg!(target_os = "macos") {
+            let flag = |on: bool, mark: &'static str| if on { mark } else { "" };
+            format!("{}{}{}{}{key}", flag(self.ctrl, "⌃"), flag(self.alt, "⌥"), flag(self.shift, "⇧"), flag(self.cmd, "⌘"))
+        } else {
+            self.joined(["Ctrl", "Alt", "Shift", "Super"], &key)
+        }
+    }
+
+    /// As `aria-keyshortcuts` writes it, for a screen reader.
+    pub fn aria(&self) -> String {
+        self.joined(["Control", "Alt", "Shift", "Meta"], &self.key.to_uppercase())
+    }
+
+    fn joined(&self, names: [&str; 4], key: &str) -> String {
+        [(self.ctrl, names[0]), (self.alt, names[1]), (self.shift, names[2]), (self.cmd, names[3])]
+            .into_iter()
+            .filter_map(|(on, name)| on.then_some(name))
+            .chain([key])
+            .collect::<Vec<_>>()
+            .join("+")
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -396,6 +481,9 @@ pub struct Dot {
     pub tone: Option<Tone>,
     /// `0xRRGGBB`, a colour from the page's data, which wins over the tone.
     pub color: Option<u32>,
+    /// `state`: an agent's state, drawn as the app's own status dot (a spinning ring while working), which wins
+    /// over both, so an agent's page names its state as a terminal pane's header does.
+    pub state: Option<crate::agents::AgentState>,
 }
 
 /// A column that scrolls and fills what is left of its parent.
@@ -1180,6 +1268,7 @@ impl Walk {
                     toolbar: slots.take("toolbar"),
                     flush: on("flush"),
                     body: slots.take("body"),
+                    on_text_scale: handler("onTextScale"),
                 })
             }
             "Toolbar" => {
@@ -1276,6 +1365,7 @@ impl Walk {
                 round: on("round"),
                 on_click: handler("onClick"),
                 on_key_down: handler("onKeyDown"),
+                shortcut: str_prop(&props, "shortcut").and_then(Shortcut::parse),
                 description: str_prop(&props, "description")
                     .filter(|text| !text.is_empty())
                     .map(|text| cut(text.to_owned())),
@@ -1344,6 +1434,13 @@ impl Walk {
                 color: number(&props, "color")
                     .filter(|color| (0.0..=16_777_215.0).contains(color))
                     .map(|color| color as u32),
+                state: match str_prop(&props, "state") {
+                    Some("working") => Some(crate::agents::AgentState::Working),
+                    Some("blocked") => Some(crate::agents::AgentState::Blocked),
+                    Some("done") => Some(crate::agents::AgentState::Done),
+                    Some("idle") => Some(crate::agents::AgentState::Idle),
+                    _ => None,
+                },
             }),
             "Scroll" => Node::Scroll(Scroll {
                 id,
@@ -1573,6 +1670,7 @@ impl Walk {
                     round: false,
                     on_click: handler("onClick"),
                     on_key_down: handler("onKeyDown"),
+                    shortcut: str_prop(&props, "shortcut").and_then(Shortcut::parse),
                     description: None,
                     children: parts(children),
                 },
@@ -2180,6 +2278,17 @@ mod tests {
         assert_eq!(dot(json!({"tone":7})), None);
     }
 
+    #[test]
+    fn a_dot_can_show_an_agents_state() {
+        let state = |props| match parse_one(json!({"id":1,"type":"Dot","props":props,"children":[]})) {
+            Node::Dot(dot) => dot.state,
+            _ => panic!("a dot"),
+        };
+        assert_eq!(state(json!({"state":"working"})), Some(crate::agents::AgentState::Working));
+        assert_eq!(state(json!({"state":"blocked"})), Some(crate::agents::AgentState::Blocked));
+        assert_eq!(state(json!({"state":"asleep"})), None);
+    }
+
     fn gauge(props: Value, children: Value) -> Gauge {
         match parse_one(json!({"id":1,"type":"Gauge","props":props,"children":children})) {
             Node::Gauge(gauge) => gauge,
@@ -2630,5 +2739,38 @@ mod tests {
         assert_eq!(sheet.body.len(), 2);
         // What a reader would see has its title, so a page that waits on it finds it.
         assert_eq!(parsed.text(), "Past sessions In shop. Fix the checkoutSplit the cart");
+    }
+
+    /// A shortcut the app or a text field answers to is dropped, so the page's button can't take it away from them.
+    #[test]
+    fn a_buttons_shortcut_is_kept_only_when_no_app_or_text_key_has_it() {
+        let shortcut = |value: &str| {
+            let parsed = tree(json!([button(json!({"shortcut": value, "onClick": "2:onClick"}))])).unwrap();
+            let Node::Button(button) = &parsed.children[0] else { panic!("a button") };
+            button.shortcut.clone()
+        };
+        let kept = shortcut("Cmd-Shift-P").expect("a free shortcut is kept");
+        assert_eq!((kept.canonical(), kept.aria()), ("shift-cmd-p".into(), "Shift+Meta+P".into()));
+        assert!(shortcut("cmd-alt-b").is_some() && shortcut("cmd-shift-[").is_some());
+        for refused in [
+            // The app's: quit, close, new tab, settings, tab by number, font size, the sidebar, the palette.
+            "cmd-q", "cmd-w", "cmd-t", "cmd-n", "cmd-,", "cmd-3", "cmd-=", "cmd--", "cmd-0", "cmd-b", "cmd-k",
+            "cmd-shift-d", "ctrl-shift-t",
+            // A text field's.
+            "cmd-a", "cmd-z", "cmd-shift-z",
+            // Plain keys and keys that move a caret belong to what has the keyboard.
+            "p", "shift-p", "cmd-left", "cmd-enter", "cmd-backspace",
+            // Not a key.
+            "cmd-", "cmd-shift", "hyper-p", "",
+        ] {
+            assert_eq!(shortcut(refused), None, "{refused:?} was kept");
+        }
+    }
+
+    #[test]
+    fn a_page_that_sizes_its_own_text_names_its_handler() {
+        let parsed = tree(json!([{"id":1,"type":"Page","props":{"onTextScale":"1:onTextScale"},"children":[]}])).unwrap();
+        let Node::Page(page) = &parsed.children[0] else { panic!("a page") };
+        assert_eq!(page.on_text_scale.as_deref(), Some("1:onTextScale"));
     }
 }

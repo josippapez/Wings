@@ -113,6 +113,7 @@ impl Workspace {
             input: Some(input),
             placement: "tab".into(),
             claude_account: None,
+            replace: None,
         };
         let (reply, _answer) = Reply::channel();
         self.open_plugin_pane(plan, reply, window, cx);
