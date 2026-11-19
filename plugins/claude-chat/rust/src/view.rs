@@ -56,7 +56,9 @@ fn chat_page(c: &Chat) -> Node {
     // The prompt rail sits over them against the column's left, where the app has room for it.
     let rail = crate::rail::Rail::of(&c.session.items, &built, crate::rail::state_at());
     let body = crate::rail::watch(body, &rail, last);
-    let main: Vec<Node> = crate::rail::marks(c, &rail).into_iter().chain([body]).chain(todo_card(c)).chain([composer(c)]).collect();
+    // The rail goes down to the checklist and the message box, not past them: it is laid over the conversation alone.
+    let conversation = stack().prop("fill", true).prop("gap", "none").children(crate::rail::marks(c, &rail)).child(body);
+    let main: Vec<Node> = [conversation].into_iter().chain(todo_card(c)).chain([composer(c)]).collect();
     // The panel floats over the right of the tab and shows by default; only the header's button puts it away and brings it
     // back, also where it covers the conversation in a narrow tab. A panel left out leaves its terminals out with it.
     let shown = side_shown(c);

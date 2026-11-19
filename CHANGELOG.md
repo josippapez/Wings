@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.49 · 2026-11-19
+
+- **Claude chat's prompt rail stops above the message box** instead of running down beside it.
+- **A long prompt rail scrolls** rather than squeeze every tick into the window: ticks stay at least 12 points apart.
+- **The rail's mark stays on the message you're reading** while older messages load above it.
+
 ## 0.2.48 · 2026-11-19
 
 - **Claude chat shows a long session all the way back.** Scroll up and older messages keep loading, where it used to stop at "Older messages aren't shown here". Scroll back down and newer ones return. **Jump to the latest**, over the message box, or sending a message takes you straight to the end.

@@ -14,7 +14,7 @@ pub const PREVIEW_CHARS: usize = 400;
 
 /// How far apart ticks are when there is room, and the closest they get before the rail scrolls.
 pub const PITCH_MAX: f32 = 20.0;
-pub const PITCH_MIN: f32 = 6.0;
+pub const PITCH_MIN: f32 = 12.0;
 /// Room above the first tick and below the last.
 pub const PAD_Y: f32 = 8.0;
 /// Room left of the ticks.
@@ -87,8 +87,8 @@ pub(super) fn parse(id: u64, props: &Map<String, Value>) -> PromptRail {
     }
 }
 
-/// How far apart the ticks are in a rail `height` tall holding `count`: 20 points when they fit, closer down to 6 when
-/// they don't.
+/// How far apart the ticks are in a rail `height` tall holding `count`: 20 points when they fit, closer down to 12 when
+/// they don't, and then the rail scrolls rather than cram them in.
 pub fn pitch(count: usize, height: f32) -> f32 {
     if count == 0 {
         return PITCH_MAX;
@@ -179,7 +179,7 @@ mod tests {
     fn ticks_sit_20_points_apart_and_close_up_to_6_before_the_rail_scrolls() {
         assert_eq!(pitch(10, 600.0), 20.0);
         assert_eq!(pitch(40, 600.0), (600.0 - 2.0 * PAD_Y) / 40.0);
-        assert_eq!(pitch(500, 600.0), 6.0);
+        assert_eq!(pitch(500, 600.0), 12.0);
         assert_eq!(max_scroll(10, 20.0, 600.0), 0.0);
         assert_eq!(max_scroll(500, 6.0, 600.0), 2.0 * PAD_Y + 3000.0 - 600.0);
     }

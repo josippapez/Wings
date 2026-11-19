@@ -33,7 +33,8 @@ struct State {
     jump: Option<usize>,
     /// Each click has the next one, so Wings scrolls once for each.
     token: u64,
-    /// What Wings last said: none before it has said, then the position in the tracked prompts, or none above them all.
+    /// What Wings last said: none before it has said, then the prompt the view has reached, as its item's index, or none
+    /// above them all. Kept by item rather than by its place among those drawn, which moves as older ones load.
     at: Option<Option<usize>>,
     /// "Jump to the latest" asked for the end of the conversation, with `token`.
     end: bool,
@@ -43,9 +44,9 @@ thread_local! {
     static STATE: RefCell<State> = RefCell::new(State::default());
 }
 
-/// What Wings says of the tracked prompts: the position of the last whose top the view has reached.
-pub fn tracked(at: Option<usize>) {
-    STATE.with(|state| state.borrow_mut().at = Some(at));
+/// What Wings says of the tracked prompts: the last whose top the view has reached, as its item's index.
+pub fn tracked(item: Option<usize>) {
+    STATE.with(|state| state.borrow_mut().at = Some(item));
 }
 
 /// What Wings last said of the view, for `Rail::of`.
@@ -77,15 +78,16 @@ pub struct Rail {
 }
 
 impl Rail {
+    /// `at` is what Wings last said (`tracked`).
     pub fn of(items: &[Item], built: &[(usize, usize)], at: Option<Option<usize>>) -> Rail {
         let prompts: Vec<Prompt> = prompt_items(items)
             .into_iter()
             .map(|item| Prompt { item, child: built.binary_search_by_key(&item, |(built, _)| *built).ok().map(|at| built[at].1) })
             .collect();
-        // Those drawn are in a row, so the tracked positions count from the first of them.
         let first = prompts.iter().position(|prompt| prompt.child.is_some());
         let current = match (at, first) {
-            (Some(Some(at)), Some(first)) => (first + at).min(prompts.len() - 1),
+            // The prompt the view reached, or one before it where it is no longer a prompt, as after a rewind.
+            (Some(Some(item)), _) => prompts.iter().rposition(|prompt| prompt.item <= item).unwrap_or(0),
             (Some(None), Some(first)) => first,
             // Before Wings has said, the view is at the end of the conversation.
             _ => prompts.len().saturating_sub(1),
@@ -147,7 +149,11 @@ pub fn watch(scroll: Node, rail: &Rail, last: usize) -> Node {
     if rail.prompts.is_empty() {
         return scroll;
     }
-    let scroll = scroll.prop("track", json!(rail.track())).on("onTrack", |payload| tracked(payload["at"].as_u64().map(|at| at as usize)));
+    // Wings says a place among the tracked children, which is kept as the prompt there.
+    let drawn: Vec<usize> = rail.prompts.iter().filter(|prompt| prompt.child.is_some()).map(|prompt| prompt.item).collect();
+    let scroll = scroll.prop("track", json!(rail.track())).on("onTrack", move |payload| {
+        tracked(payload["at"].as_u64().map(|at| drawn.get(at as usize).or(drawn.last()).copied().unwrap_or_default()));
+    });
     match scroll_to(rail, last) {
         Some(to) => scroll.prop("scrollTo", to),
         None => scroll,
@@ -231,9 +237,9 @@ mod tests {
         let rail = Rail::of(&talk(), &built, None);
         assert_eq!((rail.current, rail.track()), (2, vec![0, 2, 4]));
         // Wings says the last tracked child at or above the top of the view is the second; or that the view is above all.
-        assert_eq!(Rail::of(&talk(), &built, Some(Some(1))).current, 1);
+        assert_eq!(Rail::of(&talk(), &built, Some(Some(2))).current, 1);
         assert_eq!(Rail::of(&talk(), &built, Some(None)).current, 0);
-        assert_eq!(Rail::of(&talk(), &built, Some(Some(9))).current, 2, "a position past the last is the last");
+        assert_eq!(Rail::of(&talk(), &built, Some(Some(9))).current, 2, "an item past the last prompt is the last");
     }
 
     #[test]
@@ -241,11 +247,20 @@ mod tests {
         // Of five prompts only the newest two are drawn, as a session read back from its transcript shows its end first.
         let items: Vec<Item> = (0..5).flat_map(|n| [said(&format!("Prompt {n}")), Item::Text("ok".into())]).collect();
         let built = [(6, 0), (8, 2)];
-        let rail = Rail::of(&items, &built, Some(Some(1)));
+        let rail = Rail::of(&items, &built, Some(Some(8)));
         assert_eq!(rail.prompts.iter().map(|prompt| prompt.child).collect::<Vec<_>>(), [None, None, None, Some(0), Some(2)]);
         assert_eq!(rail.current, 4);
         assert_eq!(Rail::of(&items, &built, Some(None)).current, 3);
         assert_eq!(rail.track(), [0, 2]);
+    }
+
+    #[test]
+    fn the_prompt_being_read_stays_marked_when_older_ones_load_above_it() {
+        let items: Vec<Item> = (0..5).flat_map(|n| [said(&format!("Prompt {n}")), Item::Text("ok".into())]).collect();
+        // Wings said the view reached the prompt at item 8, the second of the two drawn; then two older ones load above.
+        let before = Rail::of(&items, &[(6, 0), (8, 2)], Some(Some(8)));
+        let after = Rail::of(&items, &[(2, 0), (4, 2), (6, 4), (8, 6)], Some(Some(8)));
+        assert_eq!((before.current, after.current), (4, 4));
     }
 
     fn prompts_said(count: usize) -> Vec<Item> {

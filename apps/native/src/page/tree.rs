@@ -218,6 +218,9 @@ pub struct Stack {
     pub id: u64,
     pub gap: Gap,
     pub grow: bool,
+    /// `fill: true`: it takes what is left of its parent's height and no more, so a `Scroll` in it scrolls rather than push
+    /// what follows out of view. A `grow` stack keeps the height of what it holds.
+    pub fill: bool,
     /// A fixed width in points, for a column beside others.
     pub width: Option<f32>,
     /// At most this wide, centred: a reading column, as plugin-ui.css's `.w-stack[data-max-width]`.
@@ -1102,6 +1105,7 @@ impl Walk {
                 id,
                 gap: choice(&props, "gap"),
                 grow: on("grow"),
+                fill: on("fill"),
                 width: number(&props, "width")
                     .filter(|width| *width > 0.0)
                     .map(|width| width.min(2_000.0) as f32),

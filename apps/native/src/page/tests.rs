@@ -2066,6 +2066,42 @@ fn a_following_scroll_moves_along_a_list_too_long_to_send_whole_and_stays_on_wha
     settle(&app, &mut window, |view| view.follow_scrolled(1).is_some_and(|(top, max)| top >= max - 24.0));
 }
 
+/// A `Stack` with `fill` holding a following `Scroll` of 60 rows, over a line at the foot of the page, as a chat lays its
+/// conversation over its message box.
+fn filled_rows(fill: bool) -> String {
+    fake::page("page", move |_| {
+        let rows: Vec<Value> = (0..60).map(|i| text(100 + i, 1_000 + i, format!("Row {i}"))).collect();
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            { "id": 3, "type": "Stack", "props": { "fill": fill }, "children": [
+                { "id": 1, "type": "Scroll", "props": { "follow": "end" }, "children": [{ "id": 2, "type": "Stack", "props": {}, "children": rows }] }] },
+            text(50, 51, "Foot".into())] })
+    })
+}
+
+/// A `fill` stack is as tall as its page leaves it, so the scroll in it scrolls and what follows stays in view; one
+/// without `fill` is as tall as the rows, which push the foot out.
+#[test]
+fn a_filling_stack_keeps_its_scroll_within_the_page() {
+    for fill in [true, false] {
+        let mut app = TestApp::new();
+        app.background_executor().allow_parking();
+        let host = hosted(&mut app);
+        let source = filled_rows(fill);
+        let bounds = gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(500.0), px(300.0)));
+        let mut window = app.open_window_with_options(
+            gpui::WindowOptions { window_bounds: Some(gpui::WindowBounds::Windowed(bounds)), ..Default::default() },
+            |_, cx| PageView::in_plugin(&host, &source, cx),
+        );
+        settle(&app, &mut window, shows("Foot"));
+        for _ in 0..3 {
+            app.run_until_parked();
+            window.draw();
+        }
+        let scrolls = window.read(|view, _| view.follow_scrolled(1).is_some_and(|(_, max)| max > 300.0));
+        assert_eq!(scrolls, fill, "fill: {fill}");
+    }
+}
+
 /// A column of 60 rows in a plain `Scroll` that is asked to scroll to row 40 and to track rows 10, 20, 30 and 40, over a
 /// line that says what `onTrack` last said.
 fn aimed_rows() -> String {

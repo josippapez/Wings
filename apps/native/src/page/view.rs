@@ -1257,6 +1257,7 @@ impl PageView {
             .flex_col()
             .gap(px(gap(stack.gap)))
             .when(stack.grow, |el| el.flex_1())
+            .when(stack.fill, |el| el.flex_1().min_h_0())
             .when_some(stack.width, |el, width| el.w(px(width)).flex_none())
             .when_some(stack.max_width, |el, width| el.w_full().max_w(px(width)).mx_auto())
             .map(|el| match stack.enter {
