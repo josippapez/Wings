@@ -1625,9 +1625,11 @@ esac"##,
             let row = answer("REQUEST_ID", json!({ "tree": { "type": "Box", "props": { "gap": 1 }, "children": [
                 { "type": "Text", "props": { "color": "green" }, "children": ["●"] },
                 { "type": "Text", "props": { "bold": true }, "children": ["Deploy"] },
-                { "type": "Text", "props": { "dimColor": true }, "children": ["staging · 41s"] }] }, "props": {}, "rewritten": false, "hooked": true }));
+                { "type": "Text", "props": { "dimColor": true }, "children": ["staging · 41s"] },
+                // A title longer than the column, which the mod asks to cut short, as Ink's `wrap` does.
+                { "type": "Text", "props": { "wrap": "truncate-end" }, "children": ["the checkout fix with the new discount rules, the cart totals and the payment retry, for the QA pass before Friday"] }] }, "props": {}, "rewritten": false, "hooked": true }));
             std::fs::write(answers.join("component-ToolUse-deploy-1"), format!("{row}\n")).unwrap();
-            let result = answer("REQUEST_ID", json!({ "tree": { "type": "Text", "props": { "color": "cyan" }, "children": ["3f2a1c9 is live on staging"] }, "props": {}, "rewritten": false, "hooked": true }));
+            let result = answer("REQUEST_ID", json!({ "tree": { "type": "Box", "props": { "marginX": 1 }, "children": [{ "type": "Text", "props": { "color": "cyan" }, "children": ["3f2a1c9 is live on staging, and the smoke tests passed on checkout, cart, payment and the order history pages in 41 seconds"] }] }, "props": {}, "rewritten": false, "hooked": true }));
             std::fs::write(answers.join("component-ToolResult-deploy-1"), format!("{result}\n")).unwrap();
             // What a mod adds to the menu on a link.
             let menu = answer("REQUEST_ID", json!({ "tree": { "type": "Box", "props": { "flexDirection": "column" }, "children": [

@@ -489,18 +489,30 @@ fn node(el: &Value, at: &At, budget: &mut usize) -> Option<Node> {
                 Some(cells) if cells >= 1.0 => "s",
                 _ => "xs",
             };
-            let mut node = if column { stack() } else { row().prop("wrap", props["flexWrap"] == "wrap") }.prop("gap", gap);
+            let mut boxed = if column { stack() } else { row().prop("wrap", props["flexWrap"] == "wrap") }.prop("gap", gap);
             if props["alignItems"] == "center" {
-                node = node.prop("align", "center");
+                boxed = boxed.prop("align", "center");
             }
             if props["justifyContent"] == "space-between" {
-                node = node.prop("justify", "between");
+                boxed = boxed.prop("justify", "between");
             }
-            Some(node.children(inner(budget)))
+            if column {
+                return Some(boxed.children(inner(budget)));
+            }
+            // A row's last text takes the room left and wraps or cuts short in it, as a row of Claude Code's ends in
+            // the long part (a title, a result's line), instead of running past the conversation's edge.
+            let last = children.iter().rposition(|child| child.is_string() || matches!(child["type"].as_str(), Some("Text" | "span" | "b")));
+            let drawn = children.iter().enumerate().filter_map(|(place, child)| {
+                let drawn = node(child, at, budget)?;
+                Some(if Some(place) == last { drawn.prop("grow", true) } else { drawn })
+            });
+            Some(boxed.children(drawn.collect::<Vec<_>>()))
         }
         "Text" | "span" | "b" => {
             let styled = |node: Node| {
                 let node = if el["type"] == "b" || props["bold"] == true { node.prop("weight", "strong") } else { node };
+                // Ink's `wrap: "truncate-end"` and the like cut a line short where it would wrap.
+                let node = if props["wrap"].as_str().is_some_and(|wrap| wrap.starts_with("truncate")) { node.prop("truncate", true) } else { node };
                 match tone(props) {
                     Some(tone) => node.prop("tone", tone),
                     None => node,
