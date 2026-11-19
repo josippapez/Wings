@@ -139,7 +139,7 @@ impl Workspace {
         args: Option<serde_json::Value>,
         cx: &mut Context<Self>,
     ) -> Option<usize> {
-        self.new_plugin_tab_with_state(plugin, view, args, None, cx)
+        self.new_plugin_tab_with_state(plugin, view, args, None, None, cx)
     }
 
     fn new_plugin_tab_with_state(
@@ -148,9 +148,10 @@ impl Workspace {
         view: &str,
         args: Option<serde_json::Value>,
         initial: Option<serde_json::Value>,
+        key: Option<String>,
         cx: &mut Context<Self>,
     ) -> Option<usize> {
-        let state = self.plugin_env.tab_state(initial);
+        let state = self.plugin_env.tab_state(initial).with_key(key);
         let (page, title) = self.plugin_page(plugin, view, args.as_ref(), state.clone(), cx)?;
         let focus = cx.focus_handle().tab_stop(true);
         page.update(cx, |page, _| page.set_host_focus(focus.clone()));
@@ -211,6 +212,7 @@ impl Workspace {
                     &tab.view,
                     tab.args.clone(),
                     tab.state.clone(),
+                    tab.key.clone(),
                     cx,
                 )
             })

@@ -25,6 +25,10 @@
 //!
 //! When no server answers, or the server is turned off, the app runs new panes in its own process, and saves them under
 //! the same history ids. Panes a server still runs are attached either way, and keep running until they're closed.
+//!
+//! A server also runs the programs a plugin's tab asks to keep through a restart (jobs, `page::plugin::process`), like
+//! a chat's Claude Code. At launch the app lists them, and each plugin takes its own as it starts (`claim_jobs`); those
+//! no plugin took within `JOB_GRACE` are stopped.
 
 use std::{
     fs,
@@ -36,14 +40,21 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     thread,
     time::{Duration, Instant},
 };
 
-use wings_ptyd::{SERVER_VERSION, client::Control, proto::PaneInfo};
+use wings_ptyd::{
+    SERVER_VERSION,
+    client::Control,
+    proto::{JobInfo, PaneInfo},
+};
+
+/// How long after the app starts a job an earlier app left running waits for its plugin to take it.
+pub const JOB_GRACE: Duration = Duration::from_secs(120);
 
 /// `1` runs new panes in the terminal server and `0` runs them in the app, whatever Settings says: for tests and
 /// debugging.
@@ -475,6 +486,10 @@ pub struct Servers {
     /// New panes start in a server. Off, they run in the app, and the panes servers already run are still attached.
     on: AtomicBool,
     found: Mutex<Vec<(PathBuf, PaneInfo)>>,
+    /// The jobs the servers ran when the app started, until their plugin takes them (`claim_jobs`).
+    jobs: Arc<Mutex<Vec<(PathBuf, JobInfo)>>>,
+    /// The keys of the tabs those jobs are for.
+    job_tabs: Vec<String>,
     /// What the saved panes whose idle shells an older server ran printed, by history id, once `tidy_older` ended
     /// them: each pane starts again in the current server below it.
     retired: Mutex<Vec<(String, Vec<u8>)>>,
@@ -505,6 +520,7 @@ impl Servers {
     fn open(dir: &Path, start: Option<&Start>, version: u32, on: bool) -> Servers {
         let ours = version;
         let mut found = Vec::new();
+        let mut jobs = Vec::new();
         let mut current: Option<(u32, PathBuf)> = None;
         // The file each answering server runs from, `None` once one can't be told.
         let mut running = Some(Vec::new());
@@ -517,6 +533,8 @@ impl Servers {
                 current: Mutex::new(None),
                 on: AtomicBool::new(on),
                 found: Mutex::new(found),
+                jobs: Arc::default(),
+                job_tabs: Vec::new(),
                 retired: Mutex::default(),
                 dir: dir.to_owned(),
                 version,
@@ -566,12 +584,49 @@ impl Servers {
                     path.display()
                 ),
             }
+            if control.welcome().runs_jobs() {
+                match control.jobs() {
+                    Ok(listed) => {
+                        for job in listed {
+                            // Nobody heard it end, and its tab starts its program again.
+                            if job.ended {
+                                let _ = control.stop_job(job.job);
+                            } else {
+                                jobs.push((path.clone(), job));
+                            }
+                        }
+                    }
+                    Err(error) => eprintln!(
+                        "Couldn't list the terminal server's jobs at {}: {error}",
+                        path.display()
+                    ),
+                }
+            }
         }
         remove_old_copies(dir, running.as_deref());
+        let job_tabs = jobs
+            .iter()
+            .filter_map(|(_, job)| job.owner["tab"].as_str().map(str::to_owned))
+            .collect();
+        let jobs = Arc::new(Mutex::new(jobs));
+        if !jobs.lock().unwrap().is_empty() {
+            let left = jobs.clone();
+            thread::spawn(move || {
+                thread::sleep(JOB_GRACE);
+                let unclaimed = std::mem::take(&mut *left.lock().unwrap());
+                for (socket, job) in unclaimed {
+                    if let Err(error) = Control::connect(&socket).and_then(|mut control| control.stop_job(job.job)) {
+                        eprintln!("Couldn't stop a job no plugin took: {error}");
+                    }
+                }
+            });
+        }
         let servers = Servers {
             current: Mutex::new(current.map(|(_, path)| path)),
             on: AtomicBool::new(on),
             found: Mutex::new(found),
+            jobs,
+            job_tabs,
             retired: Mutex::default(),
             dir: dir.to_owned(),
             version: ours,
@@ -678,6 +733,19 @@ impl Servers {
             .iter()
             .position(|(_, pane)| !pane.exited && pane.history_id.as_deref() == Some(history_id))?;
         Some(found.remove(at))
+    }
+
+    /// Takes the jobs the servers ran for the plugin `plugin` when the app started, once.
+    pub fn claim_jobs(&self, plugin: &str) -> Vec<(PathBuf, JobInfo)> {
+        let mut jobs = self.jobs.lock().unwrap();
+        let (theirs, others) = std::mem::take(&mut *jobs).into_iter().partition(|(_, job)| job.owner["plugin"] == plugin);
+        *jobs = others;
+        theirs
+    }
+
+    /// The keys of the plugin tabs whose programs the servers ran when the app started.
+    pub fn job_tabs(&self) -> &[String] {
+        &self.job_tabs
     }
 
     /// The output `tidy_older` kept of the saved pane `history`, once, for its new shell.

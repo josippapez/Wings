@@ -345,6 +345,9 @@ pub(super) struct AppEnv {
     sessions: super::history::Sessions,
     /// The words plugins narrowed their links to, by plugin and link (`wings.setLinkWords`).
     pub(super) link_words: Mutex<HashMap<(String, String), Arc<HashSet<String>>>>,
+    /// The terminal servers, which run the programs tabs keep through a restart.
+    #[cfg(unix)]
+    servers: std::sync::OnceLock<crate::host::TerminalServers>,
 }
 
 impl AppEnv {
@@ -405,6 +408,16 @@ impl AppEnv {
             clients: Arc::default(),
             sessions,
             link_words: Mutex::default(),
+            #[cfg(unix)]
+            servers: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// The terminal servers, which run the programs tabs keep through a restart. Set once, before any plugin starts.
+    #[cfg(unix)]
+    pub(super) fn use_servers(&self, servers: Option<crate::host::TerminalServers>) {
+        if let Some(servers) = servers {
+            let _ = self.servers.set(servers);
         }
     }
 
@@ -475,6 +488,24 @@ impl AppEnv {
 }
 
 impl Env for AppEnv {
+    #[cfg(unix)]
+    fn job_server(&self) -> Option<PathBuf> {
+        self.servers.get()?.0.current()
+    }
+
+    #[cfg(unix)]
+    fn left_jobs(&self, plugin: &str) -> Vec<crate::page::plugin::LeftJob> {
+        let Some(servers) = self.servers.get() else {
+            return Vec::new();
+        };
+        servers
+            .0
+            .claim_jobs(plugin)
+            .into_iter()
+            .map(|(socket, info)| crate::page::plugin::LeftJob { socket, info })
+            .collect()
+    }
+
     fn past_sessions(&self, project: &std::path::Path, query: &str, limit: usize) -> Vec<serde_json::Value> {
         let filter = wings_agents::history::Filter {
             project: Some(project.to_string_lossy().into_owned()),

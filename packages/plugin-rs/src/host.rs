@@ -817,10 +817,16 @@ impl ProcessInput {
     pub fn note(&self, note: &Value, heard: Option<u64>) {
         drop(call("processNote", json!({ "token": self.0, "note": note, "heard": heard })));
     }
+
+    /// `note`, saying which Claude Code session the program goes on with, once it has one: Wings starts no other program
+    /// of the plugin on that session while this one runs. Needs Wings 0.2.47; an older Wings keeps the note alone.
+    pub fn note_session(&self, note: &Value, heard: Option<u64>, session: Option<&str>) {
+        drop(call("processNote", json!({ "token": self.0, "note": note, "heard": heard, "session": session })));
+    }
 }
 
 /// A program the page before this one, in the same tab (or the main before this one), left running when the plugin was
-/// updated or restarted.
+/// updated or restarted, or Wings itself was.
 pub struct Left {
     /// What `adopt` takes it over by.
     pub id: String,
@@ -831,13 +837,30 @@ pub struct Left {
     pub note: Value,
     /// How many lines it printed past that page's note, which the page that takes it over hears first.
     pub kept: u64,
+    /// The Claude Code session it goes on with, when Wings knows it. Needs Wings 0.2.47.
+    pub session: Option<String>,
+    /// Another program of the plugin goes on with the session `processes_of` asked about: it can't be taken over, and
+    /// the session mustn't be started again. Needs Wings 0.2.47.
+    pub elsewhere: bool,
 }
 
-/// `wings.processes`: the programs this page's tab ran when the plugin was updated or restarted, which Wings kept
-/// running for this page to take over with `adopt`. Wings stops each one no page takes over within 30 s, and one the
-/// new version's manifest no longer allows. Empty for a page that didn't load in place of another. Needs Wings 0.2.42.
+/// `wings.processes`: the programs this page's tab ran when the plugin was updated or restarted, or Wings was, which
+/// Wings kept running for this page to take over with `adopt`. Wings stops each one no page takes over within 30 s (2
+/// minutes after Wings restarts), and one the new version's manifest no longer allows. Empty for a page that didn't
+/// load in place of another. Needs Wings 0.2.42.
 pub async fn processes() -> Result<Vec<Left>, String> {
-    let listed = call("processes", json!({})).await?;
+    processes_of(None).await
+}
+
+/// `processes`, and, after them, a `Left` that is `elsewhere` when another program of the plugin, in another tab or left
+/// from before Wings restarted, goes on with the Claude Code session `session`. Needs Wings 0.2.47 for that; an older
+/// Wings lists only this page's.
+pub async fn processes_of(session: Option<&str>) -> Result<Vec<Left>, String> {
+    let params = match session {
+        Some(session) => json!({ "session": session }),
+        None => json!({}),
+    };
+    let listed = call("processes", params).await?;
     let text = |value: &Value| value.as_str().unwrap_or_default().to_owned();
     Ok(listed
         .as_array()
@@ -850,6 +873,8 @@ pub async fn processes() -> Result<Vec<Left>, String> {
             cwd: text(&left["cwd"]),
             note: left["note"].clone(),
             kept: left["kept"].as_u64().unwrap_or(0),
+            session: left["session"].as_str().map(str::to_owned),
+            elsewhere: left["elsewhere"] == true,
         })
         .collect())
 }
@@ -871,7 +896,7 @@ pub fn adopt(left: &str, on_line: impl Fn(&Value) + 'static) -> Process {
 /// sent with its start (empty for nothing): later writes need your click or key. `on_line` hears each line it prints to
 /// stdout, in order and none lost: as JSON when the line is JSON, and as a string when it isn't.
 pub fn spawn(program: &str, args: &[&str], cwd: &str, input: &str, on_line: impl Fn(&Value) + 'static) -> Process {
-    spawn_with(None, program, args, cwd, input, on_line)
+    spawn_with(None, false, program, args, cwd, input, on_line)
 }
 
 /// The Claude Code account a `spawn` or `exec` runs under, set as `CLAUDE_CONFIG_DIR`. Wings picks the folder from the
@@ -889,16 +914,28 @@ impl Account {
 
 /// `spawn` under a Claude Code account.
 pub fn spawn_as(account: &Account, program: &str, args: &[&str], cwd: &str, input: &str, on_line: impl Fn(&Value) + 'static) -> Process {
-    spawn_with(Some(account), program, args, cwd, input, on_line)
+    spawn_with(Some(account), false, program, args, cwd, input, on_line)
 }
 
-fn spawn_with(account: Option<&Account>, program: &str, args: &[&str], cwd: &str, input: &str, on_line: impl Fn(&Value) + 'static) -> Process {
+/// `spawn_as`, run by Wings' terminal server when it runs one, so the program goes on while Wings quits, restarts or
+/// updates: the page that opens in this tab in Wings' next run takes it over (`processes`, `adopt`). Only a page of one
+/// of Wings' own plugins shown as a tab keeps one; elsewhere, without the server, and in a Wings older than 0.2.47 it
+/// runs as `spawn_as` does.
+pub fn spawn_surviving(account: &Account, program: &str, args: &[&str], cwd: &str, input: &str, on_line: impl Fn(&Value) + 'static) -> Process {
+    spawn_with(Some(account), true, program, args, cwd, input, on_line)
+}
+
+fn spawn_with(account: Option<&Account>, survive: bool, program: &str, args: &[&str], cwd: &str, input: &str, on_line: impl Fn(&Value) + 'static) -> Process {
     let id = next_id();
     let token = format!("process-{id}");
     OUTPUTS.with(|outputs| outputs.borrow_mut().insert(id, Rc::new(on_line)));
     let input = (!input.is_empty()).then_some(input);
     let account = account.map(|account| &account.0);
-    let answer = call_as(id, "spawn", json!({ "program": program, "args": args, "cwd": cwd, "token": token, "input": input, "account": account }));
+    let mut params = json!({ "program": program, "args": args, "cwd": cwd, "token": token, "input": input, "account": account });
+    if survive {
+        params["survive"] = true.into();
+    }
+    let answer = call_as(id, "spawn", params);
     Process { input: ProcessInput(token), answer }
 }
 
@@ -980,6 +1017,25 @@ mod tests {
         let token = sent[0].1["token"].clone();
         assert_eq!(sent[0], ("adopt".to_owned(), json!({ "from": "left-0", "token": token })));
         assert_eq!(sent[1], ("processNote".to_owned(), json!({ "token": token, "note": { "cut": "u2" }, "heard": 5 })));
+    }
+
+    #[test]
+    fn a_program_that_survives_asks_for_it_and_a_page_asks_whether_a_session_runs() {
+        let calls = record(&[]);
+        let _plain = spawn_as(&Account::of_session(None), "claude", &["-p"], "/repo", "", |_| {});
+        let kept = spawn_surviving(&Account::of_session(Some("s1")), "claude", &["-p", "--resume=s1"], "/repo", "", |_| {});
+        kept.input().note_session(&json!({}), None, Some("s1"));
+        let sent: Vec<(String, Value)> = calls.borrow().clone();
+        assert_eq!(sent[0].1.get("survive"), None, "a spawn that needn't survive is sent as before");
+        assert_eq!(sent[1].1["survive"], true);
+        assert_eq!(sent[2], ("processNote".to_owned(), json!({ "token": sent[1].1["token"], "note": {}, "heard": null, "session": "s1" })));
+        testing::answer(|method, params| match method {
+            "processes" => Ok(json!([{ "elsewhere": true, "session": params["session"] }])),
+            _ => Ok(Value::Null),
+        });
+        let left = block_on(processes_of(Some("s1"))).unwrap();
+        assert!(left[0].elsewhere);
+        assert_eq!(left[0].session.as_deref(), Some("s1"));
     }
 
     #[test]

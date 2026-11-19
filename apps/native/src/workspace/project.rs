@@ -104,14 +104,27 @@ impl Workspace {
             }
             let right = project.right.as_deref().map(super::right_stack::Stack::from_saved);
             let agents = panes.iter().any(|pane| pane.session.is_some());
-            if !attached && adopted.is_none() && !agents {
+            // A page whose program the terminal server kept, like a chat's Claude Code, opens now, so it takes the
+            // program over before the server's wait for it runs out. The project's other pages open with it.
+            let keeps_jobs = servers.as_ref().is_some_and(|servers| {
+                let tabs = servers.0.job_tabs();
+                project.plugin_tabs.iter().any(|tab| tab.key.as_ref().is_some_and(|key| tabs.contains(key)))
+            });
+            let (plugin_tabs, pages) = if keeps_jobs {
+                let shown = std::mem::take(&mut self.plugin_tabs);
+                let pages = self.restore_plugin_tabs(&project.plugin_tabs, cx);
+                (std::mem::replace(&mut self.plugin_tabs, shown), Some(pages))
+            } else {
+                (Vec::new(), None)
+            };
+            if !attached && adopted.is_none() && !agents && pages.is_none() {
                 continue;
             }
             self.parked.insert(
                 path,
                 Parked {
                     terminals,
-                    plugin_tabs: Vec::new(),
+                    plugin_tabs,
                     project_page: None,
                     issues_open: !project.issues_closed,
                     // Decided when it's first shown, once its pages are open.
@@ -121,6 +134,7 @@ impl Workspace {
                         panes,
                         project,
                         adopted,
+                        pages,
                     }),
                 },
             );

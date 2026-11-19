@@ -266,7 +266,8 @@ async fn open() {
         c.program = program;
         c.dirs = dirs;
     });
-    // After an update or restart of the plugin, the Claude Code this tab ran is still going: the chat takes it over.
+    // After an update or restart of the plugin or of Wings, the Claude Code this tab ran is still going: the chat takes
+    // it over, and never starts a second one on its session.
     if crate::reattach::take_over(resume.clone()).await {
         return;
     }
@@ -312,7 +313,8 @@ pub fn launch_with(resume: Option<String>, how: Launch) {
         let account = host::Account::of_session(resume.as_deref());
         // A fork before a message asks for its rewind as it starts, as the opening requests do: the fork is a new session.
         let opening = Session::opening(start_mode.as_deref()) + &with(|c| fork::opening(&how, &c.session.prompts));
-        let process = host::spawn_as(&account, &program, &args, &cwd, &opening, move |line| hear(run, line));
+        // In Wings' terminal server, so the turn goes on while Wings restarts or updates, and this tab takes it over after.
+        let process = host::spawn_surviving(&account, &program, &args, &cwd, &opening, move |line| hear(run, line));
         crate::reattach::started(run, process.input());
         follow(run, process).await;
     });

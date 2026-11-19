@@ -262,7 +262,8 @@ impl Inner {
                         self.event(msg);
                     }
                 }
-                Frame::In { .. } => {}
+                // Jobs are the native app's.
+                Frame::In { .. } | Frame::Line { .. } => {}
             }
         }
         self.gone();
@@ -334,7 +335,7 @@ impl Inner {
                     }),
                 );
             }
-            HostMsg::Welcome { .. } => {}
+            HostMsg::Welcome { .. } | HostMsg::JobEnded { .. } | HostMsg::JobDropped { .. } => {}
         }
     }
 

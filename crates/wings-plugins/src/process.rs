@@ -88,6 +88,11 @@ impl Process {
         self.child.lock().unwrap().as_ref().map(Child::id)
     }
 
+    /// Whether it was told to stop.
+    pub fn stopping(&self) -> bool {
+        self.input.lock().unwrap().is_none()
+    }
+
     /// Closes the program's input once the writes before have gone, which tells a program like Claude to finish, and
     /// kills it if it's still running `STOP_GRACE` later. Never waits.
     pub fn stop(self: &Arc<Self>) {
@@ -209,6 +214,40 @@ pub fn run_under(
         return Err(LINE_TOO_LONG.into());
     }
     Ok(Exit { code: status.code(), stderr })
+}
+
+/// A program `check` allows, as another process starts it for the plugin: the file, its arguments, its folder and the
+/// whole environment it would have had here.
+#[derive(Debug)]
+pub struct Launch {
+    pub program: std::path::PathBuf,
+    pub args: Vec<String>,
+    pub cwd: std::path::PathBuf,
+    pub env: Vec<(String, String)>,
+}
+
+/// What `run_under` would start, for the terminal server to start instead, so the program outlives Wings.
+pub fn launch(plugin: &Plugin, program: &str, args: &[String], cwd: &Path, config_dir: Option<&Path>) -> Result<Launch, String> {
+    check(plugin, program, args, cwd)?;
+    let mut command = command(program, args, Some(cwd))?;
+    if let Some(dir) = config_dir {
+        command.env("CLAUDE_CONFIG_DIR", dir);
+    }
+    let mut env: std::collections::BTreeMap<String, String> =
+        std::env::vars_os().filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?))).collect();
+    for (key, value) in command.get_envs() {
+        let Some(key) = key.to_str() else { continue };
+        match value.and_then(|value| value.to_str()) {
+            Some(value) => env.insert(key.to_owned(), value.to_owned()),
+            None => env.remove(key),
+        };
+    }
+    Ok(Launch {
+        program: command.get_program().into(),
+        args: args.to_vec(),
+        cwd: cwd.to_owned(),
+        env: env.into_iter().collect(),
+    })
 }
 
 /// Checks the command, starts it with the writer on its input, and gives its output pipes.
@@ -362,6 +401,20 @@ mod tests {
         assert_eq!(exit.code, Some(3));
         assert!(exit.stderr.len() <= STDERR_KEPT);
         assert!(exit.stderr.ends_with("line-2999\n"), "{}", &exit.stderr[exit.stderr.len() - 20..]);
+    }
+
+    #[test]
+    fn a_launch_is_checked_and_carries_the_environment_the_program_would_get_here() {
+        let p = with_processes(&["cat []"]);
+        assert!(launch(&p, "cat", &args(&["-u"]), Path::new("/tmp"), None).unwrap_err().contains("may not run cat"));
+        let launched = launch(&p, "cat", &[], Path::new("/tmp"), Some(Path::new("/accounts/work"))).unwrap();
+        assert_eq!(launched.program, crate::exec::find_program("cat").unwrap());
+        assert_eq!(launched.cwd, Path::new("/tmp"));
+        let env = |key: &str| launched.env.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
+        assert_eq!(env("CLAUDE_CONFIG_DIR"), Some("/accounts/work"));
+        assert_eq!(env("GIT_CONFIG_KEY_0"), Some("safe.bareRepository"));
+        assert_eq!(env("PATH").map(str::to_owned), Some(crate::exec::search_path()));
+        assert_eq!(env("HOME").map(str::to_owned), std::env::var("HOME").ok(), "and what Wings' own environment has");
     }
 
     #[test]

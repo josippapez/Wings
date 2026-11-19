@@ -1,22 +1,26 @@
 //! How an app reaches a terminal server. Each pane gets a connection of its own, so a pane whose terminal is slow to
 //! take its output (a hidden one, a flood) only lags itself: the server never waits for it, and it catches up from the
-//! server's ring. Short requests (list, kill, drain, read) go over a `Control` connection.
+//! server's ring. Short requests (list, kill, drain, read) go over a `Control` connection. So does each job (`Job`).
 
 use std::{
+    collections::HashMap,
     io::{self, BufReader, Write},
     net::Shutdown,
     os::unix::net::UnixStream,
     path::Path,
     sync::{
-        atomic::{AtomicU32, Ordering},
-        Mutex,
+        atomic::{AtomicBool, AtomicU32, Ordering},
+        Arc, Mutex,
     },
     time::Duration,
 };
 
 use serde_json::Value;
 
-use crate::proto::{self, Attached, Call, Frame, HostMsg, PaneInfo, Request, Spawn, Spawned, CHUNK, MIN_PROTO, PROTO};
+use crate::proto::{
+    self, Attached, Call, Frame, HostMsg, JobAttached, JobExit, JobInfo, JobSpawn, JobStarted, PaneInfo, Request, Spawn, Spawned, CHUNK, JOBS,
+    MIN_PROTO, PROTO,
+};
 
 /// How long the server has to answer a hello or a request.
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -26,6 +30,14 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 pub struct Welcome {
     pub proto: u32,
     pub server_version: u32,
+    pub features: Vec<String>,
+}
+
+impl Welcome {
+    /// Whether the server runs jobs.
+    pub fn runs_jobs(&self) -> bool {
+        self.features.iter().any(|feature| feature == JOBS)
+    }
 }
 
 fn invalid(what: impl Into<String>) -> io::Error {
@@ -39,13 +51,13 @@ fn connect(path: &Path) -> io::Result<(UnixStream, BufReader<UnixStream>, Welcom
     (&stream).write_all(&proto::ctrl(&Call { id: 0, req: Request::Hello { proto: PROTO, min_proto: MIN_PROTO } })?)?;
     let mut reader = BufReader::with_capacity(64 << 10, stream.try_clone()?);
     let Some(Frame::Ctrl(json)) = proto::read(&mut reader)? else { return Err(invalid("the server didn't answer hello")) };
-    let HostMsg::Welcome { proto, host_version, error, .. } = serde_json::from_slice(&json)? else {
+    let HostMsg::Welcome { proto, host_version, error, features } = serde_json::from_slice(&json)? else {
         return Err(invalid("the server didn't answer hello"));
     };
     if let Some(error) = error {
         return Err(io::Error::new(io::ErrorKind::Unsupported, error));
     }
-    Ok((stream, reader, Welcome { proto, server_version: host_version }))
+    Ok((stream, reader, Welcome { proto, server_version: host_version, features }))
 }
 
 fn send(stream: &UnixStream, id: u32, req: Request, blob: &[u8]) -> io::Result<()> {
@@ -135,6 +147,209 @@ impl Control {
     /// The output the server kept for the pane.
     pub fn read(&mut self, pane: u32) -> io::Result<Vec<u8>> {
         Ok(self.call(Request::Read { pane })?.1)
+    }
+
+    /// Every job the server runs, and those that ended that no app heard end.
+    pub fn jobs(&mut self) -> io::Result<Vec<JobInfo>> {
+        Ok(serde_json::from_value(self.call(Request::JobList)?.0)?)
+    }
+
+    /// What the app that heard the job last kept with it (`Job::note`).
+    pub fn job_note(&mut self, job: u32) -> io::Result<Vec<u8>> {
+        Ok(self.call(Request::JobReadNote { job })?.1)
+    }
+
+    /// Stops the job, or forgets it once it ended.
+    pub fn stop_job(&mut self, job: u32) -> io::Result<()> {
+        self.call(Request::JobStop { job }).map(drop)
+    }
+}
+
+/// Hears how a write to a job went.
+pub type Written = Box<dyn FnOnce(Result<(), String>) + Send>;
+
+const INPUT_CLOSED: &str = "The program's input is closed";
+
+/// A job on the server, as an app writes to it from any thread. What it prints comes from the `JobEvents` it was
+/// opened with, each on a connection of its own.
+pub struct Job {
+    number: u32,
+    pid: Option<u32>,
+    writer: Mutex<UnixStream>,
+    next_id: AtomicU32,
+    /// The writes the server hasn't said went yet, by request. None once nothing hears the server any more.
+    written: Arc<Mutex<Option<HashMap<u32, Written>>>>,
+    stopping: AtomicBool,
+}
+
+/// What comes of a job, in order.
+#[derive(Debug, PartialEq)]
+pub enum JobEvent {
+    /// The line numbered `n`, without its line ending.
+    Line(u64, Vec<u8>),
+    /// That many lines before the next were let go of for room.
+    Dropped(u64),
+    /// The program ended, after its last line.
+    Ended(JobExit),
+    /// The connection ended: the server stopped, or `Job::detach`.
+    Closed,
+}
+
+impl Job {
+    /// Starts a job and hears it. `input` is what it reads first. Fails as `Unsupported` on a server that runs no jobs.
+    pub fn start(path: &Path, spawn: JobSpawn, input: &[u8]) -> io::Result<(Job, JobEvents)> {
+        let (stream, mut reader, welcome) = connect(path)?;
+        if !welcome.runs_jobs() {
+            return Err(io::Error::new(io::ErrorKind::Unsupported, "this terminal server runs no jobs"));
+        }
+        send(&stream, 1, Request::JobStart(spawn), input)?;
+        // The reply comes before the job's first line.
+        let (ok, _) = reply(&mut reader, 1, |_| {})?;
+        let started: JobStarted = serde_json::from_value(ok)?;
+        stream.set_read_timeout(None)?;
+        Ok(Job::open(started.job, started.pid, stream, reader))
+    }
+
+    /// Hears a job the server runs, from the line after its last note; another app that heard it no longer does.
+    pub fn attach(path: &Path, job: u32, pid: Option<u32>) -> io::Result<(Job, JobEvents, JobAttached)> {
+        let (stream, mut reader, _) = connect(path)?;
+        send(&stream, 1, Request::JobAttach { job }, &[])?;
+        let (ok, _) = reply(&mut reader, 1, |_| {})?;
+        let attached: JobAttached = serde_json::from_value(ok)?;
+        stream.set_read_timeout(None)?;
+        let (job, events) = Job::open(job, pid, stream, reader);
+        Ok((job, events, attached))
+    }
+
+    fn open(number: u32, pid: Option<u32>, stream: UnixStream, reader: BufReader<UnixStream>) -> (Job, JobEvents) {
+        let written = Arc::new(Mutex::new(Some(HashMap::new())));
+        let job = Job { number, pid, writer: Mutex::new(stream), next_id: AtomicU32::new(2), written: written.clone(), stopping: AtomicBool::new(false) };
+        (job, JobEvents { number, reader, piece: None, written })
+    }
+
+    pub fn number(&self) -> u32 {
+        self.number
+    }
+
+    pub fn pid(&self) -> Option<u32> {
+        self.pid
+    }
+
+    /// Whether it was told to stop.
+    pub fn stopping(&self) -> bool {
+        self.stopping.load(Ordering::Relaxed)
+    }
+
+    fn request(&self, req: Request, blob: &[u8]) -> io::Result<u32> {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        send(&self.writer.lock().unwrap(), id, req, blob)?;
+        Ok(id)
+    }
+
+    /// Writes `data` to the program's input, after the writes before, and tells `done` how that went once the server
+    /// says. Never waits for the program.
+    pub fn write(&self, data: &[u8], done: impl FnOnce(Result<(), String>) + Send + 'static) {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let refused = match self.written.lock().unwrap().as_mut() {
+            Some(written) => {
+                written.insert(id, Box::new(done));
+                None
+            }
+            None => Some(done),
+        };
+        if let Some(done) = refused {
+            return done(Err(INPUT_CLOSED.into()));
+        }
+        let sent = send(&self.writer.lock().unwrap(), id, Request::JobWrite { job: self.number }, data);
+        if let Err(error) = sent {
+            let done = self.written.lock().unwrap().as_mut().and_then(|written| written.remove(&id));
+            if let Some(done) = done {
+                done(Err(format!("{INPUT_CLOSED}: {error}")));
+            }
+        }
+    }
+
+    /// Keeps `note` with the job for the next app that hears it. With `since`, the lines up to that one need not be kept
+    /// for it; with `owner`, the job is for that from now on.
+    pub fn note(&self, since: Option<u64>, owner: Option<Value>, note: &[u8]) -> io::Result<()> {
+        self.request(Request::JobNote { job: self.number, since, owner }, note).map(drop)
+    }
+
+    /// Closes the program's input, which tells a program like Claude to finish, and the server kills it if it still runs a
+    /// few seconds later.
+    pub fn stop(&self) -> io::Result<()> {
+        self.stopping.store(true, Ordering::Relaxed);
+        self.request(Request::JobStop { job: self.number }, &[]).map(drop)
+    }
+
+    /// Lets go of the job, which goes on running in the server. Its `JobEvents` end with `Closed`.
+    pub fn detach(&self) {
+        let _ = self.writer.lock().unwrap().shutdown(Shutdown::Both);
+    }
+}
+
+/// What a job prints and how it ends, read on a thread of its own.
+pub struct JobEvents {
+    number: u32,
+    reader: BufReader<UnixStream>,
+    /// A line whose pieces are still coming.
+    piece: Option<(u64, Vec<u8>)>,
+    written: Arc<Mutex<Option<HashMap<u32, Written>>>>,
+}
+
+impl JobEvents {
+    /// The next event. Blocks until there is one. After `Ended` or `Closed` there are no more.
+    pub fn next(&mut self) -> JobEvent {
+        loop {
+            let frame = match proto::read(&mut self.reader) {
+                Ok(Some(frame)) => frame,
+                Ok(None) | Err(_) => return self.closed(),
+            };
+            match frame {
+                Frame::Line { job, n, more, data } if job == self.number => {
+                    let line = match self.piece.take() {
+                        Some((at, mut line)) if at == n => {
+                            line.extend_from_slice(&data);
+                            line
+                        }
+                        _ => data,
+                    };
+                    if more {
+                        self.piece = Some((n, line));
+                        continue;
+                    }
+                    return JobEvent::Line(n, line);
+                }
+                Frame::Ctrl(json) => match serde_json::from_slice::<HostMsg>(&json) {
+                    Ok(HostMsg::Reply { id, error, .. }) => {
+                        let done = self.written.lock().unwrap().as_mut().and_then(|written| written.remove(&id));
+                        if let Some(done) = done {
+                            done(error.map_or(Ok(()), Err));
+                        }
+                    }
+                    Ok(HostMsg::JobEnded { job, exit }) if job == self.number => {
+                        self.fail_writes("The program ended");
+                        return JobEvent::Ended(exit);
+                    }
+                    Ok(HostMsg::JobDropped { job, lines }) if job == self.number => return JobEvent::Dropped(lines),
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+    }
+
+    fn closed(&mut self) -> JobEvent {
+        self.fail_writes(INPUT_CLOSED);
+        JobEvent::Closed
+    }
+
+    /// Answers the writes the server will never say went, and those to come at once.
+    fn fail_writes(&self, why: &str) {
+        let waiting = self.written.lock().unwrap().take().unwrap_or_default();
+        for done in waiting.into_values() {
+            done(Err(why.to_owned()));
+        }
     }
 }
 
@@ -460,5 +675,138 @@ mod tests {
     #[test]
     fn nothing_listening_is_an_error() {
         assert_eq!(connect(Path::new("/nonexistent/wings.sock")).unwrap_err().kind(), io::ErrorKind::NotFound);
+    }
+
+    // Jobs
+
+    /// A job that runs `script` with `sh`, in the test's environment.
+    fn job_spawn(script: &str) -> JobSpawn {
+        JobSpawn {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), script.into()],
+            cwd: std::env::temp_dir(),
+            env: std::env::vars_os().filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?))).collect(),
+            owner: serde_json::json!({ "plugin": "probe", "tab": "t1" }),
+        }
+    }
+
+    /// Reads a job's events on a thread, as the app does, into a channel.
+    fn read_job(mut events: JobEvents) -> mpsc::Receiver<JobEvent> {
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || loop {
+            let event = events.next();
+            let end = matches!(event, JobEvent::Ended(_) | JobEvent::Closed);
+            if tx.send(event).is_err() || end {
+                return;
+            }
+        });
+        rx
+    }
+
+    fn next_event(rx: &mpsc::Receiver<JobEvent>) -> JobEvent {
+        rx.recv_timeout(Duration::from_secs(10)).expect("the job said nothing more")
+    }
+
+    fn line(n: u64, text: &str) -> JobEvent {
+        JobEvent::Line(n, text.as_bytes().to_vec())
+    }
+
+    /// Writes `text` and waits for the server to say it went.
+    fn write_job(job: &Job, text: &[u8]) -> Result<(), String> {
+        let (tx, rx) = mpsc::channel();
+        job.write(text, move |result| tx.send(result).unwrap());
+        rx.recv_timeout(Duration::from_secs(10)).unwrap()
+    }
+
+    /// The server's jobs once `done` holds of them.
+    fn jobs_once(path: &Path, what: &str, done: impl Fn(&[JobInfo]) -> bool) -> Vec<JobInfo> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let jobs = Control::connect(path).unwrap().jobs().unwrap();
+            if done(&jobs) {
+                return jobs;
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for {what}: {jobs:?}");
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn wait_for_file(file: &Path, what: &str) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !file.exists() {
+            assert!(Instant::now() < deadline, "{what}");
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn a_job_reads_what_it_starts_with_and_each_write_and_prints_lines_bigger_than_a_frame() {
+        let (path, _host) = host(Config::default());
+        let (job, events) = Job::start(&path, job_spawn("read a; echo \"got $a\"; cat"), b"hello\n").unwrap();
+        let rx = read_job(events);
+        assert_eq!(next_event(&rx), line(1, "got hello"));
+        assert_eq!(write_job(&job, b"{\"type\":\"user\"}\r\n"), Ok(()));
+        assert_eq!(next_event(&rx), line(2, "{\"type\":\"user\"}"), "without its line ending");
+        // Longer than a frame, so it comes in pieces, and no line discipline cuts it.
+        let long = "x".repeat(3 * CHUNK + 5);
+        assert_eq!(write_job(&job, format!("{long}\n").as_bytes()), Ok(()));
+        assert_eq!(next_event(&rx), line(3, &long));
+        job.stop().unwrap();
+        assert_eq!(next_event(&rx), JobEvent::Ended(JobExit { code: Some(0), stderr: String::new(), error: None }));
+        assert!(write_job(&job, b"late\n").is_err());
+    }
+
+    #[test]
+    fn a_job_runs_on_while_no_app_hears_it_and_the_next_app_hears_what_it_missed_then_the_rest() {
+        let (path, _host) = host(Config::default());
+        let flag = std::env::temp_dir().join(format!("wptyd-job-flag-{}", std::process::id()));
+        let _ = std::fs::remove_file(&flag);
+        let script = format!("read a; echo \"$a\"; while [ ! -f '{}' ]; do sleep 0.05; done; echo during; cat", flag.display());
+        let (job, events) = Job::start(&path, job_spawn(&script), b"first\n").unwrap();
+        let rx = read_job(events);
+        assert_eq!(next_event(&rx), line(1, "first"));
+        // The app has what it needs of line 1, and keeps a note for the next one.
+        job.note(Some(1), None, b"{\"turn\":1}").unwrap();
+        // The app quits: the job goes on, and prints while nobody hears it.
+        job.detach();
+        assert_eq!(next_event(&rx), JobEvent::Closed);
+        std::fs::write(&flag, "").unwrap();
+        let listed = jobs_once(&path, "the line printed meanwhile", |jobs| jobs.len() == 1 && jobs[0].last == 2 && !jobs[0].attached);
+        assert_eq!((listed[0].since, listed[0].ended, &listed[0].owner), (1, false, &serde_json::json!({ "plugin": "probe", "tab": "t1" })));
+        assert_eq!(Control::connect(&path).unwrap().job_note(listed[0].job).unwrap(), b"{\"turn\":1}");
+        let (again, events, attached) = Job::attach(&path, listed[0].job, listed[0].pid).unwrap();
+        assert_eq!((attached.since, attached.last), (1, 2));
+        let rx = read_job(events);
+        // What it missed, and not what the app before had.
+        assert_eq!(next_event(&rx), line(2, "during"));
+        assert_eq!(write_job(&again, b"again\n"), Ok(()));
+        assert_eq!(next_event(&rx), line(3, "again"));
+        again.stop().unwrap();
+        assert!(matches!(next_event(&rx), JobEvent::Ended(_)));
+        jobs_once(&path, "the job to be forgotten once its end was heard", <[JobInfo]>::is_empty);
+        std::fs::remove_file(&flag).unwrap();
+    }
+
+    #[test]
+    fn a_job_no_app_hears_keeps_its_server_and_has_its_input_closed_after_a_while() {
+        let marker = std::env::temp_dir().join(format!("wptyd-job-orphan-{}", std::process::id()));
+        let _ = std::fs::remove_file(&marker);
+        let (path, host) = host(Config { idle: Some(Duration::from_millis(100)), job_orphaned: Duration::from_millis(1500), ..Config::default() });
+        let (job, _events) = Job::start(&path, job_spawn(&format!("cat; touch '{}'", marker.display())), b"").unwrap();
+        job.detach();
+        thread::sleep(Duration::from_millis(1200));
+        assert!(!host.serving.is_finished(), "exited idle while a job ran");
+        assert!(!marker.exists(), "its input closed before the wait was over");
+        // Its input closes, so `cat` ends and the script goes on to its end.
+        wait_for_file(&marker, "the job no app heard kept running");
+        std::fs::remove_file(&marker).unwrap();
+    }
+
+    #[test]
+    fn a_draining_server_starts_no_job() {
+        let (path, _host) = host(Config::default());
+        Control::connect(&path).unwrap().drain().unwrap();
+        let refused = Job::start(&path, job_spawn("cat"), b"").err().expect("a job started on a draining server");
+        assert_eq!(refused.to_string(), "this server is draining");
     }
 }

@@ -7,8 +7,15 @@
 //! (`processes`) and takes them over (`adopt`). It hears what they printed since its page before noted it had what it
 //! needs of their output (`processNote`), then what they print next. One that no frame takes over within `GRACE`, or
 //! that the new manifest doesn't allow, is stopped.
+//!
+//! A tab's page can ask for more (`survive`): its program runs in the terminal server (`server`), so it goes on while
+//! Wings itself quits, restarts or updates. The host of the next run of Wings takes it over as the plugin starts
+//! (`take_jobs`), and the page of the tab with the same key takes it over from there as above, within `RESTART_GRACE`.
+//!
+//! No two programs of a plugin go on with one Claude Code session at once: a start that names the session another one
+//! runs is refused, so two Claudes never write to one transcript.
 
-use super::{Access, FrameState, Shared, account::AccountRequest};
+use super::{Access, FrameState, LeftJob, Shared, account::AccountRequest};
 use crate::page::runtime::Reply;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -24,6 +31,9 @@ use wings_plugins::{
     process::{self, Process},
 };
 
+#[cfg(unix)]
+mod server;
+
 /// The most programs one plugin keeps running at once.
 const MAX_RUNNING: usize = 8;
 /// The most text one `processWrite` sends: a message with a pasted image fits.
@@ -35,6 +45,8 @@ const KEPT_BYTES: usize = 16 * 1024 * 1024;
 const NOTE_MAX: usize = 1024 * 1024;
 /// How long after an update or restart a program waits for a frame to take it over.
 pub(super) const GRACE: Duration = Duration::from_secs(30);
+/// How long after Wings starts a program the terminal server kept through the restart waits for its tab's page.
+pub(super) const RESTART_GRACE: Duration = Duration::from_secs(120);
 
 /// The calls of this module, which the frame's link hands here with where the frame runs.
 pub(super) const CALLS: [&str; 6] = ["spawn", "processWrite", "processStop", "processNote", "processes", "adopt"];
@@ -47,6 +59,9 @@ struct SpawnRequest {
     /// Runs under a Claude Code account: see `account`.
     #[serde(default)]
     account: Option<AccountRequest>,
+    /// Keep it running through a restart or update of Wings, in the terminal server.
+    #[serde(default)]
+    survive: bool,
 }
 
 /// Where a frame runs, which a program it started stays with through an update: the plugin's main, or the tab or block
@@ -55,6 +70,9 @@ struct SpawnRequest {
 pub(super) enum Place {
     Main,
     Page(FrameState),
+    /// The tab with this key, as Wings' run before this one had it: the terminal server kept the program through the
+    /// restart.
+    Tab(String),
 }
 
 impl Place {
@@ -62,7 +80,71 @@ impl Place {
         match (self, other) {
             (Place::Main, Place::Main) => true,
             (Place::Page(a), Place::Page(b)) => a.same(b),
+            (Place::Page(page), Place::Tab(key)) | (Place::Tab(key), Place::Page(page)) => page.is_tab() && page.key() == *key,
+            (Place::Tab(a), Place::Tab(b)) => a == b,
             _ => false,
+        }
+    }
+}
+
+/// Where a program runs.
+pub(super) enum Proc {
+    /// In the app, which it ends with.
+    Here(Arc<Process>),
+    /// In the terminal server, which keeps it through a restart of the app.
+    #[cfg(unix)]
+    Server(Arc<server::Job>),
+}
+
+impl Proc {
+    fn write(&self, text: String, done: impl FnOnce(Result<(), String>) + Send + 'static) {
+        match self {
+            Proc::Here(process) => process.write(text, done),
+            #[cfg(unix)]
+            Proc::Server(job) => job.write(text, done),
+        }
+    }
+
+    fn stop(&self) {
+        match self {
+            Proc::Here(process) => process.stop(),
+            #[cfg(unix)]
+            Proc::Server(job) => job.stop(),
+        }
+    }
+
+    fn pid(&self) -> Option<u32> {
+        match self {
+            Proc::Here(process) => process.pid(),
+            #[cfg(unix)]
+            Proc::Server(job) => job.pid(),
+        }
+    }
+
+    fn stopping(&self) -> bool {
+        match self {
+            Proc::Here(process) => process.stopping(),
+            #[cfg(unix)]
+            Proc::Server(job) => job.stopping(),
+        }
+    }
+
+    /// What the terminal server keeps for the next run of Wings, for a program it runs.
+    #[cfg_attr(not(unix), allow(unused_variables))]
+    fn note(&self, since: Option<u64>, session: Option<&str>, note: &Value) {
+        match self {
+            Proc::Here(_) => {}
+            #[cfg(unix)]
+            Proc::Server(job) => job.note(since, session, note),
+        }
+    }
+
+    /// Wings quits: a program the terminal server runs goes on for its next run.
+    fn let_go(&self) {
+        match self {
+            Proc::Here(_) => {}
+            #[cfg(unix)]
+            Proc::Server(job) => job.let_go(),
         }
     }
 }
@@ -118,12 +200,14 @@ impl Out {
 
 /// A program a frame started, from its start until it ends.
 pub(super) struct Running {
-    process: Arc<Process>,
+    process: Proc,
     program: String,
     args: Vec<String>,
     cwd: PathBuf,
     /// Where the frame that started it runs, when a frame that runs there next may take it over.
     place: Option<Place>,
+    /// The Claude Code session it goes on with, as its start or its page said.
+    session: Mutex<Option<String>>,
     /// The run of the plugin it belongs to now, which lets go of it when it ends.
     host: Mutex<Weak<Shared>>,
     out: Mutex<Out>,
@@ -133,12 +217,13 @@ pub(super) struct Running {
 }
 
 impl Running {
-    /// A line the program printed: kept for a frame that may take it over, and handed to the frame that hears it.
-    fn heard(&self, line: &str) {
+    /// A line the program printed: kept for a frame that may take it over, and handed to the frame that hears it. `n` is
+    /// its number when the terminal server counted it.
+    fn heard(&self, n: Option<u64>, line: &str) {
         let _order = self.order.lock().unwrap();
         let lines = {
             let mut out = self.out.lock().unwrap();
-            out.last += 1;
+            out.last = n.unwrap_or(out.last + 1);
             let n = out.last;
             out.keep(n, line);
             out.listener.as_ref().map(|listener| listener.lines.clone())
@@ -151,6 +236,20 @@ impl Running {
             if still {
                 self.process.stop();
             }
+        }
+    }
+
+    /// The terminal server let go of `lines` lines no frame heard, for room.
+    #[cfg(unix)]
+    fn skipped(&self, lines: u64) {
+        let _order = self.order.lock().unwrap();
+        let listener = {
+            let mut out = self.out.lock().unwrap();
+            out.last += lines;
+            out.listener.as_ref().map(|listener| listener.lines.clone())
+        };
+        if let Some(listener) = listener {
+            listener(&json!({ "wingsDropped": lines }).to_string());
         }
     }
 
@@ -196,18 +295,54 @@ impl Running {
     }
 
     /// Keeps `note` for the frame that may take the program over. With `heard`, the number of lines the frame that hears
-    /// it has heard, it has what it needs of those, which are let go of.
-    fn note(&self, note: Value, heard: Option<u64>) {
-        let mut out = self.out.lock().unwrap();
-        out.note = note;
-        let before = out.listener.as_ref().map(|listener| listener.before);
-        if let (Some(heard), Some(before)) = (heard, before) {
-            let since = before.saturating_add(heard).min(out.last);
-            out.since = out.since.max(since);
-            out.forget_noted();
+    /// it has heard, it has what it needs of those, which are let go of. With `session`, the program goes on with that
+    /// Claude Code session.
+    fn note(&self, note: Value, heard: Option<u64>, session: Option<String>) {
+        if session.is_some() {
+            *self.session.lock().unwrap() = session.clone();
         }
+        let since = {
+            let mut out = self.out.lock().unwrap();
+            out.note = note.clone();
+            let before = out.listener.as_ref().map(|listener| listener.before);
+            match (heard, before) {
+                (Some(heard), Some(before)) => {
+                    let since = before.saturating_add(heard).min(out.last);
+                    out.since = out.since.max(since);
+                    out.forget_noted();
+                    Some(out.since)
+                }
+                _ => None,
+            }
+        };
+        self.process.note(since, session.as_deref(), &note);
+    }
+
+    /// Whether it goes on with the Claude Code session `session` and isn't being stopped.
+    fn runs(&self, session: &str) -> bool {
+        self.session.lock().unwrap().as_deref() == Some(session) && !self.process.stopping()
     }
 }
+
+/// The Claude Code session a program goes on with, from its arguments: its `--resume=<id>`, unless it forks a new
+/// session from that one.
+fn resumes(args: &[String]) -> Option<String> {
+    if args.iter().any(|arg| arg == "--fork-session") {
+        return None;
+    }
+    args.iter().find_map(|arg| arg.strip_prefix("--resume=")).filter(|id| !id.is_empty()).map(str::to_owned)
+}
+
+/// A session's id as a page says it: letters, digits and dashes.
+fn session_id(value: Option<&Value>) -> Result<Option<String>, String> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(id)) if (1..=128).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') => Ok(Some(id.clone())),
+        Some(_) => Err("A session is an id of letters, digits and dashes".into()),
+    }
+}
+
+const SESSION_TAKEN: &str = "Claude Code is already running this session elsewhere in Wings. Open it again here once it has finished.";
 
 /// A program a frame left running when the plugin was updated or restarted, until a frame takes it over.
 pub(super) struct Orphan {
@@ -245,10 +380,7 @@ impl Shared {
             "spawn" => self.spawn(token, place, &params, reply.clone(), access),
             "processWrite" => self.write(&token, &params, reply.clone()),
             "processNote" => self.note(&token, &params).map(|()| reply.clone().ok("null".into())),
-            "processes" => {
-                reply.clone().ok(self.left(place.as_ref()).to_string());
-                Ok(())
-            }
+            "processes" => session_id(params.get("session")).map(|session| reply.clone().ok(self.left(place.as_ref(), session.as_deref()).to_string())),
             "adopt" => self.adopt(token, place.as_ref(), &params, reply.clone()),
             _ => {
                 if let Some(running) = self.processes.lock().unwrap().get(&token) {
@@ -271,7 +403,7 @@ impl Shared {
         reply: Reply,
         access: Access,
     ) -> Result<(), String> {
-        let SpawnRequest { program, args, cwd, account } =
+        let SpawnRequest { program, args, cwd, account, survive } =
             serde_json::from_value(params.clone()).map_err(|error| error.to_string())?;
         let cwd = exec_cwd(&program, Some(&cwd), &access.env.projects(), &self.pane_folders(), false)?;
         let config_dir = access.claude_config_dir(account.as_ref(), &cwd);
@@ -282,17 +414,58 @@ impl Shared {
             Some(Value::String(input)) if input.len() <= WRITE_MAX => Some(input.clone()),
             Some(_) => return Err("spawn input is text of up to 8 MB".into()),
         };
+        let session = resumes(&args);
+        if let Some(session) = &session
+            && self.runs_session(session, None)
+        {
+            return Err(SESSION_TAKEN.into());
+        }
         let listener = Listener { lines: Arc::new(reply.lines_in_order()), done: reply, before: 0 };
-        let running = Arc::new(Running {
-            process: Process::new(),
-            program,
-            args,
-            cwd,
-            place,
-            host: Mutex::new(Arc::downgrade(self)),
-            out: Mutex::new(Out { listener: Some(listener), ..Out::default() }),
-            order: Mutex::default(),
-        });
+        let running = |process: Proc, program: String, args: Vec<String>, cwd: PathBuf, place: Option<Place>, listener: Listener| {
+            Arc::new(Running {
+                process,
+                program,
+                args,
+                cwd,
+                place,
+                session: Mutex::new(session.clone()),
+                host: Mutex::new(Arc::downgrade(self)),
+                out: Mutex::new(Out { listener: Some(listener), ..Out::default() }),
+                order: Mutex::default(),
+            })
+        };
+        // Only a tab's page has a place that comes back after a restart, and only Wings' own plugins keep a program
+        // running once Wings has quit.
+        #[cfg(unix)]
+        let tab = match (&place, survive && access.builtin) {
+            (Some(Place::Page(state)), true) if state.is_tab() => Some(state.key()),
+            _ => None,
+        };
+        #[cfg(unix)]
+        if let Some(tab) = tab
+            && let Some(socket) = access.env.job_server()
+        {
+            self.room(&self.processes.lock().unwrap(), &token)?;
+            let launch = process::launch(&access.plugin, &program, &args, &cwd, config_dir.as_deref())?;
+            let owner = json!({
+                "plugin": self.config.id, "tab": tab, "token": shown(&token), "program": program, "args": args,
+                "cwd": cwd.to_string_lossy(), "session": session,
+            });
+            match server::start(&socket, launch, owner, input.as_deref()) {
+                Ok((job, events)) => {
+                    let started = running(Proc::Server(job.clone()), program, args, cwd, place, listener);
+                    self.processes.lock().unwrap().insert(token, started.clone());
+                    server::follow(started, job, events);
+                    return Ok(());
+                }
+                // The terminal server can't run it: the app does, as for a program that needn't survive.
+                Err(error) => eprintln!("[plugins] {}: the terminal server didn't start {program}, so Wings runs it: {error}", self.config.id),
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = survive;
+        let here = Process::new();
+        let running = running(Proc::Here(here.clone()), program, args, cwd, place, listener);
         // Kept from now, before it starts, so that the page can write to it at once.
         {
             let mut processes = self.processes.lock().unwrap();
@@ -301,12 +474,12 @@ impl Shared {
         }
         if let Some(input) = input {
             // A failed write shows as the program's own end.
-            running.process.write(input, |_| {});
+            here.write(input, |_| {});
         }
         let started = running.clone();
         let spawned = thread::Builder::new().name("plugin-process".into()).spawn(move || {
-            let exit = process::run_under(&access.plugin, &started.process, &started.program, &started.args, &started.cwd, config_dir.as_deref(), |line| {
-                started.heard(line);
+            let exit = process::run_under(&access.plugin, &here, &started.program, &started.args, &started.cwd, config_dir.as_deref(), |line| {
+                started.heard(None, line);
                 true
             });
             let host = started.host.lock().unwrap().upgrade();
@@ -320,6 +493,14 @@ impl Shared {
             return Err(format!("The call couldn't start: {error}"));
         }
         Ok(())
+    }
+
+    /// Whether a program of the plugin goes on with the Claude Code session `session` and isn't being stopped, but those
+    /// left at `here`.
+    fn runs_session(&self, session: &str, here: Option<&Place>) -> bool {
+        let at_here = |running: &Running| here.is_some_and(|here| running.place.as_ref().is_some_and(|at| at.same(here)));
+        let running = self.processes.lock().unwrap().values().any(|running| running.runs(session));
+        running || self.orphans.lock().unwrap().iter().any(|orphan| orphan.running.runs(session) && !at_here(&orphan.running))
     }
 
     fn write(&self, token: &str, params: &Value, reply: Reply) -> Result<(), String> {
@@ -341,8 +522,8 @@ impl Shared {
         Ok(())
     }
 
-    /// `processNote`: what the frame keeps with one of its programs for the frame that may take it over, and with
-    /// `heard`, how many of its lines it has what it needs of.
+    /// `processNote`: what the frame keeps with one of its programs for the frame that may take it over, with `heard`,
+    /// how many of its lines it has what it needs of, and with `session`, the Claude Code session it goes on with.
     fn note(&self, token: &str, params: &Value) -> Result<(), String> {
         let note = params.get("note").cloned().unwrap_or(Value::Null);
         if note.to_string().len() > NOTE_MAX {
@@ -352,6 +533,7 @@ impl Shared {
             None | Some(Value::Null) => None,
             Some(heard) => Some(heard.as_u64().ok_or("processNote heard is a number of lines")?),
         };
+        let session = session_id(params.get("session"))?;
         let running = self
             .processes
             .lock()
@@ -359,28 +541,39 @@ impl Shared {
             .get(token)
             .cloned()
             .ok_or_else(|| format!("No program is running as {}", shown(token)))?;
-        running.note(note, heard);
+        running.note(note, heard, session);
         Ok(())
     }
 
-    /// `processes`: the programs the frame before this one, where it runs, left running for it to take over.
-    fn left(&self, place: Option<&Place>) -> Value {
+    /// `processes`: the programs the frame before this one, where it runs, left running for it to take over. With
+    /// `session`, also whether another program of the plugin goes on with that Claude Code session: one entry
+    /// `{ elsewhere: true, session }`, which can't be taken over.
+    fn left(&self, place: Option<&Place>, session: Option<&str>) -> Value {
         let Some(place) = place else {
             return json!([]);
         };
-        let orphans = self.orphans.lock().unwrap();
-        orphans
-            .iter()
-            .filter(|orphan| orphan.running.place.as_ref().is_some_and(|at| at.same(place)))
-            .map(|orphan| {
-                let running = &orphan.running;
-                let out = running.out.lock().unwrap();
-                json!({
-                    "id": orphan.id, "token": orphan.token, "program": running.program, "args": running.args,
-                    "cwd": running.cwd.to_string_lossy(), "note": out.note, "kept": out.kept.len(),
+        let mut listed: Vec<Value> = {
+            let orphans = self.orphans.lock().unwrap();
+            orphans
+                .iter()
+                .filter(|orphan| orphan.running.place.as_ref().is_some_and(|at| at.same(place)))
+                .map(|orphan| {
+                    let running = &orphan.running;
+                    let out = running.out.lock().unwrap();
+                    json!({
+                        "id": orphan.id, "token": orphan.token, "program": running.program, "args": running.args,
+                        "cwd": running.cwd.to_string_lossy(), "note": out.note, "kept": out.kept.len(),
+                        "session": *running.session.lock().unwrap(),
+                    })
                 })
-            })
-            .collect()
+                .collect()
+        };
+        if let Some(session) = session
+            && self.runs_session(session, Some(place))
+        {
+            listed.push(json!({ "elsewhere": true, "session": session }));
+        }
+        Value::Array(listed)
     }
 
     /// `adopt`: takes over the program `from` that `processes` listed for this frame, as its own program `token`.
@@ -465,6 +658,44 @@ impl Shared {
                 }
             }
         }
+        self.stop_left_after(grace);
+    }
+
+    /// Takes over the programs of this plugin's tabs that the terminal server kept running from Wings' run before this
+    /// one: the page of each one's tab may take it over in `grace`, after which it is stopped. One this run's manifest
+    /// doesn't allow is stopped now.
+    #[cfg(unix)]
+    pub(super) fn take_jobs(self: &Arc<Self>, jobs: Vec<LeftJob>, grace: Duration) {
+        if jobs.is_empty() {
+            return;
+        }
+        let until = Instant::now() + grace;
+        for left in jobs {
+            let Some((job, events, running)) = server::take(self, &left) else {
+                continue;
+            };
+            let id = format!("left-{}", self.next_orphan.fetch_add(1, Ordering::Relaxed));
+            let token = left.info.owner["token"].as_str().unwrap_or_default().to_owned();
+            self.orphans.lock().unwrap().push(Orphan { id, token, running: running.clone(), until });
+            server::follow(running, job, events);
+        }
+        self.stop_left_after(grace);
+    }
+
+    /// Only a Unix app has a terminal server.
+    #[cfg(not(unix))]
+    pub(super) fn take_jobs(self: &Arc<Self>, _jobs: Vec<LeftJob>, _grace: Duration) {}
+
+    /// Lets go of the programs the terminal server runs as Wings quits: they run on for its next run.
+    pub(super) fn let_go_of_jobs(&self) {
+        let processes = self.processes.lock().unwrap();
+        let orphans = self.orphans.lock().unwrap();
+        for running in processes.values().chain(orphans.iter().map(|orphan| &orphan.running)) {
+            running.process.let_go();
+        }
+    }
+
+    fn stop_left_after(self: &Arc<Self>, grace: Duration) {
         let host = Arc::downgrade(self);
         let _ = thread::Builder::new().name("plugin-process-grace".into()).spawn(move || {
             thread::sleep(grace);

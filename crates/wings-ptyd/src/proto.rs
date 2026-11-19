@@ -5,6 +5,9 @@
 //! A connection opens with the client's `hello` and the host's `welcome`. After that the client sends requests,
 //! each with an `id` the host's `reply` carries back, and the host sends events about its panes whenever they
 //! happen. Panes are numbered by the host.
+//!
+//! A host whose `welcome` lists `JOBS` also runs jobs: programs on pipes rather than a terminal, whose output is lines
+//! (`Line` frames), for an app that wants a program it talks to, like a plugin's headless Claude Code, to outlive it.
 
 use std::{
     io::{self, Read},
@@ -21,11 +24,14 @@ pub const MIN_PROTO: u32 = 1;
 pub const MAX_FRAME: usize = 1 << 20;
 /// Replays and blobs go in pieces this big, so each frame stays well under `MAX_FRAME`.
 pub const CHUNK: usize = 256 << 10;
+/// What a host that runs jobs lists in its `welcome`.
+pub const JOBS: &str = "jobs";
 
 const CTRL: u8 = 0;
 const OUT: u8 = 1;
 const IN: u8 = 2;
 const BLOB: u8 = 3;
+const LINE: u8 = 4;
 
 #[derive(Debug, PartialEq)]
 pub enum Frame {
@@ -37,6 +43,9 @@ pub enum Frame {
     In { pane: u32, data: Vec<u8> },
     /// Bytes of request `req`: a spawn's saved output client to host, a read's output host to client.
     Blob { req: u32, data: Vec<u8> },
+    /// A piece of a line a job printed, host to client, without its line ending. `n` numbers the line, the first 1, and
+    /// `more` says another piece of the same line follows: a line can be bigger than a frame.
+    Line { job: u32, n: u64, more: bool, data: Vec<u8> },
 }
 
 fn frame(kind: u8, header: &[u8], data: &[u8]) -> Vec<u8> {
@@ -71,6 +80,14 @@ pub fn input(pane: u32, data: &[u8]) -> Vec<u8> {
 
 pub fn blob(req: u32, data: &[u8]) -> Vec<u8> {
     frame(BLOB, &req.to_le_bytes(), data)
+}
+
+pub fn line(job: u32, n: u64, more: bool, data: &[u8]) -> Vec<u8> {
+    let mut header = [0u8; 13];
+    header[..4].copy_from_slice(&job.to_le_bytes());
+    header[4..12].copy_from_slice(&n.to_le_bytes());
+    header[12] = u8::from(more);
+    frame(LINE, &header, data)
 }
 
 /// Reads one frame, or `None` where the stream ends cleanly between frames.
@@ -119,6 +136,15 @@ pub fn read(r: &mut impl Read) -> io::Result<Option<Frame>> {
         BLOB => {
             let h = header(r, 4)?;
             Frame::Blob { req: u32::from_le_bytes(h[..].try_into().unwrap()), data: bytes(r, body - 4)? }
+        }
+        LINE => {
+            let h = header(r, 13)?;
+            Frame::Line {
+                job: u32::from_le_bytes(h[..4].try_into().unwrap()),
+                n: u64::from_le_bytes(h[4..12].try_into().unwrap()),
+                more: h[12] != 0,
+                data: bytes(r, body - 13)?,
+            }
         }
         kind => return Err(invalid(format!("a frame of unknown kind {kind}"))),
     }))
@@ -173,6 +199,86 @@ pub enum Request {
     /// For a server older than the app's: start no more panes, and exit once the last one has ended. The panes it
     /// runs go on as before.
     Drain,
+    /// Starts a job: a program on pipes. The blob of this request is what it reads first. Replies `JobStarted`, then
+    /// streams the job to this client as `JobAttach` does.
+    JobStart(JobSpawn),
+    /// Streams the job to this client, and to no other: the lines after its last note, each new one, then `JobEnded`.
+    /// Replies `JobAttached` first.
+    JobAttach {
+        job: u32,
+    },
+    /// Writes the blob of this request to the job's input. Replied once it is written.
+    JobWrite {
+        job: u32,
+    },
+    /// Keeps the blob of this request as the job's note, for the next app that attaches. With `since`, the lines up to
+    /// that one are let go of; with `owner`, it is what the job is for from now on.
+    JobNote {
+        job: u32,
+        since: Option<u64>,
+        owner: Option<serde_json::Value>,
+    },
+    /// Closes the job's input and kills it if it still runs a few seconds later. A job that ended is forgotten.
+    JobStop {
+        job: u32,
+    },
+    /// Replies `[JobInfo]`.
+    JobList,
+    /// The job's note, as `Blob` frames before the reply.
+    JobReadNote {
+        job: u32,
+    },
+}
+
+/// A job as an app asks for it. The app has checked the program may run, and found it.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct JobSpawn {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    pub cwd: PathBuf,
+    /// Its whole environment. The app builds it as for a program it runs itself.
+    pub env: Vec<(String, String)>,
+    /// What the job is for, as the app knows it: kept and listed back, never read here.
+    pub owner: serde_json::Value,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct JobStarted {
+    pub job: u32,
+    pub pid: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct JobAttached {
+    pub job: u32,
+    /// The last line noted: the lines after it follow.
+    pub since: u64,
+    /// The last line printed so far.
+    pub last: u64,
+}
+
+/// How a job's program ended: its exit code (none when a signal ended it), the end of what it printed to stderr, and
+/// why it was ended, if it was.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
+pub struct JobExit {
+    pub code: Option<i32>,
+    pub stderr: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct JobInfo {
+    pub job: u32,
+    pub owner: serde_json::Value,
+    pub pid: Option<u32>,
+    pub since: u64,
+    pub last: u64,
+    /// A client hears it now.
+    pub attached: bool,
+    /// It was told to stop.
+    pub stopping: bool,
+    pub ended: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -220,6 +326,10 @@ pub enum HostMsg {
     /// The client fell too far behind: this pane's queued output was dropped and it no longer streams. Attach
     /// again from the last `seq_end` received.
     Lagged { pane: u32 },
+    /// A job's program ended, after its last line.
+    JobEnded { job: u32, exit: JobExit },
+    /// `lines` lines of a job that this client never got were let go of for room, before the next one it gets.
+    JobDropped { job: u32, lines: u64 },
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -321,6 +431,17 @@ mod tests {
         assert_eq!(reply, HostMsg::Reply { id: 4, ok: serde_json::Value::Null, error: None });
         let welcome = HostMsg::Welcome { proto: 1, host_version: 3, features: vec![], error: None };
         assert_eq!(serde_json::to_string(&welcome).unwrap(), r#"{"t":"welcome","proto":1,"host_version":3,"features":[]}"#);
+    }
+
+    #[test]
+    fn a_jobs_line_and_requests_round_trip() {
+        let wire = line(4, 1 << 33, true, b"{\"type\":");
+        assert_eq!(one(&wire).unwrap(), Some(Frame::Line { job: 4, n: 1 << 33, more: true, data: b"{\"type\":".to_vec() }));
+        assert_eq!(one(&line(4, 1, false, b"")).unwrap(), Some(Frame::Line { job: 4, n: 1, more: false, data: Vec::new() }));
+        let note: Call = serde_json::from_str(r#"{"id":3,"t":"job_note","job":4,"since":7}"#).unwrap();
+        assert_eq!(note.req, Request::JobNote { job: 4, since: Some(7), owner: None });
+        let ended = HostMsg::JobEnded { job: 4, exit: JobExit { code: Some(0), stderr: String::new(), error: None } };
+        assert_eq!(serde_json::from_slice::<HostMsg>(&serde_json::to_vec(&ended).unwrap()).unwrap(), ended);
     }
 
     #[test]

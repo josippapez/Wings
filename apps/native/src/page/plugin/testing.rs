@@ -82,6 +82,8 @@ pub(super) struct FakeEnv {
     pub past: Mutex<Vec<serde_json::Value>>,
     /// The files you pick when the file picker opens.
     pub picks: Mutex<Vec<PathBuf>>,
+    /// The socket of the terminal server that runs the programs tabs keep through a restart, when a test starts one.
+    pub job_server: Mutex<Option<PathBuf>>,
     log: Mutex<Vec<Seen>>,
     changed: Condvar,
 }
@@ -101,6 +103,7 @@ impl FakeEnv {
             statusline: Mutex::default(),
             past: Mutex::default(),
             picks: Mutex::default(),
+            job_server: Mutex::default(),
             log: Mutex::default(),
             changed: Condvar::new(),
         })
@@ -393,6 +396,23 @@ impl Env for FakeEnv {
             sort.into(),
         ));
     }
+
+    fn job_server(&self) -> Option<PathBuf> {
+        self.job_server.lock().unwrap().clone()
+    }
+
+    /// The server's jobs of `plugin` that haven't ended, as the app lists them as it starts.
+    #[cfg(unix)]
+    fn left_jobs(&self, plugin: &str) -> Vec<super::LeftJob> {
+        let Some(socket) = self.job_server() else {
+            return Vec::new();
+        };
+        let jobs = wings_ptyd::client::Control::connect(&socket).and_then(|mut control| control.jobs()).unwrap_or_default();
+        jobs.into_iter()
+            .filter(|job| !job.ended && job.owner["plugin"] == plugin)
+            .map(|info| super::LeftJob { socket: socket.clone(), info })
+            .collect()
+    }
 }
 
 /// A plugin of id `probe` with what `manifest` adds (`permissions`, `contributes`, `name`).
@@ -464,6 +484,17 @@ impl Rig {
         let config = self.root.config(&plugin.manifest.id);
         let next = PluginHost::with_access(config, Access { plugin, builtin: access.builtin, env: access.env });
         next.take_handover_within(self.host.hand_over(), grace);
+        next
+    }
+
+    /// The plugin in Wings' next run, as an update of Wings starts it: this run lets go of the programs the terminal
+    /// server runs for its tabs as it quits, and the next one takes them, which its pages have `grace` to take over.
+    pub fn next_app(&self, grace: Duration) -> PluginHost {
+        self.host.app_quits();
+        let access = self.host.shared.access.clone().unwrap();
+        let config = self.root.config(&access.plugin.manifest.id);
+        let next = PluginHost::with_access(config, access);
+        next.take_left_jobs_within(grace);
         next
     }
 

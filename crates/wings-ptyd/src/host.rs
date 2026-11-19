@@ -33,9 +33,12 @@ use wings_terminal::shell::pane_command;
 use crate::{
     output::{Kept, REPLAY_BYTES},
     pane_id,
-    proto::{self, Attached, Call, Frame, HostMsg, PaneInfo, Request, Spawn, Spawned, CHUNK, PROTO},
+    proto::{self, Attached, Call, Frame, HostMsg, JobStarted, PaneInfo, Request, Spawn, Spawned, CHUNK, JOBS, PROTO},
     SERVER_VERSION,
 };
+
+mod job;
+use job::HostJob;
 
 pub struct Config {
     /// Output queued for one client before it is told it lagged.
@@ -49,11 +52,23 @@ pub struct Config {
     pub idle: Option<Duration>,
     /// The version it says in its `welcome`: `SERVER_VERSION`, or a newer one a test plays.
     pub version: u32,
+    /// A job no app has heard for this long has its input closed, so it ends; one that ended is then forgotten.
+    pub job_orphaned: Duration,
 }
+
+/// How long a job waits for an app to attach before it is let end: longer than an update takes to start the new app.
+pub const JOB_ORPHANED: Duration = Duration::from_secs(10 * 60);
 
 impl Default for Config {
     fn default() -> Config {
-        Config { client_queue: 8 << 20, uid: unsafe { libc::getuid() }, exe: None, idle: None, version: SERVER_VERSION }
+        Config {
+            client_queue: 8 << 20,
+            uid: unsafe { libc::getuid() },
+            exe: None,
+            idle: None,
+            version: SERVER_VERSION,
+            job_orphaned: JOB_ORPHANED,
+        }
     }
 }
 
@@ -75,8 +90,9 @@ const FG_POLL: Duration = Duration::from_millis(250);
 /// How often the host checks whether its executable was replaced.
 const TICK: Duration = Duration::from_secs(1);
 
-/// Saved output a client may send ahead of a spawn: a ring's worth, and its end.
-const MAX_STAGED: usize = 2 * REPLAY_BYTES;
+/// What a client may send ahead of a request: a spawn's saved output (a ring's worth, and its end), or a write to a job
+/// of up to a line's worth.
+const MAX_STAGED: usize = job::LINE_LIMIT + REPLAY_BYTES;
 
 /// Serves on `path` as `version` until `serve` returns, with the executable it runs from watched for an update.
 pub fn main(path: &Path, idle: Option<Duration>, version: u32) -> Result<Stopped, io::Error> {
@@ -118,14 +134,16 @@ pub fn serve(listener: UnixListener, path: &Path, config: Config) -> Stopped {
                 host.accept(stream);
             }
         }
+        host.tend_jobs();
         // Drained once nothing runs in it and no app is left to read the panes that exited.
         if host.draining.load(Ordering::Relaxed)
             && host.clients.lock().unwrap().is_empty()
             && host.all_panes().iter().all(|pane| pane.out.lock().unwrap().exited)
+            && host.all_jobs().iter().all(|job| job.ended())
         {
             break Stopped::Drained;
         }
-        if !host.panes.lock().unwrap().is_empty() {
+        if !host.panes.lock().unwrap().is_empty() || !host.jobs.lock().unwrap().is_empty() {
             used = std::time::Instant::now();
             continue;
         }
@@ -166,6 +184,8 @@ struct Host {
     config: Config,
     panes: Mutex<HashMap<u32, Arc<HostPane>>>,
     next_pane: AtomicU32,
+    jobs: Mutex<HashMap<u32, Arc<HostJob>>>,
+    next_job: AtomicU32,
     clients: Mutex<HashMap<u64, Arc<Client>>>,
     /// Wakes the foreground poller when the first client connects.
     clients_changed: Condvar,
@@ -212,6 +232,8 @@ impl Host {
             config,
             panes: Mutex::default(),
             next_pane: AtomicU32::new(1),
+            jobs: Mutex::default(),
+            next_job: AtomicU32::new(1),
             clients: Mutex::default(),
             clients_changed: Condvar::new(),
             next_client: AtomicU64::new(1),
@@ -226,6 +248,24 @@ impl Host {
 
     fn all_panes(&self) -> Vec<Arc<HostPane>> {
         self.panes.lock().unwrap().values().cloned().collect()
+    }
+
+    fn job(&self, id: u32) -> Option<Arc<HostJob>> {
+        self.jobs.lock().unwrap().get(&id).cloned()
+    }
+
+    fn all_jobs(&self) -> Vec<Arc<HostJob>> {
+        self.jobs.lock().unwrap().values().cloned().collect()
+    }
+
+    /// Closes the input of the jobs no app has heard for a while, and forgets those of them that ended.
+    fn tend_jobs(&self) {
+        for job in self.all_jobs() {
+            if job.tend(self.config.job_orphaned) {
+                self.jobs.lock().unwrap().remove(&job.id);
+                job.forget();
+            }
+        }
     }
 
     /// Sends an event to every client. Its lock order: a pane's output, then the client list, then a queue.
@@ -256,6 +296,9 @@ impl Host {
         for pane in self.all_panes() {
             pane.out.lock().unwrap().attached.retain(|c| !Arc::ptr_eq(c, client));
         }
+        for job in self.all_jobs() {
+            job.left_by(client);
+        }
     }
 
     fn serve_client(self: &Arc<Self>, client: &Arc<Client>, stream: UnixStream) {
@@ -267,7 +310,7 @@ impl Host {
         let welcome = HostMsg::Welcome {
             proto: both.unwrap_or(PROTO),
             host_version: self.config.version,
-            features: Vec::new(),
+            features: vec![JOBS.into()],
             error: both.is_none().then(|| format!("this host speaks protocols {}..={PROTO}, not {min_proto}..={proto}", proto::MIN_PROTO)),
         };
         let Some(welcome) = ctrl_frame(&welcome) else { return };
@@ -320,7 +363,7 @@ impl Host {
                         reply(client, id, Err(e.to_string()));
                     }
                 },
-                Frame::Out { .. } => break,
+                Frame::Out { .. } | Frame::Line { .. } => break,
             }
         }
         // Ends the write thread too, if it is stuck writing to a client that stopped reading.
@@ -367,6 +410,61 @@ impl Host {
                 self.draining.store(true, Ordering::Relaxed);
                 reply(client, id, Ok(Value::Null));
             }
+            Request::JobStart(_) if self.draining.load(Ordering::Relaxed) => reply(client, id, Err("this server is draining".into())),
+            Request::JobStart(spawn) => {
+                let number = self.next_job.fetch_add(1, Ordering::Relaxed);
+                match HostJob::start(self, number, spawn, blob) {
+                    Ok(job) => {
+                        self.jobs.lock().unwrap().insert(number, job.clone());
+                        let started = JobStarted { job: number, pid: job.pid() };
+                        reply(client, id, Ok(serde_json::to_value(started).expect("serializes")));
+                        job.attach(client, None);
+                    }
+                    Err(e) => reply(client, id, Err(e.to_string())),
+                }
+            }
+            Request::JobAttach { job } => match self.job(job) {
+                Some(job) => job.attach(client, Some(id)),
+                None => reply(client, id, Err(format!("unknown job {job}"))),
+            },
+            Request::JobWrite { job } => match self.job(job) {
+                Some(job) => job.write(blob, client, id),
+                None => reply(client, id, Err("The program's input is closed".into())),
+            },
+            Request::JobNote { job, since, owner } => {
+                let noted = match self.job(job) {
+                    Some(job) => job.note(blob, since, owner).map(|()| Value::Null),
+                    None => Err(format!("unknown job {job}")),
+                };
+                reply(client, id, noted);
+            }
+            Request::JobStop { job } => {
+                if let Some(job) = self.job(job) {
+                    // One that ended goes once a client heard how; nobody will.
+                    if job.ended() && !job.heard() {
+                        self.jobs.lock().unwrap().remove(&job.id);
+                        job.forget();
+                    } else {
+                        job.stop();
+                    }
+                }
+                reply(client, id, Ok(Value::Null));
+            }
+            Request::JobList => {
+                let mut jobs: Vec<_> = self.all_jobs().iter().map(|job| job.info()).collect();
+                jobs.sort_by_key(|job| job.job);
+                reply(client, id, Ok(serde_json::to_value(jobs).expect("serializes")));
+            }
+            Request::JobReadNote { job } => match self.job(job) {
+                Some(job) => {
+                    let note = job.note_bytes();
+                    for chunk in note.chunks(CHUNK) {
+                        client.send(None, Arc::new(proto::blob(id, chunk)));
+                    }
+                    reply(client, id, Ok(json!({ "len": note.len() })));
+                }
+                None => reply(client, id, Err(format!("unknown job {job}"))),
+            },
         }
     }
 
@@ -624,6 +722,8 @@ struct Client {
     id: u64,
     queue: Mutex<Queue>,
     ready: Condvar,
+    /// Woken as the writer takes a frame, for a job's line that waits while the client is behind.
+    room: Condvar,
     /// Streamed output stops here and the client lags.
     cap: usize,
 }
@@ -638,7 +738,19 @@ struct Queue {
 
 impl Client {
     fn new(id: u64, cap: usize) -> Client {
-        Client { id, queue: Mutex::default(), ready: Condvar::new(), cap }
+        Client { id, queue: Mutex::default(), ready: Condvar::new(), room: Condvar::new(), cap }
+    }
+
+    fn is_closed(&self) -> bool {
+        self.queue.lock().unwrap().closed
+    }
+
+    /// Waits up to `timeout` for at most `most` bytes to be queued. False when that didn't happen in time; a closed
+    /// client has nothing to wait for.
+    fn wait_room(&self, most: usize, timeout: Duration) -> bool {
+        let queue = self.queue.lock().unwrap();
+        let (queue, _) = self.room.wait_timeout_while(queue, timeout, |queue| !queue.closed && queue.bytes > most).unwrap();
+        queue.closed || queue.bytes <= most
     }
 
     /// Queues a reply, an event or a replay. These aren't dropped like streamed output, but a client that lets them
@@ -687,6 +799,7 @@ impl Client {
         queue.closed = true;
         queue.frames.clear();
         self.ready.notify_one();
+        self.room.notify_all();
     }
 
     /// The next frame to write, or `None` once closed.
@@ -698,6 +811,7 @@ impl Client {
             }
             if let Some((_, frame)) = queue.frames.pop_front() {
                 queue.bytes -= frame.len();
+                self.room.notify_all();
                 return Some(frame);
             }
             queue = self.ready.wait(queue).unwrap();

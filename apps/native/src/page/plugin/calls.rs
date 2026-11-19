@@ -987,6 +987,8 @@ mod sections;
 pub use sections::{SectionIcon, SectionRow};
 #[cfg(test)]
 mod disk_usage;
+#[cfg(all(test, unix))]
+mod jobs;
 #[cfg(test)]
 mod prerequisites;
 #[cfg(test)]

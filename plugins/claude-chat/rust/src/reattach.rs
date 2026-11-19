@@ -1,5 +1,7 @@
 //! A chat whose plugin was updated or restarted while its Claude Code ran goes on with that same Claude Code: Wings keeps
 //! it running (`host::processes`), and the chat's next page takes it over (`host::adopt`) instead of starting another.
+//! So does a chat whose Wings restarted or updated: Wings' terminal server ran its Claude Code (`host::spawn_surviving`).
+//! A chat never starts a Claude Code on a session another one still runs (`host::processes_of`).
 //!
 //! The new page shows what the page before showed. The conversation comes from the session's transcript up to the entry
 //! before the first message among the lines Wings kept, and the rest from those lines: Claude Code prints each message
@@ -133,6 +135,8 @@ pub struct Track {
 /// What the note last sent said, but its lasting lines, of which `changed` counts the changes.
 #[derive(PartialEq)]
 struct Sent {
+    /// The session, which Wings is told with the note once Claude Code names it.
+    session: Option<String>,
     answered: Vec<(String, bool)>,
     queued: Vec<String>,
     model: Option<String>,
@@ -184,6 +188,7 @@ impl Track {
             None => false,
         });
         let sent = Sent {
+            session: session.id.clone(),
             answered,
             queued: session.queued.iter().map(|queued| queued.uuid.clone()).collect(),
             model: session.model.clone(),
@@ -321,13 +326,26 @@ mod page {
         FOLLOWED.with(|followed| *followed.borrow_mut() = Some(Followed { run, input, track: Track::default(), waiting: None }));
     }
 
+    /// Said in place of a Claude Code the tab can't start: another one runs its session.
+    const TAKEN: &str = "Claude Code is already running this session elsewhere in Wings. Open it again here once it has finished.";
+
     /// Takes over the Claude Code this tab's page before ran, which Wings kept running through an update or restart of
-    /// the plugin. False when there is none, as when the tab opens after Wings started: the chat starts it then.
+    /// the plugin or of Wings. False when there is none, as when the tab opens after Wings started: the chat starts it
+    /// then. True too when another Claude Code runs the session `resume`, which this tab mustn't start again.
     pub async fn take_over(resume: Option<String>) -> bool {
-        // An older Wings doesn't know the call.
-        if !host::processes().await.is_ok_and(|left| left.iter().any(chat_runs)) {
+        // An older Wings doesn't know the call, or the session.
+        let Ok(listed) = host::processes_of(resume.as_deref()).await else {
             return false;
-        }
+        };
+        let Some(here) = listed.iter().rev().find(|left| chat_runs(left)) else {
+            if listed.iter().any(|left| left.elsewhere) {
+                taken();
+                return true;
+            }
+            return false;
+        };
+        // What Wings knows it runs, over what the tab last saved.
+        let resume = here.session.clone().or(resume);
         let (run, cwd) = chat::with(|c| (chat::begin(c), c.cwd.clone()));
         chat::load_files(run, cwd.clone());
         chat::load_git(run, cwd);
@@ -352,6 +370,16 @@ mod page {
         }
         chat::follow(run, process).await;
         true
+    }
+
+    /// Another chat, or a Claude Code Wings kept from before it restarted that no tab took over, runs the tab's session.
+    /// The tab says so and starts none: two on one session would both write to it. It keeps the session for when it opens
+    /// again, and offers no terminal for it either.
+    fn taken() {
+        chat::with(|c| {
+            chat::begin(c);
+            c.state = chat::State::Failed(TAKEN.into());
+        });
     }
 
     /// A line of the Claude Code taken over: one Wings kept, until they have all come, then each as it is printed.
@@ -425,11 +453,73 @@ mod page {
         let Some((note, heard)) = note else {
             return;
         };
+        let session = chat::with(|c| c.session.id.clone());
         FOLLOWED.with(|followed| {
             if let Some(followed) = followed.borrow().as_ref() {
-                followed.input.note(&note, heard);
+                followed.input.note_session(&note, heard, session.as_deref());
             }
         });
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::{cell::RefCell, rc::Rc};
+
+        use serde_json::{Value, json};
+        use wings_plugin::{host, task};
+
+        use super::take_over;
+        use crate::chat;
+
+        const SESSION: &str = "11111111-2222-4333-8444-555555555555";
+
+        type Calls = Rc<RefCell<Vec<(String, Value)>>>;
+
+        /// Wings, as far as the chat asks it: `processes` lists `listed`, every other call is answered with null, and what
+        /// was called is kept.
+        fn wings(listed: Value) -> Calls {
+            let calls = Calls::default();
+            let kept = calls.clone();
+            host::testing::answer(move |method, params| {
+                kept.borrow_mut().push((method.to_owned(), params.clone()));
+                Ok(if method == "processes" { listed.clone() } else { Value::Null })
+            });
+            calls
+        }
+
+        fn called(calls: &Calls, method: &str) -> Vec<Value> {
+            calls.borrow().iter().filter(|(name, _)| name == method).map(|(_, params)| params.clone()).collect()
+        }
+
+        #[test]
+        fn a_chat_takes_over_the_claude_code_wings_kept_for_its_session_and_starts_none() {
+            let resume = format!("--resume={SESSION}");
+            let calls = wings(json!([{ "id": "left-0", "token": "process-1", "program": "claude", "args": ["-p", resume], "cwd": "/p", "note": null, "kept": 0, "session": SESSION }]));
+            assert!(task::block_on(take_over(Some(SESSION.into()))));
+            assert_eq!(called(&calls, "processes")[0], json!({ "session": SESSION }), "it asks whether its session runs");
+            assert_eq!(called(&calls, "adopt").len(), 1);
+            assert!(called(&calls, "spawn").is_empty());
+            assert_eq!(chat::with(|c| c.session.id.clone()).as_deref(), Some(SESSION));
+        }
+
+        #[test]
+        fn a_chat_starts_no_claude_code_on_a_session_another_one_runs() {
+            let calls = wings(json!([{ "elsewhere": true, "session": SESSION }]));
+            assert!(task::block_on(take_over(Some(SESSION.into()))), "nothing for the chat to start");
+            assert!(called(&calls, "adopt").is_empty() && called(&calls, "spawn").is_empty());
+            assert!(chat::with(|c| matches!(&c.state, chat::State::Failed(why) if why.contains("already running this session"))));
+        }
+
+        #[test]
+        fn a_chat_runs_its_claude_code_in_the_terminal_server() {
+            let calls = wings(json!([]));
+            chat::launch_with(Some(SESSION.into()), crate::fork::Launch::default());
+            task::block_on(async {});
+            let spawned = called(&calls, "spawn");
+            assert_eq!(spawned.len(), 1);
+            assert_eq!(spawned[0]["survive"], true);
+            assert!(spawned[0]["args"].as_array().unwrap().contains(&json!(format!("--resume={SESSION}"))));
+        }
     }
 }
 

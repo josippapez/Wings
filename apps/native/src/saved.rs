@@ -97,6 +97,9 @@ pub struct SavedPluginTab {
     pub args: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<serde_json::Value>,
+    /// The tab's key (`FrameState::key`), which the programs the terminal server keeps for it through a restart name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -562,12 +565,14 @@ mod tests {
                     view: "board".into(),
                     args: None,
                     state: Some(serde_json::json!({ "view": "list" })),
+                    key: Some("0123456789abcdef".into()),
                 },
                 SavedPluginTab {
                     plugin: "notes".into(),
                     view: "all".into(),
                     args: Some(serde_json::json!({ "filter": "mine" })),
                     state: None,
+                    key: None,
                 },
             ],
             active_plugin: None,

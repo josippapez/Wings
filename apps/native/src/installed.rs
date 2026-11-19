@@ -230,7 +230,8 @@ pub fn start(found: Vec<Found>, paths: &PluginPaths, env: &Arc<dyn Env>) -> Vec<
 }
 
 /// `start` for a plugin that was updated or restarted, whose run before handed on the programs its frames left running
-/// (`PluginHost::hand_over`): its new run takes them before its main starts.
+/// (`PluginHost::hand_over`): its new run takes them before its main starts, as it takes those the terminal server kept
+/// from Wings' run before this one (`PluginHost::take_left_jobs`).
 pub fn start_with(
     found: Vec<Found>,
     paths: &PluginPaths,
@@ -265,6 +266,8 @@ pub fn start_with(
             if let Some(handover) = handover.take() {
                 host.take_handover(handover);
             }
+            // Before any of its pages opens, so the page of a tab whose program the terminal server kept finds it.
+            host.take_left_jobs();
             let reported = id.clone();
             host.keep_main(
                 main.into(),

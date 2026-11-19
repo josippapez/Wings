@@ -341,6 +341,10 @@ impl Workspace {
     pub fn new(config: Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
         // Registered before any terminal's, so it runs first and reads each shell's folder while it's alive.
         let quit = cx.on_app_quit(|this, cx| {
+            // A chat's Claude Code in the terminal server runs on for the next app, as the server's panes do.
+            for installed in &this.plugins {
+                installed.host.app_quits();
+            }
             this.save(cx);
             this.save_histories(cx);
             // Nothing saves the sidebar's terminals, so their shells end rather than run on in the terminal server.
@@ -385,6 +389,8 @@ impl Workspace {
             config.state.clone(),
             sessions.clone(),
         ));
+        #[cfg(unix)]
+        plugin_env.use_servers(config.terminal_server.clone());
         if let Some(ai) = &ai {
             summaries::start(ai.clone(), sessions.clone());
         }

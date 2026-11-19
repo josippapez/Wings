@@ -512,6 +512,23 @@ pub trait Env: Send + Sync + 'static {
     /// The plugin narrowed its link `link` to `words`, or with `None` let its pattern alone say again. The host has checked
     /// the plugin declares the link, and the words.
     fn set_link_words(&self, _plugin: &str, _link: &str, _words: Option<std::collections::HashSet<String>>) {}
+    /// The socket of the terminal server that runs the programs a tab's page asks to keep through a restart of Wings
+    /// (`spawn`'s `survive`), while one runs. `None` runs them in the app.
+    fn job_server(&self) -> Option<PathBuf> {
+        None
+    }
+    /// The programs of `plugin` the terminal server kept running from Wings' run before this one, once: the plugin's
+    /// host takes them over as it starts.
+    fn left_jobs(&self, _plugin: &str) -> Vec<LeftJob> {
+        Vec::new()
+    }
+}
+
+/// A program a plugin's tab ran in the terminal server, which Wings' run before this one left running.
+#[derive(Clone, Debug)]
+pub struct LeftJob {
+    pub socket: PathBuf,
+    pub info: wings_ptyd::proto::JobInfo,
 }
 
 /// A plugin that is on and approved, and the app it runs in: what every call of its frames is checked against.

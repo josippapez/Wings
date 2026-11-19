@@ -279,6 +279,7 @@ impl Workspace {
                 view: tab.view.view_id.clone(),
                 args: tab.args.clone(),
                 state: tab.state.clone(),
+                key: None,
             });
         }
         for (space, project) in &mut projects {

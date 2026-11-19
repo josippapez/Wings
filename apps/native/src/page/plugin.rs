@@ -58,8 +58,8 @@ pub mod ui;
 
 pub use calls::{SectionIcon, SectionRow};
 pub use env::{
-    Access, ClaudeCaller, Env, Notification, NotifyButton, OpenPane, OpenView, PaneEntry, PanePort,
-    Project, Running, SessionEntry, ToolCall,
+    Access, ClaudeCaller, Env, LeftJob, Notification, NotifyButton, OpenPane, OpenView, PaneEntry,
+    PanePort, Project, Running, SessionEntry, ToolCall,
 };
 
 /// The most JSON a broadcast may hold, in JS string units: what the desktop's host allows.
@@ -941,6 +941,26 @@ impl PluginHost {
     #[cfg(test)]
     pub(crate) fn take_handover_within(&self, handover: Handover, grace: Duration) {
         self.shared.take_handover(handover, grace);
+    }
+
+    /// Takes over the programs of the plugin's tabs that the terminal server kept running from Wings' run before this
+    /// one: the page that opens in each one's tab may take it over (`processes`, `adopt`) in `process::RESTART_GRACE`,
+    /// after which it is stopped.
+    pub fn take_left_jobs(&self) {
+        self.take_left_jobs_within(process::RESTART_GRACE);
+    }
+
+    pub(crate) fn take_left_jobs_within(&self, grace: Duration) {
+        if let Some(access) = &self.shared.access {
+            let jobs = access.env.left_jobs(&self.shared.config.id);
+            self.shared.take_jobs(jobs, grace);
+        }
+    }
+
+    /// Wings quits: the programs the terminal server runs for the plugin's tabs run on, for the pages of those tabs in
+    /// its next run, rather than stop as the plugin's frames close.
+    pub fn app_quits(&self) {
+        self.shared.let_go_of_jobs();
     }
 
     /// How many frames the plugin has open, its main included: a frame leaves when what holds it is let go of.

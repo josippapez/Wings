@@ -19,6 +19,9 @@ pub(super) struct Waiting {
     pub(super) project: SavedProject,
     /// The tab of the last pane adopted from the server, which `enter_project` would have left on screen.
     pub(super) adopted: Option<usize>,
+    /// The tab each of the project's pages got, when they opened at launch for the programs the terminal server kept
+    /// for them (`restore_hidden`).
+    pub(super) pages: Option<Vec<Option<usize>>>,
 }
 
 pub(super) struct WaitingPane {
@@ -66,7 +69,7 @@ impl Workspace {
             let tab = self.restore_tab(tab, None, cx);
             self.terminals.push(tab);
         }
-        self.restore_pages(&project, window, cx);
+        self.restore_pages(&project, None, window, cx);
     }
 
     /// Shows a project restored at launch behind another (`restore_hidden`) for the first time: the panes the server
@@ -95,7 +98,7 @@ impl Workspace {
         if project.tabs.is_empty() && project.plugin_tabs.is_empty() {
             self.new_terminal(window, cx);
         } else {
-            self.restore_pages(project, window, cx);
+            self.restore_pages(project, waiting.pages, window, cx);
         }
         if let Some(tab) = waiting.adopted {
             self.show(Active::Terminal(tab), window, cx);
@@ -126,14 +129,18 @@ impl Workspace {
         }
     }
 
-    /// The project's plugin pages, then the tab it last showed.
+    /// The project's plugin pages, unless they `opened` already, then the tab it last showed.
     fn restore_pages(
         &mut self,
         project: &SavedProject,
+        opened: Option<Vec<Option<usize>>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let restored = self.restore_plugin_tabs(&project.plugin_tabs, cx);
+        let restored = match opened {
+            Some(opened) => opened,
+            None => self.restore_plugin_tabs(&project.plugin_tabs, cx),
+        };
         let terminal = project
             .active
             .and_then(|index| self.terminals.get(index))
@@ -296,6 +303,7 @@ impl Workspace {
                     view: tab.view.clone(),
                     args: tab.args.clone(),
                     state: Some(tab.state.value()).filter(|value| !value.is_null()),
+                    key: Some(tab.state.key()),
                 })
                 .collect(),
             active_plugin: self

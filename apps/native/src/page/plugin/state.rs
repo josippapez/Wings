@@ -1,8 +1,22 @@
 //! State belongs to a host-created tab or block instance, never an id supplied by page JavaScript.
 
-use std::sync::{Arc, Mutex};
+use std::{
+    hash::{BuildHasher, Hasher},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use serde_json::Value;
+
+/// A key no other tab has: random, from the hasher seeds the system gives each process.
+fn new_key() -> String {
+    static MADE: AtomicU64 = AtomicU64::new(0);
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u64(MADE.fetch_add(1, Ordering::Relaxed));
+    format!("{:016x}", hasher.finish())
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum StatePlace {
@@ -25,6 +39,9 @@ struct State {
     show: Option<Box<dyn Fn(&FrameState) + Send + Sync>>,
     /// The frame that runs the page now, whose programs are the page's.
     frame: Option<u64>,
+    /// The tab's own name, which it keeps when Wings restarts: the programs the terminal server kept running for the tab
+    /// are for the page of the tab with the same key.
+    key: String,
 }
 
 /// An agent a tab's page runs, as the sidebar lists it.
@@ -60,8 +77,22 @@ impl FrameState {
                 close: None,
                 show: None,
                 frame: None,
+                key: new_key(),
             })),
         }
+    }
+
+    /// The same, as the tab whose key was `key` before Wings restarted. A key that isn't one this made is ignored.
+    pub fn with_key(self, key: Option<String>) -> Self {
+        if let Some(key) = key.filter(|key| key.len() == 16 && key.bytes().all(|b| b.is_ascii_hexdigit())) {
+            self.state.lock().unwrap().key = key;
+        }
+        self
+    }
+
+    /// The tab's own name, which it keeps when Wings restarts.
+    pub fn key(&self) -> String {
+        self.state.lock().unwrap().key.clone()
     }
 
     /// Calls `changed` each time the page says what its agent does or names its tab.
