@@ -710,13 +710,7 @@ fn composer(c: &Chat) -> Node {
         .prop("autoFocus", true)
         .prop("value", c.draft.as_str())
         .prop("disabled", !open)
-        .on("onChange", |event| {
-            chat::with(|c| {
-                c.draft = event["value"].as_str().unwrap_or_default().to_owned();
-                // Typing dismisses the suggestion, as in Claude Code.
-                c.session.suggestion = c.session.suggestion.take().filter(|_| c.draft.is_empty());
-            })
-        })
+        .on("onChange", |event| chat::typed(event["value"].as_str().unwrap_or_default()))
         .on("onPasteImage", |event| chat::add_image(event["mediaType"].as_str().unwrap_or_default(), event["data"].as_str().unwrap_or_default()))
         .on("onKeyDown", |event| {
             let shift = event["shiftKey"] == true;
@@ -1118,6 +1112,23 @@ mod tests {
 
     fn terminal(pane: &str) -> crate::chat::Terminal {
         crate::chat::Terminal { pane: pane.into() }
+    }
+
+    #[test]
+    fn a_suggestion_taken_with_tab_shows_again_once_the_box_is_emptied_and_typing_your_own_dismisses_it() {
+        chat::with(|c| {
+            c.state = chat::State::Running;
+            c.session.suggestion = Some("run the tests".into());
+        });
+        chat::accept_suggestion();
+        assert_eq!(chat::with(|c| c.draft.clone()), "run the tests");
+        chat::typed("run the tes");
+        chat::typed("");
+        assert_eq!(chat::with(|c| chat::suggested(c).map(str::to_owned)).as_deref(), Some("run the tests"));
+        // A new turn's suggestion is dismissed by typing, as Claude Code does.
+        chat::with(|c| c.session.suggestion = Some("commit it".into()));
+        chat::typed("no, ");
+        assert_eq!(chat::with(|c| c.session.suggestion.clone()), None);
     }
 
     #[test]

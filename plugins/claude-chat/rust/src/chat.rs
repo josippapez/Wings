@@ -78,6 +78,9 @@ pub struct Chat {
     pub session: Session,
     /// The message being typed.
     pub draft: String,
+    /// The suggestion you put in the message box with Tab: editing it keeps the suggestion, so emptying the box shows it
+    /// again.
+    took_suggestion: Option<String>,
     /// The pictures pasted into the message, as (media type, base64), sent with it.
     pub images: Vec<(String, String)>,
     /// How many of the newest items are shown.
@@ -156,6 +159,7 @@ thread_local! {
     static CHAT: RefCell<Chat> = RefCell::new(Chat {
         session: Session::default(),
         draft: String::new(),
+        took_suggestion: None,
         images: Vec::new(),
         shown: PAGE,
         folder: String::new(),
@@ -989,12 +993,24 @@ pub fn suggested(c: &Chat) -> Option<&str> {
     c.session.suggestion.as_deref().filter(|_| empty && c.state == State::Running)
 }
 
-/// Puts the suggested next message in the message box, to send or change.
+/// Puts the suggested next message in the message box, to send or change. The suggestion stays until the next turn, so
+/// emptying the box shows it again.
 pub fn accept_suggestion() {
     with(|c| {
         if let Some(text) = suggested(c).map(str::to_owned) {
-            c.session.suggestion = None;
+            c.took_suggestion = Some(text.clone());
             c.draft = text;
+        }
+    });
+}
+
+/// What you typed in the message box. Typing your own message dismisses the suggestion, as in Claude Code; editing the
+/// one you took with Tab doesn't.
+pub fn typed(value: &str) {
+    with(|c| {
+        c.draft = value.to_owned();
+        if !c.draft.is_empty() && c.took_suggestion.as_ref().is_none_or(|took| Some(took) != c.session.suggestion.as_ref()) {
+            c.session.suggestion = None;
         }
     });
 }
