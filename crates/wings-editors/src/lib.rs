@@ -122,11 +122,21 @@ pub fn open(editor_id: &str, folder: &Path) -> Result<(), String> {
     Err(if text.trim().is_empty() { format!("{} exited with {}", editor.name, out.status) } else { text.trim().to_string() })
 }
 
+/// Whether an editor opens `file` as a workspace or project, whose settings and tasks it takes up, rather than as a
+/// document: VS Code's and Cursor's `.code-workspace` and Sublime Text's project files.
+fn opens_as_workspace(file: &Path) -> bool {
+    let extension = file.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+    matches!(extension.as_deref(), Some("code-workspace" | "sublime-project" | "sublime-workspace"))
+}
+
 /// Opens `file` in the editor with this id, at `line` where the editor can. The error is the editor's own text when it
 /// fails.
 pub fn open_file(editor_id: &str, file: &Path, line: Option<u32>) -> Result<(), String> {
     if !file.is_absolute() || !file.is_file() {
         return Err(format!("{} isn't a file", file.display()));
+    }
+    if opens_as_workspace(file) {
+        return Err(format!("{} is an editor's workspace, which opens with its settings and tasks, not as a file", file.display()));
     }
     let (editor, launch) = installed().into_iter().find(|(e, _)| e.id == editor_id).ok_or("That editor isn't installed")?;
     let (program, args) = file_argv(editor.id, &launch, file, line);
@@ -193,6 +203,19 @@ mod tests {
         let (program, args) = file_argv("idea", &Launch::App("IntelliJ IDEA"), file, Some(42));
         assert_eq!(program, PathBuf::from("/usr/bin/open"));
         assert_eq!(args, vec![OsString::from("-a"), "IntelliJ IDEA".into(), file.into()]);
+    }
+
+    #[test]
+    fn refuses_a_workspace_file_which_an_editor_opens_with_its_settings() {
+        let folder = std::env::temp_dir().join(format!("wings-editors-workspace-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        for name in ["shop.code-workspace", "shop.sublime-project", "shop.SUBLIME-WORKSPACE"] {
+            let file = folder.join(name);
+            std::fs::write(&file, "{}").unwrap();
+            assert!(open_file("vscode", &file, None).unwrap_err().ends_with("not as a file"), "{name}");
+        }
+        assert!(!opens_as_workspace(Path::new("/code/shop/settings.json")));
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     #[test]
