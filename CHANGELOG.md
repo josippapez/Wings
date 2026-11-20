@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.63 · 2026-11-20
+
+- **Fewer redraws while idle**: Claude chat's session panel turns its spinners without redrawing itself, a plugin sending the same badge, status or sidebar rows again no longer redraws the window, and the glow behind an empty chat moves 10 times a second instead of 30.
+- **Verbose follows your list**: Thinking is back in Claude chat's What Verbose opens and now applies in Verbose, and notes from Claude Code (hook output, saved memories) can start open or shut too.
+
 ## 0.2.62 · 2026-11-20
 
 - **Far less power while idle**: a spinning status dot anywhere no longer rebuilds the sidebar, title bar and main column 30 times a second. Wings sat at about a third of a CPU core with nothing happening.
