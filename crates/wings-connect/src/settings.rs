@@ -82,9 +82,9 @@ fn command(settings: &Map<String, Value>) -> Option<&str> {
     line.get("command")?.as_str()
 }
 
-/// The hooks Wings adds, with the matcher each one has. `PreToolUse` is only for Bash: Wings starts in 20 to
-/// 60 ms, which every tool call shouldn't wait for. Once per message you send is fine.
-const HOOKS: [(&str, Option<&str>); 3] = [("SessionStart", None), ("PreToolUse", Some("Bash")), ("UserPromptSubmit", None)];
+/// The hooks Wings adds, with the matcher each one has. `PreToolUse` is for every tool, in subagents too: the plan limit's
+/// note has to reach an edit or a subagent's start, not just a command, and `wings hook` answers in about 8 ms.
+const HOOKS: [(&str, Option<&str>); 3] = [("SessionStart", None), ("PreToolUse", None), ("UserPromptSubmit", None)];
 /// Claude Code's own cap is 600 s; Wings answers within 2 s or says nothing.
 const HOOK_TIMEOUT: u64 = 5;
 
@@ -134,6 +134,7 @@ fn add_hooks(settings: &mut Map<String, Value>, exe: &Path) -> Result<bool, Stri
     let ours = format!("{} hook", quote(&exe.to_string_lossy()));
     let mut changed = false;
     for (event, matcher) in HOOKS {
+        changed |= set_matcher(settings, event, matcher);
         let found = hook_commands(settings, event);
         if !found.is_empty() {
             // The first stays, repointed; any other Wings hook would run Wings twice, or a program that is gone.
@@ -167,6 +168,27 @@ fn add_hooks(settings: &mut Map<String, Value>, exe: &Path) -> Result<bool, Stri
         changed = true;
     }
     Ok(changed)
+}
+
+/// Gives the entries of `event` that hold only `wings hook`, which Wings added, the matcher it adds them with now: an older
+/// Wings ran `PreToolUse` for Bash alone. Yours keep theirs. Whether one changed.
+fn set_matcher(settings: &mut Map<String, Value>, event: &str, matcher: Option<&str>) -> bool {
+    let Some(Value::Array(entries)) = settings.get_mut("hooks").and_then(|h| h.get_mut(event)) else { return false };
+    let mut changed = false;
+    for entry in entries.iter_mut().filter_map(Value::as_object_mut) {
+        let ours = entry.get("hooks").and_then(Value::as_array).is_some_and(|hooks| {
+            !hooks.is_empty() && hooks.iter().all(|hook| hook.get("command").and_then(Value::as_str).and_then(hook_exe).is_some())
+        });
+        if !ours || entry.get("matcher").and_then(Value::as_str) == matcher {
+            continue;
+        }
+        match matcher {
+            Some(matcher) => entry.insert("matcher".into(), json!(matcher)),
+            None => entry.remove("matcher"),
+        };
+        changed = true;
+    }
+    changed
 }
 
 /// Leaves only the first `wings hook` of `event`, and drops an entry that held only one of the others.
@@ -348,7 +370,7 @@ mod tests {
         assert_eq!(pre.len(), 3);
         assert_eq!(pre[0]["hooks"][0]["command"], "rtk hook claude");
         assert_eq!(pre[1]["hooks"][0]["command"], "fmt");
-        assert_eq!(pre[2], json!({ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("'{}' hook", exe.display()), "timeout": 5 }] }));
+        assert_eq!(pre[2], json!({ "hooks": [{ "type": "command", "command": format!("'{}' hook", exe.display()), "timeout": 5 }] }));
         assert_eq!(settings["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
         assert_eq!(settings["hooks"]["SessionStart"][0].get("matcher"), None);
         assert_eq!(settings["hooks"]["PostToolUse"], json!([{ "hooks": [{ "type": "command", "command": "after" }] }]));
@@ -379,6 +401,21 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\n  \"model\": \"opus\"\n}\n");
     }
 
+    /// An older Wings ran `PreToolUse` for Bash alone, so the plan limit's note never reached an edit or a subagent: its
+    /// entry runs for every tool now, and yours keep their matchers.
+    #[test]
+    fn an_older_wings_bash_only_hook_runs_for_every_tool_and_yours_keep_theirs() {
+        let exe = Path::new("/Applications/Wings.app/Contents/MacOS/wings");
+        let ours = json!({ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("'{}' hook", exe.display()), "timeout": 5 }] });
+        let yours = json!({ "matcher": "Bash", "hooks": [{ "type": "command", "command": "rtk hook claude" }] });
+        let path = file("bash-only", &json!({ "hooks": { "PreToolUse": [yours.clone(), ours] } }).to_string());
+        assert!(add(&path, exe).unwrap());
+        let pre = read(&path).unwrap()["hooks"]["PreToolUse"].clone();
+        assert_eq!(pre[0], yours);
+        assert_eq!(pre[1], json!({ "hooks": [{ "type": "command", "command": format!("'{}' hook", exe.display()), "timeout": 5 }] }));
+        assert!(!add(&path, exe).unwrap(), "a second start changes nothing");
+    }
+
     /// What a build in `target/release/deps` left behind: wrapped inside the app's status line and in a hook of
     /// its own, both running a program `cargo clean` had removed.
     #[test]
@@ -400,7 +437,7 @@ mod tests {
         let settings = read(&path).unwrap();
         assert_eq!(command(&settings), Some(format!("'{}'{PASS}{HUD}\n}}", app.display()).as_str()));
         assert_eq!(settings["hooks"]["SessionStart"], json!([hook(&app.to_string_lossy())]));
-        assert_eq!(settings["hooks"]["PreToolUse"], json!([bash(&app.to_string_lossy())]));
+        assert_eq!(settings["hooks"]["PreToolUse"], json!([hook(&app.to_string_lossy())]));
         assert!(!add(&path, app).unwrap(), "a second start changes nothing");
         assert!(!is_wings("/usr/bin/wingspan") && !is_wings("/x/wings-tool") && is_wings("/x/wings-0af"));
     }

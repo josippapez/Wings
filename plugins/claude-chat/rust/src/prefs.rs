@@ -18,6 +18,13 @@ pub fn pause_near_limit() -> Setting<bool> {
     Setting::boolean(PAUSE_NEAR_LIMIT, true)
 }
 
+/// A chat stops Claude's turn, as its Stop button does, when your plan's usage nears its limit (`plan_limit::stop_for`).
+pub const STOP_NEAR_LIMIT: &str = "stop-near-limit";
+
+pub fn stop_near_limit() -> Setting<bool> {
+    Setting::boolean(STOP_NEAR_LIMIT, false)
+}
+
 /// Every new chat turns Remote Control on as it starts (`remote.rs`), so you can go on with it on claude.ai or in the Claude
 /// app.
 pub const REMOTE_ON_START: &str = "remote-on-start";

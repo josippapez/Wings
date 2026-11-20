@@ -49,6 +49,8 @@ fn view() -> Vec<Node> {
         .child(heading("Plan limit"))
         .child(muted("When your plan's 5-hour or weekly usage passes 90%, Claude is told to pause and ask you before more work, in every Claude Code session in Wings, chat or terminal. Past the limit, work is billed as extra usage."))
         .child(checkbox("Tell Claude to pause near the limit", prefs::pause_near_limit().get(), |on| drop(prefs::pause_near_limit().set(on))).key("pause-near-limit"))
+        .child(muted("To be sure, a chat can also stop Claude's turn itself, as its Stop button does: once when usage passes 90%, and once more when the limit is used up. Send a message to go on."))
+        .child(checkbox("Stop the chat's turn near the limit", prefs::stop_near_limit().get(), |on| drop(prefs::stop_near_limit().set(on))).key("stop-near-limit"))
         .child(heading("Remote Control"))
         .child(muted("Each new chat turns on Remote Control as it starts, so you can follow and answer it on claude.ai or in the Claude app. The button by the model menu still turns it off for that chat."))
         .child(checkbox("Turn on Remote Control in every new chat", prefs::remote_on_start().get(), |on| drop(prefs::remote_on_start().set(on))).key("remote-on-start"))

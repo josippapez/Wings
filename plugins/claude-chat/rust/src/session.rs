@@ -408,6 +408,8 @@ pub struct Session {
     default_effort: Option<String>,
     /// How much of your plan's limits is used: ("5h", percent, when it resets in milliseconds) and the week's.
     pub limits: Vec<(&'static str, u64, Option<f64>)>,
+    /// The windows the chat stopped Claude's turn for near the limit, each once (`plan_limit::stop_for`).
+    pub limit_stops: Vec<crate::plan_limit::Stopped>,
     /// The permission mode, one of `MODES`' or another Claude Code has.
     pub mode: Option<String>,
     /// The mode the opening input asked for, which `mode` shows once Claude Code has accepted it.

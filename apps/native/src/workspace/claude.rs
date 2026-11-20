@@ -325,7 +325,7 @@ impl Workspace {
     }
 
     /// The tabs whose page runs an agent and says so, like Claude chat's, in every project, as Wings' MCP tools list them.
-    fn agent_tabs(&self) -> Vec<TabRow> {
+    pub(super) fn agent_tabs(&self) -> Vec<TabRow> {
         let shown = self.plugin_tabs.iter().map(|tab| (&self.config.project, tab));
         let parked = self
             .parked
@@ -571,6 +571,16 @@ impl Handler for Server {
         let snapshot = self.snapshot(HOOK_TIMEOUT).unwrap_or_default();
         let mut caller = snapshot.caller(snapshot.pane(ppid, None));
         caller.session = hook_session(event, input, caller.session);
+        // A chat's Claude Code never runs the status line, so plugins learn its account from the tab that runs it.
+        let id = input.get("session_id").and_then(Value::as_str);
+        if let Some(account) = snapshot
+            .tabs
+            .iter()
+            .find(|tab| id.is_some() && tab.session_id.as_deref() == id)
+            .and_then(|tab| tab.account.clone())
+        {
+            caller.session["account"] = json!(account);
+        }
         let started = Instant::now();
         let asked: Vec<_> = plugins
             .iter()

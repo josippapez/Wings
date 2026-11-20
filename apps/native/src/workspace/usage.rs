@@ -55,6 +55,12 @@ impl Workspace {
                 sessions.entry(account).or_default().insert(id.clone());
             }
         }
+        // A chat's Claude Code never runs the status line: its tab says the account.
+        for tab in self.agent_tabs() {
+            if let (Some(account), Some(id)) = (tab.account, tab.session_id) {
+                sessions.entry(account).or_default().insert(id);
+            }
+        }
         let accounts: Vec<Account> = sessions
             .into_iter()
             .map(|(name, sessions)| Account {

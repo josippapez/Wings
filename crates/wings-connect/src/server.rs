@@ -138,11 +138,9 @@ fn drop_closed(clients: &mut Vec<Arc<Mutex<UnixStream>>>) {
     clients.retain(|client| writeln!(client.lock().unwrap()).is_ok());
 }
 
-/// The event plugins are asked about for a hook input, or `None` when there is nothing to ask: no event, or a
-/// `PreToolUse` of a tool other than Bash (it is installed for Bash only, but the input is Claude Code's to say).
+/// The event plugins are asked about for a hook input, or `None` when it names none.
 pub fn hook_event(input: &Value) -> Option<&str> {
-    let event = input.get("hook_event_name").and_then(Value::as_str)?;
-    (event != "PreToolUse" || input.get("tool_name").and_then(Value::as_str) == Some("Bash")).then_some(event)
+    input.get("hook_event_name").and_then(Value::as_str)
 }
 
 /// The session a hook's plugins are told of. The pane's agent may not know its session id yet at startup, but the
@@ -302,9 +300,9 @@ mod tests {
     }
 
     #[test]
-    fn only_bash_tool_calls_are_asked_about() {
+    fn every_tool_call_is_asked_about() {
         assert_eq!(hook_event(&json!({ "hook_event_name": "PreToolUse", "tool_name": "Bash" })), Some("PreToolUse"));
-        assert_eq!(hook_event(&json!({ "hook_event_name": "PreToolUse", "tool_name": "Edit" })), None);
+        assert_eq!(hook_event(&json!({ "hook_event_name": "PreToolUse", "tool_name": "Agent" })), Some("PreToolUse"));
         assert_eq!(hook_event(&json!({ "hook_event_name": "SessionStart" })), Some("SessionStart"));
         assert_eq!(hook_event(&json!({})), None);
     }
