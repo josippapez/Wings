@@ -54,6 +54,32 @@ pub fn approval(tool: &Tool) -> String {
     format!("Auto mode blocked {what}:\n\n{fence}\n{said}\n{fence}\n\nI meant it and approve it: go ahead and retry it.")
 }
 
+/// What an approval of `approval`'s says it allows, as the conversation shows it in place of the words for the classifier:
+/// what it was ("this command") and its specifics, empty for a call that had none.
+pub fn allowed(text: &str) -> Option<(String, String)> {
+    let rest = text.strip_prefix("Auto mode blocked ")?.strip_suffix("I meant it and approve it: go ahead and retry it.")?;
+    if let Some(call) = rest.strip_prefix("the ").and_then(|rest| rest.strip_suffix(" call. ")) {
+        return Some((format!("the {call} call"), String::new()));
+    }
+    let (what, fenced) = rest.split_once(":\n\n")?;
+    let fence: String = fenced.chars().take_while(|ch| *ch == '`').collect();
+    let said = fenced.strip_prefix(&format!("{fence}\n"))?.strip_suffix(&format!("\n{fence}\n\n"))?;
+    (fence.len() >= 3).then(|| (what.to_owned(), said.to_owned()))
+}
+
+#[cfg(feature = "chat")]
+/// Your approval in the conversation: a check, what you allowed, and the command or address in a chip of its own, cut to
+/// one line with the whole in its hover.
+pub fn allowed_row(what: &str, said: &str) -> Node {
+    let lead = text("✓").prop("tone", "success");
+    let line = muted(format!("You allowed {what}")).prop("size", "small");
+    let chip = (!said.is_empty()).then(|| {
+        let first = said.lines().next().unwrap_or_default();
+        crate::view::inset(text(first).prop("mono", true).prop("size", "small").prop("truncate", true).prop("title", said))
+    });
+    row().prop("gap", "s").prop("align", "center").child(lead).child(line).maybe(chip)
+}
+
 #[cfg(feature = "chat")]
 /// Sends the approval of block `at` and marks it allowed.
 fn allow(at: usize) {
@@ -119,6 +145,23 @@ mod tests {
         assert_eq!(approval(&bash), "Auto mode blocked this command:\n\n```\ngit push origin main\n```\n\nI meant it and approve it: go ahead and retry it.");
         let fetch = tool("WebFetch", "https://example.com", Detail::Plain);
         assert!(approval(&fetch).starts_with("Auto mode blocked this WebFetch call:\n\n```\nhttps://example.com\n```"));
+    }
+
+    /// The conversation showed the approval as a message of yours, the words for the classifier and all.
+    #[test]
+    fn an_approval_shows_as_what_it_allowed_live_and_read_back() {
+        let bash = tool("Bash", "git push origin main", Detail::Command("git push origin main".into()));
+        assert_eq!(allowed(&approval(&bash)), Some(("this command".into(), "git push origin main".into())));
+        let sneaky = tool("Bash", "x", Detail::Command("echo ```\nmore".into()));
+        assert_eq!(allowed(&approval(&sneaky)), Some(("this command".into(), "echo ```\nmore".into())));
+        let bare = tool("Skill", "", Detail::Plain);
+        assert_eq!(allowed(&approval(&bare)), Some(("the Skill call".into(), String::new())));
+        assert_eq!(allowed("Auto mode blocked this, I think"), None);
+        let mut session = Session::default();
+        session.send(&approval(&bash), &[], 1_800_000_000_000, 1);
+        session.hear(&serde_json::json!({ "type": "user", "uuid": "u", "message": { "role": "user", "content": approval(&bash) } }));
+        let shown = || crate::session::Item::Allowed("this command".into(), "git push origin main".into());
+        assert_eq!(session.items, [shown(), shown()]);
     }
 
     #[test]

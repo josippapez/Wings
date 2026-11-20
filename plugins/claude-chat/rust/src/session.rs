@@ -64,6 +64,9 @@ pub enum Item {
     Divider(String),
     /// A short note from Claude Code, like a retry that failed or a model it switched to.
     Notice(String),
+    /// You allowed an action auto mode blocked (`blocked.rs`): what it was ("this command") and its specifics, the
+    /// command or the address, which may be empty.
+    Allowed(String, String),
     /// What Claude thought before it answered, as its summary, and how long it took (ms, 0 when unknown).
     Thought(String, u64),
 }
@@ -1567,6 +1570,9 @@ fn sent_item(text: String, pictures: Vec<String>) -> Item {
     if let Some(note) = crate::actions::relayed_note(&text) {
         return Item::Notice(note);
     }
+    if let Some((what, said)) = crate::blocked::allowed(&text) {
+        return Item::Allowed(what, said);
+    }
     if pictures.is_empty() { Item::User(text) } else { Item::UserImages(text, pictures) }
 }
 
@@ -1620,6 +1626,9 @@ fn said(text: &str) -> Option<Item> {
     let Some(tag) = tag else {
         if let Some(note) = crate::actions::relayed_note(text) {
             return Some(Item::Notice(note));
+        }
+        if let Some((what, said)) = crate::blocked::allowed(text) {
+            return Some(Item::Allowed(what, said));
         }
         return (!text.is_empty()).then(|| Item::User(text.to_owned()));
     };

@@ -1589,7 +1589,18 @@ esac"##,
         text("The login test waits on a timer; I made it wait for the page instead."),
         json!({ "type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.01 }),
     ]);
+    // A push auto mode blocked, then allowed from its note: the approval shows as what it allowed, not its words.
+    let allowed = opened(vec![
+        init.clone(),
+        user("Push the fix"),
+        tool("toolu_push", "Bash", json!({ "command": "git push origin main", "description": "Push main" })),
+        json!({ "type": "system", "subtype": "permission_denied", "tool_name": "Bash", "tool_use_id": "toolu_push", "decision_reason_type": "classifier", "decision_reason": "pushes to the default branch" }),
+        output("toolu_push", "Auto mode blocked this action.", true),
+        text("Auto mode blocked the push. Allow it to go on."),
+        json!({ "type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.01 }),
+    ]);
     let scenes: Vec<Scene> = vec![
+        ("allowed", allowed, None, Some("press:Allow and retry"), "You allowed this command"),
         ("limit-card", limit_hit, None, None, "Continue when it resets"),
         ("rename", renaming, None, Some("press:Rename"), "Generate a name"),
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
