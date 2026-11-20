@@ -33,10 +33,16 @@ pub struct Look {
 }
 
 /// The chat's side panel calls a tab under about 1,100 points narrow, where a 760-point column still holds two sides, so
-/// the choice is yours at any width.
+/// the choice is yours at any width. A sidebar (a subagent's, a pane's, the session's) is too narrow for two sides: one
+/// column there, with no choice.
 pub fn look(c: &Chat) -> Look {
+    if SIDEBAR {
+        return Look { split: false, toggle: false };
+    }
     Look { split: c.diff_split, toggle: true }
 }
+
+const SIDEBAR: bool = cfg!(any(feature = "subagent", feature = "pane", feature = "session"));
 
 /// A finished edit's lines: what the call's input says, with no numbers, as it has no file to count in.
 pub fn finished(key: &str, language: &str, diff: &Diff, look: Look) -> Node {
@@ -200,6 +206,22 @@ fn open(request: &str) {
 
 #[cfg(test)]
 mod tests {
+
+    /// The subagent sidebar's diffs offered Side by side, which a sidebar is too narrow for: one column there, no switch.
+    #[test]
+    #[cfg(feature = "chat")]
+    fn a_sidebar_draws_one_column_with_no_switch_and_a_tab_offers_both() {
+        crate::chat::with(|c| {
+            c.diff_split = true;
+            let shown = look(c);
+            if SIDEBAR {
+                assert_eq!(shown, Look { split: false, toggle: false });
+            } else {
+                assert_eq!(shown, Look { split: true, toggle: true });
+            }
+            c.diff_split = false;
+        });
+    }
     use super::*;
 
     #[test]
