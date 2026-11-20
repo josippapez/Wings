@@ -2047,6 +2047,21 @@ impl PageView {
                     inset: false,
                 }])
                 .into_any_element(),
+            // Rows split by hairlines, as Wings' Settings groups its own: each row keeps the card's inset.
+            Node::Card(card) if card.rows => ui::plain_card(
+                self.nodes(&card.children, cx).into_iter().enumerate().map(|(at, row)| {
+                    div()
+                        .px(px(12.0))
+                        .py(px(10.0))
+                        .when(at > 0, |row| row.border_t_1().border_color(rgba(ui::HAIRLINE)))
+                        .child(row)
+                        .into_any_element()
+                }),
+            )
+            .gap(px(0.0))
+            .px(px(0.0))
+            .py(px(0.0))
+            .into_any_element(),
             Node::Card(card) => ui::plain_card(self.nodes(&card.children, cx)).into_any_element(),
             Node::Heading(heading) => ui::heading(self.inline(&heading.children, cx))
                 .when(heading.section, |el| {

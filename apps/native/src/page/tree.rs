@@ -512,6 +512,8 @@ pub struct Card {
     pub id: u64,
     /// `variant: "raised"`: rounder, and lifted off the page by a shadow, as a chat's message box floats.
     pub raised: bool,
+    /// `variant: "rows"`: each child a row, split from the one above by a hairline, as Wings' Settings groups its rows.
+    pub rows: bool,
     pub children: Vec<Node>,
 }
 
@@ -1549,6 +1551,7 @@ impl Walk {
             "Card" => Node::Card(Card {
                 id,
                 raised: str_prop(&props, "variant") == Some("raised"),
+                rows: str_prop(&props, "variant") == Some("rows"),
                 children: parts(children),
             }),
             "Heading" => Node::Heading(Heading {
@@ -2310,6 +2313,18 @@ mod tests {
         assert_eq!(scale(json!({"textScale":40})), Some(2.0));
         assert_eq!(scale(json!({"textScale":0})), Some(0.5));
         assert_eq!(scale(json!({"textScale":"big"})), None);
+    }
+
+    /// A plugin's settings page grouped its rows in a plain card, with no hairlines between them as Wings' own have.
+    #[test]
+    fn a_card_of_rows_says_so_and_a_plain_or_raised_one_does_not() {
+        let card = |variant: serde_json::Value| match parse_one(json!({"id":1,"type":"Card","props":{"variant":variant},"children":[]})) {
+            Node::Card(card) => (card.rows, card.raised),
+            _ => panic!("a card"),
+        };
+        assert_eq!(card(json!("rows")), (true, false));
+        assert_eq!(card(json!("raised")), (false, true));
+        assert_eq!(card(serde_json::Value::Null), (false, false));
     }
 
     #[test]

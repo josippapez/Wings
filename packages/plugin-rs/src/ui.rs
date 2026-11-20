@@ -257,6 +257,11 @@ pub fn stack() -> Node {
 pub fn card() -> Node {
     Node::new("Card")
 }
+/// A card of `rows`, each split from the one above by a hairline, as Wings' Settings groups its rows. Needs Wings 0.2.70;
+/// an older Wings draws a plain card.
+pub fn rows_card(rows: impl IntoIterator<Item = Node>) -> Node {
+    Node::new("Card").prop("variant", "rows").children(rows)
+}
 pub fn list() -> Node {
     Node::new("List")
 }
