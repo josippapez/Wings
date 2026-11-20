@@ -34,8 +34,56 @@ struct At<'a> {
     drafts: &'a HashMap<String, String>,
 }
 
-/// The most nodes one mod's tree makes: the page's budget is the conversation's.
+/// The most nodes one mod's tree makes in the conversation: the page's budget is the conversation's.
 const MOST: usize = 300;
+
+/// The most a pane makes, which has a sidebar page of its own: the Feedback pane's inbox of 97 entries is 763 elements.
+const PANE_MOST: usize = 2_000;
+
+/// The most characters of a pane's tree the chat hands the sidebar, under the 1 MB Wings takes from page to page
+/// (since 0.2.66): the Feedback pane's 110 KB tree was over the 64 KB it took before, which left the sidebar on its
+/// loading mark for good.
+const SENT: usize = 900_000;
+
+/// `tree` cut to what the sidebar can be told and draws: its first `PANE_MOST` elements, fewer where those are still over
+/// `SENT` characters.
+pub fn fit(tree: &Value) -> Value {
+    let mut most = PANE_MOST;
+    loop {
+        let cut = cut(tree, most, &mut 0);
+        if most <= 1 || cut.to_string().encode_utf16().count() <= SENT {
+            return cut;
+        }
+        most /= 2;
+    }
+}
+
+/// `el` without the elements after the first `most`, counted as `node` goes down a tree, `seen` of them so far.
+fn cut(el: &Value, most: usize, seen: &mut usize) -> Value {
+    let Value::Object(fields) = el else {
+        return el.clone();
+    };
+    *seen += 1;
+    let mut fields = fields.clone();
+    let mut keep = |list: &mut Value| {
+        if let Value::Array(children) = list {
+            let mut kept = Vec::with_capacity(children.len());
+            for child in children.iter() {
+                if !child.is_object() || *seen < most {
+                    kept.push(cut(child, most, seen));
+                }
+            }
+            *children = kept;
+        }
+    };
+    if let Some(children) = fields.get_mut("children") {
+        keep(children);
+    }
+    if let Some(children) = fields.get_mut("props").and_then(|props| props.get_mut("children")) {
+        keep(children);
+    }
+    Value::Object(fields)
+}
 
 /// The band, the status lines and the toasts, over the message box. None with nothing to show.
 pub fn above_prompt(c: &Chat) -> Option<Node> {
@@ -469,7 +517,7 @@ pub fn pane_body(instance: &str, title: &str, tree: &Value, drafts: &HashMap<Str
     if !is_words(&tree) && first_words(&tree).is_some_and(|said| said.trim() == title.trim()) {
         drop_first_text(&mut tree);
     }
-    drawn(&tree, &At { instance, drafts })
+    node(&tree, &At { instance, drafts }, &mut PANE_MOST.clone())
 }
 
 /// Takes the first text out of a tree, wherever it sits, as `first_words` finds it. Says whether it found one.
@@ -957,5 +1005,35 @@ mod tests {
         assert_eq!(tone(&json!({ "color": "greenBright" })), Some("success"));
         assert_eq!(tone(&json!({ "color": "red", "dimColor": true })), Some("muted"));
         assert_eq!(tone(&json!({ "color": "#ff8800" })), None);
+    }
+
+    /// One entry of the Feedback pane as Claude Code drew it, its long text cut.
+    fn feedback_entry(key: &str) -> Value {
+        json!({ "type": "Box", "props": { "key": key, "flexDirection": "column", "marginTop": 1, "paddingX": 1, "borderStyle": "round", "borderColor": "gray" }, "children": [
+            { "type": "Box", "props": { "gap": 1 }, "children": [
+                { "type": "Text", "props": { "backgroundColor": "gray", "color": "black", "bold": true, "weight": "semibold" }, "children": [" LOW "] },
+                { "type": "Text", "props": { "color": "yellow", "bold": true, "weight": "semibold" }, "children": ["Pain point"] },
+                { "type": "Text", "props": { "dimColor": true }, "children": ["· ", "rtk hook + auto mode"] }] },
+            { "type": "Text", "props": { "bold": true, "wrap": "wrap", "weight": "semibold" }, "children": ["rtk PreToolUse rewrite makes auto-mode classifier refuse Bash calls"] },
+            { "type": "Text", "props": { "dimColor": true, "wrap": "wrap" }, "children": ["In a subagent under auto mode, several read-only Bash calls (grep/rg piped to head, sed) were refused with \"a hook changed this call's input after auto mode reviewed it\" because the rtk hook rewrote `grep`/`rg` to `rtk grep`/`rtk rg`. Each refusal costs a turn and forces a re-is…".repeat(2)] },
+            { "type": "Text", "props": { "dimColor": true }, "children": ["2026-11-20 14:35", " · ", "wings", " · ", key] }] })
+    }
+
+    #[test]
+    fn a_feedback_inbox_goes_to_the_sidebar_whole_and_only_a_runaway_tree_is_cut() {
+        // The Feedback pane with 97 entries was 110 KB, over the 64 KB a page's message could be: the sidebar was never
+        // told. It goes whole now.
+        let entries: Vec<Value> = (0..97).map(|n| feedback_entry(&format!("{n:08x}"))).collect();
+        let tree = json!({ "type": "Box", "props": { "flexDirection": "column", "paddingX": 1 }, "children": entries });
+        assert!(tree.to_string().len() > 64_000);
+        assert_eq!(fit(&tree), tree);
+        // A tree past what a page's message holds keeps its top, and what it leaves out is the end.
+        let entries: Vec<Value> = (0..2_000).map(|n| feedback_entry(&format!("{n:08x}"))).collect();
+        let huge = json!({ "type": "Box", "props": { "flexDirection": "column" }, "children": entries });
+        let fitted = fit(&huge);
+        assert!(json!({ "message": fitted }).to_string().encode_utf16().count() < SENT);
+        assert_eq!(fitted["children"][0], huge["children"][0]);
+        let kept = fitted["children"].as_array().unwrap().len();
+        assert!(kept > 10 && kept < 2_000, "{kept}");
     }
 }

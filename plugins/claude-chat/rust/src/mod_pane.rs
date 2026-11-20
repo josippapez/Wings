@@ -45,7 +45,7 @@ pub fn show_message(session: &str, pane: &str) -> Value {
 /// What the chat tells the sidebar of the pane it shows: its title and tree, or that it closed.
 fn pane_message(c: &chat::Chat, pane: &str) -> Value {
     match c.session.mods.panes.iter().find(|open| open.id == pane) {
-        Some(open) => json!({ "kind": "mod-pane", "pane": pane, "open": true, "title": open.title, "tree": c.session.mods.trees.get(pane).cloned().unwrap_or(Value::Null) }),
+        Some(open) => json!({ "kind": "mod-pane", "pane": pane, "open": true, "title": open.title, "tree": c.session.mods.trees.get(pane).map_or(Value::Null, crate::mods_view::fit) }),
         None => json!({ "kind": "mod-pane", "pane": pane, "open": false }),
     }
 }
@@ -86,6 +86,9 @@ struct Relay {
     told: HashMap<String, Value>,
     /// What the sidebar is to show, until its page is there to be told.
     show: Option<Value>,
+    /// The pane the sidebar shows, with its page's name and whether that page has been among the names yet: its page
+    /// going away after is you closing it.
+    watch: Option<(String, String, bool)>,
 }
 
 thread_local! {
@@ -99,7 +102,24 @@ pub fn start() {
 }
 
 fn names_changed(names: &[String]) {
-    RELAY.with(|relay| relay.borrow_mut().names = names.to_vec());
+    let closed = RELAY.with(|relay| {
+        let mut relay = relay.borrow_mut();
+        relay.names = names.to_vec();
+        let (pane, name, seen) = relay.watch.as_mut()?;
+        if names.contains(name) {
+            *seen = true;
+            return None;
+        }
+        let closed = seen.then(|| pane.clone());
+        if closed.is_some() {
+            relay.watch = None;
+        }
+        closed
+    });
+    // Claude Code hears you closed it, if it is still open there.
+    if let Some(pane) = closed {
+        chat::write(move |c, n| c.session.mods.panes.iter().any(|open| open.id == pane).then(|| mods::close(&pane, n)));
+    }
     send_show();
     sync();
 }
@@ -114,7 +134,16 @@ pub fn open(pane: &str) {
     let Some(message) = shown else {
         return;
     };
-    RELAY.with(|relay| relay.borrow_mut().show = Some(message));
+    let name = chat::with(|c| c.session.id.as_deref().map(|session| page_name(session, pane))).unwrap_or_default();
+    RELAY.with(|relay| {
+        let mut relay = relay.borrow_mut();
+        relay.show = Some(message);
+        // The sidebar changing to this pane isn't a close of the last one.
+        relay.watch = Some((pane.to_owned(), name, false));
+    });
+    // Claude Code hears which pane is shown.
+    let shown = pane.to_owned();
+    chat::write(move |_, n| Some(mods::pane_show(&shown, n)));
     crate::session_side::covered();
     drop(host::open_view_with(SIDEBAR, "sidebar", &Value::Null));
     send_show();
@@ -380,5 +409,41 @@ mod tests {
         assert_eq!(taken(&message, false), None, "not without the click handed on with it");
         assert_eq!(taken(&act_message("gone", "press", &json!({ "plugin": "feedback", "handle": 21 }), None, None), true), None, "not for a pane that closed");
         assert_eq!(taken(&show_message("s1", "feedback"), true), None);
+    }
+
+    /// The subtypes and ids of the requests the chat wrote to Claude Code.
+    fn written(calls: &Rc<RefCell<Vec<(String, Value)>>>) -> Vec<(String, Value)> {
+        wings_plugin::task::block_on(async {});
+        calls
+            .borrow()
+            .iter()
+            .filter(|(method, _)| method == "processWrite")
+            .filter_map(|(_, params)| serde_json::from_str::<Value>(params["text"].as_str()?.trim()).ok())
+            .map(|line| (line["request"]["subtype"].as_str().unwrap_or_default().to_owned(), line["request"]["id"].clone()))
+            .collect()
+    }
+
+    #[test]
+    fn showing_a_pane_and_closing_its_sidebar_are_told_to_claude_code_once() {
+        let calls = record();
+        chat_with_feedback();
+        let process = host::spawn("claude", &[], "/work/shop", "", |_| {});
+        chat::with(|c| c.input = Some(process.input()));
+        open("feedback");
+        assert_eq!(written(&calls), [("ui_pane_show".to_owned(), json!("feedback"))]);
+        // The sidebar's page comes, then goes: you closed it.
+        let named = page_name("s1", "feedback");
+        names_changed(&[IDLE.to_owned()]);
+        names_changed(&[named.clone()]);
+        assert_eq!(written(&calls).len(), 1, "not before its page was there and went");
+        names_changed(&[]);
+        names_changed(&[]);
+        assert_eq!(written(&calls)[1..], [("ui_close".to_owned(), json!("feedback"))]);
+        // A pane Claude Code closed itself is not closed again.
+        open("feedback");
+        names_changed(&[named]);
+        chat::with(|c| c.session.mods.panes.clear());
+        names_changed(&[]);
+        assert_eq!(written(&calls).iter().filter(|(subtype, _)| subtype == "ui_close").count(), 1);
     }
 }

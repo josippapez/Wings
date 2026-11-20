@@ -49,6 +49,8 @@ const RENDER: &str = "ui-render-";
 const PRESS: &str = "ui-press-";
 const INPUT: &str = "ui-input-";
 const SELECT: &str = "ui-select-";
+const CLOSE: &str = "ui-close-";
+const PANE: &str = "ui-pane-";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pane {
@@ -94,6 +96,8 @@ pub struct Mods {
     pub attached: bool,
     /// A pane Claude Code asked to show or focus that the chat hasn't opened in Wings' sidebar yet (`mod_pane.rs`).
     pub to_open: Option<String>,
+    /// A pane Claude Code asked to focus (`focus_requested_id`) that the chat hasn't settled yet, with `ui_pane_focus`.
+    pub to_focus: Option<String>,
     /// The last pane Claude Code said it shows and asked to focus, so each ask opens the sidebar once.
     shown: (Option<String>, Option<String>),
     /// What is to be asked for again.
@@ -166,6 +170,23 @@ pub fn select(instance: &str, press: &Value, key: &str, value: &str, n: u32) -> 
     Some(request(&format!("{SELECT}{instance}-{n}"), body))
 }
 
+/// The request that tells Claude Code you closed pane `id` in Wings, numbered `n`: it runs the plugin's close, which may
+/// keep the pane open, and the roster that follows says whether it closed.
+pub fn close(id: &str, n: u32) -> String {
+    request(&format!("{CLOSE}{n}"), json!({ "subtype": "ui_close", "id": id, "client_id": CLIENT }))
+}
+
+/// The request that tells Claude Code you picked pane `id` and Wings shows it, numbered `n`.
+pub fn pane_show(id: &str, n: u32) -> String {
+    request(&format!("{PANE}show-{n}"), json!({ "subtype": "ui_pane_show", "id": id, "surface": SURFACE, "client_id": CLIENT }))
+}
+
+/// The request that tells Claude Code which pane holds the keyboard, numbered `n`: `id` once Wings focused it, which also
+/// settles a standing focus request, and null where it refused one.
+pub fn pane_focus(id: Option<&str>, n: u32) -> String {
+    request(&format!("{PANE}focus-{n}"), json!({ "subtype": "ui_pane_focus", "id": id, "surface": SURFACE, "client_id": CLIENT }))
+}
+
 /// The request that presses a button of `instance`'s tree, numbered `n`, from its `press` and its key.
 pub fn press(instance: &str, press: &Value, key: Option<&str>, n: u32) -> Option<String> {
     let (plugin, handle) = (press["plugin"].as_str()?, press["handle"].as_u64()?);
@@ -217,6 +238,7 @@ impl Mods {
                 let (shown, focus) = (id("shown_id"), id("focus_requested_id"));
                 let asked = focus.clone().filter(|_| focus != self.shown.1).or_else(|| shown.clone().filter(|_| shown != self.shown.0));
                 if asked.is_some() {
+                    self.to_focus = focus.clone().filter(|_| focus != self.shown.1);
                     self.to_open = asked;
                 }
                 self.shown = (shown, focus);
@@ -278,7 +300,8 @@ impl Mods {
             self.stale.insert(instance.to_owned());
             return true;
         }
-        false
+        // Its answers to a pane's close, show and focus say nothing the roster that follows doesn't.
+        id.starts_with(CLOSE) || id.starts_with(PANE)
     }
 
     /// The instances to ask Claude Code to draw again, once it took the attach.
@@ -408,8 +431,10 @@ mod tests {
             mods.hear(&system("ui_panes", json!({ "panes": panes, "shown_id": "probe", "focused_id": null, "focus_requested_id": "feedback" })), 0, &mut logged);
         }
         assert_eq!(mods.to_open.take().as_deref(), Some("feedback"));
+        // The focus it asked for is to be settled, once.
+        assert_eq!(mods.to_focus.take().as_deref(), Some("feedback"));
         mods.hear(&system("ui_panes", json!({ "panes": panes, "shown_id": "probe", "focused_id": null, "focus_requested_id": "feedback" })), 0, &mut logged);
-        assert_eq!(mods.to_open, None);
+        assert_eq!((mods.to_open.as_deref(), mods.to_focus.as_deref()), (None, None));
         // A pane not in the roster isn't opened.
         mods.hear(&system("ui_panes", json!({ "panes": [], "shown_id": "gone", "focus_requested_id": "gone" })), 0, &mut logged);
         assert_eq!(mods.to_open, None);
@@ -466,5 +491,22 @@ mod tests {
         let mut mods = Mods { attached: true, ..Mods::default() };
         assert!(mods.answered("ui-select-form-11", &json!({ "subtype": "success", "response": { "handled": true } })));
         assert_eq!(mods.take_stale(), ["form"]);
+    }
+
+    #[test]
+    fn closing_showing_and_focusing_a_pane_are_the_requests_claude_code_takes() {
+        let line: Value = serde_json::from_str(close("feedback", 4).trim()).unwrap();
+        assert_eq!(line["request_id"], "ui-close-4");
+        assert_eq!(line["request"], json!({ "subtype": "ui_close", "id": "feedback", "client_id": "wings" }));
+        let line: Value = serde_json::from_str(pane_show("feedback", 5).trim()).unwrap();
+        assert_eq!(line["request"], json!({ "subtype": "ui_pane_show", "id": "feedback", "surface": "desktop", "client_id": "wings" }));
+        let line: Value = serde_json::from_str(pane_focus(Some("feedback"), 6).trim()).unwrap();
+        assert_eq!(line["request"], json!({ "subtype": "ui_pane_focus", "id": "feedback", "surface": "desktop", "client_id": "wings" }));
+        let line: Value = serde_json::from_str(pane_focus(None, 7).trim()).unwrap();
+        assert_eq!(line["request"]["id"], Value::Null);
+        // Its answers are the roster's to show, not the conversation's.
+        let mut mods = Mods::default();
+        assert!(mods.answered("ui-close-4", &json!({ "subtype": "success", "response": { "closed": true } })));
+        assert!(mods.answered("ui-pane-show-5", &json!({ "subtype": "success", "response": {} })));
     }
 }

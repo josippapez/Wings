@@ -726,6 +726,10 @@ pub(crate) fn hear(run: u32, line: &Value) {
     if let Some(pane) = with(|c| if c.run == run { c.session.mods.to_open.take() } else { None }) {
         crate::mod_pane::open(&pane);
     }
+    // And a focus it asked for is taken, which settles the request.
+    if let Some(pane) = with(|c| if c.run == run { c.session.mods.to_focus.take() } else { None }) {
+        write(move |_, n| Some(crate::mods::pane_focus(Some(&pane), n)));
+    }
     for (id, asked) in with(|c| if c.run == run { std::mem::take(&mut c.session.mods.asks) } else { Vec::new() }) {
         write(move |c, _| Some(crate::mods_view::answer_ask(c, &id, &asked)));
     }
