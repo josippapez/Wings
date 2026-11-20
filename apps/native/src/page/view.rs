@@ -40,6 +40,9 @@ mod column_window_view;
 mod popup_menu_view;
 #[path = "sunburst_view.rs"]
 mod sunburst_view;
+#[cfg(feature = "test-support")]
+#[path = "bench_view.rs"]
+mod bench_view;
 
 use super::{
     plugin::{PageOpener, PluginHost, RESTART_FIRST, RESTART_MOST, RESTART_RESET},
@@ -90,6 +93,11 @@ thread_local! {
     static LINKED: Cell<bool> = const { Cell::new(false) };
     /// What the `Dialog` being drawn leaves what it holds, for a picture that keeps within it (`fitWindow`).
     static DIALOG_ROOM: Cell<Option<(f32, f32)>> = const { Cell::new(None) };
+    /// How wide each character is at one point in each font a page measures text in (`char_width`).
+    static CHAR_WIDTHS: RefCell<HashMap<(gpui::FontId, char), f32>> = RefCell::default();
+    /// How many characters `char_width` asked the text system for.
+    #[cfg(feature = "test-support")]
+    static CHARS_ASKED: Cell<usize> = const { Cell::new(0) };
 }
 
 /// A text size in points as the `Scroll` being drawn scales it.
@@ -311,6 +319,9 @@ pub struct PageView {
     /// How many times the page has rendered, for what draws it again.
     #[cfg(feature = "test-support")]
     renders: Cell<usize>,
+    /// The nodes the typing bench leaves out of the draw (`bench_view`).
+    #[cfg(feature = "test-support")]
+    bench_hidden: RefCell<HashSet<u64>>,
     _events: Task<()>,
 }
 
@@ -667,6 +678,8 @@ impl PageView {
             shot_terminals: None,
             #[cfg(feature = "test-support")]
             renders: Cell::new(0),
+            #[cfg(feature = "test-support")]
+            bench_hidden: RefCell::default(),
             _events: events,
         };
         if view.stopped {
@@ -1875,6 +1888,10 @@ impl PageView {
     }
 
     fn node(&self, node: &Node, cx: &mut Context<Self>) -> AnyElement {
+        #[cfg(feature = "test-support")]
+        if self.hidden_for_bench(node) {
+            return div().into_any_element();
+        }
         match node {
             Node::Str { text, .. } => div().child(text.clone()).into_any_element(),
             // Only a component that names its parts reads them; one out of place just shows what it holds.
@@ -3290,22 +3307,36 @@ fn text_font(text: &tree::Text) -> (f32, FontWeight) {
     (size, weight)
 }
 
+/// How wide `c` is in `font` at `size`. The text system asks Core Text each time, for the glyph and then its advance; a
+/// long chat's page measured the words of its growing texts that way, every character on every render: about a tenth of
+/// the page's draw in a profile of the app while typing there. A character's width is its width at one point times the
+/// size, so each is asked once.
+pub(super) fn char_width(font: gpui::FontId, size: f32, c: char, cx: &gpui::App) -> f32 {
+    let unit = CHAR_WIDTHS.with_borrow_mut(|widths| {
+        *widths.entry((font, c)).or_insert_with(|| {
+            #[cfg(feature = "test-support")]
+            CHARS_ASKED.with(|asked| asked.set(asked.get() + 1));
+            cx.text_system().advance(font, px(1.0), c).map_or(0.0, |advance| advance.width.as_f32())
+        })
+    });
+    unit * size
+}
+
+/// How many characters the page's text measuring has asked the text system for on this thread.
+#[cfg(feature = "test-support")]
+pub(super) fn chars_asked() -> usize {
+    CHARS_ASKED.with(Cell::get)
+}
+
 /// How wide `text` is on one line.
 fn line_width(text: &str, size: f32, weight: FontWeight, mono: bool, cx: &gpui::App) -> f32 {
-    let system = cx.text_system();
     let font = page_font(weight, mono, cx);
-    text.chars().filter_map(|c| system.advance(font, px(size), c).ok()).map(|advance| advance.width.as_f32()).sum()
+    text.chars().map(|c| char_width(font, size, c, cx)).sum()
 }
 
 fn longest_word(text: &str, size: f32, weight: FontWeight, mono: bool, cx: &gpui::App) -> f32 {
-    let system = cx.text_system();
     let font = page_font(weight, mono, cx);
-    let width = |word: &str| {
-        word.chars()
-            .filter_map(|c| system.advance(font, px(size), c).ok())
-            .map(|advance| advance.width.as_f32())
-            .sum::<f32>()
-    };
+    let width = |word: &str| word.chars().map(|c| char_width(font, size, c, cx)).sum::<f32>();
     // A point over, so rounding in the line's own layout never leaves the word a hair too wide to fit.
     (text.split_whitespace().map(width).fold(0.0, f32::max).ceil() + 1.0).min(LONGEST_WORD_KEPT)
 }

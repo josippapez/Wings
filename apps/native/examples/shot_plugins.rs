@@ -36,6 +36,8 @@ use wings_native::{
 
 #[path = "shot_plugins/external.rs"]
 mod external;
+#[path = "shot_plugins/typing.rs"]
+mod typing;
 
 fn wait(cx: &mut VisualTestAppContext, window: AnyWindowHandle, duration: Duration) {
     let until = Instant::now() + duration;
@@ -1895,6 +1897,17 @@ esac"##,
             open: std::rc::Rc::new(|_: wings_native::page::links::LinkTarget, _: &mut gpui::Window, _: &mut gpui::App| {}),
         })
     });
+    // `CHAT_TYPING=<session.jsonl>` measures typing in that session alone (`shot_plugins/typing.rs`), under the settings
+    // `CHAT_TYPING_SETTINGS` holds, a JSON object of the Settings page's keys and values.
+    if let Some(transcript) = std::env::var_os("CHAT_TYPING").filter(|path| !path.is_empty()) {
+        let settings: serde_json::Map<String, serde_json::Value> =
+            std::env::var("CHAT_TYPING_SETTINGS").ok().map(|said| serde_json::from_str(&said).expect("CHAT_TYPING_SETTINGS is a JSON object")).unwrap_or_default();
+        let seed: Vec<(&str, serde_json::Value)> = settings.iter().map(|(key, value)| (key.as_str(), value.clone())).collect();
+        let host = host_over("fixture-storage-claude-chat-typing", &seed);
+        let lines = |id: &str| opened(vec![json!({ "type": "system", "subtype": "init", "session_id": id, "model": "claude-opus-5-5" })]);
+        typing::typing(&mut cx, &host, &source, &root, std::path::Path::new(&transcript), lines);
+        return;
+    }
     // `CHAT_SCENE=<name>[,<name>...]` renders those scenes alone.
     let only = std::env::var("CHAT_SCENE").ok();
     for (name, lines, exit, act, expected) in scenes {

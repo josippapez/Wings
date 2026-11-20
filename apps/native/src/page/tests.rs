@@ -3378,6 +3378,26 @@ fn varied_row(i: usize) -> Value {
     text(1_000 + 2 * i, 1_001 + 2 * i, format!("Row {i}. {}", "Some words of a reply. ".repeat(i * 7 % 12)))
 }
 
+/// A text that grows is never narrower than its longest word, which is measured a character at a time, as is a select's
+/// widest option. A page drawn again asks the text system for none of them again: a long chat's page asked it for every
+/// character of its growing texts on every render, a tenth of the frame of a key typed there.
+#[test]
+fn a_page_drawn_again_measures_no_character_again() {
+    let source = fake::page("page", |_| {
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 2, "type": "Text", "props": { "grow": true }, "children": [text_node(3, "Words of a reply, each measured for the longest one")] }] })
+    });
+    let (app, mut window) = open_narrow(source, 500.0);
+    settle(&app, &mut window, shows("longest one"));
+    window.draw();
+    let asked = super::view::chars_asked();
+    for _ in 0..3 {
+        window.update(|_, _, cx| cx.notify());
+        window.draw();
+    }
+    assert_eq!(super::view::chars_asked(), asked, "the text system was asked again for characters already measured");
+}
+
 /// 120 varied rows in the column `3` of the `Scroll` `2`, which has `props`.
 fn long_column(props: Value) -> String {
     fake::page("page", move |_| {

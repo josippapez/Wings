@@ -1000,15 +1000,8 @@ impl PageView {
 /// How wide a select's menu is with its longest option whole: the label at 13pt, then `ui::select_row`'s padding, gap
 /// and check and `ui::select_menu`'s padding and border. At most 360pt.
 fn widest_option(select: &tree::Select, cx: &gpui::App) -> Pixels {
-    let system = cx.text_system();
     let font = super::page_font(FontWeight::NORMAL, false, cx);
-    let width = |label: &str| {
-        label
-            .chars()
-            .filter_map(|c| system.advance(font, px(13.0), c).ok())
-            .map(|advance| advance.width.as_f32())
-            .sum::<f32>()
-    };
+    let width = |label: &str| label.chars().map(|c| super::char_width(font, 13.0, c, cx)).sum::<f32>();
     let widest = select
         .options
         .iter()

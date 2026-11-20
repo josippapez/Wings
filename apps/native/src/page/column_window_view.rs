@@ -40,7 +40,7 @@ pub(super) struct Windowing {
     /// The tree `heights` and `seen` were last kept to.
     tree: u64,
     /// The children the last render drew, of how many.
-    drawn: (std::ops::Range<usize>, usize),
+    pub(super) drawn: (std::ops::Range<usize>, usize),
     /// Each child's top in the window in the last frame, and the top of the view.
     #[cfg(all(test, feature = "test-support"))]
     screen: (Vec<f32>, f32),
