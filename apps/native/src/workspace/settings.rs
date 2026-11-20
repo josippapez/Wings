@@ -18,7 +18,7 @@ use crate::{
     },
     text_field::{FieldEvent, TextField},
     theme,
-    ui::{self, ButtonSize, motion},
+    ui::{self, behaviors::EscapeExt, ButtonSize, motion},
 };
 
 use super::{
@@ -1441,10 +1441,8 @@ impl Workspace {
                     panel
                         .max_w_full()
                         .max_h_full()
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                            if event.keystroke.key == "escape" {
-                                this.close_settings(window, cx);
-                            }
+                        .on_escape(cx.listener(|this, _: &KeyDownEvent, window, cx| {
+                            this.close_settings(window, cx);
                         }))
                         .children(ui::spot(|| "settings-dialog".into()))
                         .child(sidebar)

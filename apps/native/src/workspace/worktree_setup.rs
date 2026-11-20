@@ -11,7 +11,7 @@ use gpui::{
 use crate::{
     text_field::{FieldEvent, TextField},
     theme,
-    ui::{self, Variant, motion},
+    ui::{self, behaviors::EscapeExt, Variant, motion},
 };
 
 use super::Workspace;
@@ -195,11 +195,8 @@ impl Workspace {
                 )
                 .child(ui::dialog_panel(
                     panel
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                            if event.keystroke.key == "escape" {
-                                this.close_worktree_setup(window, cx);
-                                cx.stop_propagation();
-                            }
+                        .on_escape(cx.listener(|this, _: &KeyDownEvent, window, cx| {
+                            this.close_worktree_setup(window, cx);
                         }))
                         .child(
                             ui::dialog_body()

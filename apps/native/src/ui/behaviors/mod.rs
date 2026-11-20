@@ -3,7 +3,7 @@
 //!
 //! - `position`: where a popup goes beside its anchor (`position`).
 //! - `popup`: draws a popup's content there, over the window (`createPopup`).
-//! - `layer`: Escape and a press outside dismiss it (`bindLayer`).
+//! - `layer`: Escape and a press outside dismiss it (`bindLayer`); `bind_escape` is the Escape half for a modal dialog.
 //! - `focus_recovery`: the keyboard goes back to the trigger as it closes (`createFocusRecovery`).
 //! - `listbox`: the arrow keys move the highlighted option (`createListbox`).
 //!
@@ -17,6 +17,6 @@ pub mod popup;
 pub mod position;
 
 pub use focus_recovery::FocusRecovery;
-pub use layer::{DismissReason, bind_layer};
+pub use layer::{DismissReason, EscapeExt, bind_escape, bind_layer};
 pub use popup::{Popup, popup, popup_at, popup_on_parent};
 pub use position::{Align, Placement, Side};

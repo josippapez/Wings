@@ -49,6 +49,27 @@ fn wait(cx: &mut VisualTestAppContext, window: AnyWindowHandle, duration: Durati
 
 fn save(cx: &mut VisualTestAppContext, window: AnyWindowHandle, path: PathBuf) {
     let _ = cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx));
+    // `SHOT_FRAMES=<n>` draws each screen n more times from scratch and prints the median ms of a draw and of a frame
+    // rendered on the GPU, for what a redraw of that screen costs.
+    if let Some(frames) = std::env::var("SHOT_FRAMES").ok().and_then(|n| n.parse::<usize>().ok()) {
+        let (mut drawn, mut rendered) = (Vec::new(), Vec::new());
+        for _ in 0..frames {
+            let start = Instant::now();
+            let _ = cx.update_window(window, |_, window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx)
+            });
+            drawn.push(start.elapsed().as_secs_f64() * 1000.0);
+            let start = Instant::now();
+            let _ = cx.capture_screenshot(window);
+            rendered.push(start.elapsed().as_secs_f64() * 1000.0);
+        }
+        let median = |times: &mut Vec<f64>| {
+            times.sort_by(f64::total_cmp);
+            times[times.len() / 2]
+        };
+        println!("[measure] {}: draw {:.2} ms, GPU frame {:.2} ms", path.display(), median(&mut drawn), median(&mut rendered));
+    }
     cx.capture_screenshot(window)
         .expect("render the window")
         .save(&path)
@@ -826,6 +847,17 @@ while IFS= read -r line; do for answer in "$CHAT_ANSWERS"/*; do [ -f "$answer" ]
 for answer in "$CHAT_ANSWERS"/instance-*; do [ -f "$answer" ] && case "$line" in *"\"instance_id\":\"${answer##*/instance-}\""*) id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p'); sed "s/REQUEST_ID/$id/" "$answer";; esac; done
 for answer in "$CHAT_ANSWERS"/component-*; do [ -f "$answer" ] && name=${answer##*/component-} && case "$line" in *"\"component\":\"${name%%-*}\",\"instance_id\":\"${name#*-}\""*) id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p'); sed "s/REQUEST_ID/$id/" "$answer";; esac; done; done"##,
     );
+    // `git` answers the branch switcher's reads and its switch from `$CHAT_BRANCHES`, a made-up list of refs, when a scene sets it:
+    // the folder is on main, and a switch is refused as git refuses one with changes in the way. Else it is the Mac's own git.
+    script(
+        bin.join("git"),
+        r##"if [ -n "$CHAT_BRANCHES" ]; then case "$1" in
+rev-parse) echo main; exit 0;;
+for-each-ref) cat "$CHAT_BRANCHES"; exit 0;;
+switch) printf 'error: Your local changes to the following files would be overwritten by checkout:\n\tsrc/checkout.ts\nPlease commit your changes or stash them before you switch branches.\nAborting\n' >&2; exit 1;;
+esac; fi
+exec /usr/bin/git "$@""##,
+    );
     // `gh pr view <url> --json ...` is how the side panel reads a pull request the conversation names: made-up ones.
     script(
         bin.join("gh"),
@@ -896,6 +928,26 @@ esac"##,
         user("Do it, and run the tests again."),
         tool("t3", "Edit", fix.clone()),
         json!({ "type": "control_request", "request_id": "r1", "request": { "subtype": "can_use_tool", "tool_name": "Edit", "input": fix } }),
+    ]);
+    // A permission card for an Edit, drawn as a diff against the file on disk (`lib/discount.ts`, written below): the lines round
+    // the change with their numbers. The same card side by side, and a finished edit's diff side by side, as the setting says.
+    let discount = json!({ "file_path": "/work/shop/lib/discount.ts",
+        "old_string": "  return total * (1 - rate);",
+        "new_string": "  const cents = Math.round(total * 100);\n  return Math.round(cents * (1 - rate)) / 100;" });
+    let ask_edit = opened(vec![
+        init.clone(),
+        user("Round the discount to whole cents."),
+        json!({ "type": "control_request", "request_id": "r1", "request": { "subtype": "can_use_tool", "tool_name": "Edit", "input": discount.clone(), "decision_reason": "Edits outside src need your say" } }),
+    ]);
+    let edits_split = opened(vec![
+        init.clone(),
+        user("Round the discount to whole cents, in both functions."),
+        tool("e1", "MultiEdit", json!({ "file_path": "/work/shop/lib/discount.ts", "edits": [
+            discount.clone(),
+            { "old_string": "  return totals.map((total) => applyDiscount(total, rate));", "new_string": "  const out = totals.map((total) => applyDiscount(total, rate));\n  return out;" },
+        ] })),
+        output("e1", "Applied 2 edits", false),
+        text("Both functions round to whole cents now."),
     ]);
     // Claude at work on a checklist: an edit, a failed command, a file written and a read, with more to do.
     let work = opened(vec![
@@ -1357,6 +1409,15 @@ esac"##,
     let finished_panel = finished.clone();
     let (worked_again, worked_forking, rewound_again) = (worked.clone(), worked.clone(), rewound.clone());
     let edited_undo = edited.clone();
+    // A file deep in long folders with a long name: the name stays on one line and the folders are cut.
+    let edited_long = {
+        let long = "/work/shop/src/BoundedContext/CareProvision/Domain/Shop.Digital.Core.CareProvision.Domain/MedicationRequestHospitalStatus.cs";
+        let mut lines = edited.clone();
+        let end = lines.len() - 2;
+        lines.insert(end, tool("e3", "Write", json!({ "file_path": long, "content": "" })));
+        lines.insert(end + 1, edit_done("e3", json!({ "type": "create", "filePath": long, "content": "public enum Status {}", "structuredPatch": [], "originalFile": null, "userModified": false })));
+        lines
+    };
     let tasks_open = tasks.clone();
     // A long message of yours that wraps, with Rewind and Fork from here under it.
     let wrapped = opened(vec![
@@ -1413,7 +1474,7 @@ esac"##,
         (tasks.clone(), subagents.clone(), mentioned.clone(), mods.clone(), finished_panel.clone(), built.clone(), agent.clone());
     let (tasks_open_side, worked_again_side) = (tasks_open.clone(), worked_again.clone());
     let fresh: Vec<serde_json::Value> = ready.to_vec();
-    let scenes: [Scene; 84] = [
+    let scenes: [Scene; 89] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         // A click on the first prompt's tick on the rail of the long session, timed.
         ("long-rail", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, Some("rail:0"), "Step 0 passes"),
@@ -1469,6 +1530,10 @@ esac"##,
         // The same two, each opened to its whole message by its More button, which reads Less once it is open.
         ("queue-open", working.clone(), None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter;more:"), "Claude reads them"),
         ("ask-bash", ask_bash, None, None, "Allow Bash?"),
+        // The change read against its file: line numbers, the lines round it, and a button that opens it in the diff viewer.
+        ("ask-edit", ask_edit.clone(), None, None, "Open in diff viewer"),
+        ("ask-edit-split", ask_edit, None, None, "One column"),
+        ("edits-split", edits_split, None, None, "One column"),
         ("question", question, None, None, "Which formats"),
         ("plan", plan, None, None, "Keep planning"),
         ("mention", opened(vec![init.clone()]), None, Some("type:fix the rounding in @che"), "checkout.test.ts"),
@@ -1485,6 +1550,8 @@ esac"##,
         ("tasks", tasks.clone(), None, None, "Background tasks"),
         // A click on one opens the end of what it printed in a dialog.
         ("task-output", tasks, None, Some("row:Watch the test suite"), "Waiting for file changes"),
+        // The branch button in the message box opens a searchable list of the folder's branches, local ones and those only on a remote.
+        ("branch-switch", opened(vec![init.clone()]), None, Some("wait:600;press:Switch branch;type:feature"), "checkout-discounts"),
         // The Rewind button beside your first message opens its dialog, with the files restoring the code writes back.
         ("rewind", rewound, None, Some("press:Rewind"), "src/checkout.ts"),
         // /hooks, /memory and /permissions open their dialog over the chat, filled by the reads the Enter sends.
@@ -1538,6 +1605,7 @@ esac"##,
         ("long-message", wrapped, None, None, "which of the two places"),
         // A turn that changed files ends with a card of them, and the files its reply names are links.
         ("edits", edited, None, None, "Edited 2 files"),
+        ("edits-long", edited_long, None, None, "Edited 3 files"),
         // Undo asks first, and says what goes back.
         ("edits-undo", edited_undo, None, Some("press:Undo"), "Undo the changes to 2 files from this turn?"),
         // /mcp offers Reconnect on the server that failed, Sign in on the one that wants it and Sign out on a signed-in one.
@@ -1562,6 +1630,13 @@ esac"##,
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, "").unwrap();
     }
+    // The file the `ask-edit` scenes' Edit is asked against, outside `src`, which the project's own files don't list.
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    std::fs::write(
+        root.join("lib/discount.ts"),
+        "export type Rate = number;\n\n/** Applies a discount rate to a total, in dollars. */\nexport function applyDiscount(total: number, rate: Rate): number {\n  if (rate < 0 || rate > 1) {\n    throw new RangeError(\"rate must be between 0 and 1\");\n  }\n  return total * (1 - rate);\n}\n\nexport function applyAll(totals: number[], rate: Rate): number[] {\n  return totals.map((total) => applyDiscount(total, rate));\n}\n",
+    )
+    .unwrap();
     // A repo with a commit and a change since, which the side panel's Changes line counts.
     let git = |args: &[&str]| assert!(std::process::Command::new("git").args(["-c", "user.name=Shop", "-c", "user.email=shop@example.com"]).args(args).current_dir(&root).status().unwrap().success());
     git(&["init", "-q", "-b", "main"]);
@@ -1597,6 +1672,8 @@ esac"##,
     let host = host_over("fixture-storage-claude-chat", &[]);
     // Detailed output on: every run of calls open, with each command's output.
     let detailed = host_over("fixture-storage-claude-chat-detailed", &[("detailed-output", json!(true))]);
+    // Diffs side by side, with every run of calls open, as the Settings choice of the diff card's button keeps it.
+    let split = host_over("fixture-storage-claude-chat-split", &[("diff-split", json!(true)), ("detailed-output", json!(true))]);
     // Large text: the conversation's text a fifth bigger.
     let large = host_over("fixture-storage-claude-chat-large", &[("text-size", json!("large"))]);
     // The session panel in Wings' sidebar, as the Settings page moves it there.
@@ -1637,11 +1714,12 @@ esac"##,
         let host = match name {
             "detailed" | "read-ts" => &detailed,
             "large-text" => &large,
+            "ask-edit-split" | "edits-split" => &split,
             _ => &host,
         };
         let fixture = root.join(format!("{name}.jsonl"));
         let printed = lines.iter().map(|line| format!("{line}\n")).collect::<String>();
-        let printed = if name.starts_with("edits") { printed.replace("/work/shop", &project) } else { printed };
+        let printed = if name.starts_with("edits") || name.starts_with("ask-edit") { printed.replace("/work/shop", &project) } else { printed };
         std::fs::write(&fixture, printed).unwrap();
         // What the fake answers a request with, by its subtype: the rewind dialog's dry run, with a path in the project.
         let answers = root.join(format!("answers-{name}"));
@@ -1748,6 +1826,13 @@ esac"##,
             let export = answer("export-dialog", json!({ "text": "User: Move the discount maths into its own module and test it.\n\nClaude: The discount maths is in src/discount.ts now, and checkout.ts re-exports it.\n", "default_filename": "conversation-2026-11-18-101500.txt" }));
             std::fs::write(answers.join("export_conversation"), format!("{export}\n")).unwrap();
         }
+        // The branches the made-up git lists for the branch switcher, as `git for-each-ref` prints them.
+        let branches = root.join("branches.txt");
+        std::fs::write(
+            &branches,
+            "refs/heads/main\nrefs/heads/feature/checkout-discounts\nrefs/heads/fix/cart-rounding\nrefs/heads/release/2.4\nrefs/remotes/origin/HEAD\nrefs/remotes/origin/main\nrefs/remotes/origin/feature/search-filters\nrefs/remotes/origin/feature/order-history\n",
+        )
+        .unwrap();
         let drip = root.join(format!("drip-{name}.jsonl"));
         if name == "long-rail-streaming" {
             std::fs::write(&drip, format!("{}\n", delta("and the next few words of the reply as they stream in, "))).unwrap();
@@ -1755,6 +1840,7 @@ esac"##,
         // SAFETY: the page from the scene before is closed, so nothing reads these while they change.
         unsafe {
             std::env::set_var("CHAT_DRIP", if name == "long-rail-streaming" { drip.as_os_str() } else { std::ffi::OsStr::new("") });
+            std::env::set_var("CHAT_BRANCHES", if name == "branch-switch" { branches.as_os_str() } else { std::ffi::OsStr::new("") });
             std::env::set_var("CHAT_FIXTURE", &fixture);
             std::env::set_var("CHAT_ANSWERS", &answers);
             std::env::set_var("CHAT_EXIT", exit.map_or("", |(code, _)| code));

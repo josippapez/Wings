@@ -277,6 +277,8 @@ pub struct Text {
     pub weight: Weight,
     pub mono: bool,
     pub truncate: bool,
+    /// `shrink: "last"`: beside other text in a row, it keeps its width while they have any to give.
+    pub shrink_last: bool,
     /// `expandable: true` with `truncate`: the app adds More after the text while it is cut short, and Less once it
     /// is opened, so a page never guesses from its length whether it fits.
     pub expandable: bool,
@@ -463,6 +465,10 @@ pub struct Badge {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Empty {
     pub id: u64,
+    /// It takes the height it is in and sits in its middle (`fill`), as a new chat's does.
+    pub fill: bool,
+    /// A soft glow drifts behind it (`backdrop: "glow"`).
+    pub glow: bool,
     pub title: Vec<Node>,
     pub description: Vec<Node>,
     pub children: Vec<Node>,
@@ -1340,6 +1346,7 @@ impl Walk {
                 weight: choice(&props, "weight"),
                 mono: on("mono"),
                 truncate: on("truncate"),
+                shrink_last: str_prop(&props, "shrink") == Some("last"),
                 expandable: on("expandable"),
                 clamp: on("clamp"),
                 grow: on("grow"),
@@ -1437,6 +1444,8 @@ impl Walk {
                 let mut slots = Slots(children);
                 Node::Empty(Empty {
                     id,
+                    fill: on("fill"),
+                    glow: str_prop(&props, "backdrop") == Some("glow"),
                     title: slots.take("title"),
                     description: slots.take("description"),
                     children: slots.take("children"),

@@ -916,6 +916,7 @@ mod tests {
                 reason: None,
                 suggestions: Vec::new(),
                 input: json!({ "questions": [{ "question": "Which?", "options": [{ "label": "A" }] }] }),
+                preview: Default::default(),
                 answer: None,
             }));
             let asked: Value = serde_json::from_str(request_for(c, "question:r1", 3).unwrap().trim()).unwrap();

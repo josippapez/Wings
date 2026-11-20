@@ -17,7 +17,7 @@ use crate::{
     agents,
     icons::{Icon, icon},
     theme,
-    ui::{self, ButtonSize, Variant, motion},
+    ui::{self, behaviors::EscapeExt, ButtonSize, Variant, motion},
 };
 
 use crate::workspace::{
@@ -581,10 +581,8 @@ impl Workspace {
                 )
                 .child(ui::dialog_panel(
                     panel
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                            if event.keystroke.key == "escape" {
-                                this.cancel_remove(window, cx);
-                            }
+                        .on_escape(cx.listener(|this, _: &KeyDownEvent, window, cx| {
+                            this.cancel_remove(window, cx);
                         }))
                         .child(
                             div()

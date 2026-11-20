@@ -2,6 +2,18 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.58 · 2026-11-20
+
+- **A new Claude chat opens in the middle of the tab**, with "What should Claude do?" over a soft glow that drifts slowly. It stands still under Reduce motion and while Wings is in the background.
+- **Edit and Write requests show a real diff** before you allow them: the lines around the change with their numbers, colours, and a button that opens it in the diff viewer. A new file reads as all added.
+- **Side by side diffs in Claude chat**, for edit requests and finished edits, with a button on the card to switch between one column and two.
+- **Switch branches from the message box**: the branch button finds local and remote branches as you type and switches to the one you pick. Git's own message shows when it refuses.
+- **Stop with a message queued stops the turn and runs your message next**, as Claude Code does. With nothing queued it just stops.
+- **Agents keep their place in the sidebar** when you click one, instead of jumping to the top.
+- **Long file names stay on one line** in the Edited files card, and the folder before them is cut short first.
+- **Claude chat says when changing effort starts costing a fresh prompt cache**, which Claude Code reports when the server stops taking effort with each message.
+- **Escape in a dialog closes only the dialog**: in Settings and the sidebar's remove dialog it also reached the terminal under it.
+
 ## 0.2.57 · 2026-11-19
 
 - **Remote Control is on in every new Claude chat**, with a setting in Claude chat's settings to leave it off.

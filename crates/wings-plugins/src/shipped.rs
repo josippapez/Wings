@@ -370,6 +370,21 @@ fn hud_calls_pass_its_own_manifest() {
 }
 
 #[test]
+fn claude_chat_branch_switcher_calls_pass_its_manifest_and_cannot_force_a_switch() {
+    let p = own_plugin("claude-chat");
+    assert_calls_pass(
+        &p,
+        &[
+            ("git", &["for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes"]),
+            ("git", &["switch", "feature/x"]),
+        ],
+    );
+    for flag in ["--force", "-f", "--discard-changes", "-c", "--create"] {
+        assert!(!may_exec(&p, "git", &["switch".into(), flag.into(), "x".into()]), "git switch {flag} allowed");
+    }
+}
+
+#[test]
 fn schedules_calls_pass_its_own_manifest() {
     let p = own_plugin("schedules");
     let org = "https://dev.azure.com/contoso";

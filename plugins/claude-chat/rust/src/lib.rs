@@ -18,6 +18,8 @@ mod actions;
 #[cfg(feature = "chat")]
 mod actions_view;
 #[cfg(feature = "chat")]
+mod branch;
+#[cfg(feature = "chat")]
 mod chat;
 #[cfg(any(feature = "chat", test))]
 mod code_view;
@@ -25,6 +27,9 @@ mod composer;
 mod commands;
 #[cfg(any(feature = "chat", test))]
 mod copy;
+mod diff_preview;
+#[cfg(feature = "chat")]
+mod diff_view;
 mod edits;
 #[cfg(feature = "chat")]
 mod edits_view;

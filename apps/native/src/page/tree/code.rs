@@ -20,6 +20,8 @@ pub struct Code {
     /// `tone: "success"` or `"danger"`: the code is a run of added or removed lines of a diff, drawn as a tinted band in
     /// place of a card. Another tone is drawn in its colour the same way.
     pub tone: Option<Tone>,
+    /// `variant: "band"`: a diff's unchanged lines, drawn flush like a tinted band but untinted, for the same card.
+    pub band: bool,
 }
 
 pub(super) fn parse(id: u64, props: &Map<String, Value>, tone: Option<Tone>) -> Code {
@@ -41,6 +43,7 @@ pub(super) fn parse(id: u64, props: &Map<String, Value>, tone: Option<Tone>) -> 
         text: text.to_owned(),
         language,
         tone,
+        band: str_prop(props, "variant") == Some("band"),
     }
 }
 

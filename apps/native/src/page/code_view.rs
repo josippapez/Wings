@@ -178,6 +178,8 @@ impl PageView {
                     .border_color(rgb(color))
                     .bg(rgba(color << 8 | 0x1a))
             }
+            // Unchanged lines between them: the same inset with no tint, so the text lines up with the bands'.
+            None if code.band => lines.px(px(8.0)).py(px(2.0)).border_l_2().border_color(gpui::transparent_black()),
             None => ui::plain_card([lines.into_any_element()]),
         };
         // A right press tells the `Stack` round it with an `onContextMenu`, which asks after this, what it hit.

@@ -171,6 +171,8 @@ pub struct Ask {
     /// The permission rules "Always allow" adds. None when Claude Code offers none, or says not to offer them.
     pub suggestions: Vec<Value>,
     pub input: Value,
+    /// The change an Edit, MultiEdit or Write asks for, as a diff against the file on disk, once it is read.
+    pub preview: crate::diff_preview::Peek,
     /// Allowed or denied, once you have said, or once Claude Code withdrew the question (shown as denied).
     pub answer: Option<bool>,
 }
@@ -472,6 +474,9 @@ pub struct Session {
     pub titled: bool,
     /// The conversation was cleared (`/clear`, `/new`, `/reset`), which the page reads once to drop what it kept of it.
     pub cleared: bool,
+    /// Claude Code stopped sending the effort with each turn (`per_turn_effort_changed`), so changing it rewrites the
+    /// prompt cache. Its notice is shown once until an `init` turns it back on.
+    pub effort_rewrites_cache: bool,
     /// When the thinking block being streamed began (ms), for how long the thought took.
     pub thought_since: u64,
     /// The dialogs and answers of `/status`, `/export` and `/btw`.
@@ -561,6 +566,9 @@ impl Session {
                     self.model = reported.map(str::to_owned);
                 }
                 self.mode = line["permissionMode"].as_str().map(str::to_owned).or(self.mode.take());
+                if let Some(active) = line["per_turn_effort_active"].as_bool() {
+                    self.effort_rewrites_cache = !active;
+                }
             }
             "command_lifecycle" => {
                 let uuid = line["command_uuid"].as_str().unwrap_or_default();
@@ -659,6 +667,7 @@ impl Session {
                     suggestions,
                     tool,
                     input: request["input"].clone(),
+                    preview: Default::default(),
                     answer: None,
                 }));
             }
@@ -1258,13 +1267,12 @@ impl Session {
         })
     }
 
-    /// The line that asks Claude to stop the turn it is on, the `n`th time you have, and to drop the messages queued
-    /// behind it, which are then gone from the chat. Without that, Claude Code reads them as soon as it has stopped.
+    /// The line that asks Claude to stop the turn it is on, the `n`th time you have. Messages queued behind it stay
+    /// queued, as Claude Code leaves them on a plain `interrupt` (they are listed under its `still_queued`): it reads them
+    /// as the next turn once this one has stopped. `cancel_queued` would drop them, which is not what Stop is for here.
     pub fn interrupt(&mut self, n: u32) -> String {
         self.stopping = true;
-        let cancel_queued = !std::mem::take(&mut self.queued).is_empty();
-        let what = if cancel_queued { json!({ "subtype": "interrupt", "cancel_queued": true }) } else { json!({ "subtype": "interrupt" }) };
-        request(&format!("interrupt-{n}"), what)
+        request(&format!("interrupt-{n}"), json!({ "subtype": "interrupt" }))
     }
 
     /// The question `request` while it waits for an answer.
@@ -1736,6 +1744,16 @@ fn doing(tool: &str, summary: &str) -> String {
 /// write leaves, else the input as Claude sent it. Whatever else the input holds follows as JSON, so nothing that runs is
 /// left off the card.
 fn ask_detail(tool: &str, input: &Value) -> String {
+    ask_text(tool, input, true)
+}
+
+/// `ask_detail` without the lines of an edit or a write: its path, and what else the input holds. A card that draws the change
+/// as a diff shows this above it.
+pub(crate) fn ask_head(tool: &str, input: &Value) -> String {
+    ask_text(tool, input, false)
+}
+
+fn ask_text(tool: &str, input: &Value, whole: bool) -> String {
     let field = |key: &str| shown(input[key].as_str().unwrap_or_default(), true);
     let change = |edit: &Value| {
         let lines = |key: &str, mark: &str| edit[key].as_str().unwrap_or_default().lines().map(|line| format!("{mark} {}", shown(line, true))).collect::<Vec<_>>();
@@ -1745,6 +1763,9 @@ fn ask_detail(tool: &str, input: &Value) -> String {
     let (said, keys): (String, &[&str]) = match tool {
         // A command's description is Claude's words about it, which don't run.
         "Bash" => (shown(input["command"].as_str().unwrap_or_default().trim(), false), &["command", "description"]),
+        "Edit" if !whole => (field("file_path"), &["file_path", "old_string", "new_string", "replace_all"]),
+        "MultiEdit" if !whole => (field("file_path"), &["file_path", "edits"]),
+        "Write" if !whole => (field("file_path"), &["file_path", "content"]),
         "Edit" => (format!("{}\n\n{}", field("file_path"), change(input)), &["file_path", "old_string", "new_string", "replace_all"]),
         "MultiEdit" => {
             let edits = input["edits"].as_array().map(Vec::as_slice).unwrap_or_default();
@@ -1762,7 +1783,7 @@ fn ask_detail(tool: &str, input: &Value) -> String {
 /// `text` as a card can show it truthfully: printable ASCII, letters and digits stay, and every other character is
 /// written out as `\u{…}`, so nothing invisible, nothing that turns text around and nothing that looks like something
 /// else hides in what you allow. A field that is one line, like a path, writes out its line breaks and tabs too.
-fn shown(text: &str, one_line: bool) -> String {
+pub(crate) fn shown(text: &str, one_line: bool) -> String {
     let plain = |c: char| {
         matches!(c, ' '..='~')
             || (!one_line && matches!(c, '\n' | '\t'))
@@ -2251,13 +2272,50 @@ mod tests {
     }
 
     #[test]
-    fn stop_with_messages_queued_cancels_them_too() {
+    fn stop_with_a_message_queued_only_interrupts_and_leaves_it_queued_to_run_next() {
         let mut session = Session::default();
         session.send("count to 400", &[], 1, 1);
-        session.queue("one", Vec::new(), 1, 1);
-        session.queue("two", Vec::new(), 1, 2);
-        let stop: Value = serde_json::from_str(&session.interrupt(3)).unwrap();
-        assert_eq!(stop, json!({ "type": "control_request", "request_id": "interrupt-3", "request": { "subtype": "interrupt", "cancel_queued": true } }));
+        let first = uuid(1, 1);
+        session.hear(&lifecycle(&first, "started"));
+        session.hear(&turn_start());
+        session.queue("one", Vec::new(), 1, 2);
+        let one = session.queued[0].uuid.clone();
+        session.hear(&lifecycle(&one, "queued"));
+        let written = session.interrupt(3);
+        // One plain interrupt: no `cancel_queued`, and the message isn't written again.
+        assert_eq!(parsed(&written), [json!({ "type": "control_request", "request_id": "interrupt-3", "request": { "subtype": "interrupt" } })]);
+        assert_eq!(session.queued.len(), 1, "still waiting, shown as queued");
+        // The stopped turn ends; Claude Code goes on with the queued message as the next turn.
+        session.hear(&json!({ "type": "result", "subtype": "error_during_execution", "is_error": true, "user_message_uuids": [first], "errors": ["x"] }));
+        session.hear(&lifecycle(&first, "completed"));
+        assert_eq!(session.items, [Item::User("count to 400".into()), Item::Stopped]);
+        assert!(session.working, "its message is next");
+        assert_eq!(session.queued.len(), 1);
+        session.hear(&lifecycle(&one, "started"));
+        session.hear(&turn_start());
+        let echo = json!({ "type": "user", "isReplay": true, "uuid": one, "message": { "role": "user", "content": "one" } });
+        session.hear(&echo);
+        session.hear(&echo);
+        assert_eq!(session.items, [Item::User("count to 400".into()), Item::Stopped, Item::User("one".into())]);
+        assert!(session.queued.is_empty());
+        session.hear(&turn_end(&[&one], None));
+        session.hear(&lifecycle(&one, "completed"));
+        assert!(!session.working);
+        assert_eq!(session.items.iter().filter(|item| **item == Item::Stopped).count(), 1, "the next turn isn't a stopped one");
+    }
+
+    #[test]
+    fn stop_with_nothing_queued_just_stops_the_turn() {
+        let mut session = Session::default();
+        session.send("count to 400", &[], 1, 1);
+        let first = uuid(1, 1);
+        session.hear(&lifecycle(&first, "started"));
+        session.hear(&turn_start());
+        assert_eq!(parsed(&session.interrupt(2)).len(), 1);
+        session.hear(&json!({ "type": "result", "subtype": "error_during_execution", "is_error": true, "user_message_uuids": [first], "errors": ["x"] }));
+        session.hear(&lifecycle(&first, "completed"));
+        assert_eq!(session.items, [Item::User("count to 400".into()), Item::Stopped]);
+        assert!(!session.working);
         assert!(session.queued.is_empty());
     }
 
@@ -2601,6 +2659,16 @@ mod tests {
         let Item::Tool(tool) = &session.items[1] else { panic!() };
         let Detail::Diff(diff) = &tool.detail else { panic!("{:?}", tool.detail) };
         assert_eq!((diff.added, diff.removed, diff.lines.len(), diff.more), (31, 30, 40, 21));
+    }
+
+    #[test]
+    fn the_head_of_an_edit_ask_is_its_path_without_the_lines_the_diff_draws() {
+        let input = json!({ "file_path": "/a/b.rs", "old_string": "x", "new_string": "y", "extra": 1 });
+        assert_eq!(ask_head("Edit", &input), "/a/b.rs\n\n{\n  \"extra\": 1\n}");
+        assert!(ask_detail("Edit", &input).contains("− x\n+ y"));
+        assert_eq!(ask_head("Write", &json!({ "file_path": "/a", "content": "c" })), "/a");
+        assert_eq!(ask_head("MultiEdit", &json!({ "file_path": "/a", "edits": [] })), "/a");
+        assert_eq!(ask_head("Bash", &json!({ "command": "ls" })), ask_detail("Bash", &json!({ "command": "ls" })));
     }
 
     #[test]

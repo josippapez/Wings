@@ -4,6 +4,7 @@
 pub mod behaviors;
 mod button;
 mod drag;
+mod glow;
 mod menu;
 pub mod motion;
 mod parts;
@@ -13,6 +14,7 @@ mod status_dot;
 mod tooltip;
 
 pub use button::{Variant, badge, button, chip};
+pub use glow::glow;
 pub use drag::{RESIZE_EDGE, Side, resize_edge, window_drag};
 pub use menu::{
     context_menu, dropdown_menu, dropup_menu, menu, menu_item, menu_item_text, menu_item_with, menu_separator,

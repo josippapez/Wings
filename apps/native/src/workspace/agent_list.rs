@@ -26,8 +26,8 @@ const BLOCKED_ROW: u32 = theme::BLOCKED << 8 | 0x1a;
 const BLOCKED_ROW_HOVER: u32 = theme::BLOCKED << 8 | 0x26;
 
 impl Workspace {
-    /// The agents in the desktop list's order (needs you, done, working, idle), or nothing while
-    /// there are none.
+    /// The agents in the order they were made (terminals', then tabs', then those coming back), or nothing
+    /// while there are none.
     pub(super) fn agent_list(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let pending = self.pending_agents(cx.background_executor().now());
         let tabs = self.tab_agents();
@@ -35,26 +35,17 @@ impl Workspace {
             return None;
         }
         let count = self.agents.len() + pending.len() + tabs.len();
-        let mut agents: Vec<(usize, &Agent)> = self.agents.iter().map(|(p, a)| (*p, a)).collect();
-        let rank = |state: AgentState| match state {
-            AgentState::Blocked => 0,
-            AgentState::Done => 1,
-            AgentState::Working => 2,
-            AgentState::Idle => 3,
-        };
-        agents.sort_by_key(|(pane, agent)| (rank(agent.state), *pane));
         let focused = self.focused_pane();
-        let mut rows: Vec<(u8, AnyElement)> = agents
+        // Rows keep their place: a click, a state change or a project switch never moves one. A blocked agent shows
+        // in its row's colour instead.
+        let mut rows: Vec<AnyElement> = in_place(&self.agents)
             .into_iter()
-            .map(|(pane, agent)| (rank(agent.state), self.agent_row(pane, agent, focused == Some(pane), cx)))
+            .map(|(pane, agent)| self.agent_row(pane, agent, focused == Some(pane), cx))
             .collect();
         rows.extend(tabs.into_iter().map(|(project, tab, agent)| {
             let state = tab_state(&agent.state);
-            (rank(state), self.tab_agent_row(project, tab, agent, state, cx))
+            self.tab_agent_row(project, tab, agent, state, cx)
         }));
-        // Stable, so the terminals' agents keep their order among those in the same state.
-        rows.sort_by_key(|(rank, _)| *rank);
-        let mut rows: Vec<AnyElement> = rows.into_iter().map(|(_, row)| row).collect();
         rows.extend(
             pending
                 .into_iter()
@@ -220,10 +211,14 @@ impl Workspace {
             .parked
             .iter()
             .flat_map(|(path, parked)| parked.plugin_tabs.iter().map(move |tab| (path, tab)));
-        shown
+        let mut tabs: Vec<(PathBuf, usize, TabAgent)> = shown
             .chain(parked)
             .filter_map(|(project, tab)| Some((project.clone(), tab.id, tab.state.agent()?)))
-            .collect()
+            .collect();
+        // Shown project first, then the parked ones in a map's order, would move a row to the top when its project
+        // is switched to. Tab ids are never reused, so they keep each row where it was.
+        tabs.sort_by_key(|(_, tab, _)| *tab);
+        tabs
     }
 
     /// Like `agent_row`, for a tab's agent: its name, project, state and what it does, and a click shows its tab.
@@ -397,6 +392,8 @@ impl Workspace {
                 });
             }
         }
+        // The shown project's tabs come first and the parked ones in a map's order, so a project switch would move rows.
+        rows.sort_by_key(|row| row.pane);
         rows
     }
 
@@ -581,9 +578,57 @@ fn glyph(kind: AgentKind) -> (Icon, u32) {
     }
 }
 
+/// The terminals' agents in the order their panes were made, whatever each is doing.
+fn in_place(agents: &std::collections::HashMap<usize, Agent>) -> Vec<(usize, &Agent)> {
+    let mut agents: Vec<(usize, &Agent)> = agents.iter().map(|(pane, agent)| (*pane, agent)).collect();
+    agents.sort_by_key(|(pane, _)| *pane);
+    agents
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{AgentKind, Icon, elapsed, glyph};
+    use super::{AgentKind, Icon, elapsed, glyph, in_place};
+    use crate::agents::{Agent, AgentState};
+    use std::collections::HashMap;
+
+    fn agent(pane: usize, state: AgentState) -> Agent {
+        Agent {
+            pane_id: pane.to_string(),
+            space_id: String::new(),
+            pid: 1,
+            kind: AgentKind::Claude,
+            session_id: None,
+            name: None,
+            state,
+            waiting_for: None,
+            args: Vec::new(),
+            launcher: None,
+            started_at: 0,
+            state_since: None,
+            direct: true,
+            summary: None,
+            weak_name: false,
+            claude_dir: None,
+        }
+    }
+
+    #[test]
+    fn clicking_an_agent_leaves_the_order_alone() {
+        let order = |agents: &HashMap<usize, Agent>| in_place(agents).iter().map(|(pane, _)| *pane).collect::<Vec<_>>();
+        let mut agents: HashMap<usize, Agent> = [
+            (1, AgentState::Idle),
+            (2, AgentState::Working),
+            (3, AgentState::Done),
+            (4, AgentState::Blocked),
+        ]
+        .into_iter()
+        .map(|(pane, state)| (pane, agent(pane, state)))
+        .collect();
+        assert_eq!(order(&agents), [1, 2, 3, 4]);
+        // Focusing the Done agent turns it Idle (a focused pane never turns Done); it stays third.
+        agents.get_mut(&3).unwrap().state = AgentState::Idle;
+        assert_eq!(order(&agents), [1, 2, 3, 4]);
+    }
 
     #[test]
     fn opencode_shows_its_own_icon() {

@@ -144,6 +144,20 @@ fn turn(window: &mut Window, cx: &mut App) -> f32 {
     elapsed.as_secs_f32().fract()
 }
 
+/// Seconds on the spinners' clock, for something else that moves on it, and a redraw of the view being drawn at its next
+/// step while the window is in front, so it shares the spinners' frames. None under Reduce motion.
+pub fn ticking(window: &mut Window, cx: &mut App) -> Option<f32> {
+    if cx.reduce_motion() {
+        return None;
+    }
+    let now = cx.background_executor().now();
+    let elapsed = now.saturating_duration_since(*ORIGIN.get_or_init(|| now));
+    if window.is_window_active() {
+        wake_at_next_step(elapsed, window, cx);
+    }
+    Some(elapsed.as_secs_f32())
+}
+
 /// Where the spinner named `name` goes, in a piece drawn with `drawing_piece`: `spinner_layer` turns it there, so a step
 /// redraws the layer, not the piece.
 pub fn spinner_slot(name: impl Into<SharedString>) -> impl IntoElement {

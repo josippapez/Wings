@@ -111,6 +111,7 @@ pub(super) fn section(id: u64, children: Vec<Node>) -> Node {
             weight: Weight::Normal,
             mono: false,
             truncate: false,
+            shrink_last: false,
             expandable: false,
             clamp: false,
             grow: false,

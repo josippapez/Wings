@@ -122,6 +122,8 @@ pub struct Chat {
     /// Whether the tab is narrower than the side panel and the conversation need side by side, as the page's split says: None
     /// until it has measured. Then the panel floats over the conversation, and Escape or a press outside puts it away.
     pub narrow: Option<bool>,
+    /// Your choice for every chat of showing diffs side by side (`prefs::diff_split`). A narrow tab keeps one column.
+    pub diff_split: bool,
     /// Your choice for every chat of whether the session panel shows (`prefs::side_panel`, on by default): in the chat, or
     /// opened with it in Wings' sidebar, as `side_in_wings` says.
     pub side_open: bool,
@@ -193,6 +195,7 @@ thread_local! {
         fork_ask: false,
         forked_from: None,
         narrow: None,
+        diff_split: false,
         side_open: true,
         side_in_wings: false,
         message_to: None,
@@ -253,10 +256,12 @@ pub fn start() {
         c.detailed = prefs::detailed().get();
         c.text_scale = prefs::scale_of(&prefs::text_size().get());
         c.side_open = prefs::side_panel().get();
+        c.diff_split = prefs::diff_split().get();
         c.side_in_wings = prefs::in_sidebar(&prefs::session_panel().get());
     });
     prefs::text_size().on_change(|size| with(|c| c.text_scale = prefs::scale_of(size)));
     prefs::side_panel().on_change(|shown| with(|c| c.side_open = *shown));
+    prefs::diff_split().on_change(|split| with(|c| c.diff_split = *split));
     // The panel moves with the setting, in every open chat.
     prefs::session_panel().on_change(|place| session_panel_moved(place));
     // After your setting is read: a chat in front opens the session sidebar with it.
@@ -653,6 +658,7 @@ pub(crate) fn hear(run: u32, line: &Value) {
         }
     }
     report_agent();
+    crate::diff_view::fetch(run);
     crate::reattach::heard(run, line);
 }
 

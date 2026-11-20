@@ -4,7 +4,10 @@
 use gpui::{AnyElement, Context, Entity, FocusHandle, KeyDownEvent, MouseButton, Window, div, prelude::*, px};
 
 use super::Workspace;
-use crate::{page::PageView, ui};
+use crate::{
+    page::PageView,
+    ui::{self, behaviors::EscapeExt},
+};
 
 pub(super) struct PluginModal {
     /// The plugin's id and the view's.
@@ -105,11 +108,8 @@ impl Workspace {
                 )
                 .child(ui::dialog_panel(
                     panel
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                            if event.keystroke.key == "escape" {
-                                this.close_plugin_modal(None, window, cx);
-                                cx.stop_propagation();
-                            }
+                        .on_escape(cx.listener(|this, _: &KeyDownEvent, window, cx| {
+                            this.close_plugin_modal(None, window, cx);
                         }))
                         .child(div().w_full().child(modal.page.clone())),
                 ))

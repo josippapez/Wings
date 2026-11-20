@@ -1543,6 +1543,11 @@ impl PageView {
             .when_some(least, |el, least| el.min_w(px(least)))
             .when(text.grow, |el| el.flex_1())
             .when(text.truncate, |el| el.truncate())
+            // Shrinking is shared by width, so a long folder before a long file name cut both: the name hardly shrinks.
+            .when(text.shrink_last, |mut el| {
+                el.style().flex_shrink = Some(0.001);
+                el
+            })
             .when(text.clamp, three_lines)
             .when(text.mono, |el| el.font_family(DEFAULT_FONT_FAMILY))
             .map(|el| match text.size {
@@ -2214,7 +2219,31 @@ impl PageView {
     }
 
     fn empty(&self, empty: &tree::Empty, cx: &mut Context<Self>) -> AnyElement {
+        let content = self.empty_content(empty, cx);
+        if !empty.fill {
+            return content;
+        }
+        // A little above the middle, where the eye puts the middle of a page.
         div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .pb(px(48.0))
+            .when(empty.glow, |el| {
+                el.child(div().absolute().top_0().left_0().size_full().child(ui::glow()))
+            })
+            .child(content)
+            .into_any_element()
+    }
+
+    fn empty_content(&self, empty: &tree::Empty, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .relative()
             .w_full()
             .flex()
             .flex_col()
@@ -2232,8 +2261,8 @@ impl PageView {
                     .gap(px(8.0))
                     .child(
                         div()
-                            .text_size(px(14.0))
-                            .font_weight(FontWeight::MEDIUM)
+                            .text_size(px(if empty.fill { 22.0 } else { 14.0 }))
+                            .font_weight(if empty.fill { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM })
                             .child(self.inline(&empty.title, cx)),
                     )
                     .when(!empty.description.is_empty(), |header| {

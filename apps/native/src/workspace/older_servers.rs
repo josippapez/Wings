@@ -17,7 +17,7 @@ use crate::{
     saved::SavedSession,
     terminal_server::{self, Running},
     theme,
-    ui::{self, Variant},
+    ui::{self, behaviors::EscapeExt, Variant},
 };
 
 use super::{Workspace, panes::Ended};
@@ -461,11 +461,8 @@ impl Workspace {
                 )
                 .child(ui::dialog_panel(
                     panel
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                            if event.keystroke.key == "escape" {
-                                this.cancel_stop(window, cx);
-                                cx.stop_propagation();
-                            }
+                        .on_escape(cx.listener(|this, _: &KeyDownEvent, window, cx| {
+                            this.cancel_stop(window, cx);
                         }))
                         .child(
                             div()

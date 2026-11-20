@@ -64,6 +64,14 @@ pub fn in_sidebar(place: &str) -> bool {
     place == "sidebar"
 }
 
+/// Diffs in the chat (a permission card's, a finished edit's) show the old lines on the left and the new on the right, in every
+/// chat. Off, they are one column.
+pub const DIFF_SPLIT: &str = "diff-split";
+
+pub fn diff_split() -> Setting<bool> {
+    Setting::boolean(DIFF_SPLIT, false)
+}
+
 pub fn detailed() -> Setting<bool> {
     Setting::boolean(DETAILED, false)
 }

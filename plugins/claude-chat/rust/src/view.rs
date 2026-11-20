@@ -7,7 +7,7 @@
 use wings_plugin::{
     format::{clock, plural, truncate},
     local_time::local,
-    markdown::{highlighted_code, markdown},
+    markdown::markdown,
     ui::{
         Entry, Node, badge, button, card, chip, confirm, disclosure, empty, entry, gauge, icon, list, list_button, loading, muted,
         notice, row, section, select, spinner, stack, text, text_input,
@@ -198,7 +198,11 @@ fn conversation(c: &Chat) -> (Node, Vec<(usize, usize)>, usize) {
             State::Starting => loading(),
             State::Failed(why) => notice("danger", why.as_str()),
             State::Moved => muted("This session goes on in a terminal."),
-            _ => empty("What should Claude do?", "It works in this folder with your Claude Code setup, and asks here before it does anything you haven't allowed."),
+            // A new chat's prompt sits in the middle of the conversation, over a soft glow. Needs Wings 0.2.58.
+            _ => {
+                let new = empty("What should Claude do?", "It works in this folder with your Claude Code setup, and asks here before it does anything you haven't allowed.");
+                return (new.prop("fill", true).prop("backdrop", "glow"), Vec::new(), 0);
+            }
         };
         return (Node::new("Scroll").child(column().child(body)), Vec::new(), 0);
     }
@@ -612,7 +616,7 @@ fn step(tool: &Tool, opened: bool, c: &Chat) -> Node {
     match label {
         Some(label) => {
             let id = tool.id.clone();
-            let body = if opened { body(tool, output) } else { stack() };
+            let body = if opened { body(tool, output, crate::diff_view::look(c)) } else { stack() };
             let label = if error.is_some() { "Whole error" } else { label };
             let fold = disclosure(label, body).prop("open", opened).on("onOpenChange", move |_| chat::toggle_output(&id));
             stack().prop("gap", "xs").child(head).maybe(mod_result).maybe(error).maybe(pictures).child(fold)
@@ -656,12 +660,12 @@ fn facts(tool: &Tool) -> Vec<Node> {
 
 /// What a call's fold holds: the diff, the start of the file, a command of several lines, and what it printed. A long block
 /// shows its first lines with a row that opens the rest (`code_view.rs`), in the file's language where the call names a file.
-fn body(tool: &Tool, output: Option<(&str, bool)>) -> Node {
+fn body(tool: &Tool, output: Option<(&str, bool)>, look: crate::diff_view::Look) -> Node {
     let failed = output.is_some_and(|(_, failed)| failed);
     let language = code_view::language_of_path(&tool.summary);
     let mut body = stack().prop("gap", "s");
     match &tool.detail {
-        Detail::Diff(diff) if !failed => body = body.child(diff_lines(&format!("diff-{}", tool.id), language, diff)),
+        Detail::Diff(diff) if !failed => body = body.child(crate::diff_view::finished(&format!("diff-{}", tool.id), language, diff, look)),
         Detail::Write { lines, head } if !failed => {
             let key = format!("write-{}", tool.id);
             body = body.child(code_view::block(&key, &head.join("\n"), language));
@@ -683,22 +687,6 @@ fn body(tool: &Tool, output: Option<(&str, bool)>) -> Node {
         }
         _ => body,
     }
-}
-
-/// An edit's lines, in the file's language: each run of lines taken out is a red band with minuses, each run put in a
-/// green one with pluses. The first lines show, and a row opens the rest.
-fn diff_lines(key: &str, language: &str, diff: &Diff) -> Node {
-    let kept = diff.lines.len();
-    let open = code_view::is_open(key);
-    let shown = if open { kept } else { kept.min(code_view::FOLD_LINES) };
-    let bands = diff.lines[..shown].chunk_by(|a, b| a.0 == b.0).enumerate().map(|(at, run)| {
-        let added = run[0].0;
-        let lines: Vec<String> = run.iter().map(|(_, line)| format!("{} {line}", if added { "+" } else { "−" })).collect();
-        highlighted_code(&lines.join("\n"), language).prop("tone", if added { "success" } else { "danger" }).key(format!("run-{at}"))
-    });
-    let fold = (kept > code_view::FOLD_LINES).then(|| code_view::toggle_row(key, code_view::label(kept - shown, open)));
-    let more = (diff.more > 0 && (open || kept <= code_view::FOLD_LINES)).then(|| muted(format!("{} more", plural(diff.more, "line"))));
-    card().child(stack().prop("gap", "none").children(bands).maybe(more).maybe(fold))
 }
 
 /// The most checklist lines shown at once.
@@ -800,7 +788,7 @@ fn ask_node(ask: &Ask, c: &Chat) -> Node {
             None => questions_node(ask, draft),
         },
         "ExitPlanMode" if ask.input["plan"].as_str().is_some() => plan_node(ask, draft),
-        _ => permission_node(ask, draft),
+        _ => permission_node(ask, draft, c),
     }
 }
 
@@ -810,10 +798,14 @@ fn feedback_field(request: &str, draft: &Draft, label: &str, placeholder: &str) 
     text_input(label, draft.feedback.as_str(), move |said| chat::edit(&request, |draft| draft.feedback = said)).prop("placeholder", placeholder)
 }
 
-fn permission_node(ask: &Ask, draft: &Draft) -> Node {
+fn permission_node(ask: &Ask, draft: &Draft, c: &Chat) -> Node {
     let (deny, once, always) = (ask.request.clone(), ask.request.clone(), ask.request.clone());
     let mut body: Vec<Node> = ask.reason.iter().map(|why| muted(why.as_str())).collect();
-    body.push(text(ask.detail.as_str()).prop("mono", true).prop("size", "small"));
+    // An edit or a write that was read against its file shows as a diff, with the lines round it.
+    match crate::diff_view::ask_diff(ask) {
+        Some(preview) => body.extend(crate::diff_view::ask_body(ask, preview, crate::diff_view::look(c))),
+        None => body.push(text(ask.detail.as_str()).prop("mono", true).prop("size", "small")),
+    }
     if ask.cut_short {
         body.push(text("This is too long to show here in full, so it can't be allowed here. Open the session in the terminal to read it.").prop("tone", "warn"));
     }
@@ -1001,6 +993,7 @@ fn composer(c: &Chat) -> Node {
             .maybe(todo_card(c))
             .maybe(crate::mods_view::above_prompt(c))
             .maybe(queued(c))
+            .maybe(crate::branch::panel(c))
             .child(message_box)
             .maybe(crate::mods_view::under_prompt(c)),
     )
@@ -1285,6 +1278,7 @@ fn pickers(c: &Chat) -> Vec<Node> {
         pickers.push(select("Permission mode", &options, mode, chat::pick_mode).prop("variant", "ghost"));
     }
     pickers.extend(remote_button(c));
+    pickers.extend(crate::branch::button_node(c));
     pickers
 }
 

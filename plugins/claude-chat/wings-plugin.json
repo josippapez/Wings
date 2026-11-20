@@ -1,8 +1,8 @@
 {
   "id": "claude-chat",
   "name": "Claude chat",
-  "version": "0.27.0",
-  "minWingsVersion": "0.2.57",
+  "version": "0.28.0",
+  "minWingsVersion": "0.2.58",
   "description": "Experimental. Runs Claude Code as a chat in a tab instead of a terminal: messages, tool calls and permission prompts as cards, with Enter to send. Open a new chat from the + menu, or move a Claude terminal into one with its Chat badge.",
   "api": 1,
   "main": "dist/native/main.wasm",
@@ -14,9 +14,12 @@
       "git ls-files [--cached --others --exclude-standard -z]",
       "git diff [--shortstat]",
       "git rev-parse [--abbrev-ref]",
+      "git for-each-ref [--format]",
+      "git switch []",
       "claude plugin list [--available --json]",
       "claude plugin install [--json]",
       "test [-d]",
+      "cat []",
       "gh pr view [--json]",
       "az repos pr show [--id --organization --output]"
     ],

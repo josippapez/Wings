@@ -43,7 +43,7 @@ pub fn card_of(c: &Chat, from: usize, end: usize, turn: &Turn) -> Node {
             .prop("align", "baseline")
             .prop("grow", true)
             .maybe((!dir.is_empty()).then(|| muted(format!("{dir}/")).prop("size", "small").prop("truncate", true)))
-            .child(text(name).prop("size", "small").prop("weight", "medium"));
+            .child(text(name).prop("size", "small").prop("weight", "medium").prop("truncate", true).prop("shrink", "last"));
         let line = row().prop("grow", true).prop("gap", "s").prop("align", "baseline").child(name_line).child(counts(file.added, file.removed));
         let shown = shown.to_owned();
         list_button([line], move || view_changes(from, end, Some(&shown))).key(file.path.as_str()).prop("title", file.path.as_str())
@@ -171,7 +171,7 @@ fn show_changes(reference: &Reference) -> bool {
     true
 }
 
-fn open(shown: serde_json::Value) {
+pub(crate) fn open(shown: serde_json::Value) {
     task::spawn(async move {
         if let Err(why) = diff::open(shown).await {
             say(format!("Couldn't open the changes: {why}"));

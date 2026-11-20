@@ -12,6 +12,9 @@ use crate::session::{Item, Session};
 /// The most of a note's text the chat keeps.
 const NOTE_KEPT: usize = 400;
 
+/// What `per_turn_effort_changed` means for you.
+const EFFORT_NOTE: &str = "Effort is no longer sent with each message, so changing it now restarts the prompt cache";
+
 /// Takes in `line` when it is one of these, and says whether it was.
 pub fn hear(session: &mut Session, line: &Value) -> bool {
     if line["type"] == "conversation_reset" {
@@ -58,6 +61,12 @@ pub fn hear(session: &mut Session, line: &Value) -> bool {
             }
         }
         "session_title_changed" => session.title = text("title").map(str::to_owned),
+        // The server refused effort sent with each turn. It can repeat a change the chat already holds.
+        "per_turn_effort_changed" => {
+            if !std::mem::replace(&mut session.effort_rewrites_cache, true) {
+                note(session, Some(EFFORT_NOTE.to_owned()));
+            }
+        }
         _ => return false,
     }
     true
@@ -157,6 +166,25 @@ mod tests {
     fn a_model_fallback_without_text_names_both_models() {
         let session = heard(r#"{"type":"system","subtype":"model_fallback","original_model":"claude-opus-5-5","fallback_model":"claude-sonnet-5-5","trigger":"overload"}"#);
         assert_eq!(session.items, [Item::Notice("Switched from claude-opus-5-5 to claude-sonnet-5-5".into())]);
+    }
+
+    #[test]
+    fn effort_turning_off_per_turn_is_said_once_until_an_init_turns_it_back_on() {
+        // As Claude Code 2.1.328's schema builds it.
+        let changed = json!({ "type": "system", "subtype": "per_turn_effort_changed", "per_turn_effort_active": false, "uuid": "u", "session_id": "s" });
+        let mut session = Session::default();
+        session.hear(&changed);
+        session.hear(&json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "hi" }] } }));
+        session.hear(&changed);
+        assert_eq!(session.items.iter().filter(|item| **item == Item::Notice(EFFORT_NOTE.into())).count(), 1);
+        session.hear(&json!({ "type": "system", "subtype": "init", "session_id": "s", "per_turn_effort_active": true }));
+        session.hear(&changed);
+        assert_eq!(session.items.iter().filter(|item| **item == Item::Notice(EFFORT_NOTE.into())).count(), 2);
+        // An init that starts with it off says nothing more when the change repeats it.
+        let mut off = Session::default();
+        off.hear(&json!({ "type": "system", "subtype": "init", "session_id": "s", "per_turn_effort_active": false }));
+        off.hear(&changed);
+        assert!(off.items.is_empty());
     }
 
     #[test]
