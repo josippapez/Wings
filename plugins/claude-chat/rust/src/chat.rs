@@ -19,7 +19,7 @@ use crate::{
     images,
     commands,
     fork::{self, Launch},
-    fork_view,
+    fork_view, issues,
     mentions::{self, Files},
     plugins, prefs,
     composer::{self, Escape},
@@ -103,6 +103,8 @@ pub struct Chat {
     pub open_outputs: HashSet<String>,
     /// The project's files, for @-mentions.
     pub files: Files,
+    /// The Wings and GitHub issues for #-references.
+    pub issues: crate::issues::Issues,
     /// What you have picked and typed on the cards that wait for an answer, by request.
     pub drafts: HashMap<String, Draft>,
     /// The checklist above the message box is folded to its summary line.
@@ -186,6 +188,7 @@ thread_local! {
         open_steps: HashSet::new(),
         open_outputs: HashSet::new(),
         files: Files::default(),
+        issues: Default::default(),
         drafts: HashMap::new(),
         todos_folded: false,
         doing: (String::new(), 0),
@@ -1033,6 +1036,26 @@ pub fn mention_matches(c: &Chat) -> Option<(usize, Vec<&str>)> {
     (!found.is_empty()).then_some((start, found))
 }
 
+/// The issues that match the `#word` the draft ends in, with where the word starts. None while a slash command is being
+/// typed (that menu wins), or when the word matches none.
+pub fn issue_matches(c: &Chat) -> Option<(usize, Vec<&issues::Entry>)> {
+    if c.draft.starts_with('/') {
+        return None;
+    }
+    let (start, query) = issues::active(&c.draft)?;
+    let found = c.issues.matches(query);
+    (!found.is_empty()).then_some((start, found))
+}
+
+/// Replaces the `#word` the draft ends in with the issue's key or number.
+pub fn insert_issue(id: &str) {
+    with(|c| {
+        if let Some((start, _)) = issues::active(&c.draft) {
+            c.draft = issues::insert(&c.draft, start, id);
+        }
+    });
+}
+
 /// Replaces the `@word` the draft ends in with a mention of `path`.
 pub fn insert_mention(path: &str) {
     with(|c| {
@@ -1192,6 +1215,10 @@ pub fn typed(value: &str) {
             c.session.suggestion = None;
         }
     });
+    // A `#word` lists issues, which are read the first time and then once a minute at most.
+    if with(|c| !c.draft.starts_with('/') && issues::active(&c.draft).is_some()) {
+        issues::want();
+    }
 }
 
 /// Opens the usage or context dialog and reads what it shows: one request, from your click.

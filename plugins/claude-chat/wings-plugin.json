@@ -1,7 +1,7 @@
 {
   "id": "claude-chat",
   "name": "Claude chat",
-  "version": "0.28.2",
+  "version": "0.28.3",
   "minWingsVersion": "0.2.58",
   "description": "Experimental. Runs Claude Code as a chat in a tab instead of a terminal: messages, tool calls and permission prompts as cards, with Enter to send. Open a new chat from the + menu, or move a Claude terminal into one with its Chat badge.",
   "api": 1,
@@ -9,7 +9,7 @@
   "permissions": {
     "statusline": true,
     "claudeAccounts": true,
-    "callTools": ["changes changed_files", "tasks get"],
+    "callTools": ["changes changed_files", "tasks get", "tasks list"],
     "exec": [
       "git ls-files [--cached --others --exclude-standard -z]",
       "git diff [--shortstat]",
@@ -21,6 +21,7 @@
       "test [-d]",
       "cat []",
       "gh pr view [--json]",
+      "gh issue list [--json --limit]",
       "az repos pr show [--id --organization --output]"
     ],
     "processes": [

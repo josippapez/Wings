@@ -603,8 +603,10 @@ fn node(el: &Value, at: &At, budget: &mut usize) -> Option<Node> {
                 .on("onClick", move |_| crate::mod_pane::act(crate::mod_pane::act_message(&instance, "press", &press, key.as_deref(), None)));
             let label = props["label"].as_str().map(str::to_owned).or_else(|| children.iter().all(|child| child.is_string()).then(|| words(&children)));
             let pressed = match label {
-                Some(label) if props["dimColor"] == true => pressed.prop("label", label.as_str()).child(muted(label)),
-                Some(label) => pressed.text(label),
+                // Its words are cut short where the column ends: quiet-tools' row of an MCP call, its summary as the
+                // button's words, ran on past the conversation and under the side panel.
+                Some(label) if props["dimColor"] == true => pressed.prop("label", label.as_str()).child(muted(label).prop("truncate", true)),
+                Some(label) => pressed.prop("label", label.as_str()).child(text(label).prop("truncate", true)),
                 // What it holds goes inside it, and it narrows and wraps, or cuts its text short, to fit its column:
                 // quiet-tools' row of an MCP call, a button holding the call's whole summary, ran past the
                 // conversation's edge.
@@ -739,7 +741,7 @@ mod tests {
             { "type": "engine", "ref": 2 }] });
         let drawn = super::drawn(&pane, &at("probe")).unwrap();
         // A stack of a text, a button with its label in a row and a line for the frame; Claude Code's own part is left out.
-        assert_eq!(drawn.count(), 1 + 2 + 3 + 2);
+        assert_eq!(drawn.count(), 1 + 2 + 4 + 2);
         assert!(super::drawn(&json!({ "type": "engine", "ref": 0 }), &at("x")).is_none());
         // A tree too big for the page is cut off.
         let many = json!({ "type": "Box", "children": (0..1000).map(|n| json!({ "type": "Text", "children": [n.to_string()] })).collect::<Vec<_>>() });
@@ -762,13 +764,18 @@ mod tests {
         assert!(drawn["children"][1]["props"]["grow"].is_null());
         let [toggle, filter] = [1, 2].map(|at| drawn["children"][0]["children"][at]["children"][0].clone());
         assert_eq!((&toggle["props"]["variant"], &filter["props"]["variant"]), (&json!("ghost"), &json!("ghost")), "plain buttons are quiet");
-        assert_eq!((&toggle["children"][0]["type"], &filter["children"][0]["props"]["tone"]), (&json!("#text"), &json!("muted")), "a dimmed one in muted words");
+        assert_eq!((&toggle["children"][0]["props"]["tone"], &filter["children"][0]["props"]["tone"]), (&json!(null), &json!("muted")), "a dimmed one in muted words");
+        assert_eq!((&toggle["children"][0]["props"]["truncate"], &filter["children"][0]["props"]["truncate"]), (&json!(true), &json!(true)), "both cut short in a narrow column");
         // quiet-tools' row of an MCP call: a button holding a text cut short, which narrows to fit.
         let call = json!({ "type": "Button", "props": { "key": "call-t1", "plain": true }, "press": { "plugin": "quiet-tools", "handle": 3 }, "children": [
             { "type": "Text", "props": { "bold": true, "wrap": "truncate-end" }, "children": ["·", " ", "claude_ai_Figma › create_session Check the updated sidebar menu button"] }] });
         let pressed = tree_json(super::drawn(&call, &at("use:t1")).unwrap())["children"][0].clone();
         assert_eq!((&pressed["props"]["wrap"], &pressed["props"]["label"]), (&json!(true), &json!("· claude_ai_Figma › create_session Check the updated sidebar menu button")));
         assert_eq!(pressed["children"][0]["props"]["truncate"], true, "its text goes inside it, cut short");
+        // The same row with its words given as the button's own: cut short too.
+        let words = json!({ "type": "Button", "props": { "key": "call-t2", "plain": true }, "press": { "plugin": "quiet-tools", "handle": 4 }, "children": ["· wings › tasks__create Typing # lists the project's issues"] });
+        let pressed = tree_json(super::drawn(&words, &at("use:t2")).unwrap())["children"][0].clone();
+        assert_eq!((&pressed["props"]["label"], &pressed["children"][0]["props"]["truncate"]), (&json!("· wings › tasks__create Typing # lists the project's issues"), &json!(true)));
         // A row of words alone still ends in the long part, which takes the room left.
         let words = json!({ "type": "Box", "children": [{ "type": "Text", "children": ["●"] }, { "type": "Text", "children": ["Reindex"] }] });
         assert_eq!(tree_json(super::drawn(&words, &at("x")).unwrap())["children"][1]["props"]["grow"], true);

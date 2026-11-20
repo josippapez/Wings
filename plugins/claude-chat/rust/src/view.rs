@@ -1379,7 +1379,7 @@ fn effort_name(effort: &str) -> String {
 }
 
 /// What the message box suggests for what you typed: the slash commands that match a `/`, else the files that match an
-/// `@word`, as a combobox's options, each a name with what it is beside it.
+/// `@word`, else the issues that match a `#word`, as a combobox's options, each a name with what it is beside it.
 fn suggestions(c: &Chat) -> Option<Node> {
     let option = |key: &str, label: String, detail: &str, pick: Box<dyn Fn()>| {
         let chip = chip(label, false, move || pick()).key(key);
@@ -1394,8 +1394,7 @@ fn suggestions(c: &Chat) -> Option<Node> {
                 option(&command.name, format!("/{}", command.name), &command.description, Box::new(move || chat::insert_command(&name)))
             })
             .collect()
-    } else {
-        let (_, found) = chat::mention_matches(c)?;
+    } else if let Some((_, found)) = chat::mention_matches(c) {
         found
             .into_iter()
             .map(|path| {
@@ -1404,6 +1403,20 @@ fn suggestions(c: &Chat) -> Option<Node> {
                 option(path, name.to_owned(), dir, Box::new(move || chat::insert_mention(&picked)))
             })
             .collect()
+    } else if let Some((_, found)) = chat::issue_matches(c) {
+        // The key or number, with the title and the status muted beside it.
+        found
+            .into_iter()
+            .map(|issue| {
+                let picked = issue.id.clone();
+                option(&issue.id, issue.id.clone(), &format!("{} · {}", issue.title, issue.status), Box::new(move || chat::insert_issue(&picked)))
+            })
+            .collect()
+    } else if !c.draft.starts_with('/') && c.issues.loading() && crate::issues::active(&c.draft).is_some() {
+        // Nothing to pick until the lists arrive.
+        vec![muted("Loading issues…").prop("size", "small").key("loading")]
+    } else {
+        return None;
     };
     (!options.is_empty()).then(|| row().prop("gap", "s").prop("wrap", true).prop("align", "center").children(options))
 }
