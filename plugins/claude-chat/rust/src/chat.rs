@@ -266,6 +266,7 @@ pub fn start() {
     prefs::session_panel().on_change(|place| session_panel_moved(place));
     // After your setting is read: a chat in front opens the session sidebar with it.
     crate::session_side::start();
+    wings_plugin::poll::while_focused(crate::refs_view::ISSUES_EVERY_MS, false, crate::refs_view::refresh_issues);
     host::on_terminals(|listed| with(|c| c.terminals = listed.iter().filter_map(Terminal::of).collect()));
     host::on_agent_message(take_agent_message);
     // The clicks were made against the old setting, so they go with it.

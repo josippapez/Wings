@@ -431,7 +431,6 @@ pub struct Session {
     /// environment variable Wings can't set, so this is how the chat knows it may rely on them.
     reports_state: bool,
     asked_you: bool,
-    told_you: bool,
     /// What the session has cost so far, in US dollars.
     pub cost: f64,
     /// Claude's checklist as it stands now.
@@ -615,7 +614,6 @@ impl Session {
             "assistant" => {
                 self.suggestion = None;
                 self.status = None;
-                self.told_you = false;
                 self.assistant(&line["message"]);
             }
             // After a rewind Claude Code leaves the dropped entries in the transcript and says what it cut after them.
@@ -712,11 +710,6 @@ impl Session {
                     }
                     self.items.push(Item::Error(said));
                 } else {
-                    if !std::mem::replace(&mut self.told_you, true) {
-                        let last = self.items.iter().rev().find_map(|item| if let Item::Text(text) = item { Some(text) } else { None });
-                        let first = last.and_then(|text| text.lines().find(|line| !line.trim().is_empty())).unwrap_or_default();
-                        self.alerts.push(("Claude finished".into(), cut(first.trim(), SUMMARY_KEPT)));
-                    }
                     // As Claude Code timed the turn. A result of no turns, like one for a background task answered along
                     // with another, did no work of its own.
                     if let Some(ms) = line["duration_ms"].as_f64().filter(|_| line["num_turns"] != 0) {
@@ -854,7 +847,6 @@ impl Session {
             took: Some(self.now.saturating_sub(task.started)).filter(|_| task.started > 0),
             report: cut(report, OUTPUT_KEPT),
         };
-        self.alerts.push((finished.title(), cut(report.lines().find(|line| !line.trim().is_empty()).unwrap_or_default().trim(), SUMMARY_KEPT)));
         self.items.push(Item::Finished(finished));
     }
 
@@ -2350,7 +2342,7 @@ mod tests {
     }
 
     #[test]
-    fn you_are_told_once_a_turn_when_claude_needs_you_and_once_when_it_finishes() {
+    fn you_are_told_once_a_turn_when_claude_needs_you_and_not_when_it_finishes() {
         let ask = |id: &str| json!({ "type": "control_request", "request_id": id, "request": { "subtype": "can_use_tool", "tool_name": "Bash", "input": { "command": "rm x" } } });
         let mut session = Session::default();
         session.send("clean up", &[], 1, 1);
@@ -2361,9 +2353,8 @@ mod tests {
         session.hear(&json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "\nDone, x is gone.\nAnything else?" }] } }));
         session.hear(&json!({ "type": "result", "subtype": "success", "is_error": false }));
         session.hear(&json!({ "type": "result", "subtype": "success", "is_error": false }));
-        assert_eq!(session.alerts, [("Claude finished".to_owned(), "Done, x is gone.".to_owned())]);
-        // The next turn tells you again.
-        session.alerts.clear();
+        assert!(session.alerts.is_empty(), "a turn that ends needs nothing of you");
+        // The next turn's question tells you again.
         session.hear(&ask("r3"));
         assert_eq!(session.alerts.len(), 1);
     }
@@ -3544,7 +3535,7 @@ mod tests {
         assert_eq!((done.kind, done.description.as_str(), done.took, done.call.as_str()), ("Agent", "Survey the parser", Some(452_000), "toolu_ag1"));
         assert_eq!(done.title(), "Agent “Survey the parser” finished");
         assert_eq!(done.report, "Found two callers.\nBoth are tests.");
-        assert_eq!(session.alerts, [("Agent “Survey the parser” finished".to_owned(), "Found two callers.".to_owned())]);
+        assert!(session.alerts.is_empty(), "a finished task is a line in the chat, not a notification");
         // A command that fails says so, with Claude Code's words under it.
         session.now = 20_000;
         session.hear(&json!({ "type": "system", "subtype": "task_notification", "task_id": "bk1", "tool_use_id": "toolu_bk1", "status": "failed",

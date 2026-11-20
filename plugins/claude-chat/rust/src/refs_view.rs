@@ -38,6 +38,28 @@ pub fn scan(c: &mut Chat) {
     });
 }
 
+/// How often the issues listed are read again while you look at the chat: an issue changes in Issues, or from another
+/// session, and the Issues plugin tells only its own frames.
+pub const ISSUES_EVERY_MS: u32 = 15_000;
+
+/// Reads the issues listed again, keeping what each showed until its answer comes.
+pub fn refresh_issues() {
+    let keys: Vec<String> = chat::with(|c| c.refs.details.iter().filter(|(_, detail)| matches!(detail, Detail::Issue(_))).map(|(key, _)| key.clone()).collect());
+    if keys.is_empty() {
+        return;
+    }
+    task::spawn(async move {
+        task::map_limit(keys, AT_ONCE, |key| async move {
+            let detail = look_up(&Ref::Issue(key.clone())).await;
+            // A lookup that fails now leaves the row as it was.
+            if matches!(detail, Detail::Issue(_)) {
+                chat::with(|c| c.refs.details.insert(key, detail));
+            }
+        })
+        .await;
+    });
+}
+
 async fn look_up(found: &Ref) -> Detail {
     let detail = match found {
         Ref::Issue(key) => {
@@ -183,5 +205,44 @@ fn pr_tone(state: &str) -> Option<&'static str> {
         "Open" => Some("info"),
         "Closed" => Some("danger"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
+    use super::*;
+
+    #[test]
+    fn a_listed_issue_shows_its_new_status_once_it_is_read_again_and_a_failed_read_keeps_the_old_one() {
+        let status = Rc::new(RefCell::new("todo"));
+        let now = status.clone();
+        host::testing::answer(move |method, params| {
+            if method != "callTool" || params["name"] != "tasks__get" {
+                return Ok(Value::Null);
+            }
+            let said: &str = *now.borrow();
+            Ok(match said {
+                "gone" => json!({ "isError": true, "text": "No such issue" }),
+                said => json!({ "text": format!("WIN-246 [{said}] (feature) A real diff\nPriority: No priority") }),
+            })
+        });
+        let shown = || chat::with(|c| match c.refs.details.get("WIN-246") {
+            Some(Detail::Issue(issue)) => issue.status.clone(),
+            other => format!("{other:?}"),
+        });
+        chat::with(|c| c.refs.details.clear());
+        let detail = task::block_on(async { look_up(&Ref::Issue("WIN-246".into())).await });
+        chat::with(|c| c.refs.details.insert("WIN-246".into(), detail));
+        assert_eq!(shown(), "todo");
+        *status.borrow_mut() = "done";
+        refresh_issues();
+        task::block_on(async {});
+        assert_eq!(shown(), "done");
+        *status.borrow_mut() = "gone";
+        refresh_issues();
+        task::block_on(async {});
+        assert_eq!(shown(), "done");
     }
 }
