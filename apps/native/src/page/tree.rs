@@ -220,6 +220,15 @@ pub struct Page {
     /// `onTextScale`: the page sizes its own text, so Cmd-+, Cmd-- and Cmd-0 send it `{ "step": "bigger" | "smaller" |
     /// "reset" }` while its tab has the keyboard, in place of changing the terminals' font.
     pub on_text_scale: Option<String>,
+    /// What Wings draws behind the whole page in place of its plain ground (`backdrop`), where the page fills a tab.
+    pub backdrop: Option<Backdrop>,
+}
+
+/// A page's `backdrop`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Backdrop {
+    /// `"pixels"`: a slow drift of dithered pixels in the page's colours (`ui::backdrop`).
+    Pixels,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1298,6 +1307,7 @@ impl Walk {
                     flush: on("flush"),
                     body: slots.take("body"),
                     on_text_scale: handler("onTextScale"),
+                    backdrop: (str_prop(&props, "backdrop") == Some("pixels")).then_some(Backdrop::Pixels),
                 })
             }
             "Toolbar" => {
@@ -2820,6 +2830,19 @@ mod tests {
         let parsed = tree(json!([{"id":1,"type":"Page","props":{"onTextScale":"1:onTextScale"},"children":[]}])).unwrap();
         let Node::Page(page) = &parsed.children[0] else { panic!("a page") };
         assert_eq!(page.on_text_scale.as_deref(), Some("1:onTextScale"));
+    }
+
+    #[test]
+    fn a_page_asks_for_the_pixels_behind_it_and_any_other_backdrop_is_its_plain_ground() {
+        let backdrop = |props: Value| {
+            let parsed = tree(json!([{"id":1,"type":"Page","props":props,"children":[]}])).unwrap();
+            let Node::Page(page) = &parsed.children[0] else { panic!("a page") };
+            page.backdrop
+        };
+        assert_eq!(backdrop(json!({"backdrop":"pixels"})), Some(Backdrop::Pixels));
+        assert_eq!(backdrop(json!({"backdrop":"glow"})), None);
+        assert_eq!(backdrop(json!({"backdrop":3})), None);
+        assert_eq!(backdrop(json!({})), None);
     }
 
     fn slot_text(id: u64, name: &str, text: &str) -> Value {

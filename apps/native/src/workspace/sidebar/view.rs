@@ -13,11 +13,12 @@ use gpui::{
 };
 use wings_spaces::{spaces::GitStatus, worktree::slug};
 
+use crate::ui::behaviors::{Reveal, RevealExt};
 use crate::{
     agents,
     icons::{Icon, icon},
     theme,
-    ui::{self, behaviors::EscapeExt, ButtonSize, Variant, motion},
+    ui::{self, behaviors::{EscapeExt, TrapTabExt}, ButtonSize, Variant, motion},
 };
 
 use crate::workspace::{
@@ -206,7 +207,7 @@ impl Workspace {
             |item| matches!(item, ListItem::Row(index) if self.projects[*index].path == path),
         );
         if let Some(row) = row {
-            self.side.scroll.scroll_to_item(row);
+            self.side.scroll.reveal(row, Reveal::Nearest);
         }
     }
 
@@ -581,6 +582,7 @@ impl Workspace {
                 )
                 .child(ui::dialog_panel(
                     panel
+                        .trap_tab(focus)
                         .on_escape(cx.listener(|this, _: &KeyDownEvent, window, cx| {
                             this.cancel_remove(window, cx);
                         }))

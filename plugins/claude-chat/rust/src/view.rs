@@ -101,7 +101,10 @@ fn chat_page(c: &Chat) -> Node {
         .maybe(crate::pictures_view::dialog_of(c))
         .maybe(crate::status_view::dialog(c))
         .maybe(crate::mods_view::menu(c));
-    Node::new("Page").prop("flush", true).on_text_scale(crate::prefs::step_text_size).child(body)
+    let page = Node::new("Page").prop("flush", true).on_text_scale(crate::prefs::step_text_size);
+    // The drift of pixels you picked in Settings, behind the whole tab. Needs Wings 0.2.59; an older one keeps the ground.
+    let page = if c.pixels { page.backdrop("pixels") } else { page };
+    page.child(body)
 }
 
 /// Lucide's icons, as the app draws them in its headers: `square-terminal`, `rotate-ccw-clock` (Past sessions), `plus`
@@ -198,10 +201,13 @@ fn conversation(c: &Chat) -> (Node, Vec<(usize, usize)>, usize) {
             State::Starting => loading(),
             State::Failed(why) => notice("danger", why.as_str()),
             State::Moved => muted("This session goes on in a terminal."),
-            // A new chat's prompt sits in the middle of the conversation, over a soft glow. Needs Wings 0.2.58.
+            // A new chat's prompt sits in the middle of the conversation, over a soft glow. Needs Wings 0.2.58. Over the drift
+            // of pixels it goes without, so one backdrop moves behind it, not two.
             _ => {
                 let new = empty("What should Claude do?", "It works in this folder with your Claude Code setup, and asks here before it does anything you haven't allowed.");
-                return (new.prop("fill", true).prop("backdrop", "glow"), Vec::new(), 0);
+                let new = new.prop("fill", true);
+                let new = if c.pixels { new } else { new.prop("backdrop", "glow") };
+                return (new, Vec::new(), 0);
             }
         };
         return (Node::new("Scroll").child(column().child(body)), Vec::new(), 0);
@@ -1279,6 +1285,7 @@ fn pickers(c: &Chat) -> Vec<Node> {
     }
     pickers.extend(remote_button(c));
     pickers.extend(crate::branch::button_node(c));
+    pickers.extend(crate::worktree::button_node(c));
     pickers
 }
 
@@ -1564,6 +1571,22 @@ mod tests {
 
     fn page_text(c: &Chat) -> String {
         wings_plugin::ui::tree_json(chat_page(c)).to_string()
+    }
+
+    #[test]
+    fn the_background_you_picked_goes_behind_the_whole_page_and_a_new_chat_drops_its_glow_over_it() {
+        chat::with(|c| {
+            c.state = State::Running;
+            c.pixels = false;
+            let page = wings_plugin::ui::tree_json(chat_page(c));
+            assert_eq!(page["type"], "Page");
+            assert!(page["props"].get("backdrop").is_none(), "the plain ground: {}", page["props"]);
+            assert!(page.to_string().contains(r#""backdrop":"glow""#), "a new chat's soft glow");
+            c.pixels = true;
+            let page = wings_plugin::ui::tree_json(chat_page(c));
+            assert_eq!(page["props"]["backdrop"], "pixels");
+            assert!(!page.to_string().contains(r#""backdrop":"glow""#), "one backdrop behind a new chat, not two");
+        });
     }
 
     #[test]

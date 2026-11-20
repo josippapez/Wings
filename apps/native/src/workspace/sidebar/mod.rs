@@ -19,7 +19,7 @@ use std::{
 
 use gpui::{Context, FocusHandle, PathPromptOptions, Pixels, ScrollHandle, Task, Window};
 
-use crate::{projects::ProjectEntry, saved, ui::motion};
+use crate::{projects::ProjectEntry, saved, ui::{behaviors::FocusRecovery, motion}};
 
 use super::Workspace;
 use order::{Sort, TOUCH_EVERY_MS};
@@ -56,6 +56,7 @@ pub(super) struct State {
     sort_menu: bool,
     /// The project asked to be removed while it has tabs open, with the focus of the question.
     pub(in crate::workspace) removing: Option<(PathBuf, FocusHandle)>,
+    recovery: FocusRecovery,
     git: git::Git,
     peek: peek::Peek,
     slide: Slide,
@@ -101,6 +102,7 @@ impl Default for State {
             swallow_click: false,
             sort_menu: false,
             removing: None,
+            recovery: FocusRecovery::default(),
             git: git::Git::default(),
             peek: peek::Peek::default(),
             slide: Slide::default(),
@@ -390,16 +392,18 @@ impl Workspace {
             return self.remove_project(project, window, cx);
         }
         let focus = cx.focus_handle();
-        focus.focus(window, cx);
+        self.side.recovery.open(&focus, window, cx);
         self.side.removing = Some((project, focus));
         cx.notify();
     }
 
     fn cancel_remove(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut restored = false;
         if let Some(removing) = self.side.removing.take() {
+            restored = self.side.recovery.restore_within(&removing.1, window, cx);
             self.leave("remove", removing, motion::POPUP_IN, cx);
         }
-        if let Some(pane) = self.focused_pane() {
+        if !restored && let Some(pane) = self.focused_pane() {
             self.focus_pane(pane, window, cx);
         }
         cx.notify();

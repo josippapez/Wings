@@ -135,6 +135,14 @@ impl Running {
             .map(|target| target.builtin)
     }
 
+    /// Where the running plugin's view `id` opens (its manifest's `opens`), or `None` when the plugin doesn't run here or
+    /// has no such view.
+    pub fn view_opens(&self, plugin: &str, id: &str) -> Option<Vec<String>> {
+        let running = self.0.lock().unwrap();
+        let target = running.get(plugin)?;
+        target.plugin.manifest.contributes.views.iter().find(|view| view.id == id).map(|view| view.opens.clone())
+    }
+
     /// Sends the event `name` with `data` of the plugin `from` to the main of every other running plugin that declared
     /// `<from> <name>` in its `events`. Only Wings' own plugins send and hear events.
     pub fn emit(&self, from: &str, name: &str, data: &serde_json::Value) {
@@ -373,6 +381,10 @@ pub trait Env: Send + Sync + 'static {
     fn close_view(&self, _plugin: &str, _view: &str) {}
     /// Whether the plugin is one of Wings' own, or `None` when it doesn't run here.
     fn builtin(&self, _plugin: &str) -> Option<bool> {
+        None
+    }
+    /// Where the view `id` of another running plugin opens, or `None` when it doesn't run here or has no such view.
+    fn view_opens(&self, _plugin: &str, _id: &str) -> Option<Vec<String>> {
         None
     }
     /// Runs the tool of another running plugin, and answers `reply` with `{ text, isError }`, now or later.

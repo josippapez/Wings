@@ -11,6 +11,7 @@ use gpui::{
 };
 use wings_agents::history::{Filter, Hit};
 
+use crate::ui::behaviors::{Reveal, RevealExt};
 use crate::{
     actions::{
         ClosePane, CloseTab, DecreaseFontSize, Find, FocusDown, FocusLeft, FocusRight, FocusUp,
@@ -198,7 +199,7 @@ impl Workspace {
     fn palette_typed(&mut self, cx: &mut Context<Self>) {
         if let Some(palette) = &mut self.palette {
             palette.active = 0;
-            palette.scroll.scroll_to_item(0);
+            palette.scroll.reveal(0, Reveal::Nearest);
         }
         self.load_palette_sessions(cx);
         cx.notify();
@@ -237,7 +238,7 @@ impl Workspace {
         };
         if count > 0 {
             palette.active = to(palette.active.min(count - 1), count);
-            palette.scroll.scroll_to_item(palette.active);
+            palette.scroll.reveal(palette.active, Reveal::Nearest);
             cx.notify();
         }
     }

@@ -5,6 +5,7 @@ use gpui::{
     MouseDownEvent, Role, SharedString, Window, div, hsla, point, prelude::*, px, rgb, rgba,
 };
 
+use crate::ui::behaviors::{Reveal, RevealExt};
 use crate::{
     agents::AgentState,
     icons::{Icon, icon, plugin_glyph},
@@ -124,7 +125,7 @@ impl Workspace {
             self.leave_loose(cx);
         }
         if let Some(index) = self.tabs().iter().position(|tab| *tab == active) {
-            self.tab_scroll.scroll_to_item(index);
+            self.tab_scroll.reveal(index, Reveal::Nearest);
         }
         self.sync_plugin_visibility(cx);
         self.sync_pane_visibility(cx);

@@ -629,6 +629,10 @@ impl Env for AppEnv {
         self.running.builtin(plugin)
     }
 
+    fn view_opens(&self, plugin: &str, id: &str) -> Option<Vec<String>> {
+        self.running.view_opens(plugin, id)
+    }
+
     fn emit(&self, from: &str, name: &str, data: &serde_json::Value) {
         self.running.emit(from, name, data);
     }

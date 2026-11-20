@@ -11,7 +11,7 @@ use gpui::{
 use crate::{
     terminal_server::HELPER,
     theme,
-    ui::{self, behaviors::EscapeExt, Variant},
+    ui::{self, behaviors::{EscapeExt, FocusRecovery, TrapTabExt}, Variant},
 };
 
 use super::Workspace;
@@ -28,6 +28,7 @@ pub(super) struct DiskAccess {
     pub(super) asking: Option<FocusHandle>,
     /// System Settings was opened for it: coming back checks again.
     pub(super) granting: bool,
+    recovery: FocusRecovery,
     checking: Option<Task<()>>,
 }
 
@@ -68,8 +69,13 @@ impl Workspace {
             self.set_prefs(|prefs| prefs.app_data_asked = true, cx);
             // The dialog takes the keys, so Escape closes it. The check ends with no window at hand.
             let workspace = cx.entity();
+            let id = workspace.entity_id();
             cx.defer(move |cx| {
-                cx.with_window(workspace.entity_id(), |window, cx| focus.focus(window, cx));
+                cx.with_window(id, |window, cx| {
+                    workspace.update(cx, |this, cx| {
+                        this.disk_access.recovery.open(&focus, window, cx)
+                    })
+                });
             });
         }
         cx.notify();
@@ -85,8 +91,11 @@ impl Workspace {
     /// Closes the dialog, if open, and gives the keys back to the tab shown.
     pub(super) fn close_disk_access(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(focus) = self.disk_access.asking.take() {
+            let restored = self.disk_access.recovery.restore_within(&focus, window, cx);
             self.leave("app-data-access", focus, ui::motion::POPUP_IN, cx);
-            self.show(self.active, window, cx);
+            if !restored {
+                self.show(self.active, window, cx);
+            }
         }
     }
 
@@ -110,6 +119,7 @@ impl Workspace {
             backdrop
                 .child(ui::dialog_panel(
                     panel
+                        .trap_tab(focus)
                         .on_escape(cx.listener(|this, _: &KeyDownEvent, window, cx| {
                             this.close_disk_access(window, cx);
                         }))

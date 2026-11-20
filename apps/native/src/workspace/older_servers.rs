@@ -17,7 +17,7 @@ use crate::{
     saved::SavedSession,
     terminal_server::{self, Running},
     theme,
-    ui::{self, behaviors::EscapeExt, Variant},
+    ui::{self, behaviors::{EscapeExt, FocusRecovery, TrapTabExt}, Variant},
 };
 
 use super::{Workspace, panes::Ended};
@@ -28,6 +28,7 @@ pub(super) struct OlderServers {
     pub(super) list: Vec<ServerRow>,
     /// The older server whose stop waits for you to confirm, and the dialog's focus.
     pub(super) stopping: Option<(PathBuf, FocusHandle)>,
+    recovery: FocusRecovery,
     /// Panes whose idle agent was told to `/exit`, with the session to resume once they're on the current server.
     pub(super) exiting: HashMap<usize, SavedSession>,
 }
@@ -384,7 +385,7 @@ impl Workspace {
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         let focus = cx.focus_handle();
-                        focus.focus(window, cx);
+                        this.older.recovery.open(&focus, window, cx);
                         this.older.stopping = Some((socket.clone(), focus));
                         cx.notify();
                     }))
@@ -401,17 +402,19 @@ impl Workspace {
         self.refresh_servers(cx);
         if let Some(row) = self.older.list.iter().find(|row| !row.current) {
             let focus = cx.focus_handle();
-            focus.focus(window, cx);
+            self.older.recovery.open(&focus, window, cx);
             self.older.stopping = Some((row.socket.clone(), focus));
         }
         cx.notify();
     }
 
     fn cancel_stop(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        let mut restored = false;
         if let Some(stopping) = self.older.stopping.take() {
+            restored = self.older.recovery.restore_within(&stopping.1, window, cx);
             self.leave("stop-server", stopping, ui::motion::POPUP_IN, cx);
         }
-        if let Some(dialog) = &self.settings {
+        if !restored && let Some(dialog) = &self.settings {
             dialog.focus.focus(window, cx);
         }
         cx.notify();
@@ -461,6 +464,7 @@ impl Workspace {
                 )
                 .child(ui::dialog_panel(
                     panel
+                        .trap_tab(focus)
                         .on_escape(cx.listener(|this, _: &KeyDownEvent, window, cx| {
                             this.cancel_stop(window, cx);
                         }))

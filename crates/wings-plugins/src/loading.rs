@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::{
     exec::exec_entry,
-    fetch::{fetch_prefix_ok, fetch_rule, open_url_prefix_ok, valid_secret_name},
+    fetch::{fetch_rule, https_prefix_ok, open_url_prefix_ok, valid_secret_name},
     log_line,
     manifest::{
         Contributes, Manifest, Permissions, Plugin, SectionSort, BLOCK_MIN_HEIGHT, HOOK_EVENTS, MAX_BLOCKS, MAX_LINKS, MAX_MCP_INSTRUCTIONS, PANEL_ICONS,
@@ -281,10 +281,10 @@ fn check_permissions(permissions: &Permissions) -> Result<(), String> {
     }
     if let Some(entry) = permissions.fetch.iter().find(|e| fetch_rule(e).is_none()) {
         return Err(format!(
-            "fetch entry {entry:?} must be an https URL with a path, like https://api.example.com/, optionally after GET or POST (a POST URL may use * for one segment and end with {{field=value}})"
+            "fetch entry {entry:?} must be an https URL with a path, like https://api.example.com/, or http to this computer on one port, like http://127.0.0.1:4096/, optionally after GET or POST (a POST URL may use * for one segment and end with {{field=value}})"
         ));
     }
-    if let Some((name, prefix)) = permissions.secrets.iter().find(|(name, prefix)| !valid_secret_name(name) || !fetch_prefix_ok(prefix)) {
+    if let Some((name, prefix)) = permissions.secrets.iter().find(|(name, prefix)| !valid_secret_name(name) || !https_prefix_ok(prefix)) {
         return Err(format!(
             "secret {name:?} needs a name of letters, digits, - and _, and the https URL prefix it's sent to, like https://api.example.com/, not {prefix:?}"
         ));

@@ -2932,3 +2932,77 @@ fn actions_sit_at_the_end_of_the_line_with_the_acting_button_last_and_a_list_row
     window.simulate_click(point(px(width - 6.0), px(40.0)), MouseButton::Left);
     settle(&app, &mut window, shows("Cancelled 0, saved 1, opened 1."));
 }
+
+/// A page over the backdrop it asks for, in a tab as the workspace draws one.
+mod backdrop {
+    use gpui::{Entity, StyleRefinement, Window, div, prelude::*};
+
+    use super::*;
+    use crate::ui::{BACKDROP_STEP, BackdropLayer, backdrop_slot, spinner_layer};
+
+    /// A fill page, as Claude chat's, that asks for the pixels behind it.
+    fn pixels() -> String {
+        fake::page("page", |_| {
+            json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Page", "props": { "flush": true, "backdrop": "pixels" }, "children": [
+                { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [text(3, 4, "Step 99 passes".into())] }] }] })
+        })
+    }
+
+    /// The window's backdrop layer, then the tab's card over it, which leaves the backdrop's slot and holds the page, kept
+    /// as last drawn.
+    struct Tab {
+        page: Entity<PageView>,
+        layer: Entity<BackdropLayer>,
+    }
+
+    impl Render for Tab {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let slot = self.page.read(cx).backdrop().map(|palette| backdrop_slot("tab", palette, 13.0));
+            div()
+                .relative()
+                .size_full()
+                .child(spinner_layer(window))
+                .child(self.layer.clone())
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .children(slot)
+                        .child(self.page.clone().cached(StyleRefinement::default().size_full())),
+                )
+        }
+    }
+
+    #[test]
+    fn a_step_of_the_backdrop_draws_the_layer_and_the_page_keeps_its_drawing() {
+        let mut app = TestApp::new();
+        app.background_executor().allow_parking();
+        let host = hosted(&mut app);
+        let source = pixels();
+        let mut window = app.open_window(move |_, cx| Tab {
+            page: cx.new(|cx| PageView::in_plugin(&host, &source, cx).in_card()),
+            layer: cx.new(|_| BackdropLayer::default()),
+        });
+        window.update(|_, window, _| window.activate_window());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !window.read(|tab, cx| tab.page.read(cx).backdrop().is_some()) {
+            assert!(Instant::now() < deadline, "the page never asked for its backdrop");
+            app.run_until_parked();
+            window.draw();
+            thread::sleep(Duration::from_millis(5));
+        }
+        window.draw();
+        let drawn = |window: &TestAppWindow<Tab>| window.read(|tab, cx| (tab.page.read(cx).renders(), tab.layer.read(cx).drawn));
+        let (pages, layers) = drawn(&window);
+        for _ in 0..15 {
+            app.advance_clock(BACKDROP_STEP);
+            app.run_until_parked();
+        }
+        let (pages, layers) = (drawn(&window).0 - pages, drawn(&window).1 - layers);
+        eprintln!("[measure] 15 steps of the backdrop: the page rendered {pages} times, the layer {layers}");
+        assert_eq!(pages, 0, "the page kept its drawing");
+        assert!((14..=16).contains(&layers), "the layer drew {layers} times in 15 steps");
+    }
+}

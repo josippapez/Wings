@@ -6,7 +6,7 @@ use gpui::{AnyElement, Context, Entity, FocusHandle, KeyDownEvent, MouseButton, 
 use super::Workspace;
 use crate::{
     page::PageView,
-    ui::{self, behaviors::EscapeExt},
+    ui::{self, behaviors::{EscapeExt, FocusRecovery, TrapTabExt}},
 };
 
 pub(super) struct PluginModal {
@@ -16,6 +16,7 @@ pub(super) struct PluginModal {
     size: (f32, f32),
     page: Entity<PageView>,
     focus: FocusHandle,
+    recovery: FocusRecovery,
 }
 
 impl Workspace {
@@ -61,13 +62,25 @@ impl Workspace {
         let page = cx.new(|cx| PageView::in_plugin_with_state(&host, &source, None, state, cx));
         page.read(cx).set_visible(true);
         let focus = cx.focus_handle();
-        focus.focus(window, cx);
+        // A modal that replaces another keeps what the first one took the keyboard from.
+        let recovery = match self.plugin_ui.modal.take() {
+            Some(old) => {
+                focus.focus(window, cx);
+                old.recovery
+            }
+            None => {
+                let mut recovery = FocusRecovery::default();
+                recovery.open(&focus, window, cx);
+                recovery
+            }
+        };
         self.plugin_ui.modal = Some(PluginModal {
             key,
             title,
             size,
             page,
             focus,
+            recovery,
         });
         cx.notify();
         Ok(())
@@ -88,10 +101,13 @@ impl Workspace {
         {
             return;
         }
-        if let Some(modal) = self.plugin_ui.modal.take() {
+        if let Some(mut modal) = self.plugin_ui.modal.take() {
             modal.page.read(cx).set_visible(false);
+            let restored = modal.recovery.restore_within(&modal.focus, window, cx);
             self.leave("plugin-modal", modal, ui::motion::POPUP_IN, cx);
-            self.show(self.active, window, cx);
+            if !restored {
+                self.show(self.active, window, cx);
+            }
         }
     }
 
@@ -108,6 +124,7 @@ impl Workspace {
                 )
                 .child(ui::dialog_panel(
                     panel
+                        .trap_tab(&modal.focus)
                         .on_escape(cx.listener(|this, _: &KeyDownEvent, window, cx| {
                             this.close_plugin_modal(None, window, cx);
                         }))

@@ -126,6 +126,9 @@ pub struct Chat {
     pub narrow: Option<bool>,
     /// Your choice for every chat of showing diffs side by side (`prefs::diff_split`). A narrow tab keeps one column.
     pub diff_split: bool,
+    /// Your choice for every chat of what lies behind the conversation (`prefs::background`): the drift of pixels Wings
+    /// draws, else the plain ground.
+    pub pixels: bool,
     /// Your choice for every chat of whether the session panel shows (`prefs::side_panel`, on by default): in the chat, or
     /// opened with it in Wings' sidebar, as `side_in_wings` says.
     pub side_open: bool,
@@ -162,6 +165,11 @@ pub struct Chat {
     /// The Claude Code account you picked for this tab's new chats, by name, `Some(None)` being the default one. None
     /// until you pick one: a new chat then runs under its project's account.
     pub picked: Option<Option<String>>,
+    /// The message a tab opened with `prompt` in its args sends as its first, taken by the start that sends it.
+    pub first_prompt: Option<String>,
+    /// That message has gone to Claude Code, in this run of the tab or an earlier one: kept with the tab so a restart never
+    /// sends it again.
+    pub prompted: bool,
     /// The Claude Code accounts there are, for the picker in the message box. Empty until Wings lists them, and in a
     /// Wings that won't.
     pub accounts: Vec<host::AccountChoice>,
@@ -199,6 +207,7 @@ thread_local! {
         forked_from: None,
         narrow: None,
         diff_split: false,
+        pixels: false,
         side_open: true,
         side_in_wings: false,
         message_to: None,
@@ -217,6 +226,8 @@ thread_local! {
         cwd: String::new(),
         program: "claude".into(),
         picked: None,
+        first_prompt: None,
+        prompted: false,
         accounts: Vec::new(),
     });
 }
@@ -260,11 +271,13 @@ pub fn start() {
         c.text_scale = prefs::scale_of(&prefs::text_size().get());
         c.side_open = prefs::side_panel().get();
         c.diff_split = prefs::diff_split().get();
+        c.pixels = prefs::pixels(&prefs::background().get());
         c.side_in_wings = prefs::in_sidebar(&prefs::session_panel().get());
     });
     prefs::text_size().on_change(|size| with(|c| c.text_scale = prefs::scale_of(size)));
     prefs::side_panel().on_change(|shown| with(|c| c.side_open = *shown));
     prefs::diff_split().on_change(|split| with(|c| c.diff_split = *split));
+    prefs::background().on_change(|kind| with(|c| c.pixels = prefs::pixels(kind)));
     // The panel moves with the setting, in every open chat.
     prefs::session_panel().on_change(|place| session_panel_moved(place));
     // After your setting is read: a chat in front opens the session sidebar with it.
@@ -288,6 +301,19 @@ pub fn start() {
 async fn open() {
     let args = host::view_args().unwrap_or(Value::Null);
     let saved = host::call("tabState", json!({})).await.unwrap_or(Value::Null);
+    open_with(args, saved).await;
+}
+
+/// The message a new chat sends first: the `prompt` in its args, as another plugin (Schedules) opens a chat to run it.
+/// Only a new session gets it, and only once: a tab that saved a session or that it was sent in, a resumed session and a
+/// fork get nothing, since the tab's saved state, not its args, is what a restart goes on from.
+fn first_prompt(saved: &Value, args: &Value, how: &Launch) -> Option<String> {
+    let new = saved["sessionId"].is_null() && saved["prompted"] != true && args["resume"].is_null() && !how.fork;
+    args["prompt"].as_str().filter(|prompt| new && !prompt.trim().is_empty()).map(str::to_owned)
+}
+
+/// `open`, for the args the tab was opened with and the state it saved.
+async fn open_with(args: Value, saved: Value) {
     let resume = saved["sessionId"].as_str().or(args["resume"].as_str()).map(str::to_owned);
     // A fork opened beside a chat in use (`fork_beside`) starts as one only the first time: after a restart the tab goes on
     // with the session it saved.
@@ -297,7 +323,9 @@ async fn open() {
     };
     let dirs = if saved["dirs"].is_array() { &saved["dirs"] } else { &args["dirs"] };
     let dirs: Vec<String> = dirs.as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect();
-    let cwd = match args["cwd"].as_str() {
+    let moved = saved["cwd"].as_str().filter(|cwd| !cwd.is_empty());
+    crate::worktree::restore(moved);
+    let cwd = match moved.or(args["cwd"].as_str()) {
         Some(cwd) => cwd.to_owned(),
         None => match host::call("project", json!({})).await.ok().and_then(|project| project["path"].as_str().map(str::to_owned)) {
             Some(path) => path,
@@ -306,7 +334,10 @@ async fn open() {
     };
     let program = args["program"].as_str().filter(|program| PROGRAMS.contains(program)).unwrap_or("claude").to_owned();
     let picked = picked_of(&saved, &args);
+    let prompt = first_prompt(&saved, &args, &how);
     with(|c| {
+        c.prompted = c.prompted || saved["prompted"] == true || prompt.is_some();
+        c.first_prompt = prompt;
         c.folder = basename(&cwd).to_owned();
         c.cwd = cwd;
         c.program = program;
@@ -330,13 +361,13 @@ fn launch(resume: Option<String>) {
 
 /// `launch`, as a copy of the session when `how` says so, and with the folders you added.
 pub fn launch_with(resume: Option<String>, how: Launch) {
-    let (run, cwd, program, start_mode, dirs) = with(|c| {
+    let (run, cwd, program, start_mode, dirs, prompt) = with(|c| {
         if how.fork {
             // A fork in a new tab has no conversation yet to name it by: the chat it came from named it.
             c.forked_from = Some(name(c).or_else(|| c.forked_from.clone()).unwrap_or_else(|| "an earlier session".into()));
         }
         let run = begin(c);
-        (run, c.cwd.clone(), c.program.clone(), c.session.start_mode.clone(), c.dirs.clone())
+        (run, c.cwd.clone(), c.program.clone(), c.session.start_mode.clone(), c.dirs.clone(), c.first_prompt.take())
     });
     load_files(run, cwd.clone());
     load_git(run, cwd.clone());
@@ -364,11 +395,21 @@ pub fn launch_with(resume: Option<String>, how: Launch) {
         load_accounts(run, resume.as_deref(), cwd.clone());
         // A fork before a message asks for its rewind as it starts, as the opening requests do: the fork is a new session.
         let opening = Session::opening(start_mode.as_deref()) + &with(|c| fork::opening(&how, &c.session.prompts)) + &with(remote_on_start);
+        // A chat opened with a prompt sends it with its start, as your first message, since a page may write later only on a click or a key.
+        let opening = opening + &prompt.map(|text| with(|c| first_message(c, &text))).unwrap_or_default();
         // In Wings' terminal server, so the turn goes on while Wings restarts or updates, and this tab takes it over after.
         let process = host::spawn_surviving(&account, &program, &args, &cwd, &opening, move |line| hear(run, line));
         crate::reattach::started(run, process.input());
         follow(run, process).await;
     });
+}
+
+/// The line that sends `text` as the chat's first message, which is shown as yours at once.
+fn first_message(c: &mut Chat, text: &str) -> String {
+    c.requests += 1;
+    let line = c.session.send(text, &[], host::now() as u64, c.requests);
+    c.doing = (c.session.activity(), host::now() as u64);
+    line
 }
 
 /// Starts the chat over for a new start of Claude Code, in place of the one running: the number of that start.
@@ -410,6 +451,8 @@ pub(crate) async fn follow(run: u32, process: host::Process) {
     if !current {
         return process.input().stop();
     }
+    // A chat moved into a worktree sends its first message once Claude Code runs there.
+    crate::worktree::started(run);
     let ended = match process.await {
         Ok(exit) if exit["code"] == 0 => State::Ended,
         Ok(exit) => State::Failed(why(&exit)),
@@ -439,8 +482,13 @@ pub(crate) async fn follow(run: u32, process: host::Process) {
 
 /// What the tab keeps for when it opens again: the session, and the folders you added.
 pub(crate) fn save_tab() {
-    let (id, dirs, picked) = with(|c| (c.session.id.clone(), c.dirs.clone(), picked_json(&c.picked)));
-    drop(host::call("setTabState", json!({ "state": { "sessionId": id, "dirs": dirs, "account": picked } })));
+    let (id, dirs, picked, prompted) = with(|c| (c.session.id.clone(), c.dirs.clone(), picked_json(&c.picked), c.prompted));
+    let mut state = json!({ "sessionId": id, "dirs": dirs, "account": picked, "prompted": prompted });
+    // A chat moved into a worktree opens again there: its session is found by that folder.
+    if let Some(cwd) = crate::worktree::made() {
+        state["cwd"] = cwd.into();
+    }
+    drop(host::call("setTabState", json!({ "state": state })));
 }
 
 /// Lists the project's files for @-mentions: git's own list, so ignored files stay out. Done here, not by Claude Code's
@@ -755,6 +803,10 @@ pub fn send() {
     // /add-dir starts Claude Code again with the folder, and isn't sent as a message.
     if let Some(path) = with(|c| fork::add_dir_command(&c.draft).filter(|_| c.images.is_empty()).map(str::to_owned)) {
         return fork_view::add_dir(path);
+    }
+    // With Worktree on, the first message makes the worktree and starts Claude Code there, which then sends it.
+    if crate::worktree::intercept() {
+        return;
     }
     write(|c, n| {
         let text = c.draft.trim().to_owned();
@@ -1326,7 +1378,8 @@ pub fn toggle_steps(first: usize) {
 #[cfg(test)]
 mod tests {
     use super::{changes_counted, shortstat};
-    use super::{State, new_chat, resume, with};
+    use super::{State, first_prompt, new_chat, resume, with};
+    use crate::fork::Launch;
     use serde_json::{Value, json};
     use std::{cell::RefCell, rc::Rc};
     use wings_plugin::host;
@@ -1481,6 +1534,76 @@ mod tests {
         assert_eq!(writes.len(), 1, "{writes:?}");
         assert!(writes[0].contains("Run the tests."), "{}", writes[0]);
         assert!(with(|c| c.draft.is_empty() && c.session.working));
+    }
+
+    /// Wings answering `tabState` with `saved`, keeping every call.
+    fn wings_with_tab(saved: Value) -> Rc<RefCell<Vec<(String, Value)>>> {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let kept = calls.clone();
+        host::testing::answer(move |method, params| {
+            kept.borrow_mut().push((method.to_owned(), params.clone()));
+            Ok(if method == "tabState" { saved.clone() } else { Value::Null })
+        });
+        calls
+    }
+
+    /// What the start of the tab sent Claude Code with it: the `input` of each `spawn`.
+    fn started_with(calls: &Rc<RefCell<Vec<(String, Value)>>>) -> Vec<String> {
+        asked(calls, "spawn").iter().map(|params| params["input"].as_str().unwrap_or_default().to_owned()).collect()
+    }
+
+    fn user_lines(input: &str) -> Vec<Value> {
+        input.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok()).filter(|line| line["type"] == "user").collect()
+    }
+
+    #[test]
+    fn a_new_chat_opened_with_a_prompt_sends_it_once_as_the_first_message_and_shows_it_as_yours() {
+        let calls = wings_with_tab(json!({}));
+        wings_plugin::task::block_on(super::open_with(json!({ "cwd": "/work/shop", "prompt": "Run the tests" }), json!({})));
+        let inputs = started_with(&calls);
+        assert_eq!(inputs.len(), 1);
+        let sent = user_lines(&inputs[0]);
+        assert_eq!(sent.len(), 1, "{}", inputs[0]);
+        assert_eq!(sent[0]["message"]["content"], json!("Run the tests"));
+        // The fake Claude Code ends at once, so the turn isn't running any more; the message stays shown as yours.
+        assert!(with(|c| c.session.items.contains(&crate::session::Item::User("Run the tests".into())) && c.session.prompts.len() == 1 && c.prompted && c.first_prompt.is_none()));
+        // The tab keeps that it was sent, so a restart goes on without it.
+        let saved = asked(&calls, "setTabState");
+        assert_eq!(saved.last().unwrap()["state"]["prompted"], true);
+    }
+
+    #[test]
+    fn a_reloaded_tab_does_not_send_the_prompt_again() {
+        // Restarted before Claude Code named its session: the state holds no session, only that the prompt went.
+        let calls = wings_with_tab(json!({}));
+        wings_plugin::task::block_on(super::open_with(
+            json!({ "cwd": "/work/shop", "prompt": "Run the tests" }),
+            json!({ "sessionId": null, "dirs": [], "account": null, "prompted": true }),
+        ));
+        assert_eq!(started_with(&calls).len(), 1);
+        assert!(user_lines(&started_with(&calls)[0]).is_empty());
+        assert!(with(|c| c.prompted && !c.session.working));
+        // Restarted with a session saved.
+        let calls = wings_with_tab(json!({}));
+        wings_plugin::task::block_on(super::open_with(json!({ "cwd": "/work/shop", "prompt": "Run the tests" }), json!({ "sessionId": "s1" })));
+        assert!(user_lines(&started_with(&calls)[0]).is_empty());
+        assert!(asked(&calls, "spawn")[0]["args"].as_array().unwrap().contains(&json!("--resume=s1")));
+    }
+
+    #[test]
+    fn a_prompt_is_ignored_when_the_chat_resumes_a_session_or_forks_one() {
+        let new = Launch::default();
+        let fresh = |args: Value| first_prompt(&json!({}), &args, &new);
+        assert_eq!(fresh(json!({ "prompt": "Go" })), Some("Go".into()));
+        assert_eq!(fresh(json!({ "prompt": "Go", "resume": "s1" })), None);
+        assert_eq!(first_prompt(&json!({}), &json!({ "prompt": "Go" }), &Launch { fork: true, before: None }), None);
+        assert_eq!(fresh(json!({ "prompt": "  " })), None);
+        assert_eq!(fresh(json!({ "prompt": 3 })), None);
+        assert_eq!(fresh(json!({})), None);
+        let calls = wings_with_tab(json!({}));
+        wings_plugin::task::block_on(super::open_with(json!({ "cwd": "/work/shop", "prompt": "Go", "resume": "s1" }), json!({})));
+        assert!(user_lines(&started_with(&calls)[0]).is_empty());
+        assert!(with(|c| !c.prompted && c.first_prompt.is_none()));
     }
 
     #[test]

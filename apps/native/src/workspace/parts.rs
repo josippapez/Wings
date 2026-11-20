@@ -65,6 +65,9 @@ pub(super) struct Parts {
     pub(super) sidebar: Entity<Part>,
     pub(super) title_bar: Entity<Part>,
     pub(super) main: Entity<Part>,
+    /// The backdrop a tab's page asks for, drawn under the main column in the place the tab's card leaves for it, so a
+    /// step of it draws neither the column nor the page again (`ui::backdrop_slot`).
+    pub(super) backdrop: Entity<crate::ui::BackdropLayer>,
 }
 
 impl Parts {
@@ -78,6 +81,7 @@ impl Parts {
             ),
             title_bar: Part::new(workspace, "title-bar", Workspace::title_bar_part, cx),
             main: Part::new(workspace, "main", Workspace::main_part, cx),
+            backdrop: cx.new(|_| crate::ui::BackdropLayer::default()),
         }
     }
 }

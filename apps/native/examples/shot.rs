@@ -2458,7 +2458,8 @@ fn plugins_install(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     data.install_script(
         "notes",
         serde_json::json!({ "name": "Notes", "version": "0.3.0", "description": "Keeps notes beside each project.",
-            "permissions": { "panes": [], "sendToAgents": true, "secrets": { "notes-token": "https://notes.example.com/" } },
+            "permissions": { "panes": [], "sendToAgents": true, "fetch": ["https://notes.example.com/", "http://127.0.0.1:4096/"],
+                "secrets": { "notes-token": "https://notes.example.com/" } },
             "contributes": { "sidebars": [{ "id": "notes", "title": "Notes", "page": "dist/notes.html" }] } }),
         &fake::idle("main"),
         &[("notes", &fake::idle("notes"))],

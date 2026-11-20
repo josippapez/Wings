@@ -1,5 +1,5 @@
 //! The Claude chat page in Wings Settings: the mode a new chat starts in, how much of its tool calls a chat shows and which
-//! kinds of fold Detailed opens, and how big its text is.
+//! kinds of fold Detailed opens, how big its text is, and what lies behind it.
 
 use wings_plugin::ui::{Node, checkbox, chips as choose, heading as section, muted as note, row, stack};
 
@@ -53,10 +53,14 @@ fn view() -> Vec<Node> {
         .child(chips("Session panel", &prefs::SESSION_PANELS, &prefs::session_panel().get(), |place| drop(prefs::session_panel().set(place.to_owned()))))
         .child(heading("Text size"))
         .child(muted("The size of the text in the conversation, in every chat. A chat that is open follows a change at once."))
-        .child(chips("Text size", &prefs::TEXT_SIZES, &prefs::text_size().get(), |size| drop(prefs::text_size().set(size.to_owned()))))]
+        .child(chips("Text size", &prefs::TEXT_SIZES, &prefs::text_size().get(), |size| drop(prefs::text_size().set(size.to_owned()))))
+        .child(heading("Background"))
+        .child(muted("What lies behind the conversation, in every chat. Pixel drift is a dim pattern of pixels in the chat's colours that moves slowly while Wings is in front and stands still when your Mac reduces motion. A chat that is open follows a change at once."))
+        .child(chips("Background", &prefs::BACKGROUNDS, &prefs::background().get(), |kind| drop(prefs::background().set(kind.to_owned()))))]
 }
 
-#[unsafe(no_mangle)]
+// A test build holds the main frame's `start` too: only the page's module exports this one.
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     wings_plugin::run(view);
 }
@@ -73,5 +77,19 @@ mod tests {
         assert_eq!(tree["props"]["segmented"], true);
         let tree = wings_plugin::ui::tree_json(heading("Output"));
         assert_eq!(tree["props"]["level"], 3);
+    }
+
+    #[test]
+    fn the_background_is_a_choice_of_the_plain_ground_or_pixel_drift_and_starts_plain() {
+        fn chips_named<'a>(node: &'a serde_json::Value, label: &str) -> Option<&'a serde_json::Value> {
+            if node["type"] == "Chips" && node["props"]["label"] == label {
+                return Some(node);
+            }
+            node["children"].as_array()?.iter().find_map(|child| chips_named(child, label))
+        }
+        let page = wings_plugin::ui::tree_json(view().remove(0));
+        let chips = chips_named(&page, "Background").expect("the background's choice");
+        assert_eq!(chips["props"]["value"], "plain");
+        assert_eq!(chips["props"]["options"][1]["label"], "Pixel drift");
     }
 }

@@ -34,6 +34,11 @@ pub const SIDE_PANEL: &str = "side-panel";
 pub const SESSION_PANEL: &str = "session-panel";
 pub const SESSION_PANELS: [(&str, &str); 2] = [("chat", "In the chat"), ("sidebar", "Wings sidebar")];
 
+/// What lies behind the conversation, in every chat: the page's plain ground, or a slow drift of pixels Wings draws there
+/// (`backdrop: "pixels"` on the page, Wings 0.2.59).
+pub const BACKGROUND: &str = "background";
+pub const BACKGROUNDS: [(&str, &str); 2] = [("plain", "Plain"), ("pixels", "Pixel drift")];
+
 /// How big the conversation's text is, in every chat.
 pub const TEXT_SIZE: &str = "text-size";
 pub const TEXT_SIZES: [(&str, &str); 3] = [("small", "Small"), ("default", "Default"), ("large", "Large")];
@@ -62,6 +67,19 @@ pub fn session_panel() -> Setting<String> {
 /// Whether a value of the session panel setting is Wings' sidebar.
 pub fn in_sidebar(place: &str) -> bool {
     place == "sidebar"
+}
+
+fn background_of(stored: &Value) -> Option<String> {
+    stored.as_str().filter(|kind| BACKGROUNDS.iter().any(|(value, _)| value == kind)).map(str::to_owned)
+}
+
+pub fn background() -> Setting<String> {
+    Setting::new(BACKGROUND, "plain".to_owned(), background_of, |kind| json!(kind))
+}
+
+/// Whether a value of the background setting is the drift of pixels.
+pub fn pixels(kind: &str) -> bool {
+    kind == "pixels"
 }
 
 /// Diffs in the chat (a permission card's, a finished edit's) show the old lines on the left and the new on the right, in every
@@ -146,6 +164,24 @@ mod tests {
         assert_eq!(session_panel_of(&json!("sidebar")).as_deref(), Some("sidebar"));
         assert_eq!(session_panel_of(&json!("floating")), None);
         assert!(in_sidebar("sidebar"));
+    }
+
+    #[test]
+    fn the_background_is_plain_unless_you_picked_the_pixels_and_a_change_reaches_the_chats() {
+        assert_eq!(background().get(), "plain");
+        assert!(!pixels(&background().get()));
+        assert_eq!(background_of(&json!("pixels")).as_deref(), Some("pixels"));
+        assert_eq!(background_of(&json!("plain")).as_deref(), Some("plain"));
+        assert_eq!(background_of(&json!("aurora")), None);
+        assert_eq!(background_of(&json!(true)), None);
+        assert!(pixels("pixels") && !pixels("plain"));
+        // What a set stores (`json!(kind)`) reads back as it was, and a listener hears the set.
+        let setting = background();
+        let heard = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = heard.clone();
+        setting.on_change(move |kind| seen.borrow_mut().push(kind.clone()));
+        setting.set("pixels".to_owned()).unwrap();
+        assert_eq!(*heard.borrow(), ["pixels"]);
     }
 
     #[test]

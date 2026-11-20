@@ -85,6 +85,7 @@ use gpui::{
     Subscription, Task, Window, canvas, deferred, div, prelude::*, px, rgb, rgba,
 };
 
+use crate::ui::behaviors::{Reveal, RevealExt};
 use crate::{
     actions::{
         ActivateTab, ClosePane, CloseTab, CloseWindow, DecreaseFontSize, FocusDown, FocusLeft,
@@ -311,6 +312,12 @@ pub struct Workspace {
 /// How a shortcut reads in a button's name. The keys themselves are bound in `actions`.
 /// A page tab's body, as the desktop's `PluginTab` and `ProjectPageTab`: a card like a pane's, in the same `p-2 pt-0`.
 fn page_card(page: impl IntoElement) -> AnyElement {
+    page_card_over(page, None)
+}
+
+/// `page_card`, with the slot of the backdrop the page asks for (`ui::backdrop_slot`) under the page in place of the
+/// card's ground.
+fn page_card_over(page: impl IntoElement, backdrop: Option<AnyElement>) -> AnyElement {
     div()
         .size_full()
         .flex()
@@ -318,6 +325,7 @@ fn page_card(page: impl IntoElement) -> AnyElement {
         .pt_0()
         .child(
             div()
+                .relative()
                 .flex_1()
                 .min_w_0()
                 .min_h_0()
@@ -325,7 +333,8 @@ fn page_card(page: impl IntoElement) -> AnyElement {
                 .rounded(px(14.0))
                 .border_1()
                 .border_color(rgba(HAIRLINE))
-                .bg(rgb(theme::SURFACE))
+                .when(backdrop.is_none(), |card| card.bg(rgb(theme::SURFACE)))
+                .children(backdrop)
                 .child(page),
         )
         .into_any_element()
@@ -830,12 +839,20 @@ impl Workspace {
                     None => div().into_any_element(),
                 },
                 Active::Plugin(id) => match self.plugin_tabs.iter().find(|tab| tab.id == id) {
-                    // Kept as last drawn until the page changes, so a busy terminal doesn't rebuild it every frame.
-                    Some(tab) => page_card(
-                        tab.page
-                            .clone()
-                            .cached(StyleRefinement::default().size_full()),
-                    ),
+                    // Kept as last drawn until the page changes, so a busy terminal doesn't rebuild it every frame. Over the
+                    // backdrop the page asks for once the window has the layer that draws it (`parts`), at the card's
+                    // radius less its border.
+                    Some(tab) => {
+                        let backdrop = tab.page.read(cx).backdrop().filter(|_| self.parts.is_some());
+                        page_card_over(
+                            tab.page
+                                .clone()
+                                .cached(StyleRefinement::default().size_full()),
+                            backdrop.map(|palette| {
+                                ui::backdrop_slot(format!("tab-{}", tab.id), palette, 13.0).into_any_element()
+                            }),
+                        )
+                    }
                     None => div().into_any_element(),
                 },
                 Active::Project => match &self.project_page {
@@ -966,7 +983,7 @@ impl Render for Workspace {
         );
         if self.tab_layout != Some(tab_layout) {
             if let Some(index) = self.tabs().iter().position(|tab| *tab == self.active) {
-                self.tab_scroll.scroll_to_item(index);
+                self.tab_scroll.reveal(index, Reveal::Nearest);
             }
             self.tab_layout = Some(tab_layout);
         }
@@ -1161,6 +1178,8 @@ impl Render for Workspace {
                     .flex()
                     .relative()
                     .children(sidebar)
+                    // Under the main column: the backdrop a tab's page asks for, in the place its card leaves for it.
+                    .children(self.parts.as_ref().map(|parts| parts.backdrop.clone()))
                     .child(main)
                     // Over the main column, as if in it: what draws over the terminals in it follows.
                     .child(ui::slot_layer(pane_card::TERMINALS, self.tab_terminals(cx)))

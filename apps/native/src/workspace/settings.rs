@@ -18,7 +18,7 @@ use crate::{
     },
     text_field::{FieldEvent, TextField},
     theme,
-    ui::{self, behaviors::EscapeExt, ButtonSize, motion},
+    ui::{self, behaviors::{EscapeExt, FocusRecovery, TrapTabExt}, ButtonSize, motion},
 };
 
 use super::{
@@ -179,6 +179,7 @@ impl Default for Prefs {
 pub(super) struct SettingsDialog {
     pub(super) section: Section,
     pub(super) focus: FocusHandle,
+    recovery: FocusRecovery,
     pub(super) family: Entity<TextField>,
     pub(super) family_error: Option<SharedString>,
     _family_events: Subscription,
@@ -279,10 +280,12 @@ impl Workspace {
                 FieldEvent::Changed => cx.notify(),
             });
         let focus = cx.focus_handle();
-        focus.focus(window, cx);
+        let mut recovery = FocusRecovery::default();
+        recovery.open(&focus, window, cx);
         self.settings = Some(SettingsDialog {
             section: Section::Text,
             focus,
+            recovery,
             family,
             family_error: None,
             _family_events: events,
@@ -363,11 +366,13 @@ impl Workspace {
     /// Keeps what was typed in the font field, then gives the keys back to the terminal.
     pub(super) fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.apply_family(cx);
+        let mut restored = false;
         if let Some(mut settings) = self.settings.take() {
             settings.recording = None;
+            restored = settings.recovery.restore_within(&settings.focus, window, cx);
             self.leave("settings", settings, crate::ui::motion::POPUP_IN, cx);
         }
-        if let Some(pane) = self.focused_pane() {
+        if !restored && let Some(pane) = self.focused_pane() {
             self.focus_pane(pane, window, cx);
         }
         cx.notify();
@@ -1441,6 +1446,7 @@ impl Workspace {
                     panel
                         .max_w_full()
                         .max_h_full()
+                        .trap_tab(&dialog.focus)
                         .on_escape(cx.listener(|this, _: &KeyDownEvent, window, cx| {
                             this.close_settings(window, cx);
                         }))

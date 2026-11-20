@@ -931,6 +931,27 @@ mod tests {
     }
 
     #[test]
+    fn calling_a_server_on_this_computer_needs_approval_again() {
+        let (mut s, dir) = store();
+        let repo = || Source::Github { repo: "owner/demo".into(), folder: None };
+        let with = |fetch: serde_json::Value| {
+            let m = serde_json::json!({ "id": "demo", "name": "demo", "version": "1.0.0", "api": 1, "main": "main.js", "permissions": { "fetch": fetch } });
+            package(&[("wings-plugin.json", &m.to_string()), ("main.js", "")])
+        };
+        s.install(&with(serde_json::json!(["https://api.example.com/"])), repo(), None).unwrap();
+        // Another port is another server.
+        for fetch in [serde_json::json!(["https://api.example.com/", "http://127.0.0.1:4096/"]), serde_json::json!(["https://api.example.com/", "http://127.0.0.1:4097/"])]
+        {
+            s.set_enabled("demo", true, Some(Grant::of(&s.plugins["demo"].manifest))).unwrap();
+            let next = s.install(&with(fetch.clone()), repo(), Some("demo")).unwrap().0;
+            assert!(!next.approved && s.active("demo").is_none(), "{fetch}");
+        }
+        // An entry for this computer without a port doesn't install at all.
+        assert!(s.install(&with(serde_json::json!(["http://127.0.0.1/"])), repo(), Some("demo")).unwrap_err().contains("fetch entry"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn adding_a_settings_page_needs_approval_again() {
         let (mut s, dir) = store();
         let repo = || Source::Github { repo: "owner/demo".into(), folder: None };

@@ -30,10 +30,31 @@ pub fn bind_escape<E: InteractiveElement>(
     })
 }
 
-/// `bind_escape` as a method, to chain onto a dialog's panel.
+/// `bind_escape` in the capture phase, before a field inside `content` hears the key (a field's Escape cancels its own
+/// editing and would otherwise run alongside). `on_escape` says whether it took the key: when it did, the key is
+/// stopped there; when not (a select's menu open in the dialog closes first, on its own), it goes on to the field.
+pub fn capture_escape<E: InteractiveElement>(
+    content: E,
+    on_escape: impl Fn(&KeyDownEvent, &mut Window, &mut App) -> bool + 'static,
+) -> E {
+    content.capture_key_down(move |event: &KeyDownEvent, window, cx| {
+        if event.keystroke.key == "escape" && on_escape(event, window, cx) {
+            cx.stop_propagation();
+        }
+    })
+}
+
+/// `bind_escape` and `capture_escape` as methods, to chain onto a dialog's panel.
 pub trait EscapeExt: InteractiveElement + Sized {
     fn on_escape(self, on_escape: impl Fn(&KeyDownEvent, &mut Window, &mut App) + 'static) -> Self {
         bind_escape(self, on_escape)
+    }
+
+    fn capture_escape(
+        self,
+        on_escape: impl Fn(&KeyDownEvent, &mut Window, &mut App) -> bool + 'static,
+    ) -> Self {
+        capture_escape(self, on_escape)
     }
 }
 
@@ -82,6 +103,58 @@ mod tests {
                     div().id("dialog").size(px(100.0)).track_focus(&self.focus),
                     move |_, _, _| escapes.set(escapes.get() + 1),
                 ))
+        }
+    }
+
+    /// A focused field that stops its own Escape (as `TextField` does), inside a dialog panel.
+    struct Field {
+        focus: FocusHandle,
+        heard: Rc<Cell<usize>>,
+        field_heard: Rc<Cell<usize>>,
+        takes: bool,
+    }
+
+    impl Render for Field {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let (heard, field_heard, takes) = (self.heard.clone(), self.field_heard.clone(), self.takes);
+            div().size_full().child(
+                capture_escape(
+                    div().id("panel").size(px(100.0)).child(
+                        div()
+                            .id("field")
+                            .size(px(50.0))
+                            .track_focus(&self.focus)
+                            .on_key_down(move |_: &KeyDownEvent, _, cx| {
+                                field_heard.set(field_heard.get() + 1);
+                                cx.stop_propagation();
+                            }),
+                    ),
+                    move |_, _, _| {
+                        heard.set(heard.get() + 1);
+                        takes
+                    },
+                ),
+            )
+        }
+    }
+
+    #[test]
+    fn capture_escape_runs_before_a_field_and_hands_the_key_on_when_it_declines() {
+        for takes in [true, false] {
+            let mut app = TestApp::new();
+            let (heard, field_heard) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+            let (h, f) = (heard.clone(), field_heard.clone());
+            let mut window = app.open_window(move |_, cx| Field {
+                focus: cx.focus_handle(),
+                heard: h,
+                field_heard: f,
+                takes,
+            });
+            window.draw();
+            window.update(|view, window, cx| window.focus(&view.focus, cx));
+            window.draw();
+            window.simulate_keystroke("escape");
+            assert_eq!((heard.get(), field_heard.get()), (1, usize::from(!takes)), "takes: {takes}");
         }
     }
 

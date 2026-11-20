@@ -13,7 +13,9 @@ use super::{
 };
 use crate::{
     theme, ui,
-    ui::behaviors::{DismissReason, Placement, Side, bind_layer, listbox, popup_on_parent, position},
+    ui::behaviors::{
+        DismissReason, Placement, Reveal, RevealExt, Side, bind_layer, listbox, popup_on_parent, position,
+    },
 };
 
 /// The padding over and under a `ListButton`'s parts, inside its 1pt border.
@@ -831,7 +833,7 @@ impl PageView {
                     _ => return,
                 }
                 if let Some(at) = view.highlight {
-                    view.combobox_scroll.scroll_to_item(at);
+                    view.combobox_scroll.reveal(at, Reveal::Nearest);
                 }
                 window.prevent_default();
                 cx.stop_propagation();

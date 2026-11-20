@@ -1081,12 +1081,7 @@ fn plugin_fetch(state: State<AppState>, plugin_id: String, request: FetchRequest
         let token = stored_secret(&state, &plugin_id, name)?.ok_or_else(|| format!("no secret named {name}"))?;
         builder = builder.header("Authorization", format!("Bearer {token}"));
     }
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .http_status_as_error(false)
-        .max_redirects(0)
-        .timeout_global(Some(Duration::from_secs(30)))
-        .build()
-        .into();
+    let agent = plugins::fetch_agent(&url);
     let mut response = agent
         .run(builder.body(request.body.unwrap_or_default()).map_err(err)?)
         .map_err(|e| format!("Couldn't reach {}: {e}", request.url))?;

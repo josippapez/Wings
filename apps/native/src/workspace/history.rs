@@ -31,7 +31,7 @@ use crate::{
     theme,
     ui::{
         self, ButtonSize, Variant,
-        behaviors::{Align, popup_on_parent},
+        behaviors::{Align, EscapeExt, popup_on_parent},
         motion,
     },
 };
@@ -972,10 +972,8 @@ impl Workspace {
                 .child(sheet_panel(
                     panel
                         // Escape from a button the sheet's field doesn't have the keys for.
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                            if event.keystroke.key == "escape" {
-                                this.escape_history(window, cx);
-                            }
+                        .on_escape(cx.listener(|this, _: &KeyDownEvent, window, cx| {
+                            this.escape_history(window, cx)
                         }))
                         .child(header)
                         .child(

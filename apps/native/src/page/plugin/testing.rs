@@ -204,6 +204,10 @@ impl Env for FakeEnv {
         self.running.builtin(plugin)
     }
 
+    fn view_opens(&self, plugin: &str, id: &str) -> Option<Vec<String>> {
+        self.running.view_opens(plugin, id)
+    }
+
     fn call_tool(&self, call: ToolCall, reply: crate::page::runtime::Reply) {
         self.running.call_tool(call, reply);
     }

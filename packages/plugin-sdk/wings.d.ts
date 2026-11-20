@@ -772,7 +772,9 @@ interface Wings {
   /**
    * An HTTP request to a URL under `permissions.fetch`, made by Wings. An entry may be `GET <prefix>`, or
    * `POST <url with * segments>` (optionally `{field=value}`) for one write with a JSON `body`. `bearer` names a secret that Wings sends
-   * as `Authorization: Bearer <secret>`, only to a URL under the prefix `permissions.secrets` binds it to (Wings 0.1.108). Resolves for any status; redirects aren't followed. With `binary: true` (Wings 0.1.108)
+   * as `Authorization: Bearer <secret>`, only to a URL under the prefix `permissions.secrets` binds it to (Wings 0.1.108). Resolves for any status; redirects aren't followed.
+   * An entry may be plain http to a server on this computer on one port, like `http://127.0.0.1:4096/` (also `localhost` and `[::1]`),
+   * matched with that host and port as written; no `bearer` goes there (Wings 0.2.59). With `binary: true` (Wings 0.1.108)
    * `body` is the response as base64, up to 10 MB, for an image or a file: show an image with
    * `data:${contentType};base64,${body}`.
    */
@@ -822,6 +824,8 @@ interface Wings {
       args?: unknown;
       /** With `as: "tab"`: always a new tab, even when one of this view is open, like a middle-click. Needs Wings 0.1.39. */
       newTab?: boolean;
+      /** Another of Wings' own plugins whose view `id` opens as a tab. Needs `permissions.openViews` naming `<plugin> <view>` and Wings 0.2.59. */
+      plugin?: string;
     },
   ): Promise<void>;
   /** Where this page shows. `null` in the plugin's main script. Needs Wings 0.1.22. */

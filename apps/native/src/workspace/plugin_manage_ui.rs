@@ -14,7 +14,7 @@ use wings_plugins::{
 use crate::{
     icons::{Icon, icon, plugin_glyph},
     theme,
-    ui::{self, Variant},
+    ui::{self, Variant, behaviors::EscapeExt},
 };
 
 use super::Workspace;
@@ -108,9 +108,20 @@ pub(super) fn access_groups(manifest: &Manifest) -> Vec<(&'static str, Vec<Strin
             .collect();
     let on = |yes: bool| if yes { Some(Vec::new()) } else { None };
     let list = |items: &[String]| (!items.is_empty()).then(|| items.to_vec());
+    // Loading lets an http entry reach only this computer, and binds no token to one.
+    let (local, web): (Vec<String>, Vec<String>) = p.fetch.iter().cloned().partition(|entry| {
+        entry
+            .split_once(' ')
+            .map_or(entry.as_str(), |(_, url)| url)
+            .starts_with("http://")
+    });
     [
         ("Show these in Wings", list(&shows)),
-        ("Call these web addresses, with tokens you give it", list(&p.fetch)),
+        ("Call these web addresses, with tokens you give it", list(&web)),
+        (
+            "Call the programs on this computer that listen at these addresses",
+            list(&local),
+        ),
         (
             "Keep these tokens in your keychain, each sent only to its own address",
             list(&p.secrets.iter().map(|(name, prefix)| format!("{name} → {prefix}")).collect::<Vec<_>>()),
@@ -134,6 +145,7 @@ pub(super) fn access_groups(manifest: &Manifest) -> Vec<(&'static str, Vec<Strin
             on(p.claude_accounts),
         ),
         ("Use these Wings plugins' tools and data", list(&p.call_tools)),
+        ("Open these views of other Wings plugins, like a chat that starts with its prompt", list(&p.open_views)),
         ("Hear these events from other Wings plugins", list(&p.events)),
         ("Read these parts of your Claude Code sessions", list(&p.transcript)),
         ("Read your Claude usage limits and each session's context and cache, from Claude Code's status line", on(p.statusline)),
@@ -840,12 +852,7 @@ impl Workspace {
                 )
                 .child(ui::dialog_panel(
                     panel
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                            if event.keystroke.key == "escape" {
-                                this.skip_review(cx);
-                                cx.stop_propagation();
-                            }
-                        }))
+                        .on_escape(cx.listener(|this, _: &KeyDownEvent, _, cx| this.skip_review(cx)))
                         .child(
                             ui::dialog_body()
                                 .child(
@@ -956,6 +963,35 @@ mod tests {
                     vec![]
                 ),
                 ("Show desktop notifications, up to 20 a minute", vec![]),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_review_lists_calls_to_this_computer_apart_from_web_addresses() {
+        let manifest: Manifest = serde_json::from_value(serde_json::json!({
+            "id": "demo", "name": "Demo", "version": "1.0.0", "api": 1, "main": "main.js",
+            "permissions": { "fetch": [
+                "https://api.example.com/",
+                "http://127.0.0.1:4096/",
+                "POST http://localhost:4096/session/*/message",
+            ] },
+        }))
+        .unwrap();
+        assert_eq!(
+            access_groups(&manifest),
+            [
+                (
+                    "Call these web addresses, with tokens you give it",
+                    vec!["https://api.example.com/".to_owned()]
+                ),
+                (
+                    "Call the programs on this computer that listen at these addresses",
+                    vec![
+                        "http://127.0.0.1:4096/".to_owned(),
+                        "POST http://localhost:4096/session/*/message".to_owned()
+                    ]
+                ),
             ]
         );
     }

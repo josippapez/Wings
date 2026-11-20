@@ -7,7 +7,7 @@ use crate::{
     assigned::{DEFAULT_MIN_FREE_GB, DEFAULT_PROMPT, Project, WatchDraft, describe_check, fill_prompt, resolve_project},
     list::format_list,
     main_frame::{remove_schedule, save_schedule},
-    schedule::{Agent, Draft, Schedule, clean_draft, describe_next, describe_when, next_run, refuse_past, time_ok},
+    schedule::{Agent, Draft, RunIn, Schedule, clean_draft, describe_next, describe_when, next_run, refuse_past, time_ok},
     store::{read_schedules, read_watches},
     watches::{add_watch, check_one, plan_start, remove_watch, save_watch, start_ticket},
 };
@@ -101,7 +101,7 @@ pub fn register_all() {
         let found = resolve_project(&projects, &wanted)?;
         let when = when_from(&WhenInput::of(&input), None)?.ok_or("Give every_hours, or time with days, or date with time.")?;
         let agent = input["agent"].as_str().and_then(Agent::from_id).unwrap_or(Agent::Claude);
-        let draft = clean_draft(&Draft { name: input["name"].as_str().unwrap_or_default().to_owned(), project_id: found.id.clone(), agent, prompt: input["prompt"].as_str().unwrap_or_default().to_owned(), when })?;
+        let draft = clean_draft(&Draft { name: input["name"].as_str().unwrap_or_default().to_owned(), project_id: found.id.clone(), agent, run_in: RunIn::Terminal, prompt: input["prompt"].as_str().unwrap_or_default().to_owned(), when })?;
         refuse_past(&draft.when, host::now() as i64)?;
         allowed(ask_approval(context["session"]["name"].as_str().map(str::to_owned), &found.name, None, draft.clone(), &found.id).await, "Nothing changed.")?;
         let saved = save_schedule(None, &draft)?;
@@ -197,6 +197,7 @@ pub fn register_all() {
             let proposed = clean_draft(&Draft {
                 name: input["name"].as_str().map_or(current.name.clone(), str::to_owned),
                 agent: input["agent"].as_str().and_then(Agent::from_id).unwrap_or(current.agent),
+                run_in: current.run_in,
                 prompt: input["prompt"].as_str().map_or(current.prompt.clone(), str::to_owned),
                 when: when_from(&WhenInput::of(&input), Some(&current.when))?.unwrap_or(current.when.clone()),
                 project_id: current.project_id.clone(),

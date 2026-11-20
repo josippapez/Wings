@@ -13,7 +13,7 @@ use wings_plugins::store::Available;
 
 use crate::{
     theme,
-    ui::{self, Variant},
+    ui::{self, Variant, behaviors::{EscapeExt, TrapTabExt}},
 };
 
 use super::Workspace;
@@ -143,11 +143,9 @@ impl Workspace {
                 )
                 .child(ui::dialog_panel(
                     panel
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                            if event.keystroke.key == "escape" {
-                                this.close_first_launch(window, cx);
-                                cx.stop_propagation();
-                            }
+                        .trap_tab(focus)
+                        .on_escape(cx.listener(|this, _: &KeyDownEvent, window, cx| {
+                            this.close_first_launch(window, cx)
                         }))
                         .child(
                             ui::dialog_body()

@@ -41,6 +41,33 @@ impl Agent {
     }
 }
 
+/// Where a run opens. Only a Claude Code run can open as a Claude chat; any other agent runs in a terminal.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum RunIn {
+    #[default]
+    Terminal,
+    Chat,
+}
+
+impl RunIn {
+    pub fn id(self) -> &'static str {
+        match self {
+            RunIn::Terminal => "terminal",
+            RunIn::Chat => "chat",
+        }
+    }
+
+    /// Anything but "chat" is a terminal, as every schedule saved before this choice existed runs.
+    pub fn from_id(id: Option<&str>) -> Self {
+        if id == Some("chat") { RunIn::Chat } else { RunIn::Terminal }
+    }
+
+    /// What a run of `agent` really uses: the chat is Claude Code's.
+    pub fn for_agent(self, agent: Agent) -> Self {
+        if agent == Agent::Claude { self } else { RunIn::Terminal }
+    }
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum When {
     Every { hours: i64 },
@@ -111,6 +138,8 @@ pub struct Schedule {
     pub name: String,
     pub project_id: String,
     pub agent: Agent,
+    /// Where a run opens: a terminal, or for Claude Code a Claude chat tab.
+    pub run_in: RunIn,
     pub prompt: String,
     pub when: When,
     pub enabled: bool,
@@ -124,6 +153,7 @@ pub struct Draft {
     pub name: String,
     pub project_id: String,
     pub agent: Agent,
+    pub run_in: RunIn,
     pub prompt: String,
     pub when: When,
 }
@@ -135,6 +165,7 @@ impl Schedule {
             name: text(&value["name"]),
             project_id: text(&value["projectId"]),
             agent: Agent::from_id(value["agent"].as_str()?)?,
+            run_in: RunIn::from_id(value["runIn"].as_str()),
             prompt: text(&value["prompt"]),
             when: When::from_json(&value["when"])?,
             enabled: value["enabled"] != false,
@@ -148,6 +179,9 @@ impl Schedule {
             "id": self.id, "name": self.name, "projectId": self.project_id, "agent": self.agent.id(), "prompt": self.prompt,
             "when": self.when.to_json(), "enabled": self.enabled, "anchor": self.anchor,
         });
+        if self.run_in == RunIn::Chat {
+            out["runIn"] = self.run_in.id().into();
+        }
         if let Some(run) = &self.last_run {
             out["lastRun"] = run.to_json();
         }
@@ -155,7 +189,7 @@ impl Schedule {
     }
 
     pub fn draft(&self) -> Draft {
-        Draft { name: self.name.clone(), project_id: self.project_id.clone(), agent: self.agent, prompt: self.prompt.clone(), when: self.when.clone() }
+        Draft { name: self.name.clone(), project_id: self.project_id.clone(), agent: self.agent, run_in: self.run_in, prompt: self.prompt.clone(), when: self.when.clone() }
     }
 }
 
@@ -165,13 +199,18 @@ impl Draft {
             name: text(&value["name"]),
             project_id: text(&value["projectId"]),
             agent: Agent::from_id(value["agent"].as_str()?)?,
+            run_in: RunIn::from_id(value["runIn"].as_str()),
             prompt: text(&value["prompt"]),
             when: When::from_json(&value["when"])?,
         })
     }
 
     pub fn to_json(&self) -> Value {
-        json!({ "name": self.name, "projectId": self.project_id, "agent": self.agent.id(), "prompt": self.prompt, "when": self.when.to_json() })
+        let mut out = json!({ "name": self.name, "projectId": self.project_id, "agent": self.agent.id(), "prompt": self.prompt, "when": self.when.to_json() });
+        if self.run_in == RunIn::Chat {
+            out["runIn"] = self.run_in.id().into();
+        }
+        out
     }
 }
 
@@ -343,7 +382,7 @@ pub fn clean_draft(d: &Draft) -> Result<Draft, String> {
             When::Once { date: date.clone(), time: time.clone() }
         }
     };
-    Ok(Draft { name: d.name.trim().chars().take(80).collect(), project_id: d.project_id.clone(), agent: d.agent, prompt: clean_prompt(&d.prompt)?, when })
+    Ok(Draft { name: d.name.trim().chars().take(80).collect(), project_id: d.project_id.clone(), agent: d.agent, run_in: d.run_in.for_agent(d.agent), prompt: clean_prompt(&d.prompt)?, when })
 }
 
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -439,7 +478,7 @@ mod tests {
     }
 
     fn make(when: When, anchor: i64) -> Schedule {
-        Schedule { id: "a".into(), name: String::new(), project_id: "p".into(), agent: Agent::Claude, prompt: "Review".into(), when, enabled: true, anchor, last_run: None }
+        Schedule { id: "a".into(), name: String::new(), project_id: "p".into(), agent: Agent::Claude, run_in: RunIn::Terminal, prompt: "Review".into(), when, enabled: true, anchor, last_run: None }
     }
 
     fn daily(time: &str, days: &[i64]) -> When {
@@ -555,7 +594,7 @@ mod tests {
         assert!(refuse_past(&once("2026-12-16", "09:01"), now).is_ok());
         assert!(refuse_past(&once("2026-12-15", "23:59"), now).is_err());
         assert!(refuse_past(&daily("09:00", &ALL), now).is_ok());
-        let draft = |when| Draft { name: String::new(), project_id: "p".into(), agent: Agent::Claude, prompt: "Go".into(), when };
+        let draft = |when| Draft { name: String::new(), project_id: "p".into(), agent: Agent::Claude, run_in: RunIn::Terminal, prompt: "Go".into(), when };
         assert!(clean_draft(&draft(once("2026-02-30", "09:00"))).unwrap_err().contains("YYYY-MM-DD"));
         assert_eq!(clean_draft(&draft(once("2026-12-16", "9:00"))).unwrap_err(), "Pick a time of day.");
         assert_eq!(clean_draft(&draft(once("2026-12-16", "09:00"))).unwrap().when, once("2026-12-16", "09:00"));
@@ -577,7 +616,7 @@ mod tests {
 
     #[test]
     fn a_draft_keeps_the_picked_days_in_the_weeks_order_and_refuses_what_the_form_names() {
-        let draft = |when| Draft { name: "  Review  ".into(), project_id: "p".into(), agent: Agent::Claude, prompt: "Go".into(), when };
+        let draft = |when| Draft { name: "  Review  ".into(), project_id: "p".into(), agent: Agent::Claude, run_in: RunIn::Terminal, prompt: "Go".into(), when };
         let cleaned = clean_draft(&draft(daily("09:00", &[0, 5, 1, 1, 9]))).unwrap();
         assert_eq!((cleaned.name.as_str(), cleaned.when), ("Review", daily("09:00", &[1, 5, 0])));
         assert_eq!(clean_draft(&draft(daily("9:00", &[1]))).unwrap_err(), "Pick a time of day.");
@@ -585,6 +624,27 @@ mod tests {
         assert_eq!(clean_draft(&draft(When::Every { hours: 5 })).unwrap_err(), "Pick how many hours.");
         assert!(["00:00", "23:59", "19:30"].iter().all(|time| time_ok(time)) && ["24:00", "09:60", "9:00", "09-00"].iter().all(|time| !time_ok(time)));
         assert_eq!([describe_when(&daily("09:00", &[1, 2, 3, 4, 5])), describe_when(&daily("09:00", &[6, 0])), describe_when(&When::Every { hours: 1 })], ["Weekdays at 09:00", "Sat, Sun at 09:00", "Every hour"]);
+    }
+
+    #[test]
+    fn where_a_run_opens_defaults_to_a_terminal_for_old_schedules_and_is_the_chat_for_claude_only() {
+        // A schedule saved before the choice existed has no `runIn`.
+        let old = json!({ "id": "a", "name": "", "projectId": "p", "agent": "claude", "prompt": "Go", "when": { "kind": "every", "hours": 1 }, "enabled": true, "anchor": 0 });
+        let mut kept = old.clone();
+        let loaded = Schedule::from_json(&old).unwrap();
+        assert_eq!(loaded.run_in, RunIn::Terminal);
+        // A terminal schedule is saved as it always was.
+        assert_eq!(loaded.to_json().get("runIn"), None);
+        kept["runIn"] = "chat".into();
+        let chat = Schedule::from_json(&kept).unwrap();
+        assert_eq!(chat.run_in, RunIn::Chat);
+        assert_eq!(Schedule::from_json(&chat.to_json()).unwrap().run_in, RunIn::Chat);
+        assert_eq!(Draft::from_json(&chat.draft().to_json()).unwrap().run_in, RunIn::Chat);
+        assert_eq!(Schedule::from_json(&json!({ "id": "a", "agent": "claude", "runIn": "x", "when": old["when"], "anchor": 0 })).unwrap().run_in, RunIn::Terminal);
+        // Saving keeps the chat for Claude and turns it into a terminal for another agent.
+        let draft = |agent| Draft { name: String::new(), project_id: "p".into(), agent, run_in: RunIn::Chat, prompt: "Go".into(), when: When::Every { hours: 1 } };
+        assert_eq!(clean_draft(&draft(Agent::Claude)).unwrap().run_in, RunIn::Chat);
+        assert_eq!(clean_draft(&draft(Agent::OpenCode)).unwrap().run_in, RunIn::Terminal);
     }
 
     #[test]

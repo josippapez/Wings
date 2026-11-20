@@ -137,13 +137,13 @@ impl Approval {
 
 /// Whether saving `next` over `prev` changes what runs, where or when. A new name alone doesn't need the user.
 pub fn needs_approval(prev: &Draft, next: &Draft) -> bool {
-    prev.project_id != next.project_id || prev.agent != next.agent || prev.prompt != next.prompt || prev.when != next.when
+    prev.project_id != next.project_id || prev.agent != next.agent || prev.run_in != next.run_in || prev.prompt != next.prompt || prev.when != next.when
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schedule::Agent;
+    use crate::schedule::{Agent, RunIn};
 
     fn daily() -> When {
         When::Daily { time: "09:00".into(), days: vec![1, 2, 3, 4, 5] }
@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn only_what_runs_where_or_when_needs_the_users_approval_not_a_new_name() {
-        let draft = Draft { name: String::new(), project_id: "p1".into(), agent: Agent::Claude, prompt: "Check the board.".into(), when: daily() };
+        let draft = Draft { name: String::new(), project_id: "p1".into(), agent: Agent::Claude, run_in: RunIn::Terminal, prompt: "Check the board.".into(), when: daily() };
         let with = |change: &dyn Fn(&mut Draft)| {
             let mut next = draft.clone();
             change(&mut next);
@@ -201,12 +201,13 @@ mod tests {
         assert!(!with(&|d| d.name = "Board".into()));
         assert!(with(&|d| d.prompt = "Delete the board.".into()));
         assert!(with(&|d| d.agent = Agent::OpenCode));
+        assert!(with(&|d| d.run_in = RunIn::Chat));
         assert!(with(&|d| d.when = When::Daily { time: "03:00".into(), days: vec![1, 2, 3, 4, 5] }));
     }
 
     #[test]
     fn an_ask_to_add_or_to_start_reads_back_as_it_was_told_and_a_schedule_ask_keeps_its_old_shape() {
-        let draft = Draft { name: String::new(), project_id: "p1".into(), agent: Agent::Claude, prompt: "Check the board.".into(), when: daily() };
+        let draft = Draft { name: String::new(), project_id: "p1".into(), agent: Agent::Claude, run_in: RunIn::Terminal, prompt: "Check the board.".into(), when: daily() };
         let schedule = Approval { id: "1".into(), asker: Some("api".into()), project_name: "web".into(), what: What::Schedule { current: None, proposed: draft.clone() } };
         let json = schedule.to_json();
         assert!(json.get("start").is_none());

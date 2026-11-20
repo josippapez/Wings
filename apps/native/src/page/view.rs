@@ -44,7 +44,7 @@ use super::{
     runtime::{Event, Message, PageRuntime},
     tree::{self, Align, Gap, Justify, Level, Node, TextSize, Tone, Tree, Weight, plain_text},
 };
-use crate::{terminal_view::DEFAULT_FONT_FAMILY, theme, ui};
+use crate::{terminal_view::DEFAULT_FONT_FAMILY, theme, ui, ui::behaviors::EscapeExt};
 
 /// What the page thread has sent that the view hasn't taken yet: only the newest tree matters, so a page that
 /// renders faster than the window can draw never builds up a backlog.
@@ -298,6 +298,9 @@ pub struct PageView {
     /// Draws the page's terminals over it, as the workspace does, for the screenshots of a page alone.
     #[cfg(feature = "test-support")]
     shot_terminals: Option<Rc<dyn Fn(&mut gpui::App) -> Vec<(SharedString, AnyElement)>>>,
+    /// How many times the page has rendered, for what draws it again.
+    #[cfg(feature = "test-support")]
+    renders: Cell<usize>,
     _events: Task<()>,
 }
 
@@ -306,6 +309,18 @@ impl PageView {
     /// and can reach past the page's own bounds, so a press on one may land outside the frame that holds the page.
     pub fn shows_menu(&self) -> bool {
         self.menu.is_some() || self.listing.get()
+    }
+
+    /// The palette of the backdrop the page asks for behind it (`backdrop: "pixels"` on its `Page`), when a card holds
+    /// it. The page leaves its ground to the card then, which draws the backdrop where the window has one
+    /// (`ui::backdrop_slot`), else its own plain ground.
+    pub fn backdrop(&self) -> Option<theme::Palette> {
+        let drawn = self.tree.as_ref().filter(|_| self.in_card && !self.popover)?;
+        drawn
+            .children
+            .iter()
+            .any(|node| matches!(node, Node::Page(page) if page.backdrop == Some(tree::Backdrop::Pixels)))
+            .then(|| drawn.palette.unwrap_or(theme::Palette::APP))
     }
 
     pub fn set_visible(&self, visible: bool) {
@@ -630,6 +645,8 @@ impl PageView {
             found_links: RefCell::default(),
             #[cfg(feature = "test-support")]
             shot_terminals: None,
+            #[cfg(feature = "test-support")]
+            renders: Cell::new(0),
             _events: events,
         };
         if view.stopped {
@@ -1131,6 +1148,12 @@ impl PageView {
     #[cfg(feature = "test-support")]
     pub fn trees_sent(&self) -> u64 {
         self.trees
+    }
+
+    /// How many times the page has rendered.
+    #[cfg(feature = "test-support")]
+    pub fn renders(&self) -> usize {
+        self.renders.get()
     }
 
     /// How far the following `Scroll` `id` is scrolled from its top, and how far it can scroll at most, in points.
@@ -2406,14 +2429,17 @@ impl PageView {
                     cx.listener(move |view, _, _, _| view.act(&on_press, None)),
                 ),
             );
-            pane = pane.track_focus(&focus).capture_key_down(cx.listener(move |view, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key != "escape" || view.shows_menu() {
-                    return;
-                }
-                view.send(&close, None);
-                window.prevent_default();
-                cx.stop_propagation();
-            }));
+            let page = cx.entity();
+            pane = pane.track_focus(&focus).capture_escape(move |_, window, cx| {
+                page.update(cx, |view, _| {
+                    if view.shows_menu() {
+                        return false;
+                    }
+                    view.send(&close, None);
+                    window.prevent_default();
+                    true
+                })
+            });
         }
         // The cards' surface is see-through, which only shows once the pane floats over the page's text: an opaque layer of
         // the page's own colour under them, at the raised card's radius, keeps that text out, and the pointer with it.
@@ -2526,16 +2552,21 @@ impl PageView {
                     .flex_col()
                     // Before a field in it, which keeps Escape. A select's menu or a field's options open in the dialog
                     // close first, on their own.
-                    .capture_key_down(cx.listener(move |view, event: &KeyDownEvent, window, cx| {
-                        if event.keystroke.key != "escape" || view.shows_menu() {
-                            return;
+                    .capture_escape({
+                        let page = cx.entity();
+                        move |_, window, cx| {
+                            page.update(cx, |view, _| {
+                                if view.shows_menu() {
+                                    return false;
+                                }
+                                if let Some(handler) = &on_escape {
+                                    view.send(handler, None);
+                                }
+                                window.prevent_default();
+                                true
+                            })
                         }
-                        if let Some(handler) = &on_escape {
-                            view.send(handler, None);
-                        }
-                        window.prevent_default();
-                        cx.stop_propagation();
-                    }))
+                    })
                     .children(ui::spot(|| "page-dialog".into()))
                     .child(header)
                     .child(body),
@@ -2621,7 +2652,12 @@ impl PageView {
 
 impl Render for PageView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(feature = "test-support")]
+        {
+            self.renders.set(self.renders.get() + 1);
+        }
         self.lines.borrow_mut().start();
+        let over_backdrop = self.backdrop().is_some();
         // A page with a palette of its own paints in it while it builds its elements, which read their colours then.
         let palette = self.tree.as_ref().and_then(|tree| tree.palette);
         let _painting = palette.map(theme::painting);
@@ -2799,14 +2835,16 @@ impl Render for PageView {
             // The card's radius less its border: the ground is as round as the card's inside.
             .when(self.in_card, |page| page.rounded(px(13.0)))
             // The desktop's page is transparent on the `bg-surface` of the card, panel or window that holds it, or on the
-            // `bg-popover` of a popover.
-            .bg(rgb(if self.popover {
-                theme::palette().dialog
-            } else {
-                theme::palette().surface
-            }))
-            .when_some(palette.and_then(|palette| palette.ground).filter(|_| !self.popover), |page, (from, to, angle)| {
-                page.bg(gpui::linear_gradient(angle, gpui::linear_color_stop(rgb(from), 0.0), gpui::linear_color_stop(rgb(to), 1.0)))
+            // `bg-popover` of a popover. Over a backdrop, the card draws the ground.
+            .when(!over_backdrop, |page| {
+                page.bg(rgb(if self.popover {
+                    theme::palette().dialog
+                } else {
+                    theme::palette().surface
+                }))
+                .when_some(palette.and_then(|palette| palette.ground).filter(|_| !self.popover), |page, (from, to, angle)| {
+                    page.bg(gpui::linear_gradient(angle, gpui::linear_color_stop(rgb(from), 0.0), gpui::linear_color_stop(rgb(to), 1.0)))
+                })
             })
             .text_color(rgb(theme::palette().foreground))
             .text_size(px(13.0))

@@ -678,7 +678,9 @@ pub struct Response {
     pub body: String,
 }
 
-/// `wings.fetch`, with the plugin's secret `bearer` as the token when given. The body is JSON.
+/// `wings.fetch`, with the plugin's secret `bearer` as the token when given. The body is JSON. `url` is under an entry of
+/// `permissions.fetch`: https, or http to a server on this computer on one port like `http://127.0.0.1:4096/`, written
+/// with the entry's host and port and sent no `bearer` (Wings 0.2.59). Redirects aren't followed.
 pub async fn fetch(url: &str, method: &str, body: Option<&Value>, bearer: Option<&str>) -> Result<Response, String> {
     let mut params = json!({ "url": url, "method": method, "headers": {} });
     if let Some(body) = body {
@@ -755,6 +757,14 @@ pub fn open_tab_beside(id: &str, args: &Value) -> Pending<Result<Value, String>>
 /// folder does.
 pub fn open_new_tab_beside(id: &str, args: &Value) -> Pending<Result<Value, String>> {
     call("openView", json!({ "id": id, "as": "tab", "args": args, "newTab": true, "after": "self" }))
+}
+
+/// `wings.openView` for the view `view` of another of Wings' own plugins, as a new tab with `args` for the view to read with
+/// `view_args`. Needs `permissions.openViews` naming `"<plugin> <view>"` in the manifest, the other plugin installed and on,
+/// and Wings 0.2.59 (older Wings refuse it). Rejects with why when it isn't allowed or the plugin is off, so a caller can fall
+/// back. The tab opens in the project on screen, so pass the folder in `args`.
+pub fn open_plugin_tab(plugin: &str, view: &str, args: &Value) -> Pending<Result<Value, String>> {
+    call("openView", json!({ "plugin": plugin, "id": view, "as": "tab", "args": args, "newTab": true }))
 }
 
 /// `wings.setProjectSection`: the rows of the plugin's section `section` under the project `project` in the sidebar, or

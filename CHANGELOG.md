@@ -2,6 +2,17 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.59 · 2026-11-20
+
+- **Pixel drift**: a Background setting in Claude chat puts a dim, slowly moving pixel pattern behind the whole chat. It moves only while Wings is in front and stands still under Reduce motion, and a step redraws the pattern alone, not the conversation.
+- **Start a chat in a worktree**: a Worktree button beside the branch button makes a worktree of the project for the chat's first message, listed under the project like the ones Wings makes.
+- **Run a schedule in Claude chat**: a Claude schedule can open its run as a chat tab that starts with the prompt, instead of a terminal. If the chat can't open, it runs in a terminal and the run says why.
+- **# finds an issue**: typing # in Claude chat's message box lists the project's issues and the repo's open GitHub issues, and a pick puts its key or number in.
+- **Plugins can call programs on this computer**: a plugin may ask for http addresses on this Mac with a port, which the approval dialog lists apart from web addresses. Tokens never go there, and no redirect is followed.
+- **Dialogs keep the keyboard**: Tab and Shift-Tab stay inside an open dialog, and closing it gives the keyboard back to what had it. Escape closes every dialog the same way.
+- **Fewer notifications from Claude chat**: only when Claude asks for permission or a question waits for you, not after every turn or finished subagent.
+- **Mentioned issues follow their status** in Claude chat's side panel, and a long tool row from a Claude Code plugin is cut short at the conversation's edge.
+
 ## 0.2.58 · 2026-11-20
 
 - **A new Claude chat opens in the middle of the tab**, with "What should Claude do?" over a soft glow that drifts slowly. It stands still under Reduce motion and while Wings is in the background.

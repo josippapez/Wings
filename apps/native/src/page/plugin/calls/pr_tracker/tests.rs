@@ -1,8 +1,13 @@
 //! The calls PR tracker makes: what each says when the manifest doesn't grant it, what it does when it does, and the
-//! desktop's words for bad arguments. A request to a real server isn't made, since the only URLs a plugin may fetch are https
-//! ones: the checks all come before the network.
+//! desktop's words for bad arguments. No request goes to a real server on the internet: the checks all come before the
+//! network, and a fetch that is made goes to a server the test runs on this computer.
 
-use std::{sync::Arc, time::Instant};
+use std::{
+    io::{Read, Write},
+    net::TcpListener,
+    sync::Arc,
+    time::Instant,
+};
 
 use serde_json::{Value, json};
 
@@ -62,6 +67,87 @@ fn fetch_says_what_the_desktop_says_before_it_reaches_for_the_network() {
     assert_eq!(
         rig.refuses("fetch", fetch(&format!("{API}x"), json!({ "bearer": "bank" }))),
         "no secret named bank"
+    );
+}
+
+/// A server on this computer that answers one request with `answer`, and hands the test that request's head.
+fn local_server(answer: String) -> (u16, std::sync::mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (sender, heard) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let (mut head, mut byte) = (Vec::new(), [0u8; 1]);
+        while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).is_ok_and(|n| n == 1) {
+            head.push(byte[0]);
+        }
+        let _ = sender.send(String::from_utf8_lossy(&head).into_owned());
+        let _ = stream.write_all(answer.as_bytes());
+    });
+    (port, heard)
+}
+
+const JSON_OK: &str = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}";
+
+#[test]
+fn a_plugin_calls_a_server_on_this_computer_only_at_the_host_and_port_it_declared() {
+    let (port, heard) = local_server(JSON_OK.into());
+    let local = format!("http://127.0.0.1:{port}/");
+    // A manifest that binds a token here doesn't load; this one skips loading, as `plugin` does.
+    let rig = Rig::new(
+        json!({ "permissions": { "fetch": [&local], "secrets": { "bank": &local } } }),
+        vec![],
+    );
+    assert_eq!(
+        rig.allows("fetch", json!({ "url": format!("http://127.0.0.1:{port}/session") })),
+        json!({ "status": 200, "contentType": "application/json", "body": "{\"ok\":true}" })
+    );
+    let head = heard.recv_timeout(WAIT).unwrap();
+    assert!(head.starts_with("GET /session HTTP/1.1\r\n"), "{head}");
+    // The same server by another name, or another port, isn't what the manifest named.
+    let other = if port == 65535 { 65534 } else { port + 1 };
+    for url in [
+        format!("http://localhost:{port}/session"),
+        format!("http://[::1]:{port}/session"),
+        format!("http://127.0.0.1:{other}/session"),
+        "http://127.0.0.1/session".to_owned(),
+        format!("http://127.0.0.1:{port}@evil.test/session"),
+    ] {
+        assert_eq!(
+            rig.refuses("fetch", json!({ "url": url })),
+            format!("probe may not GET {url}")
+        );
+    }
+    // No token goes to it, even under a binding that names it.
+    assert_eq!(
+        rig.refuses(
+            "fetch",
+            json!({ "url": format!("http://127.0.0.1:{port}/session"), "bearer": "bank" })
+        ),
+        format!("probe may not send the bank secret to http://127.0.0.1:{port}/session")
+    );
+}
+
+#[test]
+fn a_fetch_to_this_computer_hands_back_a_redirect_instead_of_following_it() {
+    // Somewhere the redirect points, which nothing may reach.
+    let elsewhere = TcpListener::bind("127.0.0.1:0").unwrap();
+    elsewhere.set_nonblocking(true).unwrap();
+    let to = elsewhere.local_addr().unwrap().port();
+    let (port, heard) = local_server(format!(
+        "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{to}/stolen\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    ));
+    let rig = Rig::new(
+        json!({ "permissions": { "fetch": [format!("http://127.0.0.1:{port}/"), format!("http://127.0.0.1:{to}/")] } }),
+        vec![],
+    );
+    let answer = rig.allows("fetch", json!({ "url": format!("http://127.0.0.1:{port}/go") }));
+    assert_eq!(answer["status"], json!(302), "{answer}");
+    assert!(heard.recv_timeout(WAIT).unwrap().starts_with("GET /go HTTP/1.1\r\n"));
+    // Not followed even to a server the plugin may call: the plugin decides whether to call it.
+    assert!(
+        matches!(elsewhere.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+        "the redirect was followed"
     );
 }
 

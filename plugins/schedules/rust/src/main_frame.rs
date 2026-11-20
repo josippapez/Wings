@@ -7,7 +7,7 @@ use crate::{
     ASK, DONE, STATE, WANT,
     approvals,
     assigned::{Project, Watch, WatchDraft},
-    schedule::{Draft, Run, Schedule, When, claim, clean_draft, describe_when, due_at, on_start, refuse_past},
+    schedule::{Draft, Run, RunIn, Schedule, When, claim, clean_draft, describe_when, due_at, on_start, refuse_past},
     store::{read_schedules, read_watches, save_schedules, save_watches},
     tools,
     watches::{CHECK_MS, add_watch, check_all, check_one, check_watch, dismiss, install, remove_watch, save_watch, sign_in, sign_in_code, start_ticket, targets_of, toggle_watch},
@@ -109,7 +109,7 @@ pub fn save_schedule(id: Option<&str>, draft: &Draft) -> Result<Schedule, String
     let now = host::now() as i64;
     let Some(id) = id else {
         refuse_past(&clean.when, now)?;
-        let added = Schedule { id: new_id(now), name: clean.name, project_id: clean.project_id, agent: clean.agent, prompt: clean.prompt, when: clean.when, enabled: true, anchor: now, last_run: None };
+        let added = Schedule { id: new_id(now), name: clean.name, project_id: clean.project_id, agent: clean.agent, run_in: clean.run_in, prompt: clean.prompt, when: clean.when, enabled: true, anchor: now, last_run: None };
         write_schedules(&[list, vec![added.clone()]].concat())?;
         return Ok(added);
     };
@@ -118,7 +118,7 @@ pub fn save_schedule(id: Option<&str>, draft: &Draft) -> Result<Schedule, String
         refuse_past(&clean.when, now)?;
     }
     // A changed time counts from now, so it never runs for a time it was already past when you saved it.
-    let saved = Schedule { name: clean.name, project_id: clean.project_id, agent: clean.agent, prompt: clean.prompt, when: clean.when, anchor: now, ..old.clone() };
+    let saved = Schedule { name: clean.name, project_id: clean.project_id, agent: clean.agent, run_in: clean.run_in, prompt: clean.prompt, when: clean.when, anchor: now, ..old.clone() };
     write_schedules(&list.iter().map(|s| if s.id == id { saved.clone() } else { s.clone() }).collect::<Vec<_>>())?;
     Ok(saved)
 }
@@ -127,18 +127,29 @@ pub fn remove_schedule(id: &str) -> Result<(), String> {
     write_schedules(&read_schedules()?.into_iter().filter(|s| s.id != id).collect::<Vec<_>>())
 }
 
-/// Starts the agent for `s`, in a new tab in its project. Never fails: a failure is the run's result.
+/// Starts the agent for `s`, in a new tab in its project. Never fails: a failure is the run's result. A run set for
+/// the Claude chat that can't open one falls back to a terminal, and says why in the run's `error`, which stays on a run
+/// that started.
 async fn open_agent(s: &Schedule) -> Run {
     let at = host::now() as i64;
     let opened = async {
         let projects = Project::list(&host::projects().await?);
         let project = projects.iter().find(|p| p.id == s.project_id).ok_or("The project is no longer in Wings.")?;
-        let answer = host::call("openPane", json!({ "command": s.agent.command(), "args": [s.prompt], "cwd": project.path, "placement": "tab" })).await?;
-        Ok::<Option<String>, String>(answer["paneId"].as_str().map(str::to_owned))
+        let mut fell_back = None;
+        if s.run_in.for_agent(s.agent) == RunIn::Chat {
+            match host::open_plugin_tab("claude-chat", "chat", &json!({ "cwd": project.path, "prompt": s.prompt })).await {
+                Ok(_) => return Ok::<(Option<String>, Option<String>), String>((None, None)),
+                Err(error) => fell_back = Some(format!("Claude chat didn't open ({error}), so it ran in a terminal.")),
+            }
+        }
+        let answer = host::call("openPane", json!({ "command": s.agent.command(), "args": [s.prompt], "cwd": project.path, "placement": "tab" }))
+            .await
+            .map_err(|error| fell_back.as_ref().map_or(error.clone(), |why| format!("{why} The terminal failed too: {error}")))?;
+        Ok((answer["paneId"].as_str().map(str::to_owned), fell_back))
     }
     .await;
     match opened {
-        Ok(pane_id) => Run { at, pane_id, ok: true, error: None },
+        Ok((pane_id, error)) => Run { at, pane_id, ok: true, error },
         Err(error) => Run { at, pane_id: None, ok: false, error: Some(error) },
     }
 }
@@ -269,4 +280,86 @@ pub fn start() {
             host::sleep(CHECK_MS).await;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{cell::RefCell, rc::Rc};
+    use wings_plugin::task::block_on;
+
+    fn schedule(agent: crate::schedule::Agent, run_in: RunIn) -> Schedule {
+        Schedule {
+            id: "a".into(),
+            name: String::new(),
+            project_id: "p".into(),
+            agent,
+            run_in,
+            prompt: "Review the open PRs".into(),
+            when: When::Every { hours: 1 },
+            enabled: true,
+            anchor: 0,
+            last_run: None,
+        }
+    }
+
+    /// Wings with the project `p` in `/work`, answering `openView` with `chat` and `openPane` with `pane`, keeping every call.
+    fn wings(chat: Result<Value, String>, pane: Result<Value, String>) -> Rc<RefCell<Vec<(String, Value)>>> {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let kept = calls.clone();
+        host::testing::answer(move |method, params| {
+            kept.borrow_mut().push((method.to_owned(), params.clone()));
+            match method {
+                "projects" => Ok(json!([{ "id": "p", "path": "/work", "name": "Work" }])),
+                "openView" => chat.clone(),
+                "openPane" => pane.clone(),
+                _ => Ok(Value::Null),
+            }
+        });
+        calls
+    }
+
+    fn methods(calls: &Rc<RefCell<Vec<(String, Value)>>>) -> Vec<String> {
+        calls.borrow().iter().map(|(method, _)| method.clone()).filter(|method| method != "projects").collect()
+    }
+
+    #[test]
+    fn a_claude_chat_run_opens_the_chat_tab_in_the_project_with_the_prompt_and_starts_no_terminal() {
+        let calls = wings(Ok(Value::Null), Ok(json!({ "paneId": "9" })));
+        let run = block_on(open_agent(&schedule(crate::schedule::Agent::Claude, RunIn::Chat)));
+        assert_eq!((run.ok, run.error, run.pane_id), (true, None, None));
+        assert_eq!(methods(&calls), ["openView"]);
+        let (_, params) = calls.borrow().iter().find(|(method, _)| method == "openView").cloned().unwrap();
+        assert_eq!(params, json!({ "plugin": "claude-chat", "id": "chat", "as": "tab", "args": { "cwd": "/work", "prompt": "Review the open PRs" }, "newTab": true }));
+    }
+
+    #[test]
+    fn a_terminal_run_and_any_other_agent_open_a_pane_as_before() {
+        for (agent, run_in, command) in [
+            (crate::schedule::Agent::Claude, RunIn::Terminal, "claude"),
+            (crate::schedule::Agent::OpenCode, RunIn::Chat, "opencode --prompt"),
+        ] {
+            let calls = wings(Ok(Value::Null), Ok(json!({ "paneId": "9" })));
+            let run = block_on(open_agent(&schedule(agent, run_in)));
+            assert_eq!((run.ok, run.error, run.pane_id), (true, None, Some("9".into())));
+            assert_eq!(methods(&calls), ["openPane"]);
+            let (_, params) = calls.borrow().iter().find(|(method, _)| method == "openPane").cloned().unwrap();
+            assert_eq!(params, json!({ "command": command, "args": ["Review the open PRs"], "cwd": "/work", "placement": "tab" }));
+        }
+    }
+
+    #[test]
+    fn a_chat_that_cannot_open_falls_back_to_a_terminal_and_the_run_says_why() {
+        let calls = wings(Err("claude-chat is turned off or not installed".into()), Ok(json!({ "paneId": "9" })));
+        let run = block_on(open_agent(&schedule(crate::schedule::Agent::Claude, RunIn::Chat)));
+        assert_eq!(methods(&calls), ["openView", "openPane"]);
+        assert!(run.ok && run.pane_id.as_deref() == Some("9"));
+        let why = run.error.unwrap();
+        assert!(why.contains("claude-chat is turned off or not installed") && why.contains("ran in a terminal"), "{why}");
+        // Both failing is a failed run that names both.
+        wings(Err("no chat".into()), Err("no terminal".into()));
+        let run = block_on(open_agent(&schedule(crate::schedule::Agent::Claude, RunIn::Chat)));
+        let why = run.error.unwrap();
+        assert!(!run.ok && why.contains("no chat") && why.contains("no terminal"), "{why}");
+    }
 }

@@ -5,7 +5,7 @@ use crate::{
     STATE, WANT,
     assigned::{AssignedTicket, DEFAULT_MIN_FREE_GB, DEFAULT_PROMPT, Project, Waiting, Watch, WatchDraft, WATCH_NAME, describe_check, started_elsewhere, state_options, title_wanted},
     page_ask::{ask, ask_quiet, busy, clear_error, error, listen},
-    schedule::{Agent, DAYS, DAY_NUMBERS, Draft, EVERY_HOURS, Run, Schedule, When, describe_moment, describe_next, describe_once_next, describe_when, next_run},
+    schedule::{Agent, DAYS, DAY_NUMBERS, Draft, EVERY_HOURS, Run, RunIn, Schedule, When, describe_moment, describe_next, describe_once_next, describe_when, next_run},
     store::{read_schedules, read_watches},
     view::{busy_button, button, field, field_group, small_badge, textarea},
     worktree_setup::{WorktreeSetup, include_text, worktree_change},
@@ -64,6 +64,7 @@ struct Form {
     name: String,
     project_id: String,
     agent: Agent,
+    run_in: RunIn,
     prompt: String,
     mode: Mode,
     hours: i64,
@@ -93,6 +94,7 @@ impl Form {
             name: schedule.map(|s| s.name.clone()).or_else(|| watch.and_then(|w| w.name.clone())).unwrap_or_default(),
             project_id: schedule.map(|s| s.project_id.clone()).or_else(|| watch.map(|w| w.project_id.clone())).or_else(|| here.map(str::to_owned)).or_else(|| projects.first().map(|p| p.id.clone())).unwrap_or_default(),
             agent: schedule.map(|s| s.agent).or_else(|| watch.map(|w| w.agent)).unwrap_or(Agent::Claude),
+            run_in: schedule.map_or(RunIn::Terminal, |s| s.run_in),
             prompt: schedule.map(|s| s.prompt.clone()).unwrap_or_default(),
             mode: match when {
                 Some(When::Every { .. }) => Mode::Every,
@@ -242,7 +244,7 @@ fn save() {
                 Mode::Every => When::Every { hours: f.hours },
                 Mode::Once => When::Once { date: f.date.trim().to_owned(), time: f.time.clone() },
             };
-            let draft = Draft { name: f.name.clone(), project_id: f.project_id.clone(), agent: f.agent, prompt: f.prompt.clone(), when };
+            let draft = Draft { name: f.name.clone(), project_id: f.project_id.clone(), agent: f.agent, run_in: f.run_in, prompt: f.prompt.clone(), when };
             return ("save", json!({ "entry": editing, "draft": draft.to_json() }));
         }
         let moved = p.watches.iter().find(|w| Some(&w.id) == editing.as_ref()).is_some_and(|w| w.project_id != f.project_id);
@@ -299,7 +301,7 @@ fn schedule_fields(f: &Form) -> Vec<Node> {
     } else {
         row().child(field("Every", None, select("Every", &hours, &f.hours.to_string(), |hours| with(|p| p.form.hours = hours.parse().unwrap_or(24)))))
     };
-    vec![
+    let mut fields = vec![
         field("Prompt", Some("What the agent is asked to do. It goes in as one line: line breaks become spaces.".into()), textarea("Prompt", &f.prompt, 4, false, |prompt| with(|p| p.form.prompt = prompt))),
         field_group(
             "When",
@@ -323,7 +325,19 @@ fn schedule_fields(f: &Form) -> Vec<Node> {
                 },
             )).child(when),
         ),
-    ]
+    ];
+    // The chat is Claude Code's: another agent has nothing to choose.
+    if f.agent == Agent::Claude {
+        fields.insert(
+            1,
+            field_group(
+                "Run in",
+                Some("A terminal runs claude with the prompt. A Claude chat opens the run as a chat tab that starts with it. If the chat plugin is off, it falls back to a terminal.".into()),
+                chips("Run in", &[("terminal", "Terminal"), ("chat", "Claude chat")], f.run_in.id(), |value| with(|p| p.form.run_in = RunIn::from_id(Some(value)))),
+            ),
+        );
+    }
+    fields
 }
 
 fn watch_fields(f: &Form, watch: Option<&Watch>) -> Vec<Node> {
@@ -500,7 +514,7 @@ fn run_line(run: &Run, label: Node) -> Node {
         .prop("wrap", true)
         .child(label)
         .child(if run.ok { small_badge("Started", Some("success"), None) } else { small_badge("Failed", Some("danger"), None) })
-        .maybe((!run.ok).then(|| text(run.error.clone().unwrap_or_default()).prop("tone", "danger").prop("size", "small")))
+        .maybe(run.error.as_ref().map(|error| text(error.clone()).prop("tone", if run.ok { "muted" } else { "danger" }).prop("size", "small")))
 }
 
 fn schedule_item(s: &Schedule, project: &str, now: i64, working: bool) -> Node {

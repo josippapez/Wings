@@ -11,7 +11,7 @@ use gpui::{
 use crate::{
     text_field::{FieldEvent, TextField},
     theme,
-    ui::{self, behaviors::EscapeExt, Variant, motion},
+    ui::{self, behaviors::{EscapeExt, FocusRecovery, TrapTabExt}, Variant, motion},
 };
 
 use super::Workspace;
@@ -20,6 +20,7 @@ pub(super) struct WorktreeSetupDialog {
     project: PathBuf,
     name: String,
     focus: FocusHandle,
+    recovery: FocusRecovery,
     include: Entity<TextField>,
     setup: Entity<TextField>,
     /// The repo has a `.worktreeinclude`, which is used instead of the list.
@@ -89,11 +90,13 @@ impl Workspace {
             })
         };
         let subscriptions = [events(&include, window, cx), events(&setup, window, cx)];
-        include.focus_handle(cx).focus(window, cx);
+        let mut recovery = FocusRecovery::default();
+        recovery.open(&include.focus_handle(cx), window, cx);
         self.worktree_setup = Some(WorktreeSetupDialog {
             project,
             name,
             focus: cx.focus_handle(),
+            recovery,
             include,
             setup,
             has_file,
@@ -133,10 +136,12 @@ impl Workspace {
     }
 
     fn close_worktree_setup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(dialog) = self.worktree_setup.take() {
+        let mut restored = false;
+        if let Some(mut dialog) = self.worktree_setup.take() {
+            restored = dialog.recovery.restore_within(&dialog.focus, window, cx);
             self.leave("worktree-setup", dialog, motion::POPUP_IN, cx);
         }
-        if let Some(pane) = self.focused_pane() {
+        if !restored && let Some(pane) = self.focused_pane() {
             self.focus_pane(pane, window, cx);
         }
         cx.notify();
@@ -195,6 +200,7 @@ impl Workspace {
                 )
                 .child(ui::dialog_panel(
                     panel
+                        .trap_tab(&dialog.focus)
                         .on_escape(cx.listener(|this, _: &KeyDownEvent, window, cx| {
                             this.close_worktree_setup(window, cx);
                         }))
@@ -295,6 +301,40 @@ mod tests {
     use gpui::Focusable;
 
     use super::super::tests::open_config;
+
+    /// Closing gives the keyboard back to what had it before the dialog opened, and Tab stays inside the dialog.
+    #[test]
+    fn the_worktree_setup_dialog_traps_tab_and_gives_the_keyboard_back() {
+        let dir = std::env::temp_dir().join(format!("wings-native-worktree-focus-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let alpha = dir.join("alpha");
+        std::fs::create_dir_all(&alpha).unwrap();
+        let list = dir.join("spaces.json");
+        let spaces = serde_json::json!([{ "id": "a", "name": "alpha", "path": alpha }]);
+        std::fs::write(&list, serde_json::to_vec(&spaces).unwrap()).unwrap();
+        let (_app, mut window) = open_config(|config| {
+            config.project = alpha.clone();
+            config.projects = Some(list.clone());
+        });
+        let before = window.update(|_, window, cx| {
+            let before = cx.focus_handle().tab_stop(true);
+            window.focus(&before, cx);
+            before
+        });
+        window.update(|w, window, cx| w.open_worktree_setup(alpha.clone(), window, cx));
+        window.draw();
+        for _ in 0..6 {
+            window.simulate_keystroke("tab");
+            window.update(|w, window, cx| {
+                let dialog = w.worktree_setup.as_ref().unwrap();
+                assert!(dialog.focus.contains_focused(window, cx), "Tab never leaves the dialog");
+            });
+        }
+        window.update(|w, window, cx| {
+            w.close_worktree_setup(window, cx);
+            assert!(before.is_focused(window), "the keyboard goes back to what had it");
+        });
+    }
 
     /// A project's menu opens the dialog on its setup; Save keeps the command, and the default list left as it is stays
     /// unset.

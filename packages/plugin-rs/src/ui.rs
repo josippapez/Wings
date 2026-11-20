@@ -72,6 +72,14 @@ impl Node {
         self.on("onTextScale", move |payload| on_step(payload["step"].as_str().unwrap_or_default()))
     }
 
+    /// On a `Page`: what the app draws behind the whole page in place of its plain ground. `"pixels"` is a slow drift of
+    /// dim, dithered pixels in the page's colours, which moves only while the window is in front and stands still under
+    /// Reduce motion. The app draws it where the page fills a tab; elsewhere, and in an older Wings, the page keeps its
+    /// plain ground. Needs Wings 0.2.59.
+    pub fn backdrop(self, kind: &str) -> Self {
+        self.prop("backdrop", kind)
+    }
+
     pub fn child(mut self, node: Node) -> Self {
         self.children.push(Child::Node(node));
         self

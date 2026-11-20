@@ -5,13 +5,13 @@
 use std::cell::Cell;
 
 use gpui::{
-    AnyElement, Context, ElementId, Focusable, KeyDownEvent, MouseButton, SharedString, div, prelude::*,
+    AnyElement, Context, ElementId, Focusable, MouseButton, SharedString, div, prelude::*,
 };
 
 use super::{Node, PageView, plain_text, tree};
 use crate::{
     icons::Icon,
-    ui::{self, ButtonSize, motion},
+    ui::{self, ButtonSize, behaviors::EscapeExt, motion},
 };
 
 thread_local! {
@@ -76,16 +76,21 @@ impl PageView {
                     panel
                         // Before its search field, which keeps Escape, as a `Dialog` does. A select's menu open in it
                         // closes first, on its own.
-                        .capture_key_down(cx.listener(move |view, event: &KeyDownEvent, window, cx| {
-                            if event.keystroke.key != "escape" || view.shows_menu() {
-                                return;
+                        .capture_escape({
+                            let page = cx.entity();
+                            move |_, window, cx| {
+                                page.update(cx, |view, _| {
+                                    if view.shows_menu() {
+                                        return false;
+                                    }
+                                    if let Some(handler) = &on_key {
+                                        view.send(handler, None);
+                                    }
+                                    window.prevent_default();
+                                    true
+                                })
                             }
-                            if let Some(handler) = &on_key {
-                                view.send(handler, None);
-                            }
-                            window.prevent_default();
-                            cx.stop_propagation();
-                        }))
+                        })
                         .child(header)
                         .child(
                             div()

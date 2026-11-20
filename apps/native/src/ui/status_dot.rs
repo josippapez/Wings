@@ -144,14 +144,20 @@ fn turn(window: &mut Window, cx: &mut App) -> f32 {
     elapsed.as_secs_f32().fract()
 }
 
+/// How far into the spinners' clock it is now, for something that steps on it at a pace of its own (`backdrop`), so its
+/// steps fall on theirs.
+pub(super) fn clock(cx: &App) -> Duration {
+    let now = cx.background_executor().now();
+    now.saturating_duration_since(*ORIGIN.get_or_init(|| now))
+}
+
 /// Seconds on the spinners' clock, for something else that moves on it, and a redraw of the view being drawn at its next
 /// step while the window is in front, so it shares the spinners' frames. None under Reduce motion.
 pub fn ticking(window: &mut Window, cx: &mut App) -> Option<f32> {
     if cx.reduce_motion() {
         return None;
     }
-    let now = cx.background_executor().now();
-    let elapsed = now.saturating_duration_since(*ORIGIN.get_or_init(|| now));
+    let elapsed = clock(cx);
     if window.is_window_active() {
         wake_at_next_step(elapsed, window, cx);
     }

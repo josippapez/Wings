@@ -10,6 +10,7 @@ use super::{
     patch::{DiffLine, DiffLineKind, DiffStatus},
     rows::{CodeRow, ListRow, Notes, code_rows, file_path, list_rows, with_notes},
 };
+use crate::ui::behaviors::{Reveal, RevealExt};
 use crate::{
     icons::{Icon, icon},
     markdown::{Block, Opener},
@@ -20,7 +21,7 @@ use crate::{
 use gpui::{
     AnyElement, App, Context, Div, ElementId, Entity, EventEmitter, FocusHandle, Focusable,
     HighlightStyle, KeyDownEvent, ListAlignment, ListOffset, ListState, Pixels, Role, ScrollEvent,
-    ScrollStrategy, SharedString, Stateful, StyledText, Subscription, Task,
+    SharedString, Stateful, StyledText, Subscription, Task,
     UniformListScrollHandle, Window, div, list, point, prelude::*, px, rgb, rgba, uniform_list,
 };
 use std::{
@@ -563,7 +564,7 @@ impl Viewer {
         self.split_x = px(0.0);
         self.wrapped.reset(self.rows.len());
         let target = target.unwrap_or(0);
-        self.scroll.scroll_to_item(target, ScrollStrategy::Top);
+        self.scroll.reveal(target, Reveal::Top);
         self.wrapped.scroll_to(ListOffset {
             item_ix: target,
             offset_in_item: px(0.0),
@@ -647,8 +648,7 @@ impl Viewer {
                 .iter()
                 .position(|row| matches!(row, ListRow::File { index: file, .. } if *file == index));
             if let Some(row) = row {
-                self.files_scroll
-                    .scroll_to_item(row, ScrollStrategy::Center);
+                self.files_scroll.reveal(row, Reveal::Center);
             }
             cx.notify();
         }

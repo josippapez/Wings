@@ -103,3 +103,5 @@ mod usage;
 mod usage_view;
 #[cfg(feature = "chat")]
 mod view;
+#[cfg(feature = "chat")]
+mod worktree;

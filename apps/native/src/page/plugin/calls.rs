@@ -16,7 +16,7 @@ use wings_plugins::{
     manifest::Plugin,
     panes::{exec_cwd, worktrees_call_in_any_repo},
     permissions::{
-        NOTIFY_LIMIT, may_call_tool, may_create_worktrees, may_read_ports, may_read_statusline,
+        NOTIFY_LIMIT, may_call_tool, may_create_worktrees, may_open_view, may_read_ports, may_read_statusline,
         may_use_claude_accounts, notification,
     },
     transcript::agent_entries,
@@ -245,13 +245,35 @@ impl Shared {
     fn open_view(&self, access: &Access, params: &Value, after: Option<u64>, reply: Reply) -> Result<(), String> {
         let id = js_string(params.get("id"));
         let contributes = &access.plugin.manifest.contributes;
-        let opens = if contributes.sidebars.iter().any(|page| page.id == id) {
+        // A view of another plugin: only a tab, only when the manifest names `<plugin> <view>` and that plugin is one of
+        // Wings' own and on. Its sidebars and its other places stay its own.
+        let other = match params.get("plugin") {
+            None | Some(Value::Null) => None,
+            Some(plugin) => Some(js_string(Some(plugin))).filter(|plugin| *plugin != access.plugin.manifest.id),
+        };
+        let owner = other.clone().unwrap_or_else(|| access.plugin.manifest.id.clone());
+        let opens = if let Some(target) = &other {
+            let caller = &access.plugin.manifest.id;
+            if !access.builtin || access.env.builtin(target) != Some(true) {
+                return Err("Only Wings' own plugins can open each other's views".into());
+            }
+            if !may_open_view(&access.plugin, target, &id) {
+                return Err(format!("{caller} may not open {target}'s {id}"));
+            }
+            match access.env.view_opens(target, &id) {
+                Some(opens) if opens.iter().any(|place| place == "tab") => vec!["tab".to_owned()],
+                _ => return Err(format!("{target} has no view {id} that opens as a tab")),
+            }
+        } else if contributes.sidebars.iter().any(|page| page.id == id) {
             vec!["sidebar".to_owned()]
         } else if let Some(view) = contributes.views.iter().find(|view| view.id == id) {
             view.opens.clone()
         } else {
             return Err(format!("{} has no view {id}", access.plugin.manifest.id));
         };
+        if other.is_some() && after.is_some() {
+            return Err("openView after only works for the plugin's own views".into());
+        }
         let place = params
             .get("as")
             .filter(|v| !v.is_null())
@@ -283,7 +305,7 @@ impl Shared {
         }
         access.env.open_view(
             super::OpenView {
-                plugin: access.plugin.manifest.id.clone(),
+                plugin: owner,
                 id,
                 place,
                 args,

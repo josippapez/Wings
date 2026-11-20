@@ -491,7 +491,7 @@ fn schedules(out: PathBuf) {
             "shot",
             "schedules",
             json!([
-                { "id": "a1", "name": "Morning review", "projectId": id, "agent": "claude",
+                { "id": "a1", "name": "Morning review", "projectId": id, "agent": "claude", "runIn": "chat",
                   "prompt": "Check yesterday's failed CI runs and open a fix for the flaky test.",
                   "when": { "kind": "daily", "time": "09:00", "days": [1, 2, 3, 4, 5] }, "enabled": true, "anchor": now,
                   "lastRun": { "at": now - 2 * hour, "paneId": "3", "ok": true } },
@@ -831,6 +831,41 @@ fn feedback_pane() -> serde_json::Value {
         entry("MEDIUM", "yellow", "Bug", "red", "plugins test script / claude-chat crate features", "Claude chat's view and rail tests never run under plain cargo test / pnpm test", "The claude-chat crate gates view.rs, rail.rs and the other page modules behind the `chat` feature, and has no default features."),
         entry("LOW", "gray", "Bug", "red", "wings builds rule hook", "Subagent build hook refuses read-only commands that merely mention cargo test or build-rust.sh", "The PreToolUse hook that stops subagents from building matches command text."),
         entry("MEDIUM", "yellow", "Pain point", "yellow", "orchestration / Wings lead session", "Lead released and stopped with requested features unbuilt", "After a builder declined the stacked multi-file diff, the lead released anyway.")] })
+}
+
+/// A chat tab as the workspace draws one: the window's backdrop layer, and over it the tab's card, which leaves the slot of
+/// the backdrop its page asks for in place of its ground and holds the page, kept as last drawn.
+struct ShotTab {
+    page: gpui::Entity<PageView>,
+    layer: gpui::Entity<wings_native::ui::BackdropLayer>,
+}
+
+impl gpui::Render for ShotTab {
+    fn render(&mut self, window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> impl gpui::IntoElement {
+        use gpui::prelude::*;
+        let slot = self.page.read(cx).backdrop().map(|palette| wings_native::ui::backdrop_slot("tab", palette, 13.0));
+        gpui::div()
+            .relative()
+            .size_full()
+            .bg(gpui::rgb(wings_native::theme::BACKGROUND))
+            // It starts each draw of the slots, as the workspace's does.
+            .child(wings_native::ui::spinner_layer(window))
+            .child(self.layer.clone())
+            .child(
+                gpui::div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .overflow_hidden()
+                    .rounded(px(14.0))
+                    .border_1()
+                    .border_color(gpui::rgba(wings_native::ui::HAIRLINE))
+                    .when(slot.is_none(), |card| card.bg(gpui::rgb(wings_native::theme::SURFACE)))
+                    .children(slot)
+                    .child(self.page.clone().cached(gpui::StyleRefinement::default().size_full())),
+            )
+    }
 }
 
 fn claude_chat(out: PathBuf) {
@@ -1490,7 +1525,7 @@ esac"##,
         (tasks.clone(), subagents.clone(), mentioned.clone(), mods.clone(), finished_panel.clone(), built.clone(), agent.clone());
     let (tasks_open_side, worked_again_side) = (tasks_open.clone(), worked_again.clone());
     let fresh: Vec<serde_json::Value> = ready.to_vec();
-    let scenes: [Scene; 90] = [
+    let scenes: [Scene; 91] = [
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         // A click on the first prompt's tick on the rail of the long session, timed.
         ("long-rail", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, Some("rail:0"), "Step 0 passes"),
@@ -1568,6 +1603,9 @@ esac"##,
         ("task-output", tasks, None, Some("row:Watch the test suite"), "Waiting for file changes"),
         // The branch button in the message box opens a searchable list of the folder's branches, local ones and those only on a remote.
         ("branch-switch", opened(vec![init.clone()]), None, Some("wait:600;press:Switch branch;type:feature"), "checkout-discounts"),
+        // Before the first message, the Worktree button sits beside the branch's: a click lights it, and the message then starts
+        // the chat in a new git worktree.
+        ("worktree-on", opened(vec![init.clone()]), None, Some("wait:600;press:Worktree"), "What should Claude do?"),
         // A `#` in the message box lists the Wings issues, then the repository's GitHub issues, filtered as you type.
         ("hash-issues", opened(vec![init.clone()]), None, Some("wait:600;type:#;wait:600;type:co"), "WIN-245"),
         // The Rewind button beside your first message opens its dialog, with the files restoring the code writes back.
@@ -2009,6 +2047,73 @@ esac"##,
             until(&mut cx, expected);
             wait(&mut cx, window, Duration::from_millis(300));
             save(&mut cx, window, out.join(format!("claude-chat-{name}-{width}.png")));
+            let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        }
+    }
+    // Pixel drift, the chat's background setting, in a tab drawn as the workspace draws one (`ShotTab`): behind the long
+    // session, the same tab over the plain ground for what the backdrop adds (`long-tab`, drawn with `long-pixels`), and
+    // behind a new chat, which goes without its glow. Each is saved, and measured from scratch with `SHOT_FRAMES`; then
+    // `SHOT_FRAMES=<n>` draws n steps of the backdrop and prints the median ms of a draw and how many times the page
+    // rendered in them, which should be none.
+    let long = opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]);
+    let long_args = json!({ "resume": LONG, "cwd": root.canonicalize().unwrap() });
+    let tab_scenes = [
+        ("long-pixels", "long-pixels", true, long.clone(), Some(&long_args), "Step 99 passes"),
+        ("long-tab", "long-pixels", false, long, Some(&long_args), "Step 99 passes"),
+        ("new-pixels", "new-pixels", true, opened(vec![init.clone()]), None, "What should Claude do?"),
+    ];
+    let tab_scenes: Vec<_> = tab_scenes.into_iter().filter(|scene| only.as_deref().is_none_or(|only| only.split(',').any(|one| one == scene.1))).collect();
+    let pixels = (!tab_scenes.is_empty()).then(|| host_over("fixture-storage-claude-chat-pixels", &[("background", json!("pixels"))]));
+    // A step of the backdrop: 15 a second (`ui::backdrop`).
+    let step = Duration::from_nanos(1_000_000_000 / 15);
+    for (name, _, over_pixels, lines, args, expected) in tab_scenes {
+        let host = if over_pixels { pixels.as_ref().unwrap() } else { &host };
+        let fixture = root.join(format!("{name}.jsonl"));
+        std::fs::write(&fixture, lines.iter().map(|line| format!("{line}\n")).collect::<String>()).unwrap();
+        let answers = root.join(format!("answers-{name}"));
+        let _ = std::fs::remove_dir_all(&answers);
+        std::fs::create_dir_all(&answers).unwrap();
+        // SAFETY: the pages of the scenes before are closed, so nothing reads these while they change.
+        unsafe {
+            for empty in ["CHAT_DRIP", "CHAT_ISSUES", "CHAT_BRANCHES", "CHAT_EXIT", "CHAT_STDERR"] {
+                std::env::set_var(empty, "");
+            }
+            std::env::set_var("CHAT_FIXTURE", &fixture);
+            std::env::set_var("CHAT_ANSWERS", &answers);
+        }
+        for width in [1000.0, 640.0] {
+            let handle = cx
+                .open_offscreen_window(size(px(width), px(760.0)), |_, cx| {
+                    let page = cx.new(|cx| PageView::in_plugin_with_args(host, &source, args, cx).in_card());
+                    let layer = cx.new(|_| wings_native::ui::BackdropLayer::default());
+                    cx.new(|_| ShotTab { page, layer })
+                })
+                .unwrap();
+            let window: AnyWindowHandle = handle.into();
+            let (page, layer) = handle.read_with(&cx, |tab, _| (tab.page.clone(), tab.layer.clone())).unwrap();
+            page.read_with(&cx, |view, _| view.set_visible(true));
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !page.read_with(&cx, |view, _| view.text().contains(expected)) {
+                assert!(Instant::now() < deadline, "page did not show {expected:?}: {}", page.read_with(&cx, |view, _| view.text()));
+                wait(&mut cx, window, Duration::from_millis(20));
+            }
+            wait(&mut cx, window, Duration::from_millis(300));
+            save(&mut cx, window, out.join(format!("claude-chat-{name}-{width}.png")));
+            if let Some(frames) = std::env::var("SHOT_FRAMES").ok().and_then(|n| n.parse::<usize>().ok()) {
+                let renders = page.read_with(&cx, |view, _| view.renders());
+                let mut drawn = Vec::new();
+                for _ in 0..frames {
+                    // What a step does: the clock moves on a step, and the layer asks to be drawn again.
+                    cx.advance_clock(step);
+                    cx.update(|cx| layer.update(cx, |_, cx| cx.notify()));
+                    let start = Instant::now();
+                    let _ = cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx));
+                    drawn.push(start.elapsed().as_secs_f64() * 1000.0);
+                }
+                drawn.sort_by(f64::total_cmp);
+                let renders = page.read_with(&cx, |view, _| view.renders()) - renders;
+                println!("[measure] claude-chat-{name}-{width}: a backdrop step draws in {:.2} ms (median of {frames}); the page rendered {renders} times in them", drawn[frames / 2]);
+            }
             let _ = cx.update_window(window, |_, window, _| window.remove_window());
         }
     }

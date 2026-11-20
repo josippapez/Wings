@@ -29,6 +29,7 @@ use wings_spaces::project_info::{
     Info, Item, MAX_BLOCKS, MAX_SECTIONS, Op, Place, Store, dir_name,
 };
 
+use crate::ui::behaviors::{Reveal, RevealExt};
 use crate::{
     icons::{Icon, icon, plugin_glyph},
     installed::BlockPage,
@@ -855,7 +856,7 @@ impl Render for ProjectPage {
                 Match::Item(id) => at_item.get(&id).copied(),
             };
             if let Some(index) = index {
-                self.scroll.scroll_to_item(index);
+                self.scroll.reveal(index, Reveal::Nearest);
             }
         }
         outer

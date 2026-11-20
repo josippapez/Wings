@@ -21,6 +21,11 @@ pub fn may_call_tool(plugin: &Plugin, target: &str, tool: &str) -> bool {
     })
 }
 
+/// Whether the plugin's `openViews` names this view of this other plugin (`<plugin> <view>`, no wildcard).
+pub fn may_open_view(plugin: &Plugin, target: &str, view: &str) -> bool {
+    plugin.manifest.permissions.open_views.iter().any(|e| e.split_once(' ').is_some_and(|(p, v)| p == target && v == view))
+}
+
 /// Whether the plugin's `events` names this event of this plugin.
 pub fn may_hear_event(plugin: &Plugin, from: &str, name: &str) -> bool {
     plugin.manifest.permissions.events.iter().any(|e| e.split_once(' ').is_some_and(|(p, n)| p == from && n == name))
@@ -179,6 +184,27 @@ mod tests {
         assert!(may_hear_event(&hearer, "pr-tracker", "pr-state"));
         assert!(!may_hear_event(&hearer, "pr-tracker", "other") && !may_hear_event(&hearer, "disk", "pr-state"));
         assert!(!may_hear_event(&manifest(serde_json::json!({})), "pr-tracker", "pr-state"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn opening_another_plugins_view_needs_the_exact_entry() {
+        let dir = std::env::temp_dir().join(format!("wings-openviews-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("main.js"), "").unwrap();
+        let manifest = |permissions: Value| {
+            let m = serde_json::json!({ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js", "permissions": permissions });
+            fs::write(dir.join("wings-plugin.json"), m.to_string()).unwrap();
+            load(&dir).unwrap()
+        };
+        assert!(!may_open_view(&manifest(serde_json::json!({})), "claude-chat", "chat"));
+        // The tools permission doesn't grant views.
+        assert!(!may_open_view(&manifest(serde_json::json!({ "callTools": ["claude-chat"] })), "claude-chat", "chat"));
+        let caller = manifest(serde_json::json!({ "openViews": ["claude-chat chat"] }));
+        assert!(may_open_view(&caller, "claude-chat", "chat"));
+        assert!(!may_open_view(&caller, "claude-chat", "history") && !may_open_view(&caller, "tasks", "chat"));
+        // A bare plugin id names no view.
+        assert!(!may_open_view(&manifest(serde_json::json!({ "openViews": ["claude-chat"] })), "claude-chat", "chat"));
         let _ = fs::remove_dir_all(&dir);
     }
 

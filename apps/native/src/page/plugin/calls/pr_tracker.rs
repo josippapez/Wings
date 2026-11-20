@@ -4,13 +4,11 @@
 //! `apps/desktop/src/lib/plugins.ts`, with `plugin_fetch`, `plugin_secret_*` and `plugin_post` in `src-tauri/src/lib.rs`,
 //! their limits and their messages. What each may do is `wings-plugins`' to say.
 
-use std::time::Duration;
-
 use serde_json::{Value, json};
 use wings_plugins::{
     fetch::{
-        declares_secret, fetch_header_ok, fetch_needs_json, fetch_url, may_send_secret,
-        valid_secret_name,
+        declares_secret, fetch_agent, fetch_header_ok, fetch_needs_json, fetch_url,
+        may_send_secret, valid_secret_name,
     },
     permissions::may_send_to_agents,
     post::{PostRequest, post},
@@ -74,13 +72,8 @@ fn fetch(shared: &Shared, access: &Access, params: &Value) -> Result<String, Str
             .ok_or_else(|| format!("no secret named {name}"))?;
         builder = builder.header("Authorization", format!("Bearer {token}"));
     }
-    // No redirects, so a response can't send the request, and its token, to another host.
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .http_status_as_error(false)
-        .max_redirects(0)
-        .timeout_global(Some(Duration::from_secs(30)))
-        .build()
-        .into();
+    // No redirects, and no proxy for a call to this computer: `fetch_agent` says why.
+    let agent = fetch_agent(&url);
     let request = builder
         .body(body.unwrap_or_default().to_owned())
         .map_err(|error| error.to_string())?;

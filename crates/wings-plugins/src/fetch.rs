@@ -1,14 +1,33 @@
 //! What a plugin may open or fetch: URL prefixes, pinned POST bodies, secrets bound to a prefix, and fetch headers.
 
+use std::time::Duration;
+
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::manifest::Plugin;
 
-/// A fetch prefix has to name a host and end its host part with `/`, so `https://api.example.com` can't
-/// also match `https://api.example.com.evil.net`.
+/// A fetch prefix: an https one (`https_prefix_ok`), or plain http to a server on this computer on one port
+/// (`loopback_prefix_ok`).
 pub(crate) fn fetch_prefix_ok(prefix: &str) -> bool {
+    https_prefix_ok(prefix) || loopback_prefix_ok(prefix)
+}
+
+/// An https prefix has to name a host and end its host part with `/`, so `https://api.example.com` can't also match
+/// `https://api.example.com.evil.net`. The only kind a secret may be bound to.
+pub(crate) fn https_prefix_ok(prefix: &str) -> bool {
     prefix.strip_prefix("https://").is_some_and(|rest| rest.split_once('/').is_some_and(|(host, _)| !host.is_empty() && !host.contains(['@', '*'])))
+}
+
+/// A prefix for a server on this computer, like a local agent's API: `http://127.0.0.1:<port>/`,
+/// `http://localhost:<port>/` or `http://[::1]:<port>/`, then any path. The port is written out and in the normal form
+/// a URL keeps (1 to 65535, no leading zero, not 80 which the normal form drops), so the entry names one port, and
+/// since the `/` follows it `http://localhost:4096/` can't match port 40960. No other host, no credentials, no `*`.
+fn loopback_prefix_ok(prefix: &str) -> bool {
+    prefix.strip_prefix("http://").and_then(|rest| rest.split_once('/')).is_some_and(|(origin, _)| {
+        let root = format!("http://{origin}/");
+        is_loopback_http(&root) && url::Url::parse(&root).is_ok_and(|u| u.port().is_some_and(|port| port != 0))
+    })
 }
 
 /// An `openUrl` entry: `https://` for any page, an https prefix that ends its host with `/` like a fetch entry, or http
@@ -16,7 +35,7 @@ pub(crate) fn fetch_prefix_ok(prefix: &str) -> bool {
 pub(crate) fn open_url_prefix_ok(prefix: &str) -> bool {
     let loopback =
         ["http://localhost", "http://127.0.0.1", "http://[::1]"].iter().any(|host| prefix.strip_prefix(host).is_some_and(|rest| rest.starts_with([':', '/'])));
-    prefix == "https://" || fetch_prefix_ok(prefix) || loopback
+    prefix == "https://" || https_prefix_ok(prefix) || loopback
 }
 
 /// One `permissions.fetch` entry.
@@ -106,7 +125,9 @@ pub(crate) fn fetch_rule(entry: &str) -> Option<FetchRule<'_>> {
     if method != Some("POST") && (!pins.is_empty() || target.contains('*')) {
         return None;
     }
-    if method == Some("POST") && (target.contains(['?', '#']) || !target.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.~*/:%".contains(&b))) {
+    // The brackets of `[::1]` are the only ones a POST entry may hold: `fetch_prefix_ok` checks that host whole.
+    let plain = target.strip_prefix("http://[::1]:").unwrap_or(target);
+    if method == Some("POST") && (target.contains(['?', '#']) || !plain.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.~*/:%".contains(&b))) {
         return None;
     }
     fetch_prefix_ok(target).then_some(FetchRule { method, target, pins })
@@ -118,16 +139,17 @@ fn post_url_matches(pattern: &str, url: &str) -> bool {
     want.len() == got.len() && want.iter().zip(&got).enumerate().all(|(i, (w, g))| if *w == "*" { i > 2 && post_segment_ok(g) } else { w == g })
 }
 
-/// The URL to send, if the plugin may call it with this method and body: https, no credentials, under a
-/// `permissions.fetch` entry, and already in normal form. The path may only use letters, digits and `-_.~/`, with
+/// The URL to send, if the plugin may call it with this method and body: https (or http to this computer, which only
+/// a loopback entry's `http://<host>:<port>/` can start), no credentials, under a `permissions.fetch` entry, and
+/// already in normal form. The path may only use letters, digits and `-_.~/`, with
 /// no `;` or percent escapes, so no server can read it as a different path (`..;/`, `..%2F`, double encoding) than
 /// the one that was checked. A `POST` entry also needs the body to be a JSON object that holds its pinned fields.
 pub fn fetch_url(plugin: &Plugin, method: &str, url: &str, body: Option<&str>) -> Option<String> {
     let parsed = url::Url::parse(url).ok()?;
     let normal = parsed.as_str();
     let plain_path = parsed.path().bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.~/".contains(&b));
-    let ok =
-        parsed.scheme() == "https" && parsed.username().is_empty() && parsed.password().is_none() && parsed.fragment().is_none() && normal == url && plain_path;
+    let scheme_ok = parsed.scheme() == "https" || is_loopback_http(url);
+    let ok = scheme_ok && parsed.username().is_empty() && parsed.password().is_none() && parsed.fragment().is_none() && normal == url && plain_path;
     if !ok {
         return None;
     }
@@ -172,9 +194,21 @@ pub fn declares_secret(plugin: &Plugin, name: &str) -> bool {
 }
 
 /// Whether `wings.fetch` may send this secret as the bearer to `url`, the normal form `fetch_url` returned: only under
-/// the prefix the manifest binds it to. Its host part ends in `/` (`fetch_prefix_ok`), so a longer host can't match.
+/// the prefix the manifest binds it to. Its host part ends in `/` (`https_prefix_ok`), so a longer host can't match.
+/// Never to a server on this computer: whatever program listens on that port would get the token, over plain http.
+/// Loading refuses such a binding; this holds for a plugin made some other way too.
 pub fn may_send_secret(plugin: &Plugin, name: &str, url: &str) -> bool {
-    plugin.manifest.permissions.secrets.get(name).is_some_and(|prefix| url.starts_with(prefix.as_str()))
+    plugin.manifest.permissions.secrets.get(name).is_some_and(|prefix| https_prefix_ok(prefix) && url.starts_with(prefix.as_str()))
+}
+
+/// The client a `wings.fetch` to `url` (as `fetch_url` returned it) goes out on. It follows no redirect, so a response
+/// can't send the request and its token to another host, or point an https call at a server on this computer; any status
+/// is an answer; and it gives up after 30 seconds. A call to this computer never goes through a proxy from the
+/// environment (`ALL_PROXY`, `HTTP_PROXY`), which would carry it, and what it sends, off the computer.
+pub fn fetch_agent(url: &str) -> ureq::Agent {
+    let config = ureq::Agent::config_builder().http_status_as_error(false).max_redirects(0).timeout_global(Some(Duration::from_secs(30)));
+    let config = if is_loopback_http(url) { config.proxy(None) } else { config };
+    config.build().into()
 }
 
 /// The only headers a plugin may set. Anything else could route a request, and the token on it, to a
@@ -418,6 +452,122 @@ mod tests {
         ] {
             assert!(fetch_rule(entry).is_none(), "{entry}");
         }
+    }
+
+    #[test]
+    fn a_fetch_entry_may_name_a_server_on_this_computer_on_one_written_port() {
+        for entry in [
+            "http://127.0.0.1:4096/",
+            "http://localhost:4096/",
+            "http://[::1]:4096/",
+            "http://127.0.0.1:1/",
+            "http://127.0.0.1:65535/api/",
+            "GET http://127.0.0.1:4096/session/",
+            "POST http://127.0.0.1:4096/session/*/message",
+            "POST http://[::1]:4096/session/*/abort",
+            "POST http://localhost:4096/session/*/permissions {response=once|reject}",
+        ] {
+            assert!(fetch_rule(entry).is_some(), "{entry}");
+        }
+        for entry in [
+            // No port, or one that isn't a single port in normal form: 80 is http's own, which a URL drops.
+            "http://localhost/",
+            "http://localhost:/",
+            "http://127.0.0.1:0/",
+            "http://127.0.0.1:65536/",
+            "http://127.0.0.1:80/",
+            "http://127.0.0.1:04096/",
+            "http://127.0.0.1:*/",
+            "http://127.0.0.1:4096",
+            "POST http://127.0.0.1:*/x",
+            // Credentials, or another host behind one that looks like this computer.
+            "http://user@localhost:4096/",
+            "http://user:pw@127.0.0.1:4096/",
+            "http://localhost:4096@evil.com/",
+            "http://localhost.evil.com:4096/",
+            "http://localhost:4096.evil.com/",
+            "http://localhost:4096\\@evil.com/",
+            "http://*:4096/",
+            // Only 127.0.0.1, localhost and [::1] as written: no other loopback address or spelling of one.
+            "http://127.0.0.2:4096/",
+            "http://0.0.0.0:4096/",
+            "http://127.1:4096/",
+            "http://2130706433:4096/",
+            "http://[0:0:0:0:0:0:0:1]:4096/",
+            "http://LOCALHOST:4096/",
+            "http://localhost.:4096/",
+            // Any other http host.
+            "http://example.com:4096/",
+            "http://192.168.1.10:4096/",
+            "ws://localhost:4096/",
+        ] {
+            assert!(fetch_rule(entry).is_none(), "{entry}");
+        }
+    }
+
+    #[test]
+    fn a_fetch_to_this_computer_reaches_only_the_declared_host_and_port() {
+        let mut p = plugin(Path::new("/tmp"), &[], &[]);
+        p.manifest.permissions.fetch = vec!["http://127.0.0.1:4096/".into(), "POST http://localhost:4096/session/*/message".into()];
+        for url in ["http://127.0.0.1:4096/", "http://127.0.0.1:4096/session?directory=x"] {
+            assert_eq!(fetch_url(&p, "GET", url, None).as_deref(), Some(url));
+        }
+        assert!(fetch_url(&p, "POST", "http://localhost:4096/session/ses_1/message", Some("{}")).is_some());
+        for url in [
+            // Another port, the default one, or the same digits as part of a longer port.
+            "http://127.0.0.1:40960/x",
+            "http://127.0.0.1:409/x",
+            "http://127.0.0.1/x",
+            "http://127.0.0.1:80/x",
+            "http://127.0.0.1:04096/x",
+            // The same server by another name: entries match as written.
+            "http://localhost:4096/x",
+            "http://[::1]:4096/x",
+            "http://127.1:4096/x",
+            // Another host behind the declared one, or credentials.
+            "http://127.0.0.1:4096@evil.com/x",
+            "http://127.0.0.1:4096.evil.com/x",
+            "http://127.0.0.1:4096\\@evil.com/x",
+            "http://user:pw@127.0.0.1:4096/x",
+            // https to the same place is another entry, and paths are as plain as https ones.
+            "https://127.0.0.1:4096/x",
+            "http://127.0.0.1:4096/a/../admin",
+            "http://127.0.0.1:4096/a/..%2Fadmin",
+            "http://127.0.0.1:4096/x#frag",
+        ] {
+            assert!(fetch_url(&p, "GET", url, None).is_none(), "{url}");
+        }
+        // A POST entry to this computer is one path like any other.
+        assert!(fetch_url(&p, "POST", "http://localhost:4096/session/ses_1/message/2", Some("{}")).is_none());
+        assert!(fetch_url(&p, "POST", "http://127.0.0.1:4096/session/ses_1/message", Some("{}")).is_some(), "the bare prefix allows it");
+        assert!(fetch_url(&p, "DELETE", "http://localhost:4096/session/ses_1/message", None).is_none());
+    }
+
+    #[test]
+    fn a_token_is_never_bound_or_sent_to_a_server_on_this_computer() {
+        let dir = std::env::temp_dir().join(format!("wings-bearer-loopback-{}", std::process::id()));
+        for local in ["http://127.0.0.1:4096/", "http://localhost:4096/", "http://[::1]:4096/"] {
+            assert!(with_secrets(&dir, serde_json::json!({ "api": local })).is_err(), "{local}");
+        }
+        // A plugin that wasn't loaded from a manifest gets the same answer.
+        let mut p = plugin(Path::new("/tmp"), &[], &[]);
+        p.manifest.permissions.fetch = vec!["http://127.0.0.1:4096/".into()];
+        p.manifest.permissions.secrets.insert("api".into(), "http://127.0.0.1:4096/".into());
+        assert!(fetch_url(&p, "GET", "http://127.0.0.1:4096/x", None).is_some());
+        assert!(!may_send_secret(&p, "api", "http://127.0.0.1:4096/x"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_fetch_follows_no_redirect_and_one_to_this_computer_skips_the_proxy() {
+        // With no redirect followed, an https API can't point a call at this computer, nor a server here one elsewhere.
+        for url in ["https://api.example.com/v1/x", "http://127.0.0.1:4096/x"] {
+            let agent = fetch_agent(url);
+            assert_eq!(agent.config().max_redirects(), 0, "{url}");
+            assert!(!agent.config().http_status_as_error(), "{url}");
+        }
+        // Run with ALL_PROXY set to see this hold against a proxy from the environment.
+        assert!(fetch_agent("http://127.0.0.1:4096/x").config().proxy().is_none());
     }
 
     #[test]

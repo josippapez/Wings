@@ -1,6 +1,8 @@
 //! A bounded window of graph data over a virtual list of the complete history.
 use super::*;
-use gpui::{PathBuilder, ScrollStrategy, UniformListScrollHandle, canvas, point, uniform_list};
+use gpui::{PathBuilder, UniformListScrollHandle, canvas, point, uniform_list};
+
+use crate::ui::behaviors::{Reveal, RevealExt};
 use std::ops::Range;
 
 #[derive(Default)]
@@ -160,7 +162,7 @@ impl PageView {
                     state.wanted.len().saturating_sub(24).max(1),
                 ) {
                     state.cursor = index;
-                    state.scroll.scroll_to_item(index, ScrollStrategy::Nearest);
+                    state.scroll.reveal(index, Reveal::Nearest);
                     drop(graphs);
                     cx.notify();
                 } else if matches!(key, "enter" | "space") {

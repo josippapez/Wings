@@ -207,3 +207,96 @@ fn worktree_calls_are_refused_without_the_permission() {
         assert_eq!(rig.refuses(method, params), refused, "{method}");
     }
 }
+
+/// A running plugin `claude-chat` with a `chat` view that opens as a tab, a `side` one that is a sidebar only and no other.
+fn chat_plugin(rig: &Rig, builtin: bool) -> Arc<PluginHost> {
+    let chat = plugin(json!({
+        "id": "claude-chat",
+        "contributes": { "views": [
+            { "id": "chat", "title": "Chat", "page": "chat.wasm", "opens": ["tab"] },
+            { "id": "side", "title": "Side", "page": "side.wasm", "opens": ["sidebar"] },
+        ] },
+    }));
+    let host = Arc::new(PluginHost::with_access(
+        rig.root.config("claude-chat"),
+        Access { plugin: chat.clone(), builtin, env: rig.env.clone() },
+    ));
+    rig.env.running.add(&chat, builtin, &host);
+    host
+}
+
+/// What `wings.openView` sends for another plugin's view.
+fn open_other(plugin: &str, id: &str, extra: Value) -> Value {
+    let mut params = json!({ "plugin": plugin, "id": id, "as": "tab", "args": { "cwd": "/work", "prompt": "hi" }, "newTab": true });
+    params.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+    params
+}
+
+#[test]
+fn another_plugins_view_opens_as_a_new_tab_with_its_args_only_with_the_manifest_entry() {
+    let rig = caller(json!({ "openViews": ["claude-chat chat"] }), true);
+    let _chat = chat_plugin(&rig, true);
+    assert_eq!(rig.allows("openView", open_other("claude-chat", "chat", json!({}))), Value::Null);
+    let Seen::OpenView(plan) = rig.env.seen().last().cloned().unwrap() else { panic!("no view plan") };
+    assert_eq!(plan.plugin, "claude-chat");
+    assert_eq!(plan.id, "chat");
+    assert_eq!(plan.place, "tab");
+    assert_eq!(plan.args, Some(json!({ "cwd": "/work", "prompt": "hi" })));
+    assert!(plan.new_tab);
+    // Without `as` it is a tab all the same, the only place it can open from here.
+    let mut bare = open_other("claude-chat", "chat", json!({}));
+    bare.as_object_mut().unwrap().remove("as");
+    rig.allows("openView", bare);
+
+    // A view the manifest doesn't name, and the same view without any entry, are refused.
+    assert_eq!(
+        rig.refuses("openView", open_other("claude-chat", "side", json!({}))),
+        "probe may not open claude-chat's side"
+    );
+    let none = caller(json!({ "callTools": ["claude-chat"] }), true);
+    let _chat = chat_plugin(&none, true);
+    assert_eq!(
+        none.refuses("openView", open_other("claude-chat", "chat", json!({}))),
+        "probe may not open claude-chat's chat"
+    );
+    // Only a tab: not a sidebar, a window, or a tab placed after the caller's.
+    let rig = caller(json!({ "openViews": ["claude-chat chat", "claude-chat side"] }), true);
+    let _chat = chat_plugin(&rig, true);
+    assert_eq!(
+        rig.refuses("openView", open_other("claude-chat", "side", json!({}))),
+        "claude-chat has no view side that opens as a tab"
+    );
+    assert!(!rig.refuses("openView", open_other("claude-chat", "chat", json!({ "as": "window" }))).is_empty());
+    // Views of a plugin that isn't there or isn't on are refused even with the entry.
+    assert_eq!(
+        rig.refuses("openView", open_other("tasks", "chat", json!({}))),
+        "Only Wings' own plugins can open each other's views"
+    );
+    // Nothing was opened by any refused call.
+    assert!(rig.env.seen().is_empty(), "{:?}", rig.env.seen());
+}
+
+#[test]
+fn another_plugins_view_is_refused_for_a_caller_or_a_target_that_is_not_wings_own_or_not_running() {
+    let permitted = json!({ "openViews": ["claude-chat chat"] });
+    let third_party = caller(permitted.clone(), false);
+    let _chat = chat_plugin(&third_party, true);
+    assert_eq!(
+        third_party.refuses("openView", open_other("claude-chat", "chat", json!({}))),
+        "Only Wings' own plugins can open each other's views"
+    );
+    let not_running = caller(permitted.clone(), true);
+    assert_eq!(
+        not_running.refuses("openView", open_other("claude-chat", "chat", json!({}))),
+        "Only Wings' own plugins can open each other's views"
+    );
+    let outside = caller(permitted, true);
+    let _chat = chat_plugin(&outside, false);
+    assert_eq!(
+        outside.refuses("openView", open_other("claude-chat", "chat", json!({}))),
+        "Only Wings' own plugins can open each other's views"
+    );
+    for rig in [&third_party, &not_running, &outside] {
+        assert!(rig.env.seen().is_empty());
+    }
+}

@@ -1,6 +1,7 @@
 //! Wings' native UI kit: the desktop app's shadcn components (`apps/desktop/src/components/ui`) as
 //! GPUI elements, so every screen shares one look. Each returns an element to add handlers to.
 
+mod backdrop;
 pub mod behaviors;
 mod button;
 mod drag;
@@ -13,6 +14,9 @@ mod slots;
 mod status_dot;
 mod tooltip;
 
+pub use backdrop::{BackdropLayer, backdrop_slot};
+#[cfg(all(test, feature = "test-support"))]
+pub(crate) use backdrop::STEP as BACKDROP_STEP;
 pub use button::{Variant, badge, button, chip};
 pub use glow::glow;
 pub use drag::{RESIZE_EDGE, Side, resize_edge, window_drag};

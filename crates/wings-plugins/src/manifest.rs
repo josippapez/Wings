@@ -21,14 +21,15 @@ pub struct Permissions {
     /// URL prefixes the plugin may open in the browser: https, or http to this computer (`localhost`,
     /// `127.0.0.1` or `[::1]`).
     pub open_url: Vec<String>,
-    /// https URLs the plugin may call with `wings.fetch`. A bare entry is a prefix, like an API's base URL, for
+    /// https URLs the plugin may call with `wings.fetch`, or http to a server on this computer on one port, like
+    /// `http://127.0.0.1:4096/` (`localhost` and `[::1]` too, Wings 0.2.59). A bare entry is a prefix, like an API's base URL, for
     /// any method. `GET <prefix>` allows only GET and HEAD. `POST <url>` allows one POST path, where `*` stands
     /// for one path segment, with a JSON object (or no body, if nothing is pinned) and no query. Either may end with ` {field=a|b}` to
     /// pin body fields (POST only).
     pub fetch: Vec<String>,
     /// The secrets the plugin may keep with `wings.secrets.set`, each with the one URL prefix `wings.fetch` sends it to
     /// as the bearer, like `{"azure-devops": "https://dev.azure.com/"}`. A plugin that may call two hosts can't send
-    /// one's token to the other.
+    /// one's token to the other. Always an https prefix: no token goes to a server on this computer.
     pub secrets: BTreeMap<String, String>,
     /// API paths the plugin may POST to through a signed-in CLI, as `<gh|glab|az> <pattern>`. `*` stands for
     /// one path segment, e.g. `gh repos/*/*/pulls/*/comments/*/replies`. `exec` refuses every write flag. An
@@ -65,6 +66,9 @@ pub struct Permissions {
     /// Other plugins' tools the plugin may call with `wings.callTool`: a plugin id for all of its tools, or
     /// `<plugin> <tool>` for one, like `tasks list`.
     pub call_tools: Vec<String>,
+    /// Views of other plugins the plugin may open as a tab with `wings.openView`'s `plugin`: `<plugin> <view>`, like
+    /// `claude-chat chat`. Only between Wings' own plugins, and the other plugin has to be on.
+    pub open_views: Vec<String>,
     /// Events from other plugins the plugin hears with `wings.onEvent`: `<plugin> <event>`, like `pr-tracker pr-state`.
     pub events: Vec<String>,
 }

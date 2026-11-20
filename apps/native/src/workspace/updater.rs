@@ -4,7 +4,7 @@ use super::Workspace;
 use crate::{
     icons::{Icon, icon},
     theme,
-    ui::{self, ButtonSize, Variant, motion},
+    ui::{self, ButtonSize, Variant, behaviors::{EscapeExt, FocusRecovery, TrapTabExt}, motion},
     updater::{self, Available, Prepared},
 };
 use gpui::{
@@ -270,6 +270,9 @@ mod tests {
             window.simulate_keystroke("tab");
             window.update(|w, window, _| assert!(focused(w, window)));
         }
+        // Shift-Tab goes back, round from the first control to the last (it used to go forward too).
+        window.simulate_keystroke("shift-tab");
+        window.update(|w, window, _| assert!(w.updates.close_focus.is_focused(window)));
         window.simulate_keystroke("escape");
         assert!(!window.read(|w, _| w.updates.open));
     }
@@ -513,7 +516,7 @@ pub(super) struct Updates {
     close_focus: FocusHandle,
     dismiss_focus: FocusHandle,
     action_focus: FocusHandle,
-    previous: Option<FocusHandle>,
+    recovery: FocusRecovery,
     task: Option<Task<()>>,
     progress: Option<Task<()>>,
     timer: Option<Task<()>>,
@@ -535,7 +538,7 @@ impl Updates {
             close_focus: cx.focus_handle().tab_stop(true),
             dismiss_focus: cx.focus_handle().tab_stop(true),
             action_focus: cx.focus_handle().tab_stop(true),
-            previous: None,
+            recovery: FocusRecovery::default(),
             task: None,
             progress: None,
             timer: None,
@@ -606,18 +609,6 @@ impl Updates {
             action,
         }
     }
-
-    /// The dialog's controls in the order Tab moves through them: the footer's, then the corner's ×.
-    fn controls(&self) -> Vec<FocusHandle> {
-        let content = self.content();
-        content
-            .dismiss
-            .map(|_| self.dismiss_focus.clone())
-            .into_iter()
-            .chain(content.action.map(|_| self.action_focus.clone()))
-            .chain([self.close_focus.clone()])
-            .collect()
-    }
 }
 
 impl Workspace {
@@ -663,9 +654,8 @@ impl Workspace {
             });
         }
         if !self.updates.open {
-            self.updates.previous = window.focused(cx);
             self.updates.open = true;
-            window.focus(&self.updates.focus, cx);
+            self.updates.recovery.open(&self.updates.focus, window, cx);
         }
         cx.notify();
     }
@@ -675,9 +665,7 @@ impl Workspace {
             self.leave("update", (), motion::POPUP_IN, cx);
         }
         self.updates.open = false;
-        if let Some(focus) = self.updates.previous.take() {
-            window.focus(&focus, cx);
-        }
+        self.updates.recovery.restore_within(&self.updates.focus, window, cx);
         cx.notify();
     }
 
@@ -1100,19 +1088,9 @@ impl Workspace {
                     panel
                         .flex_col()
                         .text_size(px(14.0))
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                            if event.keystroke.key == "tab" {
-                                let controls = this.updates.controls();
-                                let next = controls
-                                    .iter()
-                                    .position(|focus| focus.is_focused(window))
-                                    .map_or(0, |at| (at + 1) % controls.len());
-                                window.focus(&controls[next], cx);
-                                cx.stop_propagation();
-                            } else if event.keystroke.key == "escape" {
-                                this.close_updates(window, cx);
-                                cx.stop_propagation();
-                            }
+                        .trap_tab(&self.updates.focus)
+                        .on_escape(cx.listener(|this, _: &KeyDownEvent, window, cx| {
+                            this.close_updates(window, cx)
                         }))
                         .children(ui::spot(|| "update-dialog".into()))
                         .child(

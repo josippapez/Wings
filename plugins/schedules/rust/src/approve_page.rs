@@ -5,7 +5,7 @@ use crate::{
     STATE, WANT,
     approval::{Approval, StartAsk, What},
     page_ask::{ask, busy, error, listen},
-    schedule::describe_when,
+    schedule::{RunIn, describe_when},
     view::{button, properties},
 };
 use serde_json::{Value, json};
@@ -51,6 +51,9 @@ fn details(a: &Approval) -> Node {
             let c = current.as_ref();
             items.push(("Runs".to_owned(), changed(describe_when(&p.when), c.map(|c| describe_when(&c.when)))));
             items.push(("Agent".to_owned(), changed(p.agent.label().to_owned(), c.map(|c| c.agent.label().to_owned()))));
+            if p.run_in == RunIn::Chat || c.is_some_and(|c| c.run_in == RunIn::Chat) {
+                items.push(("Run in".to_owned(), changed(run_in_label(p.run_in).to_owned(), c.map(|c| run_in_label(c.run_in).to_owned()))));
+            }
             if !p.name.is_empty() {
                 items.push(("Name".to_owned(), changed(p.name.clone(), c.map(|c| c.name.clone()).filter(|name| !name.is_empty()))));
             }
@@ -66,6 +69,13 @@ fn details(a: &Approval) -> Node {
         }
     }
     properties(items)
+}
+
+fn run_in_label(run_in: RunIn) -> &'static str {
+    match run_in {
+        RunIn::Terminal => "Terminal",
+        RunIn::Chat => "Claude chat",
+    }
 }
 
 fn ticket_line(s: &StartAsk) -> String {
