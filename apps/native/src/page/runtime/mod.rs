@@ -147,6 +147,8 @@ impl Message {
 pub struct Reply {
     call: u32,
     queue: Queue,
+    /// Told the message of a refusal, so the host can keep it where it can be read (`noting`).
+    note: Option<Arc<dyn Fn(&str) + Send + Sync>>,
 }
 
 /// The answer to a `Reply::channel`'s reply.
@@ -186,6 +188,7 @@ impl Reply {
             Reply {
                 call: 0,
                 queue: Queue { jobs },
+                note: None,
             },
             Answer(answers),
         )
@@ -196,8 +199,17 @@ impl Reply {
         self.send(Message::Resolve, result);
     }
 
+    /// This reply with `note` told the message if the call fails.
+    pub fn noting(mut self, note: Arc<dyn Fn(&str) + Send + Sync>) -> Self {
+        self.note = Some(note);
+        self
+    }
+
     /// The call failed: the frame's promise rejects with an `Error` of `message`.
     pub fn err(self, message: String) {
+        if let Some(note) = &self.note {
+            note(&message);
+        }
         self.send(Message::Reject, message);
     }
 

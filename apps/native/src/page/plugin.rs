@@ -301,6 +301,9 @@ struct FrameLink {
     state: Option<FrameState>,
     /// When the app last handed the page a click, key or other event of yours.
     acted: Mutex<Option<Instant>>,
+    /// The calls the frame was refused and why, each kept in the plugins' log once: a plugin that drops a call's error
+    /// left nothing to read when it broke (Claude chat's 110 KB pane, refused on its way to the sidebar).
+    refused: Arc<Mutex<std::collections::HashSet<(String, String)>>>,
 }
 
 /// How long after your click or key a page may still put text on the clipboard: a browser's transient user activation,
@@ -353,6 +356,22 @@ impl Link for FrameLink {
     }
 
     fn call(&self, method: &str, mut params: serde_json::Value, reply: Reply) {
+        let reply = match &self.shared.access {
+            Some(access) => {
+                let (plugin, frame, call, refused) = (
+                    access.plugin.manifest.id.clone(),
+                    if self.role == Role::Main { "main" } else { "page" },
+                    method.to_owned(),
+                    self.refused.clone(),
+                );
+                reply.noting(Arc::new(move |message: &str| {
+                    if refused.lock().unwrap().insert((call.clone(), message.to_owned())) {
+                        super::log::line(&plugin, frame, &format!("{call} refused: {message}"));
+                    }
+                }))
+            }
+            None => reply,
+        };
         if matches!(
             method,
             "tabState" | "setTabState" | "blockState" | "setBlockState"
@@ -1222,6 +1241,7 @@ fn open_frame(
         args,
         state,
         acted: Mutex::new(None),
+        refused: Arc::default(),
     });
     let weak = Arc::downgrade(shared);
     let mut on_event = on_event;

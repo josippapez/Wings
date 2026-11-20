@@ -224,3 +224,22 @@ fn a_subagents_transcript_is_read_from_its_sessions_folder_by_its_id() {
     assert!(read(json!("../a1b2")).is_err());
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// A call a plugin is refused goes in the plugins' log, once for each refusal: Claude chat dropped the error of a pane
+/// too big to hand its sidebar, and nothing said why the pane never loaded.
+#[test]
+fn a_refused_call_is_kept_in_the_plugins_log_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("plugins.log");
+    crate::page::log::keep_in(file.clone());
+    let rig = Rig::new(json!({}), vec![]);
+    let page = Caller::start(&rig.host);
+    for _ in 0..3 {
+        assert_eq!(page.call("tellPage", json!({ "name": "nobody-by-this-name", "message": 1 })), Err("No page is named nobody-by-this-name".into()));
+    }
+    assert!(page.call("tellPage", json!({ "name": "nobody-else", "message": 1 })).is_err());
+    let kept = std::fs::read_to_string(&file).unwrap_or_default();
+    let lines: Vec<&str> = kept.lines().filter(|line| line.contains("tellPage refused")).collect();
+    assert_eq!(lines.len(), 2, "{kept}");
+    assert!(lines[0].ends_with("page: tellPage refused: No page is named nobody-by-this-name"), "{kept}");
+}

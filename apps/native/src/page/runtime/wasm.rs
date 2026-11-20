@@ -93,6 +93,7 @@ impl Host {
             Reply {
                 call: id,
                 queue: self.queue.clone(),
+                note: None,
             },
         );
         Ok(())
