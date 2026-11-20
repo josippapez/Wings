@@ -116,4 +116,28 @@ mod tests {
         assert!(!chat::with(|c| folds::is_open(c, Kind::Thought, true)));
         chat::with(|c| c.show_thinking = false);
     }
+
+    #[test]
+    #[cfg(feature = "chat")]
+    fn verbose_keeps_shut_what_its_list_clears_thoughts_and_notes_too() {
+        use crate::{chat, folds::{self, Kind}};
+        let (detailed, thinking) = Mode::Verbose.settings();
+        chat::with(|c| {
+            c.detailed = detailed;
+            c.show_thinking = thinking;
+            c.opens = folds::Opens::default();
+        });
+        assert!(chat::with(|c| folds::is_open(c, Kind::Thought, false) && folds::is_open(c, Kind::Note, false)));
+        chat::with(|c| {
+            c.opens.set(Kind::Thought, false);
+            c.opens.set(Kind::Note, false);
+        });
+        assert!(!chat::with(|c| folds::is_open(c, Kind::Thought, false)), "a cleared Thinking stays shut in Verbose");
+        assert!(!chat::with(|c| folds::is_open(c, Kind::Note, false)));
+        chat::with(|c| {
+            c.detailed = false;
+            c.show_thinking = false;
+            c.opens = folds::Opens::default();
+        });
+    }
 }

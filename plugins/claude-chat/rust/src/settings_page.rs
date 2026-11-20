@@ -6,7 +6,7 @@ use wings_plugin::ui::{Node, checkbox, chips as choose, heading as section, mute
 /// The most points wide a description runs, so a line stays a readable length on a wide page.
 const MEASURE: u32 = 560;
 
-use crate::{claude_version, folds::{KINDS, Kind}, prefs, session::MODES, view_mode::{self, Mode}};
+use crate::{claude_version, folds::KINDS, prefs, session::MODES, view_mode::{self, Mode}};
 
 /// A section's name, in the page's section heading style, stronger than the description under it.
 fn heading(text: &str) -> Node {
@@ -27,8 +27,7 @@ fn chips(label: &str, options: &[(&str, &str)], value: &str, on_change: impl Fn(
 fn view() -> Vec<Node> {
     let modes = [Mode::Normal, Mode::Thinking, Mode::Verbose].map(|mode| (mode.name(), mode.name()));
     let mode = Mode::of(prefs::detailed().get(), prefs::thinking().get());
-    // Verbose shows what Claude thought whatever this list says, as Claude Code's does.
-    let opens = KINDS.iter().filter(|(kind, ..)| *kind != Kind::Thought).map(|(kind, key, label)| {
+    let opens = KINDS.iter().map(|(kind, key, label)| {
         let kind = *kind;
         checkbox(*label, prefs::opens(kind).get(), move |on| drop(prefs::opens(kind).set(on))).key(*key)
     });

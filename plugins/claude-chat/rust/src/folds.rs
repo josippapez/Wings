@@ -25,10 +25,12 @@ pub enum Kind {
     Thought,
     /// What a finished agent or command reported.
     Summary,
+    /// What Claude Code wrote in your name: a hook's output, a memory saved, an action auto mode blocked.
+    Note,
 }
 
 /// Each kind, the key its setting is kept under, and how the Settings page names it.
-pub const KINDS: [(Kind, &str, &str); 10] = [
+pub const KINDS: [(Kind, &str, &str); 11] = [
     (Kind::Steps, "open-steps", "Runs of tool calls"),
     (Kind::Command, "open-command", "Command output"),
     (Kind::Read, "open-read", "File reads"),
@@ -39,6 +41,7 @@ pub const KINDS: [(Kind, &str, &str); 10] = [
     (Kind::Other, "open-other", "Other tools"),
     (Kind::Thought, "open-thought", "Thinking"),
     (Kind::Summary, "open-summary", "Summaries of finished agents and commands"),
+    (Kind::Note, "open-note", "Notes from Claude Code, like hook output and saved memories"),
 ];
 
 impl Kind {
@@ -113,8 +116,10 @@ pub fn follow() {
 /// Whether a fold of `kind` shows open, given whether you clicked it.
 #[cfg(feature = "chat")]
 pub fn is_open(c: &crate::chat::Chat, kind: Kind, clicked: bool) -> bool {
-    // The Thinking view mode opens what Claude thought and nothing else (`view_mode.rs`).
-    crate::prefs::is_open((c.detailed && c.opens.get(kind)) || (c.show_thinking && kind == Kind::Thought), clicked)
+    // The Thinking view mode opens what Claude thought and nothing else (`view_mode.rs`). In Verbose your list decides,
+    // thoughts too.
+    let thinking = !c.detailed && c.show_thinking && kind == Kind::Thought;
+    crate::prefs::is_open((c.detailed && c.opens.get(kind)) || thinking, clicked)
 }
 
 #[cfg(test)]

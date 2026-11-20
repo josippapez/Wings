@@ -531,7 +531,7 @@ pub(crate) fn item_node(at: usize, item: &Item, c: &Chat, own: bool) -> Option<N
                 None => line,
             }
         }
-        Item::Note(title, body) => note(at, title, body, c.open_outputs.contains(&format!("note-{at}"))),
+        Item::Note(title, body) => note(at, title, body, crate::folds::is_open(c, Kind::Note, c.open_outputs.contains(&format!("note-{at}")))),
         Item::Finished(done) => finished(at, done, c),
         Item::Tool(_) | Item::Ask(_) => return None,
     };
