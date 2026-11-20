@@ -121,7 +121,6 @@ fn chat_page(c: &Chat) -> Node {
 
 /// Lucide's icons, as the app draws them in its headers: `square-terminal`, `rotate-ccw-clock` (Past sessions), `plus`
 /// and `settings`, in a 24-point box.
-const TERMINAL: [&str; 3] = ["m7 11 2-2-2-2", "M11 13h4", "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"];
 const HISTORY: [&str; 3] = ["M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8", "M3 3v5h5", "M12 7v5l4 2"];
 const PLUS: [&str; 2] = ["M5 12h14", "M12 5v14"];
 /// Lucide's `zap`, on the fast mode button.
@@ -196,12 +195,10 @@ fn header(c: &Chat) -> Node {
             let place = c.branch.as_ref().map_or_else(|| c.folder.clone(), |branch| format!("{} · {branch}", c.folder));
             muted(place.as_str()).prop("size", "small").prop("truncate", true).prop("title", place.as_str())
         }));
-    let terminal = (c.session.id.is_some() && c.state != State::Moved).then(|| icon_button("Open in terminal", &TERMINAL, chat::to_terminal).shortcut("cmd-alt-t"));
     let actions = row()
         .prop("gap", "xs")
         .prop("align", "center")
         .maybe(crate::claude_version::pill(c.narrow == Some(true)))
-        .maybe(terminal)
         .child(crate::search::header_button(c))
         .child(crate::view_mode::mode_button(c))
         .maybe(crate::titles_view::header_button(c))
@@ -225,7 +222,6 @@ fn conversation(c: &Chat) -> (Node, Vec<(usize, usize)>, usize) {
         let body = match &c.state {
             State::Starting => loading(),
             State::Failed(why) => notice("danger", why.as_str()),
-            State::Moved => muted("This session goes on in a terminal."),
             // A new chat's prompt sits in the middle of the conversation, over a soft glow. Needs Wings 0.2.58. Over the drift
             // of pixels or a gradient it goes without, so one backdrop moves behind it, not two.
             _ => {
@@ -331,7 +327,6 @@ fn newest_end(c: &Chat, nodes: &mut Vec<Node>) {
     match &c.state {
         State::Failed(why) => nodes.push(notice("danger", why.as_str()).key("ended")),
         State::Ended => nodes.push(muted("Claude Code ended. Start a new chat, or pick a past session, to go on.").key("ended")),
-        State::Moved => nodes.push(muted("This session goes on in a terminal.").key("ended")),
         _ => {}
     }
 }

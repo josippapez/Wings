@@ -48,8 +48,6 @@ pub enum State {
     Ended,
     /// It couldn't start, or stopped on an error: why.
     Failed(String),
-    /// The session went on in a terminal.
-    Moved,
 }
 
 /// A terminal Claude opened in Wings, which Wings draws where the page puts its `Terminal` node.
@@ -162,8 +160,6 @@ pub struct Chat {
     told: (Option<String>, Option<Option<String>>),
     /// What the tab was last named, none for its view's title.
     titled: Option<String>,
-    /// Going on in a terminal once Claude Code here has ended.
-    moving: bool,
     pub(crate) input: Option<ProcessInput>,
     /// Each request the chat writes gets the next number, for its id.
     requests: u32,
@@ -241,7 +237,6 @@ thread_local! {
         agent: None,
         told: (None, None),
         titled: None,
-        moving: false,
         input: None,
         requests: 0,
         run: 0,
@@ -479,7 +474,6 @@ pub(crate) fn begin(c: &mut Chat) -> u32 {
     c.fork_from = None;
     c.fork_ask = false;
     c.message_to = None;
-    c.moving = false;
     // A wait for a usage limit that the tab kept across a restart of Wings goes on.
     crate::limit_view::resume(c);
     c.run
@@ -505,24 +499,16 @@ pub(crate) async fn follow(run: u32, process: host::Process) {
         Ok(exit) => State::Failed(why(&exit)),
         Err(error) => State::Failed(error),
     };
-    let moving = with(|c| {
+    let current = with(|c| {
         if c.run != run {
             return false;
         }
         c.session.stopped_running();
         c.input = None;
-        if c.moving {
-            return true;
-        }
         c.state = ended;
-        false
+        true
     });
-    if moving {
-        // The session goes on in a terminal, which the sidebar lists by itself.
-        with(|c| c.agent = None);
-        drop(host::set_agent(None));
-        open_terminal();
-    } else {
+    if current {
         report_agent();
     }
 }
@@ -634,42 +620,6 @@ fn changes_counted(text: &str) -> Option<(u64, u64)> {
 fn shortstat(out: &str) -> (u64, u64) {
     let count = |word: &str| out.split(',').find(|part| part.contains(word)).and_then(|part| part.split_whitespace().next()?.parse().ok()).unwrap_or(0);
     (count("insertion"), count("deletion"))
-}
-
-/// Goes on with the session in a terminal, as Claude Code itself: once Claude Code here has ended, so that only one
-/// writes to the session.
-pub fn to_terminal() {
-    let now = with(|c| {
-        c.session.id.as_ref()?;
-        c.moving = true;
-        match c.input.take() {
-            Some(input) => {
-                input.stop();
-                Some(false)
-            }
-            None => Some(true),
-        }
-    });
-    if now == Some(true) {
-        open_terminal();
-    }
-}
-
-fn open_terminal() {
-    let Some((id, cwd, program)) = with(|c| Some((c.session.id.clone()?, c.cwd.clone(), c.program.clone()))) else {
-        return;
-    };
-    task::spawn(async move {
-        // The terminal takes this tab's place, as a chat takes a terminal's when a session moves the other way.
-        let opened = host::open_pane_in_place(&format!("{program} --resume"), &[&id], &cwd).await;
-        with(|c| {
-            c.moving = false;
-            c.state = match opened {
-                Ok(_) => State::Moved,
-                Err(error) => State::Failed(format!("Couldn't open a terminal: {error}")),
-            };
-        });
-    });
 }
 
 /// The end of what Claude Code printed to stderr, or its exit code.
@@ -1697,21 +1647,6 @@ mod tests {
         assert_eq!(with(|c| c.run), run);
         let opened = asked(&calls, "openView");
         assert_eq!((&opened[0]["args"]["resume"], &opened[0]["args"]["cwd"]), (&json!("s3"), &json!("/work/shop/api")));
-    }
-
-    #[test]
-    fn open_in_terminal_puts_the_terminal_in_this_tabs_place() {
-        use super::to_terminal;
-        let calls = wings_picks(Value::Null);
-        running(false);
-        with(|c| (c.input, c.session.id) = (None, Some("s1".into())));
-        to_terminal();
-        wings_plugin::task::block_on(async {});
-        assert_eq!(
-            asked(&calls, "openPane"),
-            [json!({ "command": "claude --resume", "args": ["s1"], "cwd": "/work/shop", "placement": "replace" })]
-        );
-        assert!(with(|c| c.state == State::Moved));
     }
 
     #[test]
