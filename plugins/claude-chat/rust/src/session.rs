@@ -623,13 +623,25 @@ impl Session {
                 self.settle();
             }
             "system" if line["subtype"] == "thinking_tokens" => self.meter.thinking(line["estimated_tokens"].as_u64().unwrap_or(0)),
-            "system" if line["subtype"] == "task_progress" => self.meter.progress(line),
+            "system" if line["subtype"] == "task_progress" => {
+                // A resumed agent's progress comes under the call that woke it, but its row is under the call that started it.
+                let first = self.tasks.iter().find(|task| line["task_id"] == task.id.as_str()).map(|task| task.call.clone()).filter(|call| !call.is_empty());
+                match first {
+                    Some(call) => {
+                        let mut line = line.clone();
+                        line["tool_use_id"] = call.into();
+                        self.meter.progress(&line);
+                    }
+                    None => self.meter.progress(line),
+                }
+            }
             "system" if line["subtype"] == "session_state_changed" => self.changed(line["state"].as_str().unwrap_or_default()),
             "system" if line["subtype"] == "background_tasks_changed" => self.tasks_now(&line["tasks"]),
             // A task's end, from its update and its notice, whichever comes first.
             "system" if line["subtype"] == "task_started" => {
-                if let Some(task) = self.tasks.iter_mut().find(|task| line["task_id"] == task.id.as_str()) {
-                    task.call = line["tool_use_id"].as_str().unwrap_or_default().to_owned();
+                // Waking an agent with SendMessage starts it again under that message's call: the first call is its row's.
+                if let Some(task) = self.tasks.iter_mut().find(|task| line["task_id"] == task.id.as_str() && task.call.is_empty()) {
+                    task.call =line["tool_use_id"].as_str().unwrap_or_default().to_owned();
                 }
             }
             "system" if line["subtype"] == "task_updated" || line["subtype"] == "task_notification" => {
@@ -3627,6 +3639,28 @@ mod tests {
             json!({ "type": "system", "subtype": "task_started", "task_id": id, "run_id": format!("run-{id}"), "tool_use_id": format!("toolu_{id}"), "description": description,
                 "subagent_type": "general-purpose", "is_backgrounded": true, "task_type": "local_agent" }),
         ]
+    }
+
+    #[test]
+    fn a_background_agent_woken_by_send_message_runs_again_under_the_call_that_started_it() {
+        let mut session = Session::default();
+        session.now = 10_000;
+        // Claude Code 2.1.329: the live set lists the agent again and `task_started` comes under the SendMessage's call.
+        let lines = |call: &str, run: &str| {
+            [
+                json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": [{ "task_id": "ag1", "run_id": run, "task_type": "local_agent", "description": "tiny" }] }),
+                json!({ "type": "system", "subtype": "task_started", "task_id": "ag1", "run_id": run, "tool_use_id": call, "description": "tiny", "is_backgrounded": true, "task_type": "local_agent" }),
+            ]
+        };
+        lines("toolu_first", "run-1").iter().for_each(|line| session.hear(line));
+        session.hear(&json!({ "type": "system", "subtype": "task_notification", "task_id": "ag1", "tool_use_id": "toolu_first", "status": "completed", "summary": "hi" }));
+        session.hear(&json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": [] }));
+        assert_eq!(session.tasks[0].ended.as_deref(), Some("completed"));
+        session.now = 50_000;
+        lines("toolu_send", "run-2").iter().for_each(|line| session.hear(line));
+        assert_eq!((session.tasks[0].call.as_str(), session.tasks[0].ended.as_deref(), session.tasks[0].started), ("toolu_first", None, 50_000));
+        session.hear(&json!({ "type": "system", "subtype": "task_progress", "task_id": "ag1", "tool_use_id": "toolu_send", "usage": { "total_tokens": 900, "tool_uses": 3, "duration_ms": 4_000 } }));
+        assert_eq!(session.meter.agents["toolu_first"].tool_uses, 3);
     }
 
     #[test]

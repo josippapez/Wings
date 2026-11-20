@@ -42,8 +42,8 @@ pub(crate) const BUDGET: usize = 3_500;
 /// centre; narrower, it covers the conversation's right side, and Escape or a press outside puts it away.
 const SIDE: u32 = 340;
 const SIDE_BELOW: u32 = COLUMN + 16 + 2 * (SIDE + 12);
-/// The panel's width collapsed to its rail: the pane's 12 points of padding either side and a card with one icon button.
-const RAIL: u32 = 64;
+/// The widest the collapsed pill gets: the panel's own width. Past it the project and branch are cut.
+const RAIL_MOST: u32 = SIDE;
 /// The most subagents the session panel lists.
 const SUBAGENTS_LISTED: usize = 12;
 pub fn view() -> Vec<Node> {
@@ -78,7 +78,7 @@ fn chat_page(c: &Chat) -> Node {
         main
     } else {
         let split = Node::new("Split")
-            .prop("defaultSize", if side_shown(c) && side_railed(c) { RAIL } else { SIDE })
+            .prop("defaultSize", if side_shown(c) && side_railed(c) { rail_width(c) } else { SIDE })
             .prop("side", "end")
             .prop("float", true)
             .prop("collapseBelow", SIDE_BELOW)
@@ -1132,6 +1132,45 @@ fn pasted(c: &Chat) -> Option<Node> {
     Some(row().prop("gap", "s").prop("wrap", true).children(chips))
 }
 
+/// What the collapsed panel says: the folder and branch, and what the working tree changed, as the open panel's first rows do.
+fn rail_place(c: &Chat) -> Option<String> {
+    match (c.folder.is_empty(), &c.branch) {
+        (true, _) => None,
+        (false, Some(branch)) => Some(format!("{} · {branch}", c.folder)),
+        (false, None) => Some(c.folder.clone()),
+    }
+}
+
+/// The floating pane's width for the pill, as wide as what it says (about 6.3 points a character at the small size, which is
+/// an estimate: the pane has a width, not a size from its content), up to the panel's own width.
+fn rail_width(c: &Chat) -> u32 {
+    let place = rail_place(c).map_or("Session".len(), |place| place.chars().count());
+    let changes = c.changes.map_or(0, |(added, removed)| format!("+{added} −{removed}").chars().count() + 1);
+    let badge = if live_in_side(c) > 0 { 30 } else { 0 };
+    // The pane's padding either side, the button's, the chevron and the gaps.
+    (24 + 40 + 20 + (place as u32 + changes as u32) * 63 / 10 + badge).clamp(120, RAIL_MOST)
+}
+
+/// The collapsed panel: one pill, as tall as a header control, that says the folder, branch and changes and opens the panel
+/// when pressed. Nothing when the panel has nothing to say.
+fn rail(c: &Chat, no_sections: bool) -> Option<Node> {
+    let live = live_in_side(c);
+    if no_sections && live == 0 && c.terminals.is_empty() {
+        return None;
+    }
+    let place = rail_place(c).unwrap_or_else(|| "Session".to_owned());
+    let title = if live == 0 { "Expand the side panel".to_owned() } else { format!("Expand the side panel, {live} running") };
+    let mut face = row().prop("gap", "s").prop("align", "center").child(text(place.as_str()).prop("size", "small").prop("tone", "muted").prop("truncate", true).prop("grow", true));
+    if let Some((added, removed)) = c.changes {
+        face = face.child(fact(format!("+{added}"), "success")).child(fact(format!("−{removed}"), "danger"));
+    }
+    if live > 0 {
+        face = face.child(badge(live.to_string(), Some("info")));
+    }
+    face = face.child(icon(24, 2.0, &CHEVRON_LEFT).prop("size", 14));
+    Some(button("", "outline", false, || chat::set_side_rail(false)).prop("size", "sm").prop("label", "Expand the side panel").prop("title", title.as_str()).child(face).key("side-rail"))
+}
+
 /// The panel on the right, quiet beside the conversation: a header with the button that collapses it, the folder and
 /// branch, and the sections below, in a raised card, with the terminals Claude opened under it. Collapsed, it is a slim
 /// rail with the button that opens it again and how many things run in it, and the terminals are left out. Nothing when
@@ -1139,13 +1178,7 @@ fn pasted(c: &Chat) -> Option<Node> {
 fn side(c: &Chat) -> Vec<Node> {
     let sections = side_sections(c, true);
     if side_railed(c) {
-        let live = live_in_side(c);
-        if sections.is_empty() && live == 0 && c.terminals.is_empty() {
-            return Vec::new();
-        }
-        let open = icon_button_titled("Expand the side panel", if live == 0 { "Expand the side panel".to_owned() } else { format!("Expand the side panel, {live} running") }.as_str(), &CHEVRON_LEFT, || chat::set_side_rail(false));
-        let rail = stack().prop("gap", "s").prop("align", "center").child(open).maybe((live > 0).then(|| badge(live.to_string(), Some("info"))));
-        return vec![card().prop("variant", "raised").child(rail).key("side-rail")];
+        return rail(c, sections.is_empty()).into_iter().collect();
     }
     if sections.is_empty() {
         return terminals(c);
@@ -1313,7 +1346,8 @@ fn subagent_row(tool: &Tool, c: &Chat) -> Node {
     let ran = background.filter(|task| task.ended.is_some() && task.started > 0).map(|task| task.ended_at.saturating_sub(task.started));
     // "Haiku 5.5 · 12s", while it runs (the app counts the seconds up) and when it is done, in one small muted text.
     let lapse = match (running, sub.filter(|sub| sub.started > 0)) {
-        (true, Some(sub)) => Some(Err(sub.started)),
+        // A resumed background agent counts from when it woke, not from its first run.
+        (true, Some(sub)) => Some(Err(background.filter(|task| task.started > 0).map_or(sub.started, |task| task.started))),
         (false, Some(sub)) => Some(Ok(took(ran.unwrap_or(sub.last.saturating_sub(sub.started))))),
         (false, None) => ran.map(|ms| Ok(took(ms))),
         _ => None,
@@ -1884,6 +1918,66 @@ mod tests {
             let page = page_text(c);
             assert!(page.contains("\"Split\"") && !page.contains("Open Changes") && !page.contains("\"Terminal\""));
         });
+    }
+
+    #[test]
+    fn the_panels_own_button_collapses_it_to_a_pill_and_the_pill_opens_it_again_and_the_choice_is_kept() {
+        wings_plugin::host::testing::answer(|_, _| Ok(serde_json::Value::Null));
+        chat::with(|c| {
+            c.side_in_wings = false;
+            c.side_open = true;
+            c.side_rail = Some(false);
+            c.narrow = Some(false);
+            c.folder = "shop".into();
+            c.branch = Some("main".into());
+            c.changes = Some((12, 3));
+            c.session.context = Some((41_000, 200_000));
+            c.terminals = vec![terminal("1")];
+            let open = page_text(c);
+            assert!(open.contains("Collapse the side panel") && open.contains("Open Changes") && open.contains("\"Terminal\""), "{open}");
+            assert!(!open.contains("Expand the side panel"));
+        });
+        chat::set_side_rail(true);
+        chat::with(|c| {
+            let rail = page_text(c);
+            assert!(rail.contains("Expand the side panel") && !rail.contains("Open Changes") && !rail.contains("Context") && !rail.contains("\"Terminal\""), "{rail}");
+            assert!(rail.contains("shop · main") && rail.contains("+12") && rail.contains("−3"), "the pill says the place and the changes: {rail}");
+            assert!(rail.contains("1 running"), "what runs shows on the pill");
+            assert!(rail.contains("\"Split\"") && !rail.contains("\"defaultSize\":340"), "the pane shrinks to the pill: {rail}");
+            assert!(rail_width(c) < SIDE && rail_width(c) >= 120);
+        });
+        // Outside Wings nothing is stored (as with `side_panel`), so this chat holds the choice the setting keeps.
+        assert_eq!(chat::with(|c| c.side_rail), Some(true));
+        chat::set_side_rail(false);
+        assert_eq!(chat::with(|c| c.side_rail), Some(false));
+        let open = chat::with(|c| page_text(c));
+        assert!(open.contains("Open Changes") && open.contains("\"defaultSize\":340"), "{open}");
+        // The per-section folds go on working in the open panel.
+        chat::set_panel_open("usage", false);
+        assert!(chat::with(|c| page_text(c)).contains(r#""open":false"#));
+        chat::set_panel_open("usage", true);
+    }
+
+    #[test]
+    fn a_narrow_tab_starts_with_the_pill_until_you_choose_and_a_wide_one_with_the_panel() {
+        wings_plugin::host::testing::answer(|_, _| Ok(serde_json::Value::Null));
+        chat::with(|c| {
+            c.side_in_wings = false;
+            c.side_open = true;
+            c.side_rail = None;
+            c.changes = Some((12, 3));
+            c.narrow = Some(true);
+            assert!(side_railed(c), "over the conversation it starts out of the way");
+            assert!(!page_text(c).contains("Open Changes"));
+            c.narrow = Some(false);
+            assert!(!side_railed(c));
+            assert!(page_text(c).contains("Open Changes"));
+            c.narrow = Some(true);
+        });
+        // Opened over a narrow tab by hand, it stays open there: your choice outranks the width.
+        chat::set_side_rail(false);
+        assert!(chat::with(|c| !side_railed(c) && page_text(c).contains("Open Changes")));
+        chat::with(|c| c.side_rail = None);
     }
 
     #[test]
