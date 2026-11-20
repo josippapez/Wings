@@ -2,6 +2,14 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.67 · 2026-11-20
+
+- **Typing in a long chat is light**: a long page lays out only the messages on screen, so a key in a 120-message chat lays out 9 of them, not all. Any plugin page with a long list gets it.
+- **A performance readout**: "Performance Readout" in the command palette shows Wings' CPU, frames per second and what redraws. Agents read the same with the `performance` tool or `wings performance`.
+- **Claude Code plugins show more**: notifications, rows placed in the conversation, progress bars and fields that update as you type. A plugin's command typed while Claude works says it runs when Claude finishes.
+- **Claude chat (0.35.0)**: the side panel folds into a pill with the project, branch and changes; built-in commands like /usage and /plugins come from one list, and a plugin's command of the same name goes to the plugin; diffs in a sidebar are one column; a subagent woken again shows running.
+- **Fixed**: a refused plugin call is now written to the plugins' log.
+
 ## 0.2.66 · 2026-11-20
 
 - **Plugin panes load**: a Claude Code plugin's pane, like the feedback plugin's inbox from /feedback-inbox, opens in the sidebar with all of it. A large pane was refused on its way there and stayed on its loading mark. Closing the pane in Wings closes it in Claude Code too (Claude chat 0.34.0).
