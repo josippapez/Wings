@@ -103,6 +103,8 @@ mod session_sidebar;
 mod claude_version;
 #[cfg(feature = "settings")]
 mod settings_page;
+#[cfg(any(feature = "settings", test))]
+mod settings_preview;
 mod setup;
 mod spend;
 #[cfg(feature = "chat")]
