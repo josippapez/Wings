@@ -1502,6 +1502,7 @@ esac"##,
     );
     let finished_panel = finished.clone();
     let finished_panel_folded = finished.clone();
+    let (finished_panel_rail, finished_panel_rail_default) = (finished.clone(), finished.clone());
     let (worked_again, worked_forking, rewound_again) = (worked.clone(), worked.clone(), rewound.clone());
     let edited_undo = edited.clone();
     // A file deep in long folders with a long name: the name stays on one line and the folders are cut.
@@ -1768,6 +1769,10 @@ esac"##,
         // Each section of the panel folds on its heading, and what you folded is kept in storage (seeded here, as a restart reads it):
         // Background tasks is closed to its heading and count, Subagents stays open.
         ("panel-folded", finished_panel_folded, None, None, "Background tasks · 1 failed"),
+        // The panel's own button collapses the whole panel to a rail, with how many things run in it (seeded here, as the button leaves
+        // it); a tab that never chose starts so.
+        ("panel-rail", finished_panel_rail, None, None, "Command “Run the tests” failed"),
+        ("panel-rail-default", finished_panel_rail_default, None, None, "Command “Run the tests” failed"),
         // Comments left on lines in the diff viewer, which the tab kept: a chip for each over the message box, to go with the next message.
         ("review-comments", opened(vec![init.clone()]), None, None, "2 comments on 2 files"),
         // The side panel's Pull request section, from the PR tracker's answer for the folder's branch: one that can merge, one
@@ -1811,6 +1816,10 @@ esac"##,
         // The newest Claude Code, as the header's pill reads it from the storage the chats share (`claude_version.rs`) rather than
         // fetching it: the fake `claude` prints 2.1.329, so a scene is up to date unless it seeds a newer one.
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as f64;
+        // A scene's panel is open unless it seeds the choice: a narrow tab would otherwise start with the panel's rail.
+        if !seed.iter().any(|(key, _)| *key == "side-rail") {
+            store.set("claude-chat", "shot", "side-rail", json!(false)).unwrap();
+        }
         if !seed.iter().any(|(key, _)| *key == "claude-latest") {
             store.set("claude-chat", "shot", "claude-latest", json!({ "version": "2.1.329", "at": now })).unwrap();
         }
@@ -1854,6 +1863,9 @@ esac"##,
     );
     // The session panel with its Background tasks section folded, as a fold you made before the last restart leaves it.
     let folded = host_over("fixture-storage-claude-chat-folded", &[("panel-closed", json!(["tasks"]))]);
+    // The whole panel collapsed to its rail, as the panel's own button leaves it; and never chosen, as a first run in a narrow tab.
+    let railed = host_over("fixture-storage-claude-chat-rail", &[("side-rail", json!(true))]);
+    let rail_default = host_over("fixture-storage-claude-chat-rail-default", &[("side-rail", serde_json::Value::Null)]);
     // The session panel in Wings' sidebar, as the Settings page moves it there.
     let side_host = host_over("fixture-storage-claude-chat-sidebar", &[("session-panel", json!("sidebar"))]);
     let page = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/claude-chat/dist/native/chat.wasm");
@@ -1896,6 +1908,8 @@ esac"##,
             "view-thinking" => &thinking_host,
             "bookmarks" => &bookmarks_host,
             "panel-folded" => &folded,
+            "panel-rail" => &railed,
+            "panel-rail-default" => &rail_default,
             "hash-issues" | "pull-request" | "pull-request-failing" | "pull-request-none" | "pull-request-merge" => &hash_host,
             "ask-edit-split" | "edits-split" => &split,
             _ => &host,

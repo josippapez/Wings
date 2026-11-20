@@ -42,6 +42,8 @@ pub(crate) const BUDGET: usize = 3_500;
 /// centre; narrower, it covers the conversation's right side, and Escape or a press outside puts it away.
 const SIDE: u32 = 340;
 const SIDE_BELOW: u32 = COLUMN + 16 + 2 * (SIDE + 12);
+/// The panel's width collapsed to its rail: the pane's 12 points of padding either side and a card with one icon button.
+const RAIL: u32 = 64;
 /// The most subagents the session panel lists.
 const SUBAGENTS_LISTED: usize = 12;
 pub fn view() -> Vec<Node> {
@@ -76,7 +78,7 @@ fn chat_page(c: &Chat) -> Node {
         main
     } else {
         let split = Node::new("Split")
-            .prop("defaultSize", SIDE)
+            .prop("defaultSize", if side_shown(c) && side_railed(c) { RAIL } else { SIDE })
             .prop("side", "end")
             .prop("float", true)
             .prop("collapseBelow", SIDE_BELOW)
@@ -124,6 +126,9 @@ const HISTORY: [&str; 3] = ["M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8",
 const PLUS: [&str; 2] = ["M5 12h14", "M12 5v14"];
 /// Lucide's `zap`, on the fast mode button.
 const FAST: [&str; 1] = ["M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"];
+/// Lucide's `chevron-right` and `chevron-left`, which collapse the side panel to its rail and open it again.
+const CHEVRON_RIGHT: [&str; 1] = ["m9 18 6-6-6-6"];
+const CHEVRON_LEFT: [&str; 1] = ["m15 18-6-6 6-6"];
 /// Lucide's `panel-right`.
 const PANEL: [&str; 2] = ["M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z", "M15 3v18"];
 const SETTINGS: [&str; 2] = [
@@ -145,6 +150,12 @@ fn icon_button_titled(label: &str, title: &str, paths: &[&str], on_click: impl F
 /// wide tab and over it in a narrow one. The header's button turns it off for every chat.
 fn side_shown(c: &Chat) -> bool {
     c.side_open
+}
+
+/// Whether the panel in the chat is collapsed to its rail: as you left it with the panel's own button, else collapsed while
+/// the tab is narrow enough for the panel to cover the conversation, and open where it sits beside it.
+pub(crate) fn side_railed(c: &Chat) -> bool {
+    c.side_rail.unwrap_or(c.narrow == Some(true))
 }
 
 /// What is alive in the session panel: a terminal Claude opened, a background task and a subagent that run.
@@ -1121,12 +1132,28 @@ fn pasted(c: &Chat) -> Option<Node> {
     Some(row().prop("gap", "s").prop("wrap", true).children(chips))
 }
 
-/// The panel on the right, quiet beside the conversation: the folder and branch, and the sections below, in a raised card,
-/// with the terminals Claude opened under it. Nothing when there is nothing to say yet.
+/// The panel on the right, quiet beside the conversation: a header with the button that collapses it, the folder and
+/// branch, and the sections below, in a raised card, with the terminals Claude opened under it. Collapsed, it is a slim
+/// rail with the button that opens it again and how many things run in it, and the terminals are left out. Nothing when
+/// there is nothing to say yet.
 fn side(c: &Chat) -> Vec<Node> {
     let sections = side_sections(c, true);
-    let summary = (!sections.is_empty()).then(|| card().prop("variant", "raised").child(stack().prop("gap", "m").children(sections)));
-    summary.into_iter().chain(terminals(c)).collect()
+    if side_railed(c) {
+        let live = live_in_side(c);
+        if sections.is_empty() && live == 0 && c.terminals.is_empty() {
+            return Vec::new();
+        }
+        let open = icon_button_titled("Expand the side panel", if live == 0 { "Expand the side panel".to_owned() } else { format!("Expand the side panel, {live} running") }.as_str(), &CHEVRON_LEFT, || chat::set_side_rail(false));
+        let rail = stack().prop("gap", "s").prop("align", "center").child(open).maybe((live > 0).then(|| badge(live.to_string(), Some("info"))));
+        return vec![card().prop("variant", "raised").child(rail).key("side-rail")];
+    }
+    if sections.is_empty() {
+        return terminals(c);
+    }
+    let collapse = icon_button_titled("Collapse the side panel", "Collapse the side panel to a rail", &CHEVRON_RIGHT, || chat::set_side_rail(true));
+    let top = row().prop("align", "center").child(inset(muted("Session").prop("size", "small")).prop("grow", true)).child(collapse).key("side-collapse");
+    let summary = card().prop("variant", "raised").child(stack().prop("gap", "m").child(top).children(sections));
+    std::iter::once(summary).chain(terminals(c)).collect()
 }
 
 /// The session panel's sections, which the chat draws in its own card and tells Wings' sidebar (`session_side.rs`): the

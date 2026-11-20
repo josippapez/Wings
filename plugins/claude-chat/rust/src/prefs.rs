@@ -69,6 +69,15 @@ pub fn side_panel() -> Setting<bool> {
     Setting::boolean(SIDE_PANEL, true)
 }
 
+/// Whether the session panel, while it shows in the chat, is collapsed to a slim rail (true) or open (false). Unset until
+/// you press the panel's own collapse or expand button: then a narrow tab, where the panel would cover the conversation,
+/// starts with the rail and a wide one with the panel open.
+pub const SIDE_RAIL: &str = "side-rail";
+
+pub fn side_rail() -> Setting<Option<bool>> {
+    Setting::new(SIDE_RAIL, None, |stored| Some(stored.as_bool()), |rail| json!(rail))
+}
+
 fn session_panel_of(stored: &Value) -> Option<String> {
     stored.as_str().filter(|place| SESSION_PANELS.iter().any(|(value, _)| value == place)).map(str::to_owned)
 }

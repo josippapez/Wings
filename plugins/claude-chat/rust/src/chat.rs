@@ -139,6 +139,9 @@ pub struct Chat {
     /// Your choice for every chat of whether the session panel shows (`prefs::side_panel`, on by default): in the chat, or
     /// opened with it in Wings' sidebar, as `side_in_wings` says.
     pub side_open: bool,
+    /// Your choice for every chat of the panel collapsed to a rail (`prefs::side_rail`), none until you make it: then a
+    /// narrow tab collapses it and a wide one doesn't (`view::side_railed`).
+    pub side_rail: Option<bool>,
     /// Where the session panel is, as you set for every chat (`prefs::session_panel`): in Wings' sidebar, else over the
     /// chat's right side.
     pub side_in_wings: bool,
@@ -227,6 +230,7 @@ thread_local! {
         panel_closed: Vec::new(),
         backdrop: None,
         side_open: true,
+        side_rail: None,
         side_in_wings: false,
         message_to: None,
         changes: None,
@@ -292,6 +296,7 @@ pub fn start() {
         c.show_thinking = prefs::thinking().get();
         c.text_scale = prefs::scale_of(&prefs::text_size().get());
         c.side_open = prefs::side_panel().get();
+        c.side_rail = prefs::side_rail().get();
         c.diff_split = prefs::diff_split().get();
         c.panel_closed = prefs::panel_closed().get();
         c.backdrop = prefs::backdrop(&prefs::background().get());
@@ -299,6 +304,7 @@ pub fn start() {
     });
     prefs::text_size().on_change(|size| with(|c| c.text_scale = prefs::scale_of(size)));
     prefs::side_panel().on_change(|shown| with(|c| c.side_open = *shown));
+    prefs::side_rail().on_change(|rail| with(|c| c.side_rail = *rail));
     prefs::diff_split().on_change(|split| with(|c| c.diff_split = *split));
     prefs::panel_closed().on_change(|closed| with(|c| c.panel_closed = closed.clone()));
     prefs::background().on_change(|kind| with(|c| c.backdrop = prefs::backdrop(kind)));
@@ -1538,6 +1544,12 @@ pub fn close_rewind() {
 
 pub fn toggle_todos() {
     with(|c| c.todos_folded = !c.todos_folded);
+}
+
+/// The panel's own button: collapses the whole panel to its rail or opens it again, kept for every chat and every restart.
+pub fn set_side_rail(rail: bool) {
+    with(|c| c.side_rail = Some(rail));
+    drop(prefs::side_rail().set(Some(rail)));
 }
 
 /// A panel section's fold was clicked (in the chat's panel or in Wings' sidebar): kept for every chat and every restart.
