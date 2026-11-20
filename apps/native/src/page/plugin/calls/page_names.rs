@@ -160,8 +160,8 @@ fn a_page_hears_what_another_tells_it_and_who_did() {
     // No page of that name, a name that isn't one, and a message past the limit are refused.
     assert_eq!(chat.call("tellPage", json!({ "name": "chat:s2", "message": 1 })), Err("No page is named chat:s2".into()));
     assert!(chat.call("namePage", json!({ "name": "../x" })).is_err());
-    let big = json!({ "name": "subagent:s1:a1", "message": "x".repeat(70_000) });
-    assert_eq!(chat.call("tellPage", big), Err("A page's message is limited to 64 KB".into()));
+    let big = json!({ "name": "subagent:s1:a1", "message": "x".repeat(1_000_000) });
+    assert_eq!(chat.call("tellPage", big), Err("A page's message is limited to 1 MB".into()));
 }
 
 #[test]

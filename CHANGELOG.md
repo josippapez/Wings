@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.66 · 2026-11-20
+
+- **Plugin panes load**: a Claude Code plugin's pane, like the feedback plugin's inbox from /feedback-inbox, opens in the sidebar with all of it. A large pane was refused on its way there and stayed on its loading mark. Closing the pane in Wings closes it in Claude Code too (Claude chat 0.34.0).
+
 ## 0.2.65 · 2026-11-20
 
 - **Spinners cost nothing while Claude works**: they turn in macOS's own animation layer over the window, so a working chat no longer redraws the window 30 times a second for them. Under a menu or dialog they turn as before.
