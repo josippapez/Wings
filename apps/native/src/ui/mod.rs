@@ -10,12 +10,15 @@ mod menu;
 pub mod motion;
 #[cfg(target_os = "macos")]
 mod native_backdrop;
+#[cfg(target_os = "macos")]
+mod native_spinners;
 mod parts;
 #[cfg(target_os = "macos")]
 mod shader;
 mod sheet;
 mod shimmer;
 mod slots;
+mod spinner_host;
 mod status_dot;
 mod tooltip;
 
@@ -38,7 +41,10 @@ pub use sheet::{
 pub use shimmer::{shimmer, shimmer_slot};
 #[cfg(all(test, feature = "test-support"))]
 pub(crate) use status_dot::SPIN_STEP;
-pub use slots::{Piece, drawing_piece, start_draw, forget_view, place_view, slot, slot_layer, view_placed};
+pub use slots::{Piece, cover, drawing_piece, start_draw, forget_view, place_view, slot, slot_layer, view_placed};
+pub use spinner_host::spinner_sync;
+#[cfg(target_os = "macos")]
+pub use spinner_host::turn_spinners_natively;
 pub use status_dot::{
     spinner as working_spinner, spinner_layer, status_dot, SpinnerLayer, Spinners, status_dot_slot, view_spinner_layer, view_spinner_slot,
     view_status_dot_slot,
@@ -571,5 +577,5 @@ pub fn select_menu(items: impl IntoIterator<Item = AnyElement>) -> Div {
 /// it is its own, as on a `behaviors::bind_layer` layer: nothing under it, like a dialog's backdrop, hears it.
 pub fn popover(content: impl Styled + InteractiveElement + IntoElement + 'static) -> AnyElement {
     let content = motion::popup("popover", motion::From::Above, motion::POPUP_IN, content.occlude());
-    deferred(anchored().child(content)).into_any_element()
+    deferred(anchored().child(cover(content))).into_any_element()
 }

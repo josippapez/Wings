@@ -781,51 +781,55 @@ impl Workspace {
     /// shows only while one is dragged over the window, and lets every click and hover through.
     pub(super) fn plugin_drop_layer(&self, cx: &mut Context<Self>) -> AnyElement {
         let shown = |paths: &ExternalPaths| super::plugin_manage::carries_package(paths);
-        deferred(
-            div()
-                .id("plugin-drop")
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(theme::RADIUS))
-                .border_2()
-                .border_color(gpui::transparent_black())
-                .drag_over::<ExternalPaths>(move |style, paths, _, _| {
-                    if shown(paths) {
-                        style.bg(rgba(0x0f0e1299)).border_color(rgba(0xe9b65fb3))
-                    } else {
-                        style
-                    }
-                })
-                .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
-                    this.drop_package(paths, window, cx)
-                }))
-                .child(
-                    div()
-                        .id("plugin-drop-label")
-                        .px(px(14.0))
-                        .py(px(8.0))
-                        .rounded(px(10.0))
-                        .text_size(px(13.0))
-                        .font_weight(FontWeight::MEDIUM)
-                        .bg(rgba(theme::POPOVER))
-                        .text_color(rgb(theme::FOREGROUND))
-                        // A drag over only refines what paints, not the text's color, so the label fades in whole.
-                        .opacity(0.0)
-                        .drag_over::<ExternalPaths>(move |style, paths, _, _| {
-                            if shown(paths) {
-                                style.opacity(1.0)
-                            } else {
-                                style
-                            }
-                        })
-                        .child("Drop to install the plugin"),
-                ),
-        )
-        .with_priority(5)
-        .into_any_element()
+        let layer = div()
+            .id("plugin-drop")
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(theme::RADIUS))
+            .border_2()
+            .border_color(gpui::transparent_black())
+            .drag_over::<ExternalPaths>(move |style, paths, _, _| {
+                if shown(paths) {
+                    style.bg(rgba(0x0f0e1299)).border_color(rgba(0xe9b65fb3))
+                } else {
+                    style
+                }
+            })
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                this.drop_package(paths, window, cx)
+            }))
+            .child(
+                div()
+                    .id("plugin-drop-label")
+                    .px(px(14.0))
+                    .py(px(8.0))
+                    .rounded(px(10.0))
+                    .text_size(px(13.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .bg(rgba(theme::POPOVER))
+                    .text_color(rgb(theme::FOREGROUND))
+                    // A drag over only refines what paints, not the text's color, so the label fades in whole.
+                    .opacity(0.0)
+                    .drag_over::<ExternalPaths>(move |style, paths, _, _| {
+                        if shown(paths) {
+                            style.opacity(1.0)
+                        } else {
+                            style
+                        }
+                    })
+                    .child("Drop to install the plugin"),
+            );
+        // Over the spinners turning over the window's drawing only while something is dragged, when it may tint the
+        // window: it is always there, over all of it.
+        let layer = if cx.has_active_drag() {
+            ui::cover(layer).into_any_element()
+        } else {
+            layer.into_any_element()
+        };
+        deferred(layer).with_priority(5).into_any_element()
     }
 
     /// "Turn on <plugin>?": what the first plugin waiting for review will be able to do, over everything else.

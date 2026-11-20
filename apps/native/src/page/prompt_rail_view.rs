@@ -301,7 +301,7 @@ impl PageView {
                     view.act(handler, Some(&serde_json::json!({ "index": index })));
                 }
             }));
-        deferred(anchored().anchor(Anchor::TopLeft).position(top_left).child(strip))
+        deferred(anchored().anchor(Anchor::TopLeft).position(top_left).child(crate::ui::cover(strip)))
             .with_priority(1)
             .into_any_element()
     }

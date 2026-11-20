@@ -49,7 +49,8 @@ impl Popup {
     fn new(anchor: Anchor, content: impl IntoElement) -> Self {
         Self {
             anchor,
-            content: content.into_any_element(),
+            // Over the window's drawing, where the spinners turning over it give way (`ui::cover`).
+            content: crate::ui::cover(content).into_any_element(),
             placement: Placement::default(),
             priority: 1,
         }

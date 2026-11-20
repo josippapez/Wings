@@ -138,6 +138,8 @@ fn run() -> Result<(), String> {
                 // A tab's animated background steps in a layer between the vibrancy and GPUI's view, never drawing the
                 // window.
                 wings_native::ui::draw_backdrops_under(window);
+                // The spinners turn in Core Animation over GPUI's drawing, never drawing the window.
+                wings_native::ui::turn_spinners_natively(window);
             });
             if let Some(path) = &restart_ack
                 && let Err(error) = wings_native::updater::acknowledge_startup(path)

@@ -1,8 +1,13 @@
 //! Places that a piece of the window that keeps its last drawing (`workspace::parts`) leaves for what is drawn over it
 //! later in the window, so that can change without the piece drawing itself again: the spinners in it, which
-//! `spinner_layer` turns, and its terminals, which a `slot_layer` draws.
+//! `spinner_layer` turns, and its terminals, which a `slot_layer` draws. And where the overlays of a draw are
+//! (`cover`), which what turns over GPUI's drawing (`spinner_host`) keeps clear of.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    rc::Rc,
+};
 
 use gpui::{
     AnyElement, App, Bounds, ContentMask, Element, EntityId, GlobalElementId, InspectorElementId,
@@ -34,6 +39,8 @@ pub type Over = Rc<dyn Fn(&mut Window)>;
 pub struct Slot {
     pub bounds: Bounds<Pixels>,
     pub mask: ContentMask<Pixels>,
+    /// The piece that left it, whose slots' names are its own.
+    pub piece: Piece,
     over: Option<Over>,
     /// The draw that left it there.
     drawn: u64,
@@ -71,6 +78,8 @@ const WINDOW: Piece = Piece::Named("window");
 
 thread_local! {
     static SLOTS: RefCell<Slots> = RefCell::default();
+    /// The name the next cover in a draw takes (`cover`).
+    static NEXT_COVER: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Runs `draw`, the drawing of the piece `piece` of the window `id`, so the slots it leaves are its own.
@@ -116,6 +125,9 @@ pub fn forget_view(view: EntityId) {
 /// window, before its pieces with slots draw themselves, and before anything says it puts a view on screen
 /// (`place_view`): the workspace does it first in its draw, `spinner_layer` elsewhere.
 pub fn start_draw(id: WindowId) {
+    // A cover's name needs to be its own only in its piece's draw: names start again, so a piece's covers drawn again
+    // take the places of its last ones.
+    NEXT_COVER.with(|next| next.set(0));
     SLOTS.with_borrow_mut(|slots| {
         let frame = slots.frame.entry(id).or_default();
         *frame += 1;
@@ -130,26 +142,128 @@ pub fn slot(
     name: impl Into<SharedString>,
     over: Option<Over>,
 ) -> impl IntoElement {
-    let piece = SLOTS.with_borrow(|slots| slots.current).unwrap_or(WINDOW);
+    let piece = current_piece();
     let name = name.into();
     canvas(
-        move |bounds, window, _| {
-            let id = window.window_handle().window_id();
-            let mask = window.content_mask();
-            SLOTS.with_borrow_mut(|slots| {
-                let drawn = slots.frame.get(&id).copied().unwrap_or_default();
-                let slot = Slot {
-                    bounds,
-                    mask,
-                    over,
-                    drawn,
-                };
-                slots.slots.insert((id, piece, layer, name), slot);
-            });
-        },
+        move |bounds, window, _| leave(window, piece, layer, name, bounds, over),
         |_, _, _, _| {},
     )
     .size_full()
+}
+
+/// The piece being drawn, whose the slots made now are.
+fn current_piece() -> Piece {
+    SLOTS.with_borrow(|slots| slots.current).unwrap_or(WINDOW)
+}
+
+/// Leaves the slot `name` of `layer` at `bounds` in the window being drawn, as the piece `piece` does in this draw,
+/// clipped as what is drawn there now.
+fn leave(
+    window: &Window,
+    piece: Piece,
+    layer: &'static str,
+    name: SharedString,
+    bounds: Bounds<Pixels>,
+    over: Option<Over>,
+) {
+    let id = window.window_handle().window_id();
+    let mask = window.content_mask();
+    SLOTS.with_borrow_mut(|slots| {
+        let drawn = slots.frame.get(&id).copied().unwrap_or_default();
+        let slot = Slot {
+            bounds,
+            mask,
+            piece,
+            over,
+            drawn,
+        };
+        slots.slots.insert((id, piece, layer, name), slot);
+    });
+}
+
+/// The layer the overlays' places are kept in (`cover`).
+const COVERS: &str = "covers";
+
+/// `element`, an overlay (a menu, a popover, a dialog, a tooltip), and a note of where it is in each draw of the window:
+/// what turns over GPUI's drawing of the window (`spinner_host`) gives way where one is. Kept as a slot of the piece
+/// being drawn, so an overlay in a piece that keeps its last drawing counts for as long as the piece keeps it. Laid out,
+/// drawn and placed as `element` alone.
+pub fn cover(element: impl IntoElement) -> Cover {
+    let name = NEXT_COVER.with(|next| {
+        let name = next.get();
+        next.set(name + 1);
+        name
+    });
+    Cover {
+        piece: current_piece(),
+        name: name.to_string().into(),
+        element: element.into_any_element(),
+    }
+}
+
+pub struct Cover {
+    piece: Piece,
+    name: SharedString,
+    element: AnyElement,
+}
+
+impl Element for Cover {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        // The element's own box, so the cover's bounds are the element's, wherever its style puts it.
+        (self.element.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        leave(window, self.piece, COVERS, self.name.clone(), bounds, None);
+        self.element.prepaint(window, cx);
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.element.paint(window, cx);
+    }
+}
+
+/// Where the overlays of the window `id` are in its last draw (`cover`), as far as each shows.
+pub(super) fn covers(id: WindowId) -> Vec<Bounds<Pixels>> {
+    shown(id, COVERS)
+        .into_iter()
+        .map(|(_, slot)| slot.bounds.intersect(&slot.mask.bounds))
+        .filter(|bounds| !bounds.is_empty())
+        .collect()
 }
 
 /// The slots of `layer` in the window `id` still there: left in the draw their piece last drew itself in, by a piece on

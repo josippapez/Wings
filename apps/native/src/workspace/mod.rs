@@ -956,7 +956,14 @@ impl Render for Workspace {
         if self.diff_shown() == Some(diff::Shown::Full)
             && let Some((viewer, _)) = &self.plugin_ui.diff
         {
-            return div().size_full().child(viewer.clone()).into_any_element();
+            // No spinner layers in this draw: the spinners turning over the window's drawing go too. A draw of the
+            // window still, for the overlays' places (`ui::cover`).
+            ui::start_draw(window.window_handle().window_id());
+            return div()
+                .size_full()
+                .child(viewer.clone())
+                .child(ui::spinner_sync(window))
+                .into_any_element();
         }
         // Before anything in this draw puts a page on screen (`ui::place_view`): the main column's tab page and the right
         // panel's pages turn their spinners in the window's layer for them only when placed in this draw.
@@ -1198,15 +1205,20 @@ impl Render for Workspace {
                     // Over the main column, as if in it: what draws over the terminals in it follows.
                     .child(ui::slot_layer(pane_card::TERMINALS, self.tab_terminals(cx)))
                     // The terminals an agent opened floating over its pane, over its terminal.
+                    // Each of these over the window's spinners, where those turning over its drawing give way
+                    // (`ui::cover`), as do the layers over the window below.
                     .child(ui::slot_layer(
                         agent_terminals::FLOATS,
-                        self.float_layer(cx),
+                        self.float_layer(cx)
+                            .into_iter()
+                            .map(|(name, float)| (name, ui::cover(float).into_any_element()))
+                            .collect(),
                     ))
                     .child(ui::slot_layer(
                         QUICK,
                         self.quick_layer(cx)
                             .map(|quick| {
-                                let area = div().relative().size_full().child(quick);
+                                let area = div().relative().size_full().child(ui::cover(quick));
                                 (QUICK.into(), area.into_any_element())
                             })
                             .into_iter()
@@ -1218,16 +1230,19 @@ impl Render for Workspace {
                         crate::page::TERMINALS,
                         self.page_terminals_layer(cx),
                     ))
-                    .children(self.sidebar_diff(window.viewport_size().width, cx))
-                    .children(self.sidebar_peek(cx)),
+                    .children(self.sidebar_diff(window.viewport_size().width, cx).map(ui::cover))
+                    .children(self.sidebar_peek(cx).into_iter().map(ui::cover)),
             )
             // The sidebar's spinners, which turn here so the sidebar keeps its last drawing (see `parts`).
             .children(self.parts.as_ref().map(|parts| ui::SpinnerLayer::in_draw(&parts.spinners)))
-            .children(under)
-            .children(notices)
-            .children(over)
+            .children(under.into_iter().map(ui::cover))
+            .children(notices.map(ui::cover))
+            .children(over.into_iter().map(ui::cover))
             .child(self.plugin_drop_layer(cx))
             .child(deferred(crate::ui::tooltip_exit()).with_priority(10))
+            // Last: hands the spinners this draw shows to what turns them over the window's drawing, once every
+            // overlay above has its place.
+            .child(ui::spinner_sync(window))
             .into_any_element()
     }
 }

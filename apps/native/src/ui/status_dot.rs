@@ -14,7 +14,7 @@ use gpui::{
     rgba,
 };
 
-use super::slots;
+use super::{slots, spinner_host};
 use crate::{agents::AgentState, theme};
 
 /// A faint ring with its top quarter in full color, turned by `angle`, like the desktop's
@@ -256,23 +256,57 @@ impl Render for SpinnerLayer {
 }
 
 /// The rings in the slots of `layer` in the window `id`, all at one angle, and a redraw of the view drawing them at the
-/// spinners' next step while there are any.
+/// spinners' next step while there are any. In a window whose spinners turn outside its drawing (`spinner_host`), only
+/// those under an overlay of this draw (`slots::cover`): the others are handed to the host, and ask for no redraw.
 fn rings(id: gpui::WindowId, layer: &'static str) -> impl IntoElement {
     canvas(
         move |_, window, cx| {
             let shown = slots::shown(id, layer);
-            let turn = if shown.is_empty() {
+            let turn = if shown.is_empty() || spinner_host::hosted(id) {
                 0.0
             } else {
                 turn(window, cx)
             };
             (shown, turn)
         },
-        |_, (shown, turn), window, _| {
-            for (_, slot) in shown {
-                window.with_content_mask(Some(slot.mask), |window| {
-                    paint_ring(slot.bounds, turn * TAU, window)
-                });
+        move |_, (shown, turn), window, cx| {
+            if !spinner_host::hosted(id) {
+                for (_, slot) in shown {
+                    window.with_content_mask(Some(slot.mask), |window| {
+                        paint_ring(slot.bounds, turn * TAU, window)
+                    });
+                }
+                return;
+            }
+            // Painted, every overlay has its place in this draw.
+            let covers = slots::covers(id);
+            let (scale, still) = (window.scale_factor(), cx.reduce_motion());
+            let mut under = Vec::new();
+            for (name, slot) in shown {
+                let clip = slot.bounds.intersect(&slot.mask.bounds);
+                if clip.is_empty() {
+                    continue;
+                }
+                if covers.iter().any(|cover| cover.intersects(&clip)) {
+                    under.push(slot);
+                } else {
+                    let placed = spinner_host::Placed {
+                        bounds: slot.bounds,
+                        clip: slot.mask.bounds,
+                        color: theme::palette().working,
+                        scale,
+                        still,
+                    };
+                    spinner_host::hand(id, (slot.piece, layer, name), placed);
+                }
+            }
+            if !under.is_empty() {
+                let turn = self::turn(window, cx);
+                for slot in under {
+                    window.with_content_mask(Some(slot.mask), |window| {
+                        paint_ring(slot.bounds, turn * TAU, window)
+                    });
+                }
             }
         },
     )
@@ -523,6 +557,7 @@ mod tests {
                 })
                 .child(view_spinner_layer(window))
                 .child(layer)
+                .child(spinner_host::spinner_sync(window))
         }
     }
 
@@ -607,5 +642,193 @@ mod tests {
             (29..=31).contains(&steps),
             "drawn {steps} times in 30 steps"
         );
+    }
+
+    /// A stand-in for what turns the spinners over the window's drawing (`native_spinners::Host`): where it shows each,
+    /// and how many times it was asked to put one.
+    #[derive(Clone, Default)]
+    struct Over {
+        shown: Rc<RefCell<HashMap<spinner_host::Key, spinner_host::Placed>>>,
+        placings: Rc<Cell<usize>>,
+    }
+
+    impl spinner_host::Present for Over {
+        fn place(&mut self, key: &spinner_host::Key, placed: &spinner_host::Placed, _: f64) {
+            self.shown.borrow_mut().insert(key.clone(), *placed);
+            self.placings.set(self.placings.get() + 1);
+        }
+
+        fn remove(&mut self, key: &spinner_host::Key) {
+            self.shown.borrow_mut().remove(key);
+        }
+    }
+
+    /// Has `over` turn the window's spinners, as `turn_spinners_natively` has the layer over GPUI's drawing.
+    fn turn_over<V: Render + 'static>(window: &mut gpui::TestAppWindow<V>, over: &Over) {
+        let present = over.clone();
+        window.update(move |_, window, _| {
+            spinner_host::present_with(window.window_handle().window_id(), Box::new(present))
+        });
+        window.draw();
+    }
+
+    /// A piece that keeps its last drawing, with an agent's dot in it: a spinner while it works.
+    struct Agent {
+        working: bool,
+    }
+
+    impl Render for Agent {
+        fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let state = if self.working { AgentState::Working } else { AgentState::Idle };
+            slots::drawing_piece("piece", window.window_handle().window_id(), || {
+                div().child(status_dot_slot(state, "agent"))
+            })
+        }
+    }
+
+    /// The window as the workspace draws it with its spinners turned over its drawing: the piece, cached, the spinner
+    /// layer, an overlay where `cover` says, and the hand-over, last; counting its own draws.
+    struct Hosted {
+        piece: gpui::Entity<Agent>,
+        spinners: gpui::Entity<SpinnerLayer>,
+        cover: Option<Bounds<Pixels>>,
+        drawn: Rc<Cell<usize>>,
+    }
+
+    impl Render for Hosted {
+        fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.drawn.set(self.drawn.get() + 1);
+            slots::start_draw(window.window_handle().window_id());
+            div()
+                .size_full()
+                .child(self.piece.clone().cached(gpui::StyleRefinement::default().size(px(20.0))))
+                .child(SpinnerLayer::in_draw(&self.spinners))
+                .children(self.cover.map(|at| {
+                    slots::cover(div().absolute().left(at.origin.x).top(at.origin.y).w(at.size.width).h(at.size.height))
+                }))
+                .child(spinner_host::spinner_sync(window))
+        }
+    }
+
+    /// A window with a working agent's spinner, turned by `over` from the start, and an overlay at `cover`, once the step
+    /// its first draw asked for, before `over` turned its spinners, has passed. Counts the window's draws.
+    fn hosted(cover: Option<Bounds<Pixels>>) -> (TestApp, gpui::TestAppWindow<Hosted>, Over, Rc<Cell<usize>>) {
+        let mut app = TestApp::new();
+        let drawn = Rc::new(Cell::new(0));
+        let counter = drawn.clone();
+        let mut window = app.open_window(move |_, cx| Hosted {
+            piece: cx.new(|_| Agent { working: true }),
+            spinners: cx.new(|_| SpinnerLayer::new(Spinners::Window)),
+            cover,
+            drawn: counter,
+        });
+        let over = Over::default();
+        turn_over(&mut window, &over);
+        app.advance_clock(SPIN_STEP);
+        app.run_until_parked();
+        (app, window, over, drawn)
+    }
+
+    /// The window's draws in 30 of the spinners' steps.
+    fn thirty_steps(app: &TestApp, drawn: &Rc<Cell<usize>>) -> usize {
+        let before = drawn.get();
+        for _ in 0..30 {
+            app.advance_clock(SPIN_STEP);
+            app.run_until_parked();
+        }
+        drawn.get() - before
+    }
+
+    /// It drew the window 30 times a second while an agent worked, only to turn the spinners: about a quarter of a core
+    /// while Claude worked.
+    #[test]
+    fn a_spinner_turned_over_the_window_draws_no_frame_of_it() {
+        let (app, mut window, over, drawn) = hosted(None);
+        let frames = thirty_steps(&app, &drawn);
+        eprintln!("[measure] 30 steps of a spinner turned over the window: {frames} draws of the window");
+        assert_eq!(frames, 0, "no draw of the window");
+        let slot = window.update(|_, window, _| {
+            slots::shown(window.window_handle().window_id(), SPINNERS).pop().expect("the spinner's slot").1
+        });
+        let shown = over.shown.borrow().clone();
+        let key: spinner_host::Key = (slots::Piece::Named("piece"), SPINNERS, "agent".into());
+        assert_eq!(shown.len(), 1, "one spinner over the window");
+        assert_eq!(shown[&key].bounds, slot.bounds, "at its slot");
+        assert_eq!(shown[&key].bounds.size, gpui::size(px(10.0), px(10.0)));
+        // The window drawn again for something else: the spinner stays as it was, turning, not put there again.
+        for _ in 0..3 {
+            window.update(|_, _, cx| cx.notify());
+            window.draw();
+        }
+        assert_eq!(over.placings.get(), 1, "put there once");
+    }
+
+    #[test]
+    fn an_overlay_over_a_spinner_has_the_window_turn_it_under_the_overlay_until_it_goes() {
+        let over_it = Bounds::new(point(px(5.0), px(5.0)), gpui::size(px(50.0), px(50.0)));
+        let (app, mut window, over, drawn) = hosted(Some(over_it));
+        assert!(over.shown.borrow().is_empty(), "not over the overlay");
+        let frames = thirty_steps(&app, &drawn);
+        assert!((29..=31).contains(&frames), "the window turns it, under the overlay: {frames} draws");
+        window.update(|hosted, _, cx| {
+            hosted.cover = None;
+            cx.notify();
+        });
+        window.draw();
+        app.run_until_parked();
+        assert_eq!(over.shown.borrow().len(), 1, "over the window again once the overlay is gone");
+        // The step the window's last turn asked for.
+        app.advance_clock(SPIN_STEP);
+        app.run_until_parked();
+        assert_eq!(thirty_steps(&app, &drawn), 0, "and no draw of the window");
+    }
+
+    #[test]
+    fn an_overlay_elsewhere_leaves_a_spinner_over_the_window() {
+        let elsewhere = Bounds::new(point(px(100.0), px(100.0)), gpui::size(px(20.0), px(20.0)));
+        let (app, _window, over, drawn) = hosted(Some(elsewhere));
+        assert_eq!(over.shown.borrow().len(), 1);
+        assert_eq!(thirty_steps(&app, &drawn), 0);
+    }
+
+    #[test]
+    fn a_spinner_whose_piece_draws_without_it_goes_from_over_the_window() {
+        let (app, mut window, over, _) = hosted(None);
+        assert_eq!(over.shown.borrow().len(), 1);
+        window.update(|hosted, _, cx| {
+            hosted.piece.update(cx, |agent, cx| {
+                agent.working = false;
+                cx.notify();
+            })
+        });
+        app.run_until_parked();
+        window.draw();
+        assert!(over.shown.borrow().is_empty(), "the agent stopped: no ring over the window");
+    }
+
+    #[test]
+    fn a_page_switched_away_from_leaves_no_ring_over_the_window_and_has_it_back_when_shown() {
+        let mut app = TestApp::new();
+        let mut window = app.open_window(|_, cx| Tabs {
+            page: cx.new(|_| Page),
+            shown: true,
+        });
+        let over = Over::default();
+        turn_over(&mut window, &over);
+        let page = window.read(|tabs, _| tabs.page.entity_id());
+        let key: spinner_host::Key = (slots::Piece::View(page), VIEW_SPINNERS, "agent".into());
+        assert!(over.shown.borrow().contains_key(&key), "the page's ring over the window");
+        let show = |window: &mut gpui::TestAppWindow<Tabs>, shown: bool| {
+            window.update(|tabs, _, cx| {
+                tabs.shown = shown;
+                cx.notify();
+            });
+            window.draw();
+        };
+        show(&mut window, false);
+        assert!(over.shown.borrow().is_empty(), "no ring where the page was");
+        show(&mut window, true);
+        assert!(over.shown.borrow().contains_key(&key), "the ring is back with the page");
+        app.run_until_parked();
     }
 }

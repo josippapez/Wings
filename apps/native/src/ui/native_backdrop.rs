@@ -139,14 +139,14 @@ impl Layers {
 
 /// Runs `change` on layers as one change of the screen, without Core Animation's implicit animations, which would ease
 /// each move over a quarter of a second.
-fn unanimated(change: impl FnOnce()) {
+pub(super) fn unanimated(change: impl FnOnce()) {
     CATransaction::begin();
     CATransaction::setDisableActions(true);
     change();
     CATransaction::commit();
 }
 
-fn rect(bounds: Bounds<Pixels>) -> CGRect {
+pub(super) fn rect(bounds: Bounds<Pixels>) -> CGRect {
     let points = |value: Pixels| f64::from(f32::from(value));
     CGRect::new(
         CGPoint::new(points(bounds.origin.x), points(bounds.origin.y)),
@@ -160,7 +160,7 @@ fn rect(bounds: Bounds<Pixels>) -> CGRect {
 /// window, which undid the flip set on it before and put each slot's layer upside down in the window: as far above the
 /// card as the card's bottom is above the window's, leaving that much of the card's bottom without it. A layer of
 /// Wings' own keeps its flip, and AppKit leaves `root` unflipped.
-fn slots_layer(root: &CALayer) -> Retained<CALayer> {
+pub(super) fn slots_layer(root: &CALayer) -> Retained<CALayer> {
     let slots = CALayer::new();
     slots.setGeometryFlipped(true);
     slots.setAutoresizingMask(CAAutoresizingMask::LayerWidthSizable | CAAutoresizingMask::LayerHeightSizable);
