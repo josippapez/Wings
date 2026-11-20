@@ -2,3 +2,4 @@
 .claude/settings.local.json
 apps/desktop/.scratch/
 .claude/worktrees/
+/.build.lock/
