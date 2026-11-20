@@ -234,20 +234,42 @@ pub fn relay_write(session: &mut Session, message: &Value, write: bool, stamp: u
     Some(if session.working { session.queue(&text, Vec::new(), stamp, n) } else { session.send(&text, &[], stamp, n) })
 }
 
-/// A transcript entry of what SendMessage told the subagent, which Claude Code writes as a note in the subagent's name,
-/// as the message it passed on.
+/// A transcript entry of what SendMessage told the subagent, as the message it passed on. Claude Code 2.1.329 writes one
+/// that wakes a finished agent as a note in the subagent's name, and one that reaches it while it runs as a
+/// `queued_command` attachment, which no line the chat passes on carries.
 fn passed_on(entry: &Value) -> Option<Value> {
-    if entry["type"] != "user" || entry["origin"]["kind"] != "coordinator" {
+    let queued = &entry["attachment"];
+    let said = if entry["type"] == "attachment" && queued["type"] == "queued_command" && queued["origin"]["kind"] == "coordinator" {
+        queued["prompt"].as_str()?.trim()
+    } else if entry["type"] == "user" && entry["origin"]["kind"] == "coordinator" {
+        let text = entry["message"]["content"].as_str()?;
+        let said = text.split_once('\n').map_or(text, |(_, rest)| rest);
+        said.rsplit_once("\n\n").map_or(said, |(said, _)| said).trim()
+    } else {
         return None;
-    }
-    let text = entry["message"]["content"].as_str()?;
-    let said = text.split_once('\n').map_or(text, |(_, rest)| rest);
-    let said = said.rsplit_once("\n\n").map_or(said, |(said, _)| said).trim();
+    };
     let mut shown = Map::new();
     shown.insert("type".into(), "user".into());
     shown.insert("uuid".into(), entry["uuid"].clone());
     shown.insert("message".into(), json!({ "role": "user", "content": said }));
     Some(Value::Object(shown))
+}
+
+/// What a tab reads of its subagent's transcript: the conversation, and the messages SendMessage passed on while it ran.
+pub const KINDS: [&str; 3] = ["user", "assistant", "attachment:queued_command"];
+
+/// After the tab read the transcript: what you sent that it now shows is off `sent`, and the rest, still on its way to the
+/// subagent, shows at the end. A message is matched by its text, as Claude passes it on word for word.
+pub fn still_on_the_way(sent: &mut Vec<String>, session: &mut Session) {
+    let mut shown: Vec<String> = session.items.iter().filter_map(|item| if let Item::User(said) = item { Some(said.clone()) } else { None }).collect();
+    sent.retain(|said| match shown.iter().position(|text| text == said) {
+        Some(at) => {
+            shown.remove(at);
+            false
+        }
+        None => true,
+    });
+    session.items.extend(sent.iter().cloned().map(Item::User));
 }
 
 /// What the tab has heard of the subagent's conversation: its transcript as the tab opens, then the lines the chat
@@ -426,6 +448,27 @@ mod tests {
             ]
         );
         assert_eq!(session.reported_model.as_deref(), Some("claude-haiku-5-5"));
+    }
+
+    /// Claude Code 2.1.329 writes a message SendMessage passed on to a subagent that runs as an attachment of its next tool
+    /// round, and no line the chat passes on carries it: read again, the tab shows it there, and what you sent that hasn't
+    /// reached the subagent yet shows at the end.
+    #[test]
+    fn a_message_that_reached_a_running_subagent_shows_after_a_reload_and_one_still_on_its_way_too() {
+        let delivered = json!({ "isSidechain": true, "agentId": "ab8d33bbb758bcba5", "type": "attachment", "uuid": "t9", "attachment": { "type": "queued_command", "prompt": "Write to the issue immediately", "source_uuid": "d8646916-04c0-4d4b-816e-c7be9e0281e3", "origin": { "kind": "coordinator" }, "isMeta": true, "reminderId": "ce1477c1bcc086d7" } });
+        let answer = json!({ "isSidechain": true, "agentId": "ab8d33bbb758bcba5", "type": "assistant", "uuid": "t10", "message": { "role": "assistant", "content": [{ "type": "text", "text": "logged it" }] } });
+        let mut entries = transcript();
+        entries.extend([delivered, answer]);
+        let (mut session, mut heard) = (Session::default(), Heard::default());
+        heard.load(&entries, &mut session);
+        let mut sent = vec!["Write to the issue immediately".to_owned(), "and keep the log short".to_owned()];
+        still_on_the_way(&mut sent, &mut session);
+        let end: Vec<&Item> = session.items.iter().rev().take(3).rev().collect();
+        assert_eq!(
+            end,
+            [&Item::User("Write to the issue immediately".into()), &Item::Text("logged it".into()), &Item::User("and keep the log short".into())]
+        );
+        assert_eq!(sent, ["and keep the log short"], "the delivered one is off the list");
     }
 
     #[test]

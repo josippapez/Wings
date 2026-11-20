@@ -32,6 +32,8 @@ pub struct Tab {
     pub state: Value,
     /// Why the last message didn't go.
     pub refused: Option<String>,
+    /// What you sent from here that its transcript doesn't show yet: a reload shows them again at the end.
+    pub sent: Vec<String>,
     /// This is the sidebar, which shows one subagent at a time and none (an empty `session`) until the chat says which.
     pub sidebar: bool,
     /// The names the plugin's pages have, to tell whether the chat is open when the subagent changes.
@@ -63,12 +65,12 @@ fn change(change: impl FnOnce(&mut Tab)) {
 }
 
 /// Hears into the subagent's conversation, which is the page's session.
-fn hear(hear: impl FnOnce(&mut Heard, &mut Session)) {
+fn hear(hear: impl FnOnce(&mut Tab, &mut Session)) {
     TAB.with(|tab| {
         if let Some(tab) = tab.borrow_mut().as_mut() {
             chat::with(|c| {
                 c.session.now = host::now() as u64;
-                hear(&mut tab.heard, &mut c.session);
+                hear(tab, &mut c.session);
             });
         }
     });
@@ -168,7 +170,7 @@ fn load() {
         return;
     };
     task::spawn(async move {
-        let read = host::subagent_transcript(&session, &agent, &["user", "assistant"], Some(HISTORY)).await;
+        let read = host::subagent_transcript(&session, &agent, &subagents::KINDS, Some(HISTORY)).await;
         // A subagent that has only just started may have no transcript yet: what the chat passes on still shows.
         let entries = match read {
             Ok(entries) => entries.as_array().cloned().unwrap_or_default(),
@@ -177,7 +179,10 @@ fn load() {
                 Vec::new()
             }
         };
-        hear(|heard, session| heard.load(&entries, session));
+        hear(|tab, session| {
+            tab.heard.load(&entries, session);
+            subagents::still_on_the_way(&mut tab.sent, session);
+        });
     });
 }
 
@@ -186,7 +191,7 @@ fn told(message: &Value) {
     match message["kind"].as_str() {
         Some("line") => {
             let line = message["line"].clone();
-            hear(|heard, session| heard.line(line, session));
+            hear(|tab, session| tab.heard.line(line, session));
         }
         Some("show") => show(message),
         Some("state") => change(|tab| tab.state = message.clone()),
@@ -217,7 +222,10 @@ pub fn send() {
     change(|tab| tab.refused = None);
     task::spawn(async move {
         match sent.await {
-            Ok(_) => chat::with(|c| c.session.items.push(Item::User(said))),
+            Ok(_) => {
+                chat::with(|c| c.session.items.push(Item::User(said.clone())));
+                change(|tab| tab.sent.push(said));
+            }
             Err(error) => {
                 // Back in the box, to send again.
                 chat::with(|c| {
