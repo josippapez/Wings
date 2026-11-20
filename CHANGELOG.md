@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.68 · 2026-11-20
+
+- **Past sessions show their first message again** under sessions Wings named, like the ones run from Claude chat.
+- **Typing in a long chat does a little less work**: each character's width is measured once instead of on every redraw.
+- **Claude chat 0.35.1**: no Open in terminal button.
+
 ## 0.2.67 · 2026-11-20
 
 - **Typing in a long chat is light**: a long page lays out only the messages on screen, so a key in a 120-message chat lays out 9 of them, not all. Any plugin page with a long list gets it.
