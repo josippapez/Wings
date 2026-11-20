@@ -227,8 +227,9 @@ pub struct Page {
 /// A page's `backdrop`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Backdrop {
-    /// `"pixels"`: a slow drift of dithered pixels in the page's colours (`ui::backdrop`).
-    Pixels,
+    /// `"pixels"` or `"pixels:<pattern>"`: a slow pattern of dithered pixels in the page's colours (`pixels`,
+    /// `ui::backdrop`). A pattern this Wings doesn't know is the drift, `"pixels"`'s own.
+    Pixels(crate::pixels::Pattern),
     /// `"gradient:<preset>"`: a slow mesh of a preset's three colours, dimmed under the page's text (`gradients`).
     Gradient(crate::gradients::Preset),
 }
@@ -237,8 +238,13 @@ impl Backdrop {
     /// The backdrop a page's `backdrop` names, if Wings draws it.
     fn named(name: &str) -> Option<Backdrop> {
         match name {
-            "pixels" => Some(Backdrop::Pixels),
-            _ => name.strip_prefix("gradient:").and_then(crate::gradients::Preset::named).map(Backdrop::Gradient),
+            "pixels" => Some(Backdrop::Pixels(crate::pixels::Pattern::Drift)),
+            _ => match name.strip_prefix("pixels:") {
+                Some(pattern) => {
+                    Some(Backdrop::Pixels(crate::pixels::Pattern::named(pattern).unwrap_or(crate::pixels::Pattern::Drift)))
+                }
+                None => name.strip_prefix("gradient:").and_then(crate::gradients::Preset::named).map(Backdrop::Gradient),
+            },
         }
     }
 }
@@ -2858,7 +2864,13 @@ mod tests {
             let Node::Page(page) = &parsed.children[0] else { panic!("a page") };
             page.backdrop
         };
-        assert_eq!(backdrop(json!({"backdrop":"pixels"})), Some(Backdrop::Pixels));
+        use crate::pixels::Pattern;
+        assert_eq!(backdrop(json!({"backdrop":"pixels"})), Some(Backdrop::Pixels(Pattern::Drift)));
+        assert_eq!(backdrop(json!({"backdrop":"pixels:rain"})), Some(Backdrop::Pixels(Pattern::Rain)));
+        assert_eq!(backdrop(json!({"backdrop":"pixels:checker"})), Some(Backdrop::Pixels(Pattern::Checker)));
+        assert_eq!(backdrop(json!({"backdrop":"pixels:embers"})), Some(Backdrop::Pixels(Pattern::Embers)));
+        // A pattern from a newer plugin than this Wings knows is the drift, not the plain ground.
+        assert_eq!(backdrop(json!({"backdrop":"pixels:snow"})), Some(Backdrop::Pixels(Pattern::Drift)));
         assert_eq!(backdrop(json!({"backdrop":"gradient:halo"})), Some(Backdrop::Gradient(crate::gradients::Preset::Halo)));
         assert_eq!(
             backdrop(json!({"backdrop":"gradient:nighty-night"})),

@@ -15,6 +15,7 @@ use crate::{
         links::{self, Which, refresh_links, session_linked},
         news::start_news,
         projects::{refresh_projects, set_notify, set_sidebar},
+        pull::pull_request,
         retry,
         state::{self, Pane, Loaded},
         status::refresh_status,
@@ -154,8 +155,13 @@ pub fn start() {
 
     tools::register(
         "failing_checks",
-        json!({ "type": "object", "properties": {}, "additionalProperties": false }),
-        |_input, caller| async move { failing_checks(caller["paneId"].as_str()).await.map(Value::from) },
+        json!({ "type": "object", "properties": { "cwd": { "type": "string", "minLength": 1, "maxLength": 4096 } }, "additionalProperties": false }),
+        |input, caller| async move { failing_checks(caller["paneId"].as_str(), input["cwd"].as_str()).await.map(Value::from) },
+    );
+    tools::register(
+        "pull_request",
+        json!({ "type": "object", "properties": { "cwd": { "type": "string", "minLength": 1, "maxLength": 4096 }, "fresh": { "type": "boolean" } }, "required": ["cwd"], "additionalProperties": false }),
+        |input, _caller| async move { pull_request(input["cwd"].as_str().unwrap_or_default(), input["fresh"] == true).await },
     );
 
     // A reply typed in a diff viewer is posted to the PR it shows.

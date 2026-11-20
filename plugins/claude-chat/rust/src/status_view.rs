@@ -189,7 +189,7 @@ pub fn reply(at: usize, said: &str, c: &Chat) -> Node {
     if blocks.is_empty() {
         nodes.push(crate::edits_view::prose(said, c));
     }
-    let foot = row().child(copy_button(&format!("reply-{at}"), "Copy this reply", c, move || copy_reply(at)));
+    let foot = row().prop("gap", "xs").prop("align", "center").child(copy_button(&format!("reply-{at}"), "Copy this reply", c, move || copy_reply(at))).maybe(crate::bookmarks::toggle_button(at, c));
     stack().prop("gap", "xs").children(nodes).child(foot)
 }
 

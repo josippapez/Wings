@@ -50,7 +50,7 @@ fn paint_ring(bounds: Bounds<Pixels>, angle: f32, window: &mut Window) {
 }
 
 /// How often a working spinner moves on: 30 times a second.
-const SPIN_STEP: Duration = Duration::from_nanos(1_000_000_000 / 30);
+pub(crate) const SPIN_STEP: Duration = Duration::from_nanos(1_000_000_000 / 30);
 
 /// A ring that turns once a second, as `spinner` draws it. Every one on screen takes its angle from the same clock and
 /// asks to be drawn again at the same moments, at most once per view and step, so any number of them cost one redraw
@@ -64,8 +64,9 @@ pub struct Spin;
 thread_local! {
     /// When each view last drew its spinners, on their clock.
     static DRAWN: RefCell<HashMap<EntityId, Duration>> = RefCell::default();
-    /// The views that already asked to be drawn again at a step, by step.
-    static WAKING: RefCell<HashSet<(EntityId, u128)>> = RefCell::default();
+    /// The views that already asked to be drawn again at a moment on the clock, by that moment and the pace of what
+    /// asked, in nanoseconds.
+    static WAKING: RefCell<HashSet<(EntityId, u128, u128)>> = RefCell::default();
 }
 
 /// When the spinners' clock started: the first time one was drawn.
@@ -138,9 +139,8 @@ fn turn(window: &mut Window, cx: &mut App) -> f32 {
     if cx.reduce_motion() {
         return 0.0;
     }
-    let now = cx.background_executor().now();
-    let elapsed = now.saturating_duration_since(*ORIGIN.get_or_init(|| now));
-    wake_at_next_step(elapsed, window, cx);
+    let elapsed = clock(cx);
+    wake_at_next(elapsed, SPIN_STEP, window, cx);
     elapsed.as_secs_f32().fract()
 }
 
@@ -159,9 +159,18 @@ pub fn ticking(window: &mut Window, cx: &mut App) -> Option<f32> {
     }
     let elapsed = clock(cx);
     if window.is_window_active() {
-        wake_at_next_step(elapsed, window, cx);
+        wake_at_next(elapsed, SPIN_STEP, window, cx);
     }
     Some(elapsed.as_secs_f32())
+}
+
+/// Seconds on the spinners' clock, and a redraw of the view being drawn at the next multiple of `every` on it, for
+/// something that moves slower than the spinners, so each of its steps falls on one of theirs. Whether it should move at
+/// all (Reduce motion, a window behind others) is the caller's to say.
+pub fn ticking_every(every: Duration, window: &mut Window, cx: &mut App) -> f32 {
+    let elapsed = clock(cx);
+    wake_at_next(elapsed, every, window, cx);
+    elapsed.as_secs_f32()
 }
 
 /// Where the spinner named `name` goes, in a piece drawn with `drawing_piece`: `spinner_layer` turns it there, so a step
@@ -178,9 +187,63 @@ const SPINNERS: &str = "spinners";
 pub fn spinner_layer(window: &Window) -> impl IntoElement {
     let id = window.window_handle().window_id();
     slots::start_draw(id);
+    rings(id, SPINNERS)
+}
+
+/// Where the spinner named `name` goes in a view a piece puts on screen (`slots::place_view`), a page say:
+/// `view_spinner_layer` turns it there, so a step redraws the layer, not the view, which may be a whole chat.
+pub fn view_spinner_slot(name: impl Into<SharedString>) -> impl IntoElement {
+    slots::slot(VIEW_SPINNERS, name, None)
+}
+
+/// `status_dot` in a view a piece puts on screen: working, its ring is the spinner in the slot `name`
+/// (`view_spinner_slot`).
+pub fn view_status_dot_slot(state: AgentState, name: impl Into<SharedString>) -> AnyElement {
+    match state {
+        AgentState::Working => div()
+            .size(px(10.0))
+            .flex_none()
+            .child(view_spinner_slot(name))
+            .into_any_element(),
+        state => status_dot(state).into_any_element(),
+    }
+}
+
+/// The layer the spinners in views' slots turn in.
+const VIEW_SPINNERS: &str = "view-spinners";
+
+/// What moves in the views a piece puts on screen (`slots::place_view`), so a step of it draws this layer and not the
+/// views, which may be whole chats: the spinners and working dots in their slots (`view_spinner_slot`,
+/// `view_status_dot_slot`) and the shimmering lines in theirs (`shimmer::shimmer_slot`), all on one clock. Drawn right
+/// after the piece that puts the views on screen, so what the window draws over that piece later (a sidebar sliding over
+/// it, a floating terminal, a menu) stays over them too. In the same draw of the window as `spinner_layer`, which starts
+/// it.
+pub fn view_spinner_layer(window: &Window) -> impl IntoElement {
+    let id = window.window_handle().window_id();
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .child(rings(id, VIEW_SPINNERS))
+        .child(
+            canvas(
+                move |_, window, cx| super::shimmer::lay_out_lines(id, window, cx),
+                |_, lines, window, cx| super::shimmer::paint_lines(lines, window, cx),
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full(),
+        )
+}
+
+/// The rings in the slots of `layer` in the window `id`, all at one angle, and a redraw of the view drawing them at the
+/// spinners' next step while there are any.
+fn rings(id: gpui::WindowId, layer: &'static str) -> impl IntoElement {
     canvas(
         move |_, window, cx| {
-            let shown = slots::shown(id, SPINNERS);
+            let shown = slots::shown(id, layer);
             let turn = if shown.is_empty() {
                 0.0
             } else {
@@ -202,36 +265,38 @@ pub fn spinner_layer(window: &Window) -> impl IntoElement {
     .size_full()
 }
 
-/// Draws the view being drawn again at the spinners' next step, `elapsed` into their clock, unless a spinner in it
-/// already asked for that step.
-fn wake_at_next_step(elapsed: Duration, window: &mut Window, cx: &mut App) {
+/// Draws the view being drawn again at the next multiple of `every` on the spinners' clock, `elapsed` into it, unless
+/// something in it already asked for that moment.
+fn wake_at_next(elapsed: Duration, every: Duration, window: &mut Window, cx: &mut App) {
     let view = window.current_view();
     DRAWN.with_borrow_mut(|drawn| drawn.insert(view, elapsed));
-    wake_after(view, elapsed, window, cx);
+    wake_after(view, elapsed, every, window, cx);
 }
 
-fn wake_after(view: EntityId, elapsed: Duration, window: &mut Window, cx: &mut App) {
-    let step = elapsed.as_nanos() / SPIN_STEP.as_nanos();
-    if !WAKING.with_borrow_mut(|waking| waking.insert((view, step))) {
+fn wake_after(view: EntityId, elapsed: Duration, every: Duration, window: &mut Window, cx: &mut App) {
+    let step = elapsed.as_nanos() / every.as_nanos();
+    let next = Duration::from_nanos(((step + 1) * every.as_nanos()) as u64);
+    // By pace too: a slower pace's wait skips a moment a faster one has to draw in (`recent` below).
+    let key = (view, next.as_nanos(), every.as_nanos());
+    if !WAKING.with_borrow_mut(|waking| waking.insert(key)) {
         return;
     }
-    let next = SPIN_STEP * (step + 1) as u32;
     let delay = next.saturating_sub(elapsed);
     window
         .spawn(cx, async move |cx| {
             cx.background_executor().timer(delay).await;
-            WAKING.with_borrow_mut(|waking| waking.remove(&(view, step)));
+            WAKING.with_borrow_mut(|waking| waking.remove(&key));
             // A view that drew its spinners again since this was asked, within the last step, for a terminal's output say,
-            // turned them
-            // then: it waits for the step after, so a busy terminal and a spinner make one stream of frames, not two.
+            // turned them then: it waits for the step after, so a busy terminal and a spinner make one stream of frames,
+            // not two.
             let recent = DRAWN.with_borrow(|drawn| {
                 drawn
                     .get(&view)
-                    .is_some_and(|&at| at > elapsed && at + SPIN_STEP >= next)
+                    .is_some_and(|&at| at > elapsed && at + every >= next)
             });
             cx.update(|window, cx| {
                 if recent {
-                    wake_after(view, next, window, cx);
+                    wake_after(view, next, every, window, cx);
                 } else {
                     cx.notify(view);
                 }
@@ -351,6 +416,69 @@ mod tests {
             (29..=31).contains(&steps),
             "the layer turned {steps} times in 30 steps"
         );
+    }
+
+    /// A view a piece puts on screen, as a page in a tab, with a working agent's dot in it.
+    struct Page;
+
+    impl Render for Page {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let id = window.window_handle().window_id();
+            slots::drawing_piece(slots::Piece::View(cx.entity_id()), id, || {
+                div().child(view_status_dot_slot(AgentState::Working, "agent"))
+            })
+        }
+    }
+
+    /// The window: the page while its tab is `shown`, kept as last drawn, then the layers.
+    struct Tabs {
+        page: gpui::Entity<Page>,
+        shown: bool,
+    }
+
+    impl Render for Tabs {
+        fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let layer = spinner_layer(window);
+            if self.shown {
+                slots::place_view(self.page.entity_id(), window.window_handle().window_id());
+            }
+            div()
+                .size_full()
+                .when(self.shown, |tabs| {
+                    tabs.child(
+                        self.page
+                            .clone()
+                            .cached(gpui::StyleRefinement::default().size(px(20.0))),
+                    )
+                })
+                .child(view_spinner_layer(window))
+                .child(layer)
+        }
+    }
+
+    #[test]
+    fn a_page_switched_away_from_leaves_no_ring_behind_and_has_it_back_when_shown() {
+        let mut app = TestApp::new();
+        let mut window = app.open_window(|_, cx| Tabs {
+            page: cx.new(|_| Page),
+            shown: true,
+        });
+        window.draw();
+        let rings = |window: &mut gpui::TestAppWindow<Tabs>| {
+            window.update(|_, window, _| slots::shown(window.window_handle().window_id(), VIEW_SPINNERS).len())
+        };
+        assert_eq!(rings(&mut window), 1, "the page's ring turns in the layer");
+        let show = |window: &mut gpui::TestAppWindow<Tabs>, shown: bool| {
+            window.update(|tabs, _, cx| {
+                tabs.shown = shown;
+                cx.notify();
+            });
+            window.draw();
+        };
+        show(&mut window, false);
+        assert_eq!(rings(&mut window), 0, "no ring where the page was");
+        show(&mut window, true);
+        assert_eq!(rings(&mut window), 1, "the ring is back with the page");
     }
 
     #[test]

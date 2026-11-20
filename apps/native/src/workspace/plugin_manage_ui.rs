@@ -151,6 +151,7 @@ pub(super) fn access_groups(manifest: &Manifest) -> Vec<(&'static str, Vec<Strin
         ("Read your Claude usage limits and each session's context and cache, from Claude Code's status line", on(p.statusline)),
         ("Read what your OpenCode sessions are doing: their latest prompts, tool calls and token use", on(p.agent_activity)),
         ("See which local ports the programs in your terminals listen on", on(p.ports)),
+        (PANE_OUTPUT, on(p.pane_output)),
         ("Read the names and sizes of the files and folders on your disks", on(p.disk_usage)),
         ("Open links that start with", list(&p.open_url)),
     ]
@@ -158,6 +159,9 @@ pub(super) fn access_groups(manifest: &Manifest) -> Vec<(&'static str, Vec<Strin
     .filter_map(|(title, items)| Some((title, items?)))
     .collect()
 }
+
+/// How the approval names `paneOutput`. Terminal output is where programs print tokens and passwords, so it says so.
+const PANE_OUTPUT: &str = "Read what your terminals show, their recent output. That can include passwords, tokens and other secrets a program printed";
 
 /// What a plugin built for JavaScript says in its page in Settings.
 const BUILT_FOR_JAVASCRIPT: &str = "Wings runs plugins built to WebAssembly. This version is written in JavaScript, so it doesn't run. Install an update if one is offered, or ask its author for a version written in Rust.";
@@ -965,6 +969,17 @@ mod tests {
                 ("Show desktop notifications, up to 20 a minute", vec![]),
             ]
         );
+    }
+
+    #[test]
+    fn the_review_warns_that_reading_terminal_output_can_reveal_secrets() {
+        let manifest: Manifest = serde_json::from_value(serde_json::json!({
+            "id": "demo", "name": "Demo", "version": "1.0.0", "api": 1, "main": "main.js",
+            "permissions": { "paneOutput": true },
+        }))
+        .unwrap();
+        assert_eq!(access_groups(&manifest), [(PANE_OUTPUT, vec![])]);
+        assert!(PANE_OUTPUT.starts_with("Read what your terminals show") && PANE_OUTPUT.contains("secrets"));
     }
 
     #[test]

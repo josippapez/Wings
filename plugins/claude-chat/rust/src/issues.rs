@@ -88,7 +88,11 @@ fn tier(issue: &Entry, query: &str) -> Option<u8> {
 pub fn active(draft: &str) -> Option<(usize, &str)> {
     let start = draft.char_indices().rev().find(|(_, ch)| ch.is_whitespace()).map_or(0, |(at, ch)| at + ch.len_utf8());
     let query = draft[start..].strip_prefix('#')?;
-    if !query.chars().all(|ch| ch.is_alphanumeric() || ch == '-' || ch == '_') || draft[..start].matches('`').count() % 2 == 1 {
+    // `@a.rs #L10` is a line range of the file before it.
+    if !query.chars().all(|ch| ch.is_alphanumeric() || ch == '-' || ch == '_')
+        || draft[..start].matches('`').count() % 2 == 1
+        || crate::mentions::range_after_mention(draft, start)
+    {
         return None;
     }
     Some((start, query))

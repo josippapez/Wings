@@ -844,6 +844,11 @@ impl Workspace {
                     // radius less its border.
                     Some(tab) => {
                         let backdrop = tab.page.read(cx).backdrop().filter(|_| self.parts.is_some());
+                        // On screen unless a terminal fills the area in its place: its spinners turn in the window's
+                        // layer for them then (`render`), and a step of them no longer draws the whole page again.
+                        if self.loose_page().is_none() {
+                            ui::place_view(tab.page.entity_id(), window.window_handle().window_id());
+                        }
                         page_card_over(
                             tab.page
                                 .clone()
@@ -1027,7 +1032,6 @@ impl Render for Workspace {
             .flex()
             .flex_col()
             .relative()
-            .bg(rgba(theme::GLASS))
             .on_action(
                 cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)),
             )
@@ -1170,6 +1174,8 @@ impl Render for Workspace {
                     }))
                 },
             )
+            // The glass everything lies on, with a hole where a tab's backdrop shows in the layer under the window.
+            .child(ui::window_glass(rgba(theme::GLASS)))
             .child(title_bar)
             .child(
                 div()
@@ -1181,6 +1187,9 @@ impl Render for Workspace {
                     // Under the main column: the backdrop a tab's page asks for, in the place its card leaves for it.
                     .children(self.parts.as_ref().map(|parts| parts.backdrop.clone()))
                     .child(main)
+                    // What moves in the tab's page (spinners, working dots, shimmers), as if in it: under what the
+                    // window draws over the main column.
+                    .child(ui::view_spinner_layer(window))
                     // Over the main column, as if in it: what draws over the terminals in it follows.
                     .child(ui::slot_layer(pane_card::TERMINALS, self.tab_terminals(cx)))
                     // The terminals an agent opened floating over its pane, over its terminal.

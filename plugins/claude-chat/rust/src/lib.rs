@@ -17,6 +17,9 @@ pub const SESSION_SAVED: &str = "session-saved";
 mod actions;
 #[cfg(feature = "chat")]
 mod actions_view;
+mod blocked;
+#[cfg(feature = "chat")]
+mod bookmarks;
 #[cfg(feature = "chat")]
 mod branch;
 #[cfg(feature = "chat")]
@@ -56,6 +59,9 @@ mod mentions;
 mod notices;
 #[cfg(feature = "chat")]
 mod pictures_view;
+mod plan_doc;
+#[cfg(feature = "chat")]
+mod plan_doc_view;
 mod plan_limit;
 mod plugins;
 #[cfg(feature = "chat")]
@@ -63,6 +69,8 @@ mod plugins_view;
 mod prefs;
 #[cfg(feature = "chat")]
 mod rail;
+#[cfg(feature = "chat")]
+mod search;
 mod review;
 #[cfg(any(feature = "chat", test))]
 mod reattach;
@@ -78,12 +86,18 @@ mod pane_sidebar;
 mod refs;
 mod remote;
 #[cfg(feature = "chat")]
+mod pull;
+#[cfg(feature = "chat")]
+mod pull_view;
+#[cfg(feature = "chat")]
 mod refs_view;
 mod session;
 #[cfg(feature = "chat")]
 mod session_side;
 #[cfg(feature = "session")]
 mod session_sidebar;
+#[cfg(feature = "settings")]
+mod claude_version;
 #[cfg(feature = "settings")]
 mod settings_page;
 mod setup;
@@ -102,6 +116,8 @@ mod subagent_tab;
 mod subagent_view;
 mod subagents;
 #[cfg(feature = "chat")]
+mod terminals;
+#[cfg(feature = "chat")]
 mod tasks_view;
 #[cfg(feature = "chat")]
 mod titles_view;
@@ -111,5 +127,7 @@ mod usage;
 mod usage_view;
 #[cfg(feature = "chat")]
 mod view;
+#[cfg(feature = "chat")]
+mod view_mode;
 #[cfg(feature = "chat")]
 mod worktree;

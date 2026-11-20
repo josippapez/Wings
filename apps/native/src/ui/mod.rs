@@ -8,15 +8,20 @@ mod drag;
 mod glow;
 mod menu;
 pub mod motion;
+#[cfg(target_os = "macos")]
+mod native_backdrop;
 mod parts;
 #[cfg(target_os = "macos")]
 mod shader;
 mod sheet;
+mod shimmer;
 mod slots;
 mod status_dot;
 mod tooltip;
 
-pub use backdrop::{BackdropLayer, backdrop_slot};
+pub use backdrop::{BackdropLayer, backdrop_slot, window_glass};
+#[cfg(target_os = "macos")]
+pub use backdrop::draw_backdrops_under;
 #[cfg(all(test, feature = "test-support"))]
 pub(crate) use backdrop::STEP as BACKDROP_STEP;
 pub use button::{Variant, badge, button, chip};
@@ -30,8 +35,14 @@ pub use sheet::{
     SEARCH_MARK, SHEET_SEARCH_WIDTH, SHEET_WIDTH, search_box, segment, segmented, sheet, sheet_corner,
     sheet_header, sheet_list,
 };
-pub use slots::{drawing_piece, slot, slot_layer};
-pub use status_dot::{spinner as working_spinner, spinner_layer, status_dot, status_dot_slot};
+pub use shimmer::{shimmer, shimmer_slot};
+#[cfg(all(test, feature = "test-support"))]
+pub(crate) use status_dot::SPIN_STEP;
+pub use slots::{Piece, drawing_piece, forget_view, place_view, slot, slot_layer, view_placed};
+pub use status_dot::{
+    spinner as working_spinner, spinner_layer, status_dot, status_dot_slot, view_spinner_layer, view_spinner_slot,
+    view_status_dot_slot,
+};
 pub use tooltip::{tip, tooltip, tooltip_exit};
 
 use gpui::{

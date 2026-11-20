@@ -1,7 +1,7 @@
-//! A slow drift of dithered pixels behind a page that asks for it (`backdrop: "pixels"` on its `Page`), over all of the
-//! card that holds it. A grid of square cells, each shaded from a few slow waves of where it is and when, cut into a few
-//! shades of the page's ground with a hint of the Claude orange and the info blue, so text on it reads as on the plain
-//! ground. Cells of one shade side by side in a row are painted as one quad, and the ground's shade not at all.
+//! A slow pattern of dithered pixels behind a page that asks for it (`backdrop: "pixels"` or `"pixels:<pattern>"` on its
+//! `Page`), over all of the card that holds it. A grid of square cells, each one of a few shades of the page's ground
+//! with a hint of the Claude orange and the info blue by where it is and when (`pixels`), so text on it reads as on the
+//! plain ground. Cells of one shade side by side in a row are painted as one quad, and the ground's shade not at all.
 //!
 //! The card leaves a slot for it (`backdrop_slot`) and paints no ground of its own. The window's `BackdropLayer`, drawn
 //! before the piece with the card, paints in the slot. The layer is a view of its own that asks to be drawn again at
@@ -13,6 +13,15 @@
 //! A page can ask for a gradient instead (`backdrop: "gradient:<preset>"`, `gradients.rs`): a Metal shader draws each
 //! step into a frame of its own (`shader`), which the layer draws as a GPUI surface on the same steps. Where Metal
 //! can't be set up, the slot keeps the plain ground.
+//!
+//! That is how a window draws them on its own. The app's window draws them in a layer of Wings' own under GPUI's
+//! drawing of the window instead (`native_backdrop`, `draw_backdrops_under`), so a step is one Metal draw into that
+//! layer and no draw of the window at all. The window's glass (`window_glass`) leaves a hole where the slot is, and the
+//! window paints nothing of the backdrop. The layer moves only in a draw of the window, which is the only time the slot
+//! can move. A slot that appears shows the plain ground for a draw while its layer gets its first drawing, a slot that
+//! goes keeps its layer a frame longer, and a slot that moves has a layer over where it was and where it is for a frame,
+//! so the window's drawing and the layer, which reach the screen apart, never leave the desktop showing through the
+//! hole. Windows without the layer (offscreen ones, tests, or where it can't be set up) paint the backdrops as above.
 
 use std::{
     cell::RefCell,
@@ -22,72 +31,52 @@ use std::{
 };
 
 use gpui::{
-    App, Bounds, ContentMask, Context, Corners, EntityId, Hsla, IntoElement, Pixels, Render, SharedString, Window,
-    WindowId, canvas, div, fill, point, prelude::*, px, rgba, size,
+    App, BorderStyle, Bounds, ContentMask, Context, Corners, EntityId, Hsla, IntoElement, PaintQuad, Pixels, Render,
+    SharedString, Window, WindowId, canvas, div, fill, point, prelude::*, px, quad, rgba, size, transparent_black,
 };
 
 use super::{slots, status_dot};
 use crate::{
     gradients::{self, Preset, Uniforms},
     page::tree::Backdrop,
+    pixels::{BASE, Pattern, SHADES},
     theme::{self, Palette},
 };
 
 /// The layer the backdrops draw in (`slots`).
 const LAYER: &str = "backdrop";
 
-/// How wide and tall a cell is, in points.
-pub(crate) const CELL: f32 = 12.0;
-
 /// How long a step of the drift lasts: 15 a second, every other step of the spinners' 30.
 pub(crate) const STEP: Duration = Duration::from_nanos(1_000_000_000 / 15);
 
-/// How many shades a cell can be: two darker than the ground, the ground itself (`BASE`), then the orange and the blue,
-/// each faint and fainter.
-pub(crate) const SHADES: usize = 7;
-
-/// The ground's shade, which the layer paints once under the cells and no cell paints again.
-pub(crate) const BASE: u8 = 2;
-
-/// The 4x4 ordered dither: where in a band's edge a cell falls, so two bands meet in a checker of cells, not a line.
-const BAYER: [[u8; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
-
-/// Where the waves' bands change, darkest to brightest, on their 0 to 1.
-const EDGES: [f32; 4] = [0.30, 0.42, 0.58, 0.70];
-
-/// Each shade's colour over the ground, in `palette`: the window's darker ground strong and light, the ground, then the
-/// Claude orange and the info blue, each at 5% and 9%.
-fn colors(palette: &Palette) -> [Hsla; SHADES] {
-    let over = |color: u32, alpha: u32| -> Hsla { rgba(color << 8 | alpha).into() };
+/// Each shade's colour over the ground and how strong, as 0xRRGGBB and 0 to 255, in `palette`: the window's darker
+/// ground strong and light, the ground, then the Claude orange and the info blue, each at 5% and 9%.
+fn tints(palette: &Palette) -> [(u32, u32); SHADES] {
     [
-        over(palette.background, 0xd9),
-        over(palette.background, 0x73),
-        over(palette.surface, 0xff),
-        over(theme::CLAUDE, 0x0d),
-        over(theme::CLAUDE, 0x17),
-        over(palette.info, 0x0d),
-        over(palette.info, 0x17),
+        (palette.background, 0xd9),
+        (palette.background, 0x73),
+        (palette.surface, 0xff),
+        (theme::CLAUDE, 0x0d),
+        (theme::CLAUDE, 0x17),
+        (palette.info, 0x0d),
+        (palette.info, 0x17),
     ]
 }
 
-/// The shade of the cell `col` across and `row` down, `t` seconds into the drift: a sum of slow waves cut into five
-/// bands, dithered at their edges. The two brightest bands are warm or cool by a broader, slower wave.
-pub(crate) fn shade(col: u32, row: u32, t: f32) -> u8 {
-    let (x, y) = (col as f32, row as f32);
-    // Rings out of a centre that wanders over the first 70 by 45 cells or so.
-    let (cx, cy) = (34.0 + 22.0 * (t * 0.029).sin(), 22.0 + 14.0 * (t * 0.037).cos());
-    let waves = (x * 0.067 + t * 0.07).sin()
-        + (y * 0.089 - t * 0.05).sin()
-        + ((x - y) * 0.047 + t * 0.04).sin()
-        + ((x - cx).hypot(y - cy) * 0.16 - t * 0.12).sin();
-    let dither = (f32::from(BAYER[(row % 4) as usize][(col % 4) as usize]) + 0.5) / 16.0 - 0.5;
-    let value = waves / 8.0 + 0.5 + dither * 0.06;
-    let band = EDGES.iter().filter(|edge| value >= **edge).count() as u8;
-    if band <= BASE {
-        return band;
-    }
-    let warm = (x * 0.019 + y * 0.023 + t * 0.017).sin() > 0.0;
-    if warm { band } else { band + 2 }
+fn colors(palette: &Palette) -> [Hsla; SHADES] {
+    tints(palette).map(|(color, alpha)| rgba(color << 8 | alpha).into())
+}
+
+/// Each shade's colour laid over the ground, opaque, as sRGB 0 to 1: what the window makes of a cell it paints over the
+/// ground (`colors`), as GPUI blends sRGB values as they are, for a layer that draws the cells itself.
+fn opaque_colors(palette: &Palette) -> [[f32; 4]; SHADES] {
+    let channels = |color: u32| [(color >> 16) & 0xff, (color >> 8) & 0xff, color & 0xff].map(|c| c as f32 / 255.0);
+    let ground = channels(palette.surface);
+    tints(palette).map(|(color, alpha)| {
+        let (color, alpha) = (channels(color), alpha as f32 / 255.0);
+        let [r, g, b] = [0, 1, 2].map(|i| ground[i] + (color[i] - ground[i]) * alpha);
+        [r, g, b, 1.0]
+    })
 }
 
 /// The runs of one shade in a row of cells' shades, by their first cell and the one past their last, leaving out the
@@ -130,20 +119,21 @@ pub(crate) struct Run {
 }
 
 /// What to paint over the ground of a slot `width` by `height` points whose corners are `radius` round, at step `step`
-/// of the drift. The cells start at the slot's top left corner, which doesn't scroll, so they stay where they are.
-pub(crate) fn runs_in(width: f32, height: f32, radius: f32, step: u64) -> Vec<Run> {
+/// of `pattern`. The cells start at the slot's top left corner, which doesn't scroll, so they stay where they are.
+pub(crate) fn runs_in(pattern: Pattern, width: f32, height: f32, radius: f32, step: u64) -> Vec<Run> {
     let t = step as f32 * STEP.as_secs_f32();
-    let (cols, rows) = ((width / CELL).ceil().max(0.0) as u32, (height / CELL).ceil().max(0.0) as u32);
+    let cell = pattern.cell();
+    let (cols, rows) = ((width / cell).ceil().max(0.0) as u32, (height / cell).ceil().max(0.0) as u32);
     let mut shades = Vec::with_capacity(cols as usize);
     let mut runs = Vec::new();
     for row in 0..rows {
-        let top = row as f32 * CELL;
-        let bottom = (top + CELL).min(height);
+        let top = row as f32 * cell;
+        let bottom = (top + cell).min(height);
         let inset = corner_inset(top, bottom, height, radius);
         shades.clear();
-        shades.extend((0..cols).map(|col| shade(col, row, t)));
+        shades.extend((0..cols).map(|col| pattern.shade(col, row, t)));
         for (start, end, shade) in runs_of(&shades) {
-            let (left, right) = ((start as f32 * CELL).max(inset), (end as f32 * CELL).min(width - inset));
+            let (left, right) = ((start as f32 * cell).max(inset), (end as f32 * cell).min(width - inset));
             if right > left {
                 runs.push(Run { x: left, y: top, width: right - left, height: bottom - top, shade });
             }
@@ -152,7 +142,7 @@ pub(crate) fn runs_in(width: f32, height: f32, radius: f32, step: u64) -> Vec<Ru
     runs
 }
 
-/// What a slot's backdrop is: the pixels or a gradient, the page's palette, and how round the corners of what holds it
+/// What a slot's backdrop is: a pattern of pixels or a gradient, the page's palette, and how round the corners of what holds it
 /// are.
 #[derive(Clone, Copy, PartialEq)]
 struct Look {
@@ -192,10 +182,10 @@ pub fn backdrop_slot(name: impl Into<SharedString>, kind: Backdrop, palette: Pal
         )
 }
 
-/// A slot's runs as last worked out, and what for: the step and the slot's width, height and corners.
+/// A slot's runs as last worked out, and what for: the step, the slot's width and height, and its look.
 struct Painted {
     name: SharedString,
-    key: (u64, u32, u32, u32),
+    key: (u64, u32, u32, Look),
     runs: Rc<Vec<Run>>,
 }
 
@@ -227,6 +217,19 @@ impl Render for BackdropLayer {
     }
 }
 
+/// The slots of the window `id` that show, with the looks the pieces that left them drew.
+fn looks_of(id: WindowId, shown: &[(SharedString, slots::Slot)]) -> Vec<(&SharedString, &slots::Slot, Look)> {
+    shown
+        .iter()
+        .filter_map(|(name, slot)| Some((name, slot, LOOKS.with_borrow(|looks| looks.get(&(id, name.clone())).copied())?)))
+        .collect()
+}
+
+/// Which of the slots that show a window's native layer shows: the first by name. The window paints any other.
+fn pick(looks: &[(&SharedString, &slots::Slot, Look)]) -> Option<usize> {
+    (0..looks.len()).min_by(|a, b| looks[*a].0.cmp(looks[*b].0))
+}
+
 fn paint_slots(painted: &RefCell<Vec<Painted>>, window: &mut Window, cx: &mut App) {
     let id = window.window_handle().window_id();
     let shown = slots::shown(id, LAYER);
@@ -235,13 +238,21 @@ fn paint_slots(painted: &RefCell<Vec<Painted>>, window: &mut Window, cx: &mut Ap
     let mut painted = painted.borrow_mut();
     painted.retain(|was| showing(&was.name));
     SHADER.with_borrow_mut(|shader| shader.forget(&|(window, name): &SlotKey| *window != id || showing(name)));
-    let looks: Vec<(&SharedString, &slots::Slot, Look)> = shown
-        .iter()
-        .filter_map(|(name, slot)| Some((name, slot, LOOKS.with_borrow(|looks| looks.get(&(id, name.clone())).copied())?)))
-        .collect();
+    let mut looks = looks_of(id, &shown);
+    let native = pick(&looks);
+    match (present_native(id, native.map(|at| looks[at]), window, cx), native) {
+        (InDraw::Ground, Some(at)) => {
+            let (_, slot, look) = looks.remove(at);
+            window.with_content_mask(Some(slot.mask), |window| paint(slot.bounds, &look, &[], window));
+        }
+        (InDraw::Layer, Some(at)) => {
+            looks.remove(at);
+        }
+        _ => {}
+    }
     // Pixels always move; a gradient only once its shader is set up, and never after it failed.
     let moving = looks.iter().any(|(_, _, look)| match look.kind {
-        Backdrop::Pixels => true,
+        Backdrop::Pixels(_) => true,
         Backdrop::Gradient(_) => SHADER.with_borrow_mut(|shader| shader.usable()),
     });
     if !moving {
@@ -252,17 +263,20 @@ fn paint_slots(painted: &RefCell<Vec<Painted>>, window: &mut Window, cx: &mut Ap
     }
     let step = step(window, cx);
     for (name, slot, look) in looks {
-        if let Backdrop::Gradient(preset) = look.kind {
-            let key = (id, name.clone());
-            window.with_content_mask(Some(slot.mask), |window| paint_gradient(&key, slot, &look, preset, step, window));
-            continue;
-        }
+        let pattern = match look.kind {
+            Backdrop::Pixels(pattern) => pattern,
+            Backdrop::Gradient(preset) => {
+                let key = (id, name.clone());
+                window.with_content_mask(Some(slot.mask), |window| paint_gradient(&key, slot, &look, preset, step, window));
+                continue;
+            }
+        };
         let (width, height) = (f32::from(slot.bounds.size.width), f32::from(slot.bounds.size.height));
-        let key = (step, width.to_bits(), height.to_bits(), look.radius.to_bits());
+        let key = (step, width.to_bits(), height.to_bits(), look);
         let runs = match painted.iter().find(|was| was.name == *name) {
             Some(was) if was.key == key => was.runs.clone(),
             _ => {
-                let runs = Rc::new(runs_in(width, height, look.radius, step));
+                let runs = Rc::new(runs_in(pattern, width, height, look.radius, step));
                 painted.retain(|was| was.name != *name);
                 painted.push(Painted { name: name.clone(), key, runs: runs.clone() });
                 runs
@@ -432,15 +446,18 @@ fn paint_frame(_: Bounds<Pixels>, frame: &Frame, _: &mut Window) {
     match *frame {}
 }
 
-/// The step of the drift to paint, and a draw of the layer at the next while the window is in front. The first under
-/// Reduce motion, where it stands still.
-fn step(window: &mut Window, cx: &mut App) -> u64 {
-    if cx.reduce_motion() {
-        return 0;
-    }
+/// The step of the backdrops now, and how far into the spinners' clock it is. The first under Reduce motion, where they
+/// stand still.
+fn now(cx: &App) -> (u64, Duration) {
     let elapsed = status_dot::clock(cx);
-    let step = (elapsed.as_nanos() / STEP.as_nanos()) as u64;
-    if window.is_window_active() {
+    let step = if cx.reduce_motion() { 0 } else { (elapsed.as_nanos() / STEP.as_nanos()) as u64 };
+    (step, elapsed)
+}
+
+/// The step of the drift to paint, and a draw of the layer at the next while the window is in front.
+fn step(window: &mut Window, cx: &mut App) -> u64 {
+    let (step, elapsed) = now(cx);
+    if !cx.reduce_motion() && window.is_window_active() {
         wake_at(step + 1, elapsed, window, cx);
     }
     step
@@ -462,30 +479,330 @@ fn wake_at(next: u64, elapsed: Duration, window: &mut Window, cx: &mut App) {
         .detach();
 }
 
+/// What a native layer draws in a slot.
+pub(crate) enum Drawing<'a> {
+    /// `cols` by `rows` cells `cell` points wide from the slot's top left corner, row by row, one pixel a cell, each the
+    /// colour of its shade.
+    Cells { cell: f32, cols: u32, rows: u32, shades: &'a [u8], colors: [[f32; 4]; SHADES] },
+    /// A gradient's frame over the whole slot, `uniforms.size` pixels big.
+    Gradient(&'a Uniforms),
+}
+
+/// What draws a window's backdrops in a layer under the window's drawing (`native_backdrop::Host`), or a stand-in in
+/// tests.
+pub(crate) trait Present {
+    /// Puts the slot's layer as `placed` and draws `drawing` in it if there is one, as one change of the screen, without
+    /// waiting for the GPU.
+    fn show(&mut self, slot: &SharedString, placed: &Placed, drawing: Option<&Drawing>) -> Result<(), String>;
+    /// Takes the slot's layer away.
+    fn remove(&mut self, slot: &SharedString);
+}
+
+/// Where a slot's layer is and how: at `frame`, in the window's points from its top left corner, with its corners
+/// `radius` round, for a window of `scale` device pixels a point, showing or hidden.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct Placed {
+    pub frame: Bounds<Pixels>,
+    pub radius: f32,
+    pub scale: f32,
+    pub visible: bool,
+}
+
+/// The slot a window's native layer shows.
+struct Shown {
+    name: SharedString,
+    look: Look,
+    /// Where the slot is in the window's last draw.
+    bounds: Bounds<Pixels>,
+    placed: Option<Placed>,
+    /// What the layer last drew: the step, its size in cells or pixels, and the look.
+    drawn: Option<(u64, (u32, u32), Look)>,
+}
+
+/// A window's backdrops drawn under its drawing.
+struct NativeLayer {
+    present: Box<dyn Present>,
+    shown: Option<Shown>,
+}
+
+/// What a draw of the window does in the slot its native layer shows.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum InDraw {
+    /// Paints it, as a window without the layer does.
+    Window,
+    /// Paints the plain ground: the layer has its first drawing and shows from the next draw.
+    Ground,
+    /// Nothing: the layer shows it through the glass's hole.
+    Layer,
+}
+
+/// What a draw of the window did to its native layer.
+struct Outcome {
+    in_draw: InDraw,
+    /// The slot it stopped showing, whose layer goes once the window's drawing without it is on screen.
+    leaving: Option<SharedString>,
+    /// The layer covers where the slot was as well as where it is, until the window's drawing is on screen.
+    moved: bool,
+}
+
+impl NativeLayer {
+    /// Puts the shown slot's layer as `placed` and draws step `step` in it at the size of its frame, unless it is there
+    /// and shows that already.
+    fn show(&mut self, placed: Placed, step: u64) -> Result<(), String> {
+        let Some(shown) = self.shown.as_mut() else { return Ok(()) };
+        let (width, height) = (f32::from(placed.frame.size.width), f32::from(placed.frame.size.height));
+        let look = shown.look;
+        let shades: Vec<u8>;
+        let uniforms: Uniforms;
+        let mut drawing = None;
+        let key = match look.kind {
+            Backdrop::Pixels(pattern) => {
+                let cell = pattern.cell();
+                let (cols, rows) = ((width / cell).ceil().max(1.0) as u32, (height / cell).ceil().max(1.0) as u32);
+                let key = (step, (cols, rows), look);
+                if shown.drawn != Some(key) {
+                    let t = step as f32 * STEP.as_secs_f32();
+                    shades = (0..rows).flat_map(|row| (0..cols).map(move |col| pattern.shade(col, row, t))).collect();
+                    let colors = opaque_colors(&look.palette);
+                    drawing = Some(Drawing::Cells { cell, cols, rows, shades: &shades, colors });
+                }
+                key
+            }
+            Backdrop::Gradient(preset) => {
+                let size = frame_size(width, height, placed.scale);
+                let key = (step, size, look);
+                if shown.drawn != Some(key) {
+                    let seconds = step as f64 * STEP.as_secs_f64();
+                    uniforms = gradients::uniforms(preset, &look.palette, seconds, size, look.radius * placed.scale * RESOLUTION);
+                    drawing = Some(Drawing::Gradient(&uniforms));
+                }
+                key
+            }
+        };
+        if shown.placed == Some(placed) && drawing.is_none() {
+            return Ok(());
+        }
+        self.present.show(&shown.name, &placed, drawing.as_ref())?;
+        shown.placed = Some(placed);
+        if drawing.is_some() {
+            shown.drawn = Some(key);
+        }
+        Ok(())
+    }
+
+    /// A draw of the window, with `chosen` the slot the layer shows in it, if any.
+    fn in_draw(&mut self, chosen: Option<(&SharedString, &slots::Slot, Look)>, step: u64, scale: f32) -> Result<Outcome, String> {
+        let mut outcome = Outcome { in_draw: InDraw::Window, leaving: None, moved: false };
+        if self.shown.as_ref().is_some_and(|shown| chosen.is_none_or(|(name, ..)| *name != shown.name)) {
+            outcome.leaving = self.shown.take().map(|shown| shown.name);
+        }
+        let Some((name, slot, look)) = chosen else { return Ok(outcome) };
+        let bounds = slot.bounds;
+        let shown =
+            self.shown.get_or_insert_with(|| Shown { name: name.clone(), look, bounds, placed: None, drawn: None });
+        // Shown from the draw after its first drawing, as the glass leaves it a hole from then (`hole`).
+        let ready = shown.drawn.is_some();
+        // The window's last drawing may still be on screen when the layer moves, or its next one already: over both
+        // places, neither shows the desktop through its hole. `settle` takes it back to the slot.
+        let frame = if ready && shown.bounds != bounds { shown.bounds.union(&bounds) } else { bounds };
+        shown.bounds = bounds;
+        shown.look = look;
+        outcome.moved = frame != bounds;
+        self.show(Placed { frame, radius: look.radius, scale, visible: ready }, step)?;
+        outcome.in_draw = if ready { InDraw::Layer } else { InDraw::Ground };
+        Ok(outcome)
+    }
+}
+
+thread_local! {
+    /// Each window's native layer, for the windows that have one.
+    static NATIVE: RefCell<HashMap<WindowId, NativeLayer>> = RefCell::default();
+    /// The windows whose native layer already waits for a step, by the step.
+    static NATIVE_WAKING: RefCell<HashSet<(WindowId, u64)>> = RefCell::default();
+}
+
+/// Has `present` draw the backdrops of the window `id` under its drawing, from its next draw.
+pub(crate) fn present_with(id: WindowId, present: Box<dyn Present>) {
+    NATIVE.with_borrow_mut(|natives| natives.insert(id, NativeLayer { present, shown: None }));
+}
+
+/// Draws the window's backdrops in a layer under its drawing from now on, so a step of one never draws the window. Where
+/// Metal or the layer can't be set up the window paints them itself, as an offscreen window does.
+#[cfg(target_os = "macos")]
+pub fn draw_backdrops_under(window: &mut Window) {
+    match super::native_backdrop::Host::new(window) {
+        Ok(host) => {
+            present_with(window.window_handle().window_id(), Box::new(host));
+            window.refresh();
+        }
+        Err(why) => eprintln!("Backdrops are painted in the window: {why}"),
+    }
+}
+
+/// The window's glass, which everything in the window lies on, in `color`: all over the window but for a hole where a
+/// backdrop shows in the layer under the window. First in the window's root, which paints no ground of its own.
+pub fn window_glass(color: impl Into<Hsla>) -> impl IntoElement {
+    let color = color.into();
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            // Painted once every piece has been laid out in this draw, so the hole is where the slot is now.
+            let id = window.window_handle().window_id();
+            window.paint_quad(match hole(id) {
+                Some((slot, radius)) => holed(bounds, slot, radius, color),
+                None => fill(bounds, color),
+            });
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+}
+
+/// Where the glass of the window `id` leaves a hole for the slot its native layer shows, and how round: once the layer
+/// has a drawing, while the slot still shows in this draw.
+fn hole(id: WindowId) -> Option<(Bounds<Pixels>, f32)> {
+    let name = NATIVE.with_borrow(|natives| {
+        let shown = natives.get(&id)?.shown.as_ref()?;
+        shown.drawn.is_some().then(|| shown.name.clone())
+    })?;
+    let shown = slots::shown(id, LAYER);
+    let looks = looks_of(id, &shown);
+    let (chosen, slot, look) = looks[pick(&looks)?];
+    (*chosen == name).then_some((slot.bounds, look.radius))
+}
+
+/// A quad in `color` over all of `window` but `hole`, whose corners are `radius` round: a border so wide around the hole
+/// that it reaches past the window, with nothing inside it. GPUI rounds a border's inner corners to the outer ones'
+/// radius less the border (`quad_fragment`), so outer corners as much rounder as the border is wide leave the hole
+/// `radius` round.
+fn holed(window: Bounds<Pixels>, hole: Bounds<Pixels>, radius: f32, color: Hsla) -> PaintQuad {
+    let reach = (f32::from(window.size.width) + f32::from(window.size.height)).ceil() + 1.0;
+    let radius = radius.min(f32::from(hole.size.width).min(f32::from(hole.size.height)) / 2.0);
+    let around = Bounds::new(
+        point(hole.origin.x - px(reach), hole.origin.y - px(reach)),
+        size(hole.size.width + px(reach * 2.0), hole.size.height + px(reach * 2.0)),
+    );
+    quad(around, Corners::all(px(radius + reach)), transparent_black(), px(reach), color, BorderStyle::Solid)
+}
+
+/// A draw of the window `id`, as its native layer sees it: places and draws the layer of `chosen`, the slot it shows,
+/// and says what the window paints there. Paints all of them itself without the layer.
+fn present_native(
+    id: WindowId,
+    chosen: Option<(&SharedString, &slots::Slot, Look)>,
+    window: &mut Window,
+    cx: &mut App,
+) -> InDraw {
+    let (step, elapsed) = now(cx);
+    let scale = window.scale_factor();
+    let Some(outcome) = NATIVE.with_borrow_mut(|natives| Some(natives.get_mut(&id)?.in_draw(chosen, step, scale))) else {
+        return InDraw::Window;
+    };
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(why) => {
+            fail_native(id, &why, window);
+            return InDraw::Window;
+        }
+    };
+    if let Some(name) = outcome.leaving {
+        window.on_next_frame(move |window, _| take_away(window, &name));
+    }
+    match outcome.in_draw {
+        // The next draw leaves the hole.
+        InDraw::Ground => window.request_animation_frame(),
+        InDraw::Layer => {
+            if outcome.moved {
+                window.on_next_frame(settle);
+            }
+            if !cx.reduce_motion() && window.is_window_active() {
+                native_wake(step + 1, elapsed, window, cx);
+            }
+        }
+        InDraw::Window => {}
+    }
+    outcome.in_draw
+}
+
+/// Takes away the layer of the slot `name`, unless it shows again.
+fn take_away(window: &mut Window, name: &SharedString) {
+    let id = window.window_handle().window_id();
+    NATIVE.with_borrow_mut(|natives| {
+        if let Some(native) = natives.get_mut(&id)
+            && native.shown.as_ref().is_none_or(|shown| shown.name != *name)
+        {
+            native.present.remove(name);
+        }
+    });
+}
+
+/// Brings the layer that covered where its slot was and is back to the slot, now the window's drawing of it is on
+/// screen. No draw of the window.
+fn settle(window: &mut Window, _: &mut App) {
+    let id = window.window_handle().window_id();
+    let settled = NATIVE.with_borrow_mut(|natives| {
+        let native = natives.get_mut(&id)?;
+        let shown = native.shown.as_ref()?;
+        let placed = shown.placed.filter(|placed| placed.frame != shown.bounds)?;
+        let (bounds, step) = (shown.bounds, shown.drawn.map_or(0, |drawn| drawn.0));
+        Some(native.show(Placed { frame: bounds, ..placed }, step))
+    });
+    if let Some(Err(why)) = settled {
+        fail_native(id, &why, window);
+    }
+}
+
+/// Draws a step of the window's native layer as step `next` starts, `elapsed` into the clock, unless it already waits
+/// for it.
+fn native_wake(next: u64, elapsed: Duration, window: &mut Window, cx: &mut App) {
+    let id = window.window_handle().window_id();
+    if !NATIVE_WAKING.with_borrow_mut(|waking| waking.insert((id, next))) {
+        return;
+    }
+    let delay = Duration::from_nanos(next * STEP.as_nanos() as u64).saturating_sub(elapsed);
+    window
+        .spawn(cx, async move |cx| {
+            cx.background_executor().timer(delay).await;
+            NATIVE_WAKING.with_borrow_mut(|waking| waking.remove(&(id, next)));
+            cx.update(native_step).ok();
+        })
+        .detach();
+}
+
+/// A step of the window's native layer: its next drawing, and a wake for the step after while the window is in front.
+/// The window doesn't draw.
+fn native_step(window: &mut Window, cx: &mut App) {
+    if cx.reduce_motion() || !window.is_window_active() {
+        return;
+    }
+    let id = window.window_handle().window_id();
+    let (step, elapsed) = now(cx);
+    let drawn = NATIVE.with_borrow_mut(|natives| {
+        let native = natives.get_mut(&id)?;
+        let placed = native.shown.as_ref()?.placed.filter(|placed| placed.visible)?;
+        Some(native.show(placed, step))
+    });
+    match drawn {
+        Some(Ok(())) => native_wake(step + 1, elapsed, window, cx),
+        Some(Err(why)) => fail_native(id, &why, window),
+        None => {}
+    }
+}
+
+/// The native layer of the window `id` couldn't place or draw: said once, and the window paints its backdrops itself
+/// from its next draw, with no hole in its glass.
+fn fail_native(id: WindowId, why: &str, window: &mut Window) {
+    eprintln!("Backdrops are painted in the window from now on: {why}");
+    let gone = NATIVE.with_borrow_mut(|natives| natives.remove(&id));
+    drop(gone);
+    window.on_next_frame(|window, _| window.refresh());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The shades of a grid of cells `t` seconds in, row by row.
-    fn grid(t: f32) -> Vec<u8> {
-        (0..60).flat_map(|row| (0..84).map(move |col| shade(col, row, t))).collect()
-    }
-
-    #[test]
-    fn a_cell_is_one_of_a_few_shades_and_the_same_one_each_time_it_is_asked() {
-        let cells = grid(12.5);
-        assert_eq!(cells, grid(12.5));
-        assert!(cells.iter().all(|shade| usize::from(*shade) < SHADES));
-        let seen: HashSet<u8> = cells.iter().copied().collect();
-        assert!(seen.len() >= 4, "a pattern, not a flat ground: {seen:?}");
-    }
-
-    #[test]
-    fn a_step_of_the_drift_changes_few_cells() {
-        let (now, next) = (grid(30.0), grid(30.0 + STEP.as_secs_f32()));
-        let moved = now.iter().zip(&next).filter(|(a, b)| a != b).count();
-        assert!(moved * 10 < now.len(), "{moved} of {} cells changed in one step", now.len());
-    }
 
     #[test]
     fn cells_of_one_shade_side_by_side_are_one_run_and_the_grounds_are_left_out() {
@@ -495,8 +812,8 @@ mod tests {
         assert_eq!(runs_of(&[]), vec![]);
         // A slot's runs are fewer than its cells off the ground.
         let (width, height) = (1000.0, 760.0);
-        let runs = runs_in(width, height, 13.0, 300);
-        let cells: usize = runs.iter().map(|run| (run.width / CELL).ceil() as usize).sum();
+        let runs = runs_in(Pattern::Drift, width, height, 13.0, 300);
+        let cells: usize = runs.iter().map(|run| (run.width / Pattern::Drift.cell()).ceil() as usize).sum();
         assert!(runs.len() < cells, "{} runs for {cells} cells", runs.len());
     }
 
@@ -508,7 +825,8 @@ mod tests {
             let (cx, cy) = (x.clamp(radius, width - radius), y.clamp(radius, height - radius));
             (x - cx).hypot(y - cy) <= radius + 0.001
         };
-        let runs: Vec<Run> = (0..40).flat_map(|step| runs_in(width, height, radius, step * 50)).collect();
+        let runs: Vec<Run> =
+            Pattern::ALL.into_iter().flat_map(|pattern| (0..40).flat_map(move |step| runs_in(pattern, width, height, radius, step * 50))).collect();
         assert!(runs.iter().any(|run| run.y == 0.0), "the top row has cells");
         for run in &runs {
             let (right, bottom) = (run.x + run.width, run.y + run.height);
@@ -541,6 +859,50 @@ mod tests {
         // A slot shorter than its two corners still has bands, all of it.
         let short = super::bands(20.0, radius);
         assert_eq!((short.first().unwrap().0, short.last().unwrap().1), (0.0, 20.0));
+    }
+
+    #[test]
+    fn the_glass_covers_the_window_but_for_a_hole_as_round_as_the_card() {
+        let window = Bounds::new(point(px(0.0), px(0.0)), size(px(1000.0), px(640.0)));
+        let hole = Bounds::new(point(px(240.0), px(38.0)), size(px(752.0), px(594.0)));
+        let glass = holed(window, hole, 13.0, rgba(theme::GLASS).into());
+        let reach = f32::from(glass.border_widths.left);
+        assert!(
+            [glass.border_widths.top, glass.border_widths.right, glass.border_widths.bottom].iter().all(|side| f32::from(*side) == reach),
+            "one width all round, so GPUI rounds the inner corners as circles"
+        );
+        // The border's inner edge is the hole, rounded to the card's corners: the outer radius less the border.
+        let inner = Bounds::new(
+            point(glass.bounds.origin.x + px(reach), glass.bounds.origin.y + px(reach)),
+            size(glass.bounds.size.width - px(reach * 2.0), glass.bounds.size.height - px(reach * 2.0)),
+        );
+        assert_eq!(inner, hole);
+        assert_eq!(f32::from(glass.corner_radii.top_left) - reach, 13.0);
+        // The border reaches past every corner of the window from anywhere in the hole.
+        assert!(reach >= f32::from(window.size.width).hypot(f32::from(window.size.height)));
+        assert_eq!(glass.background, gpui::Background::from(transparent_black()), "nothing in the hole");
+        assert_eq!(glass.border_color, Hsla::from(rgba(theme::GLASS)));
+        // A hole narrower than its corners is as round as it can be.
+        let thin = holed(window, Bounds::new(point(px(10.0), px(10.0)), size(px(20.0), px(400.0))), 13.0, glass.border_color);
+        assert_eq!(f32::from(thin.corner_radii.top_left) - f32::from(thin.border_widths.left), 10.0);
+    }
+
+    #[test]
+    fn a_layers_cells_are_the_colours_the_window_blends_over_the_ground() {
+        // What GPUI makes of each shade's colour (`colors`) painted over the ground: source over, on sRGB values as they
+        // are (`SourceAlpha`, `OneMinusSourceAlpha` in gpui-pre-apple's pipelines).
+        let ground = Hsla::from(rgba(Palette::APP.surface << 8 | 0xff)).to_rgb();
+        for (shade, (opaque, painted)) in opaque_colors(&Palette::APP).iter().zip(colors(&Palette::APP)).enumerate() {
+            let painted = painted.to_rgb();
+            let blended = [ground.r, ground.g, ground.b]
+                .into_iter()
+                .zip([painted.r, painted.g, painted.b])
+                .map(|(ground, color)| ground + (color - ground) * painted.a);
+            for (channel, (opaque, blended)) in opaque.iter().zip(blended).enumerate() {
+                assert!((opaque - blended).abs() < 2e-3, "shade {shade} channel {channel}: {opaque} for {blended}");
+            }
+            assert_eq!(opaque[3], 1.0);
+        }
     }
 
     #[test]
@@ -581,7 +943,18 @@ mod drawing {
         }
     }
 
-    /// The window, as the workspace's: the layer, then the piece over it, cached.
+    thread_local! {
+        /// The hole the window's glass left in each draw, in order.
+        static GLASS: RefCell<Vec<Option<(Bounds<Pixels>, f32)>>> = RefCell::default();
+    }
+
+    /// The hole the glass left in the window's last draw.
+    fn last_hole() -> Option<(Bounds<Pixels>, f32)> {
+        GLASS.with_borrow(|glass| glass.last().copied().expect("the glass was painted"))
+    }
+
+    /// The window, as the workspace's: the glass first, which asks where to leave a hole as `window_glass` does, then the
+    /// layer, then the piece over it, cached.
     struct Frame {
         layer: Entity<BackdropLayer>,
         piece: Entity<Piece>,
@@ -590,16 +963,28 @@ mod drawing {
     impl Render for Frame {
         fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             slots::start_draw(window.window_handle().window_id());
+            let glass = canvas(
+                |_, _, _| {},
+                |_, _, window, _| {
+                    let hole = hole(window.window_handle().window_id());
+                    GLASS.with_borrow_mut(|glass| glass.push(hole));
+                },
+            )
+            .absolute()
+            .size_full();
             div()
                 .relative()
                 .size_full()
+                .child(glass)
                 .child(self.layer.clone())
                 .child(self.piece.clone().cached(StyleRefinement::default().size_full()))
         }
     }
 
+    const PIXELS: Backdrop = Backdrop::Pixels(Pattern::Drift);
+
     fn open(slot: bool, active: bool) -> (TestApp, TestAppWindow<Frame>, Rc<Cell<usize>>) {
-        open_with(slot, Backdrop::Pixels, active)
+        open_with(slot, PIXELS, active)
     }
 
     fn open_with(slot: bool, kind: Backdrop, active: bool) -> (TestApp, TestAppWindow<Frame>, Rc<Cell<usize>>) {
@@ -648,7 +1033,7 @@ mod drawing {
         let counter = drawn.clone();
         let mut window = app.open_window(move |_, cx| Frame {
             layer: cx.new(|_| BackdropLayer::default()),
-            piece: cx.new(|_| Piece { slot: true, kind: Backdrop::Pixels, drawn: counter }),
+            piece: cx.new(|_| Piece { slot: true, kind: PIXELS, drawn: counter }),
         });
         window.update(|_, window, _| window.activate_window());
         app.run_until_parked();
@@ -755,5 +1140,223 @@ mod drawing {
         let rendered = fake.rendered.get();
         thirty_steps(&app, &mut window, &piece);
         assert_eq!(fake.rendered.get(), rendered, "nothing drawn while it is hidden");
+    }
+
+    /// A stand-in for the layer under the window: keeps where it put each slot's layer and what it drew, and fails to draw
+    /// if `broken`.
+    #[derive(Clone, Default)]
+    struct Under {
+        log: Rc<RefCell<UnderLog>>,
+        broken: bool,
+    }
+
+    #[derive(Default)]
+    struct UnderLog {
+        /// Each place: the slot, its frame, and whether it shows.
+        placed: Vec<(SharedString, Bounds<Pixels>, bool)>,
+        /// Each drawing: the slot, and its size in cells or pixels.
+        drawn: Vec<(SharedString, (u32, u32))>,
+        removed: Vec<SharedString>,
+    }
+
+    impl Present for Under {
+        fn show(&mut self, slot: &SharedString, placed: &Placed, drawing: Option<&Drawing>) -> Result<(), String> {
+            self.log.borrow_mut().placed.push((slot.clone(), placed.frame, placed.visible));
+            let Some(drawing) = drawing else { return Ok(()) };
+            if self.broken {
+                return Err("no layer".to_owned());
+            }
+            let size = match drawing {
+                Drawing::Cells { cols, rows, shades, .. } => {
+                    assert_eq!(shades.len(), (cols * rows) as usize);
+                    (*cols, *rows)
+                }
+                Drawing::Gradient(uniforms) => (uniforms.size[0] as u32, uniforms.size[1] as u32),
+            };
+            self.log.borrow_mut().drawn.push((slot.clone(), size));
+            Ok(())
+        }
+
+        fn remove(&mut self, slot: &SharedString) {
+            self.log.borrow_mut().removed.push(slot.clone());
+        }
+    }
+
+    impl Under {
+        fn drawn(&self) -> usize {
+            self.log.borrow().drawn.len()
+        }
+
+        fn last_placed(&self) -> (Bounds<Pixels>, bool) {
+            self.log.borrow().placed.last().map(|(_, frame, visible)| (*frame, *visible)).expect("placed")
+        }
+    }
+
+    fn window_id(window: &mut TestAppWindow<Frame>) -> WindowId {
+        window.update(|_, window, _| window.window_handle().window_id())
+    }
+
+    /// Lets the window's next frame come, as the screen would.
+    fn next_frame(app: &TestApp, window: &mut TestAppWindow<Frame>) {
+        window.update(|_, window, cx| {
+            window.simulate_next_frame(cx);
+        });
+        app.run_until_parked();
+    }
+
+    /// Hands the window's backdrops to `under` and lets a frame pass, so its layer shows.
+    fn draw_under(app: &TestApp, window: &mut TestAppWindow<Frame>, under: &Under) {
+        let id = window_id(window);
+        let present = under.clone();
+        window.update(move |_, window, _| {
+            present_with(id, Box::new(present));
+            window.refresh();
+        });
+        app.run_until_parked();
+        next_frame(app, window);
+        // The draw of the window the layer asked for at the next step before there was a layer under it.
+        app.advance_clock(STEP);
+        app.run_until_parked();
+    }
+
+    #[test]
+    fn under_the_window_a_step_draws_the_layer_and_never_the_window() {
+        let (app, mut window, piece) = open(true, true);
+        let under = Under::default();
+        draw_under(&app, &mut window, &under);
+        assert!(under.last_placed().1, "the layer shows");
+        let drawn = under.drawn();
+        let (layers, pieces) = thirty_steps(&app, &mut window, &piece);
+        let steps = under.drawn() - drawn;
+        eprintln!("[measure] 30 steps under the window: the layer under it drew {steps} times, the window's layer {layers}, the piece {pieces}");
+        assert_eq!((layers, pieces), (0, 0), "no draw of the window");
+        assert!((29..=31).contains(&steps), "one drawing a step: {steps}");
+    }
+
+    #[test]
+    fn a_slot_shows_its_layer_and_the_glass_its_hole_from_the_draw_after_its_first_drawing() {
+        let (app, mut window, _) = open(true, true);
+        let under = Under::default();
+        let id = window_id(&mut window);
+        let present = under.clone();
+        window.update(move |_, window, _| {
+            present_with(id, Box::new(present));
+            window.refresh();
+        });
+        app.run_until_parked();
+        assert_eq!(under.log.borrow().placed.iter().map(|placed| placed.2).collect::<Vec<_>>(), [false], "placed hidden");
+        assert_eq!(under.drawn(), 1, "its first drawing");
+        assert_eq!(last_hole(), None, "the window paints the plain ground there, under the glass");
+        next_frame(&app, &mut window);
+        let (frame, visible) = under.last_placed();
+        assert!(visible);
+        assert_eq!(last_hole(), Some((frame, 13.0)), "the glass leaves the slot to the layer");
+        assert_eq!(hole(id), Some((frame, 13.0)));
+    }
+
+    #[test]
+    fn under_the_window_it_stands_still_behind_other_apps_and_under_reduce_motion() {
+        let (app, mut window, piece) = open(true, false);
+        let under = Under::default();
+        draw_under(&app, &mut window, &under);
+        // A draw of the window behind another app's still shows the step it is at, once.
+        window.draw();
+        let drawn = under.drawn();
+        let (layers, _) = thirty_steps(&app, &mut window, &piece);
+        assert_eq!((layers, under.drawn() - drawn), (0, 0), "no step while the window is behind another app's");
+
+        let mut app = TestApp::new();
+        app.update(|cx| cx.set_reduce_motion(true));
+        let pieces = Rc::new(Cell::new(0));
+        let counter = pieces.clone();
+        let mut window = app.open_window(move |_, cx| Frame {
+            layer: cx.new(|_| BackdropLayer::default()),
+            piece: cx.new(|_| Piece { slot: true, kind: PIXELS, drawn: counter }),
+        });
+        window.update(|_, window, _| window.activate_window());
+        app.run_until_parked();
+        let under = Under::default();
+        draw_under(&app, &mut window, &under);
+        let drawn = under.drawn();
+        let (layers, _) = thirty_steps(&app, &mut window, &pieces);
+        assert_eq!((layers, under.drawn() - drawn), (0, 0), "drawn once and still under Reduce motion");
+        assert!(drawn >= 1);
+    }
+
+    #[test]
+    fn a_slot_that_goes_keeps_its_layer_a_frame_longer_then_it_goes_and_nothing_steps() {
+        let (app, mut window, piece) = open(true, true);
+        let under = Under::default();
+        draw_under(&app, &mut window, &under);
+        let id = window_id(&mut window);
+        window.update(|frame, _, cx| {
+            frame.piece.update(cx, |piece, cx| {
+                piece.slot = false;
+                cx.notify();
+            })
+        });
+        app.run_until_parked();
+        assert!(under.log.borrow().removed.is_empty(), "the window's drawing without the hole may not be on screen yet");
+        assert_eq!(hole(id), None, "the glass covers where it was");
+        next_frame(&app, &mut window);
+        assert_eq!(under.log.borrow().removed.iter().map(|name| name.to_string()).collect::<Vec<_>>(), ["tab"]);
+        let drawn = under.drawn();
+        thirty_steps(&app, &mut window, &piece);
+        assert_eq!(under.drawn(), drawn, "nothing drawn while it is gone");
+    }
+
+    #[test]
+    fn a_slot_that_moves_has_its_layer_over_where_it_was_and_is_until_the_next_frame() {
+        let (app, mut window, _) = open(true, true);
+        let under = Under::default();
+        draw_under(&app, &mut window, &under);
+        let id = window_id(&mut window);
+        let (before, _) = under.last_placed();
+        // Narrower and taller, so where it was and where it is together are neither.
+        let now = Bounds::new(before.origin, size(before.size.width - px(200.0), before.size.height + px(100.0)));
+        window.simulate_resize(now.size);
+        // The test window's resize reaches the window only so (as in `workspace::plugin_tests`): `simulate_resize` calls
+        // the window back while it holds the app, and GPUI drops that call.
+        window.update(|_, window, cx| window.bounds_changed(cx));
+        app.run_until_parked();
+        assert_eq!(under.last_placed(), (before.union(&now), true), "over where it was and where it is");
+        assert_ne!(before.union(&now), now);
+        assert_eq!(last_hole(), Some((now, 13.0)), "the glass's hole is where the slot is now");
+        assert_eq!(hole(id), Some((now, 13.0)));
+        next_frame(&app, &mut window);
+        assert_eq!(under.last_placed(), (now, true), "back to the slot once that drawing is on screen");
+        let cell = Pattern::Drift.cell();
+        let cells = ((f32::from(now.size.width) / cell).ceil() as u32, (f32::from(now.size.height) / cell).ceil() as u32);
+        assert_eq!(under.log.borrow().drawn.last().map(|drawn| drawn.1), Some(cells), "drawn at the slot's size");
+    }
+
+    #[test]
+    fn where_the_layer_cant_draw_the_window_paints_the_backdrop_again() {
+        let (app, mut window, piece) = open(true, true);
+        let under = Under { broken: true, ..Under::default() };
+        draw_under(&app, &mut window, &under);
+        let id = window_id(&mut window);
+        assert!(NATIVE.with_borrow(|natives| !natives.contains_key(&id)), "the layer is let go");
+        assert_eq!(hole(id), None);
+        let (layers, pieces) = thirty_steps(&app, &mut window, &piece);
+        assert_eq!(pieces, 0);
+        assert!((29..=31).contains(&layers), "the window's layer steps again: {layers}");
+    }
+
+    #[test]
+    fn a_gradient_under_the_window_draws_one_frame_a_step_and_the_window_nothing() {
+        let fake = Fake::default();
+        use_shade(Box::new(fake.clone()));
+        let (app, mut window, piece) = open_with(true, HALO, true);
+        let under = Under::default();
+        draw_under(&app, &mut window, &under);
+        let (rendered, drawn) = (fake.rendered.get(), under.drawn());
+        let (layers, pieces) = thirty_steps(&app, &mut window, &piece);
+        let steps = under.drawn() - drawn;
+        assert_eq!((layers, pieces), (0, 0), "no draw of the window");
+        assert_eq!(fake.rendered.get(), rendered, "the window's own frames aren't drawn");
+        assert!((29..=31).contains(&steps), "one frame a step: {steps}");
+        let (_, (width, height)) = under.log.borrow().drawn.last().cloned().unwrap();
+        assert!(width % 2 == 0 && height % 2 == 0 && width >= 2, "a frame as the window's own: {width}x{height}");
     }
 }

@@ -184,9 +184,15 @@ impl Env for FixtureEnv {
     // Issues' list, made up, for the one scene that sets `$CHAT_ISSUES` (the folder holding `tasks.txt`): the chat's host there is
     // one of Wings' own plugins, which may call it. Everywhere else no plugin runs, as before.
     fn builtin(&self, plugin: &str) -> Option<bool> {
-        (plugin == "tasks" && std::env::var_os("CHAT_ISSUES").is_some_and(|dir| !dir.is_empty())).then_some(true)
+        let set = |name: &str| std::env::var_os(name).is_some_and(|dir| !dir.is_empty());
+        ((plugin == "tasks" && set("CHAT_ISSUES")) || (plugin == "pr-tracker" && set("CHAT_PR"))).then_some(true)
     }
     fn call_tool(&self, call: wings_native::page::plugin::ToolCall, reply: wings_native::page::runtime::Reply) {
+        // The PR tracker's answer for the side panel's Pull request section: the text in the file `$CHAT_PR` names.
+        if let Some(file) = std::env::var_os("CHAT_PR").filter(|file| !file.is_empty()).filter(|_| call.target == "pr-tracker" && call.tool == "pull_request") {
+            let text = std::fs::read_to_string(PathBuf::from(file)).unwrap_or_default();
+            return reply.ok(json!({ "text": text, "isError": false }).to_string());
+        }
         match std::env::var_os("CHAT_ISSUES").filter(|dir| !dir.is_empty()) {
             Some(dir) if call.target == "tasks" && call.tool == "list" => {
                 let text = std::fs::read_to_string(PathBuf::from(dir).join("tasks.txt")).unwrap_or_default();
@@ -889,7 +895,8 @@ fn claude_chat(out: PathBuf) {
     std::fs::write(root.join("available.json"), include_str!("../../../plugins/claude-chat/rust/tests/available.json")).unwrap();
     script(
         bin.join("claude"),
-        r##"if [ "$1" = plugin ]; then case "$2" in list) cat "$CHAT_AVAILABLE";; install) echo '{"command":"install","outcome":"ok","scope":"user"}';; esac; exit 0; fi
+        r##"case "$1" in --version) echo '2.1.329 (Claude Code)'; exit 0;; upgrade) echo 'Successfully updated to 2.1.331'; exit 0;; esac
+if [ "$1" = plugin ]; then case "$2" in list) cat "$CHAT_AVAILABLE";; install) echo '{"command":"install","outcome":"ok","scope":"user"}';; esac; exit 0; fi
 case "$1" in edit-*) cat >/dev/null; if [ -f "$CHAT_ANSWERS/$1" ]; then cat "$CHAT_ANSWERS/$1" >&2; exit 1; fi; echo '{"ok":true}'; exit 0;; esac
 cat "$CHAT_FIXTURE"; if [ -n "$CHAT_DRIP" ]; then (n=0; while [ $n -lt 2000 ] && cat "$CHAT_DRIP" 2>/dev/null; do n=$((n+1)); sleep 0.02; done) & fi
 if [ -n "$CHAT_EXIT" ]; then echo "$CHAT_STDERR" >&2; exit "$CHAT_EXIT"; fi
@@ -1051,7 +1058,7 @@ esac"##,
     let question = asked(
         "AskUserQuestion",
         json!({ "questions": [
-            { "question": "Which date library should the reports use?", "header": "Library", "multiSelect": false, "options": [
+            { "question": "Which date library should the reports use? Both handle time zones, but the reports also run in the browser, where every kilobyte counts, and the API team already uses one of them.", "header": "Library", "multiSelect": false, "options": [
                 { "label": "date-fns", "description": "Functions, tree-shakes well" }, { "label": "dayjs", "description": "Small, Moment-like API" }] },
             { "question": "Which formats do the reports need?", "header": "Formats", "multiSelect": true, "options": [
                 { "label": "ISO", "description": "2026-11-18" }, { "label": "Long", "description": "18 November 2026" }, { "label": "Relative", "description": "3 days ago" }] },
@@ -1063,6 +1070,17 @@ esac"##,
         json!({ "plan": "## Split the checkout into a package\n\n1. Move `src/checkout` to `packages/checkout`\n2. Give it its own `package.json` and tests\n3. Point the app at `@shop/checkout`\n\n- **Risk:** the cart imports private helpers; they move along" }),
         json!({}),
     );
+    // Two plans, the first approved and the second waiting, for the plan page and its picker.
+    let plan_text = "## Split the checkout into a package\n\n1. Move `src/checkout` to `packages/checkout`\n2. Give it its own `package.json` and tests\n3. Point the app at `@shop/checkout`\n\n- **Risk:** the cart imports private helpers; they move along\n\n```sh\npnpm --filter @shop/checkout test\n```";
+    let plans = opened(vec![
+        init.clone(),
+        user("Plan the checkout split."),
+        tool("pl1", "ExitPlanMode", json!({ "plan": "## Move the checkout\n\n1. Copy it to `packages/checkout`" })),
+        output("pl1", "User has approved your plan. You can now start coding.", false),
+        user("Now plan the tests for it."),
+        tool("pl2", "ExitPlanMode", json!({ "plan": plan_text })),
+        json!({ "type": "control_request", "request_id": "r1", "request": { "subtype": "can_use_tool", "tool_name": "ExitPlanMode", "tool_use_id": "pl2", "input": { "plan": plan_text } } }),
+    ]);
     // Two subagents the session started: one still at work, one done, each with the lines it printed, which carry the id of
     // the call that started it and the subagent's own id, which its tab is opened by.
     let within = |parent: &str, mut line: serde_json::Value| {
@@ -1562,7 +1580,7 @@ esac"##,
         text("The login test waits on a timer; I made it wait for the page instead."),
         json!({ "type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.01 }),
     ]);
-    let scenes: [Scene; 96] = [
+    let scenes: Vec<Scene> = vec![
         ("limit-card", limit_hit, None, None, "Continue when it resets"),
         ("rename", renaming, None, Some("press:Rename"), "Generate a name"),
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
@@ -1612,6 +1630,12 @@ esac"##,
         // close button and the two chips come first), and the filter leaves api-guard.
         ("discover", plugins, None, Some("type:/plugins;keys:enter;chip:Discover;keys:tab tab tab;type:guard"), "api-guard"),
         ("failed", vec![], Some(("1", "Error: Invalid API key · Please run /login")), None, "Invalid API key"),
+        // Search over the conversation: the bar under the header, its count, and the run of calls opened at the match. The
+        // header's button is pressed by its label, and the typing goes to the field it focuses.
+        ("search", work.clone(), None, Some("press:Search;type:pnpm test"), "1 of 1"),
+        ("search-none", work.clone(), None, Some("press:Search;type:zzz"), "No matches"),
+        // Two bookmarks the session kept (`bookmarks_host`): the panel's section lists them, and their buttons are lit.
+        ("bookmarks", worked.clone(), None, None, "Bookmarks · 2"),
         ("work", worked, None, None, "Worked for 1m 23s"),
         ("work-open", work.clone(), None, Some("disclose:Ran 1 command"), "pnpm test discount"),
         ("detailed", work.clone(), None, None, "No test suite found"),
@@ -1624,9 +1648,16 @@ esac"##,
         ("ask-edit", ask_edit.clone(), None, None, "Open in diff viewer"),
         ("ask-edit-split", ask_edit, None, None, "One column"),
         ("edits-split", edits_split, None, None, "One column"),
-        ("question", question, None, None, "Which formats"),
+        ("question", question, None, None, "1 of 2"),
         ("plan", plan, None, None, "Keep planning"),
+        // A plan opened as a document, with its picker, a comment written on one of its parts, and the card's button that
+        // then says the comment goes with it.
+        ("plan-doc", plans.clone(), None, Some("press:Open as document"), "Press a speech bubble"),
+        ("plan-comment", plans, None, Some("press:Open as document;press:Comment on line 3;type:Why not keep it in the app?;press:Add comment"), "Revise with 1 comment"),
         ("mention", opened(vec![init.clone()]), None, Some("type:fix the rounding in @che"), "checkout.test.ts"),
+        // Folders come in the same menu, ending in a slash; a line range after a picked file is part of its mention and hides the menu.
+        ("mention-folder", opened(vec![init.clone()]), None, Some("type:look through @sr"), "src/"),
+        ("mention-range", opened(vec![init.clone()]), None, Some("type:why is @src/cart.ts#L10-20 slow"), "Review changes"),
         // Two pasted pictures wait in the message box as chips, with a message under them.
         ("paste", opened(vec![init.clone()]), None, Some("paste:;paste:;type:what is in these?"), "Image 2"),
         // Each subagent's call has Open, which opens its conversation in Wings' sidebar (the `subagent-sidebar` scene); the
@@ -1679,6 +1710,8 @@ esac"##,
         ("cleared", cleared, None, None, "What should Claude do?"),
         // Claude's thinking is folded under its turn, and opens on a click.
         ("thought", thought.clone(), None, None, "Thought"),
+        // The Thinking view mode (`show-thinking` on) shows the thought open without a click.
+        ("view-thinking", thought.clone(), None, None, "so the ball costs 0.05"),
         ("thought-open", thought, None, Some("disclose:Thought"), "so the ball costs 0.05"),
         // /status, /btw and /export open a dialog over the chat that the conversation never gets.
         ("status", opened(vec![init.clone()]), None, Some("type:/status;keys:enter"), "Setting sources"),
@@ -1725,6 +1758,12 @@ esac"##,
         ("panel-folded", finished_panel_folded, None, None, "Background tasks · 1 failed"),
         // Comments left on lines in the diff viewer, which the tab kept: a chip for each over the message box, to go with the next message.
         ("review-comments", opened(vec![init.clone()]), None, None, "2 comments on 2 files"),
+        // The side panel's Pull request section, from the PR tracker's answer for the folder's branch: one that can merge, one
+        // with a failing check, one with none, and the dialog the Merge button asks in.
+        ("pull-request", opened(vec![init.clone()]), None, None, "Add the checkout rounding"),
+        ("pull-request-failing", opened(vec![init.clone()]), None, None, "1 failed, 3 passed"),
+        ("pull-request-none", opened(vec![init.clone()]), None, None, "Create pull request"),
+        ("pull-request-merge", opened(vec![init.clone()]), None, Some("wait:600;press:Merge"), "It can't be undone from here"),
     ];
     // Files for @-mentions, which the chat lists with git.
     for file in ["src/checkout.ts", "src/checkout.test.ts", "src/cart.ts", "api/limits.ts", "README.md"] {
@@ -1781,6 +1820,17 @@ esac"##,
     let split = host_over("fixture-storage-claude-chat-split", &[("diff-split", json!(true)), ("detailed-output", json!(true))]);
     // Large text: the conversation's text a fifth bigger.
     let large = host_over("fixture-storage-claude-chat-large", &[("text-size", json!("large"))]);
+    // The Thinking view mode: what Claude thought shows open, with the calls still folded. (Verbose is `detailed` above.)
+    let thinking_host = host_over("fixture-storage-claude-chat-thinking", &[("show-thinking", json!(true))]);
+    // Two bookmarks of the `worked` session's messages, by where they were and how they start, as a restart reads them.
+    let reply_start: String = "The discount maths is in `src/discount.ts` now, and `checkout.ts` re-exports it. The suite has no discount tests yet: shall I write them?".chars().take(80).collect();
+    let bookmarks_host = host_over(
+        "fixture-storage-claude-chat-bookmarks",
+        &[(
+            "bookmarks/5b7e2c1a-0f3d-4c8e-9a61-2d4f8b3c7e90",
+            json!([{ "at": 0, "text": "Move the discount maths into its own module and test it." }, { "at": 99, "text": reply_start }]),
+        )],
+    );
     // The session panel with its Background tasks section folded, as a fold you made before the last restart leaves it.
     let folded = host_over("fixture-storage-claude-chat-folded", &[("panel-closed", json!(["tasks"]))]);
     // The session panel in Wings' sidebar, as the Settings page moves it there.
@@ -1821,8 +1871,10 @@ esac"##,
         let host = match name {
             "detailed" | "read-ts" => &detailed,
             "large-text" => &large,
+            "view-thinking" => &thinking_host,
+            "bookmarks" => &bookmarks_host,
             "panel-folded" => &folded,
-            "hash-issues" => &hash_host,
+            "hash-issues" | "pull-request" | "pull-request-failing" | "pull-request-none" | "pull-request-merge" => &hash_host,
             "ask-edit-split" | "edits-split" => &split,
             _ => &host,
         };
@@ -1955,6 +2007,14 @@ esac"##,
             r#"[{"number":318,"title":"Cart total flickers when a coupon is applied","state":"OPEN"},{"number":311,"title":"Document the checkout events","state":"OPEN"},{"number":297,"title":"Coupon field loses focus on mobile","state":"CLOSED"}]"#,
         )
         .unwrap();
+        // What the PR tracker's `pull_request` answers for the `pull-request` scenes.
+        let pull = root.join(format!("pull-{name}.json"));
+        let (review, checks, mergeable) = match name {
+            "pull-request-failing" => ("Changes requested", r#"{"passed":3,"failed":1,"running":0}"#, "false"),
+            _ => ("Approved", r#"{"passed":4,"failed":0,"running":0}"#, "true"),
+        };
+        let found = format!(r##"{{"supported":true,"found":true,"provider":"GitHub","github":true,"number":214,"ref":"#214","title":"Add the checkout rounding","url":"https://github.com/acme/shop/pull/214","state":"open","draft":false,"label":"Approved","tone":"success","review":"{review}","checks":{checks},"mergeable":{mergeable}}}"##);
+        std::fs::write(&pull, if name == "pull-request-none" { r#"{"supported":true,"found":false}"#.to_owned() } else { found }).unwrap();
         let drip = root.join(format!("drip-{name}.jsonl"));
         if name == "long-rail-streaming" {
             std::fs::write(&drip, format!("{}\n", delta("and the next few words of the reply as they stream in, "))).unwrap();
@@ -1963,6 +2023,7 @@ esac"##,
         unsafe {
             std::env::set_var("CHAT_DRIP", if name == "long-rail-streaming" { drip.as_os_str() } else { std::ffi::OsStr::new("") });
             std::env::set_var("CHAT_ISSUES", if name == "hash-issues" { issues_dir.as_os_str() } else { std::ffi::OsStr::new("") });
+            std::env::set_var("CHAT_PR", if name.starts_with("pull-request") { pull.as_os_str() } else { std::ffi::OsStr::new("") });
             std::env::set_var("CHAT_BRANCHES", if name == "branch-switch" { branches.as_os_str() } else { std::ffi::OsStr::new("") });
             std::env::set_var("CHAT_FIXTURE", &fixture);
             std::env::set_var("CHAT_ANSWERS", &answers);
@@ -2111,8 +2172,8 @@ esac"##,
         }
     }
     // Pixel drift, the chat's background setting, in a tab drawn as the workspace draws one (`ShotTab`): behind the long
-    // session, the same tab over the plain ground for what the backdrop adds (`long-tab`, drawn with `long-pixels`), and
-    // behind a new chat, which goes without its glow. Each is saved, and measured from scratch with `SHOT_FRAMES`; then
+    // session (and its other patterns, `long-pixels-<pattern>`), the same tab over the plain ground for what the backdrop
+    // adds (`long-tab`, drawn with `long-pixels`), and behind a new chat, which goes without its glow. Each is saved, and measured from scratch with `SHOT_FRAMES`; then
     // `SHOT_FRAMES=<n>` draws n steps of the backdrop and prints the median ms of a draw and how many times the page
     // rendered in them, which should be none.
     let long = opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]);
@@ -2121,6 +2182,9 @@ esac"##,
     // (`long-gradient`, one shape after another), and one behind a new chat (`new-gradient`).
     let tab_scenes = [
         ("long-pixels", "long-pixels", Some("pixels"), long.clone(), Some(&long_args), "Step 99 passes"),
+        ("long-pixels-rain", "long-pixels", Some("pixels:rain"), long.clone(), Some(&long_args), "Step 99 passes"),
+        ("long-pixels-checker", "long-pixels", Some("pixels:checker"), long.clone(), Some(&long_args), "Step 99 passes"),
+        ("long-pixels-embers", "long-pixels", Some("pixels:embers"), long.clone(), Some(&long_args), "Step 99 passes"),
         ("long-gradient", "long-gradient", Some("gradient:halo"), long.clone(), Some(&long_args), "Step 99 passes"),
         ("long-gradient-pensive", "long-gradient", Some("gradient:pensive"), long.clone(), Some(&long_args), "Step 99 passes"),
         ("long-gradient-mint", "long-gradient", Some("gradient:mint"), long.clone(), Some(&long_args), "Step 99 passes"),
@@ -2502,12 +2566,12 @@ esac"##,
         let source = format!("{}{}", wings_native::page::runtime::wasm::MARKER, page.display());
         for width in [1000.0, 640.0] {
             let handle = cx
-                .open_offscreen_window(size(px(width), px(900.0)), |_, cx| cx.new(|cx| PageView::in_plugin(&settings, &source, cx)))
+                .open_offscreen_window(size(px(width), px(1250.0)), |_, cx| cx.new(|cx| PageView::in_plugin(&settings, &source, cx)))
                 .unwrap();
             let window = handle.into();
             handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
             let deadline = Instant::now() + Duration::from_secs(30);
-            while !handle.read_with(&cx, |view, _| view.text().contains("Text size")).unwrap() {
+            while !handle.read_with(&cx, |view, _| view.text().contains("Claude Code 2.1.329")).unwrap() {
                 assert!(Instant::now() < deadline, "page did not show the settings: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
                 wait(&mut cx, window, Duration::from_millis(20));
             }

@@ -206,9 +206,9 @@ fn block_node(block: &Block, cwd: &str, known: &dyn Fn(&str) -> bool, scope: &st
     match block {
         Block::Heading(level, source) => Node::new("Text").prop("weight", "strong").prop("size", if *level <= 2 { "field" } else { "small" }).child(spans(source)),
         Block::Paragraph(source) => spans(source),
-        Block::List { ordered, items } => stack().prop("gap", "xs").children(items.iter().enumerate().map(|(at, item)| {
+        Block::List { ordered, start, items } => stack().prop("gap", "xs").children(items.iter().enumerate().map(|(at, item)| {
             let mark = match item.checked {
-                None if *ordered => format!("{}.", at + 1),
+                None if *ordered => format!("{}.", *start + at as u64),
                 None => "\u{2022}".to_owned(),
                 Some(true) => "\u{2611}".to_owned(),
                 Some(false) => "\u{2610}".to_owned(),

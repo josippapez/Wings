@@ -46,6 +46,9 @@ pub struct Permissions {
     pub statusline: bool,
     /// Lets the plugin see which local TCP ports the programs in each pane listen on, with `wings.ports`.
     pub ports: bool,
+    /// Lets the plugin read the recent output of your terminal panes as plain text, with `wings.readPane`. Terminal
+    /// output can hold secrets a program printed, so the approval says so.
+    pub pane_output: bool,
     /// Lets the plugin read what an OpenCode session is doing, with `wings.agentActivity`, and hear when it
     /// changes, with `wings.onAgentActivity`.
     pub agent_activity: bool,

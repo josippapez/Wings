@@ -5,6 +5,7 @@ pub mod diff;
 pub mod gradients;
 pub mod host;
 pub mod page;
+pub mod pixels;
 pub mod projects;
 pub mod saved;
 pub mod secrets;

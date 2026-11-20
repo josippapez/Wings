@@ -133,7 +133,12 @@ fn run() -> Result<(), String> {
             )
             .expect("Could not open the Wings native window");
             #[cfg(target_os = "macos")]
-            let _ = window.update(cx, |_, window, _| under_window_vibrancy(window));
+            let _ = window.update(cx, |_, window, _| {
+                under_window_vibrancy(window);
+                // A tab's animated background steps in a layer between the vibrancy and GPUI's view, never drawing the
+                // window.
+                wings_native::ui::draw_backdrops_under(window);
+            });
             if let Some(path) = &restart_ack
                 && let Err(error) = wings_native::updater::acknowledge_startup(path)
             {

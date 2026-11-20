@@ -42,6 +42,19 @@ struct State {
 
 thread_local! {
     static STATE: RefCell<State> = RefCell::new(State::default());
+    /// Where each block the page drew is among the children of the conversation's column, as (first item, end item, child),
+    /// from the last build: a jump to an item that is not a message of yours (a search hit, a bookmark) finds its child here.
+    static PLACED: RefCell<Vec<(usize, usize, usize)>> = RefCell::new(Vec::new());
+}
+
+/// What the page drew of the conversation: its blocks' items and their children.
+pub fn place(blocks: Vec<(usize, usize, usize)>) {
+    PLACED.with(|placed| *placed.borrow_mut() = blocks);
+}
+
+/// The child of the column that shows `item`.
+fn child_of(item: usize) -> Option<usize> {
+    PLACED.with(|placed| placed.borrow().iter().find(|(start, end, _)| (*start..*end).contains(&item)).map(|(.., child)| *child))
 }
 
 /// What Wings says of the tracked prompts: the last whose top the view has reached, as its item's index.
@@ -104,13 +117,18 @@ impl Rail {
 /// A click on a tick: the conversation scrolls so `item`, a message of yours, is at its top. A prompt outside what the
 /// page shows is brought in first.
 pub fn go(item: usize) {
+    chat::with(|c| go_in(c, item));
+}
+
+/// `go`, for a caller that holds the chat.
+pub fn go_in(c: &mut Chat, item: usize) {
     STATE.with(|state| {
         let mut state = state.borrow_mut();
         state.token += 1;
         state.jump = Some(item);
         state.end = false;
     });
-    chat::with(|c| crate::view::show_item(c, item));
+    crate::view::show_item(c, item);
 }
 
 /// The conversation scrolls to its last child, once the page shows the newest items.
@@ -133,7 +151,7 @@ pub fn scroll_to(rail: &Rail, last: usize) -> Option<Value> {
             return Some(json!({ "index": last, "token": state.token }));
         }
         let item = state.jump?;
-        match rail.prompts.iter().find(|prompt| prompt.item == item).and_then(|prompt| prompt.child) {
+        match rail.prompts.iter().find(|prompt| prompt.item == item).and_then(|prompt| prompt.child).or_else(|| child_of(item)) {
             Some(index) => Some(json!({ "index": index, "token": state.token })),
             None => {
                 state.jump = None;

@@ -273,6 +273,8 @@ pub struct Draft {
     picked: HashSet<(usize, usize)>,
     /// The "Other" text of each question.
     other: HashMap<usize, String>,
+    /// The question shown, when several are asked one at a time.
+    pub step: usize,
 }
 
 impl Draft {
@@ -301,6 +303,11 @@ impl Draft {
             self.picked.retain(|(q, _)| *q != question);
         }
         self.other.insert(question, text);
+    }
+
+    /// Whether question `question` has an option picked or other text.
+    pub fn has_answer(&self, question: usize) -> bool {
+        self.picked.iter().any(|(q, _)| *q == question) || !self.other(question).trim().is_empty()
     }
 
     /// Each question's answer, by its text: the labels picked, then the other text, joined by commas. None while a
@@ -377,6 +384,8 @@ pub const TASK_STOP: &str = "task-stop-";
 
 #[derive(Debug, Default)]
 pub struct Session {
+    /// What auto mode blocked in this chat, for "Allow and retry" (`blocked.rs`).
+    pub blocked: Vec<crate::blocked::Blocked>,
     /// Whether this chat is on claude.ai and in the Claude app too.
     pub remote: crate::remote::Remote,
     pub items: Vec<Item>,
@@ -466,6 +475,8 @@ pub struct Session {
     pub restored: Option<String>,
     /// The background tasks heard of, running or ended, in the order they started.
     pub tasks: Vec<Task>,
+    /// The plans Claude proposed with ExitPlanMode, which stay readable and commentable after the answer (`plan_doc.rs`).
+    pub plans: crate::plan_doc::Plans,
     /// Fast mode and the output style.
     pub options: crate::composer::Options,
     /// What Claude Code says it is doing beyond a tool call, like compacting or retrying a request, for the status line.
@@ -678,6 +689,9 @@ impl Session {
                     false => request["permission_suggestions"].as_array().cloned().unwrap_or_default(),
                 };
                 let detail = ask_detail(&tool, &request["input"]);
+                if tool == "ExitPlanMode" {
+                    self.plans.asked(line["request_id"].as_str().unwrap_or_default(), request["tool_use_id"].as_str(), &request["input"]);
+                }
                 self.items.push(Item::Ask(Ask {
                     request: line["request_id"].as_str().unwrap_or_default().to_owned(),
                     summary: summary(&tool, &request["input"]),
@@ -895,6 +909,7 @@ impl Session {
             || self.edits.answered(id, response, &self.prompts, &mut self.items)
             || self.answered_task(id, response)
             || self.setup.answered(id, response)
+            || self.plans.answered(id, response)
             || self.cmds.answered(id, response)
             || self.mods.answered(id, response)
             || self.naming.answered(id, response, &mut self.title, &mut self.titled, &mut self.items)
@@ -1140,6 +1155,7 @@ impl Session {
                     todo.active = active;
                 }
             }
+            "ExitPlanMode" => self.plans.seen(id, input),
             _ => {}
         }
     }

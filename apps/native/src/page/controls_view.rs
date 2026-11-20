@@ -448,7 +448,8 @@ impl PageView {
                         } else {
                             "Enter"
                         };
-                        let payload = serde_json::json!({"type":"keydown", "key":key});
+                        let shift = matches!(event, crate::text_field::FieldEvent::Submit { back: true });
+                        let payload = serde_json::json!({"type":"keydown", "key":key, "shiftKey":shift});
                         // Escape is a key gesture too: a chat stops the turn on it.
                         view.act(&handler, Some(&payload));
                     }

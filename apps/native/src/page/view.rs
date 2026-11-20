@@ -294,6 +294,10 @@ pub struct PageView {
     terminals_told: Option<String>,
     /// A dialog or sheet of the page is over its terminals, which are then not drawn: they draw over the page.
     terminals_covered: Cell<bool>,
+    /// The page's spinners, working dots and shimmers move in the window's layer for them (`ui::view_spinner_layer`) in
+    /// this render: a step of them then draws the layer, not the whole page. Only while a piece of the window puts the page on screen and draws
+    /// that layer (`ui::place_view`), and nothing of the page's own is over them.
+    spin_in_layer: Cell<bool>,
     found_links: RefCell<FoundLinks>,
     /// Draws the page's terminals over it, as the workspace does, for the screenshots of a page alone.
     #[cfg(feature = "test-support")]
@@ -642,6 +646,7 @@ impl PageView {
             terminals: Vec::new(),
             terminals_told: None,
             terminals_covered: Cell::new(false),
+            spin_in_layer: Cell::new(false),
             found_links: RefCell::default(),
             #[cfg(feature = "test-support")]
             shot_terminals: None,
@@ -652,6 +657,9 @@ impl PageView {
         if view.stopped {
             view.restart_later(cx);
         }
+        // The places its spinners left in the window's layer go with it.
+        let id = cx.entity_id();
+        cx.on_release(move |_, _| ui::forget_view(id)).detach();
         view
     }
 
@@ -1545,6 +1553,8 @@ impl PageView {
         // can't scroll: it breaks inside a word wider than its box instead, or a log's "=====" rule and a long link
         // ran past the card's edge.
         let code = text.mono && text.grow;
+        let in_layer = text.shimmer && self.spin_in_layer.get();
+        let page = cx.entity_id();
         let least = ((text.grow || drop.is_some()) && !text.truncate && !code).then(|| {
             let size = match text.size {
                 TextSize::Small => scaled(12.0),
@@ -1592,31 +1602,43 @@ impl PageView {
                 text.children
                     .iter()
                     .any(|node| !matches!(node, Node::Str { text, .. } if text.is_empty())),
-                |el| match text.since {
-                    Some(since) => {
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map_or(0, |now| now.as_millis() as i64);
-                        let took = Node::Str { id: text.id, text: format!(" · {}", took(since, now)) };
-                        el.child(self.inline(&[text.children.clone(), vec![took]].concat(), cx))
-                    }
-                    None if text.links || LINKED.with(Cell::get) => el.child(
-                        self.linked_text(&text.children, text.id, cx)
+                |el| {
+                    let content = match text.since {
+                        Some(since) => {
+                            let took = Node::Str { id: text.id, text: format!(" · {}", took(since, now_ms())) };
+                            self.inline(&[text.children.clone(), vec![took]].concat(), cx)
+                        }
+                        None if text.links || LINKED.with(Cell::get) => self
+                            .linked_text(&text.children, text.id, cx)
                             .unwrap_or_else(|| self.inline_of(&text.children, true, cx)),
-                    ),
-                    None => el.child(self.inline_of(&text.children, true, cx)),
+                        None => self.inline_of(&text.children, true, cx),
+                    };
+                    if !in_layer {
+                        return el.child(content);
+                    }
+                    // The window's layer draws the words over their own, which keep their room, selection and screen
+                    // reader in no colour, and pulses them and counts their `since` up without drawing the page again.
+                    let words = plain_text(&text.children);
+                    let since = text.since;
+                    el.child(
+                        div()
+                            .relative()
+                            .child(div().text_color(gpui::transparent_black()).child(content))
+                            .child(ui::shimmer_slot(format!("shimmer-{page}-{}", text.id), since.is_some(), move || {
+                                match since {
+                                    Some(since) => format!("{words} · {}", took(since, now_ms())).into(),
+                                    None => words.clone().into(),
+                                }
+                            })),
+                    )
                 },
             );
-        // A shimmer pulses as the page's spinners turn: at most 30 frames a second, and still under Reduce motion. Each
-        // of its frames draws the page again, which counts a `since` up too; without one, a second's tick does that.
+        // A shimmer pulses on the spinners' clock, 10 frames a second while the window is in front: in the window's
+        // layer for it (`ui::view_spinner_layer`), or in the page, each of whose frames then draws the page again, which
+        // counts a `since` up too. Without a shimmer, a second's tick does that.
         let element = match (text.shimmer, text.since) {
-            (true, _) => element
-                .with_animation(
-                    ElementId::NamedInteger("page-shimmer".into(), text.id),
-                    Animation::new(SHIMMER).repeat().with_max_fps(30.0),
-                    |el, t| el.opacity(0.45 + 0.55 * (0.5 + 0.5 * (t * std::f32::consts::TAU).cos())),
-                )
-                .into_any_element(),
+            (true, _) if in_layer => element.into_any_element(),
+            (true, since) => ui::shimmer(element, since.is_some()).into_any_element(),
             (false, Some(_)) => element
                 .with_animation(
                     ElementId::NamedInteger("page-since".into(), text.id),
@@ -1888,14 +1910,17 @@ impl PageView {
                 })
                 .size(px(if spinner.large { 18.0 } else { 14.0 }))
                 .flex_none()
-                .with_animation(
-                    ElementId::NamedInteger("page-spinner-animation".into(), spinner.id),
-                    Animation::new(Duration::from_secs(1))
-                        .repeat()
-                        .with_max_fps(30.0),
-                    |ring, turn| ring.child(ui::working_spinner(turn * std::f32::consts::TAU)),
-                )
-                .into_any_element(),
+                .map(|ring| {
+                    if self.spin_in_layer.get() {
+                        return ring.child(ui::view_spinner_slot(format!("spinner-{}", spinner.id))).into_any_element();
+                    }
+                    ring.with_animation(
+                        ElementId::NamedInteger("page-spinner-animation".into(), spinner.id),
+                        Animation::new(Duration::from_secs(1)).repeat().with_max_fps(30.0),
+                        |ring, turn| ring.child(ui::working_spinner(turn * std::f32::consts::TAU)),
+                    )
+                    .into_any_element()
+                }),
             Node::Checkbox(checkbox) => self.checkbox(checkbox, cx),
             Node::Confirm(confirm) => ui::plain_card(vec![
                 div()
@@ -1984,8 +2009,10 @@ impl PageView {
                 })
                 .into_any_element(),
             Node::Dot(dot) => match dot.state {
-                // Turning in place, as the page's spinners do: a spinner in the window's spinner layer was left blank,
-                // as a page draws from its cache and doesn't name its slot in each draw.
+                // Turning where the page's spinners turn: in the window's layer for them, or in place.
+                Some(state) if self.spin_in_layer.get() => {
+                    ui::view_status_dot_slot(state, format!("dot-{}", dot.id))
+                }
                 Some(state) => ui::status_dot(state).into_any_element(),
                 None => ui::dot(
                     dot.color
@@ -2724,15 +2751,21 @@ impl Render for PageView {
                 .map(|tree| view.nodes(&tree.children, cx))
                 .unwrap_or_default()
         };
-        let body = if self.terminals.is_empty() {
+        let covered = dialog.is_some() || self.tree.as_ref().is_some_and(|tree| sheet_in(&tree.children));
+        let id = window.window_handle().window_id();
+        let placed = ui::view_placed(cx.entity_id(), id);
+        // Under a dialog or sheet of its own, the page's spinners turn in place: the layer would draw them over it.
+        self.spin_in_layer.set(placed && !covered);
+        if !self.terminals.is_empty() {
+            self.terminals_covered.set(covered);
+        }
+        // Its terminals' and spinners' places are kept from this draw until the page draws again, which a terminal's
+        // output or a spinner's step doesn't make it do.
+        let body = if placed {
+            ui::drawing_piece(ui::Piece::View(cx.entity_id()), id, || tree_nodes(self, cx))
+        } else if self.terminals.is_empty() {
             tree_nodes(self, cx)
         } else {
-            self.terminals_covered.set(
-                dialog.is_some() || self.tree.as_ref().is_some_and(|tree| sheet_in(&tree.children)),
-            );
-            // Its terminals' places are kept from this draw until the page draws again, which a terminal's output doesn't
-            // make it do.
-            let id = window.window_handle().window_id();
             ui::drawing_piece(TERMINALS, id, || tree_nodes(self, cx))
         };
         let overlay = dialog
@@ -2963,6 +2996,13 @@ fn popup_in(nodes: &[Node]) -> Option<&tree::PopupMenu> {
     })
 }
 
+/// Milliseconds since 1970, as a `since` counts from.
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |now| now.as_millis() as i64)
+}
+
 /// How long ago `since` was, at `now` (both ms since the epoch), as a status line counts: "16s", "2m 5s", "1h 4m".
 fn took(since: i64, now: i64) -> String {
     let seconds = (now - since).max(0) / 1000;
@@ -2973,10 +3013,8 @@ fn took(since: i64, now: i64) -> String {
     }
 }
 
-/// One pulse of a shimmering `Text`: bright, faint and bright again.
 /// How long after a click or key in a page it may still move the keyboard into itself, as a dialog it opened does.
 const GESTURE_TAKES_KEYBOARD: Duration = Duration::from_secs(2);
-const SHIMMER: std::time::Duration = std::time::Duration::from_millis(1600);
 
 /// How near its end, in points, a following `Scroll` still counts as there: a line's worth of a pointer's drift.
 const FOLLOW_SLACK: f32 = 24.0;

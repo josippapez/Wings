@@ -15,8 +15,9 @@ mod wings;
 use super::tree::Tree;
 use std::{
     any::Any,
+    collections::VecDeque,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -26,8 +27,8 @@ pub use wings::{Link, Store};
 
 const HEAP_BYTES: usize = 64 * 1024 * 1024;
 const THREAD_STACK_BYTES: usize = 4 * 1024 * 1024;
-/// Clicks and broadcasts waiting for a frame that is busy. More than this are dropped, as a stuck frame can't use
-/// them anyway, and the sender never waits for it.
+/// Clicks and messages waiting for a frame that is busy. More than this are dropped, as a stuck frame can't use them
+/// anyway, and the sender never waits for it; a broadcast waits on a thread instead (`Inbox::deliver`).
 const QUEUED_COMMANDS: usize = 256;
 const MAX_MESSAGE_CHARS: usize = 500;
 
@@ -290,12 +291,62 @@ impl Queue {
 pub struct Inbox {
     queue: Queue,
     stopped: Arc<AtomicBool>,
+    behind: Arc<Mutex<Behind>>,
+}
+
+/// The broadcasts that found the frame's queue full, in the order they came, and whether a thread is handing them on.
+#[derive(Default)]
+struct Behind {
+    waiting: VecDeque<Job>,
+    handing: bool,
 }
 
 impl Inbox {
-    /// Hands the frame the JSON of a broadcast, which it parses for its `onBroadcast` listeners. Never waits.
+    /// Hands the frame the JSON of a broadcast, which it parses for its `onBroadcast` listeners. Never waits, and is never
+    /// lost while the frame runs: a frame behind the agent it streams has a full queue for as long as it is behind
+    /// (`Reply::lines_in_order`), so a broadcast that finds it full, like a change of a setting, waits on a thread for
+    /// room, after any that waited before it.
     pub fn deliver(&self, json: String) -> Delivery {
-        self.send(Message::Broadcast, 0, json)
+        if self.stopped.load(Ordering::Relaxed) {
+            return Delivery::Stopped;
+        }
+        let command = Command::Deliver {
+            message: Message::Broadcast,
+            id: 0,
+            text: json,
+        };
+        let mut behind = self.behind.lock().unwrap();
+        if behind.handing {
+            behind.waiting.push_back(Job::Frame(command));
+            return Delivery::Queued;
+        }
+        match self.queue.try_send(command) {
+            Ok(()) => return Delivery::Queued,
+            Err(mpsc::TrySendError::Disconnected(_)) => return Delivery::Stopped,
+            Err(mpsc::TrySendError::Full(job)) => behind.waiting.push_back(job),
+        }
+        behind.handing = true;
+        let (jobs, behind) = (self.queue.jobs.clone(), self.behind.clone());
+        thread::spawn(move || {
+            loop {
+                let job = {
+                    let mut behind = behind.lock().unwrap();
+                    let Some(job) = behind.waiting.pop_front() else {
+                        behind.handing = false;
+                        return;
+                    };
+                    job
+                };
+                if jobs.send(job).is_err() {
+                    // The frame has stopped: what waited goes with it.
+                    let mut behind = behind.lock().unwrap();
+                    behind.waiting.clear();
+                    behind.handing = false;
+                    return;
+                }
+            }
+        });
+        Delivery::Queued
     }
 
     /// Tells the frame `message`, with the text its listeners parse. Never waits.

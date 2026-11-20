@@ -100,8 +100,19 @@ async fn find_for_pane(pane: &Pane, local: bool) -> Result<Option<Link>, String>
     let Some(branch) = BRANCHES.with(|branches| branches.borrow().get(&pane.id).cloned().flatten()).filter(|branch| !branch.is_empty()) else {
         return Ok(None);
     };
-    let lookup = Lookup { key: format!("{} {branch}", forges::repo_key(&remote)), cwd: pane.cwd.clone(), remote, branch };
+    lookup(&pane.cwd, remote, branch).await
+}
+
+async fn lookup(cwd: &str, remote: Remote, branch: String) -> Result<Option<Link>, String> {
+    let lookup = Lookup { key: format!("{} {branch}", forges::repo_key(&remote)), cwd: cwd.to_owned(), remote, branch };
     LOOKUPS.with(Cached::clone).get(lookup).await
+}
+
+/// The PR for the branch a folder is on, for a caller that has no pane (a chat tab): the same lookup, cached the same
+/// way, so a chat and a pane on one branch cost one network call.
+pub async fn find_for_folder(cwd: &str, remote: Remote) -> Result<Option<Link>, String> {
+    let Some(branch) = git::ok(cwd, &["branch", "--show-current"]).await.filter(|branch| !branch.is_empty()) else { return Ok(None) };
+    lookup(cwd, remote, branch).await
 }
 
 /// Which panes `refresh_links` looks at.

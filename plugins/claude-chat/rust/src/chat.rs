@@ -85,6 +85,12 @@ pub struct Chat {
     pub state: State,
     /// Your setting for how tool calls show: Compact folds them, Detailed opens every run and each call's output.
     pub detailed: bool,
+    /// Your setting for showing what Claude thought open, in the Thinking view mode (`view_mode.rs`).
+    pub show_thinking: bool,
+    /// The search over the conversation (`search.rs`).
+    pub search: crate::search::Search,
+    /// The messages you bookmarked in this session (`bookmarks.rs`).
+    pub bookmarks: crate::bookmarks::Bookmarks,
     /// Your settings for which kinds of fold Detailed starts open (`folds.rs`).
     pub opens: crate::folds::Opens,
     /// Your setting for the conversation's text size, as the `textScale` its scroll takes.
@@ -180,6 +186,8 @@ pub struct Chat {
     pub accounts: Vec<host::AccountChoice>,
     /// The comments left on lines in Wings' diff viewer for this chat, which go with the next message (`review.rs`).
     pub review: Vec<crate::review::Comment>,
+    /// Which plan is open as a document, and the comment being written on it (`plan_doc_view.rs`).
+    pub plan_view: crate::plan_doc::View,
 }
 
 thread_local! {
@@ -194,6 +202,9 @@ thread_local! {
         folder: String::new(),
         state: State::Starting,
         detailed: false,
+        show_thinking: false,
+        search: Default::default(),
+        bookmarks: Default::default(),
         opens: crate::folds::Opens::default(),
         text_scale: 1.0,
         panel: None,
@@ -239,6 +250,7 @@ thread_local! {
         limit_resume: None,
         accounts: Vec::new(),
         review: Vec::new(),
+        plan_view: Default::default(),
     });
 }
 
@@ -278,6 +290,7 @@ pub fn start() {
     crate::mod_pane::start();
     with(|c| {
         c.detailed = prefs::detailed().get();
+        c.show_thinking = prefs::thinking().get();
         c.text_scale = prefs::scale_of(&prefs::text_size().get());
         c.side_open = prefs::side_panel().get();
         c.diff_split = prefs::diff_split().get();
@@ -295,8 +308,10 @@ pub fn start() {
     // After your setting is read: a chat in front opens the session sidebar with it.
     crate::session_side::start();
     wings_plugin::poll::while_focused(crate::refs_view::ISSUES_EVERY_MS, false, crate::refs_view::refresh_issues);
+    wings_plugin::poll::while_focused(crate::pull::EVERY_MS, false, crate::pull::tick);
     // The cache clock in the session panel counts down: a tick only has the page drawn again, and only while Wings is in front.
     wings_plugin::poll::while_focused(crate::spend::CACHE_TICK_MS, false, || {});
+    crate::terminals::start();
     host::on_terminals(|listed| with(|c| c.terminals = listed.iter().filter_map(Terminal::of).collect()));
     host::on_agent_message(take_agent_message);
     messages::on(crate::review::EVENT, review_comment);
@@ -305,6 +320,12 @@ pub fn start() {
         with(|c| {
             c.detailed = *detailed;
             c.open_steps.clear();
+            c.open_outputs.clear();
+        })
+    });
+    prefs::thinking().on_change(|thinking| {
+        with(|c| {
+            c.show_thinking = *thinking;
             c.open_outputs.clear();
         })
     });
@@ -573,6 +594,7 @@ pub(crate) fn load_git(run: u32, cwd: String) {
                 c.counting = next.is_some();
                 next
             });
+            crate::pull::after_git();
             let Some(next) = next else { break };
             (run, cwd) = next;
         }
@@ -839,6 +861,10 @@ pub fn send() {
     if crate::worktree::intercept() {
         return;
     }
+    // A mentioned terminal's output is read first, and the message goes with it once it is.
+    if crate::terminals::read_first(&with(|c| c.draft.trim().to_owned()), send) {
+        return;
+    }
     let had_review = with(|c| !c.review.is_empty());
     write(|c, n| {
         let text = c.draft.trim().to_owned();
@@ -884,6 +910,8 @@ pub fn send() {
         let images = std::mem::take(&mut c.images);
         // The comments left in the diff viewer go with this message, once.
         let text = crate::review::message(&text, &std::mem::take(&mut c.review));
+        // A line range goes in the form Claude Code reads, and a mentioned terminal gets its note.
+        let text = crate::terminals::attach(&mentions::normalize(&text));
         if c.session.working {
             return Some(c.session.queue(&text, images, host::now() as u64, n));
         }
@@ -1045,8 +1073,11 @@ pub fn keep_planning(request: &str) {
     write(|c, _| {
         let draft = c.drafts.remove(request).unwrap_or_default();
         let said = if draft.feedback.trim().is_empty() { "The user wants you to keep planning. Don't start the work yet." } else { draft.feedback.as_str() };
-        c.session.deny(request, said)
+        // The comments left on the plan are what to change.
+        let said = crate::review::message(said, &crate::plan_doc::take(&mut c.review));
+        c.session.deny(request, &said)
     });
+    save_tab();
 }
 
 /// Asks Claude to stop the turn it is on.
@@ -1150,6 +1181,14 @@ pub fn mention_matches(c: &Chat) -> Option<(usize, Vec<&str>)> {
     let (start, query) = mentions::active(&c.draft)?;
     let found = c.files.matches(query);
     (!found.is_empty()).then_some((start, found))
+}
+
+/// The open terminal panes that match the `@word` the draft ends in.
+pub fn terminal_matches(c: &Chat) -> Vec<crate::terminals::Pane> {
+    match mentions::active(&c.draft) {
+        Some((_, query)) if !c.draft.starts_with('/') => crate::terminals::matching(query),
+        _ => Vec::new(),
+    }
 }
 
 /// The issues that match the `#word` the draft ends in, with where the word starts. None while a slash command is being

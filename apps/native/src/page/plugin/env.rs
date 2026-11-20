@@ -495,6 +495,11 @@ pub trait Env: Send + Sync + 'static {
     }
     /// The local ports the programs in the panes listen on. Takes a while: called on a thread of its own.
     fn ports(&self) -> Result<Vec<PanePort>, String>;
+    /// What the terminal pane `pane` printed lately, oldest first, as Wings' `read_pane` tool reads it. The host has
+    /// checked the plugin may and that the pane is listed. Takes a while: called on a thread of its own.
+    fn pane_output(&self, _pane: &str) -> Result<Vec<u8>, String> {
+        Err("Reading a pane isn't available in this host".into())
+    }
     /// Opens `url` in the browser. The host has checked the plugin may.
     fn open_url(&self, url: &str) -> Result<(), String>;
     /// Opens `file` in the editor chosen in Settings, at `line` where the editor can. The host has checked the file is in

@@ -1,7 +1,8 @@
 //! What a frame costs the window while an agent works: one drawn after the visible terminal is told to redraw with nothing
 //! new on it, one drawn for the working agent's spinner alone, 30 times a second, one after output that changes a
 //! single row (Claude Code's spinner and timer line), one after output that scrolls the whole screen, and the one-row
-//! frame again with the tab split in two, the other pane full of text too. Offscreen,
+//! frame again with the tab split in two, the other pane full of text too, and last one drawn for a long chat at work in a
+//! tab (spinners, a working dot and a shimmering line) with only the clock moving. Offscreen,
 //! with 16 made-up projects in the sidebar, a made-up Claude Code (a renamed `sleep`) working in the first pane, and the
 //! components page open as a plugin's sidebar on the right.
 //!
@@ -62,6 +63,15 @@ fn main() {
         &fixture_main(),
         &[("side", &components)],
         "bench",
+    );
+    // A long chat at work, as Claude chat draws one, opened as a tab at the end.
+    let chat = fake::page("page", |_| chat_at_work());
+    data.install_script(
+        "chat",
+        serde_json::json!({ "contributes": { "views": [{ "id": "chat", "title": "Chat", "page": "dist/chat.html", "opens": ["tab"], "newTab": true, "button": false }] } }),
+        &fixture_main(),
+        &[("chat", &chat)],
+        "bench-chat",
     );
     config.plugins = Some(data.paths());
 
@@ -237,9 +247,64 @@ fn main() {
         let quick = std::path::Path::new(path).with_extension("quick.png");
         cx.capture_screenshot(window).unwrap().save(quick).unwrap();
     }
+    // The chat in a tab, in front: only the clock moves, so a frame is what its spinners, dot and shimmer draw again.
+    handle
+        .update(&mut cx, |workspace, window, cx| {
+            assert!(workspace.open_plugin_view("chat", "chat", None, window, cx), "the chat opens");
+            window.activate_window();
+        })
+        .unwrap();
+    settle(&mut cx, Duration::from_secs(2));
+    let active = cx
+        .update_window(window, |_, window, _| window.is_window_active())
+        .unwrap_or(false);
+    let mut frames = Vec::new();
+    for _ in 0..300 {
+        let start = Instant::now();
+        cx.advance_clock(Duration::from_millis(34));
+        cx.run_until_parked();
+        draw(&mut cx);
+        frames.push(start.elapsed());
+    }
+    report(
+        &format!("frame for a working chat's spinners and shimmer alone (window in front: {active})"),
+        frames,
+    );
     let _ = std::process::Command::new("pkill")
         .args(["-f", &fake_claude.display().to_string()])
         .status();
+}
+
+/// What moves while a chat works (a running step's spinner, a running subagent's, a working agent's dot and the
+/// shimmering "Working" line that counts its seconds), then 120 turns of it, each a title and two paragraphs in a card.
+fn chat_at_work() -> serde_json::Value {
+    use serde_json::json;
+    let text = |id: u64, words: String, props: serde_json::Value| {
+        json!({ "id": id, "type": "Text", "props": props, "children": [{ "id": id + 1, "type": "#text", "text": words }] })
+    };
+    let mut turns: Vec<serde_json::Value> = (0..120u64)
+        .map(|turn| {
+            let id = 100 + turn * 10;
+            json!({ "id": id, "type": "Card", "props": {}, "children": [
+                text(id + 1, format!("Turn {turn}: refactor the API client"), json!({ "weight": "strong" })),
+                text(id + 3, "The client now retries once on a dropped connection and reads the token from the keychain. ".repeat(4), json!({})),
+                text(id + 5, "All 214 checks passed in 12.3 s.".into(), json!({ "tone": "muted" })),
+            ] })
+        })
+        .collect();
+    turns.splice(0..0, [
+        json!({ "id": 10, "type": "Spinner", "props": { "label": "Running the checks" } }),
+        json!({ "id": 11, "type": "Spinner", "props": { "size": "large" } }),
+        json!({ "id": 12, "type": "Dot", "props": { "state": "working" } }),
+        text(13, "Working".into(), json!({ "tone": "muted", "shimmer": true, "since": 1_763_470_000_000u64 })),
+    ]);
+    json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Page", "props": { "flush": true }, "children": [
+        { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [
+            { "id": 3, "type": "Scroll", "props": {}, "children": [
+                { "id": 4, "type": "Stack", "props": { "gap": "l" }, "children": turns }
+            ] }
+        ] }
+    ] }] })
 }
 
 fn claude_like_screen() -> String {

@@ -71,6 +71,8 @@ pub(super) struct FakeEnv {
     /// The folders of the Claude Code accounts, which `transcript` reads.
     pub claude: Mutex<Vec<PathBuf>>,
     pub ports: Mutex<Result<Vec<PanePort>, String>>,
+    /// What each terminal pane printed, by pane id, which `readPane` reads.
+    pub output: Mutex<std::collections::HashMap<String, Vec<u8>>>,
     /// The OpenCode sessions the service knows, and the ones `agentActivity` was asked about.
     opencode: Mutex<Vec<String>>,
     asked: Mutex<Vec<String>>,
@@ -99,6 +101,7 @@ impl FakeEnv {
             spaces: Mutex::new(Projects::open(None, "/nowhere".into())),
             claude: Mutex::default(),
             ports: Mutex::new(Ok(Vec::new())),
+            output: Mutex::default(),
             opencode: Mutex::default(),
             asked: Mutex::default(),
             refuse: Mutex::default(),
@@ -341,6 +344,10 @@ impl Env for FakeEnv {
     }
     fn ports(&self) -> Result<Vec<PanePort>, String> {
         self.ports.lock().unwrap().clone()
+    }
+
+    fn pane_output(&self, pane: &str) -> Result<Vec<u8>, String> {
+        self.output.lock().unwrap().get(pane).cloned().ok_or_else(|| format!("no pane {pane}"))
     }
 
     fn open_url(&self, url: &str) -> Result<(), String> {

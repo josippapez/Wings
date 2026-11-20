@@ -3045,3 +3045,110 @@ mod backdrop {
         assert!((14..=16).contains(&layers), "the layer drew {layers} times in 15 steps");
     }
 }
+
+/// A chat at work in a tab, as the workspace draws one: what moves in it turns in the window's layer, not the page.
+mod spinners {
+    use gpui::{Entity, StyleRefinement, Window, div, prelude::*};
+
+    use super::*;
+    use crate::ui::{SPIN_STEP, place_view, spinner_layer, view_spinner_layer};
+
+    /// A page with everything a working chat moves: a running step's spinner, a large one, a working agent's dot and a
+    /// shimmering "Working" line that counts the seconds since it started.
+    fn working() -> String {
+        fake::page("page", |_| {
+            json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Page", "props": { "flush": true }, "children": [
+                { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [
+                    { "id": 3, "type": "Spinner", "props": { "label": "Running" } },
+                    { "id": 4, "type": "Spinner", "props": { "size": "large" } },
+                    { "id": 5, "type": "Dot", "props": { "state": "working" } },
+                    { "id": 6, "type": "Text", "props": { "tone": "muted", "shimmer": true, "since": 1_763_470_000_000u64 },
+                      "children": [text_node(7, "Working")] },
+                    text(8, 9, "Step 99 passes".into())
+                ] }] }] })
+        })
+    }
+
+    /// The window: the tab's page, kept as last drawn and put on screen while `shown`, the layer of what moves in it,
+    /// and the window's spinner layer, counting the window's draws.
+    struct Tab {
+        page: Entity<PageView>,
+        shown: bool,
+        drawn: usize,
+    }
+
+    impl Render for Tab {
+        fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.drawn += 1;
+            let layer = spinner_layer(window);
+            if self.shown {
+                place_view(self.page.entity_id(), window.window_handle().window_id());
+            }
+            div()
+                .relative()
+                .size_full()
+                .child(self.page.clone().cached(StyleRefinement::default().size_full()))
+                .child(view_spinner_layer(window))
+                .child(layer)
+        }
+    }
+
+    fn open_tab(shown: bool) -> (TestApp, TestAppWindow<Tab>) {
+        let mut app = TestApp::new();
+        app.background_executor().allow_parking();
+        let host = hosted(&mut app);
+        let source = working();
+        let mut window = app.open_window(move |_, cx| Tab {
+            page: cx.new(|cx| PageView::in_plugin(&host, &source, cx).in_card()),
+            shown,
+            drawn: 0,
+        });
+        // In front, where a shimmer pulses.
+        window.update(|_, window, _| window.activate_window());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !window.read(|tab, cx| tab.page.read(cx).text().contains("Step 99")) {
+            assert!(Instant::now() < deadline, "the page never drew its tree");
+            app.run_until_parked();
+            window.draw();
+            thread::sleep(Duration::from_millis(5));
+        }
+        window.draw();
+        (app, window)
+    }
+
+    /// The page's renders and the window's draws so far.
+    fn drawn(window: &TestAppWindow<Tab>) -> (usize, usize) {
+        window.read(|tab, cx| (tab.page.read(cx).renders(), tab.drawn))
+    }
+
+    /// The guard for every page: a node that moves on its own (a spinner, a working dot, a shimmer, a `since` that
+    /// counts) must move in the window's layer. One that animates in the page draws the whole page again at each step,
+    /// which in a long chat kept a core busy while an agent worked.
+    #[test]
+    fn a_second_of_a_working_chat_draws_the_layer_and_never_the_page() {
+        let (app, window) = open_tab(true);
+        let (pages, frames) = drawn(&window);
+        for _ in 0..30 {
+            app.advance_clock(SPIN_STEP);
+            app.run_until_parked();
+        }
+        let (pages, frames) = (drawn(&window).0 - pages, drawn(&window).1 - frames);
+        eprintln!("[measure] 30 spinner steps of a working chat: the page rendered {pages} times, the window {frames}");
+        assert_eq!(pages, 0, "the page kept its drawing");
+        assert!((29..=31).contains(&frames), "the layer turned {frames} times in 30 steps");
+    }
+
+    /// A page nobody puts on screen with the layer, as one in a window of its own, still turns its spinners and pulses
+    /// its shimmer, in place.
+    #[test]
+    fn a_page_without_the_layer_moves_in_place() {
+        let (app, window) = open_tab(false);
+        let pages = drawn(&window).0;
+        for _ in 0..30 {
+            app.advance_clock(SPIN_STEP);
+            app.run_until_parked();
+        }
+        let pages = drawn(&window).0 - pages;
+        assert!(pages >= 10, "the page turned its spinners {pages} times in 30 steps");
+    }
+}

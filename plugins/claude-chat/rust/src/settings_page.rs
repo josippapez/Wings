@@ -6,7 +6,7 @@ use wings_plugin::ui::{Node, checkbox, chips as choose, heading as section, mute
 /// The most points wide a description runs, so a line stays a readable length on a wide page.
 const MEASURE: u32 = 560;
 
-use crate::{folds::KINDS, prefs, session::MODES};
+use crate::{claude_version, folds::KINDS, prefs, session::MODES};
 
 /// A section's name, in the page's section heading style, stronger than the description under it.
 fn heading(text: &str) -> Node {
@@ -55,11 +55,14 @@ fn view() -> Vec<Node> {
         .child(muted("The size of the text in the conversation, in every chat. A chat that is open follows a change at once."))
         .child(chips("Text size", &prefs::TEXT_SIZES, &prefs::text_size().get(), |size| drop(prefs::text_size().set(size.to_owned()))))
         .child(heading("Background"))
-        .child(muted("What lies behind the conversation, in every chat. Pixel drift is a dim pattern of pixels in the chat's colours. Halo, Pensive, Mint, Interstella and Nighty night are dim moving gradients in the colours of ShaderGradient's presets, and need Wings 0.2.60. Each moves slowly while Wings is in front and stands still when your Mac reduces motion. A chat that is open follows a change at once."))
-        .child(background())]
+        .child(muted("What lies behind the conversation, in every chat. Pixel drift, Pixel rain, Checker shimmer and Embers are dim patterns of pixels in the chat's colours; all but Pixel drift need a Wings after 0.2.60. Halo, Pensive, Mint, Interstella and Nighty night are dim moving gradients in the colours of ShaderGradient's presets, and need Wings 0.2.60. Each moves slowly while Wings is in front and stands still when your Mac reduces motion. A chat that is open follows a change at once."))
+        .child(background())
+        .child(heading("Claude Code"))
+        .child(muted("The version of Claude Code that every chat runs, and whether a newer one is out. Update Claude Code runs `claude upgrade`."))
+        .child(claude_version::section())]
 }
 
-/// The background's choice: a menu, as seven don't fit on a track in a narrow page.
+/// The background's choice: a menu, as ten don't fit on a track in a narrow page.
 fn background() -> Node {
     let options: Vec<(String, String)> =
         prefs::BACKGROUNDS.iter().map(|(value, label)| ((*value).to_owned(), (*label).to_owned())).collect();
@@ -69,6 +72,7 @@ fn background() -> Node {
 // A test build holds the main frame's `start` too: only the page's module exports this one.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
+    claude_version::check();
     wings_plugin::run(view);
 }
 
@@ -99,7 +103,11 @@ mod tests {
         assert_eq!(select["props"]["value"], "plain");
         let options = select["props"]["options"].as_array().unwrap();
         let labels: Vec<&str> = options.iter().map(|option| option["label"].as_str().unwrap()).collect();
-        assert_eq!(labels, ["Plain", "Pixel drift", "Halo", "Pensive", "Mint", "Interstella", "Nighty night"]);
-        assert_eq!(options[2]["value"], "gradient:halo");
+        assert_eq!(
+            labels,
+            ["Plain", "Pixel drift", "Pixel rain", "Checker shimmer", "Embers", "Halo", "Pensive", "Mint", "Interstella", "Nighty night"]
+        );
+        assert_eq!(options[2]["value"], "pixels:rain");
+        assert_eq!(options[5]["value"], "gradient:halo");
     }
 }

@@ -577,6 +577,29 @@ pub fn ports() -> Pending<Result<Value, String>> {
     call("ports", json!({}))
 }
 
+/// What `read_pane` read of a terminal pane.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PaneText {
+    /// Its last lines as plain text, without colors or cursor moves, and without blank lines at the end.
+    pub text: String,
+    /// Whether older output was left out.
+    pub cut: bool,
+}
+
+/// `wings.readPane`: the last `lines` lines (up to 500, and 64 KB) the terminal pane `pane_id` shows, as Wings'
+/// `read_pane` tool reads them. Needs `permissions.paneOutput` and Wings 0.2.61: an older Wings refuses it as an
+/// unknown method. The call goes out now.
+pub fn read_pane(pane_id: &str, lines: u32) -> impl Future<Output = Result<PaneText, String>> + use<> {
+    let answer = call("readPane", json!({ "paneId": pane_id, "lines": lines }));
+    async move {
+        let mut answer = answer.await?;
+        let Some(Value::String(text)) = answer.get_mut("text").map(Value::take) else {
+            return Err("readPane answered without text".into());
+        };
+        Ok(PaneText { text, cut: answer["cut"] == true })
+    }
+}
+
 /// `wings.storage`: what the plugin keeps between runs, shared by its frames. Answered at once.
 pub mod storage {
     #[cfg(target_arch = "wasm32")]
@@ -1223,6 +1246,17 @@ mod tests {
                 ("setAgent".to_owned(), json!({ "agent": { "state": "idle", "name": "Fix", "summary": null, "sessionId": null } })),
             ]
         );
+    }
+
+    #[test]
+    fn a_pane_is_read_by_its_id_and_lines_and_a_refusal_comes_through() {
+        let calls = record(&["readPane"]);
+        assert_eq!(block_on(read_pane("7", 200)), Err("no pane".into()));
+        assert_eq!(calls.borrow()[0], ("readPane".to_owned(), json!({ "paneId": "7", "lines": 200 })));
+        testing::answer(|_, _| Ok(json!({ "text": "$ make\nok", "cut": true })));
+        assert_eq!(block_on(read_pane("7", 200)), Ok(PaneText { text: "$ make\nok".into(), cut: true }));
+        testing::answer(|_, _| Ok(Value::Null));
+        assert_eq!(block_on(read_pane("7", 200)), Err("readPane answered without text".into()));
     }
 
     #[test]

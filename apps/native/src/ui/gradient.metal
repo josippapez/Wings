@@ -1,6 +1,7 @@
 // The gradient backdrops (`gradients.rs`): a slow mesh of three colours over a page's ground, drawn straight into the
-// two planes of a 4:2:0 YCbCr frame (luma, then chroma at half size), which GPUI draws as a surface. Wings' own code; the
-// looks recreate shadergradient's plane, sphere and waterPlane meshes on a flat picture.
+// two planes of a 4:2:0 YCbCr frame (luma, then chroma at half size), which GPUI draws as a surface, or as one BGRA
+// picture into a layer under the window (`gradient_rgb`), with the pixel backdrops' cells (`cells_rgb`). Wings' own code;
+// the looks recreate shadergradient's plane, sphere and waterPlane meshes on a flat picture.
 
 #include <metal_stdlib>
 using namespace metal;
@@ -178,4 +179,28 @@ fragment float4 gradient_chroma(Vertex in [[stage_in]], constant Gradient &g [[b
   float3 color = shade(at, g);
   float y = luma_of(color);
   return float4((color.b - y) / 1.772 + 0.5, (color.r - y) / 1.402 + 0.5, 0.0, 1.0);
+}
+
+// The frame as one opaque BGRA picture, for the layer Wings draws a backdrop in under the window (`native_backdrop.rs`):
+// the same colour, untagged as GPUI's own drawing is, which writes sRGB values as they are.
+fragment float4 gradient_rgb(Vertex in [[stage_in]], constant Gradient &g [[buffer(0)]]) {
+  float2 at = in.position.xy * (g.size / g.target);
+  float3 color = shade(at, g);
+  float dither = (hash(float3(in.position.xy, 11.0)) - 0.5) / 255.0;
+  return float4(saturate(color + dither), 1.0);
+}
+
+// As `CellColors` in native_backdrop.rs: the size of the grid, and each shade's colour over the ground (`pixels.rs`).
+struct Cells {
+  uint cols;
+  uint rows;
+  uint2 pad;
+  float4 colors[7];
+};
+
+// The pixel backdrops, one pixel a cell, which the layer scales up without smoothing: each cell's shade picks its colour.
+fragment float4 cells_rgb(Vertex in [[stage_in]], constant Cells &c [[buffer(0)]],
+                          device const uchar *shades [[buffer(1)]]) {
+  uint2 at = min(uint2(in.position.xy), uint2(c.cols - 1, c.rows - 1));
+  return c.colors[min(uint(shades[at.y * c.cols + at.x]), 6u)];
 }

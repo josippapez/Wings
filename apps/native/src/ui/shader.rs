@@ -53,22 +53,9 @@ impl Metal {
     /// The system's GPU, the shader compiled and the two pipelines made, or why not.
     pub(crate) fn new() -> Result<Self, String> {
         let device = MTLCreateSystemDefaultDevice().ok_or("no Metal device")?;
-        let library = device
-            .newLibraryWithSource_options_error(&NSString::from_str(SOURCE), None)
-            .map_err(|error| format!("compiling the gradient shader: {error:?}"))?;
-        let pipeline = |fragment: &str, format: MTLPixelFormat| -> Result<_, String> {
-            let function = |name: &str| {
-                library.newFunctionWithName(&NSString::from_str(name)).ok_or(format!("no {name} in the gradient shader"))
-            };
-            let descriptor = MTLRenderPipelineDescriptor::new();
-            descriptor.setVertexFunction(Some(&*function("gradient_vertex")?));
-            descriptor.setFragmentFunction(Some(&*function(fragment)?));
-            // SAFETY: Index zero is within the pipeline's colour attachments.
-            unsafe { descriptor.colorAttachments().objectAtIndexedSubscript(0) }.setPixelFormat(format);
-            device.newRenderPipelineStateWithDescriptor_error(&descriptor).map_err(|error| format!("{fragment}: {error:?}"))
-        };
-        let luma = pipeline("gradient_luma", MTLPixelFormat::R8Unorm)?;
-        let chroma = pipeline("gradient_chroma", MTLPixelFormat::RG8Unorm)?;
+        let library = library(&device)?;
+        let luma = pipeline(&device, &library, "gradient_luma", MTLPixelFormat::R8Unorm)?;
+        let chroma = pipeline(&device, &library, "gradient_chroma", MTLPixelFormat::RG8Unorm)?;
         let queue = device.newCommandQueue().ok_or("no Metal command queue")?;
         // The planes' textures are drawn into, and GPUI reads them.
         let usage = CFNumber::new_i64((MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead).0 as i64);
@@ -89,6 +76,31 @@ impl Metal {
         let cache = unsafe { CFRetained::from_raw(cache) };
         Ok(Self { queue, luma, chroma, cache, slots: HashMap::new() })
     }
+}
+
+/// `gradient.metal`, compiled for `device`.
+pub(super) fn library(device: &ProtocolObject<dyn MTLDevice>) -> Result<Retained<ProtocolObject<dyn MTLLibrary>>, String> {
+    device
+        .newLibraryWithSource_options_error(&NSString::from_str(SOURCE), None)
+        .map_err(|error| format!("compiling the gradient shader: {error:?}"))
+}
+
+/// A pipeline that draws one triangle over all of a target of `format` with the shader's `fragment`.
+pub(super) fn pipeline(
+    device: &ProtocolObject<dyn MTLDevice>,
+    library: &ProtocolObject<dyn MTLLibrary>,
+    fragment: &str,
+    format: MTLPixelFormat,
+) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, String> {
+    let function = |name: &str| {
+        library.newFunctionWithName(&NSString::from_str(name)).ok_or(format!("no {name} in the gradient shader"))
+    };
+    let descriptor = MTLRenderPipelineDescriptor::new();
+    descriptor.setVertexFunction(Some(&*function("gradient_vertex")?));
+    descriptor.setFragmentFunction(Some(&*function(fragment)?));
+    // SAFETY: Index zero is within the pipeline's colour attachments.
+    unsafe { descriptor.colorAttachments().objectAtIndexedSubscript(0) }.setPixelFormat(format);
+    device.newRenderPipelineStateWithDescriptor_error(&descriptor).map_err(|error| format!("{fragment}: {error:?}"))
 }
 
 /// A new frame `size` pixels big, IOSurface-backed so Metal can draw into it, and its planes as textures.

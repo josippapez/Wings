@@ -85,6 +85,12 @@ pub fn hear(session: &mut Session, line: &Value) -> bool {
             };
             // Under the tool's row, where the call was.
             let at = text("tool_use_id").and_then(|id| session.items.iter().position(|item| matches!(item, Item::Tool(tool) if tool.id == id)));
+            if let (Some(at), Some("classifier")) = (at, text("decision_reason_type")) {
+                if let Item::Tool(tool) = &session.items[at] {
+                    let blocked = crate::blocked::of(&said, tool);
+                    crate::blocked::keep(session, blocked);
+                }
+            }
             match at {
                 Some(at) if session.items.get(at + 1) != Some(&Item::Notice(said.clone())) => session.items.insert(at + 1, Item::Notice(said)),
                 Some(_) => {}

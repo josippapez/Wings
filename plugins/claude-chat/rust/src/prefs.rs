@@ -34,13 +34,17 @@ pub const SIDE_PANEL: &str = "side-panel";
 pub const SESSION_PANEL: &str = "session-panel";
 pub const SESSION_PANELS: [(&str, &str); 2] = [("chat", "In the chat"), ("sidebar", "Wings sidebar")];
 
-/// What lies behind the conversation, in every chat: the page's plain ground, a slow drift of pixels Wings draws there
-/// (`backdrop: "pixels"` on the page, Wings 0.2.59), or a moving gradient Wings draws with a shader (`"gradient:<preset>"`,
-/// Wings 0.2.60), whose colours are shadergradient's presets'.
+/// What lies behind the conversation, in every chat: the page's plain ground, a slow pattern of pixels Wings draws there
+/// (`backdrop: "pixels"` on the page, Wings 0.2.59, or `"pixels:<pattern>"`, a Wings after 0.2.60, which an older one
+/// leaves plain), or a moving gradient Wings draws with a shader (`"gradient:<preset>"`, Wings 0.2.60), whose colours are
+/// shadergradient's presets'.
 pub const BACKGROUND: &str = "background";
-pub const BACKGROUNDS: [(&str, &str); 7] = [
+pub const BACKGROUNDS: [(&str, &str); 10] = [
     ("plain", "Plain"),
     ("pixels", "Pixel drift"),
+    ("pixels:rain", "Pixel rain"),
+    ("pixels:checker", "Checker shimmer"),
+    ("pixels:embers", "Embers"),
     ("gradient:halo", "Halo"),
     ("gradient:pensive", "Pensive"),
     ("gradient:mint", "Mint"),
@@ -113,6 +117,14 @@ pub fn panel_closed() -> Setting<Vec<String>> {
 
 pub fn detailed() -> Setting<bool> {
     Setting::boolean(DETAILED, false)
+}
+
+/// What Claude thought shows open, with tool calls as they are: Claude Code's Thinking view mode (`view_mode.rs`). The other
+/// modes are `DETAILED` off (Normal) and on (Verbose).
+pub const THINKING: &str = "show-thinking";
+
+pub fn thinking() -> Setting<bool> {
+    Setting::boolean(THINKING, false)
 }
 
 /// Whether a kind of fold starts open in Detailed (`folds.rs`): on, as Detailed has always opened everything.
@@ -194,6 +206,11 @@ mod tests {
         assert_eq!(background_of(&json!("pixels")).as_deref(), Some("pixels"));
         assert_eq!(background_of(&json!("plain")).as_deref(), Some("plain"));
         assert_eq!(background_of(&json!("gradient:mint")).as_deref(), Some("gradient:mint"));
+        for pattern in ["pixels:rain", "pixels:checker", "pixels:embers"] {
+            assert_eq!(background_of(&json!(pattern)).as_deref(), Some(pattern));
+            assert_eq!(backdrop(pattern).as_deref(), Some(pattern), "the page asks Wings for the pattern by name");
+        }
+        assert_eq!(background_of(&json!("pixels:snow")), None);
         assert_eq!(background_of(&json!("gradient:aurora")), None);
         assert_eq!(background_of(&json!("aurora")), None);
         assert_eq!(background_of(&json!(true)), None);

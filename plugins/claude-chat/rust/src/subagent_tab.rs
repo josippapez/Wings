@@ -104,6 +104,7 @@ fn begin() {
     wings_plugin::run_filled(crate::subagent_view::view);
     chat::with(|c| {
         c.detailed = prefs::detailed().get();
+        c.show_thinking = prefs::thinking().get();
         c.text_scale = prefs::scale_of(&prefs::text_size().get());
     });
     prefs::text_size().on_change(|size| chat::with(|c| c.text_scale = prefs::scale_of(size)));

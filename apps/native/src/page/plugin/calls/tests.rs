@@ -42,6 +42,7 @@ fn a_host_without_a_manifest_refuses_every_call() {
         ("setBadge", json!({ "paneId": "1", "badge": { "label": "x" } })),
         ("openUrl", json!({ "url": "https://github.com/" })),
         ("ports", json!({})),
+        ("readPane", json!({ "paneId": "1", "lines": 10 })),
         ("statusline", json!({})),
         ("notify", json!({ "title": "x", "body": "" })),
         (
@@ -547,6 +548,38 @@ fn ports_lists_what_the_app_found_with_the_permission_and_says_why_it_could_not(
         none.refuses("ports", json!({})),
         "probe may not read listening ports"
     );
+}
+
+// readPane
+
+#[test]
+fn read_pane_answers_a_listed_panes_last_lines_as_plain_text_with_the_permission() {
+    let rig = Rig::new(json!({ "permissions": { "paneOutput": true } }), panes());
+    let printed: String = (1..=600).map(|i| format!("\x1b[32mline {i}\x1b[0m\r\n")).chain(["\r\n\r\n".to_owned()]).collect();
+    rig.env.output.lock().unwrap().insert("1".into(), printed.into_bytes());
+    assert_eq!(
+        rig.allows("readPane", json!({ "paneId": "1", "lines": 3 })),
+        json!({ "text": "line 598\nline 599\nline 600", "cut": true })
+    );
+    // At most 500 lines, whatever it asks.
+    let read = rig.allows("readPane", json!({ "paneId": "1", "lines": 5000 }));
+    let text = read["text"].as_str().unwrap();
+    assert_eq!((text.lines().count(), text.lines().next()), (500, Some("line 101")));
+    rig.env.output.lock().unwrap().insert("2".into(), b"$ ls\r\n".to_vec());
+    assert_eq!(rig.allows("readPane", json!({ "paneId": "2", "lines": 200 })), json!({ "text": "$ ls", "cut": false }));
+    assert_eq!(rig.refuses("readPane", json!({ "paneId": "1", "lines": 0 })), "readPane lines is a whole number from 1");
+}
+
+#[test]
+fn read_pane_refuses_a_pane_that_isnt_open_and_a_plugin_without_the_permission() {
+    let rig = Rig::new(json!({ "permissions": { "paneOutput": true } }), panes());
+    assert_eq!(rig.refuses("readPane", json!({ "paneId": "9", "lines": 10 })), "no pane 9");
+    // Listed, but closed before the window read it.
+    assert_eq!(rig.refuses("readPane", json!({ "paneId": "2", "lines": 10 })), "no pane 2");
+
+    let none = Rig::new(json!({ "permissions": { "panes": [], "ports": true, "sendToAgents": true } }), panes());
+    none.env.output.lock().unwrap().insert("1".into(), b"TOKEN=secret\r\n".to_vec());
+    assert_eq!(none.refuses("readPane", json!({ "paneId": "1", "lines": 10 })), "probe may not read terminal output");
 }
 
 // notify

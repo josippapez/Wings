@@ -144,7 +144,11 @@ pub(super) fn open(
     }
     PageRuntime {
         link: Some(link),
-        inbox: Inbox { queue, stopped },
+        inbox: Inbox {
+            queue,
+            stopped,
+            behind: Arc::default(),
+        },
         closed,
         _attached: None,
         jobs,

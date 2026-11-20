@@ -1,16 +1,17 @@
 {
   "id": "claude-chat",
   "name": "Claude chat",
-  "version": "0.30.0",
+  "version": "0.31.0",
   "minWingsVersion": "0.2.60",
   "description": "Experimental. Runs Claude Code as a chat in a tab instead of a terminal: messages, tool calls and permission prompts as cards, with Enter to send. Open a new chat from the + menu, or move a Claude terminal into one with its Chat badge.",
   "api": 1,
   "main": "dist/native/main.wasm",
   "permissions": {
     "statusline": true,
+    "paneOutput": true,
     "claudeAccounts": true,
     "worktrees": true,
-    "callTools": ["changes changed_files", "tasks get", "tasks list"],
+    "callTools": ["changes changed_files", "pr-tracker pull_request", "tasks get", "tasks list"],
     "events": ["changes review-comment"],
     "exec": [
       "git ls-files [--cached --others --exclude-standard -z]",
@@ -20,9 +21,12 @@
       "git switch []",
       "claude plugin list [--available --json]",
       "claude plugin install [--json]",
+      "claude --version [--version]",
+      "claude upgrade []",
       "test [-d]",
       "cat []",
       "gh pr view [--json]",
+      "gh pr merge [--squash --merge --rebase]",
       "gh issue list [--json --limit]",
       "az repos pr show [--id --organization --output]"
     ],
@@ -32,6 +36,9 @@
       "claude edit-permission-rules [--json]",
       "claude edit-hook [--json]",
       "claude edit-memory-settings [--json]"
+    ],
+    "fetch": [
+      "GET https://downloads.claude.ai/claude-code-releases/latest"
     ],
     "notify": true,
     "openUrl": [

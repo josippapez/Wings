@@ -5,10 +5,26 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use gpui::{
-    AnyElement, App, Bounds, ContentMask, Element, GlobalElementId, InspectorElementId,
+    AnyElement, App, Bounds, ContentMask, Element, EntityId, GlobalElementId, InspectorElementId,
     IntoElement, LayoutId, Pixels, Position, SharedString, Style, Window, WindowId, canvas,
     prelude::*,
 };
+
+/// A piece of the window that keeps its last drawing: one of the workspace's, by name, or a view that one of them puts
+/// on screen, a page say, by its entity. A view's slots count only while the piece that put it there still does
+/// (`place_view`): a page left behind by a tab switch keeps its last drawing, and its spinners must not turn on over
+/// whatever took its place.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Piece {
+    Named(&'static str),
+    View(EntityId),
+}
+
+impl From<&'static str> for Piece {
+    fn from(name: &'static str) -> Self {
+        Piece::Named(name)
+    }
+}
 
 /// What draws over a slot after the layer has drawn in it, clipped to the slot.
 pub type Over = Rc<dyn Fn(&mut Window)>;
@@ -28,22 +44,38 @@ struct Slots {
     /// The window's draws so far, counted by `start_draw`.
     frame: HashMap<WindowId, u64>,
     /// The draw each piece of a window last drew itself in.
-    drawn: HashMap<(WindowId, &'static str), u64>,
+    drawn: HashMap<(WindowId, Piece), u64>,
     /// Each slot by window, piece, the layer that draws in it, and name.
-    slots: HashMap<(WindowId, &'static str, &'static str, SharedString), Slot>,
+    slots: HashMap<(WindowId, Piece, &'static str, SharedString), Slot>,
     /// The piece being drawn, whose the slots made now are.
-    current: Option<&'static str>,
+    current: Option<Piece>,
+    /// Which piece last put each view on screen in a window, and in which of its draws (`place_view`).
+    placed: HashMap<(WindowId, EntityId), (Piece, u64)>,
+}
+
+impl Slots {
+    /// Whether the slots `piece` left in the window `id` still count: a named piece's always do, a view's while the
+    /// piece that put it on screen last did so in the draw it last drew itself in.
+    fn on_screen(&self, id: WindowId, piece: Piece) -> bool {
+        match piece {
+            Piece::Named(_) => true,
+            Piece::View(view) => self.placed.get(&(id, view)).is_some_and(|&(by, at)| {
+                by != piece && self.drawn.get(&(id, by)) == Some(&at) && self.on_screen(id, by)
+            }),
+        }
+    }
 }
 
 /// The piece the window's own drawing is, outside any `drawing_piece`.
-const WINDOW: &str = "window";
+const WINDOW: Piece = Piece::Named("window");
 
 thread_local! {
     static SLOTS: RefCell<Slots> = RefCell::default();
 }
 
 /// Runs `draw`, the drawing of the piece `piece` of the window `id`, so the slots it leaves are its own.
-pub fn drawing_piece<R>(piece: &'static str, id: WindowId, draw: impl FnOnce() -> R) -> R {
+pub fn drawing_piece<R>(piece: impl Into<Piece>, id: WindowId, draw: impl FnOnce() -> R) -> R {
+    let piece = piece.into();
     let outer = SLOTS.with_borrow_mut(|slots| {
         let frame = slots.frame.get(&id).copied().unwrap_or_default();
         slots.drawn.insert((id, piece), frame);
@@ -52,6 +84,32 @@ pub fn drawing_piece<R>(piece: &'static str, id: WindowId, draw: impl FnOnce() -
     let drawn = draw();
     SLOTS.with_borrow_mut(|slots| slots.current = outer);
     drawn
+}
+
+/// Says that the piece being drawn puts `view` on screen in the window `id`, in this draw of it: the slots `view` leaves
+/// as the piece `Piece::View` count until that piece draws itself again without saying so. A view that keeps its last
+/// drawing (`.cached`) and is put there again finds its slots still there.
+pub fn place_view(view: EntityId, id: WindowId) {
+    SLOTS.with_borrow_mut(|slots| {
+        let by = slots.current.unwrap_or(WINDOW);
+        let frame = slots.frame.get(&id).copied().unwrap_or_default();
+        slots.placed.insert((id, view), (by, frame));
+    });
+}
+
+/// Whether a piece now puts `view` on screen in the window `id` (`place_view`), so the slots it leaves will be drawn in.
+pub fn view_placed(view: EntityId, id: WindowId) -> bool {
+    SLOTS.with_borrow(|slots| slots.on_screen(id, Piece::View(view)))
+}
+
+/// Lets go of what `view` left in every window: its slots and where it was put. For a view that is gone.
+pub fn forget_view(view: EntityId) {
+    SLOTS.with_borrow_mut(|slots| {
+        let piece = Piece::View(view);
+        slots.slots.retain(|(_, of, _, _), _| *of != piece);
+        slots.drawn.retain(|(_, of), _| *of != piece);
+        slots.placed.retain(|(_, placed), _| *placed != view);
+    });
 }
 
 /// Starts a draw of the window `id`: the slots its pieces leave from now on are this draw's. Once in each draw of the
@@ -93,16 +151,19 @@ pub fn slot(
     .size_full()
 }
 
-/// The slots of `layer` in the window `id` still there: left in the draw their piece last drew itself in.
+/// The slots of `layer` in the window `id` still there: left in the draw their piece last drew itself in, by a piece on
+/// screen. A view's slots wait while nothing puts it on screen, for a tab switched back to that is drawn from its cache.
 pub(super) fn shown(id: WindowId, layer: &'static str) -> Vec<(SharedString, Slot)> {
-    SLOTS.with_borrow_mut(|slots| {
-        let Slots { drawn, slots, .. } = slots;
+    SLOTS.with_borrow_mut(|state| {
+        let Slots { drawn, slots, .. } = &mut *state;
         slots.retain(|(window, piece, _, _), slot| {
             *window != id || drawn.get(&(*window, *piece)) == Some(&slot.drawn)
         });
-        slots
+        let state = &*state;
+        state
+            .slots
             .iter()
-            .filter(|((window, _, of, _), _)| *window == id && *of == layer)
+            .filter(|((window, piece, of, _), _)| *window == id && *of == layer && state.on_screen(id, *piece))
             .map(|((.., name), slot)| (name.clone(), slot.clone()))
             .collect()
     })

@@ -253,3 +253,66 @@ fn a_click_goes_ahead_of_the_messages_the_frame_has_queued() {
     let heard = shown(&page.tree()).as_u64().unwrap();
     assert!(heard < 5, "the click waited for {heard} of the 50 messages queued before it");
 }
+
+#[test]
+fn a_broadcast_to_a_frame_behind_its_agent_waits_for_room_in_order_instead_of_being_lost() {
+    /// A chat behind the agent it streams, as Claude chat is while Claude works: it holds its first message until let
+    /// go, so the agent's lines fill its queue, and shows the broadcasts it heard once it has two.
+    struct Behind {
+        gate: Arc<(std::sync::Mutex<(bool, bool)>, std::sync::Condvar)>,
+        heard: Vec<String>,
+    }
+    impl Guest for Behind {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            show(cx, serde_json::json!("started"));
+        }
+        fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, _id: u32, text: &str) {
+            let (state, changed) = &*self.gate;
+            let mut state = state.lock().unwrap();
+            // (holding, let go)
+            state.0 = true;
+            changed.notify_all();
+            while !state.1 {
+                state = changed.wait(state).unwrap();
+            }
+            drop(state);
+            if kind == "broadcast" {
+                self.heard.push(text.to_owned());
+                if self.heard.len() == 2 {
+                    show(cx, serde_json::json!(self.heard));
+                }
+            }
+        }
+    }
+    let gate = Arc::new((std::sync::Mutex::new((false, false)), std::sync::Condvar::new()));
+    let made = gate.clone();
+    let page = start_in_plugin(&fake::source("chat", move || {
+        Box::new(Behind { gate: made.clone(), heard: Vec::new() })
+    }));
+    assert_eq!(shown(&page.tree()), "started");
+    let inbox = page.runtime.inbox();
+    // The frame takes the first line and holds it, then the rest fill its queue, as `Reply::lines_in_order` keeps it.
+    assert_eq!(inbox.send(Message::Output, 1, "line".into()), Delivery::Queued);
+    {
+        let (state, changed) = &*gate;
+        let state = state.lock().unwrap();
+        let (_state, waited) = changed.wait_timeout_while(state, WAIT, |state| !state.0).unwrap();
+        assert!(!waited.timed_out(), "the frame never took the first line");
+    }
+    while inbox.send(Message::Output, 1, "line".into()) == Delivery::Queued {}
+    // A setting changed in another frame, twice, while the queue is full: both wait for room, in order.
+    assert_eq!(inbox.deliver(r#"{"name":"setting:background","n":1}"#.into()), Delivery::Queued);
+    assert_eq!(inbox.deliver(r#"{"name":"setting:background","n":2}"#.into()), Delivery::Queued);
+    {
+        let (state, changed) = &*gate;
+        state.lock().unwrap().1 = true;
+        changed.notify_all();
+    }
+    assert_eq!(
+        shown(&page.tree()),
+        serde_json::json!([
+            r#"{"name":"setting:background","n":1}"#,
+            r#"{"name":"setting:background","n":2}"#
+        ])
+    );
+}

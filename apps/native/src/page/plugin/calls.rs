@@ -16,8 +16,8 @@ use wings_plugins::{
     manifest::Plugin,
     panes::{exec_cwd, worktrees_call_in_any_repo},
     permissions::{
-        NOTIFY_LIMIT, may_call_tool, may_create_worktrees, may_open_view, may_read_ports, may_read_statusline,
-        may_use_claude_accounts, notification,
+        NOTIFY_LIMIT, may_call_tool, may_create_worktrees, may_open_view, may_read_pane_output, may_read_ports,
+        may_read_statusline, may_use_claude_accounts, notification,
     },
     transcript::agent_entries,
 };
@@ -33,6 +33,10 @@ use crate::page::runtime::Reply;
 
 /// The most a page may put on the clipboard at once, in UTF-8 bytes: far more than a branch name or a code block.
 const COPY_MAX: usize = 1024 * 1024;
+/// The lines `readPane` reads when it isn't told, and the most lines and bytes it answers, so a frame's turn stays small.
+const READ_PANE_LINES: u64 = 100;
+const READ_PANE_LINES_MAX: u64 = 500;
+const READ_PANE_BYTES_MAX: usize = 64 * 1024;
 
 /// The text JS makes of a value with `String(value)`, for the arguments the desktop turns into strings.
 fn js_string(value: Option<&Value>) -> String {
@@ -488,6 +492,10 @@ impl Shared {
                 });
             }
             "ports" => self.off_thread(reply, move |_| ports(&access)),
+            "readPane" => match self.pane_to_read(&access, &params) {
+                Ok((pane, lines)) => self.off_thread(reply, move |_| read_pane(&access, &pane, lines)),
+                Err(error) => reply.err(error),
+            },
             "openUrl" => self.off_thread(reply, move |_| open_url(&access, &params)),
             // Right after your click or key, which the frame has checked, as a link in a page is clicked.
             "openFile" => self.off_thread(reply, move |_| open_file(&access, &params)),
@@ -556,6 +564,20 @@ impl Shared {
         } else {
             Err(format!("no pane {pane}"))
         }
+    }
+
+    /// `readPane`'s pane and lines: the plugin needs `paneOutput`, and the pane is one the app listed.
+    fn pane_to_read(&self, access: &Access, params: &Value) -> Result<(String, usize), String> {
+        if !may_read_pane_output(&access.plugin) {
+            return Err(format!("{} may not read terminal output", access.plugin.manifest.id));
+        }
+        let pane = js_string(params.get("paneId"));
+        self.require_pane(&pane)?;
+        let lines = match params.get("lines") {
+            None | Some(Value::Null) => READ_PANE_LINES,
+            Some(lines) => lines.as_u64().filter(|lines| *lines > 0).ok_or("readPane lines is a whole number from 1")?,
+        };
+        Ok((pane, lines.min(READ_PANE_LINES_MAX) as usize))
     }
 
     fn set_badge(&self, access: &Access, params: &Value) -> Result<String, String> {
@@ -1036,6 +1058,14 @@ impl Shared {
         let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(50).clamp(1, PAST_SESSIONS_MAX);
         to_json(&access.env.past_sessions(&project, query, limit as usize))
     }
+}
+
+/// `readPane`: `{ text, cut }`, the pane's last lines as plain text, as Wings' `read_pane` tool reads them, and whether
+/// older output was left out.
+fn read_pane(access: &Access, pane: &str, lines: usize) -> Result<String, String> {
+    let output = access.env.pane_output(pane)?;
+    let (text, cut) = wings_connect::panes::pane_text(&output, lines, READ_PANE_BYTES_MAX);
+    to_json(&json!({ "text": text, "cut": cut }))
 }
 
 fn ports(access: &Access) -> Result<String, String> {

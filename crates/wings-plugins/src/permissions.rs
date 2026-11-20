@@ -12,6 +12,11 @@ pub fn may_read_ports(plugin: &Plugin) -> bool {
     plugin.manifest.permissions.ports
 }
 
+/// Whether the plugin may read the recent output of the terminal panes.
+pub fn may_read_pane_output(plugin: &Plugin) -> bool {
+    plugin.manifest.permissions.pane_output
+}
+
 /// Whether the plugin may read what an OpenCode session is doing.
 /// Whether the plugin's `callTools` names this tool, or every tool of its plugin.
 pub fn may_call_tool(plugin: &Plugin, target: &str, tool: &str) -> bool {
@@ -143,6 +148,22 @@ mod tests {
         assert!(!may_read_statusline(&manifest(serde_json::json!({}))));
         assert!(!may_read_statusline(&manifest(serde_json::json!({ "transcript": ["assistant"] }))));
         assert!(may_read_statusline(&manifest(serde_json::json!({ "statusline": true }))));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pane_output_needs_its_permission() {
+        let dir = std::env::temp_dir().join(format!("wings-pane-output-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("main.js"), "").unwrap();
+        let manifest = |permissions: Value| {
+            let m = serde_json::json!({ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js", "permissions": permissions });
+            fs::write(dir.join("wings-plugin.json"), m.to_string()).unwrap();
+            load(&dir).unwrap()
+        };
+        assert!(!may_read_pane_output(&manifest(serde_json::json!({}))));
+        assert!(!may_read_pane_output(&manifest(serde_json::json!({ "panes": [], "sendToAgents": true, "ports": true }))));
+        assert!(may_read_pane_output(&manifest(serde_json::json!({ "paneOutput": true }))));
         let _ = fs::remove_dir_all(&dir);
     }
 

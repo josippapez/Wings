@@ -11,7 +11,7 @@ use std::cell::RefCell;
 pub const EVENT: &str = "review-comment";
 
 /// The most comments a chat holds before the next message: more is a review sent in pieces.
-const MAX: usize = 50;
+pub const MAX: usize = 50;
 
 thread_local! {
     static KEY: RefCell<Option<String>> = const { RefCell::new(None) };
@@ -108,13 +108,25 @@ pub fn apply(comments: &mut Vec<Comment>, data: &Value) -> bool {
     true
 }
 
-/// "2 comments on 2 files".
+/// "2 comments on 2 files", "1 comment on the plan", or both.
 pub fn summary(comments: &[Comment]) -> String {
-    let mut files: Vec<&str> = comments.iter().map(|comment| comment.path.as_str()).collect();
+    let mut files: Vec<&str> = comments.iter().filter(|comment| !crate::plan_doc::is_plan(&comment.path)).map(|comment| comment.path.as_str()).collect();
     files.sort_unstable();
     files.dedup();
+    let mut plans: Vec<&str> = comments.iter().filter(|comment| crate::plan_doc::is_plan(&comment.path)).map(|comment| comment.path.as_str()).collect();
+    plans.sort_unstable();
+    plans.dedup();
     let many = |n: usize, one: &str| format!("{n} {one}{}", if n == 1 { "" } else { "s" });
-    format!("{} on {}", many(comments.len(), "comment"), many(files.len(), "file"))
+    let mut on = Vec::new();
+    if !files.is_empty() {
+        on.push(many(files.len(), "file"));
+    }
+    match plans.len() {
+        0 => {}
+        1 => on.push("the plan".to_owned()),
+        n => on.push(many(n, "plan")),
+    }
+    format!("{} on {}", many(comments.len(), "comment"), on.join(" and "))
 }
 
 /// A fence of backticks that the quoted text can't end early.
@@ -127,27 +139,29 @@ fn fence(quote: &str) -> String {
     "`".repeat((longest + 1).max(3))
 }
 
-/// `text` with the comments after it: each as its `path:line`, the quoted lines in a fenced block, then what was said.
-/// Without comments, `text` as it was.
+/// One comment as the message gives it: its `path:line`, the quoted lines in a fenced block, then what was said.
+fn note(comment: &Comment) -> String {
+    let quote = comment.quote.trim_end_matches('\n');
+    let quoted = if quote.is_empty() {
+        String::new()
+    } else {
+        let fence = fence(quote);
+        format!("{fence}\n{quote}\n{fence}\n")
+    };
+    format!("{}\n{quoted}{}", comment.place(), comment.body.trim())
+}
+
+/// `text` with the comments after it, those on the changes and then those on a plan, each under its own heading. Without
+/// comments, `text` as it was.
 pub fn message(text: &str, comments: &[Comment]) -> String {
     if comments.is_empty() {
         return text.to_owned();
     }
-    let notes: Vec<String> = comments
-        .iter()
-        .map(|comment| {
-            let quote = comment.quote.trim_end_matches('\n');
-            let quoted = if quote.is_empty() {
-                String::new()
-            } else {
-                let fence = fence(quote);
-                format!("{fence}\n{quote}\n{fence}\n")
-            };
-            format!("{}\n{quoted}{}", comment.place(), comment.body.trim())
-        })
-        .collect();
+    let (plans, changes): (Vec<&Comment>, Vec<&Comment>) = comments.iter().partition(|comment| crate::plan_doc::is_plan(&comment.path));
+    let group = |heading: &str, of: Vec<&Comment>| (!of.is_empty()).then(|| format!("{heading}\n\n{}", of.into_iter().map(note).collect::<Vec<_>>().join("\n\n")));
+    let groups: Vec<String> = [group("Review comments on the changes:", changes), group("Comments on the plan (lines count from the plan's first):", plans)].into_iter().flatten().collect();
     let head = if text.trim().is_empty() { String::new() } else { format!("{}\n\n", text.trim()) };
-    format!("{head}Review comments on the changes:\n\n{}", notes.join("\n\n"))
+    format!("{head}{}", groups.join("\n\n"))
 }
 
 #[cfg(test)]
@@ -216,5 +230,20 @@ mod tests {
         assert_eq!(kept, list);
         assert!(from_json(&Value::Null).is_empty());
         assert_eq!(from_json(&json!([{ "id": "1:1" }, 3])).len(), 0);
+    }
+
+    #[test]
+    fn comments_on_a_plan_go_under_their_own_heading_after_those_on_the_changes() {
+        let plan = Comment { quote: "2. Add tests".into(), ..comment("plan-1-5-9", "plan #1", 5, "Which tests?") };
+        let list = [plan.clone(), comment("1:-1", "src/a.rs", 12, "Why one?")];
+        assert_eq!(
+            message("Go on", &list),
+            "Go on\n\nReview comments on the changes:\n\nsrc/a.rs:12\n```\nlet a = 1;\n```\nWhy one?\n\nComments on the plan (lines count from the plan's first):\n\nplan #1:5\n```\n2. Add tests\n```\nWhich tests?"
+        );
+        assert!(message("", &[plan.clone()]).starts_with("Comments on the plan"));
+        assert_eq!(summary(&[plan.clone()]), "1 comment on the plan");
+        assert_eq!(summary(&list), "2 comments on 1 file and the plan");
+        let second = Comment { path: "plan #2".into(), ..plan.clone() };
+        assert_eq!(summary(&[plan, second]), "2 comments on 2 plans");
     }
 }

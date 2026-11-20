@@ -135,7 +135,7 @@ fn row_of(found: &Ref, detail: Option<&Detail>) -> Node {
 
 /// Opens a pull request in Wings' own tab, which the PR tracker's link for its address does; the browser where nothing
 /// does (no PR tracker, or an older Wings).
-fn open_pull_request(url: &str) {
+pub(crate) fn open_pull_request(url: &str) {
     let opening = host::open_link(url);
     let url = url.to_owned();
     task::spawn(async move {

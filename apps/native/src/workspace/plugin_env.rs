@@ -44,6 +44,8 @@ pub(super) const ACTION_TIMEOUT: Duration = Duration::from_secs(310);
 const SUBMIT_AFTER: Duration = Duration::from_millis(150);
 /// How long a notice the system couldn't show stays in the window.
 const NOTICE_FOR: Duration = Duration::from_secs(8);
+/// How long a plugin's `readPane` waits for the window to hand over a pane's output, as Claude Code's tools wait.
+const PANE_WAIT: Duration = Duration::from_secs(10);
 
 #[cfg(test)]
 #[test]
@@ -768,6 +770,11 @@ impl Env for AppEnv {
         ports::scan(&shells)
     }
 
+    fn pane_output(&self, pane: &str) -> Result<Vec<u8>, String> {
+        let id = pane.to_owned();
+        self.on_window(PANE_WAIT, move |workspace, _, cx| workspace.pane_output(&id, cx))?.ok_or_else(|| format!("no pane {pane}"))
+    }
+
     fn open_url(&self, url: &str) -> Result<(), String> {
         self.system().open_url(url)
     }
@@ -1362,6 +1369,13 @@ impl Workspace {
     pub(super) fn plugin_pane(&self, pane: &str) -> Option<usize> {
         let pane = pane.parse().ok()?;
         self.panes.contains_key(&pane).then_some(pane)
+    }
+
+    /// What the terminal pane `pane` printed lately, oldest first, for Wings' `read_pane` tool and a plugin's
+    /// `wings.readPane`. A full-screen program's output is cursor moves, so the screen it leaves is what reads.
+    pub(super) fn pane_output(&self, pane: &str, cx: &gpui::App) -> Option<Vec<u8>> {
+        let terminal = self.terminal(self.plugin_pane(pane)?)?.read(cx);
+        Some(terminal.screen_text().map_or_else(|| terminal.recent_output(), String::into_bytes))
     }
 
     pub(super) fn show_notice(&mut self, title: String, body: String, cx: &mut Context<Self>) {

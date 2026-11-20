@@ -2,6 +2,19 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.61 · 2026-11-20
+
+- **A working chat costs far less power**: its spinners, working dots and "Working…" line move in a layer of their own, so they no longer redraw the whole conversation 30 times a second. While Claude worked, that kept Wings at about a full CPU core.
+- **Backgrounds drawn under the window**: Pixel drift and the gradients draw in a GPU layer beneath Wings, so a step no longer redraws the window. Three new pixel backgrounds: Pixel rain, Checker shimmer and Embers.
+- **The plan as a document**: every plan Claude proposes stays open as a page after you approve or reject it, from the side panel or the plan card. Comment on any part, and the comments go back to Claude.
+- **Search and bookmarks in a chat**: Cmd-Shift-F finds text in the conversation and jumps between matches. Bookmark any message and jump back from the side panel, also after a restart. A Normal, Thinking or Verbose view switch sits in the header (Ctrl-O cycles it).
+- **More @ mentions**: folders, line ranges like `@src/cart.ts#L10-20`, and open terminals, whose recent output goes along with your message once you allow Claude chat to read terminal output.
+- **Pull request in the side panel**: the chat's branch shows its pull request with review and checks, and buttons to open it, see why checks fail, merge it (after you confirm), or ask Claude to create one.
+- **Allow what auto mode blocked**: a blocked action has "Allow and retry", and the side panel lists what was recently blocked.
+- **Questions one at a time**: when Claude asks several, the card steps through them, and Enter in "Something else" moves on or sends. Long questions wrap.
+- **Claude Code's version and updates**: Claude chat's settings show the version you run, whether a newer one is out, and an Update Claude Code button.
+- **Fixed**: the Side by side button on diffs did nothing, a background change was sometimes lost while Claude was answering, and numbered lists in a plan all read "1.".
+
 ## 0.2.60 · 2026-11-20
 
 - **Gradient backgrounds**: Claude chat's Background setting adds five softly moving gradients (Halo, Pensive, Mint, Interstella, Nighty night), drawn by real GPU shaders. Like Pixel drift they move only while Wings is in front and stand still under Reduce motion.

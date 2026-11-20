@@ -73,7 +73,8 @@ impl Node {
     }
 
     /// On a `Page`: what the app draws behind the whole page in place of its plain ground. `"pixels"` is a slow drift of
-    /// dim, dithered pixels in the page's colours. `"gradient:<preset>"` is a slow gradient mesh a shader draws, dimmed so
+    /// dim, dithered pixels in the page's colours, and `"pixels:<pattern>"` another pattern of them: `rain`, `checker` or
+    /// `embers` (a Wings after 0.2.60; a pattern it doesn't know is the drift). `"gradient:<preset>"` is a slow gradient mesh a shader draws, dimmed so
     /// the page's muted text stays readable on it, in the colours of one of ShaderGradient's presets: `halo`, `pensive`,
     /// `mint`, `interstella` or `nighty-night`. Either moves only while the window is in front and stands still under
     /// Reduce motion. The app draws it where the page fills a tab; elsewhere, and in an older Wings, the page keeps its

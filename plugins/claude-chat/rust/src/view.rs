@@ -49,7 +49,10 @@ pub fn view() -> Vec<Node> {
         crate::refs_view::scan(c);
         wings_plugin::ui::palette(crate::mods_view::palette(c));
         crate::session_side::publish(c);
-        vec![chat_page(c)]
+        crate::search::refresh(c);
+        crate::bookmarks::refresh(c);
+        // A plan opened as a document takes the tab's place until you go back.
+        vec![crate::plan_doc_view::page_of(c).unwrap_or_else(|| chat_page(c))]
     });
     // The tool rows the page drew are asked of the mods once it is built, as asking writes to Claude Code.
     crate::mods_view::ask_rows();
@@ -88,6 +91,7 @@ fn chat_page(c: &Chat) -> Node {
     let body = Node::new("Slot")
         .prop("name", "body")
         .child(header(c))
+        .maybe(crate::search::bar(c))
         .children(main)
         .maybe(crate::plugins_view::dialog(c))
         .maybe(crate::setup_view::dialog(c))
@@ -101,10 +105,11 @@ fn chat_page(c: &Chat) -> Node {
         .maybe(crate::usage_view::dialog(c))
         .maybe(crate::pictures_view::dialog_of(c))
         .maybe(crate::status_view::dialog(c))
+        .maybe(crate::pull_view::dialog(c))
         .maybe(crate::mods_view::menu(c));
     let page = Node::new("Page").prop("flush", true).on_text_scale(crate::prefs::step_text_size);
-    // The drift of pixels or the gradient you picked in Settings, behind the whole tab. Needs Wings 0.2.59, and 0.2.60 for
-    // a gradient; an older one keeps the ground.
+    // The pattern of pixels or the gradient you picked in Settings, behind the whole tab. Needs Wings 0.2.59, 0.2.60 for
+    // a gradient and a Wings after 0.2.60 for a pattern other than the drift; an older one keeps the ground.
     let page = match &c.backdrop {
         Some(kind) => page.backdrop(kind),
         None => page,
@@ -127,7 +132,7 @@ const SETTINGS: [&str; 2] = [
 ];
 
 /// A quiet square button holding one of those icons, named by its tooltip, as the app's pane and header buttons are.
-fn icon_button(label: &str, paths: &[&str], on_click: impl Fn() + 'static) -> Node {
+pub(crate) fn icon_button(label: &str, paths: &[&str], on_click: impl Fn() + 'static) -> Node {
     icon_button_titled(label, label, paths, on_click)
 }
 
@@ -185,6 +190,8 @@ fn header(c: &Chat) -> Node {
         .prop("gap", "xs")
         .prop("align", "center")
         .maybe(terminal)
+        .child(crate::search::header_button(c))
+        .child(crate::view_mode::mode_button(c))
         .maybe(crate::titles_view::header_button(c))
         .maybe(crate::fork_view::header_button(c))
         .maybe(side_button(c))
@@ -224,8 +231,10 @@ fn conversation(c: &Chat) -> (Node, Vec<(usize, usize)>, usize) {
     let first = window.last().map_or(end, |block| block.start);
     let mut blocks = Vec::new();
     let mut prompts: Vec<(usize, usize)> = Vec::new();
+    let mut placed: Vec<(usize, usize, usize)> = Vec::new();
     for block in window {
         blocks.extend(block.edited);
+        placed.push((block.start, block.end, blocks.len()));
         if matches!(items[block.start], Item::User(_) | Item::UserImages(..)) {
             prompts.push((block.start, blocks.len()));
         }
@@ -238,6 +247,7 @@ fn conversation(c: &Chat) -> (Node, Vec<(usize, usize)>, usize) {
     let forked = c.forked_from.as_ref().map(|from| muted(format!("Forked from {}", truncate(from, 80))).prop("size", "small").key("forked"));
     let lead = usize::from(forked.is_some());
     let prompts: Vec<(usize, usize)> = prompts.into_iter().rev().map(|(item, back)| (item, lead + built - 1 - back)).collect();
+    crate::rail::place(placed.into_iter().map(|(start, end, back)| (start, end, lead + built - 1 - back)).collect());
     let mut nodes: Vec<Node> = forked.into_iter().chain(blocks).collect();
     // Reading an older part, what Claude does now isn't here: it shows once you are back at the newest.
     if newest {
@@ -343,6 +353,7 @@ fn block_before(c: &Chat, end: usize, from: usize) -> (usize, Option<Block>) {
         }
         false => item_node(start, &items[start], c, true),
     };
+    let node = node.map(|node| crate::search::mark(c, start, end, node));
     // A turn that changed files ends with a card of them, after its last item.
     let edited = c.session.turn_ending_at(end).map(|(from, turn)| crate::edits_view::card_of(c, from, end, &turn));
     (start, node.map(|node| Block { start, end, node, edited }))
@@ -483,13 +494,17 @@ fn bubble(card: Node, action: Option<Node>) -> Node {
 
 /// An item of the conversation, or with `own` false, of a subagent's, whose messages can't be rewound.
 pub(crate) fn item_node(at: usize, item: &Item, c: &Chat, own: bool) -> Option<Node> {
-    let rewind = || own.then(|| crate::fork_view::message_actions(at, c)).flatten();
+    let rewind = || own.then(|| crate::bookmarks::with_button(at, c, crate::fork_view::message_actions(at, c))).flatten();
     // What a mod made of a message of yours or Claude's: its own tree in its place, or its words reworded.
     let (drawn, reworded) = if own { crate::mods_view::message(c, at, item) } else { (None, None) };
     let said_now = |said: &str| reworded.clone().unwrap_or_else(|| said.to_owned());
     let node = match item {
         Item::User(_) if drawn.is_some() => bubble(card().maybe(drawn), rewind()),
-        Item::User(said) => bubble(card().child(text(said_now(said))), rewind()),
+        Item::User(said) => {
+            let (typed, attached) = crate::terminals::typed(said);
+            let note = (!attached.is_empty()).then(|| muted(format!("Attached the output of {}", attached.join(", "))).prop("size", "small"));
+            bubble(card().child(text(reworded.clone().unwrap_or_else(|| typed.to_owned()))).maybe(note), rewind())
+        }
         Item::UserImages(said, pictures) => {
             let card = card().maybe(thumbs(pictures, "Attached picture"));
             bubble(if said.is_empty() { card } else { card.child(text(said.as_str())) }, rewind())
@@ -501,7 +516,7 @@ pub(crate) fn item_node(at: usize, item: &Item, c: &Chat, own: bool) -> Option<N
         // Words that name something in Wings, like an issue key, open it there.
         Item::Text(said) => crate::edits_view::prose(said, c),
         Item::Divider(said) => row().prop("justify", "center").child(muted(format!("── {said} ──")).prop("size", "small")),
-        Item::Notice(said) => muted(said.as_str()).prop("size", "small"),
+        Item::Notice(said) => crate::blocked::notice(said, c),
         Item::Thought(said, ms) => thought(at, said, *ms, crate::folds::is_open(c, Kind::Thought, c.open_outputs.contains(&format!("thought-{at}")))),
         Item::Ask(ask) if ask.answer.is_none() => ask_node(ask, c),
         Item::Error(said) => notice("danger", said.as_str()),
@@ -612,6 +627,7 @@ fn step(tool: &Tool, opened: bool, c: &Chat) -> Node {
         .child(text(tool.summary.as_str()).prop("mono", !subagent).prop("size", "small").prop("tone", "muted").prop("truncate", true).prop("grow", true))
         .children(facts(tool))
         .maybe(open_subagent(tool, c))
+        .maybe(crate::plan_doc_view::step_link(c, tool))
         .maybe(crate::actions_view::background_button(tool, c));
     // A mod that draws the call's row draws it here instead, and its result under it.
     let head = crate::mods_view::tool_head(c, tool, head);
@@ -811,7 +827,7 @@ fn ask_node(ask: &Ask, c: &Chat) -> Node {
             Some(added) => stack().prop("gap", "s").child(added).child(questions_node(ask, draft)),
             None => questions_node(ask, draft),
         },
-        "ExitPlanMode" if ask.input["plan"].as_str().is_some() => plan_node(ask, draft),
+        "ExitPlanMode" if ask.input["plan"].as_str().is_some() => plan_node(ask, draft, c),
         _ => permission_node(ask, draft, c),
     }
 }
@@ -862,11 +878,15 @@ fn choice_mark(multi: bool, picked: bool) -> Node {
     icon(24, 2.0, &shapes).prop("size", 16).prop("tone", if picked { "info" } else { "muted" })
 }
 
-/// Each question with its options as chips, and a field for another answer.
+/// The questions with their options, and a field for another answer each. Several are asked one at a time, as Claude
+/// Code's own menu does: Next once one is answered, and picking the one answer of a question moves on.
 fn questions_node(ask: &Ask, draft: &Draft) -> Node {
     let questions = ask.input["questions"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let count = questions.len();
+    let step = draft.step.min(count.saturating_sub(1));
+    let last = step + 1 >= count;
     let mut body = Vec::new();
-    for (q, question) in questions.iter().enumerate() {
+    for (q, question) in questions.iter().enumerate().filter(|(q, _)| count < 2 || *q == step) {
         let multi = question["multiSelect"] == true;
         let options = question["options"].as_array().map(Vec::as_slice).unwrap_or_default();
         // One row an option, as Claude Code's own menu lists them, marked when picked: a round mark for one answer, a box
@@ -881,33 +901,63 @@ fn questions_node(ask: &Ask, draft: &Draft) -> Node {
                 .child(mark)
                 .child(text(option["label"].as_str().unwrap_or_default()).prop("weight", "medium"))
                 .maybe(option["description"].as_str().filter(|said| !said.is_empty()).map(|said| muted(truncate(said, 120)).prop("size", "small").prop("grow", true)));
-            list_button([line], move || chat::edit(&request, |draft| draft.toggle(q, o, multi))).key(format!("{q}-{o}"))
+            let advance = count > 1 && !multi && !last;
+            list_button([line], move || {
+                chat::edit(&request, |draft| {
+                    draft.toggle(q, o, multi);
+                    if advance && draft.has_answer(q) {
+                        draft.step = q + 1;
+                    }
+                })
+            })
+            .key(format!("{q}-{o}"))
         }));
-        let request = ask.request.clone();
+        let (request, sent) = (ask.request.clone(), ask.request.clone());
+        // Enter goes on to the next question, or on the last sends the answers once every question has one.
         let other = text_input("Other", draft.other(q), move |said| chat::edit(&request, |draft| draft.set_other(q, said, multi)))
             .prop("placeholder", "Something else")
+            .on("onKeyDown", move |event| {
+                if event["key"] != "Enter" {
+                    return;
+                }
+                if last {
+                    chat::submit(&sent);
+                } else {
+                    chat::edit(&sent, |draft| {
+                        if draft.has_answer(q) {
+                            draft.step = q + 1;
+                        }
+                    });
+                }
+            })
             .key(format!("other-{q}"));
         let header = question["header"].as_str().filter(|header| !header.is_empty()).map(|header| badge(header, None));
         body.push(
             stack()
                 .prop("gap", "xs")
                 .key(format!("q-{q}"))
-                .child(row().prop("gap", "s").prop("align", "baseline").maybe(header).child(text(question["question"].as_str().unwrap_or_default()).prop("weight", "medium")))
+                .child(row().prop("gap", "s").prop("align", "start").maybe(header).child(text(question["question"].as_str().unwrap_or_default()).prop("weight", "medium").prop("grow", true)))
                 .child(chips)
                 .child(other),
         );
     }
     let ready = draft.answers(&ask.input["questions"]).is_some();
-    let (skip, submit) = (ask.request.clone(), ask.request.clone());
-    confirm(
-        "Claude has a question",
-        body,
-        [button("Skip", "outline", false, move || chat::skip(&skip)), button("Submit", "default", false, move || chat::submit(&submit)).prop("disabled", !ready)],
-    )
+    let (skip, submit, back, next) = (ask.request.clone(), ask.request.clone(), ask.request.clone(), ask.request.clone());
+    let title = if count > 1 { format!("Claude has {count} questions · {} of {count}", step + 1) } else { "Claude has a question".to_owned() };
+    let mut actions = vec![button("Skip", "outline", false, move || chat::skip(&skip))];
+    if count > 1 && step > 0 {
+        actions.push(button("Back", "outline", false, move || chat::edit(&back, |draft| draft.step = step - 1)));
+    }
+    if last {
+        actions.push(button("Submit", "default", false, move || chat::submit(&submit)).prop("disabled", !ready));
+    } else {
+        actions.push(button("Next", "default", false, move || chat::edit(&next, |draft| draft.step = step + 1)).prop("disabled", !draft.has_answer(step)));
+    }
+    confirm(title, body, actions)
 }
 
 /// The plan as Markdown, to approve, or to send back with what to change.
-fn plan_node(ask: &Ask, draft: &Draft) -> Node {
+fn plan_node(ask: &Ask, draft: &Draft, c: &Chat) -> Node {
     let plan = ask.input["plan"].as_str().unwrap_or_default();
     let shown = markdown(plan);
     let shown = if shown.count() > BUDGET / 4 { text(truncate(plan, 20_000)) } else { shown };
@@ -916,13 +966,13 @@ fn plan_node(ask: &Ask, draft: &Draft) -> Node {
         .prop("gap", "s")
         .prop("wrap", true)
         .prop("justify", "end")
-        .child(button("Keep planning", "outline", false, move || chat::keep_planning(&keep)))
+        .child(button(crate::plan_doc_view::revise_label(c), "outline", false, move || chat::keep_planning(&keep)))
         .child(button("Approve", "secondary", false, move || chat::approve_plan(&approve, "default")))
         .child(button("Approve and auto-accept edits", "default", false, move || chat::approve_plan(&auto, "acceptEdits")));
     card().prop("variant", "raised").child(
         stack()
             .prop("gap", "m")
-            .child(text("Claude's plan").prop("weight", "strong"))
+            .child(row().prop("gap", "s").prop("align", "center").child(text("Claude's plan").prop("weight", "strong").prop("grow", true)).maybe(crate::plan_doc_view::card_link(c, plan)))
             .child(shown)
             .child(feedback_field(&ask.request, draft, "What to change", "What to change in the plan, to keep planning"))
             .child(actions),
@@ -1103,6 +1153,8 @@ pub(crate) fn side_sections(c: &Chat, place: bool) -> Vec<Node> {
         head = head.child(list_button([small("Review changes".into()).prop("grow", true)], chat::review_changes).prop("title", "Review all changes in the diff viewer"));
     }
     sections.push(head);
+    sections.extend(crate::pull_view::section(c));
+    sections.extend(crate::blocked::section(c));
     let mut limits = stack().prop("gap", "s");
     if let Some((used, most)) = c.session.context {
         limits = limits.child(meter_button("Context", used * 100 / most.max(1), (70, 90), None, Panel::Context));
@@ -1122,6 +1174,8 @@ pub(crate) fn side_sections(c: &Chat, place: bool) -> Vec<Node> {
     if limits.count() > 1 {
         sections.push(fold(c, "usage", "Usage", [limits]));
     }
+    sections.extend(crate::bookmarks::section(c));
+    sections.extend(crate::plan_doc_view::section(c));
     sections.extend(crate::tasks_view::section(c));
     sections.extend(crate::fork_view::folders(c));
     sections.extend(crate::refs_view::section(c));
@@ -1447,13 +1501,15 @@ fn effort_name(effort: &str) -> String {
 }
 
 /// What the message box suggests for what you typed: the slash commands that match a `/`, else the files that match an
-/// `@word`, else the issues that match a `#word`, as a combobox's options, each a name with what it is beside it.
+/// `@word` (and the terminals that open), else the issues that match a `#word`, as a combobox's options, each a name with what it is beside it.
 fn suggestions(c: &Chat) -> Option<Node> {
     let option = |key: &str, label: String, detail: &str, pick: Box<dyn Fn()>| {
         let chip = chip(label, false, move || pick()).key(key);
         if detail.is_empty() { chip } else { chip.child(muted(truncate(detail, 100)).prop("size", "small")) }
     };
     let commands = chat::command_matches(c);
+    let files = chat::mention_matches(c).map(|(_, found)| found).unwrap_or_default();
+    let terminals = chat::terminal_matches(c);
     let options: Vec<Node> = if !commands.is_empty() {
         commands
             .into_iter()
@@ -1462,15 +1518,20 @@ fn suggestions(c: &Chat) -> Option<Node> {
                 option(&command.name, format!("/{}", command.name), &command.description, Box::new(move || chat::insert_command(&name)))
             })
             .collect()
-    } else if let Some((_, found)) = chat::mention_matches(c) {
-        found
-            .into_iter()
-            .map(|path| {
-                let (dir, name) = path.rsplit_once('/').unwrap_or(("", path));
-                let picked = path.to_owned();
-                option(path, name.to_owned(), dir, Box::new(move || chat::insert_mention(&picked)))
-            })
-            .collect()
+    } else if !files.is_empty() || !terminals.is_empty() {
+        // A folder ends in `/`: its name is the last part before that, with its parent beside it.
+        let paths = files.into_iter().map(|path| {
+            let (dir, name) = path.trim_end_matches('/').rsplit_once('/').unwrap_or(("", path.trim_end_matches('/')));
+            let name = if path.ends_with('/') { format!("{name}/") } else { name.to_owned() };
+            let picked = path.to_owned();
+            option(path, name, dir, Box::new(move || chat::insert_mention(&picked)))
+        });
+        let panes = terminals.into_iter().map(|pane| {
+            let picked = crate::terminals::mention(&pane);
+            let key = picked.clone();
+            option(&key, picked.clone(), &pane.detail, Box::new(move || chat::insert_mention(&picked)))
+        });
+        paths.chain(panes).collect()
     } else if let Some((_, found)) = chat::issue_matches(c) {
         // The key or number, with the title and the status muted beside it.
         found
@@ -1507,6 +1568,27 @@ mod tests {
         let end = end_of(c);
         let (window, _) = window(c, end, end.saturating_sub(c.shown));
         (window.last().map_or(end, |block| block.start), end)
+    }
+
+    #[test]
+    fn several_questions_are_asked_one_at_a_time() {
+        let input = serde_json::json!({ "questions": [
+            { "question": "Which library?", "options": [{ "label": "dayjs" }, { "label": "date-fns" }] },
+            { "question": "Which formats?", "multiSelect": true, "options": [{ "label": "ISO" }] },
+        ] });
+        let ask = Ask { request: "q1".into(), tool: "AskUserQuestion".into(), summary: String::new(), detail: String::new(), cut_short: false, reason: None, suggestions: Vec::new(), input, preview: Default::default(), answer: None };
+        let shown = |draft: &Draft| wings_plugin::ui::tree_json(questions_node(&ask, draft)).to_string();
+        let mut draft = Draft::default();
+        let first = shown(&draft);
+        assert!(first.contains("1 of 2") && first.contains("Which library?") && !first.contains("Which formats?") && first.contains("Next"));
+        draft.toggle(0, 1, false);
+        assert!(draft.has_answer(0) && !draft.has_answer(1));
+        draft.step = 1;
+        let second = shown(&draft);
+        assert!(second.contains("2 of 2") && second.contains("Which formats?") && !second.contains("Which library?") && second.contains("Back") && second.contains("Submit"));
+        let one = Ask { input: serde_json::json!({ "questions": [{ "question": "Which library?", "options": [{ "label": "dayjs" }] }] }), ..ask };
+        let alone = wings_plugin::ui::tree_json(questions_node(&one, &Draft::default())).to_string();
+        assert!(alone.contains("Claude has a question") && !alone.contains("Next"));
     }
 
     #[test]
@@ -1679,7 +1761,7 @@ mod tests {
             assert_eq!(page["type"], "Page");
             assert!(page["props"].get("backdrop").is_none(), "the plain ground: {}", page["props"]);
             assert!(page.to_string().contains(r#""backdrop":"glow""#), "a new chat's soft glow");
-            for kind in ["pixels", "gradient:pensive"] {
+            for kind in ["pixels", "pixels:embers", "gradient:pensive"] {
                 c.backdrop = Some(kind.to_owned());
                 let page = wings_plugin::ui::tree_json(chat_page(c));
                 assert_eq!(page["props"]["backdrop"], kind);

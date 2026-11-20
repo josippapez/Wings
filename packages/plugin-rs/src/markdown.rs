@@ -12,7 +12,8 @@ use crate::{
 pub enum Block {
     Heading(usize, String),
     Paragraph(String),
-    List { ordered: bool, items: Vec<Item> },
+    /// `start` is the first item's number, which a numbered list counts on from, as CommonMark has it.
+    List { ordered: bool, start: u64, items: Vec<Item> },
     Code { lang: String, text: String },
     Quote(String),
     Rule,
@@ -60,17 +61,18 @@ fn rule(line: &str) -> bool {
     t.len() >= 3 && matches!(first, Some('-' | '*' | '_')) && t.chars().all(|c| Some(c) == first)
 }
 
-/// A list item: its indent in columns, whether it is numbered, and its text.
-fn list_item(line: &str) -> Option<(usize, bool, &str)> {
+/// A list item: its indent in columns, its number when it is numbered, and its text.
+fn list_item(line: &str) -> Option<(usize, Option<u64>, &str)> {
     let t = line.trim_start();
     let indent = line.len() - t.len();
     let columns = line[..indent].replace('\t', "  ").len();
     if let Some(rest) = t.strip_prefix(['-', '*', '+']) {
-        return rest.strip_prefix(char::is_whitespace).map(|rest| (columns, false, rest.trim_start()));
+        return rest.strip_prefix(char::is_whitespace).map(|rest| (columns, None, rest.trim_start()));
     }
     let digits = t.bytes().take_while(u8::is_ascii_digit).count();
     let rest = t.get(digits..)?.strip_prefix(['.', ')'])?;
-    (digits > 0).then_some(rest)?.strip_prefix(char::is_whitespace).map(|rest| (columns, true, rest.trim_start()))
+    let number = t[..digits].parse().ok()?;
+    (digits > 0).then_some(rest)?.strip_prefix(char::is_whitespace).map(|rest| (columns, Some(number), rest.trim_start()))
 }
 
 fn ref_definition(line: &str) -> bool {
@@ -234,7 +236,8 @@ pub fn parse_blocks(src: &str, depth: usize) -> Vec<Block> {
         } else if rule(&line) {
             flush(&mut paragraph, &mut blocks);
             blocks.push(Block::Rule);
-        } else if let Some((columns, ordered, rest)) = list_item(&line) {
+        } else if let Some((columns, number, rest)) = list_item(&line) {
+            let ordered = number.is_some();
             flush(&mut paragraph, &mut blocks);
             let (checked, text) = match rest.get(..3).map(|t| t.to_owned()) {
                 Some(t) if matches!(t.as_str(), "[ ]" | "[x]" | "[X]") && rest[3..].starts_with(char::is_whitespace) => (Some(t != "[ ]"), rest[3..].trim_start()),
@@ -242,8 +245,8 @@ pub fn parse_blocks(src: &str, depth: usize) -> Vec<Block> {
             };
             let item = Item { text: text.to_owned(), depth: (columns / 2).min(3), checked };
             match blocks.last_mut() {
-                Some(Block::List { ordered: o, items }) if *o == ordered => items.push(item),
-                _ => blocks.push(Block::List { ordered, items: vec![item] }),
+                Some(Block::List { ordered: o, items, .. }) if *o == ordered => items.push(item),
+                _ => blocks.push(Block::List { ordered, start: number.unwrap_or(1), items: vec![item] }),
             }
         } else if let Some(quote) = line.trim_start().strip_prefix('>') {
             flush(&mut paragraph, &mut blocks);
@@ -427,9 +430,9 @@ fn node_of(block: &Block) -> Node {
     match block {
         Block::Heading(level, t) => Node::new("Text").prop("weight", "strong").prop("size", if *level <= 2 { "field" } else { "small" }).child(spans(t)),
         Block::Paragraph(t) => spans(t),
-        Block::List { ordered, items } => stack().prop("gap", "xs").children(items.iter().enumerate().map(|(j, item)| {
+        Block::List { ordered, start, items } => stack().prop("gap", "xs").children(items.iter().enumerate().map(|(j, item)| {
             let mark = match item.checked {
-                None if *ordered => format!("{}.", j + 1),
+                None if *ordered => format!("{}.", *start + j as u64),
                 None => "\u{2022}".to_owned(),
                 Some(true) => "\u{2611}".to_owned(),
                 Some(false) => "\u{2610}".to_owned(),
@@ -475,11 +478,17 @@ mod tests {
     }
 
     #[test]
+    fn a_numbered_list_counts_on_from_its_first_number() {
+        assert!(matches!(&parse_blocks("2. two\n3. three", 0)[0], Block::List { ordered: true, start: 2, items } if items.len() == 2));
+        assert!(matches!(&parse_blocks("- a", 0)[0], Block::List { ordered: false, start: 1, .. }));
+    }
+
+    #[test]
     fn blocks_are_read_as_the_desktop_parser_reads_them() {
         let blocks = parse_blocks("# Title\n\nSome **bold** text\nsecond line\n\n- one\n- [x] two\n\n```rs\nlet a = 1;\n```\n<!-- hidden -->\n> quoted\n[KEY]: tracking\n", 0);
         assert_eq!(blocks[0], Block::Heading(1, "Title".into()));
         assert_eq!(blocks[1], Block::Paragraph("Some **bold** text second line".into()));
-        assert!(matches!(&blocks[2], Block::List { ordered: false, items } if items.len() == 2 && items[1].checked == Some(true)));
+        assert!(matches!(&blocks[2], Block::List { ordered: false, items, .. } if items.len() == 2 && items[1].checked == Some(true)));
         assert_eq!(blocks[3], Block::Code { lang: "rs".into(), text: "let a = 1;".into() });
         assert_eq!(blocks[4], Block::Quote("quoted".into()));
         assert_eq!(blocks.len(), 5);

@@ -385,6 +385,11 @@ fn claude_chat_branch_switcher_calls_pass_its_manifest_and_cannot_force_a_switch
 }
 
 #[test]
+fn claude_chat_may_read_the_terminals_a_message_mentions() {
+    assert!(crate::permissions::may_read_pane_output(&own_plugin("claude-chat")));
+}
+
+#[test]
 fn schedules_calls_pass_its_own_manifest() {
     let p = own_plugin("schedules");
     let org = "https://dev.azure.com/contoso";

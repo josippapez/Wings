@@ -1,12 +1,17 @@
 //! The `failing_checks` MCP tool: the failed checks of the pane's PR, with the end of each log, for Claude to fix.
 
-use super::{state::{self, Loaded}, status::{load_failures, refresh_status}};
+use super::{pull::folder_link, state::{self, Loaded}, status::{load_failures, refresh_status}};
 use crate::{logs::{TOOL_CHARS, fenced}, providers::link_ref};
 
 const NONE: &str = "Wings found no pull request for this pane's branch, so there are no checks to show.";
 
-pub async fn failing_checks(pane_id: Option<&str>) -> Result<String, String> {
-    let Some(link) = pane_id.and_then(|id| state::with(|s| s.links.get(id).cloned())) else { return Ok(NONE.into()) };
+/// A chat's Claude has no pane, so it names its folder: the PR is the one that folder's branch has.
+pub async fn failing_checks(pane_id: Option<&str>, cwd: Option<&str>) -> Result<String, String> {
+    let mut link = pane_id.and_then(|id| state::with(|s| s.links.get(id).cloned()));
+    if let (None, Some(cwd)) = (&link, cwd) {
+        link = folder_link(cwd).await?;
+    }
+    let Some(link) = link else { return Ok(NONE.into()) };
     refresh_status(&link.url, false).await;
     let st = match state::status_of(&link.url) {
         None => return Ok(NONE.into()),

@@ -113,7 +113,8 @@ pub fn follow() {
 /// Whether a fold of `kind` shows open, given whether you clicked it.
 #[cfg(feature = "chat")]
 pub fn is_open(c: &crate::chat::Chat, kind: Kind, clicked: bool) -> bool {
-    crate::prefs::is_open(c.detailed && c.opens.get(kind), clicked)
+    // The Thinking view mode opens what Claude thought and nothing else (`view_mode.rs`).
+    crate::prefs::is_open((c.detailed && c.opens.get(kind)) || (c.show_thinking && kind == Kind::Thought), clicked)
 }
 
 #[cfg(test)]

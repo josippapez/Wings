@@ -2,14 +2,19 @@
 
 use crate::{host, messages};
 use serde_json::{Value, json};
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
+
+thread_local! {
+    /// This frame's listeners by key. Kept apart from any one `Setting`, as code makes a new one each time it reaches a
+    /// setting (`prefs::x()`), and a `set` on one has to reach the listener another registered.
+    static HERE: RefCell<HashMap<&'static str, Vec<Rc<dyn Fn(&Value)>>>> = RefCell::new(HashMap::new());
+}
 
 struct Inner<T> {
     key: &'static str,
     default: T,
     read: fn(&Value) -> Option<T>,
     write: fn(&T) -> Value,
-    here: RefCell<Vec<Rc<dyn Fn(&T)>>>,
 }
 
 /// A setting stored under `key`, read as `default` when it isn't set or `read` doesn't accept what is stored. Make it
@@ -24,7 +29,7 @@ impl<T> Clone for Setting<T> {
 
 impl<T: Clone + 'static> Setting<T> {
     pub fn new(key: &'static str, default: T, read: fn(&Value) -> Option<T>, write: fn(&T) -> Value) -> Self {
-        Self(Rc::new(Inner { key, default, read, write, here: RefCell::new(Vec::new()) }))
+        Self(Rc::new(Inner { key, default, read, write }))
     }
 
     fn name(&self) -> String {
@@ -37,9 +42,11 @@ impl<T: Clone + 'static> Setting<T> {
     }
 
     pub fn set(&self, value: T) -> Result<(), String> {
-        host::storage::set(self.0.key, &(self.0.write)(&value))?;
-        for listener in self.0.here.borrow().clone() {
-            listener(&value);
+        let written = (self.0.write)(&value);
+        host::storage::set(self.0.key, &written)?;
+        let here = HERE.with(|here| here.borrow().get(self.0.key).cloned().unwrap_or_default());
+        for listener in here {
+            listener(&written);
         }
         messages::tell(&self.name(), &Value::Null);
         Ok(())
@@ -47,10 +54,11 @@ impl<T: Clone + 'static> Setting<T> {
 
     /// Hears this frame's own `set` and the other frames' ones.
     pub fn on_change(&self, listener: impl Fn(&T) + 'static) {
-        let listener: Rc<dyn Fn(&T)> = Rc::new(listener);
-        self.0.here.borrow_mut().push(listener.clone());
         let this = self.clone();
-        messages::on(&self.name(), move |_| listener(&this.get()));
+        let read = self.clone();
+        let here: Rc<dyn Fn(&Value)> = Rc::new(move |written| listener(&(read.0.read)(written).unwrap_or_else(|| read.get())));
+        HERE.with(|all| all.borrow_mut().entry(self.0.key).or_default().push(here.clone()));
+        messages::on(&self.name(), move |_| here(&(this.0.write)(&this.get())));
     }
 }
 
@@ -63,6 +71,16 @@ impl Setting<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_set_through_another_handle_of_the_same_setting_reaches_the_listener() {
+        let make = || Setting::boolean("split", false);
+        let heard = Rc::new(RefCell::new(0));
+        let seen = heard.clone();
+        make().on_change(move |_| *seen.borrow_mut() += 1);
+        make().set(true).unwrap();
+        assert_eq!(*heard.borrow(), 1);
+    }
 
     #[test]
     fn an_unset_setting_reads_as_its_default_and_a_listener_hears_a_set_here() {

@@ -7,6 +7,7 @@ pub mod links;
 pub mod news;
 pub mod problems;
 pub mod projects;
+pub mod pull;
 pub mod remote;
 pub mod retry;
 pub mod state;
