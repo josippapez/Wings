@@ -39,7 +39,7 @@ pub use sheet::{
     SEARCH_MARK, SHEET_SEARCH_WIDTH, SHEET_WIDTH, search_box, segment, segmented, sheet, sheet_corner,
     sheet_header, sheet_list,
 };
-pub use shimmer::{shimmer, shimmer_slot};
+pub use shimmer::{count_slot, shimmer, shimmer_slot};
 #[cfg(all(test, feature = "test-support"))]
 pub(crate) use status_dot::SPIN_STEP;
 pub use slots::{Piece, bounds_into, cover, drawing_piece, in_piece, start_draw, forget_view, place_view, slot, slot_layer, under, view_placed};

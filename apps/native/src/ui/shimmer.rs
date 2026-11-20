@@ -21,6 +21,8 @@ struct Line {
     words: Rc<dyn Fn() -> SharedString>,
     /// Its words count the time since something started, and change each second.
     counts: bool,
+    /// It pulses; a line that only counts stands still at full opacity.
+    pulses: bool,
 }
 
 thread_local! {
@@ -40,6 +42,22 @@ pub fn shimmer_slot(
     counts: bool,
     words: impl Fn() -> SharedString + 'static,
 ) -> impl IntoElement {
+    line_slot(name, counts, true, words)
+}
+
+/// Where a line that counts the time since something started, and doesn't pulse, goes in a view a piece puts on screen:
+/// the layer draws it again each second, so the view doesn't. A background task's "Running · 12s" drew its whole page
+/// each second.
+pub fn count_slot(name: impl Into<SharedString>, words: impl Fn() -> SharedString + 'static) -> impl IntoElement {
+    line_slot(name, true, false, words)
+}
+
+fn line_slot(
+    name: impl Into<SharedString>,
+    counts: bool,
+    pulses: bool,
+    words: impl Fn() -> SharedString + 'static,
+) -> impl IntoElement {
     let name = name.into();
     let key = name.clone();
     let words: Rc<dyn Fn() -> SharedString> = Rc::new(words);
@@ -57,6 +75,7 @@ pub fn shimmer_slot(
                         style: window.text_style(),
                         words,
                         counts,
+                        pulses,
                     };
                     LINES.with_borrow_mut(|lines| lines.insert((id, key), line));
                 },
@@ -74,30 +93,31 @@ pub(super) fn lay_out_lines(id: WindowId, window: &mut Window, cx: &mut App) -> 
     LINES.with_borrow_mut(|lines| {
         lines.retain(|(window, name), _| *window != id || shown.iter().any(|(at, _)| at == name))
     });
-    let lines: Vec<(slots::Slot, TextStyle, Rc<dyn Fn() -> SharedString>, bool)> = shown
+    let lines: Vec<(slots::Slot, TextStyle, Rc<dyn Fn() -> SharedString>, bool, bool)> = shown
         .into_iter()
         .filter_map(|(name, slot)| {
             LINES.with_borrow(|lines| {
                 let line = lines.get(&(id, name))?;
-                Some((slot, line.style.clone(), line.words.clone(), line.counts))
+                Some((slot, line.style.clone(), line.words.clone(), line.counts, line.pulses))
             })
         })
         .collect();
     if lines.is_empty() {
         return Vec::new();
     }
-    let opacity = if !cx.reduce_motion() && window.is_window_active() {
+    let pulsing = !cx.reduce_motion() && window.is_window_active() && lines.iter().any(|(.., pulses)| *pulses);
+    let pulse = if pulsing {
         opacity_at(status_dot::ticking_every(SHIMMER_STEP, window, cx))
     } else {
-        if lines.iter().any(|(.., counts)| *counts) {
+        if lines.iter().any(|(.., counts, _)| *counts) {
             status_dot::ticking_every(COUNT_STEP, window, cx);
         }
         1.0
     };
     lines
         .into_iter()
-        .map(|(slot, style, words, _)| {
-            let style = refinement(&style, opacity);
+        .map(|(slot, style, words, _, pulses)| {
+            let style = refinement(&style, if pulses { pulse } else { 1.0 });
             let mut line = div().size_full().child(words()).into_any_element();
             window.with_text_style(Some(style.clone()), |window| {
                 window.with_content_mask(Some(slot.mask), |window| {

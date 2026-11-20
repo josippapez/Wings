@@ -3159,8 +3159,8 @@ mod spinners {
     use super::*;
     use crate::ui::{SPIN_STEP, place_view, spinner_layer, view_spinner_layer};
 
-    /// A page with everything a working chat moves: a running step's spinner, a large one, a working agent's dot and a
-    /// shimmering "Working" line that counts the seconds since it started.
+    /// A page with everything a working chat moves: a running step's spinner, a large one, a working agent's dot, a
+    /// shimmering "Working" line that counts the seconds since it started, and a plain line that counts them.
     fn working() -> String {
         fake::page("page", |_| {
             json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Page", "props": { "flush": true }, "children": [
@@ -3170,6 +3170,9 @@ mod spinners {
                     { "id": 5, "type": "Dot", "props": { "state": "working" } },
                     { "id": 6, "type": "Text", "props": { "tone": "muted", "shimmer": true, "since": 1_763_470_000_000u64 },
                       "children": [text_node(7, "Working")] },
+                    // A background task's "Running · 12s", which counts without a shimmer: it drew the page each second.
+                    { "id": 10, "type": "Text", "props": { "tone": "muted", "since": 1_763_470_000_000u64 },
+                      "children": [text_node(11, "Running")] },
                     text(8, 9, "Step 99 passes".into())
                 ] }] }] })
         })
@@ -3242,6 +3245,21 @@ mod spinners {
         eprintln!("[measure] 30 spinner steps of a working chat: the page rendered {pages} times, the window {frames}");
         assert_eq!(pages, 0, "the page kept its drawing");
         assert!((29..=31).contains(&frames), "the layer turned {frames} times in 30 steps");
+    }
+
+    /// A line that counts without a shimmer, like a background task's "Running · 12s", drew the whole page again each
+    /// second, which kept an idle chat drawing while a task or subagent ran.
+    #[test]
+    fn seconds_that_a_line_counts_draw_the_layer_and_never_the_page() {
+        let (app, window) = open_tab(true);
+        let (pages, frames) = drawn(&window);
+        for _ in 0..3 {
+            app.advance_clock(Duration::from_secs(1));
+            app.run_until_parked();
+        }
+        let (pages, frames) = (drawn(&window).0 - pages, drawn(&window).1 - frames);
+        assert_eq!(pages, 0, "the page drew {pages} times in 3 seconds");
+        assert!(frames >= 3, "the layer drew the count {frames} times in 3 seconds");
     }
 
     /// A page nobody puts on screen with the layer, as one in a window of its own, still turns its spinners and pulses

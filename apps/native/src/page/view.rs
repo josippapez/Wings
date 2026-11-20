@@ -1601,7 +1601,8 @@ impl PageView {
         // can't scroll: it breaks inside a word wider than its box instead, or a log's "=====" rule and a long link
         // ran past the card's edge.
         let code = text.mono && text.grow;
-        let in_layer = text.shimmer && self.spin_in_layer.get();
+        // A line that pulses or counts the seconds moves in the window's layer, so its steps never draw the page.
+        let in_layer = (text.shimmer || text.since.is_some()) && self.spin_in_layer.get();
         let page = cx.entity_id();
         let least = ((text.grow || drop.is_some()) && !text.truncate && !code).then(|| {
             let size = match text.size {
@@ -1668,16 +1669,21 @@ impl PageView {
                     // reader in no colour, and pulses them and counts their `since` up without drawing the page again.
                     let words = plain_text(&text.children);
                     let since = text.since;
+                    let said = move || -> SharedString {
+                        match since {
+                            Some(since) => format!("{words} · {}", took(since, now_ms())).into(),
+                            None => words.clone().into(),
+                        }
+                    };
+                    let name = format!("shimmer-{page}-{}", text.id);
                     el.child(
                         div()
                             .relative()
                             .child(div().text_color(gpui::transparent_black()).child(content))
-                            .child(ui::shimmer_slot(format!("shimmer-{page}-{}", text.id), since.is_some(), move || {
-                                match since {
-                                    Some(since) => format!("{words} · {}", took(since, now_ms())).into(),
-                                    None => words.clone().into(),
-                                }
-                            })),
+                            .map(|el| match text.shimmer {
+                                true => el.child(ui::shimmer_slot(name, since.is_some(), said)),
+                                false => el.child(ui::count_slot(name, said)),
+                            }),
                     )
                 },
             );
@@ -1685,7 +1691,7 @@ impl PageView {
         // layer for it (`ui::view_spinner_layer`), or in the page, each of whose frames then draws the page again, which
         // counts a `since` up too. Without a shimmer, a second's tick does that.
         let element = match (text.shimmer, text.since) {
-            (true, _) if in_layer => element.into_any_element(),
+            _ if in_layer => element.into_any_element(),
             (true, since) => ui::shimmer(element, since.is_some()).into_any_element(),
             (false, Some(_)) => element
                 .with_animation(
