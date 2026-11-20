@@ -155,7 +155,9 @@ pub fn fetch_url(plugin: &Plugin, method: &str, url: &str, body: Option<&str>) -
     }
     let method = method.to_ascii_uppercase();
     let allowed = plugin.manifest.permissions.fetch.iter().filter_map(|e| fetch_rule(e)).any(|rule| match rule.method {
-        None => normal.starts_with(rule.target),
+        // A bare entry for a server on this computer only reads: a local service seldom asks who calls it, so each
+        // write to it is a `POST` entry the approval dialog shows.
+        None => (!rule.target.starts_with("http://") || matches!(method.as_str(), "GET" | "HEAD")) && normal.starts_with(rule.target),
         Some("GET") => matches!(method.as_str(), "GET" | "HEAD") && normal.starts_with(rule.target),
         _ => {
             method == "POST"
@@ -513,6 +515,12 @@ mod tests {
             assert_eq!(fetch_url(&p, "GET", url, None).as_deref(), Some(url));
         }
         assert!(fetch_url(&p, "POST", "http://localhost:4096/session/ses_1/message", Some("{}")).is_some());
+        // The bare entry only reads: each write to a local server needs its own `POST` entry.
+        assert!(fetch_url(&p, "HEAD", "http://127.0.0.1:4096/", None).is_some());
+        for method in ["POST", "PUT", "PATCH", "DELETE"] {
+            assert_eq!(fetch_url(&p, method, "http://127.0.0.1:4096/session", Some("{}")), None, "{method}");
+        }
+        assert_eq!(fetch_url(&p, "DELETE", "http://localhost:4096/session/ses_1/message", None), None);
         for url in [
             // Another port, the default one, or the same digits as part of a longer port.
             "http://127.0.0.1:40960/x",
@@ -539,7 +547,7 @@ mod tests {
         }
         // A POST entry to this computer is one path like any other.
         assert!(fetch_url(&p, "POST", "http://localhost:4096/session/ses_1/message/2", Some("{}")).is_none());
-        assert!(fetch_url(&p, "POST", "http://127.0.0.1:4096/session/ses_1/message", Some("{}")).is_some(), "the bare prefix allows it");
+        assert!(fetch_url(&p, "POST", "http://127.0.0.1:4096/session/ses_1/message", Some("{}")).is_none(), "the bare prefix only reads");
         assert!(fetch_url(&p, "DELETE", "http://localhost:4096/session/ses_1/message", None).is_none());
     }
 

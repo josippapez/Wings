@@ -8,7 +8,7 @@ What changed in each Wings release, newest first.
 - **Start a chat in a worktree**: a Worktree button beside the branch button makes a worktree of the project for the chat's first message, listed under the project like the ones Wings makes.
 - **Run a schedule in Claude chat**: a Claude schedule can open its run as a chat tab that starts with the prompt, instead of a terminal. If the chat can't open, it runs in a terminal and the run says why.
 - **# finds an issue**: typing # in Claude chat's message box lists the project's issues and the repo's open GitHub issues, and a pick puts its key or number in.
-- **Plugins can call programs on this computer**: a plugin may ask for http addresses on this Mac with a port, which the approval dialog lists apart from web addresses. Tokens never go there, and no redirect is followed.
+- **Plugins can call programs on this computer**: a plugin may ask for http addresses on this Mac with a port, which the approval dialog lists apart from web addresses. A plain address only reads; each write is its own entry in the dialog. Tokens never go there, and no redirect is followed.
 - **Dialogs keep the keyboard**: Tab and Shift-Tab stay inside an open dialog, and closing it gives the keyboard back to what had it. Escape closes every dialog the same way.
 - **Fewer notifications from Claude chat**: only when Claude asks for permission or a question waits for you, not after every turn or finished subagent.
 - **Mentioned issues follow their status** in Claude chat's side panel, and a long tool row from a Claude Code plugin is cut short at the conversation's edge.
