@@ -9,8 +9,11 @@ verdict=$(printf '%s' "$command" | python3 -I -c '
 import re, sys
 build = re.compile(r"(^|[^\w-])(cargo\s+(build|test|run|check|clippy|bench|nextest)|build-rust\.sh|package-mac-app\.sh|pnpm(\s+--dir\s+\S+)?\s+(shot|test|build))")
 queued = re.compile(r"^\s*(sh\s+)?(\S*/)?scripts/build\.sh(\s|$)")
-for part in re.split(r"&&|\|\||;|\|", sys.stdin.read()):
-    if build.search(part) and not queued.match(part):
+command = sys.stdin.read()
+# A substitution or a second line runs a command a plain split cannot see: with one, any build is refused.
+hidden = re.search(r"\$\(|`|\n|<\(", command)
+for part in re.split(r"&&|\|\||;|\||&", command):
+    if build.search(part) and (hidden or not queued.match(part)):
         print("deny")
         break
 ')

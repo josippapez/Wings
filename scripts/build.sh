@@ -6,10 +6,15 @@
 #   sh scripts/build.sh sh plugins/build-rust.sh claude-chat
 #   sh scripts/build.sh pnpm --dir plugins shot /tmp/shots --claude-chat
 set -eu
-root=$(cd "$(dirname "$0")/.." && pwd -P)
-case "$(pwd -P)/" in
-  "$root"/.claude/worktrees/*) echo "build.sh: run it from the main checkout, $root, not a worktree" >&2; exit 2 ;;
-esac
+# The main checkout, from git, whichever copy of this script runs: a worktree's own copy builds there too.
+root=$(cd "$(git -C "$(dirname "$0")" rev-parse --path-format=absolute --git-common-dir)/.." && pwd -P)
+for place in "$(pwd -P)" "$(cd "$(dirname "$0")" && pwd -P)"; do
+  case "$place/" in
+    "$root"/.claude/worktrees/*) echo "build.sh: run it from the main checkout, $root, not a worktree" >&2; exit 2 ;;
+    "$root"/*) ;;
+    *) echo "build.sh: run it inside the main checkout, $root" >&2; exit 2 ;;
+  esac
+done
 [ "$#" -gt 0 ] || { echo "usage: sh scripts/build.sh <command> [args...]" >&2; exit 2; }
 if [ -n "${CARGO_TARGET_DIR:-}" ]; then
   echo "build.sh: unset CARGO_TARGET_DIR: builds share the checkout's target folders" >&2
