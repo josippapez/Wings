@@ -1229,11 +1229,7 @@ impl Workspace {
         );
         let detail: Option<AnyElement> = match hit.snippets.first() {
             Some(snippet) => Some(snippet_text(snippet, hit.agent, words)),
-            None => hit
-                .title
-                .as_ref()
-                .zip(hit.first_prompt.as_ref())
-                .map(|(_, prompt)| muted_lines(one_line(prompt)).into_any_element()),
+            None => under_title(hit).map(|prompt| muted_lines(one_line(prompt)).into_any_element()),
         };
         let meta = session_meta(hit, now, &self.config.project.to_string_lossy(), sheet.all);
         let menu_open = sheet.menu == Some(Menu::Session(hit.id.clone()));
@@ -1598,6 +1594,12 @@ fn skeleton() -> AnyElement {
         .into_any_element()
 }
 
+/// The first prompt under a session's name, unless the name is that prompt: a session run from Claude chat has no title of
+/// Claude Code's own, only the name Wings gave it, and showed no first prompt under it.
+fn under_title(hit: &Hit) -> Option<&str> {
+    hit.title.as_ref().or(hit.name.as_ref()).and(hit.first_prompt.as_deref())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1785,6 +1787,30 @@ mod tests {
         assert_eq!(ago(now, minutes(3 * 60)), "3 hours ago");
         assert_eq!(ago(now, minutes(24 * 60)), "yesterday");
         assert_eq!(ago(now, minutes(5 * 24 * 60)), "5 days ago");
+    }
+
+    #[test]
+    fn a_named_session_shows_its_first_prompt_under_the_name_and_an_unnamed_one_does_not_repeat_it() {
+        let hit = |title: Option<&str>, name: Option<&str>| Hit {
+            id: "s1".into(),
+            agent: Agent::Claude,
+            cwd: None,
+            title: title.map(Into::into),
+            first_prompt: Some("Continue this issue".into()),
+            git_branch: None,
+            last_active_ms: 0,
+            last_active: None,
+            messages: 1,
+            matches: 0,
+            snippets: Vec::new(),
+            name: name.map(Into::into),
+            transcript: None,
+        };
+        assert_eq!(under_title(&hit(Some("Fix the login"), None)), Some("Continue this issue"));
+        // Named by Wings, as a session run from Claude chat is.
+        assert_eq!(under_title(&hit(None, Some("Analyze idle redraw causes"))), Some("Continue this issue"));
+        // The first prompt is already its title.
+        assert_eq!(under_title(&hit(None, None)), None);
     }
 
     #[test]
