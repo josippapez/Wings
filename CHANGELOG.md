@@ -2,6 +2,14 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.65 · 2026-11-20
+
+- **Spinners cost nothing while Claude works**: they turn in macOS's own animation layer over the window, so a working chat no longer redraws the window 30 times a second for them. Under a menu or dialog they turn as before.
+- **Typing in a chat draws less**: a key draws the conversation once, not twice, when the chat only echoes what you typed.
+- **Tab picks a suggestion**: with / commands, @ mentions or # issues listed under the message box, Tab takes the highlighted one instead of typing a tab.
+- **Up brings queued messages back**: messages typed while Claude works come back into the box to edit, as in Claude Code (Claude chat 0.33.1).
+- **Issues**: Claude names an issue's fields right on its first try (Issues 0.28.1).
+
 ## 0.2.64 · 2026-11-20
 
 - **Cheaper frames in a busy window**: Wings moves to GPUI 0.3.13, which no longer re-sorts every button and field on screen in each frame. A long chat at work draws a frame in about half the time.
