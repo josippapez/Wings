@@ -2723,6 +2723,7 @@ impl PageView {
 
 impl Render for PageView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        ui::readout::render("page");
         #[cfg(feature = "test-support")]
         {
             self.renders.set(self.renders.get() + 1);
