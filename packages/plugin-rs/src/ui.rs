@@ -73,9 +73,11 @@ impl Node {
     }
 
     /// On a `Page`: what the app draws behind the whole page in place of its plain ground. `"pixels"` is a slow drift of
-    /// dim, dithered pixels in the page's colours, which moves only while the window is in front and stands still under
+    /// dim, dithered pixels in the page's colours. `"gradient:<preset>"` is a slow gradient mesh a shader draws, dimmed so
+    /// the page's muted text stays readable on it, in the colours of one of ShaderGradient's presets: `halo`, `pensive`,
+    /// `mint`, `interstella` or `nighty-night`. Either moves only while the window is in front and stands still under
     /// Reduce motion. The app draws it where the page fills a tab; elsewhere, and in an older Wings, the page keeps its
-    /// plain ground. Needs Wings 0.2.59.
+    /// plain ground. Needs Wings 0.2.59, and 0.2.60 for a gradient.
     pub fn backdrop(self, kind: &str) -> Self {
         self.prop("backdrop", kind)
     }
@@ -386,6 +388,24 @@ pub fn section(title: impl Into<String>, description: Option<&str>, rows: impl I
         .children(rows)
 }
 
+/// A `section` the person can fold: the heading gets a chevron, the whole heading line is the button (Enter and Space
+/// too while it has the keyboard), and while `open` is false the rows and the description are not drawn, so a closed
+/// section sends no rows. Put the count in `title` ("Subagents · 4 running"), which stays when it is closed. The app
+/// calls `on_toggle` with the state the person asked for: keep it (in storage, to survive a restart) and pass it as
+/// `open` on the next draw. Needs Wings 0.2.60; an older Wings ignores the props and draws the section open.
+pub fn section_folding(
+    title: impl Into<String>,
+    description: Option<&str>,
+    open: bool,
+    on_toggle: impl Fn(bool) + 'static,
+    rows: impl IntoIterator<Item = Node>,
+) -> Node {
+    section(title, description, rows)
+        .prop("collapsible", true)
+        .prop("open", open)
+        .on("onOpenChange", move |event| on_toggle(event["open"].as_bool().unwrap_or(!open)))
+}
+
 /// A dialog's or a confirm's buttons at the end of the line: `dismiss` (Cancel, Close) first, which the app draws
 /// ghost whatever its variant, then `act`, the buttons that do something, last of which the main one. Needs Wings 0.2.57.
 pub fn actions(dismiss: Option<Node>, act: impl IntoIterator<Item = Node>) -> Node {
@@ -638,6 +658,8 @@ mod tests {
         assert_eq!(slots(entry(Entry { lead: None, title: text("Earlier"), detail: None, trailing: None })), ["title"]);
         assert_eq!(slots(section("Folders", Some("Added with /add-dir."), [text("a")])), ["title", "description"]);
         assert_eq!(slots(section("Folders", None, Vec::new())), ["title"]);
+        let folding = tree_json(section_folding("Folders", None, false, |_| {}, [text("a")]));
+        assert_eq!((folding["props"]["collapsible"].clone(), folding["props"]["open"].clone()), (json!(true), json!(false)));
         let drawn = tree_json(actions(Some(button("Cancel", "outline", false, || {})), [button("Save", "default", false, || {})]));
         assert_eq!(drawn["type"], "Actions");
         assert_eq!(drawn["children"][0]["props"]["name"], "dismiss");

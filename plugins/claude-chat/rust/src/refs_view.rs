@@ -92,7 +92,7 @@ pub fn section(c: &Chat) -> Option<Node> {
     let title = format!("Mentioned · {}", shown.len());
     let rows = shown.iter().take(LISTED).map(|(found, detail)| row_of(found, *detail));
     let earlier = (hidden > 0).then(|| ui::entry(ui::Entry { lead: None, title: muted(format!("{hidden} earlier")).prop("size", "small"), detail: None, trailing: None }));
-    Some(ui::section(title, None, rows.chain(earlier)))
+    Some(crate::view::fold(c, "refs", title, rows.chain(earlier)))
 }
 
 fn small(said: impl Into<String>) -> Node {

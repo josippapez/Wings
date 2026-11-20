@@ -4,7 +4,7 @@
 use crate::{
     COMMIT, DONE, GRAPH, GRAPH_REPO, GRAPH_WANT, OPEN, POLL_MS,
     changes::{Changes, Mode, changes, forget_repos},
-    diff::{open_changes, open_commit},
+    diff::{open_changes, open_changes_as, open_commit},
     log::{LOG, parse_log},
 };
 use serde_json::{Value, json};
@@ -253,6 +253,16 @@ pub fn start() {
     host::on("pluginEvent", |_, event| {
         if event["from"] == "claude-chat" && event["name"] == "open-changes" {
             host::open_view("changes");
+            // The chat's Review changes: the viewer on every change in its folder, as the sidebar's View all opens it.
+            if let Some(cwd) = review_cwd(&event["data"]) {
+                // The chat's key lets the viewer take comments on lines, which go back to that chat.
+                let chat = crate::review::chat_of(&event["data"]);
+                spawn(async move {
+                    if let Some(root) = repo_root(&cwd).await {
+                        drop(open_changes_as(root, Mode::Uncommitted, None, true, chat).await);
+                    }
+                });
+            }
         }
     });
     messages::on(OPEN, |asked| {
@@ -276,12 +286,28 @@ pub fn start() {
         });
     });
     messages::on(GRAPH_WANT, |_| spawn(tell_graph_repo()));
+    crate::review::listen();
     register_tools();
+}
+
+/// The folder the chat's `open-changes` event asks the viewer for, when it asks for a review and not only the sidebar.
+fn review_cwd(data: &Value) -> Option<String> {
+    data["review"].as_bool().filter(|review| *review)?;
+    data["cwd"].as_str().filter(|cwd| !cwd.is_empty()).map(str::to_owned)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::shown_of;
+    use super::{review_cwd, shown_of};
+    use serde_json::{Value, json};
+
+    #[test]
+    fn a_review_event_names_the_folder_and_a_plain_open_changes_event_names_none() {
+        assert_eq!(review_cwd(&json!({ "review": true, "cwd": "/shop" })), Some("/shop".to_owned()));
+        assert_eq!(review_cwd(&Value::Null), None);
+        assert_eq!(review_cwd(&json!({ "review": false, "cwd": "/shop" })), None);
+        assert_eq!(review_cwd(&json!({ "review": true, "cwd": "" })), None);
+    }
 
     fn repo(root: &str) -> Option<String> {
         Some(root.to_owned())

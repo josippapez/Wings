@@ -25,6 +25,8 @@ mod log;
 mod mode;
 #[cfg(feature = "main")]
 mod main_frame;
+#[cfg(any(feature = "main", test))]
+mod review;
 #[cfg(feature = "sidebar")]
 mod sidebar;
 

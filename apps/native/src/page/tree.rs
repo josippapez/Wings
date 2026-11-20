@@ -229,6 +229,18 @@ pub struct Page {
 pub enum Backdrop {
     /// `"pixels"`: a slow drift of dithered pixels in the page's colours (`ui::backdrop`).
     Pixels,
+    /// `"gradient:<preset>"`: a slow mesh of a preset's three colours, dimmed under the page's text (`gradients`).
+    Gradient(crate::gradients::Preset),
+}
+
+impl Backdrop {
+    /// The backdrop a page's `backdrop` names, if Wings draws it.
+    fn named(name: &str) -> Option<Backdrop> {
+        match name {
+            "pixels" => Some(Backdrop::Pixels),
+            _ => name.strip_prefix("gradient:").and_then(crate::gradients::Preset::named).map(Backdrop::Gradient),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -729,6 +741,9 @@ pub struct Disclosure {
     pub id: u64,
     pub open: Option<bool>,
     pub on_open_change: Option<String>,
+    /// Set only by a collapsible `Section` (never by a page): the summary is drawn as the section's heading and the body
+    /// starts at the rows' own edge instead of under the summary's words.
+    pub section: bool,
     pub summary: Vec<Node>,
     pub body: Vec<Node>,
 }
@@ -1307,7 +1322,7 @@ impl Walk {
                     flush: on("flush"),
                     body: slots.take("body"),
                     on_text_scale: handler("onTextScale"),
-                    backdrop: (str_prop(&props, "backdrop") == Some("pixels")).then_some(Backdrop::Pixels),
+                    backdrop: str_prop(&props, "backdrop").and_then(Backdrop::named),
                 })
             }
             "Toolbar" => {
@@ -1338,7 +1353,10 @@ impl Walk {
                 children: parts(children),
             }),
             "ListRow" => kit::list_row(id, children, handler("onClick"), title(&props)),
-            "Section" => kit::section(id, children),
+            "Section" => {
+                let fold = on("collapsible").then(|| (props.get("open").and_then(Value::as_bool), handler("onOpenChange")));
+                kit::section(id, children, fold)
+            }
             "Actions" => kit::actions(id, children),
             "Row" => Node::Row(Row {
                 id,
@@ -1641,6 +1659,7 @@ impl Walk {
                     id,
                     open: props.get("open").and_then(Value::as_bool),
                     on_open_change: handler("onOpenChange"),
+                    section: false,
                     summary: slots.take("summary"),
                     body: slots.take("body"),
                 })
@@ -2833,13 +2852,21 @@ mod tests {
     }
 
     #[test]
-    fn a_page_asks_for_the_pixels_behind_it_and_any_other_backdrop_is_its_plain_ground() {
+    fn a_page_asks_for_the_pixels_or_a_gradient_behind_it_and_any_other_backdrop_is_its_plain_ground() {
         let backdrop = |props: Value| {
             let parsed = tree(json!([{"id":1,"type":"Page","props":props,"children":[]}])).unwrap();
             let Node::Page(page) = &parsed.children[0] else { panic!("a page") };
             page.backdrop
         };
         assert_eq!(backdrop(json!({"backdrop":"pixels"})), Some(Backdrop::Pixels));
+        assert_eq!(backdrop(json!({"backdrop":"gradient:halo"})), Some(Backdrop::Gradient(crate::gradients::Preset::Halo)));
+        assert_eq!(
+            backdrop(json!({"backdrop":"gradient:nighty-night"})),
+            Some(Backdrop::Gradient(crate::gradients::Preset::NightyNight))
+        );
+        assert_eq!(backdrop(json!({"backdrop":"gradient:aurora"})), None);
+        assert_eq!(backdrop(json!({"backdrop":"gradient:"})), None);
+        assert_eq!(backdrop(json!({"backdrop":"halo"})), None);
         assert_eq!(backdrop(json!({"backdrop":"glow"})), None);
         assert_eq!(backdrop(json!({"backdrop":3})), None);
         assert_eq!(backdrop(json!({})), None);
@@ -2907,6 +2934,24 @@ mod tests {
         let bare = tree(json!([{"id":1,"type":"Section","props":{},"children":[slot_text(2, "title", "Folders")]}])).unwrap();
         let Node::Stack(bare) = &bare.children[0] else { panic!("a stack") };
         assert_eq!(bare.children.len(), 2);
+    }
+
+    #[test]
+    fn a_collapsible_section_is_a_disclosure_with_its_heading_as_the_summary_and_its_rows_as_the_body() {
+        let parsed = tree(json!([{"id":1,"type":"Section","props":{"collapsible":true,"open":false,"onOpenChange":"1:onOpenChange"},"children":[
+            slot_text(2, "title", "Subagents · 4 running"),
+            slot_text(4, "description", "What this session started."),
+            {"id":6,"type":"ListRow","props":{},"children":[slot_text(7, "title", "Explore")]},
+        ]}]))
+        .unwrap();
+        let Node::Disclosure(fold) = &parsed.children[0] else { panic!("{:?}", parsed.children) };
+        assert_eq!((fold.id, fold.open, fold.section), (1, Some(false), true));
+        assert_eq!(fold.on_open_change.as_deref(), Some("1:onOpenChange"));
+        assert_eq!(plain_text(&fold.summary), "Subagents · 4 running");
+        assert_eq!(fold.body.len(), 2, "the description, then the rows");
+        // Without the flag the section is the plain stack, as an older page draws it.
+        let plain = tree(json!([{"id":1,"type":"Section","props":{"open":false},"children":[slot_text(2, "title", "Folders")]}])).unwrap();
+        assert!(matches!(plain.children[0], Node::Stack(_)));
     }
 
     #[test]

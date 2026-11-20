@@ -9,6 +9,8 @@ mod glow;
 mod menu;
 pub mod motion;
 mod parts;
+#[cfg(target_os = "macos")]
+mod shader;
 mod sheet;
 mod slots;
 mod status_dot;

@@ -72,6 +72,10 @@ pub enum Message {
     /// A reply typed in the diff viewer: `id` names it for `Link::call("actionDone")`, the text is the JSON of
     /// `{ diffId, replyTo, body }`.
     Reply,
+    /// A comment started in the diff viewer on a line, or one of those deleted: `id` names it for
+    /// `Link::call("actionDone")`, the text is the JSON of `{ diffId, path, side, line, endLine?, quote, body, id }`, or
+    /// `{ diffId, delete: true, id }`.
+    Comment,
     /// The JSON of another plugin's event, `{ from, name, data }`, for `onEvent`.
     PluginEvent,
     /// The JSON `{ sectionId, sort }` of a sort picked in a project section's menu, for `onSectionSort`.
@@ -116,6 +120,7 @@ impl Message {
             Message::DiffRefresh => "diffRefresh",
             Message::DiffClosed => "diffClosed",
             Message::Reply => "reply",
+            Message::Comment => "comment",
             Message::PluginEvent => "pluginEvent",
             Message::SectionSort => "sectionSort",
             Message::Broadcast => "broadcast",

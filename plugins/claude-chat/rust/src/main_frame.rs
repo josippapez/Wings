@@ -111,9 +111,20 @@ fn chat_args(pane: &Value) -> Option<Value> {
     Some(json!({ "resume": session["sessionId"].as_str()?, "cwd": pane["cwd"], "program": program }))
 }
 
+/// The data of the Changes plugin's event that carries a comment left on a line of its diff viewer, for the chat pages.
+fn review_data(event: &Value) -> Option<&Value> {
+    (event["from"] == "changes" && event["name"] == crate::review::EVENT).then(|| &event["data"])
+}
+
 #[unsafe(no_mangle)]
 pub fn start() {
     crate::plan_limit::listen();
+    // A chat page can't hear another plugin's events, so the main passes the comments on; each page keeps its chat's.
+    host::on("pluginEvent", |_, event| {
+        if let Some(data) = review_data(event) {
+            messages::tell(crate::review::EVENT, data);
+        }
+    });
     host::on_panes(|list| {
         PANES.with(|panes| *panes.borrow_mut() = list.to_vec());
         show();
@@ -145,6 +156,14 @@ pub fn start() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_changes_plugins_review_comments_are_passed_to_the_chats() {
+        let comment = json!({ "from": "changes", "name": "review-comment", "data": { "chat": "c", "id": "1:-1" } });
+        assert_eq!(review_data(&comment), Some(&json!({ "chat": "c", "id": "1:-1" })));
+        assert_eq!(review_data(&json!({ "from": "pr-tracker", "name": "review-comment", "data": {} })), None);
+        assert_eq!(review_data(&json!({ "from": "changes", "name": "open-changes", "data": {} })), None);
+    }
 
     #[test]
     fn only_claude_panes_get_the_badge_and_it_resumes_with_their_wrapper() {

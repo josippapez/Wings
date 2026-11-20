@@ -126,9 +126,11 @@ pub struct Chat {
     pub narrow: Option<bool>,
     /// Your choice for every chat of showing diffs side by side (`prefs::diff_split`). A narrow tab keeps one column.
     pub diff_split: bool,
-    /// Your choice for every chat of what lies behind the conversation (`prefs::background`): the drift of pixels Wings
-    /// draws, else the plain ground.
-    pub pixels: bool,
+    /// The session panel's sections you folded, by key (`prefs::panel_closed`), for every chat. All open until you fold one.
+    pub panel_closed: Vec<String>,
+    /// Your choice for every chat of what lies behind the conversation (`prefs::background`): the page's `backdrop`, the
+    /// drift of pixels or a gradient Wings draws, else none for the plain ground.
+    pub backdrop: Option<String>,
     /// Your choice for every chat of whether the session panel shows (`prefs::side_panel`, on by default): in the chat, or
     /// opened with it in Wings' sidebar, as `side_in_wings` says.
     pub side_open: bool,
@@ -154,7 +156,7 @@ pub struct Chat {
     titled: Option<String>,
     /// Going on in a terminal once Claude Code here has ended.
     moving: bool,
-    input: Option<ProcessInput>,
+    pub(crate) input: Option<ProcessInput>,
     /// Each request the chat writes gets the next number, for its id.
     requests: u32,
     /// Which start of Claude Code the page shows: one started before it is let go of, and its lines are dropped.
@@ -170,9 +172,14 @@ pub struct Chat {
     /// That message has gone to Claude Code, in this run of the tab or an earlier one: kept with the tab so a restart never
     /// sends it again.
     pub prompted: bool,
+    /// The reset (ms) a wait for a usage limit was armed for before the tab last closed, which the next start arms again
+    /// (`limit_view.rs`).
+    pub limit_resume: Option<f64>,
     /// The Claude Code accounts there are, for the picker in the message box. Empty until Wings lists them, and in a
     /// Wings that won't.
     pub accounts: Vec<host::AccountChoice>,
+    /// The comments left on lines in Wings' diff viewer for this chat, which go with the next message (`review.rs`).
+    pub review: Vec<crate::review::Comment>,
 }
 
 thread_local! {
@@ -207,7 +214,8 @@ thread_local! {
         forked_from: None,
         narrow: None,
         diff_split: false,
-        pixels: false,
+        panel_closed: Vec::new(),
+        backdrop: None,
         side_open: true,
         side_in_wings: false,
         message_to: None,
@@ -228,7 +236,9 @@ thread_local! {
         picked: None,
         first_prompt: None,
         prompted: false,
+        limit_resume: None,
         accounts: Vec::new(),
+        review: Vec::new(),
     });
 }
 
@@ -271,20 +281,25 @@ pub fn start() {
         c.text_scale = prefs::scale_of(&prefs::text_size().get());
         c.side_open = prefs::side_panel().get();
         c.diff_split = prefs::diff_split().get();
-        c.pixels = prefs::pixels(&prefs::background().get());
+        c.panel_closed = prefs::panel_closed().get();
+        c.backdrop = prefs::backdrop(&prefs::background().get());
         c.side_in_wings = prefs::in_sidebar(&prefs::session_panel().get());
     });
     prefs::text_size().on_change(|size| with(|c| c.text_scale = prefs::scale_of(size)));
     prefs::side_panel().on_change(|shown| with(|c| c.side_open = *shown));
     prefs::diff_split().on_change(|split| with(|c| c.diff_split = *split));
-    prefs::background().on_change(|kind| with(|c| c.pixels = prefs::pixels(kind)));
+    prefs::panel_closed().on_change(|closed| with(|c| c.panel_closed = closed.clone()));
+    prefs::background().on_change(|kind| with(|c| c.backdrop = prefs::backdrop(kind)));
     // The panel moves with the setting, in every open chat.
     prefs::session_panel().on_change(|place| session_panel_moved(place));
     // After your setting is read: a chat in front opens the session sidebar with it.
     crate::session_side::start();
     wings_plugin::poll::while_focused(crate::refs_view::ISSUES_EVERY_MS, false, crate::refs_view::refresh_issues);
+    // The cache clock in the session panel counts down: a tick only has the page drawn again, and only while Wings is in front.
+    wings_plugin::poll::while_focused(crate::spend::CACHE_TICK_MS, false, || {});
     host::on_terminals(|listed| with(|c| c.terminals = listed.iter().filter_map(Terminal::of).collect()));
     host::on_agent_message(take_agent_message);
+    messages::on(crate::review::EVENT, review_comment);
     // The clicks were made against the old setting, so they go with it.
     prefs::detailed().on_change(|detailed| {
         with(|c| {
@@ -337,6 +352,8 @@ async fn open_with(args: Value, saved: Value) {
     let prompt = first_prompt(&saved, &args, &how);
     with(|c| {
         c.prompted = c.prompted || saved["prompted"] == true || prompt.is_some();
+        c.limit_resume = saved["limitArmed"].as_f64();
+        c.review = crate::review::from_json(&saved["reviewComments"]);
         c.first_prompt = prompt;
         c.folder = basename(&cwd).to_owned();
         c.cwd = cwd;
@@ -384,7 +401,7 @@ pub fn launch_with(resume: Option<String>, how: Launch) {
         }
         save_tab();
         // Each value joined to its flag: Wings passes a program nothing else.
-        let mut args: Vec<String> = ["-p", "--input-format=stream-json", "--output-format=stream-json", "--verbose", "--include-partial-messages", "--permission-prompt-tool=stdio", "--replay-user-messages", "--prompt-suggestions=true"]
+        let mut args: Vec<String> = ["-p", "--input-format=stream-json", "--output-format=stream-json", "--verbose", "--include-partial-messages", "--include-hook-events", "--permission-prompt-tool=stdio", "--replay-user-messages", "--prompt-suggestions=true"]
             .map(str::to_owned)
             .to_vec();
         args.extend(fork::flags(resume.as_deref(), &how, &dirs));
@@ -435,6 +452,8 @@ pub(crate) fn begin(c: &mut Chat) -> u32 {
     c.fork_ask = false;
     c.message_to = None;
     c.moving = false;
+    // A wait for a usage limit that the tab kept across a restart of Wings goes on.
+    crate::limit_view::resume(c);
     c.run
 }
 
@@ -484,6 +503,10 @@ pub(crate) async fn follow(run: u32, process: host::Process) {
 pub(crate) fn save_tab() {
     let (id, dirs, picked, prompted) = with(|c| (c.session.id.clone(), c.dirs.clone(), picked_json(&c.picked), c.prompted));
     let mut state = json!({ "sessionId": id, "dirs": dirs, "account": picked, "prompted": prompted });
+    // A wait for a usage limit's reset goes on after Wings restarts.
+    state["limitArmed"] = with(|c| c.session.limit.armed).into();
+    // Comments left in the diff viewer and not sent yet stay across a restart.
+    state["reviewComments"] = with(|c| crate::review::to_json(&c.review));
     // A chat moved into a worktree opens again there: its session is found by that folder.
     if let Some(cwd) = crate::worktree::made() {
         state["cwd"] = cwd.into();
@@ -698,8 +721,9 @@ pub(crate) fn hear(run: u32, line: &Value) {
     if named.is_some() {
         save_tab();
     }
-    // The sidebar's Chats list reads sessions from their transcripts, which Claude Code has written by the end of a turn.
-    if ended {
+    // The sidebar's Chats list reads sessions from their transcripts, which Claude Code has written by the end of a turn,
+    // and by a rename.
+    if ended || (line["type"] == "system" && line["subtype"] == "session_title_changed") {
         messages::tell(crate::SESSION_SAVED, &Value::Null);
     }
     // Files change in a turn, as each edit, command or subagent ends, and when the code is rewound.
@@ -726,8 +750,15 @@ pub(crate) fn report_agent() {
         let (state, summary) = match asking {
             Some(tool) => ("blocked", Some(format!("Asks to use {tool}"))),
             None if c.session.working => ("working", Some(c.doing.0.clone()).filter(|doing| !doing.is_empty())),
-            None if c.session.items.is_empty() || host::focused() => ("idle", None),
-            None => ("done", None),
+            // Claude Code's own summary of how the turn ended (`post_turn_summary`) says whether it needs you.
+            None => {
+                let ended = if c.session.items.is_empty() || host::focused() { "idle" } else { "done" };
+                match c.session.naming.summary.as_ref().and_then(|summary| summary.state()) {
+                    Some(("done", line)) => (ended, line),
+                    Some(said) => said,
+                    None => (ended, None),
+                }
+            }
         };
         // The tab is named after the session too, as a terminal's tab shows what runs in it.
         let title = name(c);
@@ -808,9 +839,10 @@ pub fn send() {
     if crate::worktree::intercept() {
         return;
     }
+    let had_review = with(|c| !c.review.is_empty());
     write(|c, n| {
         let text = c.draft.trim().to_owned();
-        if text.is_empty() && c.images.is_empty() {
+        if text.is_empty() && c.images.is_empty() && c.review.is_empty() {
             return None;
         }
         // /usage, /cost and /context open a dialog here, and aren't sent as a message, not even queued.
@@ -850,6 +882,8 @@ pub fn send() {
             crate::view::show_latest(c);
         }
         let images = std::mem::take(&mut c.images);
+        // The comments left in the diff viewer go with this message, once.
+        let text = crate::review::message(&text, &std::mem::take(&mut c.review));
         if c.session.working {
             return Some(c.session.queue(&text, images, host::now() as u64, n));
         }
@@ -860,6 +894,10 @@ pub fn send() {
     });
     images::flush();
     report_agent();
+    // The comments the message took are not kept for the next one.
+    if had_review {
+        save_tab();
+    }
 }
 
 /// A message another agent sent this chat through Wings' `send_to_agent`: it goes in the message box, and with `submit`,
@@ -917,6 +955,32 @@ pub fn remove_image(index: usize) {
             c.images.remove(index);
         }
     });
+}
+
+/// Takes the `index`th review comment off the message.
+pub fn remove_review(index: usize) {
+    with(|c| {
+        if index < c.review.len() {
+            c.review.remove(index);
+        }
+    });
+    save_tab();
+}
+
+/// Takes every review comment off the message.
+pub fn clear_review() {
+    with(|c| c.review.clear());
+    save_tab();
+}
+
+/// A comment, or one taken back, that the diff viewer sent for a chat: kept when it is for this one.
+fn review_comment(data: &Value) {
+    if data["chat"].as_str() != Some(crate::review::key().as_str()) {
+        return;
+    }
+    if with(|c| crate::review::apply(&mut c.review, data)) {
+        save_tab();
+    }
 }
 
 /// Takes a queued message back.
@@ -1241,6 +1305,19 @@ pub fn open_changes() {
     drop(host::call("emit", json!({ "name": "open-changes" })));
 }
 
+/// The event that asks the Changes plugin to open its diff viewer on every change in this chat's folder: uncommitted ones,
+/// with the viewer's own picker for the branch's (since it left the default branch).
+pub fn review_event(cwd: &str) -> Value {
+    json!({ "name": "open-changes", "data": { "review": true, "cwd": cwd, "chat": crate::review::key() } })
+}
+
+/// The side panel's "Review changes": the whole change in the diff viewer, not just one turn's.
+pub fn review_changes() {
+    crate::session_side::covered();
+    let event = with(|c| review_event(&c.cwd));
+    drop(host::call("emit", event));
+}
+
 /// The suggested next message to show in the empty message box, if there is one.
 pub fn suggested(c: &Chat) -> Option<&str> {
     let empty = c.draft.is_empty() && c.images.is_empty();
@@ -1367,6 +1444,19 @@ pub fn toggle_todos() {
     with(|c| c.todos_folded = !c.todos_folded);
 }
 
+/// A panel section's fold was clicked (in the chat's panel or in Wings' sidebar): kept for every chat and every restart.
+pub fn set_panel_open(key: &str, open: bool) {
+    // This frame changes at once, as `toggle_side` does; the other frames (the sidebar's) hear the setting.
+    let closed = with(|c| {
+        c.panel_closed.retain(|shut| shut != key);
+        if !open {
+            c.panel_closed.push(key.to_owned());
+        }
+        c.panel_closed.clone()
+    });
+    drop(prefs::panel_closed().set(closed));
+}
+
 pub fn toggle_steps(first: usize) {
     with(|c| {
         if !c.open_steps.remove(&first) {
@@ -1377,7 +1467,7 @@ pub fn toggle_steps(first: usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::{changes_counted, shortstat};
+    use super::{changes_counted, review_event, shortstat};
     use super::{State, first_prompt, new_chat, resume, with};
     use crate::fork::Launch;
     use serde_json::{Value, json};
@@ -1536,6 +1626,68 @@ mod tests {
         assert!(with(|c| c.draft.is_empty() && c.session.working));
     }
 
+    /// Comments from the diff viewer for this chat wait above the message box, are kept with the tab, go out with the next
+    /// message once, and a message with none carries none.
+    #[test]
+    fn review_comments_wait_for_the_next_message_which_carries_them_once() {
+        use super::{clear_review, remove_review, review_comment, send};
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let kept = calls.clone();
+        host::testing::answer(move |method, params| {
+            kept.borrow_mut().push((method.to_owned(), params.clone()));
+            Ok(Value::Null)
+        });
+        running(false);
+        let process = host::spawn("claude", &[], "/work/shop", "", |_| {});
+        with(|c| (c.input, c.draft, c.review) = (Some(process.input()), String::new(), Vec::new()));
+        let key = crate::review::key();
+        let event = |chat: &str, id: &str, line: u64, body: &str| json!({ "chat": chat, "path": "src/a.rs", "side": "new", "line": line, "quote": "let a = 1;", "body": body, "id": id });
+        review_comment(&event(&key, "1:-1", 12, "Why one?"));
+        review_comment(&event(&key, "1:-2", 14, "And this?"));
+        // Another chat's comment isn't ours.
+        review_comment(&event("chat-other", "1:-3", 1, "Not for this chat"));
+        assert_eq!(with(|c| c.review.len()), 2);
+        // The tab keeps them.
+        let saved = asked(&calls, "setTabState");
+        assert_eq!(saved.last().unwrap()["state"]["reviewComments"].as_array().unwrap().len(), 2);
+        // One is taken off, a taken-back draft goes too.
+        remove_review(0);
+        assert_eq!(with(|c| c.review.iter().map(|c| c.body.clone()).collect::<Vec<_>>()), ["And this?"]);
+        review_comment(&event(&key, "1:-4", 20, "Third"));
+        review_comment(&json!({ "chat": key, "delete": true, "id": "1:-4" }));
+        assert_eq!(with(|c| c.review.len()), 1);
+        // With a message typed, it goes out with the comment after it, and the comments are spent.
+        with(|c| c.draft = "Fix these".into());
+        send();
+        wings_plugin::task::block_on(async {});
+        let writes: Vec<String> = calls.borrow().iter().filter(|(method, _)| method == "processWrite").map(|(_, params)| params["text"].as_str().unwrap().to_owned()).collect();
+        assert_eq!(writes.len(), 1, "{writes:?}");
+        assert!(writes[0].contains("Fix these") && writes[0].contains("src/a.rs:14") && writes[0].contains("let a = 1;") && writes[0].contains("And this?"), "{}", writes[0]);
+        assert!(with(|c| c.review.is_empty()));
+        let saved = asked(&calls, "setTabState");
+        assert_eq!(saved.last().unwrap()["state"]["reviewComments"], json!([]));
+        // The next message has none of them; and Clear takes them all off.
+        review_comment(&event(&key, "2:-1", 1, "Later"));
+        clear_review();
+        assert!(with(|c| c.review.is_empty()));
+        with(|c| c.draft = "Plain".into());
+        send();
+        wings_plugin::task::block_on(async {});
+        let writes: Vec<String> = calls.borrow().iter().filter(|(method, _)| method == "processWrite").map(|(_, params)| params["text"].as_str().unwrap().to_owned()).collect();
+        assert_eq!(writes.len(), 2);
+        assert!(writes[1].contains("Plain") && !writes[1].contains("Review comments"), "{}", writes[1]);
+    }
+
+    /// A tab that kept comments shows them again after a restart.
+    #[test]
+    fn a_restarted_tab_gets_its_unsent_review_comments_back() {
+        let saved = json!({ "reviewComments": [{ "id": "1:-1", "path": "src/a.rs", "old": false, "line": 3, "quote": "x", "body": "Why?" }] });
+        wings_with_tab(saved.clone());
+        wings_plugin::task::block_on(super::open_with(json!({ "cwd": "/work/shop" }), saved));
+        assert_eq!(with(|c| c.review.len()), 1);
+        assert_eq!(with(|c| c.review[0].place()), "src/a.rs:3");
+    }
+
     /// Wings answering `tabState` with `saved`, keeping every call.
     fn wings_with_tab(saved: Value) -> Rc<RefCell<Vec<(String, Value)>>> {
         let calls = Rc::new(RefCell::new(Vec::new()));
@@ -1612,6 +1764,12 @@ mod tests {
         assert_eq!(changes_counted(&answer), Some((120, 7)));
         assert_eq!(changes_counted("wings is not inside a git repo."), None);
         assert_eq!(changes_counted(r#"{ "added": 1 }"#), None);
+    }
+
+    #[test]
+    fn the_review_event_asks_the_changes_plugin_for_the_viewer_on_this_chats_folder() {
+        let key = crate::review::key();
+        assert_eq!(review_event("/shop"), serde_json::json!({ "name": "open-changes", "data": { "review": true, "cwd": "/shop", "chat": key } }));
     }
 
     #[test]

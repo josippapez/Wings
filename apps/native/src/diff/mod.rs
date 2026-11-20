@@ -28,6 +28,9 @@ pub struct Update {
     /// The patch's new side is the files in the diff's `cwd` as they are now, so the viewer may read the unchanged lines
     /// its folds leave out from there.
     pub worktree: Option<bool>,
+    /// The viewer lets the user start a comment on a line, which it hands to the plugin's `onComment`. It then shows one
+    /// file at a time, as a diff with comments does.
+    pub allow_new_comments: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -134,6 +137,7 @@ pub fn clean_update(params: &Value) -> Result<Update, String> {
         scope,
         scopes,
         worktree: params.get("worktree").and_then(Value::as_bool),
+        allow_new_comments: params.get("allowNewComments").and_then(Value::as_bool),
     })
 }
 
@@ -180,6 +184,18 @@ mod tests {
     }
 
     #[test]
+    fn allow_new_comments_is_read_as_a_boolean() {
+        assert_eq!(
+            clean_update(&json!({ "allowNewComments": true })).unwrap().allow_new_comments,
+            Some(true)
+        );
+        assert_eq!(
+            clean_update(&json!({ "allowNewComments": "yes" })).unwrap().allow_new_comments,
+            None
+        );
+    }
+
+    #[test]
     fn scopes_are_bounded_and_need_an_id_and_a_label() {
         let scope = |id: &str, label: &str| json!({ "id": id, "label": label });
         let mut list = vec![scope("uncommitted", "Uncommitted"), scope("", "No id"), json!("branch")];
@@ -196,6 +212,7 @@ mod tests {
         );
         assert_eq!(update.scope.unwrap().len(), MAX_SCOPE_TEXT);
         assert_eq!(update.worktree, Some(true));
+        assert_eq!(update.allow_new_comments, None);
         assert!(clean_update(&json!({})).unwrap().scopes.is_none());
         assert_eq!(
             clean_update(&json!({ "scopes": "branch" })),

@@ -3,7 +3,7 @@
 
 use wings_plugin::{
     format::truncate,
-    ui::{self, Entry, Node, button, card, dialog as panel, entry, icon, loading, muted, notice, row, spinner, stack, text},
+    ui::{Entry, Node, button, card, dialog as panel, entry, icon, loading, muted, notice, row, spinner, stack, text},
 };
 
 use crate::{
@@ -36,7 +36,7 @@ pub fn section(c: &Chat) -> Option<Node> {
         parts.push(format!("{failed} failed"));
     }
     let title = parts.join(" · ");
-    Some(ui::section(title, None, running.into_iter().map(task_row).chain(done.into_iter().map(done_row))))
+    Some(crate::view::fold(c, "tasks", title, running.into_iter().map(task_row).chain(done.into_iter().map(done_row))))
 }
 
 /// One task that ended: how it ended, its name and how long it ran, with its output on a click when Claude Code keeps it.

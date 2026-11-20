@@ -209,6 +209,20 @@ impl PluginHost {
         self.send_action_message(Message::Reply, text, None, done);
     }
 
+    /// Hands a comment started on a line of the viewer `id`, or the deletion of one, to the main frame's `onComment`.
+    /// `fields` is `{ path, side, line, endLine?, quote, body, id }`, or `{ delete: true, id }`. `done` gets the plugin's
+    /// error, or nothing once it has taken the comment.
+    pub fn send_comment(
+        &self,
+        id: &str,
+        fields: Value,
+        done: impl FnOnce(Result<(), String>) + Send + 'static,
+    ) {
+        let mut text = fields;
+        text["diffId"] = id.into();
+        self.send_action_message(Message::Comment, text.to_string(), None, done);
+    }
+
     /// Opens a link from a comment the plugin gave the viewer, if the plugin may open it, as its `openUrl` would.
     pub fn open_url(&self, url: &str) -> Result<(), String> {
         let Some(access) = &self.shared.access else {
@@ -418,6 +432,50 @@ mod tests {
         assert_eq!(
             reply("hello"),
             Err("This plugin doesn't take replies".into())
+        );
+    }
+
+    /// A comment started on a line reaches the main frame's `onComment` as `{ diffId, ...fields }`, and so does its
+    /// deletion; the viewer hears the handler's error.
+    #[test]
+    fn comments_started_in_the_viewer_reach_the_main_handler() {
+        struct Takes;
+        impl Guest for Takes {
+            fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, id: u32, text: &str) {
+                if kind == "comment" {
+                    let heard: Value = serde_json::from_str(text).unwrap_or_default();
+                    let error = (heard["body"] == "fail").then_some("No room");
+                    if error.is_none() {
+                        cx.link()
+                            .broadcast(json!({ "comment": heard }).to_string())
+                            .unwrap();
+                    }
+                    cx.call("actionDone", json!({ "token": id, "error": error }));
+                }
+            }
+        }
+        let rig = Rig::new(json!({ "contributes": { "ui": ["diff"] } }), vec![]);
+        let reporter = Frame::start(&rig.host, &echoes());
+        rig.host
+            .start_main(&fake::source("main", || Box::new(Takes)), |_| {})
+            .unwrap();
+        let comment = |fields: Value| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            rig.host.send_comment("probe:1", fields, move |result| {
+                let _ = tx.send(result);
+            });
+            rx.recv_timeout(WAIT).unwrap()
+        };
+        let fields = json!({ "path": "a.rs", "side": "new", "line": 4, "quote": "let a = 1;", "body": "Why?", "id": -1 });
+        assert_eq!(comment(fields.clone()), Ok(()));
+        reporter.report("comment heard", |r| {
+            r["comment"]
+                == json!({ "diffId": "probe:1", "path": "a.rs", "side": "new", "line": 4, "quote": "let a = 1;", "body": "Why?", "id": -1 })
+        });
+        assert_eq!(comment(json!({ "delete": true, "id": -1 })), Ok(()));
+        assert_eq!(
+            comment(json!({ "body": "fail", "id": -2 })),
+            Err("No room".into())
         );
     }
 

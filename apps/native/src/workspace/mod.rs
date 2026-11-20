@@ -848,8 +848,8 @@ impl Workspace {
                             tab.page
                                 .clone()
                                 .cached(StyleRefinement::default().size_full()),
-                            backdrop.map(|palette| {
-                                ui::backdrop_slot(format!("tab-{}", tab.id), palette, 13.0).into_any_element()
+                            backdrop.map(|(kind, palette)| {
+                                ui::backdrop_slot(format!("tab-{}", tab.id), kind, palette, 13.0).into_any_element()
                             }),
                         )
                     }

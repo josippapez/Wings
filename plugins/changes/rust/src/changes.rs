@@ -130,14 +130,17 @@ async fn line_counts(root: &str, paths: &[String]) -> Result<HashMap<String, u64
     Ok(counts)
 }
 
-/// The changed files of a repo: against HEAD, or against where this branch left the default branch.
-async fn load(root: &str, mode: Mode) -> Result<Changes, String> {
+/// The changed files of a repo: against HEAD, or against where this branch left `base`, the default branch when none.
+async fn load(root: &str, mode: Mode, picked: Option<&str>) -> Result<Changes, String> {
     let (branch, head) = join(ok(root, &["branch", "--show-current"]), ok(root, &["rev-parse", "--verify", "--quiet", "HEAD"])).await;
     let head = head.filter(|head| !head.is_empty());
     let mut base = head.clone().unwrap_or_else(|| EMPTY_TREE.to_owned());
     let mut against = "Working tree against HEAD".to_owned();
     if mode == Mode::Branch {
-        let name = default_branch(root).await.ok_or("No default branch found (origin/HEAD, main or master).")?;
+        let name = match picked {
+            Some(name) => name.to_owned(),
+            None => default_branch(root).await.ok_or("No default branch found (origin/HEAD, main or master).")?,
+        };
         if head.is_none() {
             return Err("This repo has no commits yet.".into());
         }
@@ -168,8 +171,8 @@ async fn load(root: &str, mode: Mode) -> Result<Changes, String> {
     })
 }
 
-/// By repo and mode: when they were read, and what was.
-type Kept = HashMap<(String, Mode), (f64, Rc<Changes>)>;
+/// By repo, mode and the branch compared with: when they were read, and what was.
+type Kept = HashMap<(String, Mode, Option<String>), (f64, Rc<Changes>)>;
 
 thread_local! {
     static KEPT: RefCell<Kept> = RefCell::new(HashMap::new());
@@ -177,11 +180,16 @@ thread_local! {
 
 /// Kept for a moment, unless `fresh`.
 pub async fn changes(root: &str, mode: Mode, fresh: bool) -> Result<Rc<Changes>, String> {
-    let key = (root.to_owned(), mode);
+    changes_against(root, mode, None, fresh).await
+}
+
+/// `changes`, in `Mode::Branch` against the branch `base` instead of the default one.
+pub async fn changes_against(root: &str, mode: Mode, base: Option<&str>, fresh: bool) -> Result<Rc<Changes>, String> {
+    let key = (root.to_owned(), mode, base.map(str::to_owned));
     if !fresh && let Some(kept) = KEPT.with(|kept| kept.borrow().get(&key).filter(|(at, _)| host::now() - at < FRESH_MS).map(|(_, changes)| changes.clone())) {
         return Ok(kept);
     }
-    let loaded = Rc::new(load(root, mode).await?);
+    let loaded = Rc::new(load(root, mode, base).await?);
     KEPT.with(|kept| kept.borrow_mut().insert(key, (host::now(), loaded.clone())));
     Ok(loaded)
 }
@@ -254,5 +262,22 @@ pub(crate) mod tests {
         assert!(calls.borrow().len() > asked);
         fake_git(&[("branch --show-current", 0, "main\n")]);
         assert_eq!(block_on(async { changes("/new", Mode::Branch, true).await }).unwrap_err(), "No default branch found (origin/HEAD, main or master).");
+    }
+
+    /// A branch picked in the viewer is what the changes are since this branch left, not the default branch.
+    #[test]
+    fn changes_against_a_picked_branch_use_its_merge_base_and_are_kept_apart() {
+        let calls = fake_git(&[
+            ("branch --show-current", 0, "feature\n"),
+            ("rev-parse --verify --quiet HEAD", 0, "abc\n"),
+            ("merge-base HEAD develop", 0, "9999999999\n"),
+            ("diff 9999999999", 0, ""),
+            ("ls-files", 0, ""),
+        ]);
+        let c = block_on(async { changes_against("/r", Mode::Branch, Some("develop"), false).await }).unwrap();
+        assert_eq!(c.against, "Since develop at 9999999");
+        // The default branch was never asked for, and the default's answer isn't this one's.
+        assert!(calls.borrow().iter().all(|line| !line.contains("origin/HEAD")));
+        assert!(block_on(async { changes("/r", Mode::Branch, false).await }).is_err());
     }
 }

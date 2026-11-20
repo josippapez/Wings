@@ -1,8 +1,8 @@
 {
   "id": "claude-chat",
   "name": "Claude chat",
-  "version": "0.29.0",
-  "minWingsVersion": "0.2.58",
+  "version": "0.30.0",
+  "minWingsVersion": "0.2.60",
   "description": "Experimental. Runs Claude Code as a chat in a tab instead of a terminal: messages, tool calls and permission prompts as cards, with Enter to send. Open a new chat from the + menu, or move a Claude terminal into one with its Chat badge.",
   "api": 1,
   "main": "dist/native/main.wasm",
@@ -11,6 +11,7 @@
     "claudeAccounts": true,
     "worktrees": true,
     "callTools": ["changes changed_files", "tasks get", "tasks list"],
+    "events": ["changes review-comment"],
     "exec": [
       "git ls-files [--cached --others --exclude-standard -z]",
       "git diff [--shortstat]",
@@ -26,8 +27,8 @@
       "az repos pr show [--id --organization --output]"
     ],
     "processes": [
-      "claude [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --replay-user-messages --prompt-suggestions --resume --fork-session --add-dir]",
-      "claude-rtk [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --replay-user-messages --prompt-suggestions --resume --fork-session --add-dir]",
+      "claude [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --replay-user-messages --prompt-suggestions --resume --fork-session --add-dir --include-hook-events]",
+      "claude-rtk [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --replay-user-messages --prompt-suggestions --resume --fork-session --add-dir --include-hook-events]",
       "claude edit-permission-rules [--json]",
       "claude edit-hook [--json]",
       "claude edit-memory-settings [--json]"

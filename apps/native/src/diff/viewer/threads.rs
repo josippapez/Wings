@@ -14,7 +14,7 @@ use gpui::{
 use std::{rc::Rc, time::Duration};
 
 /// The card's `bg-[#1d1b22]`.
-const CARD: u32 = 0x1d1b22;
+pub(super) const CARD: u32 = 0x1d1b22;
 
 /// An open reply box: what's typed, and while the plugin posts it, nothing more can be.
 pub(super) struct ReplyBox {
@@ -129,6 +129,9 @@ impl Viewer {
     /// takes replies. Under a line it's indented past the line numbers; in the discussion it fills the width and names
     /// its file.
     fn thread_card(&self, t: usize, inline: bool, cx: &mut Context<Self>) -> AnyElement {
+        if t == super::compose::COMPOSE {
+            return self.compose_card(cx);
+        }
         let comments = self.comments();
         let thread = &self.threads[t];
         let root = &comments[thread.root];
@@ -181,6 +184,7 @@ impl Viewer {
                 )
             })
             .when(root.can_reply, |card| card.child(self.reply_box(id, cx)))
+            .when(root.draft, |card| card.child(self.draft_footer(id, cx)))
             .into_any_element()
     }
 
@@ -538,7 +542,7 @@ impl Viewer {
 }
 
 /// shadcn's `Button` at size `sm`: 28px tall with 12.8px text.
-fn small(button: gpui::Stateful<gpui::Div>) -> gpui::Stateful<gpui::Div> {
+pub(super) fn small(button: gpui::Stateful<gpui::Div>) -> gpui::Stateful<gpui::Div> {
     button
         .h(px(28.0))
         .px(px(10.0))

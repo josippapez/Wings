@@ -297,7 +297,7 @@ mod tests {
         assert!(first_line(&said(&"x".repeat(500))).chars().count() <= LINE + 1);
         let items = vec![
             said("Fix it"),
-            Item::Worked(5),
+            Item::Worked(5, Default::default()),
             Item::Text("  \n".into()),
             Item::Text("I found\n\n  the bug in `build.rs`.".into()),
             said("And now?"),

@@ -2,7 +2,7 @@
 
 use crate::{
     batch::{batched, fit_patch, placeholder},
-    changes::{COLOR, Changes, FileChange, MAX_UNTRACKED_READ, Mode, args, changes, literal},
+    changes::{COLOR, Changes, FileChange, MAX_UNTRACKED_READ, Mode, args, changes_against, literal},
     dates::date_time_of,
 };
 use serde_json::{Value, json};
@@ -10,12 +10,52 @@ use std::collections::{HashMap, HashSet};
 use wings_plugin::{
     diff::{open_live_scoped, open_while},
     format::{basename, plural},
-    git::{raw, run},
+    git::{default_branch, ok, raw, run},
     task::join,
 };
 
 /// The id of the sidebar the viewer opens in the place of (`wings-plugin.json`).
 const SIDEBAR: &str = "changes";
+
+/// The scopes of a viewer from the sidebar: `uncommitted`, `branch` (since the default branch), and `branch:<name>` for
+/// another local branch. The viewer's picker holds 6.
+const MAX_BRANCH_SCOPES: usize = 4;
+/// The longest a scope's id or label is, in UTF-16 units (the viewer cuts it there).
+const MAX_SCOPE_TEXT: usize = 60;
+const BRANCH_PREFIX: &str = "branch:";
+
+/// What a scope id asks for: the mode, and the branch to compare with in `Mode::Branch` when it names one.
+fn parse_scope(id: &str) -> (Mode, Option<&str>) {
+    match id.strip_prefix(BRANCH_PREFIX) {
+        Some(name) if !name.is_empty() => (Mode::Branch, Some(name)),
+        _ => (Mode::named(id), None),
+    }
+}
+
+/// The repo's local branches, the one committed to last first. None when git won't list them.
+async fn local_branches(root: &str) -> Vec<String> {
+    let listed = ok(root, &["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads"]).await;
+    listed.map(|names| names.lines().map(str::trim).filter(|name| !name.is_empty()).map(str::to_owned).collect()).unwrap_or_default()
+}
+
+/// The scopes the viewer offers: the two it always has, then up to four other local branches to compare with, the one
+/// picked now first. The branch checked out and the default branch's own local copy are no other branch to compare with.
+fn scopes_of(branches: &[String], current: Option<&str>, default: Option<&str>, picked: Option<&str>) -> Value {
+    let fits = |id: &str, label: &str| id.encode_utf16().count() <= MAX_SCOPE_TEXT && label.encode_utf16().count() <= MAX_SCOPE_TEXT;
+    let default_local = default.map(|name| name.strip_prefix("origin/").unwrap_or(name));
+    let mut others: Vec<&str> = branches
+        .iter()
+        .map(String::as_str)
+        .filter(|name| Some(*name) != current && Some(*name) != default_local && fits(&format!("{BRANCH_PREFIX}{name}"), &format!("Against {name}")))
+        .collect();
+    if let Some(at) = others.iter().position(|name| Some(format!("{BRANCH_PREFIX}{name}")).as_deref() == picked) {
+        let name = others.remove(at);
+        others.insert(0, name);
+    }
+    let mut scopes = vec![json!({ "id": Mode::Uncommitted.name(), "label": "Uncommitted" }), json!({ "id": Mode::Branch.name(), "label": "Branch" })];
+    scopes.extend(others.into_iter().take(MAX_BRANCH_SCOPES).map(|name| json!({ "id": format!("{BRANCH_PREFIX}{name}"), "label": format!("Against {name}") })));
+    Value::Array(scopes)
+}
 
 /// About 2 MB of patch in all. Past this the biggest files turn into "Too large to show" entries, since the viewer
 /// would take seconds to draw them.
@@ -97,6 +137,12 @@ async fn patch_of(c: &Changes, path: Option<&str>) -> Result<(String, String), S
 /// to `path`, with a picker between the uncommitted changes and the branch's. Only a change too large for that falls
 /// back to `path` alone.
 pub async fn open_changes(root: String, mode: Mode, path: Option<String>, from_sidebar: bool) -> Result<(), String> {
+    open_changes_as(root, mode, path, from_sidebar, None).await
+}
+
+/// `open_changes`, as a review for the Claude chat `chat` names when it does: the viewer lets the user comment on lines,
+/// and each comment goes to that chat (`review.rs`).
+pub async fn open_changes_as(root: String, mode: Mode, path: Option<String>, from_sidebar: bool, chat: Option<String>) -> Result<(), String> {
     let all = from_sidebar && path.is_some();
     let title = match &path {
         _ if from_sidebar => "Changes".to_owned(),
@@ -109,7 +155,7 @@ pub async fn open_changes(root: String, mode: Mode, path: Option<String>, from_s
     let mut open = json!({ "title": title, "cwd": root, "subtitle": subtitle });
     if from_sidebar {
         open["sidebar"] = SIDEBAR.into();
-        open["scopes"] = json!([{ "id": Mode::Uncommitted.name(), "label": "Uncommitted" }, { "id": Mode::Branch.name(), "label": "Branch" }]);
+        open["scopes"] = scopes_of(&[], None, None, None);
         open["scope"] = mode.name().into();
         // Both diff against the working tree, so the viewer may read the lines between the hunks from the repo.
         open["worktree"] = true.into();
@@ -117,19 +163,44 @@ pub async fn open_changes(root: String, mode: Mode, path: Option<String>, from_s
     if all {
         open["focus"] = json!({ "path": path });
     }
+    // Comments on lines go to the chat that asked, when one did and the viewer is the sidebar's.
+    let reviewing = chat.filter(|_| from_sidebar);
+    if reviewing.is_some() {
+        open["allowNewComments"] = true.into();
+    }
+    crate::review::start(reviewing);
     open_live_scoped(open, &key, move |fresh, scope| {
         let (root, path) = (root.clone(), path.clone());
-        let mode = scope.as_deref().map_or(mode, Mode::named);
+        let (mode, base) = scope.as_deref().map_or((mode, None), |id| {
+            let (mode, base) = parse_scope(id);
+            (mode, base.map(str::to_owned))
+        });
         async move {
-            let c = changes(&root, mode, fresh).await?;
-            if c.files.is_empty() {
-                return Ok(json!({ "error": if mode == Mode::Branch { "Nothing changed on this branch." } else { "No uncommitted changes." } }));
+            // The picker lists the branches to compare with, and a branch asked for has to be one of them.
+            let mut scopes = None;
+            if from_sidebar {
+                let (branches, current) = join(local_branches(&root), ok(&root, &["branch", "--show-current"])).await;
+                let default = default_branch(&root).await;
+                let picked = base.as_ref().map(|name| format!("{BRANCH_PREFIX}{name}"));
+                scopes = Some(scopes_of(&branches, current.as_deref(), default.as_deref(), picked.as_deref()));
+                if let Some(name) = base.as_ref().filter(|name| !branches.contains(name)) {
+                    return Ok(json!({ "error": format!("{name} is not a local branch any more."), "scopes": scopes }));
+                }
             }
-            let (patch, note) = match patch_of(&c, if all { None } else { path.as_deref() }).await {
-                Err(_) if all => patch_of(&c, path.as_deref()).await?,
-                done => done?,
+            let c = changes_against(&root, mode, base.as_deref(), fresh).await?;
+            let mut shown = if c.files.is_empty() {
+                json!({ "error": if mode == Mode::Branch { "Nothing changed on this branch." } else { "No uncommitted changes." } })
+            } else {
+                let (patch, note) = match patch_of(&c, if all { None } else { path.as_deref() }).await {
+                    Err(_) if all => patch_of(&c, path.as_deref()).await?,
+                    done => done?,
+                };
+                if patch.is_empty() { json!({ "error": format!("No diff to show{note}.") }) } else { json!({ "patch": patch }) }
             };
-            Ok(if patch.is_empty() { json!({ "error": format!("No diff to show{note}.") }) } else { json!({ "patch": patch }) })
+            if let Some(scopes) = scopes {
+                shown["scopes"] = scopes;
+            }
+            Ok(shown)
         }
     })
     .await
@@ -268,6 +339,67 @@ mod tests {
         let update = sent("updateDiff");
         assert_eq!(update["scope"], "branch");
         assert!(update["patch"].as_str().unwrap().starts_with("diff --git a/a.rs"));
+    }
+
+    fn names(scopes: &Value) -> Vec<&str> {
+        scopes.as_array().unwrap().iter().map(|scope| scope["id"].as_str().unwrap()).collect()
+    }
+
+    /// The picker's two fixed scopes, then up to four other local branches, the branch checked out and the default
+    /// branch's own copy left out, the one picked kept in view, and names that wouldn't fit the viewer's limit left out.
+    #[test]
+    fn the_picker_offers_other_local_branches_and_keeps_the_one_picked_in_view() {
+        let branches: Vec<String> = ["feature", "main", "a", "b", "c", "d", "e"].map(String::from).to_vec();
+        let scopes = scopes_of(&branches, Some("feature"), Some("origin/main"), None);
+        assert_eq!(names(&scopes), ["uncommitted", "branch", "branch:a", "branch:b", "branch:c", "branch:d"]);
+        assert_eq!(scopes[2]["label"], "Against a");
+        assert_eq!(names(&scopes_of(&branches, Some("feature"), Some("origin/main"), Some("branch:e")))[2], "branch:e");
+        let long = vec!["x".repeat(MAX_SCOPE_TEXT)];
+        assert_eq!(names(&scopes_of(&long, None, None, None)), ["uncommitted", "branch"]);
+        assert_eq!(names(&scopes_of(&[], None, None, None)), ["uncommitted", "branch"]);
+        assert_eq!(parse_scope("branch:release/1.0"), (Mode::Branch, Some("release/1.0")));
+        assert_eq!((parse_scope("branch"), parse_scope("branch:"), parse_scope("uncommitted")), ((Mode::Branch, None), (Mode::Uncommitted, None), (Mode::Uncommitted, None)));
+    }
+
+    /// A review from the chat lets the viewer take comments, and its picker lists the repo's other local branches.
+    /// Without a chat to send them to, or outside the sidebar, no comments are offered.
+    #[test]
+    fn a_review_opens_with_new_comments_allowed_and_the_repos_branches_to_pick() {
+        let git: &'static [(&'static str, i64, &'static str)] = &[
+            ("branch --show-current", 0, "feature\n"),
+            ("rev-parse --verify --quiet HEAD", 0, "abc\n"),
+            ("rev-parse --abbrev-ref origin/HEAD", 0, "origin/main\n"),
+            ("for-each-ref --sort=-committerdate", 0, "feature\nmain\ndevelop\n"),
+            ("ls-files", 0, ""),
+            ("diff abc --numstat", 0, "1\t0\ta.rs\0"),
+            ("diff abc --name-status", 0, "M\0a.rs\0"),
+            ("diff abc -M", 0, "diff --git a/a.rs b/a.rs\n@@ -1 +1,2 @@\n+y\n"),
+        ];
+        let calls: Rc<RefCell<Vec<(String, Value)>>> = Rc::default();
+        let seen = calls.clone();
+        host::testing::answer(move |method, params| {
+            if method != "exec" {
+                seen.borrow_mut().push((method.to_owned(), params.clone()));
+                return Ok(json!({ "id": 1 }));
+            }
+            let line = params["args"].as_array().unwrap().iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ");
+            Ok(match git.iter().find(|answer| line.starts_with(answer.0)) {
+                Some((_, code, stdout)) => json!({ "code": code, "stdout": stdout, "stderr": "" }),
+                None => json!({ "code": 1, "stdout": "", "stderr": format!("fake git has no answer for {line}") }),
+            })
+        });
+        block_on(open_changes_as("/r".into(), Mode::Uncommitted, None, true, Some("chat-1".into()))).unwrap();
+        let sent = |method: &str| calls.borrow().iter().filter(|call| call.0 == method).map(|call| call.1.clone()).collect::<Vec<_>>();
+        assert_eq!(sent("openDiff")[0]["allowNewComments"], true);
+        let update = &sent("updateDiff")[0];
+        assert_eq!(names(&update["scopes"]), ["uncommitted", "branch", "branch:develop"]);
+        // With no chat to send to, or outside the sidebar, comments aren't offered.
+        calls.borrow_mut().clear();
+        block_on(open_changes_as("/r".into(), Mode::Uncommitted, None, true, None)).unwrap();
+        assert!(sent("openDiff")[0]["allowNewComments"].is_null());
+        calls.borrow_mut().clear();
+        block_on(open_changes_as("/r".into(), Mode::Uncommitted, None, false, Some("chat-1".into()))).unwrap();
+        assert!(sent("openDiff")[0]["allowNewComments"].is_null());
     }
 
     #[test]

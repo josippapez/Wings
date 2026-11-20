@@ -843,7 +843,8 @@ struct ShotTab {
 impl gpui::Render for ShotTab {
     fn render(&mut self, window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> impl gpui::IntoElement {
         use gpui::prelude::*;
-        let slot = self.page.read(cx).backdrop().map(|palette| wings_native::ui::backdrop_slot("tab", palette, 13.0));
+        let slot =
+            self.page.read(cx).backdrop().map(|(kind, palette)| wings_native::ui::backdrop_slot("tab", kind, palette, 13.0));
         gpui::div()
             .relative()
             .size_full()
@@ -1099,6 +1100,24 @@ esac"##,
         within("p2", haiku(json!([{ "type": "tool_use", "id": "q2", "name": "Read", "input": { "file_path": "/work/shop/src/cart.ts" } }]))),
         within("p3", haiku(json!([{ "type": "text", "text": "Two tests cover discounts, both in checkout.test.ts." }]))),
         output("p3", "Two tests cover discounts, both in checkout.test.ts.", false),
+    ]);
+    // Shapes as Claude Code 2.1.328 prints them: `usage` on the message and the result, `thinking_tokens`, `task_progress`.
+    let spend = opened(vec![
+        {
+            let mut keyed = init.clone();
+            keyed["apiKeySource"] = json!("ANTHROPIC_API_KEY");
+            keyed
+        },
+        user("Which tests cover the discount code?"),
+        turn_start.clone(),
+        json!({ "type": "assistant", "parent_tool_use_id": null, "message": { "id": "msg_1", "role": "assistant", "content": [{ "type": "text", "text": "Two files cover it: cart.test.ts and checkout.test.ts." }], "usage": { "input_tokens": 1_200, "output_tokens": 12_300, "cache_read_input_tokens": 50_000, "cache_creation_input_tokens": 2_000, "cache_creation": { "ephemeral_5m_input_tokens": 2_000, "ephemeral_1h_input_tokens": 0 } } } }),
+        json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 14_000, "num_turns": 1, "result": "", "total_cost_usd": 0.0412, "usage": { "input_tokens": 1_200, "output_tokens": 12_300, "cache_read_input_tokens": 50_000, "cache_creation_input_tokens": 2_000 } }),
+        user("And the rounding?"),
+        turn_start.clone(),
+        json!({ "type": "stream_event", "event": { "type": "message_start", "message": { "id": "msg_2", "usage": { "input_tokens": 3, "output_tokens": 1 } } } }),
+        json!({ "type": "system", "subtype": "thinking_tokens", "estimated_tokens": 2_100, "estimated_tokens_delta": 300 }),
+        tool("w1", "Task", json!({ "description": "Check the rounding in the cart", "subagent_type": "Explore", "prompt": "Does the cart round?" })),
+        json!({ "type": "system", "subtype": "task_progress", "task_id": "w1a", "tool_use_id": "w1", "description": "Check the rounding", "usage": { "total_tokens": 4_200, "tool_uses": 7, "duration_ms": 12_000 } }),
     ]);
     let streaming = opened(vec![
         init.clone(),
@@ -1458,6 +1477,7 @@ esac"##,
         .concat(),
     );
     let finished_panel = finished.clone();
+    let finished_panel_folded = finished.clone();
     let (worked_again, worked_forking, rewound_again) = (worked.clone(), worked.clone(), rewound.clone());
     let edited_undo = edited.clone();
     // A file deep in long folders with a long name: the name stays on one line and the folders are cut.
@@ -1525,7 +1545,26 @@ esac"##,
         (tasks.clone(), subagents.clone(), mentioned.clone(), mods.clone(), finished_panel.clone(), built.clone(), agent.clone());
     let (tasks_open_side, worked_again_side) = (tasks_open.clone(), worked_again.clone());
     let fresh: Vec<serde_json::Value> = ready.to_vec();
-    let scenes: [Scene; 91] = [
+    // A hit usage limit, as Claude Code 2.1.328 prints it: a `rate_limit_event` whose window is `rejected`, then the turn's
+    // `result` with the limit as its text. The reset is a little over two hours from now, so the card has a time to wait for.
+    let limit_resets = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 2 * 3600 + 14 * 60;
+    let limit_hit = opened(vec![
+        init.clone(),
+        user("Run the whole checkout suite and fix what fails."),
+        json!({ "type": "rate_limit_event", "rate_limit_info": { "status": "rejected", "resetsAt": limit_resets, "rateLimitType": "five_hour",
+            "unifiedWindows": { "five_hour": { "utilization": 1, "resetsAt": limit_resets, "status": "rejected", "surpassedThreshold": 1 } } } }),
+        json!({ "type": "result", "subtype": "success", "is_error": true, "result": "You've hit your 5-hour limit · resets soon", "total_cost_usd": 0.0 }),
+    ]);
+    // The header's Rename, open over a chat Claude Code has not named yet.
+    let renaming = opened(vec![
+        init.clone(),
+        user("Fix the flaky login test"),
+        text("The login test waits on a timer; I made it wait for the page instead."),
+        json!({ "type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.01 }),
+    ]);
+    let scenes: [Scene; 96] = [
+        ("limit-card", limit_hit, None, None, "Continue when it resets"),
+        ("rename", renaming, None, Some("press:Rename"), "Generate a name"),
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         // A click on the first prompt's tick on the rail of the long session, timed.
         ("long-rail", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, Some("rail:0"), "Step 0 passes"),
@@ -1595,6 +1634,8 @@ esac"##,
         ("subagent", subagent, None, Some("disclose:Ran 1 subagent · 1 running"), "Survey the callers of applyDiscount"),
         ("suggestion", suggested, None, None, "Tab"),
         ("subagents", subagents, None, None, "Waiting on 2 subagents"),
+        // A finished turn with its tokens and cost (an API key pays per token) under it, and the next turn's counter.
+        ("spend", spend, None, None, "Worked for 14s · 12.3k tokens"),
         // The prompt rail: a mark for each message, the one in view lit, and a tooltip on the one the pointer is over.
         ("prompt-rail", railed, None, Some("hover:45,87"), "Add a test for the rounding"),
         // The side panel shows by default, and lists the background tasks that run, each with how long it has and Stop.
@@ -1679,6 +1720,11 @@ esac"##,
         ("tasks-finished", finished, None, None, "Command “Run the tests” failed"),
         // The side panel lists them as done, the agent under Subagents and the command under Background tasks.
         ("tasks-done", finished_panel, None, None, "Background tasks · 1 failed"),
+        // Each section of the panel folds on its heading, and what you folded is kept in storage (seeded here, as a restart reads it):
+        // Background tasks is closed to its heading and count, Subagents stays open.
+        ("panel-folded", finished_panel_folded, None, None, "Background tasks · 1 failed"),
+        // Comments left on lines in the diff viewer, which the tab kept: a chip for each over the message box, to go with the next message.
+        ("review-comments", opened(vec![init.clone()]), None, None, "2 comments on 2 files"),
     ];
     // Files for @-mentions, which the chat lists with git.
     for file in ["src/checkout.ts", "src/checkout.test.ts", "src/cart.ts", "api/limits.ts", "README.md"] {
@@ -1735,6 +1781,8 @@ esac"##,
     let split = host_over("fixture-storage-claude-chat-split", &[("diff-split", json!(true)), ("detailed-output", json!(true))]);
     // Large text: the conversation's text a fifth bigger.
     let large = host_over("fixture-storage-claude-chat-large", &[("text-size", json!("large"))]);
+    // The session panel with its Background tasks section folded, as a fold you made before the last restart leaves it.
+    let folded = host_over("fixture-storage-claude-chat-folded", &[("panel-closed", json!(["tasks"]))]);
     // The session panel in Wings' sidebar, as the Settings page moves it there.
     let side_host = host_over("fixture-storage-claude-chat-sidebar", &[("session-panel", json!("sidebar"))]);
     let page = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/claude-chat/dist/native/chat.wasm");
@@ -1773,6 +1821,7 @@ esac"##,
         let host = match name {
             "detailed" | "read-ts" => &detailed,
             "large-text" => &large,
+            "panel-folded" => &folded,
             "hash-issues" => &hash_host,
             "ask-edit-split" | "edits-split" => &split,
             _ => &host,
@@ -1948,8 +1997,19 @@ esac"##,
                 terminal
             });
             let args = matches!(name, "long" | "long-older" | "long-rail" | "long-rail-streaming").then(|| json!({ "resume": LONG, "cwd": root.canonicalize().unwrap() }));
+            // The comments the tab kept, as a restart reads them.
+            let kept = (name == "review-comments").then(|| json!({ "reviewComments": [
+                { "id": "1:-1", "path": "src/config.rs", "old": false, "line": 3, "quote": "    let timeout = 30;", "body": "Why 30? The load balancer drops idle connections after 25 s." },
+                { "id": "1:-2", "path": "src/client/retry.rs", "old": false, "line": 2, "quote": "    200 * 2u64.pow(attempt)", "body": "This doubles forever. Cap it at 30 s." },
+            ] }));
             let handle = cx
-                .open_offscreen_window(size(px(width), px(if name == "read-ts" { 940.0 } else { 760.0 })), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, &source, args.as_ref(), cx)))
+                .open_offscreen_window(size(px(width), px(if name == "read-ts" { 940.0 } else { 760.0 })), |_, cx| cx.new(|cx| match kept {
+                    Some(kept) => {
+                        let state = wings_native::page::plugin::FrameState::new(wings_native::page::plugin::StatePlace::Tab, Some(kept), |_| Ok(()));
+                        PageView::in_plugin_with_state(&host, &source, args.as_ref(), state, cx)
+                    }
+                    None => PageView::in_plugin_with_args(&host, &source, args.as_ref(), cx),
+                }))
                 .unwrap();
             let window = handle.into();
             handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
@@ -2057,17 +2117,35 @@ esac"##,
     // rendered in them, which should be none.
     let long = opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]);
     let long_args = json!({ "resume": LONG, "cwd": root.canonicalize().unwrap() });
+    // The gradients (`gradients.rs`), drawn by their Metal shader as a surface: each preset behind the long session
+    // (`long-gradient`, one shape after another), and one behind a new chat (`new-gradient`).
     let tab_scenes = [
-        ("long-pixels", "long-pixels", true, long.clone(), Some(&long_args), "Step 99 passes"),
-        ("long-tab", "long-pixels", false, long, Some(&long_args), "Step 99 passes"),
-        ("new-pixels", "new-pixels", true, opened(vec![init.clone()]), None, "What should Claude do?"),
+        ("long-pixels", "long-pixels", Some("pixels"), long.clone(), Some(&long_args), "Step 99 passes"),
+        ("long-gradient", "long-gradient", Some("gradient:halo"), long.clone(), Some(&long_args), "Step 99 passes"),
+        ("long-gradient-pensive", "long-gradient", Some("gradient:pensive"), long.clone(), Some(&long_args), "Step 99 passes"),
+        ("long-gradient-mint", "long-gradient", Some("gradient:mint"), long.clone(), Some(&long_args), "Step 99 passes"),
+        ("long-gradient-interstella", "long-gradient", Some("gradient:interstella"), long.clone(), Some(&long_args), "Step 99 passes"),
+        ("long-gradient-nighty-night", "long-gradient", Some("gradient:nighty-night"), long.clone(), Some(&long_args), "Step 99 passes"),
+        ("long-tab", "long-pixels", None, long, Some(&long_args), "Step 99 passes"),
+        ("new-pixels", "new-pixels", Some("pixels"), opened(vec![init.clone()]), None, "What should Claude do?"),
+        ("new-gradient", "new-gradient", Some("gradient:pensive"), opened(vec![init.clone()]), None, "What should Claude do?"),
     ];
     let tab_scenes: Vec<_> = tab_scenes.into_iter().filter(|scene| only.as_deref().is_none_or(|only| only.split(',').any(|one| one == scene.1))).collect();
-    let pixels = (!tab_scenes.is_empty()).then(|| host_over("fixture-storage-claude-chat-pixels", &[("background", json!("pixels"))]));
+    // A host whose background setting is each one the scenes ask for.
+    let mut backgrounds: Vec<(&str, _)> = Vec::new();
+    for value in tab_scenes.iter().filter_map(|scene| scene.2) {
+        if !backgrounds.iter().any(|(had, _)| *had == value) {
+            let folder = format!("fixture-storage-claude-chat-{}", value.replace(':', "-"));
+            backgrounds.push((value, host_over(&folder, &[("background", json!(value))])));
+        }
+    }
     // A step of the backdrop: 15 a second (`ui::backdrop`).
     let step = Duration::from_nanos(1_000_000_000 / 15);
-    for (name, _, over_pixels, lines, args, expected) in tab_scenes {
-        let host = if over_pixels { pixels.as_ref().unwrap() } else { &host };
+    for (name, _, background, lines, args, expected) in tab_scenes {
+        let host = match background {
+            Some(value) => &backgrounds.iter().find(|(had, _)| *had == value).unwrap().1,
+            None => &host,
+        };
         let fixture = root.join(format!("{name}.jsonl"));
         std::fs::write(&fixture, lines.iter().map(|line| format!("{line}\n")).collect::<String>()).unwrap();
         let answers = root.join(format!("answers-{name}"));

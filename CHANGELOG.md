@@ -2,6 +2,16 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.60 · 2026-11-20
+
+- **Gradient backgrounds**: Claude chat's Background setting adds five softly moving gradients (Halo, Pensive, Mint, Interstella, Nighty night), drawn by real GPU shaders. Like Pixel drift they move only while Wings is in front and stand still under Reduce motion.
+- **Comment on the change**: Review changes in Claude chat's side panel opens everything changed, against the default branch or another local branch. A + on any line starts a comment, and your comments go to Claude with your next message.
+- **Side panel sections fold**, and stay folded after a restart, in the chat and in Wings' sidebar.
+- **Usage at a glance**: the status line counts tokens while Claude works, each subagent shows its tool calls, each reply says how long it took and how many tokens it used (and its cost on an API key), and the panel shows how long the prompt cache stays warm.
+- **Wait out a usage limit**: when a limit stops Claude, a card says when it resets and can continue the task then.
+- **Rename a chat** from its header, or let Claude Code suggest a name. Each chat's state follows Claude Code's own summary of the turn.
+- **Notes Claude Code sends**: an action auto mode blocked, a hook that failed or stopped Claude, memories saved, missing attachments, and a warning when the disk was too full to save the conversation.
+
 ## 0.2.59 · 2026-11-20
 
 - **Pixel drift**: a Background setting in Claude chat puts a dim, slowly moving pixel pattern behind the whole chat. It moves only while Wings is in front and stands still under Reduce motion, and a step redraws the pattern alone, not the conversation.

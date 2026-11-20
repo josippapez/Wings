@@ -10,7 +10,7 @@ use wings_plugin::{
     markdown::markdown,
     ui::{
         Entry, Node, badge, button, card, chip, confirm, disclosure, empty, entry, gauge, icon, list, list_button, loading, muted,
-        notice, row, section, select, spinner, stack, text, text_input,
+        notice, row, select, spinner, stack, text, text_input,
     },
 };
 
@@ -96,14 +96,19 @@ fn chat_page(c: &Chat) -> Node {
         .maybe(crate::fork_view::dialog(c))
         .maybe(crate::edits_view::dialog(c))
         .maybe(crate::fork_view::header_dialog(c))
+        .maybe(crate::titles_view::dialog(c))
         .maybe(crate::actions_view::message_dialog(c))
         .maybe(crate::usage_view::dialog(c))
         .maybe(crate::pictures_view::dialog_of(c))
         .maybe(crate::status_view::dialog(c))
         .maybe(crate::mods_view::menu(c));
     let page = Node::new("Page").prop("flush", true).on_text_scale(crate::prefs::step_text_size);
-    // The drift of pixels you picked in Settings, behind the whole tab. Needs Wings 0.2.59; an older one keeps the ground.
-    let page = if c.pixels { page.backdrop("pixels") } else { page };
+    // The drift of pixels or the gradient you picked in Settings, behind the whole tab. Needs Wings 0.2.59, and 0.2.60 for
+    // a gradient; an older one keeps the ground.
+    let page = match &c.backdrop {
+        Some(kind) => page.backdrop(kind),
+        None => page,
+    };
     page.child(body)
 }
 
@@ -180,6 +185,7 @@ fn header(c: &Chat) -> Node {
         .prop("gap", "xs")
         .prop("align", "center")
         .maybe(terminal)
+        .maybe(crate::titles_view::header_button(c))
         .maybe(crate::fork_view::header_button(c))
         .maybe(side_button(c))
         .maybe(account_menu(c))
@@ -202,11 +208,11 @@ fn conversation(c: &Chat) -> (Node, Vec<(usize, usize)>, usize) {
             State::Failed(why) => notice("danger", why.as_str()),
             State::Moved => muted("This session goes on in a terminal."),
             // A new chat's prompt sits in the middle of the conversation, over a soft glow. Needs Wings 0.2.58. Over the drift
-            // of pixels it goes without, so one backdrop moves behind it, not two.
+            // of pixels or a gradient it goes without, so one backdrop moves behind it, not two.
             _ => {
                 let new = empty("What should Claude do?", "It works in this folder with your Claude Code setup, and asks here before it does anything you haven't allowed.");
                 let new = new.prop("fill", true);
-                let new = if c.pixels { new } else { new.prop("backdrop", "glow") };
+                let new = if c.backdrop.is_some() { new } else { new.prop("backdrop", "glow") };
                 return (new, Vec::new(), 0);
             }
         };
@@ -257,6 +263,8 @@ fn conversation(c: &Chat) -> (Node, Vec<(usize, usize)>, usize) {
 fn newest_end(c: &Chat, nodes: &mut Vec<Node>) {
     // What an MCP server asks you waits at the foot, where Claude's own questions do.
     nodes.extend(crate::elicitation_view::cards(c));
+    // A hit usage limit, once the turn that hit it is over.
+    nodes.extend(crate::limit_view::card(c));
     if !c.session.live.is_empty() {
         let live = crate::edits_view::prose_in("live", &c.session.live, c);
         let live = if live.count() > BUDGET / 4 { text(truncate(&c.session.live, 20_000)) } else { live };
@@ -280,7 +288,9 @@ fn newest_end(c: &Chat, nodes: &mut Vec<Node>) {
                     None if retrying => text(what).prop("tone", "muted").prop("shimmer", true),
                     None => text(what).prop("tone", "muted").prop("shimmer", true).prop("since", c.doing.1),
                 };
-                row().prop("gap", "s").prop("align", "center").child(line).maybe(crate::actions_view::status_button(c))
+                // "Working · 16s" and then "· 2.1k tokens": what Claude has written this turn, thinking included.
+                let tokens = crate::spend::live_tokens(c.session.meter.tokens()).map(|said| text(format!("· {said}")).prop("tone", "muted"));
+                row().prop("gap", "s").prop("align", "center").child(line).maybe(tokens).maybe(crate::actions_view::status_button(c))
             }
         };
         // While subagents of the turn run, how many, over the status line.
@@ -496,7 +506,15 @@ pub(crate) fn item_node(at: usize, item: &Item, c: &Chat, own: bool) -> Option<N
         Item::Ask(ask) if ask.answer.is_none() => ask_node(ask, c),
         Item::Error(said) => notice("danger", said.as_str()),
         Item::Stopped => muted("Stopped"),
-        Item::Worked(ms) => muted(format!("Worked for {}", took(*ms))).prop("size", "small"),
+        Item::Worked(ms, spend) => {
+            // The cost shows when an API key pays per token; on a subscription it is only in the hover.
+            let (said, hover) = crate::spend::worked(&took(*ms), spend, c.session.meter.per_token);
+            let line = muted(said).prop("size", "small");
+            match hover {
+                Some(hover) => line.prop("title", hover),
+                None => line,
+            }
+        }
         Item::Note(title, body) => note(at, title, body, c.open_outputs.contains(&format!("note-{at}"))),
         Item::Finished(done) => finished(at, done, c),
         Item::Tool(_) | Item::Ask(_) => return None,
@@ -945,7 +963,7 @@ fn composer(c: &Chat) -> Node {
         });
     // One round button, as chat apps have: a square to stop while Claude works and nothing is typed, else an arrow to send.
     // What you send while Claude works waits in the queue.
-    let typed = !c.draft.trim().is_empty() || !c.images.is_empty();
+    let typed = !c.draft.trim().is_empty() || !c.images.is_empty() || !c.review.is_empty();
     let action = if c.session.working && !typed {
         button("", "default", false, chat::stop).prop("size", "icon-sm").prop("label", "Stop").prop("title", "Stop").child(icon(14, 2.0, &[STOP]))
     } else {
@@ -987,7 +1005,7 @@ fn composer(c: &Chat) -> Node {
     // that the arrows move through and Enter picks from, as a combobox's. Keyed, so the field stays the same one as the
     // list comes and goes, and keeps the keyboard.
     let field = stack().prop("gap", "s").key("message").child(field.prop("grow", true).key("field")).maybe(suggestions(c));
-    let message_box = card().prop("variant", "raised").maybe(pasted(c)).child(field).child(controls);
+    let message_box = card().prop("variant", "raised").maybe(review_chips(c)).maybe(pasted(c)).child(field).child(controls);
     // Reading an older part, the conversation ends at the bar in a line of text cut through: a hairline makes it an edge, and the
     // button over the message box has room round it.
     let older = c.until.is_some();
@@ -1008,6 +1026,25 @@ fn composer(c: &Chat) -> Node {
 /// While you read an older part of a long session, a button over the message box back to the newest.
 fn latest(c: &Chat) -> Option<Node> {
     c.until.is_some().then(|| row().prop("justify", "center").child(button("Jump to the latest", "outline", false, || chat::with(show_latest)).prop("size", "sm")))
+}
+
+/// The comments left in Wings' diff viewer, above the message that will carry them: how many and on how many files, a chip
+/// for each with its file and line and a cross to take it back, and one to take them all off.
+fn review_chips(c: &Chat) -> Option<Node> {
+    if c.review.is_empty() {
+        return None;
+    }
+    let chips = c.review.iter().enumerate().map(|(at, comment)| {
+        button("", "outline", false, move || chat::remove_review(at))
+            .prop("size", "sm")
+            .prop("label", format!("Remove the comment on {}", comment.place()))
+            .prop("title", comment.body.chars().take(200).collect::<String>())
+            .child(text(comment.chip()))
+            .child(icon(12, 2.0, &[CLOSE]))
+            .key(format!("review-{at}"))
+    });
+    let clear = button("Clear", "ghost", false, chat::clear_review).prop("size", "sm").prop("label", "Remove all the comments").key("review-clear");
+    Some(row().prop("gap", "s").prop("wrap", true).prop("align", "center").child(muted(crate::review::summary(&c.review)).key("review-summary")).children(chips).child(clear))
 }
 
 /// The pictures pasted into the message, as chips above its text, each with a cross to take it out.
@@ -1062,11 +1099,17 @@ pub(crate) fn side_sections(c: &Chat, place: bool) -> Vec<Node> {
             )
             .prop("title", "Open Changes"),
         );
+        // Every change in the folder in the diff viewer, not only this turn's (the card's View changes).
+        head = head.child(list_button([small("Review changes".into()).prop("grow", true)], chat::review_changes).prop("title", "Review all changes in the diff viewer"));
     }
     sections.push(head);
     let mut limits = stack().prop("gap", "s");
     if let Some((used, most)) = c.session.context {
         limits = limits.child(meter_button("Context", used * 100 / most.max(1), (70, 90), None, Panel::Context));
+    }
+    // "Cache warm · 3m left", counted from the last request; the chat redraws it every 15 s while Wings is in front.
+    if let Some(warm) = c.session.meter.cache(wings_plugin::host::now() as u64) {
+        limits = limits.child(inset(muted(warm).prop("size", "small").prop("title", "The prompt cache keeps what Claude has read, so the next message is cheaper and quicker while it is warm")).key("cache"));
     }
     for (label, used, resets) in &c.session.limits {
         let resets = resets.map(|ms| match *label {
@@ -1075,7 +1118,10 @@ pub(crate) fn side_sections(c: &Chat, place: bool) -> Vec<Node> {
         });
         limits = limits.child(meter_button(if *label == "5h" { "5-hour" } else { "Week" }, *used, (80, 95), resets, Panel::Usage));
     }
-    sections.push(limits);
+    // Folds as the sections below do; the folder, branch and changes above it stay.
+    if limits.count() > 1 {
+        sections.push(fold(c, "usage", "Usage", [limits]));
+    }
     sections.extend(crate::tasks_view::section(c));
     sections.extend(crate::fork_view::folders(c));
     sections.extend(crate::refs_view::section(c));
@@ -1111,6 +1157,15 @@ fn meter_button(label: &str, percent: u64, levels: (u64, u64), resets: Option<St
     list_button([stack().prop("grow", true).child(gauge)], move || chat::open_panel(panel)).prop("title", title).key(label)
 }
 
+/// A session panel section you can fold: `rows` under `title` (put the count in it, which shows when it is closed too). Its
+/// state is kept per `key` for every chat and every restart (`prefs::panel_closed`), in the chat's panel and in Wings'
+/// sidebar alike. Closed, it sends no rows. Wings before 0.2.60 draws it open.
+pub(crate) fn fold(c: &Chat, key: &'static str, title: impl Into<String>, rows: impl IntoIterator<Item = Node>) -> Node {
+    let open = !c.panel_closed.iter().any(|shut| shut == key);
+    let rows: Vec<Node> = if open { rows.into_iter().collect() } else { Vec::new() };
+    wings_plugin::ui::section_folding(title, None, open, move |open| chat::set_panel_open(key, open), rows).key(format!("fold-{key}"))
+}
+
 /// A section's heading, in the inset a list button has, so the heading and the rows under it share one left edge: a button
 /// is drawn 7 points in from its container, a bare heading is not.
 pub(crate) fn heading(title: impl Into<String>) -> Node {
@@ -1142,7 +1197,7 @@ fn subagents(c: &Chat) -> Option<Node> {
     let hidden = tasks.len().saturating_sub(SUBAGENTS_LISTED);
     let earlier = (hidden > 0).then(|| entry(Entry { lead: None, title: muted(format!("{hidden} earlier")).prop("size", "small"), detail: None, trailing: None }));
     let rows = tasks[hidden..].iter().map(|tool| subagent_row(tool, c));
-    Some(section(title, None, earlier.into_iter().chain(rows)))
+    Some(fold(c, "subagents", title, earlier.into_iter().chain(rows)))
 }
 
 /// The background task a subagent's call started, when it went to the background.
@@ -1175,6 +1230,12 @@ fn subagent_row(tool: &Tool, c: &Chat) -> Node {
         (false, Some(sub)) => Some(Ok(took(ran.unwrap_or(sub.last.saturating_sub(sub.started))))),
         (false, None) => ran.map(|ms| Ok(took(ms))),
         _ => None,
+    };
+    // What `task_progress` counted: "Haiku 5.5 · 7 tool calls · 12s".
+    let calls = c.session.meter.agents.get(&tool.id).filter(|seen| seen.tool_uses > 0).map(|seen| plural(seen.tool_uses as usize, "tool call"));
+    let model = match (model, calls) {
+        (Some(model), Some(calls)) => Some(format!("{model} · {calls}")),
+        (model, calls) => model.or(calls),
     };
     let facts = match (model, lapse) {
         (Some(model), Some(Ok(time))) => Some(muted(format!("{model} · {time}"))),
@@ -1574,18 +1635,56 @@ mod tests {
     }
 
     #[test]
+    fn a_running_turn_says_its_tokens_in_the_status_line_and_a_subagent_row_its_tool_calls() {
+        chat::with(|c| {
+            c.state = State::Running;
+            c.session.working = true;
+            c.session.items = vec![Item::User("go".into())];
+            c.session.meter.message(Some("m1"), &serde_json::json!({ "output_tokens": 2_100 }));
+            let page = page_text(c);
+            assert!(page.contains("· 2.1k tokens"), "{page}");
+            c.session.hear(&serde_json::json!({ "type": "assistant", "parent_tool_use_id": null, "message": { "role": "assistant", "content": [{ "type": "tool_use", "id": "toolu_7", "name": "Agent", "input": { "description": "scan", "prompt": "scan" } }] } }));
+            c.session.hear(&serde_json::json!({ "type": "system", "subtype": "task_progress", "task_id": "a", "tool_use_id": "toolu_7", "usage": { "total_tokens": 900, "tool_uses": 7, "duration_ms": 12_000 } }));
+            let side = side_sections(c, false).into_iter().map(|node| wings_plugin::ui::tree_json(node).to_string()).collect::<String>();
+            assert!(side.contains("7 tool calls"), "{side}");
+        });
+    }
+
+    #[test]
+    fn the_worked_line_under_a_turn_has_tokens_and_cost_only_for_an_api_key_and_the_panel_has_the_cache_clock() {
+        chat::with(|c| {
+            c.state = State::Running;
+            c.session.items = vec![Item::User("go".into()), Item::Worked(14_000, crate::spend::Spend { output: 12_300, cost: Some(0.0412), ..Default::default() })];
+            let page = page_text(c);
+            assert!(page.contains("Worked for 14s · 12.3k tokens\""), "{page}");
+            c.session.meter.per_token = true;
+            assert!(page_text(c).contains("Worked for 14s · 12.3k tokens · $0.04"));
+            // Counted down from the last request, by the host's clock.
+            wings_plugin::host::testing::set_now(1_000_000.0);
+            c.session.meter.requested_at(1_000_000 - 2 * 60_000, &serde_json::json!({}));
+            let side = side_sections(c, false).into_iter().map(|node| wings_plugin::ui::tree_json(node).to_string()).collect::<String>();
+            assert!(side.contains("Cache warm · 3m left"), "{side}");
+            wings_plugin::host::testing::set_now(1_000_000.0 + 4.0 * 60_000.0);
+            let side = side_sections(c, false).into_iter().map(|node| wings_plugin::ui::tree_json(node).to_string()).collect::<String>();
+            assert!(side.contains("Cache expired"), "{side}");
+        });
+    }
+
+    #[test]
     fn the_background_you_picked_goes_behind_the_whole_page_and_a_new_chat_drops_its_glow_over_it() {
         chat::with(|c| {
             c.state = State::Running;
-            c.pixels = false;
+            c.backdrop = None;
             let page = wings_plugin::ui::tree_json(chat_page(c));
             assert_eq!(page["type"], "Page");
             assert!(page["props"].get("backdrop").is_none(), "the plain ground: {}", page["props"]);
             assert!(page.to_string().contains(r#""backdrop":"glow""#), "a new chat's soft glow");
-            c.pixels = true;
-            let page = wings_plugin::ui::tree_json(chat_page(c));
-            assert_eq!(page["props"]["backdrop"], "pixels");
-            assert!(!page.to_string().contains(r#""backdrop":"glow""#), "one backdrop behind a new chat, not two");
+            for kind in ["pixels", "gradient:pensive"] {
+                c.backdrop = Some(kind.to_owned());
+                let page = wings_plugin::ui::tree_json(chat_page(c));
+                assert_eq!(page["props"]["backdrop"], kind);
+                assert!(!page.to_string().contains(r#""backdrop":"glow""#), "one backdrop behind a new chat, not two");
+            }
         });
     }
 
@@ -1608,6 +1707,39 @@ mod tests {
             let page = page_text(c);
             assert!(page.contains("\"Split\"") && !page.contains("Open Changes") && !page.contains("\"Terminal\""));
         });
+    }
+
+    #[test]
+    fn every_panel_section_folds_and_a_closed_one_keeps_its_title_and_sends_no_rows() {
+        wings_plugin::host::testing::answer(|_, _| Ok(serde_json::Value::Null));
+        chat::with(|c| {
+            c.panel_closed.clear();
+            c.session.context = Some((41_000, 200_000));
+            c.terminals.clear();
+            let text_of = |c: &Chat| side_sections(c, false).into_iter().map(|node| wings_plugin::ui::tree_json(node).to_string()).collect::<String>();
+            let open = text_of(c);
+            assert!(open.contains(r#""collapsible":true"#) && open.contains(r#""open":true"#) && open.contains("Usage") && open.contains("Context"), "{open}");
+            let rows_open: usize = side_sections(c, false).iter().map(Node::count).sum();
+            c.panel_closed = vec!["usage".into()];
+            let shut = text_of(c);
+            assert!(shut.contains(r#""open":false"#) && shut.contains("Usage") && !shut.contains("Context"), "{shut}");
+            let rows_shut: usize = side_sections(c, false).iter().map(Node::count).sum();
+            assert!(rows_shut < rows_open, "fewer nodes: {rows_shut} against {rows_open}");
+            c.panel_closed.clear();
+        });
+    }
+
+    #[test]
+    fn a_click_on_a_section_heading_keeps_its_state_for_every_chat() {
+        wings_plugin::host::testing::answer(|_, _| Ok(serde_json::Value::Null));
+        chat::with(|c| c.panel_closed.clear());
+        chat::set_panel_open("tasks", false);
+        chat::set_panel_open("refs", false);
+        chat::set_panel_open("tasks", true);
+        // Each folded section is one key of the list the setting keeps.
+        assert_eq!(chat::with(|c| c.panel_closed.clone()), vec!["refs".to_owned()]);
+        chat::set_panel_open("refs", true);
+        assert!(chat::with(|c| c.panel_closed.is_empty()));
     }
 
     #[test]

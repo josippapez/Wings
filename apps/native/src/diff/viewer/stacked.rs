@@ -107,7 +107,7 @@ impl Viewer {
 
     /// Stacked, unless the diff has review threads, which sit under their lines in the one-file view.
     pub(super) fn stacked(&self) -> bool {
-        self.stack.on && self.comments().is_empty()
+        self.stack.on && self.comments().is_empty() && !self.allows_comments()
     }
 
     /// Lays every file out again. The row at the top stays there when it is still in the patch, else its file's header
@@ -994,7 +994,7 @@ impl Viewer {
     }
 
     /// A ghost select of the diff's scopes, showing the one picked.
-    fn scope_picker(&self, scopes: &[Scope], cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn scope_picker(&self, scopes: &[Scope], cx: &mut Context<Self>) -> AnyElement {
         let now = self.view.update.scope.as_deref();
         let label = scopes
             .iter()
@@ -1040,11 +1040,12 @@ impl Viewer {
 
     /// The scope picker's menu, or a file header's, when one is open.
     pub(super) fn stack_menus(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.stacked() {
-            return None;
-        }
+        // The scope picker is in the one-file header too, for a diff that takes new comments.
         if self.stack.scopes_open {
             return self.scope_menu(cx);
+        }
+        if !self.stacked() {
+            return None;
         }
         self.file_menu(cx)
     }

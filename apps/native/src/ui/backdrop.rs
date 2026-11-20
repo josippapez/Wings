@@ -9,6 +9,10 @@
 //! drawing: GPUI marks a view and the views above it dirty (`Window::mark_view_dirty`), and only the root is above the
 //! layer. It steps 15 times a second on the spinners' clock, on every other spinner step, only while the window is in
 //! front and a slot shows, and stands still under Reduce motion.
+//!
+//! A page can ask for a gradient instead (`backdrop: "gradient:<preset>"`, `gradients.rs`): a Metal shader draws each
+//! step into a frame of its own (`shader`), which the layer draws as a GPUI surface on the same steps. Where Metal
+//! can't be set up, the slot keeps the plain ground.
 
 use std::{
     cell::RefCell,
@@ -18,12 +22,16 @@ use std::{
 };
 
 use gpui::{
-    App, Bounds, Context, Corners, EntityId, Hsla, IntoElement, Pixels, Render, SharedString, Window, WindowId, canvas,
-    div, fill, point, prelude::*, px, rgba, size,
+    App, Bounds, ContentMask, Context, Corners, EntityId, Hsla, IntoElement, Pixels, Render, SharedString, Window,
+    WindowId, canvas, div, fill, point, prelude::*, px, rgba, size,
 };
 
 use super::{slots, status_dot};
-use crate::theme::{self, Palette};
+use crate::{
+    gradients::{self, Preset, Uniforms},
+    page::tree::Backdrop,
+    theme::{self, Palette},
+};
 
 /// The layer the backdrops draw in (`slots`).
 const LAYER: &str = "backdrop";
@@ -144,9 +152,11 @@ pub(crate) fn runs_in(width: f32, height: f32, radius: f32, step: u64) -> Vec<Ru
     runs
 }
 
-/// What a slot's backdrop is painted in: the page's palette, and how round the corners of what holds it are.
-#[derive(Clone, Copy)]
+/// What a slot's backdrop is: the pixels or a gradient, the page's palette, and how round the corners of what holds it
+/// are.
+#[derive(Clone, Copy, PartialEq)]
 struct Look {
+    kind: Backdrop,
     palette: Palette,
     radius: f32,
 }
@@ -158,12 +168,12 @@ thread_local! {
     static WAKING: RefCell<HashSet<(EntityId, u64)>> = RefCell::default();
 }
 
-/// Where the backdrop goes, in a piece drawn with `drawing_piece`: all of what holds it, whose corners are `radius`
+/// Where the backdrop `kind` goes, in a piece drawn with `drawing_piece`: all of what holds it, whose corners are `radius`
 /// round, painted in `palette`. What holds it paints no ground of its own: the window's `BackdropLayer` paints here.
-pub fn backdrop_slot(name: impl Into<SharedString>, palette: Palette, radius: f32) -> impl IntoElement {
+pub fn backdrop_slot(name: impl Into<SharedString>, kind: Backdrop, palette: Palette, radius: f32) -> impl IntoElement {
     let name = name.into();
     let key = name.clone();
-    let look = Look { palette, radius };
+    let look = Look { kind, palette, radius };
     div()
         .absolute()
         .top_0()
@@ -224,14 +234,29 @@ fn paint_slots(painted: &RefCell<Vec<Painted>>, window: &mut Window, cx: &mut Ap
     LOOKS.with_borrow_mut(|looks| looks.retain(|(window, name), _| *window != id || showing(name)));
     let mut painted = painted.borrow_mut();
     painted.retain(|was| showing(&was.name));
-    if shown.is_empty() {
+    SHADER.with_borrow_mut(|shader| shader.forget(&|(window, name): &SlotKey| *window != id || showing(name)));
+    let looks: Vec<(&SharedString, &slots::Slot, Look)> = shown
+        .iter()
+        .filter_map(|(name, slot)| Some((name, slot, LOOKS.with_borrow(|looks| looks.get(&(id, name.clone())).copied())?)))
+        .collect();
+    // Pixels always move; a gradient only once its shader is set up, and never after it failed.
+    let moving = looks.iter().any(|(_, _, look)| match look.kind {
+        Backdrop::Pixels => true,
+        Backdrop::Gradient(_) => SHADER.with_borrow_mut(|shader| shader.usable()),
+    });
+    if !moving {
+        for (_, slot, look) in &looks {
+            window.with_content_mask(Some(slot.mask), |window| paint(slot.bounds, look, &[], window));
+        }
         return;
     }
     let step = step(window, cx);
-    for (name, slot) in &shown {
-        let Some(look) = LOOKS.with_borrow(|looks| looks.get(&(id, name.clone())).copied()) else {
+    for (name, slot, look) in looks {
+        if let Backdrop::Gradient(preset) = look.kind {
+            let key = (id, name.clone());
+            window.with_content_mask(Some(slot.mask), |window| paint_gradient(&key, slot, &look, preset, step, window));
             continue;
-        };
+        }
         let (width, height) = (f32::from(slot.bounds.size.width), f32::from(slot.bounds.size.height));
         let key = (step, width.to_bits(), height.to_bits(), look.radius.to_bits());
         let runs = match painted.iter().find(|was| was.name == *name) {
@@ -255,6 +280,156 @@ fn paint(bounds: Bounds<Pixels>, look: &Look, runs: &[Run], window: &mut Window)
         let origin = point(bounds.origin.x + px(run.x), bounds.origin.y + px(run.y));
         window.paint_quad(fill(Bounds::new(origin, size(px(run.width), px(run.height))), colors[run.shade as usize]));
     }
+}
+
+/// A slot, by its window and name.
+pub(crate) type SlotKey = (WindowId, SharedString);
+
+#[cfg(target_os = "macos")]
+pub(crate) type Frame = super::shader::Frame;
+#[cfg(not(target_os = "macos"))]
+pub(crate) type Frame = std::convert::Infallible;
+
+/// What draws the gradients' frames: Metal (`shader::Metal`), or a stand-in in tests.
+pub(crate) trait Shade {
+    /// Starts drawing a frame of `uniforms` for `slot`, without waiting for it.
+    fn render(&mut self, slot: &SlotKey, uniforms: &Uniforms) -> Result<(), String>;
+    /// The newest frame of `slot` that is finished.
+    fn latest(&mut self, slot: &SlotKey) -> Option<Frame>;
+    /// Lets go of the frames of slots `keep` turns down.
+    fn forget(&mut self, keep: &dyn Fn(&SlotKey) -> bool);
+}
+
+/// What a slot's newest frame was drawn for: the step, its size in the frame's pixels, and its look.
+type Drawn = (u64, (u32, u32), Look);
+
+enum Shader {
+    /// Not needed yet: Metal is set up the first time a gradient shows.
+    Untried,
+    Ready(Box<dyn Shade>, HashMap<SlotKey, Drawn>),
+    /// Metal couldn't be set up or draw, so gradients keep the plain ground. Said once, as it happened.
+    Failed,
+}
+
+impl Shader {
+    fn usable(&mut self) -> bool {
+        if let Shader::Untried = self {
+            *self = match make_shade() {
+                Ok(shade) => Shader::Ready(shade, HashMap::new()),
+                Err(why) => fail(&why),
+            };
+        }
+        matches!(self, Shader::Ready(..))
+    }
+
+    fn forget(&mut self, keep: &dyn Fn(&SlotKey) -> bool) {
+        if let Shader::Ready(shade, drawn) = self {
+            shade.forget(keep);
+            drawn.retain(|slot, _| keep(slot));
+        }
+    }
+
+    /// The frame to paint in `slot`, drawn first if what it shows changed since its last.
+    fn frame(&mut self, slot: &SlotKey, now: Drawn, uniforms: impl FnOnce() -> Uniforms) -> Option<Frame> {
+        if !self.usable() {
+            return None;
+        }
+        let Shader::Ready(shade, drawn) = self else { return None };
+        if drawn.get(slot) != Some(&now) {
+            if let Err(why) = shade.render(slot, &uniforms()) {
+                *self = fail(&why);
+                return None;
+            }
+            drawn.insert(slot.clone(), now);
+        }
+        shade.latest(slot)
+    }
+}
+
+fn fail(why: &str) -> Shader {
+    eprintln!("Gradient backgrounds are off, showing the plain ground: {why}");
+    Shader::Failed
+}
+
+#[cfg(target_os = "macos")]
+fn make_shade() -> Result<Box<dyn Shade>, String> {
+    super::shader::Metal::new().map(|metal| Box::new(metal) as Box<dyn Shade>)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn make_shade() -> Result<Box<dyn Shade>, String> {
+    Err("needs Metal".to_owned())
+}
+
+thread_local! {
+    static SHADER: RefCell<Shader> = const { RefCell::new(Shader::Untried) };
+}
+
+/// Draws the gradients with `shade` in place of Metal, on this thread.
+#[cfg(test)]
+pub(crate) fn use_shade(shade: Box<dyn Shade>) {
+    SHADER.set(Shader::Ready(shade, HashMap::new()));
+}
+
+/// The frame's pixels for each device pixel: half, as the mesh is smooth and the window draws it scaled up smoothly.
+const RESOLUTION: f32 = 0.5;
+
+/// The size of a frame for a slot `width` by `height` points at `scale` device pixels a point: even, as 4:2:0 halves
+/// it, and at most 1600 wide or tall.
+pub(crate) fn frame_size(width: f32, height: f32, scale: f32) -> (u32, u32) {
+    let side = |points: f32| ((points * scale * RESOLUTION / 2.0).round() as u32 * 2).clamp(2, 1600);
+    (side(width), side(height))
+}
+
+/// How tall a band of a frame is where it meets a rounded corner: the window clips a surface only to a rectangle, so
+/// each band is cut to how far in the curve is over it, as the drift's rows are (`corner_inset`).
+const BAND: f32 = 2.0;
+
+/// The bands a frame is drawn in down a slot `height` tall whose corners are `radius` round: from and to where, and
+/// how far in from each side. One for the middle, a few thin ones by the corners.
+pub(crate) fn bands(height: f32, radius: f32) -> Vec<(f32, f32, f32)> {
+    let corner = radius.min(height / 2.0).max(0.0);
+    let mut edges: Vec<f32> = (0..).map(|at| at as f32 * BAND).take_while(|y| *y < corner).collect();
+    edges.extend((0..).map(|at| height - corner + at as f32 * BAND).take_while(|y| *y < height));
+    edges.push(height);
+    edges.windows(2).filter(|pair| pair[1] > pair[0]).map(|pair| (pair[0], pair[1], corner_inset(pair[0], pair[1], height, radius))).collect()
+}
+
+/// A gradient in `slot`: the plain ground, then the newest frame over it, cut to the corners of what holds it.
+fn paint_gradient(key: &SlotKey, slot: &slots::Slot, look: &Look, preset: Preset, step: u64, window: &mut Window) {
+    let bounds = slot.bounds;
+    paint(bounds, look, &[], window);
+    let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+    let scale = window.scale_factor();
+    let size = frame_size(width, height, scale);
+    let uniforms = || {
+        let seconds = step as f64 * STEP.as_secs_f64();
+        gradients::uniforms(preset, &look.palette, seconds, size, look.radius * scale * RESOLUTION)
+    };
+    let Some(frame) = SHADER.with_borrow_mut(|shader| shader.frame(key, (step, size, *look), uniforms)) else {
+        return;
+    };
+    for (top, bottom, inset) in bands(height, look.radius) {
+        let band = Bounds::new(
+            point(bounds.origin.x + px(inset), bounds.origin.y + px(top)),
+            size_of(width - inset * 2.0, bottom - top),
+        );
+        window.with_content_mask(Some(ContentMask { bounds: band }), |window| paint_frame(bounds, &frame, window));
+    }
+}
+
+fn size_of(width: f32, height: f32) -> gpui::Size<Pixels> {
+    size(px(width.max(0.0)), px(height.max(0.0)))
+}
+
+#[cfg(target_os = "macos")]
+fn paint_frame(bounds: Bounds<Pixels>, frame: &Frame, window: &mut Window) {
+    window.paint_surface(bounds, frame.clone());
+}
+
+#[cfg(not(target_os = "macos"))]
+fn paint_frame(_: Bounds<Pixels>, frame: &Frame, _: &mut Window) {
+    match *frame {}
 }
 
 /// The step of the drift to paint, and a draw of the layer at the next while the window is in front. The first under
@@ -345,6 +520,37 @@ mod tests {
         assert_eq!(corner_inset(0.0, 12.0, height, radius), radius);
         assert_eq!(corner_inset(188.0, 200.0, height, radius), radius);
     }
+
+    #[test]
+    fn a_gradients_bands_cover_the_slot_top_to_bottom_and_none_shows_past_a_corner() {
+        let (width, height, radius) = (1000.0, 760.0, 13.0);
+        let inside = |x: f32, y: f32| {
+            let (cx, cy) = (x.clamp(radius, width - radius), y.clamp(radius, height - radius));
+            (x - cx).hypot(y - cy) <= radius + 0.001
+        };
+        let bands = bands(height, radius);
+        assert_eq!(bands.first().map(|band| band.0), Some(0.0));
+        assert_eq!(bands.last().map(|band| band.1), Some(height));
+        assert!(bands.windows(2).all(|pair| pair[0].1 == pair[1].0), "no gap between bands: {bands:?}");
+        assert!(bands.len() <= 16, "a few surfaces a draw, not a row each: {}", bands.len());
+        for (top, bottom, inset) in &bands {
+            for (x, y) in [(*inset, *top), (width - inset, *top), (*inset, *bottom), (width - inset, *bottom)] {
+                assert!(inside(x, y), "the band {top}..{bottom} shows past a corner at ({x}, {y})");
+            }
+        }
+        // A slot shorter than its two corners still has bands, all of it.
+        let short = super::bands(20.0, radius);
+        assert_eq!((short.first().unwrap().0, short.last().unwrap().1), (0.0, 20.0));
+    }
+
+    #[test]
+    fn a_frame_is_half_the_slots_device_pixels_even_and_capped() {
+        assert_eq!(frame_size(1000.0, 760.0, 2.0), (1000, 760));
+        assert_eq!(frame_size(640.0, 761.0, 1.0), (320, 380));
+        assert_eq!(frame_size(5000.0, 0.0, 2.0), (1600, 2));
+        let (width, height) = frame_size(333.0, 517.0, 2.0);
+        assert!(width % 2 == 0 && height % 2 == 0);
+    }
 }
 
 #[cfg(all(test, feature = "test-support"))]
@@ -358,18 +564,19 @@ mod drawing {
     /// A piece that keeps its last drawing, with a backdrop's slot over all of it or none, counting its draws.
     struct Piece {
         slot: bool,
+        kind: Backdrop,
         drawn: Rc<Cell<usize>>,
     }
 
     impl Render for Piece {
         fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             self.drawn.set(self.drawn.get() + 1);
-            let slot = self.slot;
+            let (slot, kind) = (self.slot, self.kind);
             slots::drawing_piece("piece", window.window_handle().window_id(), || {
                 div()
                     .relative()
                     .size_full()
-                    .when(slot, |piece| piece.child(backdrop_slot("tab", Palette::APP, 13.0)))
+                    .when(slot, |piece| piece.child(backdrop_slot("tab", kind, Palette::APP, 13.0)))
             })
         }
     }
@@ -392,12 +599,16 @@ mod drawing {
     }
 
     fn open(slot: bool, active: bool) -> (TestApp, TestAppWindow<Frame>, Rc<Cell<usize>>) {
+        open_with(slot, Backdrop::Pixels, active)
+    }
+
+    fn open_with(slot: bool, kind: Backdrop, active: bool) -> (TestApp, TestAppWindow<Frame>, Rc<Cell<usize>>) {
         let mut app = TestApp::new();
         let drawn = Rc::new(Cell::new(0));
         let counter = drawn.clone();
         let mut window = app.open_window(move |_, cx| Frame {
             layer: cx.new(|_| BackdropLayer::default()),
-            piece: cx.new(|_| Piece { slot, drawn: counter }),
+            piece: cx.new(|_| Piece { slot, kind, drawn: counter }),
         });
         if active {
             window.update(|_, window, _| window.activate_window());
@@ -437,7 +648,7 @@ mod drawing {
         let counter = drawn.clone();
         let mut window = app.open_window(move |_, cx| Frame {
             layer: cx.new(|_| BackdropLayer::default()),
-            piece: cx.new(|_| Piece { slot: true, drawn: counter }),
+            piece: cx.new(|_| Piece { slot: true, kind: Backdrop::Pixels, drawn: counter }),
         });
         window.update(|_, window, _| window.activate_window());
         app.run_until_parked();
@@ -445,5 +656,104 @@ mod drawing {
 
         let (app, mut window, piece) = open(false, true);
         assert_eq!(thirty_steps(&app, &mut window, &piece).0, 0, "nothing to draw while no slot shows, as with the tab hidden");
+    }
+
+    /// A stand-in for Metal: counts the frames asked for and keeps which slots have frames, and fails if `broken`.
+    #[derive(Clone, Default)]
+    struct Fake {
+        rendered: Rc<Cell<usize>>,
+        live: Rc<RefCell<HashSet<SlotKey>>>,
+        broken: bool,
+    }
+
+    impl Shade for Fake {
+        fn render(&mut self, slot: &SlotKey, uniforms: &Uniforms) -> Result<(), String> {
+            self.rendered.set(self.rendered.get() + 1);
+            assert!(uniforms.size[0] >= 2.0 && uniforms.size[1] >= 2.0);
+            if self.broken {
+                return Err("no Metal device".to_owned());
+            }
+            self.live.borrow_mut().insert(slot.clone());
+            Ok(())
+        }
+
+        // `super::Frame`: this module's `Frame` is the test window.
+        fn latest(&mut self, _: &SlotKey) -> Option<super::Frame> {
+            None
+        }
+
+        fn forget(&mut self, keep: &dyn Fn(&SlotKey) -> bool) {
+            self.live.borrow_mut().retain(|slot| keep(slot));
+        }
+    }
+
+    const HALO: Backdrop = Backdrop::Gradient(Preset::Halo);
+
+    #[test]
+    fn a_step_of_a_gradient_draws_one_frame_and_the_layer_and_not_the_piece() {
+        let fake = Fake::default();
+        use_shade(Box::new(fake.clone()));
+        let (app, mut window, piece) = open_with(true, HALO, true);
+        let before = fake.rendered.get();
+        let (layers, pieces) = thirty_steps(&app, &mut window, &piece);
+        let frames = fake.rendered.get() - before;
+        eprintln!("[measure] 30 steps of a gradient: {frames} frames drawn, the layer drew {layers} times, the piece {pieces}");
+        assert_eq!(pieces, 0, "the piece kept its drawing");
+        assert!((29..=31).contains(&layers), "the layer drew {layers} times in 30 steps");
+        assert!((29..=31).contains(&frames), "one frame a step, not one a draw: {frames}");
+    }
+
+    #[test]
+    fn a_gradient_stands_still_behind_other_apps_and_under_reduce_motion() {
+        let fake = Fake::default();
+        use_shade(Box::new(fake.clone()));
+        let (app, mut window, piece) = open_with(true, HALO, false);
+        let (layers, _) = thirty_steps(&app, &mut window, &piece);
+        assert_eq!((layers, fake.rendered.get()), (0, 1), "one still frame behind another app's window");
+
+        let fake = Fake::default();
+        use_shade(Box::new(fake.clone()));
+        let mut app = TestApp::new();
+        app.update(|cx| cx.set_reduce_motion(true));
+        let drawn = Rc::new(Cell::new(0));
+        let counter = drawn.clone();
+        let mut window = app.open_window(move |_, cx| Frame {
+            layer: cx.new(|_| BackdropLayer::default()),
+            piece: cx.new(|_| Piece { slot: true, kind: HALO, drawn: counter }),
+        });
+        window.update(|_, window, _| window.activate_window());
+        app.run_until_parked();
+        let (layers, _) = thirty_steps(&app, &mut window, &drawn);
+        assert_eq!((layers, fake.rendered.get()), (0, 1), "one still frame under Reduce motion");
+    }
+
+    #[test]
+    fn a_gradient_whose_shader_fails_keeps_the_plain_ground_and_stops_stepping() {
+        let fake = Fake { broken: true, ..Fake::default() };
+        use_shade(Box::new(fake.clone()));
+        let (app, mut window, piece) = open_with(true, HALO, true);
+        let (layers, _) = thirty_steps(&app, &mut window, &piece);
+        assert_eq!(fake.rendered.get(), 1, "tried once, then the plain ground");
+        assert!(layers <= 1, "no more steps once it failed: the layer drew {layers} times");
+        assert!(SHADER.with_borrow(|shader| matches!(shader, Shader::Failed)));
+    }
+
+    #[test]
+    fn a_hidden_gradient_lets_go_of_its_frames() {
+        let fake = Fake::default();
+        use_shade(Box::new(fake.clone()));
+        let (app, mut window, piece) = open_with(true, HALO, true);
+        thirty_steps(&app, &mut window, &piece);
+        assert_eq!(fake.live.borrow().len(), 1, "one slot's frames, however many steps");
+        window.update(|frame, _, cx| frame.piece.update(cx, |piece, cx| {
+            piece.slot = false;
+            cx.notify();
+        }));
+        app.run_until_parked();
+        window.draw();
+        assert!(fake.live.borrow().is_empty(), "the hidden slot's frames are let go");
+        let rendered = fake.rendered.get();
+        thirty_steps(&app, &mut window, &piece);
+        assert_eq!(fake.rendered.get(), rendered, "nothing drawn while it is hidden");
     }
 }

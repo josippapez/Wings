@@ -8072,7 +8072,7 @@ dependencies = [
 
 [[package]]
 name = "wings-native"
-version = "0.2.59"
+version = "0.2.60"
 dependencies = [
  "async-channel",
  "base64 0.22.1",
@@ -8088,7 +8088,10 @@ dependencies = [
  "minisign-verify",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
+ "objc2-core-video",
  "objc2-foundation 0.3.2",
+ "objc2-metal 0.3.2",
  "plist",
  "raw-window-handle",
  "semver",

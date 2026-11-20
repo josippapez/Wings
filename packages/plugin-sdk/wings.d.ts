@@ -335,6 +335,29 @@ interface WingsReply {
   body: string;
 }
 
+/**
+ * A comment the user started on a line of a diff opened with `allowNewComments` (Wings 0.2.60), or taking one back.
+ * The viewer shows the new comment itself, as a draft with a Delete button, under the line; `id` is a negative
+ * number it gave the draft. If you also list it in the viewer's `comments`, give it that `id` and the viewer shows yours
+ * and drops the draft.
+ */
+type WingsNewComment =
+  | {
+      diffId: string;
+      /** The file's path in the patch. */
+      path: string;
+      /** `old` counts lines before the change, `new` (also for unchanged lines) after it. */
+      side: "old" | "new";
+      line: number;
+      /** The last line when the comment is on a range. The viewer doesn't send it yet. */
+      endLine?: number;
+      /** The text of the line. */
+      quote: string;
+      body: string;
+      id: number;
+    }
+  | { diffId: string; delete: true; id: number };
+
 /** A usage limit window. `resetsAt` is in Unix epoch seconds. */
 interface WingsLimitWindow {
   usedPercentage: number;
@@ -738,7 +761,7 @@ interface Wings {
    * (Wings 0.1.113) the plugin keeps it up to date: the viewer shows a Refresh button that calls `onDiffRefresh`, and
    * `onDiffClosed` says when it closes.
    */
-  openDiff(diff: { title: string; subtitle?: string; /** The repo or folder the diff is of, so Send to agent offers the agent working there first. */ cwd?: string; patch?: string; comments?: WingsComment[]; focus?: WingsDiffFocus; refresh?: boolean }): Promise<{ id: string }>;
+  openDiff(diff: { title: string; subtitle?: string; /** The repo or folder the diff is of, so Send to agent offers the agent working there first. */ cwd?: string; patch?: string; comments?: WingsComment[]; focus?: WingsDiffFocus; refresh?: boolean; /** Wings 0.2.60: lets the user start a comment on a line (a + in its gutter on hover), sent to `onComment`. The viewer then shows one file at a time. */ allowNewComments?: boolean }): Promise<{ id: string }>;
   /** Updates a viewer opened with `openDiff`; ignored once it's closed. `{ comments }` alone keeps the patch, like after a reply. */
   updateDiff(id: string, update: { patch: string; comments?: WingsComment[]; focus?: WingsDiffFocus } | { comments: WingsComment[]; focus?: WingsDiffFocus } | { error: string }): Promise<void>;
   /**
@@ -747,6 +770,12 @@ interface Wings {
    * with the text kept. One handler: a second call replaces the first.
    */
   onReply(handler: (reply: WingsReply) => unknown): void;
+  /**
+   * Needs `"diff"` in `contributes.ui` and Wings 0.2.60. A comment started on a line of a viewer opened with
+   * `allowNewComments: true`, saved with Enter or Cmd-Enter, or a draft taken back with Delete (`delete: true`).
+   * A thrown error shows under the draft. One handler: a second call replaces the first.
+   */
+  onComment(handler: (comment: WingsNewComment) => unknown): void;
   /**
    * Needs Wings 0.1.113. The Refresh button of a viewer opened with `refresh: true`. Load it again and `updateDiff` it;
    * the button spins until the returned promise settles, and a thrown error shows as a toast. One handler: a second call

@@ -29,6 +29,26 @@ pub async fn update(id: &Value, shown: &Value) -> Result<(), String> {
     host::call("updateDiff", params).await.map(drop)
 }
 
+/// `wings.onComment`: hears a comment the user started on a line of a viewer opened with `allowNewComments: true`, or
+/// one they deleted. `handler` gets `{ diffId, path, side: "old" | "new", line, quote, body, id }` (`line` counts on
+/// the side's file, `quote` is that line's text, `id` is a negative number the viewer gave the draft), or
+/// `{ diffId, delete: true, id }` for a draft taken back. The viewer shows the draft itself; if the plugin also
+/// lists it in the viewer's `comments` it uses the same `id`, which replaces the draft. An `Err` shows under the draft.
+/// Needs Wings 0.2.60.
+pub fn on_comment<F, Fut>(handler: F)
+where
+    F: Fn(Value) -> Fut + 'static,
+    Fut: Future<Output = Result<(), String>> + 'static,
+{
+    host::on("comment", move |token, comment| {
+        let done = handler(comment.clone());
+        task::spawn(async move {
+            let error = done.await.err();
+            drop(host::call("actionDone", json!({ "token": token, "error": error })));
+        });
+    });
+}
+
 /// What a load gave, as the viewer takes it: its error shows in the viewer.
 fn shown(loaded: Result<Value, String>) -> Value {
     loaded.unwrap_or_else(|error| json!({ "error": error }))

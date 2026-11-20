@@ -28,6 +28,8 @@ pub struct Comment {
     pub url: String,
     /// On a thread's first comment: the viewer offers a reply box, and sends replies to the plugin's `onReply`.
     pub can_reply: bool,
+    /// Written in the viewer and handed to the plugin's `onComment`: the card offers Delete, which tells the plugin.
+    pub draft: bool,
 }
 
 /// What the desktop keeps of a plugin's comments: the first 1000, each with a whole-number id and a path of 1 to 500
@@ -64,6 +66,7 @@ pub fn clean(raw: &[Value]) -> Vec<Comment> {
                     String::new()
                 },
                 can_reply: c.get("canReply") == Some(&Value::Bool(true)),
+                draft: false,
             })
         })
         .collect()
@@ -193,6 +196,7 @@ mod tests {
             created_at: at.into(),
             url: String::new(),
             can_reply: true,
+            draft: false,
         }
     }
 

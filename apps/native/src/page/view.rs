@@ -311,16 +311,16 @@ impl PageView {
         self.menu.is_some() || self.listing.get()
     }
 
-    /// The palette of the backdrop the page asks for behind it (`backdrop: "pixels"` on its `Page`), when a card holds
-    /// it. The page leaves its ground to the card then, which draws the backdrop where the window has one
-    /// (`ui::backdrop_slot`), else its own plain ground.
-    pub fn backdrop(&self) -> Option<theme::Palette> {
+    /// The backdrop the page asks for behind it (`backdrop: "pixels"` or `"gradient:<preset>"` on its `Page`) and its
+    /// palette, when a card holds it. The page leaves its ground to the card then, which draws the backdrop where the
+    /// window has one (`ui::backdrop_slot`), else its own plain ground.
+    pub fn backdrop(&self) -> Option<(tree::Backdrop, theme::Palette)> {
         let drawn = self.tree.as_ref().filter(|_| self.in_card && !self.popover)?;
-        drawn
-            .children
-            .iter()
-            .any(|node| matches!(node, Node::Page(page) if page.backdrop == Some(tree::Backdrop::Pixels)))
-            .then(|| drawn.palette.unwrap_or(theme::Palette::APP))
+        let kind = drawn.children.iter().find_map(|node| match node {
+            Node::Page(page) => page.backdrop,
+            _ => None,
+        })?;
+        Some((kind, drawn.palette.unwrap_or(theme::Palette::APP)))
     }
 
     pub fn set_visible(&self, visible: bool) {

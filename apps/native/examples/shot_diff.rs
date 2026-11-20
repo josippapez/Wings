@@ -30,6 +30,8 @@ fn main() {
             "selection",
             "tree",
             "wrap",
+            "draft",
+            "compose",
         ] {
             let payload = match state {
                 "loading" => serde_json::json!({}),
@@ -39,6 +41,8 @@ fn main() {
                 "binary" => {
                     serde_json::json!({"patch":"diff --git a/assets/logo.png b/assets/logo.png\nBinary files a/assets/logo.png and b/assets/logo.png differ\n"})
                 }
+                // A diff whose plugin takes comments on lines: a saved one under its line, and a box open under another.
+                "draft" | "compose" => serde_json::json!({"patch":PATCH,"allowNewComments":true}),
                 _ => serde_json::json!({"patch":PATCH}),
             };
             let view = View {
@@ -63,6 +67,30 @@ fn main() {
                     .update(&mut cx, |viewer, _, cx| {
                         viewer.set_layout(state == "wrap", state == "tree", cx);
                         viewer.set_split(state != "wrap", cx);
+                    })
+                    .unwrap();
+            }
+            if state == "draft" || state == "compose" {
+                handle
+                    .update(&mut cx, |viewer, window, cx| {
+                        viewer.shot_draft(
+                            "src/config.rs",
+                            false,
+                            3,
+                            "    let timeout = 30;",
+                            "Why 30? The load balancer drops idle connections after 25 s.",
+                            cx,
+                        );
+                        if state == "compose" {
+                            viewer.shot_compose(
+                                0,
+                                4,
+                                false,
+                                "Should this return an error instead of panicking?",
+                                window,
+                                cx,
+                            );
+                        }
                     })
                     .unwrap();
             }

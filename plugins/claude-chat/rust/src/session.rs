@@ -16,6 +16,7 @@ use crate::{
     notices,
     plugins::{self, Plugins, Show},
     setup::Setup,
+    spend::{Meter, Spend},
     usage::{ContextDetail, Panel, Usage},
 };
 
@@ -57,8 +58,8 @@ pub enum Item {
     Note(String, String),
     /// A background agent, command or monitor ended.
     Finished(Finished),
-    /// A turn ended as it should, after this many milliseconds of work.
-    Worked(u64),
+    /// A turn ended as it should, after this many milliseconds of work, and what it spent.
+    Worked(u64, Spend),
     /// A line across the conversation, like the one where it was compacted.
     Divider(String),
     /// A short note from Claude Code, like a retry that failed or a model it switched to.
@@ -433,6 +434,8 @@ pub struct Session {
     asked_you: bool,
     /// What the session has cost so far, in US dollars.
     pub cost: f64,
+    /// The tokens of the turn under way, how far each subagent has got, and the prompt cache's clock (`spend.rs`).
+    pub meter: Meter,
     /// Claude's checklist as it stands now.
     pub todos: Vec<Todo>,
     /// TaskCreate calls waiting for their result, which names the task's number: the call's id, its subject and its
@@ -486,6 +489,10 @@ pub struct Session {
     pub mods: crate::mods::Mods,
     /// The files each turn changed, and Undo (`edits.rs`).
     pub edits: Edits,
+    /// A hit usage limit, and waiting it out (`limit_wait.rs`).
+    pub limit: crate::limit_wait::LimitWait,
+    /// The rename dialog, and how the last turn ended (`titles.rs`).
+    pub naming: crate::titles::Naming,
 }
 
 impl Session {
@@ -522,6 +529,8 @@ impl Session {
             self.turn_open = true;
             self.settle();
         }
+        self.limit.heard(line);
+        self.naming.heard(line);
         if notices::hear(self, line) {
             return;
         }
@@ -565,6 +574,8 @@ impl Session {
                     self.model = reported.map(str::to_owned);
                 }
                 self.mode = line["permissionMode"].as_str().map(str::to_owned).or(self.mode.take());
+                // Only an API key bills per token: a claude.ai login is "none", as is a cloud provider.
+                self.meter.per_token = line["apiKeySource"].as_str().is_some_and(crate::spend::bills_per_token);
                 if let Some(active) = line["per_turn_effort_active"].as_bool() {
                     self.effort_rewrites_cache = !active;
                 }
@@ -578,6 +589,8 @@ impl Session {
                 }
                 self.settle();
             }
+            "system" if line["subtype"] == "thinking_tokens" => self.meter.thinking(line["estimated_tokens"].as_u64().unwrap_or(0)),
+            "system" if line["subtype"] == "task_progress" => self.meter.progress(line),
             "system" if line["subtype"] == "session_state_changed" => self.changed(line["state"].as_str().unwrap_or_default()),
             "system" if line["subtype"] == "background_tasks_changed" => self.tasks_now(&line["tasks"]),
             // A task's end, from its update and its notice, whichever comes first.
@@ -614,6 +627,15 @@ impl Session {
             "assistant" => {
                 self.suggestion = None;
                 self.status = None;
+                // A transcript says when each message was; a live line is the request being heard, which `message_start`
+                // already timed.
+                let usage = &line["message"]["usage"];
+                match line["timestamp"].as_str().and_then(parse_time) {
+                    Some(at) => self.meter.requested_at(at as u64, usage),
+                    None if self.meter.requested == 0 => self.meter.requested_at(self.now, usage),
+                    None => self.meter.note_cache(usage),
+                }
+                self.meter.message(line["message"]["id"].as_str(), usage);
                 self.assistant(&line["message"]);
             }
             // After a rewind Claude Code leaves the dropped entries in the transcript and says what it cut after them.
@@ -697,6 +719,11 @@ impl Session {
                 }
                 self.settle();
                 self.live.clear();
+                // The turn's own spend: its usage as the result says it, else what its messages added up to, and its share of
+                // the session's running cost.
+                let counted = self.meter.end_turn();
+                let mut spend = Some(Spend::of(&line["usage"])).filter(|spend| spend.output > 0).unwrap_or(counted);
+                spend.cost = line["total_cost_usd"].as_f64().map(|total| total - self.cost).filter(|cost| *cost > 0.0);
                 self.cost = line["total_cost_usd"].as_f64().unwrap_or(self.cost);
                 // A stopped turn ends as an error, with Claude Code's diagnostics as its text.
                 if std::mem::take(&mut self.stopping) {
@@ -713,7 +740,7 @@ impl Session {
                     // As Claude Code timed the turn. A result of no turns, like one for a background task answered along
                     // with another, did no work of its own.
                     if let Some(ms) = line["duration_ms"].as_f64().filter(|_| line["num_turns"] != 0) {
-                        self.items.push(Item::Worked(ms as u64));
+                        self.items.push(Item::Worked(ms as u64, spend));
                     }
                 }
                 // A question in the next turn tells you again. "Finished" waits for the next turn's own output: a
@@ -870,6 +897,7 @@ impl Session {
             || self.setup.answered(id, response)
             || self.cmds.answered(id, response)
             || self.mods.answered(id, response)
+            || self.naming.answered(id, response, &mut self.title, &mut self.titled, &mut self.items)
         {
             return;
         }
@@ -952,6 +980,14 @@ impl Session {
                 }
             }
             "content_block_stop" => self.thinking = false,
+            // The request has gone out, which restarts the prompt cache's clock; the message's usage so far follows in
+            // `message_delta`.
+            "message_start" => {
+                let message = &event["message"];
+                self.meter.requested_at(self.now, &message["usage"]);
+                self.meter.message(message["id"].as_str(), &message["usage"]);
+            }
+            "message_delta" => self.meter.update(&event["usage"]),
             "content_block_delta" if event["delta"]["type"] == "text_delta" => {
                 self.live.push_str(event["delta"]["text"].as_str().unwrap_or_default());
             }
@@ -1118,6 +1154,8 @@ impl Session {
         self.turn_open = true;
         self.working = true;
         self.suggestion = None;
+        self.limit.user_spoke();
+        self.naming.user_spoke();
         // The limits are asked again with each message: the chat may only write when you send something.
         line(&json!({ "type": "user", "message": { "role": "user", "content": content(text, images) }, "parent_tool_use_id": null, "uuid": uuid })) + &usage()
     }
@@ -1130,6 +1168,8 @@ impl Session {
     pub fn queue(&mut self, text: &str, images: Vec<(String, String)>, stamp: u64, n: u32) -> String {
         let uuid = uuid(stamp, n);
         self.suggestion = None;
+        self.limit.user_spoke();
+        self.naming.user_spoke();
         let sent = user_line(text, &images, "next", &uuid);
         self.queued.push(Queued { uuid, text: text.to_owned(), images });
         sent
@@ -2848,6 +2888,39 @@ mod tests {
     }
 
     #[test]
+    fn the_counters_follow_usage_lines_and_the_finished_turn_keeps_its_tokens_and_its_share_of_the_cost() {
+        let mut session = Session::default();
+        session.now = 1_000;
+        session.hear(&json!({ "type": "system", "subtype": "init", "session_id": "s", "apiKeySource": "ANTHROPIC_API_KEY" }));
+        assert!(session.meter.per_token);
+        session.send("go", &[], 1, 1);
+        session.hear(&json!({ "type": "stream_event", "event": { "type": "message_start", "message": { "id": "m1", "usage": { "input_tokens": 9, "output_tokens": 1, "cache_creation": { "ephemeral_1h_input_tokens": 0, "ephemeral_5m_input_tokens": 30 } } } } }));
+        session.hear(&json!({ "type": "system", "subtype": "thinking_tokens", "estimated_tokens": 600, "estimated_tokens_delta": 600 }));
+        assert_eq!(session.meter.tokens(), 600);
+        session.hear(&json!({ "type": "stream_event", "event": { "type": "message_delta", "usage": { "output_tokens": 1_500 } } }));
+        session.hear(&json!({ "type": "assistant", "parent_tool_use_id": null, "message": { "id": "m1", "role": "assistant", "content": [{ "type": "text", "text": "hi" }], "usage": { "output_tokens": 1_500 } } }));
+        assert_eq!(session.meter.tokens(), 1_500);
+        assert_eq!(session.meter.cache(1_000 + 60_000).as_deref(), Some("Cache warm · 4m left"));
+        session.hear(&json!({ "type": "system", "subtype": "task_progress", "task_id": "a", "tool_use_id": "toolu_9", "usage": { "total_tokens": 10, "tool_uses": 3, "duration_ms": 4_000 } }));
+        assert_eq!(session.meter.agents["toolu_9"].tool_uses, 3);
+        session.cost = 1.0;
+        session.hear(&json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 14_000, "num_turns": 1, "total_cost_usd": 1.04, "usage": { "input_tokens": 9, "output_tokens": 1_500, "cache_read_input_tokens": 0 } }));
+        let Some(Item::Worked(14_000, spend)) = session.items.last() else { panic!("{:?}", session.items) };
+        assert_eq!(spend.output, 1_500);
+        assert!((spend.cost.unwrap() - 0.04).abs() < 1e-9);
+        assert_eq!(session.meter.tokens(), 0, "the next turn counts from nothing");
+    }
+
+    #[test]
+    fn a_resumed_transcript_times_the_cache_from_its_last_message_not_from_when_it_was_read() {
+        let mut session = Session::default();
+        session.now = 1_800_000_000_000;
+        session.hear(&json!({ "type": "assistant", "timestamp": "2026-11-18T18:42:42.764Z", "message": { "id": "m1", "role": "assistant", "content": [], "usage": { "output_tokens": 5, "cache_creation": { "ephemeral_1h_input_tokens": 40, "ephemeral_5m_input_tokens": 0 } } } }));
+        assert!(session.meter.hour);
+        assert_eq!(session.meter.cache(session.now).as_deref(), Some("Cache expired"));
+    }
+
+    #[test]
     fn a_finished_turn_says_how_long_it_worked() {
         let mut session = Session::default();
         session.send("go", &[], 1, 1);
@@ -2857,7 +2930,7 @@ mod tests {
         session.hear(&json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 12, "num_turns": 0 }));
         // A failed turn says so instead.
         session.hear(&json!({ "type": "result", "subtype": "error_during_execution", "is_error": true, "duration_ms": 900, "num_turns": 1, "errors": ["Overloaded"] }));
-        assert_eq!(session.items, [Item::User("go".into()), Item::Worked(20_400), Item::Error("Overloaded".into())]);
+        assert_eq!(session.items, [Item::User("go".into()), Item::Worked(20_400, Default::default()), Item::Error("Overloaded".into())]);
     }
 
     #[test]

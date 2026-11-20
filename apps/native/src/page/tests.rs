@@ -157,6 +157,45 @@ fn search() -> String {
     })
 }
 
+/// A collapsible `Section` the page keeps the state of: `open` is what its last `onOpenChange` said.
+fn folding() -> String {
+    let (mut open, mut heard) = (true, 0);
+    fake::page("page", move |event| {
+        if let Some((handler, change)) = event {
+            assert_eq!(handler, "5:onOpenChange");
+            open = change["open"].as_bool().unwrap();
+            heard += 1;
+        }
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Page", "children": [
+            { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [
+                text(3, 4, format!("Heard {heard}")),
+                // As Claude chat does: a closed section sends its title alone. (`text` reads the whole tree, a closed
+                // body too, so the rows leaving is what the page sees.)
+                { "id": 5, "type": "Section", "props": { "collapsible": true, "open": open, "onOpenChange": "5:onOpenChange" }, "children": if open { json!([
+                    { "id": 6, "type": "Slot", "props": { "name": "title" }, "children": [text_node(7, "Subagents · 4 running")] },
+                    { "id": 8, "type": "Slot", "props": { "name": "description" }, "children": [text_node(9, "What this session started.")] },
+                    text(10, 11, "Explore the cache".to_owned())]) } else { json!([
+                    { "id": 6, "type": "Slot", "props": { "name": "title" }, "children": [text_node(7, "Subagents · 4 running")] }]) } }] }] }] })
+    })
+}
+
+#[test]
+fn a_collapsible_section_folds_on_its_heading_tells_the_page_and_keeps_its_count_when_closed() {
+    let (app, mut window) = open(folding());
+    settle(&app, &mut window, shows("Explore the cache"));
+    assert!(window.read(|view, _| view.text().contains("What this session started.")));
+
+    // A click on the heading line asks the page to close it, and the page's answer hides the rows and the description.
+    assert!(window.update(|view, _, cx| view.press_disclosure("Subagents", cx)));
+    settle(&app, &mut window, shows("Heard 1"));
+    settle(&app, &mut window, |view| !view.text().contains("Explore the cache"));
+    assert!(window.read(|view, _| view.text().contains("Subagents · 4 running") && !view.text().contains("What this session started.")));
+
+    assert!(window.update(|view, _, cx| view.press_disclosure("Subagents", cx)));
+    settle(&app, &mut window, shows("Heard 2"));
+    settle(&app, &mut window, shows("Explore the cache"));
+}
+
 #[test]
 fn search_field_physical_input_reaches_the_query_and_backspace_edits_it() {
     let (app, mut window) = open(search());
@@ -2957,7 +2996,7 @@ mod backdrop {
 
     impl Render for Tab {
         fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            let slot = self.page.read(cx).backdrop().map(|palette| backdrop_slot("tab", palette, 13.0));
+            let slot = self.page.read(cx).backdrop().map(|(kind, palette)| backdrop_slot("tab", kind, palette, 13.0));
             div()
                 .relative()
                 .size_full()

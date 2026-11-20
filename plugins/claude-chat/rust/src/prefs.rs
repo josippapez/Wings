@@ -34,10 +34,19 @@ pub const SIDE_PANEL: &str = "side-panel";
 pub const SESSION_PANEL: &str = "session-panel";
 pub const SESSION_PANELS: [(&str, &str); 2] = [("chat", "In the chat"), ("sidebar", "Wings sidebar")];
 
-/// What lies behind the conversation, in every chat: the page's plain ground, or a slow drift of pixels Wings draws there
-/// (`backdrop: "pixels"` on the page, Wings 0.2.59).
+/// What lies behind the conversation, in every chat: the page's plain ground, a slow drift of pixels Wings draws there
+/// (`backdrop: "pixels"` on the page, Wings 0.2.59), or a moving gradient Wings draws with a shader (`"gradient:<preset>"`,
+/// Wings 0.2.60), whose colours are shadergradient's presets'.
 pub const BACKGROUND: &str = "background";
-pub const BACKGROUNDS: [(&str, &str); 2] = [("plain", "Plain"), ("pixels", "Pixel drift")];
+pub const BACKGROUNDS: [(&str, &str); 7] = [
+    ("plain", "Plain"),
+    ("pixels", "Pixel drift"),
+    ("gradient:halo", "Halo"),
+    ("gradient:pensive", "Pensive"),
+    ("gradient:mint", "Mint"),
+    ("gradient:interstella", "Interstella"),
+    ("gradient:nighty-night", "Nighty night"),
+];
 
 /// How big the conversation's text is, in every chat.
 pub const TEXT_SIZE: &str = "text-size";
@@ -77,9 +86,9 @@ pub fn background() -> Setting<String> {
     Setting::new(BACKGROUND, "plain".to_owned(), background_of, |kind| json!(kind))
 }
 
-/// Whether a value of the background setting is the drift of pixels.
-pub fn pixels(kind: &str) -> bool {
-    kind == "pixels"
+/// The page's `backdrop` for a value of the background setting: none for the plain ground, else the value itself.
+pub fn backdrop(kind: &str) -> Option<String> {
+    (kind != "plain").then(|| kind.to_owned())
 }
 
 /// Diffs in the chat (a permission card's, a finished edit's) show the old lines on the left and the new on the right, in every
@@ -88,6 +97,18 @@ pub const DIFF_SPLIT: &str = "diff-split";
 
 pub fn diff_split() -> Setting<bool> {
     Setting::boolean(DIFF_SPLIT, false)
+}
+
+/// The session panel's sections you folded, by key (`view::fold`): one list for every chat, so a section stays as you left
+/// it across chats and restarts. Empty reads as all open.
+pub const PANEL_CLOSED: &str = "panel-closed";
+
+fn closed_of(stored: &Value) -> Option<Vec<String>> {
+    stored.as_array().map(|keys| keys.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+}
+
+pub fn panel_closed() -> Setting<Vec<String>> {
+    Setting::new(PANEL_CLOSED, Vec::new(), closed_of, |keys| json!(keys))
 }
 
 pub fn detailed() -> Setting<bool> {
@@ -167,14 +188,18 @@ mod tests {
     }
 
     #[test]
-    fn the_background_is_plain_unless_you_picked_the_pixels_and_a_change_reaches_the_chats() {
+    fn the_background_is_plain_unless_you_picked_the_pixels_or_a_gradient_and_a_change_reaches_the_chats() {
         assert_eq!(background().get(), "plain");
-        assert!(!pixels(&background().get()));
+        assert_eq!(backdrop(&background().get()), None);
         assert_eq!(background_of(&json!("pixels")).as_deref(), Some("pixels"));
         assert_eq!(background_of(&json!("plain")).as_deref(), Some("plain"));
+        assert_eq!(background_of(&json!("gradient:mint")).as_deref(), Some("gradient:mint"));
+        assert_eq!(background_of(&json!("gradient:aurora")), None);
         assert_eq!(background_of(&json!("aurora")), None);
         assert_eq!(background_of(&json!(true)), None);
-        assert!(pixels("pixels") && !pixels("plain"));
+        assert_eq!(backdrop("pixels").as_deref(), Some("pixels"));
+        assert_eq!(backdrop("gradient:halo").as_deref(), Some("gradient:halo"));
+        assert_eq!(backdrop("plain"), None);
         // What a set stores (`json!(kind)`) reads back as it was, and a listener hears the set.
         let setting = background();
         let heard = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -202,6 +227,13 @@ mod tests {
         assert_eq!(stepped("default", "smaller"), "small");
         assert_eq!(stepped("small", "smaller"), "small");
         assert_eq!(stepped("large", "reset"), "default");
+    }
+
+    #[test]
+    fn the_folded_panel_sections_read_back_as_a_list_of_keys_and_anything_else_as_none_folded() {
+        assert_eq!(closed_of(&json!(["tasks", "refs", 3])), Some(vec!["tasks".to_owned(), "refs".to_owned()]));
+        assert_eq!(closed_of(&json!("tasks")), None);
+        assert!(panel_closed().get().is_empty());
     }
 
     #[test]

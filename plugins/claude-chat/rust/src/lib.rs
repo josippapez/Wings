@@ -48,6 +48,9 @@ mod main_frame;
 mod images;
 #[cfg(feature = "chat")]
 mod issues;
+#[cfg(feature = "chat")]
+mod limit_view;
+mod limit_wait;
 #[cfg(any(feature = "chat", test))]
 mod mentions;
 mod notices;
@@ -60,6 +63,7 @@ mod plugins_view;
 mod prefs;
 #[cfg(feature = "chat")]
 mod rail;
+mod review;
 #[cfg(any(feature = "chat", test))]
 mod reattach;
 #[cfg(feature = "chat")]
@@ -83,6 +87,7 @@ mod session_sidebar;
 #[cfg(feature = "settings")]
 mod settings_page;
 mod setup;
+mod spend;
 #[cfg(feature = "chat")]
 mod setup_view;
 #[cfg(feature = "chat")]
@@ -98,6 +103,9 @@ mod subagent_view;
 mod subagents;
 #[cfg(feature = "chat")]
 mod tasks_view;
+#[cfg(feature = "chat")]
+mod titles_view;
+mod titles;
 mod usage;
 #[cfg(feature = "chat")]
 mod usage_view;

@@ -1,5 +1,6 @@
 //! A plugin's diff, docked beside a tab or filling the window, with its review threads under their lines, or every
 //! file stacked in one scroll in a sidebar's place (`stacked.rs`). Only viewport rows become GPUI elements.
+mod compose;
 mod stacked;
 mod threads;
 
@@ -116,6 +117,16 @@ pub struct Viewer {
     notes: Vec<Notes>,
     /// The reply boxes open, by the id of their thread's first comment.
     replies: HashMap<i64, threads::ReplyBox>,
+    /// The comment being written under a line, when the plugin lets the user start one.
+    compose: Option<compose::Compose>,
+    /// Comments written here and handed to the plugin, shown with its own until it echoes one back with the same id.
+    drafts: Vec<Comment>,
+    /// The id the next draft takes: negative, so it can't be a plugin's.
+    next_draft: i64,
+    /// Why the plugin refused a draft, by its id.
+    draft_errors: HashMap<i64, String>,
+    #[cfg(feature = "test-support")]
+    sent_comments: Vec<serde_json::Value>,
     /// Comment bodies as Markdown, by their place in the comments, parsed the first time they show.
     bodies: RefCell<HashMap<usize, Rc<Vec<Block>>>>,
     /// Hands a comment's link to the plugin's `openUrl` grant.
@@ -208,6 +219,12 @@ impl Viewer {
             file_comments: Vec::new(),
             notes: Vec::new(),
             replies: HashMap::new(),
+            compose: None,
+            drafts: Vec::new(),
+            next_draft: -1,
+            draft_errors: HashMap::new(),
+            #[cfg(feature = "test-support")]
+            sent_comments: Vec::new(),
             bodies: RefCell::default(),
             opener,
             link_error: None,
@@ -357,9 +374,16 @@ impl Viewer {
         if let Some(worktree) = update.worktree {
             self.view.update.worktree = Some(worktree);
         }
-        let comments = update.comments.is_some();
+        if let Some(allow) = update.allow_new_comments {
+            self.view.update.allow_new_comments = Some(allow);
+            if !allow {
+                self.compose = None;
+            }
+        }
+        let comments = update.comments.is_some() || update.allow_new_comments.is_some();
         if let Some(list) = update.comments {
             self.view.update.comments = Some(list);
+            self.keep_drafts();
         }
         // Review threads show one file at a time, so comments coming or going change the layout.
         rebuild |= self.stacked() != stacked;
@@ -435,7 +459,13 @@ impl Viewer {
             .comments
             .as_deref()
             .map_or(&[][..], Vec::as_slice);
-        let on_lines = comments::on_lines(comments, &self.threads, file_path(file));
+        let mut on_lines = comments::on_lines(comments, &self.threads, file_path(file));
+        if let Some(compose) = self.compose.as_ref().filter(|c| c.path == file_path(file)) {
+            on_lines
+                .entry((compose.old, compose.line))
+                .or_default()
+                .push(compose::COMPOSE);
+        }
         (self.rows, self.notes) = with_notes(rows, &file.hunks, &on_lines);
     }
 
@@ -844,6 +874,8 @@ impl Viewer {
         let row = div()
             .min_h(px(ROW))
             .w_full()
+            .relative()
+            .group(SharedString::from(format!("diff-line-{index}")))
             .flex()
             .text_size(px(13.0))
             .font_family(crate::terminal_view::DEFAULT_FONT_FAMILY)
@@ -881,8 +913,15 @@ impl Viewer {
                 } else {
                     self.code_text(line, spans, px(0.0))
                 };
+                let add = self.add_comment_button(
+                    index,
+                    (h, l),
+                    line.kind == DiffLineKind::Deleted,
+                    cx,
+                );
                 row.bg(rgba(bg))
                     .text_color(rgb(color))
+                    .children(add)
                     .child(number(line.old_line))
                     .child(number(line.new_line))
                     .child(div().w(px(22.0)).flex_none().child(mark))
@@ -893,9 +932,13 @@ impl Viewer {
                 let lines = &file.hunks[hunk].lines;
                 let side =
                     |at: Option<usize>, old| at.map(|l| (&lines[l], self.spans(hunk, l, old)));
-                row.child(self.split_side(side(left, true), true))
+                let add = |at: Option<usize>, old, cx: &mut Context<Self>| {
+                    at.and_then(|l| self.add_comment_button(index, (hunk, l), old, cx))
+                };
+                let (add_left, add_right) = (add(left, true, cx), add(right, false, cx));
+                row.child(self.split_side(side(left, true), true, add_left))
                     .child(div().w(px(1.0)).flex_none().bg(rgba(ui::HAIRLINE)))
-                    .child(self.split_side(side(right, false), false))
+                    .child(self.split_side(side(right, false), false, add_right))
                     .into_any_element()
             }
             CodeRow::Notes(n) => self.notes_row(&self.notes[n], cx),
@@ -903,14 +946,20 @@ impl Viewer {
     }
 
     /// One column of a side-by-side row: the old file's line on the left, the new one's on the right.
-    fn split_side(&self, line: Option<(&DiffLine, &[Span])>, old: bool) -> Div {
-        let side = div().flex_1().min_w_0().flex().overflow_hidden();
+    fn split_side(
+        &self,
+        line: Option<(&DiffLine, &[Span])>,
+        old: bool,
+        add: Option<AnyElement>,
+    ) -> Div {
+        let side = div().flex_1().min_w_0().relative().flex().overflow_hidden();
         let Some((line, spans)) = line else {
             return side;
         };
         let (mark, color, bg) = colors(line.kind);
         side.bg(rgba(bg))
             .text_color(rgb(color))
+            .children(add)
             .child(number(if old { line.old_line } else { line.new_line }))
             .child(div().w(px(22.0)).flex_none().child(mark))
             .child(self.code_text(line, spans, self.split_x))
@@ -1488,6 +1537,14 @@ impl Render for Viewer {
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::Close))),
                         )
                     })
+                    .children(
+                        self.view
+                            .update
+                            .scopes
+                            .clone()
+                            .filter(|scopes| !scopes.is_empty())
+                            .map(|scopes| self.scope_picker(&scopes, cx)),
+                    )
                     .child(
                         div()
                             .mr(px(12.0))
@@ -2127,6 +2184,126 @@ mod comment_tests {
             let top = v.wrapped.logical_scroll_top();
             assert_eq!((top.item_ix, top.offset_in_item), (11, px(40.0)));
         });
+    }
+
+    const ONE_FILE: &str = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n";
+
+    fn commentable() -> (TestApp, TestAppWindow<Viewer>) {
+        let (app, mut window) = open(json!({ "patch": ONE_FILE, "allowNewComments": true }));
+        window.update(|v, _, cx| v.set_split(false, cx));
+        window.draw();
+        (app, window)
+    }
+
+    /// A diff opened with `allowNewComments` has a "+" in each code line's gutter; one without has none.
+    #[test]
+    fn the_gutter_control_is_there_only_when_the_plugin_allows_new_comments() {
+        let (_app, _window) = commentable();
+        // Row 0 is the hunk's header, row 1 the unchanged line, row 2 the removed one (its old side).
+        assert!(crate::ui::spot_at("diff-add-1-new").is_some());
+        assert!(crate::ui::spot_at("diff-add-2-old").is_some());
+        assert!(crate::ui::spot_at("diff-add-0-new").is_none());
+    }
+
+    #[test]
+    fn a_diff_that_does_not_allow_new_comments_has_no_gutter_control() {
+        let (_app, mut window) = open(json!({ "patch": ONE_FILE }));
+        window.update(|v, _, cx| v.set_split(false, cx));
+        window.draw();
+        assert!(crate::ui::spot_at("diff-code").is_some());
+        assert!(crate::ui::spot_at("diff-add-1-new").is_none());
+        window.update(|v, window, cx| v.open_compose(0, 2, false, window, cx));
+        window.read(|v, _| assert!(v.compose.is_none()));
+    }
+
+    /// Enter saves what's typed: the plugin's `onComment` gets the line, its side and its text, and the draft shows under
+    /// the line. The plugin adding it back with the draft's id replaces it, and Delete tells the plugin.
+    #[test]
+    fn a_saved_comment_reaches_the_plugin_and_shows_as_a_draft_under_its_line() {
+        let (_app, mut window) = commentable();
+        window.update(|v, window, cx| v.open_compose(0, 2, false, window, cx));
+        window.draw();
+        window.read(|v, _| assert!(v.compose.is_some()));
+        assert!(crate::ui::spot_at("diff-compose").is_some());
+        window.simulate_input("Why upper case?");
+        window.simulate_keystroke("enter");
+        window.draw();
+        window.read(|v, _| {
+            assert!(v.compose.is_none());
+            assert_eq!(
+                v.sent_comments,
+                [json!({ "path": "a.rs", "side": "new", "line": 2, "quote": "TWO", "body": "Why upper case?", "id": -1 })]
+            );
+            let draft = &v.comments()[0];
+            assert!(draft.draft && draft.line == Some(2) && !draft.old && draft.body == "Why upper case?");
+            assert_eq!(
+                v.rows.iter().filter(|row| matches!(row, CodeRow::Notes(_))).count(),
+                1
+            );
+        });
+        // A comment on the removed side is on its old number.
+        window.update(|v, window, cx| v.open_compose(0, 1, true, window, cx));
+        window.draw();
+        window.simulate_input("Keep it");
+        window.simulate_keystroke("cmd-enter");
+        window.read(|v, _| {
+            assert_eq!(v.sent_comments[1]["side"], "old");
+            assert_eq!((v.sent_comments[1]["line"].as_u64(), v.sent_comments[1]["quote"].as_str()), (Some(2), Some("two")));
+            assert_eq!(v.comments().len(), 2);
+        });
+        // The plugin shows the first one itself under the same id: one of them, not two.
+        let echoed = diff::clean_update(&json!({ "comments": [
+            { "id": -1, "path": "a.rs", "line": 2, "side": "additions", "author": "you", "body": "Why upper case?",
+              "createdAt": "2026-11-01T10:00:00Z", "canReply": true }
+        ] }))
+        .unwrap();
+        window.update(|v, _, cx| v.update(echoed, cx));
+        window.read(|v, _| {
+            let ids: Vec<i64> = v.comments().iter().map(|c| c.id).collect();
+            assert_eq!(ids.iter().filter(|id| **id == -1).count(), 1);
+            assert_eq!(ids.len(), 2, "the second draft stays");
+            assert!(v.comments().iter().find(|c| c.id == -1).is_some_and(|c| !c.draft));
+        });
+        window.update(|v, _, cx| v.delete_draft(-2, cx));
+        window.read(|v, _| {
+            assert_eq!(v.sent_comments.last().unwrap(), &json!({ "delete": true, "id": -2 }));
+            assert_eq!(v.comments().len(), 1);
+        });
+    }
+
+    /// The one-file view a diff with new comments gets has the scope picker, and its menu opens.
+    #[test]
+    fn the_scope_picker_shows_when_new_comments_are_allowed() {
+        let (_app, mut window) = open(json!({ "patch": ONE_FILE, "allowNewComments": true,
+            "scopes": [{ "id": "uncommitted", "label": "Uncommitted" }, { "id": "branch", "label": "Branch" }],
+            "scope": "uncommitted" }));
+        window.update(|v, _, cx| v.set_split(false, cx));
+        window.draw();
+        window.read(|v, _| assert!(!v.stacked()));
+        let picker = crate::ui::spot_at("diff-scope").expect("the scope picker was drawn");
+        window.simulate_click(picker.center(), gpui::MouseButton::Left);
+        window.draw();
+        assert!(crate::ui::spot_at("diff-scope-item-1").is_some());
+    }
+
+    #[test]
+    fn escape_cancels_the_box_and_nothing_is_sent() {
+        let (_app, mut window) = commentable();
+        window.update(|v, window, cx| v.open_compose(0, 2, false, window, cx));
+        window.draw();
+        window.simulate_input("never mind");
+        window.simulate_keystroke("escape");
+        window.draw();
+        window.read(|v, _| {
+            assert!(v.compose.is_none());
+            assert!(v.sent_comments.is_empty() && v.comments().is_empty());
+            assert!(!v.rows.iter().any(|row| matches!(row, CodeRow::Notes(_))));
+        });
+        // An empty box doesn't save.
+        window.update(|v, window, cx| v.open_compose(0, 2, false, window, cx));
+        window.draw();
+        window.simulate_keystroke("enter");
+        window.read(|v, _| assert!(v.compose.is_some() && v.sent_comments.is_empty()));
     }
 }
 

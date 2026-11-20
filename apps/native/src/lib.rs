@@ -2,6 +2,7 @@
 
 pub mod data_dir;
 pub mod diff;
+pub mod gradients;
 pub mod host;
 pub mod page;
 pub mod projects;

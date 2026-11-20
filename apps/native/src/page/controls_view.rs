@@ -539,7 +539,12 @@ impl PageView {
             open,
             // A summary longer than the line wraps under itself, as in the desktop, instead of running past the card.
             // The trigger's 12 points, as a `Scroll`'s `textScale` makes them.
-            div().min_w_0().text_size(px(scaled(12.0))).child(self.inline(&disclosure.summary, cx)),
+            div()
+                .min_w_0()
+                // A collapsible section's heading looks like a plain section's: the page's quiet heading, with its count.
+                .text_size(px(scaled(12.0)))
+                .when(disclosure.section, |el| el.font_weight(FontWeight::MEDIUM).text_color(rgb(theme::palette().muted_foreground)))
+                .child(self.inline(&disclosure.summary, cx)),
         )
         .on_click(cx.listener(move |view, _, _, cx| {
             cx.stop_propagation();
@@ -558,7 +563,8 @@ impl PageView {
             .when(open, |el| {
                 // Under the summary's words, past the trigger's padding, chevron and gap: what it holds is inside it, and a
                 // fold in it sits a step further in.
-                let body = div().min_w_0().pl(px(22.0)).flex().flex_col().children(self.nodes(&disclosure.body, cx));
+                // A section's rows start at the section's own edge instead.
+                let body = div().min_w_0().when(!disclosure.section, |el| el.pl(px(22.0))).flex().flex_col().children(self.nodes(&disclosure.body, cx));
                 el.child(crate::ui::motion::tween(
                     body,
                     ElementId::NamedInteger("page-disclosure-body".into(), id),
