@@ -16,6 +16,10 @@ const MOST_CHARS: usize = 2000;
 
 static FILE: OnceLock<Mutex<PathBuf>> = OnceLock::new();
 
+/// Every line said in this test run, for a test to read without the one file the run may keep.
+#[cfg(test)]
+pub(crate) static SAID: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
 /// Keeps the log in `file` from now on. Said once, when the app starts; without it nothing is kept.
 pub fn keep_in(file: PathBuf) {
     let _ = FILE.set(Mutex::new(file));
@@ -24,6 +28,8 @@ pub fn keep_in(file: PathBuf) {
 /// Adds a line for `plugin`'s `frame` ("main", or a page's name), and prints it on stderr as before.
 pub fn line(plugin: &str, frame: &str, message: &str) {
     eprintln!("[plugins] {plugin} {frame}: {message}");
+    #[cfg(test)]
+    SAID.lock().unwrap().push(format!("{plugin} {frame}: {message}"));
     if let Some(file) = FILE.get() {
         // One writer at a time, so two lines never interleave and the move aside happens once.
         let file = file.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
