@@ -965,6 +965,8 @@ impl Session {
             USAGE_VIEW => {
                 self.usage_view = Usage::parse(answer);
                 self.view_error = self.usage_view.is_none().then(|| "Claude Code's answer had no usage in it.".to_owned());
+                // The panel beside the dialog shows the same fresh numbers.
+                self.take_limits(&answer["rate_limits"]);
             }
             CONTEXT_VIEW => {
                 self.context_view = ContextDetail::parse(answer);
@@ -1010,15 +1012,7 @@ impl Session {
                     .filter_map(|(model, set)| Some((model.clone(), set["effortLevel"].as_str()?.to_owned())))
                     .collect();
             }
-            // An answer can come without `rate_limits`: the limits shown stay.
-            USAGE => {
-                let limits = &answer["rate_limits"];
-                for (label, key) in LIMITS {
-                    if let Some(used) = limits[key]["utilization"].as_f64() {
-                        self.set_limit(label, used, limits[key]["resets_at"].as_str().and_then(parse_time));
-                    }
-                }
-            }
+            USAGE => self.take_limits(&answer["rate_limits"]),
             _ => {}
         }
     }
@@ -1735,6 +1729,16 @@ pub fn summary(tool: &str, input: &Value) -> String {
 
 impl Session {
     /// Shows `used` percent of the limit `label`, the 5-hour one first.
+    /// The windows of a `get_usage` answer's `rate_limits` (percent used, ISO reset time). An answer can come without them:
+    /// the limits shown stay.
+    fn take_limits(&mut self, limits: &Value) {
+        for (label, key) in LIMITS {
+            if let Some(used) = limits[key]["utilization"].as_f64() {
+                self.set_limit(label, used, limits[key]["resets_at"].as_str().and_then(parse_time));
+            }
+        }
+    }
+
     fn set_limit(&mut self, label: &'static str, used: f64, resets: Option<f64>) {
         self.limits.retain(|(shown, ..)| *shown != label);
         self.limits.push((label, used.round() as u64, resets));
@@ -2845,6 +2849,8 @@ mod tests {
             "seven_day_opus": { "utilization": 7, "resets_at": "2026-11-19T10:59:59+00:00" },
             "extra_usage": { "is_enabled": false } }, "behaviors": null })));
         let usage = session.usage_view.take().unwrap();
+        // The side panel takes the same fresh numbers: it showed what the last reply said beside the dialog's newer ones.
+        assert_eq!(session.limits.iter().map(|(label, used, _)| (*label, *used)).collect::<Vec<_>>(), [("5h", 40)]);
         // No server-listed per-model windows: the fixed Opus one stands in.
         assert_eq!(usage.windows.iter().map(|window| window.name.as_str()).collect::<Vec<_>>(), ["Current session", "Current week (Opus)"]);
         assert!(usage.credits.is_none() && usage.day.is_none() && usage.week.is_none());

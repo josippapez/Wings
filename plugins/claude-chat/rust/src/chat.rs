@@ -674,8 +674,9 @@ pub(crate) fn hear(run: u32, line: &Value) {
     crate::subagent_relay::heard(line);
     // Claude Code says how much of the plan is used with its replies: Wings keeps it for the sidebar and the plan limit's
     // note, and asks Anthropic less.
-    if line["type"] == "rate_limit_event" {
-        report_usage(&line["rate_limit_info"]["unifiedWindows"]);
+    let usage_answer = line["type"] == "control_response" && matches!(line["response"]["request_id"].as_str(), Some(session::USAGE | session::USAGE_VIEW));
+    if line["type"] == "rate_limit_event" || usage_answer {
+        report_usage();
     }
     // Past the share you picked, the setting stops the turn as Stop does.
     if line["type"] == "rate_limit_event" && prefs::stop_near_limit().get() {
@@ -1087,14 +1088,14 @@ pub fn keep_planning(request: &str) {
     save_tab();
 }
 
-/// Passes on to Wings the limits Claude Code reported (`unifiedWindows`, utilization 0 to 1), for the account this chat
-/// runs under, once the chat knows it.
-fn report_usage(windows: &Value) {
-    let Some(account) = with(|c| c.accounts.iter().find(|account| account.current).map(|account| account.name.clone())) else {
+/// Passes on to Wings the limits Claude Code last reported to this chat, for the account it runs under, once the chat
+/// knows it.
+fn report_usage() {
+    let Some((account, limits)) = with(|c| Some((c.accounts.iter().find(|account| account.current)?.name.clone(), c.session.limits.clone()))) else {
         return;
     };
-    let window = |key: &str| windows[key]["utilization"].as_f64().map(|used| (used * 100.0, windows[key]["resetsAt"].as_f64()));
-    drop(host::report_usage(account.as_deref(), window("five_hour"), window("seven_day")));
+    let window = |label: &str| limits.iter().find(|(shown, ..)| *shown == label).map(|(_, used, resets)| (*used as f64, resets.map(|ms| ms / 1000.0)));
+    drop(host::report_usage(account.as_deref(), window("5h"), window("week")));
 }
 
 /// Asks Claude to stop the turn it is on.
