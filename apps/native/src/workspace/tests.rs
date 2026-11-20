@@ -1784,3 +1784,98 @@ fn a_badge_sent_again_unchanged_draws_nothing_again() {
     send(&mut window);
     assert_eq!(drawn(&window), first, "the same badge again drew the pieces again");
 }
+
+/// The performance readout: off, nothing is counted or drawn; on, its update each second draws the card alone and the
+/// window's frames are counted.
+mod readout {
+    use super::*;
+    use crate::ui::readout;
+    use std::time::Duration;
+
+    fn pieces(window: &TestAppWindow<Workspace>) -> (usize, usize, usize, usize) {
+        window.read(|w, cx| {
+            let parts = w.parts.as_ref().expect("the pieces");
+            (
+                parts.main.read(cx).drawn,
+                parts.title_bar.read(cx).drawn,
+                parts.sidebar.read(cx).drawn,
+                parts.readout.read(cx).drawn,
+            )
+        })
+    }
+
+    fn toggle(window: &mut TestAppWindow<Workspace>) {
+        window.update(|w, _, cx| w.toggle_readout(cx));
+        window.draw();
+    }
+
+    #[test]
+    fn off_nothing_is_counted_sampled_or_drawn() {
+        let (app, mut window) = open();
+        window.draw();
+        let before = pieces(&window);
+        for _ in 0..3 {
+            window.draw();
+            app.advance_clock(Duration::from_secs(1));
+        }
+        assert_eq!(readout::counted(), (0, 0));
+        assert_eq!(pieces(&window), before, "the readout drew while off");
+        assert!(window.read(|w, cx| !w.parts.as_ref().unwrap().readout.read(cx).is_on()));
+    }
+
+    #[test]
+    fn its_update_each_second_draws_only_its_own_view() {
+        let (app, mut window) = open();
+        window.draw();
+        toggle(&mut window);
+        window.draw();
+        let before = pieces(&window);
+        for _ in 0..4 {
+            window.draw();
+        }
+        // The frames since it was turned on make the first update differ from the empty card.
+        app.advance_clock(Duration::from_millis(1100));
+        window.draw();
+        let after = pieces(&window);
+        assert_eq!(after.3, before.3 + 1, "the card draws once for the update");
+        assert_eq!((after.0, after.1, after.2), (before.0, before.1, before.2), "a piece of the window drew");
+        let shown = window.read(|w, cx| w.parts.as_ref().unwrap().readout.read(cx).shown().clone());
+        assert!(shown.frames > 0, "{shown:?}");
+        // An update with the same numbers draws nothing.
+        let mut last = pieces(&window).3;
+        for _ in 0..3 {
+            app.advance_clock(Duration::from_secs(1));
+            window.draw();
+            let now = pieces(&window);
+            assert!(now.3 <= last + 1, "more than one draw of the card in a second");
+            assert_eq!((now.0, now.1, now.2), (before.0, before.1, before.2));
+            last = now.3;
+        }
+    }
+
+    #[test]
+    fn the_frame_counter_counts_the_windows_draws() {
+        let (_app, mut window) = open();
+        window.draw();
+        toggle(&mut window);
+        let (start, _) = readout::counted();
+        for _ in 0..5 {
+            window.draw();
+        }
+        assert_eq!(readout::counted().0, start + 5);
+    }
+
+    #[test]
+    fn turning_it_off_stops_the_counts() {
+        let (app, mut window) = open();
+        window.draw();
+        toggle(&mut window);
+        window.draw();
+        toggle(&mut window);
+        for _ in 0..3 {
+            window.draw();
+            app.advance_clock(Duration::from_secs(1));
+        }
+        assert_eq!(readout::counted(), (0, 0));
+    }
+}

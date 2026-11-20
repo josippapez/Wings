@@ -435,6 +435,7 @@ impl Render for TerminalView {
         {
             self.drawn += 1;
         }
+        crate::ui::readout::render("terminal");
         if self.autofocus && self.visible {
             self.focus.focus(window, cx);
             self.autofocus = false;

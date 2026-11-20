@@ -43,6 +43,7 @@ actions!(
         OpenProjectInEditor,
         ToggleQuickTerminal,
         ShowNotifications,
+        TogglePerformanceReadout,
         GoBack,
         GoForward,
         PaletteNext,

@@ -48,6 +48,7 @@ impl Render for Part {
         {
             self.drawn += 1;
         }
+        crate::ui::readout::render(self.name);
         let draw = self.draw;
         let id = window.window_handle().window_id();
         crate::ui::drawing_piece(self.name, id, || {
@@ -72,6 +73,8 @@ pub(super) struct Parts {
     /// pieces again (`ui::SpinnerLayer`).
     pub(super) spinners: Entity<crate::ui::SpinnerLayer>,
     pub(super) view_spinners: Entity<crate::ui::SpinnerLayer>,
+    /// The performance readout (`ui::readout`), a view of its own so its update draws none of the pieces.
+    pub(super) readout: Entity<crate::ui::readout::Readout>,
 }
 
 impl Parts {
@@ -88,6 +91,7 @@ impl Parts {
             backdrop: cx.new(|_| crate::ui::BackdropLayer::default()),
             spinners: cx.new(|_| crate::ui::SpinnerLayer::new(crate::ui::Spinners::Window)),
             view_spinners: cx.new(|_| crate::ui::SpinnerLayer::new(crate::ui::Spinners::Views)),
+            readout: cx.new(|_| crate::ui::readout::Readout::new()),
         }
     }
 }

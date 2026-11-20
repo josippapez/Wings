@@ -92,7 +92,7 @@ use crate::{
         FocusRight, FocusUp, GoBack, GoForward, IncreaseFontSize, Minimize, MoveTabLeft,
         MoveTabRight, NewTab, NextTab, OpenHistory, OpenProjectInEditor, OpenSettings, PreviousTab,
         ResetFontSize, ShowNotifications, SplitDown, SplitRight, ToggleFullScreen, TogglePalette,
-        ToggleQuickTerminal, ToggleSidebar, Zoom, ZoomPane,
+        ToggleQuickTerminal, TogglePerformanceReadout, ToggleSidebar, Zoom, ZoomPane,
     },
     agents::{Agent, PaneInfo},
     host::Config,
@@ -944,8 +944,31 @@ impl Workspace {
 /// The layer of the window that draws the terminals floating over the tab, and its one slot.
 const QUICK: &str = "quick";
 
+impl Workspace {
+    /// Turns the performance readout (`ui::readout`) on or off. The workspace draws again only for this, to put the card
+    /// in the window or take it out; its once-a-second update draws the card alone.
+    pub(super) fn toggle_readout(&mut self, cx: &mut Context<Self>) {
+        if let Some(parts) = &self.parts {
+            parts.readout.update(cx, |readout, cx| readout.set_on(!readout.is_on(), cx));
+            cx.notify();
+        }
+    }
+
+    /// The readout's card, kept as last drawn, and what counts the window's draws for it; nothing while it is off.
+    fn readout_layer(&self, cx: &gpui::App) -> Vec<gpui::AnyElement> {
+        let Some(parts) = self.parts.as_ref().filter(|parts| parts.readout.read(cx).is_on()) else {
+            return Vec::new();
+        };
+        vec![
+            ui::readout::frame_counter().into_any_element(),
+            parts.readout.clone().cached(ui::readout::placement()).into_any_element(),
+        ]
+    }
+}
+
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        ui::readout::render("workspace");
         self.sync_plugins(cx);
         self.exits.popovers.render();
         // Whatever showed another project or tab, it arrives here as the place on screen, as the desktop's history.
@@ -1153,6 +1176,7 @@ impl Render for Workspace {
                 }
             }))
             .on_action(cx.listener(|this, _: &ShowNotifications, _, cx| this.open_inbox(cx)))
+            .on_action(cx.listener(|this, _: &TogglePerformanceReadout, _, cx| this.toggle_readout(cx)))
             .on_action(cx.listener(|this, _: &GoBack, window, cx| this.navigate(true, window, cx)))
             .on_action(
                 cx.listener(|this, _: &GoForward, window, cx| this.navigate(false, window, cx)),
@@ -1235,6 +1259,7 @@ impl Render for Workspace {
             )
             // The sidebar's spinners, which turn here so the sidebar keeps its last drawing (see `parts`).
             .children(self.parts.as_ref().map(|parts| ui::SpinnerLayer::in_draw(&parts.spinners)))
+            .children(self.readout_layer(cx))
             .children(under.into_iter().map(ui::cover))
             .children(notices.map(ui::cover))
             .children(over.into_iter().map(ui::cover))

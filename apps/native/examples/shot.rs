@@ -421,6 +421,10 @@ fn main() {
     if std::env::args().nth(2).as_deref() == Some("chrome") {
         return chrome(&mut cx, &config, &out);
     }
+    // `-- <out-dir> readout` renders only the performance readout, turned on from the command palette.
+    if std::env::args().nth(2).as_deref() == Some("readout") {
+        return readout(&mut cx, &config, &out);
+    }
     // `-- <out-dir> icons` renders only a plugin's icons: on its sidebar, its pages, its Settings row and its block.
     if std::env::args().nth(2).as_deref() == Some("icons") {
         return icons(&mut cx, &config, &out);
@@ -1133,6 +1137,29 @@ fn mouse(
 
 /// The Inbox (empty, with made-up notifications, then its row with the count), each right-click menu, and the tooltips
 /// of a title bar button, a tab and a pane's button.
+fn readout(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+    let mut config = base.clone();
+    config.agents = None;
+    config.plugins = None;
+    for width in [1000.0, 640.0] {
+        let config = config.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        wait(cx, window, Duration::from_secs(2));
+        cx.simulate_keystrokes(window, "cmd-t cmd-d");
+        cx.simulate_keystrokes(window, "cmd-k");
+        cx.simulate_input(window, "Performance Readout");
+        cx.simulate_keystrokes(window, "enter");
+        // Past two updates, so the card shows numbers.
+        wait(cx, window, Duration::from_millis(2500));
+        save(cx, window, &out.join(format!("readout-{width}.png")));
+    }
+}
+
 fn chrome(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     let mut config = base.clone();
     config.agents = None;

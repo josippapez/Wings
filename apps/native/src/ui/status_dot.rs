@@ -247,6 +247,10 @@ impl SpinnerLayer {
 
 impl Render for SpinnerLayer {
     fn render(&mut self, window: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+        super::readout::render(match self.0 {
+            Spinners::Window => "spinners",
+            Spinners::Views => "view-spinners",
+        });
         let id = window.window_handle().window_id();
         match self.0 {
             Spinners::Window => div().absolute().top_0().left_0().size_full().child(rings(id, SPINNERS)),
