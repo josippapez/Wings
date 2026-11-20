@@ -78,3 +78,28 @@ pub fn large_text(text: impl Into<String>) -> Node {
 pub fn time_text(iso: &str) -> Option<String> {
     iso_to_ms(iso).map(|ms| ago(ms, host::now()))
 }
+
+/// A queued check that has waited this long says so, since "1 h ago" reads as when it ran.
+const LONG_QUEUE_MS: f64 = 15.0 * 60_000.0;
+
+fn queued_ago(ms: f64, now: f64) -> String {
+    if now - ms > LONG_QUEUE_MS { format!("queued {}", ago(ms, now).trim_end_matches(" ago")) } else { ago(ms, now) }
+}
+
+/// Like `time_text` for a check waiting to start: "queued 1 h" once it has waited a while.
+pub fn queued_text(iso: &str) -> Option<String> {
+    iso_to_ms(iso).map(|ms| queued_ago(ms, host::now()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_check_queued_for_long_says_it_is_queued_and_a_fresh_one_says_how_long_ago() {
+        let now = 1_800_000_000_000.0;
+        assert_eq!(queued_ago(now - 3_600_000.0, now), "queued 1 h");
+        assert_eq!(queued_ago(now - 20.0 * 60_000.0, now), "queued 20 min");
+        assert_eq!(queued_ago(now - 5.0 * 60_000.0, now), "5 min ago");
+    }
+}

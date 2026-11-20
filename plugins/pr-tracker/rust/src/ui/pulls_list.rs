@@ -185,6 +185,8 @@ fn pull_item(r: &PullRow, show_scope: bool) -> Node {
         (Some(format!("{} failing", checks.failed)), "danger")
     } else if checks.running > 0 {
         (Some(format!("{} running", checks.running)), "warn")
+    } else if checks.queued > 0 {
+        (Some(format!("{} queued", checks.queued)), "warn")
     } else if checks.passed > 0 {
         (Some(format!("{} passed", checks.passed)), "success")
     } else {

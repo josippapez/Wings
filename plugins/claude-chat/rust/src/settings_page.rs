@@ -1,12 +1,12 @@
-//! The Claude chat page in Wings Settings: the mode a new chat starts in, how much of its tool calls a chat shows and which
-//! kinds of fold Detailed opens, how big its text is, and what lies behind it.
+//! The Claude chat page in Wings Settings: the mode a new chat starts in, the view mode chats show and which kinds of fold
+//! Verbose opens, how big its text is, and what lies behind it.
 
 use wings_plugin::ui::{Node, checkbox, chips as choose, heading as section, muted as note, row, select, stack};
 
 /// The most points wide a description runs, so a line stays a readable length on a wide page.
 const MEASURE: u32 = 560;
 
-use crate::{claude_version, folds::KINDS, prefs, session::MODES};
+use crate::{claude_version, folds::{KINDS, Kind}, prefs, session::MODES, view_mode::{self, Mode}};
 
 /// A section's name, in the page's section heading style, stronger than the description under it.
 fn heading(text: &str) -> Node {
@@ -25,9 +25,10 @@ fn chips(label: &str, options: &[(&str, &str)], value: &str, on_change: impl Fn(
 }
 
 fn view() -> Vec<Node> {
-    let outputs = [("compact", "Compact"), ("detailed", "Detailed")];
-    let output = if prefs::detailed().get() { "detailed" } else { "compact" };
-    let opens = KINDS.iter().map(|(kind, key, label)| {
+    let modes = [Mode::Normal, Mode::Thinking, Mode::Verbose].map(|mode| (mode.name(), mode.name()));
+    let mode = Mode::of(prefs::detailed().get(), prefs::thinking().get());
+    // Verbose shows what Claude thought whatever this list says, as Claude Code's does.
+    let opens = KINDS.iter().filter(|(kind, ..)| *kind != Kind::Thought).map(|(kind, key, label)| {
         let kind = *kind;
         checkbox(*label, prefs::opens(kind).get(), move |on| drop(prefs::opens(kind).set(on))).key(*key)
     });
@@ -37,10 +38,14 @@ fn view() -> Vec<Node> {
         .child(muted("The permission mode a chat starts in. The picker in a chat's message box still changes it for that chat."))
         .child(chips("Permission mode", &MODES, &prefs::mode().get(), |mode| drop(prefs::mode().set(mode.to_owned()))))
         .child(heading("Output"))
-        .child(muted("Compact folds a run of tool calls into one line. Detailed shows every run open, with each command and what it printed, as Claude Code's verbose mode does. A chat that is open follows a change at once."))
-        .child(chips("Tool calls", &outputs, output, |value| drop(prefs::detailed().set(value == "detailed"))))
-        .child(heading("What Detailed opens"))
-        .child(muted("Each kind starts open in Detailed unless you clear it here. A click on a fold still opens or shuts it, and Compact keeps all of them shut."))
+        .child(muted("Claude Code's view modes. Normal folds each run of tool calls into one line, Thinking also shows what Claude thought, and Verbose opens what you tick below. The View mode button in a chat and Ctrl+O change the same setting. A chat that is open follows a change at once."))
+        .child(chips("View mode", &modes, mode.name(), |name| {
+            if let Some(mode) = [Mode::Normal, Mode::Thinking, Mode::Verbose].into_iter().find(|mode| mode.name() == name) {
+                view_mode::set(mode);
+            }
+        }))
+        .child(heading("What Verbose opens"))
+        .child(muted("Each kind starts open in Verbose unless you clear it here. A click on a fold still opens or shuts it, and Normal keeps all of them shut."))
         .child(stack().prop("gap", "s").children(opens))
         .child(heading("Plan limit"))
         .child(muted("When your plan's 5-hour or weekly usage passes 90%, Claude is told to pause and ask you before more work, in every Claude Code session in Wings, chat or terminal. Past the limit, work is billed as extra usage."))

@@ -1189,7 +1189,10 @@ impl Render for Workspace {
                     .child(main)
                     // What moves in the tab's page (spinners, working dots, shimmers), as if in it: under what the
                     // window draws over the main column.
-                    .child(ui::view_spinner_layer(window))
+                    .child(match &self.parts {
+                        Some(parts) => ui::SpinnerLayer::in_draw(&parts.view_spinners, window, cx),
+                        None => ui::view_spinner_layer(window).into_any_element(),
+                    })
                     // Over the main column, as if in it: what draws over the terminals in it follows.
                     .child(ui::slot_layer(pane_card::TERMINALS, self.tab_terminals(cx)))
                     // The terminals an agent opened floating over its pane, over its terminal.
@@ -1218,7 +1221,10 @@ impl Render for Workspace {
                     .children(self.sidebar_peek(cx)),
             )
             // The sidebar's spinners, which turn here so the sidebar keeps its last drawing (see `parts`).
-            .child(crate::ui::spinner_layer(window))
+            .child(match &self.parts {
+                Some(parts) => ui::SpinnerLayer::in_draw(&parts.spinners, window, cx),
+                None => crate::ui::spinner_layer(window).into_any_element(),
+            })
             .children(under)
             .children(notices)
             .children(over)

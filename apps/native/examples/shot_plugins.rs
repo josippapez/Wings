@@ -895,7 +895,7 @@ fn claude_chat(out: PathBuf) {
     std::fs::write(root.join("available.json"), include_str!("../../../plugins/claude-chat/rust/tests/available.json")).unwrap();
     script(
         bin.join("claude"),
-        r##"case "$1" in --version) echo '2.1.329 (Claude Code)'; exit 0;; upgrade) echo 'Successfully updated to 2.1.331'; exit 0;; esac
+        r##"case "$1" in --version) if [ -f "$CHAT_FIXTURE.upgraded" ]; then echo '2.1.331 (Claude Code)'; else echo '2.1.329 (Claude Code)'; fi; exit 0;; upgrade) touch "$CHAT_FIXTURE.upgraded"; echo 'Successfully updated to 2.1.331'; exit 0;; esac
 if [ "$1" = plugin ]; then case "$2" in list) cat "$CHAT_AVAILABLE";; install) echo '{"command":"install","outcome":"ok","scope":"user"}';; esac; exit 0; fi
 case "$1" in edit-*) cat >/dev/null; if [ -f "$CHAT_ANSWERS/$1" ]; then cat "$CHAT_ANSWERS/$1" >&2; exit 1; fi; echo '{"ok":true}'; exit 0;; esac
 cat "$CHAT_FIXTURE"; if [ -n "$CHAT_DRIP" ]; then (n=0; while [ $n -lt 2000 ] && cat "$CHAT_DRIP" 2>/dev/null; do n=$((n+1)); sleep 0.02; done) & fi
@@ -1640,6 +1640,10 @@ esac"##,
         ("work-open", work.clone(), None, Some("disclose:Ran 1 command"), "pnpm test discount"),
         ("detailed", work.clone(), None, None, "No test suite found"),
         ("large-text", work.clone(), None, None, "of 4 done"),
+        // A newer Claude Code is out: the header's pill reads "Update to 2.1.331". Its click runs `claude upgrade` (the fake prints
+        // that it updated), then the pill says it updated, with the note about open chats in its tooltip.
+        ("claude-update", work.clone(), None, None, "Update"),
+        ("claude-updated", work.clone(), None, Some("press:Update Claude Code"), "Updated to 2.1.331"),
         ("queue", working.clone(), None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter"), "Claude reads them"),
         // The same two, each opened to its whole message by its More button, which reads Less once it is open.
         ("queue-open", working.clone(), None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter;more:"), "Claude reads them"),
@@ -1762,7 +1766,7 @@ esac"##,
         // with a failing check, one with none, and the dialog the Merge button asks in.
         ("pull-request", opened(vec![init.clone()]), None, None, "Add the checkout rounding"),
         ("pull-request-failing", opened(vec![init.clone()]), None, None, "1 failed, 3 passed"),
-        ("pull-request-none", opened(vec![init.clone()]), None, None, "Create pull request"),
+        ("pull-request-none", opened(vec![init.clone()]), None, None, "Review changes"),
         ("pull-request-merge", opened(vec![init.clone()]), None, Some("wait:600;press:Merge"), "It can't be undone from here"),
     ];
     // Files for @-mentions, which the chat lists with git.
@@ -1796,8 +1800,15 @@ esac"##,
         let storage = out.join(folder);
         let _ = std::fs::remove_dir_all(&storage);
         let store = wings_plugin_storage::Storage::new(storage.clone());
+        // The newest Claude Code, as the header's pill reads it from the storage the chats share (`claude_version.rs`) rather than
+        // fetching it: the fake `claude` prints 2.1.329, so a scene is up to date unless it seeds a newer one.
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as f64;
+        if !seed.iter().any(|(key, _)| *key == "claude-latest") {
+            store.set("claude-chat", "shot", "claude-latest", json!({ "version": "2.1.329", "at": now })).unwrap();
+        }
         for (key, value) in seed {
-            store.set("claude-chat", "shot", key, value.clone()).unwrap();
+            let value = if *key == "claude-latest" { json!({ "version": value, "at": now }) } else { value.clone() };
+            store.set("claude-chat", "shot", key, value).unwrap();
         }
         let host = PluginHost::with_access(
             PluginConfig { id: "claude-chat".into(), root: storage, scope: "shot".into() },
@@ -1818,6 +1829,8 @@ esac"##,
     let detailed = host_over("fixture-storage-claude-chat-detailed", &[("detailed-output", json!(true))]);
     // Diffs side by side, with every run of calls open, as the Settings choice of the diff card's button keeps it.
     let split = host_over("fixture-storage-claude-chat-split", &[("diff-split", json!(true)), ("detailed-output", json!(true))]);
+    // A newer Claude Code is out (2.1.331, against the fake `claude`'s 2.1.329): the header's pill is a button that updates.
+    let update_host = host_over("fixture-storage-claude-chat-update", &[("claude-latest", json!("2.1.331"))]);
     // Large text: the conversation's text a fifth bigger.
     let large = host_over("fixture-storage-claude-chat-large", &[("text-size", json!("large"))]);
     // The Thinking view mode: what Claude thought shows open, with the calls still folded. (Verbose is `detailed` above.)
@@ -1871,6 +1884,7 @@ esac"##,
         let host = match name {
             "detailed" | "read-ts" => &detailed,
             "large-text" => &large,
+            "claude-update" | "claude-updated" => &update_host,
             "view-thinking" => &thinking_host,
             "bookmarks" => &bookmarks_host,
             "panel-folded" => &folded,
@@ -2042,6 +2056,8 @@ esac"##,
             &[1000.0, 640.0]
         };
         for &width in widths {
+            // The fake `claude` says it is on 2.1.331 once `claude upgrade` ran in this scene, so each width starts before that.
+            let _ = std::fs::remove_file(format!("{}.upgraded", fixture.display()));
             // The shell of the terminal the workspace draws over the page, opened before the page so the fake `claude` the
             // page starts is found under the scene's own shell.
             let shot_terminal = (name == "terminal").then(|| {

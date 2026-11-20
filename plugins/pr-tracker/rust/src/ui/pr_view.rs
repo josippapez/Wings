@@ -379,13 +379,13 @@ fn review_chip(overview: &Overview) -> Node {
 
 fn checks_chip(st: &Status) -> Node {
     let c = st.checks;
-    let parts: Vec<String> = [(c.failed, "failed"), (c.running, "running"), (c.passed, "passed")].into_iter().filter(|(n, _)| *n > 0).map(|(n, w)| format!("{n} {w}")).collect();
-    let tone = if c.failed > 0 { "danger" } else if c.running > 0 { "warn" } else { "success" };
+    let parts: Vec<String> = [(c.failed, "failed"), (c.running, "running"), (c.queued, "queued"), (c.passed, "passed")].into_iter().filter(|(n, _)| *n > 0).map(|(n, w)| format!("{n} {w}")).collect();
+    let tone = if c.failed > 0 { "danger" } else if c.pending() > 0 { "warn" } else { "success" };
     outline(format!("{} ›", parts.join(" · ")), Some(tone)).on("onClick", |_| ui(|u| u.tab = Tab::Checks))
 }
 
 fn loaded(p: &Page, overview: &Overview, st: &Status) -> Vec<Node> {
-    let total = st.checks.passed + st.checks.failed + st.checks.running;
+    let total = st.checks.total();
     let comments = p.comments.as_deref();
     let people = comments.map_or(0, <[Comment]>::len);
     let unresolved = comments.map(|cs| cs.iter().filter(|c| c.reply_to.is_none() && !c.system && c.thread.as_ref().is_some_and(|t| t.state == "active")).count());

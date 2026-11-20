@@ -32,10 +32,19 @@ fn status_line(pr: &Pr) -> Option<Node> {
     if pr.state != State::Open {
         return None;
     }
-    let (_, failed, running) = pr.checks;
-    let tone = if failed > 0 { "danger" } else if running > 0 { "muted" } else { "success" };
+    let (_, failed, running, queued) = pr.checks;
+    let tone = if failed > 0 { "danger" } else if running + queued > 0 { "muted" } else { "success" };
     let said = if pr.review.is_empty() { pull::checks_text(pr.checks) } else { format!("{} · {}", pr.review, pull::checks_text(pr.checks)) };
     Some(crate::view::inset(small(said).prop("tone", tone).prop("truncate", true)))
+}
+
+/// Which checks are still to finish, one muted line each, so "1 queued" says which.
+fn pending_lines(pr: &Pr) -> Vec<Node> {
+    if pr.state != State::Open {
+        return Vec::new();
+    }
+    let now = host::now();
+    pr.pending.iter().map(|check| crate::view::inset(small(pull::pending_text(check, now)).prop("tone", "muted").prop("size", "tiny").prop("truncate", true))).collect()
 }
 
 fn found(c: &Chat, pr: &Pr) -> Vec<Node> {
@@ -58,7 +67,7 @@ fn found(c: &Chat, pr: &Pr) -> Vec<Node> {
     if pr.state == State::Open && pr.checks.1 > 0 {
         actions = actions.child(ui::button("Why failing", "outline", false, pull::explain_failing).prop("size", "sm").prop("disabled", no_claude).prop("title", "Ask Claude to read the failed checks' logs and fix them"));
     }
-    [Some(head), status_line(pr), Some(crate::view::inset(actions))].into_iter().flatten().collect()
+    [Some(head), status_line(pr)].into_iter().flatten().chain(pending_lines(pr)).chain([crate::view::inset(actions)]).collect()
 }
 
 /// The section, with nothing in a folder no forge knows, a chat that isn't on a branch, or before the first read.
@@ -71,14 +80,25 @@ pub fn section(c: &Chat) -> Option<Node> {
         let rows = match &p.load {
             Load::Idle | Load::Unsupported => return None,
             Load::Found(pr) => found(c, pr),
-            Load::NoPr => {
-                let create = ui::button("Create pull request", "outline", false, pull::create).prop("size", "sm").prop("disabled", c.input.is_none()).prop("title", "Ask Claude to push the branch and open a pull request for it");
-                vec![crate::view::inset(small(format!("No pull request for {branch}")).prop("tone", "muted").prop("truncate", true)), crate::view::inset(create)]
-            }
+            // No PR: no section. The message box offers Create PR (`create_button`).
+            Load::NoPr => return None,
             Load::Failed(why) => vec![crate::view::inset(small(why.as_str()).prop("tone", "danger"))],
         };
         Some(crate::view::fold(c, "pull", "Pull request", rows))
     })
+}
+
+/// Lucide's `git-pull-request-arrow`, in a 24-point box.
+const PR_ICON: [&str; 4] = ["M6 3a3 3 0 1 0 0 6a3 3 0 1 0 0-6z", "M6 9v12", "M18 15a3 3 0 1 0 0 6a3 3 0 1 0 0-6z", "M13 6h3a2 2 0 0 1 2 2v7"];
+
+/// The message box's Create PR, beside the branch button, while the branch has none and isn't the default one.
+pub fn create_button(c: &Chat) -> Option<Node> {
+    if !pull::can_create(c) {
+        return None;
+    }
+    let glyph = ui::icon(24, 2.0, &PR_ICON).prop("size", 14);
+    let button = ui::button("", "ghost", false, pull::create).prop("disabled", c.input.is_none()).prop("label", "Create pull request").prop("title", "Ask Claude to push the branch and open a pull request for it");
+    Some(if c.narrow == Some(true) { button.prop("size", "icon-sm").prop("round", true).child(glyph) } else { button.prop("size", "sm").child(glyph).child(text("Create PR")) }.key("create-pr"))
 }
 
 /// The merge dialog, while it asks, runs or failed.

@@ -2483,6 +2483,56 @@ fn a_dialog_is_drawn_over_the_page_and_escape_or_the_backdrop_sends_on_close() {
     settle(&app, &mut window, shows("Closed 2."));
 }
 
+/// A dialog that holds only a select, as Claude chat's Background in Settings: its menu hangs past the panel's foot.
+fn dialog_with_select() -> String {
+    let (mut picked, mut closed) = ("a".to_owned(), 0);
+    fake::page("page", move |event| {
+        match event {
+            Some(("7:change", pick)) => picked = pick["value"].as_str().unwrap_or_default().to_owned(),
+            Some(("6:onClose", _)) => closed += 1,
+            _ => {}
+        }
+        let options: Vec<Value> =
+            ["a", "b", "c", "d"].iter().map(|value| json!({ "value": value, "label": value.to_uppercase() })).collect();
+        json!({ "id": 0, "type": "#root", "children": [{ "id": 1, "type": "Page", "children": [
+            { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [
+                text(3, 4, format!("Picked {picked}, closed {closed}.")),
+                { "id": 6, "type": "Dialog", "props": { "title": "Background", "width": 300, "onClose": "6:onClose" },
+                    "children": [{ "id": 7, "type": "Select", "props": { "label": "Background", "value": picked,
+                        "onChange": "7:change", "options": options } }] }] }] }] })
+    })
+}
+
+/// An option of a select's menu that hangs past its dialog's panel, over the backdrop, is picked by a press, and the
+/// dialog stays: the press reached the backdrop too, which closed the dialog, as Settings closed on Halo.
+#[test]
+fn an_option_past_the_dialogs_panel_is_picked_and_the_dialog_stays() {
+    let mut app = TestApp::new();
+    app.background_executor().allow_parking();
+    let host = hosted(&mut app);
+    let source = dialog_with_select();
+    let bounds = gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(500.0), px(700.0)));
+    let mut window = app.open_window_with_options(
+        gpui::WindowOptions {
+            window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
+            ..Default::default()
+        },
+        move |_, cx| PageView::in_plugin(&host, &source, cx),
+    );
+    settle(&app, &mut window, shows("Picked a, closed 0."));
+    let select = window.read(|view, _| view.select_box(7)).expect("the select is drawn");
+    click(&mut window, center(select));
+    settle(&app, &mut window, PageView::menu_open);
+    window.draw();
+    let panel = crate::ui::spot_at("page-dialog").expect("the dialog is drawn");
+    // The third option: under the select's foot, 4pt of room, the menu's 1pt border and 4pt of padding, then 32pt rows.
+    let (x, y) = (center(select).0, f32::from(select.bottom()) + 9.0 + 64.0 + 16.0);
+    assert!(y > f32::from(panel.bottom()) + 16.0, "the option at {y} is past the panel {panel:?}");
+    click(&mut window, (x, y));
+    settle(&app, &mut window, shows("Picked c,"));
+    assert!(window.read(|view, _| view.text().contains("Picked c, closed 0.")), "the dialog closed");
+}
+
 /// A page that opens a dialog by itself, on a timer, with nothing clicked or typed in it.
 fn dialog_by_itself() -> String {
     struct Later;

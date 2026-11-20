@@ -40,7 +40,7 @@ pub use shimmer::{shimmer, shimmer_slot};
 pub(crate) use status_dot::SPIN_STEP;
 pub use slots::{Piece, drawing_piece, forget_view, place_view, slot, slot_layer, view_placed};
 pub use status_dot::{
-    spinner as working_spinner, spinner_layer, status_dot, status_dot_slot, view_spinner_layer, view_spinner_slot,
+    spinner as working_spinner, spinner_layer, status_dot, SpinnerLayer, Spinners, status_dot_slot, view_spinner_layer, view_spinner_slot,
     view_status_dot_slot,
 };
 pub use tooltip::{tip, tooltip, tooltip_exit};
@@ -567,8 +567,9 @@ pub fn select_menu(items: impl IntoIterator<Item = AnyElement>) -> Div {
 }
 
 /// Draws `content` above the rest of the window, where it would sit in the layout, fading, zooming and sliding it down
-/// into place as the desktop's popovers do, or out in the phase popups are built in (`motion::with_phase`).
-pub fn popover(content: impl Styled + IntoElement + 'static) -> AnyElement {
-    let content = motion::popup("popover", motion::From::Above, motion::POPUP_IN, content);
+/// into place as the desktop's popovers do, or out in the phase popups are built in (`motion::with_phase`). A press on
+/// it is its own, as on a `behaviors::bind_layer` layer: nothing under it, like a dialog's backdrop, hears it.
+pub fn popover(content: impl Styled + InteractiveElement + IntoElement + 'static) -> AnyElement {
+    let content = motion::popup("popover", motion::From::Above, motion::POPUP_IN, content.occlude());
     deferred(anchored().child(content)).into_any_element()
 }

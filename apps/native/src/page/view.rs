@@ -1202,6 +1202,12 @@ impl PageView {
         self.menu.is_some()
     }
 
+    /// Where the select `id` was last drawn, which its menu opens beside.
+    #[cfg(all(test, feature = "test-support"))]
+    pub(super) fn select_box(&self, id: u64) -> Option<gpui::Bounds<Pixels>> {
+        self.select_bounds.get(&id).map(|(bounds, _)| *bounds)
+    }
+
     #[cfg(all(test, feature = "test-support"))]
     pub(super) fn error(&self) -> Option<&str> {
         self.error.as_deref()

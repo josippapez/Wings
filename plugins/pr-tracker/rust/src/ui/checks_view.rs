@@ -69,7 +69,7 @@ pub fn build(st: &Status, unresolved: Option<usize>) -> Node {
     let items = with_unresolved(st.items.as_deref().unwrap_or_default(), unresolved);
     if items.is_empty() {
         let c = st.checks;
-        return muted(if c.passed + c.failed + c.running > 0 { "This provider didn't list the checks by name." } else { "No checks reported." });
+        return muted(if c.total() > 0 { "This provider didn't list the checks by name." } else { "No checks reported." });
     }
     let can_run = pr_page::read(|p| p.can.run);
     if can_run && let Some(item) = run_view::opened_item(&items) {
@@ -112,7 +112,7 @@ fn check_row(st: &Status, c: &CheckItem, opens_run: bool) -> Node {
     let expandable = !opens_run && c.state == CheckState::Failed && has_log(c.failing.as_ref());
     let open = ui(|u| u.expanded.contains(&c.id));
     let url = c.url.clone().filter(|url| url.starts_with("https://"));
-    let when = c.at.as_deref().and_then(parts::time_text);
+    let when = c.at.as_deref().and_then(if c.state == CheckState::Queued { parts::queued_text } else { parts::time_text });
     let took = duration_text(c.seconds);
     let main = vec![
         parts::state_mark(c.state),

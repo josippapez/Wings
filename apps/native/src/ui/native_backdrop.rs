@@ -19,7 +19,9 @@ use objc2_metal::{
     MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLRenderPipelineState,
     MTLResourceOptions, MTLStoreAction,
 };
-use objc2_quartz_core::{CALayer, CAMetalDrawable, CAMetalLayer, CATransaction, kCAFilterLinear, kCAFilterNearest};
+use objc2_quartz_core::{
+    CAAutoresizingMask, CALayer, CAMetalDrawable, CAMetalLayer, CATransaction, kCAFilterLinear, kCAFilterNearest,
+};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use super::{
@@ -118,7 +120,7 @@ struct Layers {
 }
 
 impl Layers {
-    fn new(device: &ProtocolObject<dyn MTLDevice>, root: &CALayer) -> Self {
+    fn new(device: &ProtocolObject<dyn MTLDevice>, slots: &CALayer) -> Self {
         let clip = CALayer::new();
         clip.setMasksToBounds(true);
         clip.setHidden(true);
@@ -129,7 +131,7 @@ impl Layers {
         metal.setOpaque(true);
         unanimated(|| {
             clip.addSublayer(&metal);
-            root.addSublayer(&clip);
+            slots.addSublayer(&clip);
         });
         Self { clip, metal, cells: false }
     }
@@ -152,10 +154,28 @@ fn rect(bounds: Bounds<Pixels>) -> CGRect {
     )
 }
 
+/// The layer the slots' layers go in, in `root`, the view's own layer: over all of it, following its size, and flipped,
+/// so a slot's frame counts GPUI's points down from the window's top left corner. Not `root` itself: AppKit sets a
+/// hosting view's layer's `geometryFlipped` to the view's `isFlipped`, NO for a plain `NSView`, once the view is in a
+/// window, which undid the flip set on it before and put each slot's layer upside down in the window: as far above the
+/// card as the card's bottom is above the window's, leaving that much of the card's bottom without it. A layer of
+/// Wings' own keeps its flip, and AppKit leaves `root` unflipped.
+fn slots_layer(root: &CALayer) -> Retained<CALayer> {
+    let slots = CALayer::new();
+    slots.setGeometryFlipped(true);
+    slots.setAutoresizingMask(CAAutoresizingMask::LayerWidthSizable | CAAutoresizingMask::LayerHeightSizable);
+    unanimated(|| {
+        slots.setFrame(root.bounds());
+        root.addSublayer(&slots);
+    });
+    slots
+}
+
 /// The window's view under GPUI's, and the layers of the slots that show a backdrop in it.
 pub(crate) struct Host {
     view: Retained<NSView>,
-    root: Retained<CALayer>,
+    /// What the slots' layers are in (`slots_layer`).
+    under: Retained<CALayer>,
     gpu: Gpu,
     slots: HashMap<SharedString, Layers>,
 }
@@ -174,8 +194,6 @@ impl Host {
         let content = unsafe { gpui.superview() }.ok_or("GPUI's view isn't in a window")?;
         let gpu = Gpu::new()?;
         let root = CALayer::new();
-        // GPUI's points run down from the window's top left corner.
-        root.setGeometryFlipped(true);
         let view = NSView::initWithFrame(mtm.alloc(), gpui.frame());
         // A layer-hosting view: given its layer before it wants one, AppKit leaves what is in the layer to Wings.
         // SAFETY: `setLayer:` takes a CALayer, which the view keeps.
@@ -184,13 +202,14 @@ impl Host {
         view.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable);
         // Right under GPUI's view, so over the vibrancy under it; GPUI's view, over all of it, takes the pointer.
         content.addSubview_positioned_relativeTo(&view, NSWindowOrderingMode::Below, Some(gpui));
-        Ok(Self { view, root, gpu, slots: HashMap::new() })
+        let under = slots_layer(&root);
+        Ok(Self { view, under, gpu, slots: HashMap::new() })
     }
 }
 
 impl Present for Host {
     fn show(&mut self, slot: &SharedString, placed: &Placed, drawing: Option<&Drawing>) -> Result<(), String> {
-        let layers = self.slots.entry(slot.clone()).or_insert_with(|| Layers::new(&self.gpu.device, &self.root));
+        let layers = self.slots.entry(slot.clone()).or_insert_with(|| Layers::new(&self.gpu.device, &self.under));
         let frame = rect(placed.frame);
         unanimated(|| {
             layers.clip.setFrame(frame);
@@ -252,5 +271,44 @@ mod tests {
         let cells = CellColors { cols: 1, rows: 2, _pad: [0; 2], colors: [[0.0; 4]; SHADES] };
         let offset = (&cells.colors as *const _ as usize) - (&cells as *const CellColors as usize);
         assert_eq!(offset, 16, "float4 colors[7] after two uints and a uint2");
+    }
+
+    /// Where a layer at `frame` in the slots' layer lands in the view's own layer, unflipped as AppKit leaves a plain
+    /// view's: `y` up from the window's bottom.
+    fn in_root(slots: &CALayer, root: &CALayer, frame: Bounds<Pixels>) -> CGRect {
+        let clip = CALayer::new();
+        slots.addSublayer(&clip);
+        clip.setFrame(rect(frame));
+        let landed = clip.convertRect_toLayer(clip.bounds(), Some(root));
+        clip.removeFromSuperlayer();
+        landed
+    }
+
+    #[test]
+    fn a_slots_layer_lands_on_the_card_in_the_views_unflipped_layer_and_after_a_resize() {
+        use gpui::{point, px, size};
+        unanimated(|| {
+            // The view's own layer, which AppKit leaves unflipped, as the view isn't.
+            let root = CALayer::new();
+            root.setFrame(CGRect::new(CGPoint::ZERO, CGSize::new(1497.0, 900.0)));
+            let slots = slots_layer(&root);
+            // A chat's card: under the 40-point title bar, the 36-point project bar and its border, 9 points above the
+            // window's bottom (`page_card_over`). Put in `root` itself, it landed 77 up from the bottom, mirrored.
+            let card = Bounds::new(point(px(248.0), px(77.0)), size(px(1240.0), px(814.0)));
+            let landed = in_root(&slots, &root, card);
+            assert_eq!(
+                (landed.origin.x, landed.origin.y, landed.size.width, landed.size.height),
+                (248.0, 9.0, 1240.0, 814.0),
+                "the card's layer where GPUI drew the card: 9 points up from the window's bottom"
+            );
+            // The window grows 100 points taller: the slots' layer grows with the view's, so the card's new place, still
+            // counted from the top, lands on the card.
+            root.setFrame(CGRect::new(CGPoint::ZERO, CGSize::new(1497.0, 1000.0)));
+            root.layoutIfNeeded();
+            assert_eq!((slots.frame().size.width, slots.frame().size.height), (1497.0, 1000.0), "it follows the view's layer");
+            let taller = Bounds::new(card.origin, size(px(1240.0), px(914.0)));
+            let landed = in_root(&slots, &root, taller);
+            assert_eq!((landed.origin.y, landed.size.height), (9.0, 914.0), "after the resize");
+        });
     }
 }

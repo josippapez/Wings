@@ -340,7 +340,8 @@ pub fn github_status_of(pr: &Value) -> Status {
     let items: Vec<CheckItem> = pr["statusCheckRollup"].as_array().map(|checks| checks.iter().enumerate().map(|(i, c)| gh_item(c, &host, i)).collect()).unwrap_or_default();
     let results: Vec<&str> = items.iter().map(|c| match c.state {
         CheckState::Failed => "failed",
-        CheckState::Running | CheckState::Queued => "running",
+        CheckState::Running => "running",
+        CheckState::Queued => "queued",
         _ => "passed",
     }).collect();
     let checks = counts(&results);
@@ -783,6 +784,10 @@ mod tests {
         running["status"] = "IN_PROGRESS".into();
         assert_eq!(label(json!({ "reviewDecision": "CHANGES_REQUESTED", "statusCheckRollup": [running] })), "Changes requested");
         assert_eq!(label(json!({ "statusCheckRollup": [{ "__typename": "CheckRun", "name": "e2e", "status": "IN_PROGRESS" }], "reviewDecision": "APPROVED" })), "Checks running");
+        let waiting = github_status_of(&pr(json!({ "statusCheckRollup": [{ "__typename": "CheckRun", "name": "e2e", "status": "QUEUED" }, { "__typename": "CheckRun", "name": "unit", "status": "IN_PROGRESS" }] })));
+        assert_eq!(waiting.checks, Counts { passed: 0, failed: 0, running: 1, queued: 1 });
+        let only_queued = github_status_of(&pr(json!({ "statusCheckRollup": [{ "__typename": "CheckRun", "name": "e2e", "status": "QUEUED" }] })));
+        assert_eq!((only_queued.checks.queued, only_queued.label.as_str()), (1, "Checks queued"));
         assert_eq!(label(json!({ "reviewDecision": "APPROVED" })), "Approved");
         assert_eq!(label(json!({ "reviewDecision": "REVIEW_REQUIRED" })), "In review");
         assert_eq!(label(json!({})), "Open", "a PR with no review policy has nothing to wait for");
@@ -800,7 +805,7 @@ mod tests {
             (st.key.as_str(), st.title.as_str(), st.branch.as_str(), st.changes.as_deref(), st.review.as_str(), st.updated.as_str()),
             ("2026-10-01T10:00:00Z", "Fix x", "fix → main", Some("+5 −2 in 3 files"), "Waiting for review", "2026-10-01T10:00:00Z")
         );
-        assert_eq!(st.checks, Counts { passed: 2, failed: 1, running: 0 });
+        assert_eq!(st.checks, Counts { passed: 2, failed: 1, running: 0, queued: 0 });
         assert_eq!(st.failing.iter().map(|f| (f.name.clone(), f.job.clone())).collect::<Vec<_>>(), [(Some("unit".to_owned()), Some("4".to_owned()))]);
         assert_eq!(st.items.unwrap().len(), 3);
         assert_eq!(github_status_of(&pr(json!({ "reviewDecision": "CHANGES_REQUESTED" }))).review, "Changes requested");

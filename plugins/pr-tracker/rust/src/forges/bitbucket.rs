@@ -398,7 +398,7 @@ mod tests {
         assert_eq!(label(bb(json!({ "draft": true })), vec![]), "Draft");
         let failed = bb_status_of(&bb(json!({})), &[json!({ "key": "k1", "state": "FAILED", "name": "Pipeline #1", "url": "https://x/1" }), json!({ "key": "k2", "state": "SUCCESSFUL" }), json!({ "key": "k3", "state": "INPROGRESS" })]);
         assert_eq!(failed.label, "Checks failing");
-        assert_eq!(failed.checks, Counts { passed: 1, failed: 1, running: 1 });
+        assert_eq!(failed.checks, Counts { passed: 1, failed: 1, running: 1, queued: 0 });
         assert_eq!(failed.failing.iter().map(|f| (f.id.as_str(), f.name.as_deref(), f.url.as_deref())).collect::<Vec<_>>(), [("k1", Some("Pipeline #1"), Some("https://x/1"))]);
         assert_eq!(label(bb(json!({})), vec![json!({ "key": "k", "state": "INPROGRESS" })]), "Checks running");
         let approved = bb(json!({ "participants": [{ "role": "REVIEWER", "approved": true, "user": { "uuid": "{a}" } }] }));

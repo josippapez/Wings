@@ -1,21 +1,25 @@
 //! Which Claude Code the chats run, whether a newer one is out, and the button that runs `claude upgrade`. Shown in the
-//! Claude chat page in Wings Settings (`settings_page.rs`).
+//! Claude chat page in Wings Settings (`settings_page.rs`) and as a small pill in every chat's header (`pill`).
 //!
 //! The installed version is what `claude --version` prints. The newest is what Claude Code itself asks for on a native
-//! install: a plain-text version at `https://downloads.claude.ai/claude-code-releases/latest`.
+//! install: a plain-text version at `https://downloads.claude.ai/claude-code-releases/latest`. It is kept in the plugin's
+//! storage with the time it was read, which every frame shares, so any number of open chats fetch it once an hour.
 
+use serde_json::{Value, json};
 use std::cell::RefCell;
-use wings_plugin::{
-    host,
-    task::spawn,
-    ui::{Node, badge, button, notice, row, spinner, stack, text},
-};
+use wings_plugin::{host, task::spawn, ui::Node};
 
 /// Where the newest version is, as plain text, and the pages it may be read from (`permissions.fetch`).
 const LATEST_URL: &str = "https://downloads.claude.ai/claude-code-releases/latest";
 
-/// How long a read of the newest version is kept while the page stays open.
+/// How long a read of the newest version is kept, and how often a chat looks again while Wings is in front.
 const KEEP_MS: f64 = 3_600_000.0;
+
+/// Where the newest version is kept in the plugin's storage, as `{ "version", "at" }`, for every frame.
+const LATEST_KEY: &str = "claude-latest";
+
+/// What a note about a finished update adds.
+const OPEN_CHATS: &str = "Chats that are open keep running the version they started with until they restart.";
 
 /// `claude upgrade` downloads a build: five minutes is the most a call may wait.
 const UPGRADE_MS: u32 = 300_000;
@@ -29,8 +33,6 @@ struct State {
     current: Option<String>,
     /// The newest version, once read.
     latest: Option<String>,
-    /// When `latest` was read, in the clock's milliseconds.
-    read_at: Option<f64>,
     checking: bool,
     upgrading: bool,
     /// How the last click on the button ended: the line `claude upgrade` ended with, or why it failed.
@@ -91,12 +93,26 @@ fn with<T>(change: impl FnOnce(&mut State) -> T) -> T {
     STATE.with(|state| change(&mut state.borrow_mut()))
 }
 
-/// Reads the installed version and the newest, unless the newest was read within the hour. Runs when the page opens.
+/// The newest version another frame (or this one) read within the hour, from the plugin's storage.
+fn shared_latest(now: f64) -> Option<String> {
+    fresh(&host::storage::get(LATEST_KEY).ok()?, now)
+}
+
+/// The version in what was kept, when it was read within the hour (and not in the future, as a changed clock leaves it).
+fn fresh(kept: &Value, now: f64) -> Option<String> {
+    let (version, at) = (kept["version"].as_str()?, kept["at"].as_f64()?);
+    (at <= now && now - at < KEEP_MS && numbers(version).is_some()).then(|| version.to_owned())
+}
+
+fn keep_latest(version: &str, now: f64) {
+    drop(host::storage::set(LATEST_KEY, &json!({ "version": version, "at": now })));
+}
+
+/// Reads the installed version and the newest, which comes from the storage when it was read within the hour and from the
+/// network otherwise. Runs when a chat or the settings page opens, and then hourly while Wings is in front (`start`).
 pub fn check() {
-    let now = host::now();
     let go = with(|state| {
-        let fresh = state.read_at.is_some_and(|at| now - at < KEEP_MS);
-        if state.checking || state.upgrading || fresh && state.current.is_some() {
+        if state.checking || state.upgrading {
             return false;
         }
         state.checking = true;
@@ -107,17 +123,34 @@ pub fn check() {
     }
     spawn(async move {
         let current = printed(host::exec("claude", &["--version"]).await).ok().and_then(|line| parse_version(&line));
-        let latest = match host::fetch(LATEST_URL, "GET", None, None).await {
-            Ok(answer) if answer.status == 200 => numbers(answer.body.trim()).map(|_| answer.body.trim().to_owned()),
-            _ => None,
+        let now = host::now();
+        let latest = match shared_latest(now) {
+            Some(version) => Some(version),
+            None => {
+                let read = match host::fetch(LATEST_URL, "GET", None, None).await {
+                    Ok(answer) if answer.status == 200 => numbers(answer.body.trim()).map(|_| answer.body.trim().to_owned()),
+                    _ => None,
+                };
+                if let Some(version) = &read {
+                    keep_latest(version, now);
+                }
+                read
+            }
         };
         with(|state| {
             state.checking = false;
             state.current = current;
-            state.read_at = latest.is_some().then_some(now);
             state.latest = latest;
         });
     });
+}
+
+/// Reads the versions as a chat starts, and again every hour while Wings is in front.
+#[cfg(feature = "chat")]
+#[cfg_attr(any(feature = "subagent", feature = "pane", feature = "session"), allow(dead_code))]
+pub fn start() {
+    check();
+    wings_plugin::poll::while_focused(KEEP_MS as u32, false, check);
 }
 
 /// Runs `claude upgrade` from a click on its button, then reads the version again.
@@ -146,7 +179,9 @@ fn upgrade() {
 }
 
 /// The line and badge for where the installed version stands.
+#[cfg(feature = "settings")]
 fn headline(state: &State) -> Node {
+    use wings_plugin::ui::{badge, row, spinner, text};
     let name = match &state.current {
         Some(version) => format!("Claude Code {version}"),
         None if state.checking => "Claude Code".to_owned(),
@@ -168,7 +203,9 @@ fn headline(state: &State) -> Node {
 }
 
 /// What the button changes: a stack of the version line, the button and how its last run ended.
+#[cfg(feature = "settings")]
 pub fn section() -> Node {
+    use wings_plugin::ui::{button, notice, row, stack};
     let state = with(|state| state.clone());
     let available = matches!(standing(state.current.as_deref(), state.latest.as_deref()), Standing::Available(_));
     let variant = if available { "default" } else { "outline" };
@@ -177,11 +214,45 @@ pub fn section() -> Node {
         .key("update-claude-code");
     let mut section = stack().prop("gap", "s").child(headline(&state)).child(row().child(update));
     section = match &state.outcome {
-        Some(Ok(line)) => section.child(notice("success", format!("{line}. Chats that are open keep running the version they started with until they restart."))),
+        Some(Ok(line)) => section.child(notice("success", format!("{line}. {OPEN_CHATS}"))),
         Some(Err(why)) => section.child(notice("danger", format!("Claude Code could not update: {why}"))),
         None => section,
     };
     section
+}
+
+/// The chat header's pill: the version in muted text, or, with a newer one out, a warn-toned button that updates. Narrow, the
+/// version is left out and only an update (or its result) shows. `None` while the version is unread or `claude` isn't there.
+#[cfg(feature = "chat")]
+pub fn pill(narrow: bool) -> Option<Node> {
+    use wings_plugin::ui::{badge, button, muted};
+    let state = with(|state| state.clone());
+    let version = state.current.as_deref()?;
+    if state.upgrading {
+        return Some(button("Updating", "ghost", true, upgrade).prop("size", "sm").prop("title", "Running `claude upgrade`").key("claude-update"));
+    }
+    let again = |label: &str, tone: &str, title: String| {
+        button("", "ghost", false, upgrade)
+            .prop("size", "sm")
+            .prop("label", "Update Claude Code")
+            .prop("title", title.as_str())
+            .child(badge(label, Some(tone)))
+            .key("claude-update")
+    };
+    match &state.outcome {
+        Some(Err(why)) => return Some(again("Update failed", "danger", format!("Claude Code could not update: {why}. Click to try again"))),
+        Some(Ok(line)) => return Some(badge(format!("Updated to {version}"), Some("success")).prop("title", format!("{line}. {OPEN_CHATS}").as_str())),
+        None => {}
+    }
+    match standing(Some(version), state.latest.as_deref()) {
+        Standing::Available(newest) => {
+            let label = if narrow { "Update".to_owned() } else { format!("Update to {newest}") };
+            Some(again(&label, "warn", format!("Claude Code {version} is installed and {newest} is out. Click to run `claude upgrade`. {OPEN_CHATS}")))
+        }
+        _ if narrow => None,
+        Standing::UpToDate => Some(muted(format!("Claude Code {version}")).prop("size", "small").prop("title", "Up to date")),
+        Standing::Unknown => Some(muted(format!("Claude Code {version}")).prop("size", "small").prop("title", "The newest version could not be read")),
+    }
 }
 
 #[cfg(test)]
@@ -267,5 +338,79 @@ mod tests {
         assert_eq!(state.current.as_deref(), Some("2.1.331"));
         assert_eq!(state.outcome, Some(Ok("Successfully updated to 2.1.331".into())));
         assert!(!state.upgrading);
+    }
+
+    #[test]
+    fn a_read_within_the_hour_is_shared_and_an_old_or_odd_one_is_not() {
+        let kept = json!({ "version": "2.1.331", "at": 1000.0 });
+        assert_eq!(fresh(&kept, 1000.0 + KEEP_MS - 1.0).as_deref(), Some("2.1.331"));
+        assert_eq!(fresh(&kept, 1000.0 + KEEP_MS), None);
+        assert_eq!(fresh(&kept, 500.0), None);
+        assert_eq!(fresh(&json!({ "version": "<html>", "at": 1000.0 }), 1001.0), None);
+        assert_eq!(fresh(&Value::Null, 1001.0), None);
+    }
+
+    #[cfg(feature = "chat")]
+    fn pill_of(state: State, narrow: bool) -> Option<String> {
+        STATE.with(|kept| *kept.borrow_mut() = state);
+        pill(narrow).map(|node| wings_plugin::ui::tree_json(node).to_string())
+    }
+
+    #[cfg(feature = "chat")]
+    #[test]
+    fn the_header_pill_is_muted_when_up_to_date_and_a_warn_button_when_a_newer_one_is_out() {
+        let known = State { current: Some("2.1.329".into()), latest: Some("2.1.329".into()), ..State::default() };
+        let ok = pill_of(known.clone(), false).unwrap();
+        assert!(ok.contains("Claude Code 2.1.329") && ok.contains("Up to date") && !ok.contains("Button"), "{ok}");
+        let newer = pill_of(State { latest: Some("2.1.331".into()), ..known.clone() }, false).unwrap();
+        assert!(
+            newer.contains("Update to 2.1.331") && newer.contains("\"warn\"") && newer.contains("Button") && newer.contains("until they restart"),
+            "{newer}"
+        );
+        let unknown = pill_of(State { latest: None, ..known.clone() }, false).unwrap();
+        assert!(unknown.contains("Claude Code 2.1.329") && unknown.contains("could not be read") && !unknown.contains("Button"), "{unknown}");
+        assert_eq!(pill_of(State::default(), false), None);
+    }
+
+    #[cfg(feature = "chat")]
+    #[test]
+    fn the_header_pill_is_busy_while_it_updates_and_then_says_how_it_went() {
+        let known = State { current: Some("2.1.329".into()), latest: Some("2.1.331".into()), ..State::default() };
+        let busy = pill_of(State { upgrading: true, ..known.clone() }, false).unwrap();
+        assert!(busy.contains("Updating") && busy.contains("\"disabled\":true"), "{busy}");
+        let done =
+            pill_of(State { current: Some("2.1.331".into()), outcome: Some(Ok("Successfully updated to 2.1.331".into())), ..known.clone() }, false).unwrap();
+        assert!(done.contains("Updated to 2.1.331") && done.contains("until they restart") && !done.contains("Button"), "{done}");
+        let failed = pill_of(State { outcome: Some(Err("EACCES".into())), ..known }, false).unwrap();
+        assert!(failed.contains("Update failed") && failed.contains("EACCES") && failed.contains("danger"), "{failed}");
+    }
+
+    #[cfg(feature = "chat")]
+    #[test]
+    fn narrow_the_header_pill_keeps_only_an_update_and_its_result() {
+        let known = State { current: Some("2.1.329".into()), latest: Some("2.1.329".into()), ..State::default() };
+        assert_eq!(pill_of(known.clone(), true), None);
+        assert_eq!(pill_of(State { latest: None, ..known.clone() }, true), None);
+        let newer = pill_of(State { latest: Some("2.1.331".into()), ..known.clone() }, true).unwrap();
+        assert!(newer.contains("\"text\":\"Update\"") && !newer.contains("Update to") && newer.contains("Button"), "{newer}");
+        assert!(pill_of(State { outcome: Some(Ok("done".into())), ..known }, true).unwrap().contains("Updated to"));
+    }
+
+    #[cfg(feature = "chat")]
+    #[test]
+    fn the_header_pill_button_runs_claude_upgrade() {
+        STATE.with(|kept| *kept.borrow_mut() = State { current: Some("2.1.329".into()), latest: Some("2.1.331".into()), ..State::default() });
+        let calls = std::rc::Rc::new(RefCell::new(Vec::<String>::new()));
+        let seen = calls.clone();
+        host::testing::answer(move |_, params| {
+            let args: Vec<&str> = params["args"].as_array().unwrap().iter().map(|arg| arg.as_str().unwrap()).collect();
+            seen.borrow_mut().push(args.join(" "));
+            Ok(json!({ "code": 0, "stdout": "2.1.331 (Claude Code)\n", "stderr": "" }))
+        });
+        let (tree, handlers) = wings_plugin::ui::export(vec![pill(false).unwrap()]);
+        let click = tree[0]["props"]["onClick"].as_str().expect("the pill has a click");
+        assert!(handlers.call(click, &json!({})));
+        wings_plugin::task::block_on(async {});
+        assert_eq!(*calls.borrow(), ["upgrade", "--version"]);
     }
 }

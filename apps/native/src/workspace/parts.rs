@@ -68,6 +68,10 @@ pub(super) struct Parts {
     /// The backdrop a tab's page asks for, drawn under the main column in the place the tab's card leaves for it, so a
     /// step of it draws neither the column nor the page again (`ui::backdrop_slot`).
     pub(super) backdrop: Entity<crate::ui::BackdropLayer>,
+    /// The sidebar's spinners and what moves in a tab's page, each a view of its own, so a step of them draws none of the
+    /// pieces again (`ui::SpinnerLayer`).
+    pub(super) spinners: Entity<crate::ui::SpinnerLayer>,
+    pub(super) view_spinners: Entity<crate::ui::SpinnerLayer>,
 }
 
 impl Parts {
@@ -82,6 +86,8 @@ impl Parts {
             title_bar: Part::new(workspace, "title-bar", Workspace::title_bar_part, cx),
             main: Part::new(workspace, "main", Workspace::main_part, cx),
             backdrop: cx.new(|_| crate::ui::BackdropLayer::default()),
+            spinners: cx.new(|_| crate::ui::SpinnerLayer::new(crate::ui::Spinners::Window)),
+            view_spinners: cx.new(|_| crate::ui::SpinnerLayer::new(crate::ui::Spinners::Views)),
         }
     }
 }

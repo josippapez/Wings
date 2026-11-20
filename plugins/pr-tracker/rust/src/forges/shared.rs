@@ -12,6 +12,7 @@ pub fn counts(results: &[&str]) -> Counts {
         match *result {
             "passed" => c.passed += 1,
             "failed" => c.failed += 1,
+            "queued" => c.queued += 1,
             _ => c.running += 1,
         }
     }
@@ -67,6 +68,7 @@ pub fn label_of(f: &Facts, words: &Words) -> (String, String, String, PrState) {
             (f.checks.failed > 0, "Checks failing", "danger", None),
             (f.changes, words.changes.unwrap_or("Changes requested"), "danger", None),
             (f.checks.running > 0, "Checks running", "warning", None),
+            (f.checks.queued > 0, "Checks queued", "warning", None),
             (f.unresolved, "Unresolved threads", "warning", None),
             (f.approved, "Approved", "success", None),
             (f.reviewing, "In review", "info", None),
@@ -138,7 +140,11 @@ mod tests {
     }
 
     fn checks(failed: u32, running: u32) -> Counts {
-        Counts { passed: 0, failed, running }
+        Counts { passed: 0, failed, running, queued: 0 }
+    }
+
+    fn queued(n: u32) -> Counts {
+        Counts { queued: n, ..Counts::default() }
     }
 
     #[test]
@@ -159,6 +165,9 @@ mod tests {
         assert_eq!(label(Facts { checks: checks(1, 1), changes: true, ..Default::default() }), "Checks failing");
         assert_eq!(label(Facts { changes: true, checks: checks(0, 2), ..Default::default() }), "Changes requested");
         assert_eq!(label(Facts { checks: checks(0, 2), unresolved: true, ..Default::default() }), "Checks running");
+        assert_eq!(label(Facts { checks: Counts { running: 1, queued: 1, ..Counts::default() }, ..Default::default() }), "Checks running");
+        assert_eq!(label(Facts { checks: queued(1), unresolved: true, ..Default::default() }), "Checks queued");
+        assert_eq!(label(Facts { checks: queued(1), changes: true, ..Default::default() }), "Changes requested");
         assert_eq!(label(Facts { unresolved: true, approved: true, ..Default::default() }), "Unresolved threads");
         assert_eq!(label(Facts { approved: true, reviewing: true, ..Default::default() }), "Approved");
         assert_eq!(label(Facts { reviewing: true, ..Default::default() }), "In review");
@@ -225,7 +234,9 @@ mod tests {
 
     #[test]
     fn counts_tally_results_and_a_name_matches_whatever_its_case() {
-        assert_eq!(counts(&["passed", "failed", "passed", "running"]), Counts { passed: 2, failed: 1, running: 1 });
+        assert_eq!(counts(&["passed", "failed", "passed", "running", "queued", "queued"]), Counts { passed: 2, failed: 1, running: 1, queued: 2 });
+        let old: Counts = serde_json::from_str(r#"{"passed":1,"failed":0,"running":2}"#).unwrap();
+        assert_eq!(old, Counts { passed: 1, failed: 0, running: 2, queued: 0 });
         assert!(same(Some("Ada"), "ada"));
         assert!(!same(None, "ada"));
         assert!(!same(Some(""), ""));

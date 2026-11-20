@@ -45,8 +45,8 @@ fn badge_for(link: &Link, loaded: Option<&state::Loaded>, local: Option<(i64, i6
         }
         Some(Ok(st)) => st,
     };
-    let (passed, failed, running) = (st.checks.passed, st.checks.failed, st.checks.running);
-    let total = passed + failed + running;
+    let (passed, failed, running, queued) = (st.checks.passed, st.checks.failed, st.checks.running, st.checks.queued);
+    let total = st.checks.total();
     let (ahead, behind) = local.unwrap_or((0, 0));
     let pending = sync_text(ahead, behind);
     let details = state::with(|s| s.failures.get(&link.url).filter(|f| failed > 0 && f.key == state::fail_key(st)).and_then(|f| f.list.clone())).unwrap_or_default();
@@ -55,8 +55,8 @@ fn badge_for(link: &Link, loaded: Option<&state::Loaded>, local: Option<(i64, i6
         json!({ "label": "Review", "value": st.review }),
         json!({
             "label": "Checks",
-            "value": if total > 0 { format!("{passed} passed, {failed} failed, {running} running") } else { "None".to_owned() },
-            "tone": if failed > 0 { json!("danger") } else if running > 0 { json!("warning") } else if total > 0 { json!("success") } else { Value::Null },
+            "value": if total > 0 { format!("{passed} passed, {failed} failed, {running} running{}", if queued > 0 { format!(", {queued} queued") } else { String::new() }) } else { "None".to_owned() },
+            "tone": if failed > 0 { json!("danger") } else if running + queued > 0 { json!("warning") } else if total > 0 { json!("success") } else { Value::Null },
         }),
     ];
     rows.extend(details.iter().take(3).map(|f| json!({ "label": "Failed", "value": format!("{}: {}", f.step.as_deref().or(f.check.as_deref()).unwrap_or_default(), f.summary), "tone": "danger" })));

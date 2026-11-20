@@ -375,7 +375,7 @@ mod tests {
             &[json!({ "status": "failure", "context": "ci / build", "target_url": "/o/r/actions/runs/1", "description": "Failing" }), json!({ "status": "success", "context": "lint" }), json!({ "status": "skipped" }), json!({ "status": "pending", "context": "e2e" }), json!({ "status": "warning" })],
             &[],
         );
-        assert_eq!(checks.checks, Counts { passed: 3, failed: 1, running: 1 });
+        assert_eq!(checks.checks, Counts { passed: 3, failed: 1, running: 1, queued: 0 });
         assert_eq!(checks.label, "Checks failing");
         assert_eq!(checks.failing.iter().map(|f| (f.id.as_str(), f.name.as_deref(), f.summary.as_deref())).collect::<Vec<_>>(), [("ci / build", Some("ci / build"), Some("Failing"))]);
         let reviews = vec![

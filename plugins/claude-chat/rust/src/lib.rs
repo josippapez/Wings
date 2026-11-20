@@ -96,7 +96,7 @@ mod session;
 mod session_side;
 #[cfg(feature = "session")]
 mod session_sidebar;
-#[cfg(feature = "settings")]
+#[cfg(any(feature = "chat", feature = "settings"))]
 mod claude_version;
 #[cfg(feature = "settings")]
 mod settings_page;
@@ -127,7 +127,7 @@ mod usage;
 mod usage_view;
 #[cfg(feature = "chat")]
 mod view;
-#[cfg(feature = "chat")]
+// The Settings page sets the view mode too.
 mod view_mode;
 #[cfg(feature = "chat")]
 mod worktree;

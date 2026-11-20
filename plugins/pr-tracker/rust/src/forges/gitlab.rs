@@ -122,6 +122,7 @@ pub fn gl_status_of(mr: &Value, approvals: &Value, jobs: &[Value]) -> Status {
             "success" | "skipped" => "passed",
             "failed" if j["allow_failure"] == true => "passed",
             "failed" | "canceled" => "failed",
+            s if GL_QUEUED.contains(&s) => "queued",
             _ => "running",
         })
         .collect();
@@ -672,11 +673,14 @@ mod tests {
             job("failed", json!({ "id": 7 })),
         ];
         let st = so(json!({}), &jobs, json!({ "approved_by": [{ "user": { "username": "bob" } }], "approvals_left": 2 }));
-        assert_eq!(st.checks, Counts { passed: 2, failed: 2, running: 1 });
+        assert_eq!(st.checks, Counts { passed: 2, failed: 2, running: 1, queued: 0 });
         let failing: Vec<_> = st.failing.iter().map(|f| (f.id.clone(), f.summary.clone(), f.project)).collect();
         assert_eq!(failing, [("4".into(), Some("Canceled".into()), Some(3)), ("7".into(), None, Some(3))]);
         assert_eq!(st.items.as_ref().unwrap().len(), 6, "manual jobs are listed, though they don't count");
         assert_eq!((st.review.as_str(), st.key.as_str(), st.branch.as_str(), st.changes.as_deref()), ("1 approved, 2 more needed", "c0ffee", "feat → main", Some("7 files")));
+        let waiting = so(json!({}), &[job("pending", json!({ "id": 8 })), job("running", json!({ "id": 9 })), job("created", json!({ "id": 10 }))], Value::Null);
+        assert_eq!(waiting.checks, Counts { passed: 0, failed: 0, running: 1, queued: 2 });
+        assert_eq!(so(json!({}), &[job("pending", json!({ "id": 8 }))], Value::Null).label, "Checks queued");
         assert_eq!(so(json!({ "changes_count": null }), &[], Value::Null).changes, None);
         assert_eq!(so(json!({}), &[], Value::Null).review, "No approvals yet");
     }
@@ -794,7 +798,7 @@ mod tests {
         let remote = Remote::Gitlab { host: "gitlab.example.com".into(), path: "g/p".into() };
         let link = to_link(&mr(json!({})), &remote);
         let status = block_on(async move { status(&link, false).await }).unwrap();
-        assert_eq!(status.checks, Counts { passed: 1, failed: 0, running: 0 });
+        assert_eq!(status.checks, Counts { passed: 1, failed: 0, running: 0, queued: 0 });
         assert_eq!(calls.borrow().len(), 3);
     }
 

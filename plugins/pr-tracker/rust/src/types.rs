@@ -59,6 +59,20 @@ pub struct Counts {
     pub passed: u32,
     pub failed: u32,
     pub running: u32,
+    /// Waiting to start. Older cached statuses have no count, which reads as none.
+    #[serde(default)]
+    pub queued: u32,
+}
+
+impl Counts {
+    /// Checks that haven't finished, running or waiting.
+    pub fn pending(&self) -> u32 {
+        self.running + self.queued
+    }
+
+    pub fn total(&self) -> u32 {
+        self.passed + self.failed + self.pending()
+    }
 }
 
 /// A failed check as the status lists it. Which fields are set depends on the provider. `id` and `job` are text, which

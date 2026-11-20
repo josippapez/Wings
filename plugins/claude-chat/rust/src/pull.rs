@@ -8,7 +8,10 @@
 use std::cell::RefCell;
 
 use serde_json::{Value, json};
-use wings_plugin::{format::truncate, host, task};
+use wings_plugin::{
+    format::{ago, truncate},
+    host, task,
+};
 
 use crate::chat;
 
@@ -23,6 +26,16 @@ pub enum State {
     Closed,
 }
 
+/// A check still to finish, as the tracker names it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pending {
+    pub name: String,
+    /// Running, else waiting to start.
+    pub running: bool,
+    /// When it started or was queued (ms), where the forge says.
+    pub since: Option<f64>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pr {
     pub number: u64,
@@ -33,8 +46,10 @@ pub struct Pr {
     pub state: State,
     pub draft: bool,
     pub review: String,
-    /// Passed, failed and running checks.
-    pub checks: (u64, u64, u64),
+    /// Passed, failed, running and queued checks.
+    pub checks: (u64, u64, u64, u64),
+    /// The checks still to finish, at most a few. Empty from a tracker that doesn't list them.
+    pub pending: Vec<Pending>,
     pub mergeable: bool,
     /// `gh` can merge it.
     pub github: bool,
@@ -75,10 +90,12 @@ pub struct Pull {
     /// The branch being read now, so a burst of triggers is one read.
     reading: Option<String>,
     pub merge: Merge,
+    /// The folder's default branch (`origin/HEAD`), by folder, once read: a PR is made from another branch, not this one.
+    default: Option<(String, Option<String>)>,
 }
 
 thread_local! {
-    static PULL: RefCell<Pull> = const { RefCell::new(Pull { load: Load::Idle, branch: None, reading: None, merge: Merge::Idle }) };
+    static PULL: RefCell<Pull> = const { RefCell::new(Pull { load: Load::Idle, branch: None, reading: None, merge: Merge::Idle, default: None }) };
 }
 
 pub fn with<T>(change: impl FnOnce(&mut Pull) -> T) -> T {
@@ -110,7 +127,13 @@ pub fn parse(text: &str) -> Load {
             state,
             draft: found["draft"] == true,
             review: text("review"),
-            checks: (count("passed"), count("failed"), count("running")),
+            checks: (count("passed"), count("failed"), count("running"), count("queued")),
+            pending: found["pending"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|c| Some(Pending { name: c["name"].as_str()?.to_owned(), running: c["state"] == "running", since: c["since"].as_f64() }))
+                .collect(),
             mergeable: found["mergeable"] == true,
             github: found["github"] == true,
         }),
@@ -118,14 +141,30 @@ pub fn parse(text: &str) -> Load {
     }
 }
 
-/// "1 failed, 2 passed", "3 running, 1 passed", "No checks", most pressing first.
-pub fn checks_text((passed, failed, running): (u64, u64, u64)) -> String {
+/// "AI guardrail PR check · queued 1 h": a pending check and for how long, at `now`.
+pub fn pending_text(check: &Pending, now: f64) -> String {
+    let word = if check.running { "running" } else { "queued" };
+    match check.since {
+        Some(since) => {
+            let waited = ago(since, now);
+            let waited = if waited == "just now" { "<1 min" } else { waited.trim_end_matches(" ago") };
+            format!("{} · {word} {waited}", check.name)
+        }
+        None => format!("{} · {word}", check.name),
+    }
+}
+
+/// "1 failed, 2 passed", "3 running, 1 queued, 1 passed", "No checks", most pressing first.
+pub fn checks_text((passed, failed, running, queued): (u64, u64, u64, u64)) -> String {
     let mut said = Vec::new();
     if failed > 0 {
         said.push(format!("{failed} failed"));
     }
     if running > 0 {
         said.push(format!("{running} running"));
+    }
+    if queued > 0 {
+        said.push(format!("{queued} queued"));
     }
     if passed > 0 {
         said.push(format!("{passed} passed"));
@@ -147,13 +186,21 @@ pub fn refresh() {
 /// `fresh` has the tracker ask the forge again instead of answering from the minute it keeps: after a merge.
 fn read(fresh: bool) {
     let Some((cwd, branch)) = chat::with(|c| Some((c.cwd.clone(), c.branch.clone()?))) else {
-        return with(|p| *p = Pull { load: Load::Idle, branch: None, reading: None, merge: Merge::Idle });
+        return with(|p| {
+            (p.load, p.branch, p.reading, p.merge) = (Load::Idle, None, None, Merge::Idle);
+        });
     };
     if with(|p| p.reading.as_deref() == Some(branch.as_str())) {
         return;
     }
     with(|p| p.reading = Some(branch.clone()));
+    let known = with(|p| p.default.as_ref().is_some_and(|(of, _)| *of == cwd));
     task::spawn(async move {
+        if !known {
+            let head = host::exec_in(&cwd, "git", &["rev-parse", "--abbrev-ref", "origin/HEAD"]).await;
+            let default = head.ok().filter(|out| out["code"] == 0).and_then(|out| default_branch(out["stdout"].as_str().unwrap_or_default()));
+            with(|p| p.default = Some((cwd.clone(), default)));
+        }
         let asked = host::call("callTool", json!({ "name": TOOL, "arguments": { "cwd": cwd, "fresh": fresh } })).await;
         let load = match asked {
             Ok(answer) if answer["isError"] != true => parse(answer["text"].as_str().unwrap_or_default()),
@@ -176,6 +223,27 @@ fn read(fresh: bool) {
     });
 }
 
+/// `main` from `git rev-parse --abbrev-ref origin/HEAD`'s `origin/main`.
+pub fn default_branch(printed: &str) -> Option<String> {
+    let line = printed.trim();
+    let name = line.split_once('/').map_or(line, |(_, name)| name);
+    (!name.is_empty() && name != "HEAD").then(|| name.to_owned())
+}
+
+/// Whether the message box offers Create PR: the chat's branch has no PR, isn't the folder's default branch (`main` or
+/// `master` when the remote doesn't say).
+pub fn can_create(c: &chat::Chat) -> bool {
+    let Some(branch) = c.branch.as_deref() else { return false };
+    with(|p| {
+        let default = p.default.as_ref().filter(|(of, _)| *of == c.cwd).and_then(|(_, default)| default.as_deref());
+        let is_default = match default {
+            Some(default) => default == branch,
+            None => matches!(branch, "main" | "master"),
+        };
+        p.branch.as_deref() == Some(branch) && matches!(p.load, Load::NoPr) && !is_default
+    })
+}
+
 /// The poll: read again while the panel shows. The poll itself only runs while Wings is in front.
 pub fn tick() {
     if chat::with(|c| visible(c)) {
@@ -186,9 +254,10 @@ pub fn tick() {
 /// After the chat read its folder's git (a switch, a turn's edits): a new branch is read at once, and so is a branch with
 /// no PR, which the turn may just have made one for. A read of a branch with a PR waits for the poll.
 pub fn after_git() {
-    let (branch, shown) = chat::with(|c| (c.branch.clone(), visible(c)));
+    // Not a poll: it follows git, so it reads with the panel hidden too, for the message box's Create PR.
+    let branch = chat::with(|c| c.branch.clone());
     let wanted = with(|p| p.branch != branch || matches!(p.load, Load::NoPr | Load::Failed(_)));
-    if shown && wanted {
+    if wanted {
         refresh();
     }
 }
@@ -297,7 +366,7 @@ mod tests {
 
     fn reset(branch: Option<&str>, shown: bool) {
         host::testing::set_now(1_000_000.0);
-        with(|p| *p = Pull { load: Load::Idle, branch: None, reading: None, merge: Merge::Idle });
+        with(|p| *p = Pull { load: Load::Idle, branch: None, reading: None, merge: Merge::Idle, default: None });
         chat::with(|c| {
             c.cwd = "/work/shop".into();
             c.branch = branch.map(str::to_owned);
@@ -332,7 +401,8 @@ mod tests {
     #[test]
     fn the_trackers_answer_is_a_pr_none_a_folder_without_a_forge_or_a_failure() {
         let pr = found();
-        assert_eq!((pr.number, pr.reference.as_str(), pr.state, pr.draft, pr.checks, pr.github, pr.mergeable), (12, "#12", State::Open, false, (3, 0, 1), true, false));
+        assert_eq!((pr.number, pr.reference.as_str(), pr.state, pr.draft, pr.checks, pr.github, pr.mergeable), (12, "#12", State::Open, false, (3, 0, 1, 0), true, false));
+        assert!(pr.pending.is_empty(), "an older tracker's answer has no pending list");
         assert_eq!(parse(r#"{ "supported": true, "found": false }"#), Load::NoPr);
         assert_eq!(parse(r#"{ "supported": false, "found": false }"#), Load::Unsupported);
         assert!(matches!(parse("not json"), Load::Failed(_)));
@@ -342,9 +412,23 @@ mod tests {
 
     #[test]
     fn the_checks_say_the_failing_ones_first() {
-        assert_eq!(checks_text((3, 1, 2)), "1 failed, 2 running, 3 passed");
-        assert_eq!(checks_text((4, 0, 0)), "4 passed");
-        assert_eq!(checks_text((0, 0, 0)), "No checks");
+        assert_eq!(checks_text((3, 1, 2, 0)), "1 failed, 2 running, 3 passed");
+        assert_eq!(checks_text((5, 0, 0, 1)), "1 queued, 5 passed");
+        assert_eq!(checks_text((1, 0, 1, 2)), "1 running, 2 queued, 1 passed");
+        assert_eq!(checks_text((4, 0, 0, 0)), "4 passed");
+        assert_eq!(checks_text((0, 0, 0, 0)), "No checks");
+    }
+
+    #[test]
+    fn the_trackers_pending_checks_are_read_and_said_with_how_long_they_have_waited() {
+        let said = FOUND.replace(r#""running": 1 }"#, r#""running": 0, "queued": 1 }, "pending": [{ "name": "AI guardrail PR check", "state": "queued", "since": 1000000.0 }, { "name": "e2e", "state": "running", "since": null }, { "state": "queued" }]"#);
+        let Load::Found(pr) = parse(&said) else { panic!("found") };
+        assert_eq!(pr.checks, (3, 0, 0, 1));
+        assert_eq!(pr.pending.len(), 2, "one with no name is skipped");
+        let hour = 1_000_000.0 + 3_600_000.0;
+        assert_eq!(pending_text(&pr.pending[0], hour), "AI guardrail PR check · queued 1 h");
+        assert_eq!(pending_text(&pr.pending[0], 1_000_000.0), "AI guardrail PR check · queued <1 min");
+        assert_eq!(pending_text(&pr.pending[1], hour), "e2e · running");
     }
 
     #[test]
@@ -397,11 +481,10 @@ mod tests {
     }
 
     #[test]
-    fn nothing_is_read_while_the_panel_is_not_shown_or_the_section_is_folded() {
+    fn the_poll_waits_for_the_panel_but_a_git_change_reads_for_the_message_box() {
         reset(Some("cart"), false);
         let asks = tracker(Ok(json!({ "text": FOUND })));
         tick();
-        after_git();
         task::block_on(async {});
         chat::with(|c| {
             c.side_open = true;
@@ -410,10 +493,42 @@ mod tests {
         tick();
         task::block_on(async {});
         assert_eq!(asks.get(), 0);
+        // A switch or a turn's edits read once with the panel hidden, so Create PR knows whether there is one.
+        after_git();
+        task::block_on(async {});
+        assert_eq!(asks.get(), 1);
         chat::with(|c| c.panel_closed.clear());
         tick();
         task::block_on(async {});
-        assert_eq!(asks.get(), 1);
+        assert_eq!(asks.get(), 2);
+    }
+
+    #[test]
+    fn the_default_branch_is_read_from_origin_head() {
+        assert_eq!(default_branch("origin/main\n").as_deref(), Some("main"));
+        assert_eq!(default_branch("upstream/release/2\n").as_deref(), Some("release/2"));
+        assert_eq!(default_branch("origin/HEAD"), None);
+        assert_eq!(default_branch(""), None);
+    }
+
+    #[test]
+    fn create_pr_is_offered_on_a_branch_with_none_that_isnt_the_default() {
+        let set = |branch: &str, load: Load, default: Option<&str>| {
+            reset(Some(branch), false);
+            chat::with(|c| c.cwd = "/shop".into());
+            with(|p| {
+                p.branch = Some(branch.into());
+                p.load = load;
+                p.default = default.map(|default| ("/shop".to_owned(), Some(default.to_owned())));
+            });
+            chat::with(|c| can_create(c))
+        };
+        assert!(set("fix/cart", Load::NoPr, Some("main")));
+        assert!(!set("main", Load::NoPr, Some("main")));
+        assert!(!set("develop", Load::NoPr, Some("develop")));
+        assert!(!set("master", Load::NoPr, None));
+        assert!(!set("fix/cart", Load::Found(found()), Some("main")));
+        assert!(!set("fix/cart", Load::Unsupported, Some("main")));
     }
 
     #[test]

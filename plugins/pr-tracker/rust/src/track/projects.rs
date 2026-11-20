@@ -167,6 +167,8 @@ fn row(item: &ListedPr, cwd: &str) -> Value {
         parts.push(format!("{} failing", plural(failed as usize, "check")));
     } else if running > 0 {
         parts.push("checks running".into());
+    } else if st.checks.queued > 0 {
+        parts.push("checks queued".into());
     }
     if unread > 0 {
         parts.push(format!("{unread} unread"));

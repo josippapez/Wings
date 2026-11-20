@@ -189,6 +189,7 @@ fn header(c: &Chat) -> Node {
     let actions = row()
         .prop("gap", "xs")
         .prop("align", "center")
+        .maybe(crate::claude_version::pill(c.narrow == Some(true)))
         .maybe(terminal)
         .child(crate::search::header_button(c))
         .child(crate::view_mode::mode_button(c))
@@ -1400,6 +1401,7 @@ fn pickers(c: &Chat) -> Vec<Node> {
     }
     pickers.extend(remote_button(c));
     pickers.extend(crate::branch::button_node(c));
+    pickers.extend(crate::pull_view::create_button(c));
     pickers.extend(crate::worktree::button_node(c));
     pickers
 }

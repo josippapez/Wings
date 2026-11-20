@@ -307,6 +307,8 @@ pub fn start() {
     prefs::session_panel().on_change(|place| session_panel_moved(place));
     // After your setting is read: a chat in front opens the session sidebar with it.
     crate::session_side::start();
+    // Which Claude Code this is, and whether a newer one is out, for the header's pill: once now, then hourly in front.
+    crate::claude_version::start();
     wings_plugin::poll::while_focused(crate::refs_view::ISSUES_EVERY_MS, false, crate::refs_view::refresh_issues);
     wings_plugin::poll::while_focused(crate::pull::EVERY_MS, false, crate::pull::tick);
     // The cache clock in the session panel counts down: a tick only has the page drawn again, and only while Wings is in front.

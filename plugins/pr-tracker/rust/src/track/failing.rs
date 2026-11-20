@@ -20,7 +20,7 @@ pub async fn failing_checks(pane_id: Option<&str>, cwd: Option<&str>) -> Result<
     };
     let head = format!("Pull request {}: {}\n{}", link_ref(&link), st.title, link.url);
     if st.failing.is_empty() {
-        return Ok(format!("{head}\n\nNo checks have failed: {} passed, {} running.", st.checks.passed, st.checks.running));
+        return Ok(format!("{head}\n\nNo checks have failed: {} passed, {} running, {} queued.", st.checks.passed, st.checks.running, st.checks.queued));
     }
     let list = load_failures(&link.url).await;
     // Anyone who can open a PR can write into its CI output, so the log is fenced as data, never instructions.

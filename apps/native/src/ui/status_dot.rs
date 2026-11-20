@@ -219,7 +219,10 @@ const VIEW_SPINNERS: &str = "view-spinners";
 /// it, a floating terminal, a menu) stays over them too. In the same draw of the window as `spinner_layer`, which starts
 /// it.
 pub fn view_spinner_layer(window: &Window) -> impl IntoElement {
-    let id = window.window_handle().window_id();
+    view_layer(window.window_handle().window_id())
+}
+
+fn view_layer(id: gpui::WindowId) -> gpui::Div {
     div()
         .absolute()
         .top_0()
@@ -236,6 +239,44 @@ pub fn view_spinner_layer(window: &Window) -> impl IntoElement {
             .left_0()
             .size_full(),
         )
+}
+
+/// `spinner_layer` (`Spinners::Window`) or `view_spinner_layer` (`Spinners::Views`) as a view of its own, so a step of
+/// its spinners redraws it and not the view it is in. A step tells the view drawing the rings to draw again, and the
+/// workspace's pieces draw again whenever the workspace view is told so (`workspace::parts`): in the workspace itself,
+/// each step drew the sidebar, title bar and main column again. Make it before the window's first draw: GPUI only redraws
+/// a view that is older than the frame it is first drawn in.
+pub struct SpinnerLayer(Spinners);
+
+#[derive(Clone, Copy)]
+pub enum Spinners {
+    Window,
+    Views,
+}
+
+impl SpinnerLayer {
+    pub fn new(spinners: Spinners) -> Self {
+        Self(spinners)
+    }
+
+    /// The layer to draw in the window's draw, where `spinner_layer` or `view_spinner_layer` would go. The window's
+    /// spinners also start the window's draw for the slot layers, as `spinner_layer` does.
+    pub fn in_draw(layer: &gpui::Entity<Self>, window: &Window, cx: &App) -> AnyElement {
+        if let Spinners::Window = layer.read(cx).0 {
+            slots::start_draw(window.window_handle().window_id());
+        }
+        layer.clone().into_any_element()
+    }
+}
+
+impl Render for SpinnerLayer {
+    fn render(&mut self, window: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+        let id = window.window_handle().window_id();
+        match self.0 {
+            Spinners::Window => div().absolute().top_0().left_0().size_full().child(rings(id, SPINNERS)),
+            Spinners::Views => view_layer(id),
+        }
+    }
 }
 
 /// The rings in the slots of `layer` in the window `id`, all at one angle, and a redraw of the view drawing them at the
@@ -416,6 +457,54 @@ mod tests {
             (29..=31).contains(&steps),
             "the layer turned {steps} times in 30 steps"
         );
+    }
+
+    /// The window as the workspace draws it: the piece, cached, and the spinner layer, a view of its own, over it.
+    struct Layered {
+        piece: gpui::Entity<Piece>,
+        spinners: gpui::Entity<SpinnerLayer>,
+        drawn: Rc<Cell<usize>>,
+    }
+
+    impl Render for Layered {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            self.drawn.set(self.drawn.get() + 1);
+            div()
+                .size_full()
+                .child(
+                    self.piece
+                        .clone()
+                        .cached(gpui::StyleRefinement::default().size(px(20.0))),
+                )
+                .child(SpinnerLayer::in_draw(&self.spinners, window, cx))
+        }
+    }
+
+    /// The workspace's pieces draw again whenever the workspace changes (`workspace::parts`): a step of the spinners isn't
+    /// such a change. It was: each step told the window's root view, so the sidebar, title bar and main column all drew
+    /// again 30 times a second while an agent worked anywhere.
+    #[test]
+    fn a_spinner_step_leaves_alone_a_piece_that_follows_the_window() {
+        let mut app = TestApp::new();
+        let piece_drawn = Rc::new(Cell::new(0));
+        let frame_drawn = Rc::new(Cell::new(0));
+        let (piece_counter, frame_counter) = (piece_drawn.clone(), frame_drawn.clone());
+        let mut window = app.open_window(move |_, cx| Layered {
+            piece: cx.new(|_| Piece(piece_counter)),
+            spinners: cx.new(|_| SpinnerLayer::new(Spinners::Window)),
+            drawn: frame_counter,
+        });
+        window.update(|frame, _, cx| {
+            let root = cx.entity();
+            frame.piece.update(cx, |_, cx| cx.observe(&root, |_, _, cx| cx.notify()).detach());
+        });
+        window.draw();
+        let (pieces, frames) = (piece_drawn.get(), frame_drawn.get());
+        for _ in 0..30 {
+            app.advance_clock(SPIN_STEP);
+            app.run_until_parked();
+        }
+        assert_eq!(piece_drawn.get(), pieces, "the piece kept its drawing");
     }
 
     /// A view a piece puts on screen, as a page in a tab, with a working agent's dot in it.

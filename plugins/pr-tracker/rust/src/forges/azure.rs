@@ -387,6 +387,7 @@ pub fn azure_status_of(pr: &Value, records: &[Value], remote: &AzureRemote) -> S
         .map(|r| match r["status"].as_str() {
             Some("approved") => "passed",
             Some("rejected" | "broken") => "failed",
+            Some("queued") => "queued",
             _ => "running",
         })
         .collect();
@@ -908,7 +909,11 @@ mod tests {
             policy("Require a merge strategy", "rejected", json!({ "configuration": { "type": { "id": "fa4e907d-c16b-4a4c-9dfa-4916e5d171ab", "displayName": "Require a merge strategy" }, "settings": { "allowSquash": true, "allowRebase": true } } })),
         ];
         let st = azure_status_of(&pr(json!({})), &records, &remote());
-        assert_eq!(st.checks, Counts { passed: 1, failed: 2, running: 0 });
+        assert_eq!(st.checks, Counts { passed: 1, failed: 2, running: 0, queued: 0 });
+        let waiting = azure_status_of(&pr(json!({})), &[policy("Build", "queued", json!({})), policy("Build", "running", json!({})), policy("Minimum number of reviewers", "queued", json!({ "configuration": { "type": { "id": "fa4e907d-c16b-4a4c-9dfa-4906e5d171dd", "displayName": "Minimum number of reviewers" } } }))], &remote());
+        assert_eq!((waiting.checks, waiting.label.as_str()), (Counts { passed: 0, failed: 0, running: 1, queued: 1 }, "Checks running"));
+        let only_queued = azure_status_of(&pr(json!({})), &[policy("Build", "queued", json!({}))], &remote());
+        assert_eq!((only_queued.checks.queued, only_queued.label.as_str()), (1, "Checks queued"));
         assert_eq!(
             st.failing,
             [

@@ -3,9 +3,12 @@
 //! thoughts included. Verbose is the Detailed setting of Settings (`prefs::detailed`); Thinking is `prefs::thinking`, which
 //! opens only the thoughts (`folds::is_open`). Both are kept for every chat, so a mode holds across tabs and restarts.
 
+#[cfg(feature = "chat")]
 use wings_plugin::ui::{Node, button};
 
-use crate::{chat::Chat, prefs};
+use crate::prefs;
+#[cfg(feature = "chat")]
+use crate::chat::Chat;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -33,6 +36,7 @@ impl Mode {
     }
 
     /// What it shows, for the button's tooltip.
+    #[cfg(feature = "chat")]
     fn shows(self) -> &'static str {
         match self {
             Mode::Normal => "tool calls folded into summaries",
@@ -42,6 +46,7 @@ impl Mode {
     }
 
     /// Ctrl+O cycles in this order, as in Claude Desktop.
+    #[cfg(any(feature = "chat", test))]
     pub fn next(self) -> Mode {
         match self {
             Mode::Normal => Mode::Thinking,
@@ -63,10 +68,12 @@ pub fn set(mode: Mode) {
     drop(prefs::thinking().set(thinking));
 }
 
+#[cfg(feature = "chat")]
 fn cycle() {
     set(Mode::of(prefs::detailed().get(), prefs::thinking().get()).next());
 }
 
+#[cfg(feature = "chat")]
 /// The header's button: the mode in use, which a click or Ctrl+O changes to the next.
 pub fn mode_button(c: &Chat) -> Node {
     let mode = Mode::of(c.detailed, c.show_thinking);
@@ -93,6 +100,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "chat")]
     fn thinking_opens_what_claude_thought_and_leaves_tool_calls_folded() {
         use crate::{chat, folds::{self, Kind}};
         chat::with(|c| {

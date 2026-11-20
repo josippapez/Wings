@@ -2,6 +2,16 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.62 · 2026-11-20
+
+- **Far less power while idle**: a spinning status dot anywhere no longer rebuilds the sidebar, title bar and main column 30 times a second. Wings sat at about a third of a CPU core with nothing happening.
+- **Backgrounds fill the chat**: the GPU background was drawn upside down, which left a strip at the bottom of the chat and showed it faintly behind the title bar.
+- **View modes in Settings**: Claude chat's Output setting is now Normal, Thinking or Verbose, the same switch as the chat's header and Ctrl-O. "What Verbose opens" picks which kinds of output Verbose shows open.
+- **Claude Code's version in the top bar**: a quiet pill shows the version, and turns into an Update button when a newer one is out.
+- **Queued checks say so**: a check waiting to start reads "queued", not "running", and the side panel names each one and how long it has waited.
+- **A smaller pull request section**: hidden when the branch has no pull request, with a Create PR button beside the branch button instead.
+- **Fixed**: picking a menu option that hangs below the Settings window closed Settings.
+
 ## 0.2.61 · 2026-11-20
 
 - **A working chat costs far less power**: its spinners, working dots and "Working…" line move in a layer of their own, so they no longer redraw the whole conversation 30 times a second. While Claude worked, that kept Wings at about a full CPU core.
