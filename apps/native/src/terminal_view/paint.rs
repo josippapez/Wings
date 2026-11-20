@@ -565,7 +565,7 @@ impl Render for TerminalView {
                         )
                     };
                     // In one layer, so the quads share one place in the window's draw order instead of each taking one.
-                    window.paint_layer(bounds, |window| {
+                    window.paint_layer(|window| {
                         let background = data.snapshot.background;
                         for (at, color) in spans(&data.snapshot.cells, |cell| {
                             (cell.bg != background).then_some(cell.bg)
@@ -615,7 +615,7 @@ impl Render for TerminalView {
                         }
                     }
                     paint_images(window, bounds, &data, ImageLayer::AboveText);
-                    window.paint_layer(bounds, |window| {
+                    window.paint_layer(|window| {
                         for (at, color) in spans(&data.snapshot.cells, |cell| {
                             cell.selected.then_some(SELECTION)
                         }) {

@@ -172,14 +172,6 @@ fn opacity_at(seconds: f32) -> f32 {
     0.45 + 0.55 * (0.5 + 0.5 * (phase * TAU).cos())
 }
 
-impl IntoElement for Shimmer {
-    type Element = Self;
-
-    fn into_element(self) -> Self {
-        self
-    }
-}
-
 impl Element for Shimmer {
     type RequestLayoutState = AnyElement;
     type PrepaintState = ();

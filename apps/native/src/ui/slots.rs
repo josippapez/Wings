@@ -182,14 +182,6 @@ pub struct SlotLayer {
     children: Vec<(SharedString, AnyElement)>,
 }
 
-impl IntoElement for SlotLayer {
-    type Element = Self;
-
-    fn into_element(self) -> Self {
-        self
-    }
-}
-
 impl Element for SlotLayer {
     type RequestLayoutState = ();
     type PrepaintState = Vec<(AnyElement, Slot)>;

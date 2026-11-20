@@ -72,14 +72,6 @@ thread_local! {
 /// When the spinners' clock started: the first time one was drawn.
 static ORIGIN: OnceLock<Instant> = OnceLock::new();
 
-impl IntoElement for Spin {
-    type Element = Self;
-
-    fn into_element(self) -> Self {
-        self
-    }
-}
-
 impl Element for Spin {
     type RequestLayoutState = AnyElement;
     type PrepaintState = ();

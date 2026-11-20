@@ -285,10 +285,17 @@ fn chat_at_work() -> serde_json::Value {
     let mut turns: Vec<serde_json::Value> = (0..120u64)
         .map(|turn| {
             let id = 100 + turn * 10;
+            // With the copy and bookmark buttons under each message, as Claude chat draws them: every one is a focusable
+            // control the window keeps track of in each frame.
+            let button = |at: u64, label: &str| {
+                json!({ "id": at, "type": "Button", "props": { "onClick": format!("{at}:onClick") }, "children": [{ "id": at + 1000, "type": "#text", "text": label }] })
+            };
             json!({ "id": id, "type": "Card", "props": {}, "children": [
                 text(id + 1, format!("Turn {turn}: refactor the API client"), json!({ "weight": "strong" })),
                 text(id + 3, "The client now retries once on a dropped connection and reads the token from the keychain. ".repeat(4), json!({})),
                 text(id + 5, "All 214 checks passed in 12.3 s.".into(), json!({ "tone": "muted" })),
+                button(id + 7, "Copy"),
+                button(id + 8, "Bookmark"),
             ] })
         })
         .collect();

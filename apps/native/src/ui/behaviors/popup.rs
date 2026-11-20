@@ -89,14 +89,6 @@ pub struct PopupLayout {
     content_box: LayoutId,
 }
 
-impl IntoElement for Popup {
-    type Element = Self;
-
-    fn into_element(self) -> Self {
-        self
-    }
-}
-
 impl Element for Popup {
     type RequestLayoutState = PopupLayout;
     type PrepaintState = ();

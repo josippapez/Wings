@@ -207,7 +207,7 @@ fn wedge_path(
     wedge: &Wedge,
     inset: f32,
     mut path: PathBuilder,
-) -> Option<gpui::Path<Pixels>> {
+) -> Option<gpui::Path> {
     let r0 = geometry.inner + wedge.ring as f32 * geometry.ring_width;
     let r1 = r0 + geometry.ring_width;
     if r1 - r0 < 0.5 || (wedge.to - wedge.from) * r1 < 0.5 {

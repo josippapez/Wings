@@ -433,14 +433,6 @@ pub struct Tween<E> {
     animate: Option<Animate<E>>,
 }
 
-impl<E: IntoElement + 'static> IntoElement for Tween<E> {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
 impl<E: IntoElement + 'static> Element for Tween<E> {
     type RequestLayoutState = AnyElement;
     type PrepaintState = ();
@@ -557,14 +549,6 @@ pub struct Surface {
     origin: (f32, f32),
     scale: Option<f32>,
     child: AnyElement,
-}
-
-impl IntoElement for Surface {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
 }
 
 impl Element for Surface {
@@ -734,14 +718,6 @@ fn inert_out(phase: Phase, element: impl IntoElement) -> AnyElement {
 /// Lays out and paints its child, but makes its hitboxes under an empty content mask, so none of them is ever under
 /// the pointer: the child's clicks, hovers and occlusion pass through to what is under it.
 struct Inert(AnyElement);
-
-impl IntoElement for Inert {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
 
 impl Element for Inert {
     type RequestLayoutState = ();

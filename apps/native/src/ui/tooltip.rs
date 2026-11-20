@@ -150,14 +150,6 @@ pub fn tooltip_exit() -> TooltipExit {
 
 pub struct TooltipExit;
 
-impl IntoElement for TooltipExit {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
 impl Element for TooltipExit {
     type RequestLayoutState = ();
     type PrepaintState = Option<AnyElement>;

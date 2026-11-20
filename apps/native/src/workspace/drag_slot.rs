@@ -7,7 +7,7 @@ use std::{cell::RefCell, collections::HashMap, hash::Hash, rc::Rc};
 
 use gpui::{
     AnyElement, App, Axis, Bounds, Element, ElementId, GlobalElementId, InspectorElementId,
-    IntoElement, LayoutId, Pixels, Window, point, px,
+    LayoutId, Pixels, Window, point, px,
 };
 
 /// How far the pointer moves before a press is a drag, so a click still selects: the desktop's `trackDrag` threshold.
@@ -40,14 +40,6 @@ impl<K> Slot<K> {
             axis,
             at,
         }
-    }
-}
-
-impl<K: Hash + Eq + Clone + 'static> IntoElement for Slot<K> {
-    type Element = Self;
-
-    fn into_element(self) -> Self {
-        self
     }
 }
 

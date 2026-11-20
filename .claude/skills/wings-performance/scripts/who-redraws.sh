@@ -21,6 +21,10 @@ continue
 CMDS
 WINGS_STACKS="$out/stacks.txt" lldb -p "$pid" --batch -s "$out/cmds" -o 'process detach' > "$out/lldb.log" 2>&1 &
 sleep "$secs"
-# The first interrupt stops `continue`; a second is sometimes needed before lldb runs the detach.
-for _ in 1 2 3; do pkill -INT -f "lldb -p $pid" || true; sleep 3; pgrep -f "lldb -p $pid" >/dev/null || break; done
+# The first interrupt stops `continue`; more are sometimes needed before lldb runs the detach. A debugger left
+# attached costs Wings and itself most of a core, so say so loudly if it is still there.
+for _ in 1 2 3 4 5 6 7 8; do pkill -INT -f "lldb -p $pid" || true; sleep 3; pgrep -f "lldb -p $pid" >/dev/null || break; done
+if pgrep -f "lldb -p $pid" >/dev/null; then
+    echo "lldb is STILL ATTACHED to Wings ($pid): run pkill -INT -f 'lldb -p $pid' until pgrep finds no lldb" >&2
+fi
 python3 "$here/stacks.py" "$out/stacks.txt" "$secs"
