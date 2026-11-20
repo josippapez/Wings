@@ -15,7 +15,12 @@ use std::{
 
 use serde_json::{Value, json};
 
-use super::{FrameLink, FrameState, MAX_BROADCAST_CHARS, Role, Shared, USER_ACTION};
+use super::{FrameLink, FrameState, Role, Shared, USER_ACTION};
+
+/// The most JSON one page may hand another of its plugin's, in JS string units. A Claude Code mod's pane, which Claude
+/// chat hands its sidebar whole, came to 110 KB for a feedback inbox of 97 entries; the 64 KB a broadcast is held to
+/// refused it, and the pane never loaded.
+pub const MAX_PAGE_MESSAGE_CHARS: usize = 1_000_000;
 use crate::page::runtime::{Delivery, Message};
 
 /// The most writes a page may be handed and not have made yet.
@@ -104,8 +109,8 @@ impl Shared {
             (to.ok_or_else(|| format!("No page is named {name}"))?, sender)
         };
         let text = json!({ "from": sender, "message": message, "write": write }).to_string();
-        if text.encode_utf16().count() > MAX_BROADCAST_CHARS {
-            return Err("A page's message is limited to 64 KB".into());
+        if text.encode_utf16().count() > MAX_PAGE_MESSAGE_CHARS {
+            return Err("A page's message is limited to 1 MB".into());
         }
         if write {
             let mut pages = self.pages.lock().unwrap();

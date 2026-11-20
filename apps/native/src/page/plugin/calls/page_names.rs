@@ -128,6 +128,11 @@ fn a_sidebar_page_takes_a_name_hears_the_chat_and_hands_on_one_write_for_each_cl
     // It names itself, hears the chat, and isn't a tab to bring to the front. Showing a subagent renames it.
     assert_eq!(side.call("namePage", json!({ "name": "subagent-side" })), Ok(Value::Null));
     assert_eq!(chat.call("tellPage", json!({ "name": "subagent-side", "message": { "kind": "show" } })), Ok(Value::Null));
+    // A Claude Code mod's pane goes whole: a feedback inbox of 97 entries was 110 KB, over the 64 KB a page's message
+    // used to be, and its sidebar never heard it. Only past 1 MB is it refused.
+    let pane = |chars: usize| json!({ "name": "subagent-side", "message": { "tree": "x".repeat(chars) } });
+    assert_eq!(chat.call("tellPage", pane(110_000)), Ok(Value::Null));
+    assert_eq!(chat.call("tellPage", pane(1_000_000)), Err("A page's message is limited to 1 MB".into()));
     assert_eq!(chat.call("showPage", json!({ "name": "subagent-side" })), Err("subagent-side isn't shown as a tab".into()));
     assert_eq!(side.call("namePage", json!({ "name": "subagent-side:s1:a1" })), Ok(Value::Null));
     assert_eq!(chat.call("tellPage", json!({ "name": "subagent-side", "message": null })), Err("No page is named subagent-side".into()));
