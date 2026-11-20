@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.69 · 2026-11-20
+
+- **Usage in the sidebar stays current with less asking**: Claude chat passes on the usage Claude Code reports with its replies, in the background too, and Wings skips its own once-a-minute check for an account a chat just reported. The plan limit's note reads the same numbers.
+- **An approval shows as what you allowed**: Allow and retry shows a check and the command, not the long message auto mode needs (Claude chat 0.36.1).
+- **Claude chat 0.37.0**: the above.
+
 ## 0.2.68 · 2026-11-20
 
 - **Past sessions show their first message again** under sessions Wings named, like the ones run from Claude chat.
