@@ -351,6 +351,14 @@ fn resumes(args: &[String]) -> Option<String> {
     args.iter().find_map(|arg| arg.strip_prefix("--resume=")).filter(|id| !id.is_empty()).map(str::to_owned)
 }
 
+/// Whether a program is Claude Code started for a chat: `claude` with the chat's stream-json input and output. Wings sets
+/// `CLAUDE_CODE_NOTIFICATIONS_HOST` for it, so Claude Code pushes a mod's notifications as `ui_notify` lines. Any other
+/// program, and any other use of `claude`, runs without it.
+fn is_chat_claude(program: &str, args: &[String]) -> bool {
+    let has = |flag: &str| args.iter().any(|arg| arg == flag);
+    program == "claude" && has("--input-format=stream-json") && has("--output-format=stream-json")
+}
+
 /// A session's id as a page says it: letters, digits and dashes.
 fn session_id(value: Option<&Value>) -> Result<Option<String>, String> {
     match value {
@@ -425,6 +433,7 @@ impl Shared {
             serde_json::from_value(params.clone()).map_err(|error| error.to_string())?;
         let cwd = exec_cwd(&program, Some(&cwd), &access.env.projects(), &self.pane_folders(), false)?;
         let config_dir = access.claude_config_dir(account.as_ref(), &cwd)?;
+        let notifications = is_chat_claude(&program, &args);
         // What the program reads first, sent with its start: what the page asks as it opens, never an answer to the
         // program's questions, whose ids it makes up later.
         let input = match params.get("input") {
@@ -465,7 +474,7 @@ impl Shared {
             && let Some(socket) = access.env.job_server()
         {
             self.room(&self.processes.lock().unwrap(), &token)?;
-            let launch = process::launch(&access.plugin, &program, &args, &cwd, config_dir.as_deref())?;
+            let launch = process::launch(&access.plugin, &program, &args, &cwd, config_dir.as_deref(), notifications)?;
             let owner = json!({
                 "plugin": self.config.id, "tab": tab, "token": shown(&token), "program": program, "args": args,
                 "cwd": cwd.to_string_lossy(), "session": session,
@@ -497,7 +506,7 @@ impl Shared {
         }
         let started = running.clone();
         let spawned = thread::Builder::new().name("plugin-process".into()).spawn(move || {
-            let exit = process::run_under(&access.plugin, &here, &started.program, &started.args, &started.cwd, config_dir.as_deref(), |line| {
+            let exit = process::run_under(&access.plugin, &here, &started.program, &started.args, &started.cwd, config_dir.as_deref(), notifications, |line| {
                 started.heard(None, line);
                 true
             });
@@ -817,4 +826,22 @@ impl Shared {
 /// The token as the frame named it, without the frame's id in front.
 fn shown(token: &str) -> &str {
     token.split_once(':').map_or(token, |(_, own)| own)
+}
+
+#[cfg(test)]
+mod chat_claude_tests {
+    use super::is_chat_claude;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|arg| arg.to_string()).collect()
+    }
+
+    #[test]
+    fn only_a_chats_claude_code_gets_the_notifications_variable() {
+        let chat = args(&["-p", "--input-format=stream-json", "--output-format=stream-json", "--verbose"]);
+        assert!(is_chat_claude("claude", &chat));
+        assert!(!is_chat_claude("git", &chat), "another program a plugin runs");
+        assert!(!is_chat_claude("claude", &args(&["auth", "status"])), "claude for something else");
+        assert!(!is_chat_claude("claude", &args(&["-p", "--output-format=stream-json"])), "a one-shot run");
+    }
 }

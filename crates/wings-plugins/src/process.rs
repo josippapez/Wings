@@ -161,11 +161,12 @@ pub fn run(
     cwd: &Path,
     on_line: impl FnMut(&str) -> bool,
 ) -> Result<Exit, String> {
-    run_under(plugin, process, program, args, cwd, None, on_line)
+    run_under(plugin, process, program, args, cwd, None, false, on_line)
 }
 
 /// `run` with `CLAUDE_CONFIG_DIR` set to `config_dir`, the Claude Code account the program runs under. The host picks it
-/// from an account it knows; a plugin never names the folder.
+/// from an account it knows; a plugin never names the folder. `notifications` sets `CLAUDE_CODE_NOTIFICATIONS_HOST`,
+/// which makes Claude Code push a mod's notifications to its host; the host decides it, a plugin never names it.
 pub fn run_under(
     plugin: &Plugin,
     process: &Arc<Process>,
@@ -173,9 +174,10 @@ pub fn run_under(
     args: &[String],
     cwd: &Path,
     config_dir: Option<&Path>,
+    notifications: bool,
     mut on_line: impl FnMut(&str) -> bool,
 ) -> Result<Exit, String> {
-    let (stdout, stderr) = start(plugin, process, program, args, cwd, config_dir).inspect_err(|_| process.close())?;
+    let (stdout, stderr) = start(plugin, process, program, args, cwd, config_dir, notifications).inspect_err(|_| process.close())?;
     let errors = thread::spawn(move || tail(stderr));
     let mut reader = BufReader::new(stdout);
     let mut line = Vec::new();
@@ -216,6 +218,9 @@ pub fn run_under(
     Ok(Exit { code: status.code(), stderr })
 }
 
+/// Set to make Claude Code push a mod's `ui.notify` to its host as a `ui_notify` line.
+pub const NOTIFICATIONS_HOST: &str = "CLAUDE_CODE_NOTIFICATIONS_HOST";
+
 /// A program `check` allows, as another process starts it for the plugin: the file, its arguments, its folder and the
 /// whole environment it would have had here.
 #[derive(Debug)]
@@ -227,11 +232,14 @@ pub struct Launch {
 }
 
 /// What `run_under` would start, for the terminal server to start instead, so the program outlives Wings.
-pub fn launch(plugin: &Plugin, program: &str, args: &[String], cwd: &Path, config_dir: Option<&Path>) -> Result<Launch, String> {
+pub fn launch(plugin: &Plugin, program: &str, args: &[String], cwd: &Path, config_dir: Option<&Path>, notifications: bool) -> Result<Launch, String> {
     check(plugin, program, args, cwd)?;
     let mut command = command(program, args, Some(cwd))?;
     if let Some(dir) = config_dir {
         command.env("CLAUDE_CONFIG_DIR", dir);
+    }
+    if notifications {
+        command.env(NOTIFICATIONS_HOST, "1");
     }
     let mut env: std::collections::BTreeMap<String, String> =
         std::env::vars_os().filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?))).collect();
@@ -251,11 +259,14 @@ pub fn launch(plugin: &Plugin, program: &str, args: &[String], cwd: &Path, confi
 }
 
 /// Checks the command, starts it with the writer on its input, and gives its output pipes.
-fn start(plugin: &Plugin, process: &Process, program: &str, args: &[String], cwd: &Path, config_dir: Option<&Path>) -> Result<(ChildStdout, ChildStderr), String> {
+fn start(plugin: &Plugin, process: &Process, program: &str, args: &[String], cwd: &Path, config_dir: Option<&Path>, notifications: bool) -> Result<(ChildStdout, ChildStderr), String> {
     check(plugin, program, args, cwd)?;
     let mut command = command(program, args, Some(cwd))?;
     if let Some(dir) = config_dir {
         command.env("CLAUDE_CONFIG_DIR", dir);
+    }
+    if notifications {
+        command.env(NOTIFICATIONS_HOST, "1");
     }
     let mut child = command.stdin(Stdio::piped()).spawn().map_err(|error| error.to_string())?;
     let (stdout, stderr, stdin) = (child.stdout.take().unwrap(), child.stderr.take().unwrap(), child.stdin.take().unwrap());
@@ -406,8 +417,8 @@ mod tests {
     #[test]
     fn a_launch_is_checked_and_carries_the_environment_the_program_would_get_here() {
         let p = with_processes(&["cat []"]);
-        assert!(launch(&p, "cat", &args(&["-u"]), Path::new("/tmp"), None).unwrap_err().contains("may not run cat"));
-        let launched = launch(&p, "cat", &[], Path::new("/tmp"), Some(Path::new("/accounts/work"))).unwrap();
+        assert!(launch(&p, "cat", &args(&["-u"]), Path::new("/tmp"), None, false).unwrap_err().contains("may not run cat"));
+        let launched = launch(&p, "cat", &[], Path::new("/tmp"), Some(Path::new("/accounts/work")), false).unwrap();
         assert_eq!(launched.program, crate::exec::find_program("cat").unwrap());
         assert_eq!(launched.cwd, Path::new("/tmp"));
         let env = |key: &str| launched.env.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
@@ -425,7 +436,7 @@ mod tests {
         let p = with_processes(&[&format!("sh {script}")]);
         let heard = |config: Option<&Path>| {
             let mut lines = Vec::new();
-            run_under(&p, &Process::new(), "sh", &args(&[&script]), Path::new("/tmp"), config, |line| {
+            run_under(&p, &Process::new(), "sh", &args(&[&script]), Path::new("/tmp"), config, false, |line| {
                 lines.push(line.to_owned());
                 true
             })
@@ -435,6 +446,30 @@ mod tests {
         assert_eq!(heard(Some(Path::new("/accounts/work"))), ["dir:/accounts/work"]);
         // Without one the program keeps Wings' own environment.
         assert_eq!(heard(None), [format!("dir:{}", std::env::var("CLAUDE_CONFIG_DIR").unwrap_or_default())]);
+        std::fs::remove_file(&script).unwrap();
+    }
+
+    #[test]
+    fn the_notifications_variable_is_set_only_when_the_host_asks() {
+        let p = with_processes(&["cat []"]);
+        let has = |on: bool| launch(&p, "cat", &[], Path::new("/tmp"), None, on).unwrap().env.iter().any(|(k, v)| k == NOTIFICATIONS_HOST && v == "1");
+        assert!(has(true));
+        assert!(std::env::var_os(NOTIFICATIONS_HOST).is_some() || !has(false));
+        let script = std::env::temp_dir().join(format!("wings-notify-{}.sh", std::process::id()));
+        std::fs::write(&script, "echo \"n:$CLAUDE_CODE_NOTIFICATIONS_HOST\"").unwrap();
+        let script = script.to_string_lossy().into_owned();
+        let p = with_processes(&[&format!("sh {script}")]);
+        let heard = |on: bool| {
+            let mut lines = Vec::new();
+            run_under(&p, &Process::new(), "sh", &args(&[&script]), Path::new("/tmp"), None, on, |line| {
+                lines.push(line.to_owned());
+                true
+            })
+            .unwrap();
+            lines
+        };
+        assert_eq!(heard(true), ["n:1"]);
+        assert_eq!(heard(false), [format!("n:{}", std::env::var(NOTIFICATIONS_HOST).unwrap_or_default())]);
         std::fs::remove_file(&script).unwrap();
     }
 }
