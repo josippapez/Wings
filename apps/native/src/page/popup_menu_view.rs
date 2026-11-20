@@ -8,6 +8,11 @@ use serde_json::{Value, json};
 /// What a stack's listener for the children's places hears: where each child of the stack was drawn.
 pub(super) type ChildrenWatch = Box<dyn Fn(Vec<Bounds<Pixels>>, &mut Window, &mut gpui::App) + 'static>;
 
+/// What turns the places of the elements a stack draws into the places of its children, for a column drawn a window at a
+/// time (`windowed_column`), whose elements are a few of its children between spacers.
+pub(super) type ChildrenPlaces =
+    Box<dyn Fn(Vec<Bounds<Pixels>>, &mut Window, &mut gpui::App) -> Vec<Bounds<Pixels>> + 'static>;
+
 /// The index in `stack.children` of the node behind each element the stack draws, in order: `PageView::items` makes one
 /// element of a run of plain strings, and none of an empty run, and `rising` one of each child.
 fn element_children(stack: &tree::Stack) -> Vec<usize> {
@@ -46,18 +51,25 @@ impl PageView {
     /// and a listener for the right button that comes after what is inside it (GPUI hands a press to the innermost
     /// element first), so it finds what they recorded under the pointer. It sends the page where the press was, which
     /// child was under it, and the link or code that was, then stops the press there. `watch` is what else wants the
-    /// children's places, which GPUI keeps one listener for.
+    /// children's places, which GPUI keeps one listener for. `children` makes the children's places of the elements'.
     pub(super) fn with_context_menu(
         &self,
         element: gpui::Div,
         stack: &tree::Stack,
         watch: Option<ChildrenWatch>,
+        children: Option<ChildrenPlaces>,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let Some(handler) = stack.on_context_menu.clone() else {
-            return match watch {
-                Some(watch) => element.on_children_prepainted(watch),
-                None => element,
+            return match (watch, children) {
+                (Some(watch), None) => element.on_children_prepainted(watch),
+                (None, None) => element,
+                (watch, Some(children)) => element.on_children_prepainted(move |bounds, window, cx| {
+                    let bounds = children(bounds, window, cx);
+                    if let Some(watch) = &watch {
+                        watch(bounds, window, cx);
+                    }
+                }),
             };
         };
         let places: Rc<RefCell<Vec<Bounds<Pixels>>>> = Rc::default();
@@ -65,6 +77,10 @@ impl PageView {
         let slots = element_children(stack);
         element
             .on_children_prepainted(move |bounds, window, cx| {
+                let bounds = match &children {
+                    Some(children) => children(bounds, window, cx),
+                    None => bounds,
+                };
                 if let Some(watch) = &watch {
                     watch(bounds.clone(), window, cx);
                 }

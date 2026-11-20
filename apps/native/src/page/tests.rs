@@ -3296,9 +3296,8 @@ impl gpui::Render for InTab {
     }
 }
 
-/// What a keystroke in a long chat's message box costs: how many times the page renders for it.
-#[test]
-fn a_key_typed_in_a_long_chat_renders_the_page_once() {
+/// The long chat in a tab, drawn, with the keyboard in its message box.
+fn open_long_chat() -> (TestApp, TestAppWindow<InTab>, gpui::Entity<PageView>) {
     let mut app = TestApp::new();
     app.background_executor().allow_parking();
     let host = hosted(&mut app);
@@ -3314,13 +3313,29 @@ fn a_key_typed_in_a_long_chat_renders_the_page_once() {
     }
     window.update(|_, window, cx| page.read(cx).input_focus("Message", cx).expect("the box").focus(window, cx));
     window.draw();
+    (app, window, page)
+}
+
+/// What a keystroke in a long chat's message box costs: how many times the page renders for it.
+#[test]
+fn a_key_typed_in_a_long_chat_renders_the_page_once() {
+    let (app, mut window, page) = open_long_chat();
     let renders = |window: &TestAppWindow<InTab>| window.read(|_, cx| page.read(cx).renders());
     let before = renders(&window);
     let keys = "hello there";
     for key in keys.chars() {
+        let trees = window.read(|_, cx| page.read(cx).trees_sent());
         window.simulate_input(&key.to_string());
         window.draw();
-        // The page's echo of the key arrives from its own thread.
+        // The page's echo of the key arrives from its own thread. Typed before it came, the next key makes it stale, which
+        // draws the page: under a whole test run's load the echo took longer than a fixed wait.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while window.read(|_, cx| page.read(cx).trees_sent()) == trees {
+            assert!(Instant::now() < deadline, "no echo of {key:?}");
+            app.run_until_parked();
+            window.draw();
+            thread::sleep(Duration::from_millis(2));
+        }
         let until = Instant::now() + Duration::from_millis(30);
         while Instant::now() < until {
             app.run_until_parked();
@@ -3340,4 +3355,201 @@ fn a_key_typed_in_a_long_chat_renders_the_page_once() {
     // The field drawing its new text is one; the page's echo of it and the field's own notice of the change were two
     // more, each a whole long chat laid out again.
     assert!(rendered <= keys.len() + 1, "{rendered} renders for {} keys", keys.len());
+}
+
+/// A key typed in a long chat's message box draws the messages in view and half a view either side, not all 120: each
+/// one drawn is laid out and its lines wrapped again.
+#[test]
+fn a_key_typed_in_a_long_chat_lays_out_only_the_messages_in_view() {
+    let (app, mut window, page) = open_long_chat();
+    window.simulate_input("x");
+    window.draw();
+    app.run_until_parked();
+    window.draw();
+    let (drawn, of, _) = window.read(|_, cx| page.read(cx).windowed_drawn(3)).expect("the chat is drawn a window at a time");
+    eprintln!("[measure] a key in a {of}-message chat drew messages {drawn:?}, {} of them", drawn.len());
+    assert_eq!(of, 120);
+    assert!(drawn.len() * 4 <= of, "{drawn:?}");
+}
+
+/// Row `i` of a long column: one to five lines, as a chat's messages are, so a row never drawn isn't as tall as the
+/// guess for it.
+fn varied_row(i: usize) -> Value {
+    text(1_000 + 2 * i, 1_001 + 2 * i, format!("Row {i}. {}", "Some words of a reply. ".repeat(i * 7 % 12)))
+}
+
+/// 120 varied rows in the column `3` of the `Scroll` `2`, which has `props`.
+fn long_column(props: Value) -> String {
+    fake::page("page", move |_| {
+        let rows: Vec<Value> = (0..120).map(varied_row).collect();
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            { "id": 2, "type": "Scroll", "props": props.clone(), "children": [{ "id": 3, "type": "Stack", "props": {}, "children": rows }] }] })
+    })
+}
+
+/// The wheel turned by `by` points over the page's scroll, down for less than 0.
+fn scroll_by(window: &mut View, by: f32) {
+    window.simulate_event(gpui::ScrollEvent {
+        position: point(px(60.0), px(150.0)),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(by))),
+        modifiers: gpui::Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+        source: Default::default(),
+    });
+}
+
+/// A few draws, for what a draw asks of the next.
+fn draws(app: &TestApp, window: &mut View) {
+    for _ in 0..4 {
+        app.run_until_parked();
+        window.draw();
+    }
+}
+
+/// A long column draws the rows in view, at its top and scrolled to its middle, and none far from them.
+#[test]
+fn a_long_column_draws_the_rows_in_view_wherever_it_is_scrolled() {
+    let (app, mut window) = open_narrow(long_column(json!({})), 500.0);
+    settle(&app, &mut window, |view| view.windowed_drawn(2).is_some_and(|(_, of, tops)| of == 120 && tops.len() == 120));
+    let (drawn, _, _) = window.read(|view, _| view.windowed_drawn(2)).unwrap();
+    assert!(drawn.start == 0 && drawn.len() < 40, "{drawn:?}");
+    scroll_by(&mut window, -3_000.0);
+    draws(&app, &mut window);
+    let (drawn, _, tops) = window.read(|view, _| view.windowed_drawn(2)).unwrap();
+    // Every row with any of it in the 400 point window is drawn.
+    let in_view: Vec<usize> = (0..120).filter(|at| tops[*at] < 400.0 && tops.get(at + 1).is_none_or(|next| *next > 0.0)).collect();
+    assert!(in_view.len() > 2 && in_view.iter().all(|at| drawn.contains(at)), "{in_view:?} not all in {drawn:?}");
+    assert!(drawn.start > 20 && drawn.len() < 40, "{drawn:?}");
+}
+
+/// A long column told to scroll to a row it hasn't drawn puts that row at the top of the view, though the rows above it
+/// were only guessed at, and keeps it there.
+#[test]
+fn a_long_column_scrolled_to_a_row_it_has_not_drawn_puts_it_at_the_top() {
+    let (app, mut window) = open_narrow(long_column(json!({ "scrollTo": { "index": 100, "token": 1 } })), 500.0);
+    let at_top = |view: &PageView| view.windowed_drawn(2).is_some_and(|(drawn, _, tops)| drawn.contains(&100) && tops[100].abs() < 1.0);
+    settle(&app, &mut window, at_top);
+    draws(&app, &mut window);
+    let tops = window.read(|view, _| view.windowed_drawn(2)).unwrap().2;
+    assert!(tops[100].abs() < 1.0, "row 100 is {} below the view's top", tops[100]);
+}
+
+/// 100 varied rows and three more for each press of More, in a following `Scroll` whose rows rise in.
+fn growing_column() -> String {
+    counting(|heard| {
+        let rows: Vec<Value> = (0..100 + 3 * heard as usize).map(varied_row).collect();
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            { "id": 1, "type": "Button", "props": { "onClick": "1:onClick" }, "children": [text_node(9, "More")] },
+            { "id": 2, "type": "Scroll", "props": { "follow": "end" }, "children": [{ "id": 3, "type": "Stack", "props": { "enter": "rise" }, "children": rows }] }] })
+    })
+}
+
+/// A following long column stays at its end as rows come, and draws the newest.
+#[test]
+fn a_following_long_column_stays_at_its_end_as_rows_come() {
+    let (app, mut window) = open_narrow(growing_column(), 500.0);
+    settle(&app, &mut window, |view| view.follow_scrolled(2).is_some_and(|(top, max)| max > 1_000.0 && top >= max - 1.0));
+    for more in 1..=3usize {
+        window.simulate_click(point(px(30.0), px(16.0)), MouseButton::Left);
+        let newest = format!("Row {}.", 99 + 3 * more);
+        settle(&app, &mut window, move |view| view.text().contains(&newest));
+        draws(&app, &mut window);
+        let (drawn, of, _) = window.read(|view, _| view.windowed_drawn(2)).unwrap();
+        let (top, max) = window.read(|view, _| view.follow_scrolled(2)).unwrap();
+        assert!(of == 100 + 3 * more && drawn.end == of && drawn.len() < 40, "{drawn:?} of {of}");
+        assert!(top >= max - 1.0, "scrolled {top} of {max}");
+    }
+}
+
+/// 100 varied rows in a following `Scroll` that asks for older ones at its top, and 50 older rows above them once asked.
+fn older_long_rows(heard: u32) -> Value {
+    let mut rows: Vec<Value> = (0..100).map(varied_row).collect();
+    if heard > 0 {
+        let older = (0..50).map(|i| text(5_000 + 2 * i, 5_001 + 2 * i, format!("Older {i}. {}", "Earlier words. ".repeat(i % 9))));
+        rows.splice(0..0, older);
+    }
+    let props = if heard > 0 { json!({ "follow": "end" }) } else { json!({ "follow": "end", "onReachStart": "2:onReachStart" }) };
+    json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+        { "id": 2, "type": "Scroll", "props": props, "children": [{ "id": 3, "type": "Stack", "props": {}, "children": rows }] }] })
+}
+
+/// Older rows loaded above a long column, never drawn and so only guessed at, leave its first row where it was, at the
+/// top of the view, as they come and as the ones near it are drawn.
+#[test]
+fn older_rows_loaded_above_a_long_column_keep_the_row_in_view_where_it_was() {
+    let (app, mut window) = open_narrow(counting(older_long_rows), 500.0);
+    settle(&app, &mut window, |view| view.follow_scrolled(2).is_some_and(|(top, max)| max > 1_000.0 && top >= max - 1.0));
+    scroll_by(&mut window, 100_000.0);
+    settle(&app, &mut window, |view| view.text().contains("Older 0.") && view.windowed_drawn(2).is_some_and(|(_, of, tops)| of == 150 && tops.len() == 150));
+    draws(&app, &mut window);
+    let (drawn, _, tops) = window.read(|view, _| view.windowed_drawn(2)).unwrap();
+    assert!(tops[50].abs() < 1.0, "row 0 is {} below the view's top, drawn {drawn:?}", tops[50]);
+}
+
+/// 120 rows of a line each in a `Scroll`.
+fn worded_column() -> String {
+    fake::page("page", |_| {
+        let rows: Vec<Value> = (0..120).map(|i| text(1_000 + 2 * i, 1_001 + 2 * i, format!("Line {i} words"))).collect();
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            { "id": 2, "type": "Scroll", "props": {}, "children": [{ "id": 3, "type": "Stack", "props": {}, "children": rows }] }] })
+    })
+}
+
+/// A selection over rows of a long column copies them whole, and still does once they are scrolled far out of view: the
+/// rows it holds are drawn wherever they are.
+#[test]
+fn a_selection_over_rows_of_a_long_column_copies_them_after_they_are_scrolled_away() {
+    let (app, mut window) = open_narrow(worded_column(), 500.0);
+    settle(&app, &mut window, |view| view.windowed_drawn(2).is_some_and(|(_, _, tops)| tops.len() == 120));
+    let (tops, view_top) = window.read(|view, _| (view.windowed_drawn(2).unwrap().2, view.scroll_view_top(2).unwrap()));
+    let y = |row: usize| px(view_top + tops[row] + 6.0);
+    drag(&mut window, point(px(20.0), y(1)), point(px(400.0), y(3)));
+    let copied = |window: &mut View| {
+        key(window, "cmd-c");
+        app.read(|cx| cx.read_from_clipboard().and_then(|item| item.text())).unwrap_or_default()
+    };
+    let whole = |copy: &str| copy.contains("1 words\nLine 2 words\nLine 3 words");
+    let copy = copied(&mut window);
+    assert!(whole(&copy), "{copy:?}");
+    scroll_by(&mut window, -2_000.0);
+    draws(&app, &mut window);
+    let (drawn, _, tops) = window.read(|view, _| view.windowed_drawn(2)).unwrap();
+    assert!(tops[3] < -1_000.0 && drawn.start <= 1, "row 3 at {}, drawn {drawn:?}", tops[3]);
+    let selected = window.read(|view, _| view.selected_text()).unwrap_or_default();
+    assert!(whole(&selected), "{selected:?}");
+    let copy = copied(&mut window);
+    assert!(whole(&copy), "{copy:?}");
+}
+
+/// 120 varied rows in a following `Scroll` whose text is 1.5 times as big once More is pressed, as Cmd-+ makes a chat's.
+fn scaled_column() -> String {
+    counting(|heard| {
+        let rows: Vec<Value> = (0..120).map(varied_row).collect();
+        let scale = if heard > 0 { 1.5 } else { 1.0 };
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            { "id": 1, "type": "Button", "props": { "onClick": "1:onClick" }, "children": [text_node(9, "More")] },
+            { "id": 2, "type": "Scroll", "props": { "follow": "end", "textScale": scale }, "children": [{ "id": 3, "type": "Stack", "props": {}, "children": rows }] }] })
+    })
+}
+
+/// Bigger text wraps every row again, and the kept heights of the rows not drawn are of the old size: the row at the top
+/// of the view stays there.
+#[test]
+fn a_long_column_keeps_the_row_at_its_top_through_a_change_of_text_size() {
+    let (app, mut window) = open_narrow(scaled_column(), 500.0);
+    settle(&app, &mut window, |view| view.follow_scrolled(2).is_some_and(|(top, max)| max > 1_000.0 && top >= max - 1.0));
+    scroll_by(&mut window, 2_500.0);
+    draws(&app, &mut window);
+    // The row whose top is the last at or above the view's top.
+    let at_top = |window: &View| {
+        let tops = window.read(|view, _| view.windowed_drawn(2)).unwrap().2;
+        let at = tops.iter().rposition(|top| *top <= 0.5).unwrap();
+        (at, tops[at])
+    };
+    let (row, top) = at_top(&window);
+    window.simulate_click(point(px(30.0), px(16.0)), MouseButton::Left);
+    settle(&app, &mut window, |view| view.trees_sent() >= 2);
+    draws(&app, &mut window);
+    let (after, moved) = at_top(&window);
+    assert!(after == row && (moved - top).abs() < 1.0, "row {row} was {top} below the view's top, now row {after} is, {moved}");
 }

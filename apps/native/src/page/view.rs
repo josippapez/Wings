@@ -34,6 +34,8 @@ mod sheet_view;
 mod prompt_rail_view;
 #[path = "hover_card_view.rs"]
 mod hover_card_view;
+#[path = "column_window_view.rs"]
+mod column_window_view;
 #[path = "popup_menu_view.rs"]
 mod popup_menu_view;
 #[path = "sunburst_view.rs"]
@@ -113,6 +115,10 @@ struct FollowScroll {
     jumped: Cell<u64>,
     /// What `onTrack` last said: none before it was said at all, then the tracked child or none.
     tracked: Cell<Option<Option<usize>>>,
+    /// It follows its end in the render under way (`follow_end`).
+    stuck: Cell<bool>,
+    /// Its column's heights and window, when it is drawn a window at a time (`column_window_view`).
+    windowing: RefCell<column_window_view::Windowing>,
 }
 
 /// What a following `Scroll` with one column had in view.
@@ -1259,7 +1265,9 @@ impl PageView {
         let state = self.follow_scrolls.borrow_mut().entry(id).or_default().clone();
         let handle = &state.handle;
         // Its offset grows negative as it scrolls down, to minus the most it can scroll. Not laid out yet, both are 0.
-        if newest && !state.asked_end.get() && -handle.offset().y >= handle.max_offset().y - px(FOLLOW_SLACK) {
+        let stuck = newest && !state.asked_end.get() && -handle.offset().y >= handle.max_offset().y - px(FOLLOW_SLACK);
+        state.stuck.set(stuck);
+        if stuck {
             handle.scroll_to_bottom();
         }
         state
@@ -1304,7 +1312,8 @@ impl PageView {
                 // The offset is how far the content moved up, so it is minus what the child is below the view's top.
                 let wanted = offset.y + view.top() - child.top();
                 handle.set_offset(point(offset.x, wanted.max(-max).min(px(0.0))));
-                window.refresh();
+                // Drawn again from the page, which draws the children at the new place in a windowed column.
+                window.request_animation_frame();
                 return;
             }
             let Some(handler) = on_track.as_ref() else {
@@ -1363,7 +1372,9 @@ impl PageView {
             // At the newest end the scroll follows it instead.
             if !following && moved.abs() > px(0.5) {
                 handle.set_offset(point(offset.x, offset.y - moved));
-                window.refresh();
+                // `refresh` does nothing while the window draws. Older items that came in a windowed column aren't drawn,
+                // so no rise of theirs asks for the next frame either.
+                window.request_animation_frame();
                 return true;
             }
         }
@@ -1443,7 +1454,17 @@ impl PageView {
         // The texts it holds find links when it asks, as a Scroll's take its `textScale`.
         let before = LINKED.with(Cell::get);
         LINKED.with(|cell| cell.set(before || stack.links));
-        let element = div()
+        let element = Self::stack_box(stack).map(|el| match stack.enter {
+            true => el.children(stack.children.iter().map(|child| self.rising(child, cx))),
+            false => el.children(self.items(&stack.children, cx)),
+        });
+        LINKED.with(|cell| cell.set(before));
+        self.with_context_menu(element, stack, watch, None, cx)
+    }
+
+    /// A `Stack`'s box, without its children.
+    fn stack_box(stack: &tree::Stack) -> gpui::Div {
+        div()
             .min_w_0()
             .flex()
             .flex_col()
@@ -1457,12 +1478,6 @@ impl PageView {
             .when(stack.inset, |el| {
                 el.px(px(7.0)).py(px(1.0 + controls_view::LIST_BUTTON_PADDING))
             })
-            .map(|el| match stack.enter {
-                true => el.children(stack.children.iter().map(|child| self.rising(child, cx))),
-                false => el.children(self.items(&stack.children, cx)),
-            });
-        LINKED.with(|cell| cell.set(before));
-        self.with_context_menu(element, stack, watch, cx)
     }
 
     fn nodes(&self, nodes: &[Node], cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -2038,17 +2053,23 @@ impl PageView {
             // A scroll keeps 8 points either side and 12 below, as a list under a header does.
             Node::Scroll(scroll) => {
                 let watches = scroll.scroll_to.is_some() || scroll.on_track.is_some();
-                let state = match (scroll.follow_end, watches) {
-                    (true, _) => Some(self.follow_end(scroll.id, scroll.on_reach_end.is_none())),
-                    (false, true) => Some(self.watched_scroll(scroll.id)),
-                    (false, false) => None,
-                };
-                // A following scroll with one column keeps what is in view in place by the column's children, as children
-                // come and go at either end; another keeps it by how much grew above.
                 let column = match &scroll.children[..] {
                     [Node::Stack(column)] => Some(column),
                     _ => None,
                 };
+                // A long column is drawn a window at a time, which needs to know where the scroll is: so does one that was,
+                // whose place would otherwise be lost as it gets shorter.
+                let windowed = column.filter(|column| column_window_view::windowed(column));
+                let state = match (scroll.follow_end, watches) {
+                    (true, _) => Some(self.follow_end(scroll.id, scroll.on_reach_end.is_none())),
+                    (false, true) => Some(self.watched_scroll(scroll.id)),
+                    (false, false) if windowed.is_some() || self.follow_scrolls.borrow().contains_key(&scroll.id) => {
+                        Some(self.watched_scroll(scroll.id))
+                    }
+                    (false, false) => None,
+                };
+                // A following scroll with one column keeps what is in view in place by the column's children, as children
+                // come and go at either end; another keeps it by how much grew above.
                 let edges = column.filter(|_| scroll.follow_end).map(|column| Edges {
                     start: scroll.on_reach_start.clone(),
                     end: scroll.on_reach_end.clone(),
@@ -2065,10 +2086,18 @@ impl PageView {
                 let scale = scroll.text_scale.unwrap_or(before);
                 TEXT_SCALE.with(|cell| cell.set(scale));
                 // Following, or with a place to scroll to or children to track, its one column reports where its children are.
-                let children = match (column, state.as_ref().filter(|_| watches || edges.is_some())) {
-                    (Some(column), Some(state)) => {
-                        let watch = Self::scroll_watch(state.clone(), edges, scroll.scroll_to, scroll.track.clone(), scroll.on_track.clone(), cx);
-                        vec![self.stack(column, Some(Box::new(watch)), cx).into_any_element()]
+                let reports = watches || edges.is_some();
+                let children = match (column, state.as_ref()) {
+                    (Some(column), Some(state)) if windowed.is_some() || reports => {
+                        let watch: Option<popup_menu_view::ChildrenWatch> = match reports {
+                            true => Some(Box::new(Self::scroll_watch(state.clone(), edges, scroll.scroll_to, scroll.track.clone(), scroll.on_track.clone(), cx))),
+                            false => None,
+                        };
+                        let element = match windowed {
+                            Some(_) => self.windowed_column(column, state, scroll.follow_end && state.stuck.get(), watch, cx),
+                            None => self.stack(column, watch, cx),
+                        };
+                        vec![element.into_any_element()]
                     }
                     _ => self.nodes(&scroll.children, cx),
                 };

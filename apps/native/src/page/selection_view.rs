@@ -178,7 +178,7 @@ pub(super) fn with_selection(
 }
 
 /// Whether a node `id` is anywhere in `nodes`.
-fn has_node(nodes: &[Node], id: u64) -> bool {
+pub(super) fn has_node(nodes: &[Node], id: u64) -> bool {
     nodes
         .iter()
         .any(|node| node.id() == Some(node_of(id)) || node.parts().into_iter().any(|part| has_node(part, id)))
@@ -217,6 +217,11 @@ impl PageView {
             return None;
         }
         current.range_in(id, text.len(), &self.lines.borrow().drawn)
+    }
+
+    /// The lines the selection starts and ends in, by id.
+    pub(super) fn selection_ends(&self) -> Option<(u64, u64)> {
+        self.selection.borrow().as_ref().map(|selection| (selection.anchor.id, selection.head.id))
     }
 
     /// Drops the selection when a line it starts or ends in has left the page.
