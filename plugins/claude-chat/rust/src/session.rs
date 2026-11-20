@@ -1540,7 +1540,7 @@ fn sent_item(text: String, pictures: Vec<String>) -> Item {
     if pictures.is_empty() { Item::User(text) } else { Item::UserImages(text, pictures) }
 }
 
-fn cancel(uuid: &str, n: u32) -> String {
+pub(crate) fn cancel(uuid: &str, n: u32) -> String {
     request(&format!("cancel-{n}"), json!({ "subtype": "cancel_async_message", "message_uuid": uuid }))
 }
 

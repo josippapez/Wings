@@ -1137,6 +1137,35 @@ pub fn escape() {
     }
 }
 
+/// Up while messages wait in the queue: all of them come back into the box, joined by a blank line and ahead of what is
+/// there, with their pictures, to edit and send again, as Claude Code's Up does. Claude Code is told to cancel each. False
+/// when none waits, and Up recalls a prompt instead.
+pub fn take_queued() -> bool {
+    let lines = with(|c| {
+        if c.session.queued.is_empty() {
+            return None;
+        }
+        let queued = std::mem::take(&mut c.session.queued);
+        let mut texts: Vec<String> = queued.iter().map(|queued| queued.text.clone()).filter(|text| !text.is_empty()).collect();
+        if !c.draft.trim().is_empty() {
+            texts.push(std::mem::take(&mut c.draft));
+        }
+        c.draft = texts.join("\n\n");
+        let mut lines = String::new();
+        for message in queued {
+            c.requests += 1;
+            lines.push_str(&session::cancel(&message.uuid, c.requests));
+            c.images.extend(message.images);
+        }
+        Some(lines)
+    });
+    let Some(lines) = lines else {
+        return false;
+    };
+    write(move |_, _| Some(lines));
+    true
+}
+
 /// Up from the first line: the prompt you sent before the one in the box, the newest first. What you had typed comes back
 /// with Down.
 pub fn recall_older() {

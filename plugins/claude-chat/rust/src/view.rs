@@ -1007,7 +1007,11 @@ fn composer(c: &Chat) -> Node {
                 Some("Tab") if shift => chat::cycle_mode(),
                 Some("Tab") => chat::accept_suggestion(),
                 Some("Escape") => chat::escape(),
-                Some("ArrowUp") => chat::recall_older(),
+                Some("ArrowUp") => {
+                    if !chat::take_queued() {
+                        chat::recall_older()
+                    }
+                }
                 Some("ArrowDown") => chat::recall_newer(),
                 _ => {}
             }
@@ -1607,6 +1611,32 @@ mod tests {
     fn the_queue_card_says_it_for_one_message_and_them_for_several() {
         assert_eq!(queued_note(1), "Claude reads it after its current step");
         assert_eq!(queued_note(2), "Claude reads them after its current step");
+    }
+
+    #[test]
+    fn up_with_messages_queued_brings_them_all_back_into_the_box_and_empties_the_queue() {
+        chat::with(|c| {
+            c.draft.clear();
+            c.images.clear();
+            c.session.queued.clear();
+            c.session.queue("and lint", Vec::new(), 1, 1);
+            c.session.queue("then deploy", vec![("image/png".into(), "AAAA".into())], 1, 2);
+        });
+        assert!(chat::take_queued());
+        chat::with(|c| {
+            assert_eq!(c.draft, "and lint\n\nthen deploy");
+            assert_eq!(c.images, vec![("image/png".to_owned(), "AAAA".to_owned())]);
+            assert!(c.session.queued.is_empty());
+        });
+        // Nothing waits any more: Up recalls a prompt, as it did.
+        assert!(!chat::take_queued());
+        // What was in the box stays, after the queued ones.
+        chat::with(|c| {
+            c.draft = "half a thought".into();
+            c.session.queue("one more", Vec::new(), 1, 3);
+        });
+        assert!(chat::take_queued());
+        assert_eq!(chat::with(|c| c.draft.clone()), "one more\n\nhalf a thought");
     }
 
     #[test]
