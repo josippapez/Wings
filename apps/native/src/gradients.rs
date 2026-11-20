@@ -7,7 +7,10 @@
 //! None of its code is used: its look is a three.js mesh displaced by noise and lit, and the shader here recreates that
 //! look on a flat picture.
 
-use crate::theme::Palette;
+use crate::theme::{self, Palette};
+
+/// In a preset's colours: the page's own text colour, so a line is light on a dark page and dark on a light one.
+const FOREGROUND_INK: u32 = u32::MAX;
 
 /// A gradient backdrop, by the name a page asks for it with after `gradient:`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -17,6 +20,13 @@ pub enum Preset {
     Mint,
     Interstella,
     NightyNight,
+    Topo,
+    Flow,
+    Grid,
+    Dots,
+    Silk,
+    Cells,
+    Moire,
 }
 
 /// The kind of mesh a preset is drawn on, as shadergradient's `type`.
@@ -28,6 +38,20 @@ pub enum Shape {
     Sphere,
     /// `waterPlane`: finer ripples crossing each other, the third colour on their crests.
     Water,
+    /// Contour lines of a drifting hill field.
+    Topo,
+    /// Parallel lines that bend with a drifting field.
+    Flow,
+    /// A floor of lines in perspective with a pulse of light travelling along it.
+    Grid,
+    /// A matrix of dots that swell and shrink.
+    Dots,
+    /// Warped bands of two colours with a bright line on each crest.
+    Silk,
+    /// Voronoi cells with thin walls.
+    Cells,
+    /// Two sets of lines turning against each other.
+    Moire,
 }
 
 /// What a preset looks like: its colours, mesh and how it moves.
@@ -44,14 +68,28 @@ pub struct Look {
     pub density: f32,
     /// How much of the third colour the crests take, 0 to 1 (from shadergradient's `uStrength`).
     pub strength: f32,
-    /// How far a sphere twists, 0 to 1 (from shadergradient's `uAmplitude` over 7, its strongest preset's).
+    /// How far a sphere twists, 0 to 1 (from shadergradient's `uAmplitude` over 7, its strongest preset's); how much a
+    /// topography's field or a flow's lines swing, for those.
     pub twist: f32,
     /// Film grain, shadergradient's `grain`.
     pub grain: bool,
 }
 
 impl Preset {
-    pub const ALL: [Preset; 5] = [Preset::Halo, Preset::Pensive, Preset::Mint, Preset::Interstella, Preset::NightyNight];
+    pub const ALL: [Preset; 12] = [
+        Preset::Halo,
+        Preset::Pensive,
+        Preset::Mint,
+        Preset::Interstella,
+        Preset::NightyNight,
+        Preset::Topo,
+        Preset::Flow,
+        Preset::Grid,
+        Preset::Dots,
+        Preset::Silk,
+        Preset::Cells,
+        Preset::Moire,
+    ];
 
     /// The preset a page names, as in `"gradient:halo"` less its `gradient:`.
     pub fn named(name: &str) -> Option<Preset> {
@@ -115,6 +153,83 @@ impl Preset {
                 twist: 0.0,
                 grain: true,
             },
+            Preset::Topo => Look {
+                name: "topo",
+                label: "Topography",
+                shape: Shape::Topo,
+                colors: [theme::INFO, theme::CLAUDE, FOREGROUND_INK],
+                speed: 0.5,
+                density: 1.0,
+                strength: 0.9,
+                twist: 1.0,
+                grain: false,
+            },
+            Preset::Flow => Look {
+                name: "flow",
+                label: "Flow lines",
+                shape: Shape::Flow,
+                colors: [theme::INFO, theme::CLAUDE, FOREGROUND_INK],
+                speed: 0.6,
+                density: 1.0,
+                strength: 0.9,
+                twist: 1.0,
+                grain: false,
+            },
+            Preset::Grid => Look {
+                name: "grid",
+                label: "Grid",
+                shape: Shape::Grid,
+                colors: [theme::INFO, theme::CLAUDE, FOREGROUND_INK],
+                speed: 1.5,
+                density: 1.0,
+                strength: 0.9,
+                twist: 0.0,
+                grain: false,
+            },
+            Preset::Dots => Look {
+                name: "dots",
+                label: "Dot matrix",
+                shape: Shape::Dots,
+                colors: [theme::INFO, theme::CLAUDE, FOREGROUND_INK],
+                speed: 0.8,
+                density: 1.0,
+                strength: 0.9,
+                twist: 0.0,
+                grain: false,
+            },
+            Preset::Silk => Look {
+                name: "silk",
+                label: "Silk",
+                shape: Shape::Silk,
+                colors: [theme::INFO, theme::CLAUDE, FOREGROUND_INK],
+                speed: 0.8,
+                density: 1.0,
+                strength: 0.9,
+                twist: 0.0,
+                grain: false,
+            },
+            Preset::Cells => Look {
+                name: "cells",
+                label: "Cells",
+                shape: Shape::Cells,
+                colors: [theme::INFO, theme::CLAUDE, FOREGROUND_INK],
+                speed: 0.8,
+                density: 1.0,
+                strength: 0.9,
+                twist: 0.0,
+                grain: false,
+            },
+            Preset::Moire => Look {
+                name: "moire",
+                label: "Moire",
+                shape: Shape::Moire,
+                colors: [theme::INFO, theme::CLAUDE, FOREGROUND_INK],
+                speed: 0.8,
+                density: 1.0,
+                strength: 0.8,
+                twist: 0.0,
+                grain: false,
+            },
         }
     }
 }
@@ -145,7 +260,7 @@ pub struct Uniforms {
     pub target: [f32; 2],
     /// Shader time, 0 up to `LOOP`.
     pub time: f32,
-    /// 0 plane, 1 sphere, 2 water.
+    /// 0 plane, 1 sphere, 2 water, 3 topo, 4 flow, 5 grid, 6 dots, 7 silk, 8 cells, 9 moire.
     pub shape: f32,
     pub density: f32,
     pub strength: f32,
@@ -215,12 +330,13 @@ fn ink(ground: [f32; 3], color: u32, (low, high): (f32, f32)) -> [f32; 3] {
 /// holds it whose corners are `corner` pixels round.
 pub fn uniforms(preset: Preset, palette: &Palette, seconds: f64, size: (u32, u32), corner: f32) -> Uniforms {
     let look = preset.look();
+    let own = |color: u32| if color == FOREGROUND_INK { palette.foreground } else { color };
     let bounds = luma_bounds(palette);
     let ground = rgb(palette.surface);
     let four = |[r, g, b]: [f32; 3]| [r, g, b, 1.0];
     let size = [size.0 as f32, size.1 as f32];
     Uniforms {
-        inks: look.colors.map(|color| four(ink(ground, color, bounds))),
+        inks: look.colors.map(|color| four(ink(ground, own(color), bounds))),
         ground: four(ground),
         size,
         target: size,
@@ -229,6 +345,13 @@ pub fn uniforms(preset: Preset, palette: &Palette, seconds: f64, size: (u32, u32
             Shape::Plane => 0.0,
             Shape::Sphere => 1.0,
             Shape::Water => 2.0,
+            Shape::Topo => 3.0,
+            Shape::Flow => 4.0,
+            Shape::Grid => 5.0,
+            Shape::Dots => 6.0,
+            Shape::Silk => 7.0,
+            Shape::Cells => 8.0,
+            Shape::Moire => 9.0,
         },
         density: look.density,
         strength: look.strength,
@@ -321,6 +444,9 @@ mod tests {
         assert_eq!(uniforms(Preset::Interstella, &Palette::APP, 0.0, (2, 2), 0.0).shape, 1.0);
         assert_eq!(uniforms(Preset::Mint, &Palette::APP, 0.0, (2, 2), 0.0).shape, 2.0);
         assert_eq!(uniforms(Preset::Mint, &Palette::APP, 0.0, (2, 2), 0.0).grain, 0.0);
+        for (at, preset) in Preset::ALL[5..].iter().enumerate() {
+            assert_eq!(uniforms(*preset, &Palette::APP, 0.0, (2, 2), 0.0).shape, at as f32 + 3.0);
+        }
     }
 
     /// The colours of each preset as moved towards the ground, and the bound the shader holds every pixel to: muted text

@@ -222,3 +222,66 @@ impl Shade for Metal {
         self.slots.retain(|slot, _| keep(slot));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use objc2_metal::{MTLStorageMode, MTLTextureDescriptor};
+
+    use super::*;
+    use crate::{gradients::Preset, theme::Palette};
+
+    /// The time from commit to done of one frame of each preset, as the layer under the window draws it (`gradient_rgb`) at 1000 x 760
+    /// points on a 2x screen (frames are half the device pixels). Run it in release with `--ignored --nocapture`.
+    #[test]
+    #[ignore = "a measurement"]
+    fn gpu_time_of_a_step() {
+        let device = MTLCreateSystemDefaultDevice().unwrap();
+        let library = library(&device).unwrap();
+        let pipeline = pipeline(&device, &library, "gradient_rgb", MTLPixelFormat::BGRA8Unorm).unwrap();
+        let queue = device.newCommandQueue().unwrap();
+        let (width, height) = (1000_u32, 760_u32);
+        // SAFETY: A plain descriptor of a valid format and size.
+        let descriptor = unsafe {
+            MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+                MTLPixelFormat::BGRA8Unorm,
+                width as usize,
+                height as usize,
+                false,
+            )
+        };
+        descriptor.setUsage(MTLTextureUsage::RenderTarget);
+        descriptor.setStorageMode(MTLStorageMode::Private);
+        let texture = device.newTextureWithDescriptor(&descriptor).unwrap();
+        for preset in Preset::ALL {
+            let mut times = Vec::new();
+            for step in 0..90 {
+                let uniforms = crate::gradients::uniforms(preset, &Palette::APP, step as f64 / 15.0, (width, height), 0.0);
+                let work = queue.commandBuffer().unwrap();
+                let descriptor = MTLRenderPassDescriptor::new();
+                // SAFETY: Index zero is within the pass's colour attachments.
+                let attachment = unsafe { descriptor.colorAttachments().objectAtIndexedSubscript(0) };
+                attachment.setTexture(Some(&*texture));
+                attachment.setLoadAction(MTLLoadAction::DontCare);
+                attachment.setStoreAction(MTLStoreAction::Store);
+                let encoder = work.renderCommandEncoderWithDescriptor(&descriptor).unwrap();
+                encoder.setRenderPipelineState(&pipeline);
+                // SAFETY: As in `pass`.
+                unsafe {
+                    encoder.setFragmentBytes_length_atIndex(
+                        NonNull::from(&uniforms).cast::<c_void>(),
+                        mem::size_of::<Uniforms>(),
+                        0,
+                    );
+                    encoder.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
+                }
+                encoder.endEncoding();
+                let start = std::time::Instant::now();
+                work.commit();
+                work.waitUntilCompleted();
+                times.push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            times.sort_by(f64::total_cmp);
+            eprintln!("[measure] {:?}: {:.3} ms commit to done per step (median of 90, 1000x760)", preset, times[45]);
+        }
+    }
+}

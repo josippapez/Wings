@@ -68,7 +68,7 @@ pub const SESSION_PANELS: [(&str, &str); 2] = [("chat", "In the chat"), ("sideba
 /// leaves plain), or a moving gradient Wings draws with a shader (`"gradient:<preset>"`, Wings 0.2.60), whose colours are
 /// shadergradient's presets'.
 pub const BACKGROUND: &str = "background";
-pub const BACKGROUNDS: [(&str, &str); 10] = [
+pub const BACKGROUNDS: [(&str, &str); 17] = [
     ("plain", "Plain"),
     ("pixels", "Pixel drift"),
     ("pixels:rain", "Pixel rain"),
@@ -79,6 +79,13 @@ pub const BACKGROUNDS: [(&str, &str); 10] = [
     ("gradient:mint", "Mint"),
     ("gradient:interstella", "Interstella"),
     ("gradient:nighty-night", "Nighty night"),
+    ("gradient:topo", "Topography"),
+    ("gradient:flow", "Flow lines"),
+    ("gradient:grid", "Grid"),
+    ("gradient:dots", "Dot matrix"),
+    ("gradient:silk", "Silk"),
+    ("gradient:cells", "Cells"),
+    ("gradient:moire", "Moire"),
 ];
 
 /// How big the conversation's text is, in every chat.

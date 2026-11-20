@@ -3,7 +3,7 @@
 //! rows with the name and what it does on the left and the control at the end, and a small preview under a row where a
 //! choice shows.
 
-use wings_plugin::ui::{Entry, Node, card, checkbox, chips as choose, entry, muted, row, section, select, stack, text};
+use wings_plugin::ui::{Entry, Node, card, checkbox, chips as choose, entry, muted, row, rows_card, section, select, stack, text};
 
 /// How wide the background's menu is at the end of its row.
 const MENU_WIDTH: u32 = 200;
@@ -37,9 +37,14 @@ fn toggle(tick: Node, detail: &str) -> Node {
     entry(Entry { lead: None, title: tick, detail: Some(muted(detail).prop("size", "small")), trailing: None })
 }
 
-/// A section: its rows grouped in one card, as Wings' own Settings panes group theirs.
+/// A section: its rows in one card split by hairlines, as Wings' own Settings panes group theirs.
 fn group(name: &str, rows: impl IntoIterator<Item = Node>) -> Node {
-    section(name, None, [card().child(stack().prop("gap", "m").children(rows))])
+    section(name, None, [rows_card(rows)])
+}
+
+/// One row of a group made of a setting and what goes with it, like its preview.
+fn together(parts: impl IntoIterator<Item = Node>) -> Node {
+    stack().prop("gap", "m").children(parts)
 }
 
 /// What a choice does, in a card under its row, in the rows' inset.
@@ -87,35 +92,40 @@ fn view() -> Vec<Node> {
         .child(group(
             "Output",
             [
-                setting(
-                    "View mode",
-                    "How much of a turn a chat shows. The View mode button in a chat and Ctrl+O change the same setting.",
-                    chips("View mode", &modes, mode.name(), |name| {
-                        if let Some(mode) = [Mode::Normal, Mode::Thinking, Mode::Verbose].into_iter().find(|mode| mode.name() == name) {
-                            view_mode::set(mode);
-                        }
-                    }),
-                ),
-                preview(turn(mode, |kind| prefs::opens(kind).get())),
-                about("What Verbose opens", "Each kind starts open in Verbose unless you clear it. Normal keeps all of them shut."),
-                preview(ticks),
+                together([
+                    setting(
+                        "View mode",
+                        "How much of a turn a chat shows. The View mode button in a chat and Ctrl+O change the same setting.",
+                        chips("View mode", &modes, mode.name(), |name| {
+                            if let Some(mode) = [Mode::Normal, Mode::Thinking, Mode::Verbose].into_iter().find(|mode| mode.name() == name) {
+                                view_mode::set(mode);
+                            }
+                        }),
+                    ),
+                    preview(turn(mode, |kind| prefs::opens(kind).get())),
+                ]),
+                together([about("What Verbose opens", "Each kind starts open in Verbose unless you clear it. Normal keeps all of them shut."), preview(ticks)]),
             ],
         ))
         .child(group(
             "Plan limit",
             [
-                toggle(
-                    checkbox("Tell Claude to pause near the limit", prefs::pause_near_limit().get(), |on| drop(prefs::pause_near_limit().set(on))).key("pause-near-limit"),
-                    "When your plan's 5-hour or weekly usage passes the share you pick, Claude is told to pause and ask you before more work, in every Claude Code session in Wings. Past the limit, work is billed as extra usage.",
-                ),
-                setting("Pause at", "The share of the limit.", chips("Pause at", &prefs::LIMIT_SHARES, &pause_at, |share| drop(prefs::pause_at().set(share.to_owned())))),
-                preview(limit("Claude pauses and asks", prefs::percent(&pause_at), false)),
-                toggle(
-                    checkbox("Stop the chat's turn near the limit", prefs::stop_near_limit().get(), |on| drop(prefs::stop_near_limit().set(on))).key("stop-near-limit"),
-                    "A chat can also stop Claude's turn itself, as its Stop button does, once at this share and once more when the limit is used up. Send a message to go on.",
-                ),
-                setting("Stop at", "The share of the limit.", chips("Stop at", &prefs::LIMIT_SHARES, &stop_at, |share| drop(prefs::stop_at().set(share.to_owned())))),
-                preview(limit("The chat stops Claude's turn", prefs::percent(&stop_at), true)),
+                together([
+                    toggle(
+                        checkbox("Tell Claude to pause near the limit", prefs::pause_near_limit().get(), |on| drop(prefs::pause_near_limit().set(on))).key("pause-near-limit"),
+                        "When your plan's 5-hour or weekly usage passes the share you pick, Claude is told to pause and ask you before more work, in every Claude Code session in Wings. Past the limit, work is billed as extra usage.",
+                    ),
+                    setting("Pause at", "The share of the limit.", chips("Pause at", &prefs::LIMIT_SHARES, &pause_at, |share| drop(prefs::pause_at().set(share.to_owned())))),
+                    preview(limit("Claude pauses and asks", prefs::percent(&pause_at), false)),
+                ]),
+                together([
+                    toggle(
+                        checkbox("Stop the chat's turn near the limit", prefs::stop_near_limit().get(), |on| drop(prefs::stop_near_limit().set(on))).key("stop-near-limit"),
+                        "A chat can also stop Claude's turn itself, as its Stop button does, once at this share and once more when the limit is used up. Send a message to go on.",
+                    ),
+                    setting("Stop at", "The share of the limit.", chips("Stop at", &prefs::LIMIT_SHARES, &stop_at, |share| drop(prefs::stop_at().set(share.to_owned())))),
+                    preview(limit("The chat stops Claude's turn", prefs::percent(&stop_at), true)),
+                ]),
             ],
         ))
         .child(group(
@@ -128,24 +138,30 @@ fn view() -> Vec<Node> {
         .child(group(
             "Appearance",
             [
-                setting(
-                    "Session panel",
-                    "Where a chat shows its session: changes, context and usage, tasks, subagents and terminals.",
-                    chips("Session panel", &prefs::SESSION_PANELS, &prefs::session_panel().get(), |place| drop(prefs::session_panel().set(place.to_owned()))),
-                ),
-                preview(places(prefs::in_sidebar(&prefs::session_panel().get()))),
-                setting(
-                    "Diff layout",
-                    "How a chat shows the lines an edit changes.",
-                    chips("Diff layout", &[("one", "One column"), ("split", "Side by side")], if split { "split" } else { "one" }, |layout| drop(prefs::diff_split().set(layout == "split"))),
-                ),
-                preview(diff(split)),
-                setting(
-                    "Text size",
-                    "The size of the text in the conversation, in every chat.",
-                    chips("Text size", &prefs::TEXT_SIZES, &prefs::text_size().get(), |size| drop(prefs::text_size().set(size.to_owned()))),
-                ),
-                preview(sample(prefs::scale_of(&prefs::text_size().get()))),
+                together([
+                    setting(
+                        "Session panel",
+                        "Where a chat shows its session: changes, context and usage, tasks, subagents and terminals.",
+                        chips("Session panel", &prefs::SESSION_PANELS, &prefs::session_panel().get(), |place| drop(prefs::session_panel().set(place.to_owned()))),
+                    ),
+                    preview(places(prefs::in_sidebar(&prefs::session_panel().get()))),
+                ]),
+                together([
+                    setting(
+                        "Diff layout",
+                        "How a chat shows the lines an edit changes.",
+                        chips("Diff layout", &[("one", "One column"), ("split", "Side by side")], if split { "split" } else { "one" }, |layout| drop(prefs::diff_split().set(layout == "split"))),
+                    ),
+                    preview(diff(split)),
+                ]),
+                together([
+                    setting(
+                        "Text size",
+                        "The size of the text in the conversation, in every chat.",
+                        chips("Text size", &prefs::TEXT_SIZES, &prefs::text_size().get(), |size| drop(prefs::text_size().set(size.to_owned()))),
+                    ),
+                    preview(sample(prefs::scale_of(&prefs::text_size().get()))),
+                ]),
                 setting(
                     "Background",
                     "What lies behind the conversation. Patterns and gradients are dim, move slowly while Wings is in front, and stand still when your Mac reduces motion. Some need a newer Wings.",
@@ -155,11 +171,11 @@ fn view() -> Vec<Node> {
         ))
         .child(group(
             "Claude Code",
-            [about("Version", "The version every chat runs, and whether a newer one is out. Update Claude Code runs `claude upgrade`."), preview_plain(claude_version::section())],
+            [together([about("Version", "The version every chat runs, and whether a newer one is out. Update Claude Code runs `claude upgrade`."), preview_plain(claude_version::section())])],
         ))]
 }
 
-/// The background's choice: a menu, as ten don't fit on a track in a narrow page.
+/// The background's choice: a menu, as seventeen don't fit on a track in a narrow page.
 fn background() -> Node {
     let options: Vec<(String, String)> =
         prefs::BACKGROUNDS.iter().map(|(value, label)| ((*value).to_owned(), (*label).to_owned())).collect();
@@ -208,7 +224,7 @@ mod tests {
         let labels: Vec<&str> = options.iter().map(|option| option["label"].as_str().unwrap()).collect();
         assert_eq!(
             labels,
-            ["Plain", "Pixel drift", "Pixel rain", "Checker shimmer", "Embers", "Halo", "Pensive", "Mint", "Interstella", "Nighty night"]
+            ["Plain", "Pixel drift", "Pixel rain", "Checker shimmer", "Embers", "Halo", "Pensive", "Mint", "Interstella", "Nighty night", "Topography", "Flow lines", "Grid", "Dot matrix", "Silk", "Cells", "Moire"]
         );
         assert_eq!(options[2]["value"], "pixels:rain");
         assert_eq!(options[5]["value"], "gradient:halo");
