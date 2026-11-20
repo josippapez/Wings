@@ -2,6 +2,15 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.70 · 2026-11-20
+
+- **Typing stays light everywhere**: a key in any text field, the chat's message box, a plugin page's filter or the command palette, now redraws the field and not the part of the window around it. In a long chat a key at typing pace went from about 14 ms to 2.5 ms.
+- **Stop near the limit works**: the setting can now stop a chat's turn without a click.
+- **Usage**: opening a chat's usage view refreshes its side panel and Wings' sidebar with the same numbers.
+- **Claude chat settings** show previews of each choice and are laid out like Wings' own Settings, with lines between rows. Plugin pages can group rows that way too.
+- **Seven new backgrounds**: Topography, Flow lines, Grid, Dot matrix, Silk, Cells and Moire.
+- **Claude chat 0.38.0**: the above.
+
 ## 0.2.69 · 2026-11-20
 
 - **Usage in the sidebar stays current with less asking**: Claude chat passes on the usage Claude Code reports with its replies, in the background too, and Wings skips its own once-a-minute check for an account a chat just reported. The plan limit's note reads the same numbers.
