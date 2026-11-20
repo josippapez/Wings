@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.64 · 2026-11-20
+
+- **Cheaper frames in a busy window**: Wings moves to GPUI 0.3.13, which no longer re-sorts every button and field on screen in each frame. A long chat at work draws a frame in about half the time.
+
 ## 0.2.63 · 2026-11-20
 
 - **Fewer redraws while idle**: Claude chat's session panel turns its spinners without redrawing itself, a plugin sending the same badge, status or sidebar rows again no longer redraws the window, and the glow behind an empty chat moves 10 times a second instead of 30.
