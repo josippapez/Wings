@@ -458,10 +458,13 @@ impl PageView {
                 if !matches!(event, crate::text_field::FieldEvent::Changed) {
                     return;
                 }
-                // Typing brings a combobox's options back, with none of them picked out.
-                view.suggestions_closed = false;
-                view.highlight = None;
-                cx.notify();
+                // Typing brings a combobox's options back, with none of them picked out. The field draws its own text, so
+                // the page draws again only when that changes: each key drew a whole long chat again.
+                if view.suggestions_closed || view.highlight.is_some() {
+                    view.suggestions_closed = false;
+                    view.highlight = None;
+                    cx.notify();
+                }
                 let text = entity.read(cx).value().to_string();
                 let handler = view.inputs.borrow_mut().get_mut(&id).and_then(|state| {
                     let handler = state.handler.clone()?;

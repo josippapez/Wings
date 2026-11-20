@@ -499,7 +499,14 @@ impl PageView {
                 let taken = std::mem::take(&mut *pending.lock().unwrap());
                 if view
                     .update(cx, |view, cx| {
+                        let mut echo = false;
                         if let Some(tree) = taken.tree {
+                            // The page sent back only what was just typed, which its fields already show: nothing to draw.
+                            echo = view.tree.as_ref().is_some_and(|old| {
+                                old.echoes(&tree, |id, text| {
+                                    view.inputs.borrow().get(&id).is_some_and(|state| state.field.read(cx).value() == text)
+                                })
+                            });
                             let mut ids = HashSet::new();
                             fn controls(nodes: &[Node], ids: &mut HashSet<u64>) {
                                 for node in nodes {
@@ -568,7 +575,9 @@ impl PageView {
                             view.stopped = true;
                             view.restart_later(cx);
                         }
-                        cx.notify();
+                        if !echo || view.error.is_some() || taken.stopped {
+                            cx.notify();
+                        }
                     })
                     .is_err()
                 {

@@ -3202,3 +3202,79 @@ mod spinners {
         assert!(pages >= 10, "the page turned its spinners {pages} times in 30 steps");
     }
 }
+
+/// A long chat with its message box, as Claude chat draws one: 120 messages with copy and bookmark buttons, and a box
+/// whose text the page sends back on each change.
+fn long_chat_with_box() -> String {
+    let mut typed = String::new();
+    fake::page("page", move |event| {
+        if let Some((_, change)) = event {
+            typed = change["value"].as_str().unwrap_or_default().to_owned();
+        }
+        let turns: Vec<Value> = (0..120usize)
+            .map(|turn| {
+                let id = 100 + turn * 10;
+                json!({ "id": id, "type": "Card", "props": {}, "children": [
+                    text(id + 1, id + 2, format!("Turn {turn}: refactor the API client")),
+                    text(id + 3, id + 4, "The client now retries once on a dropped connection and reads the token from the keychain. ".repeat(4)),
+                    { "id": id + 5, "type": "Button", "props": { "onClick": format!("{}:onClick", id + 5) }, "children": [text_node(id + 6, "Copy")] },
+                    { "id": id + 7, "type": "Button", "props": { "onClick": format!("{}:onClick", id + 7) }, "children": [text_node(id + 8, "Bookmark")] }
+                ] })
+            })
+            .collect();
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Page", "props": { "flush": true }, "children": [
+            { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [
+                { "id": 3, "type": "Scroll", "props": {}, "children": [{ "id": 4, "type": "Stack", "props": { "gap": "l" }, "children": turns }] },
+                { "id": 5, "type": "Textarea", "props": { "label": "Message", "rows": 3, "value": typed, "onChange": "5:change" } }
+            ] }] }] })
+    })
+}
+
+/// The page in a tab, kept as last drawn, as the workspace draws one.
+struct InTab(gpui::Entity<PageView>);
+
+impl gpui::Render for InTab {
+    fn render(&mut self, _: &mut gpui::Window, _: &mut gpui::Context<Self>) -> impl gpui::IntoElement {
+        use gpui::{ParentElement, Styled};
+        gpui::div().size_full().child(self.0.clone().cached(gpui::StyleRefinement::default().size_full()))
+    }
+}
+
+/// What a keystroke in a long chat's message box costs: how many times the page renders for it.
+#[test]
+fn a_key_typed_in_a_long_chat_renders_the_page_once() {
+    let mut app = TestApp::new();
+    app.background_executor().allow_parking();
+    let host = hosted(&mut app);
+    let source = long_chat_with_box();
+    let mut window = app.open_window(move |_, cx| InTab(gpui::AppContext::new(cx, |cx| PageView::in_plugin(&host, &source, cx))));
+    let page = window.read(|tab, _| tab.0.clone());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !window.read(|_, cx| page.read(cx).text().contains("Turn 119")) {
+        assert!(Instant::now() < deadline, "the page never drew its tree");
+        app.run_until_parked();
+        window.draw();
+        thread::sleep(Duration::from_millis(5));
+    }
+    window.update(|_, window, cx| page.read(cx).input_focus("Message", cx).expect("the box").focus(window, cx));
+    window.draw();
+    let renders = |window: &TestAppWindow<InTab>| window.read(|_, cx| page.read(cx).renders());
+    let before = renders(&window);
+    let keys = "hello there";
+    for key in keys.chars() {
+        window.simulate_input(&key.to_string());
+        window.draw();
+        // The page's echo of the key arrives from its own thread.
+        let until = Instant::now() + Duration::from_millis(30);
+        while Instant::now() < until {
+            app.run_until_parked();
+            window.draw();
+            thread::sleep(Duration::from_millis(2));
+        }
+    }
+    let rendered = renders(&window) - before;
+    eprintln!("[measure] {} keys typed in a long chat rendered the page {rendered} times", keys.len());
+    // The field drawing its new text is one; the page's echo of it and the field's own notice of the change were two
+    // more, each a whole long chat laid out again.
+    assert!(rendered <= keys.len() + 1, "{rendered} renders for {} keys", keys.len());
+}

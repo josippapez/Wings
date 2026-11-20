@@ -1211,6 +1211,63 @@ impl Node {
             Node::Sheet(n) => vec![&n.title, &n.description, &n.header, &n.body],
         }
     }
+
+    /// `parts`, to change.
+    fn parts_mut(&mut self) -> Vec<&mut Vec<Node>> {
+        match self {
+            Node::Str { .. } => vec![],
+            Node::Slot(n) => vec![&mut n.children],
+            Node::Page(n) => vec![&mut n.toolbar, &mut n.body],
+            Node::Toolbar(n) => vec![&mut n.title, &mut n.filters, &mut n.actions],
+            Node::Stack(n) => vec![&mut n.children],
+            Node::Row(n) => vec![&mut n.children],
+            Node::Text(n) => vec![&mut n.children],
+            Node::Button(n) => vec![&mut n.children],
+            Node::ListButton(n) => vec![&mut n.button.children],
+            Node::Notice(n) => vec![&mut n.children],
+            Node::Spinner(_) => vec![],
+            Node::Checkbox(n) => vec![&mut n.children],
+            Node::Confirm(n) => vec![&mut n.title, &mut n.body, &mut n.actions],
+            Node::Badge(n) => vec![&mut n.children],
+            Node::Empty(n) => vec![&mut n.title, &mut n.description, &mut n.children],
+            Node::Loading(n) => vec![&mut n.children],
+            Node::Card(n) => vec![&mut n.children],
+            Node::Heading(n) => vec![&mut n.children],
+            Node::Dot(_)
+            | Node::Select(_)
+            | Node::Chips(_)
+            | Node::SearchField(_)
+            | Node::Input(_)
+            | Node::Icon(_)
+            | Node::Svg(_)
+            | Node::Image(_)
+            | Node::Graph(_)
+            | Node::Avatar(_)
+            | Node::Skeleton(_)
+            | Node::Sunburst(_)
+            | Node::PromptRail(_)
+            | Node::Terminal(_)
+            | Node::Code(_) => vec![],
+            Node::Scroll(n) => vec![&mut n.children],
+            Node::Split(n) => vec![&mut n.start, &mut n.end],
+            Node::Bar(n) => vec![&mut n.children],
+            Node::Dialog(n) => vec![&mut n.children],
+            Node::Actions(n) => vec![&mut n.children],
+            Node::Gauge(n) => vec![&mut n.note],
+            Node::Meter(_) => vec![],
+            Node::Board(n) => vec![&mut n.header, &mut n.body],
+            Node::BoardRow(n) => vec![&mut n.children],
+            Node::BoardColumn(n) => vec![&mut n.title, &mut n.actions, &mut n.body],
+            Node::List(n) => vec![&mut n.children],
+            Node::ListItem(n) => vec![&mut n.children, &mut n.actions],
+            Node::Disclosure(n) => vec![&mut n.summary, &mut n.body],
+            Node::HoverCard(n) => vec![&mut n.children, &mut n.card],
+            Node::PopupMenu(n) => vec![&mut n.items],
+            Node::Combobox(n) => vec![&mut n.field, &mut n.options, &mut n.empty],
+            Node::Menu(n) => vec![&mut n.trigger, &mut n.items],
+            Node::Sheet(n) => vec![&mut n.title, &mut n.description, &mut n.header, &mut n.body],
+        }
+    }
 }
 
 struct Walk {
@@ -2983,5 +3040,44 @@ mod tests {
             })
             .collect();
         assert_eq!(variants, [("Go".to_owned(), Variant::Ghost), ("Review".to_owned(), Variant::Default)]);
+    }
+}
+
+impl Tree {
+    /// Whether `next` is this tree again but for the text of inputs that already show it (`shows(id, text)`): a page
+    /// sending back what was just typed, as each keystroke in a message box makes Claude chat do. Drawing the page again
+    /// for that rebuilt a whole long chat once more for every key.
+    pub fn echoes(&self, next: &Tree, shows: impl Fn(u64, &str) -> bool) -> bool {
+        fn values(nodes: &[Node], into: &mut std::collections::HashMap<u64, String>) {
+            for node in nodes {
+                if let Node::Input(input) = node {
+                    into.insert(input.id, input.value.clone());
+                }
+                for part in node.parts() {
+                    values(part, into);
+                }
+            }
+        }
+        /// Puts back the text the inputs had before, saying whether each one that changed already shows its new text.
+        fn restore(nodes: &mut [Node], before: &std::collections::HashMap<u64, String>, shows: &dyn Fn(u64, &str) -> bool) -> bool {
+            let mut all = true;
+            for node in nodes {
+                if let Node::Input(input) = node
+                    && let Some(old) = before.get(&input.id)
+                    && *old != input.value
+                {
+                    all &= shows(input.id, &input.value);
+                    input.value = old.clone();
+                }
+                for part in node.parts_mut() {
+                    all &= restore(part, before, shows);
+                }
+            }
+            all
+        }
+        let mut before = std::collections::HashMap::new();
+        values(&self.children, &mut before);
+        let mut next = next.clone();
+        restore(&mut next.children, &before, &shows) && next == *self
     }
 }
