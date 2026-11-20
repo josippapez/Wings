@@ -60,7 +60,9 @@ pub fn is_edit(tool: &str) -> bool {
 
 /// The file `input` names, if it is a full path.
 pub fn path_of(input: &Value) -> Option<&str> {
-    input["file_path"].as_str().filter(|path| path.starts_with('/'))
+    // A path with a line break, a control or an invisible character could write lines of its own into the patch the
+    // diff viewer reads, or show a name other than the file's: such a call keeps the escaped −/+ card.
+    input["file_path"].as_str().filter(|path| path.starts_with('/') && crate::session::shown(path, true) == *path)
 }
 
 /// The call `tool` with `input` against the file's text, None where the file isn't there. None when the call doesn't fit
@@ -300,6 +302,15 @@ pub fn patch(shown: &str, preview: &Preview) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_path_with_a_line_break_or_a_hidden_character_has_no_diff() {
+        for path in ["/a/b.rs\n+++ b/other.rs", "/a/\u{202e}sr.b", "/a/b\r.rs"] {
+            assert_eq!(path_of(&serde_json::json!({ "file_path": path })), None, "{path:?}");
+        }
+        assert_eq!(path_of(&serde_json::json!({ "file_path": "/a/b.rs" })), Some("/a/b.rs"));
+    }
+
     use serde_json::json;
 
     use super::*;
