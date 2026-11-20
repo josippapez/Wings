@@ -1,7 +1,7 @@
 //! The Claude chat page in Wings Settings: the mode a new chat starts in, the view mode chats show and which kinds of fold
 //! Verbose opens, how big its text is, and what lies behind it.
 
-use wings_plugin::ui::{Node, checkbox, chips as choose, heading as section, muted as note, row, select, stack};
+use wings_plugin::ui::{Node, checkbox, chips as choose, field_inline, heading as section, muted as note, row, select, stack};
 
 /// The most points wide a description runs, so a line stays a readable length on a wide page.
 const MEASURE: u32 = 560;
@@ -47,10 +47,12 @@ fn view() -> Vec<Node> {
         .child(muted("Each kind starts open in Verbose unless you clear it here. A click on a fold still opens or shuts it, and Normal keeps all of them shut."))
         .child(stack().prop("gap", "s").children(opens))
         .child(heading("Plan limit"))
-        .child(muted("When your plan's 5-hour or weekly usage passes 90%, Claude is told to pause and ask you before more work, in every Claude Code session in Wings, chat or terminal. Past the limit, work is billed as extra usage."))
+        .child(muted("When your plan's 5-hour or weekly usage passes the share you pick, Claude is told to pause and ask you before more work, in every Claude Code session in Wings, chat or terminal. Past the limit, work is billed as extra usage."))
         .child(checkbox("Tell Claude to pause near the limit", prefs::pause_near_limit().get(), |on| drop(prefs::pause_near_limit().set(on))).key("pause-near-limit"))
-        .child(muted("To be sure, a chat can also stop Claude's turn itself, as its Stop button does: once when usage passes 90%, and once more when the limit is used up. Send a message to go on."))
+        .child(field_inline("Pause at", chips("Pause at", &prefs::LIMIT_SHARES, &prefs::pause_at().get(), |share| drop(prefs::pause_at().set(share.to_owned())))))
+        .child(muted("To be sure, a chat can also stop Claude's turn itself, as its Stop button does: once when usage passes the share you pick, and once more when the limit is used up. Send a message to go on."))
         .child(checkbox("Stop the chat's turn near the limit", prefs::stop_near_limit().get(), |on| drop(prefs::stop_near_limit().set(on))).key("stop-near-limit"))
+        .child(field_inline("Stop at", chips("Stop at", &prefs::LIMIT_SHARES, &prefs::stop_at().get(), |share| drop(prefs::stop_at().set(share.to_owned())))))
         .child(heading("Remote Control"))
         .child(muted("Each new chat turns on Remote Control as it starts, so you can follow and answer it on claude.ai or in the Claude app. The button by the model menu still turns it off for that chat."))
         .child(checkbox("Turn on Remote Control in every new chat", prefs::remote_on_start().get(), |on| drop(prefs::remote_on_start().set(on))).key("remote-on-start"))

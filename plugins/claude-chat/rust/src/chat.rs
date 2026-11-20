@@ -672,13 +672,15 @@ pub(crate) fn hear(run: u32, line: &Value) {
     // Pictures in what was heard go to Wings once, as the page names them by id.
     images::flush();
     crate::subagent_relay::heard(line);
-    // Claude Code says how much of the plan is used with each reply: past 90%, the setting stops the turn as Stop does.
+    // Claude Code says how much of the plan is used with each reply: past the share you picked, the setting stops the turn
+    // as Stop does.
     if line["type"] == "rate_limit_event" && prefs::stop_near_limit().get() {
         let stopping = with(|c| {
             if c.run != run || !c.session.working {
                 return false;
             }
-            let Some((stop, said)) = crate::plan_limit::stop_for(&c.session.limits, &c.session.limit_stops) else {
+            let at = prefs::percent(&prefs::stop_at().get());
+            let Some((stop, said)) = crate::plan_limit::stop_for(&c.session.limits, &c.session.limit_stops, at) else {
                 return false;
             };
             c.session.limit_stops.push(stop);

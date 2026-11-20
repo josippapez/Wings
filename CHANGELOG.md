@@ -7,7 +7,7 @@ What changed in each Wings release, newest first.
 - **Past sessions show their first message again** under sessions Wings named, like the ones run from Claude chat.
 - **Typing in a long chat does a little less work**: each character's width is measured once instead of on every redraw.
 - **Pausing near the plan limit works in chats**: Wings now reads the usage of each chat's account, and Claude hears the note with every tool call, in subagents too. Before, a Wings with only chats open had no usage numbers, so the note never came.
-- **Stop the chat's turn near the limit**: a new setting in Claude chat's settings (off by default) stops Claude's turn as the Stop button does once your 5-hour or weekly usage passes 90%, and again when the limit is used up.
+- **Stop the chat's turn near the limit**: a new setting in Claude chat's settings (off by default) stops Claude's turn as the Stop button does once your 5-hour or weekly usage passes the share you pick, and again when the limit is used up. The pause note's share is yours to pick too, from 70% to 100%.
 - **Messages you send a subagent stay in its view**, also after it loads again, and ones still on their way show at the end.
 - **Claude chat 0.36.0**: no Open in terminal button, and the above.
 

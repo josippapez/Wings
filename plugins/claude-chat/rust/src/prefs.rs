@@ -25,6 +25,28 @@ pub fn stop_near_limit() -> Setting<bool> {
     Setting::boolean(STOP_NEAR_LIMIT, false)
 }
 
+/// The share of a limit (percent) at which Claude is told to pause, and at which a chat stops its turn.
+pub const PAUSE_AT: &str = "pause-at";
+pub const STOP_AT: &str = "stop-at";
+pub const LIMIT_SHARES: [(&str, &str); 5] = [("70", "70%"), ("80", "80%"), ("90", "90%"), ("95", "95%"), ("100", "100%")];
+
+fn share_of(stored: &Value) -> Option<String> {
+    stored.as_str().filter(|share| LIMIT_SHARES.iter().any(|(value, _)| value == share)).map(str::to_owned)
+}
+
+pub fn pause_at() -> Setting<String> {
+    Setting::new(PAUSE_AT, "90".to_owned(), share_of, |share| json!(share))
+}
+
+pub fn stop_at() -> Setting<String> {
+    Setting::new(STOP_AT, "90".to_owned(), share_of, |share| json!(share))
+}
+
+/// The percent a value of those settings stands for.
+pub fn percent(share: &str) -> f64 {
+    share.parse().unwrap_or(90.0)
+}
+
 /// Every new chat turns Remote Control on as it starts (`remote.rs`), so you can go on with it on claude.ai or in the Claude
 /// app.
 pub const REMOTE_ON_START: &str = "remote-on-start";

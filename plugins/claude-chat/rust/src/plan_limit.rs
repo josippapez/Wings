@@ -5,9 +5,6 @@
 
 use serde_json::Value;
 
-/// The share of a window's limit at which Claude is told to pause, in percent.
-pub const NEAR: f64 = 90.0;
-
 /// How close a window is: near its limit, or used up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Level {
@@ -25,8 +22,8 @@ pub fn account_of(statusline: &Value, session: &str, caller: &Value) -> Value {
 
 /// What Claude is told in a session of `account`, from the limits Wings keeps (`{ rateLimits, sessions }`), at `now`
 /// (epoch seconds), with `clock` saying when a window resets: the window, how close it is, and the note. None while both
-/// windows are under `NEAR`, or the numbers are of a window that has reset since.
-pub fn note(statusline: &Value, account: &Value, now: f64, clock: impl Fn(f64) -> String) -> Option<(&'static str, Level, String)> {
+/// windows are under `at` (the percent you picked), or the numbers are of a window that has reset since.
+pub fn note(statusline: &Value, account: &Value, at: f64, now: f64, clock: impl Fn(f64) -> String) -> Option<(&'static str, Level, String)> {
     let limits = statusline["rateLimits"].as_array()?.iter().find(|limits| limits["account"] == *account)?;
     let windows = [("fiveHour", "5-hour"), ("sevenDay", "weekly")];
     let (key, name, used, resets) = windows
@@ -36,7 +33,7 @@ pub fn note(statusline: &Value, account: &Value, now: f64, clock: impl Fn(f64) -
             let used = window["usedPercentage"].as_f64()?;
             let resets = window["resetsAt"].as_f64();
             // Numbers from before a reset say nothing of the window now.
-            (used >= NEAR && resets.is_none_or(|at| at > now)).then_some((*key, *name, used, resets))
+            (used >= at && resets.is_none_or(|reset| reset > now)).then_some((*key, *name, used, resets))
         })
         .max_by(|a, b| a.2.total_cmp(&b.2))?;
     let when = resets.map(|at| format!(" (it resets at {})", clock(at))).unwrap_or_default();
@@ -59,13 +56,13 @@ pub fn note(statusline: &Value, account: &Value, now: f64, clock: impl Fn(f64) -
 pub type Stopped = (&'static str, Level, Option<f64>);
 
 /// Whether a chat stops Claude's turn, as its Stop button does, from the limits Claude Code reported to it (`limits`: label,
-/// percent used, reset in ms), with the setting on: the window at `NEAR` or past it it hasn't stopped for yet at that level
-/// and reset, and what the chat says of it. Each stops once, so the message you send next goes on.
-pub fn stop_for(limits: &[(&'static str, u64, Option<f64>)], stopped: &[Stopped]) -> Option<(Stopped, String)> {
+/// percent used, reset in ms), with the setting on: the window at `at` (the percent you picked) or past it it hasn't stopped
+/// for yet at that level and reset, and what the chat says of it. Each stops once, so the message you send next goes on.
+pub fn stop_for(limits: &[(&'static str, u64, Option<f64>)], stopped: &[Stopped], at: f64) -> Option<(Stopped, String)> {
     limits.iter().find_map(|&(label, used, resets)| {
         let level = match used as f64 {
             used if used >= 100.0 => Level::Over,
-            used if used >= NEAR => Level::Near,
+            used if used >= at => Level::Near,
             _ => return None,
         };
         let stop = (label, level, resets);
@@ -111,7 +108,8 @@ mod hooks {
             format!("{:02}:{:02}", local.hour, local.minute)
         };
         let account = account_of(&heard, &session, &context["session"]);
-        let Some((window, level, text)) = note(&heard, &account, host::now() / 1000.0, clock) else {
+        let at = prefs::percent(&prefs::pause_at().get());
+        let Some((window, level, text)) = note(&heard, &account, at, host::now() / 1000.0, clock) else {
             TOLD.with(|told| told.borrow_mut().remove(&agent));
             return None;
         };
@@ -155,15 +153,15 @@ mod tests {
 
     #[test]
     fn under_the_limit_says_nothing_and_near_it_says_to_pause_with_when_it_resets() {
-        assert_eq!(note(&heard(50.0, 80.0), &work(), 1000.0, clock), None);
-        let (window, level, text) = note(&heard(92.4, 80.0), &work(), 1000.0, clock).unwrap();
+        assert_eq!(note(&heard(50.0, 80.0), &work(), 90.0, 1000.0, clock), None);
+        let (window, level, text) = note(&heard(92.4, 80.0), &work(), 90.0, 1000.0, clock).unwrap();
         assert_eq!((window, level), ("fiveHour", Level::Near));
         assert!(text.contains("5-hour limit is at 92%") && text.contains("resets at t2000") && text.contains("Pause"), "{text}");
     }
 
     #[test]
     fn a_used_up_window_says_to_stop_and_the_closer_window_is_the_one_named() {
-        let (window, level, text) = note(&heard(91.0, 100.0), &work(), 1000.0, clock).unwrap();
+        let (window, level, text) = note(&heard(91.0, 100.0), &work(), 90.0, 1000.0, clock).unwrap();
         assert_eq!((window, level), ("sevenDay", Level::Over));
         assert!(text.contains("weekly limit is used up") && text.contains("extra usage") && text.contains("Stop now"), "{text}");
     }
@@ -171,27 +169,31 @@ mod tests {
     #[test]
     fn each_session_reads_its_own_accounts_limits_and_a_reset_window_is_not_near() {
         // `s2` runs under the default account, whose limits are low.
-        assert_eq!(note(&heard(99.0, 99.0), &account_of(&heard(99.0, 99.0), "s2", &Value::Null), 1000.0, clock), None);
+        assert_eq!(note(&heard(99.0, 99.0), &account_of(&heard(99.0, 99.0), "s2", &Value::Null), 90.0, 1000.0, clock), None);
         // Past its reset time the 5-hour window's numbers are old; the weekly one still counts.
-        assert_eq!(note(&heard(99.0, 50.0), &work(), 3000.0, clock), None);
-        assert_eq!(note(&json!({}), &work(), 1000.0, clock), None);
+        assert_eq!(note(&heard(99.0, 50.0), &work(), 90.0, 3000.0, clock), None);
+        assert_eq!(note(&json!({}), &work(), 90.0, 1000.0, clock), None);
     }
 
     #[test]
     fn a_chat_stops_once_as_a_window_passes_ninety_percent_and_once_more_when_it_is_used_up() {
         let mut stopped = Vec::new();
-        assert_eq!(stop_for(&[("5h", 89, Some(5.0)), ("week", 40, Some(9.0))], &stopped), None);
-        let (stop, said) = stop_for(&[("5h", 92, Some(5.0)), ("week", 40, Some(9.0))], &stopped).unwrap();
+        assert_eq!(stop_for(&[("5h", 89, Some(5.0)), ("week", 40, Some(9.0))], &stopped, 90.0), None);
+        let (stop, said) = stop_for(&[("5h", 92, Some(5.0)), ("week", 40, Some(9.0))], &stopped, 90.0).unwrap();
         assert_eq!(stop, ("5h", Level::Near, Some(5.0)));
         assert_eq!(said, "Stopped: your plan's 5-hour limit is at 92%. Send a message to go on.");
         stopped.push(stop);
         // The message you send next goes on.
-        assert_eq!(stop_for(&[("5h", 95, Some(5.0))], &stopped), None);
-        let (stop, said) = stop_for(&[("5h", 100, Some(5.0))], &stopped).unwrap();
+        assert_eq!(stop_for(&[("5h", 95, Some(5.0))], &stopped, 90.0), None);
+        let (stop, said) = stop_for(&[("5h", 100, Some(5.0))], &stopped, 90.0).unwrap();
         assert_eq!(stop.1, Level::Over);
         assert!(said.contains("used up") && said.contains("extra usage"), "{said}");
+        // At the share you picked.
+        assert_eq!(stop_for(&[("5h", 82, Some(5.0))], &[], 80.0).map(|(stop, _)| stop.1), Some(Level::Near));
+        assert_eq!(stop_for(&[("5h", 97, Some(5.0))], &[], 100.0), None);
+        assert_eq!(note(&heard(72.0, 50.0), &work(), 70.0, 1000.0, clock).map(|(_, level, _)| level), Some(Level::Near));
         // A window that reset is a new one.
-        assert_eq!(stop_for(&[("week", 91, Some(20.0))], &[("week", Level::Near, Some(9.0))]).map(|(stop, _)| stop), Some(("week", Level::Near, Some(20.0))));
+        assert_eq!(stop_for(&[("week", 91, Some(20.0))], &[("week", Level::Near, Some(9.0))], 90.0).map(|(stop, _)| stop), Some(("week", Level::Near, Some(20.0))));
     }
 
     /// A chat's Claude Code never runs the status line, so its session isn't among the status line's: before, it read the
@@ -201,7 +203,7 @@ mod tests {
         let heard = heard(95.0, 50.0);
         let chat = json!({ "id": "c1", "account": "work" });
         assert_eq!(account_of(&heard, "c1", &chat), "work");
-        assert_eq!(note(&heard, &account_of(&heard, "c1", &chat), 1000.0, clock).map(|(_, level, _)| level), Some(Level::Near));
+        assert_eq!(note(&heard, &account_of(&heard, "c1", &chat), 90.0, 1000.0, clock).map(|(_, level, _)| level), Some(Level::Near));
         // One the status line knows goes by what it said.
         assert_eq!(account_of(&heard, "s1", &json!({ "account": "other" })), "work");
         // One nobody names runs under the default account.
