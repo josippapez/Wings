@@ -1799,6 +1799,62 @@ fn a_message_box_sends_escape_shift_tab_and_the_history_keys_to_the_page_as_your
     settle(&app, &mut window, shows("heard=Escape,ArrowUp,ArrowDown,shift-Tab."));
 }
 
+/// A chat's message box with its slash commands under it as wings-plugin-ui/native's `Combobox` renders them: a Textarea
+/// that sends on Enter, then the commands that match as chips. What it heard: the text, the pick, and the keys.
+fn slash_box() -> String {
+    let (mut typed, mut picked, mut heard) = (String::new(), String::from("none"), Vec::<String>::new());
+    fake::page("page", move |event| {
+        match event {
+            Some(("3:onChange", change)) => typed = change["value"].as_str().unwrap_or_default().to_owned(),
+            Some(("3:onKeyDown", key)) => heard.push(key["key"].as_str().unwrap_or_default().to_owned()),
+            Some((handler, _)) => {
+                picked = ["help", "compact"][(number(handler) - 100) / 2].to_owned();
+                typed = format!("/{picked} ");
+            }
+            None => {}
+        }
+        let mut stack = vec![json!({ "id": 3, "type": "Textarea", "props": { "label": "Message", "rows": 2, "value": typed,
+            "submitOnEnter": true, "takesShiftTab": true, "onChange": "3:onChange", "onKeyDown": "3:onKeyDown" } })];
+        if typed == "/" {
+            let chips: Vec<Value> = ["help", "compact"]
+                .iter()
+                .enumerate()
+                .map(|(i, name)| {
+                    json!({ "id": 100 + 2 * i, "type": "Button", "props": { "chip": true, "pressed": false, "onClick": format!("{}:onClick", 100 + 2 * i) },
+                        "children": [text_node(101 + 2 * i, &format!("/{name}"))] })
+                })
+                .collect();
+            stack.push(json!({ "id": 4, "type": "Row", "props": { "gap": "s", "wrap": true }, "children": chips }));
+        }
+        json!({ "id": 0, "type": "#root", "children": [
+            { "id": 1, "type": "Stack", "props": { "gap": "s" }, "children": stack },
+            text(9, 10, format!("text={typed}, picked={picked}, heard={}.", heard.join(","))) ] })
+    })
+}
+
+#[test]
+fn tab_in_a_message_box_with_a_list_picks_the_first_option_or_the_one_the_arrows_reached_and_types_no_tab() {
+    let (app, mut window) = open(slash_box());
+    settle(&app, &mut window, shows("text=, picked=none, heard=."));
+    window.update(|_, window, cx| window.focus_next(cx));
+    window.draw();
+    window.simulate_input("/");
+    settle(&app, &mut window, shows("text=/, picked=none,"));
+    key(&mut window, "tab");
+    // The page hears the pick, not a Tab key, and the text has no tab in it.
+    settle(&app, &mut window, shows("text=/help , picked=help, heard=."));
+
+    // With the arrows moved to the second, Tab takes that one.
+    for _ in "/help ".chars() {
+        key(&mut window, "backspace");
+    }
+    window.simulate_input("/");
+    settle(&app, &mut window, shows("text=/, picked=help,"));
+    key(&mut window, "down");
+    key(&mut window, "tab");
+    settle(&app, &mut window, shows("text=/compact , picked=compact, heard=."));
+}
+
 /// Cyclops' start time, a `type="time"` input holding 08:30, and what the page hears.
 fn start_time() -> String {
     let mut start = "08:30".to_owned();
@@ -3273,6 +3329,13 @@ fn a_key_typed_in_a_long_chat_renders_the_page_once() {
         }
     }
     let rendered = renders(&window) - before;
+    // How long a key's frame takes: the field's change and the page drawn again.
+    let started = Instant::now();
+    for _ in 0..20 {
+        window.simulate_input("x");
+        window.draw();
+    }
+    eprintln!("[measure] a key's frame in a long chat: {:.2} ms", started.elapsed().as_secs_f64() * 1000.0 / 20.0);
     eprintln!("[measure] {} keys typed in a long chat rendered the page {rendered} times", keys.len());
     // The field drawing its new text is one; the page's echo of it and the field's own notice of the change were two
     // more, each a whole long chat laid out again.

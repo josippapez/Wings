@@ -836,6 +836,12 @@ impl PageView {
                         Some(handler) => view.pick_suggestion(handler, cx),
                         None => return,
                     },
+                    // A message box's Tab completes, as a terminal's does: the picked option, else the first. Another field's
+                    // Tab still moves on to the next control.
+                    "tab" if upward => match highlight.or(Some(0)).and_then(|at| handlers.get(at)) {
+                        Some(handler) => view.pick_suggestion(handler, cx),
+                        None => return,
+                    },
                     "escape" => {
                         view.suggestions_closed = true;
                         view.highlight = None;
