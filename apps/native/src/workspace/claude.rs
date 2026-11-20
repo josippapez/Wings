@@ -57,6 +57,80 @@ const HOOK_TIMEOUT: Duration = Duration::from_millis(1500);
 /// How long a request waits for the window. Opening a pane or reading one is quick; a window that is stuck says so.
 const WINDOW_WAIT: Duration = Duration::from_secs(10);
 
+/// The shortest and longest measurement the `performance` tool makes, and what it makes without `seconds`.
+const PERFORMANCE_SECONDS: (f64, f64, f64) = (1.0, 30.0, 3.0);
+/// After the frame counter is put in the window and before the measured window starts, so the draw that puts it in is not
+/// counted.
+const PERFORMANCE_SETTLE: Duration = Duration::from_millis(250);
+
+/// Wings' `performance` tool, which only this app has.
+fn performance_tool() -> Value {
+    json!({
+        "name": "performance",
+        "description": "Measure Wings' own CPU, window frames per second and which views render most, over a few seconds, for checking a change's cost in the running app. Turns counting on for that window if the performance readout is off (without showing its card), then puts it back. Returns JSON: seconds, cpuPercent (of one core), frames, framesPerSecond, renders (view, count, perSecond; most first), cardShown (the readout's card was on, so its own update is in the numbers) and a one-line summary. Does not draw frames itself. Leave Wings alone while it runs for an idle number: a Claude session working in Wings draws too.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "seconds": { "type": "number", "description": format!("How long to measure, {} to {}. Default {}.", PERFORMANCE_SECONDS.0, PERFORMANCE_SECONDS.1, PERFORMANCE_SECONDS.2) }
+            }
+        }
+    })
+}
+
+/// `performance`: counts for `seconds` (a number, clamped) and answers the measurement as JSON. `wait` sleeps, off the
+/// window's thread, so the window draws as it does.
+pub(super) fn performance(env: &AppEnv, arguments: &Value, wait: &dyn Fn(Duration)) -> Result<String, String> {
+    let (least, most, default) = PERFORMANCE_SECONDS;
+    let seconds = match arguments.get("seconds") {
+        None | Some(Value::Null) => default,
+        Some(value) => value
+            .as_f64()
+            .filter(|s| s.is_finite())
+            .ok_or_else(|| format!("seconds is a number, {least} to {most}"))?
+            .clamp(least, most),
+    };
+    env.on_window(WINDOW_WAIT, |workspace, _, cx| workspace.measure_begin(cx))??;
+    let waited = (|| {
+        wait(PERFORMANCE_SETTLE);
+        env.on_window_quietly(WINDOW_WAIT, |workspace, _, cx| workspace.measure_restart(cx))??;
+        wait(Duration::from_secs_f64(seconds));
+        Ok::<_, String>(())
+    })();
+    // Always put the readout back, even when the window stopped answering in between.
+    let measured = env.on_window(WINDOW_WAIT, |workspace, _, cx| workspace.measure_end(cx));
+    waited?;
+    Ok(performance_json(&measured??).to_string())
+}
+
+fn performance_json(measured: &crate::ui::readout::Measured) -> Value {
+    let tenth = |n: f64| (n * 10.0).round() / 10.0;
+    let per_second = |count: u32| tenth(f64::from(count) / measured.seconds);
+    let renders: Vec<Value> = measured
+        .renders
+        .iter()
+        .map(|&(view, count)| json!({ "view": view, "count": count, "perSecond": per_second(count) }))
+        .collect();
+    let busiest: Vec<String> = measured.renders.iter().take(5).map(|&(view, count)| format!("{view} {}", per_second(count))).collect();
+    let summary = format!(
+        "Over {:.1} s Wings used {:.1}% of one core and drew {} frames/s ({} frames). Renders/s: {}.{}",
+        measured.seconds,
+        measured.cpu_percent,
+        per_second(measured.frames),
+        measured.frames,
+        if busiest.is_empty() { "none".to_string() } else { busiest.join(", ") },
+        if measured.card_shown { " The readout card was on, so its update is counted." } else { "" },
+    );
+    json!({
+        "seconds": tenth(measured.seconds),
+        "cpuPercent": tenth(measured.cpu_percent),
+        "frames": measured.frames,
+        "framesPerSecond": per_second(measured.frames),
+        "renders": renders,
+        "cardShown": measured.card_shown,
+        "summary": summary,
+    })
+}
+
 /// What the window knows of its panes, read on its thread for one request.
 #[derive(Default)]
 pub(super) struct Snapshot {
@@ -359,6 +433,9 @@ impl Server {
         arguments: &Value,
         pane: &dyn Fn() -> Option<String>,
     ) -> Option<Result<String, String>> {
+        if name == "performance" {
+            return Some(performance(&self.env, arguments, &std::thread::sleep));
+        }
         self.sessions
             .call_tool(name, arguments)
             .or_else(|| {
@@ -431,6 +508,7 @@ impl Handler for Server {
         wings_agents::history::mcp_tools()
             .into_iter()
             .chain(panes::tools())
+            .chain([performance_tool()])
             .chain(
                 wings_connect::project_info::mcp_tools()
                     .into_iter()

@@ -48,6 +48,8 @@ mod plugin_tab_place;
 #[cfg(all(test, feature = "test-support"))]
 mod plugin_tests;
 #[cfg(all(test, feature = "test-support"))]
+mod performance_tests;
+#[cfg(all(test, feature = "test-support"))]
 mod page_keys_tests;
 mod plugin_ui;
 mod plugin_updates;
@@ -954,15 +956,39 @@ impl Workspace {
         }
     }
 
-    /// The readout's card, kept as last drawn, and what counts the window's draws for it; nothing while it is off.
+    /// What counts the window's draws while the readout is on or a measurement runs, and the readout's card, kept as last
+    /// drawn, while it is on; nothing otherwise.
     fn readout_layer(&self, cx: &gpui::App) -> Vec<gpui::AnyElement> {
-        let Some(parts) = self.parts.as_ref().filter(|parts| parts.readout.read(cx).is_on()) else {
+        let Some(parts) = self.parts.as_ref().filter(|parts| parts.readout.read(cx).counting()) else {
             return Vec::new();
         };
-        vec![
-            ui::readout::frame_counter().into_any_element(),
-            parts.readout.clone().cached(ui::readout::placement()).into_any_element(),
-        ]
+        let mut layer = vec![ui::readout::frame_counter().into_any_element()];
+        if parts.readout.read(cx).is_on() {
+            layer.push(parts.readout.clone().cached(ui::readout::placement()).into_any_element());
+        }
+        layer
+    }
+
+    /// The `performance` tool's three steps on the window's thread (`claude::measure_performance`): count, start the
+    /// window once the counter is in, and read the counts and put the readout as it was. Each draws the workspace once, to
+    /// put the frame counter in or take it out, outside the measured window.
+    pub(super) fn measure_begin(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
+        let parts = self.parts.as_ref().ok_or("The window isn't ready yet")?;
+        parts.readout.update(cx, |readout, _| readout.begin_measure())?;
+        cx.notify();
+        Ok(())
+    }
+
+    pub(super) fn measure_restart(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
+        let parts = self.parts.as_ref().ok_or("The window isn't ready yet")?;
+        parts.readout.update(cx, |readout, _| readout.restart_measure())
+    }
+
+    pub(super) fn measure_end(&mut self, cx: &mut Context<Self>) -> Result<ui::readout::Measured, String> {
+        let parts = self.parts.as_ref().ok_or("The window isn't ready yet")?;
+        let measured = parts.readout.update(cx, |readout, _| readout.end_measure());
+        cx.notify();
+        measured
     }
 }
 

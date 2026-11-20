@@ -32,6 +32,7 @@ pub fn run_command(args: &[String], version: &'static str) -> Option<i32> {
         Some("journal") => cli::journal(),
         Some("statusline") => cli::statusline(args.get(1).is_some_and(|a| a == "--pass")),
         Some("worktree-setup") => cli::worktree_setup(&args[1..]),
+        Some("performance") => cli::performance(&args[1..]),
         Some("tools") => cli::tools(),
         // A plugin's id, like `tasks`: one of its commands. Anything starting with `-` is left to the app.
         Some(id) if id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') && !id.starts_with('-') => cli::plugin_tool(args),

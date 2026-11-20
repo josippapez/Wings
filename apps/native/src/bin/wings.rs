@@ -10,7 +10,7 @@ fn main() {
         }
     }
     eprintln!(
-        "Usage: wings <command>\n\n  plugin ...        Manage plugins\n  tools             The commands the plugins that are on add\n  <plugin> <tool>   Run one of them\n  wait <pane>       Wait for a pane's command to finish\n  worktree-setup    What a project's new worktrees get\n\nClaude Code runs `wings --mcp`, `wings statusline` and `wings hook` itself. Wings has to be open."
+        "Usage: wings <command>\n\n  plugin ...        Manage plugins\n  tools             The commands the plugins that are on add\n  <plugin> <tool>   Run one of them\n  wait <pane>       Wait for a pane's command to finish\n  worktree-setup    What a project's new worktrees get\n  performance       Measure Wings' CPU, frames and renders for a few seconds\n\nClaude Code runs `wings --mcp`, `wings statusline` and `wings hook` itself. Wings has to be open."
     );
     std::process::exit(2);
 }

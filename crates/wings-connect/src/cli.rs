@@ -191,6 +191,61 @@ pub fn worktree_setup(args: &[String]) -> i32 {
     call_tool("worktree_setup", args)
 }
 
+const PERFORMANCE_USAGE: &str = "Usage: wings performance [--seconds N] [--json]
+
+Measures the running Wings for N seconds (1 to 30, default 3): its CPU as a percent of one core, the window's frames per
+second and the views that render most. Prints a summary, or with --json the whole answer. Wings' performance readout can
+stay off; it is put back as it was.";
+
+/// What `wings performance` was asked: the seconds, if given, and whether to print JSON.
+fn performance_args(args: &[String]) -> Result<(Option<f64>, bool), String> {
+    let (mut seconds, mut json) = (None, false);
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        let value = match arg.as_str() {
+            "--json" => {
+                json = true;
+                continue;
+            }
+            "--seconds" => args.next().ok_or("--seconds needs a number")?,
+            other => other.strip_prefix("--seconds=").ok_or_else(|| format!("{other} isn't an option of wings performance"))?,
+        };
+        seconds = Some(value.parse::<f64>().ok().filter(|s| s.is_finite()).ok_or_else(|| format!("{value} isn't a number of seconds"))?);
+    }
+    Ok((seconds, json))
+}
+
+/// `wings performance [--seconds N] [--json]`: Wings' `performance` tool, which measures the running app.
+pub fn performance(args: &[String]) -> i32 {
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{PERFORMANCE_USAGE}");
+        return 0;
+    }
+    let (seconds, json) = match performance_args(args) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            eprintln!("wings: {e}\n{PERFORMANCE_USAGE}");
+            return 2;
+        }
+    };
+    let arguments = serde_json::Map::from_iter(seconds.map(|s| ("seconds".to_string(), json!(s))));
+    match ask("call", tool_request("performance", arguments, None)) {
+        Ok(result) => {
+            let text = result.pointer("/content/0/text").and_then(Value::as_str).unwrap_or_default();
+            if result["isError"] == true {
+                return fail(text);
+            }
+            match serde_json::from_str::<Value>(text) {
+                Ok(answer) if !json => println!("{}", answer["summary"].as_str().unwrap_or(text)),
+                Ok(answer) => println!("{}", serde_json::to_string_pretty(&answer).unwrap_or_default()),
+                Err(_) => println!("{text}"),
+            }
+            0
+        }
+        Err(e) => fail(&e),
+    }
+}
+
 /// Calls the tool `name` with `key=value` arguments and prints its answer. Exits 1 when the tool says it failed.
 fn call_tool(name: &str, rest: &[String]) -> i32 {
     let mut arguments = serde_json::Map::new();
@@ -478,6 +533,17 @@ pub fn install_command(exe: &Path) -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn performance_takes_seconds_and_json_and_refuses_the_rest() {
+        let args = |a: &[&str]| super::performance_args(&a.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert_eq!(args(&[]), Ok((None, false)));
+        assert_eq!(args(&["--seconds", "5", "--json"]), Ok((Some(5.0), true)));
+        assert_eq!(args(&["--seconds=2.5"]), Ok((Some(2.5), false)));
+        assert!(args(&["--seconds"]).is_err());
+        assert!(args(&["--seconds", "soon"]).is_err());
+        assert!(args(&["--sec", "3"]).is_err());
+    }
+
     #[test]
     fn shared_server_cli_calls_keep_the_invoking_session() {
         let args = serde_json::Map::from_iter([("status".into(), json!("todo"))]);

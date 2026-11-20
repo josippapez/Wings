@@ -88,6 +88,8 @@ pub(super) enum UiEvent {
     SaveTabState,
     /// Something to do on the window's thread for a call from Claude Code (`claude`), which waits for it.
     Run(WindowTask),
+    /// `Run` that doesn't draw the window afterwards, for the `performance` tool, which must not make frames itself.
+    RunQuietly(WindowTask),
     FocusPane {
         pane: String,
         reply: crate::page::runtime::Reply,
@@ -457,9 +459,31 @@ impl AppEnv {
         + Send
         + 'static,
     ) -> Result<T, String> {
+        self.run_on_window(UiEvent::Run, wait, task)
+    }
+
+    /// `on_window`, without the draw of the window that follows it: for what must not make a frame (`performance`).
+    pub(super) fn on_window_quietly<T: Send + 'static>(
+        &self,
+        wait: Duration,
+        task: impl FnOnce(&mut Workspace, &mut gpui::Window, &mut Context<Workspace>) -> T
+        + Send
+        + 'static,
+    ) -> Result<T, String> {
+        self.run_on_window(UiEvent::RunQuietly, wait, task)
+    }
+
+    fn run_on_window<T: Send + 'static>(
+        &self,
+        event: fn(WindowTask) -> UiEvent,
+        wait: Duration,
+        task: impl FnOnce(&mut Workspace, &mut gpui::Window, &mut Context<Workspace>) -> T
+        + Send
+        + 'static,
+    ) -> Result<T, String> {
         let (done, answer) = std::sync::mpsc::channel();
         self.events
-            .try_send(UiEvent::Run(Box::new(move |workspace, window, cx| {
+            .try_send(event(Box::new(move |workspace, window, cx| {
                 let _ = done.send(task(workspace, window, cx));
             })))
             .map_err(|_| "The Wings window is closed or busy".to_string())?;
@@ -988,6 +1012,7 @@ impl Workspace {
         match event {
             UiEvent::SaveTabState => return self.save(cx),
             UiEvent::Run(task) => task(self, window, cx),
+            UiEvent::RunQuietly(task) => return task(self, window, cx),
             UiEvent::FocusPane { pane, reply } => {
                 let Some(id) = self.plugin_pane(&pane) else {
                     return reply.err(format!("no pane {pane}"));
