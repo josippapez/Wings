@@ -19,11 +19,14 @@ use serde_json::json;
 
 use crate::{
     chat::{self, Chat},
-    mods::{self, BAND, CLAUDES, GROUP, HINT, MENU, MODES, QUESTION, RESULT, SPINNER, USE, YOURS},
+    mods::{self, BAND, CLAUDES, GROUP, HINT, MENU, MODES, PLACED, QUESTION, RESULT, SPINNER, USE, YOURS},
     session::{Item, Tool},
 };
 
 thread_local! {
+    /// The edit of each field of a mod, by its draft's key, that is to be told Claude Code once you pause: a number from `TYPED`.
+    static TYPING: RefCell<HashMap<String, u32>> = RefCell::new(HashMap::new());
+    static TYPED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     /// The tool rows the page drew in its last build, by key, with whether each call had ended, to ask the mods for.
     static SEEN: RefCell<Vec<(String, bool)>> = const { RefCell::new(Vec::new()) };
 }
@@ -228,6 +231,34 @@ pub fn palette(c: &Chat) -> Option<Value> {
     (!palette.is_empty()).then_some(Value::Object(palette))
 }
 
+/// The rows mods placed after the messages in items `start..end`, which make `node`: below it, and above it for the rows
+/// placed at the conversation's start, with the block that starts it.
+pub fn placed_after(c: &Chat, start: usize, end: usize, node: Node) -> Node {
+    let mods = &c.session.mods;
+    if mods.placed.is_empty() {
+        return node;
+    }
+    let items = c.session.items.len();
+    let item_of = |uuid: &str| c.session.prompts.iter().find(|prompt| prompt.uuid == uuid).map(|prompt| prompt.at).filter(|at| *at < items).or_else(|| mods.item_of(uuid, items));
+    let (mut first, mut last) = (Vec::new(), Vec::new());
+    for row in &mods.placed {
+        let key = format!("{PLACED}{}", row.request);
+        let drawn = || {
+            SEEN.with(|seen| seen.borrow_mut().push((key.clone(), true)));
+            mods.trees.get(&key).and_then(|tree| drawn(tree, &At { instance: &key, drafts: &mods.drafts })).map(|row| row.key(key.clone()))
+        };
+        match row.after.as_deref().map(item_of) {
+            None if start == 0 => first.extend(drawn()),
+            Some(Some(at)) if (start..end).contains(&at) => last.extend(drawn()),
+            _ => {}
+        }
+    }
+    if first.is_empty() && last.is_empty() {
+        return node;
+    }
+    stack().prop("gap", "s").children(first).child(node).children(last).key(format!("placed-{start}"))
+}
+
 /// What mods add above Claude's question: the elements of their tree for the dialog, which holds Claude Code's own
 /// question once, drawn here as the chat's card.
 pub fn question(c: &Chat, request: &str) -> Option<Node> {
@@ -287,6 +318,10 @@ pub fn request_for(c: &Chat, key: &str, n: u32) -> Option<String> {
         let word = if c.doing.0.is_empty() { "Working" } else { c.doing.0.as_str() };
         let props = json!({ "word": word, "message": null, "suffix": "", "mode": mode });
         return Some(mods::render_row(key, "Spinner", key, props, n));
+    }
+    if let Some(request) = key.strip_prefix(PLACED) {
+        // A row a mod placed, asked for as `Placed` under the id Claude Code gave it.
+        return c.session.mods.placed.iter().any(|row| row.request == request).then(|| mods::render_row(key, "Placed", request, json!({}), n));
     }
     if let Some(request) = key.strip_prefix(QUESTION) {
         let ask = c.session.items.iter().rev().find_map(|item| match item {
@@ -580,6 +615,24 @@ fn node(el: &Value, at: &At, budget: &mut usize) -> Option<Node> {
     let inner = |budget: &mut usize| children.iter().filter_map(|child| node(child, at, budget)).collect::<Vec<Node>>();
     match el["type"].as_str()? {
         "engine" => None,
+        // A Progress the engine drew as boxes, as it does for a surface that doesn't name it: a track a fraction high whose
+        // one child is as wide as the share done.
+        "Box" if props["height"].as_f64().is_some_and(|height| height > 0.0 && height < 1.0) && children.len() == 1 && children[0]["type"] == "Box" => {
+            let share = children[0]["props"]["width"].as_str()?.strip_suffix('%')?.parse::<f64>().ok()?;
+            Some(meter("Progress", share, None))
+        }
+        "Progress" => {
+            let label = props["label"].as_str().unwrap_or_default();
+            let share = props["value"].as_f64().map(|value| value / props["max"].as_f64().filter(|max| *max > 0.0).unwrap_or(1.0) * 100.0);
+            let said = props["valueText"].as_str().map(str::to_owned).unwrap_or_else(|| share.map_or_else(|| "Running\u{2026}".to_owned(), |share| format!("{}%", share.clamp(0.0, 100.0).round())));
+            let head = row().prop("gap", "s").child(text(label).prop("grow", true).prop("truncate", true)).child(muted(said).prop("size", "small"));
+            Some(match share {
+                Some(share) => stack().prop("gap", "xs").child(head).child(meter(label, share, tone(props))),
+                None => head,
+            })
+        }
+        // Wings draws a picture from shapes it checks, not from SVG markup, so what a mod's `Svg` shows is its description.
+        "Svg" => props["alt"].as_str().filter(|alt| !alt.trim().is_empty()).map(|alt| muted(alt).prop("size", "small")),
         "Box" | "div" => {
             let column = props["flexDirection"].as_str().map_or(el["type"] == "div", |direction| direction.starts_with("column"));
             let gap = match props["gap"].as_f64().or(props[if column { "rowGap" } else { "columnGap" }].as_f64()) {
@@ -675,12 +728,18 @@ fn node(el: &Value, at: &At, budget: &mut usize) -> Option<Node> {
             let typed = at.drafts.get(&draft).cloned().unwrap_or_default();
             let label = props["placeholder"].as_str().unwrap_or(&key).to_owned();
             let (kept, sent, press, instance) = (draft.clone(), draft, el["press"].clone(), instance.to_owned());
-            let field = text_input(&label, &typed, move |said| chat::with(|c| drop(c.session.mods.drafts.insert(kept.clone(), said))))
+            let edit = (kept.clone(), press.clone(), instance.clone(), key.clone());
+            let field = text_input(&label, &typed, move |said| {
+                chat::with(|c| drop(c.session.mods.drafts.insert(kept.clone(), said)));
+                tell_edit(&edit.0, &edit.1, &edit.2, &edit.3);
+            })
                 .prop("placeholder", label.as_str())
                 .on("onKeyDown", move |event| {
                     if event["key"] != "Enter" {
                         return;
                     }
+                    // What you typed goes whole with the submit: no edit is still to be told.
+                    TYPING.with(|typing| typing.borrow_mut().remove(&sent));
                     let said = chat::with(|c| c.session.mods.drafts.remove(&sent)).unwrap_or_default();
                     crate::mod_pane::act(crate::mod_pane::act_message(&instance, "input", &press, Some(key.as_str()), Some(said.as_str())));
                 });
@@ -706,11 +765,67 @@ fn node(el: &Value, at: &At, budget: &mut usize) -> Option<Node> {
         }
         "Code" => Some(highlighted_code(props["source"].as_str()?, props["language"].as_str().unwrap_or_default())),
         "Markdown" => {
-            let shown = markdown(props["text"].as_str()?);
+            let source = props["text"].as_str()?;
+            // A mod that answers its links (a `press` on the element) hears them; only the links it names, when it names some.
+            let shown = match el["press"]["plugin"].is_string() {
+                true => {
+                    let (press, instance, key) = (el["press"].clone(), instance.to_owned(), props["key"].as_str().map(str::to_owned));
+                    let named: Option<Vec<String>> = props["pressableLinks"].as_array().map(|list| list.iter().filter_map(|href| href.as_str().map(str::to_owned)).collect());
+                    let on_link: crate::mods_markdown::OnLink = std::rc::Rc::new(move |href: &str| match named.as_ref().is_none_or(|named| named.iter().any(|named| named == href)) {
+                        true => crate::mod_pane::act(crate::mod_pane::act_message(&instance, "link", &press, key.as_deref(), Some(href))),
+                        false => host::open_url(href),
+                    });
+                    crate::mods_markdown::linked(source, &on_link)
+                }
+                false => markdown(source),
+            };
             Some(if props["dimColor"] == true { shown.prop("tone", "muted") } else { shown })
         }
         _ => Some(muted("This part shows only in Claude Code.").prop("size", "small")),
     }
+}
+
+/// A bar `share` percent full, under `label` for a screen reader.
+fn meter(label: &str, share: f64, tone: Option<&str>) -> Node {
+    let bar = Node::new("Meter").prop("label", label).prop("percent", share.clamp(0.0, 100.0));
+    match tone {
+        Some(tone) => bar.prop("tone", tone),
+        None => bar,
+    }
+}
+
+/// How long you stop typing in a mod's field before it hears the text, as Claude Code Desktop's `ui_input` of kind
+/// `change` carries the field's whole text: each key would be a request and a redraw.
+const TYPING_PAUSE: u32 = 300;
+
+/// Starts an edit of the field `draft`: a number that stands for it until the next key.
+fn begin_edit(draft: &str) -> u32 {
+    let edit = TYPED.with(|typed| {
+        typed.set(typed.get().wrapping_add(1));
+        typed.get()
+    });
+    TYPING.with(|typing| typing.borrow_mut().insert(draft.to_owned(), edit));
+    edit
+}
+
+/// Whether `edit` is still the last of the field `draft`: no key since, and no submit.
+fn is_latest(draft: &str, edit: u32) -> bool {
+    TYPING.with(|typing| typing.borrow().get(draft) == Some(&edit))
+}
+
+/// Tells Claude Code what is in the field `draft` once you pause: only the last edit of a run is sent.
+fn tell_edit(draft: &str, press: &Value, instance: &str, key: &str) {
+    let edit = begin_edit(draft);
+    let (draft, press, instance, key) = (draft.to_owned(), press.clone(), instance.to_owned(), key.to_owned());
+    wings_plugin::task::spawn(async move {
+        host::sleep(TYPING_PAUSE).await;
+        if !is_latest(&draft, edit) {
+            return;
+        }
+        if let Some(said) = chat::with(|c| c.session.mods.drafts.get(&draft).cloned()) {
+            crate::mod_pane::act(crate::mod_pane::act_message(&instance, "change", &press, Some(&key), Some(&said)));
+        }
+    });
 }
 
 /// The words of what an element holds.
@@ -1035,5 +1150,115 @@ mod tests {
         assert_eq!(fitted["children"][0], huge["children"][0]);
         let kept = fitted["children"].as_array().unwrap().len();
         assert!(kept > 10 && kept < 2_000, "{kept}");
+    }
+
+    /// The `Placed` row of a probe mod as Claude Code 2.1.329 drew it for a `desktop` client: a field, a bar that is 40
+    /// percent full and one that runs, and a Markdown with two links the mod answers.
+    fn placed_tree() -> Value {
+        let line = include_str!("../tests/mods_probe.jsonl").lines().map(|line| serde_json::from_str::<Value>(line).unwrap()).find(|line| line["response"]["request_id"].as_str().is_some_and(|id| id.starts_with("ui-render-placed:"))).unwrap();
+        line["response"]["response"]["tree"].clone()
+    }
+
+    #[test]
+    fn a_progress_is_a_bar_and_its_words_whether_claude_code_sent_it_or_drew_it_as_boxes() {
+        use wings_plugin::ui::tree_json;
+        // As Claude Code drew the probe's `<Progress label="Indexing" value={0.4} valueText="40%" />` for a desktop client,
+        // which `draws` doesn't change: a title line over a track and its fill, and for one with no value its words alone.
+        let tree = placed_tree();
+        let bar = tree_json(drawn(&tree["children"][2], &at("placed:r")).unwrap()).to_string();
+        assert!(bar.contains("Indexing") && bar.contains("40%") && bar.contains("\"Meter\"") && bar.contains("\"percent\":40.0"), "{bar}");
+        let running = tree_json(drawn(&tree["children"][3], &at("placed:r")).unwrap()).to_string();
+        assert!(running.contains("Waiting") && running.contains("Running") && !running.contains("Meter"), "{running}");
+        // The element itself, for a surface that names it: its label, its figure, a bar by `max`; none when it has no value.
+        let progress = json!({ "type": "Progress", "props": { "label": "Indexing", "value": 3, "max": 4, "color": "green" } });
+        let drawn_bar = tree_json(drawn(&progress, &at("x")).unwrap()).to_string();
+        assert!(drawn_bar.contains("75%") && drawn_bar.contains("\"percent\":75.0") && drawn_bar.contains("\"tone\":\"success\""), "{drawn_bar}");
+        let idle = tree_json(drawn(&json!({ "type": "Progress", "props": { "label": "Waiting" } }), &at("x")).unwrap()).to_string();
+        assert!(idle.contains("Running") && !idle.contains("Meter"), "{idle}");
+        // A box a few rows high isn't a track.
+        let boxes = json!({ "type": "Box", "props": { "height": 3 }, "children": [{ "type": "Box", "props": { "width": "40%" } }] });
+        assert!(!drawn(&boxes, &at("x")).map(tree_json).unwrap_or_default().to_string().contains("Meter"));
+    }
+
+    #[test]
+    fn an_svg_shows_its_description_because_wings_draws_shapes_not_markup() {
+        use wings_plugin::ui::tree_json;
+        let svg = json!({ "type": "Svg", "props": { "source": "<svg viewBox='0 0 1 1'><circle r='1'/></svg>", "alt": "A circle" } });
+        assert!(tree_json(drawn(&svg, &at("x")).unwrap()).to_string().contains("A circle"));
+        assert!(drawn(&json!({ "type": "Svg", "props": { "source": "<svg/>", "alt": "" } }), &at("x")).is_none());
+    }
+
+    #[test]
+    fn a_link_in_a_markdown_the_mod_answers_goes_back_to_claude_code() {
+        let tree = placed_tree();
+        let markdown = tree["children"][4].clone();
+        let calls = std::rc::Rc::new(RefCell::new(Vec::<(String, Value)>::new()));
+        let kept = calls.clone();
+        host::testing::answer(move |method, params| {
+            kept.borrow_mut().push((method.to_owned(), params.clone()));
+            Ok(Value::Null)
+        });
+        let (exported, handlers) = wings_plugin::ui::export(vec![drawn(&markdown, &at("placed:r")).unwrap()]);
+        let mut clicks = Vec::new();
+        fn collect(node: &Value, clicks: &mut Vec<(String, String)>) {
+            if let (Some(href), Some(handler)) = (node["props"]["href"].as_str(), node["props"]["onClick"].as_str()) {
+                clicks.push((href.to_owned(), handler.to_owned()));
+            }
+            node["children"].as_array().into_iter().flatten().for_each(|child| collect(child, clicks));
+        }
+        exported.as_array().unwrap().iter().for_each(|node| collect(node, &mut clicks));
+        assert_eq!(clicks.iter().map(|(href, _)| href.as_str()).collect::<Vec<_>>(), ["https://example.com/a", "https://example.org/b"]);
+        let process = host::spawn("claude", &[], "/work/shop", "", |_| {});
+        chat::with(|c| c.input = Some(process.input()));
+        assert!(handlers.call(&clicks[0].1, &json!({})));
+        wings_plugin::task::block_on(async {});
+        let sent: Vec<Value> = calls.borrow().iter().filter(|(method, _)| method == "processWrite").filter_map(|(_, params)| serde_json::from_str(params["text"].as_str()?.trim()).ok()).collect();
+        assert_eq!((&sent[0]["request"]["subtype"], &sent[0]["request"]["href"], &sent[0]["request"]["key"]), (&json!("ui_press"), &json!("https://example.com/a"), &json!("md")));
+    }
+
+    #[test]
+    fn an_edit_is_told_once_the_typing_pauses_and_a_submit_cancels_it() {
+        let first = begin_edit("placed:r/q");
+        let second = begin_edit("placed:r/q");
+        assert!(!is_latest("placed:r/q", first), "a key typed since makes the first stale");
+        assert!(is_latest("placed:r/q", second));
+        // The submit sends the whole text itself.
+        TYPING.with(|typing| typing.borrow_mut().remove("placed:r/q"));
+        assert!(!is_latest("placed:r/q", second));
+    }
+
+    #[test]
+    fn rows_a_mod_placed_follow_the_block_of_their_message_or_head_the_conversation() {
+        use wings_plugin::ui::tree_json;
+        let probe: Vec<Value> = include_str!("../tests/mods_probe.jsonl").lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        chat::with(|c| {
+            c.session = crate::session::Session::default();
+            for line in probe.iter().filter(|line| matches!(line["type"].as_str(), Some("user" | "assistant"))) {
+                c.session.hear(line);
+            }
+            c.session.hear(probe.iter().find(|line| line["subtype"] == "ui_placed").unwrap());
+            let key = format!("{PLACED}{}", c.session.mods.placed[0].request);
+            let answer = format!("ui-render-{key}-1");
+            c.session.mods.answered(&answer, &json!({ "subtype": "success", "request_id": answer, "response": { "tree": placed_tree(), "hooked": true } }));
+            // Claude's answer is the only item the chat holds of the turn (it makes none of your message): a later item
+            // follows it.
+            c.session.items.push(crate::session::Item::Divider("later".into()));
+            let shown = |c: &Chat, start: usize, end: usize| tree_json(placed_after(c, start, end, text("answer"))).to_string();
+            let held = shown(c, 0, 1);
+            assert!(held.find("answer") < held.find("placed ") && held.contains("placed "), "the row follows the block that holds its message: {held}");
+            assert!(!shown(c, 1, 2).contains("placed "));
+            // A row with no message to follow is at the conversation's start.
+            c.session.mods.placed[0].after = None;
+            let head = shown(c, 0, 1);
+            assert!(head.find("placed ").unwrap() < head.find("answer").unwrap(), "{head}");
+            assert!(!shown(c, 1, 2).contains("placed "));
+            // One that follows a message the chat no longer holds shows nowhere.
+            c.session.mods.placed[0].after = Some("gone".into());
+            assert!(!shown(c, 0, 1).contains("placed ") && !shown(c, 1, 2).contains("placed "));
+            // The row is asked for under its id.
+            let asked = request_for(c, &key, 3).unwrap();
+            assert!(asked.contains("\"component\":\"Placed\"") && asked.contains(&c.session.mods.placed[0].request));
+            assert!(request_for(c, "placed:unknown", 3).is_none());
+        });
     }
 }

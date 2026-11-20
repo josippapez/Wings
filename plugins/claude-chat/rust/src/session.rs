@@ -14,7 +14,7 @@ use crate::{
     images,
     commands::Commands,
     notices,
-    plugins::{self, Plugins, Show},
+    plugins::{self, Plugins},
     setup::Setup,
     spend::{Meter, Spend},
     usage::{ContextDetail, Panel, Usage},
@@ -507,6 +507,22 @@ pub struct Session {
 }
 
 impl Session {
+    /// Puts the notifications mods raised in the conversation, as notices (one that replaces a keyed one of the same mod
+    /// takes its place), and returns the words to notify with.
+    pub fn show_raised(&mut self) -> Vec<(String, String)> {
+        let mut alerts = Vec::new();
+        for raised in std::mem::take(&mut self.mods.raised) {
+            let line = raised.line();
+            let old = raised.replaces.and_then(|old| self.items.iter().rposition(|item| *item == Item::Notice(old.clone())));
+            match old {
+                Some(at) => self.items[at] = Item::Notice(line),
+                None => self.items.push(Item::Notice(line)),
+            }
+            alerts.push((raised.head, raised.text));
+        }
+        alerts
+    }
+
     /// Takes in one line Claude Code printed, or one transcript entry.
     pub fn hear(&mut self, line: &Value) {
         if let Some(id) = line["session_id"].as_str().filter(|id| self.announced.as_deref() != Some(*id)) {
@@ -531,6 +547,8 @@ impl Session {
             return;
         }
         self.hear_own(line);
+        // The rows a mod places follow a message by its uuid.
+        self.mods.note_message(line, self.items.len());
     }
 
     fn hear_own(&mut self, line: &Value) {
@@ -549,6 +567,8 @@ impl Session {
         if self.mods.hear(line, self.now, &mut logged) {
             // A plugin's log line is a notice in the conversation, which Claude doesn't read.
             self.items.extend(logged.map(Item::Notice));
+            let said = self.show_raised();
+            self.alerts.extend(said);
             return;
         }
         match line["type"].as_str().unwrap_or_default() {
@@ -804,6 +824,7 @@ impl Session {
         self.live.clear();
         self.thinking = false;
         self.prompts.clear();
+        self.mods.cut(0);
         self.edits.clear();
         self.rewind = None;
         self.restored = None;
@@ -846,6 +867,7 @@ impl Session {
     fn cut(&mut self, at: usize) {
         self.items.truncate(at);
         self.prompts.retain(|prompt| prompt.at < at);
+        self.mods.cut(at);
         self.edits.cut(at);
     }
 
@@ -1212,14 +1234,6 @@ impl Session {
         Some(lines)
     }
 
-    /// A draft that is a command with a dialog of the chat's own (`/usage`, `/cost`, `/context`): which dialog, and the
-    /// request line that fills it. It is never sent as a message. Claude Code answers a control request at once, even
-    /// while a turn runs, so the dialog doesn't wait for the turn.
-    pub fn view_command(&mut self, text: &str) -> Option<(Panel, String)> {
-        let panel = view_of(text)?;
-        Some((panel, self.open_view(panel)))
-    }
-
     /// The request line that fills the usage or context dialog: one read, for the gesture that opens it.
     pub fn open_view(&mut self, panel: Panel) -> String {
         // What the dialog showed last stays until the new answer replaces it.
@@ -1229,13 +1243,6 @@ impl Session {
             Panel::Usage => request(USAGE_VIEW, json!({ "subtype": "get_usage" })),
             Panel::Context => request(CONTEXT_VIEW, json!({ "subtype": "get_context_usage", "detail": "full" })),
         }
-    }
-
-    /// A draft that is `/plugins`, `/plugin` or `/mcp`, which open the plugins dialog over the chat: which list it leads
-    /// with, and the requests that fill it, which only read. Never sent as a message either.
-    pub fn dialog_command(&mut self, text: &str) -> Option<(Show, String)> {
-        let show = plugins::command(text)?;
-        Some((show, self.plugins.ask()))
     }
 
     /// What the chat asks Claude Code as it starts: the models and commands it has, how full the context is, your
@@ -1544,18 +1551,9 @@ pub(crate) fn cancel(uuid: &str, n: u32) -> String {
     request(&format!("cancel-{n}"), json!({ "subtype": "cancel_async_message", "message_uuid": uuid }))
 }
 
-/// The view a draft opens, when the draft is exactly that command.
 /// Whether a draft is `/exit`, which closes the chat.
 pub fn exits(text: &str) -> bool {
     text.trim() == "/exit"
-}
-
-pub fn view_of(text: &str) -> Option<Panel> {
-    match text.trim() {
-        "/usage" | "/cost" => Some(Panel::Usage),
-        "/context" => Some(Panel::Context),
-        _ => None,
-    }
 }
 
 /// A uuid (version 4 in shape, which the protocol wants) made from the time in milliseconds and a number.
@@ -1970,6 +1968,7 @@ fn cut(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::Show;
 
     /// A turn as Claude Code 2.1.327 printed it, trimmed to the lines the chat reads and a few it skips.
     const TURN: &str = include_str!("../tests/turn.jsonl");
@@ -2843,7 +2842,8 @@ mod tests {
     fn usage_cost_and_context_open_a_view_and_are_not_sent_as_messages() {
         for (text, panel, subtype) in [("/usage", Panel::Usage, "get_usage"), (" /cost\n", Panel::Usage, "get_usage"), ("/context", Panel::Context, "get_context_usage")] {
             let mut session = Session::default();
-            let (opened, line) = session.view_command(text).expect(text);
+            let Some(crate::builtin::Local::Panel(opened)) = crate::builtin::find(text, &[]) else { panic!("{text}") };
+            let line = session.open_view(opened);
             assert_eq!(opened, panel);
             // One control request, no message, and nothing in the conversation.
             assert_eq!(line.lines().count(), 1);
@@ -2853,9 +2853,6 @@ mod tests {
             assert!(sent["request"].get("skip_behaviors").is_none());
             assert!(session.items.is_empty() && !session.working);
         }
-        let mut session = Session::default();
-        assert!(session.view_command("/usage now").is_none());
-        assert!(session.view_command("tell me about /usage").is_none());
     }
 
     #[test]
@@ -3001,7 +2998,8 @@ mod tests {
     fn plugins_plugin_and_mcp_open_the_dialog_ask_only_to_read_and_are_not_sent_as_messages() {
         for (text, show) in [("/plugins", Show::Plugins), (" /plugin\n", Show::Plugins), ("/mcp", Show::Mcp)] {
             let mut session = Session::default();
-            let (opened, line) = session.dialog_command(text).expect(text);
+            let Some(crate::builtin::Local::Dialog(opened)) = crate::builtin::find(text, &[]) else { panic!("{text}") };
+            let line = session.plugins.ask();
             assert_eq!(opened, show);
             // One write of two requests that read, no message, and nothing in the conversation.
             let subtypes: Vec<Value> = parsed(&line).iter().map(|sent| sent["request"]["subtype"].clone()).collect();
@@ -3009,9 +3007,6 @@ mod tests {
             assert!(parsed(&line).iter().all(|sent| sent["type"] == "control_request"));
             assert!(session.items.is_empty() && !session.working);
         }
-        let mut session = Session::default();
-        assert!(session.dialog_command("/plugins install toolbox").is_none());
-        assert!(session.dialog_command("what does /mcp do").is_none());
     }
 
     #[test]

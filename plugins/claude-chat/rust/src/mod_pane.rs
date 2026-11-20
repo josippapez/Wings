@@ -50,8 +50,8 @@ fn pane_message(c: &chat::Chat, pane: &str) -> Value {
     }
 }
 
-/// What a press, a submit or a pick in a mod's tree is: `act` (`press`, `input`, `select`) of `instance`, with the `press`
-/// handle and `key` the element came with, and the `value` typed or picked.
+/// What a press, a submit, an edit or a pick in a mod's tree is: `act` (`press`, `input`, `change`, `select`, `link`) of
+/// `instance`, with the `press` handle and `key` the element came with, and the `value` typed, picked or linked to.
 pub fn act_message(instance: &str, act: &str, press: &Value, key: Option<&str>, value: Option<&str>) -> Value {
     json!({ "kind": "mod-act", "pane": instance, "act": act, "press": press, "key": key, "value": value })
 }
@@ -63,6 +63,8 @@ pub fn request(message: &Value, n: u32) -> Option<String> {
         "press" => mods::press(instance, press, key, n),
         "input" => mods::input(instance, press, key?, message["value"].as_str()?, n),
         "select" => mods::select(instance, press, key?, message["value"].as_str()?, n),
+        "change" => mods::input_change(instance, press, key?, message["value"].as_str()?, n),
+        "link" => mods::press_link(instance, press, key, message["value"].as_str()?, n),
         _ => None,
     }
 }

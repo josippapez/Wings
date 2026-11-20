@@ -23,8 +23,7 @@ use crate::{
     mentions::{self, Files},
     plugins, prefs,
     composer::{self, Escape},
-    session::{self, Command, Draft, Item, Restore, Session, exits, view_of},
-    setup,
+    session::{self, Command, Draft, Item, Restore, Session, exits},
     usage::Panel,
 };
 
@@ -740,6 +739,24 @@ pub(crate) fn hear(run: u32, line: &Value) {
             with(|c| c.session.mods.expire(host::now() as u64));
         });
     }
+    // A notification a mod booked for later is raised when its time comes.
+    if let Some(wait) = crate::mods::notify_wait(line, host::now() as u64) {
+        task::spawn(async move {
+            host::sleep((wait + 50).min(u64::from(u32::MAX)) as u32).await;
+            let alerts = with(|c| {
+                if c.run != run {
+                    return Vec::new();
+                }
+                c.session.mods.due(host::now() as u64, host::focused());
+                c.session.show_raised()
+            });
+            if !host::focused() {
+                for (title, body) in alerts {
+                    drop(host::notify(&title, &body));
+                }
+            }
+        });
+    }
     // Only for what you'd miss: someone looking at this tab sees it happen.
     if !host::focused() {
         for (title, body) in alerts {
@@ -852,6 +869,22 @@ pub(crate) fn write(make: impl FnOnce(&mut Chat, u32) -> Option<String>) {
     crate::reattach::sync();
 }
 
+/// Opens the view a built-in command names, and gives the request lines that fill it, which only read.
+fn open_builtin(c: &mut Chat, local: crate::builtin::Local) -> String {
+    use crate::builtin::Local;
+    match local {
+        Local::Panel(panel) => {
+            c.panel = Some(panel);
+            c.session.open_view(panel)
+        }
+        Local::Dialog(show) => {
+            c.plugins = Some(plugins::Dialog::new(show));
+            c.session.plugins.ask()
+        }
+        Local::Setup(which) => c.session.setup.open(which),
+    }
+}
+
 /// Sends the draft as your message, or queues it while Claude works.
 pub fn send() {
     // /exit ends the session, as in Claude Code: the tab closes, and the Claude Code it runs stops with it.
@@ -877,28 +910,17 @@ pub fn send() {
         if text.is_empty() && c.images.is_empty() && c.review.is_empty() {
             return None;
         }
-        // /usage, /cost and /context open a dialog here, and aren't sent as a message, not even queued.
+        // The built-in commands that open a view here aren't sent as a message, not even queued.
         if c.images.is_empty() {
             // /remote-control turns Remote Control on, or off when it is on, as in Claude Code.
             if let Some(name) = crate::remote::command(&text) {
                 c.draft.clear();
                 return Some(remote_line(c, name));
             }
-            if let Some((panel, line)) = c.session.view_command(&text) {
+            // /usage, /plugins and the rest of `builtin::TABLE` open their view here, unless Claude Code lists the name as its own.
+            if let Some(local) = crate::builtin::find(&text, &c.session.commands) {
                 c.draft.clear();
-                c.panel = Some(panel);
-                return Some(line);
-            }
-            // /plugins, /plugin and /mcp open their dialog over the chat, filled by what the line asks.
-            if let Some((show, line)) = c.session.dialog_command(&text) {
-                c.draft.clear();
-                c.plugins = Some(plugins::Dialog::new(show));
-                return Some(line);
-            }
-            // /hooks, /memory and /permissions open theirs, filled by the reads the line asks for.
-            if let Some(line) = c.session.setup.open(&text) {
-                c.draft.clear();
-                return Some(line);
+                return Some(open_builtin(c, local));
             }
             // /status, /export and /btw open a dialog, and /plan sets the mode and sends its task, all in this one write.
             if let Some(line) = c.session.typed_command(&text, host::now() as u64, n) {
@@ -1201,7 +1223,7 @@ pub fn command_matches(c: &Chat) -> Vec<Command> {
         return Vec::new();
     };
     // Typed out in full, the command is ready: a list over it would take the Enter that opens its view.
-    if view_of(&c.draft).is_some() || exits(&c.draft) || plugins::command(&c.draft).is_some() || setup::command(&c.draft).is_some() || commands::is_whole(&c.draft) {
+    if crate::builtin::find(&c.draft, &c.session.commands).is_some() || exits(&c.draft) || commands::is_whole(&c.draft) {
         return Vec::new();
     }
     commands::menu(&c.session.commands, typed)
@@ -1570,6 +1592,24 @@ mod tests {
             c.session.working = working;
             c.run
         })
+    }
+
+    #[test]
+    fn opening_a_built_in_shows_its_view_and_asks_only_to_read_without_a_message() {
+        use crate::{builtin::Local, plugins::Show, usage::Panel};
+        let line = with(|c| {
+            c.session.items.clear();
+            let line = super::open_builtin(c, Local::Panel(Panel::Usage));
+            assert_eq!(c.panel, Some(Panel::Usage));
+            assert!(c.session.items.is_empty() && !c.session.working);
+            line
+        });
+        let sent: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!((line.lines().count(), sent["type"].as_str(), sent["request"]["subtype"].as_str()), (1, Some("control_request"), Some("get_usage")));
+        with(|c| {
+            super::open_builtin(c, Local::Dialog(Show::Mcp));
+            assert!(c.plugins.is_some());
+        });
     }
 
     #[test]

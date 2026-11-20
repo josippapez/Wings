@@ -355,6 +355,7 @@ fn block_before(c: &Chat, end: usize, from: usize) -> (usize, Option<Block>) {
         false => item_node(start, &items[start], c, true),
     };
     let node = node.map(|node| crate::search::mark(c, start, end, node));
+    let node = node.map(|node| crate::mods_view::placed_after(c, start, end, node));
     // A turn that changed files ends with a card of them, after its last item.
     let edited = c.session.turn_ending_at(end).map(|(from, turn)| crate::edits_view::card_of(c, from, end, &turn));
     (start, node.map(|node| Block { start, end, node, edited }))

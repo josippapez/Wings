@@ -171,19 +171,12 @@ pub fn own_commands(listed: &[Command]) -> impl Iterator<Item = Command> + '_ {
         ("btw", "Ask a side question without adding it to the conversation", "<question>"),
         ("plan", "Switch to plan mode, and plan a task", "<task>"),
         ("remote-control", "Continue this chat from claude.ai or the Claude app", "<name>"),
-        // Dialogs the chat opens itself, which headless Claude Code leaves out of the commands it lists.
-        ("plugins", "Turn plugins on or off for this chat", ""),
-        ("mcp", "Turn MCP servers on or off for this project", ""),
-        ("usage", "Show your plan's limits and credits", ""),
-        ("cost", "Show what this session has cost", ""),
-        ("context", "Show how the context window is spent", ""),
-        ("hooks", "List the hooks Claude Code runs", ""),
-        ("memory", "Show the instruction files and memories Claude Code loads", ""),
-        ("permissions", "List the allow, ask and deny rules", ""),
     ]
     .into_iter()
     .filter(move |(name, ..)| listed.iter().all(|command| command.name != *name))
     .map(|(name, description, hint)| Command { name: name.to_owned(), description: description.to_owned(), hint: hint.to_owned() })
+    // The views the chat opens itself, from the table in `builtin.rs`.
+    .chain(crate::builtin::menu(listed))
 }
 
 #[cfg(test)]

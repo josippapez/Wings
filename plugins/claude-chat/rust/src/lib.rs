@@ -18,6 +18,7 @@ mod actions;
 #[cfg(feature = "chat")]
 mod actions_view;
 mod blocked;
+mod builtin;
 #[cfg(feature = "chat")]
 mod bookmarks;
 #[cfg(feature = "chat")]
@@ -79,6 +80,8 @@ mod rewind_view;
 mod mods;
 #[cfg(feature = "chat")]
 mod mods_view;
+#[cfg(feature = "chat")]
+mod mods_markdown;
 #[cfg(feature = "chat")]
 mod mod_pane;
 #[cfg(feature = "pane")]

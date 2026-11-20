@@ -210,15 +210,6 @@ fn listing_of(stdout: &str) -> Option<(Vec<Available>, Vec<String>)> {
     Some((available, installed))
 }
 
-/// The dialog a draft opens, when the draft is exactly its command.
-pub fn command(text: &str) -> Option<Show> {
-    match text.trim() {
-        "/plugins" | "/plugin" => Some(Show::Plugins),
-        "/mcp" => Some(Show::Mcp),
-        _ => None,
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct Plugin {
     /// As your settings name it: `name@marketplace`.

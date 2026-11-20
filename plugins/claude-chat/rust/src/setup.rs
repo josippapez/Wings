@@ -30,17 +30,6 @@ pub enum Which {
     Permissions,
 }
 
-/// The dialog a draft opens, when the draft is exactly its command. `/allowed-tools` is Claude Code's other name for
-/// `/permissions`.
-pub fn command(text: &str) -> Option<Which> {
-    match text.trim() {
-        "/hooks" => Some(Which::Hooks),
-        "/memory" => Some(Which::Memory),
-        "/permissions" | "/allowed-tools" => Some(Which::Permissions),
-        _ => None,
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct Hook {
     pub event: String,
@@ -307,13 +296,12 @@ pub struct Setup {
 }
 
 impl Setup {
-    /// Opens the dialog the draft `text` names, and gives the reads that fill it, which go from the Enter that sent it.
-    pub fn open(&mut self, text: &str) -> Option<String> {
-        let which = command(text)?;
+    /// Opens the dialog `which` names, and gives the reads that fill it, which go from the Enter that sent it.
+    pub fn open(&mut self, which: Which) -> String {
         self.open = Some(which);
         (self.pending, self.form) = (None, None);
         self.outcome.clear();
-        Some(match which {
+        match which {
             Which::Hooks => {
                 self.hooks = None;
                 [request(HOOKS, json!({ "subtype": "get_hooks_listing" })), request(FOLDER, json!({ "subtype": "get_memory_dialog" }))].concat()
@@ -332,7 +320,7 @@ impl Setup {
                 ]
                 .concat()
             }
-        })
+        }
     }
 
     /// Takes in Claude Code's answer `response` to the request `id`. False when it isn't one of these dialogs'.
@@ -656,14 +644,14 @@ mod tests {
             ("/allowed-tools", Which::Permissions, vec!["list_permission_rules", "get_settings", "get_memory_dialog"]),
         ] {
             let mut setup = Setup::default();
-            let lines = setup.open(typed).expect(typed);
+            assert_eq!(crate::builtin::find(typed, &[]), Some(crate::builtin::Local::Setup(which)), "{typed}");
+            let lines = setup.open(which);
             assert_eq!(setup.open, Some(which), "{typed}");
             assert_eq!(subtypes(&lines), reads, "{typed}");
             assert!(lines.lines().all(|line| serde_json::from_str::<Value>(line).unwrap()["type"] == "control_request"), "{typed}");
         }
         for typed in ["/hooks list", "/memory add a note", "/permission", "hooks", "/plugins"] {
-            assert_eq!(command(typed), None, "{typed}");
-            assert_eq!(Setup::default().open(typed), None, "{typed}");
+            assert!(!matches!(crate::builtin::find(typed, &[]), Some(crate::builtin::Local::Setup(_))), "{typed}");
         }
     }
 
@@ -798,14 +786,14 @@ mod tests {
     #[test]
     fn a_refused_read_says_why_and_opening_again_reads_anew() {
         let mut setup = Setup::default();
-        setup.open("/hooks");
+        setup.open(Which::Hooks);
         let refused = json!({ "subtype": "error", "request_id": HOOKS, "error": "get_hooks_listing is not available on this connection" });
         assert!(setup.answered(HOOKS, &refused));
         assert_eq!(setup.hooks, Some(Err("get_hooks_listing is not available on this connection".into())));
         assert!(!setup.answered("plugins-settings", &refused), "another dialog's answer");
-        setup.open("/hooks");
+        setup.open(Which::Hooks);
         assert_eq!(setup.hooks, None, "loading again");
-        setup.open("/permissions");
+        setup.open(Which::Permissions);
         let refused = json!({ "subtype": "error", "request_id": MODE, "error": "boom" });
         assert!(setup.answered(MODE, &refused));
         assert_eq!(setup.mode, None);
@@ -887,7 +875,7 @@ mod tests {
         // `get_memory_dialog` lists the user instructions file in the account's folder (probed with a scratch CLAUDE_CONFIG_DIR),
         // while the hooks listing's own label says `~/.claude` whatever the account.
         let mut setup = Setup::default();
-        setup.open("/hooks");
+        setup.open(Which::Hooks);
         let answer = json!({ "subtype": "success", "request_id": FOLDER, "response": { "files": [
             { "kind": "user", "path": "/accounts/work/CLAUDE.md", "label": "User instructions", "description": "Saved in ~/.claude/CLAUDE.md", "exists": true },
             { "kind": "project", "path": "/work/shop/CLAUDE.md", "label": "Project instructions", "description": "Checked in at ./CLAUDE.md", "exists": false },
@@ -908,7 +896,7 @@ mod tests {
     #[test]
     fn a_new_rule_starts_empty_and_is_only_shown_until_you_confirm_it() {
         let mut setup = Setup::default();
-        setup.open("/permissions");
+        setup.open(Which::Permissions);
         setup.behavior = "deny".into();
         setup.new_rule();
         // Nothing of Claude's: the rule is yours to type.
@@ -932,7 +920,7 @@ mod tests {
             Ok(if method == "spawn" { json!({ "code": 0, "stderr": "" }) } else { Value::Null })
         });
         let mut setup = Setup::default();
-        setup.open("/permissions");
+        setup.open(Which::Permissions);
         setup.new_rule();
         setup.form.as_mut().unwrap().rule = "Bash(npm test)".into();
         setup.review_rule();
@@ -979,7 +967,7 @@ mod tests {
         assert_eq!(outcome(&Err("A plugin can keep at most 8 programs running".into()), &Value::Null), Err("A plugin can keep at most 8 programs running".into()));
 
         let mut setup = Setup::default();
-        setup.open("/permissions");
+        setup.open(Which::Permissions);
         setup.new_rule();
         setup.form.as_mut().unwrap().rule = "Bash(curl -u admin:hunter2 https://ci.example.com)".into();
         setup.review_rule();
