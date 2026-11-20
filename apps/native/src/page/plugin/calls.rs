@@ -479,6 +479,7 @@ impl Shared {
                 reply.ok("null".into());
             }
             "statusline" => reply.done(statusline(&access)),
+            "reportUsage" => reply.done(report_usage(&access, &params)),
             "exec" => {
                 self.off_thread(reply, move |reply| this.exec(&access, &params, reply));
             }
@@ -1010,6 +1011,29 @@ fn statusline(access: &Access) -> Result<String, String> {
         ));
     }
     Ok(access.env.statusline().to_string())
+}
+
+/// `wings.reportUsage`: the limits of a Claude Code account that a plugin heard from Claude Code itself, as a chat hears
+/// them with its replies: `{ account, fiveHour?, sevenDay? }`, each window `{ usedPercentage, resetsAt? }` (0 to 100, epoch
+/// seconds). Wings keeps them as it keeps the status line's, and then doesn't ask Anthropic for that account for a
+/// minute. Needs the status line permission, as reading them does.
+fn report_usage(access: &Access, params: &Value) -> Result<String, String> {
+    if !may_read_statusline(&access.plugin) {
+        return Err(format!("{} may not report usage", access.plugin.manifest.id));
+    }
+    let account = match params.get("account") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(name)) if valid_name(name) => Some(name.as_str()),
+        _ => return Err("reportUsage account must be null or an account's name".into()),
+    };
+    let window = |key: &str| {
+        let window = params.get(key)?;
+        let used = window.get("usedPercentage")?.as_f64().filter(|used| used.is_finite())?;
+        let resets_at = window.get("resetsAt").and_then(Value::as_f64).filter(|at| at.is_finite() && *at > 0.0).map(|at| at as i64);
+        Some(wings_connect::statusline::Window { used_percentage: used.clamp(0.0, 100.0), resets_at })
+    };
+    access.env.record_usage(account, window("fiveHour"), window("sevenDay"));
+    Ok("null".into())
 }
 
 fn transcript(access: &Access, params: &Value) -> Result<String, String> {

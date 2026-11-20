@@ -789,6 +789,22 @@ impl Env for AppEnv {
         self.statusline.lock().unwrap().view()
     }
 
+    fn record_usage(
+        &self,
+        account: Option<&str>,
+        five_hour: Option<wings_connect::statusline::Window>,
+        seven_day: Option<wings_connect::statusline::Window>,
+    ) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64);
+        let login = super::claude::login_of(account);
+        self.statusline
+            .lock()
+            .unwrap()
+            .record_reported(account, login.as_deref(), five_hour, seven_day, now);
+    }
+
     fn ports(&self) -> Result<Vec<PanePort>, String> {
         let shells = self.known.lock().unwrap().shells.clone();
         ports::scan(&shells)

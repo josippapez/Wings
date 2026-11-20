@@ -342,6 +342,14 @@ impl Env for FakeEnv {
     fn statusline(&self) -> Value {
         self.statusline.lock().unwrap().view()
     }
+    fn record_usage(
+        &self,
+        account: Option<&str>,
+        five_hour: Option<wings_connect::statusline::Window>,
+        seven_day: Option<wings_connect::statusline::Window>,
+    ) {
+        self.statusline.lock().unwrap().record_reported(account, None, five_hour, seven_day, 1000);
+    }
     fn ports(&self) -> Result<Vec<PanePort>, String> {
         self.ports.lock().unwrap().clone()
     }

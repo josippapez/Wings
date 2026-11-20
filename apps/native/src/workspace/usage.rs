@@ -1,5 +1,6 @@
 //! The usage limits Wings reads itself, as Claude Code's `/usage` does (`wings_connect::usage`): once a minute while
-//! Wings is in front, for each Claude account with a session on screen or that reported to the status line. What comes
+//! Wings is in front, for each Claude account with a session on screen or that reported to the status line, unless a chat
+//! passed on that account's limits from Claude Code within the minute (`reportUsage`). What comes
 //! back joins the status line's limits, so `wings.statusline()` and the HUD read them as before. Only the app that
 //! serves the socket does it, never tests or screenshots.
 
@@ -61,14 +62,22 @@ impl Workspace {
                 sessions.entry(account).or_default().insert(id);
             }
         }
+        // An account a chat reported within the minute, from Claude Code's replies, needs no call to Anthropic.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64);
+        let since = now.saturating_sub(usage::EVERY.as_millis() as u64);
+        let statusline = self.plugin_env.statusline.lock().unwrap();
         let accounts: Vec<Account> = sessions
             .into_iter()
+            .filter(|(name, _)| !statusline.reported_since(name, since))
             .map(|(name, sessions)| Account {
                 login: login_of(name.as_deref()),
                 name,
                 sessions,
             })
             .collect();
+        drop(statusline);
         for account in usage.due(&accounts, self.window_active, Instant::now()) {
             let (usage, env) = (usage.clone(), self.plugin_env.clone());
             cx.background_executor()

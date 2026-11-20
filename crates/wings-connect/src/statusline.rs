@@ -83,6 +83,8 @@ pub struct Statusline {
     /// Each account's newest. A status without them keeps the last ones.
     limits: Vec<Limits>,
     sessions: HashMap<String, Session>,
+    /// When a chat last passed on the limits Claude Code told it of each account, in ms (`record_reported`).
+    reported: HashMap<Option<String>, u64>,
 }
 
 fn number(v: &Value) -> Option<f64> {
@@ -218,6 +220,22 @@ impl Statusline {
         }
     }
 
+    /// Keeps the limits of `account` a chat heard from Claude Code with a reply, at `now` in ms, as `record_usage` does,
+    /// and notes when: Wings needn't ask Anthropic for an account a chat reported within a minute (`reported_since`).
+    pub fn record_reported(&mut self, account: Option<&str>, login: Option<&str>, five_hour: Option<Window>, seven_day: Option<Window>, now: u64) {
+        let Some(account) = account.map_or(Some(None), |name| wings_spaces::claude_accounts::valid_name(name).then(|| Some(name.to_owned()))) else { return };
+        if five_hour.is_none() && seven_day.is_none() {
+            return;
+        }
+        self.record_usage(account.as_deref(), login, five_hour, seven_day, now);
+        self.reported.insert(account, now);
+    }
+
+    /// Whether a chat reported the limits of `account` at `since` (ms) or later.
+    pub fn reported_since(&self, account: &Option<String>, since: u64) -> bool {
+        self.reported.get(account).is_some_and(|at| *at >= since)
+    }
+
     /// The ids of the sessions that reported, by account.
     pub fn sessions_by_account(&self) -> BTreeMap<Option<String>, BTreeSet<String>> {
         let mut accounts: BTreeMap<Option<String>, BTreeSet<String>> = BTreeMap::new();
@@ -256,6 +274,23 @@ mod tests {
     use serde_json::json;
 
     const ID: &str = "3c21b0c5-8113-4f55-9493-fa156c3fa369";
+
+    /// A chat hears its account's limits with each reply: they show, and Wings needn't ask Anthropic for them a minute.
+    #[test]
+    fn limits_a_chat_reported_show_and_say_when() {
+        let mut s = Statusline::default();
+        let window = |used: f64| Some(Window { used_percentage: used, resets_at: Some(1_738_425_600) });
+        s.record_reported(Some("work"), None, window(42.0), window(86.0), 5_000);
+        assert_eq!(s.view()["rateLimits"][0]["fiveHour"]["usedPercentage"], 42.0);
+        assert_eq!(s.view()["rateLimits"][0]["account"], "work");
+        assert!(s.reported_since(&Some("work".into()), 5_000) && !s.reported_since(&Some("work".into()), 5_001));
+        assert!(!s.reported_since(&None, 0), "the default account wasn't reported");
+        // A name that isn't an account's, or a report with no window, is left out.
+        s.record_reported(Some("../x"), None, window(1.0), None, 6_000);
+        s.record_reported(None, None, None, None, 6_000);
+        assert_eq!(s.view()["rateLimits"].as_array().unwrap().len(), 1);
+        assert!(!s.reported_since(&None, 0));
+    }
 
     /// The example from code.claude.com/docs/en/statusline, trimmed.
     fn status(id: &str) -> Value {

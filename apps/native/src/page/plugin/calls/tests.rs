@@ -1017,6 +1017,27 @@ fn statusline_has_what_claude_code_last_reported_and_needs_its_permission() {
     );
 }
 
+/// A chat hears its account's limits with each reply from Claude Code: passed on, they read back as the status line's.
+#[test]
+fn report_usage_keeps_what_a_chat_heard_and_needs_the_status_line_permission() {
+    let rig = Rig::new(json!({ "permissions": { "statusline": true } }), panes());
+    rig.allows(
+        "reportUsage",
+        json!({ "account": "work", "fiveHour": { "usedPercentage": 42.0, "resetsAt": 1738425600 }, "sevenDay": { "usedPercentage": 140.0 } }),
+    );
+    let status = rig.allows("statusline", json!({}));
+    assert_eq!(
+        status["rateLimits"],
+        json!([{ "account": "work", "fiveHour": { "usedPercentage": 42.0, "resetsAt": 1738425600 }, "sevenDay": { "usedPercentage": 100.0, "resetsAt": null }, "at": 1000 }])
+    );
+    assert_eq!(
+        rig.refuses("reportUsage", json!({ "account": "../x" })),
+        "reportUsage account must be null or an account's name"
+    );
+    let none = Rig::new(json!({ "permissions": { "transcript": ["assistant"] } }), panes());
+    assert_eq!(none.refuses("reportUsage", json!({ "account": null })), "probe may not report usage");
+}
+
 // claudeAccounts and setClaudeAccount
 
 /// A plugin with or without `claudeAccounts`, in an app whose projects are `/a` and `/b`.

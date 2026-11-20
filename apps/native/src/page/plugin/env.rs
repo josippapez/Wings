@@ -493,6 +493,15 @@ pub trait Env: Send + Sync + 'static {
     fn statusline(&self) -> serde_json::Value {
         serde_json::json!({ "rateLimits": [], "sessions": {} })
     }
+    /// Keeps the limits of `account` (`None` the default one) a plugin heard from Claude Code, as `wings.reportUsage`
+    /// passes them on. The host has checked the plugin may.
+    fn record_usage(
+        &self,
+        _account: Option<&str>,
+        _five_hour: Option<wings_connect::statusline::Window>,
+        _seven_day: Option<wings_connect::statusline::Window>,
+    ) {
+    }
     /// The local ports the programs in the panes listen on. Takes a while: called on a thread of its own.
     fn ports(&self) -> Result<Vec<PanePort>, String>;
     /// What the terminal pane `pane` printed lately, oldest first, as Wings' `read_pane` tool reads it. The host has

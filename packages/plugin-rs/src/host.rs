@@ -317,6 +317,14 @@ pub fn statusline() -> Pending<Result<Value, String>> {
     call("statusline", json!({}))
 }
 
+/// `wings.reportUsage` (Wings 0.2.69): the limits of a Claude Code account (`None` the default one) as Claude Code told the
+/// plugin, each window `(percent used, resets at in epoch seconds)`. Wings keeps them with the status line's and doesn't
+/// ask Anthropic for that account for a minute. Needs `permissions.statusline`.
+pub fn report_usage(account: Option<&str>, five_hour: Option<(f64, Option<f64>)>, seven_day: Option<(f64, Option<f64>)>) -> Pending<Result<Value, String>> {
+    let window = |window: Option<(f64, Option<f64>)>| window.map(|(used, resets)| json!({ "usedPercentage": used, "resetsAt": resets }));
+    call("reportUsage", json!({ "account": account, "fiveHour": window(five_hour), "sevenDay": window(seven_day) }))
+}
+
 /// `wings.exec`: runs a program the manifest allows and answers `{ code, stdout, stderr }`.
 pub fn exec(program: &str, args: &[&str]) -> Pending<Result<Value, String>> {
     call("exec", json!({ "program": program, "args": args, "cwd": null, "timeoutMs": null, "stream": false }))
