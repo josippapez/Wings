@@ -28,11 +28,6 @@ pub fn shows(mode: Mode, opens: impl Fn(Kind) -> bool) -> Shows {
     }
 }
 
-/// A mock sits in a card, held to the width a description has.
-pub fn framed(content: Node) -> Node {
-    row().child(stack().prop("maxWidth", 560).child(card().child(content))).child(stack().prop("grow", true))
-}
-
 /// One code line in the tone of what it holds, as the chat draws a diff.
 fn line(code: &str, tone: Option<&str>) -> Node {
     let node = Node::new("Code").prop("code", code);
