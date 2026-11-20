@@ -71,10 +71,13 @@ impl Sections {
         }
     }
 
-    pub(super) fn set_sort(&mut self, key: &str, sort: &str) {
-        if self.sorts.get(key).map(String::as_str) != Some(sort) {
-            self.sorts.insert(key.to_owned(), sort.to_owned());
+    /// Whether it changed the sort.
+    pub(super) fn set_sort(&mut self, key: &str, sort: &str) -> bool {
+        if self.sorts.get(key).map(String::as_str) == Some(sort) {
+            return false;
         }
+        self.sorts.insert(key.to_owned(), sort.to_owned());
+        true
     }
 
     #[cfg(all(test, feature = "test-support"))]

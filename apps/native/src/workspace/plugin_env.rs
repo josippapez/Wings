@@ -983,8 +983,10 @@ impl Workspace {
         window: &mut gpui::Window,
         cx: &mut Context<Self>,
     ) {
+        // Each event draws the whole window again, sidebar, title bar and main column, so one that changes nothing on
+        // screen returns before that: plugins send the same badge, status or section rows again on every poll.
         match event {
-            UiEvent::SaveTabState => self.save(cx),
+            UiEvent::SaveTabState => return self.save(cx),
             UiEvent::Run(task) => task(self, window, cx),
             UiEvent::FocusPane { pane, reply } => {
                 let Some(id) = self.plugin_pane(&pane) else {
@@ -1039,6 +1041,7 @@ impl Workspace {
                 for installed in &self.plugins {
                     installed.host.publish_git(&ids);
                 }
+                return;
             }
             UiEvent::OpenPane { plan, reply } => {
                 self.open_plugin_pane(plan, reply, window, cx);
@@ -1100,7 +1103,9 @@ impl Workspace {
                 let Some(pane) = self.plugin_pane(&pane) else {
                     return;
                 };
-                set(&mut self.plugin_ui.badges, pane, plugin, badge);
+                if !set(&mut self.plugin_ui.badges, pane, plugin, badge) {
+                    return;
+                }
             }
             UiEvent::Status {
                 plugin,
@@ -1110,7 +1115,9 @@ impl Workspace {
                 let Some(pane) = self.plugin_pane(&pane) else {
                     return;
                 };
-                set(&mut self.plugin_ui.statuses, pane, plugin, status);
+                if !set(&mut self.plugin_ui.statuses, pane, plugin, status) {
+                    return;
+                }
             }
             UiEvent::SidebarLabel {
                 plugin,
@@ -1118,6 +1125,9 @@ impl Workspace {
                 label,
             } => {
                 let key = (plugin, page);
+                if self.plugin_ui.labels.get(&key) == label.as_ref() {
+                    return;
+                }
                 match label {
                     Some(label) => self.plugin_ui.labels.insert(key, label),
                     None => self.plugin_ui.labels.remove(&key),
@@ -1132,7 +1142,7 @@ impl Workspace {
             }
             UiEvent::Notice { title, body } => self.show_notice(title, body, cx),
             UiEvent::Notified(notification) => self.inbox_plugin(notification),
-            UiEvent::Copy(text) => cx.write_to_clipboard(gpui::ClipboardItem::new_string(text)),
+            UiEvent::Copy(text) => return cx.write_to_clipboard(gpui::ClipboardItem::new_string(text)),
             UiEvent::ProjectSection {
                 plugin,
                 project,
@@ -1140,8 +1150,9 @@ impl Workspace {
                 rows,
             } => {
                 let key = super::project_sections::section_key(&plugin, &section);
-                self.sections
-                    .set(std::path::Path::new(&project), &key, rows);
+                if !self.sections.set(std::path::Path::new(&project), &key, rows) {
+                    return;
+                }
             }
             UiEvent::SectionSort {
                 plugin,
@@ -1149,7 +1160,9 @@ impl Workspace {
                 sort,
             } => {
                 let key = super::project_sections::section_key(&plugin, &section);
-                self.sections.set_sort(&key, &sort);
+                if !self.sections.set_sort(&key, &sort) {
+                    return;
+                }
             }
         }
         cx.notify();
@@ -1645,23 +1658,31 @@ impl Workspace {
 }
 
 /// Sets, or with `None` takes away, what `plugin` shows on `pane`.
-fn set<T>(
+/// Whether it changed what the pane shows.
+fn set<T: PartialEq>(
     all: &mut HashMap<usize, BTreeMap<String, T>>,
     pane: usize,
     plugin: String,
     value: Option<T>,
-) {
+) -> bool {
     match value {
         Some(value) => {
-            all.entry(pane).or_default().insert(plugin, value);
+            let shown = all.entry(pane).or_default();
+            if shown.get(&plugin) == Some(&value) {
+                return false;
+            }
+            shown.insert(plugin, value);
+            true
         }
         None => {
-            if let Some(shown) = all.get_mut(&pane) {
-                shown.remove(&plugin);
-                if shown.is_empty() {
-                    all.remove(&pane);
-                }
+            let Some(shown) = all.get_mut(&pane) else {
+                return false;
+            };
+            let removed = shown.remove(&plugin).is_some();
+            if shown.is_empty() {
+                all.remove(&pane);
             }
+            removed
         }
     }
 }

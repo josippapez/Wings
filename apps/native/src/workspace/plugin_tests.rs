@@ -4488,3 +4488,46 @@ fn a_plugin_narrows_its_link_to_the_words_it_knows() {
         std::thread::sleep(Duration::from_millis(10));
     }
 }
+
+/// A page in the right panel turns its spinners in the window's layer, as the tab's page does: a step of them used to
+/// draw the whole page again, 30 times a second while Claude chat's session panel showed a running task.
+#[test]
+fn a_spinner_in_a_right_panel_page_turns_without_drawing_the_page_again() {
+    let data = Data::temp();
+    let page = fake::page("page", |_| {
+        json!({ "id": 0, "type": "#root", "props": {}, "children": [
+            { "id": 1, "type": "Spinner", "props": { "label": "Running" } },
+            { "id": 2, "type": "#text", "text": "Side page" }
+        ] })
+    });
+    data.install_script(
+        "sider",
+        json!({ "contributes": { "ui": ["status"], "sidebars": [{ "id": "side", "title": "Side", "page": "dist/side.html" }] } }),
+        &side_main(),
+        &[("side", &page)],
+        "sider-scope",
+    );
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.update(|_, window, _| window.activate_window());
+    window.draw();
+    window.simulate_click(point(px(978.0), px(58.0)), MouseButton::Left);
+    settle_slide(&app, &mut window);
+    let page = window.read(|w, _| w.sidebar_pages[&("sider".to_owned(), "side".to_owned())].clone());
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !window.read(|_, cx| page.read(cx).text().contains("Side page")) {
+        assert!(std::time::Instant::now() < deadline, "the page never drew its tree");
+        app.run_until_parked();
+        window.draw();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    window.draw();
+    window.draw();
+    let before = window.read(|_, cx| page.read(cx).renders());
+    for _ in 0..30 {
+        app.advance_clock(crate::ui::SPIN_STEP);
+        app.run_until_parked();
+        window.draw();
+    }
+    let renders = window.read(|_, cx| page.read(cx).renders()) - before;
+    assert_eq!(renders, 0, "the page drew itself {renders} times in 30 steps of its spinner");
+}

@@ -370,7 +370,7 @@ impl Workspace {
 
     /// The pages of `shown` in the panel, top to bottom: with one, its header and card as ever; with more, each under a
     /// slim header, and a divider to drag between them.
-    pub(super) fn right_pages(&self, shown: &Stack, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn right_pages(&self, shown: &Stack, window: gpui::WindowId, cx: &mut Context<Self>) -> Option<AnyElement> {
         let many = shown.len() > 1;
         let mut splits: Vec<(Key, AnyElement, f32)> = Vec::new();
         for (index, key) in shown.keys().iter().enumerate() {
@@ -389,6 +389,8 @@ impl Workspace {
             else {
                 continue;
             };
+            // On screen, so its spinners turn in the window's layer and a step of them doesn't draw the page again.
+            crate::ui::place_view(page.entity_id(), window);
             let glyph = sidebar_glyph(installed, &key.1, 14.0);
             let focused = shown.focused() == Some(key);
             let header = self.split_header(key, title.clone(), glyph, many, focused, cx);

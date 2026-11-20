@@ -30,9 +30,25 @@ const DISCS: [Disc; 4] = [
     Disc { color: 0xc06a8a, alpha: 0.16, size: 0.20, at: (-0.11, 0.07), reach: (0.05, 0.04), period: 29.0, phase: 0.2 },
 ];
 
+/// How often the glow steps. Its discs take 23 to 37 seconds to go round, so 10 steps a second look as smooth as the
+/// spinners' 30, and each step draws the page it is in again.
+const GLOW_STEP: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// The glow, filling the element it is drawn in.
 pub fn glow() -> impl IntoElement {
-    canvas(|_, window, cx| crate::ui::status_dot::ticking(window, cx).unwrap_or(0.0), paint).size_full()
+    canvas(
+        |_, window, cx| {
+            if cx.reduce_motion() {
+                0.0
+            } else if window.is_window_active() {
+                super::status_dot::ticking_every(GLOW_STEP, window, cx)
+            } else {
+                super::status_dot::clock(cx).as_secs_f32()
+            }
+        },
+        paint,
+    )
+    .size_full()
 }
 
 fn paint(bounds: Bounds<Pixels>, seconds: f32, window: &mut Window, _: &mut App) {
@@ -57,4 +73,40 @@ fn paint(bounds: Bounds<Pixels>, seconds: f32, window: &mut Window, _: &mut App)
             );
         }
     });
+}
+
+#[cfg(all(test, feature = "test-support"))]
+mod tests {
+    use std::{cell::Cell, rc::Rc};
+
+    use gpui::{Context, Render, TestApp, div, prelude::*};
+
+    use super::*;
+
+    struct Glowing(Rc<Cell<usize>>);
+
+    impl Render for Glowing {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.0.set(self.0.get() + 1);
+            div().size_full().child(glow())
+        }
+    }
+
+    /// A second of the glow behind an empty chat draws its page about 10 times, not the spinners' 30.
+    #[test]
+    fn a_second_of_the_glow_draws_its_view_ten_times() {
+        let mut app = TestApp::new();
+        let drawn = Rc::new(Cell::new(0));
+        let counter = drawn.clone();
+        let mut window = app.open_window(move |_, _| Glowing(counter));
+        window.update(|_, window, _| window.activate_window());
+        window.draw();
+        let before = drawn.get();
+        for _ in 0..100 {
+            app.advance_clock(std::time::Duration::from_millis(10));
+            app.run_until_parked();
+        }
+        let steps = drawn.get() - before;
+        assert!((9..=11).contains(&steps), "drawn {steps} times in a second");
+    }
 }

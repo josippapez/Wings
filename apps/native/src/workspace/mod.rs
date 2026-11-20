@@ -958,6 +958,9 @@ impl Render for Workspace {
         {
             return div().size_full().child(viewer.clone()).into_any_element();
         }
+        // Before anything in this draw puts a page on screen (`ui::place_view`): the main column's tab page and the right
+        // panel's pages turn their spinners in the window's layer for them only when placed in this draw.
+        ui::start_draw(window.window_handle().window_id());
         // A click in a terminal focuses it directly, so the tab learns which pane has focus here.
         if let Active::Terminal(id) = self.active
             && let Some(index) = self.terminals.iter().position(|tab| tab.id == id)
@@ -1024,7 +1027,7 @@ impl Render for Workspace {
             ),
         };
         let sidebar = self.sidebar_panel(cx);
-        let right = self.right_panel(window.viewport_size().width, cx);
+        let right = self.right_panel(window.viewport_size().width, window.window_handle().window_id(), cx);
         let notices = self.notices_layer(cx);
         let (under, over) = self.layers(window, cx);
         div()
@@ -1187,12 +1190,11 @@ impl Render for Workspace {
                     // Under the main column: the backdrop a tab's page asks for, in the place its card leaves for it.
                     .children(self.parts.as_ref().map(|parts| parts.backdrop.clone()))
                     .child(main)
-                    // What moves in the tab's page (spinners, working dots, shimmers), as if in it: under what the
-                    // window draws over the main column.
-                    .child(match &self.parts {
-                        Some(parts) => ui::SpinnerLayer::in_draw(&parts.view_spinners, window, cx),
-                        None => ui::view_spinner_layer(window).into_any_element(),
-                    })
+                    // Beside the main column; what follows is laid over the main column alone, so draws over neither.
+                    .children(right)
+                    // What moves in the pages of the tab and the right panel (spinners, working dots, shimmers), as if
+                    // in them: over both, under what the window draws over the main column.
+                    .children(self.parts.as_ref().map(|parts| ui::SpinnerLayer::in_draw(&parts.view_spinners)))
                     // Over the main column, as if in it: what draws over the terminals in it follows.
                     .child(ui::slot_layer(pane_card::TERMINALS, self.tab_terminals(cx)))
                     // The terminals an agent opened floating over its pane, over its terminal.
@@ -1210,7 +1212,6 @@ impl Render for Workspace {
                             .into_iter()
                             .collect(),
                     ))
-                    .children(right)
                     // The terminals a chat's agent opened, where its session sidebar shows them: after the sidebar, so
                     // they draw over its card and find the places it left in this draw.
                     .child(ui::slot_layer(
@@ -1221,10 +1222,7 @@ impl Render for Workspace {
                     .children(self.sidebar_peek(cx)),
             )
             // The sidebar's spinners, which turn here so the sidebar keeps its last drawing (see `parts`).
-            .child(match &self.parts {
-                Some(parts) => ui::SpinnerLayer::in_draw(&parts.spinners, window, cx),
-                None => crate::ui::spinner_layer(window).into_any_element(),
-            })
+            .children(self.parts.as_ref().map(|parts| ui::SpinnerLayer::in_draw(&parts.spinners)))
             .children(under)
             .children(notices)
             .children(over)

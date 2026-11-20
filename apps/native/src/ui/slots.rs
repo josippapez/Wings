@@ -113,8 +113,9 @@ pub fn forget_view(view: EntityId) {
 }
 
 /// Starts a draw of the window `id`: the slots its pieces leave from now on are this draw's. Once in each draw of the
-/// window, before its pieces with slots draw themselves; `spinner_layer` does it.
-pub(super) fn start_draw(id: WindowId) {
+/// window, before its pieces with slots draw themselves, and before anything says it puts a view on screen
+/// (`place_view`): the workspace does it first in its draw, `spinner_layer` elsewhere.
+pub fn start_draw(id: WindowId) {
     SLOTS.with_borrow_mut(|slots| {
         let frame = slots.frame.entry(id).or_default();
         *frame += 1;

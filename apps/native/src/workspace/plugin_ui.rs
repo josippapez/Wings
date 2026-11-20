@@ -1077,6 +1077,7 @@ impl Workspace {
     pub(super) fn right_panel(
         &mut self,
         viewport: Pixels,
+        window: gpui::WindowId,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let now = cx.background_executor().now();
@@ -1126,7 +1127,7 @@ impl Workspace {
         }
         let count = slide.count;
         let shown = slide.shown.clone();
-        let pages = self.right_pages(&shown, cx)?;
+        let pages = self.right_pages(&shown, window, cx)?;
         let title = match shown.only() {
             Some((plugin, sidebar)) => self
                 .plugins

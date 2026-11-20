@@ -1747,3 +1747,40 @@ fn a_tab_running_a_program_shows_a_green_dot() {
     assert!(crate::ui::spot_at(&format!("running:{:?}", Active::Terminal(first))).is_some());
     assert!(crate::ui::spot_at(&format!("running:{:?}", Active::Terminal(second))).is_none());
 }
+
+/// Plugins send a pane's badge again on every poll: one that changes nothing leaves the window's pieces as they were.
+/// Each one drew the sidebar, title bar and main column again, a few times a second with a few plugins on.
+#[test]
+fn a_badge_sent_again_unchanged_draws_nothing_again() {
+    use crate::page::plugin::ui::Badge;
+    let (_app, mut window) = open();
+    window.draw();
+    let pane = window.read(|w, _| *w.panes.keys().next().expect("a pane")).to_string();
+    let badge = Badge {
+        label: "PR #1".into(),
+        tone: Default::default(),
+        loading: false,
+        icon: None,
+        counts: Vec::new(),
+        title: None,
+        subtitle: None,
+        rows: Vec::new(),
+        actions: Vec::new(),
+    };
+    let send = |window: &mut TestAppWindow<Workspace>| {
+        let event = super::plugin_env::UiEvent::Badge { plugin: "pr".into(), pane: pane.clone(), badge: Some(badge.clone()) };
+        window.update(|w, window, cx| w.apply_plugin_event(event, window, cx));
+        window.draw();
+    };
+    let drawn = |window: &TestAppWindow<Workspace>| {
+        window.read(|w, cx| {
+            let parts = w.parts.as_ref().expect("the pieces");
+            (parts.main.read(cx).drawn, parts.title_bar.read(cx).drawn, parts.sidebar.read(cx).drawn)
+        })
+    };
+    send(&mut window);
+    let first = drawn(&window);
+    send(&mut window);
+    send(&mut window);
+    assert_eq!(drawn(&window), first, "the same badge again drew the pieces again");
+}

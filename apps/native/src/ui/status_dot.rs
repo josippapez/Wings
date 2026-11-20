@@ -151,19 +151,6 @@ pub(super) fn clock(cx: &App) -> Duration {
     now.saturating_duration_since(*ORIGIN.get_or_init(|| now))
 }
 
-/// Seconds on the spinners' clock, for something else that moves on it, and a redraw of the view being drawn at its next
-/// step while the window is in front, so it shares the spinners' frames. None under Reduce motion.
-pub fn ticking(window: &mut Window, cx: &mut App) -> Option<f32> {
-    if cx.reduce_motion() {
-        return None;
-    }
-    let elapsed = clock(cx);
-    if window.is_window_active() {
-        wake_at_next(elapsed, SPIN_STEP, window, cx);
-    }
-    Some(elapsed.as_secs_f32())
-}
-
 /// Seconds on the spinners' clock, and a redraw of the view being drawn at the next multiple of `every` on it, for
 /// something that moves slower than the spinners, so each of its steps falls on one of theirs. Whether it should move at
 /// all (Reduce motion, a window behind others) is the caller's to say.
@@ -259,12 +246,9 @@ impl SpinnerLayer {
         Self(spinners)
     }
 
-    /// The layer to draw in the window's draw, where `spinner_layer` or `view_spinner_layer` would go. The window's
-    /// spinners also start the window's draw for the slot layers, as `spinner_layer` does.
-    pub fn in_draw(layer: &gpui::Entity<Self>, window: &Window, cx: &App) -> AnyElement {
-        if let Spinners::Window = layer.read(cx).0 {
-            slots::start_draw(window.window_handle().window_id());
-        }
+    /// The layer to draw in the window's draw, where `spinner_layer` or `view_spinner_layer` would go. Unlike
+    /// `spinner_layer` it doesn't start the window's draw for the slot layers: call `slots::start_draw` first in the draw.
+    pub fn in_draw(layer: &gpui::Entity<Self>) -> AnyElement {
         layer.clone().into_any_element()
     }
 }
@@ -467,7 +451,7 @@ mod tests {
     }
 
     impl Render for Layered {
-        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             self.drawn.set(self.drawn.get() + 1);
             div()
                 .size_full()
@@ -476,7 +460,10 @@ mod tests {
                         .clone()
                         .cached(gpui::StyleRefinement::default().size(px(20.0))),
                 )
-                .child(SpinnerLayer::in_draw(&self.spinners, window, cx))
+                .child({
+                    slots::start_draw(window.window_handle().window_id());
+                    SpinnerLayer::in_draw(&self.spinners)
+                })
         }
     }
 
@@ -505,6 +492,8 @@ mod tests {
             app.run_until_parked();
         }
         assert_eq!(piece_drawn.get(), pieces, "the piece kept its drawing");
+        let steps = frame_drawn.get() - frames;
+        assert!((29..=31).contains(&steps), "the layer turned {steps} times in 30 steps");
     }
 
     /// A view a piece puts on screen, as a page in a tab, with a working agent's dot in it.

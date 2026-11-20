@@ -38,7 +38,7 @@ pub use sheet::{
 pub use shimmer::{shimmer, shimmer_slot};
 #[cfg(all(test, feature = "test-support"))]
 pub(crate) use status_dot::SPIN_STEP;
-pub use slots::{Piece, drawing_piece, forget_view, place_view, slot, slot_layer, view_placed};
+pub use slots::{Piece, drawing_piece, start_draw, forget_view, place_view, slot, slot_layer, view_placed};
 pub use status_dot::{
     spinner as working_spinner, spinner_layer, status_dot, SpinnerLayer, Spinners, status_dot_slot, view_spinner_layer, view_spinner_slot,
     view_status_dot_slot,
