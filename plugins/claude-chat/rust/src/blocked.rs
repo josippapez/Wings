@@ -17,7 +17,9 @@ use crate::session::{Detail, Session, Tool};
 /// One action auto mode blocked in this chat.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Blocked {
-    /// The notice under the tool's row, which the note in the conversation is found by.
+    /// The blocked call's id: the note under that call's row has the button for this block alone.
+    pub tool_id: String,
+    /// The notice under the tool's row.
     pub notice: String,
     /// The tool's one-line summary, for the side panel.
     pub summary: String,
@@ -29,12 +31,12 @@ pub struct Blocked {
 
 /// A block the classifier made on `tool`, said as `notice`.
 pub fn of(notice: &str, tool: &Tool) -> Blocked {
-    Blocked { notice: notice.to_owned(), summary: format!("{} {}", tool.name, tool.summary).trim().to_owned(), approval: approval(tool), allowed: false }
+    Blocked { tool_id: tool.id.clone(), notice: notice.to_owned(), summary: format!("{} {}", tool.name, tool.summary).trim().to_owned(), approval: approval(tool), allowed: false }
 }
 
-/// Keeps `blocked`, unless it repeats one not allowed yet.
+/// Keeps `blocked`, unless the same call was blocked already.
 pub fn keep(session: &mut Session, blocked: Blocked) {
-    if !session.blocked.iter().any(|kept| kept.notice == blocked.notice && !kept.allowed) {
+    if !session.blocked.iter().any(|kept| kept.tool_id == blocked.tool_id) {
         session.blocked.push(blocked);
     }
 }
@@ -72,14 +74,19 @@ fn action(at: usize, blocked: &Blocked) -> Node {
     if blocked.allowed {
         return muted("Allowed").prop("size", "small");
     }
-    button("Allow and retry", "outline", false, move || allow(at)).prop("size", "sm").prop("title", "Tell Claude you meant it, so it can run this once")
+    button("Allow and retry", "outline", false, move || allow(at)).prop("size", "sm").prop("title", blocked.approval.clone())
 }
 
 #[cfg(feature = "chat")]
-/// A notice in the conversation: with its button when it is a block the chat kept.
-pub fn notice(said: &str, c: &Chat) -> Node {
+/// The notice item `at` in the conversation: with its button when it sits under a call the chat kept a block of. Found
+/// by that call, not the notice's words, which two calls blocked for one reason share.
+pub fn notice(at: usize, said: &str, c: &Chat) -> Node {
     let line = muted(said).prop("size", "small");
-    let Some(at) = c.session.blocked.iter().rposition(|blocked| blocked.notice == said) else {
+    let call = at.checked_sub(1).and_then(|before| match c.session.items.get(before) {
+        Some(crate::session::Item::Tool(tool)) => Some(tool.id.as_str()),
+        _ => None,
+    });
+    let Some(at) = call.and_then(|call| c.session.blocked.iter().position(|blocked| blocked.tool_id == call && blocked.notice == said)) else {
         return line;
     };
     row().prop("gap", "s").prop("align", "center").prop("wrap", true).child(line).child(action(at, &c.session.blocked[at]))
@@ -121,14 +128,14 @@ mod tests {
     }
 
     #[test]
-    fn a_repeat_is_kept_once_until_it_is_allowed() {
+    fn a_block_is_kept_once_per_call_even_when_two_calls_share_the_reason() {
         let mut session = Session::default();
-        let bash = tool("Bash", "git push", Detail::Command("git push".into()));
-        keep(&mut session, of("Auto mode blocked Bash: push", &bash));
-        keep(&mut session, of("Auto mode blocked Bash: push", &bash));
-        assert_eq!(session.blocked.len(), 1);
-        session.blocked[0].allowed = true;
-        keep(&mut session, of("Auto mode blocked Bash: push", &bash));
-        assert_eq!(session.blocked.len(), 2);
+        let push = tool("Bash", "git push", Detail::Command("git push".into()));
+        let force = Tool { id: "t2".into(), ..tool("Bash", "git push -f", Detail::Command("git push -f".into())) };
+        keep(&mut session, of("Auto mode blocked Bash: push", &push));
+        keep(&mut session, of("Auto mode blocked Bash: push", &push));
+        keep(&mut session, of("Auto mode blocked Bash: push", &force));
+        assert_eq!(session.blocked.iter().map(|blocked| blocked.tool_id.as_str()).collect::<Vec<_>>(), ["t1", "t2"]);
+        assert!(session.blocked[1].approval.contains("git push -f"));
     }
 }

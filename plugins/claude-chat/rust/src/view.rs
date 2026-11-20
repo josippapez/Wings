@@ -516,7 +516,7 @@ pub(crate) fn item_node(at: usize, item: &Item, c: &Chat, own: bool) -> Option<N
         // Words that name something in Wings, like an issue key, open it there.
         Item::Text(said) => crate::edits_view::prose(said, c),
         Item::Divider(said) => row().prop("justify", "center").child(muted(format!("── {said} ──")).prop("size", "small")),
-        Item::Notice(said) => crate::blocked::notice(said, c),
+        Item::Notice(said) => crate::blocked::notice(at, said, c),
         Item::Thought(said, ms) => thought(at, said, *ms, crate::folds::is_open(c, Kind::Thought, c.open_outputs.contains(&format!("thought-{at}")))),
         Item::Ask(ask) if ask.answer.is_none() => ask_node(ask, c),
         Item::Error(said) => notice("danger", said.as_str()),
