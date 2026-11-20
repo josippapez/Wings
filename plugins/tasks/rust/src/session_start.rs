@@ -44,7 +44,7 @@ pub fn session_start_text(o: &Start) -> String {
             issue.title,
             issue.status.label()
         )),
-        None => lines.push("When a task will change files, find its issue with tasks__list or create one with tasks__create before you edit. If you already started editing without an issue, open it now. A question, a check, a review or a lookup gets no issue: read issues with tasks__get or tasks__list when the answer needs them.".into()),
+        None => lines.push("When a task will change files, find its issue with tasks__list or create one with tasks__create (title, description, type task|bug|feature|epic, status, priority, parent) before you edit. If you already started editing without an issue, open it now. A question, a check, a review or a lookup gets no issue: read issues with tasks__get or tasks__list when the answer needs them.".into()),
     }
     if !o.stale.is_empty() {
         let named: Vec<String> = o.stale.iter().take(STALE_SHOWN).map(|i| format!("{} is {} but unchanged for {} days.", i.key, i.status.label(), ((o.now - i.updated_at) / DAY).floor())).collect();

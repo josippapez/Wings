@@ -67,7 +67,7 @@ fn keys(input: &Value, name: &str) -> Option<Vec<String>> {
 /// The relation fields of a call, as the operations name them.
 fn relations_of(input: &Value) -> Relations {
     Relations {
-        kind: text(input, "type"),
+        kind: text(input, "type").or_else(|| text(input, "kind")),
         parent: text(input, "parent"),
         related_add: keys(input, "related_add"),
         related_remove: keys(input, "related_remove"),
@@ -122,7 +122,7 @@ pub async fn run(name: String, input: Value, context: Value) -> Result<String, S
             Ok(format!("Created {} in {project_name}. Log progress with log, and set the status with update as it moves.", written.issue.key))
         }
         "update" => {
-            if CHANGES.iter().all(|field| input.get(field).is_none()) {
+            if CHANGES.iter().chain(["kind"].iter()).all(|field| input.get(field).is_none()) {
                 let (last, rest) = CHANGES.split_last().expect("fields");
                 return Err(format!("Pass at least one of {} or {last}.", rest.join(", ")));
             }
@@ -203,11 +203,14 @@ mod tests {
     fn the_manifests_instructions_line_sends_claude_to_the_tools_unprompted_and_every_frame_is_a_module() {
         let m: Value = serde_json::from_str(MANIFEST).unwrap();
         let line = m["contributes"]["mcpInstructions"].as_str().unwrap();
-        assert!(line.chars().count() <= 500);
+        assert!(line.chars().count() <= 500, "the host refuses longer instructions");
+        for part in ["tasks__create (title, description, type task|bug|feature|epic, status, priority, parent)", "tasks__update (key, status)", "tasks__log note (key, text)"] {
+            assert!(line.contains(part), "{part}");
+        }
         for name in ["create", "list", "get", "update", "log"] {
             assert!(line.contains(&format!("tasks__{name}")), "{name}");
         }
-        for part in ["For work that changes files, even unasked", "A question, check or review gets no issue", "deciding something gets no log note"] {
+        for part in ["For work that changes files, even unasked", "Questions, checks and reviews get none"] {
             assert!(line.contains(part), "{part}");
         }
         assert_eq!(m["contributes"]["hooks"], json!(["SessionStart", "PreToolUse", "UserPromptSubmit", "Journal"]));
@@ -275,6 +278,20 @@ mod tests {
         assert!(call("get", json!({ "key": "web-9" })).unwrap_err().contains("No issue WEB-9 in web"));
         let stored = memory::peek(&format!("issues/{}/WEB-1", slot_of("proj1"))).unwrap();
         assert_eq!(stored["log"][1]["by"], json!({ "id": "s-1", "name": "agent one" }));
+    }
+
+    #[test]
+    fn kind_is_taken_as_type_on_create_and_update_and_other_unknown_fields_still_list_what_the_tool_takes() {
+        memory::reset(&[]);
+        assert!(call("create", json!({ "title": "Broken", "kind": "bug" })).unwrap().starts_with("Created WEB-1"));
+        assert!(call("get", json!({ "key": "WEB-1" })).unwrap().contains("WEB-1 [todo] (bug) Broken"));
+        assert!(call("create", json!({ "title": "Both", "type": "feature", "kind": "bug" })).is_ok());
+        assert!(call("get", json!({ "key": "WEB-2" })).unwrap().contains("(feature)"));
+        assert!(call("update", json!({ "key": "WEB-1", "kind": "epic" })).unwrap().starts_with("Updated WEB-1"));
+        assert!(call("get", json!({ "key": "WEB-1" })).unwrap().contains("(epic)"));
+        assert!(call("create", json!({ "title": "t", "kind": "story" })).unwrap_err().contains("kind must be one of task, bug, feature, epic"));
+        let error = call("create", json!({ "title": "t", "flavor": "bug" })).unwrap_err();
+        assert!(error.contains("Unknown field: flavor. create takes ") && error.contains("title") && error.contains("type"), "{error}");
     }
 
     #[test]
