@@ -85,6 +85,10 @@ fn a_page_writes_to_a_program_only_right_after_you_click_or_type_in_it() {
     assert!(caller.call("processWrite", json!({ "token": "chat", "text": with_more })).is_err());
     let press = "{\"type\":\"control_request\",\"request_id\":\"p\",\"request\":{\"subtype\":\"ui_press\"}}\n";
     assert!(caller.call("processWrite", json!({ "token": "chat", "text": press })).is_err());
+    // Stopping the turn goes without one too: Claude does nothing for it, and a chat stops near the plan's limit unasked.
+    let interrupt = "{\"type\":\"control_request\",\"request_id\":\"interrupt-1\",\"request\":{\"subtype\":\"interrupt\"}}\n";
+    caller.send("processWrite", json!({ "token": "chat", "text": interrupt }));
+    assert_eq!(hear(&caller, 2).1, vec![Ok(Value::Null)]);
     caller.send("processStop", json!({ "token": "chat" }));
     hear(&caller, 2);
     // A plugin's fill of the message box that the program asked for may be answered once, in its shape: the program here

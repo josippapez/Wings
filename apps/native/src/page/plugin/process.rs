@@ -549,7 +549,8 @@ impl Shared {
                     return false;
                 };
                 match line["type"].as_str() {
-                    Some("control_request") => matches!(line["request"]["subtype"].as_str(), Some("ui_attach" | "ui_render" | "ui_panes")),
+                    // Stopping the turn makes Claude do nothing, so a chat's "stop near the limit" may send it unasked.
+                    Some("control_request") => matches!(line["request"]["subtype"].as_str(), Some("ui_attach" | "ui_render" | "ui_panes" | "interrupt")),
                     Some("control_response") if line["response"]["subtype"] == "success" => {
                         let id = line["response"]["request_id"].as_str().unwrap_or_default();
                         let Some(fields) = line["response"]["response"].as_object() else {
