@@ -1354,7 +1354,8 @@ fn queued(c: &Chat) -> Option<Node> {
             .prop("gap", "xs")
             .prop("align", "start")
             .child(stack().prop("grow", true).child(said).maybe(held.then(|| muted(HELD_NOTE))))
-            .child(button("Send now", "ghost", false, move || chat::send_now(&now)).prop("size", "sm").prop("title", "Claude puts what it runs aside and reads it now"))
+            // Sent now, Claude Code still holds a plugin's command for about 5 s and stops Claude's turn for it.
+            .maybe((!held).then(|| button("Send now", "ghost", false, move || chat::send_now(&now)).prop("size", "sm").prop("title", "Claude puts what it runs aside and reads it now")))
             .child(
                 button("", "ghost", false, move || chat::unqueue(&remove))
                     .prop("size", "icon-sm")
@@ -1632,10 +1633,13 @@ mod tests {
         };
         let command = shown(&["/toolbox:lint src"]);
         assert!(command.contains(HELD_NOTE) && !command.contains("Claude reads"), "{command}");
+        assert!(!command.contains("Send now"), "a plugin's command has no Send now: {command}");
         let message = shown(&["and lint"]);
         assert!(!message.contains(HELD_NOTE) && message.contains("Claude reads it"));
+        assert!(message.contains("Send now"));
         let both = shown(&["/toolbox:lint", "and lint"]);
         assert_eq!(both.matches(HELD_NOTE).count(), 1);
+        assert_eq!(both.matches("Send now").count(), 1);
         assert!(both.contains("Claude reads it after"));
     }
 
