@@ -47,7 +47,7 @@ pub fn menu(listed: &[Command]) -> impl Iterator<Item = Command> + '_ {
     TABLE
         .iter()
         .filter(move |(name, description, _)| !description.is_empty() && listed.iter().all(|command| command.name != *name))
-        .map(|(name, description, _)| Command { name: (*name).to_owned(), description: (*description).to_owned(), hint: String::new() })
+        .map(|(name, description, _)| Command { name: (*name).to_owned(), description: (*description).to_owned(), hint: String::new(), plugin: false })
 }
 
 #[cfg(test)]
@@ -55,7 +55,7 @@ mod tests {
     use super::*;
 
     fn listed(names: &[&str]) -> Vec<Command> {
-        names.iter().map(|name| Command { name: (*name).into(), description: String::new(), hint: String::new() }).collect()
+        names.iter().map(|name| Command { name: (*name).into(), description: String::new(), hint: String::new(), plugin: false }).collect()
     }
 
     #[test]

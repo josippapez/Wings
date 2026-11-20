@@ -1336,6 +1336,8 @@ fn queued(c: &Chat) -> Option<Node> {
     }
     let rows = c.session.queued.iter().map(|queued| {
         let (now, remove) = (queued.uuid.clone(), queued.uuid.clone());
+        // A Claude Code plugin's own command isn't read at Claude's next step: Claude Code holds it until the turn ends.
+        let held = c.session.runs_after_turn(&queued.text);
         // A message from a subagent's tab says what you sent, not how Claude is asked to pass it on.
         let shown = crate::actions::relayed_note(&queued.text);
         let said_text = shown.as_deref().unwrap_or(queued.text.as_str());
@@ -1351,7 +1353,7 @@ fn queued(c: &Chat) -> Option<Node> {
         row()
             .prop("gap", "xs")
             .prop("align", "start")
-            .child(stack().prop("grow", true).child(said))
+            .child(stack().prop("grow", true).child(said).maybe(held.then(|| muted(HELD_NOTE))))
             .child(button("Send now", "ghost", false, move || chat::send_now(&now)).prop("size", "sm").prop("title", "Claude puts what it runs aside and reads it now"))
             .child(
                 button("", "ghost", false, move || chat::unqueue(&remove))
@@ -1362,8 +1364,13 @@ fn queued(c: &Chat) -> Option<Node> {
             )
             .key(queued.uuid.as_str())
     });
-    Some(card().child(muted(queued_note(c.session.queued.len()))).child(stack().prop("gap", "xs").children(rows)))
+    // The card's line is about the messages Claude reads at its next step, so it goes when only held commands wait.
+    let read_soon = c.session.queued.iter().filter(|queued| !c.session.runs_after_turn(&queued.text)).count();
+    Some(card().maybe((read_soon > 0).then(|| muted(queued_note(read_soon)))).child(stack().prop("gap", "xs").children(rows)))
 }
+
+/// What a queued Claude Code plugin command says under its text.
+const HELD_NOTE: &str = "Runs when Claude finishes";
 
 /// The queue card's line: one message is read, several are read together.
 fn queued_note(count: usize) -> &'static str {
@@ -1606,6 +1613,30 @@ mod tests {
         assert_eq!(describe(&[&done]), "Ran 1 command");
         assert_eq!(describe(&[&pending]), "Running 1 command");
         assert_eq!(describe(&[&done, &pending]), "Ran 1 command · 1 running");
+    }
+
+    #[test]
+    fn a_queued_plugin_command_says_it_runs_when_claude_finishes_and_a_message_does_not() {
+        let shown = |texts: &[&str]| {
+            chat::with(|c| {
+                c.session.queued.clear();
+                c.session.commands = crate::session::Session::default().commands;
+                c.session.commands.push(crate::session::Command { name: "toolbox:lint".into(), description: String::new(), hint: String::new(), plugin: true });
+                for (n, text) in texts.iter().enumerate() {
+                    c.session.queue(text, Vec::new(), 1, n as u32 + 1);
+                }
+                let shown = wings_plugin::ui::tree_json(queued(c).unwrap()).to_string();
+                c.session.queued.clear();
+                shown
+            })
+        };
+        let command = shown(&["/toolbox:lint src"]);
+        assert!(command.contains(HELD_NOTE) && !command.contains("Claude reads"), "{command}");
+        let message = shown(&["and lint"]);
+        assert!(!message.contains(HELD_NOTE) && message.contains("Claude reads it"));
+        let both = shown(&["/toolbox:lint", "and lint"]);
+        assert_eq!(both.matches(HELD_NOTE).count(), 1);
+        assert!(both.contains("Claude reads it after"));
     }
 
     #[test]

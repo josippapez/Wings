@@ -1037,6 +1037,12 @@ esac"##,
     // The same turn while it runs, for the scenes that type into the box mid-turn: the first message is queued, not sent.
     let mut working = work.clone();
     working.insert(working.len() - 1, json!({ "type": "system", "subtype": "status", "status": "requesting" }));
+    // The same turn with a command of one of Claude Code's plugins in its list (a `plugin` key), for the queue scene that types it.
+    let mut plugin_command = working.clone();
+    plugin_command[1]["response"]["response"]["commands"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "name": "toolbox:lint", "description": "Lint the files you name", "argumentHint": "<files>", "plugin": "toolbox" }));
     // The same turn finished: Claude's answer, then the result that ends the turn and says how long it took.
     let mut worked = work.clone();
     worked.pop();
@@ -1647,6 +1653,8 @@ esac"##,
         ("queue", working.clone(), None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter"), "Claude reads them"),
         // The same two, each opened to its whole message by its More button, which reads Less once it is open.
         ("queue-open", working.clone(), None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter;more:"), "Claude reads them"),
+        // A plugin's own command typed while Claude works is held until the turn ends: it says so, next to a message that Claude reads at its next step.
+        ("queue-plugin-command", plugin_command, None, Some("type:/toolbox:lint src/discount.ts;keys:enter;type:and add a changelog line;keys:enter"), "Runs when Claude finishes"),
         ("ask-bash", ask_bash, None, None, "Allow Bash?"),
         // The change read against its file: line numbers, the lines round it, and a button that opens it in the diff viewer.
         ("ask-edit", ask_edit.clone(), None, None, "Open in diff viewer"),

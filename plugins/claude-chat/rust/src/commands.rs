@@ -174,7 +174,7 @@ pub fn own_commands(listed: &[Command]) -> impl Iterator<Item = Command> + '_ {
     ]
     .into_iter()
     .filter(move |(name, ..)| listed.iter().all(|command| command.name != *name))
-    .map(|(name, description, hint)| Command { name: name.to_owned(), description: description.to_owned(), hint: hint.to_owned() })
+    .map(|(name, description, hint)| Command { name: name.to_owned(), description: description.to_owned(), hint: hint.to_owned(), plugin: false })
     // The views the chat opens itself, from the table in `builtin.rs`.
     .chain(crate::builtin::menu(listed))
 }
@@ -193,7 +193,7 @@ mod tests {
 
     #[test]
     fn the_menu_puts_the_names_that_start_with_what_was_typed_first() {
-        let skill = |name: &str| Command { name: name.into(), description: String::new(), hint: String::new() };
+        let skill = |name: &str| Command { name: name.into(), description: String::new(), hint: String::new(), plugin: false };
         let listed: Vec<Command> = (0..10).map(|n| skill(&format!("dev-core:skill-{n}-plan"))).collect();
         let names: Vec<String> = menu(&listed, "P").into_iter().map(|command| command.name).collect();
         assert_eq!(names.len(), 8);
@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn the_slash_menu_offers_these_commands_unless_claude_code_lists_them() {
-        let listed = |names: &[&str]| names.iter().map(|name| Command { name: (*name).into(), description: String::new(), hint: String::new() }).collect::<Vec<_>>();
+        let listed = |names: &[&str]| names.iter().map(|name| Command { name: (*name).into(), description: String::new(), hint: String::new(), plugin: false }).collect::<Vec<_>>();
         let own: Vec<String> = own_commands(&listed(&["clear"])).map(|command| command.name).collect();
         assert_eq!(own, ["status", "export", "btw", "plan", "remote-control", "plugins", "mcp", "usage", "cost", "context", "hooks", "memory", "permissions"]);
         let own: Vec<String> = own_commands(&listed(&["plan", "status", "usage"])).map(|command| command.name).collect();

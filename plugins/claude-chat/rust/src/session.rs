@@ -353,6 +353,8 @@ pub struct Command {
     pub name: String,
     pub description: String,
     pub hint: String,
+    /// Whether a plugin of Claude Code's gives it. Claude Code holds such a command until the turn ends.
+    pub plugin: bool,
 }
 
 /// The permission modes Claude Code runs in, as `set_permission_mode` takes them, with what the chat calls them.
@@ -1198,6 +1200,13 @@ impl Session {
         line(&json!({ "type": "user", "message": { "role": "user", "content": content(text, images) }, "parent_tool_use_id": null, "uuid": uuid })) + &usage()
     }
 
+    /// Whether `text` is one of a Claude Code plugin's own slash commands (its entry in the commands list has a `plugin`
+    /// key), which Claude Code holds until the turn ends, whatever the priority it was sent with.
+    pub fn runs_after_turn(&self, text: &str) -> bool {
+        let name = text.trim_start().strip_prefix('/').and_then(|rest| rest.split_whitespace().next());
+        name.is_some_and(|name| self.commands.iter().any(|command| command.plugin && command.name == name))
+    }
+
     /// The line that sends `text` while Claude works, and the message queued until Claude reads it. It goes in at
     /// Claude's next step, as a terminal's does: sent to wait for the turn's end, a message sat there for minutes while
     /// Claude ran command after command. `stamp` (the time in milliseconds) and `n` (this write's number) make its uuid:
@@ -1566,13 +1575,18 @@ pub(crate) fn request(id: &str, request: Value) -> String {
     line(&json!({ "type": "control_request", "request_id": id, "request": request }))
 }
 
+/// Whether the command in Claude Code's list has a `plugin` key that says which plugin it comes from.
+fn is_plugin(command: &Value) -> bool {
+    command["plugin"].as_str().map_or(!command["plugin"].is_null() && command["plugin"] != false, |name| !name.is_empty())
+}
+
 /// The slash commands `initialize` or a reload of the plugins lists.
 fn commands(list: &Value) -> Vec<Command> {
     let text = |value: &Value, key: &str| value[key].as_str().unwrap_or_default().to_owned();
     list.as_array()
         .into_iter()
         .flatten()
-        .map(|command| Command { name: text(command, "name"), description: text(command, "description"), hint: text(command, "argumentHint") })
+        .map(|command| Command { name: text(command, "name"), description: text(command, "description"), hint: text(command, "argumentHint"), plugin: is_plugin(command) })
         .collect()
 }
 
@@ -3053,8 +3067,24 @@ mod tests {
     }
 
     #[test]
+    fn a_command_with_a_plugin_key_waits_for_the_turns_end_and_no_other_does() {
+        let mut session = Session::default();
+        session.commands = commands(&json!([
+            { "name": "toolbox:lint", "description": "", "argumentHint": "", "plugin": "toolbox" },
+            { "name": "review", "description": "", "argumentHint": "" },
+            { "name": "plain", "description": "", "argumentHint": "", "plugin": null },
+        ]));
+        assert!(session.runs_after_turn("/toolbox:lint src"));
+        assert!(session.runs_after_turn(" /toolbox:lint"));
+        assert!(!session.runs_after_turn("/review"));
+        assert!(!session.runs_after_turn("/plain"));
+        assert!(!session.runs_after_turn("toolbox:lint"), "a message that only names it");
+        assert!(!session.runs_after_turn("/toolbox:lint-all"));
+    }
+
+    #[test]
     fn a_plugins_skills_are_the_commands_named_after_it() {
-        let commands = |names: &[&str]| names.iter().map(|name| Command { name: (*name).into(), description: String::new(), hint: String::new() }).collect::<Vec<_>>();
+        let commands = |names: &[&str]| names.iter().map(|name| Command { name: (*name).into(), description: String::new(), hint: String::new(), plugin: false }).collect::<Vec<_>>();
         let all = commands(&["toolbox:lint", "toolbox:format", "toolbox-extra:x", "review", "release-notes:write"]);
         assert_eq!([plugins::skills(&all, "toolbox"), plugins::skills(&all, "release-notes"), plugins::skills(&all, "lint-guard")], [2, 1, 0]);
     }
