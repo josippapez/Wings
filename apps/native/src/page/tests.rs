@@ -3372,6 +3372,157 @@ fn a_key_typed_in_a_long_chat_lays_out_only_the_messages_in_view() {
     assert!(drawn.len() * 4 <= of, "{drawn:?}");
 }
 
+/// Pages in a window drawn as the workspace draws one: the page kept as last drawn in a piece kept as last drawn, and the
+/// window's field layer over them, which draws the text of the field being typed in.
+mod field_layer {
+    use gpui::{Entity, StyleRefinement, Window, div, prelude::*};
+
+    use super::*;
+    use crate::{
+        text_field::FieldLayer,
+        ui::{drawing_piece, in_piece, place_view, spinner_layer},
+    };
+
+    /// The main column's piece (`workspace::parts::Part`), putting the page on screen and counting its renders.
+    struct Main {
+        page: Entity<PageView>,
+        drawn: usize,
+    }
+
+    impl Render for Main {
+        fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.drawn += 1;
+            let id = window.window_handle().window_id();
+            let card = drawing_piece("main", id, || {
+                place_view(self.page.entity_id(), id);
+                div().size_full().child(self.page.clone().cached(StyleRefinement::default().size_full()))
+            });
+            in_piece(Some("main".into()), false, card)
+        }
+    }
+
+    struct Root {
+        main: Entity<Main>,
+        fields: Entity<FieldLayer>,
+    }
+
+    impl Render for Root {
+        fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            // Starts the window's draw for the slots, as the workspace does first.
+            let spinners = spinner_layer(window);
+            div()
+                .relative()
+                .size_full()
+                .child(self.main.clone().cached(StyleRefinement::default().size_full()))
+                .child(self.fields.clone())
+                .child(spinners)
+        }
+    }
+
+    /// `source` in the window, drawn once it shows `shown`, with the keyboard in its field `label` and GPUI turned to
+    /// keyboard input, which draws the whole window once.
+    fn open(source: String, shown: &'static str, label: &str) -> (TestApp, TestAppWindow<Root>, Entity<PageView>) {
+        let mut app = TestApp::new();
+        app.background_executor().allow_parking();
+        let host = hosted(&mut app);
+        let mut window = app.open_window(move |_, cx| Root {
+            main: cx.new(|cx| Main { page: cx.new(|cx| PageView::in_plugin(&host, &source, cx).in_card()), drawn: 0 }),
+            fields: cx.new(|_| FieldLayer),
+        });
+        let page = window.read(|root, cx| root.main.read(cx).page.clone());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !window.read(|_, cx| page.read(cx).text().contains(shown)) {
+            assert!(Instant::now() < deadline, "the page never drew its tree");
+            app.run_until_parked();
+            window.draw();
+            thread::sleep(Duration::from_millis(5));
+        }
+        window.update(|_, window, cx| page.read(cx).input_focus(label, cx).expect("the field").focus(window, cx));
+        window.draw();
+        window.simulate_keystroke("right");
+        window.draw();
+        (app, window, page)
+    }
+
+    /// Types `keys`, each drawn, then the page's answer to it.
+    fn type_keys(app: &TestApp, window: &mut TestAppWindow<Root>, page: &Entity<PageView>, keys: &str) {
+        for key in keys.chars() {
+            let trees = window.read(|_, cx| page.read(cx).trees_sent());
+            window.simulate_input(&key.to_string());
+            window.draw();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while window.read(|_, cx| page.read(cx).trees_sent()) == trees {
+                assert!(Instant::now() < deadline, "no echo of {key:?}");
+                app.run_until_parked();
+                window.draw();
+                thread::sleep(Duration::from_millis(2));
+            }
+            app.run_until_parked();
+            window.draw();
+        }
+    }
+
+    /// The page's renders and the main column's.
+    fn drawn(window: &TestAppWindow<Root>, page: &Entity<PageView>) -> (usize, usize) {
+        window.read(|root, cx| (page.read(cx).renders(), root.main.read(cx).drawn))
+    }
+
+    /// Each key typed in a long chat's message box drew the whole chat, and the main column around it, again: about 58%
+    /// of a core while typing in a long chat. The window's field layer draws the box's text, so neither draws again, the
+    /// page's echo of the text included.
+    #[test]
+    fn a_key_typed_in_a_long_chat_draws_neither_the_page_nor_the_column() {
+        let (app, mut window, page) = open(long_chat_with_box(), "Turn 119", "Message");
+        let before = drawn(&window, &page);
+        type_keys(&app, &mut window, &page, "hello there");
+        let (pages, columns) = (drawn(&window, &page).0 - before.0, drawn(&window, &page).1 - before.1);
+        eprintln!("[measure] 11 keys typed in a long chat's box: the page rendered {pages} times, the column {columns}");
+        assert_eq!((pages, columns), (0, 0));
+        let field = window.read(|_, cx| page.read(cx).input_field("Message")).unwrap();
+        assert_eq!(window.read(|_, cx| field.read(cx).drawn()), (Some("hello there".into()), true));
+    }
+
+    /// A page with something of its own over a field it shows, its dialog or a chat's side panel floating over the
+    /// transcript and its message box: typed into, the field draws its text in place, under that, not in the window's
+    /// layer over it. One the floating pane doesn't reach, as a chat's message box under a short panel, draws in the
+    /// layer.
+    #[test]
+    fn a_field_under_the_pages_own_dialog_or_floating_pane_draws_in_place() {
+        for over in ["dialog", "float", "float-above"] {
+            let mut typed = String::new();
+            let source = fake::page("page", move |event| {
+                if let Some((_, change)) = event {
+                    typed = change["value"].as_str().unwrap_or_default().to_owned();
+                }
+                let field = json!({ "id": 3, "type": "TextInput", "props": { "label": "Name", "value": typed.clone(), "onChange": "3:change" } });
+                let over_it = text(7, 8, "Over the field".into());
+                // Far enough down the start that a pane of one line doesn't reach it.
+                let lines: Vec<Value> = (0..12).map(|at| text(20 + 2 * at, 21 + 2 * at, format!("Line {at}"))).collect();
+                let start = match over {
+                    "float" => json!([field]),
+                    _ => json!([{ "id": 11, "type": "Stack", "props": {}, "children": lines }, field]),
+                };
+                let body = match over {
+                    "dialog" => json!([field, { "id": 6, "type": "Dialog", "props": { "title": "Rename", "onClose": "6:onClose" }, "children": [over_it] }]),
+                    _ => json!([{ "id": 6, "type": "Split", "props": { "defaultSize": 200, "side": "end", "float": true }, "children": [
+                        { "id": 9, "type": "Slot", "props": { "name": "start" }, "children": start },
+                        { "id": 10, "type": "Slot", "props": { "name": "end" }, "children": [over_it] }] }]),
+                };
+                json!({ "id": 0, "type": "#root", "children": [{ "id": 1, "type": "Page", "children": [
+                    { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": body }] }] })
+            });
+            let (app, mut window, page) = open(source, "Over the field", "Name");
+            let before = drawn(&window, &page).0;
+            type_keys(&app, &mut window, &page, "abc");
+            let field = window.read(|_, cx| page.read(cx).input_field("Name")).unwrap();
+            let in_layer = over == "float-above";
+            assert_eq!(window.read(|_, cx| field.read(cx).drawn()), (Some("abc".into()), in_layer), "{over}");
+            let renders = drawn(&window, &page).0 - before;
+            assert_eq!(renders >= 3, !in_layer, "{over}: the page drew {renders} times for 3 keys");
+        }
+    }
+}
+
 /// Row `i` of a long column: one to five lines, as a chat's messages are, so a row never drawn isn't as tall as the
 /// guess for it.
 fn varied_row(i: usize) -> Value {

@@ -116,6 +116,27 @@ fn session(id: &str, cwd: &Path) -> SessionRef {
     }
 }
 
+/// Each key typed in the palette, and each line the arrows moved to, drew the sidebar, the title bar and the main column
+/// again, as the palette's list is the workspace's to draw. The palette is drawn over them, and only the window draws
+/// again for it.
+#[test]
+fn typing_in_the_palette_draws_the_window_and_none_of_its_pieces() {
+    let (_app, mut window) = open_config(|_| {});
+    press(&mut window, "k");
+    window.draw();
+    let mut counts = crate::ui::readout::Readout::new();
+    counts.begin_measure().unwrap();
+    counts.restart_measure().unwrap();
+    window.simulate_input("sidebar");
+    window.simulate_keystroke("down");
+    window.simulate_keystroke("up");
+    let renders = counts.end_measure().unwrap().renders;
+    let count = |view: &str| renders.iter().find(|(name, _)| *name == view).map_or(0, |(_, count)| *count);
+    assert_eq!(titles(&window).first().map(String::as_str), Some("Toggle Sidebar"));
+    assert!(count("workspace") >= 9, "the window drew each key: {renders:?}");
+    assert_eq!((count("sidebar"), count("title-bar"), count("main")), (0, 0, 0), "{renders:?}");
+}
+
 #[test]
 fn the_palette_opens_by_its_shortcut_filters_and_runs_a_command_by_keyboard() {
     let (app, mut window) = open_config(|_| {});

@@ -1,9 +1,10 @@
 //! What a key typed in a long chat's message box costs, over a real session's transcript: `CHAT_TYPING=<session.jsonl>`
 //! with `--claude-chat` resumes that session in a tab drawn as the workspace draws one (the page kept as last drawn in the
-//! main column's piece, itself kept as last drawn under the window's root), types keys into the message box and prints
-//! the median ms of a key's frame. Then it prints the page's outline, and the same measure with each big part of the page
-//! left out, which is what that part costs a key.
+//! main column's piece, itself kept as last drawn under the window's root, with the window's field layer over it), types
+//! keys into the message box and prints the median ms of a key's frame. Then it prints the page's outline, and the same
+//! measure with each big part of the page left out, which is what that part costs a key.
 //!
+//! `CHAT_TYPING_NO_LAYER=1` leaves the field layer out, for the cost of a key before it.
 //! `CHAT_TYPING_SIZE=<width>,<height>` sizes the window (1600,1000 by default). `CHAT_TYPING_KEYS=<n>` keys are timed (60).
 //! `CHAT_TYPING_PARTS=<path>[,<path>...]` measures again without each node under each path of child indexes (`0.1` is
 //! the second child of the first node), one at a time.
@@ -15,13 +16,18 @@ use std::{
 };
 
 use gpui::{AnyWindowHandle, AppContext, Entity, VisualTestAppContext, px, size};
-use wings_native::page::{PageView, plugin::PluginHost};
+use wings_native::{
+    page::{PageView, plugin::PluginHost},
+    text_field::FieldLayer,
+};
 
 use super::wait;
 
-/// The window's root, as the workspace: it draws the main column's piece, kept as last drawn.
+/// The window's root, as the workspace: it draws the main column's piece, kept as last drawn, and over it the text of the
+/// field being typed in (`FieldLayer`).
 struct Root {
     main: Entity<Main>,
+    fields: Option<Entity<FieldLayer>>,
 }
 
 impl gpui::Render for Root {
@@ -35,6 +41,7 @@ impl gpui::Render for Root {
             // It starts each draw of the slots, as the workspace's does.
             .child(wings_native::ui::spinner_layer(window))
             .child(self.main.clone().cached(gpui::StyleRefinement::default().size_full()))
+            .children(self.fields.clone())
     }
 }
 
@@ -48,7 +55,7 @@ impl gpui::Render for Main {
         use gpui::prelude::*;
         wings_native::ui::readout::render("main");
         let id = window.window_handle().window_id();
-        wings_native::ui::drawing_piece("main", id, || {
+        let card = wings_native::ui::drawing_piece("main", id, || {
             wings_native::ui::place_view(self.page.entity_id(), id);
             gpui::div().size_full().p(px(8.0)).pt_0().child(
                 gpui::div()
@@ -60,7 +67,8 @@ impl gpui::Render for Main {
                     .bg(gpui::rgb(wings_native::theme::SURFACE))
                     .child(self.page.clone().cached(gpui::StyleRefinement::default().size_full())),
             )
-        })
+        });
+        wings_native::ui::in_piece(Some("main".into()), false, card)
     }
 }
 
@@ -161,6 +169,9 @@ pub(super) fn typing(cx: &mut VisualTestAppContext, host: &PluginHost, source: &
         .and_then(|said| said.split_once(',').map(|(w, h)| (w.parse().unwrap(), h.parse().unwrap())))
         .unwrap_or((1600.0, 1000.0));
     let n: usize = std::env::var("CHAT_TYPING_KEYS").ok().and_then(|n| n.parse().ok()).unwrap_or(60);
+    // `CHAT_TYPING_NO_LAYER=1`: without the window's field layer, as before it, so the box draws its text in place and
+    // each key draws the page again.
+    let no_layer = std::env::var_os("CHAT_TYPING_NO_LAYER").is_some();
     let args = match live {
         true => serde_json::json!({ "cwd": root.canonicalize().unwrap() }),
         false => serde_json::json!({ "resume": id, "cwd": root.canonicalize().unwrap() }),
@@ -169,7 +180,8 @@ pub(super) fn typing(cx: &mut VisualTestAppContext, host: &PluginHost, source: &
         .open_offscreen_window(size(px(width), px(height)), |_, cx| {
             let page = cx.new(|cx| PageView::in_plugin_with_args(host, source, Some(&args), cx).in_card());
             let main = cx.new(|_| Main { page });
-            cx.new(|_| Root { main })
+            let fields = (!no_layer).then(|| cx.new(|_| FieldLayer));
+            cx.new(|_| Root { main, fields })
         })
         .unwrap();
     let window: AnyWindowHandle = handle.into();

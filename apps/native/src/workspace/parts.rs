@@ -51,11 +51,12 @@ impl Render for Part {
         crate::ui::readout::render(self.name);
         let draw = self.draw;
         let id = window.window_handle().window_id();
-        crate::ui::drawing_piece(self.name, id, || {
+        let drawn = crate::ui::drawing_piece(self.name, id, || {
             self.workspace
                 .update(cx, |workspace, cx| draw(workspace, window, cx))
                 .unwrap_or_else(|_| div().into_any_element())
-        })
+        });
+        crate::ui::in_piece(Some(self.name.into()), false, drawn)
     }
 }
 
@@ -75,9 +76,18 @@ pub(super) struct Parts {
     pub(super) view_spinners: Entity<crate::ui::SpinnerLayer>,
     /// The performance readout (`ui::readout`), a view of its own so its update draws none of the pieces.
     pub(super) readout: Entity<crate::ui::readout::Readout>,
+    /// The text of the field being typed in, so a key draws none of the pieces (`text_field::FieldLayer`).
+    pub(super) fields: Entity<crate::text_field::FieldLayer>,
 }
 
 impl Parts {
+    /// Draws the window again and none of its pieces, for a change only the workspace's own drawing shows, as the layers
+    /// it draws over the pieces (the palette): telling the workspace it changed draws every piece again. The field layer
+    /// is told instead, a view the workspace draws itself, which GPUI draws again with the workspace around it.
+    pub(super) fn redraw_window(&self, cx: &mut App) {
+        self.fields.update(cx, |_, cx| cx.notify());
+    }
+
     pub(super) fn new(workspace: &Entity<Workspace>, cx: &mut App) -> Parts {
         Parts {
             sidebar: Part::new(
@@ -92,6 +102,7 @@ impl Parts {
             spinners: cx.new(|_| crate::ui::SpinnerLayer::new(crate::ui::Spinners::Window)),
             view_spinners: cx.new(|_| crate::ui::SpinnerLayer::new(crate::ui::Spinners::Views)),
             readout: cx.new(|_| crate::ui::readout::Readout::new()),
+            fields: cx.new(|_| crate::text_field::FieldLayer),
         }
     }
 }

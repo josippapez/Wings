@@ -363,6 +363,21 @@ thread_local! {
     static PHASE: Cell<Phase> = const { Cell::new(Phase::In) };
     /// The scale of the surfaces being laid out, from the nearest `tween` that zooms.
     static ZOOM: Cell<f32> = const { Cell::new(1.0) };
+    /// A `tween` that hasn't ended is being painted around what is painted now.
+    static MOVING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether what is being painted now is inside a `tween` that hasn't ended: its opacity or place may change in each
+/// frame, which something drawn in a layer elsewhere in the window (a text field's text) wouldn't follow.
+pub fn moving() -> bool {
+    MOVING.get()
+}
+
+fn while_moving<R>(moving: bool, run: impl FnOnce() -> R) -> R {
+    let outer = MOVING.replace(MOVING.get() || moving);
+    let done = run();
+    MOVING.set(outer);
+    done
 }
 
 /// Builds with `phase` as the phase of the popups `build` makes, so a layer drawn on its way out takes its menus and
@@ -434,7 +449,8 @@ pub struct Tween<E> {
 }
 
 impl<E: IntoElement + 'static> Element for Tween<E> {
-    type RequestLayoutState = AnyElement;
+    /// Its element, and whether it hasn't ended.
+    type RequestLayoutState = (AnyElement, bool);
     type PrepaintState = ();
 
     fn id(&self) -> Option<ElementId> {
@@ -451,7 +467,7 @@ impl<E: IntoElement + 'static> Element for Tween<E> {
         _: Option<&InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
-    ) -> (LayoutId, AnyElement) {
+    ) -> (LayoutId, (AnyElement, bool)) {
         let duration = self.duration;
         let element = self.element.take().expect("laid out once");
         let animate = self.animate.take().expect("laid out once");
@@ -477,7 +493,7 @@ impl<E: IntoElement + 'static> Element for Tween<E> {
                 }
                 let layout = element.request_layout(window, cx);
                 ZOOM.set(outer);
-                ((layout, element), start)
+                ((layout, (element, t < 1.0)), start)
             },
         )
     }
@@ -487,7 +503,7 @@ impl<E: IntoElement + 'static> Element for Tween<E> {
         _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
         _: Bounds<Pixels>,
-        element: &mut AnyElement,
+        (element, _): &mut (AnyElement, bool),
         window: &mut Window,
         cx: &mut App,
     ) {
@@ -499,12 +515,12 @@ impl<E: IntoElement + 'static> Element for Tween<E> {
         _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
         _: Bounds<Pixels>,
-        element: &mut AnyElement,
+        (element, moving): &mut (AnyElement, bool),
         _: &mut (),
         window: &mut Window,
         cx: &mut App,
     ) {
-        element.paint(window, cx);
+        while_moving(*moving, || element.paint(window, cx));
     }
 }
 

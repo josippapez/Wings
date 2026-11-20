@@ -1252,6 +1252,8 @@ impl Render for Workspace {
                     // What moves in the pages of the tab and the right panel (spinners, working dots, shimmers), as if
                     // in them: over both, under what the window draws over the main column.
                     .children(self.parts.as_ref().map(|parts| ui::SpinnerLayer::in_draw(&parts.view_spinners)))
+                    // The text of the field being typed in, in the main column or the right panel, as if in its place.
+                    .children(self.parts.as_ref().map(|parts| parts.fields.clone()))
                     // Over the main column, as if in it: what draws over the terminals in it follows.
                     .child(ui::slot_layer(pane_card::TERMINALS, self.tab_terminals(cx)))
                     // The terminals an agent opened floating over its pane, over its terminal.

@@ -504,6 +504,10 @@ impl Viewer {
         } else {
             self.sideways(rows, cx)
         };
+        // A comment box scrolled under the header over the rows, being typed in, draws its text under it, in place.
+        let over = Rc::new(Cell::new(Bounds::default()));
+        let sticky = self.sticky_header(over.clone(), cx);
+        let code = ui::under(over, code);
         div()
             .id("diff-code-panel")
             .relative()
@@ -522,7 +526,7 @@ impl Viewer {
             )
             .children(ui::spot(|| "diff-code".into()))
             .child(code)
-            .children(self.sticky_header(cx))
+            .children(sticky)
             .into_any_element()
     }
 
@@ -547,7 +551,7 @@ impl Viewer {
     }
 
     /// The header of the file whose rows are at the top, over them, until the next file's header pushes it up.
-    fn sticky_header(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn sticky_header(&self, over: Rc<Cell<Bounds<Pixels>>>, cx: &mut Context<Self>) -> Option<AnyElement> {
         let top = self.stack.list.logical_scroll_top();
         let row = *self.stack.rows.get(top.item_ix)?;
         // The file's own header, whole at the top, needs no copy over it.
@@ -572,6 +576,7 @@ impl Viewer {
                 .left_0()
                 .right_0()
                 .occlude()
+                .child(ui::bounds_into(over))
                 .children(ui::spot(move || format!("diff-sticky-{file}")))
                 .child(self.file_header(file, true, cx))
                 .into_any_element(),

@@ -1492,6 +1492,14 @@ impl Workspace {
         self.show_popover((plugin.to_owned(), sidebar.to_owned()), cx);
     }
 
+    /// The page of the plugin tab on screen.
+    pub fn tab_page(&self) -> Option<Entity<PageView>> {
+        let super::Active::Plugin(id) = self.active else {
+            return None;
+        };
+        self.plugin_tabs.iter().find(|tab| tab.id == id).map(|tab| tab.page.clone())
+    }
+
     pub fn sidebar_page(&self, plugin: &str, sidebar: &str) -> Option<Entity<PageView>> {
         self.sidebar_pages
             .get(&(plugin.to_owned(), sidebar.to_owned()))

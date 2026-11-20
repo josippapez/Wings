@@ -18,7 +18,7 @@ pub mod readout;
 mod shader;
 mod sheet;
 mod shimmer;
-mod slots;
+pub(crate) mod slots;
 mod spinner_host;
 mod status_dot;
 mod tooltip;
@@ -42,7 +42,7 @@ pub use sheet::{
 pub use shimmer::{shimmer, shimmer_slot};
 #[cfg(all(test, feature = "test-support"))]
 pub(crate) use status_dot::SPIN_STEP;
-pub use slots::{Piece, cover, drawing_piece, start_draw, forget_view, place_view, slot, slot_layer, view_placed};
+pub use slots::{Piece, bounds_into, cover, drawing_piece, in_piece, start_draw, forget_view, place_view, slot, slot_layer, under, view_placed};
 pub use spinner_host::spinner_sync;
 #[cfg(target_os = "macos")]
 pub use spinner_host::turn_spinners_natively;

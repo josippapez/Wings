@@ -1,7 +1,8 @@
 //! Places that a piece of the window that keeps its last drawing (`workspace::parts`) leaves for what is drawn over it
 //! later in the window, so that can change without the piece drawing itself again: the spinners in it, which
-//! `spinner_layer` turns, and its terminals, which a `slot_layer` draws. And where the overlays of a draw are
-//! (`cover`), which what turns over GPUI's drawing (`spinner_host`) keeps clear of.
+//! `spinner_layer` turns, its terminals, which a `slot_layer` draws, and the text of the field being typed in, which the
+//! field layer draws (`text_field::FieldLayer`). And where the overlays of a draw are (`cover`), which what turns over
+//! GPUI's drawing (`spinner_host`) keeps clear of.
 
 use std::{
     cell::{Cell, RefCell},
@@ -80,6 +81,10 @@ thread_local! {
     static SLOTS: RefCell<Slots> = RefCell::default();
     /// The name the next cover in a draw takes (`cover`).
     static NEXT_COVER: Cell<u64> = const { Cell::new(0) };
+    /// What is being laid out, prepainted or painted is under something its own piece draws over it (`in_piece`).
+    static COVERED: Cell<bool> = const { Cell::new(false) };
+    /// Where its own piece draws something over part of what is being painted (`under`).
+    static OVER: RefCell<Vec<Rc<Cell<Bounds<Pixels>>>>> = RefCell::default();
 }
 
 /// Runs `draw`, the drawing of the piece `piece` of the window `id`, so the slots it leaves are its own.
@@ -93,6 +98,178 @@ pub fn drawing_piece<R>(piece: impl Into<Piece>, id: WindowId, draw: impl FnOnce
     let drawn = draw();
     SLOTS.with_borrow_mut(|slots| slots.current = outer);
     drawn
+}
+
+/// `element`, what a piece's render returns, laid out, prepainted and painted as that piece's drawing: `drawing_piece`
+/// only covers building it, and GPUI renders the views inside it (a text field) later, as it lays them out, so those
+/// learn their piece from this. `piece` None keeps the piece around it. `covered`: the piece draws something of its own
+/// over what is in it (a page's dialog or sheet), so nothing in it may draw in a layer over the window's pieces.
+pub fn in_piece(piece: Option<Piece>, covered: bool, element: impl IntoElement) -> InPiece {
+    InPiece {
+        piece,
+        covered,
+        element: element.into_any_element(),
+    }
+}
+
+pub struct InPiece {
+    piece: Option<Piece>,
+    covered: bool,
+    element: AnyElement,
+}
+
+/// Runs `run` inside the piece `piece` (the one around it for None), `covered` or under a piece that is.
+fn inside<R>(piece: Option<Piece>, covered: bool, run: impl FnOnce() -> R) -> R {
+    let outer = SLOTS.with_borrow_mut(|slots| {
+        let outer = slots.current;
+        if piece.is_some() {
+            slots.current = piece;
+        }
+        outer
+    });
+    let was = COVERED.replace(COVERED.get() || covered);
+    let done = run();
+    COVERED.set(was);
+    SLOTS.with_borrow_mut(|slots| slots.current = outer);
+    done
+}
+
+impl Element for InPiece {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        (inside(self.piece, self.covered, || self.element.request_layout(window, cx)), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        inside(self.piece, self.covered, || self.element.prepaint(window, cx));
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        inside(self.piece, self.covered, || self.element.paint(window, cx));
+    }
+}
+
+/// The piece being painted, when it is one that keeps its last drawing and draws nothing of its own over what is
+/// painted now at `bounds` (`in_piece`, `under`): that may draw in a layer over the window's pieces instead.
+pub(crate) fn uncovered_piece(bounds: Bounds<Pixels>) -> Option<Piece> {
+    let piece = current_piece();
+    let over = OVER.with_borrow(|over| over.iter().any(|at| at.get().intersects(&bounds)));
+    (piece != WINDOW && !COVERED.get() && !over).then_some(piece)
+}
+
+/// `element`, over part of which the piece it is in draws something of its own later in the same draw (a page's pane
+/// floating over its content), at the bounds `over` holds once the draw has laid it out: what is painted in `element`
+/// where that is draws in place, under it (`uncovered_piece`).
+pub fn under(over: Rc<Cell<Bounds<Pixels>>>, element: impl IntoElement) -> Under {
+    Under {
+        over,
+        element: element.into_any_element(),
+    }
+}
+
+pub struct Under {
+    over: Rc<Cell<Bounds<Pixels>>>,
+    element: AnyElement,
+}
+
+impl Element for Under {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        (self.element.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.element.prepaint(window, cx);
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        OVER.with_borrow_mut(|over| over.push(self.over.clone()));
+        self.element.paint(window, cx);
+        OVER.with_borrow_mut(|over| over.pop());
+    }
+}
+
+/// Where it is drawn, kept in `at` in each draw for `under`: put it in what is drawn over the content, as the child
+/// that fills it.
+pub fn bounds_into(at: Rc<Cell<Bounds<Pixels>>>) -> impl IntoElement {
+    canvas(move |bounds, _, _| at.set(bounds), |_, _, _, _| {}).absolute().top_0().left_0().size_full()
+}
+
+/// The window's draws so far (`start_draw`).
+pub(crate) fn draws(id: WindowId) -> u64 {
+    SLOTS.with_borrow(|slots| slots.frame.get(&id).copied().unwrap_or_default())
+}
+
+/// Leaves the slot `name` of `layer` at `bounds`, as the piece `piece` does in this draw (`uncovered_piece`), for what
+/// draws in that layer later in the draw.
+pub(crate) fn leave_slot(window: &Window, piece: Piece, layer: &'static str, name: SharedString, bounds: Bounds<Pixels>) {
+    leave(window, piece, layer, name, bounds, None);
 }
 
 /// Says that the piece being drawn puts `view` on screen in the window `id`, in this draw of it: the slots `view` leaves
@@ -268,7 +445,7 @@ pub(super) fn covers(id: WindowId) -> Vec<Bounds<Pixels>> {
 
 /// The slots of `layer` in the window `id` still there: left in the draw their piece last drew itself in, by a piece on
 /// screen. A view's slots wait while nothing puts it on screen, for a tab switched back to that is drawn from its cache.
-pub(super) fn shown(id: WindowId, layer: &'static str) -> Vec<(SharedString, Slot)> {
+pub(crate) fn shown(id: WindowId, layer: &'static str) -> Vec<(SharedString, Slot)> {
     SLOTS.with_borrow_mut(|state| {
         let Slots { drawn, slots, .. } = &mut *state;
         slots.retain(|(window, piece, _, _), slot| {

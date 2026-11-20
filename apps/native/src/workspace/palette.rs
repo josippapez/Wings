@@ -202,7 +202,16 @@ impl Workspace {
             palette.scroll.reveal(0, Reveal::Nearest);
         }
         self.load_palette_sessions(cx);
-        cx.notify();
+        self.redraw_palette(cx);
+    }
+
+    /// Draws a change of the palette's list. The palette is drawn over the window's pieces, which keep their drawing:
+    /// telling the workspace itself drew the sidebar, the title bar and the main column again on each key typed in it.
+    fn redraw_palette(&self, cx: &mut Context<Self>) {
+        match &self.parts {
+            Some(parts) => parts.redraw_window(cx),
+            None => cx.notify(),
+        }
     }
 
     /// Asks the history for the sessions that match what is typed, or the latest ones.
@@ -223,7 +232,7 @@ impl Workspace {
             this.update(cx, |this, cx| {
                 if let Some(palette) = &mut this.palette {
                     palette.sessions = found.sessions.iter().filter_map(session_entry).collect();
-                    cx.notify();
+                    this.redraw_palette(cx);
                 }
             })
             .ok();
@@ -239,7 +248,7 @@ impl Workspace {
         if count > 0 {
             palette.active = to(palette.active.min(count - 1), count);
             palette.scroll.reveal(palette.active, Reveal::Nearest);
-            cx.notify();
+            self.redraw_palette(cx);
         }
     }
 
@@ -566,7 +575,7 @@ impl Workspace {
                                     && palette.active != at
                                 {
                                     palette.active = at;
-                                    cx.notify();
+                                    this.redraw_palette(cx);
                                 }
                             }))
                             .on_click(cx.listener(move |this, _, window, cx| {

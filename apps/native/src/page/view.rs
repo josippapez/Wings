@@ -1157,6 +1157,12 @@ impl PageView {
     /// card's fields of the same names.
     #[cfg(feature = "test-support")]
     pub fn input_focus(&self, label: &str, cx: &gpui::App) -> Option<gpui::FocusHandle> {
+        Some(self.input_field(label)?.read(cx).focus_handle(cx))
+    }
+
+    /// The field of the last text input named `label`.
+    #[cfg(feature = "test-support")]
+    pub fn input_field(&self, label: &str) -> Option<gpui::Entity<crate::text_field::TextField>> {
         fn find(nodes: &[Node], label: &str, found: &mut Option<u64>) {
             for node in nodes {
                 match node {
@@ -1171,8 +1177,7 @@ impl PageView {
         }
         let mut found = None;
         find(&self.tree.as_ref()?.children, label, &mut found);
-        let inputs = self.inputs.borrow();
-        Some(inputs.get(&found?)?.field.read(cx).focus_handle(cx))
+        Some(self.inputs.borrow().get(&found?)?.field.clone())
     }
 
     #[cfg(feature = "test-support")]
@@ -2501,10 +2506,12 @@ impl PageView {
     fn floating_split(&self, split: &tree::Split, container: gpui::Div, cx: &mut Context<Self>) -> AnyElement {
         let id = split.id;
         let main = div().flex_1().min_w_0().min_h_0().flex().flex_col().overflow_hidden().children(self.nodes(&split.start, cx));
-        let container = container.child(main);
         if split.end.is_empty() {
-            return container.into_any_element();
+            return container.child(main).into_any_element();
         }
+        // A field of the start's under the pane, being typed in, draws its text under the pane, in place.
+        let over = Rc::new(Cell::new(gpui::Bounds::default()));
+        let container = container.child(ui::under(over.clone(), main));
         let mut pane = div()
             .id(ElementId::NamedInteger("page-split-float".into(), id))
             .absolute()
@@ -2553,6 +2560,7 @@ impl PageView {
             .gap(px(8.0))
             .rounded(px(14.0))
             .bg(rgb(theme::palette().background))
+            .child(ui::bounds_into(over))
             .children(self.nodes(&split.end, cx));
         container.child(pane.child(under)).into_any_element()
     }
@@ -2903,7 +2911,7 @@ impl Render for PageView {
             .map(|draw| ui::slot_layer(TERMINALS, draw(cx)).into_any_element());
         #[cfg(not(feature = "test-support"))]
         let shot_terminals: Option<AnyElement> = None;
-        div()
+        let page = div()
             .id("native-page")
             .capture_any_mouse_down(cx.listener(|view, event, window, cx| {
                 *view.pressed_with.borrow_mut() = Some(window.focused(cx));
@@ -3017,7 +3025,10 @@ impl Render for PageView {
             })
             .child(div().absolute().size_0().track_focus(&self.selection_focus))
             .children(overlay)
-            .children(shot_terminals)
+            .children(shot_terminals);
+        // Its fields learn they are in the page, which keeps its drawing, and under its dialog or sheet when it shows one,
+        // so the one being typed in draws its text in the window's field layer only when nothing of the page is over it.
+        ui::in_piece(placed.then_some(ui::Piece::View(cx.entity_id())), covered, page)
     }
 }
 

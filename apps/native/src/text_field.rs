@@ -3,21 +3,22 @@
 //! arrow keys (Shift extends, Alt and Cmd move by word and line), Backspace and Delete, copy, cut, paste,
 //! select-all and an input method's composing text. It leaves the keys it doesn't use to its owner.
 
-use std::{borrow::Cow, ops::Range};
+use std::{borrow::Cow, cell::RefCell, collections::HashMap, ops::Range};
 
 use gpui::{
     App, AvailableSpace, Bounds, ClipboardEntry, ClipboardItem, ContentMask, Context, DispatchPhase, Element,
-    ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle,
+    ElementId, ElementInputHandler, Entity, EntityId, EntityInputHandler, EventEmitter, FocusHandle,
     Focusable, GlobalElementId, ImageFormat, InspectorElementId, IntoElement, KeyDownEvent, LayoutId, Modifiers,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Role, SharedString,
-    Style, TextAlign, TextRun, TextStyle, UTF16Selection, UnderlineStyle, Window, WrappedLine, div,
-    fill, point, prelude::*, px, relative, rgb, rgba, size,
+    Style, TextAlign, TextRun, TextStyle, UTF16Selection, UnderlineStyle, WeakEntity, Window, WindowId, WrappedLine,
+    canvas, div, fill, point, prelude::*, px, relative, rgb, rgba, size,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
     actions::{self, Paste},
     theme::{FOREGROUND, HOVER, MUTED_FOREGROUND},
+    ui::{motion, readout, slots},
 };
 
 /// The border of a field that draws its own frame: the desktop's `--input`.
@@ -115,6 +116,10 @@ pub struct TextField {
     /// Where the last paint put the text, which clicks and the input method ask about.
     bounds: Bounds<Pixels>,
     layout: Option<Layout>,
+    /// The text style where its text was last drawn.
+    style: Option<TextStyle>,
+    /// The window's field layer draws its text, not the view it sits in (`FieldLayer`).
+    in_layer: bool,
 }
 
 impl EventEmitter<FieldEvent> for TextField {}
@@ -166,6 +171,8 @@ impl TextField {
             dragging: false,
             bounds: Bounds::default(),
             layout: None,
+            style: None,
+            in_layer: false,
         }
     }
 
@@ -197,6 +204,12 @@ impl TextField {
     /// Where the field's text was last drawn, in the window.
     pub fn bounds(&self) -> Bounds<Pixels> {
         self.bounds
+    }
+
+    /// The text it last drew, and whether the window's field layer drew it.
+    #[cfg(test)]
+    pub(crate) fn drawn(&self) -> (Option<String>, bool) {
+        (self.layout.as_ref().map(|layout| layout.doc.to_string()), self.in_layer)
     }
 
     /// Focuses the field with its term selected, so typing replaces it, as in the desktop find bar.
@@ -249,7 +262,29 @@ impl TextField {
     fn select(&mut self, anchor: usize, head: usize, window: &mut Window, cx: &mut Context<Self>) {
         (self.anchor, self.head) = (self.at(anchor), self.at(head));
         window.notify_text_selection_changed(&self.focus);
-        cx.notify();
+        self.redraw(false, window, cx);
+    }
+
+    /// Draws a change of its text (`typed`) or of its selection. While the window's field layer draws its text
+    /// (`FieldLayer`) and the field stays as tall, that is the layer alone: the views the field sits in, which may be a
+    /// whole chat, keep their drawing. Otherwise the field draws again, and with it every view it is in, as GPUI draws
+    /// a view's ancestors with it. So does a screen reader's, which reads the field's value from where it sits.
+    fn redraw(&mut self, typed: bool, window: &Window, cx: &mut Context<Self>) {
+        let layer = LAYERS.with_borrow(|layers| layers.get(&window.window_handle().window_id()).copied());
+        match layer {
+            Some(layer) if self.in_layer && !window.is_a11y_active() && !(typed && self.resizes(window)) => {
+                App::notify(cx, layer)
+            }
+            _ => cx.notify(),
+        }
+    }
+
+    /// Whether its text now is taller or shorter than where it was last drawn, so the views around it have to make room.
+    fn resizes(&self, window: &Window) -> bool {
+        let (Some(style), Some(layout)) = (&self.style, &self.layout) else {
+            return true;
+        };
+        self.rows.is_some() && self.shape(style, Some(self.bounds.size.width), false, window).height != layout.height
     }
 
     /// Moves the caret, and keeps the anchor where it was when `extend`.
@@ -296,7 +331,7 @@ impl TextField {
         (self.anchor, self.head) = (caret, caret);
         window.notify_text_input_changed(&self.focus);
         cx.emit(FieldEvent::Changed);
-        cx.notify();
+        self.redraw(true, window, cx);
     }
 
     /// The composing text becomes text.
@@ -674,6 +709,7 @@ impl TextField {
 
 impl Render for TextField {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        readout::render("text-field");
         let focused = self.focus.is_focused(window);
         if self.time {
             if focused {
@@ -826,6 +862,124 @@ impl TextField {
         let mut layout = Layout::new(doc, lines.into_vec(), font_size, line_height);
         layout.secret = secret;
         layout
+    }
+
+    /// Its text shaped and placed in `bounds`, a one-line text scrolled as little as keeps the caret in view and no
+    /// further than its end, and that scroll.
+    fn lay_out(&self, style: &TextStyle, bounds: Bounds<Pixels>, window: &Window) -> (Layout, Pixels) {
+        let one_line = self.rows.is_none();
+        let wrap = (!one_line).then_some(bounds.size.width);
+        let mut layout = self.shape(style, wrap, self.focus.is_focused(window), window);
+        let mut scroll = px(0.0);
+        if one_line {
+            let caret = layout.point(self.caret()).x;
+            let furthest = (layout.width() + px(1.0) - bounds.size.width).max(px(0.0));
+            scroll = self
+                .scroll
+                .max(px(0.0))
+                .min(furthest)
+                .min(caret)
+                .max(caret + px(1.0) - bounds.size.width);
+        }
+        layout.origin = bounds.origin - point(scroll, px(0.0));
+        (layout, scroll)
+    }
+
+    /// Where its caret is in `layout`: none unless it has the keyboard, takes typing and has nothing selected.
+    fn caret_in(&self, layout: &Layout, window: &Window) -> Option<Point<Pixels>> {
+        (self.focus.is_focused(window) && !self.disabled && self.anchor() == self.head()).then(|| layout.point(self.caret()))
+    }
+}
+
+/// The lines of `layout`, their selection and `caret`, clipped to `bounds`.
+fn paint_text(layout: &Layout, caret: Option<Point<Pixels>>, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
+    window.with_content_mask(Some(ContentMask { bounds }), |window| {
+        for (line, top) in layout.lines.iter().zip(&layout.tops) {
+            let origin = layout.origin + point(px(0.0), *top);
+            line.paint_background(origin, layout.line_height, TextAlign::Left, None, window, cx)
+                .ok();
+            line.paint(origin, layout.line_height, TextAlign::Left, None, window, cx)
+                .ok();
+        }
+        if let Some(at) = caret {
+            let height = layout.font_size + px(3.0);
+            let top = (layout.line_height - height) / 2.0;
+            window.paint_quad(fill(
+                Bounds::new(layout.origin + at + point(px(0.0), top), size(px(1.0), height)),
+                rgb(FOREGROUND),
+            ));
+        }
+    });
+}
+
+/// The layer of a window that draws its text fields' text, by the slot each leaves (`FieldLayer`).
+const FIELDS: &str = "fields";
+
+thread_local! {
+    /// The field layer of each window, which a key in one of its fields draws.
+    static LAYERS: RefCell<HashMap<WindowId, EntityId>> = RefCell::default();
+    /// The draw in which each window's field layer was prepainted and hasn't painted yet: the fields painted in between,
+    /// in the window's pieces, it draws. One painted after it, in a popover drawn over everything, draws its own text.
+    static WAITING: RefCell<HashMap<WindowId, u64>> = RefCell::default();
+    /// Each field whose text a layer draws, by window and slot name: the field and the text style where its slot is.
+    static DRAWS: RefCell<HashMap<(WindowId, SharedString), (WeakEntity<TextField>, TextStyle)>> = RefCell::default();
+}
+
+/// Whether the window `id`'s field layer will draw in this draw, after the pieces being painted now.
+fn layer_waiting(id: WindowId) -> bool {
+    WAITING.with_borrow(|waiting| waiting.get(&id) == Some(&slots::draws(id)))
+}
+
+/// The text of the field being typed in, drawn over the window's pieces at the place the field leaves in its piece, so a
+/// key draws this layer and the field's piece keeps its drawing. GPUI draws a view again with every view it sits in, and
+/// draws a piece kept as last drawn (`.cached`) again whole: a key typed in a long chat's message box laid out and drew
+/// the whole chat, and the main column around it, again. Only the field with the keyboard draws here, and only in a
+/// piece that keeps its last drawing (`ui::in_piece`) and draws nothing of its own over it; anything else draws its text
+/// in place. Make it before the window's first draw, and draw it in each draw of the window, which `ui::start_draw`
+/// starts, after the pieces and under what the window draws over them.
+pub struct FieldLayer;
+
+impl Render for FieldLayer {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        readout::render("fields");
+        let id = window.window_handle().window_id();
+        LAYERS.with_borrow_mut(|layers| layers.insert(id, cx.entity_id()));
+        canvas(
+            move |_, _, _| {
+                WAITING.with_borrow_mut(|waiting| waiting.insert(id, slots::draws(id)));
+            },
+            move |_, _, window, cx| {
+                WAITING.with_borrow_mut(|waiting| waiting.remove(&id));
+                paint_fields(id, window, cx);
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+    }
+}
+
+/// Draws the text of the fields whose slots in the window `id` are still there, where their pieces left them.
+fn paint_fields(id: WindowId, window: &mut Window, cx: &mut App) {
+    let shown = slots::shown(id, FIELDS);
+    DRAWS.with_borrow_mut(|draws| {
+        draws.retain(|(window, name), _| *window != id || shown.iter().any(|(at, _)| at == name))
+    });
+    for (name, slot) in shown {
+        let Some((field, style)) = DRAWS.with_borrow(|draws| draws.get(&(id, name)).cloned()) else {
+            continue;
+        };
+        let Some(field) = field.upgrade() else {
+            continue;
+        };
+        let (layout, scroll) = field.read(cx).lay_out(&style, slot.bounds, window);
+        let caret = field.read(cx).caret_in(&layout, window);
+        window.with_content_mask(Some(slot.mask), |window| paint_text(&layout, caret, slot.bounds, window, cx));
+        field.update(cx, |field, _| {
+            field.scroll = scroll;
+            field.layout = Some(layout);
+        });
     }
 }
 
@@ -1044,24 +1198,7 @@ impl Element for FieldText {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        let field = self.0.read(cx);
-        let one_line = field.rows.is_none();
-        let wrap = (!one_line).then_some(bounds.size.width);
-        let style = window.text_style();
-        let mut layout = field.shape(&style, wrap, field.focus.is_focused(window), window);
-        let mut scroll = px(0.0);
-        if one_line {
-            // Scrolls as little as keeps the caret in view, and no further than the text's end.
-            let caret = layout.point(field.caret()).x;
-            let furthest = (layout.width() + px(1.0) - bounds.size.width).max(px(0.0));
-            scroll = field
-                .scroll
-                .max(px(0.0))
-                .min(furthest)
-                .min(caret)
-                .max(caret + px(1.0) - bounds.size.width);
-        }
-        layout.origin = bounds.origin - point(scroll, px(0.0));
+        let (layout, scroll) = self.0.read(cx).lay_out(&window.text_style(), bounds, window);
         self.0.update(cx, |field, _| field.scroll = scroll);
         Some(layout)
     }
@@ -1081,43 +1218,27 @@ impl Element for FieldText {
         };
         let field = self.0.read(cx);
         let focus = field.focus.clone();
-        let caret = (focus.is_focused(window) && !field.disabled && field.anchor() == field.head())
-            .then(|| layout.point(field.caret()));
+        let caret = field.caret_in(&layout, window);
+        // The field being typed in leaves its text to the window's field layer, which a key draws alone: unless it is
+        // in no piece that keeps its drawing, under something its piece draws over it, moving, or drawn after the layer.
+        let id = window.window_handle().window_id();
+        let piece = (focus.is_focused(window)
+            && !field.disabled
+            && !field.time
+            && !motion::moving()
+            && layer_waiting(id))
+        .then(|| slots::uncovered_piece(bounds))
+        .flatten();
         window.handle_input(&focus, ElementInputHandler::new(bounds, self.0.clone()), cx);
-        window.with_content_mask(Some(ContentMask { bounds }), |window| {
-            for (line, top) in layout.lines.iter().zip(&layout.tops) {
-                let origin = layout.origin + point(px(0.0), *top);
-                line.paint_background(
-                    origin,
-                    layout.line_height,
-                    TextAlign::Left,
-                    None,
-                    window,
-                    cx,
-                )
-                .ok();
-                line.paint(
-                    origin,
-                    layout.line_height,
-                    TextAlign::Left,
-                    None,
-                    window,
-                    cx,
-                )
-                .ok();
+        let style = window.text_style();
+        match piece {
+            Some(piece) => {
+                let name: SharedString = self.0.entity_id().to_string().into();
+                slots::leave_slot(window, piece, FIELDS, name.clone(), bounds);
+                DRAWS.with_borrow_mut(|draws| draws.insert((id, name), (self.0.downgrade(), style.clone())));
             }
-            if let Some(at) = caret {
-                let height = layout.font_size + px(3.0);
-                let top = (layout.line_height - height) / 2.0;
-                window.paint_quad(fill(
-                    Bounds::new(
-                        layout.origin + at + point(px(0.0), top),
-                        size(px(1.0), height),
-                    ),
-                    rgb(FOREGROUND),
-                ));
-            }
-        });
+            None => paint_text(&layout, caret, bounds, window, cx),
+        }
         // A drag goes on past the field's edge, so these listen to the whole window.
         let field = self.0.clone();
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
@@ -1140,6 +1261,8 @@ impl Element for FieldText {
         self.0.update(cx, |field, _| {
             field.bounds = bounds;
             field.layout = Some(layout);
+            field.style = Some(style);
+            field.in_layer = piece.is_some();
         });
     }
 }
@@ -1239,7 +1362,7 @@ impl EntityInputHandler for TextField {
         if removed {
             cx.emit(FieldEvent::Changed);
         }
-        cx.notify();
+        self.redraw(true, window, cx);
     }
 
     fn bounds_for_range(
@@ -1407,7 +1530,7 @@ mod tests {
         })
     }
 
-    fn press(window: &mut TestAppWindow<Host>, keys: &'static str) {
+    fn press<V: Render>(window: &mut TestAppWindow<V>, keys: &'static str) {
         for key in keys.split(' ') {
             let keystroke = Keystroke::parse(key).unwrap();
             window.simulate_event(KeyDownEvent {
@@ -1676,6 +1799,138 @@ mod tests {
         window.simulate_input("4");
         window.simulate_input("5");
         assert_eq!(text(&window, &field), "10:45");
+    }
+
+    /// A piece of the window that keeps its last drawing, as the workspace's are (`workspace::parts`), holding a field,
+    /// and counting its renders. `covered`: it draws something of its own over the field, as a page's dialog. `fading`:
+    /// the field is in a box fading in that never ends.
+    struct Piece {
+        field: Entity<TextField>,
+        covered: bool,
+        fading: bool,
+        drawn: usize,
+    }
+
+    impl Render for Piece {
+        fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.drawn += 1;
+            let id = window.window_handle().window_id();
+            let fading = self.fading;
+            let body = slots::drawing_piece("piece", id, || {
+                let field = div().size_full().child(self.field.clone());
+                match fading {
+                    true => motion::tween(field, "fading", std::time::Duration::from_secs(60), |el, t, _| el.opacity(t))
+                        .into_any_element(),
+                    false => field.into_any_element(),
+                }
+            });
+            slots::in_piece(Some("piece".into()), self.covered, body)
+        }
+    }
+
+    /// The window as the workspace draws it: the piece, kept as last drawn, then the field layer over it.
+    struct Workspace {
+        piece: Entity<Piece>,
+        layer: Entity<FieldLayer>,
+    }
+
+    impl Render for Workspace {
+        fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            slots::start_draw(window.window_handle().window_id());
+            div()
+                .size_full()
+                .child(self.piece.clone().cached(gpui::StyleRefinement::default().size_full()))
+                .child(self.layer.clone())
+        }
+    }
+
+    /// The field, `rows` lines tall at least, with the keyboard, in a piece of a window with a field layer.
+    fn open_in_piece(
+        rows: Option<usize>,
+        covered: bool,
+        fading: bool,
+    ) -> (TestApp, TestAppWindow<Workspace>, Entity<TextField>, Entity<Piece>) {
+        let mut app = TestApp::new();
+        let mut window = app.open_window(|_, cx| {
+            let field = cx.new(|cx| {
+                let mut field = TextField::new(Role::TextInput, "Message", "Ask", px(200.0), cx);
+                field.rows = rows;
+                field
+            });
+            Workspace {
+                piece: cx.new(|_| Piece { field, covered, fading, drawn: 0 }),
+                layer: cx.new(|_| FieldLayer),
+            }
+        });
+        let piece = window.read(|workspace, _| workspace.piece.clone());
+        let field = window.read(|_, cx| piece.read(cx).field.clone());
+        window.update(|_, window, cx| field.read(cx).focus.clone().focus(window, cx));
+        window.draw();
+        // The first key after the pointer turns GPUI to keyboard input, which draws the whole window once.
+        press(&mut window, "right");
+        window.draw();
+        (app, window, field, piece)
+    }
+
+    /// What the field's text was last drawn as, and the piece's renders.
+    fn drawn(window: &TestAppWindow<Workspace>, field: &Entity<TextField>, piece: &Entity<Piece>) -> (String, usize) {
+        window.read(|_, cx| {
+            let shown = field.read(cx).layout.as_ref().map(|layout| layout.doc.to_string()).unwrap_or_default();
+            (shown, piece.read(cx).drawn)
+        })
+    }
+
+    /// A key typed in a long chat's message box drew the whole chat, and the main column around it, again: GPUI draws a
+    /// view's ancestors with it, and draws a piece kept as last drawn again whole. The field's text is drawn in the
+    /// window's layer instead, and a key draws that alone.
+    #[test]
+    fn a_key_in_a_field_in_a_piece_draws_the_layer_and_not_the_piece() {
+        let (_app, mut window, field, piece) = open_in_piece(Some(2), false, false);
+        let before = drawn(&window, &field, &piece).1;
+        for key in ["a", "b", "c"] {
+            window.simulate_input(key);
+            window.draw();
+        }
+        press(&mut window, "left shift-left");
+        window.draw();
+        let (shown, drawn) = drawn(&window, &field, &piece);
+        assert_eq!(drawn - before, 0, "the piece kept its drawing");
+        assert_eq!(shown, "abc", "the layer drew what was typed");
+        assert_eq!(window.read(|_, cx| field.read(cx).selection()), 1..2);
+    }
+
+    /// Under something its piece draws over it, as a page's own dialog, the field draws its text in place, under that.
+    /// So does one fading in, whose text the layer would draw at full strength.
+    #[test]
+    fn a_field_its_piece_draws_over_or_fading_in_draws_in_place() {
+        for (covered, fading) in [(true, false), (false, true)] {
+            let (_app, mut window, field, piece) = open_in_piece(None, covered, fading);
+            let before = drawn(&window, &field, &piece).1;
+            for key in ["a", "b", "c"] {
+                window.simulate_input(key);
+                window.draw();
+            }
+            let (shown, drawn) = drawn(&window, &field, &piece);
+            assert_eq!(drawn - before, 3, "covered {covered}, fading {fading}");
+            assert_eq!(shown, "abc");
+        }
+    }
+
+    /// A line more makes the field taller, which the piece lays out again; typing on that line doesn't.
+    #[test]
+    fn a_field_that_grows_a_line_draws_its_piece_again() {
+        let (_app, mut window, field, piece) = open_in_piece(Some(1), false, false);
+        window.simulate_input("a");
+        window.draw();
+        let (before, height) = (drawn(&window, &field, &piece).1, window.read(|_, cx| field.read(cx).bounds.size.height));
+        press(&mut window, "enter");
+        window.draw();
+        let grown = window.read(|_, cx| field.read(cx).bounds.size.height);
+        assert_eq!(drawn(&window, &field, &piece).1 - before, 1);
+        assert!(grown > height, "{grown:?} after {height:?}");
+        window.simulate_input("b");
+        window.draw();
+        assert_eq!(drawn(&window, &field, &piece), ("a\nb".to_owned(), before + 1));
     }
 
     /// Cyclops' API token: a browser's `<input type="password">` shows a dot a character, and copy and cut take nothing.
