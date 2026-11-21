@@ -219,9 +219,15 @@ fn forget_copied(key: &str) {
     });
 }
 
+/// The text of the reply or report at `at`, which its Copy button copies.
+pub(crate) fn said_text_at(at: usize) -> Option<String> {
+    said_at(at)
+}
+
 fn said_at(at: usize) -> Option<String> {
     chat::with(|c| match c.session.items.get(at) {
         Some(Item::Text(said)) => Some(said.clone()),
+        Some(Item::Report(report)) => Some(report.text.clone()),
         _ => None,
     })
 }

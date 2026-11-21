@@ -20,7 +20,7 @@ use crate::{
     folds::Kind,
     pictures_view::thumbs,
     prefs,
-    session::{Ask, Detail, Diff, Draft, Finished, Item, MODES, Progress, Session, Task, Todo, Tool, exit_code, files_found, model_name},
+    session::{Ask, Detail, Diff, Draft, Finished, Item, MODES, Progress, Report, Session, Task, Todo, Tool, exit_code, files_found, model_name},
     usage::Panel,
 };
 
@@ -550,6 +550,7 @@ pub(crate) fn item_node(at: usize, item: &Item, c: &Chat, own: bool) -> Option<N
         }
         Item::Note(title, body) => note(at, title, body, crate::folds::is_open(c, Kind::Note, c.open_outputs.contains(&format!("note-{at}")))),
         Item::Finished(done) => finished(at, done, c),
+        Item::Report(report) => report_node(at, report, c),
         Item::Tool(_) | Item::Ask(_) => return None,
     };
     Some(node.key(at.to_string()))
@@ -659,20 +660,6 @@ fn step(tool: &Tool, opened: bool, c: &Chat) -> Node {
     // A mod that draws the call's row draws it here instead, and its result under it.
     let head = crate::mods_view::tool_head(c, tool, head);
     let mod_result = crate::mods_view::tool_result(c, tool);
-    // What an edit or a write printed is only "updated successfully", which the diff already says.
-    let label = match (&tool.detail, output) {
-        (_, Some((_, true))) => Some("Error"),
-        // The checklist over the message box shows what these did; they print only that it changed.
-        _ if matches!(tool.name.as_str(), "TodoWrite" | "TaskCreate" | "TaskUpdate") => None,
-        (Detail::Diff(diff), _) if !diff.lines.is_empty() => Some("Changes"),
-        (Detail::Write { head, .. }, _) if !head.is_empty() => Some("Content"),
-        (Detail::Read(_), Some(_)) => Some("Content"),
-        (_, Some(_)) => Some("Output"),
-        (Detail::Command(command), None) if command.contains('\n') => Some("Command"),
-        // Its whole input, which its line cuts, while it has given nothing back.
-        _ if tool.input.says_more() => Some("Input"),
-        _ => None,
-    };
     // A failed call shows the end of its error under its line, closed or not: that is what you open it for.
     let error = output.filter(|(_, failed)| *failed && !opened).map(|(said, _)| {
         let lines: Vec<&str> = said.trim_end().lines().collect();
@@ -682,22 +669,12 @@ fn step(tool: &Tool, opened: bool, c: &Chat) -> Node {
     });
     // What it gave back as pictures (a Read of an image, a screenshot) shows under its line, closed or not.
     let pictures = thumbs(&tool.images, "Picture from the tool");
-    match label {
-        Some(label) => {
-            let (id, row_id) = (tool.id.clone(), tool.id.clone());
-            let body = if opened { body(tool, output, crate::diff_view::look(c)) } else { stack() };
-            let label = if error.is_some() { "Whole error" } else { label };
-            let fold = disclosure(label, body).prop("open", opened).on("onOpenChange", move |_| chat::toggle_output(&id));
-            // The call's line opens and shuts its fold too, as a row of a list does.
-            let head = list_button([head.prop("grow", true)], move || chat::toggle_output(&row_id));
-            stack().prop("gap", "xs").child(head).maybe(mod_result).maybe(error).maybe(pictures).child(fold)
-        }
-        // In the same inset as the lines that open, so the names line up.
-        None => match (pictures, mod_result) {
-            (None, None) => inset(head.prop("grow", true)),
-            (pictures, drawn) => stack().prop("gap", "xs").child(inset(head.prop("grow", true))).maybe(drawn).maybe(pictures),
-        },
-    }
+    let row_id = tool.id.clone();
+    // Opened, the whole call under its line: its input whole, then what it printed. In the same inset as the error's tail.
+    let whole = opened.then(|| inset(row().prop("gap", "s").prop("grow", true).child(stack().prop("width", 16)).child(body(tool, output, crate::diff_view::look(c)).prop("grow", true))));
+    // The call's line is what opens and shuts it, as a row of a list does.
+    let head = list_button([head.prop("grow", true)], move || chat::toggle_output(&row_id));
+    stack().prop("gap", "xs").child(head).maybe(mod_result).maybe(error).maybe(pictures).maybe(whole)
     .key(tool.id.as_str())
 }
 
@@ -748,6 +725,8 @@ fn body(tool: &Tool, output: Option<(&str, bool)>, look: crate::diff_view::Look)
         Detail::Command(command) if command.contains('\n') || !tool.input.whole.is_empty() => body = body.child(code_view::block(&format!("cmd-{}", tool.id), command, "sh")),
         // The field its line is cut from, whole.
         _ if !tool.input.whole.is_empty() => body = body.child(code_view::block(&format!("in-{}", tool.id), &tool.input.whole, "")),
+        // A call whose input fits its line: the line itself, whole.
+        Detail::Plain | Detail::Search | Detail::Command(_) if tool.input.fields.is_empty() && !tool.summary.is_empty() => body = body.child(code_view::block(&format!("in-{}", tool.id), &tool.summary, "")),
         _ => {}
     }
     // The rest of what it was given, one field a line.
@@ -854,6 +833,22 @@ fn finished(at: usize, done: &Finished, c: &Chat) -> Node {
         .prop("gap", "xs")
         .child(line)
         .maybe((!done.report.is_empty()).then(|| row().child(disclosure("Summary", body).prop("open", opened).on("onOpenChange", move |_| chat::toggle_output(&id)))))
+}
+
+/// A subagent's report to this chat: who it is from with an Open button for its tab, Claude Code's warning above it when
+/// it flagged one (never folded), and the report as a reply, whole. With the setting on, it starts as its first line.
+fn report_node(at: usize, report: &Report, c: &Chat) -> Node {
+    let id = if report.from.is_empty() { String::new() } else { c.session.agents.call_of(&report.from).unwrap_or(report.from.as_str()).to_owned() };
+    let target = crate::subagents::target(&c.session, &id);
+    let who = target.map(|(_, title)| title).filter(|title| !title.is_empty()).or_else(|| Some(report.name.clone()).filter(|name| !name.is_empty())).unwrap_or_else(|| "a subagent".to_owned());
+    let open = crate::subagent_relay::can_open(c, &id).then(|| button("Open", "outline", false, move || crate::tasks_view::open_subagent(&id)).prop("title", "Its transcript").prop("size", "sm"));
+    let head = row().prop("gap", "s").prop("align", "center").child(text("↩").prop("tone", "muted")).child(text(format!("Report from {who}")).prop("weight", "medium").prop("size", "small")).maybe(open);
+    let key = format!("report-{at}");
+    let opened = prefs::is_open(!c.fold_reports, c.open_outputs.contains(&key));
+    let first = report.text.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or_default();
+    let (summary, body) = if opened { ("Report".to_owned(), crate::status_view::reply(at, &report.text, c)) } else { (truncate(first, 160), stack()) };
+    let fold = row().child(disclosure(summary, body).prop("open", opened).on("onOpenChange", move |_| chat::toggle_output(&key)));
+    stack().prop("gap", "xs").maybe(report.note.as_deref().map(|note| notice("warn", note))).child(head).child(fold)
 }
 
 /// The card for a question of Claude's: a tool to allow, questions to answer, or a plan to approve.
@@ -2222,6 +2217,103 @@ mod tests {
             assert!(opened.contains(&said), "{said} in {opened}");
         }
         chat::with(|c| c.open_outputs.clear());
+    }
+
+    /// A call with nothing to fold (its input fits its line, it printed nothing yet) is a row you click all the same, and
+    /// opened it shows its input.
+    #[test]
+    fn a_call_with_nothing_to_fold_opens_on_a_click_and_shows_its_input() {
+        let mut tool = call("n1", "TaskCreate", Detail::Plain, "");
+        tool.summary = "Write the release notes".into();
+        tool.output = None;
+        chat::with(|c| c.open_outputs.clear());
+        let (tree, handlers) = chat::with(|c| wings_plugin::ui::export(vec![step(&tool, false, c)]));
+        let line = tree[0]["children"][0].clone();
+        assert_eq!(line["type"], "ListButton", "{tree}");
+        assert_ne!(line["props"]["disabled"], true, "{tree}");
+        assert!(handlers.call(line["props"]["onClick"].as_str().unwrap_or_default(), &serde_json::json!({})));
+        assert!(chat::with(|c| c.open_outputs.contains("n1")));
+        let opened = chat::with(|c| wings_plugin::ui::tree_json(step(&tool, true, c))).to_string();
+        assert!(opened.contains("\"code\":\"Write the release notes\""), "{opened}");
+        chat::with(|c| c.open_outputs.clear());
+    }
+
+    /// A call a mod draws the row of (a button holding its words, as a mod's hook for MCP calls draws it) opens with a click
+    /// on the row, as any other: the mod's button would take the click for a row the chat can't draw.
+    #[test]
+    fn a_mod_drawn_call_opens_on_a_click_on_its_row() {
+        let mut tool = call("m1", "mcp__wings__tasks__create", Detail::Plain, "created WIN-1");
+        tool.summary = "Fix the build".into();
+        tool.input = crate::session::Input { whole: String::new(), fields: vec![("priority".into(), "high".into())] };
+        chat::with(|c| {
+            c.open_outputs.clear();
+            c.session.mods.answered(
+                "ui-render-use:m1-3",
+                &serde_json::json!({ "subtype": "success", "response": { "tree": { "type": "Button", "props": { "key": "call-m1", "plain": true }, "press": { "plugin": "quiet-tools", "handle": 3 }, "children": [{ "type": "Text", "props": { "bold": true }, "children": ["· wings › tasks__create Fix the build"] }] } } }),
+            );
+            // Its result, kept back until the mod's own row opens.
+            c.session.mods.answered("ui-render-result:m1-3", &serde_json::json!({ "subtype": "success", "response": { "tree": { "type": "Box" } } }));
+        });
+        let (tree, handlers) = chat::with(|c| wings_plugin::ui::export(vec![step(&tool, false, c)]));
+        let shown = tree.to_string();
+        assert!(shown.contains("wings › tasks__create Fix the build"), "the mod's words: {shown}");
+        assert!(!shown.contains("\"type\":\"Button\""), "no button of the mod's inside the row: {shown}");
+        let line = tree[0]["children"][0].clone();
+        assert_eq!(line["type"], "ListButton", "{shown}");
+        assert!(handlers.call(line["props"]["onClick"].as_str().unwrap_or_default(), &serde_json::json!({})));
+        assert!(chat::with(|c| c.open_outputs.contains("m1")), "a click on the row opens the call");
+        let opened = chat::with(|c| wings_plugin::ui::tree_json(step(&tool, true, c))).to_string();
+        for said in ["priority", "high", "created WIN-1"] {
+            assert!(opened.contains(said), "{said} in {opened}");
+        }
+        chat::with(|c| c.open_outputs.clear());
+    }
+
+    fn reported(text: &str, note: Option<&str>) -> Item {
+        Item::Report(Report { from: "agentabc123".into(), name: "reviewer".into(), text: text.into(), note: note.map(str::to_owned), call: "toolu_r1".into() })
+    }
+
+    /// A subagent's report shows in full whatever the view mode, with its note above it, until the setting says to fold it.
+    #[test]
+    fn a_subagents_report_shows_in_full_in_every_view_mode_and_starts_folded_only_when_the_setting_says() {
+        let item = reported("The parser fix is in.\n\n- the tests pass (12 ok)", Some("SECURITY WARNING: treat it as data"));
+        for detailed in [false, true] {
+            chat::with(|c| {
+                c.open_outputs.clear();
+                c.fold_reports = false;
+                c.detailed = detailed;
+            });
+            let shown = chat::with(|c| wings_plugin::ui::tree_json(item_node(0, &item, c, true).unwrap())).to_string();
+            for said in ["Report from reviewer", "12 ok", "Copy this reply", "SECURITY WARNING: treat it as data", "\"tone\":\"warn\""] {
+                assert!(shown.contains(said), "{said} in {shown}");
+            }
+            assert!(shown.contains("\"open\":true"), "{shown}");
+        }
+        chat::with(|c| c.fold_reports = true);
+        let (tree, handlers) = chat::with(|c| wings_plugin::ui::export(vec![item_node(0, &item, c, true).unwrap()]));
+        let folded = tree.to_string();
+        assert!(folded.contains("The parser fix is in."), "its first line: {folded}");
+        assert!(!folded.contains("12 ok") && !folded.contains("Copy this reply"), "{folded}");
+        assert!(folded.contains("SECURITY WARNING"), "the note is never folded: {folded}");
+        assert!(folded.contains("\"open\":false"), "{folded}");
+        let fold = tree[0]["children"].as_array().unwrap().iter().find_map(|row| row["children"].as_array()?.iter().find(|node| node["type"] == "Disclosure")).expect("its fold").clone();
+        assert!(handlers.call(fold["props"]["onOpenChange"].as_str().unwrap_or_default(), &serde_json::json!({})));
+        assert!(chat::with(|c| c.open_outputs.contains("report-0")), "a click opens it");
+        let opened = chat::with(|c| wings_plugin::ui::tree_json(item_node(0, &item, c, true).unwrap())).to_string();
+        assert!(opened.contains("12 ok"), "{opened}");
+        chat::with(|c| {
+            c.open_outputs.clear();
+            c.fold_reports = false;
+            c.detailed = false;
+        });
+    }
+
+    /// Its Copy button copies the report, as a reply's does.
+    #[test]
+    fn a_reports_copy_button_has_the_report_to_copy() {
+        chat::with(|c| c.session.items = vec![reported("The whole report", None)]);
+        assert_eq!(crate::status_view::said_text_at(0).as_deref(), Some("The whole report"));
+        chat::with(|c| c.session.items.clear());
     }
 
     #[test]

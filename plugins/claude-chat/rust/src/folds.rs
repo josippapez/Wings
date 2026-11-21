@@ -101,7 +101,16 @@ impl Opens {
 #[cfg(feature = "chat")]
 pub fn follow() {
     use crate::chat;
-    chat::with(|c| c.opens = Opens::stored());
+    chat::with(|c| {
+        c.opens = Opens::stored();
+        c.fold_reports = crate::prefs::fold_reports().get();
+    });
+    crate::prefs::fold_reports().on_change(|fold| {
+        chat::with(|c| {
+            c.fold_reports = *fold;
+            c.open_outputs.clear();
+        })
+    });
     for (kind, ..) in KINDS {
         crate::prefs::opens(kind).on_change(move |open| {
             chat::with(|c| {

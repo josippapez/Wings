@@ -141,14 +141,43 @@ pub fn tool_head(c: &Chat, tool: &Tool, head: Node) -> Node {
     });
     let key = format!("{USE}{}", tool.id);
     let mods = &c.session.mods;
-    mods.trees.get(&key).and_then(|tree| drawn(tree, &At { instance: &key, drafts: &mods.drafts })).unwrap_or(head)
+    mods.trees.get(&key).and_then(|tree| drawn(&unpressed(tree), &At { instance: &key, drafts: &mods.drafts })).unwrap_or(head)
+}
+
+/// A mod's row of a call with its buttons as the words they hold. The chat's row opens the call with a click (`view::step`):
+/// a mod's button inside it took that click and told the mod, whose open row is Claude Code's own (`engine`), which the chat
+/// doesn't draw, so the click opened nothing.
+fn unpressed(el: &Value) -> Value {
+    let Value::Object(fields) = el else {
+        return el.clone();
+    };
+    let mut fields = fields.clone();
+    if fields.get("type").and_then(Value::as_str) == Some("Button") {
+        fields.insert("type".into(), json!("Box"));
+        fields.remove("press");
+        // A `label` prop is the words, when it holds none.
+        if let Some(label) = fields.get("props").and_then(|props| props["label"].as_str()).map(str::to_owned) {
+            if flat(if fields["children"].is_null() { &fields["props"]["children"] } else { &fields["children"] }).is_empty() {
+                fields.insert("children".into(), json!([label]));
+            }
+        }
+    }
+    if let Some(Value::Array(children)) = fields.get_mut("children") {
+        *children = children.iter().map(unpressed).collect();
+    }
+    if let Some(Value::Array(children)) = fields.get_mut("props").and_then(|props| props.get_mut("children")) {
+        *children = children.iter().map(unpressed).collect();
+    }
+    Value::Object(fields)
 }
 
 /// What a mod draws under a tool call's row for its result, when one does.
 pub fn tool_result(c: &Chat, tool: &Tool) -> Option<Node> {
     let key = format!("{RESULT}{}", tool.id);
     let mods = &c.session.mods;
-    drawn(mods.trees.get(&key)?, &At { instance: &key, drafts: &mods.drafts })
+    // A mod that hides the result until its own row is opened answers an empty `Box`: nothing to put in the chat's column.
+    let tree = mods.trees.get(&key).filter(|tree| tree["type"] != "Box" || !(flat(&tree["children"]).is_empty() && flat(&tree["props"]["children"]).is_empty()))?;
+    drawn(tree, &At { instance: &key, drafts: &mods.drafts })
 }
 
 /// The most messages asked of the mods at a time, the newest the page drew: a long session's whole history would be a

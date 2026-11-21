@@ -128,6 +128,12 @@ pub fn set_own_share(account: Option<&str>, limit: Limit, share: Option<String>)
 
 /// Every new chat turns Remote Control on as it starts (`remote.rs`), so you can go on with it on claude.ai or in the Claude
 /// app.
+/// Whether a subagent's report to the chat starts folded to its first line. Off: a report shows in full, in every view
+/// mode, as Claude Code says to show it.
+pub fn fold_reports() -> Setting<bool> {
+    Setting::boolean("fold-reports", false)
+}
+
 pub const REMOTE_ON_START: &str = "remote-on-start";
 
 pub fn remote_on_start() -> Setting<bool> {

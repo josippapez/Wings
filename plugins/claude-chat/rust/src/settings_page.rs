@@ -158,6 +158,10 @@ fn view() -> Vec<Node> {
                     ),
                     preview(turn(mode, |kind| prefs::opens(kind).get())),
                 ]),
+                toggle(
+                    checkbox("Start subagent reports folded", prefs::fold_reports().get(), |on| drop(prefs::fold_reports().set(on))).key("fold-reports"),
+                    "A subagent's report to the chat shows in full, in every view mode. Tick this to fold each to its first line, which a click opens.",
+                ),
                 together([about("What Verbose opens", "Each kind starts open in Verbose unless you clear it. Normal keeps all of them shut."), preview(ticks)]),
             ],
         ))

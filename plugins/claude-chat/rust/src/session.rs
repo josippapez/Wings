@@ -71,6 +71,23 @@ pub enum Item {
     Allowed(String, String),
     /// What Claude thought before it answered, as its summary, and how long it took (ms, 0 when unknown).
     Thought(String, u64),
+    /// A subagent's final report to this chat, whole.
+    Report(Report),
+}
+
+/// A subagent's hand-back (`origin.handback` on a message Claude Code adds in the session's name): who sent it, the report
+/// as Markdown and the note Claude Code flags it with, which is shown above the report and never folded.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Report {
+    /// The subagent's id, which its tab opens by.
+    pub from: String,
+    /// What Claude Code calls it (its agent type), for when nothing better names it.
+    pub name: String,
+    pub text: String,
+    /// Claude Code's warning about the report, like a security warning, when it flagged one.
+    pub note: Option<String>,
+    /// The call that handed it back, which tells a report read twice from two.
+    pub call: String,
 }
 
 /// The line where a background task ended, from its notice in the stream or in a transcript.
@@ -516,6 +533,9 @@ pub struct Session {
     pub titled: bool,
     /// The conversation was cleared (`/clear`, `/new`, `/reset`), which the page reads once to drop what it kept of it.
     pub cleared: bool,
+    /// The hand-backs already shown (their call, else their text), which stay known when a rewind or a clear takes their
+    /// item away, so a transcript read again doesn't bring them back.
+    pub reports_seen: Vec<String>,
     /// Claude Code stopped sending the effort with each turn (`per_turn_effort_changed`), so changing it rewrites the
     /// prompt cache. Its notice is shown once until an `init` turns it back on.
     pub effort_rewrites_cache: bool,
@@ -614,6 +634,11 @@ impl Session {
                     self.title = Some(title.to_owned());
                 }
             }
+            // A subagent's report to this chat. Claude Code adds it in the session's name (`isMeta` in the transcript), and it
+            // is read before the arms that skip such lines.
+            "user" if line["origin"]["handback"] == true => self.handed_back(&line["origin"]),
+            // The same report when it came while Claude worked: the transcript keeps it as an attachment of that turn.
+            "attachment" if line["attachment"]["type"] == "queued_command" && line["attachment"]["origin"]["handback"] == true => self.handed_back(&line["attachment"]["origin"]),
             // A message you sent while Claude worked, or a task's notice, as a session read back has it: the transcript
             // keeps it as an attachment of the turn that read it, not as a message. What another agent sent stays out.
             "attachment" if line["attachment"]["type"] == "queued_command" => {
@@ -952,6 +977,31 @@ impl Session {
             report: cut(report, OUTPUT_KEPT),
         };
         self.items.push(Item::Finished(finished));
+    }
+
+    /// The hand-backs among transcript `entries`, which a chat reads at the end of a turn as Claude Code may print no line
+    /// for one: each shows once, whatever number of times it is read.
+    pub fn hear_handbacks(&mut self, entries: &[Value]) {
+        for entry in entries.iter().filter(|entry| entry["origin"]["handback"] == true || entry["attachment"]["origin"]["handback"] == true) {
+            self.hear(entry);
+        }
+    }
+
+    /// A subagent's hand-back as an item of its own, once: the live line and the transcript's entry for the same call are one.
+    fn handed_back(&mut self, origin: &Value) {
+        let text = origin["handbackReportText"].as_str().map(str::trim).unwrap_or_default();
+        if text.is_empty() {
+            return;
+        }
+        let call = origin["handbackToolUseId"].as_str().unwrap_or_default();
+        let key = if call.is_empty() { text } else { call };
+        if self.reports_seen.iter().any(|seen| seen == key) {
+            return;
+        }
+        self.reports_seen.push(key.to_owned());
+        let note = origin["handbackNote"].as_str().map(str::trim).filter(|note| !note.is_empty()).map(str::to_owned);
+        let text_of = |key: &str| origin[key].as_str().unwrap_or_default().to_owned();
+        self.items.push(Item::Report(Report { from: text_of("from"), name: text_of("name"), text: text.to_owned(), note, call: call.to_owned() }));
     }
 
     /// Claude Code's answer to one of the chat's requests.
@@ -3803,5 +3853,73 @@ mod tests {
         // One entry can hold several notices.
         assert_eq!(session.items.len(), 5);
         assert!(session.items.iter().all(|item| !matches!(item, Item::User(_))));
+    }
+
+    /// Two hand-backs as Claude Code 2.1.330 wrote them in a transcript: a `user` entry that is `isMeta`, and the same
+    /// message as a `queued_command` attachment when it came while Claude worked, with a note on the second.
+    const HANDBACKS: &str = include_str!("../tests/handback.jsonl");
+
+    fn handbacks() -> Vec<Value> {
+        HANDBACKS.lines().map(|line| serde_json::from_str(line).unwrap()).collect()
+    }
+
+    #[test]
+    fn a_subagents_hand_back_is_a_report_item_with_the_whole_text_and_never_your_message() {
+        let mut session = Session::default();
+        let lines = handbacks();
+        session.hear(&lines[0]);
+        let [Item::Report(report)] = session.items.as_slice() else { panic!("{:?}", session.items) };
+        assert_eq!((report.from.as_str(), report.name.as_str(), report.call.as_str()), ("agentabc123", "reviewer", "toolu_handback_1"));
+        assert!(report.text.starts_with("The parser fix is in") && report.text.contains("```sh\ncargo test parser\n```"), "{}", report.text);
+        assert!(!report.text.contains("[Subagent hand-back]"), "the report, not the frame around it");
+        assert_eq!(report.note, None);
+        assert!(session.items.iter().all(|item| !matches!(item, Item::User(_) | Item::UserImages(..))));
+        assert!(session.prompts.is_empty(), "it is not one of your prompts, so a rewind never cuts at it");
+    }
+
+    #[test]
+    fn a_hand_back_that_came_while_claude_worked_is_a_report_too_with_its_note() {
+        let mut session = Session::default();
+        session.hear(&handbacks()[1]);
+        let [Item::Report(report)] = session.items.as_slice() else { panic!("{:?}", session.items) };
+        assert_eq!(report.from, "agentdef456");
+        assert!(report.note.as_deref().is_some_and(|note| note.starts_with("SECURITY WARNING")), "{:?}", report.note);
+        assert!(session.items.iter().all(|item| !matches!(item, Item::User(_))));
+    }
+
+    #[test]
+    fn a_hand_back_only_the_transcript_has_shows_once_when_a_turn_ends_however_often_it_is_read() {
+        let mut session = Session::default();
+        // The turn ended with nothing in the stream about it; the newest transcript entries hold the report, among others.
+        let mut entries = vec![json!({ "type": "user", "message": { "role": "user", "content": "Audit it" } })];
+        entries.extend(handbacks());
+        entries.push(json!({ "type": "attachment", "attachment": { "type": "queued_command", "prompt": "later", "commandMode": "prompt" } }));
+        session.hear_handbacks(&entries);
+        session.hear_handbacks(&entries);
+        let reports: Vec<&Report> = session.items.iter().filter_map(|item| if let Item::Report(report) = item { Some(report) } else { None }).collect();
+        assert_eq!(reports.len(), 2, "{:?}", session.items);
+        assert_eq!(session.items.len(), 2, "nothing else of the entries came in: {:?}", session.items);
+        // A rewind that took one away doesn't bring it back with the next read.
+        session.items.clear();
+        session.hear_handbacks(&entries);
+        assert!(session.items.is_empty());
+    }
+
+    #[test]
+    fn a_hand_back_heard_twice_is_one_report() {
+        let mut session = Session::default();
+        let lines = handbacks();
+        // The live line and the transcript's entry for the same call.
+        for line in [&lines[0], &lines[0], &lines[1], &lines[1]] {
+            session.hear(line);
+        }
+        assert_eq!(session.items.iter().filter(|item| matches!(item, Item::Report(_))).count(), 2);
+        // One from a Claude Code that gave no call id is told apart by its text.
+        let mut old = lines[0].clone();
+        old["origin"].as_object_mut().unwrap().remove("handbackToolUseId");
+        old["origin"]["handbackReportText"] = "A different report".into();
+        session.hear(&old);
+        session.hear(&old);
+        assert_eq!(session.items.iter().filter(|item| matches!(item, Item::Report(_))).count(), 3);
     }
 }

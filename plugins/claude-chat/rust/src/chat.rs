@@ -90,6 +90,8 @@ pub struct Chat {
     pub bookmarks: crate::bookmarks::Bookmarks,
     /// Your settings for which kinds of fold Detailed starts open (`folds.rs`).
     pub opens: crate::folds::Opens,
+    /// Your setting for subagent reports starting folded (`prefs::fold_reports`).
+    pub fold_reports: bool,
     /// Your setting for the conversation's text size, as the `textScale` its scroll takes.
     pub text_scale: f32,
     /// The usage or context dialog, over the chat while it is open, and whether the usage dialog lists the last week's
@@ -204,6 +206,7 @@ thread_local! {
         search: Default::default(),
         bookmarks: Default::default(),
         opens: crate::folds::Opens::default(),
+        fold_reports: false,
         text_scale: 1.0,
         panel: None,
         panel_week: false,
@@ -754,6 +757,11 @@ pub(crate) fn hear(run: u32, line: &Value) {
     if ended || (line["type"] == "system" && line["subtype"] == "session_title_changed") {
         messages::tell(crate::SESSION_SAVED, &Value::Null);
     }
+    // A subagent's hand-back is a line of the transcript that Claude Code may not print: the end of a turn reads the
+    // newest entries for any it left, which show once.
+    if ended {
+        read_handbacks(run);
+    }
     // Files change in a turn, as each edit, command or subagent ends, and when the code is rewound.
     let touched = with(|c| c.run == run && std::mem::take(&mut c.session.files_touched));
     if touched || line["type"] == "result" || line["response"]["request_id"] == session::REWIND_FILES {
@@ -764,6 +772,26 @@ pub(crate) fn hear(run: u32, line: &Value) {
     report_agent();
     crate::diff_view::fetch(run);
     crate::reattach::heard(run, line);
+}
+
+/// The entries `read_handbacks` reads: where a hand-back is, as a message or as a queued one.
+const HANDBACK_KINDS: [&str; 2] = ["user", "attachment:queued_command"];
+/// How many of the newest of them. The turn that ended is at most a few reports behind.
+const HANDBACK_LAST: u32 = 100;
+
+fn read_handbacks(run: u32) {
+    let Some(id) = with(|c| c.session.id.clone().filter(|_| c.run == run)) else {
+        return;
+    };
+    task::spawn(async move {
+        if let Ok(entries) = host::transcript_cut(&id, &HANDBACK_KINDS, HANDBACK_LAST, HISTORY_CUT).await {
+            with(|c| {
+                if c.run == run {
+                    c.session.hear_handbacks(entries.as_array().map(Vec::as_slice).unwrap_or_default());
+                }
+            });
+        }
+    });
 }
 
 /// Tells the sidebar's Agents what Claude does in this chat, when that changed: it needs you while a question of
