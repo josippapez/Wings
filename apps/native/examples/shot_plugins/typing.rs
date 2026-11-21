@@ -95,7 +95,7 @@ fn keys(cx: &mut VisualTestAppContext, window: AnyWindowHandle, page: &Entity<Pa
         });
         frames.push(start.elapsed().as_secs_f64() * 1000.0);
         // The page hears the key on its own thread and sends a tree back.
-        let deadline = Instant::now() + Duration::from_millis(500);
+        let deadline = Instant::now() + Duration::from_millis(std::env::var("CHAT_TYPING_WAIT_MS").ok().and_then(|ms| ms.parse().ok()).unwrap_or(500));
         while page.read_with(cx, |view, _| view.trees_sent()) == sent && Instant::now() < deadline {
             cx.run_until_parked();
             std::thread::sleep(Duration::from_millis(1));
@@ -261,6 +261,8 @@ pub(super) fn typing(cx: &mut VisualTestAppContext, host: &PluginHost, source: &
     if let Some(every) = std::env::var("CHAT_TYPING_STEADY_MS").ok().and_then(|ms| ms.parse().ok()) {
         clear(cx, window);
         let (median, answer, renders) = steady(cx, window, &page, n, Duration::from_millis(every));
+        let length = page.read_with(cx, |view, cx| view.input_field("Message").map(|field| field.read(cx).value().len()));
+        println!("[measure] the message box holds {length:?} bytes");
         println!("[measure] typing {n} keys one every {every} ms: key frame median {median:.2} ms; the page answered a key in {answer:.1} ms (median); page rendered {renders} times");
     }
     for (scroll, drawn, of) in page.read_with(cx, |view, _| view.windows_drawn()) {

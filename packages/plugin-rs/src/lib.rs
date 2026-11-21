@@ -118,7 +118,11 @@ pub extern "C" fn wings_start() {
 pub unsafe extern "C" fn wings_event(handler: *mut u8, handler_len: usize, payload: *mut u8, payload_len: usize) {
     // SAFETY: both are strings the host wrote into `wings_alloc` memory.
     let (handler, payload) = unsafe { (taken(handler, handler_len), taken(payload, payload_len)) };
-    ui::dispatch(&handler, serde_json::from_str(&payload).unwrap_or(Value::Null));
+    if ui::dispatch(&handler, serde_json::from_str(&payload).unwrap_or(Value::Null)) {
+        // The handler says the page is as it was: the tasks it woke run, and the page isn't built.
+        task::run_ready();
+        return;
+    }
     settle();
 }
 
@@ -135,4 +139,62 @@ pub unsafe extern "C" fn wings_deliver(kind: *mut u8, kind_len: usize, id: u32, 
 pub extern "C" fn wings_timer(id: u32) {
     host::fired(id);
     settle();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    thread_local! {
+        static BUILDS: Cell<u32> = const { Cell::new(0) };
+        static SAID: Cell<bool> = const { Cell::new(false) };
+    }
+
+    fn view() -> Vec<ui::Node> {
+        BUILDS.with(|builds| builds.set(builds.get() + 1));
+        vec![ui::button("Go", "ghost", false, || {}).on("onChange", |_| {
+            if SAID.with(Cell::get) {
+                ui::unchanged();
+            }
+        })]
+    }
+
+    /// Sends the host's event for the handler `name`, as `wings_event` takes it.
+    fn event(name: &str) {
+        let give = |text: &str| {
+            let at = wings_alloc(text.len());
+            // SAFETY: `at` has room for `text.len()` bytes, and `wings_event` takes the memory as a string of that length.
+            unsafe { std::ptr::copy_nonoverlapping(text.as_ptr(), at, text.len()) };
+            at
+        };
+        let payload = "{}";
+        // SAFETY: both strings are in `wings_alloc` memory, as the host leaves them.
+        unsafe { wings_event(give(name), name.len(), give(payload), payload.len()) };
+    }
+
+    fn builds() -> u32 {
+        BUILDS.with(Cell::get)
+    }
+
+    #[test]
+    fn an_event_whose_handler_says_unchanged_builds_no_page_and_the_next_one_builds_it_from_what_is_then() {
+        run(view);
+        settle();
+        let name = ui::handler_named(":onChange");
+        let first = builds();
+        // An ordinary event builds the page, as before.
+        event(&name);
+        assert_eq!(builds(), first + 1);
+        // One that says unchanged doesn't, however many come.
+        SAID.with(|said| said.set(true));
+        for _ in 0..5 {
+            event(&name);
+        }
+        assert_eq!(builds(), first + 1);
+        // The next one that doesn't say so builds it.
+        SAID.with(|said| said.set(false));
+        event(&name);
+        assert_eq!(builds(), first + 2);
+    }
 }

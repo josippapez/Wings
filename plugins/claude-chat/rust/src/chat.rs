@@ -1421,9 +1421,18 @@ pub fn accept_suggestion() {
     });
 }
 
+/// What of the draft the page draws, when no list is built from it: whether the box is empty (the suggestion shows in it)
+/// and whether the send button has anything to send. None while a `/`, `@` or `#` word makes a list of what it matches.
+fn drawn_from(c: &Chat) -> Option<(bool, bool)> {
+    let list = c.draft.starts_with('/') || mentions::active(&c.draft).is_some() || issues::active(&c.draft).is_some();
+    (!list).then(|| (c.draft.is_empty(), c.draft.trim().is_empty()))
+}
+
 /// What you typed in the message box. Typing your own message dismisses the suggestion, as in Claude Code; editing the
-/// one you took with Tab doesn't.
-pub fn typed(value: &str) {
+/// one you took with Tab doesn't. False when the page draws the same as before the key, which is every key that neither
+/// empties nor fills the box nor is in a `/`, `@` or `#` word: the field shows what was typed itself.
+pub fn typed(value: &str) -> bool {
+    let before = with(|c| drawn_from(c).zip(Some(c.session.suggestion.clone())));
     with(|c| {
         c.draft = value.to_owned();
         if !c.draft.is_empty() && c.took_suggestion.as_ref().is_none_or(|took| Some(took) != c.session.suggestion.as_ref()) {
@@ -1434,6 +1443,8 @@ pub fn typed(value: &str) {
     if with(|c| !c.draft.starts_with('/') && issues::active(&c.draft).is_some()) {
         issues::want();
     }
+    let after = with(|c| drawn_from(c).zip(Some(c.session.suggestion.clone())));
+    before.is_none() || before != after
 }
 
 /// Opens the usage or context dialog and reads what it shows: one request, from your click.

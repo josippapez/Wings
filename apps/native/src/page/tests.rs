@@ -280,6 +280,58 @@ fn a_page_that_gives_typed_text_back_late_does_not_undo_the_keys_typed_since() {
     settle(&app, &mut window, shows("Name=abcd."));
 }
 
+/// A page that, like Claude chat for most keys, keeps what it hears without drawing it, and draws what it has a while later.
+fn quiet_form() -> String {
+    struct Quiet {
+        name: String,
+        drawing: Option<u32>,
+    }
+    impl Quiet {
+        fn draw(&self, cx: &mut Cx<'_>) {
+            cx.render(&json!({ "id": 0, "type": "#root", "children": [{ "id": 1, "type": "Page", "children": [
+                { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [
+                    { "id": 3, "type": "TextInput", "props": { "label": "Name", "value": self.name, "onChange": "3:change" } },
+                    text(5, 6, format!("Name={}.", self.name)) ] }] }] }));
+        }
+    }
+    impl Guest for Quiet {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            self.draw(cx);
+        }
+        fn event(&mut self, cx: &mut Cx<'_>, _handler: &str, payload: &Value) {
+            self.name = payload["value"].as_str().unwrap_or_default().to_owned();
+            self.drawing.get_or_insert_with(|| cx.later(60));
+        }
+        fn timer(&mut self, cx: &mut Cx<'_>, id: u32) {
+            if self.drawing == Some(id) {
+                self.drawing = None;
+                self.draw(cx);
+            }
+        }
+    }
+    fake::source("page", || Box::new(Quiet { name: String::new(), drawing: None }))
+}
+
+#[test]
+fn a_page_that_answers_no_key_but_draws_later_with_the_text_it_heard_does_not_undo_the_keys_typed_since() {
+    let (app, mut window) = open(quiet_form());
+    settle(&app, &mut window, shows("Name=."));
+    window.update(|_, window, cx| window.focus_next(cx));
+    window.draw();
+    for key in ["a", "b", "c", "d", "e", "f"] {
+        window.simulate_input(key);
+        // The page draws what it has heard 60 ms after the first key it hasn't drawn, so some draws land mid-typing,
+        // behind the keys.
+        thread::sleep(Duration::from_millis(25));
+        app.run_until_parked();
+        window.draw();
+    }
+    settle(&app, &mut window, shows("Name=abcdef."));
+    // Later keys still land on the whole text: the field never went back to one the page drew earlier.
+    window.simulate_input("g");
+    settle(&app, &mut window, shows("Name=abcdefg."));
+}
+
 #[test]
 fn form_inputs_start_from_the_pages_text_stop_at_their_max_length_and_a_textarea_takes_enter() {
     let (app, mut window) = open(form());

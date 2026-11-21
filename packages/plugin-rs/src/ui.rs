@@ -109,6 +109,8 @@ impl Node {
 thread_local! {
     static HANDLERS: RefCell<HashMap<String, Handler>> = RefCell::new(HashMap::new());
     static FILL: Cell<bool> = const { Cell::new(false) };
+    /// A handler said the page is as it was (`unchanged`).
+    static UNCHANGED: Cell<bool> = const { Cell::new(false) };
     static PALETTE: RefCell<Option<Value>> = const { RefCell::new(None) };
 }
 
@@ -240,10 +242,29 @@ pub(crate) fn render(page: Vec<Node>) -> String {
     json!({ "id": 0, "type": "#root", "props": props, "children": children }).to_string()
 }
 
-pub(crate) fn dispatch(handler: &str, payload: Value) {
+/// Runs the handler `handler` names. True when it called `unchanged`, so the page needn't be built for it.
+pub(crate) fn dispatch(handler: &str, payload: Value) -> bool {
+    UNCHANGED.with(|flag| flag.set(false));
     if let Some(handler) = HANDLERS.with(|handlers| handlers.borrow().get(handler).cloned()) {
         handler(&payload);
     }
+    UNCHANGED.with(|flag| flag.replace(false))
+}
+
+/// The name of the handler whose name ends in `suffix`, for a test to send its event.
+#[cfg(test)]
+pub(crate) fn handler_named(suffix: &str) -> String {
+    HANDLERS.with(|handlers| handlers.borrow().keys().find(|name| name.ends_with(suffix)).cloned().expect("a handler"))
+}
+
+/// Called from an event handler: the page would be built exactly as it was before this event, so it isn't built, and
+/// nothing is compared or sent. The page is built as usual at the next turn that doesn't say so, from the state as it is
+/// then, so a change this event made that the page does show still arrives, a turn later. Say it only when sure: a
+/// handler that changed something drawn and called this leaves the screen behind until something else changes the page.
+/// A message box's `onChange` that only stores the text, when nothing drawn depends on it, is what this is for: the app
+/// shows the typed text itself, and building a long page for every key cost a core's fifth at eight keys a second.
+pub fn unchanged() {
+    UNCHANGED.with(|flag| flag.set(true));
 }
 
 // ---------- the components, as `wings-plugin-ui/native` writes them ----------

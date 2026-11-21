@@ -1014,7 +1014,11 @@ fn composer(c: &Chat) -> Node {
         .prop("autoFocus", true)
         .prop("value", c.draft.as_str())
         .prop("disabled", !open)
-        .on("onChange", |event| chat::typed(event["value"].as_str().unwrap_or_default()))
+        .on("onChange", |event| {
+            if !chat::typed(event["value"].as_str().unwrap_or_default()) {
+                wings_plugin::ui::unchanged();
+            }
+        })
         .on("onPasteImage", |event| chat::add_image(event["mediaType"].as_str().unwrap_or_default(), event["data"].as_str().unwrap_or_default()))
         .on("onKeyDown", |event| {
             let shift = event["shiftKey"] == true;
@@ -1794,6 +1798,36 @@ mod tests {
         chat::with(|c| c.session.suggestion = Some("commit it".into()));
         chat::typed("no, ");
         assert_eq!(chat::with(|c| c.session.suggestion.clone()), None);
+    }
+
+    #[test]
+    fn a_key_in_the_message_box_leaves_the_page_alone_unless_the_box_fills_or_empties_or_a_list_depends_on_it() {
+        chat::with(|c| {
+            c.state = chat::State::Running;
+            c.draft.clear();
+            c.session.suggestion = Some("run the tests".into());
+        });
+        // The first key fills the box: the suggestion goes and the send button turns on.
+        assert!(chat::typed("h"));
+        // Plain keys after that draw nothing the page doesn't already show.
+        for said in ["he", "hel", "hello", "hello w", "hello  "] {
+            assert!(!chat::typed(said), "{said:?}");
+        }
+        assert!(!chat::typed("hello world"), "a space ends no list");
+        // A leading `/` lists commands, an `@` files and a `#` issues, and each key in such a word changes the list.
+        assert!(chat::typed("/"));
+        assert!(chat::typed("/he"));
+        assert!(chat::typed("hello @sr"));
+        assert!(chat::typed("hello @src"));
+        assert!(chat::typed("see #1"));
+        // Leaving one draws the list away.
+        assert!(chat::typed("see "));
+        // Emptying the box brings the suggestion back; a box of spaces turns the send button off.
+        assert!(chat::typed(""));
+        assert!(chat::typed("x"));
+        assert!(chat::typed("  "));
+        assert!(!chat::typed("   "));
+        assert!(chat::typed("a"));
     }
 
     #[test]
