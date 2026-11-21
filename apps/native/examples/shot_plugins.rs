@@ -3417,6 +3417,8 @@ fn tasks(out: PathBuf) {
                 "may have been removed",
             ),
             ("settings", &module("settings"), None, Tab, &[], "Keep issues local"),
+            // The header's New issue opens the line to add one under the filters.
+            ("board-new", board, None, Tab, &["Board", "New issue"], "Cancel"),
         ],
     );
     // A project with no issues: the board's empty columns and the block's empty state.

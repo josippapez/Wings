@@ -7,6 +7,9 @@ description: Lays out and checks a Wings page (a plugin tab, view, section or bl
 
 A page change isn't done until you've looked at a render of it. Tests and type checks don't see layout.
 
+The design system, which control to pick and where it goes, is in [design-system.md](design-system.md). Read it before
+laying out a page.
+
 ## Layout rules
 
 Plugin pages are built with `wings_plugin::ui` (`packages/plugin-rs/src/ui.rs`). The app draws each node with its own controls, which carry the padding, spacing and theme, so a page only places them.

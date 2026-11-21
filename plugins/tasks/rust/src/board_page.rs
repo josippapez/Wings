@@ -20,7 +20,7 @@ use std::{cell::RefCell, future::Future, rc::Rc};
 use wings_plugin::{
     host,
     task::spawn,
-    ui::{Node, empty, loading, page, search_field, slot},
+    ui::{Node, checkbox, chips, empty, loading, search_field, slot},
 };
 
 /// How many cards a column of the board shows, and rows the list does: the app draws at most 5,000 nodes in a page, and a
@@ -279,30 +279,22 @@ fn search_index(store: &Store, version: u64) -> Rc<Index> {
 
 // ---------- the page ----------
 
-fn toolbar(title: &str, filters: Vec<Node>, actions: Option<Node>) -> Node {
-    let node = Node::new("Toolbar").child(Node::new("Slot").prop("name", "title").text(title));
-    let node = if filters.is_empty() { node } else { node.child(Node::new("Slot").prop("name", "children").children(filters)) };
-    match actions {
-        Some(actions) => node.child(slot("actions", actions)),
-        None => node,
-    }
-}
 
 fn view() -> Vec<Node> {
     let project = feed::project();
     let Some(project) = project else {
-        return vec![page(toolbar("Issues", vec![], None), [loading().text("Loading issues")])];
+        return vec![page(vec![header("", None)], [loading().text("Loading issues")])];
     };
     let Some(project) = project else {
-        return vec![page(toolbar("Issues", vec![], None), [empty("No project open", "Open a project to see its issues.")])];
+        return vec![page(vec![header("", None)], [empty("No project open", "Open a project to see its issues.")])];
     };
     let (store, read_error, version) = feed::with(|f| (f.store.clone(), f.error.clone(), f.version));
     if let (None, Some(error)) = (&store, &read_error) {
-        return vec![page(toolbar(&format!("Issues, {}", project.name), vec![], None), [empty("Couldn't read the issues", error)])];
+        return vec![page(vec![header(&project.name, None)], [empty("Couldn't read the issues", error)])];
     }
     let tab_ready = with(|p| p.folded.is_some());
     if !tab_ready {
-        return vec![page(toolbar(&format!("Issues, {}", project.name), vec![], None), [loading().text("Loading issues")])];
+        return vec![page(vec![header(&project.name, None)], [loading().text("Loading issues")])];
     }
     build(&project, store.as_deref(), version)
 }
@@ -321,17 +313,12 @@ fn build(project: &Project, store: Option<&Store>, version: u64) -> Vec<Node> {
     let count = |status: Status| all.map_or(0, |all| all.iter().filter(|i| i.status == status).count());
     let by_parent = has_parents && layout.by_parent && !layout.list;
 
-    let views = row("m")
-        .prop("wrap", true)
-        .child(wings_plugin::ui::chips("View", &[("board", "Board"), ("list", "List")], if layout.list { "list" } else { "board" }, move |value| pick(Layout { list: value == "list", ..layout })))
-        .child(wings_plugin::ui::chips("Sort", &Sort::OPTIONS, layout.sort.as_str(), move |value| pick(Layout { sort: Sort::parse(value).unwrap_or_default(), ..layout })))
-        .maybe(has_parents.then(|| wings_plugin::ui::chip("Group by parent", layout.by_parent, move || pick(Layout { by_parent: !layout.by_parent, ..layout }))))
-        .child(wings_plugin::ui::chip(format!("Show canceled ({})", count(Status::Canceled)), show_canceled, || with(|p| p.show_canceled = !p.show_canceled)));
-    let filters = match all {
-        Some(all) => vec![status_summary(all), search_field("Search issues", &query, |text| with(|p| p.query = text.to_owned())), views],
-        None => vec![],
-    };
-    let toolbar = toolbar(&format!("Issues, {}", project.name), filters, Some(add_issue::node()));
+    let search = all.map(|_| search_field("Search issues", &query, |text| with(|p| p.query = text.to_owned())));
+    let mut top = vec![header(&project.name, search)];
+    if let Some(all) = all {
+        top.push(filter_bar(layout, has_parents, show_canceled, count(Status::Canceled), all));
+    }
+    top.extend(add_issue::bar());
 
     let mut body: Vec<Node> = Vec::new();
     if let Some(error) = &error {
@@ -358,8 +345,51 @@ fn build(project: &Project, store: Option<&Store>, version: u64) -> Vec<Node> {
         _ => body.push(loading().text("Loading issues")),
     }
     let flush = all.is_some() && !layout.list;
-    let page = page(toolbar, body);
+    let page = page(top, body);
     vec![if flush { page.prop("flush", true) } else { page }]
+}
+
+/// How wide the header's search field is.
+const SEARCH_WIDTH: u32 = 220;
+
+/// A page whose `top` (the header and the bars under it) stays put over its `body`.
+fn page(top: Vec<Node>, body: impl IntoIterator<Item = Node>) -> Node {
+    Node::new("Page").child(Node::new("Slot").prop("name", "toolbar").children(top)).child(Node::new("Slot").prop("name", "body").children(body))
+}
+
+/// The tab's header, as Claude chat's: "Issues" strong with the project muted after it, and the search and New issue at
+/// the end.
+fn header(project: &str, search: Option<Node>) -> Node {
+    let title = row("m")
+        .prop("align", "center")
+        .child(Node::new("Text").prop("weight", "strong").text("Issues"))
+        .maybe((!project.is_empty()).then(|| muted(project).prop("size", "small").prop("weight", "normal").prop("truncate", true).prop("title", project)));
+    let actions = row("s")
+        .prop("align", "center")
+        .maybe(search.map(|search| stack("none").prop("width", SEARCH_WIDTH).child(search)))
+        .child(add_issue::button());
+    Node::new("Toolbar").child(slot("title", title)).child(slot("actions", actions))
+}
+
+/// How the issues are shown, under the header: the view and the order on tracks, what's left out as ticks, and the counts
+/// of the whole project at the end.
+fn filter_bar(layout: Layout, has_parents: bool, show_canceled: bool, canceled: usize, all: &[Issue]) -> Node {
+    let view = chips("View", &[("board", "Board"), ("list", "List")], if layout.list { "list" } else { "board" }, move |value| pick(Layout { list: value == "list", ..layout }))
+        .prop("segmented", true);
+    let sort = row("s")
+        .prop("align", "center")
+        .child(muted("Sort").prop("size", "small"))
+        .child(chips("Sort", &Sort::OPTIONS, layout.sort.as_str(), move |value| pick(Layout { sort: Sort::parse(value).unwrap_or_default(), ..layout })).prop("segmented", true));
+    let choices = row("l")
+        .prop("wrap", true)
+        .prop("align", "center")
+        .child(view)
+        .child(sort)
+        .maybe(has_parents.then(|| checkbox("Group by parent", layout.by_parent, move |on| pick(Layout { by_parent: on, ..layout }))))
+        .child(checkbox(format!("Show canceled ({canceled})"), show_canceled, |on| with(|p| p.show_canceled = on)));
+    Node::new("Bar")
+        .prop("edge", "bottom")
+        .child(row("m").prop("wrap", true).prop("align", "center").prop("justify", "between").child(choices).child(status_summary(all)))
 }
 
 fn by_parent_list(layout: Layout, has_parents: bool) -> bool {
@@ -481,3 +511,35 @@ pub fn start() {
     });
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn json(node: Node) -> String {
+        wings_plugin::ui::tree_json(node).to_string()
+    }
+
+    /// The header is the design system's: "Issues" strong and the project muted after it, never "Issues, web", with the
+    /// search at a fixed width and New issue as an icon button at the end.
+    #[test]
+    fn the_header_names_the_page_and_its_project_apart_with_search_and_new_issue_at_the_end() {
+        let header = wings_plugin::ui::tree_json(header("web", Some(search_field("Search issues", "", |_| {}))));
+        let text = header.to_string();
+        assert!(!text.contains("Issues, web"), "{text}");
+        assert!(text.contains(r#""weight":"strong""#) && text.contains(r#""tone":"muted""#), "{text}");
+        assert!(text.contains(&format!(r#""width":{SEARCH_WIDTH}"#)) && text.contains(r#""label":"New issue""#), "{text}");
+    }
+
+    /// How the issues are shown sits in a bar under the header: the view and the order on tracks, the rest as ticks.
+    #[test]
+    fn the_filter_bar_puts_view_and_sort_on_tracks_and_the_toggles_on_ticks() {
+        let bar = json(filter_bar(settings::start_layout("board"), true, false, 2, &[]));
+        assert!(bar.contains(r#""type":"Bar""#), "{bar}");
+        assert_eq!(bar.matches(r#""segmented":true"#).count(), 2, "{bar}");
+        assert_eq!(bar.matches(r#""type":"Checkbox""#).count(), 2, "{bar}");
+        assert!(bar.contains("Show canceled (2)") && bar.contains("Group by parent"), "{bar}");
+        // No parents: no Group by parent.
+        assert_eq!(json(filter_bar(settings::start_layout("board"), false, false, 0, &[])).matches(r#""type":"Checkbox""#).count(), 1);
+    }
+}

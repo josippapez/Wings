@@ -1092,16 +1092,24 @@ impl PageView {
         })
     }
 
-    /// Turns on the `Chip` that shows `label`, as a click on it would, unless it's on already. False when the page has
-    /// no such chip.
+    /// Turns on the `Chip` or the `Checkbox` that shows `label`, as a click on it would, unless it's on already, or presses
+    /// the icon `Button` named `label`. False when the page has no such chip, tick or button.
     #[cfg(feature = "test-support")]
     pub fn turn_on_chip(&self, label: &str) -> bool {
-        fn find<'a>(nodes: &'a [Node], label: &str) -> Option<&'a tree::Button> {
+        /// Whether it is on, and what a click sends: nothing for a chip, the new state for a tick.
+        fn find(nodes: &[Node], label: &str) -> Option<(bool, Option<String>, Option<serde_json::Value>)> {
             nodes.iter().find_map(|node| match node {
                 Node::Button(button)
                     if button.chip && plain_text(&button.children).starts_with(label) =>
                 {
-                    Some(button)
+                    Some((button.pressed, button.on_click.clone(), None))
+                }
+                Node::Checkbox(tick) if plain_text(&tick.children).starts_with(label) => {
+                    Some((tick.checked, tick.on_change.clone(), Some(serde_json::json!({ "checked": true }))))
+                }
+                // An icon button, by the name it is read out by, like a header's New issue.
+                Node::Button(button) if !button.chip && button.label.as_deref() == Some(label) => {
+                    Some((false, button.on_click.clone(), None))
                 }
                 other => other.parts().into_iter().find_map(|part| find(part, label)),
             })
@@ -1110,9 +1118,9 @@ impl PageView {
             .tree
             .as_ref()
             .and_then(|tree| find(&tree.children, label));
-        found.is_some_and(|chip| {
-            if let (false, Some(handler)) = (chip.pressed, &chip.on_click) {
-                self.act(handler, None);
+        found.is_some_and(|(on, handler, payload)| {
+            if let (false, Some(handler)) = (on, handler) {
+                self.act(&handler, payload.as_ref());
             }
             true
         })
