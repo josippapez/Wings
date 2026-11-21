@@ -39,7 +39,8 @@ pub(crate) const BUDGET: usize = 3_500;
 /// The side panel's width, while it is in the chat. It floats over the right of the tab and takes no width from the
 /// conversation, which stays centered in the whole tab. The column is 760 wide, drawn with 8 points of margin either side,
 /// so the panel sits beside it while the tab holds that and the panel (with its 12 points of padding) either side of the
-/// centre; narrower, it covers the conversation's right side, and Escape or a press outside puts it away.
+/// centre; narrower, it covers the conversation's right side down to the message box, and Escape or a press outside puts
+/// it away.
 const SIDE: u32 = 340;
 const SIDE_BELOW: u32 = COLUMN + 16 + 2 * (SIDE + 12);
 /// The widest the collapsed pill gets: the panel's own width. Past it the project and branch are cut.
@@ -70,12 +71,11 @@ fn chat_page(c: &Chat) -> Node {
     let body = crate::rail::watch(body, &rail, last);
     // The rail goes down to the checklist and the message box, not past them: it is laid over the conversation alone.
     let conversation = stack().prop("fill", true).prop("gap", "none").children(crate::rail::marks(c, &rail)).child(body);
-    let main: Vec<Node> = [conversation, composer(c)].into_iter().collect();
     // The session panel is a card on the right that the app leaves out of a narrow tab and that shows by default; only the
     // header's button puts it away and brings it back, also where it covers the conversation in a narrow tab. A panel left
     // out leaves its terminals out with it. In Wings' sidebar (`session_side.rs`) the conversation has the tab's width.
     let main: Vec<Node> = if c.side_in_wings {
-        main
+        vec![conversation, composer(c)]
     } else {
         let split = Node::new("Split")
             .prop("defaultSize", if side_shown(c) && side_railed(c) { rail_width(c) } else { SIDE })
@@ -83,9 +83,17 @@ fn chat_page(c: &Chat) -> Node {
             .prop("float", true)
             .prop("collapseBelow", SIDE_BELOW)
             .on("onNarrow", |payload| chat::set_narrow(payload["narrow"].as_bool().unwrap_or(false)));
-        vec![split
-            .child(Node::new("Slot").prop("name", "start").children(main))
-            .child(Node::new("Slot").prop("name", "end").children(if side_shown(c) { side(c) } else { Vec::new() }))]
+        // Where the panel covers the conversation, in a narrow tab, the message box is under the split, not in it: the
+        // panel ends above the box and scrolls when it is taller than that, so it never covers what you type, nor the
+        // box's buttons. In a wide tab it sits beside the column and reaches down beside the box.
+        let (start, under) = match c.narrow == Some(true) {
+            true => (vec![conversation], Some(composer(c))),
+            false => (vec![conversation, composer(c)], None),
+        };
+        let split = split
+            .child(Node::new("Slot").prop("name", "start").children(start))
+            .child(Node::new("Slot").prop("name", "end").children(if side_shown(c) { side(c) } else { Vec::new() }));
+        std::iter::once(split).chain(under).collect()
     };
     // No page toolbar: the tab and the project's header over it already name the place, so the card starts with a
     // header as a terminal pane's does. The dialogs, which the app draws over the whole page, and the past
@@ -1974,6 +1982,31 @@ mod tests {
         chat::set_side_rail(false);
         assert!(chat::with(|c| !side_railed(c) && page_text(c).contains("Open Changes")));
         chat::with(|c| c.side_rail = None);
+    }
+
+    /// Over a narrow tab the panel floated over the message box once it was taller than the conversation above it: the
+    /// box sits under the split there, so the panel ends above it. In a wide tab the box stays in the split, and the panel
+    /// beside the column reaches down beside it, as before.
+    #[test]
+    fn over_a_narrow_tab_the_panel_ends_above_the_message_box() {
+        wings_plugin::host::testing::answer(|_, _| Ok(serde_json::Value::Null));
+        fn split_of(tree: &serde_json::Value) -> Option<&serde_json::Value> {
+            if tree["type"] == "Split" {
+                return Some(tree);
+            }
+            tree["children"].as_array()?.iter().find_map(split_of)
+        }
+        chat::with(|c| {
+            c.side_in_wings = false;
+            c.side_open = true;
+            for (narrow, in_split) in [(Some(true), false), (Some(false), true), (None, true)] {
+                c.narrow = narrow;
+                let page = wings_plugin::ui::tree_json(chat_page(c));
+                let split = split_of(&page).expect("the split").to_string();
+                assert!(page.to_string().contains(r#""label":"Message""#));
+                assert_eq!(split.contains(r#""label":"Message""#), in_split, "narrow {narrow:?}");
+            }
+        });
     }
 
     #[test]
