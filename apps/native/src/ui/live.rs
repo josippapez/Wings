@@ -78,6 +78,11 @@ pub trait Draw: 'static {
     fn width(&self, _now: Duration, _style: &TextStyle, _window: &Window, _cx: &App) -> Option<Pixels> {
         None
     }
+    /// Where it is laid out now, in the window: its slot's place by default. Something that follows the pointer puts
+    /// itself by the pointer here, so a move of the pointer draws its layer at the next step and never the view.
+    fn place(&self, slot: gpui::Bounds<Pixels>, _window: &Window) -> gpui::Bounds<Pixels> {
+        slot
+    }
 }
 
 /// What a slot's piece last left it to draw, and the text style where it is.
@@ -97,6 +102,18 @@ thread_local! {
     /// The width a slot's view was last asked to make room for, by window, kind and name, in tenths of a pixel: a view
     /// is asked once per width, not at each step.
     static GREW: RefCell<HashMap<(WindowId, Kind, SharedString), i64>> = RefCell::default();
+}
+
+#[cfg(all(test, feature = "test-support"))]
+thread_local! {
+    /// Where each slot was last laid out, by name, for tests of what follows the pointer.
+    static PLACED: RefCell<HashMap<SharedString, gpui::Bounds<Pixels>>> = RefCell::default();
+}
+
+/// Where the slot `name` was last laid out by its layer, in the window.
+#[cfg(all(test, feature = "test-support"))]
+pub(crate) fn placed(name: &str) -> Option<gpui::Bounds<Pixels>> {
+    PLACED.with_borrow(|placed| placed.get(name).copied())
 }
 
 /// When the clock started: the first time something on it was drawn.
@@ -217,9 +234,12 @@ fn lay_out(id: WindowId, kind: Kind, window: &mut Window, cx: &mut App) -> (Dura
                 }
             }
             let style = refinement(&style);
+            let place = draw.place(slot.bounds, window);
+            #[cfg(all(test, feature = "test-support"))]
+            PLACED.with_borrow_mut(|placed| placed.insert(name.clone(), place));
             window.with_text_style(Some(style.clone()), |window| {
                 window.with_content_mask(Some(slot.mask), |window| {
-                    element.prepaint_as_root(slot.bounds.origin, slot.bounds.size.into(), window, cx)
+                    element.prepaint_as_root(place.origin, place.size.into(), window, cx)
                 })
             });
             let pace = draw.pace(window, cx);

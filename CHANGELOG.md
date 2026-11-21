@@ -2,6 +2,13 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.81 · 2026-11-21
+
+- **The hover cue follows the pointer**: the bar under the pointer while a card is on its way moves with the pointer instead of staying where it first came onto the row.
+- **Every Claude chat checkbox has its example**: each fold under "What starts open" shows what it opens again, and turning on Remote Control in new chats shows the message box's Remote button.
+- **Per-account limits wrap cleanly**: each Pause and Stop label stays beside its menu in a narrow window.
+- **Claude chat 0.43.2**: the above.
+
 ## 0.2.80 · 2026-11-21
 
 - **Settings rows fit at any width**: a control too wide to sit beside its setting's name goes under it instead of squeezing the name to a letter a line. Issues' settings were unreadable in a narrow window.

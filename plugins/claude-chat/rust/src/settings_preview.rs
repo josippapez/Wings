@@ -1,7 +1,7 @@
 //! Small mocks of the chat the Settings page draws beside its choices, so a choice shows what it does. They are made from
 //! the same plain nodes the page uses, with made-up data, and are not the chat's own views (those belong to the chat's frame).
 
-use wings_plugin::ui::{Node, card, disclosure, gauge, muted, row, stack, text};
+use wings_plugin::ui::{Node, card, disclosure, gauge, icon, muted, row, stack, text};
 
 use crate::{folds::Kind, view_mode::Mode};
 
@@ -133,6 +133,29 @@ pub fn sample(scale: f32) -> Node {
         .child(text("The parser now keeps the trailing newline, and the test passes."))
         .child(muted("Edited src/parser.rs"));
     Node::new("Scroll").prop("textScale", scale as f64).child(lines)
+}
+
+/// Lucide's `smartphone`, as on the chat's Remote Control button (`view.rs`).
+const PHONE: [&str; 2] = ["M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z", "M12 18h.01"];
+
+/// The foot of a new chat's message box: its Remote Control button lit and named when the chat starts with it on, else
+/// the quiet icon you press to turn it on.
+pub fn remote(on: bool) -> Node {
+    let glyph = icon(24, 2.0, &PHONE).prop("size", 14);
+    let button = if on {
+        Node::new("Button").prop("variant", "secondary").prop("size", "sm").prop("label", "Remote Control").child(glyph).child(text("Remote"))
+    } else {
+        Node::new("Button").prop("variant", "ghost").prop("size", "icon-sm").prop("label", "Remote Control").child(glyph)
+    };
+    let said = if on { "On as the chat starts" } else { "Off until you press it" };
+    row()
+        .prop("gap", "m")
+        .prop("align", "center")
+        .key(format!("remote-{on}"))
+        .child(small("Opus 5.5 · High"))
+        .child(small("Auto"))
+        .child(button)
+        .child(small(said))
 }
 
 /// A gauge filled to `percent`, amber for where Claude pauses and red for where a chat stops.

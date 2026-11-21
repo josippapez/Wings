@@ -67,13 +67,13 @@ fn per_account(accounts: &[AccountChoice]) -> Option<Node> {
     let (pause, stop) = (shared_label(prefs::pause_near_limit().get(), &prefs::pause_at().get()), shared_label(prefs::stop_near_limit().get(), &prefs::stop_at().get()));
     let rows = accounts.iter().map(|account| {
         let name = account_label(account);
+        // Each label stays with its menu when the two wrap: "Stop" sat at the end of one line with its menu on the next.
+        let labelled = |label: &str, menu: Node| row().prop("gap", "s").prop("align", "center").child(muted(label).prop("size", "small")).child(menu);
         let controls = row()
-            .prop("gap", "s")
+            .prop("gap", "m")
             .prop("wrap", true)
-            .child(muted("Pause").prop("size", "small"))
-            .child(account_share(account, prefs::Limit::Pause, &name, &pause))
-            .child(muted("Stop").prop("size", "small"))
-            .child(account_share(account, prefs::Limit::Stop, &name, &stop));
+            .child(labelled("Pause", account_share(account, prefs::Limit::Pause, &name, &pause)))
+            .child(labelled("Stop", account_share(account, prefs::Limit::Stop, &name, &stop)));
         entry(Entry { lead: None, title: text(&name).prop("weight", "medium"), detail: Some(controls), trailing: None }).key(format!("account-{}", account.name.as_deref().unwrap_or("default")))
     });
     Some(together([about("Per account", "Each account's own share, or off, where it differs from the ones above. Same as above follows them."), stack().children(rows)]))
@@ -136,11 +136,6 @@ fn kind_text(kind: Kind, label: &'static str) -> (&'static str, &'static str) {
     }
 }
 
-/// Whether the session pane shows the kind's fold.
-fn in_session(kind: Kind) -> bool {
-    matches!(kind, Kind::Steps | Kind::Command | Kind::Read | Kind::Edit | Kind::Thought)
-}
-
 /// The mock session, as the view options are now.
 fn session_now() -> Node {
     let mode = Mode::of(prefs::detailed().get(), prefs::thinking().get());
@@ -177,8 +172,9 @@ fn choices() -> Node {
         let (label, detail) = kind_text(kind, label);
         let open = prefs::opens(kind).get();
         let tick = toggle(checkbox(label, open, move |on| drop(prefs::opens(kind).set(on))).key(key), detail);
-        // The session shows these four, and the thoughts, in Verbose: a preview of each would say it twice.
-        starts.push(if in_session(kind) { tick } else { together([tick, preview(settings_preview::kind(kind, open))]) });
+        // Every tick has its own example under it, though the session beside them shows some in Verbose: the example is
+        // what the tick itself changes, in any view mode.
+        starts.push(together([tick, preview(settings_preview::kind(kind, open))]));
         if kind == Kind::Summary {
             let open = !prefs::fold_reports().get();
             starts.push(together([
@@ -243,10 +239,13 @@ fn choices() -> Node {
         ))
         .child(group(
             "Remote Control",
-            [toggle(
-                checkbox("Turn on Remote Control in every new chat", prefs::remote_on_start().get(), |on| drop(prefs::remote_on_start().set(on))).key("remote-on-start"),
-                "Each new chat turns on Remote Control as it starts, so you can follow and answer it on claude.ai or in the Claude app. The button by the model menu still turns it off for that chat.",
-            )],
+            [together([
+                toggle(
+                    checkbox("Turn on Remote Control in every new chat", prefs::remote_on_start().get(), |on| drop(prefs::remote_on_start().set(on))).key("remote-on-start"),
+                    "Each new chat turns on Remote Control as it starts, so you can follow and answer it on claude.ai or in the Claude app. The button by the model menu still turns it off for that chat.",
+                ),
+                preview(settings_preview::remote(prefs::remote_on_start().get())),
+            ])],
         ))
         .child(group(
             "Appearance",
@@ -370,6 +369,44 @@ mod tests {
         assert!(page.contains("What starts open") && page.contains("Every view mode"));
     }
 
+    /// Every tick on the page has an example card in its own row, showing what it changes.
+    #[test]
+    fn every_checkbox_has_an_example_of_what_it_changes() {
+        fn count(node: &serde_json::Value, kind: &str, out: &mut usize) {
+            if node["type"] == kind && node["props"]["variant"] != "rows" {
+                *out += 1;
+            }
+            for child in node["children"].as_array().into_iter().flatten() {
+                count(child, kind, out);
+            }
+        }
+        fn rows<'a>(node: &'a serde_json::Value, out: &mut Vec<&'a serde_json::Value>) {
+            if node["type"] == "Card" && node["props"]["variant"] == "rows" {
+                out.extend(node["children"].as_array().into_iter().flatten());
+                return;
+            }
+            for child in node["children"].as_array().into_iter().flatten() {
+                rows(child, out);
+            }
+        }
+        let page = wings_plugin::ui::tree_json(stack().children(view()));
+        let mut all = Vec::new();
+        rows(&page, &mut all);
+        let mut ticks_seen = 0;
+        for row in all {
+            let (mut ticks, mut examples) = (0, 0);
+            count(row, "Checkbox", &mut ticks);
+            count(row, "Card", &mut examples);
+            ticks_seen += ticks;
+            assert!(examples >= ticks, "a tick without its example: {row}");
+        }
+        // The fold kinds, subagent reports, pause, stop and Remote Control.
+        assert_eq!(ticks_seen, KINDS.len() + 4);
+        // Remote Control's example shows the lit button only when it starts on.
+        let json = |on| wings_plugin::ui::tree_json(settings_preview::remote(on)).to_string();
+        assert!(json(true).contains("\"Remote\"") && !json(false).contains("\"Remote\""));
+    }
+
     #[test]
     fn the_report_tick_is_open_when_ticked_and_keeps_the_fold_setting_as_it_was() {
         // Folding is off by default, so the tick starts ticked.
@@ -393,6 +430,20 @@ mod tests {
         // Pause is on by default and stop is off, and "Same as above" says what each follows.
         assert!(rows.contains("Same as above (90%)") && rows.contains("Same as above (off)"), "{rows}");
         assert!(rows.contains("\"Off\""), "{rows}");
+        // Each label sits in one row with its menu, so they wrap as one.
+        fn pairs(node: &serde_json::Value, out: &mut Vec<String>) {
+            let children = node["children"].as_array().cloned().unwrap_or_default();
+            if node["type"] == "Row" && children.len() == 2 && children[1]["type"] == "Stack" && children[1].to_string().contains("\"Select\"") {
+                out.push(children[0].to_string());
+            }
+            for child in &children {
+                pairs(child, out);
+            }
+        }
+        let mut labels = Vec::new();
+        pairs(&wings_plugin::ui::tree_json(per_account(&[account(None), account(Some("work"))]).unwrap()), &mut labels);
+        assert_eq!(labels.iter().filter(|label| label.contains("Pause")).count(), 2, "{labels:?}");
+        assert_eq!(labels.iter().filter(|label| label.contains("Stop")).count(), 2, "{labels:?}");
     }
 
     #[test]

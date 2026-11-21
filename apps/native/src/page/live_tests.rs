@@ -239,3 +239,39 @@ fn the_cue_sits_below_the_pointer_and_outside_a_scrolls_clip() {
     let mask = window.update(|_, window, _| live::mask_of(Kind::Progress, slot.mask.clone(), window));
     assert_eq!(mask.bounds.intersect(&slot.bounds), slot.bounds, "the layer clips the cue: {:?}", mask.bounds);
 }
+
+/// While the card waits, the cue's bar follows the pointer along what the card is for, at the layer's steps, and the
+/// page never draws for it. It stayed where the pointer first came onto the trigger.
+#[test]
+fn the_cue_follows_the_pointer_without_drawing_its_page() {
+    let (app, mut window) = open_tab(hover_card_node());
+    window.simulate_mouse_move(gpui::point(gpui::px(400.0), gpui::px(280.0)));
+    app.run_until_parked();
+    window.draw();
+    app.advance_clock(Duration::from_secs(2));
+    app.run_until_parked();
+    window.draw();
+    window.simulate_mouse_move(gpui::point(gpui::px(12.0), gpui::px(12.0)));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !window.read(|tab, cx| tab.page.read(cx).hover_card_waiting(5)) {
+        assert!(Instant::now() < deadline, "the pointer on the trigger never started the wait");
+        app.run_until_parked();
+        window.draw();
+        thread::sleep(Duration::from_millis(5));
+    }
+    app.run_until_parked();
+    window.draw();
+    let bar = || live::placed("hover-cue-5").expect("the cue was laid out");
+    assert_eq!(bar().center().x, gpui::px(12.0), "the cue starts under the pointer");
+    let pages = window.read(|tab, cx| tab.page.read(cx).renders());
+    // Along the trigger's line of text, still on it.
+    window.simulate_mouse_move(gpui::point(gpui::px(70.0), gpui::px(14.0)));
+    for _ in 0..3 {
+        app.advance_clock(SPIN_STEP);
+        app.run_until_parked();
+    }
+    assert!(window.read(|tab, cx| tab.page.read(cx).hover_card_waiting(5)), "the move left the trigger");
+    assert_eq!(bar().center().x, gpui::px(70.0), "the cue stayed where the pointer came on");
+    assert_eq!(bar().origin.y, gpui::px(14.0 + 28.0), "the cue is under the pointer");
+    assert_eq!(window.read(|tab, cx| tab.page.read(cx).renders()) - pages, 0, "the page drew for the cue's move");
+}

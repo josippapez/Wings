@@ -3,7 +3,7 @@
 use super::*;
 use crate::ui::behaviors::popup;
 use crate::ui::{hover_cue, live};
-use gpui::{Bounds, Point, canvas};
+use gpui::{Bounds, canvas};
 use std::time::Duration;
 
 /// The room between what the card is for and the card, which the pointer crosses without the card going away.
@@ -14,18 +14,12 @@ const GAP: f32 = 6.0;
 /// the desktop's tooltips wait 0.3 s, which is what opened a card for every row passed over.
 pub(crate) const OPEN_DELAY: Duration = Duration::from_millis(600);
 
-/// How far under the pointer's hot spot the cue's bar sits: clear of the arrow, which is about 20 pt tall. Over the
-/// hot spot by the same distance when there is no room below in the window.
-const CUE_BELOW: f32 = 28.0;
-
-/// The pointer is waiting on a card to open: where it was when it came onto what the card is for (in the window), and
-/// when on the live clock.
+/// The pointer is waiting on a card to open: where the cue's bar was when the pointer came onto what the card is for (in
+/// the window; the layer then keeps it under the pointer), and when on the live clock.
 #[derive(Clone, Copy)]
 struct Waiting {
-    at: Point<Pixels>,
+    bar: Bounds<Pixels>,
     started: Duration,
-    /// There was no room below the pointer in the window, so the cue sits above it.
-    above: bool,
 }
 
 #[derive(Default)]
@@ -78,14 +72,13 @@ impl PageView {
             // fills would draw the page at every step. Without one the delay still applies and the cue is left out.
             .when_some(waiting.filter(|_| self.spin_in_layer.get()), |el, waiting| {
                 let (fill, track) = (theme::palette().working << 8 | 0xff, theme::palette().muted_foreground << 8 | 0x59);
-                // The layer for progress bars draws it unclipped, so no scrolling list cuts it off.
-                let top = waiting.at.y - bounds.origin.y
-                    + if waiting.above { -px(CUE_BELOW + hover_cue::HEIGHT) } else { px(CUE_BELOW) };
+                // The layer for progress bars draws it unclipped, so no scrolling list cuts it off, and under the pointer
+                // as it moves: the slot is only where it started.
                 el.child(
                     div()
                         .absolute()
-                        .left(waiting.at.x - bounds.origin.x - px(hover_cue::WIDTH / 2.0))
-                        .top(top)
+                        .left(waiting.bar.origin.x - bounds.origin.x)
+                        .top(waiting.bar.origin.y - bounds.origin.y)
                         .w(px(hover_cue::WIDTH))
                         .h(px(hover_cue::HEIGHT))
                         .child(hover_cue::hover_cue_slot(format!("hover-cue-{id}"), waiting.started, OPEN_DELAY, fill, track)),
@@ -149,11 +142,8 @@ impl PageView {
                     notify = true;
                 } else {
                     state.waits += 1;
-                    state.waiting = Some({
-                        let at = window.mouse_position();
-                        let room = window.viewport_size().height - at.y;
-                        Waiting { at, started: live::clock(cx), above: room < px(CUE_BELOW + hover_cue::HEIGHT + 8.0) }
-                    });
+                    let bar = hover_cue::bar_at(window.mouse_position(), window.viewport_size().height);
+                    state.waiting = Some(Waiting { bar, started: live::clock(cx) });
                     wait = Some(state.waits);
                     notify = true;
                 }
