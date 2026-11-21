@@ -4613,3 +4613,45 @@ fn a_spinner_in_a_right_panel_page_turns_without_drawing_the_page_again() {
     let renders = window.read(|_, cx| page.read(cx).renders()) - before;
     assert_eq!(renders, 0, "the page drew itself {renders} times in 30 steps of its spinner");
 }
+
+/// The command palette sits in the middle of the window across, whatever the sidebars take, and its full-height
+/// panel is in the middle of it down, its top staying put as the list narrows.
+#[test]
+fn the_command_palette_is_centred_in_the_window() {
+    let data = Data::temp();
+    install_sider(&data);
+    for height in [640.0, 900.0] {
+        let (app, mut window) = open_sized(Some(size(px(1000.0), px(height))), |config| {
+            config.plugins = Some(data.paths());
+        });
+        window.update(|_, window, _| window.activate_window());
+        window.draw();
+        let panel = |window: &mut TestAppWindow<Workspace>| {
+            window.draw();
+            crate::ui::spot_at("palette").expect("the palette is drawn")
+        };
+        let check = |window: &mut TestAppWindow<Workspace>, what: &str| {
+            press(window, "k");
+            let full = panel(window);
+            let across = full.center().x.as_f32();
+            let down = full.center().y.as_f32();
+            assert!((across - 500.0).abs() <= 1.0, "{what}: across {across}");
+            assert!((down - height / 2.0).abs() <= 1.0, "{what} at {height}: down {down}, middle {}", height / 2.0);
+            window.simulate_input("zzzz");
+            let narrowed = panel(window);
+            assert!(narrowed.size.height < full.size.height, "{what}: the list did not narrow");
+            assert_eq!(narrowed.origin.y, full.origin.y, "{what}: the top moved");
+            window.simulate_keystroke("escape");
+            window.draw();
+        };
+        check(&mut window, "no sidebars");
+        window.update(|w, _, cx| {
+            w.sidebar = true;
+            w.side.width = 300.0;
+            cx.notify();
+        });
+        check(&mut window, "left sidebar");
+        open_side(&app, &mut window);
+        check(&mut window, "both sidebars");
+    }
+}

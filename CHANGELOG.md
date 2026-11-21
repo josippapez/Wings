@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.78 · 2026-11-21
+
+- **The command palette sits in the middle**: it's centred top to bottom in the window, and its top stays put while you type and the list shrinks.
+- **Claude chat 0.42.1**: Settings shows what each fold checkbox opens, with a preview that follows the tick, in one "What starts open" list that now includes subagent reports.
+
 ## 0.2.77 · 2026-11-21
 
 - **Side panels scroll to the end**: a short list inside the panel no longer catches the wheel, so the panel scrolls past it without nudging the list first.

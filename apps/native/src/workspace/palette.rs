@@ -43,6 +43,22 @@ const SESSION_DEBOUNCE: Duration = Duration::from_millis(150);
 /// The desktop's `sm:max-w-xl`.
 const WIDTH: f32 = 576.0;
 
+/// The search line's and the key hints' heights.
+const SEARCH_HEIGHT: f32 = 44.0;
+const HINTS_HEIGHT: f32 = 36.0;
+
+/// The tallest the list gets in a window `height` tall.
+fn list_max(height: f32) -> f32 {
+    (height * 0.5).min(380.0)
+}
+
+/// Where the palette's top edge is in a window `height` tall: the middle of the panel at its full height is the
+/// window's middle, so it stays put as the list shrinks while you type. At least 16 points from the top.
+fn top(height: f32) -> f32 {
+    let full = SEARCH_HEIGHT + list_max(height) + HINTS_HEIGHT;
+    ((height - full) / 2.0).max(16.0)
+}
+
 /// What choosing a line does.
 #[derive(Clone)]
 pub(super) enum Run {
@@ -612,7 +628,7 @@ impl Workspace {
             .id("palette-list")
             .role(Role::ListBox)
             .aria_label("Results")
-            .max_h(px((f32::from(height) * 0.5).min(380.0)))
+            .max_h(px(list_max(f32::from(height))))
             .overflow_y_scroll()
             .track_scroll(&palette.scroll)
             .p(px(6.0))
@@ -629,7 +645,7 @@ impl Workspace {
             })
             .children(rows);
         let search = div()
-            .h(px(44.0))
+            .h(px(SEARCH_HEIGHT))
             .flex_none()
             .flex()
             .items_center()
@@ -650,8 +666,8 @@ impl Workspace {
             .flex()
             .items_center()
             .gap(px(12.0))
+            .h(px(HINTS_HEIGHT))
             .px(px(12.0))
-            .py(px(8.0))
             .border_t_1()
             .border_color(rgba(theme::BORDER))
             .text_size(px(11.0))
@@ -671,7 +687,7 @@ impl Workspace {
         Some(
             backdrop
                 .items_start()
-                .pt(px(f32::from(height) * 0.16))
+                .pt(px(top(f32::from(height))))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _, window, cx| this.close_palette(window, cx)),
@@ -695,7 +711,8 @@ impl Workspace {
                         }))
                         .child(search)
                         .child(list)
-                        .child(hints),
+                        .child(hints)
+                        .children(ui::spot(|| "palette".into())),
                 ))
                 .into_any_element(),
         )

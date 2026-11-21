@@ -2767,7 +2767,7 @@ esac"##,
     }
     // The page in Wings Settings, with a mode, Detailed and Large text picked.
     if only.as_deref().is_none_or(|only| only == "settings") {
-        let settings = host_over("fixture-storage-claude-chat-settings", &[("default-mode", json!("auto")), ("detailed-output", json!(true)), ("open-command", json!(false)), ("open-thought", json!(false)), ("text-size", json!("large")), ("diff-split", json!(true)), ("stop-near-limit", json!(true)), ("pause-at", json!("80")), ("stop-at", json!("95")), ("account-at", json!({ "work": { "pause": "off", "stop": "90" } })), ("session-panel", json!("sidebar"))]);
+        let settings = host_over("fixture-storage-claude-chat-settings", &[("default-mode", json!("auto")), ("detailed-output", json!(true)), ("open-command", json!(false)), ("open-thought", json!(false)), ("open-summary", json!(false)), ("fold-reports", json!(true)), ("text-size", json!("large")), ("diff-split", json!(true)), ("stop-near-limit", json!(true)), ("pause-at", json!("80")), ("stop-at", json!("95")), ("account-at", json!({ "work": { "pause": "off", "stop": "90" } })), ("session-panel", json!("sidebar"))]);
         let page = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/claude-chat/dist/native/settings.wasm");
         let page = page.canonicalize().expect("the claude-chat settings page is built, in plugins/");
         wings_native::page::runtime::wasm::compile_now(&page.to_string_lossy()).unwrap();
@@ -2785,7 +2785,19 @@ esac"##,
             }
             wait(&mut cx, window, Duration::from_millis(300));
             save(&mut cx, window, out.join(format!("claude-chat-settings-{width}.png")));
-            // The page is longer than the window: the same page scrolled to its foot, and with Thinking picked.
+            // The page is longer than the window: a window's height at a time down to the fold rows, then its foot, and
+            // with Thinking picked.
+            for step in 1..=4 {
+                cx.simulate_event(window, gpui::ScrollEvent {
+                    position: point(px(width / 2.0), px(300.0)),
+                    delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-1100.0))),
+                    modifiers: gpui::Modifiers::default(),
+                    touch_phase: gpui::TouchPhase::Moved,
+                    source: Default::default(),
+                });
+                wait(&mut cx, window, Duration::from_millis(300));
+                save(&mut cx, window, out.join(format!("claude-chat-settings-{width}-step{step}.png")));
+            }
             cx.simulate_event(window, gpui::ScrollEvent {
                 position: point(px(width / 2.0), px(300.0)),
                 delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-100_000.0))),
