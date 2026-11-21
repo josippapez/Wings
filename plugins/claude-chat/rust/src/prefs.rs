@@ -68,6 +68,9 @@ impl Limit {
     }
 }
 
+/// An account's own value that turns the limit off for it, whatever the shared one is.
+pub const OFF: &str = "off";
+
 pub type AccountShares = std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>;
 
 fn account_shares_of(stored: &Value) -> Option<AccountShares> {
@@ -76,7 +79,7 @@ fn account_shares_of(stored: &Value) -> Option<AccountShares> {
         accounts
             .iter()
             .map(|(name, shares)| {
-                let valid = shares.as_object().into_iter().flatten().filter_map(|(key, share)| Some((key.clone(), share_of(share)?))).collect();
+                let valid = shares.as_object().into_iter().flatten().filter_map(|(key, share)| Some((key.clone(), share_of(share).or_else(|| (share.as_str() == Some(OFF)).then(|| OFF.to_owned()))?))).collect();
                 (name.clone(), valid)
             })
             .collect(),
@@ -92,19 +95,23 @@ pub fn own_share(shares: &AccountShares, account: Option<&str>, limit: Limit) ->
     shares.get(account.unwrap_or_default())?.get(limit.key()).cloned()
 }
 
-/// The percent of `limit` an account is held to: its own share when picked, else the shared one (`shared`, a value of
-/// `pause_at()` or `stop_at()`).
-pub fn percent_for(shares: &AccountShares, account: Option<&str>, limit: Limit, shared: &str) -> f64 {
-    percent(&own_share(shares, account, limit).unwrap_or_else(|| shared.to_owned()))
+/// The percent of `limit` an account is held to, or None when it is off for it: its own pick when there is one ("off", or a
+/// share), else the shared one (`shared_on`, the shared checkbox, and `shared`, a value of `pause_at()` or `stop_at()`).
+pub fn percent_for(shares: &AccountShares, account: Option<&str>, limit: Limit, shared_on: bool, shared: &str) -> Option<f64> {
+    match own_share(shares, account, limit) {
+        Some(own) if own == OFF => None,
+        Some(own) => Some(percent(&own)),
+        None => shared_on.then(|| percent(shared)),
+    }
 }
 
 /// `percent_for` from what is kept.
-pub fn pause_percent(account: Option<&str>) -> f64 {
-    percent_for(&account_at().get(), account, Limit::Pause, &pause_at().get())
+pub fn pause_percent(account: Option<&str>) -> Option<f64> {
+    percent_for(&account_at().get(), account, Limit::Pause, pause_near_limit().get(), &pause_at().get())
 }
 
-pub fn stop_percent(account: Option<&str>) -> f64 {
-    percent_for(&account_at().get(), account, Limit::Stop, &stop_at().get())
+pub fn stop_percent(account: Option<&str>) -> Option<f64> {
+    percent_for(&account_at().get(), account, Limit::Stop, stop_near_limit().get(), &stop_at().get())
 }
 
 /// Keeps `share` as `account`'s own for `limit`, or None to follow the shared one again.
@@ -383,21 +390,38 @@ mod tests {
     #[test]
     fn an_account_follows_the_shared_share_unless_it_has_its_own() {
         let mut shares = AccountShares::new();
-        assert_eq!(percent_for(&shares, Some("work"), Limit::Pause, "90"), 90.0);
+        assert_eq!(percent_for(&shares, Some("work"), Limit::Pause, true, "90"), Some(90.0));
         shares.entry("work".to_owned()).or_default().insert("pause".to_owned(), "70".to_owned());
         shares.entry(String::new()).or_default().insert("stop".to_owned(), "100".to_owned());
         // The account's own wins for it, and only for the limit it set.
-        assert_eq!(percent_for(&shares, Some("work"), Limit::Pause, "90"), 70.0);
-        assert_eq!(percent_for(&shares, Some("work"), Limit::Stop, "95"), 95.0);
+        assert_eq!(percent_for(&shares, Some("work"), Limit::Pause, true, "90"), Some(70.0));
+        assert_eq!(percent_for(&shares, Some("work"), Limit::Stop, true, "95"), Some(95.0));
         // Other accounts fall back to the shared one; the default account is kept under "".
-        assert_eq!(percent_for(&shares, Some("home"), Limit::Pause, "90"), 90.0);
-        assert_eq!(percent_for(&shares, None, Limit::Stop, "80"), 100.0);
-        assert_eq!(percent_for(&shares, None, Limit::Pause, "80"), 80.0);
-        // What is kept reads back, dropping shares that are not one of the listed.
+        assert_eq!(percent_for(&shares, Some("home"), Limit::Pause, true, "90"), Some(90.0));
+        assert_eq!(percent_for(&shares, None, Limit::Stop, true, "80"), Some(100.0));
+        assert_eq!(percent_for(&shares, None, Limit::Pause, true, "80"), Some(80.0));
+        // What is kept reads back, dropping shares that are not one of the listed, and keeping "off".
         let read = account_shares_of(&json!({ "work": { "pause": "70", "stop": "55" }, "": 3 })).unwrap();
         assert_eq!(own_share(&read, Some("work"), Limit::Pause).as_deref(), Some("70"));
         assert_eq!(own_share(&read, Some("work"), Limit::Stop), None);
         assert_eq!(account_shares_of(&json!("x")), None);
+        let read = account_shares_of(&json!({ "work": { "pause": "off" } })).unwrap();
+        assert_eq!(own_share(&read, Some("work"), Limit::Pause).as_deref(), Some("off"));
+    }
+
+    #[test]
+    fn an_account_can_turn_a_limit_off_or_on_whatever_the_shared_one_is() {
+        let mut shares = AccountShares::new();
+        // Following: the shared one's on/off and percent, both ways.
+        assert_eq!(percent_for(&shares, Some("work"), Limit::Pause, true, "95"), Some(95.0));
+        assert_eq!(percent_for(&shares, Some("work"), Limit::Pause, false, "95"), None);
+        shares.entry("work".to_owned()).or_default().insert("pause".to_owned(), OFF.to_owned());
+        shares.entry("work".to_owned()).or_default().insert("stop".to_owned(), "80".to_owned());
+        // Off wins over the shared one being on; a percent wins over it being off.
+        assert_eq!(percent_for(&shares, Some("work"), Limit::Pause, true, "95"), None);
+        assert_eq!(percent_for(&shares, Some("work"), Limit::Stop, false, "95"), Some(80.0));
+        // Another account still follows.
+        assert_eq!(percent_for(&shares, Some("home"), Limit::Pause, true, "95"), Some(95.0));
     }
 
     #[test]

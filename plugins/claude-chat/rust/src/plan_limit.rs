@@ -97,9 +97,6 @@ mod hooks {
     }
 
     async fn say(input: serde_json::Value, context: serde_json::Value, tool_call: bool) -> Option<Say> {
-        if !prefs::pause_near_limit().get() {
-            return None;
-        }
         let session = input["session_id"].as_str()?.to_owned();
         let agent = (session.clone(), input["agent_id"].as_str().unwrap_or_default().to_owned());
         let heard = host::statusline().await.ok()?;
@@ -108,7 +105,7 @@ mod hooks {
             format!("{:02}:{:02}", local.hour, local.minute)
         };
         let account = account_of(&heard, &session, &context["session"]);
-        let at = prefs::pause_percent(account.as_str());
+        let at = prefs::pause_percent(account.as_str())?;
         let Some((window, level, text)) = note(&heard, &account, at, host::now() / 1000.0, clock) else {
             TOLD.with(|told| told.borrow_mut().remove(&agent));
             return None;
@@ -207,16 +204,16 @@ mod tests {
         let heard = heard(75.0, 50.0);
         let near = |session: &str, caller: Value| {
             let account = account_of(&heard, session, &caller);
-            let at = percent_for(&shares, account.as_str(), Limit::Pause, "90");
+            let at = percent_for(&shares, account.as_str(), Limit::Pause, true, "90").unwrap();
             note(&heard, &account, at, 1000.0, clock).map(|(_, level, _)| level)
         };
         // Work's own 70% is passed at 75%; the shared 90% is not, for the sessions that follow it.
         assert_eq!(near("c1", json!({ "account": "work" })), Some(Level::Near));
-        assert_eq!(percent_for(&shares, Some("work"), Limit::Pause, "90"), 70.0);
-        assert_eq!(percent_for(&shares, Some("other"), Limit::Pause, "90"), 90.0);
-        assert_eq!(percent_for(&shares, None, Limit::Pause, "90"), 90.0);
+        assert_eq!(percent_for(&shares, Some("work"), Limit::Pause, true, "90"), Some(70.0));
+        assert_eq!(percent_for(&shares, Some("other"), Limit::Pause, true, "90"), Some(90.0));
+        assert_eq!(percent_for(&shares, None, Limit::Pause, true, "90"), Some(90.0));
         // A chat's stop reads the stop share of its account, not the pause one.
-        let stop = |account: Option<&str>| stop_for(&[("5h", 80, Some(5.0))], &[], percent_for(&shares, account, Limit::Stop, "75")).is_some();
+        let stop = |account: Option<&str>| stop_for(&[("5h", 80, Some(5.0))], &[], percent_for(&shares, account, Limit::Stop, true, "75").unwrap()).is_some();
         assert!(!stop(Some("work")) && stop(None));
     }
 

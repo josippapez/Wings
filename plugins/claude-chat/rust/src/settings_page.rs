@@ -35,7 +35,8 @@ fn account_label(account: &AccountChoice) -> String {
 
 /// Picks `limit` for one account: "Same as above" for the shared share, or one of the shares.
 fn account_share(account: &AccountChoice, limit: prefs::Limit, name: &str, shared: &str) -> Node {
-    let mut options = vec![(String::new(), format!("Same as above ({shared}%)"))];
+    let mut options = vec![(String::new(), format!("Same as above ({shared})"))];
+    options.push((prefs::OFF.to_owned(), "Off".to_owned()));
     options.extend(prefs::LIMIT_SHARES.iter().map(|(value, label)| ((*value).to_owned(), (*label).to_owned())));
     let own = prefs::own_share(&prefs::account_at().get(), account.name.as_deref(), limit).unwrap_or_default();
     let who = account.name.clone();
@@ -45,12 +46,17 @@ fn account_share(account: &AccountChoice, limit: prefs::Limit, name: &str, share
     stack().prop("width", MENU_WIDTH).child(menu)
 }
 
+/// What "Same as above" follows: the shared percent, or "off" when the shared checkbox is off.
+fn shared_label(on: bool, share: &str) -> String {
+    if on { format!("{share}%") } else { "off".to_owned() }
+}
+
 /// With two or more accounts, a row for each to pick its own pause and stop share, else the shared one above.
 fn per_account(accounts: &[AccountChoice]) -> Option<Node> {
     if accounts.len() < 2 {
         return None;
     }
-    let (pause, stop) = (prefs::pause_at().get(), prefs::stop_at().get());
+    let (pause, stop) = (shared_label(prefs::pause_near_limit().get(), &prefs::pause_at().get()), shared_label(prefs::stop_near_limit().get(), &prefs::stop_at().get()));
     let rows = accounts.iter().map(|account| {
         let name = account_label(account);
         let controls = row()
@@ -62,7 +68,7 @@ fn per_account(accounts: &[AccountChoice]) -> Option<Node> {
             .child(account_share(account, prefs::Limit::Stop, &name, &stop));
         entry(Entry { lead: None, title: text(&name).prop("weight", "medium"), detail: Some(controls), trailing: None }).key(format!("account-{}", account.name.as_deref().unwrap_or("default")))
     });
-    Some(together([about("Per account", "Each account's own share, where it differs from the ones above. Same as above follows them."), stack().children(rows)]))
+    Some(together([about("Per account", "Each account's own share, or off, where it differs from the ones above. Same as above follows them."), stack().children(rows)]))
 }
 
 /// A choice between a few, on the segmented track other Wings settings use.
@@ -271,7 +277,9 @@ mod tests {
         assert!(per_account(&[account(None)]).is_none());
         let rows = wings_plugin::ui::tree_json(per_account(&[account(None), account(Some("work"))]).unwrap()).to_string();
         assert!(rows.contains("Default account pause at") && rows.contains("work stop at"), "{rows}");
-        assert!(rows.contains("Same as above"));
+        // Pause is on by default and stop is off, and "Same as above" says what each follows.
+        assert!(rows.contains("Same as above (90%)") && rows.contains("Same as above (off)"), "{rows}");
+        assert!(rows.contains("\"Off\""), "{rows}");
     }
 
     #[test]

@@ -679,13 +679,15 @@ pub(crate) fn hear(run: u32, line: &Value) {
         report_usage();
     }
     // Past the share you picked, the setting stops the turn as Stop does.
-    if line["type"] == "rate_limit_event" && prefs::stop_near_limit().get() {
+    if line["type"] == "rate_limit_event" {
         let stopping = with(|c| {
             if c.run != run || !c.session.working {
                 return false;
             }
             let account = c.accounts.iter().find(|account| account.current).and_then(|account| account.name.as_deref());
-            let at = prefs::stop_percent(account);
+            let Some(at) = prefs::stop_percent(account) else {
+                return false;
+            };
             let Some((stop, said)) = crate::plan_limit::stop_for(&c.session.limits, &c.session.limit_stops, at) else {
                 return false;
             };
