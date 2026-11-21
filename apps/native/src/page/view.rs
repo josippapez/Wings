@@ -318,7 +318,7 @@ pub struct PageView {
     shot_terminals: Option<Rc<dyn Fn(&mut gpui::App) -> Vec<(SharedString, AnyElement)>>>,
     /// Draws the layers of what moves in the page over it, as the workspace does, for the screenshots of a page alone.
     #[cfg(feature = "test-support")]
-    shot_layers: bool,
+    shot_layers: Vec<gpui::Entity<ui::live::Layer>>,
     /// How many times the page has rendered, for what draws it again.
     #[cfg(feature = "test-support")]
     renders: Cell<usize>,
@@ -695,7 +695,7 @@ impl PageView {
             #[cfg(feature = "test-support")]
             shot_terminals: None,
             #[cfg(feature = "test-support")]
-            shot_layers: false,
+            shot_layers: Vec::new(),
             #[cfg(feature = "test-support")]
             renders: Cell::new(0),
             #[cfg(feature = "test-support")]
@@ -737,8 +737,12 @@ impl PageView {
     /// Puts the page on screen as the workspace does and draws the layers of what moves in it over it, for the screenshots
     /// of a page alone: a hover card's cue shows only then.
     #[cfg(feature = "test-support")]
-    pub fn draw_layers_for_shots(&mut self) {
-        self.shot_layers = true;
+    pub fn draw_layers_for_shots(&mut self, cx: &mut Context<Self>) {
+        use ui::live::Kind;
+        // A view of its own for each, as the workspace's are, so a step of one draws it and not the page.
+        self.shot_layers = [Kind::ViewSpinners, Kind::Pulses, Kind::Counts, Kind::Progress]
+            .map(|kind| cx.new(|_| ui::live::Layer::new(kind)))
+            .to_vec();
     }
 
     /// Where a `Terminal` shows: the workspace draws the terminal over this place, in the `TERMINALS` layer, so what it
@@ -1366,7 +1370,10 @@ impl PageView {
                 let offset = wheel.offset();
                 let most = wheel.max_offset().y;
                 let before = offset.y - step;
-                let moved = (step > px(0.0) && before < px(0.0)) || (step < px(0.0) && before > -most);
+                // Compared with half a point to spare: `Pixels` orders by `total_cmp`, where 0 is above -0, so a list with
+                // nothing to scroll (`most` 0, an offset of 0) counted as one that could still go down and took the step.
+                let slack = px(0.5);
+                let moved = (step > px(0.0) && before < -slack) || (step < px(0.0) && before > -most + slack);
                 wheel.set_offset(point(offset.x, offset.y.clamp(-most, px(0.0))));
                 if moved {
                     cx.stop_propagation();
@@ -2171,6 +2178,7 @@ impl PageView {
                     .flex()
                     .flex_col()
                     .gap(px(if card.raised { 6.0 } else { 10.0 }))
+                    .track_scroll(&self.watched_scroll(card.id).handle)
                     .children(self.nodes(&card.children, cx));
                 let shell = ui::plain_card([body.into_any_element()]).min_h_0().overflow_hidden().children(ui::spot(|| format!("page-card-{}", card.id)));
                 match card.raised {
@@ -3005,7 +3013,7 @@ impl Render for PageView {
         let covered = dialog.is_some() || self.tree.as_ref().is_some_and(|tree| sheet_in(&tree.children));
         let id = window.window_handle().window_id();
         #[cfg(feature = "test-support")]
-        if self.shot_layers {
+        if !self.shot_layers.is_empty() {
             ui::start_draw(id);
             ui::place_view(cx.entity_id(), id);
         }
@@ -3198,7 +3206,7 @@ impl Render for PageView {
             .children(overlay)
             .children(shot_terminals);
         #[cfg(feature = "test-support")]
-        let page = page.when(self.shot_layers, |page| page.child(ui::view_spinner_layer(window)));
+        let page = page.children(self.shot_layers.clone());
         // Its fields learn they are in the page, which keeps its drawing, and under its dialog or sheet when it shows one,
         // so the one being typed in draws its text in the window's field layer only when nothing of the page is over it.
         ui::in_piece(placed.then_some(ui::Piece::View(cx.entity_id())), covered, page)

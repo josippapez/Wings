@@ -168,6 +168,17 @@ pub fn view_spinner_layer(window: &Window) -> impl IntoElement {
         .child(layer(Kind::Progress, window))
 }
 
+/// What clips what `kind` draws in a slot: the slot's own, which is the lists and scrolls it sits in. A cue (`Progress`) is
+/// for what the pointer is on and escapes them, as a hover card does, so the whole window.
+pub(crate) fn mask_of(kind: Kind, mask: gpui::ContentMask<Pixels>, window: &Window) -> gpui::ContentMask<Pixels> {
+    match kind {
+        Kind::Progress => gpui::ContentMask {
+            bounds: gpui::Bounds::new(gpui::point(px(0.0), px(0.0)), window.viewport_size()),
+        },
+        _ => mask,
+    }
+}
+
 /// A slot laid out for its layer's paint.
 struct Laid {
     name: SharedString,
@@ -189,7 +200,8 @@ fn lay_out(id: WindowId, kind: Kind, window: &mut Window, cx: &mut App) -> (Dura
     let now = clock(cx);
     let laid = shown
         .into_iter()
-        .filter_map(|(name, slot)| {
+        .filter_map(|(name, mut slot)| {
+            slot.mask = mask_of(kind, slot.mask, window);
             let (draw, style) =
                 DRAWS.with_borrow(|draws| draws.get(&(id, kind, name.clone())).map(|it| (it.draw.clone(), it.style.clone())))?;
             let mut element = draw.draw(now, &style, window, cx);

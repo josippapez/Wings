@@ -14,15 +14,9 @@ const GAP: f32 = 6.0;
 /// the desktop's tooltips wait 0.3 s, which is what opened a card for every row passed over.
 pub(crate) const OPEN_DELAY: Duration = Duration::from_millis(600);
 
-/// How far under the pointer the cue's bar sits, below the pointer's own height, as far as the row allows.
-const CUE_BELOW: f32 = 18.0;
-
-/// Where the cue goes along one axis: `at`, kept inside what the card is for, `room` long. The lists a trigger sits in
-/// clip what lies outside their rows, so a cue below a short row's bottom would be cut off.
-fn cue_at(at: Pixels, room: Pixels, size: f32) -> Pixels {
-    let edge = px(2.0);
-    at.min(room - px(size) - edge).max(edge)
-}
+/// How far under the pointer's hot spot the cue's bar sits: clear of the arrow, which is about 20 pt tall. Over the
+/// hot spot by the same distance when there is no room below in the window.
+const CUE_BELOW: f32 = 28.0;
 
 /// The pointer is waiting on a card to open: where it was when it came onto what the card is for (in the window), and
 /// when on the live clock.
@@ -30,6 +24,8 @@ fn cue_at(at: Pixels, room: Pixels, size: f32) -> Pixels {
 struct Waiting {
     at: Point<Pixels>,
     started: Duration,
+    /// There was no room below the pointer in the window, so the cue sits above it.
+    above: bool,
 }
 
 #[derive(Default)]
@@ -74,15 +70,22 @@ impl PageView {
             .on_hover(cx.listener(move |view, over: &bool, window, cx| {
                 view.hover_card_over(id, false, !has_card, *over, window, cx)
             }))
+            // A press on it is the action the card is a preview of (a link opens, a row is picked): the card's wait ends
+            // and an open card goes. What the press opens can take the pointer off it without a leave ever arriving, which
+            // left the card open, or opening, over a pointer that was elsewhere.
+            .capture_any_mouse_down(cx.listener(move |view, _, _, cx| view.hover_card_pressed(id, cx)))
             // Only while a piece puts the page on screen with the layer for it (`spin_in_layer`): in the page a bar that
             // fills would draw the page at every step. Without one the delay still applies and the cue is left out.
             .when_some(waiting.filter(|_| self.spin_in_layer.get()), |el, waiting| {
                 let (fill, track) = (theme::palette().working << 8 | 0xff, theme::palette().muted_foreground << 8 | 0x59);
+                // The layer for progress bars draws it unclipped, so no scrolling list cuts it off.
+                let top = waiting.at.y - bounds.origin.y
+                    + if waiting.above { -px(CUE_BELOW + hover_cue::HEIGHT) } else { px(CUE_BELOW) };
                 el.child(
                     div()
                         .absolute()
-                        .left(cue_at(waiting.at.x - bounds.origin.x - px(hover_cue::WIDTH / 2.0), bounds.size.width, hover_cue::WIDTH))
-                        .top(cue_at(waiting.at.y - bounds.origin.y + px(CUE_BELOW), bounds.size.height, hover_cue::HEIGHT))
+                        .left(waiting.at.x - bounds.origin.x - px(hover_cue::WIDTH / 2.0))
+                        .top(top)
                         .w(px(hover_cue::WIDTH))
                         .h(px(hover_cue::HEIGHT))
                         .child(hover_cue::hover_cue_slot(format!("hover-cue-{id}"), waiting.started, OPEN_DELAY, fill, track)),
@@ -146,7 +149,11 @@ impl PageView {
                     notify = true;
                 } else {
                     state.waits += 1;
-                    state.waiting = Some(Waiting { at: window.mouse_position(), started: live::clock(cx) });
+                    state.waiting = Some({
+                        let at = window.mouse_position();
+                        let room = window.viewport_size().height - at.y;
+                        Waiting { at, started: live::clock(cx), above: room < px(CUE_BELOW + hover_cue::HEIGHT + 8.0) }
+                    });
                     wait = Some(state.waits);
                     notify = true;
                 }
@@ -192,6 +199,20 @@ impl PageView {
         })
         .detach();
     }
+
+    /// The card's trigger was pressed: no wait goes on and no card shows, until the pointer comes onto it again.
+    fn hover_card_pressed(&mut self, id: u64, cx: &mut Context<Self>) {
+        let changed = self.hover_cards.borrow_mut().get_mut(&id).is_some_and(|state| {
+            let changed = state.waiting.take().is_some() | std::mem::take(&mut state.shown);
+            state.over_trigger = false;
+            state.waits += 1;
+            changed
+        });
+        if changed {
+            cx.notify();
+        }
+    }
+
 
     /// Whether the cue of `id` shows, the card waiting to open.
     #[cfg(all(test, feature = "test-support"))]

@@ -205,3 +205,37 @@ fn the_cue_of_a_hover_card_fills_without_drawing_its_page() {
     assert!(!window.read(|tab, cx| tab.page.read(cx).hover_card_waiting(5)), "the cue stayed after the card opened");
     assert_eq!(shown(&mut window, Kind::Progress), 0, "the cue's slot stayed after the card opened");
 }
+
+/// The cue sits clear of the pointer's arrow, below its hot spot, and is not clipped, though the trigger is one short row
+/// inside a scroll that stops at 30 points: the scroll clips what is drawn in it, so the cue escapes it.
+#[test]
+fn the_cue_sits_below_the_pointer_and_outside_a_scrolls_clip() {
+    let node = json!({ "id": 11, "type": "Scroll", "props": { "maxHeight": 30 }, "children": [hover_card_node()] });
+    let (app, mut window) = open_tab(node);
+    window.simulate_mouse_move(gpui::point(gpui::px(400.0), gpui::px(280.0)));
+    app.run_until_parked();
+    window.draw();
+    app.advance_clock(Duration::from_secs(2));
+    app.run_until_parked();
+    window.draw();
+    let pointer = gpui::point(gpui::px(60.0), gpui::px(12.0));
+    window.simulate_mouse_move(pointer);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !window.read(|tab, cx| tab.page.read(cx).hover_card_waiting(5)) {
+        assert!(Instant::now() < deadline, "the pointer on the trigger never started the wait");
+        app.run_until_parked();
+        window.draw();
+        thread::sleep(Duration::from_millis(5));
+    }
+    app.run_until_parked();
+    window.draw();
+    let slots = window.update(|_, window, _| slots::shown(window.window_handle().window_id(), Kind::Progress.layer()));
+    assert_eq!(slots.len(), 1, "the cue has a slot");
+    let slot = &slots[0].1;
+    let below = slot.bounds.origin.y - pointer.y;
+    assert!(below >= gpui::px(26.0), "the cue is {below:?} below the pointer, behind its arrow");
+    // The scroll's own clip would cut the cue off; the progress layer draws it under the window's.
+    assert_ne!(slot.mask.bounds.intersect(&slot.bounds), slot.bounds, "the scroll does not clip the slot: {:?}", slot.mask.bounds);
+    let mask = window.update(|_, window, _| live::mask_of(Kind::Progress, slot.mask.clone(), window));
+    assert_eq!(mask.bounds.intersect(&slot.bounds), slot.bounds, "the layer clips the cue: {:?}", mask.bounds);
+}

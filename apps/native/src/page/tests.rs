@@ -2372,6 +2372,50 @@ fn a_scroll_with_a_max_height_is_capped_and_scrolls_inside_itself_before_its_par
     assert!(inner_top == inner_max && page_top == 0.0, "{inner_top} {inner_max} {page_top}");
 }
 
+/// A scrolling card (the session panel) over rows and, at its foot, a list that scrolls inside itself.
+fn panel_with_a_list(rows: usize) -> String {
+    fake::page("page", move |_| {
+        let above: Vec<Value> = (0..30).map(|i| text(300 + i, 2_000 + i, format!("Mentioned {i}"))).collect();
+        let list: Vec<Value> = (0..rows).map(|i| text(100 + i, 1_000 + i, format!("Subagent {i}"))).collect();
+        let mut column = above;
+        column.push(json!({ "id": 10, "type": "Scroll", "props": { "maxHeight": 100 },
+            "children": [{ "id": 11, "type": "Stack", "props": {}, "children": list }] }));
+        column.push(text(900, 9_000, "Last row".to_owned()));
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            { "id": 1, "type": "Card", "props": { "scroll": true, "raised": true },
+              "children": [{ "id": 2, "type": "Stack", "props": {}, "children": column }] }] })
+    })
+}
+
+/// The wheel over a list inside a scrolling card never leaves the card short of its end: where the list can't move that
+/// way (it has nothing to scroll, or it is at that end) the card takes the step.
+#[test]
+fn the_wheel_over_a_list_in_a_scrolling_card_reaches_the_cards_end() {
+    for rows in [3, 60] {
+        let mut app = TestApp::new();
+        app.background_executor().allow_parking();
+        let host = hosted(&mut app);
+        let source = panel_with_a_list(rows);
+        let bounds = gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(500.0), px(400.0)));
+        let mut window = app.open_window_with_options(
+            gpui::WindowOptions { window_bounds: Some(gpui::WindowBounds::Windowed(bounds)), ..Default::default() },
+            |_, cx| PageView::in_plugin(&host, &source, cx),
+        );
+        settle(&app, &mut window, |view| view.text().contains("Last row") && view.scrolled_view(10).is_some_and(|height| height > 0.0));
+        let card = |window: &mut View| window.read(|view, _| view.follow_scrolled(1).unwrap());
+        // The pointer by the top scrolls the card until the list is in view at its foot.
+        window.simulate_scroll(point(px(60.0), px(40.0)), point(px(0.0), px(-300.0)));
+        window.draw();
+        // Then the pointer over the list, in steps as a wheel sends them: a list with nothing to scroll took them before.
+        for _ in 0..200 {
+            window.simulate_scroll(point(px(60.0), px(380.0)), point(px(0.0), px(-30.0)));
+            window.draw();
+        }
+        let (top, max) = card(&mut window);
+        assert!(max > 0.0 && top == max, "rows {rows}: the card is at {top} of {max}");
+    }
+}
+
 /// A column of 60 rows in a plain `Scroll` that is asked to scroll to row 40 and to track rows 10, 20, 30 and 40, over a
 /// line that says what `onTrack` last said.
 fn aimed_rows() -> String {
@@ -2981,6 +3025,48 @@ fn leaving_before_the_delay_ends_cancels_the_card() {
     app.run_until_parked();
     window.draw();
     assert!(!window.read(|view, _| view.hover_card_shown(1)), "a cancelled wait opened the card");
+}
+
+#[test]
+fn a_press_on_the_trigger_during_the_wait_leaves_no_card_open() {
+    let (app, mut window) = open(hover_card_page());
+    settle(&app, &mut window, shows("Elsewhere"));
+    window.simulate_mouse_move(point(px(400.0), px(280.0)));
+    settle(&app, &mut window, |view| !view.hover_card_shown(1));
+    window.simulate_mouse_move(point(px(10.0), px(8.0)));
+    settle(&app, &mut window, |view| view.hover_card_waiting(1));
+    // What the press opens takes the pointer off the trigger with no leave sent: the wait must not outlive it.
+    window.simulate_event(gpui::MouseDownEvent {
+        button: MouseButton::Left,
+        position: point(px(10.0), px(8.0)),
+        modifiers: gpui::Modifiers::default(),
+        click_count: 1,
+        first_mouse: false,
+    });
+    settle(&app, &mut window, |view| !view.hover_card_waiting(1));
+    app.advance_clock(crate::page::view::hover_card_view::OPEN_DELAY * 2);
+    app.run_until_parked();
+    window.draw();
+    assert!(!window.read(|view, _| view.hover_card_shown(1)), "the card opened after a press during its wait");
+}
+
+#[test]
+fn a_press_on_the_trigger_closes_an_open_card() {
+    let (app, mut window) = open(hover_card_page());
+    settle(&app, &mut window, shows("Elsewhere"));
+    window.simulate_mouse_move(point(px(400.0), px(280.0)));
+    settle(&app, &mut window, |view| !view.hover_card_shown(1));
+    window.simulate_mouse_move(point(px(10.0), px(8.0)));
+    app.advance_clock(crate::page::view::hover_card_view::OPEN_DELAY);
+    settle(&app, &mut window, |view| view.hover_card_shown(1));
+    window.simulate_event(gpui::MouseDownEvent {
+        button: MouseButton::Left,
+        position: point(px(10.0), px(8.0)),
+        modifiers: gpui::Modifiers::default(),
+        click_count: 1,
+        first_mouse: false,
+    });
+    settle(&app, &mut window, |view| !view.hover_card_shown(1));
 }
 
 /// A page of one `Code` node.

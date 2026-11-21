@@ -49,7 +49,15 @@ fn cut_strings(value: &mut Value, cut: usize) {
         }
         Value::Array(items) => items.iter_mut().for_each(|item| cut_strings(item, cut)),
         Value::Object(map) if map.get("type").and_then(Value::as_str) == Some("image") => {}
-        Value::Object(map) => map.values_mut().for_each(|item| cut_strings(item, cut)),
+        Value::Object(map) => {
+            // A subagent's hand-back is a report to show in whole, with its note, as Claude Code says to show it.
+            let handback = map.get("handback") == Some(&Value::Bool(true));
+            for (key, item) in map.iter_mut() {
+                if !(handback && matches!(key.as_str(), "body" | "handbackReportText" | "handbackNote")) {
+                    cut_strings(item, cut);
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -104,9 +112,8 @@ pub fn agent_entries(
         None => find_transcript(claude_dirs, session_id).ok_or("no transcript for that session")?,
         Some(agent) => find_subagent_transcript(claude_dirs, session_id, agent).ok_or("no transcript for that subagent of the session")?,
     };
-    let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
     let patterns: Vec<String> = types.iter().map(|t| type_marker(t)).collect();
-    let mentions = |l: &&str| patterns.iter().any(|p| l.contains(p.as_str()));
+    let mentions = |l: &str| patterns.iter().any(|p| l.contains(p.as_str()));
     // A nested object can say `"type":"user"` too, so the entry's own type is checked once it's parsed.
     let cut = cut.map(|cut| cut.max(TRANSCRIPT_CUT_MIN));
     let entry = |l: &str| {
@@ -118,13 +125,60 @@ pub fn agent_entries(
     };
     let most = if cut.is_some() { TRANSCRIPT_CUT_LAST_MAX } else { TRANSCRIPT_LAST_MAX };
     Ok(match last {
+        // From the end of the file, in chunks, until that many are found: a transcript runs to tens of MB.
         Some(n) => {
-            let mut newest: Vec<Value> = text.lines().rev().filter(mentions).filter_map(entry).take(n.min(most)).collect();
+            let n = n.min(most);
+            let mut newest: Vec<Value> = Vec::new();
+            if n > 0 {
+                lines_from_end(&path, BACKWARDS_CHUNK, |l| {
+                    if mentions(l) {
+                        newest.extend(entry(l));
+                    }
+                    newest.len() < n
+                })
+                .map_err(|e| e.to_string())?;
+            }
             newest.reverse();
             newest
         }
-        None => text.lines().filter(mentions).filter_map(entry).collect(),
+        None => fs::read_to_string(path).map_err(|e| e.to_string())?.lines().filter(|l| mentions(l)).filter_map(entry).collect(),
     })
+}
+
+/// How much of a transcript's end is read at a time.
+const BACKWARDS_CHUNK: usize = 1 << 20;
+
+/// Calls `each` with the lines of the file at `path`, newest first, reading `chunk` bytes at a time from the end, until
+/// it returns false. A line that isn't UTF-8 is skipped, as is an empty one.
+fn lines_from_end(path: &std::path::Path, chunk: usize, mut each: impl FnMut(&str) -> bool) -> std::io::Result<()> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = fs::File::open(path)?;
+    let mut at = file.metadata()?.len();
+    // The start of the line a chunk cut, which the next chunk down finishes.
+    let mut carry: Vec<u8> = Vec::new();
+    let mut give = |line: &[u8]| match std::str::from_utf8(line) {
+        Ok(line) if !line.trim().is_empty() => each(line),
+        _ => true,
+    };
+    while at > 0 {
+        let take = (chunk as u64).min(at);
+        at -= take;
+        file.seek(SeekFrom::Start(at))?;
+        let mut buf = vec![0; take as usize];
+        file.read_exact(&mut buf)?;
+        buf.extend_from_slice(&carry);
+        let mut end = buf.len();
+        while let Some(newline) = buf[..end].iter().rposition(|byte| *byte == b'\n') {
+            if !give(&buf[newline + 1..end]) {
+                return Ok(());
+            }
+            end = newline;
+        }
+        buf.truncate(end);
+        carry = buf;
+    }
+    give(&carry);
+    Ok(())
 }
 
 /// A transcript entry Claude just wrote, for `wings.onTranscript`.
@@ -223,6 +277,106 @@ mod tests {
         assert_eq!(entry["message"]["content"][1]["source"]["data"].as_str().unwrap().len(), 500);
         assert_eq!(entry["toolUseResult"]["structuredPatch"][0]["lines"][0], "+short");
         assert_eq!(entry["toolUseResult"]["originalFile"].as_str().unwrap().len(), 200);
+    }
+
+    #[test]
+    fn a_hand_backs_report_and_note_survive_the_cut_whole_and_other_long_strings_do_not() {
+        let report = "r".repeat(10_000);
+        let mut entry = serde_json::json!({
+            "type": "user",
+            "message": { "content": "m".repeat(5_000) },
+            "origin": { "kind": "peer", "handback": true, "handbackReportText": report, "body": report, "handbackNote": "n".repeat(6_000), "name": "x".repeat(5_000) },
+        });
+        cut_strings(&mut entry, 4_000);
+        assert_eq!(entry["origin"]["handbackReportText"].as_str().unwrap().len(), 10_000);
+        assert_eq!(entry["origin"]["body"].as_str().unwrap().len(), 10_000);
+        assert_eq!(entry["origin"]["handbackNote"].as_str().unwrap().len(), 6_000);
+        assert_eq!(entry["origin"]["name"].as_str().unwrap().len(), 4_000);
+        assert_eq!(entry["message"]["content"].as_str().unwrap().len(), 4_000);
+        // The same field names without the hand-back mark are cut like any string.
+        let mut other = serde_json::json!({ "origin": { "body": "b".repeat(5_000) } });
+        cut_strings(&mut other, 4_000);
+        assert_eq!(other["origin"]["body"].as_str().unwrap().len(), 4_000);
+    }
+
+    #[test]
+    fn lines_come_from_the_end_whole_whatever_the_chunk_cuts_them_at() {
+        let dir = std::env::temp_dir().join(format!("wings-tr-back-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        // Short lines, one longer than several chunks, an empty one, and no newline at the end.
+        let lines: Vec<String> = (0..40).map(|n| if n == 17 { format!("é{}", "x".repeat(700)) } else { format!("line {n}") }).collect();
+        let mut text = lines.join("\n");
+        text.insert_str(text.find("line 30").unwrap(), "\n");
+        fs::write(&path, &text).unwrap();
+        let expected: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).rev().collect();
+        for chunk in [1, 2, 7, 64, 700, 5000] {
+            let mut seen = Vec::new();
+            lines_from_end(&path, chunk, |l| {
+                seen.push(l.to_owned());
+                true
+            })
+            .unwrap();
+            assert_eq!(seen, expected, "chunk {chunk}");
+        }
+        // It stops as soon as it is told to.
+        let mut seen = Vec::new();
+        lines_from_end(&path, 7, |l| {
+            seen.push(l.to_owned());
+            seen.len() < 3
+        })
+        .unwrap();
+        assert_eq!(seen, ["line 39", "line 38", "line 37"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `cargo test -- --ignored --nocapture newest_entries_of_a_90_mb`: the newest 100 hand-backs of a big transcript,
+    /// read whole as before and from the end.
+    #[test]
+    #[ignore]
+    fn newest_entries_of_a_90_mb_transcript_are_read_from_its_end() {
+        use std::io::Write;
+        let claude = std::env::temp_dir().join(format!("wings-tr-big-{}", std::process::id()));
+        let id = "8c21b0c5-8113-4f55-9493-fa156c3fa369";
+        fs::create_dir_all(claude.join("projects/-x")).unwrap();
+        let path = claude.join(format!("projects/-x/{id}.jsonl"));
+        let mut file = std::io::BufWriter::new(fs::File::create(&path).unwrap());
+        let output = "o".repeat(40_000);
+        let mut n = 0;
+        while file.get_ref().metadata().map(|m| m.len()).unwrap_or(0) + (n % 100) < 90_000_000 {
+            for _ in 0..100 {
+                n += 1;
+                writeln!(file, "{{\"type\":\"user\",\"n\":{n},\"message\":{{\"content\":\"{output}\"}}}}").unwrap();
+                writeln!(file, "{{\"type\":\"assistant\",\"n\":{n},\"message\":{{\"content\":\"{output}\"}}}}").unwrap();
+            }
+            file.flush().unwrap();
+        }
+        writeln!(file, "{{\"type\":\"user\",\"n\":-1,\"origin\":{{\"handback\":true}}}}").unwrap();
+        drop(file);
+        let size = fs::metadata(&path).unwrap().len();
+        let p = plugin(&claude, &[], &["user"]);
+        let dirs = std::slice::from_ref(&claude);
+        let types = ["user".to_owned()];
+        let started = std::time::Instant::now();
+        let whole: Vec<Value> = fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .filter(|l| l.contains("\"type\":\"user\""))
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .take(100)
+            .collect();
+        let before = started.elapsed();
+        let started = std::time::Instant::now();
+        let end = transcript_entries(&p, dirs, id, &types, Some(100)).unwrap();
+        let after = started.elapsed();
+        assert_eq!(end.len(), 100);
+        assert_eq!(end.last().unwrap()["n"], -1);
+        assert_eq!(end.iter().rev().map(|e| e["n"].clone()).collect::<Vec<_>>(), whole.iter().map(|e| e["n"].clone()).collect::<Vec<_>>());
+        println!("{} MB: whole file {before:?}, from the end {after:?}", size / 1_000_000);
+        let _ = fs::remove_dir_all(&claude);
     }
 
     #[test]

@@ -2,6 +2,14 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.77 · 2026-11-21
+
+- **Side panels scroll to the end**: a short list inside the panel no longer catches the wheel, so the panel scrolls past it without nudging the list first.
+- **The hover cue sits below the pointer**: the loading bar shows clearly under the cursor, above it near the window's bottom edge, and lists no longer cut it off. Clicking a row while its card loads cancels the card, and clicking closes an open one.
+- **Subagent reports in the chat**: a report a subagent hands back shows in the chat that started it, in full, with an Open button for the subagent. A setting starts them folded. Long reports stay whole when a chat reloads.
+- **Every tool call opens on a click**: clicking any tool row shows the whole call, every input in full and then the output. Also for rows a mod draws.
+- **Claude chat 0.42.0**: the above.
+
 ## 0.2.76 · 2026-11-21
 
 - **Hover cards wait a moment**: a card opens after 0.6 s, with a thin bar under the pointer that fills while it waits. Moving away before it fills opens nothing, so passing over a list no longer pops a card for every row. Once one is open, the next row's opens at once.
