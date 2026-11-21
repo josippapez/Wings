@@ -282,6 +282,9 @@ pub struct Stack {
     /// Set only by a `Section`: at most this wide from its left edge, so a description reads at a measure without being
     /// centred as a `maxWidth` column is.
     pub measure: Option<f32>,
+    /// Set only by a `ListRow` with a `trailing` control: its words keep at least this share of the row's width, so a wide
+    /// control goes under them instead of squeezing them to a letter a line.
+    pub min_share: Option<f32>,
     /// `quote: true`: a bar down its left edge and what it holds set in from it, as a Markdown quote is drawn. The bar is
     /// part of the box, so it runs the quote's whole height and a selection never copies it.
     pub quote: bool,
@@ -629,6 +632,9 @@ pub struct Split {
     pub on_narrow: Option<String>,
     /// A floating pane with this handler hears Escape in it and a press outside it.
     pub on_close: Option<String>,
+    /// The space each side of the divider, so cards in the two panes don't touch it. `none` by default: a list or a rail
+    /// runs up to the divider.
+    pub gap: Gap,
     pub start: Vec<Node>,
     pub end: Vec<Node>,
 }
@@ -1428,6 +1434,7 @@ impl Walk {
                 on_context_menu: handler("onContextMenu"),
                 inset: false,
                 measure: None,
+                min_share: None,
                 quote: on("quote"),
                 children: parts(children),
             }),
@@ -1640,6 +1647,7 @@ impl Walk {
                     float: on("float"),
                     on_narrow: handler("onNarrow"),
                     on_close: handler("onClose"),
+                    gap: str_prop(&props, "gap").and_then(Gap::choose).unwrap_or(Gap::None),
                     start: slots.take("start"),
                     end: slots.take("end"),
                 })
@@ -2849,8 +2857,8 @@ mod tests {
     fn parses_a_split_whose_fixed_pane_is_on_the_right_and_folds_when_narrow() {
         let parsed = tree(json!([
             {"id":1,"type":"Split","props":{"defaultSize":260,"side":"end","collapseBelow":1100,"pinned":true},"children":[]},
-            {"id":2,"type":"Split","props":{"side":"start","collapseBelow":-5},"children":[]},
-            {"id":3,"type":"Split","props":{"side":"end","collapseBelow":"wide"},"children":[]}
+            {"id":2,"type":"Split","props":{"side":"start","collapseBelow":-5,"gap":"l"},"children":[]},
+            {"id":3,"type":"Split","props":{"side":"end","collapseBelow":"wide","gap":"huge"},"children":[]}
         ]))
         .unwrap();
         let splits: Vec<&Split> = parsed
@@ -2868,6 +2876,8 @@ mod tests {
         // Only "end" moves the pane, and a threshold that is no positive number is none.
         assert_eq!((splits[1].fixed_end, splits[1].collapse_below), (false, None));
         assert_eq!((splits[2].fixed_end, splits[2].collapse_below), (true, None));
+        // Room at the divider only when asked for, and a gap it doesn't know is none.
+        assert_eq!((splits[0].gap, splits[1].gap, splits[2].gap), (Gap::None, Gap::L, Gap::None));
     }
 
     #[test]
@@ -3039,11 +3049,14 @@ mod tests {
         assert_eq!(lead.width, Some(16.0));
         assert!(words.grow);
         assert_eq!(plain_text(&words.children), "BuildDone · 2s");
+        // Beside a control the words keep part of the row, and a control too wide for the rest goes under them.
+        assert!(line.wrap && words.min_share == Some(0.4), "{line:?}");
         for plain in &parsed.children[1..] {
             let Node::Stack(inset) = plain else { panic!("a stack") };
             assert!(inset.inset && !inset.grow);
             // No lead: the title is the row's first part, at the inset's edge.
-            assert!(matches!(row_line(plain).children.as_slice(), [Node::Stack(words)] if words.width.is_none()));
+            assert!(matches!(row_line(plain).children.as_slice(), [Node::Stack(words)] if words.width.is_none() && words.min_share.is_none()));
+            assert!(!row_line(plain).wrap, "nothing trails, so nothing goes under");
         }
     }
 

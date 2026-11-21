@@ -1611,6 +1611,7 @@ impl PageView {
             .when_some(stack.width, |el, width| el.w(px(width)).flex_none())
             .when_some(stack.max_width, |el, width| el.w_full().max_w(px(width)).mx_auto())
             .when_some(stack.measure, |el, width| el.max_w(px(width)))
+            .when_some(stack.min_share, |el, share| el.min_w(relative(share)))
             // A quote's bar: a 3pt border in the muted tone, with the text set in from it.
             .when(stack.quote, |el| {
                 el.border_l(px(3.0)).border_color(rgba(theme::palette().muted_foreground << 8 | 0x66)).pl(px(10.0))
@@ -2637,10 +2638,12 @@ impl PageView {
                 })
                 .into_any_element();
         }
+        let gutter = px(gap(split.gap));
         container
             .when(drawn, |el| {
                 el.child(
                     fixed_pane("page-split-start")
+                        .pr(gutter)
                         .border_r_1()
                         .border_color(rgba(ui::HAIRLINE))
                         .children(self.nodes(&split.start, cx)),
@@ -2655,6 +2658,7 @@ impl PageView {
                     .min_h_0()
                     .flex()
                     .flex_col()
+                    .when(drawn, |el| el.pl(gutter))
                     .children(self.nodes(&split.end, cx)),
             )
             .into_any_element()

@@ -2819,6 +2819,19 @@ esac"##,
             save(&mut cx, window, out.join(format!("claude-chat-settings-{width}-thinking.png")));
             let _ = cx.update_window(window, |_, window, _| window.remove_window());
         }
+        // The session panel in the chat, as a new install has it, at the dialog's width.
+        let in_chat = host_over("fixture-storage-claude-chat-settings-in-chat", &[("default-mode", json!("auto")), ("detailed-output", json!(true))]);
+        let handle = cx.open_offscreen_window(size(px(892.0), px(1000.0)), |_, cx| cx.new(|cx| PageView::in_plugin(&in_chat, &source, cx))).unwrap();
+        let window = handle.into();
+        handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !handle.read_with(&cx, |view, _| view.text().contains("Session preview") && view.text().contains("Context 42%")).unwrap() {
+            assert!(Instant::now() < deadline, "page did not show the settings: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
+            wait(&mut cx, window, Duration::from_millis(20));
+        }
+        wait(&mut cx, window, Duration::from_millis(300));
+        save(&mut cx, window, out.join("claude-chat-settings-in-chat-892.png"));
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
     }
 }
 

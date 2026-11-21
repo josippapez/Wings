@@ -2,6 +2,13 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.80 · 2026-11-21
+
+- **Settings rows fit at any width**: a control too wide to sit beside its setting's name goes under it instead of squeezing the name to a letter a line. Issues' settings were unreadable in a narrow window.
+- **Claude chat settings breathe**: the sample chat and the options keep a gap at the line between them, and the "where the session panel sits" sample draws properly in both places.
+- **Issues' default view is a menu**: Board, Board by epic and List, with what each shows in the text beside it.
+- **Claude chat 0.43.1, Issues 0.29.2**: the above.
+
 ## 0.2.79 · 2026-11-21
 
 - **Claude chat in the bar**: Claude chat has its own plugin button. Its Subagent, Claude Code pane and Claude session sidebars no longer show there, since they only make sense opened from a chat.

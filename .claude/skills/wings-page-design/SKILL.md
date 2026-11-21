@@ -34,8 +34,9 @@ Plugin pages are built with `wings_plugin::ui` (`packages/plugin-rs/src/ui.rs`).
 3. **Compare.** Hold the page against the app around it.
    - Padding matches the toolbar.
    - Controls sit on the same baseline.
-   - Nothing touches the frame edge.
-   - Nothing is clipped or overlaps.
+   - Nothing touches the frame edge, a split's divider or the card beside it. A `Split` whose panes hold cards sets `gap: "l"`.
+   - Nothing is clipped or overlaps, and no name or text is squeezed to a few letters a line beside a control.
    - Text is no smaller than the app's.
 4. **Fix and re-render.** Write down every problem you see, fix it, and render again. "Looks fine" without having opened the PNG doesn't count.
-5. **Report.** Give the PNG paths in your report.
+5. **Every page you touched, every width.** A change made by a subagent counts too: open its renders yourself before a release, at 640 as well as 1000. Issues' settings shipped with its name squeezed to a letter a line at 640 because nobody opened that render.
+6. **Report.** Give the PNG paths in your report.

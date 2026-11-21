@@ -10,6 +10,9 @@ use super::{
 /// The box a row's lead (an icon, a spinner, a mark) is centred in, so the text after it starts at one x whichever it is.
 const LEAD_WIDTH: f32 = 16.0;
 
+/// The least share of a `ListRow`'s width its words keep beside a `trailing` control.
+const WORDS_SHARE: f32 = 0.4;
+
 /// How wide a section's description runs at most: about 80 characters of small text.
 const MEASURE: f32 = 560.0;
 
@@ -32,6 +35,7 @@ fn stack(id: u64, gap: Gap, children: Vec<Node>) -> Stack {
         on_context_menu: None,
         inset: false,
         measure: None,
+        min_share: None,
         quote: false,
         children,
     }
@@ -56,12 +60,16 @@ pub(super) fn list_row(id: u64, children: Vec<Node>, on_click: Option<String>, t
         line.push(Node::Stack(Stack { width: Some(LEAD_WIDTH), ..stack(part(id, 1), Gap::M, vec![centred]) }));
     }
     let words = [label, detail].concat();
-    line.push(Node::Stack(Stack { grow: true, ..stack(part(id, 3), Gap::None, words) }));
+    // Beside a control, the words keep part of the row, and a control too wide for the rest goes under them: a settings
+    // row's track squeezed its name to one letter a line in a narrow page.
+    let wraps = !trailing.is_empty();
+    let min_share = wraps.then_some(WORDS_SHARE);
+    line.push(Node::Stack(Stack { grow: true, min_share, ..stack(part(id, 3), Gap::None, words) }));
     line.extend(trailing);
     let clickable = on_click.is_some();
     // In a list button, a row that grows takes the button's width, so `trailing` sits at its end. In a stack, which is a
     // column, it is as wide as the stack already.
-    let line = Node::Row(row(part(id, 4), clickable, line));
+    let line = Node::Row(Row { wrap: wraps, ..row(part(id, 4), clickable, line) });
     if clickable {
         Node::ListButton(ListButton {
             button: super::Button {

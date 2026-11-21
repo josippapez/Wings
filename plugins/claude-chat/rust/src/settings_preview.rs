@@ -48,7 +48,7 @@ fn call(name: &str, what: &str) -> Node {
 }
 
 fn steps_body(shows: &Shows) -> Node {
-    let diff = stack().prop("gap", "none").child(line("-    input.trim()", Some("danger"))).child(line("+    input.trim_end_matches('\\r')", Some("success")));
+    let diff = stack().prop("gap", "none").child(line("-    input.trim()", Some("danger"))).child(line("+    input.trim_end()", Some("success")));
     stack()
         .prop("gap", "s")
         .child(call("Bash", "cargo test parser"))
@@ -88,7 +88,7 @@ fn small(body: &str) -> Node {
 
 /// The chat element a kind of fold opens or shuts, as it looks with the fold `open`, made of sample text.
 pub fn kind(kind: Kind, open: bool) -> Node {
-    let diff = || stack().prop("gap", "none").child(line("-    input.trim()", Some("danger"))).child(line("+    input.trim_end_matches('\\r')", Some("success")));
+    let diff = || stack().prop("gap", "none").child(line("-    input.trim()", Some("danger"))).child(line("+    input.trim_end()", Some("success")));
     let under = |call: Node, title: &str, body: Node| stack().prop("gap", "xs").child(call).child(fold(title, body, open));
     let node = match kind {
         Kind::Steps => fold(
@@ -144,13 +144,14 @@ pub fn limit(label: &str, percent: f64, stops: bool) -> Node {
 /// The session panel's two places as a mock of Wings' window: the chat's tab, and the sidebar beside it.
 pub fn places(sidebar: bool) -> Node {
     let panel = || card().child(stack().prop("gap", "xs").child(text("Session").prop("weight", "medium")).child(muted("Changes +3 −2")).child(muted("Context 42%")));
-    let chat = card().child(
-        row().prop("gap", "s").prop("align", "start")
-            .child(stack().prop("grow", true).prop("gap", "xs").child(text("Chat").prop("weight", "medium")).child(muted("Fix the failing parser test")))
-            .maybe((!sidebar).then(|| stack().prop("width", 150).child(panel()))),
-    );
-    let side = if sidebar { stack().prop("width", 150).child(panel()) } else { stack().prop("width", 150).child(muted("Wings sidebar")) };
-    row().prop("gap", "s").prop("align", "start").child(stack().prop("grow", true).child(chat)).child(side)
+    let chat = stack().prop("grow", true).prop("gap", "xs").child(text("Chat").prop("weight", "medium")).child(muted("Fix the failing parser test"));
+    // In the chat, the panel sits inside the chat's own card, on its right.
+    let chat = card().child(row().prop("gap", "m").prop("align", "start").child(chat).maybe((!sidebar).then(|| stack().prop("width", 150).child(panel()))));
+    if !sidebar {
+        return chat;
+    }
+    let side = stack().prop("width", 150).prop("gap", "xs").child(small("Wings sidebar")).child(panel());
+    row().prop("gap", "m").prop("align", "start").child(stack().prop("grow", true).child(chat)).child(side)
 }
 
 /// A made-up chat session as the view options show it, for the pane beside the choices: a turn as the view mode and the fold
@@ -197,7 +198,10 @@ mod tests {
         assert!(one.to_string().contains("\"textScale\":1.25") && one.to_string().contains("Fix the failing parser test"));
         // The layout and the place change what is drawn.
         assert_ne!(one, two);
-        assert!(two.to_string().contains("Wings sidebar") == false && one.to_string().contains("Wings sidebar") == true);
+        // Wings' sidebar is named only where the panel is in it; in the chat the panel sits in the chat's card.
+        assert!(two.to_string().contains("Wings sidebar") && !one.to_string().contains("Wings sidebar"));
+        // The diff card shows the same edit as the turn above it.
+        assert_eq!(one.to_string().matches("trim_end()").count(), 2, "{one}");
     }
 
     #[test]

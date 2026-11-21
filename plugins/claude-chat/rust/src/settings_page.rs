@@ -21,7 +21,7 @@ use crate::{
 
 /// How wide the session pane is, and how wide the page has to be for it to sit beside the choices. Under that it moves to
 /// the top of the choices, as the pane isn't drawn then.
-const SESSION_WIDTH: u32 = 380;
+const SESSION_WIDTH: u32 = 400;
 const SIDE_BY_SIDE: u32 = 720;
 
 thread_local! {
@@ -159,6 +159,8 @@ fn view() -> Vec<Node> {
     let split = Node::new("Split")
         .prop("defaultSize", SESSION_WIDTH)
         .prop("collapseBelow", SIDE_BY_SIDE)
+        // Room each side of the divider, so the session's cards and the choices' don't touch it.
+        .prop("gap", "l")
         .on("onNarrow", |payload| NARROW.with(|narrow| narrow.set(payload["narrow"].as_bool().unwrap_or(false))))
         .child(Node::new("Slot").prop("name", "start").children(start))
         .child(Node::new("Slot").prop("name", "end").children(end));
@@ -307,6 +309,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_session_sits_beside_the_choices_with_room_at_the_divider_and_over_them_when_narrow() {
+        let slot = |page: &serde_json::Value, name: &str| page["children"].as_array().unwrap().iter().find(|slot| slot["props"]["name"] == name).unwrap().to_string();
+        NARROW.with(|narrow| narrow.set(false));
+        let wide = wings_plugin::ui::tree_json(view().remove(0));
+        assert_eq!(wide["type"], "Split");
+        assert_eq!(wide["props"]["gap"], "l", "the panes' cards keep off the divider");
+        assert!(slot(&wide, "start").contains("Session preview") && !slot(&wide, "end").contains("Session preview"));
+        NARROW.with(|narrow| narrow.set(true));
+        let narrow = wings_plugin::ui::tree_json(view().remove(0));
+        assert!(!slot(&narrow, "start").contains("Session preview") && slot(&narrow, "end").contains("Session preview"));
+        NARROW.with(|narrow| narrow.set(false));
+    }
+
+    #[test]
     fn a_choice_sits_on_a_track_and_a_setting_has_its_name_and_detail_before_its_control() {
         let tree = wings_plugin::ui::tree_json(chips("Mode", &[("a", "A")], "a", |_| {}));
         assert_eq!(tree["props"]["segmented"], true);
@@ -325,7 +341,7 @@ mod tests {
             (Kind::Steps, "cargo test parser"),
             (Kind::Command, "test result: FAILED"),
             (Kind::Read, "fn parse"),
-            (Kind::Edit, "trim_end_matches"),
+            (Kind::Edit, "trim_end()"),
             (Kind::Search, "src/lexer.rs:9"),
             (Kind::Web, "The parser guide"),
             (Kind::Subagent, "Two checks skip"),
