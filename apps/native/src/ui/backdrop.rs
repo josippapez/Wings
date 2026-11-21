@@ -562,7 +562,7 @@ impl NativeLayer {
                 let key = (step, (cols, rows), look);
                 if shown.drawn != Some(key) {
                     let t = step as f32 * STEP.as_secs_f32();
-                    shades = (0..rows).flat_map(|row| (0..cols).map(move |col| pattern.shade(col, row, t))).collect();
+                    shades = pattern.shades(cols, rows, t);
                     let colors = opaque_colors(&look.palette);
                     drawing = Some(Drawing::Cells { cell, cols, rows, shades: &shades, colors });
                 }

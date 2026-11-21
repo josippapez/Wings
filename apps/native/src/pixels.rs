@@ -75,6 +75,58 @@ impl Pattern {
     }
 }
 
+impl Pattern {
+    /// The shades of a whole grid, `cols` by `rows`, row by row, `t` seconds in: what `shade` gives for each cell, with what
+    /// a column, a row or a diagonal of cells shares worked out once, not for each cell (a sine for every cell was most of
+    /// a step's cost).
+    pub fn shades(self, cols: u32, rows: u32, t: f32) -> Vec<u8> {
+        let mut out = Vec::with_capacity(cols as usize * rows as usize);
+        match self {
+            Pattern::Drift => {
+                let by_col: Vec<f32> = (0..cols).map(|col| (col as f32 * 0.067 + t * 0.07).sin()).collect();
+                let by_row: Vec<f32> = (0..rows).map(|row| (row as f32 * 0.089 - t * 0.05).sin()).collect();
+                // Indexed by `col + rows - row`.
+                let by_diagonal: Vec<f32> =
+                    (0..cols + rows).map(|k| ((k as f32 - rows as f32) * 0.047 + t * 0.04).sin()).collect();
+                let (cx, cy) = (34.0 + 22.0 * (t * 0.029).sin(), 22.0 + 14.0 * (t * 0.037).cos());
+                for row in 0..rows {
+                    let y = row as f32;
+                    for col in 0..cols {
+                        let x = col as f32;
+                        let waves = by_col[col as usize]
+                            + by_row[row as usize]
+                            + by_diagonal[(col + rows - row) as usize]
+                            + ((x - cx).hypot(y - cy) * 0.16 - t * 0.12).sin();
+                        out.push(drift_band(col, row, x, y, t, waves));
+                    }
+                }
+            }
+            Pattern::Rain => {
+                let heads: Vec<(f32, f32)> = (0..cols).map(|col| drop_head(col, t, (1.5, 4.0), (36, 72))).collect();
+                for row in 0..rows {
+                    for &(head, period) in &heads {
+                        out.push(rain_shade((head - row as f32).rem_euclid(period) as u32));
+                    }
+                }
+            }
+            Pattern::Checker => out.extend((0..rows).flat_map(|row| (0..cols).map(move |col| checker(col, row, t)))),
+            Pattern::Embers => {
+                let heads: Vec<(f32, f32)> = (0..cols).map(|col| drop_head(col, t, (0.8, 2.4), (40, 90))).collect();
+                let by_col: Vec<f32> = (0..cols).map(|col| (col as f32 * 0.05 + t * 0.03).sin()).collect();
+                for row in 0..rows {
+                    let by_row = (row as f32 * 0.07 + t * 0.11).sin();
+                    for col in 0..cols {
+                        let (head, period) = heads[col as usize];
+                        let behind = (head - -(row as f32)).rem_euclid(period) as u32;
+                        out.push(ember_shade(behind, by_col[col as usize] * by_row + dither(col, row) * 0.1));
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
 /// Where in the 4x4 dither a cell falls, from -0.5 to 0.5.
 fn dither(col: u32, row: u32) -> f32 {
     (f32::from(BAYER[(row % 4) as usize][(col % 4) as usize]) + 0.5) / 16.0 - 0.5
@@ -98,6 +150,11 @@ fn drift(col: u32, row: u32, t: f32) -> u8 {
         + (y * 0.089 - t * 0.05).sin()
         + ((x - y) * 0.047 + t * 0.04).sin()
         + ((x - cx).hypot(y - cy) * 0.16 - t * 0.12).sin();
+    drift_band(col, row, x, y, t, waves)
+}
+
+/// The shade of a drift cell from its sum of waves.
+fn drift_band(col: u32, row: u32, x: f32, y: f32, t: f32, waves: f32) -> u8 {
     let value = waves / 8.0 + 0.5 + dither(col, row) * 0.06;
     let band = EDGES.iter().filter(|edge| value >= **edge).count() as u8;
     if band <= BASE {
@@ -110,18 +167,27 @@ fn drift(col: u32, row: u32, t: f32) -> u8 {
 /// Where in its column a drop is: each column runs a drop every `period` cells, at its own speed and from its own start.
 /// How many cells the cell `row` is behind the drop's head along the column's travel, 0 at the head.
 fn behind(col: u32, row: f32, t: f32, speeds: (f32, f32), periods: (u32, u32)) -> u32 {
+    let (head, period) = drop_head(col, t, speeds, periods);
+    (head - row).rem_euclid(period) as u32
+}
+
+/// Where a column's drop is along its travel `t` seconds in, and how many cells it runs before the next one.
+fn drop_head(col: u32, t: f32, speeds: (f32, f32), periods: (u32, u32)) -> (f32, f32) {
     let hash = mix(col);
     let speed = speeds.0 + (hash & 0x3ff) as f32 / 1023.0 * (speeds.1 - speeds.0);
     let period = (periods.0 + (hash >> 10) % (periods.1 - periods.0)) as f32;
     let start = ((hash >> 20) % 1024) as f32;
-    let head = (t * speed + start).rem_euclid(period);
-    (head - row).rem_euclid(period) as u32
+    ((t * speed + start).rem_euclid(period), period)
 }
 
 /// Drops of the blue falling 1.5 to 4 cells a second down each column, one every 36 to 72 cells, each with a short
 /// fading trail.
 fn rain(col: u32, row: u32, t: f32) -> u8 {
-    match behind(col, row as f32, t, (1.5, 4.0), (36, 72)) {
+    rain_shade(behind(col, row as f32, t, (1.5, 4.0), (36, 72)))
+}
+
+fn rain_shade(behind: u32) -> u8 {
+    match behind {
         0 => COOL,
         1..=2 => COOL_FAINT,
         3..=5 => DIM,
@@ -145,13 +211,18 @@ fn checker(col: u32, row: u32, t: f32) -> u8 {
 /// below them, over a dim warm glow that breathes slowly.
 fn embers(col: u32, row: u32, t: f32) -> u8 {
     // A rising spark: its head moves up the rows as time goes on, its trail below it.
-    match behind(col, -(row as f32), t, (0.8, 2.4), (40, 90)) {
+    let (x, y) = (col as f32, row as f32);
+    let glow = (x * 0.05 + t * 0.03).sin() * (y * 0.07 + t * 0.11).sin() + dither(col, row) * 0.1;
+    ember_shade(behind(col, -(row as f32), t, (0.8, 2.4), (40, 90)), glow)
+}
+
+/// The shade of an embers cell: a spark if it is within a spark's reach (`behind`), else the glow's.
+fn ember_shade(behind: u32, glow: f32) -> u8 {
+    match behind {
         0 => return WARM,
         1..=2 => return WARM_FAINT,
         _ => {}
     }
-    let (x, y) = (col as f32, row as f32);
-    let glow = (x * 0.05 + t * 0.03).sin() * (y * 0.07 + t * 0.11).sin() + dither(col, row) * 0.1;
     if glow > 0.62 {
         WARM_FAINT
     } else if glow < -0.7 {
@@ -173,6 +244,16 @@ mod tests {
     /// The shades of a grid of cells `t` seconds in, row by row.
     fn grid(pattern: Pattern, t: f32) -> Vec<u8> {
         (0..80).flat_map(|row| (0..100).map(move |col| pattern.shade(col, row, t))).collect()
+    }
+
+    #[test]
+    fn a_grid_is_what_each_cell_alone_gives() {
+        for pattern in Pattern::ALL {
+            for (cols, rows, t) in [(100, 80, 12.5), (7, 3, 0.0), (213, 129, 301.2)] {
+                let each: Vec<u8> = (0..rows).flat_map(|row| (0..cols).map(move |col| pattern.shade(col, row, t))).collect();
+                assert_eq!(pattern.shades(cols, rows, t), each, "{pattern:?} {cols}x{rows} at {t}");
+            }
+        }
     }
 
     #[test]
@@ -220,8 +301,7 @@ mod tests {
                 let start = std::time::Instant::now();
                 for step in 0..15 {
                     let t = step as f32 * STEP;
-                    let shades: Vec<u8> = (0..rows).flat_map(|row| (0..cols).map(move |col| pattern.shade(col, row, t))).collect();
-                    std::hint::black_box(shades);
+                    std::hint::black_box(pattern.shades(cols, rows, t));
                 }
                 let ms = start.elapsed().as_secs_f64() * 1000.0 / 15.0;
                 eprintln!("[measure] {pattern:?} {width}x{height}: {} cells, {ms:.3} ms a step", cols * rows);
