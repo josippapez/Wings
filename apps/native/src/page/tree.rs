@@ -3095,4 +3095,41 @@ impl Tree {
         let mut next = next.clone();
         restore(&mut next.children, &before, &shows) && next == *self
     }
+
+    /// The nodes that differ between this tree and `next`, the innermost ones whose children are the same, by the path of
+    /// node kinds to them, with both versions: what a page changed in a tree it sent.
+    #[cfg(feature = "test-support")]
+    pub fn differences(&self, next: &Tree) -> Vec<String> {
+        fn kind(node: &Node) -> String {
+            format!("{node:?}").chars().take_while(|c| c.is_alphanumeric()).collect()
+        }
+        fn short(node: &Node) -> String {
+            let said = format!("{node:?}");
+            said.chars().take(600).collect()
+        }
+        fn walk(a: &[Node], b: &[Node], path: &str, out: &mut Vec<String>) {
+            if a.len() != b.len() {
+                out.push(format!("{path}: {} children, then {}", a.len(), b.len()));
+            }
+            for (x, y) in a.iter().zip(b) {
+                if x == y || out.len() >= 8 {
+                    continue;
+                }
+                let path = format!("{path} > {}", kind(x));
+                let (px, py) = (x.parts(), y.parts());
+                if kind(x) == kind(y) && px.len() == py.len() && px != py {
+                    for (pa, pb) in px.iter().zip(&py) {
+                        if pa != pb {
+                            walk(pa, pb, &path, out);
+                        }
+                    }
+                } else {
+                    out.push(format!("{path}:\n    was {}\n    now {}", short(x), short(y)));
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.children, &next.children, "", &mut out);
+        out
+    }
 }

@@ -120,6 +120,8 @@ pub struct TextField {
     style: Option<TextStyle>,
     /// The window's field layer draws its text, not the view it sits in (`FieldLayer`).
     in_layer: bool,
+    /// Where the view it sits in draws something of its own over part of it, as it was last drawn (`ui::under`).
+    over: Vec<Bounds<Pixels>>,
 }
 
 impl EventEmitter<FieldEvent> for TextField {}
@@ -173,6 +175,7 @@ impl TextField {
             layout: None,
             style: None,
             in_layer: false,
+            over: Vec::new(),
         }
     }
 
@@ -272,11 +275,25 @@ impl TextField {
     fn redraw(&mut self, typed: bool, window: &Window, cx: &mut Context<Self>) {
         let layer = LAYERS.with_borrow(|layers| layers.get(&window.window_handle().window_id()).copied());
         match layer {
-            Some(layer) if self.in_layer && !window.is_a11y_active() && !(typed && self.resizes(window)) => {
+            Some(layer)
+                if self.in_layer
+                    && !window.is_a11y_active()
+                    && !(typed && self.resizes(window))
+                    && !self.reaches_over(window) =>
+            {
                 App::notify(cx, layer)
             }
             _ => cx.notify(),
         }
+    }
+
+    /// Whether its text now reaches under something the view it sits in draws over part of it, which only the view
+    /// drawing it in place keeps over it.
+    fn reaches_over(&self, window: &Window) -> bool {
+        let Some(style) = self.style.as_ref().filter(|_| !self.over.is_empty()) else {
+            return false;
+        };
+        self.lay_out(style, self.bounds, window).0.reaches(&self.over, self.bounds)
     }
 
     /// Whether its text now is taller or shorter than where it was last drawn, so the views around it have to make room.
@@ -1075,6 +1092,39 @@ impl Layout {
             .fold(px(0.0), Pixels::max)
     }
 
+    /// Whether what it draws in `bounds`, its rows of text with a caret after them and what a glyph draws past its
+    /// advance, reaches into any of `over`. A wrapped row but the last fills the width.
+    fn reaches(&self, over: &[Bounds<Pixels>], bounds: Bounds<Pixels>) -> bool {
+        if over.is_empty() {
+            return false;
+        }
+        let pad = self.font_size / 2.0;
+        self.lines.iter().zip(&self.tops).any(|(line, top)| {
+            let rows = line.wrap_boundaries.len() + 1;
+            let last = line.unwrapped_layout.width - self.row_x(line, rows - 1);
+            (0..rows).any(|row| {
+                let width = if row + 1 < rows { bounds.size.width } else { last };
+                let drawn = Bounds::new(
+                    self.origin + point(-pad, *top + self.line_height * row - pad),
+                    size(width + pad * 2.0 + px(1.0), self.line_height + pad * 2.0),
+                )
+                .intersect(&bounds);
+                over.iter().any(|at| at.intersects(&drawn))
+            })
+        })
+    }
+
+    /// Where row `row` of `line` starts, along the line unwrapped.
+    fn row_x(&self, line: &WrappedLine, row: usize) -> Pixels {
+        match row {
+            0 => px(0.0),
+            row => {
+                let wrap = line.wrap_boundaries[row - 1];
+                line.unwrapped_layout.x_for_index(line.unwrapped_layout.runs[wrap.run_ix].glyphs[wrap.glyph_ix].index)
+            }
+        }
+    }
+
     fn line_of(&self, index: usize) -> usize {
         self.starts
             .partition_point(|&start| start <= index)
@@ -1221,13 +1271,17 @@ impl Element for FieldText {
         let caret = field.caret_in(&layout, window);
         // The field being typed in leaves its text to the window's field layer, which a key draws alone: unless it is
         // in no piece that keeps its drawing, under something its piece draws over it, moving, or drawn after the layer.
+        // Under something its piece draws over a part of it, as a chat's side panel floating over its message box, the
+        // layer draws it while its text stays out of that part.
         let id = window.window_handle().window_id();
+        let over = slots::over(bounds);
         let piece = (focus.is_focused(window)
             && !field.disabled
             && !field.time
             && !motion::moving()
-            && layer_waiting(id))
-        .then(|| slots::uncovered_piece(bounds))
+            && layer_waiting(id)
+            && !layout.reaches(&over, bounds))
+        .then(slots::uncovered_piece)
         .flatten();
         window.handle_input(&focus, ElementInputHandler::new(bounds, self.0.clone()), cx);
         let style = window.text_style();
@@ -1263,6 +1317,7 @@ impl Element for FieldText {
             field.layout = Some(layout);
             field.style = Some(style);
             field.in_layer = piece.is_some();
+            field.over = over;
         });
     }
 }

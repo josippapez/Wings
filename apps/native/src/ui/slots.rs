@@ -182,17 +182,22 @@ impl Element for InPiece {
     }
 }
 
-/// The piece being painted, when it is one that keeps its last drawing and draws nothing of its own over what is
-/// painted now at `bounds` (`in_piece`, `under`): that may draw in a layer over the window's pieces instead.
-pub(crate) fn uncovered_piece(bounds: Bounds<Pixels>) -> Option<Piece> {
+/// The piece being painted, when it is one that keeps its last drawing and draws nothing of its own over all of what is
+/// painted now (`in_piece`): that may draw in a layer over the window's pieces instead, where nothing the piece draws
+/// over part of it is (`over`).
+pub(crate) fn uncovered_piece() -> Option<Piece> {
     let piece = current_piece();
-    let over = OVER.with_borrow(|over| over.iter().any(|at| at.get().intersects(&bounds)));
-    (piece != WINDOW && !COVERED.get() && !over).then_some(piece)
+    (piece != WINDOW && !COVERED.get()).then_some(piece)
+}
+
+/// Where the piece being painted draws something of its own over part of `bounds`, later in this draw (`under`).
+pub(crate) fn over(bounds: Bounds<Pixels>) -> Vec<Bounds<Pixels>> {
+    OVER.with_borrow(|over| over.iter().map(|at| at.get()).filter(|at| at.intersects(&bounds)).collect())
 }
 
 /// `element`, over part of which the piece it is in draws something of its own later in the same draw (a page's pane
 /// floating over its content), at the bounds `over` holds once the draw has laid it out: what is painted in `element`
-/// where that is draws in place, under it (`uncovered_piece`).
+/// where that is draws in place, under it (`over`).
 pub fn under(over: Rc<Cell<Bounds<Pixels>>>, element: impl IntoElement) -> Under {
     Under {
         over,

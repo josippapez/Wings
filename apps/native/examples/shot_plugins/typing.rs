@@ -4,7 +4,9 @@
 //! keys into the message box and prints the median ms of a key's frame. Then it prints the page's outline, and the same
 //! measure with each big part of the page left out, which is what that part costs a key.
 //!
-//! `CHAT_TYPING_NO_LAYER=1` leaves the field layer out, for the cost of a key before it.
+//! `CHAT_TYPING_STEADY_MS=<ms>` types the keys again one every <ms>, without waiting for the page's answer to each, as a
+//! person types. `CHAT_TYPING_NO_LAYER=1` leaves the field layer out, for the cost of a key before it. `CHAT_TYPING_APPEND=<lines.jsonl>`
+//! adds lines Claude Code prints after the session's (a background task that runs, a tool call still going).
 //! `CHAT_TYPING_SIZE=<width>,<height>` sizes the window (1600,1000 by default). `CHAT_TYPING_KEYS=<n>` keys are timed (60).
 //! `CHAT_TYPING_PARTS=<path>[,<path>...]` measures again without each node under each path of child indexes (`0.1` is
 //! the second child of the first node), one at a time.
@@ -23,8 +25,8 @@ use wings_native::{
 
 use super::wait;
 
-/// The window's root, as the workspace: it draws the main column's piece, kept as last drawn, and over it the text of the
-/// field being typed in (`FieldLayer`).
+/// The window's root, as the workspace: it draws the main column's piece, kept as last drawn, and over it what moves in
+/// the page (its spinners, shimmering and counting lines) and the text of the field being typed in (`FieldLayer`).
 struct Root {
     main: Entity<Main>,
     fields: Option<Entity<FieldLayer>>,
@@ -41,6 +43,8 @@ impl gpui::Render for Root {
             // It starts each draw of the slots, as the workspace's does.
             .child(wings_native::ui::spinner_layer(window))
             .child(self.main.clone().cached(gpui::StyleRefinement::default().size_full()))
+            // The page is on screen, so what moves in it, a task's "Running · 12s" too, draws in this layer.
+            .child(wings_native::ui::view_spinner_layer(window))
             .children(self.fields.clone())
     }
 }
@@ -109,6 +113,40 @@ fn keys(cx: &mut VisualTestAppContext, window: AnyWindowHandle, page: &Entity<Pa
     (median(&mut frames, 0.5), median(&mut frames, 0.9), median(&mut echoes, 0.5), renders)
 }
 
+/// `n` keys typed one every `every`, as a person types, without waiting for the page's answer to each: what the window
+/// draws between keys is drawn as it comes, every few ms, as the app draws a frame. Gives the median ms of a key's frame,
+/// how long the page took to answer a key (median, of those it answered before the next), and the page's renders.
+fn steady(cx: &mut VisualTestAppContext, window: AnyWindowHandle, page: &Entity<PageView>, n: usize, every: Duration) -> (f64, f64, usize) {
+    let (mut frames, mut answers) = (Vec::new(), Vec::new());
+    let renders = page.read_with(cx, |view, _| view.renders());
+    for at in 0..n {
+        let key = if at % 7 == 6 { " " } else { "x" };
+        let sent = page.read_with(cx, |view, _| view.trees_sent());
+        let start = Instant::now();
+        let _ = cx.update_window(window, |_, window, cx| {
+            window.dispatch_keystroke(gpui::Keystroke { modifiers: Default::default(), key: key.into(), key_char: Some(key.into()) }, cx);
+            window.draw(cx).clear(cx)
+        });
+        frames.push(start.elapsed().as_secs_f64() * 1000.0);
+        let mut answered = false;
+        while start.elapsed() < every {
+            cx.run_until_parked();
+            if !answered && page.read_with(cx, |view, _| view.trees_sent()) != sent {
+                answered = true;
+                answers.push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            let _ = cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx));
+            std::thread::sleep(Duration::from_millis(4));
+        }
+    }
+    let renders = page.read_with(cx, |view, _| view.renders()) - renders;
+    let median = |times: &mut Vec<f64>| {
+        times.sort_by(f64::total_cmp);
+        times.get(times.len() / 2).copied().unwrap_or(f64::NAN)
+    };
+    (median(&mut frames), median(&mut answers), renders)
+}
+
 /// Gives the message box the keyboard.
 fn focus(cx: &mut VisualTestAppContext, window: AnyWindowHandle, page: &Entity<PageView>) {
     let _ = cx.update_window(window, |_, window, cx| {
@@ -150,6 +188,11 @@ pub(super) fn typing(cx: &mut VisualTestAppContext, host: &PluginHost, source: &
                 printed.push('\n');
             }
         }
+    }
+    // `CHAT_TYPING_APPEND=<lines.jsonl>`: more lines Claude Code prints after those, as a background task that runs or a
+    // tool call still going, so a key is typed in a chat as it is while those last.
+    if let Some(more) = std::env::var_os("CHAT_TYPING_APPEND").filter(|path| !path.is_empty()) {
+        printed.push_str(&std::fs::read_to_string(more).expect("the lines to append"));
     }
     let fixture = root.join("typing.jsonl");
     std::fs::write(&fixture, printed).unwrap();
@@ -214,6 +257,12 @@ pub(super) fn typing(cx: &mut VisualTestAppContext, host: &PluginHost, source: &
     clear(cx, window);
     let (median, p90, echo, renders) = keys(cx, window, &page, n);
     println!("[measure] typing {n} keys in {id} at {width}x{height}: key frame median {median:.2} ms, p90 {p90:.2} ms; echo frame median {echo:.2} ms; page rendered {renders} times");
+    // `CHAT_TYPING_STEADY_MS=<ms>`: the same keys again, one every <ms> without waiting for the page's answers.
+    if let Some(every) = std::env::var("CHAT_TYPING_STEADY_MS").ok().and_then(|ms| ms.parse().ok()) {
+        clear(cx, window);
+        let (median, answer, renders) = steady(cx, window, &page, n, Duration::from_millis(every));
+        println!("[measure] typing {n} keys one every {every} ms: key frame median {median:.2} ms; the page answered a key in {answer:.1} ms (median); page rendered {renders} times");
+    }
     for (scroll, drawn, of) in page.read_with(cx, |view, _| view.windows_drawn()) {
         println!("[measure] the column of Scroll #{scroll} drew children {drawn:?} of {of}");
     }

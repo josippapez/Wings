@@ -3502,17 +3502,20 @@ mod field_layer {
 
     /// A page with something of its own over a field it shows, its dialog or a chat's side panel floating over the
     /// transcript and its message box: typed into, the field draws its text in place, under that, not in the window's
-    /// layer over it. One the floating pane doesn't reach, as a chat's message box under a short panel, draws in the
-    /// layer.
+    /// layer over it. A field the floating pane covers only part of draws in the layer while its text stays clear of the
+    /// pane, as a short message in a chat's box under a tall panel; one the pane doesn't reach does.
     #[test]
     fn a_field_under_the_pages_own_dialog_or_floating_pane_draws_in_place() {
-        for over in ["dialog", "float", "float-above"] {
-            let mut typed = String::new();
+        let long = "words that run on along the field until they pass under the pane at its right, ".repeat(3);
+        for (over, typed, in_layer) in
+            [("dialog", "abc", false), ("float", "abc", true), ("float", long.as_str(), false), ("float-above", "abc", true)]
+        {
+            let mut value = String::new();
             let source = fake::page("page", move |event| {
                 if let Some((_, change)) = event {
-                    typed = change["value"].as_str().unwrap_or_default().to_owned();
+                    value = change["value"].as_str().unwrap_or_default().to_owned();
                 }
-                let field = json!({ "id": 3, "type": "TextInput", "props": { "label": "Name", "value": typed.clone(), "onChange": "3:change" } });
+                let field = json!({ "id": 3, "type": "TextInput", "props": { "label": "Name", "value": value.clone(), "onChange": "3:change" } });
                 let over_it = text(7, 8, "Over the field".into());
                 // Far enough down the start that a pane of one line doesn't reach it.
                 let lines: Vec<Value> = (0..12).map(|at| text(20 + 2 * at, 21 + 2 * at, format!("Line {at}"))).collect();
@@ -3531,13 +3534,55 @@ mod field_layer {
             });
             let (app, mut window, page) = open(source, "Over the field", "Name");
             let before = drawn(&window, &page).0;
-            type_keys(&app, &mut window, &page, "abc");
+            type_keys(&app, &mut window, &page, typed);
             let field = window.read(|_, cx| page.read(cx).input_field("Name")).unwrap();
-            let in_layer = over == "float-above";
-            assert_eq!(window.read(|_, cx| field.read(cx).drawn()), (Some("abc".into()), in_layer), "{over}");
+            assert_eq!(window.read(|_, cx| field.read(cx).drawn()), (Some(typed.to_owned()), in_layer), "{over} {typed}");
             let renders = drawn(&window, &page).0 - before;
-            assert_eq!(renders >= 3, !in_layer, "{over}: the page drew {renders} times for 3 keys");
+            if in_layer {
+                assert_eq!(renders, 0, "{over} {typed}");
+            } else {
+                assert!(renders >= 3, "{over} {typed}: the page drew {renders} times");
+            }
         }
+    }
+
+    /// A long chat's page took longer to answer a key than the next key took to come, so its answers came back behind
+    /// what the box showed, and each was drawn as the page's own change: most keys rebuilt the chat again. Typed faster
+    /// than the page answers, the box keeps what was typed and the page draws nothing again.
+    #[test]
+    fn answers_that_come_back_behind_the_typing_draw_nothing() {
+        let mut value = String::new();
+        let source = fake::page("page", move |event| {
+            if let Some((_, change)) = event {
+                thread::sleep(Duration::from_millis(30));
+                value = change["value"].as_str().unwrap_or_default().to_owned();
+            }
+            json!({ "id": 0, "type": "#root", "children": [{ "id": 1, "type": "Page", "children": [
+                { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [
+                    text(4, 5, "Type here".into()),
+                    { "id": 3, "type": "TextInput", "props": { "label": "Name", "value": value.clone(), "onChange": "3:change" } }] }] }] })
+        });
+        let (app, mut window, page) = open(source, "Type here", "Name");
+        let (before, trees) = (drawn(&window, &page).0, window.read(|_, cx| page.read(cx).trees_sent()));
+        for key in ["a", "b", "c", "d", "e"] {
+            window.simulate_input(key);
+            window.draw();
+        }
+        // Every answer let in: none has come for a while after the first.
+        let (deadline, mut last, mut quiet) = (Instant::now() + Duration::from_secs(10), trees, Instant::now());
+        while last == trees || quiet.elapsed() < Duration::from_millis(300) {
+            assert!(Instant::now() < deadline, "the page never answered");
+            app.run_until_parked();
+            window.draw();
+            let now = window.read(|_, cx| page.read(cx).trees_sent());
+            if now != last {
+                (last, quiet) = (now, Instant::now());
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        let field = window.read(|_, cx| page.read(cx).input_field("Name")).unwrap();
+        assert_eq!(window.read(|_, cx| field.read(cx).drawn()), (Some("abcde".into()), true));
+        assert_eq!(drawn(&window, &page).0 - before, 0, "an answer behind the typing drew the page");
     }
 }
 

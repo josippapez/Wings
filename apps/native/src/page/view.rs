@@ -519,11 +519,26 @@ impl PageView {
                         let mut echo = false;
                         if let Some(tree) = taken.tree {
                             // The page sent back only what was just typed, which its fields already show: nothing to draw.
+                            // An answer to an earlier key, typed before the page caught up, is an echo too: drawing the
+                            // page again for each one rebuilt a long chat on most keys of someone typing at speed.
                             echo = view.tree.as_ref().is_some_and(|old| {
                                 old.echoes(&tree, |id, text| {
-                                    view.inputs.borrow().get(&id).is_some_and(|state| state.field.read(cx).value() == text)
+                                    view.inputs.borrow().get(&id).is_some_and(|state| {
+                                        state.field.read(cx).value() == text || state.sent.iter().any(|sent| sent == text)
+                                    })
                                 })
                             });
+                            if echo {
+                                view.echoed(&tree.children);
+                            }
+                            // `WINGS_PAGE_DIFFS=1`: what changed in each tree that isn't an echo of what was typed.
+                            #[cfg(feature = "test-support")]
+                            if !echo
+                                && std::env::var_os("WINGS_PAGE_DIFFS").is_some()
+                                && let Some(old) = &view.tree
+                            {
+                                eprintln!("[tree {}] {}", view.trees + 1, old.differences(&tree).join("\n"));
+                            }
                             let mut ids = HashSet::new();
                             fn controls(nodes: &[Node], ids: &mut HashSet<u64>) {
                                 for node in nodes {
@@ -1111,6 +1126,24 @@ impl PageView {
             cx.notify();
         }
         found.is_some()
+    }
+
+    /// Takes the texts of `nodes`' inputs as given back, as a render takes them (`input`): what was sent up to each is
+    /// heard, and each is the text the page last gave. A page's echo of what was typed isn't drawn, so this keeps the
+    /// texts sent from piling up while someone types, and a later render from taking an earlier one as the page's own.
+    fn echoed(&self, nodes: &[Node]) {
+        for node in nodes {
+            if let Node::Input(input) = node
+                && let Some(state) = self.inputs.borrow_mut().get_mut(&input.id)
+                && let Some(at) = state.sent.iter().position(|sent| *sent == input.value)
+            {
+                state.sent.drain(..=at);
+                state.given = input.value.clone();
+            }
+            for part in node.parts() {
+                self.echoed(part);
+            }
+        }
     }
 
     /// Scrolls the page's shell as little as brings `field` wholly into view, with the shell's 14pt padding around it.
