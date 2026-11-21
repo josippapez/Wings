@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.83 · 2026-11-22
+
+- **Very long chats open**: a plugin page gets ten times as long for each step, so a Claude chat reading back a session with many screenshots no longer stops with "the page ran for too long".
+
 ## 0.2.82 · 2026-11-21
 
 - **Long chats keep working**: a plugin page may now use up to 512 MB, up from 64 MB. A long Claude chat with many screenshots ran out of room and stopped with an error.

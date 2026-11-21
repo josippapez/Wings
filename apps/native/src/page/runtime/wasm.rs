@@ -39,8 +39,12 @@ use wasmtime::{Caller, Config, Extern, Instance, Linker, Module, Store, StoreLim
 /// The first line of the source of a page that is a WebAssembly module, before the module's path.
 pub const MARKER: &str = "// wings-wasm ";
 
-/// What one turn may run: about a second of a busy loop, as a JS page's turn has a second.
+/// What one turn of a plugin's main may run: about a second of a busy loop, as a JS page's turn has a second.
 const TURN_FUEL: u64 = 1_000_000_000;
+/// What one turn of a page may run, ten times a main's: a page reads back what it shows in one turn, and a Claude chat
+/// reading back a 96 MB session with 138 pictures ran out of a main's turn and was stopped. A page stuck in a loop is
+/// stopped after about ten seconds, on its own thread.
+const PAGE_TURN_FUEL: u64 = 10 * TURN_FUEL;
 
 type Emit = Rc<RefCell<Box<dyn FnMut(Event)>>>;
 
@@ -53,6 +57,11 @@ pub(super) struct Host {
     /// When each timer the page set is due, with the id it gave it.
     pub(super) timers: Vec<(Instant, u32)>,
     limits: StoreLimits,
+}
+
+/// What one turn of a frame may run: a page's more than a main's.
+fn turn_fuel(page: bool) -> u64 {
+    if page { PAGE_TURN_FUEL } else { TURN_FUEL }
 }
 
 /// What a frame's memory may grow to: a page's more than a main's.
@@ -256,7 +265,7 @@ impl Page {
         let (engine, module) = compiled(path)?;
         let mut store = Store::new(&engine, host);
         store.limiter(|host| &mut host.limits);
-        store.set_fuel(TURN_FUEL)?;
+        store.set_fuel(turn_fuel(store.data().render))?;
         let instance = imports(&engine)?.instantiate(&mut store, &module)?;
         let start = instance.get_typed_func::<(), ()>(&mut store, "wings_start")?;
         let mut page = Page {
@@ -290,7 +299,7 @@ impl Frame for Page {
     }
 
     fn command(&mut self, command: Command) -> wasmtime::Result<()> {
-        self.store.set_fuel(TURN_FUEL)?;
+        self.store.set_fuel(turn_fuel(self.store.data().render))?;
         match command {
             Command::Event { handler, payload } => {
                 let (handler, handler_len) = self.give(&handler)?;
@@ -312,7 +321,7 @@ impl Frame for Page {
     }
 
     fn fire(&mut self, id: u32) -> wasmtime::Result<()> {
-        self.store.set_fuel(TURN_FUEL)?;
+        self.store.set_fuel(turn_fuel(self.store.data().render))?;
         self.timer.call(&mut self.store, id)
     }
 }
@@ -528,7 +537,7 @@ mod tests {
 mod heap_tests {
     use wasmtime::ResourceLimiter;
 
-    use super::limits;
+    use super::{limits, turn_fuel};
 
     /// A page may grow past the 64 MB a main keeps to: a long chat's page ran out there and stopped.
     #[test]
@@ -539,5 +548,12 @@ mod heap_tests {
         assert!(!page.memory_growing(0, 513 * MB, None).unwrap());
         assert!(main.memory_growing(0, 64 * MB, None).unwrap());
         assert!(!main.memory_growing(0, 65 * MB, None).unwrap());
+    }
+
+    /// A page's turn may run ten times a main's: a long chat's read-back passed a main's second and was stopped.
+    #[test]
+    fn a_pages_turn_may_run_ten_times_a_mains() {
+        assert_eq!(turn_fuel(false), 1_000_000_000);
+        assert_eq!(turn_fuel(true), 10_000_000_000);
     }
 }
