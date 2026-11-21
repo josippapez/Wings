@@ -1,7 +1,7 @@
 //! The plugin's settings, kept in `wings.storage` under the keys the TypeScript build used, and told to the other frames
 //! when they change (`setting:<key>`, which they read again).
 
-use crate::kv;
+use crate::{kv, orderings::Sort};
 use serde_json::{Value, json};
 use wings_plugin::messages;
 
@@ -35,7 +35,7 @@ pub fn set_keep_local(on: bool) -> Result<(), String> {
 // ---------- Sidebar order: how the project section sorts the issues no agent is working on. ----------
 
 pub const SECTION_ORDER: &str = "sectionOrder";
-pub const SECTION_ORDERS: [(&str, &str); 2] = [("status", "Status"), ("date", "Latest change")];
+pub const SECTION_ORDERS: [(&str, &str); 3] = [("status", "Status"), ("date", "Latest change"), ("created", "Created")];
 
 pub fn section_order() -> String {
     read(SECTION_ORDER).as_str().filter(|saved| SECTION_ORDERS.iter().any(|(value, _)| value == saved)).unwrap_or("status").to_owned()
@@ -63,11 +63,12 @@ pub fn set_default_view(view: &str) -> Result<(), String> {
 pub struct Layout {
     pub list: bool,
     pub by_parent: bool,
+    pub sort: Sort,
 }
 
 /// How the tab starts out: rows are the board grouped by epic or feature, the list is grouped by status.
 pub fn start_layout(view: &str) -> Layout {
-    Layout { list: view == "list", by_parent: view == "rows" }
+    Layout { list: view == "list", by_parent: view == "rows", sort: Sort::Default }
 }
 
 pub const LAST_LAYOUT: &str = "lastLayout";
@@ -81,17 +82,18 @@ pub fn last_layout() -> Option<Layout> {
         "list" => true,
         _ => return None,
     };
-    Some(Layout { list, by_parent: saved["byParent"].as_bool()? })
+    Some(Layout { list, by_parent: saved["byParent"].as_bool()?, sort: saved["sort"].as_str().and_then(Sort::parse).unwrap_or_default() })
 }
 
 pub fn set_last_layout(layout: Option<Layout>) -> Result<(), String> {
-    save(LAST_LAYOUT, &layout.map_or(Value::Null, |l| json!({ "layout": if l.list { "list" } else { "board" }, "byParent": l.by_parent })))
+    save(LAST_LAYOUT, &layout.map_or(Value::Null, |l| json!({ "layout": if l.list { "list" } else { "board" }, "byParent": l.by_parent, "sort": l.sort.as_str() })))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::kv::memory;
+    use crate::orderings::Sort;
 
     #[test]
     fn a_setting_reads_as_its_default_when_unset_or_not_a_value_it_takes_and_the_view_starts_the_layout() {
@@ -106,15 +108,18 @@ mod tests {
         assert!(!keep_local());
         assert_eq!(section_order(), "date");
         assert_eq!(memory::peek("sectionOrder"), Some(json!("date")));
-        assert_eq!((start_layout("board"), start_layout("rows"), start_layout("list")), (Layout { list: false, by_parent: false }, Layout { list: false, by_parent: true }, Layout { list: true, by_parent: false }));
+        assert_eq!((start_layout("board"), start_layout("rows"), start_layout("list")), (Layout { list: false, by_parent: false, sort: Sort::Default }, Layout { list: false, by_parent: true, sort: Sort::Default }, Layout { list: true, by_parent: false, sort: Sort::Default }));
     }
 
     #[test]
     fn the_last_layout_is_kept_as_the_typescript_build_kept_it_and_cleared_with_null() {
         memory::reset(&[]);
-        set_last_layout(Some(Layout { list: true, by_parent: false })).unwrap();
-        assert_eq!(memory::peek("lastLayout"), Some(json!({ "layout": "list", "byParent": false })));
-        assert_eq!(last_layout(), Some(Layout { list: true, by_parent: false }));
+        set_last_layout(Some(Layout { list: true, by_parent: false, sort: Sort::Created })).unwrap();
+        assert_eq!(memory::peek("lastLayout"), Some(json!({ "layout": "list", "byParent": false, "sort": "created" })));
+        assert_eq!(last_layout(), Some(Layout { list: true, by_parent: false, sort: Sort::Created }));
+        // A layout saved before the sort existed reads as the default sort.
+        memory::reset(&[("lastLayout", json!({ "layout": "board", "byParent": true }))]);
+        assert_eq!(last_layout(), Some(Layout { list: false, by_parent: true, sort: Sort::Default }));
         set_last_layout(None).unwrap();
         assert_eq!(last_layout(), None);
     }

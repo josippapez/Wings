@@ -9,7 +9,7 @@ use crate::{
     delete_confirm::{ask_to_delete, asking, node as confirm_node},
     domain::{Issue, Op, Status, Store, Update},
     feed::{self, Project},
-    orderings::{Column, Lane, board_columns, board_lanes, issue_tree},
+    orderings::{Column, Lane, Sort, board_columns, board_lanes, issue_tree},
     parts::{child_progress, error_text, is_delete_key, line, muted, priority_icon, row, session_marker, stack, status_dot, status_summary, type_icon, when, column},
     relations::{children_of, progress},
     search::Index,
@@ -324,6 +324,7 @@ fn build(project: &Project, store: Option<&Store>, version: u64) -> Vec<Node> {
     let views = row("m")
         .prop("wrap", true)
         .child(wings_plugin::ui::chips("View", &[("board", "Board"), ("list", "List")], if layout.list { "list" } else { "board" }, move |value| pick(Layout { list: value == "list", ..layout })))
+        .child(wings_plugin::ui::chips("Sort", &Sort::OPTIONS, layout.sort.as_str(), move |value| pick(Layout { sort: Sort::parse(value).unwrap_or_default(), ..layout })))
         .maybe(has_parents.then(|| wings_plugin::ui::chip("Group by parent", layout.by_parent, move || pick(Layout { by_parent: !layout.by_parent, ..layout }))))
         .child(wings_plugin::ui::chip(format!("Show canceled ({})", count(Status::Canceled)), show_canceled, || with(|p| p.show_canceled = !p.show_canceled)));
     let filters = match all {
@@ -347,11 +348,11 @@ fn build(project: &Project, store: Option<&Store>, version: u64) -> Vec<Node> {
             if searching && shown.is_empty() {
                 body.push(stack("s").child(muted(format!("No issues match \"{}\".", query.trim())).prop("role", "status")));
             } else if layout.list {
-                body.push(issue_list(project, shown, all, by_parent_list(layout, has_parents), show_canceled, &folded));
+                body.push(issue_list(project, shown, all, by_parent_list(layout, has_parents), show_canceled, layout.sort, &folded));
             } else if by_parent {
-                body.push(lanes_board(project, shown, all, &folded, show_canceled));
+                body.push(lanes_board(project, shown, all, &folded, show_canceled, layout.sort));
             } else {
-                body.push(plain_board(project, shown, all, show_canceled));
+                body.push(plain_board(project, shown, all, show_canceled, layout.sort));
             }
         }
         _ => body.push(loading().text("Loading issues")),
@@ -369,8 +370,8 @@ fn shown_notice(total: usize, shown: usize) -> Option<Node> {
     (total > shown).then(|| muted(format!("{} more not shown: search to narrow them.", total - shown)).prop("size", "small"))
 }
 
-fn plain_board(project: &Project, shown: &[&Issue], all: &[Issue], show_canceled: bool) -> Node {
-    let columns = board_columns(shown.iter().copied(), show_canceled);
+fn plain_board(project: &Project, shown: &[&Issue], all: &[Issue], show_canceled: bool, sort: Sort) -> Node {
+    let columns = board_columns(shown.iter().copied(), show_canceled, sort);
     Node::new("Board").prop("label", format!("Issues for {}", project.name)).children(columns.into_iter().map(|Column { status, issues: column }| {
         let empty = EMPTY.iter().find(|(s, _)| *s == status).map_or("", |(_, text)| *text);
         let more = shown_notice(column.len(), COLUMN_CARDS);
@@ -382,8 +383,8 @@ fn plain_board(project: &Project, shown: &[&Issue], all: &[Issue], show_canceled
     }))
 }
 
-fn lanes_board(project: &Project, shown: &[&Issue], all: &[Issue], folded: &[String], show_canceled: bool) -> Node {
-    let lanes = board_lanes(shown, show_canceled);
+fn lanes_board(project: &Project, shown: &[&Issue], all: &[Issue], folded: &[String], show_canceled: bool, sort: Sort) -> Node {
+    let lanes = board_lanes(shown, show_canceled, sort);
     let statuses: &[Status] = if show_canceled { &Status::ALL } else { &Status::FLOW };
     let header = Node::new("BoardRow").children(statuses.iter().map(|status| {
         let count = shown.iter().filter(|i| i.status == *status).count();
@@ -397,7 +398,7 @@ fn lanes_board(project: &Project, shown: &[&Issue], all: &[Issue], folded: &[Str
 }
 
 /// Issues as rows like Linear's list: by parent, each epic over its children indented under it, or by status. Groups fold.
-fn issue_list(project: &Project, shown: &[&Issue], all: &[Issue], by_parent: bool, show_canceled: bool, folded: &[String]) -> Node {
+fn issue_list(project: &Project, shown: &[&Issue], all: &[Issue], by_parent: bool, show_canceled: bool, sort: Sort, folded: &[String]) -> Node {
     let is_open = |group: &str| !folded.iter().any(|k| k == group);
     let mut budget = LIST_ROWS;
     let mut take = |wanted: usize| {
@@ -408,7 +409,7 @@ fn issue_list(project: &Project, shown: &[&Issue], all: &[Issue], by_parent: boo
     let mut out = stack("l").prop("maxWidth", 1100);
     let mut hidden = 0;
     if by_parent {
-        let (groups, loose) = issue_tree(shown, show_canceled);
+        let (groups, loose) = issue_tree(shown, show_canceled, sort);
         if groups.len() + loose.len() == 0 {
             return muted(format!("No issues for {} yet.", project.name));
         }
@@ -448,7 +449,7 @@ fn issue_list(project: &Project, shown: &[&Issue], all: &[Issue], by_parent: boo
             out = out.child(list_group(is_open(""), "", summary, body));
         }
     } else {
-        let mut groups: Vec<Column> = board_columns(shown.iter().copied(), show_canceled).into_iter().filter(|g| !g.issues.is_empty()).collect();
+        let mut groups: Vec<Column> = board_columns(shown.iter().copied(), show_canceled, sort).into_iter().filter(|g| !g.issues.is_empty()).collect();
         groups.sort_by_key(|g| LIST_ORDER.iter().position(|s| *s == g.status));
         if groups.is_empty() {
             return muted(format!("No issues for {} yet.", project.name));

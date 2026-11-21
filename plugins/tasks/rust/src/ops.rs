@@ -418,7 +418,7 @@ mod tests {
         assert!(err(&s, up("WEB-1", |u| u.priority = Some("p1".into()))).contains("priority must be one of"));
         let mk = |n: u32, priority: Option<Priority>| Issue { key: format!("WEB-{n}"), title: format!("t{n}"), description: None, status: Status::Todo, kind: IssueType::Task, priority, parent: None, related: None, blocked_by: None, links: None, files: None, sessions: vec![], log: vec![], created_at: 0.0, updated_at: 0.0 };
         let issues = [mk(1, None), mk(2, Some(Priority::Low)), mk(3, Some(Priority::Urgent)), mk(4, Some(Priority::High))];
-        let column = &board_columns(&issues, false)[0];
+        let column = &board_columns(&issues, false, crate::orderings::Sort::Default)[0];
         assert_eq!(column.issues.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(), ["WEB-3", "WEB-4", "WEB-2", "WEB-1"]);
     }
 

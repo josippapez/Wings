@@ -4,7 +4,7 @@
 
 use crate::{
     domain::{Issue, Status},
-    orderings::section_issues,
+    orderings::{Sort, section_issues},
     relations::{children_of, progress},
     settings,
 };
@@ -80,7 +80,7 @@ fn children_after_parents<'a>(issues: &[&'a Issue]) -> Vec<&'a Issue> {
 
 /// The rows of a project's section for `issues`, or null for none.
 pub fn rows_of(project_id: &str, issues: &[Issue], running: &HashSet<String>, order: &str) -> Value {
-    let open = section_issues(issues, |i| i.sessions.iter().any(|s| running.contains(&s.id)), order == "date");
+    let open = section_issues(issues, |i| i.sessions.iter().any(|s| running.contains(&s.id)), Sort::of_section(order));
     let open: Vec<&Issue> = open.into_iter().take(SECTION_ROWS).collect();
     let listed: HashSet<&str> = open.iter().map(|i| i.key.as_str()).collect();
     let rows: Vec<Value> = children_after_parents(&open)
