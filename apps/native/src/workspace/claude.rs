@@ -10,6 +10,7 @@
 //!
 //! Requests come on the socket's threads. What they need of the window is read or done on its thread (`AppEnv::on_window`).
 
+use crate::workspace::NotifyWorkspace;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -67,7 +68,7 @@ const PERFORMANCE_SETTLE: Duration = Duration::from_millis(250);
 fn performance_tool() -> Value {
     json!({
         "name": "performance",
-        "description": "Measure Wings' own CPU, window frames per second and which views render most, over a few seconds, for checking a change's cost in the running app. Turns counting on for that window if the performance readout is off (without showing its card), then puts it back. Returns JSON: seconds, cpuPercent (of one core), frames, framesPerSecond, renders (view, count, perSecond; most first), cardShown (the readout's card was on, so its own update is in the numbers) and a one-line summary. Does not draw frames itself. Leave Wings alone while it runs for an idle number: a Claude session working in Wings draws too.",
+        "description": "Measure Wings' own CPU, window frames per second and which views render most, over a few seconds, for checking a change's cost in the running app. Turns counting on for that window if the performance readout is off (without showing its card), then puts it back. Returns JSON: seconds, cpuPercent (of one core), frames, framesPerSecond, renders (view, count, perSecond; most first), causes (at: file:line that notified the workspace, which redraws all its pieces, with count, perSecond; most first), cardShown (the readout's card was on, so its own update is in the numbers) and a one-line summary. Does not draw frames itself. Leave Wings alone while it runs for an idle number: a Claude session working in Wings draws too.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -110,14 +111,21 @@ fn performance_json(measured: &crate::ui::readout::Measured) -> Value {
         .iter()
         .map(|&(view, count)| json!({ "view": view, "count": count, "perSecond": per_second(count) }))
         .collect();
+    let causes: Vec<Value> = measured
+        .causes
+        .iter()
+        .map(|(at, count)| json!({ "at": at, "count": count, "perSecond": per_second(*count) }))
+        .collect();
+    let notifiers: Vec<String> = measured.causes.iter().take(3).map(|(at, count)| format!("{at} {}", per_second(*count))).collect();
     let busiest: Vec<String> = measured.renders.iter().take(5).map(|&(view, count)| format!("{view} {}", per_second(count))).collect();
     let summary = format!(
-        "Over {:.1} s Wings used {:.1}% of one core and drew {} frames/s ({} frames). Renders/s: {}.{}",
+        "Over {:.1} s Wings used {:.1}% of one core and drew {} frames/s ({} frames). Renders/s: {}. Workspace notified/s by: {}.{}",
         measured.seconds,
         measured.cpu_percent,
         per_second(measured.frames),
         measured.frames,
         if busiest.is_empty() { "none".to_string() } else { busiest.join(", ") },
+        if notifiers.is_empty() { "none".to_string() } else { notifiers.join(", ") },
         if measured.card_shown { " The readout card was on, so its update is counted." } else { "" },
     );
     json!({
@@ -126,6 +134,7 @@ fn performance_json(measured: &crate::ui::readout::Measured) -> Value {
         "frames": measured.frames,
         "framesPerSecond": per_second(measured.frames),
         "renders": renders,
+        "causes": causes,
         "cardShown": measured.card_shown,
         "summary": summary,
     })
@@ -1128,7 +1137,7 @@ impl Workspace {
         if change.is_some() {
             self.claude.error = None;
         }
-        cx.notify();
+        cx.notify_workspace();
         let work = cx.background_executor().spawn(async move {
             let claude = wings_plugins::exec::find_program("claude");
             let result = match change {
@@ -1164,7 +1173,7 @@ impl Workspace {
                 if let Err(error) = result {
                     this.claude.error = Some(error);
                 }
-                cx.notify();
+                cx.notify_workspace();
             });
         }));
     }
@@ -1173,7 +1182,7 @@ impl Workspace {
     #[cfg(feature = "test-support")]
     pub fn show_claude_accounts(&mut self, accounts: Vec<AccountStatus>, cx: &mut Context<Self>) {
         self.claude.accounts = Some(accounts);
-        cx.notify();
+        cx.notify_workspace();
     }
 }
 

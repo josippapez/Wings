@@ -1,6 +1,7 @@
 //! The Settings dialog, laid out like the desktop's: sections on the left, and each setting a row
 //! with what it does and its control. It lists only the settings the native app honours.
 
+use crate::workspace::NotifyWorkspace;
 use std::{cell::Cell, time::Duration};
 
 use gpui::{
@@ -277,7 +278,7 @@ impl Workspace {
             cx.subscribe_in(&link, window, |this, _, event, window, cx| match event {
                 FieldEvent::Submit { .. } => this.install_from_link(window, cx),
                 FieldEvent::Cancel => this.close_settings(window, cx),
-                FieldEvent::Changed => cx.notify(),
+                FieldEvent::Changed => cx.notify_workspace(),
             });
         let focus = cx.focus_handle();
         let mut recovery = FocusRecovery::default();
@@ -295,7 +296,7 @@ impl Workspace {
             recording: None,
             large: Cell::new(None),
         });
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Shows `section` in Settings, which is open.
@@ -313,7 +314,7 @@ impl Workspace {
             self.load_harnesses(cx);
             self.load_ai_status(cx);
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// The plugin whose settings page Settings shows.
@@ -375,7 +376,7 @@ impl Workspace {
         if !restored && let Some(pane) = self.focused_pane() {
             self.focus_pane(pane, window, cx);
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// An installed family, or empty for the default. Anything else stays in the field with a note.
@@ -394,7 +395,7 @@ impl Workspace {
         if installed && look(cx).family != family {
             self.set_look(|look| look.family = family, cx);
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Changes how every terminal looks or types, saves it, and redraws them.
@@ -444,7 +445,7 @@ impl Workspace {
         self.save(cx);
         // "Put idle agents to sleep" may have changed.
         self.plan_sleep(cx);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// A select: its trigger, and its menu while open. A choice closes the menu.
@@ -482,7 +483,7 @@ impl Workspace {
                             dialog.menu = None;
                         }
                         choose(this, cx);
-                        cx.notify();
+                        cx.notify_workspace();
                     }))
                     .into_any_element()
             })
@@ -498,7 +499,7 @@ impl Workspace {
                         if let Some(dialog) = &mut this.settings {
                             dialog.menu = (dialog.menu != Some(id)).then_some(id);
                         }
-                        cx.notify();
+                        cx.notify_workspace();
                     })),
             )
             .children(self.popover_phase(id, open, cx).map(|phase| {
@@ -508,7 +509,7 @@ impl Workspace {
                             if let Some(dialog) = &mut this.settings {
                                 dialog.menu = None;
                             }
-                            cx.notify();
+                            cx.notify_workspace();
                         },
                     )))
                 })
@@ -589,7 +590,7 @@ impl Workspace {
                         if let Some(dialog) = &mut this.settings
                             && dialog.recording.take().is_some()
                         {
-                            cx.notify();
+                            cx.notify_workspace();
                         }
                     }))
             })
@@ -627,7 +628,7 @@ impl Workspace {
         if let Some(dialog) = &mut self.settings {
             dialog.recording = Some(listening);
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// One key press while recording. Returns whether it was taken, which every key press is until recording ends.
@@ -656,7 +657,7 @@ impl Workspace {
             hotkey.accelerator = accelerator;
             self.set_global_hotkey(hotkey, cx);
         }
-        cx.notify();
+        cx.notify_workspace();
         true
     }
 

@@ -3,6 +3,7 @@
 //! project, narrowed by words, last activity and branch. Resuming one opens it where it started, in a new tab, as the
 //! desktop's `launchSession` does: in the project that holds its folder, or in a project made of that folder.
 
+use crate::workspace::NotifyWorkspace;
 use std::{
     ops::Range,
     path::{Path, PathBuf},
@@ -536,7 +537,7 @@ impl Workspace {
             _events: events,
         });
         self.search_history(cx);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Opens the sheet for a page that continues sessions of `agents` in its own tab: Resume of one of those, in this
@@ -555,7 +556,7 @@ impl Workspace {
         if let Some(before) = sheet.resume_in.replace(ResumeIn { agents, reply }) {
             before.reply.ok("null".into());
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Whether Resume continues `session` in the page that opened the sheet: one of its agents', in the project on screen,
@@ -583,7 +584,7 @@ impl Workspace {
                 ..
             }) => {
                 *menu = None;
-                cx.notify();
+                cx.notify_workspace();
             }
             _ => self.close_history(window, cx),
         }
@@ -636,7 +637,7 @@ impl Workspace {
                     sheet.results = Some(found);
                     sheet.accounts = accounts;
                     sheet.searching = false;
-                    cx.notify();
+                    cx.notify_workspace();
                 }
             })
             .ok();
@@ -645,7 +646,7 @@ impl Workspace {
                 this.update(cx, |this, cx| this.search_history(cx)).ok();
             }
         }));
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Changes what the sheet asks for, and searches again from the first page.
@@ -909,12 +910,12 @@ impl Workspace {
                     && sheet.copied.as_ref() == Some(&id)
                 {
                     sheet.copied = None;
-                    cx.notify();
+                    cx.notify_workspace();
                 }
             })
             .ok();
         }));
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Resumes or forks a session in a new tab, and closes the sheet.
@@ -1085,7 +1086,7 @@ impl Workspace {
                         if let Some(sheet) = &mut this.sheet {
                             sheet.menu = (sheet.menu != Some(Menu::Branch)).then_some(Menu::Branch);
                         }
-                        cx.notify();
+                        cx.notify_workspace();
                     }))
                     .child(icon(Icon::GitBranch, 14.0, theme::MUTED_FOREGROUND))
                     .child(
@@ -1135,7 +1136,7 @@ impl Workspace {
                             if let Some(sheet) = &mut this.sheet {
                                 sheet.menu = None;
                             }
-                            cx.notify();
+                            cx.notify_workspace();
                         })),
                 ))
             })
@@ -1326,7 +1327,7 @@ impl Workspace {
                                     sheet.menu =
                                         (sheet.menu.as_ref() != Some(&menu)).then_some(menu);
                                 }
-                                cx.notify();
+                                cx.notify_workspace();
                             })
                         }),
                     )
@@ -1434,7 +1435,7 @@ impl Workspace {
                     if let Some(sheet) = &mut this.sheet {
                         sheet.menu = None;
                     }
-                    cx.notify();
+                    cx.notify_workspace();
                 })),
         )
     }

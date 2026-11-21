@@ -2,6 +2,7 @@
 //! install from a GitHub link or a file at the top, and the installed plugins below. A row says what the plugin does and
 //! flags only what needs you (approval, an update). Clicking it opens its page under it, and clicking again closes it.
 
+use crate::workspace::NotifyWorkspace;
 use gpui::{
     AnimationExt, AnyElement, Context, ExternalPaths, FontWeight, KeyDownEvent, MouseButton, Role,
     SharedString, deferred, div, prelude::*, px, rgb, rgba,
@@ -529,7 +530,7 @@ impl Workspace {
                 this.manage.selected = (!open).then(|| select.clone());
                 this.manage.browsing_available = false;
                 this.manage.removing = None;
-                cx.notify();
+                cx.notify_workspace();
             }))
             .children(ui::spot(move || format!("plugin-row-{index}")))
             .child(plugin_icon(on, view.icon_svg.as_deref(), 32.0))
@@ -638,7 +639,7 @@ impl Workspace {
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.queue_reviews([review.clone()], cx);
-                    cx.notify();
+                    cx.notify_workspace();
                 })),
             );
         }
@@ -704,7 +705,7 @@ impl Workspace {
                         )
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.manage.removing = None;
-                            cx.notify();
+                            cx.notify_workspace();
                         })),
                     );
             } else {
@@ -720,7 +721,7 @@ impl Workspace {
                     .when(!busy, |button| {
                         button.on_click(cx.listener(move |this, _, _, cx| {
                             this.manage.removing = Some(asked.clone());
-                            cx.notify();
+                            cx.notify_workspace();
                         }))
                     }),
                 );

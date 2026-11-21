@@ -11,6 +11,7 @@ mod peek;
 mod tests;
 mod view;
 
+use crate::workspace::NotifyWorkspace;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
@@ -255,11 +256,11 @@ impl Workspace {
             cx.background_executor().timer(duration).await;
             let _ = this.update(cx, |this, cx| {
                 this.side.slide.running = false;
-                cx.notify();
+                cx.notify_workspace();
             });
         }));
         self.save(cx);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// The edge was grabbed with the pointer at `x`.
@@ -268,7 +269,7 @@ impl Workspace {
             from_x: x,
             from_width: self.side.width,
         });
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Follows the pointer within the limits. Nothing is saved until the pointer is released: the terminals refit
@@ -280,14 +281,14 @@ impl Workspace {
         let width = (resize.from_width + (x - resize.from_x).as_f32()).clamp(MIN_WIDTH, MAX_WIDTH);
         if width != self.side.width {
             self.side.width = width;
-            cx.notify();
+            cx.notify_workspace();
         }
     }
 
     fn end_resize(&mut self, cx: &mut Context<Self>) {
         if self.side.resize.take().is_some() {
             self.save(cx);
-            cx.notify();
+            cx.notify_workspace();
         }
     }
 
@@ -303,20 +304,20 @@ impl Workspace {
             .retain(|folder, _| projects.iter().any(|project| &project.path == folder));
         self.watch_projects_again();
         self.refresh_git(None, false, cx);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     fn set_sort(&mut self, sort: Sort, cx: &mut Context<Self>) {
         self.side.sort = sort;
         self.side.sort_menu = false;
         self.save(cx);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     fn toggle_older(&mut self, cx: &mut Context<Self>) {
         self.side.older_open = !self.side.older_open;
         self.save(cx);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     pub(in crate::workspace) fn pin_project(
@@ -329,7 +330,7 @@ impl Workspace {
             self.spaces.set_pinned(folder, pinned);
         }
         self.projects = self.spaces.entries();
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Asks for a folder, as the desktop's "Add project" does, and adds it.
@@ -394,7 +395,7 @@ impl Workspace {
         let focus = cx.focus_handle();
         self.side.recovery.open(&focus, window, cx);
         self.side.removing = Some((project, focus));
-        cx.notify();
+        cx.notify_workspace();
     }
 
     fn cancel_remove(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -406,7 +407,7 @@ impl Workspace {
         if !restored && let Some(pane) = self.focused_pane() {
             self.focus_pane(pane, window, cx);
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Takes the project off the list and closes its tabs. The project on screen gives way to the first other one; with

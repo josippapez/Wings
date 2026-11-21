@@ -4,6 +4,7 @@
 //! starts off and unapproved, a file always asks again, and an update that asks for more access stops the plugin until
 //! it is approved again. A change starts or stops the plugin's main and pages right away.
 
+use crate::workspace::NotifyWorkspace;
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
@@ -200,7 +201,7 @@ impl Workspace {
             cx.background_executor().timer(REVIEW_ARM_AFTER).await;
             let _ = this.update(cx, |this, cx| {
                 this.manage.review_armed = true;
-                cx.notify();
+                cx.notify_workspace();
             });
         }));
     }
@@ -213,7 +214,7 @@ impl Workspace {
         } else if let Some(done) = done {
             self.leave("review", done, crate::ui::motion::POPUP_IN, cx);
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Where the official list and its packages come from: GitHub, unless a test supplied a source.
@@ -448,7 +449,7 @@ impl Workspace {
             }
         }
         self.save(cx);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Closes everything of the plugin's that shows, in every project, but with `keep_pages` its tabs, sidebars and
@@ -646,7 +647,7 @@ impl Workspace {
         // A new main hears of the panes on the next frame.
         self.plugin_ui.signature = 0;
         self.plugin_env.clients.notify_changed();
-        cx.notify();
+        cx.notify_workspace();
     }
 
     // ---- What the Plugins section's buttons do ----
@@ -741,7 +742,7 @@ impl Workspace {
         if self.manage.installing.is_none() {
             self.install_file(file, window, cx);
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// The README of the plugin, parsed, read again when its version changes, as the desktop's `plugin_readme`.
@@ -781,7 +782,7 @@ impl Workspace {
     ) {
         self.manage.installing = Some(kind);
         self.manage.error = None;
-        cx.notify();
+        cx.notify_workspace();
         let task = cx.spawn_in(window, async move |this, cx| {
             let package = package.await;
             let _ = this.update_in(cx, |this, window, cx| {
@@ -804,7 +805,7 @@ impl Workspace {
                     Err(error) => this.manage.error = Some(error),
                 }
                 this.install_next_official(window, cx);
-                cx.notify();
+                cx.notify_workspace();
             });
         });
         task.detach();
@@ -820,7 +821,7 @@ impl Workspace {
     ) {
         if on && !view.approved {
             self.queue_reviews([view], cx);
-            cx.notify();
+            cx.notify_workspace();
             return;
         }
         let id = view.manifest.id.clone();
@@ -868,7 +869,7 @@ impl Workspace {
         }
         self.manage.selected = Some(id.to_owned());
         self.queue_reviews([view], cx);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     pub(super) fn remove_plugin_now(
@@ -907,7 +908,7 @@ impl Workspace {
             self.manage.busy.insert(id.clone());
             self.manage.row_error.remove(id);
         }
-        cx.notify();
+        cx.notify_workspace();
         let task = cx.spawn_in(window, async move |this, cx| {
             let mut asking = Vec::new();
             for id in ids {
@@ -936,12 +937,12 @@ impl Workspace {
                             this.manage.row_error.insert(id.clone(), error);
                         }
                     }
-                    cx.notify();
+                    cx.notify_workspace();
                 });
             }
             let _ = this.update(cx, |this, cx| {
                 this.queue_reviews(asking, cx);
-                cx.notify();
+                cx.notify_workspace();
             });
         });
         task.detach();
@@ -1003,7 +1004,7 @@ impl Workspace {
             })
             .collect();
         self.manage.checking = true;
-        cx.notify();
+        cx.notify_workspace();
         let source = self.updates_source();
         // Every plugin and the catalogue at once, as the desktop's `Promise.all`: a check waits for the slowest answer,
         // not for the sum of a dozen round trips to GitHub.
@@ -1144,7 +1145,7 @@ impl Workspace {
                         this.show_notice("All plugins are up to date".into(), String::new(), cx);
                     }
                 }
-                cx.notify();
+                cx.notify_workspace();
             });
         }));
     }
@@ -1171,13 +1172,13 @@ impl Workspace {
                 .updates
                 .insert((*id).to_owned(), (*version).to_owned());
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Settings, Plugins while a check for updates runs, or not.
     pub fn show_plugin_check(&mut self, checking: bool, cx: &mut Context<Self>) {
         self.manage.checking = checking;
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// The review of `id`, as installing it or `wings plugin enable` opens it.
@@ -1209,6 +1210,6 @@ impl Workspace {
         self.settings = None;
         self.manage.reviews.clear();
         self.setup_asks.queue.clear();
-        cx.notify();
+        cx.notify_workspace();
     }
 }

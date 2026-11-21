@@ -2,6 +2,7 @@
 //! list beside it of what agents and plugins said, newest first. An agent that comes to need you or finishes is kept,
 //! as is every notification a plugin shows. Opening the list marks everything read.
 
+use crate::workspace::NotifyWorkspace;
 use std::{cell::Cell, collections::HashSet, path::PathBuf};
 
 use gpui::{
@@ -181,7 +182,7 @@ impl Workspace {
         for event in &mut self.inbox.events {
             event.read = true;
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     pub(super) fn close_inbox(&mut self, cx: &mut Context<Self>) {
@@ -246,7 +247,7 @@ impl Workspace {
                 );
             }
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// The sidebar's Inbox row, with the unread count in the accent colour while a plugin's notification is unread.
@@ -356,7 +357,7 @@ impl Workspace {
                 |button| {
                     button.on_click(cx.listener(|this, _, _, cx| {
                         this.inbox.events.clear();
-                        cx.notify();
+                        cx.notify_workspace();
                     }))
                 },
             ));
@@ -598,7 +599,7 @@ impl Workspace {
             Some(0),
             None,
         );
-        cx.notify();
+        cx.notify_workspace();
     }
 
     pub fn show_inbox(&mut self, cx: &mut Context<Self>) {

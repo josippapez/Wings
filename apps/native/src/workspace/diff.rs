@@ -3,6 +3,7 @@
 //! into it, floating over the panes, which keep their size. The dock's left edge drags within the desktop's
 //! `SIDES.diff`, and its width is kept with the sidebars'.
 
+use crate::workspace::NotifyWorkspace;
 use std::{path::PathBuf, time::Duration};
 
 use gpui::{
@@ -155,7 +156,7 @@ impl Workspace {
             viewer.focus_handle(cx).focus(window, cx);
         }
         self.plugin_ui.diff = Some((viewer, events));
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Opens a file of the diff in the editor at `line`. Its path comes from the plugin's patch, so it opens only from
@@ -202,7 +203,7 @@ impl Workspace {
         let docked = can_dock && !dock.expanded;
         viewer.update(cx, |viewer, cx| viewer.set_dock(docked, can_dock, cx));
         viewer.focus_handle(cx).focus(window, cx);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Notes whether a window `viewport` wide has room for the dock, and tells the viewer when that changes, so it
@@ -319,7 +320,7 @@ impl Workspace {
     fn start_diff_resize(&mut self, x: Pixels, viewport: Pixels, cx: &mut Context<Self>) {
         let from = self.diff_width(viewport);
         self.plugin_ui.diff_dock.resize = Some((x, from));
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Follows the pointer within the limits. Nothing is saved until the pointer is released: the terminals refit when
@@ -332,14 +333,14 @@ impl Workspace {
         let width = (from_width + (from_x - x).as_f32()).clamp(MIN_WIDTH, room);
         if width != self.plugin_ui.diff_dock.width {
             self.plugin_ui.diff_dock.width = width;
-            cx.notify();
+            cx.notify_workspace();
         }
     }
 
     fn end_diff_resize(&mut self, cx: &mut Context<Self>) {
         if self.plugin_ui.diff_dock.resize.take().is_some() {
             self.save(cx);
-            cx.notify();
+            cx.notify_workspace();
         }
     }
 

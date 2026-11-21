@@ -5,6 +5,7 @@
 //! the agent, in a panel that docks them back. Which pane opened which, and whose terminals float, last while the app
 //! runs, as on the desktop.
 
+use crate::workspace::NotifyWorkspace;
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
@@ -412,7 +413,7 @@ impl Workspace {
                 tab.zoomed = None;
             }
             self.sync_pane_visibility(cx);
-            cx.notify();
+            cx.notify_workspace();
         }
         Some(pane)
     }
@@ -451,7 +452,7 @@ impl Workspace {
             self.save(cx);
         }
         self.show(self.active, window, cx);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     fn change_float(
@@ -462,7 +463,7 @@ impl Workspace {
     ) {
         change(self.agent_terminals.panels.entry(owner).or_default());
         self.sync_pane_visibility(cx);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     fn float_gesture(&mut self, owner: usize, position: Point<Pixels>, cx: &mut Context<Self>) {
@@ -471,7 +472,7 @@ impl Workspace {
         };
         if let (Some(gesture), Some(area)) = (panel.gesture, panel.area) {
             panel.rect = gesture.rect_at(position, area);
-            cx.notify();
+            cx.notify_workspace();
         }
     }
 
@@ -886,7 +887,7 @@ impl Workspace {
             .on_click(cx.listener(move |this, _, _, cx| {
                 let panel = this.agent_terminals.panels.entry(owner).or_default();
                 panel.menu = !panel.menu;
-                cx.notify();
+                cx.notify_workspace();
             }))
             .children(measure)
             .child(
@@ -912,7 +913,7 @@ impl Workspace {
                                     if !panel.picker.is_some_and(|at| at.contains(&event.position))
                                     {
                                         panel.menu = false;
-                                        cx.notify();
+                                        cx.notify_workspace();
                                     }
                                 },
                             )),
@@ -1084,7 +1085,7 @@ impl Workspace {
         if older {
             self.tidy_older_servers(cx);
         }
-        cx.notify();
+        cx.notify_workspace();
         true
     }
 

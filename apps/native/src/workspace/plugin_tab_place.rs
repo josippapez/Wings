@@ -1,6 +1,7 @@
 //! Where a plugin's tab goes when its page asks: `openView`'s `after: "self"` puts a new tab right after the tab of the
 //! page that opened it, as a chat's subagent opens beside the chat, and `showPage` brings a named page's tab to the front.
 
+use crate::workspace::NotifyWorkspace;
 use gpui::{Context, Window};
 
 use crate::page::plugin::FrameState;
@@ -33,7 +34,7 @@ impl Workspace {
             }
         };
         self.show(Active::Plugin(id), window, cx);
-        cx.notify();
+        cx.notify_workspace();
     }
 }
 

@@ -1,5 +1,6 @@
 //! The current project: entering it the first time, switching between projects and its bar above the panes.
 
+use crate::workspace::NotifyWorkspace;
 use std::path::PathBuf;
 
 use gpui::{AnyElement, Context, Role, Window, div, prelude::*, px, rgb};
@@ -257,7 +258,7 @@ impl Workspace {
             work(self, window, cx)
         };
         self.sync_pane_visibility(cx);
-        cx.notify();
+        cx.notify_workspace();
         result
     }
 

@@ -3,6 +3,7 @@
 //! and moved 5px, its row follows the pointer and the others make room as it passes them. The list is saved once,
 //! when it is let go; Escape puts it back. Pinned projects always lead, so a project moves among those of its kind.
 
+use crate::workspace::NotifyWorkspace;
 use std::path::{Path, PathBuf};
 
 use gpui::{AnyElement, Context, MouseButton, Pixels, Point, Subscription, canvas, prelude::*};
@@ -86,7 +87,7 @@ impl Workspace {
         self.projects = self.spaces.entries();
         // The rows are drawn by their place in the list, which changed.
         self.side.hovered = None;
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// The left button went down on the row of `project` at `at`.
@@ -280,7 +281,7 @@ impl Workspace {
     fn redraw_sidebar(&self, cx: &mut Context<Self>) {
         match &self.parts {
             Some(parts) if self.sidebar => parts.sidebar.update(cx, |_, cx| cx.notify()),
-            _ => cx.notify(),
+            _ => cx.notify_workspace(),
         }
     }
 }

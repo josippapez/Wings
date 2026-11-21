@@ -1,5 +1,6 @@
 //! The app updater's dialog, as the desktop's `UpdateDialog` (`apps/desktop/src/components/update-dialog.tsx`) with the
 //! states its toasts show (`apps/desktop/src/lib/updater.ts`), and its retained, infrequent background work.
+use crate::workspace::NotifyWorkspace;
 use super::Workspace;
 use crate::{
     icons::{Icon, icon},
@@ -463,7 +464,7 @@ mod tests {
         window.update(|w, window, cx| {
             w.close_updates(window, cx);
             w.updates.toast = true;
-            cx.notify();
+            cx.notify_workspace();
         });
         // The closing dialog covers the toast until it has gone.
         app.advance_clock(Duration::from_secs(1));
@@ -657,7 +658,7 @@ impl Workspace {
             self.updates.open = true;
             self.updates.recovery.open(&self.updates.focus, window, cx);
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     fn close_updates(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -666,7 +667,7 @@ impl Workspace {
         }
         self.updates.open = false;
         self.updates.recovery.restore_within(&self.updates.focus, window, cx);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     fn set_activity(&mut self, activity: Activity, cx: &mut Context<Self>) {
@@ -692,7 +693,7 @@ impl Workspace {
         }
         self.updates.state = State::Checking;
         self.set_activity(Activity::Spinning("Looking for a newer release…"), cx);
-        cx.notify();
+        cx.notify_workspace();
         let work = cx.background_executor().spawn(async {
             updater::destination()?;
             updater::check()
@@ -731,7 +732,7 @@ impl Workspace {
                 retry: None,
             },
         };
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// The desktop's "Update to Wings X" row above Settings, while an update waits: it opens the dialog.
@@ -832,7 +833,7 @@ impl Workspace {
                         ui::icon_button("update-toast-close", Icon::X, "Close", ButtonSize::Tiny)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.updates.toast = false;
-                                cx.notify();
+                                cx.notify_workspace();
                             })),
                     ),
                 )
@@ -863,7 +864,7 @@ impl Workspace {
         let total = update.release.size;
         self.updates.state = State::Downloading(update.clone());
         self.set_activity(Activity::Downloading { received: 0, total }, cx);
-        cx.notify();
+        cx.notify_workspace();
         let (send, receive) = async_channel::bounded(1);
         let download = update.clone();
         let work = cx.background_executor().spawn(async move {
@@ -883,7 +884,7 @@ impl Workspace {
                         message,
                         retry: Some(update),
                     };
-                    cx.notify();
+                    cx.notify_workspace();
                 }
             });
         }));
@@ -940,7 +941,7 @@ impl Workspace {
                         message,
                         retry: Some(update),
                     };
-                    cx.notify();
+                    cx.notify_workspace();
                 }
             });
         }));
@@ -1153,7 +1154,7 @@ impl Workspace {
             // An automatic check's find, without its sound.
             self.updates.state = State::Available(update);
             self.updates.toast = true;
-            cx.notify();
+            cx.notify_workspace();
             return;
         }
         let sample = state;

@@ -242,3 +242,75 @@ fn the_guard_finds_a_repeating_animation_and_a_timer_that_notifies_and_not_what_
         "a repeating animation, a timer that notifies and a working dot in place; not a tween, a done dot, a comment or a test"
     );
 }
+
+/// The functions in `src/workspace` that still call a plain `cx.notify()`: their `cx` is another entity's context (a
+/// piece, the project page, a text field, the updater's own view), whose redraw is not the workspace's. A function
+/// that notifies the workspace calls `cx.notify_workspace()` instead, so `wings performance` can say where it was
+/// called from. A text scan can't tell the two contexts apart, so a workspace notify added to a function on this list
+/// is not caught: the compiler refuses `notify_workspace` on any other context, so use it wherever it compiles.
+const OTHER_ENTITIES: &[(&str, &str)] = &[
+    ("workspace/exits.rs", "phase"),
+    ("workspace/parts.rs", "new"),
+    ("workspace/parts.rs", "notify"),
+    ("workspace/parts.rs", "redraw_window"),
+    ("workspace/project_page/facts.rs", "cancel_edit"),
+    ("workspace/project_page/facts.rs", "fact_row"),
+    ("workspace/project_page/facts.rs", "focus_fact_field"),
+    ("workspace/project_page/facts.rs", "submit_fact"),
+    ("workspace/project_page/items.rs", "edit_section"),
+    ("workspace/project_page/items.rs", "finish_edit"),
+    ("workspace/project_page/items.rs", "item_actions"),
+    ("workspace/project_page/items.rs", "sections_changed"),
+    ("workspace/project_page/items.rs", "touched"),
+    ("workspace/project_page/mod.rs", "add_row"),
+    ("workspace/project_page/mod.rs", "apply"),
+    ("workspace/project_page/mod.rs", "new"),
+    ("workspace/project_page/mod.rs", "reload"),
+    ("workspace/project_page/mod.rs", "search_now"),
+    ("workspace/project_page/mod.rs", "set_visible"),
+    ("workspace/sidebar/drag.rs", "redraw_sidebar"),
+    ("workspace/tab_drag.rs", "redraw_title_bar"),
+    ("workspace/updater.rs", "report_progress"),
+    ("workspace/updater.rs", "set_activity"),
+];
+
+/// The functions in `file` (under `src`) with a plain `cx.notify()`, outside tests.
+fn plain_notifies(file: &str, source: &str) -> Vec<(String, String)> {
+    let code = without_tests(&without_comments(source));
+    code.match_indices("cx.notify()")
+        .filter(|(offset, _)| !code[..*offset].ends_with(|c: char| c.is_alphanumeric() || c == '_'))
+        .map(|(offset, _)| (file.to_string(), function_at(&code, offset)))
+        .collect()
+}
+
+/// A notify of the workspace redraws the sidebar, title bar and main column together, and each one is a cause
+/// `wings performance` lists with its call site.
+#[test]
+fn the_workspace_is_notified_through_notify_workspace_and_the_other_entities_are_listed() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    sources(&src, &src.join("workspace"), &mut files);
+    let found: Vec<(String, String)> = files.iter().flat_map(|(file, source)| plain_notifies(file, source)).collect();
+    let allowed = |(file, function): &(String, String)| OTHER_ENTITIES.iter().any(|(f, g)| file == f && function == g);
+    let offences: Vec<_> = found.iter().filter(|site| !allowed(site)).collect();
+    assert!(
+        offences.is_empty(),
+        "these call `cx.notify()`; on the workspace's context use `cx.notify_workspace()` (`workspace::NotifyWorkspace`), and if it is another entity's, add the function to OTHER_ENTITIES: {offences:#?}"
+    );
+    let stale: Vec<_> = OTHER_ENTITIES.iter().filter(|(f, g)| !found.iter().any(|(file, function)| file == f && function == g)).collect();
+    assert!(stale.is_empty(), "these are listed but no longer call `cx.notify()`; take them off OTHER_ENTITIES: {stale:#?}");
+}
+
+#[test]
+fn the_notify_guard_finds_a_plain_notify_and_not_notify_workspace_or_a_test() {
+    let source = r#"
+        fn a(cx: &mut Context<Workspace>) { cx.notify_workspace(); }
+        fn b(cx: &mut Context<Workspace>) { cx.notify(); }
+        // fn c() { cx.notify(); }
+        #[cfg(test)]
+        mod tests {
+            fn d() { cx.notify(); }
+        }
+    "#;
+    assert_eq!(plain_notifies("workspace/x.rs", source), [("workspace/x.rs".to_string(), "b".to_string())]);
+}

@@ -3,6 +3,7 @@
 //! `setup-approval-dialog.tsx`: one prompt at a time, the others waiting behind it, and Allow only answers once the
 //! prompt has been on screen a moment, so a click meant for one can't land on the next.
 
+use crate::workspace::NotifyWorkspace;
 use std::{sync::mpsc, time::Duration};
 
 use gpui::{AnyElement, Context, KeyDownEvent, Task, div, prelude::*, px, rgb, rgba};
@@ -73,11 +74,11 @@ impl Workspace {
                 if first == Some(id) && !this.setup_asks.queue.is_empty() {
                     this.arm_setup_prompt(cx);
                 }
-                cx.notify();
+                cx.notify_workspace();
             });
         })
         .detach();
-        cx.notify();
+        cx.notify_workspace();
         answered
     }
 
@@ -88,7 +89,7 @@ impl Workspace {
             cx.background_executor().timer(ARM_AFTER).await;
             let _ = this.update(cx, |this, cx| {
                 this.setup_asks.armed = true;
-                cx.notify();
+                cx.notify_workspace();
             });
         }));
     }
@@ -105,7 +106,7 @@ impl Workspace {
         } else {
             self.leave("setup", ask, crate::ui::motion::POPUP_IN, cx);
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     pub(super) fn setup_approval_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {

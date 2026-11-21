@@ -379,7 +379,7 @@ impl Workspace {
                 if let Some(dialog) = &mut this.settings {
                     dialog.section = settings::Section::Plugins;
                 }
-                cx.notify();
+                cx.notify_workspace();
             }
         })
         .detach();
@@ -952,7 +952,7 @@ impl Workspace {
     pub(super) fn toggle_readout(&mut self, cx: &mut Context<Self>) {
         if let Some(parts) = &self.parts {
             parts.readout.update(cx, |readout, cx| readout.set_on(!readout.is_on(), cx));
-            cx.notify();
+            cx.notify_workspace();
         }
     }
 
@@ -975,7 +975,7 @@ impl Workspace {
     pub(super) fn measure_begin(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
         let parts = self.parts.as_ref().ok_or("The window isn't ready yet")?;
         parts.readout.update(cx, |readout, _| readout.begin_measure())?;
-        cx.notify();
+        cx.notify_workspace();
         Ok(())
     }
 
@@ -987,8 +987,23 @@ impl Workspace {
     pub(super) fn measure_end(&mut self, cx: &mut Context<Self>) -> Result<ui::readout::Measured, String> {
         let parts = self.parts.as_ref().ok_or("The window isn't ready yet")?;
         let measured = parts.readout.update(cx, |readout, _| readout.end_measure());
-        cx.notify();
+        cx.notify_workspace();
         measured
+    }
+}
+
+/// `cx.notify_workspace()` for the workspace, which redraws all its pieces. It tells the performance measurement where it was
+/// called from (`causes` of `wings performance`), and `src/workspace` is checked for a plain `cx.notify_workspace()` on the
+/// workspace (`ui/live/tests.rs`).
+pub(crate) trait NotifyWorkspace {
+    fn notify_workspace(&mut self);
+}
+
+impl NotifyWorkspace for Context<'_, Workspace> {
+    #[track_caller]
+    fn notify_workspace(&mut self) {
+        ui::readout::notified(std::panic::Location::caller());
+        self.notify();
     }
 }
 
@@ -1228,7 +1243,7 @@ impl Render for Workspace {
                             this.close_menu(cx);
                             this.close_inbox(cx);
                             this.new_tab_menu = false;
-                            cx.notify();
+                            cx.notify_workspace();
                             cx.stop_propagation();
                         }
                     }))

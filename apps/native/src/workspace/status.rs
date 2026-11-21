@@ -1,6 +1,7 @@
 //! Agent status for the pane headers, tabs and sidebar: which agent each pane runs and what it's
 //! doing, from the desktop app's detector.
 
+use crate::workspace::NotifyWorkspace;
 use std::{collections::HashMap, path::PathBuf};
 
 use gpui::{App, Context, SharedString, Task};
@@ -168,7 +169,7 @@ impl Workspace {
             #[cfg(unix)]
             self.tidy_older_servers(cx);
             self.plan_sleep(cx);
-            cx.notify();
+            cx.notify_workspace();
         }
     }
 

@@ -3,6 +3,7 @@
 //! go; Escape puts it back. A tab moves among its own kind, as Move Tab Left and Right do: terminals among terminals,
 //! plugin pages among plugin pages. The project page and Issues stay where they are.
 
+use crate::workspace::NotifyWorkspace;
 use gpui::{
     AnyElement, Axis, Context, MouseButton, Pixels, Point, Subscription, canvas, prelude::*,
 };
@@ -238,7 +239,7 @@ impl Workspace {
     fn redraw_title_bar(&self, cx: &mut Context<Self>) {
         match &self.parts {
             Some(parts) => parts.title_bar.update(cx, |_, cx| cx.notify()),
-            None => cx.notify(),
+            None => cx.notify_workspace(),
         }
     }
 }

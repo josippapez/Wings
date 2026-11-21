@@ -10,11 +10,11 @@ use std::{
     time::Duration,
 };
 
-use gpui::{TestApp, TestAppWindow};
+use gpui::{Context, TestApp, TestAppWindow};
 use serde_json::{Value, json};
 
 use super::{
-    Workspace,
+    NotifyWorkspace, Workspace,
     claude::performance,
     plugin_tests::{open_plugins, until},
     tests::open_config,
@@ -61,7 +61,7 @@ fn measure(
             }
             Ok(Wait::Started) => {
                 for _ in 0..frames {
-                    window.update(|_, _, cx| cx.notify());
+                    window.update(|_, _, cx| cx.notify_workspace());
                 }
                 go.send(()).unwrap();
                 continue;
@@ -88,6 +88,12 @@ fn it_counts_the_frames_and_renders_the_test_draws_and_leaves_the_readout_off() 
     let answer: Value = serde_json::from_str(&answer.unwrap()).unwrap();
     assert_eq!(answer["frames"], 7, "{answer}");
     assert_eq!(view_count(&answer, "workspace"), Some(7), "{answer}");
+    let causes = answer["causes"].as_array().unwrap();
+    assert_eq!(causes.len(), 1, "{answer}");
+    assert!(causes[0]["at"].as_str().unwrap().starts_with("workspace/performance_tests.rs:"), "{answer}");
+    assert_eq!(causes[0]["count"], 7, "{answer}");
+    assert!(answer["summary"].as_str().unwrap().contains("Workspace notified/s by: workspace/performance_tests.rs:"), "{answer}");
+    println!("{answer:#}");
     assert!(answer["cpuPercent"].is_number() && answer["cpuPercent"].as_f64().unwrap() >= 0.0, "{answer}");
     assert!(answer["framesPerSecond"].as_f64().unwrap() > 0.0, "{answer}");
     assert_eq!(answer["cardShown"], false);
@@ -184,4 +190,40 @@ fn the_tool_is_on_the_socket_and_answers_json() {
     assert!(answer["cpuPercent"].is_number() && answer["frames"].is_number() && answer["renders"].is_array(), "{answer}");
     assert!(answer["summary"].is_string());
     assert!(window.read(|w, cx| !w.parts.as_ref().unwrap().readout.read(cx).counting()));
+}
+
+/// The measurement's window with `change` done in it: what notified the workspace, as `file:line` with a count.
+fn causes_of(window: &mut TestAppWindow<Workspace>, change: impl FnOnce(&mut Workspace, &mut Context<Workspace>)) -> Vec<(String, u32)> {
+    window.update(|w, _, cx| w.measure_begin(cx).unwrap());
+    window.update(|w, _, cx| w.measure_restart(cx).unwrap());
+    window.update(|w, _, cx| change(w, cx));
+    window.update(|w, _, cx| w.measure_end(cx).unwrap().causes)
+}
+
+#[test]
+fn a_workspace_change_is_found_at_its_line_among_the_causes() {
+    let (_app, mut window) = open_config(|_| {});
+    window.draw();
+    let mut line = 0;
+    let causes = causes_of(&mut window, |_, cx| {
+        line = line!() + 1;
+        cx.notify_workspace();
+    });
+    assert_eq!(causes, [(format!("workspace/performance_tests.rs:{line}"), 1)]);
+    // A real change, made by the workspace's own code, is found in its file.
+    let causes = causes_of(&mut window, |w, cx| w.toggle_readout(cx));
+    assert!(causes.iter().any(|(at, _)| at.starts_with("workspace/mod.rs:")), "{causes:?}");
+}
+
+#[test]
+fn nothing_is_recorded_while_no_measurement_runs() {
+    let (_app, mut window) = open_config(|_| {});
+    window.draw();
+    window.update(|_, _, cx| cx.notify_workspace());
+    window.update(|_, _, cx| cx.notify_workspace());
+    let causes = causes_of(&mut window, |_, _| {});
+    assert!(causes.is_empty(), "{causes:?}");
+    // And once it has ended, nothing more is added to the next one.
+    window.update(|_, _, cx| cx.notify_workspace());
+    assert!(causes_of(&mut window, |_, _| {}).is_empty());
 }

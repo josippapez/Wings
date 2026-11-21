@@ -1,6 +1,7 @@
 //! A plugin's view that opens as a modal: its page in a dialog over the window, as Wings' own dialogs are, until the
 //! plugin closes it, or you press Escape or click outside it.
 
+use crate::workspace::NotifyWorkspace;
 use gpui::{AnyElement, Context, Entity, FocusHandle, KeyDownEvent, MouseButton, Window, div, prelude::*, px};
 
 use super::Workspace;
@@ -82,7 +83,7 @@ impl Workspace {
             focus,
             recovery,
         });
-        cx.notify();
+        cx.notify_workspace();
         Ok(())
     }
 

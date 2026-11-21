@@ -1,6 +1,7 @@
 //! The sidebar's Agents section, like the desktop's: every agent in every project, with what it's
 //! doing, and a click goes to its pane.
 
+use crate::workspace::NotifyWorkspace;
 use std::{
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
@@ -264,7 +265,7 @@ impl Workspace {
                 this.reveal_project(&path);
                 this.leave_loose(cx);
                 this.show(Active::Plugin(tab), window, cx);
-                cx.notify();
+                cx.notify_workspace();
             }))
             .child(
                 div()
@@ -329,7 +330,7 @@ impl Workspace {
             self.show(Active::Terminal(id), window, cx);
             self.focus_pane(pane, window, cx);
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// The panes with an agent session to come back to and no live agent, in every project, in tab order: restored

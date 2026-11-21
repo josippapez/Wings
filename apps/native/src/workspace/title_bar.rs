@@ -1,6 +1,7 @@
 //! The title bar, drawn by the app like the desktop's: the sidebar, Back and Forward buttons beside the traffic
 //! lights, then the tabs, the new tab button and its menu. Its empty parts move the window.
 
+use crate::workspace::NotifyWorkspace;
 use gpui::{
     AnyElement, Context, MouseButton, MouseDownEvent, Role, SharedString, Window, div, prelude::*,
     px,
@@ -186,7 +187,7 @@ impl Workspace {
         let toggle_menu =
             |this: &mut Self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>| {
                 this.new_tab_menu = !this.new_tab_menu;
-                cx.notify();
+                cx.notify_workspace();
             };
         div()
             .flex_none()
@@ -241,7 +242,7 @@ impl Workspace {
                                     .mt(px(32.0))
                                     .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                                         this.new_tab_menu = false;
-                                        cx.notify();
+                                        cx.notify_workspace();
                                     }))
                                     .children(items),
                             )

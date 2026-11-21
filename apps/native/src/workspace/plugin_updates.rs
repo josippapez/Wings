@@ -1,5 +1,6 @@
 //! Persistent, actionable notices for background plugin checks.
 
+use crate::workspace::NotifyWorkspace;
 use gpui::{AnyElement, Context, FontWeight, Role, div, prelude::*, px, rgb, rgba};
 
 use crate::{
@@ -67,7 +68,7 @@ impl Workspace {
                                             this.manage
                                                 .announcements
                                                 .retain(|notice| notice.review.slot() != index);
-                                            cx.notify();
+                                            cx.notify_workspace();
                                         },
                                     )),
                                 )
@@ -116,7 +117,7 @@ impl Workspace {
         self.manage
             .announcements
             .retain(|notice| notice.review.slot() != review.slot());
-        cx.notify();
+        cx.notify_workspace();
     }
 }
 
@@ -167,6 +168,6 @@ impl Workspace {
             });
             self.show_notice("A plugin notification".into(), "This longer message shares the same stack and wraps without covering another notice.".into(), cx);
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 }

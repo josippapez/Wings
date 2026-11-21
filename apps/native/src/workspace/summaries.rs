@@ -2,6 +2,7 @@
 //! Settings, Agents' "Session names and summaries", the desktop's `AiSettings`, and the thread that runs the model.
 //! The choice and the names made so far are the desktop's `ai/` folder, so switching apps keeps both.
 
+use crate::workspace::NotifyWorkspace;
 use std::sync::Arc;
 
 use gpui::{AnyElement, Context, SharedString};
@@ -84,7 +85,7 @@ impl Workspace {
             let status = work.await;
             let _ = this.update(cx, |this, cx| {
                 this.ai_view.status = Some(status);
-                cx.notify();
+                cx.notify_workspace();
             });
         }));
     }
@@ -93,7 +94,7 @@ impl Workspace {
     #[cfg(feature = "test-support")]
     pub fn show_ai_status(&mut self, status: Status, cx: &mut Context<Self>) {
         self.ai_view.status = Some(status);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Gives the agents these summaries, in the sidebar's order of panes, for screenshots. The next scan replaces them.
@@ -106,7 +107,7 @@ impl Workspace {
                 agent.summary = Some((*summary).to_owned());
             }
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// The card, or nothing in an app with no model folder and nothing to show, as in tests.

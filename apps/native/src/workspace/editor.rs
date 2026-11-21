@@ -1,6 +1,7 @@
 //! "Open in <editor>" for the project on screen: the desktop's editor detection and launch (`wings-editors`), its
 //! choice in Settings, Editor, and the project bar's button with the other editors one click further.
 
+use crate::workspace::NotifyWorkspace;
 use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
 use wings_editors::EditorView;
 
@@ -26,7 +27,7 @@ impl Workspace {
             let found = found.await;
             this.update(cx, |this, cx| {
                 this.editors = found;
-                cx.notify();
+                cx.notify_workspace();
             })
             .ok();
         })
@@ -60,7 +61,7 @@ impl Workspace {
             }
         })
         .detach();
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Opens `file` at `line` in the editor chosen in Settings, else the first one found, and says why when it can't.
@@ -139,7 +140,7 @@ impl Workspace {
                                 .on_click(cx.listener(
                                     |this, _, _, cx| {
                                         this.editor_menu = !this.editor_menu;
-                                        cx.notify();
+                                        cx.notify_workspace();
                                     },
                                 )),
                             )
@@ -152,7 +153,7 @@ impl Workspace {
                                 ui::popover(ui::select_menu(items).mt(px(32.0)).on_mouse_down_out(
                                     cx.listener(|this, _, _, cx| {
                                         this.editor_menu = false;
-                                        cx.notify();
+                                        cx.notify_workspace();
                                     }),
                                 ))
                             })

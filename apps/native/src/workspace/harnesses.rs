@@ -2,6 +2,7 @@
 //! each one's version and whether it's signed in, with Install, Sign in and its docs. Each check runs the agent's own CLI,
 //! so they run when the section opens and on Refresh, off the window's thread, never on a timer or at startup.
 
+use crate::workspace::NotifyWorkspace;
 use gpui::{
     AnyElement, Context, FontWeight, Role, SharedString, Window, div, prelude::*, px, rgb, rgba,
 };
@@ -82,7 +83,7 @@ impl Workspace {
         }
         self.harnesses.checking = true;
         self.harnesses.error = None;
-        cx.notify();
+        cx.notify_workspace();
         let work = cx
             .background_executor()
             .spawn(async move { harnesses::check_all(&Lookup::system()) });
@@ -91,7 +92,7 @@ impl Workspace {
             let _ = this.update(cx, |this, cx| {
                 this.harnesses.checking = false;
                 this.harnesses.list = Some(list);
-                cx.notify();
+                cx.notify_workspace();
             });
         }));
     }
@@ -100,7 +101,7 @@ impl Workspace {
     #[cfg(feature = "test-support")]
     pub fn show_harnesses(&mut self, list: Vec<HarnessStatus>, cx: &mut Context<Self>) {
         self.harnesses.list = Some(list);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// A new tab in the project on screen with `input` typed into it, as the desktop's `onRunInTab`.

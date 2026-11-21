@@ -2,6 +2,7 @@
 //! releases the old one first, and a press brings Wings forward and goes to the agent that needs you, or stays where
 //! you were when none does.
 
+use crate::workspace::NotifyWorkspace;
 use std::path::PathBuf;
 
 use gpui::{Context, SharedString, Task, Window};
@@ -53,7 +54,7 @@ impl Workspace {
         if let Err(error) = result {
             self.show_notice("Couldn't use that global shortcut".into(), error, cx);
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Saves the shortcut and holds it in place of the old one.

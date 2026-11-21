@@ -4,6 +4,7 @@
 //!
 //! Not kept from one launch to the next: which sections are collapsed (the desktop saves that in its workspace file).
 
+use crate::workspace::NotifyWorkspace;
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
@@ -322,7 +323,7 @@ impl Workspace {
             self.sections.set(project, key, None);
         }
         self.save(cx);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// The project's sections, or nothing while no plugin has put anything under it.
@@ -382,7 +383,7 @@ impl Workspace {
                 if !this.sections.collapsed.remove(&at) {
                     this.sections.collapsed.insert(at.clone());
                 }
-                cx.notify();
+                cx.notify_workspace();
             })
         };
         let chevron = div()
@@ -500,7 +501,7 @@ impl Workspace {
                             if !this.sections.expanded.remove(&at) {
                                 this.sections.expanded.insert(at.clone());
                             }
-                            cx.notify();
+                            cx.notify_workspace();
                         }))
                         .child(if all {
                             "Show less".to_owned()
@@ -541,7 +542,7 @@ impl Workspace {
             let at = at.clone();
             cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.sections.menu = (this.sections.menu.as_ref() != Some(&at)).then(|| at.clone());
-                cx.notify();
+                cx.notify_workspace();
             })
         });
         let items: Vec<AnyElement> = group
@@ -572,7 +573,7 @@ impl Workspace {
                             ui::popover(ui::select_menu(items).mt(px(26.0)).on_mouse_down_out(
                                 cx.listener(|this, _, _, cx| {
                                     this.sections.menu = None;
-                                    cx.notify();
+                                    cx.notify_workspace();
                                 }),
                             ))
                         })
@@ -716,7 +717,7 @@ impl Workspace {
                 cx,
             );
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// The user picked a sort: the section shows it at once, and the plugin sorts its rows and confirms.
@@ -732,7 +733,7 @@ impl Workspace {
         if let Some(installed) = self.plugins.iter().find(|installed| installed.id == plugin) {
             installed.host.hear_section_sort(section, sort);
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 }
 

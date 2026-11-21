@@ -1,6 +1,7 @@
 //! "Worktree setup": what a new worktree of a project gets before its agent starts, the local files copied into it and
 //! its setup command. The desktop's `worktree-setup-dialog.tsx`, opened from a project's menu.
 
+use crate::workspace::NotifyWorkspace;
 use std::path::PathBuf;
 
 use gpui::{
@@ -103,7 +104,7 @@ impl Workspace {
             error,
             _fields: subscriptions,
         });
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Saves both fields. The default list left as it is stays unset, so a later change to the default reaches the
@@ -130,7 +131,7 @@ impl Workspace {
                 if let Some(dialog) = &mut self.worktree_setup {
                     dialog.error = Some(error);
                 }
-                cx.notify();
+                cx.notify_workspace();
             }
         }
     }
@@ -144,7 +145,7 @@ impl Workspace {
         if !restored && let Some(pane) = self.focused_pane() {
             self.focus_pane(pane, window, cx);
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     pub(super) fn worktree_setup_dialog(

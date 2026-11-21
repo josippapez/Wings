@@ -1,6 +1,7 @@
 //! The desktop's right-click menus on tabs, pane headers, project rows and agent rows (`title-bar.tsx`, `pane-grid.tsx`,
 //! `sidebar.tsx`), with the items whose actions the native app has.
 
+use crate::workspace::NotifyWorkspace;
 use std::path::PathBuf;
 
 use gpui::{
@@ -61,7 +62,7 @@ impl Workspace {
             moving: false,
         });
         cx.stop_propagation();
-        cx.notify();
+        cx.notify_workspace();
     }
 
     pub(super) fn close_menu(&mut self, cx: &mut Context<Self>) {
@@ -145,14 +146,14 @@ impl Workspace {
             .on_hover(cx.listener(|this, over: &bool, _, cx| {
                 if let Some(menu) = this.menu.as_mut().filter(|menu| *over && menu.moving) {
                     menu.moving = false;
-                    cx.notify();
+                    cx.notify_workspace();
                 }
             }))
             .when_some(action, |item, action| {
                 item.on_click(cx.listener(move |this, _, window, cx| {
                     this.menu = None;
                     action(this, window, cx);
-                    cx.notify();
+                    cx.notify_workspace();
                 }))
             })
             .into_any_element()
@@ -303,13 +304,13 @@ impl Workspace {
                 .on_hover(cx.listener(|this, over: &bool, _, cx| {
                     if let Some(menu) = this.menu.as_mut().filter(|_| *over) {
                         menu.moving = true;
-                        cx.notify();
+                        cx.notify_workspace();
                     }
                 }))
                 .on_click(cx.listener(|this, _, _, cx| {
                     if let Some(menu) = this.menu.as_mut() {
                         menu.moving = !menu.moving;
-                        cx.notify();
+                        cx.notify_workspace();
                     }
                 })),
             )

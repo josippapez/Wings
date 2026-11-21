@@ -3,6 +3,7 @@
 //! OpenCode's sessions get Wings' and plugin tools. The app adds it on start unless you disconnected OpenCode in
 //! Settings, Agents, which keeps a marker beside the app's state the way Claude Code's disconnect does.
 
+use crate::workspace::NotifyWorkspace;
 use std::path::{Path, PathBuf};
 
 use gpui::Context;
@@ -143,7 +144,7 @@ impl Workspace {
         if change.is_some() {
             self.opencode.error = None;
         }
-        cx.notify();
+        cx.notify_workspace();
         let work = cx.background_executor().spawn(async move {
             let target = target(state.as_deref());
             let result = match change {
@@ -168,7 +169,7 @@ impl Workspace {
                 if let Err(error) = result {
                     this.opencode.error = Some(error);
                 }
-                cx.notify();
+                cx.notify_workspace();
             });
         }));
     }
@@ -177,7 +178,7 @@ impl Workspace {
     #[cfg(feature = "test-support")]
     pub fn show_opencode_status(&mut self, status: Status, cx: &mut Context<Self>) {
         self.opencode.status = Some(status);
-        cx.notify();
+        cx.notify_workspace();
     }
 }
 

@@ -2,6 +2,7 @@
 //! is on but has no native build is listed in the sidebar, as needing an update for the native app, or, when it is written
 //! in JavaScript, which no longer runs, as needing an update.
 
+use crate::workspace::NotifyWorkspace;
 use gpui::{
     AnyElement, Context, Entity, FocusHandle, FontWeight, Role, SharedString, Window, div,
     prelude::*, px, rgb, rgba,
@@ -194,7 +195,7 @@ impl Workspace {
         }
         self.close_plugin_modal(Some(&key), window, cx);
         self.sync_plugin_visibility(cx);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Opens the pages a project had open, except those whose plugin is off, gone or no longer has the page, as the
@@ -315,7 +316,7 @@ impl Workspace {
                             dialog.section = super::settings::Section::Plugins;
                         }
                         this.manage.selected = Some(id.clone());
-                        cx.notify();
+                        cx.notify_workspace();
                     }))
                     .child(icon(Icon::Puzzle, 16.0, theme::MUTED_FOREGROUND))
                     .child(

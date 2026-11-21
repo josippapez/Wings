@@ -1,6 +1,7 @@
 //! The peek of a closed sidebar, like the desktop's `SidebarPeek`: pointing at the window's left edge floats the sidebar
 //! over the panes, which keep their size and don't refit, and it goes when the pointer leaves it or you click elsewhere.
 
+use crate::workspace::NotifyWorkspace;
 use std::time::Duration;
 
 use gpui::{
@@ -145,7 +146,7 @@ impl Workspace {
                     this.leave_peek(cx);
                     return;
                 }
-                cx.notify();
+                cx.notify_workspace();
             });
         }));
     }
@@ -160,9 +161,9 @@ impl Workspace {
             cx.background_executor().timer(SLIDE).await;
             let _ = this.update(cx, |this, cx| {
                 this.side.peek.leaving = false;
-                cx.notify();
+                cx.notify_workspace();
             });
         }));
-        cx.notify();
+        cx.notify_workspace();
     }
 }

@@ -5,6 +5,7 @@
 //! drains and exits (`tidy_older_servers`). It's checked when the agent detection finds a pane's program or agent
 //! changed, and when a pane closes; nothing polls.
 
+use crate::workspace::NotifyWorkspace;
 use std::{collections::HashMap, path::PathBuf};
 
 use gpui::{
@@ -303,7 +304,7 @@ impl Workspace {
         terminal_server::kill(&socket, number);
         drop(old);
         self.sync_pane_visibility(cx);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Finds the servers again for Settings' list: when it opens, and after a stop.
@@ -351,7 +352,7 @@ impl Workspace {
                 },
             )
             .collect();
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Settings' rows for the servers: each with its terminals, and a Stop button on an older one.
@@ -387,7 +388,7 @@ impl Workspace {
                         let focus = cx.focus_handle();
                         this.older.recovery.open(&focus, window, cx);
                         this.older.stopping = Some((socket.clone(), focus));
-                        cx.notify();
+                        cx.notify_workspace();
                     }))
                     .into_any_element()
                 };
@@ -405,7 +406,7 @@ impl Workspace {
             self.older.recovery.open(&focus, window, cx);
             self.older.stopping = Some((row.socket.clone(), focus));
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     fn cancel_stop(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
@@ -417,7 +418,7 @@ impl Workspace {
         if !restored && let Some(dialog) = &self.settings {
             dialog.focus.focus(window, cx);
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Ends the older server and its terminals; the panes that showed them close.

@@ -13,6 +13,7 @@
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
+    panic::Location,
     time::{Duration, Instant},
 };
 
@@ -41,6 +42,8 @@ thread_local! {
     static MEASURING: Cell<bool> = const { Cell::new(false) };
     static MEASURED_FRAMES: Cell<u32> = const { Cell::new(0) };
     static MEASURED_RENDERS: RefCell<HashMap<&'static str, u32>> = RefCell::new(HashMap::new());
+    /// The places that notified the workspace during the measurement, with how many times each did.
+    static MEASURED_CAUSES: RefCell<HashMap<&'static Location<'static>, u32>> = RefCell::new(HashMap::new());
 }
 
 /// A view called `name` rendered. Does nothing while the readout is off and no measurement runs.
@@ -51,6 +54,21 @@ pub fn render(name: &'static str) {
     if MEASURING.get() {
         MEASURED_RENDERS.with_borrow_mut(|renders| *renders.entry(name).or_default() += 1);
     }
+}
+
+/// The workspace was notified from `at` (`workspace::NotifyWorkspace`). Does nothing while no measurement runs.
+pub fn notified(at: &'static Location<'static>) {
+    if MEASURING.get() {
+        MEASURED_CAUSES.with_borrow_mut(|causes| *causes.entry(at).or_default() += 1);
+    }
+}
+
+/// A source location as `workspace/sidebar/mod.rs:123`, from the `src` folder of the app.
+fn place(at: &Location<'_>) -> String {
+    let file = at.file().replace('\\', "/");
+    let file = file.split_once("/src/").map_or(file.as_str(), |(_, rest)| rest);
+    let file = file.strip_prefix("src/").unwrap_or(file);
+    format!("{file}:{}", at.line())
 }
 
 /// The window drew a frame. Does nothing while the readout is off and no measurement runs.
@@ -114,6 +132,8 @@ pub struct Measured {
     pub frames: u32,
     /// Every view that rendered, with how many renders, most first.
     pub renders: Vec<(&'static str, u32)>,
+    /// Every place that notified the workspace, which redraws all its pieces, with how many times, most first.
+    pub causes: Vec<(String, u32)>,
     /// The card was on during it, so its own update is in these numbers.
     pub card_shown: bool,
 }
@@ -185,6 +205,7 @@ impl Readout {
         MEASURING.set(true);
         MEASURED_FRAMES.set(0);
         MEASURED_RENDERS.with_borrow_mut(HashMap::clear);
+        MEASURED_CAUSES.with_borrow_mut(HashMap::clear);
         Ok(())
     }
 
@@ -195,6 +216,7 @@ impl Readout {
         }
         MEASURED_FRAMES.set(0);
         MEASURED_RENDERS.with_borrow_mut(HashMap::clear);
+        MEASURED_CAUSES.with_borrow_mut(HashMap::clear);
         self.baseline = Some((Instant::now(), cpu_time()));
         Ok(())
     }
@@ -208,6 +230,14 @@ impl Readout {
         let frames = MEASURED_FRAMES.replace(0);
         let mut renders: Vec<_> = MEASURED_RENDERS.with_borrow_mut(|renders| renders.drain().collect());
         renders.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+        let mut causes: Vec<(String, u32)> = MEASURED_CAUSES.with_borrow_mut(|causes| {
+            let mut by_place = HashMap::<String, u32>::new();
+            for (at, count) in causes.drain() {
+                *by_place.entry(place(at)).or_default() += count;
+            }
+            by_place.into_iter().collect()
+        });
+        causes.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         let (Some((at, before)), true) = (baseline, was) else {
             return Err("The measurement never started".into());
         };
@@ -217,6 +247,7 @@ impl Readout {
             cpu_percent: cpu.saturating_sub(before).as_secs_f64() / seconds * 100.0,
             frames,
             renders,
+            causes,
             card_shown: self.on,
         })
     }

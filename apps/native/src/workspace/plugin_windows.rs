@@ -1,4 +1,5 @@
 //! Plugin view windows retain their own frame and report focus separately from the workspace.
+use crate::workspace::NotifyWorkspace;
 use super::Workspace;
 use crate::{
     installed::Installed,
@@ -187,7 +188,7 @@ impl Workspace {
                             .plugin_ui
                             .windows
                             .retain(|_, handle| handle.window_id() != id);
-                        cx.notify();
+                        cx.notify_workspace();
                     });
                 });
             }));

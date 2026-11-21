@@ -2,6 +2,7 @@
 //! you drag to resize it, the row you drag to move a project, and the question before a project with tabs open is
 //! removed.
 
+use crate::workspace::NotifyWorkspace;
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
@@ -272,7 +273,7 @@ impl Workspace {
                                 )
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.side.sort_menu = !this.side.sort_menu;
-                                    cx.notify();
+                                    cx.notify_workspace();
                                 }))
                                 .children(ui::spot(|| "sidebar-sort".into())),
                             )
@@ -286,7 +287,7 @@ impl Workspace {
                                                     .on_mouse_down_out(cx.listener(
                                                         |this, _, _, cx| {
                                                             this.side.sort_menu = false;
-                                                            cx.notify();
+                                                            cx.notify_workspace();
                                                         },
                                                     )),
                                             )
@@ -373,7 +374,7 @@ impl Workspace {
                 };
                 if this.side.hovered != next {
                     this.side.hovered = next;
-                    cx.notify();
+                    cx.notify_workspace();
                 }
             }))
             .when(dragged.is_some(), |row| {

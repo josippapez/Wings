@@ -3,6 +3,7 @@
 //! when its pane is shown again. Nothing polls: the plan runs when the agents or the panes on screen change, and one
 //! timer waits for the next deadline.
 
+use crate::workspace::NotifyWorkspace;
 use std::{
     collections::{HashMap, HashSet},
     time::{Duration, Instant},
@@ -191,7 +192,7 @@ impl Workspace {
         }
         view.update(cx, |view, cx| view.write_input("/exit", cx));
         self.save(cx);
-        cx.notify();
+        cx.notify_workspace();
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(ENTER_AFTER).await;
             let _ = view.update(cx, |view, cx| view.write_input("\r", cx));
@@ -206,7 +207,7 @@ impl Workspace {
                     open.asleep = false;
                     this.sleep.refused.insert(pane);
                     this.save(cx);
-                    cx.notify();
+                    cx.notify_workspace();
                 }
             });
         })
@@ -247,13 +248,13 @@ impl Workspace {
                 cx.background_executor()
                     .timer(super::panes::RESUME_TIMEOUT)
                     .await;
-                let _ = this.update(cx, |_, cx| cx.notify());
+                let _ = this.update(cx, |_, cx| cx.notify_workspace());
             })
             .detach();
         }
         if woke {
             self.save(cx);
-            cx.notify();
+            cx.notify_workspace();
         }
     }
 }

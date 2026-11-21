@@ -1,6 +1,7 @@
 //! The right-hand panel's width: the edge you drag to resize it, within the desktop's `SIDES.right`, and the width the
 //! workspace file keeps, as the project sidebar's (`sidebar/mod.rs`).
 
+use crate::workspace::NotifyWorkspace;
 use gpui::{AnyElement, Context, Pixels, prelude::*};
 
 use crate::{saved, ui};
@@ -64,7 +65,7 @@ impl Workspace {
     fn start_right_resize(&mut self, x: Pixels, viewport: Pixels, cx: &mut Context<Self>) {
         let from = self.right_width(viewport);
         self.plugin_ui.right_size.resize = Some((x, from));
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Follows the pointer within the limits. Nothing is saved until the pointer is released: the terminals refit when
@@ -77,14 +78,14 @@ impl Workspace {
         let width = (from_width + (from_x - x).as_f32()).clamp(MIN_WIDTH, room);
         if width != self.plugin_ui.right_size.width {
             self.plugin_ui.right_size.width = width;
-            cx.notify();
+            cx.notify_workspace();
         }
     }
 
     fn end_right_resize(&mut self, cx: &mut Context<Self>) {
         if self.plugin_ui.right_size.resize.take().is_some() {
             self.save(cx);
-            cx.notify();
+            cx.notify_workspace();
         }
     }
 

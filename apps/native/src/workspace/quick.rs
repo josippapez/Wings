@@ -4,6 +4,7 @@
 //! running. Drag a floating one's header to move it, any edge or corner to resize it, fill the window with it like a
 //! tab, or minimise it to a bar. Like the desktop's, they're in no tab, so nothing saves them.
 
+use crate::workspace::NotifyWorkspace;
 use std::{path::PathBuf, rc::Rc};
 
 use gpui::{
@@ -196,7 +197,7 @@ impl Workspace {
         } else {
             self.show(self.active, window, cx);
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Going to a tab or a project puts the one filling the pane area away, as going to another tab would.
@@ -209,13 +210,13 @@ impl Workspace {
             .view
             .update(cx, |view, cx| view.set_visible(false, cx));
         self.sync_pane_visibility(cx);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     fn loose_row_focused(&mut self, key: usize, focused: bool, cx: &mut Context<Self>) {
         if let Some(quick) = self.loose.iter_mut().find(|t| t.key == key) {
             quick.row_focused = focused;
-            cx.notify();
+            cx.notify_workspace();
         }
     }
 
@@ -247,7 +248,7 @@ impl Workspace {
             self.show(self.active, window, cx);
         } else {
             self.sync_pane_visibility(cx);
-            cx.notify();
+            cx.notify_workspace();
         }
     }
 
@@ -259,7 +260,7 @@ impl Workspace {
             return;
         };
         quick.rect = gesture.rect_at(position, area);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// The panels over the pane area: the one filling it, and the floating ones over that.

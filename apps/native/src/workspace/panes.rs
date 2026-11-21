@@ -1,5 +1,6 @@
 //! Panes: opening, splitting, closing, focusing, zooming, renaming and resizing them.
 
+use crate::workspace::NotifyWorkspace;
 use std::path::PathBuf;
 
 use gpui::{
@@ -112,7 +113,7 @@ impl Workspace {
         if let Some(pane) = self.panes.get_mut(&pane) {
             pane.renaming = Some((field, events));
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// The terminal in a pane, for tests and anything that needs to reach its shell.
@@ -218,7 +219,7 @@ impl Workspace {
             // Its row says it couldn't resume once the time is up, which nothing else would draw.
             cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(RESUME_TIMEOUT).await;
-                let _ = this.update(cx, |_, cx| cx.notify());
+                let _ = this.update(cx, |_, cx| cx.notify_workspace());
             })
             .detach();
         }
@@ -506,7 +507,7 @@ impl Workspace {
         if older {
             self.tidy_older_servers(cx);
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     pub(super) fn focus_pane(&mut self, pane: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -588,7 +589,7 @@ impl Workspace {
                 dir,
                 bounds,
             });
-            cx.notify();
+            cx.notify_workspace();
         }
     }
 
@@ -604,7 +605,7 @@ impl Workspace {
         };
         if let Some(tab) = self.terminals.iter_mut().find(|t| t.id == drag.tab) {
             tab.layout.set_ratio(&drag.path, ratio);
-            cx.notify();
+            cx.notify_workspace();
         }
     }
 }

@@ -5,6 +5,7 @@
 //! window as an event; the window applies them on its own thread. The checks are `wings-plugins`' and the host's
 //! (`page::plugin::calls`): by the time a request gets here the plugin was allowed to make it.
 
+use crate::workspace::NotifyWorkspace;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::PathBuf,
@@ -1219,7 +1220,7 @@ impl Workspace {
         }
         match shown_in {
             Some(pieces) => self.notify_pieces(pieces, cx),
-            None => cx.notify(),
+            None => cx.notify_workspace(),
         }
     }
 
@@ -1227,7 +1228,7 @@ impl Workspace {
     pub(super) fn notify_pieces(&self, pieces: &[Piece], cx: &mut Context<Self>) {
         match &self.parts {
             Some(parts) => parts.notify(pieces, cx),
-            None => cx.notify(),
+            None => cx.notify_workspace(),
         }
     }
 
@@ -1471,7 +1472,7 @@ impl Workspace {
 
     pub(super) fn dismiss_notice(&mut self, id: usize, cx: &mut Context<Self>) {
         self.plugin_ui.notices.retain(|notice| notice.id != id);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Tells the plugins what changed in the panes and projects since they were last told, which is nothing most of

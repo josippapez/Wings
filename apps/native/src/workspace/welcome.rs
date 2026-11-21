@@ -1,6 +1,7 @@
 //! What to do first, shown when no project is open, as the desktop's `welcome.tsx`. The native app always opens the
 //! folder it was started in, so this shows once the last project has been removed from the sidebar.
 
+use crate::workspace::NotifyWorkspace;
 use gpui::{AnyElement, Context, FontWeight, div, prelude::*, px, rgb, rgba};
 
 use crate::{
@@ -26,7 +27,7 @@ impl Workspace {
         self.welcome = true;
         self.active = super::Active::Issues;
         self.sync_plugin_visibility(cx);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     pub(super) fn welcome(&self, cx: &mut Context<Self>) -> AnyElement {

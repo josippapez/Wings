@@ -3,6 +3,7 @@
 //! one closes the palette, gives the keys back to the pane you were in, and then runs it, so a command that opens
 //! something of its own (Settings, Past Sessions, Find) takes the keys from there.
 
+use crate::workspace::NotifyWorkspace;
 use std::{path::PathBuf, rc::Rc, time::Duration};
 
 use gpui::{
@@ -185,7 +186,7 @@ impl Workspace {
             _events: events,
         });
         self.load_palette_sessions(cx);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Closes the palette and gives the keys back to what had them: the pane you were in.
@@ -210,7 +211,7 @@ impl Workspace {
     fn redraw_palette(&self, cx: &mut Context<Self>) {
         match &self.parts {
             Some(parts) => parts.redraw_window(cx),
-            None => cx.notify(),
+            None => cx.notify_workspace(),
         }
     }
 

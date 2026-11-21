@@ -1,6 +1,7 @@
 //! The right sidebar's pages, stacked one above another like a tab's split panes: which are open, how tall each is, the
 //! dividers between them, and how a click, a menu or a plugin opens and closes one.
 
+use crate::workspace::NotifyWorkspace;
 use gpui::{
     AnyElement, Bounds, ClickEvent, Context, ElementId, FontWeight, MouseButton, MouseDownEvent,
     Orientation, Pixels, Role, SharedString, Window, canvas, div, prelude::*, px, rgb, rgba,
@@ -288,14 +289,14 @@ impl Workspace {
         stack.remove_where(|key| missing.contains(key));
         self.right = stack;
         self.sync_plugin_visibility(cx);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// After the pages open changed: visible ones run drawn, the project keeps the stack, the window redraws.
     fn right_changed(&mut self, cx: &mut Context<Self>) {
         self.sync_plugin_visibility(cx);
         self.save(cx);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// The title bar button of a sidebar. A click shows it alone, or closes the panel when it is the only one showing; a
@@ -337,7 +338,7 @@ impl Workspace {
     /// The pointer went down on the divider under page `index`.
     fn start_split_drag(&mut self, index: usize, cx: &mut Context<Self>) {
         self.plugin_ui.right_split.dragging = Some(index);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Follows the pointer. Only the sidebar lays out again: the panes keep their size. Nothing is saved until the
@@ -358,13 +359,13 @@ impl Workspace {
         let above = (y - area.top()).as_f32() - index as f32 * DIVIDER - DIVIDER / 2.0;
         let min = (MIN_SPLIT_HEIGHT / space).min(1.0 / count as f32 / 2.0);
         self.right.set_boundary(index, above / space, min);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     fn end_split_drag(&mut self, cx: &mut Context<Self>) {
         if self.plugin_ui.right_split.dragging.take().is_some() {
             self.save(cx);
-            cx.notify();
+            cx.notify_workspace();
         }
     }
 

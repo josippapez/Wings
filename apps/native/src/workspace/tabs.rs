@@ -1,5 +1,6 @@
 //! The tab strip: opening, closing, moving and switching tabs, and showing the active one.
 
+use crate::workspace::NotifyWorkspace;
 use gpui::{
     AnyElement, App, BoxShadow, Context, FocusHandle, Focusable, FontWeight, MouseButton,
     MouseDownEvent, Role, SharedString, Window, div, hsla, point, prelude::*, px, rgb, rgba,
@@ -162,7 +163,7 @@ impl Workspace {
         }
         self.sync_project_page(cx);
         self.save(cx);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Paints the active tab's panes, unless a sidebar terminal fills the pane area over them, as the desktop's
@@ -256,7 +257,7 @@ impl Workspace {
         };
         if moved {
             self.save(cx);
-            cx.notify();
+            cx.notify_workspace();
         }
     }
 
@@ -274,22 +275,22 @@ impl Workspace {
             Active::Terminal(id) => {
                 if let Some(index) = self.terminals.iter().position(|tab| tab.id == id) {
                     self.close_tab(index, window, cx);
-                    cx.notify();
+                    cx.notify_workspace();
                 }
             }
             Active::Plugin(id) => {
                 if let Some(index) = self.plugin_tabs.iter().position(|tab| tab.id == id) {
                     self.close_plugin_tab(index, window, cx);
-                    cx.notify();
+                    cx.notify_workspace();
                 }
             }
             Active::Project => {
                 self.close_project_page(window, cx);
-                cx.notify();
+                cx.notify_workspace();
             }
             Active::Issues => {
                 self.close_issues(window, cx);
-                cx.notify();
+                cx.notify_workspace();
             }
         }
     }

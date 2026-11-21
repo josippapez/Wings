@@ -2,6 +2,7 @@
 //! was drawn from is kept, and the layer is drawn from it on its way out, out of the pointer's reach, until its exit is
 //! over. Opening it again cuts the exit short.
 
+use crate::workspace::NotifyWorkspace;
 use std::{
     any::Any,
     cell::{Cell, RefCell},
@@ -143,7 +144,7 @@ impl Workspace {
                     .is_some_and(|exit| exit.number == number)
                 {
                     this.exits.layers.remove(key);
-                    cx.notify();
+                    cx.notify_workspace();
                 }
             });
         });
@@ -155,7 +156,7 @@ impl Workspace {
                 _timer: timer,
             },
         );
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// The layer `key` drawn on its way out, while it is: `put` puts the state it closed with back where `layer` draws

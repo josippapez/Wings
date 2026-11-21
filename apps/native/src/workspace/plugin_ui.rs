@@ -2,6 +2,7 @@
 //! in a panel on the right, and the notifications the system couldn't show. These follow the desktop's
 //! `pane-badge.tsx`, `pane-status.tsx` and `right-sidebar.tsx`.
 
+use crate::workspace::NotifyWorkspace;
 use std::{
     collections::{HashMap, HashSet},
     rc::Rc,
@@ -322,7 +323,7 @@ impl Workspace {
                     .is_some_and(|(pill, at)| pill.contains(&at));
                 if !on_pill {
                     this.badge_card = None;
-                    cx.notify();
+                    cx.notify_workspace();
                 }
             }),
         );
@@ -352,7 +353,7 @@ impl Workspace {
             pill: None,
             _timeout: None,
         });
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// A click on a badge's button: the plugin's main hears it with `onAction`, and the card shows the button busy until
@@ -383,7 +384,7 @@ impl Workspace {
             card.error = None;
             card._timeout = Some(timeout);
         }
-        cx.notify();
+        cx.notify_workspace();
         host.send_action(&pane.to_string(), &action, move |result| {
             let _ = answer.try_send(result);
         });
@@ -401,7 +402,7 @@ impl Workspace {
                     card._timeout = None;
                     card.error = result.err().map(Into::into);
                 }
-                cx.notify();
+                cx.notify_workspace();
             });
         })
         .detach();
@@ -631,7 +632,7 @@ impl Workspace {
                 self.open_plugin_view(plugin, id, None, window, cx);
             }
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// The "…" after the plugin buttons: the ones that didn't fit, then "Keep in bar" with a check by each pinned one.
@@ -722,7 +723,7 @@ impl Workspace {
                 ui::icon_button("plugin-buttons", Icon::Ellipsis, label, ButtonSize::Sm).on_click(
                     cx.listener(|this, _, _, cx| {
                         this.plugin_ui.buttons_menu = !this.plugin_ui.buttons_menu;
-                        cx.notify();
+                        cx.notify_workspace();
                     }),
                 ),
             )
@@ -733,7 +734,7 @@ impl Workspace {
                             ui::popover(ui::select_menu(items).w(px(224.0)).on_mouse_down_out(
                                 cx.listener(|this, _, _, cx| {
                                     this.plugin_ui.buttons_menu = false;
-                                    cx.notify();
+                                    cx.notify_workspace();
                                 }),
                             ))
                         })
@@ -752,7 +753,7 @@ impl Workspace {
             None => pinned.push(key.to_owned()),
         }
         self.save(cx);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     fn sidebar_button(
@@ -1021,7 +1022,7 @@ impl Workspace {
             let Some((source, width, height)) = crate::installed::popover(installed, &key.1) else {
                 // Declared, with no native build: the button keeps its tooltip.
                 self.plugin_ui.popover.missing.insert(key);
-                cx.notify();
+                cx.notify_workspace();
                 return;
             };
             let host = installed.host.clone();
@@ -1040,7 +1041,7 @@ impl Workspace {
             page.read(cx).set_visible(true);
         }
         popover.open = Some(key);
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Hides the popover that is shown. Its page stays, out of view, for `POPOVER_UNLOAD` so it shows again at once, and
@@ -1068,7 +1069,7 @@ impl Workspace {
                 });
             }),
         );
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// The panel on the right, with the open sidebar's page, or nothing while none is open. Opening or closing it
@@ -1114,7 +1115,7 @@ impl Workspace {
                     let _ = this.update(cx, |this, cx| {
                         if this.plugin_ui.right_slide.count == count {
                             this.plugin_ui.right_slide.share = None;
-                            cx.notify();
+                            cx.notify_workspace();
                         }
                     });
                 }));

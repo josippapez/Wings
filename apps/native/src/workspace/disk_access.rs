@@ -3,6 +3,7 @@
 //! Chrome's profile, which the Chrome DevTools MCP reads. Turning on that app's data for the helper app in System
 //! Settings, Files & Folders lets them, so Wings checks at launch and asks once, with a button that opens the list.
 
+use crate::workspace::NotifyWorkspace;
 use gpui::{
     AnyElement, Context, FocusHandle, KeyDownEvent, SharedString, Task, Window, div, prelude::*,
     px, rgb,
@@ -78,7 +79,7 @@ impl Workspace {
                 });
             });
         }
-        cx.notify();
+        cx.notify_workspace();
     }
 
     /// Opens Files & Folders in System Settings.

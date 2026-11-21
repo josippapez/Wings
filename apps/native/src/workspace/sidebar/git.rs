@@ -3,6 +3,7 @@
 //! and as soon as git moves a project's HEAD, index or refs (`wings_gitwatch`). Edits in the working tree are picked up
 //! by the minute sweep. All of it runs off the UI thread.
 
+use crate::workspace::NotifyWorkspace;
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
@@ -110,7 +111,7 @@ impl Workspace {
             self.sweep_git(cx);
         }
         if manual {
-            cx.notify();
+            cx.notify_workspace();
         }
     }
 
@@ -147,7 +148,7 @@ impl Workspace {
                 git.sweeping = false;
                 this.sweep_git(cx);
                 if changed {
-                    cx.notify();
+                    cx.notify_workspace();
                 }
             });
         })
