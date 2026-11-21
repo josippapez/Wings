@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.74 · 2026-11-21
+
+- **Issues know which chat worked on them**: an issue a Claude chat touches records that chat's session again, so each turn's commits and changed files are linked to it.
+- **`wings performance` says what redraws the whole window**: it lists each place that did, with how often, next to the frames and renders.
+
 ## 0.2.73 · 2026-11-21
 
 - **A working chat stays light**: a chat's status changing, on every tool call while Claude works, redraws the sidebar and tab strip and no longer rebuilds the chat page. Sidebar lists that change redraw only the sidebar.
