@@ -17,7 +17,7 @@
 //! build of a module leaves a file a few times its size. Clear the folder of the ones no installed plugin has if it grows.
 
 use super::{
-    Command, Event, HEAP_BYTES, Inbox, Job, Link, PageRuntime, QUEUED_COMMANDS, Queue,
+    Command, Event, HEAP_BYTES, Inbox, Job, Link, PAGE_HEAP_BYTES, PageRuntime, QUEUED_COMMANDS, Queue,
     Reply, Role, THREAD_STACK_BYTES, Tree, message, overran,
 };
 use std::{
@@ -55,6 +55,11 @@ pub(super) struct Host {
     limits: StoreLimits,
 }
 
+/// What a frame's memory may grow to: a page's more than a main's.
+fn limits(page: bool) -> StoreLimits {
+    StoreLimitsBuilder::new().memory_size(if page { PAGE_HEAP_BYTES } else { HEAP_BYTES }).build()
+}
+
 impl Host {
     pub(super) fn new(render: bool, link: Arc<dyn Link>, queue: Queue, emit: Emit) -> Self {
         Self {
@@ -63,9 +68,7 @@ impl Host {
             queue,
             emit,
             timers: Vec::new(),
-            limits: StoreLimitsBuilder::new()
-                .memory_size(HEAP_BYTES)
-                .build(),
+            limits: limits(render),
         }
     }
 
@@ -518,5 +521,23 @@ mod tests {
         load(&engine, b"not a module", Some(&kept)).expect("the kept code, read back");
         assert_eq!(std::fs::read(&kept).unwrap(), written);
         assert!(load(&engine, b"not a module", None).is_err());
+    }
+}
+
+#[cfg(test)]
+mod heap_tests {
+    use wasmtime::ResourceLimiter;
+
+    use super::limits;
+
+    /// A page may grow past the 64 MB a main keeps to: a long chat's page ran out there and stopped.
+    #[test]
+    fn a_page_may_grow_to_512_mb_and_a_main_to_64() {
+        const MB: usize = 1024 * 1024;
+        let (mut page, mut main) = (limits(true), limits(false));
+        assert!(page.memory_growing(0, 500 * MB, None).unwrap());
+        assert!(!page.memory_growing(0, 513 * MB, None).unwrap());
+        assert!(main.memory_growing(0, 64 * MB, None).unwrap());
+        assert!(!main.memory_growing(0, 65 * MB, None).unwrap());
     }
 }

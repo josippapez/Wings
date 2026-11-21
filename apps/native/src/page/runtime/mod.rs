@@ -25,7 +25,11 @@ use std::{
 };
 pub use wings::{Link, Store};
 
+/// How much memory a plugin's main may grow to.
 const HEAP_BYTES: usize = 64 * 1024 * 1024;
+/// How much memory a page may grow to: it holds what it shows, and a long Claude chat with its screenshots (a 36 MB
+/// transcript) ran out at 64 MB and stopped. Memory is only taken as a page grows; this is where a runaway one stops.
+const PAGE_HEAP_BYTES: usize = 512 * 1024 * 1024;
 const THREAD_STACK_BYTES: usize = 4 * 1024 * 1024;
 /// Clicks and messages waiting for a frame that is busy. More than this are dropped, as a stuck frame can't use them
 /// anyway, and the sender never waits for it; a broadcast waits on a thread instead (`Inbox::deliver`).

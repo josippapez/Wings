@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.82 · 2026-11-21
+
+- **Long chats keep working**: a plugin page may now use up to 512 MB, up from 64 MB. A long Claude chat with many screenshots ran out of room and stopped with an error.
+
 ## 0.2.81 · 2026-11-21
 
 - **The hover cue follows the pointer**: the bar under the pointer while a card is on its way moves with the pointer instead of staying where it first came onto the row.
