@@ -1,7 +1,7 @@
 {
   "id": "claude-chat",
   "name": "Claude chat",
-  "version": "0.38.0",
+  "version": "0.39.0",
   "minWingsVersion": "0.2.66",
   "description": "Experimental. Runs Claude Code as a chat in a tab instead of a terminal: messages, tool calls and permission prompts as cards, with Enter to send. Open a new chat from the + menu, or move a Claude terminal into one with its Chat badge.",
   "api": 1,

@@ -2,6 +2,13 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.71 · 2026-11-21
+
+- **Typing stays light in real chats**: a page that answers a key late, as a busy chat does, no longer redraws the page for it, and a panel floating near the message box no longer slows typing. In a chat with a task running, a key costs 2 ms instead of 9.
+- **Counters don't redraw the page**: a running task's or subagent's "Running · 12s" ticks on its own, where it redrew the whole chat each second.
+- **The session panel keeps its edge**: in a narrow tab it ends above the message box, and when it's taller than the room it has, it keeps its border and scrolls inside. It stands off the page with the dialogs' fill and shadow.
+- **Claude chat 0.39.0**: the above.
+
 ## 0.2.70 · 2026-11-20
 
 - **Typing stays light everywhere**: a key in any text field, the chat's message box, a plugin page's filter or the command palette, now redraws the field and not the part of the window around it. In a long chat a key at typing pace went from about 14 ms to 2.5 ms.
