@@ -41,9 +41,9 @@ pub fn glow() -> impl IntoElement {
             if cx.reduce_motion() {
                 0.0
             } else if window.is_window_active() {
-                super::status_dot::ticking_every(GLOW_STEP, window, cx)
+                super::live::ticking_every(GLOW_STEP, window, cx)
             } else {
-                super::status_dot::clock(cx).as_secs_f32()
+                super::live::clock(cx).as_secs_f32()
             }
         },
         paint,

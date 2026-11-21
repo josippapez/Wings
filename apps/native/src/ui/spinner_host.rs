@@ -1,6 +1,6 @@
 //! What turns a window's spinners outside its drawing (`native_spinners::Host`): from the window's draws it learns which
 //! spinners show where, and it turns them itself, so a step of theirs draws no frame of the window. A window without
-//! one (offscreen: tests, `pnpm shot`, the benches) turns them in its layers (`status_dot::rings`).
+//! one (offscreen: tests, `pnpm shot`, the benches) turns them in its layers (`live::Layer`).
 //!
 //! The rings it turns are over everything GPUI draws, so where an overlay of the draw lies over one (`slots::cover`), the
 //! window turns that one in its layer instead, under the overlay, until the overlay is gone.
@@ -85,7 +85,7 @@ pub fn spinner_sync(window: &Window) -> impl IntoElement {
 
 fn sync(id: WindowId, cx: &App) {
     // Where a turn of the spinners' clock is now, so a new ring turns with the rings the window paints.
-    let phase = super::status_dot::clock(cx).as_secs_f64().fract();
+    let phase = super::live::clock(cx).as_secs_f64().fract();
     HOSTS.with_borrow_mut(|hosts| {
         let Some(host) = hosts.get_mut(&id) else { return };
         let handed = std::mem::take(&mut host.handed);

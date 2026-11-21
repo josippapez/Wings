@@ -6,6 +6,7 @@ pub mod behaviors;
 mod button;
 mod drag;
 mod glow;
+pub mod live;
 mod menu;
 pub mod motion;
 #[cfg(target_os = "macos")]
@@ -30,6 +31,7 @@ pub use backdrop::draw_backdrops_under;
 pub(crate) use backdrop::STEP as BACKDROP_STEP;
 pub use button::{Variant, badge, button, chip};
 pub use glow::glow;
+pub use live::view_spinner_layer;
 pub use drag::{RESIZE_EDGE, Side, resize_edge, window_drag};
 pub use menu::{
     context_menu, dropdown_menu, dropup_menu, menu, menu_item, menu_item_text, menu_item_with, menu_separator,
@@ -47,8 +49,7 @@ pub use spinner_host::spinner_sync;
 #[cfg(target_os = "macos")]
 pub use spinner_host::turn_spinners_natively;
 pub use status_dot::{
-    spinner as working_spinner, spinner_layer, status_dot, SpinnerLayer, Spinners, status_dot_slot, view_spinner_layer, view_spinner_slot,
-    view_status_dot_slot,
+    spinner as working_spinner, spinner_layer, status_dot, status_dot_slot, view_spinner_slot, view_status_dot_slot,
 };
 pub use tooltip::{tip, tooltip, tooltip_exit};
 

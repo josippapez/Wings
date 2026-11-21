@@ -11,6 +11,8 @@
 pub mod images;
 #[cfg(feature = "ui")]
 pub mod links;
+#[cfg(all(test, feature = "test-support"))]
+mod live_tests;
 pub mod log;
 pub mod plugin;
 pub mod runtime;

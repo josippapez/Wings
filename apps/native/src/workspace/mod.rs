@@ -1249,9 +1249,9 @@ impl Render for Workspace {
                     .child(main)
                     // Beside the main column; what follows is laid over the main column alone, so draws over neither.
                     .children(right)
-                    // What moves in the pages of the tab and the right panel (spinners, working dots, shimmers), as if
-                    // in them: over both, under what the window draws over the main column.
-                    .children(self.parts.as_ref().map(|parts| ui::SpinnerLayer::in_draw(&parts.view_spinners)))
+                    // What moves in the pages of the tab and the right panel (spinners, working dots, pulsing and
+                    // counting lines), as if in them: over both, under what the window draws over the main column.
+                    .children(self.parts.iter().flat_map(|parts| parts.view_layers.clone()))
                     // The text of the field being typed in, in the main column or the right panel, as if in its place.
                     .children(self.parts.as_ref().map(|parts| parts.fields.clone()))
                     // Over the main column, as if in it: what draws over the terminals in it follows.
@@ -1286,7 +1286,7 @@ impl Render for Workspace {
                     .children(self.sidebar_peek(cx).into_iter().map(ui::cover)),
             )
             // The sidebar's spinners, which turn here so the sidebar keeps its last drawing (see `parts`).
-            .children(self.parts.as_ref().map(|parts| ui::SpinnerLayer::in_draw(&parts.spinners)))
+            .children(self.parts.as_ref().map(|parts| parts.spinners.clone()))
             .children(self.readout_layer(cx))
             .children(under.into_iter().map(ui::cover))
             .children(notices.map(ui::cover))

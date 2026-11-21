@@ -35,7 +35,7 @@ use gpui::{
     SharedString, Window, WindowId, canvas, div, fill, point, prelude::*, px, quad, rgba, size, transparent_black,
 };
 
-use super::{slots, status_dot};
+use super::{live, slots};
 use crate::{
     gradients::{self, Preset, Uniforms},
     page::tree::Backdrop,
@@ -449,7 +449,7 @@ fn paint_frame(_: Bounds<Pixels>, frame: &Frame, _: &mut Window) {
 /// The step of the backdrops now, and how far into the spinners' clock it is. The first under Reduce motion, where they
 /// stand still.
 fn now(cx: &App) -> (u64, Duration) {
-    let elapsed = status_dot::clock(cx);
+    let elapsed = live::clock(cx);
     let step = if cx.reduce_motion() { 0 } else { (elapsed.as_nanos() / STEP.as_nanos()) as u64 };
     (step, elapsed)
 }

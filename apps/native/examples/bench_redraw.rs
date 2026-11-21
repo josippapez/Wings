@@ -258,6 +258,10 @@ fn main() {
     let active = cx
         .update_window(window, |_, window, _| window.is_window_active())
         .unwrap_or(false);
+    // What each of those steps renders again, by view: the page must never be among them.
+    let mut renders = wings_native::ui::readout::Readout::new();
+    renders.begin_measure().unwrap();
+    renders.restart_measure().unwrap();
     let mut frames = Vec::new();
     for _ in 0..300 {
         let start = Instant::now();
@@ -266,10 +270,19 @@ fn main() {
         draw(&mut cx);
         frames.push(start.elapsed());
     }
+    let rendered = renders.end_measure().unwrap().renders;
+    // `<png>` with `.chat.png` for its ending: the chat at work, what moves in it drawn by the window's layers.
+    if let Some(path) = &png {
+        let chat = std::path::Path::new(path).with_extension("chat.png");
+        cx.capture_screenshot(window).unwrap().save(chat).unwrap();
+    }
     report(
-        &format!("frame for a working chat's spinners and shimmer alone (window in front: {active})"),
+        &format!("frame for a working chat's spinners, shimmer and count alone (window in front: {active})"),
         frames,
     );
+    let per_step: Vec<String> =
+        rendered.iter().map(|(view, count)| format!("{view} {:.2}", *count as f64 / 300.0)).collect();
+    println!("renders per step: {}", per_step.join(", "));
     let _ = std::process::Command::new("pkill")
         .args(["-f", &fake_claude.display().to_string()])
         .status();
@@ -304,6 +317,8 @@ fn chat_at_work() -> serde_json::Value {
         json!({ "id": 11, "type": "Spinner", "props": { "size": "large" } }),
         json!({ "id": 12, "type": "Dot", "props": { "state": "working" } }),
         text(13, "Working".into(), json!({ "tone": "muted", "shimmer": true, "since": 1_763_470_000_000u64 })),
+        // A background task's "Running · 12s", which counts without a shimmer.
+        text(15, "Running".into(), json!({ "tone": "muted", "since": 1_763_470_000_000u64 })),
     ]);
     json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Page", "props": { "flush": true }, "children": [
         { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [
