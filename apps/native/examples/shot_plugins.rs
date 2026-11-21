@@ -1659,6 +1659,8 @@ esac"##,
         ("work", worked, None, None, "Worked for 1m 23s"),
         ("work-open", work.clone(), None, Some("disclose:Ran 1 command"), "pnpm test discount"),
         ("detailed", work.clone(), None, None, "No test suite found"),
+        // A reply with a quote of several lines between two paragraphs: its bar runs the quote's whole height, in the muted tone.
+        ("quote", opened(vec![init.clone(), user("What did the reviewer say?"), text("The reviewer's note:\n\n> Rounding at the end loses a cent on every third item, and the long line of this quote wraps onto a second line to show the bar covers it all.\n> Please round each line instead.\n\nI will change it to round per line."), json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 4_000, "num_turns": 1, "result": "", "total_cost_usd": 0.01 })]), None, None, "I will change it"),
         ("large-text", work.clone(), None, None, "of 4 done"),
         // A newer Claude Code is out: the header's pill reads "Update to 2.1.331". Its click runs `claude upgrade` (the fake prints
         // that it updated), then the pill says it updated, with the note about open chats in its tooltip.

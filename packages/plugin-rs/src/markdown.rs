@@ -445,7 +445,7 @@ fn node_of(block: &Block) -> Node {
                 .child(spans(&item.text))
         })),
         Block::Code { text: code, .. } => code_block(code),
-        Block::Quote(t) => row().prop("gap", "s").prop("align", "start").child(text("\u{258e}").prop("tone", "muted")).child(spans(t).prop("tone", "muted")),
+        Block::Quote(t) => crate::ui::quote([spans(t).prop("tone", "muted")]),
         Block::Rule => text("────────────────").prop("tone", "muted"),
         Block::Table { head, rows } => stack()
             .prop("gap", "xs")
@@ -492,6 +492,15 @@ mod tests {
         assert_eq!(blocks[3], Block::Code { lang: "rs".into(), text: "let a = 1;".into() });
         assert_eq!(blocks[4], Block::Quote("quoted".into()));
         assert_eq!(blocks.len(), 5);
+    }
+
+    /// A quote's bar is drawn by the box (`quote: true`), so no node of it holds the bar glyph a selection would copy.
+    #[test]
+    fn a_quote_is_a_quote_box_and_holds_no_bar_character() {
+        let node = markdown("> quoted\nmore");
+        let json = crate::ui::tree_json(node).to_string();
+        assert!(json.contains("\"quote\":true"), "{json}");
+        assert!(!json.contains('\u{258e}'), "{json}");
     }
 
     #[test]

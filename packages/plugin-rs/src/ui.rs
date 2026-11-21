@@ -257,6 +257,11 @@ pub fn stack() -> Node {
 pub fn card() -> Node {
     Node::new("Card")
 }
+/// A column set in from a bar down its left edge, as a Markdown quote is drawn. The bar is part of the box: it runs the
+/// quote's whole height and is never copied with its text. Needs Wings 0.2.72; an older Wings draws it without the bar.
+pub fn quote(children: impl IntoIterator<Item = Node>) -> Node {
+    Node::new("Stack").prop("quote", true).children(children)
+}
 /// A card that, short of room (as a floating panel taller than the page), shrinks to fit and scrolls what it holds inside,
 /// its edge and corners still drawn. Needs Wings 0.2.71; an older Wings draws a plain card.
 pub fn scrolling_card() -> Node {

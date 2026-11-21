@@ -1525,6 +1525,10 @@ impl PageView {
             .when_some(stack.width, |el, width| el.w(px(width)).flex_none())
             .when_some(stack.max_width, |el, width| el.w_full().max_w(px(width)).mx_auto())
             .when_some(stack.measure, |el, width| el.max_w(px(width)))
+            // A quote's bar: a 3pt border in the muted tone, with the text set in from it.
+            .when(stack.quote, |el| {
+                el.border_l(px(3.0)).border_color(rgba(theme::palette().muted_foreground << 8 | 0x66)).pl(px(10.0))
+            })
             // A list button's 1pt border and its padding, so it starts where the list buttons beside it do.
             .when(stack.inset, |el| {
                 el.px(px(7.0)).py(px(1.0 + controls_view::LIST_BUTTON_PADDING))

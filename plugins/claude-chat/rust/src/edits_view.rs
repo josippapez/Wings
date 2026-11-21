@@ -220,7 +220,7 @@ fn block_node(block: &Block, cwd: &str, known: &dyn Fn(&str) -> bool, scope: &st
             blocks.set(at + 1);
             crate::code_view::block(&format!("{scope}-{at}"), code, crate::code_view::fence_language(lang))
         }
-        Block::Quote(source) => row().prop("gap", "s").prop("align", "start").child(text("\u{258e}").prop("tone", "muted")).child(spans(source).prop("tone", "muted")),
+        Block::Quote(source) => wings_plugin::ui::quote([spans(source).prop("tone", "muted")]),
         Block::Rule => text("────────────────").prop("tone", "muted"),
         Block::Table { head, rows } => stack()
             .prop("gap", "xs")

@@ -49,7 +49,7 @@ fn node_of(block: &Block, on_link: &OnLink) -> Node {
             row().prop("gap", "s").prop("align", "start").child(stack().prop("width", item.depth * 16)).child(text(mark).prop("tone", "muted")).child(spans(&item.text, on_link))
         })),
         Block::Code { text: code, .. } => code_block(code),
-        Block::Quote(t) => row().prop("gap", "s").prop("align", "start").child(text("\u{258e}").prop("tone", "muted")).child(spans(t, on_link).prop("tone", "muted")),
+        Block::Quote(t) => wings_plugin::ui::quote([spans(t, on_link).prop("tone", "muted")]),
         Block::Rule => text("────────────────").prop("tone", "muted"),
         Block::Table { head, rows } => stack()
             .prop("gap", "xs")

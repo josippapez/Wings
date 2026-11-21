@@ -327,7 +327,7 @@ pub fn markdown(source: &str) -> Node {
             row("s").prop("align", "start").maybe((item.depth > 0).then(|| column(item.depth as u32 * 16))).child(muted(marker)).child(spans(&item.text))
         })),
         Block::Code { lang, text } => code_block(&lang, &text),
-        Block::Quote(text) => row("s").prop("align", "start").child(muted("▎")).child(spans(&text).prop("tone", "muted")),
+        Block::Quote(text) => wings_plugin::ui::quote([spans(&text).prop("tone", "muted")]),
         Block::Rule => muted("────────────────"),
         Block::Table { head, rows } => stack("xs")
             .child(row("m").children(head.into_iter().map(|cell| spans(&cell).prop("weight", "strong"))))

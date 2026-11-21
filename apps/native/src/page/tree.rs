@@ -282,6 +282,9 @@ pub struct Stack {
     /// Set only by a `Section`: at most this wide from its left edge, so a description reads at a measure without being
     /// centred as a `maxWidth` column is.
     pub measure: Option<f32>,
+    /// `quote: true`: a bar down its left edge and what it holds set in from it, as a Markdown quote is drawn. The bar is
+    /// part of the box, so it runs the quote's whole height and a selection never copies it.
+    pub quote: bool,
     pub children: Vec<Node>,
 }
 
@@ -1418,6 +1421,7 @@ impl Walk {
                 on_context_menu: handler("onContextMenu"),
                 inset: false,
                 measure: None,
+                quote: on("quote"),
                 children: parts(children),
             }),
             "ListRow" => kit::list_row(id, children, handler("onClick"), title(&props)),
@@ -2317,6 +2321,18 @@ mod tests {
         assert_eq!(scale(json!({"textScale":40})), Some(2.0));
         assert_eq!(scale(json!({"textScale":0})), Some(0.5));
         assert_eq!(scale(json!({"textScale":"big"})), None);
+    }
+
+    /// A Markdown quote's bar is a prop of the stack, so it is drawn by the box and never copied as a word.
+    #[test]
+    fn a_stack_with_quote_set_is_a_quote_and_a_plain_one_is_not() {
+        let quote = |props: serde_json::Value| match parse_one(json!({"id":1,"type":"Stack","props":props,"children":[]})) {
+            Node::Stack(stack) => stack.quote,
+            _ => panic!("a stack"),
+        };
+        assert!(quote(json!({"quote":true})));
+        assert!(!quote(json!({})));
+        assert!(!quote(json!({"quote":"yes"})));
     }
 
     /// A plugin's settings page grouped its rows in a plain card, with no hairlines between them as Wings' own have.
