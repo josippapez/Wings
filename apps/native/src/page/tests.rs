@@ -2474,6 +2474,40 @@ fn a_floating_pane_taller_than_its_page_scrolls() {
     assert!(pressed_at(&app, &mut window, (780.0, 370.0), "Pressed 178."), "{}", window.read(|view, _| view.text()));
 }
 
+/// A floating pane whose card scrolls (`scroll: true`) keeps the card inside the page, its foot and border drawn, and the
+/// card scrolls what it holds: the chat's session panel ran past the page and was cut off at its foot.
+#[test]
+fn a_card_that_scrolls_in_a_floating_pane_stays_inside_the_page_and_scrolls_inside() {
+    let source = fake::page("page", {
+        let mut pressed = "none".to_owned();
+        move |event| {
+            if let Some((handler, _)) = event {
+                pressed = handler.trim_end_matches(":onClick").to_owned();
+            }
+            let rows: Vec<Value> = (0..40)
+                .map(|i| json!({ "id": 100 + 2 * i, "type": "Button", "props": { "onClick": format!("{}:onClick", 100 + 2 * i) },
+                    "children": [text_node(101 + 2 * i, &format!("Row {i}"))] }))
+                .collect();
+            json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Split",
+                "props": { "defaultSize": 240, "side": "end", "float": true }, "children": [
+                { "id": 2, "type": "Slot", "props": { "name": "start" }, "children": [text(3, 4, format!("Pressed {pressed}."))] },
+                { "id": 5, "type": "Slot", "props": { "name": "end" }, "children": [{ "id": 6, "type": "Card", "props": { "scroll": true },
+                    "children": [{ "id": 7, "type": "Stack", "children": rows }] }] }] }] })
+        }
+    });
+    let (app, mut window) = open_narrow(source, 900.0);
+    settle(&app, &mut window, shows("Pressed none."));
+    // The card ends inside the window, its foot and border drawn: it shrank to the room it had.
+    window.draw();
+    let page = window.update(|_, window, _| window.viewport_size());
+    let card = crate::ui::spot_at("page-card-6").expect("the card is drawn");
+    assert!(card.bottom() <= page.height, "{card:?} in {page:?}");
+    // And it scrolls what it holds, so its last row can be pressed.
+    window.simulate_scroll(point(px(780.0), px(200.0)), point(px(0.0), px(-10_000.0)));
+    window.draw();
+    assert!(pressed_at(&app, &mut window, (780.0, 370.0), "Pressed 178."), "{}", window.read(|view, _| view.text()));
+}
+
 /// A floating pane with `onClose` has the keyboard, and Escape in it sends `onClose`.
 #[test]
 fn escape_in_a_floating_pane_sends_its_on_close() {

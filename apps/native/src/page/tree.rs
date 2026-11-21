@@ -514,6 +514,9 @@ pub struct Card {
     pub raised: bool,
     /// `variant: "rows"`: each child a row, split from the one above by a hairline, as Wings' Settings groups its rows.
     pub rows: bool,
+    /// `scroll: true`: in a column with too little room, as a floating panel over the page, the card shrinks to fit and
+    /// what it holds scrolls inside it, so its edge and corners stay drawn.
+    pub scrolls: bool,
     pub children: Vec<Node>,
 }
 
@@ -1552,6 +1555,7 @@ impl Walk {
                 id,
                 raised: str_prop(&props, "variant") == Some("raised"),
                 rows: str_prop(&props, "variant") == Some("rows"),
+                scrolls: on("scroll"),
                 children: parts(children),
             }),
             "Heading" => Node::Heading(Heading {
@@ -2323,6 +2327,8 @@ mod tests {
             _ => panic!("a card"),
         };
         assert_eq!(card(json!("rows")), (true, false));
+        let Node::Card(scrolls) = parse_one(json!({"id":1,"type":"Card","props":{"scroll":true},"children":[]})) else { panic!("a card") };
+        assert!(scrolls.scrolls);
         assert_eq!(card(json!("raised")), (false, true));
         assert_eq!(card(serde_json::Value::Null), (false, false));
     }

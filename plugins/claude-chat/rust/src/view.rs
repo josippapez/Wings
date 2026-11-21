@@ -1189,7 +1189,8 @@ fn side(c: &Chat) -> Vec<Node> {
     }
     let collapse = icon_button_titled("Collapse the side panel", "Collapse the side panel to a rail", &CHEVRON_RIGHT, || chat::set_side_rail(true));
     let top = row().prop("align", "center").child(inset(muted("Session").prop("size", "small")).prop("grow", true)).child(collapse).key("side-collapse");
-    let summary = card().prop("variant", "raised").child(stack().prop("gap", "m").child(top).children(sections));
+    // Taller than the room it has, the card keeps its edge and its sections scroll inside it.
+    let summary = card().prop("variant", "raised").prop("scroll", true).child(stack().prop("gap", "m").child(top).children(sections));
     std::iter::once(summary).chain(terminals(c)).collect()
 }
 

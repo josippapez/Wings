@@ -257,6 +257,11 @@ pub fn stack() -> Node {
 pub fn card() -> Node {
     Node::new("Card")
 }
+/// A card that, short of room (as a floating panel taller than the page), shrinks to fit and scrolls what it holds inside,
+/// its edge and corners still drawn. Needs Wings 0.2.71; an older Wings draws a plain card.
+pub fn scrolling_card() -> Node {
+    Node::new("Card").prop("scroll", true)
+}
 /// A card of `rows`, each split from the one above by a hairline, as Wings' Settings groups its rows. Needs Wings 0.2.70;
 /// an older Wings draws a plain card.
 pub fn rows_card(rows: impl IntoIterator<Item = Node>) -> Node {

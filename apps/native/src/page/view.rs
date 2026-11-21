@@ -2077,6 +2077,36 @@ impl PageView {
                     self.inline(&loading.children, cx)
                 })
                 .into_any_element(),
+            // A card that scrolls shrinks to the room it has and scrolls what it holds, so its edge stays drawn: a
+            // floating panel taller than the page was cut off at its foot, border and corners with it.
+            Node::Card(card) if card.scrolls => {
+                let body = div()
+                    .id(ElementId::NamedInteger("page-card-scroll".into(), card.id))
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap(px(if card.raised { 6.0 } else { 10.0 }))
+                    .children(self.nodes(&card.children, cx));
+                let shell = ui::plain_card([body.into_any_element()]).min_h_0().overflow_hidden().children(ui::spot(|| format!("page-card-{}", card.id)));
+                match card.raised {
+                    true => shell
+                        .px(px(12.0))
+                        .py(px(10.0))
+                        .rounded(px(14.0))
+                        .border_color(rgba(theme::HAIRLINE_STRONG))
+                        .shadow(vec![gpui::BoxShadow {
+                            color: gpui::hsla(0.0, 0.0, 0.0, 0.28),
+                            offset: gpui::point(px(0.0), px(6.0)),
+                            blur_radius: px(18.0),
+                            spread_radius: px(0.0),
+                            inset: false,
+                        }])
+                        .into_any_element(),
+                    false => shell.into_any_element(),
+                }
+            }
             Node::Card(card) if card.raised => ui::plain_card(self.nodes(&card.children, cx))
                 .gap(px(6.0))
                 .px(px(12.0))
@@ -2551,6 +2581,9 @@ impl PageView {
         // A field of the start's under the pane, being typed in, draws its text under the pane, in place.
         let over = Rc::new(Cell::new(gpui::Bounds::default()));
         let container = container.child(ui::under(over.clone(), main));
+        // A card that scrolls what it holds (`scroll: true`) shrinks to the pane, which then neither scrolls nor clips: its
+        // clip cut off the card's foot and its shadow. Any other pane scrolls as a whole.
+        let card_scrolls = split.end.iter().any(|node| matches!(node, Node::Card(card) if card.scrolls));
         let mut pane = div()
             .id(ElementId::NamedInteger("page-split-float".into(), id))
             .absolute()
@@ -2559,7 +2592,7 @@ impl PageView {
             .w(px(split.size))
             .max_w(relative(0.5))
             .max_h(relative(1.0))
-            .overflow_y_scroll()
+            .when(!card_scrolls, |pane| pane.overflow_y_scroll())
             // The pane, not its cards, keeps the pointer from the page under it: a card that did was hit first and hid
             // the pane from the wheel, so a panel taller than the page didn't scroll.
             .occlude()
@@ -2590,15 +2623,25 @@ impl PageView {
                 })
             });
         }
-        // The cards' surface is see-through, which only shows once the pane floats over the page's text: an opaque layer of
-        // the page's own colour under them, at the raised card's radius, keeps that text out, and the pointer with it.
+        // The cards' surface is see-through, which only shows once the pane floats over the page's text: an opaque layer
+        // under them, at the raised card's radius, keeps that text out, and the pointer with it. It is the dialogs' and
+        // menus' lighter fill with their deep soft shadow, so the pane stands off the page as they do: on the page's own
+        // colour only its light edge told it apart, which read as an outline.
         let under = div()
             .id(ElementId::NamedInteger("page-split-float-under".into(), id))
             .flex()
             .flex_col()
+            .when(card_scrolls, |under| under.min_h_0())
             .gap(px(8.0))
             .rounded(px(14.0))
-            .bg(rgb(theme::palette().background))
+            .bg(rgb(theme::palette().dialog))
+            .shadow(vec![gpui::BoxShadow {
+                color: gpui::hsla(0.0, 0.0, 0.0, 0.45),
+                offset: gpui::point(px(0.0), px(10.0)),
+                blur_radius: px(32.0),
+                spread_radius: px(0.0),
+                inset: false,
+            }])
             .child(ui::bounds_into(over))
             .children(self.nodes(&split.end, cx));
         container.child(pane.child(under)).into_any_element()
