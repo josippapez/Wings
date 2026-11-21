@@ -175,7 +175,17 @@ impl Snapshot {
         let agent = pane
             .as_ref()
             .and_then(|id| self.agents.iter().find(|a| &a.pane_id == id));
-        let (project, session) = caller(space, agent);
+        let (project, mut session) = caller(space, agent);
+        // Claude in a chat tab is no pane's agent: the tab's page says which session it runs, so issues and the journal
+        // know who called. Claude chat is the only page that reports an agent.
+        if let Some(tab) = session
+            .is_null()
+            .then(|| pane.as_ref().and_then(|id| self.tabs.iter().find(|tab| &tab.id == id)))
+            .flatten()
+            && let Some(id) = &tab.session_id
+        {
+            session = serde_json::json!({ "id": id, "name": tab.name, "kind": "claude" });
+        }
         ClaudeCaller {
             pane_id: pane,
             project,
@@ -1206,5 +1216,23 @@ fn a_call_from_a_program_a_tabs_page_runs_comes_from_that_tab() {
     };
     let pane = snapshot.pane(Some(program), None);
     assert_eq!(pane.as_deref(), Some("tab-4"));
-    assert_eq!(snapshot.caller(pane).project["path"], "/work/shop");
+    assert_eq!(snapshot.caller(pane.clone()).project["path"], "/work/shop");
+    // Its session is the one the tab's page says it runs, so an issue it touches knows it, and the journal links its turns.
+    assert!(snapshot.caller(pane.clone()).session.is_null());
+    let snapshot = Snapshot {
+        tabs: vec![TabRow {
+            id: "tab-4".into(),
+            space_id: "/work/shop".into(),
+            cwd: "/work/shop".into(),
+            plugin: "claude-chat".into(),
+            title: "Chat".into(),
+            state: AgentState::Working,
+            name: "Fix the checkout".into(),
+            summary: None,
+            session_id: Some("s-1".into()),
+            account: None,
+        }],
+        ..snapshot
+    };
+    assert_eq!(snapshot.caller(pane).session, json!({ "id": "s-1", "name": "Fix the checkout", "kind": "claude" }));
 }
