@@ -1403,6 +1403,8 @@ esac"##,
     ]);
     // /add-dir checks the folder with `test -d`, so the scene adds one that is there.
     let add_dir = format!("type:/add-dir {}/api;keys:enter", root.canonicalize().unwrap().display());
+    // A draft of 30 lines: the message box stops at 12 and scrolls inside itself, with the caret on the last line.
+    let long_draft = format!("type:{}", (1..=30).map(|n| format!("draft line {n} of a long message")).collect::<Vec<_>>().join("\n"));
     // /mcp with a server that wants a sign-in in a browser, next to the one that failed and the one that is connected.
     let mut signed_out: Vec<serde_json::Value> = vec![init.clone()];
     signed_out.extend(include_str!("../../../plugins/claude-chat/rust/tests/plugins.jsonl").lines().map(|line| {
@@ -1551,6 +1553,18 @@ esac"##,
         user("Review https://github.com/acme/shop/pull/42 before we merge it."),
         text("It rounds the discount in cents now, and one check fails. The test for it went in with https://github.com/acme/shop/pull/37."),
     ]);
+    // More subagents and named pull requests than the side panel's sections have room for: each lists all of its rows in a
+    // column that scrolls inside itself.
+    let long_lists = {
+        let mut lines = vec![init.clone(), user("Survey every module and review the open pull requests.")];
+        for i in 0..25 {
+            lines.push(tool(&format!("m{i}"), "Task", json!({ "description": format!("Survey module {}", i + 1), "subagent_type": "Explore", "prompt": "List its callers." })));
+            lines.push(output(&format!("m{i}"), "Done.", false));
+        }
+        let pulls: Vec<String> = (1..=15).map(|n| format!("https://github.com/acme/shop/pull/{n}")).collect();
+        lines.push(text(&format!("Open pull requests: {}.", pulls.join(", "))));
+        opened(lines)
+    };
     // A Claude Code plugin's mod: a status line, a toast and a pane with a button, as Claude Code sends a surface them.
     let mods = opened(vec![
         init.clone(),
@@ -1615,8 +1629,10 @@ esac"##,
         ("mods-noside", mods.clone(), None, Some("press:Side panel;disclose:Ran 1 command · Used 1 tool"), "deploy pane"),
         ("mods-menu", mods_menu, None, Some("rightclick:140,130"), "Summarize this page"),
         ("mentioned", mentioned.clone(), None, None, "Mentioned"),
+        ("long-lists", long_lists, None, None, "Subagents"),
         // The pointer on a pull request's row shows its card.
         ("mentioned-card", mentioned, None, Some("hover:800,267"), "Mentioned"),
+        ("long-draft", opened(vec![init.clone()]), None, Some(long_draft.as_str()), "Remote Control"),
         ("long-older", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, Some(older.as_str()), "Jump to the latest"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -2249,6 +2265,14 @@ esac"##,
         ("long-pixels-rain", "long-pixels", Some("pixels:rain"), long.clone(), Some(&long_args), "Step 99 passes"),
         ("long-pixels-checker", "long-pixels", Some("pixels:checker"), long.clone(), Some(&long_args), "Step 99 passes"),
         ("long-pixels-embers", "long-pixels", Some("pixels:embers"), long.clone(), Some(&long_args), "Step 99 passes"),
+        ("long-pixels-mono", "long-pixels-more", Some("pixels:mono"), long.clone(), Some(&long_args), "Step 99 passes"),
+        ("long-pixels-ocean", "long-pixels-more", Some("pixels:ocean"), long.clone(), Some(&long_args), "Step 99 passes"),
+        ("long-pixels-meadow", "long-pixels-more", Some("pixels:meadow"), long.clone(), Some(&long_args), "Step 99 passes"),
+        ("long-pixels-dusk", "long-pixels-more", Some("pixels:dusk"), long.clone(), Some(&long_args), "Step 99 passes"),
+        ("long-pixels-blocks", "long-pixels-more", Some("pixels:blocks"), long.clone(), Some(&long_args), "Step 99 passes"),
+        ("long-pixels-bayer", "long-pixels-more", Some("pixels:bayer"), long.clone(), Some(&long_args), "Step 99 passes"),
+        ("long-pixels-grain", "long-pixels-more", Some("pixels:grain"), long.clone(), Some(&long_args), "Step 99 passes"),
+        ("long-pixels-grain-lagoon", "long-pixels-more", Some("pixels:grain-lagoon"), long.clone(), Some(&long_args), "Step 99 passes"),
         ("long-gradient", "long-gradient", Some("gradient:halo"), long.clone(), Some(&long_args), "Step 99 passes"),
         ("long-gradient-pensive", "long-gradient", Some("gradient:pensive"), long.clone(), Some(&long_args), "Step 99 passes"),
         ("long-gradient-mint", "long-gradient", Some("gradient:mint"), long.clone(), Some(&long_args), "Step 99 passes"),
@@ -2260,7 +2284,6 @@ esac"##,
         ("long-gradient-dots", "long-gradient", Some("gradient:dots"), long.clone(), Some(&long_args), "Step 99 passes"),
         ("long-gradient-silk", "long-gradient", Some("gradient:silk"), long.clone(), Some(&long_args), "Step 99 passes"),
         ("long-gradient-cells", "long-gradient", Some("gradient:cells"), long.clone(), Some(&long_args), "Step 99 passes"),
-        ("long-gradient-moire", "long-gradient", Some("gradient:moire"), long.clone(), Some(&long_args), "Step 99 passes"),
         ("long-tab", "long-pixels", None, long, Some(&long_args), "Step 99 passes"),
         ("new-pixels", "new-pixels", Some("pixels"), opened(vec![init.clone()]), None, "What should Claude do?"),
         ("new-gradient", "new-gradient", Some("gradient:pensive"), opened(vec![init.clone()]), None, "What should Claude do?"),
@@ -2495,6 +2518,29 @@ esac"##,
             })
             .collect();
         std::fs::write(folder.join(format!("agent-{agent}.jsonl")), entries).unwrap();
+        // A subagent that handed its report back and finished, then the chat's SendMessage woke it: the report reads whole,
+        // and the message that woke it shows as one of yours.
+        let woken = "asa2";
+        let report = "## Done\n\nThe cart rounds each line item before it adds them up, and the checkout rounds once on the total, so an order of many small discounted items can differ by a cent between the two.\n\n- `src/cart.ts` rounds per line, in `lineTotal`\n- `src/checkout.ts` rounds once, on the total\n- `src/discount.ts` doesn't round\n\n## Left\n\nWhich of the two the shop wants is a decision for you. Nothing else is left.";
+        let woken_entries: String = [
+            user("Does the cart round before or after the discount?"),
+            haiku(json!([{ "type": "tool_use", "id": "sw1", "name": "Read", "input": { "file_path": "/work/shop/src/cart.ts" } }])),
+            output("sw1", "export function lineTotal(item) {\n  return round(item.price * item.qty * (1 - item.discount));\n}", false),
+            haiku(json!([{ "type": "tool_use", "id": "sw2", "name": "SubagentHandback", "input": { "message": report } }])),
+            output("sw2", "{\"success\":true,\"message\":\"Report delivered to your caller.\"}", false),
+            json!({ "type": "user", "isMeta": true, "origin": { "kind": "coordinator" }, "message": { "role": "user", "content": "The coordinator sent a message while you were working:\nAlso check whether the tests cover the rounding.\n\nAddress this before completing your current task." } }),
+            haiku(json!([{ "type": "tool_use", "id": "sw3", "name": "Grep", "input": { "pattern": "lineTotal", "path": "/work/shop/test" } }])),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(n, mut entry)| {
+            entry["uuid"] = format!("sw{n}").into();
+            entry["isSidechain"] = true.into();
+            entry["agentId"] = woken.into();
+            format!("{entry}\n")
+        })
+        .collect();
+        std::fs::write(folder.join(format!("agent-{woken}.jsonl")), woken_entries).unwrap();
         // The chat that runs it: its call, Claude Code's word that it started, and the lines it printed so far.
         let started = [
             json!({ "type": "system", "subtype": "init", "session_id": SUB_SESSION, "model": "claude-opus-5-5" }),
@@ -2515,8 +2561,17 @@ esac"##,
             std::env::set_var("CHAT_EXIT", "");
             std::env::set_var("CHAT_STDERR", "");
         }
+        let woken_args = json!({ "subagent": { "session": SUB_SESSION, "agent": woken, "title": "Check how the cart rounds" } });
         let args = json!({ "subagent": { "session": SUB_SESSION, "agent": agent, "title": title } });
-        for (state, chat_open, sidebar) in [("subagent-tab", true, false), ("subagent-tab-closed", false, false), ("subagent-sidebar", true, true)] {
+        let scenes = [
+            ("subagent-tab", true, false),
+            ("subagent-tab-closed", false, false),
+            ("subagent-sidebar", true, true),
+            ("subagent-tab-woken", true, false),
+            ("subagent-tab-sent", true, false),
+        ];
+        for (state, chat_open, sidebar) in scenes {
+            let args = if matches!(state, "subagent-tab-woken" | "subagent-tab-sent") { &woken_args } else { &args };
             if only.as_deref().is_some_and(|only| only != state) {
                 continue;
             }
@@ -2536,7 +2591,7 @@ esac"##,
                     handle
                 });
                 let chat: Option<AnyWindowHandle> = chat_view.map(Into::into);
-                let (page, page_args) = if sidebar { (&side_source, None) } else { (&source, Some(&args)) };
+                let (page, page_args) = if sidebar { (&side_source, None) } else { (&source, Some(args)) };
                 let handle = cx
                     .open_offscreen_window(size(px(width), px(760.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, page, page_args, cx)))
                     .unwrap();
@@ -2555,6 +2610,8 @@ esac"##,
                 }
                 // Open, the box says how a message goes once the chat has said it can pass one on; closed, it says why not.
                 let shown = match (chat_open, sidebar) {
+                    _ if state == "subagent-tab-woken" => ["Nothing else is left", "Also check whether the tests"],
+                    _ if state == "subagent-tab-sent" => ["Nothing else is left", "Goes through the chat"],
                     (true, true) => ["Found three callers", "Pop out"],
                     (true, false) => ["Found three callers", "Goes through the chat"],
                     (false, _) => ["Found three callers", "is closed"],
@@ -2563,6 +2620,30 @@ esac"##,
                     let deadline = Instant::now() + Duration::from_secs(30);
                     while !handle.read_with(&cx, |view, _| view.text().contains(expected)).unwrap() {
                         assert!(Instant::now() < deadline, "the subagent's tab did not show {expected:?}: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
+                        wait(&mut cx, window, Duration::from_millis(20));
+                    }
+                }
+                // A call's line opens it as its fold does, on all it was given: the search the woken subagent runs.
+                if state == "subagent-tab-woken" {
+                    assert!(handle.update(&mut cx, |view, _, cx| view.press_disclosure("Searched 1 time", cx)).unwrap());
+                    for (press, expected) in [(false, "Grep"), (true, "/work/shop/test")] {
+                        if press {
+                            assert!(handle.read_with(&cx, |view, _| view.press_list_button("Grep")).unwrap());
+                        }
+                        let deadline = Instant::now() + Duration::from_secs(30);
+                        while !handle.read_with(&cx, |view, _| view.text().contains(expected)).unwrap() {
+                            assert!(Instant::now() < deadline, "the call did not open on {expected:?}: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
+                            wait(&mut cx, window, Duration::from_millis(20));
+                        }
+                    }
+                }
+                // What you send shows at the end as on its way until the chat's Claude passes it on, which this one never does.
+                if state == "subagent-tab-sent" {
+                    cx.simulate_input(window, "Also count the tests that cover the rounding.");
+                    cx.simulate_keystrokes(window, "enter");
+                    let deadline = Instant::now() + Duration::from_secs(30);
+                    while !handle.read_with(&cx, |view, _| view.text().contains("On its way")).unwrap() {
+                        assert!(Instant::now() < deadline, "what was sent did not show: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
                         wait(&mut cx, window, Duration::from_millis(20));
                     }
                 }
@@ -2630,7 +2711,7 @@ esac"##,
     }
     // The page in Wings Settings, with a mode, Detailed and Large text picked.
     if only.as_deref().is_none_or(|only| only == "settings") {
-        let settings = host_over("fixture-storage-claude-chat-settings", &[("default-mode", json!("auto")), ("detailed-output", json!(true)), ("open-command", json!(false)), ("open-thought", json!(false)), ("text-size", json!("large")), ("diff-split", json!(true)), ("stop-near-limit", json!(true)), ("pause-at", json!("80")), ("stop-at", json!("95")), ("session-panel", json!("sidebar"))]);
+        let settings = host_over("fixture-storage-claude-chat-settings", &[("default-mode", json!("auto")), ("detailed-output", json!(true)), ("open-command", json!(false)), ("open-thought", json!(false)), ("text-size", json!("large")), ("diff-split", json!(true)), ("stop-near-limit", json!(true)), ("pause-at", json!("80")), ("stop-at", json!("95")), ("account-at", json!({ "work": { "pause": "70", "stop": "90" } })), ("session-panel", json!("sidebar"))]);
         let page = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/claude-chat/dist/native/settings.wasm");
         let page = page.canonicalize().expect("the claude-chat settings page is built, in plugins/");
         wings_native::page::runtime::wasm::compile_now(&page.to_string_lossy()).unwrap();
@@ -2642,7 +2723,7 @@ esac"##,
             let window = handle.into();
             handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
             let deadline = Instant::now() + Duration::from_secs(30);
-            while !handle.read_with(&cx, |view, _| view.text().contains("Claude Code 2.1.329")).unwrap() {
+            while !handle.read_with(&cx, |view, _| view.text().contains("Claude Code 2.1.329") && view.text().contains("Per account")).unwrap() {
                 assert!(Instant::now() < deadline, "page did not show the settings: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
                 wait(&mut cx, window, Duration::from_millis(20));
             }
@@ -3236,6 +3317,7 @@ fn tasks(out: PathBuf) {
                 "Checkout summary card",
             ),
             ("list", board, None, Tab, &["List"], "Checkout redesign"),
+            ("board-updated", board, None, Tab, &["Board", "Updated"], "Checkout summary card"),
             (
                 "issue",
                 issue,

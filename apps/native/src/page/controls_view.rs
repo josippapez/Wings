@@ -401,6 +401,7 @@ impl PageView {
                 );
                 field.fill = true;
                 field.rows = input.rows;
+                field.max_rows = input.max_rows;
                 field.enter_submits = input.enter_submits;
                 field.bare = input.bare;
                 field.time = input.time;

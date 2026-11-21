@@ -234,19 +234,6 @@ float3 voronoi(float2 q, float t, constant Gradient &g) {
   return mix(color, g.ink3.rgb, pin * 0.6 * g.strength);
 }
 
-// Two sets of lines a few degrees apart that turn slowly against each other: the fringes between them are the picture.
-float3 moire(float2 q, float t, constant Gradient &g) {
-  float a = 0.09 + 0.06 * sin(t * TURN * 2.0);
-  float freq = g.density * 40.0;
-  float v1 = (q.x * cos(a) + q.y * sin(a)) * freq;
-  float v2 = (q.x * cos(a) - q.y * sin(a)) * freq * 1.02;
-  float m1 = line(v1, 2.2);
-  float m2 = line(v2, 2.2);
-  float3 color = mix(g.ground.rgb, g.ink1.rgb, m1 * 0.8 * g.strength);
-  color = mix(color, g.ink2.rgb, m2 * 0.8 * g.strength);
-  return mix(color, g.ink3.rgb, m1 * m2 * g.strength);
-}
-
 float3 to_linear(float3 c) {
   return select(pow((c + 0.055) / 1.055, 2.4), c / 12.92, c <= 0.04045);
 }
@@ -277,10 +264,8 @@ float3 shade(float2 at, constant Gradient &g) {
     color = dots(q, g.time, g);
   } else if (g.shape < 7.5) {
     color = silk(q, g.time, g);
-  } else if (g.shape < 8.5) {
-    color = voronoi(q, g.time, g);
   } else {
-    color = moire(q, g.time, g);
+    color = voronoi(q, g.time, g);
   }
   float corner = max(g.corner, 1.0);
   float2 from_corner = abs(at - g.size * 0.5) - (g.size * 0.5 - corner);

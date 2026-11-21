@@ -288,6 +288,12 @@ pub fn quote(children: impl IntoIterator<Item = Node>) -> Node {
 pub fn scrolling_card() -> Node {
     Node::new("Card").prop("scroll", true)
 }
+/// `children` in a column that is as tall as they are up to `max_height` points and scrolls inside itself past that, so a
+/// long list in a section shows all its rows without making the section long. The wheel over it scrolls it while it can go
+/// that way and what holds it when it can't. Needs Wings 0.2.75; an older Wings draws it at full height.
+pub fn scroll_within(max_height: u32, children: impl IntoIterator<Item = Node>) -> Node {
+    Node::new("Scroll").prop("maxHeight", max_height).child(Node::new("Stack").children(children))
+}
 /// A card of `rows`, each split from the one above by a hairline, as Wings' Settings groups its rows. Needs Wings 0.2.70;
 /// an older Wings draws a plain card.
 pub fn rows_card(rows: impl IntoIterator<Item = Node>) -> Node {

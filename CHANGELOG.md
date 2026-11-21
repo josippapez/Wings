@@ -2,6 +2,17 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.75 · 2026-11-21
+
+- **Side panel lists show everything**: Claude chat's Mentioned, Subagents, Bookmarks and Plans sections list every row and scroll inside themselves past about eight rows, where they cut to "N earlier". Plugin pages can cap a scroll's height the same way.
+- **The message box stops growing**: past 12 lines it scrolls inside, with the wheel and with the caret.
+- **Copy buttons go back**: "Copied" turns back into the copy icon after 2 seconds.
+- **Subagent tabs show what was sent**: a message the chat's Claude sends a subagent shows in its tab as it's sent, and one you type there shows as on its way until it arrives. The subagent's final report reads in full.
+- **Tool rows open on a click**: clicking a tool call's row opens it, with the whole input, and hovering a cut summary shows all of it. In chats and subagent tabs.
+- **Pause and stop per account**: with more than one Claude account, each can have its own pause and stop percentages in Claude chat's settings.
+- **New backgrounds**: Black and white, Ocean, Meadow and Dusk pixels, Pixel blocks, Ordered dither, Grainy gradient and Grainy lagoon. Moire is gone, and a chat that used it shows the plain ground.
+- **Claude chat 0.41.0**: the above.
+
 ## 0.2.74 · 2026-11-21
 
 - **Issues know which chat worked on them**: an issue a Claude chat touches records that chat's session again, so each turn's commits and changed files are linked to it.

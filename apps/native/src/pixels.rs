@@ -25,6 +25,27 @@ const BAYER: [[u8; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 
 /// Where the drift's waves change band, darkest to brightest, on their 0 to 1.
 const EDGES: [f32; 4] = [0.30, 0.42, 0.58, 0.70];
 
+/// Which two colours a pattern's warm and cool shades take (`ui::backdrop` names them in the page's palette): the
+/// Claude orange and the info blue, or other pairs of the palette's, or the text's own colour for black and white.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Tone {
+    /// The Claude orange and the info blue.
+    Claude,
+    /// The text colour for both: light on a dark ground, dark on a light one.
+    Mono,
+    /// The info blue and the done green.
+    Ocean,
+    /// The done green and the working amber.
+    Meadow,
+    /// The danger coral and a lavender between it and the info blue.
+    Dusk,
+    /// A ramp of six colours from deep blue through violet and pink to orange, which a pattern of `ramp` steps uses
+    /// in place of the shades' usual roles (`RAMP`).
+    Aurora,
+    /// The same kind of ramp from teal through blue to violet.
+    Lagoon,
+}
+
 /// A pattern of pixels, by the name a page asks for it with after `pixels:`. `"pixels"` alone is `Drift`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Pattern {
@@ -36,10 +57,40 @@ pub enum Pattern {
     Checker,
     /// `embers`: sparks of the Claude orange rising slowly, over a dim warm glow that breathes.
     Embers,
+    /// `mono`: the drift in black and white, light cells on a dark ground and the other way round on a light one.
+    Mono,
+    /// `ocean`: the drift in blues and sea greens.
+    Ocean,
+    /// `meadow`: the drift in greens and amber.
+    Meadow,
+    /// `dusk`: the drift in coral and lavender.
+    Dusk,
+    /// `blocks`: the drift in big square blocks.
+    Blocks,
+    /// `bayer`: slow waves of light and dark cut by an ordered dither, so a soft ramp is a fine screen of cells.
+    Bayer,
+    /// `grain`: a slow colour gradient from deep blue to orange in big pixels, with an ordered dither where one band
+    /// meets the next, so it reads as a pixelated, grainy gradient. It covers the whole ground, with no cell left plain.
+    Grain,
+    /// `grain-lagoon`: the same from teal to violet.
+    GrainLagoon,
 }
 
 impl Pattern {
-    pub const ALL: [Pattern; 4] = [Pattern::Drift, Pattern::Rain, Pattern::Checker, Pattern::Embers];
+    pub const ALL: [Pattern; 12] = [
+        Pattern::Drift,
+        Pattern::Rain,
+        Pattern::Checker,
+        Pattern::Embers,
+        Pattern::Mono,
+        Pattern::Ocean,
+        Pattern::Meadow,
+        Pattern::Dusk,
+        Pattern::Blocks,
+        Pattern::Bayer,
+        Pattern::Grain,
+        Pattern::GrainLagoon,
+    ];
 
     /// The pattern a page names, as in `"pixels:rain"` less its `pixels:`.
     pub fn named(name: &str) -> Option<Pattern> {
@@ -52,13 +103,37 @@ impl Pattern {
             Pattern::Rain => "rain",
             Pattern::Checker => "checker",
             Pattern::Embers => "embers",
+            Pattern::Mono => "mono",
+            Pattern::Ocean => "ocean",
+            Pattern::Meadow => "meadow",
+            Pattern::Dusk => "dusk",
+            Pattern::Blocks => "blocks",
+            Pattern::Bayer => "bayer",
+            Pattern::Grain => "grain",
+            Pattern::GrainLagoon => "grain-lagoon",
+        }
+    }
+
+    /// The colours of its warm and cool shades.
+    pub fn tone(self) -> Tone {
+        match self {
+            Pattern::Mono | Pattern::Bayer => Tone::Mono,
+            Pattern::Ocean => Tone::Ocean,
+            Pattern::Grain => Tone::Aurora,
+            Pattern::GrainLagoon => Tone::Lagoon,
+            Pattern::Meadow => Tone::Meadow,
+            Pattern::Dusk => Tone::Dusk,
+            Pattern::Drift | Pattern::Rain | Pattern::Checker | Pattern::Embers | Pattern::Blocks => Tone::Claude,
         }
     }
 
     /// How wide and tall a cell is, in points.
     pub fn cell(self) -> f32 {
         match self {
-            Pattern::Drift => 12.0,
+            Pattern::Drift | Pattern::Mono | Pattern::Ocean | Pattern::Meadow | Pattern::Dusk => 12.0,
+            Pattern::Blocks => 30.0,
+            Pattern::Bayer => 8.0,
+            Pattern::Grain | Pattern::GrainLagoon => 12.0,
             Pattern::Rain | Pattern::Embers => 10.0,
             Pattern::Checker => 24.0,
         }
@@ -67,7 +142,9 @@ impl Pattern {
     /// The shade of the cell `col` across and `row` down from the slot's top left corner, `t` seconds in.
     pub fn shade(self, col: u32, row: u32, t: f32) -> u8 {
         match self {
-            Pattern::Drift => drift(col, row, t),
+            Pattern::Drift | Pattern::Mono | Pattern::Ocean | Pattern::Meadow | Pattern::Dusk | Pattern::Blocks => drift(col, row, t),
+            Pattern::Bayer => bayer(col, row, t),
+            Pattern::Grain | Pattern::GrainLagoon => grain(col, row, t),
             Pattern::Rain => rain(col, row, t),
             Pattern::Checker => checker(col, row, t),
             Pattern::Embers => embers(col, row, t),
@@ -82,7 +159,8 @@ impl Pattern {
     pub fn shades(self, cols: u32, rows: u32, t: f32) -> Vec<u8> {
         let mut out = Vec::with_capacity(cols as usize * rows as usize);
         match self {
-            Pattern::Drift => {
+            Pattern::Drift | Pattern::Mono | Pattern::Ocean | Pattern::Meadow | Pattern::Dusk | Pattern::Blocks | Pattern::Bayer => {
+                let dithered = self == Pattern::Bayer;
                 let by_col: Vec<f32> = (0..cols).map(|col| (col as f32 * 0.067 + t * 0.07).sin()).collect();
                 let by_row: Vec<f32> = (0..rows).map(|row| (row as f32 * 0.089 - t * 0.05).sin()).collect();
                 // Indexed by `col + rows - row`.
@@ -97,7 +175,16 @@ impl Pattern {
                             + by_row[row as usize]
                             + by_diagonal[(col + rows - row) as usize]
                             + ((x - cx).hypot(y - cy) * 0.16 - t * 0.12).sin();
-                        out.push(drift_band(col, row, x, y, t, waves));
+                        out.push(if dithered { bayer_band(col, row, waves) } else { drift_band(col, row, x, y, t, waves) });
+                    }
+                }
+            }
+            Pattern::Grain | Pattern::GrainLagoon => {
+                let across: Vec<[Angle; 2]> = (0..cols).map(|col| grain_across(col, t)).collect();
+                for row in 0..rows {
+                    let down = grain_down(row);
+                    for col in 0..cols {
+                        out.push(grain_step(col, row, across[col as usize], down));
                     }
                 }
             }
@@ -151,6 +238,62 @@ fn drift(col: u32, row: u32, t: f32) -> u8 {
         + ((x - y) * 0.047 + t * 0.04).sin()
         + ((x - cx).hypot(y - cy) * 0.16 - t * 0.12).sin();
     drift_band(col, row, x, y, t, waves)
+}
+
+/// The shades of a ramp's six steps, deepest to brightest: a `Tone::Aurora` or `Tone::Lagoon` gives each its own
+/// colour, and none is the ground's.
+pub const RAMP: [u8; 6] = [DARK, DIM, WARM_FAINT, WARM, COOL_FAINT, COOL];
+
+/// A slow colour gradient across the window, a broad diagonal wave bent by a second: cut into six steps with the ordered
+/// dither deciding which side of a step each cell falls on, so the bands meet in a screen of cells.
+fn grain(col: u32, row: u32, t: f32) -> u8 {
+    grain_step(col, row, grain_across(col, t), grain_down(row))
+}
+
+/// What a column and a row each give the two waves, as the sine and cosine of their angles, so a cell's wave is
+/// sin(a + b) = sin a cos b + cos a sin b without a sine for each cell.
+type Angle = (f32, f32);
+
+fn grain_across(col: u32, t: f32) -> [Angle; 2] {
+    let angle = |v: f32| (v.sin(), v.cos());
+    [angle(col as f32 * 0.021 + t * 0.06 - 1.9), angle(col as f32 * 0.03 - t * 0.04)]
+}
+
+fn grain_down(row: u32) -> [Angle; 2] {
+    let angle = |v: f32| (v.sin(), v.cos());
+    [angle(row as f32 * 0.03), angle(row as f32 * 0.02)]
+}
+
+fn grain_step(col: u32, row: u32, across: [Angle; 2], down: [Angle; 2]) -> u8 {
+    let diagonal = across[0].0 * down[0].1 + across[0].1 * down[0].0;
+    let bend = across[1].0 * down[1].1 - across[1].1 * down[1].0;
+    let level = (0.5 + diagonal * 0.46 + bend * 0.1) * 5.0 + dither(col, row);
+    RAMP[level.round().clamp(0.0, 5.0) as usize]
+}
+
+/// An ordered dither of the same waves: the sum is cut into dark, ground and light by a threshold that moves with each
+/// cell's place in the 4x4 dither, so a soft rise from dark to light is a screen of cells that thickens, not a band.
+fn bayer(col: u32, row: u32, t: f32) -> u8 {
+    let (x, y) = (col as f32, row as f32);
+    let (cx, cy) = (34.0 + 22.0 * (t * 0.029).sin(), 22.0 + 14.0 * (t * 0.037).cos());
+    let waves = (x * 0.067 + t * 0.07).sin()
+        + (y * 0.089 - t * 0.05).sin()
+        + ((x - y) * 0.047 + t * 0.04).sin()
+        + ((x - cx).hypot(y - cy) * 0.16 - t * 0.12).sin();
+    bayer_band(col, row, waves)
+}
+
+/// The shade of a dithered cell from its sum of waves: the dark shade below a third of the way up the ramp, the light
+/// one above two thirds, the ground between, each cell's edge moved by its place in the dither.
+fn bayer_band(col: u32, row: u32, waves: f32) -> u8 {
+    let level = waves / 8.0 + 0.5 + dither(col, row) * 0.3;
+    if level < 0.4 {
+        DIM
+    } else if level > 0.6 {
+        WARM_FAINT
+    } else {
+        BASE
+    }
 }
 
 /// The shade of a drift cell from its sum of waves.
@@ -276,7 +419,8 @@ mod tests {
             assert!(seen.len() >= 3, "{pattern:?} is a pattern, not a flat ground: {seen:?}");
             // Some cells off the ground, and some on it.
             let off = cells.iter().filter(|shade| **shade != BASE).count();
-            assert!(off * 100 >= cells.len() * 3 && off * 5 <= cells.len() * 4, "{pattern:?}: {off} of {} off the ground", cells.len());
+            let covers = matches!(pattern, Pattern::Grain | Pattern::GrainLagoon);
+            assert!(off * 100 >= cells.len() * 3 && (covers || off * 5 <= cells.len() * 4), "{pattern:?}: {off} of {} off the ground", cells.len());
         }
     }
 
@@ -307,6 +451,29 @@ mod tests {
                 eprintln!("[measure] {pattern:?} {width}x{height}: {} cells, {ms:.3} ms a step", cols * rows);
             }
         }
+    }
+
+    #[test]
+    fn each_new_variant_looks_unlike_the_others_by_its_colours_its_cells_or_its_dither() {
+        // What tells two patterns apart: the colours of their shades, the size of their cells, or which cells they pick.
+        let looks: Vec<(Tone, u32, Vec<u8>)> =
+            Pattern::ALL.iter().map(|pattern| (pattern.tone(), pattern.cell() as u32, grid(*pattern, 12.5))).collect();
+        for (at, a) in looks.iter().enumerate() {
+            for (other, b) in looks.iter().enumerate().skip(at + 1) {
+                assert!(a != b, "{:?} and {:?} look the same", Pattern::ALL[at], Pattern::ALL[other]);
+            }
+        }
+        assert!(Pattern::Blocks.cell() >= 2.0 * Pattern::Drift.cell(), "blocks are big");
+        assert!(Pattern::Bayer.cell() < Pattern::Drift.cell(), "a dither is fine");
+        // The ordered dither has no dither-free bands: its three shades meet in screens, so beside a cell of one shade
+        // there are many cells of another.
+        let cells = grid(Pattern::Bayer, 12.5);
+        let edges = cells.windows(2).filter(|pair| pair[0] != pair[1]).count();
+        let drift = grid(Pattern::Drift, 12.5);
+        let drift_edges = drift.windows(2).filter(|pair| pair[0] != pair[1]).count();
+        assert!(edges > drift_edges * 3 / 2, "bayer {edges} edges against the drift's {drift_edges}");
+        let seen: HashSet<u8> = cells.iter().copied().collect();
+        assert_eq!(seen, HashSet::from([DIM, BASE, WARM_FAINT]));
     }
 
     #[test]

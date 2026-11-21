@@ -1238,6 +1238,12 @@ impl PageView {
         Some(((-handle.offset().y).as_f32(), handle.max_offset().y.as_f32()))
     }
 
+    /// How tall the view of the `Scroll` `id` was when last drawn, in points.
+    #[cfg(all(test, feature = "test-support"))]
+    pub(super) fn scrolled_view(&self, id: u64) -> Option<f32> {
+        Some(self.follow_scrolls.borrow().get(&id)?.handle.bounds().size.height.as_f32())
+    }
+
     /// Whether the expandable text `id` was cut short when last drawn, and whether it is opened.
     #[cfg(all(test, feature = "test-support"))]
     pub(super) fn text_cut(&self, id: u64) -> (Option<bool>, bool) {
@@ -1322,6 +1328,67 @@ impl PageView {
             handle.scroll_to_bottom();
         }
         state
+    }
+
+    /// A `Scroll` with a `maxHeight`: as tall as its children up to that, then it scrolls inside itself, with a thin thumb
+    /// at its right edge while it can. GPUI hands a wheel event to every scroll under the pointer, so a list inside a
+    /// scrolling card would move the card too: a wheel step the list took stops there, and one it couldn't (it is at that
+    /// end, or short) goes on to the parent. The thumb is painted from the last layout, so a step never builds the page.
+    fn scroll_within(&self, scroll: &tree::Scroll, cx: &mut Context<Self>) -> AnyElement {
+        let handle = self.watched_scroll(scroll.id).handle.clone();
+        let wheel = handle.clone();
+        let thumb = handle.clone();
+        let area = div()
+            .id(ElementId::NamedInteger("page-scroll-within".into(), scroll.id))
+            .max_h(px(scroll.max_height.unwrap_or_default()))
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .pr(px(6.0))
+            .overflow_y_scroll()
+            .track_scroll(&handle)
+            .on_scroll(move |event, window, cx| {
+                // The scroll's own listener ran first and moved the offset without clamping it, so what it was before the
+                // step is the offset less the step.
+                let step = event.delta.pixel_delta(window.line_height()).y;
+                let offset = wheel.offset();
+                let most = wheel.max_offset().y;
+                let before = offset.y - step;
+                let moved = (step > px(0.0) && before < px(0.0)) || (step < px(0.0) && before > -most);
+                wheel.set_offset(point(offset.x, offset.y.clamp(-most, px(0.0))));
+                if moved {
+                    cx.stop_propagation();
+                }
+            })
+            .children(self.nodes(&scroll.children, cx));
+        let thumb = canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                let most = thumb.max_offset().y.as_f32();
+                if most <= 0.0 {
+                    return;
+                }
+                let height = bounds.size.height.as_f32();
+                let long = height + most;
+                let size = (height / long * height).max(16.0).min(height);
+                let top = (-thumb.offset().y.as_f32() / most).clamp(0.0, 1.0) * (height - size);
+                window.paint_quad(
+                    gpui::fill(
+                        gpui::Bounds::new(
+                            point(bounds.right() - px(4.0), bounds.top() + px(top)),
+                            gpui::size(px(4.0), px(size)),
+                        ),
+                        rgba(0xffffff40),
+                    )
+                    .corner_radii(px(2.0)),
+                );
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
+        div().relative().flex_none().min_w_0().child(area).child(thumb).into_any_element()
     }
 
     /// The handle of a `Scroll` that doesn't follow its end but is told where to scroll or which children to watch.
@@ -2160,6 +2227,7 @@ impl PageView {
                 )
                 .into_any_element(),
             },
+            Node::Scroll(scroll) if scroll.max_height.is_some() => self.scroll_within(scroll, cx),
             // A scroll keeps 8 points either side and 12 below, as a list under a header does.
             Node::Scroll(scroll) => {
                 let watches = scroll.scroll_to.is_some() || scroll.on_track.is_some();

@@ -39,7 +39,7 @@ use super::{live, slots};
 use crate::{
     gradients::{self, Preset, Uniforms},
     page::tree::Backdrop,
-    pixels::{BASE, Pattern, SHADES},
+    pixels::{BASE, Pattern, RAMP, SHADES, Tone},
     theme::{self, Palette},
 };
 
@@ -49,30 +49,81 @@ const LAYER: &str = "backdrop";
 /// How long a step of the drift lasts: 15 a second, every other step of the spinners' 30.
 pub(crate) const STEP: Duration = Duration::from_nanos(1_000_000_000 / 15);
 
+/// Halfway between two 0xRRGGBB colours.
+fn halfway(a: u32, b: u32) -> u32 {
+    let channel = |shift: u32| (((a >> shift) & 0xff) + ((b >> shift) & 0xff)) / 2 << shift;
+    channel(16) | channel(8) | channel(0)
+}
+
+/// The colours of the warm and the cool shades of a `tone` in `palette`.
+fn accents(palette: &Palette, tone: Tone) -> (u32, u32) {
+    match tone {
+        Tone::Claude => (theme::CLAUDE, palette.info),
+        Tone::Mono => (palette.foreground, palette.foreground),
+        Tone::Ocean => (palette.info, palette.done),
+        Tone::Meadow => (palette.done, palette.working),
+        Tone::Dusk => (palette.danger, halfway(palette.danger, palette.info)),
+        // A ramp has its own colours (`ramp`), not the palette's.
+        Tone::Aurora | Tone::Lagoon => (palette.foreground, palette.foreground),
+    }
+}
+
+/// The six steps of a ramp's tone as 0xRRGGBB and 0 to 255, deepest to brightest, the colours the tone's pattern lays over
+/// the ground (`pixels::RAMP`): up to about 18% of colour at the brightest, with the muted text still 4.5:1 on each.
+fn ramp(tone: Tone) -> Option<[(u32, u32); 6]> {
+    match tone {
+        Tone::Aurora => Some([
+            (0x2a3cff, 0x30),
+            (0x5b52ff, 0x34),
+            (0x9a58f0, 0x34),
+            (0xd35ccb, 0x30),
+            (0xff6f91, 0x2c),
+            (0xff9d5c, 0x2c),
+        ]),
+        Tone::Lagoon => Some([
+            (0x0e9a8f, 0x30),
+            (0x2dd4bf, 0x28),
+            (0x38bdf8, 0x2c),
+            (0x6366f1, 0x34),
+            (0x8b5cf6, 0x34),
+            (0xc084fc, 0x30),
+        ]),
+        _ => None,
+    }
+}
+
 /// Each shade's colour over the ground and how strong, as 0xRRGGBB and 0 to 255, in `palette`: the window's darker
-/// ground strong and light, the ground, then the Claude orange and the info blue, each at 5% and 9%.
-fn tints(palette: &Palette) -> [(u32, u32); SHADES] {
+/// ground strong and light, the ground, then the `tone`'s warm and cool colours, each at 5% and 9%.
+fn tints(palette: &Palette, tone: Tone) -> [(u32, u32); SHADES] {
+    if let Some(steps) = ramp(tone) {
+        let mut tints = [(palette.surface, 0xff); SHADES];
+        for (step, shade) in steps.into_iter().zip(RAMP) {
+            tints[shade as usize] = step;
+        }
+        return tints;
+    }
+    let (warm, cool) = accents(palette, tone);
     [
         (palette.background, 0xd9),
         (palette.background, 0x73),
         (palette.surface, 0xff),
-        (theme::CLAUDE, 0x0d),
-        (theme::CLAUDE, 0x17),
-        (palette.info, 0x0d),
-        (palette.info, 0x17),
+        (warm, 0x0d),
+        (warm, 0x17),
+        (cool, 0x0d),
+        (cool, 0x17),
     ]
 }
 
-fn colors(palette: &Palette) -> [Hsla; SHADES] {
-    tints(palette).map(|(color, alpha)| rgba(color << 8 | alpha).into())
+fn colors(palette: &Palette, tone: Tone) -> [Hsla; SHADES] {
+    tints(palette, tone).map(|(color, alpha)| rgba(color << 8 | alpha).into())
 }
 
 /// Each shade's colour laid over the ground, opaque, as sRGB 0 to 1: what the window makes of a cell it paints over the
 /// ground (`colors`), as GPUI blends sRGB values as they are, for a layer that draws the cells itself.
-fn opaque_colors(palette: &Palette) -> [[f32; 4]; SHADES] {
+fn opaque_colors(palette: &Palette, tone: Tone) -> [[f32; 4]; SHADES] {
     let channels = |color: u32| [(color >> 16) & 0xff, (color >> 8) & 0xff, color & 0xff].map(|c| c as f32 / 255.0);
     let ground = channels(palette.surface);
-    tints(palette).map(|(color, alpha)| {
+    tints(palette, tone).map(|(color, alpha)| {
         let (color, alpha) = (channels(color), alpha as f32 / 255.0);
         let [r, g, b] = [0, 1, 2].map(|i| ground[i] + (color[i] - ground[i]) * alpha);
         [r, g, b, 1.0]
@@ -288,11 +339,19 @@ fn paint_slots(painted: &RefCell<Vec<Painted>>, window: &mut Window, cx: &mut Ap
 
 /// The ground of a slot at `bounds`, at the corners of what holds it, and the runs over it.
 fn paint(bounds: Bounds<Pixels>, look: &Look, runs: &[Run], window: &mut Window) {
-    let colors = colors(&look.palette);
+    let colors = colors(&look.palette, tone_of(look.kind));
     window.paint_quad(fill(bounds, colors[BASE as usize]).corner_radii(Corners::all(px(look.radius))));
     for run in runs {
         let origin = point(bounds.origin.x + px(run.x), bounds.origin.y + px(run.y));
         window.paint_quad(fill(Bounds::new(origin, size(px(run.width), px(run.height))), colors[run.shade as usize]));
+    }
+}
+
+/// The colours a backdrop's cells take; a gradient has no cells, so the plain ones.
+fn tone_of(kind: Backdrop) -> Tone {
+    match kind {
+        Backdrop::Pixels(pattern) => pattern.tone(),
+        Backdrop::Gradient(_) => Tone::Claude,
     }
 }
 
@@ -563,7 +622,7 @@ impl NativeLayer {
                 if shown.drawn != Some(key) {
                     let t = step as f32 * STEP.as_secs_f32();
                     shades = pattern.shades(cols, rows, t);
-                    let colors = opaque_colors(&look.palette);
+                    let colors = opaque_colors(&look.palette, pattern.tone());
                     drawing = Some(Drawing::Cells { cell, cols, rows, shades: &shades, colors });
                 }
                 key
@@ -892,16 +951,37 @@ mod tests {
         // What GPUI makes of each shade's colour (`colors`) painted over the ground: source over, on sRGB values as they
         // are (`SourceAlpha`, `OneMinusSourceAlpha` in gpui-pre-apple's pipelines).
         let ground = Hsla::from(rgba(Palette::APP.surface << 8 | 0xff)).to_rgb();
-        for (shade, (opaque, painted)) in opaque_colors(&Palette::APP).iter().zip(colors(&Palette::APP)).enumerate() {
+        for (tone, (shade, (opaque, painted))) in [Tone::Claude, Tone::Mono, Tone::Ocean, Tone::Meadow, Tone::Dusk, Tone::Aurora, Tone::Lagoon].into_iter().flat_map(|tone| {
+            opaque_colors(&Palette::APP, tone).into_iter().zip(colors(&Palette::APP, tone)).enumerate().map(move |pair| (tone, pair))
+        }) {
+            let opaque = &opaque;
             let painted = painted.to_rgb();
             let blended = [ground.r, ground.g, ground.b]
                 .into_iter()
                 .zip([painted.r, painted.g, painted.b])
                 .map(|(ground, color)| ground + (color - ground) * painted.a);
             for (channel, (opaque, blended)) in opaque.iter().zip(blended).enumerate() {
-                assert!((opaque - blended).abs() < 2e-3, "shade {shade} channel {channel}: {opaque} for {blended}");
+                assert!((opaque - blended).abs() < 2e-3, "{tone:?} shade {shade} channel {channel}: {opaque} for {blended}");
             }
             assert_eq!(opaque[3], 1.0);
+        }
+    }
+
+    #[test]
+    fn muted_text_keeps_its_contrast_on_every_step_of_a_colour_ramp() {
+        let rgb = |color: [f32; 4]| [0, 1, 2].map(|i| (color[i] * 255.0).round() as u32);
+        for tone in [Tone::Aurora, Tone::Lagoon] {
+            let muted = gradients::luminance(Palette::APP.muted_foreground);
+            let steps = opaque_colors(&Palette::APP, tone);
+            for shade in RAMP {
+                let [r, g, b] = rgb(steps[shade as usize]);
+                let ratio = gradients::contrast(muted, gradients::luminance(r << 16 | g << 8 | b));
+                assert!(ratio >= 4.5, "{tone:?} step {shade}: muted text {ratio:.2}:1");
+            }
+            // Every step is a colour of its own, and none is the ground's.
+            let colors: HashSet<[u32; 3]> = RAMP.iter().map(|shade| rgb(steps[*shade as usize])).collect();
+            assert_eq!(colors.len(), RAMP.len(), "{tone:?}");
+            assert!(!colors.contains(&rgb(steps[BASE as usize])), "{tone:?}");
         }
     }
 

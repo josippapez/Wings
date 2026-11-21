@@ -567,6 +567,10 @@ pub struct Scroll {
     /// view (null when the view is above them all), whenever that changes.
     pub track: Vec<usize>,
     pub on_track: Option<String>,
+    /// `maxHeight`: points. It is as tall as what it holds up to that, and scrolls inside itself past it, in place of
+    /// filling what is left of its parent: a list in a card that is itself long. It sets no padding of its own, and the
+    /// wheel over it scrolls it while it can go that way and its parent when it can't.
+    pub max_height: Option<f32>,
     pub children: Vec<Node>,
 }
 
@@ -841,6 +845,9 @@ pub struct Input {
     pub placeholder: String,
     pub value: String,
     pub rows: Option<usize>,
+    /// `maxRows`: the lines a `Textarea` grows to, 12 by default and never fewer than `rows`. Past that it scrolls inside
+    /// itself.
+    pub max_rows: Option<usize>,
     /// `submitOnEnter`: a `Textarea` that sends Enter to `onKeyDown`, and starts a new line on Shift-Enter.
     pub enter_submits: bool,
     /// `takesTab`: a `Textarea` that sends Tab to `onKeyDown`, in place of moving focus on.
@@ -1597,6 +1604,7 @@ impl Walk {
                     .map(|track| track.iter().filter_map(Value::as_u64).take(MAX_TRACKED).filter_map(|at| usize::try_from(at).ok()).collect())
                     .unwrap_or_default(),
                 on_track: handler("onTrack"),
+                max_height: number(&props, "maxHeight").filter(|height| *height > 0.0).map(|height| height.min(10_000.0) as f32),
                 children: parts(children),
             }),
             "Bar" => Node::Bar(Bar {
@@ -1759,6 +1767,11 @@ impl Walk {
                     .collect(),
                 rows: (kind == "Textarea")
                     .then(|| number(&props, "rows").unwrap_or(2.0).clamp(1.0, 24.0) as usize),
+                max_rows: (kind == "Textarea").then(|| {
+                    let rows = number(&props, "rows").unwrap_or(2.0).clamp(1.0, 24.0) as usize;
+                    let most = number(&props, "maxRows").unwrap_or(12.0).clamp(1.0, 48.0) as usize;
+                    most.max(rows)
+                }),
                 enter_submits: on("submitOnEnter"),
                 takes_tab: on("takesTab"),
                 takes_shift_tab: on("takesShiftTab"),
@@ -2965,6 +2978,20 @@ mod tests {
         assert_eq!(backdrop(json!({"backdrop":"pixels:embers"})), Some(Backdrop::Pixels(Pattern::Embers)));
         // A pattern from a newer plugin than this Wings knows is the drift, not the plain ground.
         assert_eq!(backdrop(json!({"backdrop":"pixels:snow"})), Some(Backdrop::Pixels(Pattern::Drift)));
+        for (name, pattern) in [
+            ("mono", Pattern::Mono),
+            ("ocean", Pattern::Ocean),
+            ("meadow", Pattern::Meadow),
+            ("dusk", Pattern::Dusk),
+            ("blocks", Pattern::Blocks),
+            ("bayer", Pattern::Bayer),
+            ("grain", Pattern::Grain),
+            ("grain-lagoon", Pattern::GrainLagoon),
+        ] {
+            assert_eq!(backdrop(json!({"backdrop": format!("pixels:{name}")})), Some(Backdrop::Pixels(pattern)));
+        }
+        // A page of an older plugin that still asks for the dropped moire gets the plain ground, not a gradient.
+        assert_eq!(backdrop(json!({"backdrop":"gradient:moire"})), None);
         assert_eq!(backdrop(json!({"backdrop":"gradient:halo"})), Some(Backdrop::Gradient(crate::gradients::Preset::Halo)));
         assert_eq!(
             backdrop(json!({"backdrop":"gradient:nighty-night"})),

@@ -26,7 +26,6 @@ pub enum Preset {
     Dots,
     Silk,
     Cells,
-    Moire,
 }
 
 /// The kind of mesh a preset is drawn on, as shadergradient's `type`.
@@ -50,8 +49,6 @@ pub enum Shape {
     Silk,
     /// Voronoi cells with thin walls.
     Cells,
-    /// Two sets of lines turning against each other.
-    Moire,
 }
 
 /// What a preset looks like: its colours, mesh and how it moves.
@@ -76,7 +73,7 @@ pub struct Look {
 }
 
 impl Preset {
-    pub const ALL: [Preset; 12] = [
+    pub const ALL: [Preset; 11] = [
         Preset::Halo,
         Preset::Pensive,
         Preset::Mint,
@@ -88,7 +85,6 @@ impl Preset {
         Preset::Dots,
         Preset::Silk,
         Preset::Cells,
-        Preset::Moire,
     ];
 
     /// The preset a page names, as in `"gradient:halo"` less its `gradient:`.
@@ -219,17 +215,6 @@ impl Preset {
                 twist: 0.0,
                 grain: false,
             },
-            Preset::Moire => Look {
-                name: "moire",
-                label: "Moire",
-                shape: Shape::Moire,
-                colors: [theme::INFO, theme::CLAUDE, FOREGROUND_INK],
-                speed: 0.8,
-                density: 1.0,
-                strength: 0.8,
-                twist: 0.0,
-                grain: false,
-            },
         }
     }
 }
@@ -260,7 +245,7 @@ pub struct Uniforms {
     pub target: [f32; 2],
     /// Shader time, 0 up to `LOOP`.
     pub time: f32,
-    /// 0 plane, 1 sphere, 2 water, 3 topo, 4 flow, 5 grid, 6 dots, 7 silk, 8 cells, 9 moire.
+    /// 0 plane, 1 sphere, 2 water, 3 topo, 4 flow, 5 grid, 6 dots, 7 silk, 8 cells.
     pub shape: f32,
     pub density: f32,
     pub strength: f32,
@@ -351,7 +336,6 @@ pub fn uniforms(preset: Preset, palette: &Palette, seconds: f64, size: (u32, u32
             Shape::Dots => 6.0,
             Shape::Silk => 7.0,
             Shape::Cells => 8.0,
-            Shape::Moire => 9.0,
         },
         density: look.density,
         strength: look.strength,

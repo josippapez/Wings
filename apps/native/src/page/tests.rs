@@ -2308,6 +2308,70 @@ fn a_filling_stack_keeps_its_scroll_within_the_page() {
     }
 }
 
+/// A page scrolling on its own (`Scroll` 1) over a list in a `Scroll` of 100 points at most (`Scroll` 10) of `rows` rows,
+/// above 40 more rows.
+fn list_in_a_page(rows: usize) -> String {
+    fake::page("page", move |_| {
+        let list: Vec<Value> = (0..rows).map(|i| text(100 + i, 1_000 + i, format!("Item {i}"))).collect();
+        let after: Vec<Value> = (0..40).map(|i| text(300 + i, 2_000 + i, format!("After {i}"))).collect();
+        let mut column = vec![json!({ "id": 10, "type": "Scroll", "props": { "maxHeight": 100 },
+            "children": [{ "id": 11, "type": "Stack", "props": {}, "children": list }] })];
+        column.extend(after);
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            { "id": 1, "type": "Scroll", "props": { "track": [0], "onTrack": "1:onTrack" },
+              "children": [{ "id": 2, "type": "Stack", "props": {}, "children": column }] }] })
+    })
+}
+
+/// A `Scroll` with a `maxHeight` is as tall as its rows while they fit and no taller than that past it, where it scrolls
+/// inside itself. Over a page that scrolls too, the wheel moves the list while it can and the page when it can't.
+#[test]
+fn a_scroll_with_a_max_height_is_capped_and_scrolls_inside_itself_before_its_parent() {
+    let open = |rows: usize| {
+        let mut app = TestApp::new();
+        app.background_executor().allow_parking();
+        let host = hosted(&mut app);
+        let source = list_in_a_page(rows);
+        let bounds = gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(500.0), px(400.0)));
+        let window = app.open_window_with_options(
+            gpui::WindowOptions { window_bounds: Some(gpui::WindowBounds::Windowed(bounds)), ..Default::default() },
+            |_, cx| PageView::in_plugin(&host, &source, cx),
+        );
+        (app, window)
+    };
+    // Three rows are shorter than 100 points: it is their height and has nothing to scroll.
+    let (app, mut window) = open(3);
+    settle(&app, &mut window, |view| view.text().contains("Item 2") && view.scrolled_view(10).is_some_and(|height| height > 0.0));
+    let (height, max) = window.read(|view, _| (view.scrolled_view(10).unwrap(), view.follow_scrolled(10).unwrap().1));
+    assert!(height < 99.0 && max == 0.0, "{height} {max}");
+    // Sixty rows are capped at 100 points and scroll inside.
+    let (app, mut window) = open(60);
+    settle(&app, &mut window, |view| view.text().contains("Item 0") && view.scrolled_view(10).is_some_and(|height| height > 0.0));
+    let state = |window: &mut View| window.read(|view, _| (view.scrolled_view(10).unwrap(), view.follow_scrolled(10).unwrap(), view.follow_scrolled(1).unwrap()));
+    let (height, (_, inner_max), _) = state(&mut window);
+    assert!((height - 100.0).abs() < 1.0 && inner_max > 300.0, "{height} {inner_max}");
+    // The wheel over the list moves the list and not the page.
+    window.simulate_scroll(point(px(60.0), px(40.0)), point(px(0.0), px(-50.0)));
+    window.draw();
+    let (_, (inner_top, _), (page_top, _)) = state(&mut window);
+    assert!(inner_top > 0.0 && page_top == 0.0, "{inner_top} {page_top}");
+    // Down to its end it still moves only the list.
+    window.simulate_scroll(point(px(60.0), px(40.0)), point(px(0.0), px(-100_000.0)));
+    window.draw();
+    let (_, (inner_top, inner_max), (page_top, _)) = state(&mut window);
+    assert!(inner_top == inner_max && page_top == 0.0, "{inner_top} {inner_max} {page_top}");
+    // At its end the next step goes to the page.
+    window.simulate_scroll(point(px(60.0), px(40.0)), point(px(0.0), px(-50.0)));
+    window.draw();
+    let (_, (inner_top, inner_max), (page_top, _)) = state(&mut window);
+    assert!(inner_top == inner_max && page_top > 0.0, "{inner_top} {inner_max} {page_top}");
+    // Beside the list the wheel moves the page alone.
+    window.simulate_scroll(point(px(60.0), px(300.0)), point(px(0.0), px(100_000.0)));
+    window.draw();
+    let (_, (inner_top, inner_max), (page_top, _)) = state(&mut window);
+    assert!(inner_top == inner_max && page_top == 0.0, "{inner_top} {inner_max} {page_top}");
+}
+
 /// A column of 60 rows in a plain `Scroll` that is asked to scroll to row 40 and to track rows 10, 20, 30 and 40, over a
 /// line that says what `onTrack` last said.
 fn aimed_rows() -> String {
@@ -3171,10 +3235,11 @@ mod backdrop {
     use super::*;
     use crate::ui::{BACKDROP_STEP, BackdropLayer, backdrop_slot, spinner_layer};
 
-    /// A fill page, as Claude chat's, that asks for the pixels behind it.
-    fn pixels() -> String {
-        fake::page("page", |_| {
-            json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Page", "props": { "flush": true, "backdrop": "pixels" }, "children": [
+    /// A fill page, as Claude chat's, that asks for `backdrop` behind it.
+    fn pixels(backdrop: &str) -> String {
+        let backdrop = backdrop.to_owned();
+        fake::page("page", move |_| {
+            json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Page", "props": { "flush": true, "backdrop": backdrop }, "children": [
                 { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [text(3, 4, "Step 99 passes".into())] }] }] })
         })
     }
@@ -3206,12 +3271,36 @@ mod backdrop {
         }
     }
 
-    #[test]
-    fn a_step_of_the_backdrop_draws_the_layer_and_the_page_keeps_its_drawing() {
+    /// One test for each backdrop: the layers' wake-ups are remembered by thread, so each runs on a thread of its own.
+    macro_rules! each_backdrop_steps_without_drawing_the_page {
+        ($($test:ident: $backdrop:literal,)*) => {
+            $(#[test]
+            fn $test() {
+                a_step_of($backdrop);
+            })*
+        };
+    }
+
+    each_backdrop_steps_without_drawing_the_page! {
+        a_step_of_the_pixels_draws_the_layer_and_the_page_keeps_its_drawing: "pixels",
+        the_page_keeps_its_drawing_for_a_step_of_rain: "pixels:rain",
+        the_page_keeps_its_drawing_for_a_step_of_checker: "pixels:checker",
+        the_page_keeps_its_drawing_for_a_step_of_embers: "pixels:embers",
+        the_page_keeps_its_drawing_for_a_step_of_mono: "pixels:mono",
+        the_page_keeps_its_drawing_for_a_step_of_ocean: "pixels:ocean",
+        the_page_keeps_its_drawing_for_a_step_of_meadow: "pixels:meadow",
+        the_page_keeps_its_drawing_for_a_step_of_dusk: "pixels:dusk",
+        the_page_keeps_its_drawing_for_a_step_of_blocks: "pixels:blocks",
+        the_page_keeps_its_drawing_for_a_step_of_bayer: "pixels:bayer",
+        the_page_keeps_its_drawing_for_a_step_of_grain: "pixels:grain",
+        the_page_keeps_its_drawing_for_a_step_of_grain_lagoon: "pixels:grain-lagoon",
+    }
+
+    fn a_step_of(backdrop: &str) {
         let mut app = TestApp::new();
         app.background_executor().allow_parking();
         let host = hosted(&mut app);
-        let source = pixels();
+        let source = pixels(backdrop);
         let mut window = app.open_window(move |_, cx| Tab {
             page: cx.new(|cx| PageView::in_plugin(&host, &source, cx).in_card()),
             layer: cx.new(|_| BackdropLayer::default()),
@@ -3232,9 +3321,9 @@ mod backdrop {
             app.run_until_parked();
         }
         let (pages, layers) = (drawn(&window).0 - pages, drawn(&window).1 - layers);
-        eprintln!("[measure] 15 steps of the backdrop: the page rendered {pages} times, the layer {layers}");
-        assert_eq!(pages, 0, "the page kept its drawing");
-        assert!((14..=16).contains(&layers), "the layer drew {layers} times in 15 steps");
+        eprintln!("[measure] 15 steps of {backdrop}: the page rendered {pages} times, the layer {layers}");
+        assert_eq!(pages, 0, "{backdrop}: the page kept its drawing");
+        assert!((14..=16).contains(&layers), "{backdrop}: the layer drew {layers} times in 15 steps");
     }
 }
 
@@ -3584,6 +3673,60 @@ mod field_layer {
         assert_eq!((pages, columns), (0, 0));
         let field = window.read(|_, cx| page.read(cx).input_field("Message")).unwrap();
         assert_eq!(window.read(|_, cx| field.read(cx).drawn()), (Some("hello there".into()), true));
+    }
+
+    /// A message box with a long text grew with it, past the window, and had no way to scroll to the top of the text.
+    /// Now it stops at 12 lines and scrolls inside itself: keys past that draw the field layer alone, the caret stays in
+    /// view, and the wheel moves the text.
+    #[test]
+    fn a_long_text_in_a_textarea_stops_growing_and_scrolls_inside_it() {
+        let mut value = String::new();
+        let source = fake::page("page", move |event| {
+            if let Some((_, change)) = event {
+                value = change["value"].as_str().unwrap_or_default().to_owned();
+            }
+            json!({ "id": 0, "type": "#root", "children": [{ "id": 1, "type": "Page", "children": [
+                { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [
+                    text(4, 5, "Type here".into()),
+                    { "id": 3, "type": "Textarea", "props": { "label": "Message", "rows": 2, "value": value.clone(), "onChange": "3:change" } }] }] }] })
+        });
+        let (app, mut window, page) = open(source, "Type here", "Message");
+        let field = window.read(|_, cx| page.read(cx).input_field("Message")).unwrap();
+        let height = |window: &TestAppWindow<Root>| window.read(|_, cx| field.read(cx).bounds().size.height);
+        type_keys(&app, &mut window, &page, &"line\n".repeat(30));
+        let capped = height(&window);
+        assert!(capped < px(12.0 * 20.0), "the box grew to {capped:?}");
+        assert!(capped > px(8.0 * 13.0), "the box is only {capped:?}");
+        // The caret is on the last line, so the text is scrolled to its end.
+        let end = window.read(|_, cx| field.read(cx).scrolled());
+        assert!(end > px(100.0), "scrolled {end:?}");
+        // More keys past the cap draw the field layer and nothing else.
+        let before = drawn(&window, &page);
+        type_keys(&app, &mut window, &page, "abc\nabc");
+        let (pages, columns) = (drawn(&window, &page).0 - before.0, drawn(&window, &page).1 - before.1);
+        eprintln!("[measure] 8 keys typed in a capped, scrolled Textarea: the page rendered {pages} times, the column {columns}");
+        assert_eq!((pages, columns), (0, 0));
+        assert_eq!(height(&window), capped);
+        let now = window.read(|_, cx| field.read(cx).scrolled());
+        assert!(now > end, "scrolled {now:?}, was {end:?}");
+        // The wheel scrolls the text up, and the page doesn't draw for it.
+        let at = window.read(|_, cx| field.read(cx).bounds().center());
+        let before = drawn(&window, &page);
+        window.simulate_event(gpui::ScrollEvent {
+            position: at,
+            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(5000.0))),
+            modifiers: gpui::Modifiers::default(),
+            touch_phase: gpui::TouchPhase::Moved,
+            source: Default::default(),
+        });
+        app.run_until_parked();
+        window.draw();
+        assert_eq!(window.read(|_, cx| field.read(cx).scrolled()), px(0.0));
+        assert_eq!(drawn(&window, &page), before);
+        // A caret moved out of view is brought back.
+        window.simulate_keystroke("left");
+        window.draw();
+        assert!(window.read(|_, cx| field.read(cx).scrolled()) > end);
     }
 
     /// A page with something of its own over a field it shows, its dialog or a chat's side panel floating over the

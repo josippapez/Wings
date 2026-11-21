@@ -9,7 +9,7 @@ use gpui::{
     App, AvailableSpace, Bounds, ClipboardEntry, ClipboardItem, ContentMask, Context, DispatchPhase, Element,
     ElementId, ElementInputHandler, Entity, EntityId, EntityInputHandler, EventEmitter, FocusHandle,
     Focusable, GlobalElementId, ImageFormat, InspectorElementId, IntoElement, KeyDownEvent, LayoutId, Modifiers,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Role, SharedString,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Role, ScrollEvent, SharedString,
     Style, TextAlign, TextRun, TextStyle, UTF16Selection, UnderlineStyle, WeakEntity, Window, WindowId, WrappedLine,
     canvas, div, fill, point, prelude::*, px, relative, rgb, rgba, size,
 };
@@ -69,6 +69,8 @@ pub struct TextField {
     pub text: String,
     /// The lines a multi-line field shows at least. Enter then starts a new line, and a one-line field (`None`) submits.
     pub rows: Option<usize>,
+    /// The lines a multi-line field grows to. Past them its text scrolls inside it. `None` grows without limit.
+    pub max_rows: Option<usize>,
     /// A multi-line field that submits on Enter and starts a new line on Shift-Enter, as a chat's message box does.
     pub enter_submits: bool,
     /// A paste that holds an image becomes a `FieldEvent::PasteImage`, not text. Off, an image paste does nothing.
@@ -111,6 +113,10 @@ pub struct TextField {
     marked: String,
     /// How far a one-line text is scrolled left, to keep the caret in view.
     scroll: Pixels,
+    /// How far a multi-line text that is taller than the field is scrolled up, and the caret it was last laid out for:
+    /// the caret is brought into view when it has moved since, and the wheel scrolls it away from the caret.
+    scroll_y: Pixels,
+    followed: usize,
     /// The mouse went down in the field and is still down: moving it extends the selection.
     dragging: bool,
     /// Where the last paint put the text, which clicks and the input method ask about.
@@ -151,6 +157,7 @@ impl TextField {
             width,
             text: String::new(),
             rows: None,
+            max_rows: None,
             enter_submits: false,
             pastes_images: false,
             takes_tab: false,
@@ -170,6 +177,8 @@ impl TextField {
             head: usize::MAX,
             marked: String::new(),
             scroll: px(0.0),
+            scroll_y: px(0.0),
+            followed: usize::MAX,
             dragging: false,
             bounds: Bounds::default(),
             layout: None,
@@ -213,6 +222,12 @@ impl TextField {
     #[cfg(test)]
     pub(crate) fn drawn(&self) -> (Option<String>, bool) {
         (self.layout.as_ref().map(|layout| layout.doc.to_string()), self.in_layer)
+    }
+
+    /// How far its taller-than-the-field text is scrolled up.
+    #[cfg(test)]
+    pub(crate) fn scrolled(&self) -> Pixels {
+        self.scroll_y
     }
 
     /// Focuses the field with its term selected, so typing replaces it, as in the desktop find bar.
@@ -296,12 +311,39 @@ impl TextField {
         self.lay_out(style, self.bounds, window).0.reaches(&self.over, self.bounds)
     }
 
+    /// The height `layout` takes in the field: all of it, or the `max_rows` it grows to.
+    fn shown_height(&self, layout: &Layout) -> Pixels {
+        match self.max_rows {
+            Some(most) => layout.height.min(layout.line_height * most as f32),
+            None => layout.height,
+        }
+    }
+
     /// Whether its text now is taller or shorter than where it was last drawn, so the views around it have to make room.
     fn resizes(&self, window: &Window) -> bool {
         let (Some(style), Some(layout)) = (&self.style, &self.layout) else {
             return true;
         };
-        self.rows.is_some() && self.shape(style, Some(self.bounds.size.width), false, window).height != layout.height
+        self.rows.is_some()
+            && self.shown_height(&self.shape(style, Some(self.bounds.size.width), false, window)) != self.shown_height(layout)
+    }
+
+    /// The wheel over a multi-line field whose text is taller than it scrolls the text, and goes on to the views around
+    /// it only when the text can't move that way.
+    fn wheel(&mut self, event: &ScrollEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(layout) = &self.layout else {
+            return;
+        };
+        let furthest = (layout.height - self.bounds.size.height).max(px(0.0));
+        let was = self.scroll_y.max(px(0.0)).min(furthest);
+        let to = (was - event.delta.pixel_delta(layout.line_height).y).max(px(0.0)).min(furthest);
+        if to != was {
+            self.scroll_y = to;
+            // The caret stays where it is, and stays out of view if the wheel took the text from it.
+            self.followed = self.caret();
+            cx.stop_propagation();
+            self.redraw(false, window, cx);
+        }
     }
 
     /// Moves the caret, and keeps the anchor where it was when `extend`.
@@ -789,6 +831,9 @@ impl Render for TextField {
             .text_size(px(if self.bare { 14.0 } else { 13.0 }))
             .cursor_text()
             .opacity(if self.disabled { 0.5 } else { 1.0 })
+            .when(self.rows.is_some() && self.max_rows.is_some(), |field| {
+                field.on_scroll(cx.listener(Self::wheel))
+            })
             .when_some(self.rows, |field, rows| {
                 field
                     .min_h(px(rows as f32 * 19.0 + 14.0))
@@ -883,7 +928,7 @@ impl TextField {
 
     /// Its text shaped and placed in `bounds`, a one-line text scrolled as little as keeps the caret in view and no
     /// further than its end, and that scroll.
-    fn lay_out(&self, style: &TextStyle, bounds: Bounds<Pixels>, window: &Window) -> (Layout, Pixels) {
+    fn lay_out(&self, style: &TextStyle, bounds: Bounds<Pixels>, window: &Window) -> (Layout, Point<Pixels>) {
         let one_line = self.rows.is_none();
         let wrap = (!one_line).then_some(bounds.size.width);
         let mut layout = self.shape(style, wrap, self.focus.is_focused(window), window);
@@ -898,8 +943,19 @@ impl TextField {
                 .min(caret)
                 .max(caret + px(1.0) - bounds.size.width);
         }
-        layout.origin = bounds.origin - point(scroll, px(0.0));
-        (layout, scroll)
+        let mut scroll_y = px(0.0);
+        if !one_line {
+            // A text taller than the field is scrolled where the wheel left it, and as little as brings the caret into
+            // view when it has moved since the last layout, as a browser's textarea does.
+            let furthest = (layout.height - bounds.size.height).max(px(0.0));
+            scroll_y = self.scroll_y.max(px(0.0)).min(furthest);
+            if self.followed != self.caret() {
+                let top = layout.point(self.caret()).y;
+                scroll_y = scroll_y.min(top).max(top + layout.line_height - bounds.size.height).max(px(0.0)).min(furthest);
+            }
+        }
+        layout.origin = bounds.origin - point(scroll, scroll_y);
+        (layout, point(scroll, scroll_y))
     }
 
     /// Where its caret is in `layout`: none unless it has the keyboard, takes typing and has nothing selected.
@@ -994,7 +1050,9 @@ fn paint_fields(id: WindowId, window: &mut Window, cx: &mut App) {
         let caret = field.read(cx).caret_in(&layout, window);
         window.with_content_mask(Some(slot.mask), |window| paint_text(&layout, caret, slot.bounds, window, cx));
         field.update(cx, |field, _| {
-            field.scroll = scroll;
+            field.scroll = scroll.x;
+            field.scroll_y = scroll.y;
+            field.followed = field.caret();
             field.layout = Some(layout);
         });
     }
@@ -1234,7 +1292,7 @@ impl Element for FieldText {
             });
             let wrap = width.filter(|_| field.rows.is_some());
             let layout = field.shape(&text_style, wrap, false, window);
-            size(width.unwrap_or_else(|| layout.width()), layout.height)
+            size(width.unwrap_or_else(|| layout.width()), field.shown_height(&layout))
         });
         (id, ())
     }
@@ -1249,7 +1307,11 @@ impl Element for FieldText {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let (layout, scroll) = self.0.read(cx).lay_out(&window.text_style(), bounds, window);
-        self.0.update(cx, |field, _| field.scroll = scroll);
+        self.0.update(cx, |field, _| {
+            field.scroll = scroll.x;
+            field.scroll_y = scroll.y;
+            field.followed = field.caret();
+        });
         Some(layout)
     }
 
