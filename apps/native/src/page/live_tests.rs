@@ -36,7 +36,7 @@ impl Global for Hosted {}
 /// a view of its own, counting the window's draws.
 struct Tab {
     page: Entity<PageView>,
-    layers: [Entity<live::Layer>; 3],
+    layers: [Entity<live::Layer>; 4],
     drawn: usize,
 }
 
@@ -85,7 +85,7 @@ fn open_tab(node: Value) -> (TestApp, TestAppWindow<Tab>) {
     });
     let mut window = app.open_window(move |_, cx| Tab {
         page: cx.new(|cx| PageView::in_plugin(&host, &source, cx).in_card()),
-        layers: [Kind::ViewSpinners, Kind::Pulses, Kind::Counts].map(|kind| cx.new(|_| live::Layer::new(kind))),
+        layers: [Kind::ViewSpinners, Kind::Pulses, Kind::Counts, Kind::Progress].map(|kind| cx.new(|_| live::Layer::new(kind))),
         drawn: 0,
     });
     window.update(|_, window, _| window.activate_window());
@@ -148,4 +148,60 @@ fn a_count_that_grows_wider_draws_its_page_once_for_it() {
         window.draw();
     }
     assert_eq!(pages(&window) - before, 1, "the page draws once for the wider count");
+}
+
+/// A hover card's trigger with a card, in the body of the page.
+fn hover_card_node() -> Value {
+    json!({ "id": 5, "type": "HoverCard", "props": { "width": 240 }, "children": [
+        { "id": 3, "type": "Text", "children": [{ "id": 4, "type": "#text", "text": "ABC-12 Fix the build" }] },
+        { "id": 6, "type": "Slot", "props": { "name": "card" }, "children": [
+            { "id": 7, "type": "Text", "children": [{ "id": 10, "type": "#text", "text": "Card body" }] }] }] })
+}
+
+/// The cue fills over the card's wait in the layer for progress bars, so the steps of the fill draw neither the page nor
+/// the piece (the tab), only the layer's own view and the window; then the card opens, drawing the page once for it.
+#[test]
+fn the_cue_of_a_hover_card_fills_without_drawing_its_page() {
+    let (app, mut window) = open_tab(hover_card_node());
+    let shown = |window: &mut TestAppWindow<Tab>, kind: Kind| {
+        window.update(|_, window, _| slots::shown(window.window_handle().window_id(), kind.layer()).len())
+    };
+    // The pointer starts at the window's corner, on the trigger: move off it first.
+    window.simulate_mouse_move(gpui::point(gpui::px(400.0), gpui::px(280.0)));
+    app.run_until_parked();
+    window.draw();
+    app.advance_clock(Duration::from_secs(2));
+    app.run_until_parked();
+    window.draw();
+    assert_eq!(shown(&mut window, Kind::Progress), 0, "no cue before the pointer is on the trigger");
+    window.simulate_mouse_move(gpui::point(gpui::px(12.0), gpui::px(12.0)));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !window.read(|tab, cx| tab.page.read(cx).hover_card_waiting(5)) {
+        assert!(Instant::now() < deadline, "the pointer on the trigger never started the wait");
+        app.run_until_parked();
+        window.draw();
+        thread::sleep(Duration::from_millis(5));
+    }
+    app.run_until_parked();
+    window.draw();
+    assert_eq!(shown(&mut window, Kind::Progress), 1, "the cue has a slot in the progress layer");
+    let counts = |window: &TestAppWindow<Tab>| window.read(|tab, cx| (tab.page.read(cx).renders(), tab.drawn));
+    let (pages, frames) = counts(&window);
+    // 15 steps of the spinners' pace, 0.5 s: the bar fills and the card is not open yet.
+    for _ in 0..15 {
+        app.advance_clock(SPIN_STEP);
+        app.run_until_parked();
+    }
+    let (pages, frames) = (counts(&window).0 - pages, counts(&window).1 - frames);
+    eprintln!("[measure] hover cue, 0.5 s: the page rendered {pages} times, the window drew {frames}");
+    assert_eq!(pages, 0, "the cue drew its page {pages} times while it filled");
+    assert!(frames >= 5, "the cue never moved: the window drew {frames} times");
+    assert!(!window.read(|tab, cx| tab.page.read(cx).hover_card_shown(5)), "the card opened before its delay");
+    // Past the delay the card opens: a state change, the page draws for it.
+    app.advance_clock(Duration::from_millis(300));
+    app.run_until_parked();
+    window.draw();
+    assert!(window.read(|tab, cx| tab.page.read(cx).hover_card_shown(5)), "the card never opened");
+    assert!(!window.read(|tab, cx| tab.page.read(cx).hover_card_waiting(5)), "the cue stayed after the card opened");
+    assert_eq!(shown(&mut window, Kind::Progress), 0, "the cue's slot stayed after the card opened");
 }

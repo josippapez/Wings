@@ -6,6 +6,7 @@ pub mod behaviors;
 mod button;
 mod drag;
 mod glow;
+pub mod hover_cue;
 pub mod live;
 mod menu;
 pub mod motion;

@@ -1631,7 +1631,9 @@ esac"##,
         ("mentioned", mentioned.clone(), None, None, "Mentioned"),
         ("long-lists", long_lists, None, None, "Subagents"),
         // The pointer on a pull request's row shows its card.
-        ("mentioned-card", mentioned, None, Some("hover:800,267"), "Mentioned"),
+        ("mentioned-card", mentioned.clone(), None, Some("hover:-220,450"), "Mentioned"),
+        // Part way through the wait before the card opens: the cue fills by the pointer, and no card yet.
+        ("mentioned-cue", mentioned, None, Some("hovercue:-220,450;wait:1500"), "Mentioned"),
         ("long-draft", opened(vec![init.clone()]), None, Some(long_draft.as_str()), "Remote Control"),
         ("long-older", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, Some(older.as_str()), "Jump to the latest"),
         ("conversation", conversation, None, None, "Allow Edit?"),
@@ -2154,6 +2156,10 @@ esac"##,
                 .unwrap();
             let window = handle.into();
             handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
+            if name == "mentioned-cue" {
+                // The cue of a hover card draws in the window's layer for it, which the workspace draws over the page.
+                handle.update(&mut cx, |view, _, _| view.draw_layers_for_shots()).unwrap();
+            }
             if let Some(terminal) = shot_terminal {
                 // What the workspace does over the page: it hands the tab the terminal its agent opened, and draws it there,
                 // here over made-up output of a build, in a shell of its own rather than the scene's fake one.
@@ -2196,9 +2202,21 @@ esac"##,
                         // The pointer over a point of the page, which shows the tooltip of what is there once it has rested.
                         Some(("hover", at)) => {
                             let (x, y) = at.split_once(',').unwrap();
-                            let position = point(px(x.parse().unwrap()), px(y.parse().unwrap()));
+                            let x: f32 = x.parse().unwrap();
+                            let position = point(px(if x < 0.0 { width + x } else { x }), px(y.parse().unwrap()));
                             cx.simulate_event(window, gpui::MouseMoveEvent { position, pressed_button: None, modifiers: gpui::Modifiers::default() });
                             wait(&mut cx, window, Duration::from_millis(1200));
+                        }
+                        // The pointer on a point, part way through a hover card's wait: its cue fills by the pointer.
+                        Some(("hovercue", at)) => {
+                            let (x, y) = at.split_once(',').unwrap();
+                            // A negative x counts from the right edge: the side panel's rows sit at another x in each width.
+                            let x: f32 = x.parse().unwrap();
+                            let position = point(px(if x < 0.0 { width + x } else { x }), px(y.parse().unwrap()));
+                            cx.simulate_event(window, gpui::MouseMoveEvent { position, pressed_button: None, modifiers: gpui::Modifiers::default() });
+                            // Under the 0.6 s wait, saved here: the shot after the scene's own waits has the card open.
+                            wait(&mut cx, window, Duration::from_millis(300));
+                            save(&mut cx, window, out.join(format!("claude-chat-{name}-midway-{width}.png")));
                         }
                         // The right button at a point of the page, after the pointer moved there.
                         Some(("rightclick", at)) => {
@@ -2711,7 +2729,7 @@ esac"##,
     }
     // The page in Wings Settings, with a mode, Detailed and Large text picked.
     if only.as_deref().is_none_or(|only| only == "settings") {
-        let settings = host_over("fixture-storage-claude-chat-settings", &[("default-mode", json!("auto")), ("detailed-output", json!(true)), ("open-command", json!(false)), ("open-thought", json!(false)), ("text-size", json!("large")), ("diff-split", json!(true)), ("stop-near-limit", json!(true)), ("pause-at", json!("80")), ("stop-at", json!("95")), ("account-at", json!({ "work": { "pause": "70", "stop": "90" } })), ("session-panel", json!("sidebar"))]);
+        let settings = host_over("fixture-storage-claude-chat-settings", &[("default-mode", json!("auto")), ("detailed-output", json!(true)), ("open-command", json!(false)), ("open-thought", json!(false)), ("text-size", json!("large")), ("diff-split", json!(true)), ("stop-near-limit", json!(true)), ("pause-at", json!("80")), ("stop-at", json!("95")), ("account-at", json!({ "work": { "pause": "off", "stop": "90" } })), ("session-panel", json!("sidebar"))]);
         let page = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/claude-chat/dist/native/settings.wasm");
         let page = page.canonicalize().expect("the claude-chat settings page is built, in plugins/");
         wings_native::page::runtime::wasm::compile_now(&page.to_string_lossy()).unwrap();

@@ -43,6 +43,8 @@ pub enum Kind {
     Pulses,
     /// Lines in those views that count the seconds since something started, and don't pulse.
     Counts,
+    /// Bars in those views that fill over a wait, a hover card's cue, at the spinners' pace.
+    Progress,
 }
 
 impl Kind {
@@ -53,6 +55,7 @@ impl Kind {
             Kind::ViewSpinners => "view-spinners",
             Kind::Pulses => "pulses",
             Kind::Counts => "counts",
+            Kind::Progress => "progress",
         }
     }
 
@@ -162,6 +165,7 @@ pub fn view_spinner_layer(window: &Window) -> impl IntoElement {
         .child(layer(Kind::ViewSpinners, window))
         .child(layer(Kind::Pulses, window))
         .child(layer(Kind::Counts, window))
+        .child(layer(Kind::Progress, window))
 }
 
 /// A slot laid out for its layer's paint.

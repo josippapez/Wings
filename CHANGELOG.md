@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.76 · 2026-11-21
+
+- **Hover cards wait a moment**: a card opens after 0.6 s, with a thin bar under the pointer that fills while it waits. Moving away before it fills opens nothing, so passing over a list no longer pops a card for every row. Once one is open, the next row's opens at once.
+- **Claude chat 0.41.1**: each account's pause and stop can be turned off, or on when the shared setting is off.
+
 ## 0.2.75 · 2026-11-21
 
 - **Side panel lists show everything**: Claude chat's Mentioned, Subagents, Bookmarks and Plans sections list every row and scroll inside themselves past about eight rows, where they cut to "N earlier". Plugin pages can cap a scroll's height the same way.

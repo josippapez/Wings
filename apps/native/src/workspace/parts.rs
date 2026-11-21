@@ -82,7 +82,7 @@ pub(super) struct Parts {
     /// The pieces' spinners, and what moves in the pages a piece puts on screen (spinners, pulsing lines, counting lines),
     /// each kind a view of its own, so a step of them draws none of the pieces again (`ui::live`).
     pub(super) spinners: Entity<Layer>,
-    pub(super) view_layers: [Entity<Layer>; 3],
+    pub(super) view_layers: [Entity<Layer>; 4],
     /// The performance readout (`ui::readout`), a view of its own so its update draws none of the pieces.
     pub(super) readout: Entity<crate::ui::readout::Readout>,
     /// The text of the field being typed in, so a key draws none of the pieces (`text_field::FieldLayer`).
@@ -121,7 +121,7 @@ impl Parts {
             main: Part::new(workspace, "main", Workspace::main_part, cx),
             backdrop: cx.new(|_| crate::ui::BackdropLayer::default()),
             spinners: cx.new(|_| Layer::new(Kind::Spinners)),
-            view_layers: [Kind::ViewSpinners, Kind::Pulses, Kind::Counts].map(|kind| cx.new(|_| Layer::new(kind))),
+            view_layers: [Kind::ViewSpinners, Kind::Pulses, Kind::Counts, Kind::Progress].map(|kind| cx.new(|_| Layer::new(kind))),
             readout: cx.new(|_| crate::ui::readout::Readout::new()),
             fields: cx.new(|_| crate::text_field::FieldLayer),
         }

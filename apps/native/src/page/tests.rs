@@ -2940,11 +2940,47 @@ fn a_hover_card_shows_while_the_pointer_is_on_what_it_is_for_and_goes_once_it_le
     window.simulate_mouse_move(point(px(400.0), px(280.0)));
     settle(&app, &mut window, |view| !view.hover_card_shown(1));
     window.simulate_mouse_move(point(px(10.0), px(8.0)));
+    settle(&app, &mut window, |view| view.hover_card_waiting(1));
+    // Not at once: it waits out the delay, then opens.
+    assert!(!window.read(|view, _| view.hover_card_shown(1)));
+    app.advance_clock(crate::page::view::hover_card_view::OPEN_DELAY);
     settle(&app, &mut window, |view| view.hover_card_shown(1));
+    assert!(!window.read(|view, _| view.hover_card_waiting(1)));
     // The page never hears of it.
     assert!(!window.read(|view, _| view.acted()));
     window.simulate_mouse_move(point(px(400.0), px(280.0)));
     settle(&app, &mut window, |view| !view.hover_card_shown(1));
+}
+
+#[test]
+fn a_hover_card_does_not_open_before_its_delay() {
+    let (app, mut window) = open(hover_card_page());
+    settle(&app, &mut window, shows("Elsewhere"));
+    window.simulate_mouse_move(point(px(10.0), px(8.0)));
+    settle(&app, &mut window, |view| view.hover_card_waiting(1));
+    app.advance_clock(crate::page::view::hover_card_view::OPEN_DELAY / 2);
+    app.run_until_parked();
+    window.draw();
+    assert!(!window.read(|view, _| view.hover_card_shown(1)), "the card opened half way through the delay");
+    assert!(window.read(|view, _| view.hover_card_waiting(1)));
+    app.advance_clock(crate::page::view::hover_card_view::OPEN_DELAY / 2);
+    settle(&app, &mut window, |view| view.hover_card_shown(1));
+}
+
+#[test]
+fn leaving_before_the_delay_ends_cancels_the_card() {
+    let (app, mut window) = open(hover_card_page());
+    settle(&app, &mut window, shows("Elsewhere"));
+    window.simulate_mouse_move(point(px(10.0), px(8.0)));
+    settle(&app, &mut window, |view| view.hover_card_waiting(1));
+    app.advance_clock(crate::page::view::hover_card_view::OPEN_DELAY / 2);
+    window.simulate_mouse_move(point(px(400.0), px(280.0)));
+    settle(&app, &mut window, |view| !view.hover_card_waiting(1));
+    // Well past the end of the first wait: it opens nothing.
+    app.advance_clock(crate::page::view::hover_card_view::OPEN_DELAY * 2);
+    app.run_until_parked();
+    window.draw();
+    assert!(!window.read(|view, _| view.hover_card_shown(1)), "a cancelled wait opened the card");
 }
 
 /// A page of one `Code` node.

@@ -33,7 +33,7 @@ mod sheet_view;
 #[path = "prompt_rail_view.rs"]
 mod prompt_rail_view;
 #[path = "hover_card_view.rs"]
-mod hover_card_view;
+pub(super) mod hover_card_view;
 #[path = "column_window_view.rs"]
 mod column_window_view;
 #[path = "popup_menu_view.rs"]
@@ -316,6 +316,9 @@ pub struct PageView {
     /// Draws the page's terminals over it, as the workspace does, for the screenshots of a page alone.
     #[cfg(feature = "test-support")]
     shot_terminals: Option<Rc<dyn Fn(&mut gpui::App) -> Vec<(SharedString, AnyElement)>>>,
+    /// Draws the layers of what moves in the page over it, as the workspace does, for the screenshots of a page alone.
+    #[cfg(feature = "test-support")]
+    shot_layers: bool,
     /// How many times the page has rendered, for what draws it again.
     #[cfg(feature = "test-support")]
     renders: Cell<usize>,
@@ -692,6 +695,8 @@ impl PageView {
             #[cfg(feature = "test-support")]
             shot_terminals: None,
             #[cfg(feature = "test-support")]
+            shot_layers: false,
+            #[cfg(feature = "test-support")]
             renders: Cell::new(0),
             #[cfg(feature = "test-support")]
             bench_hidden: RefCell::default(),
@@ -727,6 +732,13 @@ impl PageView {
         draw: impl Fn(&mut gpui::App) -> Vec<(SharedString, AnyElement)> + 'static,
     ) {
         self.shot_terminals = Some(Rc::new(draw));
+    }
+
+    /// Puts the page on screen as the workspace does and draws the layers of what moves in it over it, for the screenshots
+    /// of a page alone: a hover card's cue shows only then.
+    #[cfg(feature = "test-support")]
+    pub fn draw_layers_for_shots(&mut self) {
+        self.shot_layers = true;
     }
 
     /// Where a `Terminal` shows: the workspace draws the terminal over this place, in the `TERMINALS` layer, so what it
@@ -2992,6 +3004,11 @@ impl Render for PageView {
         };
         let covered = dialog.is_some() || self.tree.as_ref().is_some_and(|tree| sheet_in(&tree.children));
         let id = window.window_handle().window_id();
+        #[cfg(feature = "test-support")]
+        if self.shot_layers {
+            ui::start_draw(id);
+            ui::place_view(cx.entity_id(), id);
+        }
         let placed = ui::view_placed(cx.entity_id(), id);
         // Under a dialog or sheet of its own, the page's spinners turn in place: the layer would draw them over it.
         self.spin_in_layer.set(placed && !covered);
@@ -3180,6 +3197,8 @@ impl Render for PageView {
             .child(div().absolute().size_0().track_focus(&self.selection_focus))
             .children(overlay)
             .children(shot_terminals);
+        #[cfg(feature = "test-support")]
+        let page = page.when(self.shot_layers, |page| page.child(ui::view_spinner_layer(window)));
         // Its fields learn they are in the page, which keeps its drawing, and under its dialog or sheet when it shows one,
         // so the one being typed in draws its text in the window's field layer only when nothing of the page is over it.
         ui::in_piece(placed.then_some(ui::Piece::View(cx.entity_id())), covered, page)
