@@ -136,6 +136,8 @@ pub struct Chat {
     /// Your choice for every chat of what lies behind the conversation (`prefs::background`): the page's `backdrop`, the
     /// drift of pixels or a gradient Wings draws, else none for the plain ground.
     pub backdrop: Option<String>,
+    /// A new chat says once, under its prompt, that Settings can turn the background plain (`prefs::background_hint_seen`).
+    pub background_hint: bool,
     /// Your choice for every chat of whether the session panel shows (`prefs::side_panel`, on by default): in the chat, or
     /// opened with it in Wings' sidebar, as `side_in_wings` says.
     pub side_open: bool,
@@ -228,6 +230,7 @@ thread_local! {
         diff_split: false,
         panel_closed: Vec::new(),
         backdrop: None,
+        background_hint: false,
         side_open: true,
         side_rail: None,
         side_in_wings: false,
@@ -298,6 +301,7 @@ pub fn start() {
         c.diff_split = prefs::diff_split().get();
         c.panel_closed = prefs::panel_closed().get();
         c.backdrop = prefs::backdrop(&prefs::background().get());
+        c.background_hint = !prefs::background_hint_seen().get();
         c.side_in_wings = prefs::in_sidebar(&prefs::session_panel().get());
     });
     prefs::text_size().on_change(|size| with(|c| c.text_scale = prefs::scale_of(size)));
@@ -306,6 +310,7 @@ pub fn start() {
     prefs::diff_split().on_change(|split| with(|c| c.diff_split = *split));
     prefs::panel_closed().on_change(|closed| with(|c| c.panel_closed = closed.clone()));
     prefs::background().on_change(|kind| with(|c| c.backdrop = prefs::backdrop(kind)));
+    prefs::background_hint_seen().on_change(|seen| with(|c| c.background_hint = !seen));
     // The panel moves with the setting, in every open chat.
     prefs::session_panel().on_change(|place| session_panel_moved(place));
     // After your setting is read: a chat in front opens the session sidebar with it.
@@ -1137,6 +1142,18 @@ pub fn stop() {
 /// Opens the Claude chat page in Wings Settings, where the defaults for every chat are.
 pub fn open_settings() {
     drop(host::call("openSettings", json!({})));
+}
+
+/// The background hint's Settings link: opens Settings, and the hint is not shown again.
+pub fn open_settings_from_hint() {
+    dismiss_background_hint();
+    open_settings();
+}
+
+/// The background hint's Got it: not shown again, in any chat.
+pub fn dismiss_background_hint() {
+    with(|c| c.background_hint = false);
+    drop(prefs::background_hint_seen().set(true));
 }
 
 /// Switches to the model and effort picked together in the message box, as `<model>@<effort>`.

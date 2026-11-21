@@ -2772,7 +2772,7 @@ esac"##,
         let page = page.canonicalize().expect("the claude-chat settings page is built, in plugins/");
         wings_native::page::runtime::wasm::compile_now(&page.to_string_lossy()).unwrap();
         let source = format!("{}{}", wings_native::page::runtime::wasm::MARKER, page.display());
-        for width in [1000.0, 640.0] {
+        for width in [1000.0, 892.0, 640.0] {
             let handle = cx
                 .open_offscreen_window(size(px(width), px(1250.0)), |_, cx| cx.new(|cx| PageView::in_plugin(&settings, &source, cx)))
                 .unwrap();

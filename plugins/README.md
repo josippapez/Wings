@@ -533,6 +533,8 @@ A sidebar can have a quick look: a second page shown under its title bar button 
 
 The page gets the same `wings` object, storage and broadcasts as the sidebar. It loads the first time it shows and keeps running while closed, so it opens at once after that and its timers keep going. Send the user to the full view with `wings.openView("timer")`.
 
+A sidebar with `"button": false` gets no title bar button and isn't offered under "Keep in bar": use it for one that is empty on its own and only the plugin's pages open, with `wings.openView(id, { as: "sidebar" })` (Needs Wings 0.2.79; an older Wings shows the button).
+
 ## Settings page
 
 A plugin can have a page in Wings Settings instead of a settings form in its sidebar:

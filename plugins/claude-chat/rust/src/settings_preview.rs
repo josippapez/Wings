@@ -153,6 +153,13 @@ pub fn places(sidebar: bool) -> Node {
     row().prop("gap", "s").prop("align", "start").child(stack().prop("grow", true).child(chat)).child(side)
 }
 
+/// A made-up chat session as the view options show it, for the pane beside the choices: a turn as the view mode and the fold
+/// ticks show it, at the text size, then an edit's diff in its layout, and where the session panel sits.
+pub fn session(mode: Mode, opens: impl Fn(Kind) -> bool, scale: f32, split: bool, sidebar: bool) -> Node {
+    let chat = Node::new("Scroll").prop("textScale", scale as f64).child(turn(mode, opens));
+    stack().prop("gap", "m").child(card().child(chat)).child(card().child(diff(split))).child(places(sidebar))
+}
+
 /// A diff of two lines changed, side by side or in one column.
 pub fn diff(split: bool) -> Node {
     let old = line("-    input.trim()", Some("danger"));
@@ -181,6 +188,16 @@ mod tests {
         assert!(!no_steps.steps && !no_steps.command && !no_steps.edit);
         let no_command = shows(Mode::Verbose, |kind| kind != Kind::Command);
         assert!(no_command.steps && !no_command.command && no_command.read);
+    }
+
+    #[test]
+    fn the_session_holds_the_turn_at_the_text_size_with_the_diff_in_its_layout_and_the_panel_where_it_sits() {
+        let json = |split, sidebar| wings_plugin::ui::tree_json(session(Mode::Verbose, |_| true, 1.25, split, sidebar));
+        let (one, two) = (json(false, false), json(true, true));
+        assert!(one.to_string().contains("\"textScale\":1.25") && one.to_string().contains("Fix the failing parser test"));
+        // The layout and the place change what is drawn.
+        assert_ne!(one, two);
+        assert!(two.to_string().contains("Wings sidebar") == false && one.to_string().contains("Wings sidebar") == true);
     }
 
     #[test]

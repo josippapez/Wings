@@ -537,7 +537,17 @@ impl Workspace {
             .plugins
             .iter()
             .flat_map(|installed| {
-                let sidebars = installed.sidebars.iter().map(move |sidebar| BarButton {
+                let contributes = &installed.plugin.manifest.contributes;
+                let sidebars = installed
+                    .sidebars
+                    .iter()
+                    .filter(|sidebar| {
+                        !contributes
+                            .sidebars
+                            .iter()
+                            .any(|declared| declared.id == sidebar.id && !declared.button)
+                    })
+                    .map(move |sidebar| BarButton {
                     installed,
                     id: sidebar.id.clone(),
                     title: sidebar.title.clone(),
@@ -1658,6 +1668,30 @@ mod bar_tests {
                     .iter()
                     .any(|tab| tab.plugin == "disk" && tab.view == "map")
             );
+        });
+    }
+
+    /// A sidebar the manifest says `button: false` for gets no bar button, and isn't offered in "Keep in bar", but
+    /// the plugin still opens it.
+    #[test]
+    fn a_sidebar_without_a_button_stays_out_of_the_bar_but_still_opens() {
+        let data = Data::temp();
+        data.install_script(
+            "chat",
+            json!({ "contributes": {
+                "sidebars": [
+                    { "id": "side", "title": "Side", "page": "dist/side.html" },
+                    { "id": "helper", "title": "Helper", "page": "dist/helper.html", "button": false },
+                ],
+            } }),
+            &idle("main"),
+            &[("side", &idle("page")), ("helper", &idle("page"))],
+            "chat-scope",
+        );
+        let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+        window.update(|w, _, cx| {
+            assert_eq!(w.sidebar_buttons(cx).len(), 1, "Side only, not Helper");
+            assert!(w.open_sidebar_from_plugin("chat", "helper", cx));
         });
     }
 }

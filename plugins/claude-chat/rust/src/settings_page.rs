@@ -1,9 +1,10 @@
 //! The Claude chat page in Wings Settings: the mode a new chat starts in, the view mode chats show and which kinds of fold
 //! Verbose opens, how big its text is, and what lies behind it. It is laid out as Wings' own Settings panes are: sections of
-//! rows with the name and what it does on the left and the control at the end, and a small preview under a row where a
-//! choice shows.
+//! rows with the name and what it does on the left and the control at the end. Where the page is wide, a made-up chat
+//! session stays in a pane on the left and shows the view options as they are set, with the choices on the right; where it
+//! is narrow the session sits above them. A fold kind the session doesn't show has a small preview under its row.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use wings_plugin::{host::AccountChoice, task::spawn, ui::{Entry, Node, card, checkbox, chips as choose, entry, muted, row, rows_card, section, select, stack, text}};
 
 /// How wide the background's menu is at the end of its row.
@@ -14,11 +15,18 @@ use crate::{
     folds::{KINDS, Kind},
     prefs,
     session::MODES,
-    settings_preview::{self, diff, limit, places, sample, turn},
+    settings_preview::{self, limit, session},
     view_mode::{self, Mode},
 };
 
+/// How wide the session pane is, and how wide the page has to be for it to sit beside the choices. Under that it moves to
+/// the top of the choices, as the pane isn't drawn then.
+const SESSION_WIDTH: u32 = 380;
+const SIDE_BY_SIDE: u32 = 720;
+
 thread_local! {
+    /// Whether the page is narrower than `SIDE_BY_SIDE`, as the split beside the choices says.
+    static NARROW: Cell<bool> = const { Cell::new(false) };
     /// The Claude Code accounts, as Wings lists them, once read. The page shows a row of limits for each when there are two
     /// or more.
     static ACCOUNTS: RefCell<Vec<AccountChoice>> = const { RefCell::new(Vec::new()) };
@@ -128,7 +136,36 @@ fn kind_text(kind: Kind, label: &'static str) -> (&'static str, &'static str) {
     }
 }
 
+/// Whether the session pane shows the kind's fold.
+fn in_session(kind: Kind) -> bool {
+    matches!(kind, Kind::Steps | Kind::Command | Kind::Read | Kind::Edit | Kind::Thought)
+}
+
+/// The mock session, as the view options are now.
+fn session_now() -> Node {
+    let mode = Mode::of(prefs::detailed().get(), prefs::thinking().get());
+    session(mode, |kind| prefs::opens(kind).get(), prefs::scale_of(&prefs::text_size().get()), prefs::diff_split().get(), prefs::in_sidebar(&prefs::session_panel().get()))
+}
+
+/// The session in a section of its own, as a pane beside the choices or over them.
+fn session_section() -> Node {
+    section("Session preview", Some("A chat with the view options as they are set."), [session_now()])
+}
+
+/// The page: the session pane beside the choices, each scrolling on its own, or in a narrow page the session over them.
 fn view() -> Vec<Node> {
+    let narrow = NARROW.with(Cell::get);
+    let (start, end) = if narrow { (Vec::new(), vec![session_section(), choices()]) } else { (vec![session_section()], vec![choices()]) };
+    let split = Node::new("Split")
+        .prop("defaultSize", SESSION_WIDTH)
+        .prop("collapseBelow", SIDE_BY_SIDE)
+        .on("onNarrow", |payload| NARROW.with(|narrow| narrow.set(payload["narrow"].as_bool().unwrap_or(false))))
+        .child(Node::new("Slot").prop("name", "start").children(start))
+        .child(Node::new("Slot").prop("name", "end").children(end));
+    vec![split]
+}
+
+fn choices() -> Node {
     let modes = [Mode::Normal, Mode::Thinking, Mode::Verbose].map(|mode| (mode.name(), mode.name()));
     let mode = Mode::of(prefs::detailed().get(), prefs::thinking().get());
     // Each fold kind is a tick with what it is, and under it the chat element it opens or shuts. The subagent report's tick
@@ -137,10 +174,9 @@ fn view() -> Vec<Node> {
     for (kind, key, label) in KINDS {
         let (label, detail) = kind_text(kind, label);
         let open = prefs::opens(kind).get();
-        starts.push(together([
-            toggle(checkbox(label, open, move |on| drop(prefs::opens(kind).set(on))).key(key), detail),
-            preview(settings_preview::kind(kind, open)),
-        ]));
+        let tick = toggle(checkbox(label, open, move |on| drop(prefs::opens(kind).set(on))).key(key), detail);
+        // The session shows these four, and the thoughts, in Verbose: a preview of each would say it twice.
+        starts.push(if in_session(kind) { tick } else { together([tick, preview(settings_preview::kind(kind, open))]) });
         if kind == Kind::Summary {
             let open = !prefs::fold_reports().get();
             starts.push(together([
@@ -151,7 +187,7 @@ fn view() -> Vec<Node> {
     }
     let (pause_at, stop_at) = (prefs::pause_at().get(), prefs::stop_at().get());
     let split = prefs::diff_split().get();
-    vec![stack()
+    stack()
         .prop("gap", "l")
         .child(group(
             "New chats",
@@ -164,8 +200,7 @@ fn view() -> Vec<Node> {
         .child(group(
             "Output",
             [
-                together([
-                    setting(
+                setting(
                         "View mode",
                         "How much of a turn a chat shows. The View mode button in a chat and Ctrl+O change the same setting.",
                         chips("View mode", &modes, mode.name(), |name| {
@@ -174,8 +209,6 @@ fn view() -> Vec<Node> {
                             }
                         }),
                     ),
-                    preview(turn(mode, |kind| prefs::opens(kind).get())),
-                ]),
                 about(STARTS_OPEN, STARTS_OPEN_DETAIL),
             ]
             .into_iter()
@@ -216,30 +249,21 @@ fn view() -> Vec<Node> {
         .child(group(
             "Appearance",
             [
-                together([
                     setting(
                         "Session panel",
                         "Where a chat shows its session: changes, context and usage, tasks, subagents and terminals.",
                         chips("Session panel", &prefs::SESSION_PANELS, &prefs::session_panel().get(), |place| drop(prefs::session_panel().set(place.to_owned()))),
                     ),
-                    preview(places(prefs::in_sidebar(&prefs::session_panel().get()))),
-                ]),
-                together([
                     setting(
                         "Diff layout",
                         "How a chat shows the lines an edit changes.",
                         chips("Diff layout", &[("one", "One column"), ("split", "Side by side")], if split { "split" } else { "one" }, |layout| drop(prefs::diff_split().set(layout == "split"))),
                     ),
-                    preview(diff(split)),
-                ]),
-                together([
                     setting(
                         "Text size",
                         "The size of the text in the conversation, in every chat.",
                         chips("Text size", &prefs::TEXT_SIZES, &prefs::text_size().get(), |size| drop(prefs::text_size().set(size.to_owned()))),
                     ),
-                    preview(sample(prefs::scale_of(&prefs::text_size().get()))),
-                ]),
                 setting(
                     "Background",
                     "What lies behind the conversation. Patterns and gradients are dim, move slowly while Wings is in front, and stand still when your Mac reduces motion. Some need a newer Wings.",
@@ -250,7 +274,7 @@ fn view() -> Vec<Node> {
         .child(group(
             "Claude Code",
             [together([about("Version", "The version every chat runs, and whether a newer one is out. Update Claude Code runs `claude upgrade`."), preview_plain(claude_version::section())])],
-        ))]
+        ))
 }
 
 /// The background's choice: a menu, as seventeen don't fit on a track in a narrow page.
@@ -356,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn the_background_is_a_choice_of_the_plain_ground_pixel_drift_or_a_gradient_and_starts_plain() {
+    fn the_background_is_a_choice_of_the_plain_ground_pixel_drift_or_a_gradient_and_starts_on_the_ordered_dither() {
         fn select_named<'a>(node: &'a serde_json::Value, label: &str) -> Option<&'a serde_json::Value> {
             if node["type"] == "Select" && node["props"]["label"] == label {
                 return Some(node);
@@ -365,7 +389,7 @@ mod tests {
         }
         let page = wings_plugin::ui::tree_json(view().remove(0));
         let select = select_named(&page, "Background").expect("the background's choice");
-        assert_eq!(select["props"]["value"], "plain");
+        assert_eq!(select["props"]["value"], "pixels:bayer");
         let options = select["props"]["options"].as_array().unwrap();
         let labels: Vec<&str> = options.iter().map(|option| option["label"].as_str().unwrap()).collect();
         assert_eq!(

@@ -172,6 +172,10 @@ pub struct Sidebar {
     /// A smaller page shown under the title bar button while you point at it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub popover: Option<Popover>,
+    /// `false` leaves it out of the title bar's plugin buttons: a sidebar that only the plugin's own pages open
+    /// (`openView(id, { as: "sidebar" })`), because it is empty on its own.
+    #[serde(default = "yes", skip_serializing_if = "Clone::clone")]
+    pub button: bool,
 }
 
 /// A sidebar's hover page: another HTML file in the plugin, sized in CSS pixels within `POPOVER_WIDTH` and `POPOVER_HEIGHT`.

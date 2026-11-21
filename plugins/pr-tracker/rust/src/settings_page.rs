@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use wings_plugin::{
     host,
     task::spawn,
-    ui::{Node, button, checkbox, confirm, heading, muted, row, select, stack, text, text_input},
+    ui::{Entry, Node, button, checkbox, confirm, entry, muted, row, rows_card, section, select, stack, text, text_input},
 };
 
 struct Host {
@@ -104,7 +104,7 @@ fn token_field(at: usize, t: &Token) -> Node {
     stack()
         .key(host.secret)
         .prop("gap", "s")
-        .child(heading(3, host.name))
+        .child(text(host.name).prop("weight", "medium"))
         .child(muted(host.help))
         .child(text(state))
         .child(row().prop("gap", "s").child(input).child(save).maybe(remove))
@@ -124,38 +124,71 @@ fn notify_label(value: &str) -> &'static str {
     }
 }
 
+/// How wide a menu is at the end of its row.
+const MENU_WIDTH: u32 = 220;
+
+/// A setting as a row: its name and what it does on the left, its control at the end, as Wings' own Settings rows are.
+fn setting(name: &str, detail: &str, control: Node) -> Node {
+    entry(Entry { lead: None, title: text(name).prop("weight", "medium"), detail: Some(muted(detail).prop("size", "small")), trailing: Some(control) })
+}
+
+/// A tick as a row: the tick's label is its name, and what it does is under it.
+fn toggle(tick: Node, detail: &str) -> Node {
+    entry(Entry { lead: None, title: tick, detail: Some(muted(detail).prop("size", "small")), trailing: None })
+}
+
+/// A menu with the width it has in a row.
+fn menu(node: Node) -> Node {
+    stack().prop("width", MENU_WIDTH).child(node)
+}
+
 fn sidebar_field() -> Node {
     let options: Vec<(String, String)> = SIDEBAR.iter().map(|s| ((*s).to_owned(), sidebar_label(s).to_owned())).collect();
-    stack()
-        .prop("gap", "s")
-        .child(heading(1, "Sidebar"))
-        .child(muted("The pull requests listed under each project. Yours come first, then the ones waiting for your review, then everyone else's."))
-        .child(select("Sidebar lists", &options, prefs::sidebar_pulls().get(), |value| {
-            if let Some(value) = SIDEBAR.iter().find(|s| **s == value) {
-                prefs::sidebar_pulls().set(value).ok();
-            }
-        }))
+    section(
+        "Sidebar",
+        None,
+        [rows_card([setting(
+            "Sidebar lists",
+            "The pull requests listed under each project. Yours come first, then the ones waiting for your review, then everyone else's.",
+            menu(select("Sidebar lists", &options, prefs::sidebar_pulls().get(), |value| {
+                if let Some(value) = SIDEBAR.iter().find(|s| **s == value) {
+                    prefs::sidebar_pulls().set(value).ok();
+                }
+            })),
+        )])],
+    )
 }
 
 fn watch_field() -> Node {
     let notify: Vec<(String, String)> = NOTIFY.iter().map(|n| ((*n).to_owned(), notify_label(n).to_owned())).collect();
     let minutes: Vec<(String, String)> = WATCH_MINUTES.iter().map(|m| (m.to_string(), format!("Every {m} minutes"))).collect();
-    stack()
-        .prop("gap", "s")
-        .child(heading(1, "New pull requests"))
-        .child(muted("Get a notification when someone opens a pull request in one of your projects, or only when one asks for your review, including one you're added to later. While Wings is in front it checks every minute. In the background it checks as often as you pick here."))
-        .child(select("Notify me about", &notify, prefs::notify_pulls().get(), |value| {
-            if let Some(value) = NOTIFY.iter().find(|n| **n == value) {
-                prefs::notify_pulls().set(value).ok();
-            }
-        }))
-        .child(select("Check in the background", &minutes, &prefs::watch_minutes().get().to_string(), |value| {
-            prefs::watch_minutes().set(value.parse().ok().filter(|m| WATCH_MINUTES.contains(m)).unwrap_or(5)).ok();
-        }))
+    section(
+        "New pull requests",
+        Some("While Wings is in front it checks every minute. In the background it checks as often as you pick here."),
+        [rows_card([
+            setting(
+                "Notify me about",
+                "A notification when someone opens a pull request in one of your projects, or only when one asks for your review, including one you're added to later.",
+                menu(select("Notify me about", &notify, prefs::notify_pulls().get(), |value| {
+                    if let Some(value) = NOTIFY.iter().find(|n| **n == value) {
+                        prefs::notify_pulls().set(value).ok();
+                    }
+                })),
+            ),
+            setting(
+                "Check in the background",
+                "How often Wings looks while it isn't in front.",
+                menu(select("Check in the background", &minutes, &prefs::watch_minutes().get().to_string(), |value| {
+                    prefs::watch_minutes().set(value.parse().ok().filter(|m| WATCH_MINUTES.contains(m)).unwrap_or(5)).ok();
+                })),
+            ),
+        ])],
+    )
 }
 
+/// A section of one tick and what it does.
 fn flag_field(title: &str, help: &str, label: &str, on: bool, set: fn(bool)) -> Node {
-    stack().prop("gap", "s").child(heading(1, title)).child(muted(help)).child(checkbox(label, on, set))
+    section(title, None, [rows_card([toggle(checkbox(label, on, set), help)])])
 }
 
 fn view() -> Vec<Node> {
@@ -179,9 +212,11 @@ fn view() -> Vec<Node> {
                 prefs::tell_agents().get(),
                 |on| drop(prefs::tell_agents().set(on)),
             ))
-            .child(heading(1, "Pull request hosts"))
-            .child(muted("GitHub (including GitHub Enterprise), GitLab and Azure DevOps use the gh, glab and az sign-in. Bitbucket Cloud and Codeberg use a token saved here."))
-            .children(tokens.iter().enumerate().map(|(at, t)| token_field(at, t))),
+            .child(section(
+                "Pull request hosts",
+                Some("GitHub (including GitHub Enterprise), GitLab and Azure DevOps use the gh, glab and az sign-in. Bitbucket Cloud and Codeberg use a token saved here."),
+                [rows_card(tokens.iter().enumerate().map(|(at, t)| entry(Entry { lead: None, title: token_field(at, t), detail: None, trailing: None })))],
+            )),
     ]
 }
 

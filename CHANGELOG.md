@@ -2,6 +2,14 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.79 · 2026-11-21
+
+- **Claude chat in the bar**: Claude chat has its own plugin button. Its Subagent, Claude Code pane and Claude session sidebars no longer show there, since they only make sense opened from a chat.
+- **Dithered background by default**: new chats start on the ordered dither. A first chat says once that Settings can make it plain.
+- **Bigger plugin settings**: a plugin's settings page opens in a larger dialog. Claude chat's shows a live sample chat beside its options, and one column when narrow.
+- **Tidier settings pages**: PR tracker and Issues settings use the same rows and cards as Wings' own.
+- **Claude chat 0.43.0, PR tracker 0.33.2, Issues 0.29.1**: the above.
+
 ## 0.2.78 · 2026-11-21
 
 - **The command palette sits in the middle**: it's centred top to bottom in the window, and its top stays put while you type and the list shrinks.

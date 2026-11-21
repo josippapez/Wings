@@ -122,7 +122,7 @@ fn the_new_settings_are_saved_and_come_back() {
 }
 
 /// Settings is the desktop dialog's size: 820 x 600, and 1100 x 760 on Plugins, each within 32px of the window's edges.
-/// Changing between the two sizes takes the desktop's 200ms. A plugin's own page keeps the smaller size, as there.
+/// Changing between the two sizes takes the desktop's 200ms. A plugin's own settings page takes the large size too, for a preview beside its choices.
 #[test]
 fn settings_is_the_desktops_size_for_each_section() {
     use super::plugin_tests::{click_spot, install_tuner};
@@ -161,6 +161,9 @@ fn settings_is_the_desktops_size_for_each_section() {
     assert_eq!(drawn(&mut window), (1100.0, 760.0));
 
     click_spot(&mut window, "settings-nav:Plugin tuner");
+    wait(&mut window, settings::RESIZE * 2);
+    assert_eq!(drawn(&mut window), (1100.0, 760.0));
+    click_spot(&mut window, "settings-nav:General");
     wait(&mut window, settings::RESIZE * 2);
     assert_eq!(drawn(&mut window), (820.0, 600.0));
 

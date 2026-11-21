@@ -148,7 +148,7 @@ pub const SIDE_PANEL: &str = "side-panel";
 pub const SESSION_PANEL: &str = "session-panel";
 pub const SESSION_PANELS: [(&str, &str); 2] = [("chat", "In the chat"), ("sidebar", "Wings sidebar")];
 
-/// What lies behind the conversation, in every chat: the page's plain ground, a slow pattern of pixels Wings draws there
+/// What lies behind the conversation, in every chat (the ordered dither unless you pick another): the page's plain ground, a slow pattern of pixels Wings draws there
 /// (`backdrop: "pixels"` on the page, Wings 0.2.59, or `"pixels:<pattern>"`, a Wings after 0.2.60, which an older one
 /// leaves plain; `mono`, `ocean`, `meadow`, `dusk`, `blocks`, `bayer`, `grain` and `grain-lagoon` need Wings 0.2.75, and an older Wings draws
 /// the plain drift for them, or the plain ground before 0.2.61), or a moving gradient Wings draws with a shader (`"gradient:<preset>"`, Wings 0.2.60), whose colours are
@@ -225,7 +225,12 @@ fn background_of(stored: &Value) -> Option<String> {
 }
 
 pub fn background() -> Setting<String> {
-    Setting::new(BACKGROUND, "plain".to_owned(), background_of, |kind| json!(kind))
+    Setting::new(BACKGROUND, "pixels:bayer".to_owned(), background_of, |kind| json!(kind))
+}
+
+/// Whether you have seen, or put away, the hint under a new chat's prompt that Settings can turn the background plain.
+pub fn background_hint_seen() -> Setting<bool> {
+    Setting::boolean("background-hint-seen", false)
 }
 
 /// The page's `backdrop` for a value of the background setting: none for the plain ground, else the value itself.
@@ -338,9 +343,10 @@ mod tests {
     }
 
     #[test]
-    fn the_background_is_plain_unless_you_picked_the_pixels_or_a_gradient_and_a_change_reaches_the_chats() {
-        assert_eq!(background().get(), "plain");
-        assert_eq!(backdrop(&background().get()), None);
+    fn the_background_is_the_ordered_dither_unless_you_picked_another_and_a_change_reaches_the_chats() {
+        assert_eq!(background().get(), "pixels:bayer");
+        assert_eq!(backdrop(&background().get()).as_deref(), Some("pixels:bayer"));
+        assert!(!background_hint_seen().get());
         assert_eq!(background_of(&json!("pixels")).as_deref(), Some("pixels"));
         assert_eq!(background_of(&json!("plain")).as_deref(), Some("plain"));
         assert_eq!(background_of(&json!("gradient:mint")).as_deref(), Some("gradient:mint"));
@@ -350,7 +356,7 @@ mod tests {
         }
         assert_eq!(background_of(&json!("pixels:snow")), None);
         assert_eq!(background_of(&json!("gradient:aurora")), None);
-        // Moire is gone: a stored choice of it reads as the default, the plain ground.
+        // Moire is gone: a stored choice of it reads as the default.
         assert_eq!(background_of(&json!("gradient:moire")), None);
         assert_eq!(background_of(&json!("aurora")), None);
         assert_eq!(background_of(&json!(true)), None);

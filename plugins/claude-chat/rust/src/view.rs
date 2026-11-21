@@ -10,7 +10,7 @@ use wings_plugin::{
     markdown::markdown,
     ui::{
         Entry, Node, badge, button, card, chip, confirm, disclosure, empty, entry, gauge, icon, list, list_button, loading, muted,
-        notice, row, select, spinner, stack, text, text_input,
+        notice, row, select, slot, spinner, stack, text, text_input,
     },
 };
 
@@ -220,6 +220,18 @@ fn header(c: &Chat) -> Node {
     Node::new("Bar").prop("variant", "slim").child(row().prop("gap", "m").prop("align", "center").child(title).child(actions))
 }
 
+/// Said once under a new chat's prompt: the moving background can be turned plain in Settings.
+fn background_hint() -> Node {
+    row()
+        .prop("gap", "s")
+        .prop("align", "center")
+        .prop("wrap", true)
+        .child(muted("Prefer a plain background? Change it in Settings, top right.").prop("size", "small"))
+        .child(button("Open Settings", "link", false, chat::open_settings_from_hint).prop("size", "sm"))
+        .child(button("Got it", "ghost", false, chat::dismiss_background_hint).prop("size", "sm"))
+        .key("background-hint")
+}
+
 fn column() -> Node {
     stack().prop("gap", "l").prop("maxWidth", COLUMN)
 }
@@ -236,6 +248,7 @@ fn conversation(c: &Chat) -> (Node, Vec<(usize, usize)>, usize) {
             _ => {
                 let new = empty("What should Claude do?", "It works in this folder with your Claude Code setup, and asks here before it does anything you haven't allowed.");
                 let new = new.prop("fill", true);
+                let new = if c.background_hint && c.backdrop.is_some() { new.child(slot("children", background_hint())) } else { new };
                 let new = if c.backdrop.is_some() { new } else { new.prop("backdrop", "glow") };
                 return (new, Vec::new(), 0);
             }
@@ -1957,6 +1970,23 @@ mod tests {
                 assert!(!page.to_string().contains(r#""backdrop":"glow""#), "one backdrop behind a new chat, not two");
             }
         });
+    }
+
+    #[test]
+    fn a_new_chat_says_once_that_settings_can_make_the_background_plain() {
+        chat::with(|c| {
+            c.state = State::Running;
+            c.backdrop = Some("pixels:bayer".to_owned());
+            c.background_hint = true;
+            let shown = |c: &Chat| wings_plugin::ui::tree_json(chat_page(c)).to_string().contains("Prefer a plain background?");
+            assert!(shown(c), "under a new chat's prompt");
+            // On the plain ground there's nothing to turn off.
+            c.backdrop = None;
+            assert!(!shown(c));
+            c.backdrop = Some("pixels:bayer".to_owned());
+        });
+        chat::dismiss_background_hint();
+        chat::with(|c| assert!(!c.background_hint && !wings_plugin::ui::tree_json(chat_page(c)).to_string().contains("Prefer a plain background?")));
     }
 
     #[test]

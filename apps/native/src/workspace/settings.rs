@@ -105,6 +105,12 @@ impl Section {
     }
 
     /// The plugin whose settings page this is.
+    /// Whether the dialog takes its large size here: the plugin manager and a plugin's own settings page, which has room for
+    /// a preview beside its choices or cards side by side.
+    pub(super) fn is_large(&self) -> bool {
+        matches!(self, Section::Plugins | Section::Plugin(_))
+    }
+
     pub(super) fn plugin(&self) -> Option<&str> {
         match self {
             Section::Plugin(settings) => Some(&settings.plugin),
@@ -1433,7 +1439,7 @@ impl Workspace {
                     .text_color(rgb(theme::MUTED_FOREGROUND))
                     .child(format!("Wings {WINGS_VERSION}")),
             );
-        let (width, height) = dialog.size(*section == Section::Plugins, window, cx);
+        let (width, height) = dialog.size(section.is_large(), window, cx);
         let (backdrop, panel) = ui::dialog("settings", "Settings", &dialog.focus, width, height);
         Some(
             backdrop
