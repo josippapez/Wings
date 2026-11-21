@@ -14,7 +14,7 @@ use crate::{
     folds::{KINDS, Kind},
     prefs,
     session::MODES,
-    settings_preview::{diff, limit, places, sample, turn},
+    settings_preview::{self, diff, limit, places, sample, turn},
     view_mode::{self, Mode},
 };
 
@@ -106,31 +106,49 @@ fn preview(content: Node) -> Node {
     entry(Entry { lead: None, title: card().child(content), detail: None, trailing: None })
 }
 
+const STARTS_OPEN: &str = "What starts open";
+const STARTS_OPEN_DETAIL: &str = "A ticked fold starts open, a cleared one starts shut, and a click on it flips it. Every row but the subagent reports applies in the Verbose view mode only: Normal keeps those shut. Subagent reports apply in every view mode.";
+const REPORT_LABEL: &str = "Subagent reports";
+const REPORT_DETAIL: &str = "A subagent's full report in the chat, under \"↩ Report from …\". Every view mode. Clear it to start each as its first line. This is not the summary under an \"… finished\" line.";
+
+/// A fold kind's label and its one-line description: what it is, and when it applies.
+fn kind_text(kind: Kind, label: &'static str) -> (&'static str, &'static str) {
+    match kind {
+        Kind::Steps => (label, "The line over a run of tool calls, like \"Ran 1 command · Read 1 file\". Open, it lists the calls. Verbose only."),
+        Kind::Command => (label, "What a Bash command printed, under its call. Verbose only."),
+        Kind::Read => (label, "The file a Read gave back, under its call. Verbose only."),
+        Kind::Edit => (label, "An edit's diff, or the content of a written file, under its call. Verbose only."),
+        Kind::Search => (label, "What a Grep or a Glob found, under its call. Verbose only."),
+        Kind::Web => (label, "The page a fetch got, or what a web search found, under its call. Verbose only."),
+        Kind::Subagent => (label, "A subagent call's result, under its call. Verbose only."),
+        Kind::Other => (label, "What any other tool printed, like an MCP tool or a skill, under its call. Verbose only."),
+        Kind::Thought => (label, "Claude's thinking, under \"Thought for 7s\". Verbose only: the Thinking view mode opens it whatever this says."),
+        Kind::Summary => ("Summaries of finished agents and commands", "The short summary under an \"… finished\" line. Verbose only."),
+        Kind::Note => ("Notes from Claude Code", "What Claude Code wrote in your name, like hook output or a saved memory, as a \"⚙\" line. Verbose only."),
+    }
+}
+
 fn view() -> Vec<Node> {
     let modes = [Mode::Normal, Mode::Thinking, Mode::Verbose].map(|mode| (mode.name(), mode.name()));
     let mode = Mode::of(prefs::detailed().get(), prefs::thinking().get());
-    let checks: Vec<Node> = KINDS
-        .iter()
-        .map(|(kind, key, label)| {
-            let kind = *kind;
-            // The two longest names are cut to fit a column.
-            let label = match kind {
-                Kind::Summary => "Summaries of finished agents",
-                Kind::Note => "Notes from Claude Code",
-                _ => *label,
-            };
-            checkbox(label, prefs::opens(kind).get(), move |on| drop(prefs::opens(kind).set(on))).key(*key)
-        })
-        .collect();
-    // Two columns of ticks, the first holding the larger half.
-    let second = checks.len() / 2;
-    let mut checks = checks.into_iter();
-    let left: Vec<Node> = checks.by_ref().take(KINDS.len() - second).collect();
-    let ticks = row()
-        .prop("gap", "l")
-        .prop("align", "start")
-        .child(stack().prop("grow", true).prop("gap", "s").children(left))
-        .child(stack().prop("grow", true).prop("gap", "s").children(checks));
+    // Each fold kind is a tick with what it is, and under it the chat element it opens or shuts. The subagent report's tick
+    // sits next to the summaries': ticked is open, as for every row, and is the opposite of what `fold_reports` keeps.
+    let mut starts: Vec<Node> = Vec::new();
+    for (kind, key, label) in KINDS {
+        let (label, detail) = kind_text(kind, label);
+        let open = prefs::opens(kind).get();
+        starts.push(together([
+            toggle(checkbox(label, open, move |on| drop(prefs::opens(kind).set(on))).key(key), detail),
+            preview(settings_preview::kind(kind, open)),
+        ]));
+        if kind == Kind::Summary {
+            let open = !prefs::fold_reports().get();
+            starts.push(together([
+                toggle(checkbox(REPORT_LABEL, open, |on| drop(prefs::fold_reports().set(!on))).key("fold-reports"), REPORT_DETAIL),
+                preview(settings_preview::report(open)),
+            ]));
+        }
+    }
     let (pause_at, stop_at) = (prefs::pause_at().get(), prefs::stop_at().get());
     let split = prefs::diff_split().get();
     vec![stack()
@@ -158,12 +176,11 @@ fn view() -> Vec<Node> {
                     ),
                     preview(turn(mode, |kind| prefs::opens(kind).get())),
                 ]),
-                toggle(
-                    checkbox("Start subagent reports folded", prefs::fold_reports().get(), |on| drop(prefs::fold_reports().set(on))).key("fold-reports"),
-                    "A subagent's report to the chat shows in full, in every view mode. Tick this to fold each to its first line, which a click opens.",
-                ),
-                together([about("What Verbose opens", "Each kind starts open in Verbose unless you clear it. Normal keeps all of them shut."), preview(ticks)]),
-            ],
+                about(STARTS_OPEN, STARTS_OPEN_DETAIL),
+            ]
+            .into_iter()
+            .chain(starts)
+            .collect::<Vec<_>>(),
         ))
         .child(group(
             "Plan limit",
@@ -273,6 +290,58 @@ mod tests {
         assert_eq!(tree["type"], "ListRow");
         let slots: Vec<&str> = tree["children"].as_array().unwrap().iter().map(|slot| slot["props"]["name"].as_str().unwrap()).collect();
         assert_eq!(slots, ["title", "detail", "trailing"]);
+    }
+
+    #[test]
+    fn each_fold_tick_says_what_it_is_and_previews_the_element_it_opens_or_shuts() {
+        use crate::settings_preview;
+        let json = |node| wings_plugin::ui::tree_json(node).to_string();
+        // A kind's preview holds its fold's body only when ticked.
+        let samples = [
+            (Kind::Steps, "cargo test parser"),
+            (Kind::Command, "test result: FAILED"),
+            (Kind::Read, "fn parse"),
+            (Kind::Edit, "trim_end_matches"),
+            (Kind::Search, "src/lexer.rs:9"),
+            (Kind::Web, "The parser guide"),
+            (Kind::Subagent, "Two checks skip"),
+            (Kind::Other, "Reviewed 3 files"),
+            (Kind::Thought, "expects the trailing newline"),
+            (Kind::Summary, "two cases skipped"),
+            (Kind::Note, "formatted 2 files"),
+        ];
+        assert_eq!(samples.len(), KINDS.len());
+        for (kind, body) in samples {
+            let (open, shut) = (json(settings_preview::kind(kind, true)), json(settings_preview::kind(kind, false)));
+            assert!(open.contains(body) && !shut.contains(body), "{kind:?}: {open} / {shut}");
+        }
+        assert!(json(settings_preview::kind(Kind::Summary, true)).contains("Audit the discount code\\\" finished"));
+        // A report shows whole when open and as its first line when shut.
+        let (open, shut) = (json(settings_preview::report(true)), json(settings_preview::report(false)));
+        assert!(open.contains("Both are fixed") && !shut.contains("Both are fixed") && shut.contains("Two checks skip the expiry date."));
+        // The page has a labelled row and a description for each, the report's next to the summaries'.
+        let page = json(stack().children(view()));
+        for (kind, _, label) in KINDS {
+            let (label, detail) = kind_text(kind, label);
+            assert!(page.contains(label) && detail.ends_with('.') && page.contains(&detail.replace('"', "\\\"")), "{label}");
+        }
+        let (summary, report) = (page.find("Summaries of finished agents and commands").unwrap(), page.find("\"Subagent reports\"").unwrap());
+        assert!(summary < report && report < page.find("Notes from Claude Code").unwrap());
+        assert!(page.contains("What starts open") && page.contains("Every view mode"));
+    }
+
+    #[test]
+    fn the_report_tick_is_open_when_ticked_and_keeps_the_fold_setting_as_it_was() {
+        // Folding is off by default, so the tick starts ticked.
+        assert!(!prefs::fold_reports().get());
+        let page = wings_plugin::ui::tree_json(stack().children(view()));
+        fn tick(node: &serde_json::Value) -> Option<bool> {
+            if node["type"] == "Checkbox" && node.to_string().contains("Subagent reports") {
+                return node["props"]["checked"].as_bool();
+            }
+            node["children"].as_array()?.iter().find_map(tick)
+        }
+        assert_eq!(tick(&page), Some(true));
     }
 
     #[test]

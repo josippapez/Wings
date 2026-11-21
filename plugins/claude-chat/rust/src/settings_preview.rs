@@ -75,6 +75,56 @@ pub fn turn(mode: Mode, opens: impl Fn(Kind) -> bool) -> Node {
         .child(text("The parser now keeps the trailing newline, and the test passes."))
 }
 
+/// A fold as the chat draws it: its line, and under it the body when it is open. The key carries the state, so a tick
+/// remounts the fold open or shut.
+fn fold(title: &str, body: Node, open: bool) -> Node {
+    let body = if open { body } else { stack() };
+    row().child(disclosure(title, body).prop("open", open).key(format!("fold-{title}-{open}")))
+}
+
+fn small(body: &str) -> Node {
+    text(body).prop("tone", "muted").prop("size", "small")
+}
+
+/// The chat element a kind of fold opens or shuts, as it looks with the fold `open`, made of sample text.
+pub fn kind(kind: Kind, open: bool) -> Node {
+    let diff = || stack().prop("gap", "none").child(line("-    input.trim()", Some("danger"))).child(line("+    input.trim_end_matches('\\r')", Some("success")));
+    let under = |call: Node, title: &str, body: Node| stack().prop("gap", "xs").child(call).child(fold(title, body, open));
+    let node = match kind {
+        Kind::Steps => fold(
+            "Ran 1 command · Read 1 file · Edited 1 file",
+            stack().prop("gap", "xs").child(call("Bash", "cargo test parser")).child(call("Read", "src/parser.rs")).child(call("Edit", "src/parser.rs")),
+            open,
+        ),
+        Kind::Command => under(call("Bash", "cargo test parser"), "Output", line("test result: FAILED. 3 passed; 1 failed", None)),
+        Kind::Read => under(call("Read", "src/parser.rs"), "Output", line("41  fn parse(input: &str) -> Ast {", None)),
+        Kind::Edit => under(call("Edit", "src/parser.rs"), "Changes", diff()),
+        Kind::Search => under(call("Grep", "parse_ident"), "Output", line("src/parser.rs:41\nsrc/lexer.rs:9", None)),
+        Kind::Web => under(call("WebFetch", "docs.example.com/parser"), "Output", small("The parser guide: trailing newlines are kept unless trimmed.")),
+        Kind::Subagent => under(call("Agent", "Audit the discount code"), "Output", small("Two checks skip the expiry date. Both are fixed.")),
+        Kind::Other => under(call("Skill", "review"), "Output", small("Reviewed 3 files, no findings.")),
+        Kind::Thought => fold("Thought for 7s", small("The test expects the trailing newline, and the parser trims it."), open),
+        Kind::Summary => stack()
+            .prop("gap", "xs")
+            .child(row().prop("gap", "s").child(text("✓").prop("tone", "success")).child(text("Agent \"Audit the discount code\" finished · 12s").prop("size", "small").prop("tone", "muted")))
+            .child(fold("Summary", small("Checked the discount code: two cases skipped the expiry date, both fixed."), open)),
+        Kind::Note => fold("⚙ Hook output", small("pre-commit: formatted 2 files."), open),
+    };
+    node.key(format!("kind-{}-{open}", kind.key()))
+}
+
+/// A subagent's report in the chat, whole when `open` and as its first line when not.
+pub fn report(open: bool) -> Node {
+    let head = row().prop("gap", "s").prop("align", "center").child(text("↩").prop("tone", "muted")).child(text("Report from Audit the discount code").prop("weight", "medium").prop("size", "small"));
+    let first = "Two checks skip the expiry date.";
+    let fold = if open {
+        fold("Report", stack().prop("gap", "xs").child(text(first)).child(text("Both are fixed in discount.rs, and the tests cover them.")), true)
+    } else {
+        fold(first, stack(), false)
+    };
+    stack().prop("gap", "xs").key(format!("report-{open}")).child(head).child(fold)
+}
+
 /// A sample of the conversation's text at a text size: the scale the chat gives its scroll.
 pub fn sample(scale: f32) -> Node {
     let lines = stack()
