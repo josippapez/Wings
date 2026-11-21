@@ -69,8 +69,37 @@ fn make_private(dir: &Path) -> std::io::Result<()> {
 }
 
 /// The names of the `~/.claude-<name>` folders there are.
+///
+/// The list is kept until the home folder's modification time changes, which a folder added, removed or renamed there
+/// does, so the agent and transcript threads asking twice a second cost one `stat` instead of reading the whole folder.
 pub fn existing_names() -> BTreeSet<String> {
-    let Ok(entries) = std::fs::read_dir(home()) else { return BTreeSet::new() };
+    static CACHE: std::sync::Mutex<Option<NamesCache>> = std::sync::Mutex::new(None);
+    names_cached(&home(), &CACHE, scan_names)
+}
+
+type NamesCache = (PathBuf, std::time::SystemTime, BTreeSet<String>);
+
+/// `existing_names` for `home`, reading the folder with `scan` only when its modification time isn't the one `cache` has.
+fn names_cached(
+    home: &Path,
+    cache: &std::sync::Mutex<Option<NamesCache>>,
+    scan: impl Fn(&Path) -> BTreeSet<String>,
+) -> BTreeSet<String> {
+    // Read before the scan, so a change during it is seen next time.
+    let Some(modified) = std::fs::metadata(home).and_then(|meta| meta.modified()).ok() else { return scan(home) };
+    let mut cache = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((at, when, names)) = cache.as_ref() {
+        if at == home && *when == modified {
+            return names.clone();
+        }
+    }
+    let names = scan(home);
+    *cache = Some((home.to_path_buf(), modified, names.clone()));
+    names
+}
+
+fn scan_names(home: &Path) -> BTreeSet<String> {
+    let Ok(entries) = std::fs::read_dir(home) else { return BTreeSet::new() };
     entries
         .flatten()
         .filter_map(|entry| {
@@ -654,6 +683,30 @@ mod tests {
             worktree_setup: None,
             claude_account: account.map(String::from),
         }
+    }
+
+    #[test]
+    fn the_home_folder_is_read_again_only_when_it_changes() {
+        use std::{cell::Cell, sync::Mutex};
+        let home = std::env::temp_dir().join(format!("wings-names-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".claude-work")).unwrap();
+        let (cache, reads) = (Mutex::new(None), Cell::new(0));
+        let names = || {
+            names_cached(&home, &cache, |home| {
+                reads.set(reads.get() + 1);
+                scan_names(home)
+            })
+        };
+        for _ in 0..100 {
+            assert_eq!(names(), BTreeSet::from(["work".to_string()]));
+        }
+        assert_eq!(reads.get(), 1, "a hundred asks read the folder once");
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        std::fs::create_dir(home.join(".claude-home")).unwrap();
+        assert_eq!(names(), BTreeSet::from(["home".to_string(), "work".to_string()]), "a new account shows at once");
+        assert_eq!(reads.get(), 2);
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

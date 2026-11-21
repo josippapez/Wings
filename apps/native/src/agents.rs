@@ -11,6 +11,9 @@ use wings_spaces::claude_accounts;
 /// The desktop's detection interval.
 pub const EVERY: Duration = Duration::from_millis(500);
 
+/// The interval while Wings is behind other apps and no pane runs an agent.
+pub const IDLE_EVERY: Duration = Duration::from_secs(2);
+
 /// How long after an OpenCode session first does something its activity is announced, so a burst of tool calls is one
 /// event, as on the desktop.
 pub const ACTIVITY_BURST: Duration = Duration::from_millis(700);

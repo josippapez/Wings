@@ -46,7 +46,10 @@ impl Workspace {
             // Stops with the detection.
             let _announce = announce;
             loop {
-                cx.background_executor().timer(agents::EVERY).await;
+                let Ok(every) = this.update(cx, |this, _| this.detect_every()) else {
+                    break;
+                };
+                cx.background_executor().timer(every).await;
                 let Ok((panes, focused)) = this.update(cx, |this, cx| this.probes(cx)) else {
                     break;
                 };
@@ -72,6 +75,13 @@ impl Workspace {
                 }
             }
         })
+    }
+
+    /// Half a second while you can see Wings or an agent runs; `agents::IDLE_EVERY` while Wings is behind other apps and
+    /// no pane runs an agent, so a newly started agent shows up at most that late, and the first check after Wings comes
+    /// to the front is at most that late too.
+    pub(super) fn detect_every(&self) -> std::time::Duration {
+        detect_interval(self.window_active, !self.agents.is_empty())
     }
 
     /// Every pane in every project, and the one you're looking at while the window has focus,
@@ -244,5 +254,27 @@ impl Workspace {
             .filter(|agent| agent.space_id == key)
             .map(|agent| agent.state)
             .collect()
+    }
+}
+
+/// How long to wait before the next detection.
+fn detect_interval(window_active: bool, agent_running: bool) -> std::time::Duration {
+    if window_active || agent_running {
+        agents::EVERY
+    } else {
+        agents::IDLE_EVERY
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detection_slows_down_only_when_nobody_looks_and_no_agent_runs() {
+        assert_eq!(detect_interval(true, false), agents::EVERY);
+        assert_eq!(detect_interval(true, true), agents::EVERY);
+        assert_eq!(detect_interval(false, true), agents::EVERY);
+        assert_eq!(detect_interval(false, false), agents::IDLE_EVERY);
     }
 }
