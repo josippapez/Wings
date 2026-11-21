@@ -2,6 +2,14 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.72 · 2026-11-21
+
+- **Lighter typing in Claude chat**: a key that changes nothing else on the page no longer rebuilds the chat. The plugin's CPU while you type drops from about a fifth of a core to almost nothing.
+- **Quotes copy cleanly**: the bar beside a quote is drawn as a border, so selecting a quote copies only its words. In Claude chat, Tasks and PR tracker.
+- **Counters fit their line**: "Thinking · 12s" no longer wraps or leaves a gap as the count grows.
+- **Quieter in the background**: Wings looks for running agents less often while it's behind other apps and none is working, and reads your home folder only when it changes. Pixel backgrounds cost less per step.
+- **Claude chat 0.40.0, Tasks 0.28.2, PR tracker 0.33.1**: the above.
+
 ## 0.2.71 · 2026-11-21
 
 - **Typing stays light in real chats**: a page that answers a key late, as a busy chat does, no longer redraws the page for it, and a panel floating near the message box no longer slows typing. In a chat with a task running, a key costs 2 ms instead of 9.
