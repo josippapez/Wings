@@ -17,8 +17,6 @@ use crate::{
 
 /// The reading column's width.
 const COLUMN: u32 = 860;
-/// The most plans the side panel lists by name.
-const LISTED: usize = 5;
 /// A speech bubble, in a 24-point box.
 const BUBBLE: [&str; 3] = ["M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z", "M12 7v6", "M9 10h6"];
 const CLOSE: &str = "M3.5 3.5l7 7M10.5 3.5l-7 7";
@@ -42,8 +40,7 @@ pub fn section(c: &Chat) -> Option<Node> {
         return None;
     }
     let title = if plans.len() == 1 { "Plan".to_owned() } else { format!("Plans · {}", plans.len()) };
-    let earlier = plans.len().saturating_sub(LISTED);
-    let rows = plans.iter().take(LISTED).map(|(number, plan)| {
+    let rows = plans.iter().map(|(number, plan)| {
         let id = plan.id.clone();
         let comments = c.review.iter().filter(|comment| comment.path == plan_doc::path(*number)).count();
         let mut said = plan_doc::status(&c.session.items, plan).label().to_owned();
@@ -61,8 +58,7 @@ pub fn section(c: &Chat) -> Option<Node> {
         .prop("title", "Open the plan as a document")
         .key(plan.id.as_str())
     });
-    let more = (earlier > 0).then(|| muted(format!("{earlier} earlier, in the plan's page")).prop("size", "small").key("plans-earlier"));
-    Some(crate::view::fold(c, "plans", title, rows.chain(more.map(|more| crate::view::inset(more)))))
+    Some(crate::view::fold_list(c, "plans", title, rows))
 }
 
 /// The card's link, for the plan whose question shows `text`.

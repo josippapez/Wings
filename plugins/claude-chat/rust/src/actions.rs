@@ -99,7 +99,7 @@ mod tests {
 
     fn session_running(name: &str, output: Option<(String, bool)>) -> Session {
         let mut session = Session::default();
-        session.items.push(Item::Tool(Tool { id: "t1".into(), name: name.into(), summary: String::new(), output, detail: crate::session::Detail::Plain, images: Vec::new() }));
+        session.items.push(Item::Tool(Tool { id: "t1".into(), name: name.into(), summary: String::new(), output, detail: crate::session::Detail::Plain, input: Default::default(), images: Vec::new() }));
         session
     }
 

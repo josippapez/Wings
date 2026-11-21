@@ -34,6 +34,8 @@ const WRITE_KEPT: usize = 40;
 /// The most items kept of each subagent's own transcript: a subagent that searches a repository makes hundreds of tool
 /// calls, and its own tab reads them from its transcript. Older ones go.
 pub const SUBAGENT_KEPT: usize = 200;
+/// The tool a subagent hands its final report back to its caller with (Claude Code 2.1.330), its `message` the report.
+const HANDBACK: &str = "SubagentHandback";
 
 #[derive(Debug, PartialEq)]
 pub enum Item {
@@ -114,8 +116,28 @@ pub struct Tool {
     pub output: Option<(String, bool)>,
     /// What its input says beyond the summary, by kind of tool.
     pub detail: Detail,
+    /// Its input whole, which its row's hover and its opened fold show.
+    pub input: Input,
     /// The pictures it gave back (a Read of an image, a screenshot, an MCP tool), by id.
     pub images: Vec<String>,
+}
+
+/// A tool call's input as the summary leaves it out: its one line is cut at the first line break and at 200 characters,
+/// and says one field.
+#[derive(Debug, Default, PartialEq)]
+pub struct Input {
+    /// The field the summary is made from, all of it, when the summary cuts it: empty when the summary is all of it.
+    pub whole: String,
+    /// Its other fields as (name, value), a text as it is and anything else as JSON. None for a call whose fold already
+    /// shows what its input does: an edit's change, a file written, a file read, the checklist.
+    pub fields: Vec<(String, String)>,
+}
+
+impl Input {
+    /// Whether an opened call has more of its input to show than its row says.
+    pub fn says_more(&self) -> bool {
+        !self.whole.is_empty() || !self.fields.is_empty()
+    }
 }
 
 /// What a tool call's input holds that its one-line summary doesn't.
@@ -1077,7 +1099,15 @@ impl Session {
                     let id = block["id"].as_str().unwrap_or_default().to_owned();
                     self.track(&name, &id, &block["input"]);
                     self.mods.tool_called(&id, &block["input"]);
-                    self.items.push(Item::Tool(Tool { id, summary: summary(&name, &block["input"]), detail: detail(&name, &block["input"]), name, output: None, images: Vec::new() }));
+                    // A subagent's report to its caller is its last word: whole, as a reply, where a call's one-line
+                    // summary cut it to 200 characters.
+                    if name == HANDBACK
+                        && let Some(report) = block["input"]["message"].as_str().map(str::trim).filter(|report| !report.is_empty())
+                    {
+                        self.items.push(Item::Text(report.to_owned()));
+                        continue;
+                    }
+                    self.items.push(Item::Tool(Tool { id, summary: summary(&name, &block["input"]), detail: detail(&name, &block["input"]), input: input_of(&name, &block["input"]), name, output: None, images: Vec::new() }));
                 }
                 "image" => {
                     self.items.push(Item::Images(images::of_block(block).into_iter().collect()));
@@ -1710,8 +1740,9 @@ fn untagged(text: &str) -> String {
     out.lines().map(str::trim_end).filter(|line| !line.trim().is_empty()).collect::<Vec<_>>().join("\n")
 }
 
-/// What a tool is doing, in one line: the command it runs, the file or the pattern, or else its first text input.
-pub fn summary(tool: &str, input: &Value) -> String {
+/// The field a tool's summary is made from, as (name, text): the command it runs, the file or the pattern, or else its
+/// first text input.
+fn summarized<'a>(tool: &str, input: &'a Value) -> Option<(&'a str, &'a str)> {
     let key = match tool {
         "Bash" => "command",
         "Read" | "Edit" | "Write" | "NotebookEdit" => "file_path",
@@ -1721,7 +1752,24 @@ pub fn summary(tool: &str, input: &Value) -> String {
         "Task" | "Agent" => "description",
         _ => "",
     };
-    let text = input[key].as_str().or_else(|| input.as_object()?.values().find_map(Value::as_str)).unwrap_or_default();
+    let fields = input.as_object()?;
+    let text = |(name, value): (&'a String, &'a Value)| Some((name.as_str(), value.as_str()?));
+    fields.get_key_value(key).and_then(text).or_else(|| fields.iter().find_map(text))
+}
+
+/// A tool call's input whole, as `Input` keeps it, each part cut at the most a tool's output keeps.
+fn input_of(tool: &str, input: &Value) -> Input {
+    let summarized = summarized(tool, input);
+    let whole = summarized.map(|(_, text)| text.trim()).filter(|text| *text != summary(tool, input)).map(|text| cut(text, OUTPUT_KEPT)).unwrap_or_default();
+    let shown = matches!(tool, "Edit" | "MultiEdit" | "Write" | "NotebookEdit" | "Read" | "TodoWrite" | "TaskCreate" | "TaskUpdate");
+    let fields = input.as_object().filter(|_| !shown).into_iter().flatten().filter(|(name, _)| Some(name.as_str()) != summarized.map(|(name, _)| name));
+    let fields = fields.map(|(name, value)| (name.clone(), cut(&value.as_str().map_or_else(|| value.to_string(), str::to_owned), OUTPUT_KEPT))).collect();
+    Input { whole, fields }
+}
+
+/// What a tool is doing, in one line: the command it runs, the file or the pattern, or else its first text input.
+pub fn summary(tool: &str, input: &Value) -> String {
+    let text = summarized(tool, input).map(|(_, text)| text).unwrap_or_default();
     // A command's indented script or aligned text, said on one line, would show its runs of spaces as gaps.
     let line: Vec<&str> = text.lines().next().unwrap_or_default().split_whitespace().collect();
     cut(&line.join(" "), SUMMARY_KEPT)
@@ -2041,6 +2089,7 @@ mod tests {
                     summary: "ls".into(),
                     output: Some(("err.txt\nout.jsonl\nprobe-file.txt".into(), false)),
                     detail: Detail::Command("ls".into()),
+                    input: Input { whole: String::new(), fields: vec![("description".into(), "List files in current directory".into())] },
                     images: Vec::new(),
                 }),
                 Item::Text("There are 3 files:\n\n- `err.txt`\n- `out.jsonl`\n- `probe-file.txt`".into()),
@@ -2125,6 +2174,29 @@ mod tests {
         assert_eq!(sub.reported_model.as_deref(), Some("claude-haiku-5-5"));
         // Its words never reach the conversation's own state.
         assert!(session.live.is_empty() && session.reported_model.is_none());
+    }
+
+    #[test]
+    fn a_call_keeps_the_input_its_one_line_leaves_out() {
+        let long = format!("rg -n pattern {}", "src/a.rs ".repeat(30));
+        let called = [
+            ("Bash", json!({ "command": long, "description": "Search the sources" })),
+            ("Bash", json!({ "command": "echo one\necho two" })),
+            ("Read", json!({ "file_path": "/repo/a.txt", "offset": 10 })),
+            ("mcp__wings__notify", json!({ "title": "Done", "urgent": true })),
+            ("Bash", json!({ "command": "ls" })),
+        ];
+        let inputs: Vec<Input> = called.iter().map(|(tool, input)| input_of(tool, input)).collect();
+        // A command past the line's width, whole, and what else it was given.
+        assert_eq!(inputs[0], Input { whole: long.trim().to_owned(), fields: vec![("description".into(), "Search the sources".into())] });
+        // One of several lines, whole.
+        assert_eq!(inputs[1].whole, "echo one\necho two");
+        // A read's fold is its file, and its range is on its line.
+        assert_eq!(inputs[2], Input::default());
+        // Anything that isn't text, as JSON.
+        assert_eq!(inputs[3], Input { whole: String::new(), fields: vec![("urgent".into(), "true".into())] });
+        // A line that says it all keeps nothing more.
+        assert!(!inputs[4].says_more());
     }
 
     #[test]

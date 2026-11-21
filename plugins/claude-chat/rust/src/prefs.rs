@@ -47,6 +47,78 @@ pub fn percent(share: &str) -> f64 {
     share.parse().unwrap_or(90.0)
 }
 
+/// The share an account has of its own, where it differs from the shared `PAUSE_AT`/`STOP_AT`: by the account's name ("" for
+/// the default account), each `{ "pause": "80", "stop": "95" }` with only the ones set. With more than one account Settings
+/// shows a row for each (`settings_page.rs`).
+pub const ACCOUNT_AT: &str = "account-at";
+
+/// Which of an account's two shares.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Limit {
+    Pause,
+    Stop,
+}
+
+impl Limit {
+    fn key(self) -> &'static str {
+        match self {
+            Limit::Pause => "pause",
+            Limit::Stop => "stop",
+        }
+    }
+}
+
+pub type AccountShares = std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>;
+
+fn account_shares_of(stored: &Value) -> Option<AccountShares> {
+    let accounts = stored.as_object()?;
+    Some(
+        accounts
+            .iter()
+            .map(|(name, shares)| {
+                let valid = shares.as_object().into_iter().flatten().filter_map(|(key, share)| Some((key.clone(), share_of(share)?))).collect();
+                (name.clone(), valid)
+            })
+            .collect(),
+    )
+}
+
+pub fn account_at() -> Setting<AccountShares> {
+    Setting::new(ACCOUNT_AT, AccountShares::new(), account_shares_of, |shares| json!(shares))
+}
+
+/// The share `account` (None for the default one) has of its own for `limit`, if it was picked.
+pub fn own_share(shares: &AccountShares, account: Option<&str>, limit: Limit) -> Option<String> {
+    shares.get(account.unwrap_or_default())?.get(limit.key()).cloned()
+}
+
+/// The percent of `limit` an account is held to: its own share when picked, else the shared one (`shared`, a value of
+/// `pause_at()` or `stop_at()`).
+pub fn percent_for(shares: &AccountShares, account: Option<&str>, limit: Limit, shared: &str) -> f64 {
+    percent(&own_share(shares, account, limit).unwrap_or_else(|| shared.to_owned()))
+}
+
+/// `percent_for` from what is kept.
+pub fn pause_percent(account: Option<&str>) -> f64 {
+    percent_for(&account_at().get(), account, Limit::Pause, &pause_at().get())
+}
+
+pub fn stop_percent(account: Option<&str>) -> f64 {
+    percent_for(&account_at().get(), account, Limit::Stop, &stop_at().get())
+}
+
+/// Keeps `share` as `account`'s own for `limit`, or None to follow the shared one again.
+pub fn set_own_share(account: Option<&str>, limit: Limit, share: Option<String>) {
+    let mut shares = account_at().get();
+    let own = shares.entry(account.unwrap_or_default().to_owned()).or_default();
+    match share {
+        Some(share) => drop(own.insert(limit.key().to_owned(), share)),
+        None => drop(own.remove(limit.key())),
+    }
+    shares.retain(|_, own| !own.is_empty());
+    drop(account_at().set(shares));
+}
+
 /// Every new chat turns Remote Control on as it starts (`remote.rs`), so you can go on with it on claude.ai or in the Claude
 /// app.
 pub const REMOTE_ON_START: &str = "remote-on-start";
@@ -65,15 +137,24 @@ pub const SESSION_PANELS: [(&str, &str); 2] = [("chat", "In the chat"), ("sideba
 
 /// What lies behind the conversation, in every chat: the page's plain ground, a slow pattern of pixels Wings draws there
 /// (`backdrop: "pixels"` on the page, Wings 0.2.59, or `"pixels:<pattern>"`, a Wings after 0.2.60, which an older one
-/// leaves plain), or a moving gradient Wings draws with a shader (`"gradient:<preset>"`, Wings 0.2.60), whose colours are
+/// leaves plain; `mono`, `ocean`, `meadow`, `dusk`, `blocks`, `bayer`, `grain` and `grain-lagoon` need Wings 0.2.75, and an older Wings draws
+/// the plain drift for them, or the plain ground before 0.2.61), or a moving gradient Wings draws with a shader (`"gradient:<preset>"`, Wings 0.2.60), whose colours are
 /// shadergradient's presets'.
 pub const BACKGROUND: &str = "background";
-pub const BACKGROUNDS: [(&str, &str); 17] = [
+pub const BACKGROUNDS: [(&str, &str); 24] = [
     ("plain", "Plain"),
     ("pixels", "Pixel drift"),
     ("pixels:rain", "Pixel rain"),
     ("pixels:checker", "Checker shimmer"),
     ("pixels:embers", "Embers"),
+    ("pixels:mono", "Black and white"),
+    ("pixels:ocean", "Ocean pixels"),
+    ("pixels:meadow", "Meadow pixels"),
+    ("pixels:dusk", "Dusk pixels"),
+    ("pixels:blocks", "Pixel blocks"),
+    ("pixels:bayer", "Ordered dither"),
+    ("pixels:grain", "Grainy gradient"),
+    ("pixels:grain-lagoon", "Grainy lagoon"),
     ("gradient:halo", "Halo"),
     ("gradient:pensive", "Pensive"),
     ("gradient:mint", "Mint"),
@@ -85,7 +166,6 @@ pub const BACKGROUNDS: [(&str, &str); 17] = [
     ("gradient:dots", "Dot matrix"),
     ("gradient:silk", "Silk"),
     ("gradient:cells", "Cells"),
-    ("gradient:moire", "Moire"),
 ];
 
 /// How big the conversation's text is, in every chat.
@@ -251,12 +331,14 @@ mod tests {
         assert_eq!(background_of(&json!("pixels")).as_deref(), Some("pixels"));
         assert_eq!(background_of(&json!("plain")).as_deref(), Some("plain"));
         assert_eq!(background_of(&json!("gradient:mint")).as_deref(), Some("gradient:mint"));
-        for pattern in ["pixels:rain", "pixels:checker", "pixels:embers"] {
+        for pattern in ["pixels:rain", "pixels:checker", "pixels:embers", "pixels:mono", "pixels:ocean", "pixels:meadow", "pixels:dusk", "pixels:blocks", "pixels:bayer", "pixels:grain", "pixels:grain-lagoon"] {
             assert_eq!(background_of(&json!(pattern)).as_deref(), Some(pattern));
             assert_eq!(backdrop(pattern).as_deref(), Some(pattern), "the page asks Wings for the pattern by name");
         }
         assert_eq!(background_of(&json!("pixels:snow")), None);
         assert_eq!(background_of(&json!("gradient:aurora")), None);
+        // Moire is gone: a stored choice of it reads as the default, the plain ground.
+        assert_eq!(background_of(&json!("gradient:moire")), None);
         assert_eq!(background_of(&json!("aurora")), None);
         assert_eq!(background_of(&json!(true)), None);
         assert_eq!(backdrop("pixels").as_deref(), Some("pixels"));
@@ -296,6 +378,26 @@ mod tests {
         assert_eq!(closed_of(&json!(["tasks", "refs", 3])), Some(vec!["tasks".to_owned(), "refs".to_owned()]));
         assert_eq!(closed_of(&json!("tasks")), None);
         assert!(panel_closed().get().is_empty());
+    }
+
+    #[test]
+    fn an_account_follows_the_shared_share_unless_it_has_its_own() {
+        let mut shares = AccountShares::new();
+        assert_eq!(percent_for(&shares, Some("work"), Limit::Pause, "90"), 90.0);
+        shares.entry("work".to_owned()).or_default().insert("pause".to_owned(), "70".to_owned());
+        shares.entry(String::new()).or_default().insert("stop".to_owned(), "100".to_owned());
+        // The account's own wins for it, and only for the limit it set.
+        assert_eq!(percent_for(&shares, Some("work"), Limit::Pause, "90"), 70.0);
+        assert_eq!(percent_for(&shares, Some("work"), Limit::Stop, "95"), 95.0);
+        // Other accounts fall back to the shared one; the default account is kept under "".
+        assert_eq!(percent_for(&shares, Some("home"), Limit::Pause, "90"), 90.0);
+        assert_eq!(percent_for(&shares, None, Limit::Stop, "80"), 100.0);
+        assert_eq!(percent_for(&shares, None, Limit::Pause, "80"), 80.0);
+        // What is kept reads back, dropping shares that are not one of the listed.
+        let read = account_shares_of(&json!({ "work": { "pause": "70", "stop": "55" }, "": 3 })).unwrap();
+        assert_eq!(own_share(&read, Some("work"), Limit::Pause).as_deref(), Some("70"));
+        assert_eq!(own_share(&read, Some("work"), Limit::Stop), None);
+        assert_eq!(account_shares_of(&json!("x")), None);
     }
 
     #[test]

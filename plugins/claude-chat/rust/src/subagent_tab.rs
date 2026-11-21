@@ -10,7 +10,7 @@ use wings_plugin::{host, pages, task};
 
 use crate::{
     chat, prefs,
-    session::{Item, Session},
+    session::Session,
     subagents::{self, Heard},
 };
 
@@ -32,7 +32,8 @@ pub struct Tab {
     pub state: Value,
     /// Why the last message didn't go.
     pub refused: Option<String>,
-    /// What you sent from here that its transcript doesn't show yet: a reload shows them again at the end.
+    /// What you sent from here that hasn't reached the subagent yet, shown at the end as on its way: it leaves once the chat
+    /// passes it on, or the transcript shows it (`Heard`).
     pub sent: Vec<String>,
     /// This is the sidebar, which shows one subagent at a time and none (an empty `session`) until the chat says which.
     pub sidebar: bool,
@@ -179,10 +180,7 @@ fn load() {
                 Vec::new()
             }
         };
-        hear(|tab, session| {
-            tab.heard.load(&entries, session);
-            subagents::still_on_the_way(&mut tab.sent, session);
-        });
+        hear(|tab, session| tab.heard.load(&entries, session, &mut tab.sent));
     });
 }
 
@@ -191,7 +189,7 @@ fn told(message: &Value) {
     match message["kind"].as_str() {
         Some("line") => {
             let line = message["line"].clone();
-            hear(|tab, session| tab.heard.line(line, session));
+            hear(|tab, session| tab.heard.line(line, session, &mut tab.sent));
         }
         Some("show") => show(message),
         Some("state") => change(|tab| tab.state = message.clone()),
@@ -222,10 +220,7 @@ pub fn send() {
     change(|tab| tab.refused = None);
     task::spawn(async move {
         match sent.await {
-            Ok(_) => {
-                chat::with(|c| c.session.items.push(Item::User(said.clone())));
-                change(|tab| tab.sent.push(said));
-            }
+            Ok(_) => change(|tab| tab.sent.push(said)),
             Err(error) => {
                 // Back in the box, to send again.
                 chat::with(|c| {
@@ -289,7 +284,7 @@ mod tests {
         assert_eq!(with(|tab| (tab.agent.clone(), tab.title.clone())), Some(("a1b2c3d4e5f60718a".into(), "count lines".into())));
         assert_eq!(named(&calls).as_deref(), Some("subagent-side:s1:a1b2c3d4e5f60718a"));
         // What the first printed is in the page's conversation; the second subagent's starts again without it.
-        chat::with(|c| c.session.items.push(Item::Text("one".into())));
+        chat::with(|c| c.session.items.push(crate::session::Item::Text("one".into())));
         told(&subagents::show_message("s1", "b2c3d4e5f60718a9b", "count words"));
         assert_eq!(with(|tab| tab.agent.clone()).as_deref(), Some("b2c3d4e5f60718a9b"));
         assert_eq!(named(&calls).as_deref(), Some("subagent-side:s1:b2c3d4e5f60718a9b"));

@@ -1013,6 +1013,7 @@ mod tests {
                 summary: "ls".into(),
                 output: Some(("a\nb".into(), false)),
                 detail: crate::session::Detail::Plain,
+                input: Default::default(),
                 images: Vec::new(),
             })];
             c.session.mods.tool_called("t1", &json!({ "command": "ls" }));
@@ -1068,7 +1069,7 @@ mod tests {
     #[test]
     fn a_question_and_a_run_of_calls_are_asked_for_with_claude_codes_props() {
         chat::with(|c| {
-            let tool = |id: &str, output: Option<&str>| Item::Tool(Tool { id: id.into(), name: "Bash".into(), summary: String::new(), output: output.map(|said| (said.to_owned(), false)), detail: crate::session::Detail::Plain, images: Vec::new() });
+            let tool = |id: &str, output: Option<&str>| Item::Tool(Tool { id: id.into(), name: "Bash".into(), summary: String::new(), output: output.map(|said| (said.to_owned(), false)), detail: crate::session::Detail::Plain, input: Default::default(), images: Vec::new() });
             c.session.items = vec![Item::User("Go".into()), tool("t1", Some("ok")), tool("t2", None)];
             c.session.mods.tool_called("t1", &json!({ "command": "ls" }));
             let asked: Value = serde_json::from_str(request_for(c, "group:1:2", 1).unwrap().trim()).unwrap();

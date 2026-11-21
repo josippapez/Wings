@@ -684,7 +684,8 @@ pub(crate) fn hear(run: u32, line: &Value) {
             if c.run != run || !c.session.working {
                 return false;
             }
-            let at = prefs::percent(&prefs::stop_at().get());
+            let account = c.accounts.iter().find(|account| account.current).and_then(|account| account.name.as_deref());
+            let at = prefs::stop_percent(account);
             let Some((stop, said)) = crate::plan_limit::stop_for(&c.session.limits, &c.session.limit_stops, at) else {
                 return false;
             };

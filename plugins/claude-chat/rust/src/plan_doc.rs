@@ -307,7 +307,7 @@ mod tests {
     use crate::session::{Detail, Tool};
 
     fn tool(id: &str, output: Option<(&str, bool)>) -> Item {
-        Item::Tool(Tool { id: id.into(), name: "ExitPlanMode".into(), summary: String::new(), output: output.map(|(said, failed)| (said.into(), failed)), detail: Detail::Plain, images: Vec::new() })
+        Item::Tool(Tool { id: id.into(), name: "ExitPlanMode".into(), summary: String::new(), output: output.map(|(said, failed)| (said.into(), failed)), detail: Detail::Plain, input: Default::default(), images: Vec::new() })
     }
 
     fn ask(request: &str, plan: &str, answer: Option<bool>) -> Item {

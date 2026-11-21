@@ -11,8 +11,9 @@
 //! that call's id as `parent_tool_use_id`, including the ones it writes after SendMessage woke it.
 //!
 //! The tab reads the transcript as it opens, through Wings, which finds the file inside the session's folder by the two
-//! ids. After that the chat passes on each line the subagent prints, which it hears anyway: only the chat's Claude Code
-//! runs the subagent, so while the chat is closed there is nothing new to read. The tab's message goes the other way:
+//! ids. After that the chat passes on each line the subagent prints, which it hears anyway, and what its Claude tells the
+//! subagent with SendMessage, which no line of the subagent's carries: only the chat's Claude Code runs the subagent, so
+//! while the chat is closed there is nothing new to read. The tab's message goes the other way:
 //! headless Claude Code refuses `send_task_message`, so the chat's Claude passes it on with SendMessage, and the chat
 //! writes it with the write your Enter in the tab handed on (`wings_plugin::pages::tell`).
 
@@ -234,46 +235,49 @@ pub fn relay_write(session: &mut Session, message: &Value, write: bool, stamp: u
     Some(if session.working { session.queue(&text, Vec::new(), stamp, n) } else { session.send(&text, &[], stamp, n) })
 }
 
-/// A transcript entry of what SendMessage told the subagent, as the message it passed on. Claude Code 2.1.329 writes one
-/// that wakes a finished agent as a note in the subagent's name, and one that reaches it while it runs as a
-/// `queued_command` attachment, which no line the chat passes on carries.
-fn passed_on(entry: &Value) -> Option<Value> {
+/// What SendMessage told the subagent, from a transcript entry of it. Claude Code 2.1.329 writes one that wakes a finished
+/// agent as a note in the subagent's name, and one that reaches it while it runs as a `queued_command` attachment.
+fn passed_on(entry: &Value) -> Option<&str> {
     let queued = &entry["attachment"];
-    let said = if entry["type"] == "attachment" && queued["type"] == "queued_command" && queued["origin"]["kind"] == "coordinator" {
-        queued["prompt"].as_str()?.trim()
-    } else if entry["type"] == "user" && entry["origin"]["kind"] == "coordinator" {
+    if entry["type"] == "attachment" && queued["type"] == "queued_command" && queued["origin"]["kind"] == "coordinator" {
+        return Some(queued["prompt"].as_str()?.trim());
+    }
+    if entry["type"] == "user" && entry["origin"]["kind"] == "coordinator" {
         let text = entry["message"]["content"].as_str()?;
         let said = text.split_once('\n').map_or(text, |(_, rest)| rest);
-        said.rsplit_once("\n\n").map_or(said, |(said, _)| said).trim()
-    } else {
-        return None;
-    };
-    let mut shown = Map::new();
-    shown.insert("type".into(), "user".into());
-    shown.insert("uuid".into(), entry["uuid"].clone());
-    shown.insert("message".into(), json!({ "role": "user", "content": said }));
-    Some(Value::Object(shown))
+        return Some(said.rsplit_once("\n\n").map_or(said, |(said, _)| said).trim());
+    }
+    None
+}
+
+/// What the chat's Claude passed on with SendMessage in `line`, as (the subagent, the message that tells its pages). Claude
+/// Code 2.1.330 prints no line for it, neither the note that wakes a finished agent nor the attachment that reaches a
+/// running one, so a page that was open showed it only once it read the transcript again. It goes as the attachment the
+/// transcript keeps, under the call's id.
+pub fn sent_with(line: &Value) -> Vec<(String, Value)> {
+    if line["type"] != "assistant" {
+        return Vec::new();
+    }
+    let calls = line["message"]["content"].as_array().into_iter().flatten().filter(|block| block["type"] == "tool_use" && block["name"] == "SendMessage");
+    calls
+        .filter_map(|call| {
+            let agent = call["input"]["to"].as_str().filter(|to| is_agent_id(to))?;
+            let said = call["input"]["message"].as_str().map(str::trim).filter(|said| !said.is_empty())?;
+            let entry = json!({ "type": "attachment", "uuid": call["id"], "attachment": { "type": "queued_command", "prompt": said, "origin": { "kind": "coordinator" } } });
+            let message = json!({ "kind": "line", "line": entry });
+            let message = if message.to_string().len() > LINE_MOST { json!({ "kind": "reload" }) } else { message };
+            Some((agent.to_owned(), message))
+        })
+        .collect()
 }
 
 /// What a tab reads of its subagent's transcript: the conversation, and the messages SendMessage passed on while it ran.
 pub const KINDS: [&str; 3] = ["user", "assistant", "attachment:queued_command"];
 
-/// After the tab read the transcript: what you sent that it now shows is off `sent`, and the rest, still on its way to the
-/// subagent, shows at the end. A message is matched by its text, as Claude passes it on word for word.
-pub fn still_on_the_way(sent: &mut Vec<String>, session: &mut Session) {
-    let mut shown: Vec<String> = session.items.iter().filter_map(|item| if let Item::User(said) = item { Some(said.clone()) } else { None }).collect();
-    sent.retain(|said| match shown.iter().position(|text| text == said) {
-        Some(at) => {
-            shown.remove(at);
-            false
-        }
-        None => true,
-    });
-    session.items.extend(sent.iter().cloned().map(Item::User));
-}
-
 /// What the tab has heard of the subagent's conversation: its transcript as the tab opens, then the lines the chat
-/// passes on, each once and in order.
+/// passes on, each once and in order. `sent` is what you sent from the tab that hasn't reached the subagent yet: a message
+/// passed on to it with the same text is that one, which leaves `sent` and shows where it reached the subagent. Claude
+/// passes yours on word for word.
 #[derive(Debug, Default)]
 pub struct Heard {
     /// The transcript has been read. Lines passed on before that wait, as they are newer than what it holds.
@@ -284,35 +288,42 @@ pub struct Heard {
 
 impl Heard {
     /// The transcript's entries, oldest first, then the lines that waited for them.
-    pub fn load(&mut self, entries: &[Value], session: &mut Session) {
+    pub fn load(&mut self, entries: &[Value], session: &mut Session, sent: &mut Vec<String>) {
         for entry in entries {
-            self.hear(entry, session);
+            self.hear(entry, session, sent);
         }
         self.loaded = true;
         for line in std::mem::take(&mut self.waiting) {
-            self.hear(&line, session);
+            self.hear(&line, session, sent);
         }
     }
 
     /// A line the chat passed on.
-    pub fn line(&mut self, line: Value, session: &mut Session) {
+    pub fn line(&mut self, line: Value, session: &mut Session, sent: &mut Vec<String>) {
         if self.loaded {
-            self.hear(&line, session);
+            self.hear(&line, session, sent);
         } else {
             self.waiting.push(line);
         }
     }
 
-    fn hear(&mut self, entry: &Value, session: &mut Session) {
+    fn hear(&mut self, entry: &Value, session: &mut Session, sent: &mut Vec<String>) {
         if let Some(uuid) = entry["uuid"].as_str()
             && !self.uuids.insert(uuid.to_owned())
         {
             return;
         }
-        match passed_on(entry) {
-            Some(said) => session.hear(&said),
-            None => session.hear(entry),
+        let Some(said) = passed_on(entry) else {
+            return session.hear(entry);
+        };
+        if let Some(at) = sent.iter().position(|yours| yours == said) {
+            sent.remove(at);
         }
+        let mut shown = Map::new();
+        shown.insert("type".into(), "user".into());
+        shown.insert("uuid".into(), entry["uuid"].clone());
+        shown.insert("message".into(), json!({ "role": "user", "content": said }));
+        session.hear(&Value::Object(shown));
     }
 }
 
@@ -328,7 +339,7 @@ pub fn closed_because(chat_open: Option<bool>, ready: Option<bool>) -> Option<Op
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Lines of a chat that ran one subagent, as `claude -p --output-format stream-json` 2.1.327 printed them, cut down
@@ -422,10 +433,10 @@ mod tests {
     fn the_tab_shows_a_subagents_transcript_with_the_messages_passed_on_to_it() {
         let (mut session, mut heard) = (Session::default(), Heard::default());
         // A line the chat passed on before the transcript was read waits for it, and one it already holds shows once.
-        heard.line(json!({ "type": "assistant", "uuid": "t7", "message": { "role": "assistant", "content": [{ "type": "text", "text": "hello" }] } }), &mut session);
-        heard.line(json!({ "type": "assistant", "uuid": "t8", "message": { "role": "assistant", "content": [{ "type": "text", "text": "after" }] } }), &mut session);
+        heard.line(json!({ "type": "assistant", "uuid": "t7", "message": { "role": "assistant", "content": [{ "type": "text", "text": "hello" }] } }), &mut session, &mut Vec::new());
+        heard.line(json!({ "type": "assistant", "uuid": "t8", "message": { "role": "assistant", "content": [{ "type": "text", "text": "after" }] } }), &mut session, &mut Vec::new());
         assert!(session.items.is_empty());
-        heard.load(&transcript(), &mut session);
+        heard.load(&transcript(), &mut session, &mut Vec::new());
         let shown: Vec<String> = session
             .items
             .iter()
@@ -451,8 +462,7 @@ mod tests {
     }
 
     /// Claude Code 2.1.329 writes a message SendMessage passed on to a subagent that runs as an attachment of its next tool
-    /// round, and no line the chat passes on carries it: read again, the tab shows it there, and what you sent that hasn't
-    /// reached the subagent yet shows at the end.
+    /// round: read again, the tab shows it there, and what you sent that hasn't reached the subagent yet stays on its way.
     #[test]
     fn a_message_that_reached_a_running_subagent_shows_after_a_reload_and_one_still_on_its_way_too() {
         let delivered = json!({ "isSidechain": true, "agentId": "ab8d33bbb758bcba5", "type": "attachment", "uuid": "t9", "attachment": { "type": "queued_command", "prompt": "Write to the issue immediately", "source_uuid": "d8646916-04c0-4d4b-816e-c7be9e0281e3", "origin": { "kind": "coordinator" }, "isMeta": true, "reminderId": "ce1477c1bcc086d7" } });
@@ -460,15 +470,87 @@ mod tests {
         let mut entries = transcript();
         entries.extend([delivered, answer]);
         let (mut session, mut heard) = (Session::default(), Heard::default());
-        heard.load(&entries, &mut session);
         let mut sent = vec!["Write to the issue immediately".to_owned(), "and keep the log short".to_owned()];
-        still_on_the_way(&mut sent, &mut session);
-        let end: Vec<&Item> = session.items.iter().rev().take(3).rev().collect();
-        assert_eq!(
-            end,
-            [&Item::User("Write to the issue immediately".into()), &Item::Text("logged it".into()), &Item::User("and keep the log short".into())]
-        );
+        heard.load(&entries, &mut session, &mut sent);
+        let end: Vec<&Item> = session.items.iter().rev().take(2).rev().collect();
+        assert_eq!(end, [&Item::User("Write to the issue immediately".into()), &Item::Text("logged it".into())]);
         assert_eq!(sent, ["and keep the log short"], "the delivered one is off the list");
+    }
+
+    /// What the chat's Claude printed as it passed a message on to a woken subagent, as `claude -p --output-format
+    /// stream-json` 2.1.330 printed it, cut down. It printed no line of the subagent's for that message.
+    fn lead_sends(to: &str, said: &str) -> Value {
+        json!({ "type": "assistant", "parent_tool_use_id": null, "uuid": "u4", "message": { "model": "claude-haiku-5-5", "role": "assistant", "content": [{ "type": "tool_use", "id": "toolu_s", "name": "SendMessage", "input": { "to": to, "message": said, "summary": "Ask probe to say hello" } }] } })
+    }
+
+    #[test]
+    fn what_the_chats_claude_sends_a_subagent_goes_on_to_its_pages() {
+        let sent = sent_with(&lead_sends("a366918fdae7a5ff3", " Now reply with only the word hello. "));
+        let line = json!({ "type": "attachment", "uuid": "toolu_s", "attachment": { "type": "queued_command", "prompt": "Now reply with only the word hello.", "origin": { "kind": "coordinator" } } });
+        assert_eq!(sent, [("a366918fdae7a5ff3".to_owned(), json!({ "kind": "line", "line": line }))]);
+        // A tab hears it as a message passed on to its subagent.
+        let mut session = Session::default();
+        Heard { loaded: true, ..Heard::default() }.line(sent[0].1["line"].clone(), &mut session, &mut Vec::new());
+        assert_eq!(session.items, [Item::User("Now reply with only the word hello.".into())]);
+        // Nothing for another tool, an id that isn't a subagent's, or a message that isn't text.
+        assert!(sent_with(&ran_one()[0]).is_empty());
+        assert!(sent_with(&lead_sends("../x", "hi")).is_empty());
+        let mut structured = lead_sends("a366918fdae7a5ff3", "");
+        structured["message"]["content"][0]["input"]["message"] = json!({ "type": "shutdown_request" });
+        assert!(sent_with(&structured).is_empty());
+    }
+
+    #[test]
+    fn a_message_you_send_from_the_tab_is_on_its_way_until_the_chat_passes_it_on_and_then_shows_once() {
+        let (mut session, mut heard) = (Session::default(), Heard::default());
+        let mut sent = Vec::new();
+        // The subagent handed its report back and finished; then you send from its tab.
+        heard.load(&woken()[..3], &mut session, &mut sent);
+        let before = session.items.len();
+        sent.push("Also check the tests.".to_owned());
+        // The chat's Claude passes it on with SendMessage, which the chat tells the tab.
+        let (_, told) = sent_with(&lead_sends("ac2b16a32fc5e240c", "Also check the tests.")).remove(0);
+        heard.line(told["line"].clone(), &mut session, &mut sent);
+        assert!(sent.is_empty(), "it is no longer on its way");
+        assert_eq!(session.items[before..], [Item::User("Also check the tests.".into())]);
+        // Read again, the transcript has the note that woke it with it: shown once.
+        let mut entries = woken()[..3].to_vec();
+        entries.push(json!({ "type": "user", "uuid": "w9", "isMeta": true, "origin": { "kind": "coordinator" }, "message": { "role": "user", "content": "The coordinator sent a message while you were working:\nAlso check the tests.\n\nAddress this before completing your current task." } }));
+        let (mut reread, mut again) = (Session::default(), Heard::default());
+        again.load(&entries, &mut reread, &mut sent);
+        assert_eq!(reread.items.iter().filter(|item| **item == Item::User("Also check the tests.".into())).count(), 1);
+        assert!(sent.is_empty());
+    }
+
+    /// The report a subagent handed back: Markdown, and longer than the one line a call's summary keeps.
+    pub(crate) const REPORT: &str = "## Done\n\nThe four sections of the side panel now scroll inside themselves, each up to 240 points tall, and show all their rows.\n\n- `ui::scroll_within` takes a height and its rows.\n- The README says when to use it.\n\n## Left\n\nThe render at 640 points still needs a look. Nothing else is left.";
+
+    /// A subagent's transcript as Claude Code 2.1.329 wrote it, cut down, its text made neutral and its ids made up: it
+    /// handed its report back and finished, then the coordinator's SendMessage woke it again.
+    pub(crate) fn woken() -> Vec<Value> {
+        [
+            json!({ "parentUuid": null, "isSidechain": true, "agentId": "ac2b16a32fc5e240c", "type": "user", "uuid": "w1", "message": { "role": "user", "content": "Make the side panel's sections scroll inside themselves." } }),
+            json!({ "parentUuid": "w1", "isSidechain": true, "agentId": "ac2b16a32fc5e240c", "type": "assistant", "uuid": "w2", "message": { "model": "claude-sonnet-5-5", "role": "assistant", "content": [{ "type": "tool_use", "id": "toolu_h", "name": "SubagentHandback", "input": { "message": REPORT }, "caller": { "type": "direct" } }] } }),
+            json!({ "parentUuid": "w2", "isSidechain": true, "agentId": "ac2b16a32fc5e240c", "type": "user", "uuid": "w3", "toolEndsTurn": true, "message": { "role": "user", "content": [{ "tool_use_id": "toolu_h", "type": "tool_result", "content": [{ "type": "text", "text": "{\"success\":true,\"message\":\"Report delivered to your caller.\"}" }] }] } }),
+            json!({ "parentUuid": "w3", "isSidechain": true, "agentId": "ac2b16a32fc5e240c", "type": "user", "uuid": "w4", "isMeta": true, "origin": { "kind": "coordinator" }, "message": { "role": "user", "content": "The coordinator sent a message while you were working:\nContinue: finish the parts you laid out.\n\nAddress this before completing your current task." } }),
+            json!({ "parentUuid": "w4", "isSidechain": true, "agentId": "ac2b16a32fc5e240c", "type": "assistant", "uuid": "w5", "message": { "model": "claude-sonnet-5-5", "role": "assistant", "content": [{ "type": "text", "text": "Starting with the helper." }] } }),
+        ]
+        .into()
+    }
+
+    #[test]
+    fn a_woken_subagent_shows_its_whole_report_then_the_message_that_woke_it() {
+        let (mut session, mut heard) = (Session::default(), Heard::default());
+        heard.load(&woken(), &mut session, &mut Vec::new());
+        assert_eq!(
+            session.items,
+            [
+                Item::User("Make the side panel's sections scroll inside themselves.".into()),
+                Item::Text(REPORT.into()),
+                Item::User("Continue: finish the parts you laid out.".into()),
+                Item::Text("Starting with the helper.".into()),
+            ]
+        );
     }
 
     #[test]

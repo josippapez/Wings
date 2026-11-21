@@ -6,7 +6,7 @@
 use serde_json::{Value, json};
 use wings_plugin::{
     host, task,
-    ui::{self, Node, badge, list_button, muted, row, stack, text},
+    ui::{Node, badge, list_button, muted, row, stack, text},
 };
 
 use crate::{
@@ -14,8 +14,6 @@ use crate::{
     refs::{self, Detail, Issue, Pr, Ref},
 };
 
-/// The most the panel lists.
-const LISTED: usize = 10;
 /// How many are looked up at once.
 const AT_ONCE: usize = 4;
 
@@ -88,11 +86,9 @@ pub fn section(c: &Chat) -> Option<Node> {
     if shown.is_empty() {
         return None;
     }
-    let hidden = shown.len().saturating_sub(LISTED);
     let title = format!("Mentioned · {}", shown.len());
-    let rows = shown.iter().take(LISTED).map(|(found, detail)| row_of(found, *detail));
-    let earlier = (hidden > 0).then(|| ui::entry(ui::Entry { lead: None, title: muted(format!("{hidden} earlier")).prop("size", "small"), detail: None, trailing: None }));
-    Some(crate::view::fold(c, "refs", title, rows.chain(earlier)))
+    let rows = shown.iter().map(|(found, detail)| row_of(found, *detail));
+    Some(crate::view::fold_list(c, "refs", title, rows))
 }
 
 fn small(said: impl Into<String>) -> Node {
@@ -213,6 +209,22 @@ mod tests {
     use std::{cell::RefCell, rc::Rc};
 
     use super::*;
+
+    /// Before, the section listed the newest ten and ended in an "N earlier" line.
+    #[test]
+    fn the_section_lists_every_pull_request_named_in_a_column_that_scrolls() {
+        chat::with(|c| {
+            c.refs.list = (1..=25)
+                .map(|number| Ref::GitHub { url: format!("https://github.com/acme/shop/pull/{number}"), repo: "acme/shop".into(), number })
+                .collect();
+            c.refs.details.clear();
+        });
+        let tree = chat::with(|c| wings_plugin::ui::tree_json(section(c).expect("the section")));
+        let text = tree.to_string();
+        assert_eq!(text.matches("HoverCard").count(), 25);
+        assert!(!text.contains("earlier"));
+        assert!(text.contains(&format!("\"maxHeight\":{}", crate::view::LIST_HEIGHT)), "{text}");
+    }
 
     #[test]
     fn a_listed_issue_shows_its_new_status_once_it_is_read_again_and_a_failed_read_keeps_the_old_one() {

@@ -46,7 +46,8 @@ const SIDE_BELOW: u32 = COLUMN + 16 + 2 * (SIDE + 12);
 /// The widest the collapsed pill gets: the panel's own width. Past it the project and branch are cut.
 const RAIL_MOST: u32 = SIDE;
 /// The most subagents the session panel lists.
-const SUBAGENTS_LISTED: usize = 12;
+/// How tall a panel section's list is at most, in points: about eight of a pull request's 34-point rows. Past it the list scrolls inside.
+pub(crate) const LIST_HEIGHT: u32 = 280;
 pub fn view() -> Vec<Node> {
     let page = chat::with(|c| {
         crate::refs_view::scan(c);
@@ -641,7 +642,16 @@ fn step(tool: &Tool, opened: bool, c: &Chat) -> Node {
         .child(mark)
         .child(text(tool.name.as_str()).prop("weight", "medium"))
         .maybe(failure)
-        .child(text(tool.summary.as_str()).prop("mono", !subagent).prop("size", "small").prop("tone", "muted").prop("truncate", true).prop("grow", true))
+        .child(
+            text(tool.summary.as_str())
+                .prop("mono", !subagent)
+                .prop("size", "small")
+                .prop("tone", "muted")
+                .prop("truncate", true)
+                .prop("grow", true)
+                // The line is cut at its first break and its width: the hover has all of it.
+                .prop("title", if tool.input.whole.is_empty() { tool.summary.as_str() } else { tool.input.whole.as_str() }),
+        )
         .children(facts(tool))
         .maybe(open_subagent(tool, c))
         .maybe(crate::plan_doc_view::step_link(c, tool))
@@ -659,28 +669,33 @@ fn step(tool: &Tool, opened: bool, c: &Chat) -> Node {
         (Detail::Read(_), Some(_)) => Some("Content"),
         (_, Some(_)) => Some("Output"),
         (Detail::Command(command), None) if command.contains('\n') => Some("Command"),
+        // Its whole input, which its line cuts, while it has given nothing back.
+        _ if tool.input.says_more() => Some("Input"),
         _ => None,
     };
     // A failed call shows the end of its error under its line, closed or not: that is what you open it for.
     let error = output.filter(|(_, failed)| *failed && !opened).map(|(said, _)| {
         let lines: Vec<&str> = said.trim_end().lines().collect();
         let tail = lines[lines.len().saturating_sub(4)..].join("\n");
-        // Under the name, not under the mark: past the 16 point box and the gap after it.
-        row().prop("gap", "s").child(stack().prop("width", 16)).child(text(truncate(&tail, 600)).prop("mono", true).prop("size", "small").prop("tone", "danger").prop("grow", true))
+        // Under the name, not under the mark: past the line's inset, the 16 point box and the gap after it.
+        inset(row().prop("gap", "s").prop("grow", true).child(stack().prop("width", 16)).child(text(truncate(&tail, 600)).prop("mono", true).prop("size", "small").prop("tone", "danger").prop("grow", true)))
     });
     // What it gave back as pictures (a Read of an image, a screenshot) shows under its line, closed or not.
     let pictures = thumbs(&tool.images, "Picture from the tool");
     match label {
         Some(label) => {
-            let id = tool.id.clone();
+            let (id, row_id) = (tool.id.clone(), tool.id.clone());
             let body = if opened { body(tool, output, crate::diff_view::look(c)) } else { stack() };
             let label = if error.is_some() { "Whole error" } else { label };
             let fold = disclosure(label, body).prop("open", opened).on("onOpenChange", move |_| chat::toggle_output(&id));
+            // The call's line opens and shuts its fold too, as a row of a list does.
+            let head = list_button([head.prop("grow", true)], move || chat::toggle_output(&row_id));
             stack().prop("gap", "xs").child(head).maybe(mod_result).maybe(error).maybe(pictures).child(fold)
         }
+        // In the same inset as the lines that open, so the names line up.
         None => match (pictures, mod_result) {
-            (None, None) => head,
-            (pictures, drawn) => stack().prop("gap", "xs").child(head).maybe(drawn).maybe(pictures),
+            (None, None) => inset(head.prop("grow", true)),
+            (pictures, drawn) => stack().prop("gap", "xs").child(inset(head.prop("grow", true))).maybe(drawn).maybe(pictures),
         },
     }
     .key(tool.id.as_str())
@@ -715,7 +730,7 @@ fn facts(tool: &Tool) -> Vec<Node> {
     }
 }
 
-/// What a call's fold holds: the diff, the start of the file, a command of several lines, and what it printed. A long block
+/// What a call's fold holds: the diff, the start of the file, its input whole where its line cuts it, and what it printed. A long block
 /// shows its first lines with a row that opens the rest (`code_view.rs`), in the file's language where the call names a file.
 fn body(tool: &Tool, output: Option<(&str, bool)>, look: crate::diff_view::Look) -> Node {
     let failed = output.is_some_and(|(_, failed)| failed);
@@ -730,8 +745,15 @@ fn body(tool: &Tool, output: Option<(&str, bool)>, look: crate::diff_view::Look)
                 body = body.child(muted(format!("{} more", plural(lines - head.len(), "line"))));
             }
         }
-        Detail::Command(command) if command.contains('\n') => body = body.child(code_view::block(&format!("cmd-{}", tool.id), command, "sh")),
+        Detail::Command(command) if command.contains('\n') || !tool.input.whole.is_empty() => body = body.child(code_view::block(&format!("cmd-{}", tool.id), command, "sh")),
+        // The field its line is cut from, whole.
+        _ if !tool.input.whole.is_empty() => body = body.child(code_view::block(&format!("in-{}", tool.id), &tool.input.whole, "")),
         _ => {}
+    }
+    // The rest of what it was given, one field a line.
+    for (name, value) in &tool.input.fields {
+        let field = row().prop("gap", "s").prop("align", "baseline").child(muted(name.as_str()).prop("size", "small")).child(text(value.as_str()).prop("size", "small").prop("mono", true).prop("grow", true));
+        body = body.child(field.key(format!("field-{name}")));
     }
     match output {
         Some((output, _)) if failed || !matches!(tool.detail, Detail::Diff(_) | Detail::Write { .. }) => {
@@ -1295,6 +1317,12 @@ pub(crate) fn fold(c: &Chat, key: &'static str, title: impl Into<String>, rows: 
     wings_plugin::ui::section_folding(title, None, open, move |open| chat::set_panel_open(key, open), rows).key(format!("fold-{key}"))
 }
 
+/// A `fold` whose rows are all listed, in a column that scrolls inside itself past `LIST_HEIGHT` (Wings before 0.2.75 draws
+/// it at full height).
+pub(crate) fn fold_list(c: &Chat, key: &'static str, title: impl Into<String>, rows: impl IntoIterator<Item = Node>) -> Node {
+    fold(c, key, title, [wings_plugin::ui::scroll_within(LIST_HEIGHT, rows)])
+}
+
 /// A section's heading, in the inset a list button has, so the heading and the rows under it share one left edge: a button
 /// is drawn 7 points in from its container, a bare heading is not.
 pub(crate) fn heading(title: impl Into<String>) -> Node {
@@ -1323,10 +1351,8 @@ fn subagents(c: &Chat) -> Option<Node> {
     }
     let running = tasks.iter().filter(|tool| subagent_runs(tool, c)).count();
     let title = if running > 0 { format!("Subagents · {running} running") } else { format!("Subagents · {} done", tasks.len()) };
-    let hidden = tasks.len().saturating_sub(SUBAGENTS_LISTED);
-    let earlier = (hidden > 0).then(|| entry(Entry { lead: None, title: muted(format!("{hidden} earlier")).prop("size", "small"), detail: None, trailing: None }));
-    let rows = tasks[hidden..].iter().map(|tool| subagent_row(tool, c));
-    Some(fold(c, "subagents", title, earlier.into_iter().chain(rows)))
+    let rows = tasks.iter().map(|tool| subagent_row(tool, c));
+    Some(fold_list(c, "subagents", title, rows))
 }
 
 /// The background task a subagent's call started, when it went to the background.
@@ -2137,7 +2163,7 @@ mod tests {
             c.session.items = vec![
                 Item::User("one".into()),
                 Item::Text("reply".into()),
-                Item::Tool(crate::session::Tool { id: "t".into(), name: "Read".into(), summary: String::new(), output: None, detail: crate::session::Detail::Plain, images: Vec::new() }),
+                Item::Tool(crate::session::Tool { id: "t".into(), name: "Read".into(), summary: String::new(), output: None, detail: crate::session::Detail::Plain, input: Default::default(), images: Vec::new() }),
                 Item::User("two".into()),
                 Item::Text("reply".into()),
             ];
@@ -2169,7 +2195,33 @@ mod tests {
     }
 
     fn call(id: &str, name: &str, detail: Detail, output: &str) -> Tool {
-        Tool { id: id.into(), name: name.into(), summary: "src/a.ts".into(), output: Some((output.into(), false)), detail, images: Vec::new() }
+        Tool { id: id.into(), name: name.into(), summary: "src/a.ts".into(), output: Some((output.into(), false)), detail, input: Default::default(), images: Vec::new() }
+    }
+
+    /// A call's line, as the chat and a subagent's tab both draw it: a click on it opens its fold as the fold's own line
+    /// does, its cut text's hover has all of it, and the fold opened shows the whole input before what it printed.
+    #[test]
+    fn a_calls_line_opens_its_fold_which_shows_the_whole_input() {
+        let command = format!("cargo test --manifest-path apps/native/Cargo.toml {}--lib", "--features test-support ".repeat(12));
+        let mut session = Session::default();
+        session.hear(&serde_json::json!({ "type": "assistant", "message": { "content": [{ "type": "tool_use", "id": "b1", "name": "Bash", "input": { "command": command, "description": "Run the native tests" } }] } }));
+        session.hear(&serde_json::json!({ "type": "user", "message": { "content": [{ "type": "tool_result", "tool_use_id": "b1", "content": "test result: ok" }] } }));
+        let Some(Item::Tool(tool)) = session.items.first() else { panic!("{:?}", session.items) };
+        let whole = serde_json::to_string(&command).unwrap();
+        chat::with(|c| c.open_outputs.clear());
+        let (tree, handlers) = chat::with(|c| wings_plugin::ui::export(vec![step(tool, false, c)]));
+        let closed = tree.to_string();
+        assert!(closed.contains(&format!("\"title\":{whole}")), "the hover has the whole command: {closed}");
+        assert!(!closed.contains(&format!("\"code\":{whole}")), "{closed}");
+        let line = tree[0]["children"][0].clone();
+        assert_eq!(line["type"], "ListButton", "{closed}");
+        assert!(handlers.call(line["props"]["onClick"].as_str().unwrap_or_default(), &serde_json::json!({})));
+        assert!(chat::with(|c| c.open_outputs.contains("b1")), "a click on the line opens the call");
+        let opened = chat::with(|c| wings_plugin::ui::tree_json(step(tool, true, c))).to_string();
+        for said in [format!("\"code\":{whole}"), "Run the native tests".to_owned(), "test result: ok".to_owned()] {
+            assert!(opened.contains(&said), "{said} in {opened}");
+        }
+        chat::with(|c| c.open_outputs.clear());
     }
 
     #[test]
@@ -2282,6 +2334,7 @@ mod tests {
                 summary: format!("npm run check -- case_{n}"),
                 output: Some(("ok\n".repeat(20), false)),
                 detail: crate::session::Detail::Plain,
+                input: Default::default(),
                 images: Vec::new(),
             })
         };

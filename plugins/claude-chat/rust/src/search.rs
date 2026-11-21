@@ -214,7 +214,7 @@ mod tests {
     use crate::session::{Diff, Tool};
 
     fn tool(name: &str, summary: &str, detail: Detail) -> Item {
-        Item::Tool(Tool { id: format!("{name}-{summary}"), name: name.into(), summary: summary.into(), output: Some(("printed NEEDLE".into(), false)), detail, images: Vec::new() })
+        Item::Tool(Tool { id: format!("{name}-{summary}"), name: name.into(), summary: summary.into(), output: Some(("printed NEEDLE".into(), false)), detail, input: Default::default(), images: Vec::new() })
     }
 
     fn talk() -> Vec<Item> {

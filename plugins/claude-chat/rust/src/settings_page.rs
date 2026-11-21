@@ -3,7 +3,8 @@
 //! rows with the name and what it does on the left and the control at the end, and a small preview under a row where a
 //! choice shows.
 
-use wings_plugin::ui::{Entry, Node, card, checkbox, chips as choose, entry, muted, row, rows_card, section, select, stack, text};
+use std::cell::RefCell;
+use wings_plugin::{host::AccountChoice, task::spawn, ui::{Entry, Node, card, checkbox, chips as choose, entry, muted, row, rows_card, section, select, stack, text}};
 
 /// How wide the background's menu is at the end of its row.
 const MENU_WIDTH: u32 = 200;
@@ -16,6 +17,53 @@ use crate::{
     settings_preview::{diff, limit, places, sample, turn},
     view_mode::{self, Mode},
 };
+
+thread_local! {
+    /// The Claude Code accounts, as Wings lists them, once read. The page shows a row of limits for each when there are two
+    /// or more.
+    static ACCOUNTS: RefCell<Vec<AccountChoice>> = const { RefCell::new(Vec::new()) };
+}
+
+/// What an account is called in a row: its name, or "Default account" for the default one, with the email when it has one.
+fn account_label(account: &AccountChoice) -> String {
+    let name = account.name.clone().unwrap_or_else(|| "Default account".to_owned());
+    match &account.email {
+        Some(email) => format!("{name} · {email}"),
+        None => name,
+    }
+}
+
+/// Picks `limit` for one account: "Same as above" for the shared share, or one of the shares.
+fn account_share(account: &AccountChoice, limit: prefs::Limit, name: &str, shared: &str) -> Node {
+    let mut options = vec![(String::new(), format!("Same as above ({shared}%)"))];
+    options.extend(prefs::LIMIT_SHARES.iter().map(|(value, label)| ((*value).to_owned(), (*label).to_owned())));
+    let own = prefs::own_share(&prefs::account_at().get(), account.name.as_deref(), limit).unwrap_or_default();
+    let who = account.name.clone();
+    let menu = select(&format!("{name} {}", if limit == prefs::Limit::Pause { "pause at" } else { "stop at" }), &options, &own, move |share| {
+        prefs::set_own_share(who.as_deref(), limit, (!share.is_empty()).then(|| share.to_owned()));
+    });
+    stack().prop("width", MENU_WIDTH).child(menu)
+}
+
+/// With two or more accounts, a row for each to pick its own pause and stop share, else the shared one above.
+fn per_account(accounts: &[AccountChoice]) -> Option<Node> {
+    if accounts.len() < 2 {
+        return None;
+    }
+    let (pause, stop) = (prefs::pause_at().get(), prefs::stop_at().get());
+    let rows = accounts.iter().map(|account| {
+        let name = account_label(account);
+        let controls = row()
+            .prop("gap", "s")
+            .prop("wrap", true)
+            .child(muted("Pause").prop("size", "small"))
+            .child(account_share(account, prefs::Limit::Pause, &name, &pause))
+            .child(muted("Stop").prop("size", "small"))
+            .child(account_share(account, prefs::Limit::Stop, &name, &stop));
+        entry(Entry { lead: None, title: text(&name).prop("weight", "medium"), detail: Some(controls), trailing: None }).key(format!("account-{}", account.name.as_deref().unwrap_or("default")))
+    });
+    Some(together([about("Per account", "Each account's own share, where it differs from the ones above. Same as above follows them."), stack().children(rows)]))
+}
 
 /// A choice between a few, on the segmented track other Wings settings use.
 fn chips(label: &str, options: &[(&str, &str)], value: &str, on_change: impl Fn(&str) + 'static) -> Node {
@@ -126,7 +174,10 @@ fn view() -> Vec<Node> {
                     setting("Stop at", "The share of the limit.", chips("Stop at", &prefs::LIMIT_SHARES, &stop_at, |share| drop(prefs::stop_at().set(share.to_owned())))),
                     preview(limit("The chat stops Claude's turn", prefs::percent(&stop_at), true)),
                 ]),
-            ],
+            ]
+            .into_iter()
+            .chain(ACCOUNTS.with(|accounts| per_account(&accounts.borrow())))
+            .collect::<Vec<_>>(),
         ))
         .child(group(
             "Remote Control",
@@ -192,6 +243,11 @@ fn preview_plain(content: Node) -> Node {
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     claude_version::check();
+    spawn(async {
+        if let Ok(accounts) = wings_plugin::host::accounts().await {
+            ACCOUNTS.with(|kept| *kept.borrow_mut() = accounts);
+        }
+    });
     wings_plugin::run(view);
 }
 
@@ -210,6 +266,15 @@ mod tests {
     }
 
     #[test]
+    fn each_account_gets_a_row_of_limits_only_with_two_or_more() {
+        let account = |name: Option<&str>| AccountChoice { name: name.map(str::to_owned), email: None, signed_in: true, current: false };
+        assert!(per_account(&[account(None)]).is_none());
+        let rows = wings_plugin::ui::tree_json(per_account(&[account(None), account(Some("work"))]).unwrap()).to_string();
+        assert!(rows.contains("Default account pause at") && rows.contains("work stop at"), "{rows}");
+        assert!(rows.contains("Same as above"));
+    }
+
+    #[test]
     fn the_background_is_a_choice_of_the_plain_ground_pixel_drift_or_a_gradient_and_starts_plain() {
         fn select_named<'a>(node: &'a serde_json::Value, label: &str) -> Option<&'a serde_json::Value> {
             if node["type"] == "Select" && node["props"]["label"] == label {
@@ -224,9 +289,9 @@ mod tests {
         let labels: Vec<&str> = options.iter().map(|option| option["label"].as_str().unwrap()).collect();
         assert_eq!(
             labels,
-            ["Plain", "Pixel drift", "Pixel rain", "Checker shimmer", "Embers", "Halo", "Pensive", "Mint", "Interstella", "Nighty night", "Topography", "Flow lines", "Grid", "Dot matrix", "Silk", "Cells", "Moire"]
+            ["Plain", "Pixel drift", "Pixel rain", "Checker shimmer", "Embers", "Black and white", "Ocean pixels", "Meadow pixels", "Dusk pixels", "Pixel blocks", "Ordered dither", "Grainy gradient", "Grainy lagoon", "Halo", "Pensive", "Mint", "Interstella", "Nighty night", "Topography", "Flow lines", "Grid", "Dot matrix", "Silk", "Cells"]
         );
         assert_eq!(options[2]["value"], "pixels:rain");
-        assert_eq!(options[5]["value"], "gradient:halo");
+        assert_eq!(options[13]["value"], "gradient:halo");
     }
 }

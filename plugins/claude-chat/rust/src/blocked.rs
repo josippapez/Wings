@@ -136,7 +136,7 @@ mod tests {
     use super::*;
 
     fn tool(name: &str, summary: &str, detail: Detail) -> Tool {
-        Tool { id: "t1".into(), name: name.into(), summary: summary.into(), output: None, detail, images: Vec::new() }
+        Tool { id: "t1".into(), name: name.into(), summary: summary.into(), output: None, detail, input: Default::default(), images: Vec::new() }
     }
 
     #[test]

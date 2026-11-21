@@ -106,9 +106,19 @@ fn pop(message: &Value) {
     }
 }
 
-/// A line Claude Code printed, which goes on to the pages that show its subagent while they are open. Nothing for any other
-/// line, and nothing is copied unless a page takes it.
+/// A line Claude Code printed, which goes on to the pages that show its subagent while they are open, as does what a
+/// SendMessage call in it tells a subagent. Nothing for any other line, and nothing is copied unless a page takes it.
 pub fn heard(line: &Value) {
+    let sent = subagents::sent_with(line);
+    if !sent.is_empty()
+        && let Some(session) = chat::with(|c| c.session.id.clone())
+    {
+        for (agent, message) in sent {
+            for name in RELAY.with(|relay| subagents::pages_of(&relay.borrow().names, &session, &agent)) {
+                drop(pages::tell(&name, &message, false));
+            }
+        }
+    }
     let Some(agent) = line["agent_id"].as_str() else {
         return;
     };
@@ -235,6 +245,25 @@ mod tests {
         let lines = told_pages(&calls);
         assert_eq!(lines.len(), 1);
         assert_eq!((lines[0].0.as_str(), lines[0].1["kind"].as_str()), ("subagent-side:s1:b2c3d4e5f60718a9b", Some("line")));
+    }
+
+    /// Claude Code 2.1.330 prints no line of a subagent's for the message SendMessage wakes it with: what a tab open on it
+    /// hears is the call, then the subagent's answer.
+    #[test]
+    fn a_tab_open_on_a_subagent_shows_the_message_its_chat_sent_to_wake_it() {
+        let calls = record();
+        two_subagents();
+        names_changed(&[subagents::tab_page("s1", "a1b2c3d4e5f60718a")]);
+        calls.borrow_mut().clear();
+        heard(&json!({ "type": "assistant", "parent_tool_use_id": null, "uuid": "u4", "message": { "role": "assistant", "content": [{ "type": "tool_use", "id": "toolu_s", "name": "SendMessage", "input": { "to": "a1b2c3d4e5f60718a", "message": "Now reply with only the word hello.", "summary": "Ask it to say hello" } }] } }));
+        heard(&json!({ "type": "assistant", "parent_tool_use_id": "toolu_1", "agent_id": "a1b2c3d4e5f60718a", "uuid": "u5", "message": { "role": "assistant", "content": [{ "type": "text", "text": "hello" }] } }));
+        let (mut session, mut heard) = (crate::session::Session::default(), subagents::Heard::default());
+        heard.load(&[], &mut session, &mut Vec::new());
+        for (name, message) in told_pages(&calls) {
+            assert_eq!(name, "subagent:s1:a1b2c3d4e5f60718a");
+            heard.line(message["line"].clone(), &mut session, &mut Vec::new());
+        }
+        assert_eq!(session.items, [crate::session::Item::User("Now reply with only the word hello.".into()), crate::session::Item::Text("hello".into())]);
     }
 
     #[test]

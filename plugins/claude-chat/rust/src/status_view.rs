@@ -198,8 +198,25 @@ fn copy(key: String, text: &str) {
     if text.len() > COPY_MAX {
         return chat::with(|c| c.session.items.push(Item::Error("That is too long to copy: Wings copies up to 1 MB.".into())));
     }
-    chat::with(|c| c.session.cmds.copied = Some(key));
+    chat::with(|c| c.session.cmds.copied = Some(key.clone()));
     drop(host::call("copyText", json!({ "text": text })));
+    // One redraw after the pause puts the copy icon back; a newer copy keeps its own check.
+    wings_plugin::task::spawn(async move {
+        host::sleep(COPIED_FOR).await;
+        forget_copied(&key);
+    });
+}
+
+/// How long a Copy button stays a check.
+const COPIED_FOR: u32 = 2000;
+
+/// Ends the check of the button `key`, unless a later copy moved it to another.
+fn forget_copied(key: &str) {
+    chat::with(|c| {
+        if c.session.cmds.copied.as_deref() == Some(key) {
+            c.session.cmds.copied = None;
+        }
+    });
 }
 
 fn said_at(at: usize) -> Option<String> {
@@ -233,5 +250,23 @@ mod tests {
     fn the_working_folder_is_named_in_plain_words() {
         assert_eq!(label_of("cwd"), "Folder");
         assert_eq!(label_of("Version"), "Version");
+    }
+
+    fn label(key: &str) -> String {
+        let node = chat::with(|c| copy_button(key, "Copy this reply", c, || {}));
+        wings_plugin::ui::tree_json(node).to_string()
+    }
+
+    #[test]
+    fn a_copied_button_goes_back_to_copy_and_a_newer_copy_is_kept() {
+        chat::with(|c| c.session.cmds.copied = Some("reply-1".into()));
+        assert!(label("reply-1").contains("Copied"));
+        // A second copy moved the check; the first copy's timer must not clear it.
+        chat::with(|c| c.session.cmds.copied = Some("reply-2".into()));
+        forget_copied("reply-1");
+        assert!(label("reply-2").contains("Copied"));
+        forget_copied("reply-2");
+        assert!(label("reply-2").contains("Copy this reply"));
+        assert!(!label("reply-2").contains("Copied"));
     }
 }

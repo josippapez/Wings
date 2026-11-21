@@ -129,7 +129,7 @@ fn conversation(c: &Chat, tab: &Tab) -> Node {
     // A right-click on a message, a link or a code block opens the chat's menu: Copy, Copy link, Copy code.
     let column = stack().prop("gap", "l").prop("maxWidth", view::COLUMN).on("onContextMenu", |payload| crate::mods_view::open_menu(payload));
     let items = &c.session.items;
-    if items.is_empty() {
+    if items.is_empty() && tab.sent.is_empty() {
         let body = match (&tab.error, tab.heard.loaded) {
             (_, false) => loading(),
             (Some(why), true) => notice("danger", format!("Couldn't read this subagent's conversation: {why}")),
@@ -149,6 +149,8 @@ fn conversation(c: &Chat, tab: &Tab) -> Node {
                 let tools: Vec<&Tool> = items[start..end].iter().filter_map(|item| if let Item::Tool(tool) = item { Some(tool) } else { None }).collect();
                 (!tools.is_empty()).then(|| view::steps(start, &tools, c))
             }
+            // Its replies, the report it hands back the last of them, are this page's own items, which a Copy button names.
+            Item::Text(said) => Some(crate::status_view::reply(start, said, c).key(start.to_string())),
             // Its messages aren't the chat's, so they have no rewind.
             item => view::item_node(start, item, c, false),
         };
@@ -168,7 +170,13 @@ fn conversation(c: &Chat, tab: &Tab) -> Node {
         (true, None) => Some(text("Working").prop("tone", "muted").prop("shimmer", true).key("working")),
         (false, _) => None,
     };
-    let nodes: Vec<Node> = earlier.into_iter().chain(blocks).chain(working).collect();
+    // What you sent that the chat hasn't passed on yet, at the end, as yours with a line that says so.
+    let on_the_way = tab.sent.iter().enumerate().map(|(n, said)| {
+        let message = view::item_node(n, &Item::User(said.clone()), c, false).unwrap_or_else(stack);
+        let note = row().prop("justify", "end").child(muted("On its way").prop("size", "small"));
+        stack().prop("gap", "xs").child(message).child(note).key(format!("sent-{n}"))
+    });
+    let nodes: Vec<Node> = earlier.into_iter().chain(blocks).chain(on_the_way).chain(working).collect();
     Node::new("Scroll").prop("follow", "end").prop("textScale", c.text_scale as f64).child(column.prop("enter", "rise").children(nodes))
 }
 
@@ -214,6 +222,32 @@ fn composer(c: &Chat, tab: &Tab) -> Node {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_you_sent_shows_at_the_end_as_on_its_way() {
+        crate::chat::with(|c| {
+            crate::subagents::Heard::default().load(&crate::subagents::tests::woken(), &mut c.session, &mut Vec::new());
+            let tab = Tab { session: "s".into(), sent: vec!["Also check the tests.".into()], ..Tab::default() };
+            let shown = wings_plugin::ui::tree_json(page(c, &tab)).to_string();
+            c.session = crate::session::Session::default();
+            let (said, note, reply) = (shown.find("Also check the tests."), shown.find("On its way"), shown.find("Starting with the helper."));
+            assert!(matches!((reply, said, note), (Some(reply), Some(said), Some(note)) if reply < said && said < note), "after the conversation, with its note: {shown}");
+        });
+    }
+
+    #[test]
+    fn the_whole_report_a_subagent_hands_back_reaches_its_page_with_a_copy_button() {
+        crate::chat::with(|c| {
+            crate::subagents::Heard::default().load(&crate::subagents::tests::woken(), &mut c.session, &mut Vec::new());
+            let shown = wings_plugin::ui::tree_json(page(c, &Tab { session: "s".into(), ..Tab::default() })).to_string();
+            c.session = crate::session::Session::default();
+            // Each block of its Markdown, to its last words, which a call's one-line summary cut off.
+            for said in ["\"Done\"", "The four sections of the side panel now scroll inside themselves, each up to 240 points tall, and show all their rows.", "\"Left\"", "The render at 640 points still needs a look. Nothing else is left."] {
+                assert!(shown.contains(said), "{said} in {shown}");
+            }
+            assert!(shown.contains("Copy this reply"), "{shown}");
+        });
+    }
 
     #[test]
     fn a_tab_whose_chat_is_closed_names_the_model_its_transcript_says() {

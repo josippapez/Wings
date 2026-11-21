@@ -20,8 +20,6 @@ use crate::{
 
 /// How many characters of a message identify it, and show in the panel.
 const START: usize = 80;
-/// The most bookmarks the panel lists.
-const LISTED: usize = 20;
 
 const BOOKMARK: [&str; 1] = ["m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"];
 const REMOVE: [&str; 2] = ["M18 6 6 18", "m6 6 12 12"];
@@ -170,10 +168,8 @@ pub fn section(c: &Chat) -> Option<Node> {
     if marks.is_empty() {
         return None;
     }
-    let more = marks.len().saturating_sub(LISTED);
-    let rows = marks.iter().take(LISTED).map(|mark| row_of(mark, &c.session.items));
-    let more = (more > 0).then(|| entry(Entry { lead: None, title: muted(format!("{more} more")).prop("size", "small"), detail: None, trailing: None }));
-    Some(crate::view::fold(c, "bookmarks", format!("Bookmarks · {}", marks.len()), rows.chain(more)))
+    let rows = marks.iter().map(|mark| row_of(mark, &c.session.items));
+    Some(crate::view::fold_list(c, "bookmarks", format!("Bookmarks · {}", marks.len()), rows))
 }
 
 fn row_of(mark: &Mark, items: &[Item]) -> Node {

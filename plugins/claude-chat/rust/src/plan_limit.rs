@@ -108,7 +108,7 @@ mod hooks {
             format!("{:02}:{:02}", local.hour, local.minute)
         };
         let account = account_of(&heard, &session, &context["session"]);
-        let at = prefs::percent(&prefs::pause_at().get());
+        let at = prefs::pause_percent(account.as_str());
         let Some((window, level, text)) = note(&heard, &account, at, host::now() / 1000.0, clock) else {
             TOLD.with(|told| told.borrow_mut().remove(&agent));
             return None;
@@ -194,6 +194,30 @@ mod tests {
         assert_eq!(note(&heard(72.0, 50.0), &work(), 70.0, 1000.0, clock).map(|(_, level, _)| level), Some(Level::Near));
         // A window that reset is a new one.
         assert_eq!(stop_for(&[("week", 91, Some(20.0))], &[("week", Level::Near, Some(9.0))], 90.0).map(|(stop, _)| stop), Some(("week", Level::Near, Some(20.0))));
+    }
+
+    /// The hook holds a session to the share of the account it runs under (`account.as_str()`: None for the default
+    /// one), else the shared one, and a chat's stop does the same by its tab's account.
+    #[test]
+    fn a_session_is_held_to_the_share_its_own_account_picked() {
+        use crate::prefs::{AccountShares, Limit, percent_for};
+        let mut shares = AccountShares::new();
+        shares.entry("work".to_owned()).or_default().insert("pause".to_owned(), "70".to_owned());
+        shares.entry("work".to_owned()).or_default().insert("stop".to_owned(), "99".to_owned());
+        let heard = heard(75.0, 50.0);
+        let near = |session: &str, caller: Value| {
+            let account = account_of(&heard, session, &caller);
+            let at = percent_for(&shares, account.as_str(), Limit::Pause, "90");
+            note(&heard, &account, at, 1000.0, clock).map(|(_, level, _)| level)
+        };
+        // Work's own 70% is passed at 75%; the shared 90% is not, for the sessions that follow it.
+        assert_eq!(near("c1", json!({ "account": "work" })), Some(Level::Near));
+        assert_eq!(percent_for(&shares, Some("work"), Limit::Pause, "90"), 70.0);
+        assert_eq!(percent_for(&shares, Some("other"), Limit::Pause, "90"), 90.0);
+        assert_eq!(percent_for(&shares, None, Limit::Pause, "90"), 90.0);
+        // A chat's stop reads the stop share of its account, not the pause one.
+        let stop = |account: Option<&str>| stop_for(&[("5h", 80, Some(5.0))], &[], percent_for(&shares, account, Limit::Stop, "75")).is_some();
+        assert!(!stop(Some("work")) && stop(None));
     }
 
     /// A chat's Claude Code never runs the status line, so its session isn't among the status line's: before, it read the

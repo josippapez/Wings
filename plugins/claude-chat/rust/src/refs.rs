@@ -319,6 +319,7 @@ mod tests {
                 summary: String::new(),
                 output: output.map(|output| (output.to_owned(), false)),
                 detail: crate::session::Detail::Plain,
+                input: Default::default(),
                 images: Vec::new(),
             })
         };
@@ -344,6 +345,7 @@ mod tests {
                 summary: String::new(),
                 output: answer.map(|(said, failed)| (said.to_owned(), failed)),
                 detail: crate::session::Detail::Plain,
+                input: Default::default(),
                 images: Vec::new(),
             })
         };
