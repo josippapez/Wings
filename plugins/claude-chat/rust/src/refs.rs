@@ -96,18 +96,29 @@ impl Refs {
         }
         self.len = items.len();
         let mut new = Vec::new();
-        for item in &items[self.read.min(items.len())..] {
-            let (Item::User(said) | Item::UserImages(said, _) | Item::Text(said)) = item else {
-                continue;
+        // An Issues call that hasn't answered yet is read again next time, for the key its answer names.
+        let mut waiting = None;
+        for (at, item) in items.iter().enumerate().skip(self.read.min(items.len())) {
+            let named = match item {
+                Item::User(said) | Item::UserImages(said, _) | Item::Text(said) => found_in(said),
+                Item::Tool(tool) if works_on_an_issue(&tool.name) => match &tool.output {
+                    Some((answer, false)) => found_in(answer).into_iter().filter(|found| matches!(found, Ref::Issue(_))).take(1).collect(),
+                    Some(_) => Vec::new(),
+                    None => {
+                        waiting.get_or_insert(at);
+                        Vec::new()
+                    }
+                },
+                _ => continue,
             };
-            for found in found_in(said) {
+            for found in named {
                 if self.seen.insert(found.key().to_owned()) {
                     self.list.push(found.clone());
                     new.push(found);
                 }
             }
         }
-        self.read = items.len();
+        self.read = waiting.unwrap_or(items.len());
         new
     }
 
@@ -120,6 +131,12 @@ impl Refs {
             .filter(|(found, detail)| !matches!(found, Ref::Issue(_)) || matches!(detail, Some(Detail::Issue(_))))
             .collect()
     }
+}
+
+/// Whether the tool `name` creates, changes or reads one issue in Issues, whose answer names it first: the issues the
+/// chat works on are listed with the ones it names, though their keys may never be said.
+fn works_on_an_issue(name: &str) -> bool {
+    ["tasks__create", "tasks__update", "tasks__log", "tasks__get"].iter().any(|tool| name.ends_with(tool))
 }
 
 /// The pull requests and issue keys `text` names, in order.
@@ -316,6 +333,28 @@ mod tests {
         assert_eq!(refs.shown().iter().map(|(found, _)| found.label()).collect::<Vec<_>>(), ["o/r#3", "ABC-1"]);
         // A conversation that got shorter is read again.
         assert_eq!(refs.scan(&items[..1]).iter().map(Ref::label).collect::<Vec<_>>(), ["ABC-1", "UTF-8"]);
+    }
+
+    #[test]
+    fn an_issue_the_chat_creates_or_changes_through_issues_is_listed_once_it_answers() {
+        let call = |name: &str, answer: Option<(&str, bool)>| {
+            Item::Tool(crate::session::Tool {
+                id: name.into(),
+                name: name.into(),
+                summary: String::new(),
+                output: answer.map(|(said, failed)| (said.to_owned(), failed)),
+                detail: crate::session::Detail::Plain,
+                images: Vec::new(),
+            })
+        };
+        let mut items = vec![call("mcp__wings__tasks__create", None), call("mcp__wings__tasks__list", Some(("ABC-1 [todo] (task) One\nABC-2 [done] (task) Two", false)))];
+        let mut refs = Refs::default();
+        // A list names every issue, and a create that hasn't answered names none yet.
+        assert!(refs.scan(&items).is_empty());
+        items[0] = call("mcp__wings__tasks__create", Some(("Created ABC-9 in shop. Log progress with log.", false)));
+        items.push(call("mcp__wings__tasks__update", Some(("Updated ABC-4: Fix it, see ABC-5 [done].", false))));
+        items.push(call("mcp__wings__tasks__log", Some(("No issue ABC-6 in shop.", true))));
+        assert_eq!(refs.scan(&items).iter().map(Ref::label).collect::<Vec<_>>(), ["ABC-9", "ABC-4"]);
     }
 
     #[test]
