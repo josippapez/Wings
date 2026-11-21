@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.73 · 2026-11-21
+
+- **A working chat stays light**: a chat's status changing, on every tool call while Claude works, redraws the sidebar and tab strip and no longer rebuilds the chat page. Sidebar lists that change redraw only the sidebar.
+
 ## 0.2.72 · 2026-11-21
 
 - **Lighter typing in Claude chat**: a key that changes nothing else on the page no longer rebuilds the chat. The plugin's CPU while you type drops from about a fifth of a core to almost nothing.
