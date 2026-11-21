@@ -61,6 +61,14 @@ impl Render for Part {
     }
 }
 
+/// A piece of the window, for telling only the ones that draw what changed (`Parts::notify`).
+#[derive(Clone, Copy)]
+pub(super) enum Piece {
+    Sidebar,
+    TitleBar,
+    Main,
+}
+
 /// The window's cached pieces. They are made once the workspace exists and before a draw: GPUI only learns that a view
 /// it draws can change when the view is older than the frame it is first drawn in, so pieces made while drawing would
 /// never draw again.
@@ -87,6 +95,18 @@ impl Parts {
     /// is told instead, a view the workspace draws itself, which GPUI draws again with the workspace around it.
     pub(super) fn redraw_window(&self, cx: &mut App) {
         self.fields.update(cx, |_, cx| cx.notify());
+    }
+
+    /// Draws the given pieces again and not the others, for a change only they show: telling the workspace draws all three.
+    pub(super) fn notify(&self, pieces: &[Piece], cx: &mut App) {
+        for piece in pieces {
+            let part = match piece {
+                Piece::Sidebar => &self.sidebar,
+                Piece::TitleBar => &self.title_bar,
+                Piece::Main => &self.main,
+            };
+            part.update(cx, |_, cx| cx.notify());
+        }
     }
 
     pub(super) fn new(workspace: &Entity<Workspace>, cx: &mut App) -> Parts {

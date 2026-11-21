@@ -257,6 +257,88 @@ fn a_tab_whose_page_runs_an_agent_shows_with_the_agents_in_the_sidebar() {
     assert!(window.read(|w, _| w.tab_agents().is_empty()));
 }
 
+/// How many times the main column, the title bar and the sidebar drew.
+fn drawn(window: &TestAppWindow<Workspace>) -> (usize, usize, usize) {
+    window.read(|w, cx| {
+        let parts = w.parts.as_ref().expect("the pieces");
+        (parts.main.read(cx).drawn, parts.title_bar.read(cx).drawn, parts.sidebar.read(cx).drawn)
+    })
+}
+
+#[test]
+fn a_tabs_agent_or_title_changing_draws_the_sidebar_and_tab_strip_and_not_the_main_column() {
+    let data = Data::temp();
+    let views = json!([{ "id": "chat", "title": "Chat", "page": "dist/chat.html", "opens": ["tab"] }]);
+    data.install_script("chatty", json!({ "contributes": { "ui": ["agents"], "views": views } }), &fake::idle("main"),
+        &[("chat", &agent_page())], "chatty-scope");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.update(|w, window, cx| assert!(w.open_plugin_view("chatty", "chat", None, window, cx)));
+    until(&app, &mut window, "the page never said what its agent does", |w| {
+        w.plugin_tabs.iter().any(|tab| tab.state.agent().is_some())
+    });
+    app.run_until_parked();
+    window.draw();
+    let agent = |summary: &str| crate::page::plugin::TabAgent {
+        state: "working".into(),
+        name: "Fix the checkout".into(),
+        summary: Some(summary.into()),
+        session_id: None,
+        account: None,
+    };
+    let state = window.read(|w, _| w.plugin_tabs[0].state.clone());
+    let before = drawn(&window);
+    state.set_agent(Some(agent("Reading the tests"))).unwrap();
+    app.run_until_parked();
+    window.draw();
+    let after = drawn(&window);
+    println!("[measure] agent change: main {} title bar {} sidebar {}", after.0 - before.0, after.1 - before.1, after.2 - before.2);
+    assert_eq!(after.0, before.0, "an agent report drew the main column again");
+    assert!(after.1 > before.1 && after.2 > before.2, "the tab strip and the Agents list didn't draw");
+    state.set_title(Some("Renamed".into())).unwrap();
+    app.run_until_parked();
+    window.draw();
+    let titled = drawn(&window);
+    assert_eq!(titled.0, after.0, "a new title drew the main column again");
+    assert!(titled.1 > after.1, "the tab strip didn't draw");
+    assert_eq!(window.read(|w, _| w.plugin_tabs[0].label().to_string()), "Renamed");
+}
+
+#[test]
+fn a_project_section_changing_draws_the_sidebar_and_not_the_main_column() {
+    use crate::page::plugin::SectionRow;
+    let (_app, mut window) = open_sized(None, |_| {});
+    window.draw();
+    let project = window.read(|w, _| w.config.project.to_string_lossy().into_owned());
+    let send = |window: &mut TestAppWindow<Workspace>, label: &str| {
+        let rows = vec![SectionRow {
+            id: "1".into(),
+            label: label.into(),
+            detail: None,
+            badge: None,
+            icon: None,
+            parent: None,
+            view: "board".into(),
+            args: None,
+        }];
+        let event = super::plugin_env::UiEvent::ProjectSection {
+            plugin: "sectioner".into(),
+            project: project.clone(),
+            section: "issues".into(),
+            rows: Some(rows),
+        };
+        window.update(|w, window, cx| w.apply_plugin_event(event, window, cx));
+        window.draw();
+    };
+    send(&mut window, "One");
+    let before = drawn(&window);
+    send(&mut window, "Two");
+    let after = drawn(&window);
+    println!("[measure] section change: main {} title bar {} sidebar {}", after.0 - before.0, after.1 - before.1, after.2 - before.2);
+    assert_eq!(after.0, before.0, "a section change drew the main column again");
+    assert_eq!(after.1, before.1, "a section change drew the title bar again");
+    assert!(after.2 > before.2, "the sidebar didn't draw");
+}
+
 /// A page that closes its own tab as it starts, in the second tab of it to start only.
 fn closing_page() -> String {
     let started = Arc::new(std::sync::atomic::AtomicUsize::new(0));

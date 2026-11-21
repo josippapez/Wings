@@ -35,7 +35,7 @@ use crate::{
     projects::{Projects, with_setup},
 };
 
-use super::{Active, Workspace};
+use super::{Active, Workspace, parts::Piece};
 
 /// How long a badge's button waits for the plugin before it says the plugin didn't respond: just over the 5 minutes
 /// `exec` may take, so an action waiting on a long exec can finish (the desktop's `ask`).
@@ -376,9 +376,11 @@ impl AppEnv {
                     .map_err(|_| "The Wings window is closed or busy".into())
             },
         )
-        // The sidebar's Agents shows what the tab's agent does.
+        // The sidebar's Agents shows what the tab's agent does and the tab strip its title; nothing in the main column does.
         .on_agent(move || {
-            let _ = redraw.try_send(UiEvent::Run(Box::new(|_, _, cx| cx.notify())));
+            let _ = redraw.try_send(UiEvent::RunQuietly(Box::new(|workspace, _, cx| {
+                workspace.notify_pieces(&[Piece::Sidebar, Piece::TitleBar], cx)
+            })));
         })
         .on_close(move |state| {
             let state = state.clone();
@@ -1023,8 +1025,10 @@ impl Workspace {
         window: &mut gpui::Window,
         cx: &mut Context<Self>,
     ) {
-        // Each event draws the whole window again, sidebar, title bar and main column, so one that changes nothing on
-        // screen returns before that: plugins send the same badge, status or section rows again on every poll.
+        // Each event draws the whole window again, sidebar, title bar and main column, unless it names the pieces that
+        // show what it changed, so one that changes nothing on screen returns before that: plugins send the same badge,
+        // status or section rows again on every poll.
+        let mut shown_in: Option<&[Piece]> = None;
         match event {
             UiEvent::SaveTabState => return self.save(cx),
             UiEvent::Run(task) => task(self, window, cx),
@@ -1147,6 +1151,8 @@ impl Workspace {
                 if !set(&mut self.plugin_ui.badges, pane, plugin, badge) {
                     return;
                 }
+                // Pane cards are in the main column.
+                shown_in = Some(&[Piece::Main]);
             }
             UiEvent::Status {
                 plugin,
@@ -1159,6 +1165,7 @@ impl Workspace {
                 if !set(&mut self.plugin_ui.statuses, pane, plugin, status) {
                     return;
                 }
+                shown_in = Some(&[Piece::Main]);
             }
             UiEvent::SidebarLabel {
                 plugin,
@@ -1173,6 +1180,8 @@ impl Workspace {
                     Some(label) => self.plugin_ui.labels.insert(key, label),
                     None => self.plugin_ui.labels.remove(&key),
                 };
+                // The label is on the project bar's button, in the main column.
+                shown_in = Some(&[Piece::Main]);
             }
             UiEvent::SystemNotification { notification, pane } => {
                 if let Some(pane) = pane {
@@ -1194,6 +1203,7 @@ impl Workspace {
                 if !self.sections.set(std::path::Path::new(&project), &key, rows) {
                     return;
                 }
+                shown_in = Some(&[Piece::Sidebar]);
             }
             UiEvent::SectionSort {
                 plugin,
@@ -1204,9 +1214,21 @@ impl Workspace {
                 if !self.sections.set_sort(&key, &sort) {
                     return;
                 }
+                shown_in = Some(&[Piece::Sidebar]);
             }
         }
-        cx.notify();
+        match shown_in {
+            Some(pieces) => self.notify_pieces(pieces, cx),
+            None => cx.notify(),
+        }
+    }
+
+    /// Draws only `pieces` again, or the whole window while they don't exist yet.
+    pub(super) fn notify_pieces(&self, pieces: &[Piece], cx: &mut Context<Self>) {
+        match &self.parts {
+            Some(parts) => parts.notify(pieces, cx),
+            None => cx.notify(),
+        }
     }
 
     /// The shell `plan` asks for, in its project, which is then the one shown: what `open_plugin_pane` opens before it

@@ -153,7 +153,7 @@ impl FrameState {
         self.state.lock().unwrap().agent.clone()
     }
 
-    pub(super) fn set_agent(&self, agent: Option<TabAgent>) -> Result<(), String> {
+    pub(crate) fn set_agent(&self, agent: Option<TabAgent>) -> Result<(), String> {
         if self.place != StatePlace::Tab {
             return Err("Only a page shown as a tab can show as an agent".into());
         }
@@ -172,7 +172,7 @@ impl FrameState {
         self.state.lock().unwrap().title.clone()
     }
 
-    pub(super) fn set_title(&self, title: Option<String>) -> Result<(), String> {
+    pub(crate) fn set_title(&self, title: Option<String>) -> Result<(), String> {
         if self.place != StatePlace::Tab {
             return Err("Only a page shown as a tab can name its tab".into());
         }
