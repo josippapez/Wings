@@ -63,7 +63,18 @@ impl live::Draw for Line {
 
     fn draw(&self, now: Duration, style: &TextStyle, window: &Window, cx: &App) -> AnyElement {
         let opacity = if self.pulsing(window, cx) { opacity_at(now.as_secs_f32()) } else { 1.0 };
-        div().size_full().text_color(style.color.opacity(opacity)).child((self.words)()).into_any_element()
+        div()
+            .size_full()
+            .whitespace_nowrap()
+            .text_color(style.color.opacity(opacity))
+            .child((self.words)())
+            .into_any_element()
+    }
+
+    fn width(&self, _: Duration, style: &TextStyle, window: &Window, _: &App) -> Option<Pixels> {
+        let words = (self.words)();
+        let run = style.to_run(words.len());
+        Some(window.text_system().shape_line(words, style.font_size.to_pixels(window.rem_size()), &[run], None).width)
     }
 }
 

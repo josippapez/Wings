@@ -18,11 +18,15 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, Context, EntityId, IntoElement, Render, SharedString, TextStyle, TextStyleRefinement, Window,
-    WindowId, canvas, div, prelude::*,
+    AnyElement, App, Context, EntityId, IntoElement, Pixels, Render, SharedString, TextStyle, TextStyleRefinement, Window,
+    WindowId, canvas, div, prelude::*, px,
 };
 
-use super::{readout, slots, spinner_host};
+use super::{
+    readout, slots,
+    slots::Piece,
+    spinner_host,
+};
 use crate::theme;
 
 #[cfg(all(test, feature = "test-support"))]
@@ -66,6 +70,11 @@ pub trait Draw: 'static {
     /// What it shows `now` into the clock, in `style`, the text style where its slot is. Laid out at the slot's place and
     /// size, clipped as the slot is, in that text style.
     fn draw(&self, now: Duration, style: &TextStyle, window: &Window, cx: &App) -> AnyElement;
+    /// The width of what it shows `now` on one line, for what changes in width as it moves (a count of seconds): when
+    /// it is wider than its slot, the view that left the slot draws again, so the slot takes the room it needs now.
+    fn width(&self, _now: Duration, _style: &TextStyle, _window: &Window, _cx: &App) -> Option<Pixels> {
+        None
+    }
 }
 
 /// What a slot's piece last left it to draw, and the text style where it is.
@@ -82,6 +91,9 @@ thread_local! {
     /// The views that already asked to be drawn again at a moment on the clock, by that moment and the pace of what
     /// asked, in nanoseconds.
     static WAKING: RefCell<HashSet<(EntityId, u128, u128)>> = RefCell::default();
+    /// The width a slot's view was last asked to make room for, by window, kind and name, in tenths of a pixel: a view
+    /// is asked once per width, not at each step.
+    static GREW: RefCell<HashMap<(WindowId, Kind, SharedString), i64>> = RefCell::default();
 }
 
 /// When the clock started: the first time something on it was drawn.
@@ -167,6 +179,9 @@ fn lay_out(id: WindowId, kind: Kind, window: &mut Window, cx: &mut App) -> (Dura
     DRAWS.with_borrow_mut(|draws| {
         draws.retain(|(window, of, name), _| *window != id || *of != kind || shown.iter().any(|(at, _)| at == name))
     });
+    GREW.with_borrow_mut(|grew| {
+        grew.retain(|(window, of, name), _| *window != id || *of != kind || shown.iter().any(|(at, _)| at == name))
+    });
     let now = clock(cx);
     let laid = shown
         .into_iter()
@@ -174,6 +189,17 @@ fn lay_out(id: WindowId, kind: Kind, window: &mut Window, cx: &mut App) -> (Dura
             let (draw, style) =
                 DRAWS.with_borrow(|draws| draws.get(&(id, kind, name.clone())).map(|it| (it.draw.clone(), it.style.clone())))?;
             let mut element = draw.draw(now, &style, window, cx);
+            // Wider than its slot, which the view measured when it last drew: it draws again with the words as they
+            // are now, once for each width.
+            if let (Some(width), Piece::View(view)) = (draw.width(now, &style, window, cx), slot.piece) {
+                if width > slot.bounds.size.width + px(0.5) {
+                    let tenths = (f32::from(width) * 10.0) as i64;
+                    let asked = GREW.with_borrow_mut(|grew| grew.insert((id, kind, name.clone()), tenths) != Some(tenths));
+                    if asked {
+                        cx.notify(view);
+                    }
+                }
+            }
             let style = refinement(&style);
             window.with_text_style(Some(style.clone()), |window| {
                 window.with_content_mask(Some(slot.mask), |window| {

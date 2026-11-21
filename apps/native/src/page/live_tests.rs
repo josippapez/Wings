@@ -123,3 +123,29 @@ fn no_node_that_moves_draws_its_page_for_a_step() {
         assert!(frames >= 2, "{what} never moved: the window drew {frames} times");
     }
 }
+
+/// A count that grows a digit ("9s" to "10s") is wider than the slot the page measured with the shorter text: the page
+/// draws again once then, so the words keep their room, and not at the steps between. Before, the layer wrapped the
+/// longer words inside the old slot and clipped them.
+#[test]
+fn a_count_that_grows_wider_draws_its_page_once_for_it() {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    // In a row, as a status line is, so the words size their box and the slot is as wide as they were.
+    let node = json!({ "id": 5, "type": "Row", "children": [{ "id": 3, "type": "Text", "props": { "tone": "muted", "since": now - 9_700 },
+        "children": [{ "id": 4, "type": "#text", "text": "Thinking" }] }] });
+    let (app, mut window) = open_tab(node);
+    let pages = |window: &TestAppWindow<Tab>| window.read(|tab, cx| tab.page.read(cx).renders());
+    let before = pages(&window);
+    // Still "9s": the width holds, the page stays.
+    app.advance_clock(Duration::from_secs(1));
+    app.run_until_parked();
+    assert_eq!(pages(&window) - before, 0, "the page drew while the count held its width");
+    // Set up in under 300 ms, so it said "9s"; now it says "10s".
+    thread::sleep(Duration::from_millis(400));
+    for _ in 0..3 {
+        app.advance_clock(Duration::from_secs(1));
+        app.run_until_parked();
+        window.draw();
+    }
+    assert_eq!(pages(&window) - before, 1, "the page draws once for the wider count");
+}
