@@ -6,14 +6,14 @@ use crate::{
     ipc,
     pulls::{Agent, Filter, PullRow, PullsAnswer, Scope, count_pulls, filter_of, filter_pulls, split_title},
     types::PrArgs,
-    ui::parts::{tag, time_text},
+    ui::parts::{REFRESH, icon_button, joined, page_with, tag, time_text, title_with_context},
 };
 use serde_json::{Value, json};
 use std::{cell::RefCell, rc::Rc};
 use wings_plugin::{
     host, poll,
     task::spawn,
-    ui::{Node, button, card, chips, empty, list_button, muted, notice, page, row, stack, text, toolbar_with},
+    ui::{Node, button, chips, empty, list_button, muted, notice, row, rows_card, stack, text},
 };
 
 /// How often the list is asked for again while Wings is in front.
@@ -174,12 +174,21 @@ fn skeletons() -> Node {
     stack().prop("gap", "s").child(Node::new("Spinner").prop("label", "Loading pull requests")).children((0..3).map(|i| Node::new("Skeleton").key(i.to_string()).prop("height", 58)))
 }
 
+/// A tone of a row's status, as the names a `Text` takes.
+fn text_tone(tone: &str) -> &'static str {
+    match tone {
+        "info" | "merged" => "info",
+        "warning" => "warn",
+        "danger" => "danger",
+        "success" => "success",
+        _ => "muted",
+    }
+}
+
+/// A row: a lead dot, the title over its identity (number, author, branches) and its status, all muted and split by
+/// " · ", and the flags at the end. Rows sit in one card split by hairlines.
 fn pull_item(r: &PullRow, show_scope: bool) -> Node {
     let (tags, title) = split_title(&r.title);
-    let (source, target) = match r.branch.split_once(" → ") {
-        Some((source, target)) => (source.to_owned(), Some(target.to_owned())),
-        None => (r.branch.clone(), None),
-    };
     let checks = &r.checks;
     let (checks_text, checks_tone) = if checks.failed > 0 {
         (Some(format!("{} failing", checks.failed)), "danger")
@@ -205,37 +214,40 @@ fn pull_item(r: &PullRow, show_scope: bool) -> Node {
     // The page is being built under a shared borrow of the state, so this is a shared one too.
     let on_open = STATE.with(|s| s.borrow().on_open.clone());
     let title_line = row().prop("gap", "s").children(tags.iter().enumerate().map(|(i, t)| tag(t, false).key(format!("t{i}")))).child(text(title).prop("weight", "medium").prop("truncate", true).prop("grow", true));
-    let meta = row()
-        .prop("gap", "m")
-        .prop("wrap", true)
-        .child(muted(r.number.as_str()).prop("size", "tiny"))
-        .maybe(r.author.as_ref().map(|who| row().prop("gap", "s").child(Node::new("Avatar").prop("name", who.as_str()).prop("size", "small")).child(text(who.as_str()).prop("size", "small").prop("tone", "muted"))))
-        .child(muted(match &target { Some(target) => format!("{source} → {target}"), None => source.clone() }).prop("mono", true).prop("size", "tiny").prop("truncate", true));
-    let flags = row()
-        .prop("gap", "s")
-        .prop("wrap", true)
-        .prop("justify", "end")
-        .maybe((show_scope && !scope.is_empty()).then(|| Node::new("Badge").prop("size", "sm").prop("variant", "secondary").text(scope)))
-        .maybe(r.agent.map(|agent| Node::new("Badge").prop("size", "sm").prop("variant", "outline").prop("tone", "info").text(if agent == Agent::Working { "Agent working" } else { "Agent here" })))
-        .maybe((r.unread > 0).then(|| Node::new("Badge").prop("size", "sm").prop("variant", "secondary").child(text(format!("{} new", r.unread)).prop("tone", "info"))));
-    let facts = row()
-        .prop("gap", "s")
-        .prop("wrap", true)
-        .prop("justify", "end")
-        .child(text(r.badge.text.as_str()).prop("size", "small").prop("tone", "muted"))
-        .maybe((!r.review.is_empty()).then(|| muted(r.review.as_str()).prop("size", "small")))
-        .maybe(checks_text.map(|c| text(c).prop("size", "small").prop("tone", checks_tone)))
-        .maybe(time_text(&r.updated).map(|t| muted(t).prop("size", "small")));
-    let content = [
-        dot,
-        stack().prop("gap", "xs").prop("grow", true).child(title_line).child(meta),
-        stack().prop("gap", "xs").child(flags).child(facts),
-    ];
-    card().key(r.id.clone()).child(list_button(content, move || {
+    let small = |t: String| muted(t).prop("size", "small");
+    let identity = joined(
+        [Some(small(r.number.clone())), r.author.clone().map(small), (!r.branch.is_empty()).then(|| small(r.branch.clone()).prop("mono", true).prop("truncate", true))].into_iter().flatten().collect(),
+    );
+    let facts = joined(
+        [
+            (!r.badge.text.is_empty()).then(|| text(r.badge.text.as_str()).prop("size", "small").prop("tone", text_tone(&r.badge.tone))),
+            (!r.review.is_empty()).then(|| small(r.review.clone())),
+            checks_text.map(|c| text(c).prop("size", "small").prop("tone", checks_tone)),
+            time_text(&r.updated).map(small),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+    );
+    let flags: Vec<Node> = [
+        (show_scope && !scope.is_empty()).then(|| Node::new("Badge").prop("size", "sm").prop("variant", "outline").text(scope)),
+        r.agent.map(|agent| Node::new("Badge").prop("size", "sm").prop("variant", "outline").prop("tone", "info").text(if agent == Agent::Working { "Agent working" } else { "Agent here" })),
+        (r.unread > 0).then(|| Node::new("Badge").prop("size", "sm").prop("variant", "outline").prop("tone", "info").text(format!("{} new", r.unread))),
+    ]
+    .into_iter()
+    .flatten()
+    .enumerate()
+    .map(|(i, badge)| badge.key(format!("f{i}")))
+    .collect();
+    let content = [dot, stack().prop("gap", "xs").prop("grow", true).child(title_line).child(identity).child(facts)]
+        .into_iter()
+        .chain((!flags.is_empty()).then(|| row().prop("gap", "s").prop("wrap", true).prop("justify", "end").children(flags)));
+    list_button(content, move || {
         if let Some(on_open) = &on_open {
             on_open(args.clone());
         }
-    }))
+    })
+    .key(r.id.clone())
 }
 
 /// What the list says in place of rows: the error with Try again, the host nothing recognised, a problem with its
@@ -264,7 +276,7 @@ fn body(s: &State, rows: &[PullRow]) -> Node {
                 let more = (s.filter != Filter::All && !rows.is_empty()).then(|| format!("{} open in all.", rows.len()));
                 empty(empty_title(s.filter), more.as_deref().unwrap_or_default())
             } else {
-                stack().prop("gap", "s").children(shown.iter().map(|r| pull_item(r, s.filter == Filter::All)))
+                rows_card(shown.iter().map(|r| pull_item(r, s.filter == Filter::All)))
             }
         }
     }
@@ -283,7 +295,7 @@ fn chip_options(current: Filter, counts: [usize; 4]) -> Vec<(String, String)> {
 fn filter_chips(s: &State, counts: [usize; 4]) -> Node {
     let options = chip_options(s.filter, counts);
     let options: Vec<(&str, &str)> = options.iter().map(|(v, l)| (v.as_str(), l.as_str())).collect();
-    chips("Show", &options, s.filter.name(), |value| set_filter(filter_of(&json!({ "filter": value }))))
+    chips("Show", &options, s.filter.name(), |value| set_filter(filter_of(&json!({ "filter": value })))).prop("segmented", true)
 }
 
 fn build(s: &State) -> Vec<Node> {
@@ -299,13 +311,15 @@ fn build(s: &State) -> Vec<Node> {
     };
     let ready = matches!(&s.answer, Some(Ok(PullsAnswer { rows: Some(_), .. })));
     let counts = count_pulls(&rows);
-    let refresh = button("Refresh", "outline", s.loading, || read(false));
+    let refresh = icon_button("Refresh", &REFRESH, s.loading, || read(false));
     let chips_node = ready.then(|| filter_chips(s, counts));
     if s.store == Store::Tab {
-        let title = if name.is_empty() { "Pull requests".to_owned() } else { format!("{name} · Pull requests") };
-        return vec![page(toolbar_with(&title, chips_node.unwrap_or_else(row), Some(refresh)), [body(s, &rows)])];
+        let actions = Node::new("Slot").prop("name", "actions").child(row().prop("gap", "xs").prop("align", "center").child(refresh));
+        let mut top = vec![Node::new("Toolbar").child(title_with_context("Pull requests", name)).child(actions)];
+        top.extend(chips_node.map(|chips| Node::new("Bar").prop("edge", "bottom").child(row().prop("gap", "m").prop("wrap", true).prop("align", "center").child(chips))));
+        return vec![page_with(top, [body(s, &rows)])];
     }
-    let header = row().prop("gap", "s").prop("justify", "between").child(muted(if ready { format!("{} open", counts[0]) } else { String::new() }).prop("size", "small")).child(refresh);
+    let header = row().prop("gap", "s").prop("align", "center").prop("justify", "between").child(muted(if ready { format!("{} open", counts[0]) } else { String::new() }).prop("size", "small")).child(refresh);
     vec![stack().prop("gap", "m").child(header).maybe(chips_node).child(body(s, &rows))]
 }
 
@@ -364,5 +378,59 @@ mod tests {
         assert_eq!(labels(Filter::All, [3, 1, 0, 0]), ["All open 3", "Mine 1", "Review requested 0"]);
         assert_eq!(labels(Filter::All, [3, 1, 0, 2]).last().map(String::as_str), Some("Drafts 2"));
         assert_eq!(labels(Filter::Drafts, [3, 1, 0, 0]).last().map(String::as_str), Some("Drafts 0"));
+    }
+
+    fn row_json(id: &str, number: u32) -> Value {
+        json!({
+            "id": id, "title": "[WEB-4] Add retry", "number": format!("#{number}"), "author": "ada", "branch": "retry → main", "scope": "mine", "draft": false,
+            "badge": { "text": "Checks failing", "tone": "danger" }, "review": "Changes requested", "checks": { "failed": 1, "running": 0, "queued": 0, "passed": 3, "skipped": 0 },
+            "updated": "2026-11-01T09:00:00Z", "unread": 0,
+            "args": { "provider": "github", "url": "https://github.com/acme/web/pull/1", "number": number, "repo": "acme/web", "title": "Add retry", "cwd": "/w" },
+        })
+    }
+
+    fn state(store: Store) -> State {
+        let rows: Vec<PullRow> = vec![serde_json::from_value(row_json("a", 1)).unwrap(), serde_json::from_value(row_json("b", 2)).unwrap()];
+        State {
+            store,
+            project: Some(Some(("/w".into(), "web".into()))),
+            answer: Some(Ok(PullsAnswer { rows: Some(rows), ..PullsAnswer::default() })),
+            filter: Filter::All,
+            loading: false,
+            signing: false,
+            sign_error: None,
+            reads: 0,
+            on_open: None,
+        }
+    }
+
+    fn json_of(nodes: Vec<Node>) -> String {
+        nodes.into_iter().map(|n| wings_plugin::ui::tree_json(n).to_string()).collect()
+    }
+
+    /// The design system's list: the filters are a segmented track in a bar under the header, Refresh is a ghost icon
+    /// button with a tooltip, and the pull requests are rows of one card, not a card each.
+    #[test]
+    fn the_tab_has_a_segmented_filter_bar_an_icon_refresh_and_its_rows_in_one_card() {
+        let page = json_of(build(&state(Store::Tab)));
+        assert!(page.contains(r#""segmented":true"#) && page.contains(r#""type":"Bar""#), "{page}");
+        assert!(page.contains(r#""label":"Refresh""#) && page.contains(r#""size":"icon-sm""#) && !page.contains(r#""children":["Refresh"]"#), "{page}");
+        assert_eq!(page.matches(r#""type":"Card""#).count(), 1, "{page}");
+        assert_eq!(page.matches(r#""variant":"rows""#).count(), 1, "{page}");
+        assert_eq!(page.matches(r#""type":"ListButton""#).count(), 2, "{page}");
+    }
+
+    /// The facts at a row's end are split by " · " and the status keeps its tone.
+    #[test]
+    fn a_rows_facts_are_split_by_dots_and_the_status_keeps_its_tone() {
+        let row = json_of(vec![pull_item(&serde_json::from_value(row_json("a", 1)).unwrap(), true)]);
+        assert_eq!(row.matches(r#""text":"·""#).count(), 5, "{row}");
+        assert!(row.contains(r#""tone":"danger""#), "{row}");
+    }
+
+    #[test]
+    fn the_block_has_the_track_and_the_icon_refresh_too() {
+        let block = json_of(build(&state(Store::Block)));
+        assert!(block.contains(r#""segmented":true"#) && block.contains(r#""label":"Refresh""#), "{block}");
     }
 }

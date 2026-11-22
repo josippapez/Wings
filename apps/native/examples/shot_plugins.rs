@@ -183,6 +183,15 @@ impl Env for FixtureEnv {
     fn notify(&self, _: wings_native::page::plugin::Notification) -> Result<(), String> {
         Ok(())
     }
+    // Schedules' "Allow this?" modal: the scene shows it itself, so opening it succeeds. A host that refuses makes Schedules
+    // answer the ask at once as not shown, which empties the modal. Every other view stays unavailable, as before.
+    fn open_view(&self, plan: wings_native::page::plugin::OpenView, reply: wings_native::page::runtime::Reply) {
+        if plan.plugin == "schedules" && plan.id == "approve" {
+            reply.ok("null".into());
+        } else {
+            reply.err("Opening views isn't available".into());
+        }
+    }
     // Issues' list, made up, for the one scene that sets `$CHAT_ISSUES` (the folder holding `tasks.txt`): the chat's host there is
     // one of Wings' own plugins, which may call it. Everywhere else no plugin runs, as before.
     fn builtin(&self, plugin: &str) -> Option<bool> {
@@ -556,9 +565,9 @@ fn schedules(out: PathBuf) {
     let views: [(&str, &PluginHost, &str, Option<(&str, usize)>, &str); 8] = [
         ("list", &host, &source, None, "Frontend tickets"),
         ("new", &host, &source, Some(("Add entry", 0)), "Start an agent"),
-        ("edit-schedule", &host, &source, Some(("Edit", 0)), "Prompt"),
-        ("edit-once", &host, &source, Some(("Edit", 2)), "Year, month, day"),
-        ("edit-entry", &host, &source, Some(("Edit", 4)), "Keep free"),
+        ("edit-schedule", &host, &source, Some(("Edit Morning review", 0)), "Prompt"),
+        ("edit-once", &host, &source, Some(("Edit Year-end check", 0)), "Year, month, day"),
+        ("edit-entry", &host, &source, Some(("Edit Frontend tickets in shop", 0)), "Keep free"),
         ("empty", &empty_host, &source, None, "Nothing set up yet"),
         ("approve", &host, &module("approve"), None, "asks to add a schedule"),
         ("approve-start", &start_host, &module("approve"), None, "asks to start an agent"),
@@ -698,7 +707,7 @@ fn worktrees(out: PathBuf) {
         shown(&mut cx, "uncommitted", "list");
         assert!(handle.read_with(&cx, |view, _| view.press("Remove 1 merged & clean", 0)).unwrap());
         shown(&mut cx, "Also delete their branches", "confirm");
-        assert!(handle.read_with(&cx, |view, _| view.text().contains("1 worktree merged and clean")).unwrap());
+        assert!(handle.read_with(&cx, |view, _| view.text().contains("Remove 1 merged & clean")).unwrap());
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
     }
 }

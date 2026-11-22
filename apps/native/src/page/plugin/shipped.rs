@@ -142,8 +142,9 @@ fn input_named(nodes: &[Node], label: &str) -> Option<String> {
 
 fn buttons_named(nodes: &[Node], label: &str, found: &mut Vec<String>) {
     for node in nodes {
+        // By its words, or by the name an icon button is read out by.
         if let Node::Button(button) = node
-            && plain_text(&button.children) == label
+            && (plain_text(&button.children) == label || button.label.as_deref() == Some(label))
             && let Some(handler) = &button.on_click
         {
             found.push(handler.clone());
@@ -240,7 +241,9 @@ fn worktrees_sidebar_loads_the_actual_native_bundle_refreshes_on_git_and_opens_a
     let (page, events) = open_page(&rig.host, &module("worktrees", "sidebar"));
     tree(&events, "the initial main worktree", |tree| {
         let text = tree.text();
-        text.contains("Worktrees") && text.contains("main") && text.contains("Open in new pane")
+        let mut open = Vec::new();
+        buttons_named(&tree.children, "Open in new pane", &mut open);
+        text.contains("Worktrees") && text.contains("main") && !open.is_empty()
     });
 
     git(
@@ -1300,7 +1303,7 @@ fn pr_tracker_tab_opened_with_args_shows_that_pull_request_and_its_checks_with_t
     let (page, events) = open_pr_tab(&rig, &pr_args(&repo));
     let pull = tree(&events, "the pull request", |tree| tree.text().contains("Alan Turing"));
     let text = pull.text();
-    for shown in ["acme/web #482", "exponential backoff", "const delay = Math.min(base * 2 ** attempt, 30_000);", "Setting", "Equal jitter keeps a floor on the delay.", "ci-bot[bot]"] {
+    for shown in ["acme/web", "#482", "exponential backoff", "const delay = Math.min(base * 2 ** attempt, 30_000);", "Setting", "Equal jitter keeps a floor on the delay.", "ci-bot[bot]"] {
         assert!(text.contains(shown), "{shown:?} in {text:?}");
     }
     assert!(!text.contains("All pull requests"), "a tab opened on a pull request has no list to go back to");
@@ -1791,7 +1794,7 @@ fn work_item_tab_shows_the_work_item_its_links_and_history_each_from_its_own_az_
     let (page, events, _saved) = open_with_state(&rig.host, &module("work-item", "item"), Some(&args), super::StatePlace::Tab, None);
     let overview = tree(&events, "the overview", |tree| tree.text().contains("Pull request is up") && tree.text().contains("Child of #1400 Make the sync client reliable"));
     let text = overview.text();
-    for shown in ["Bug #1432", "Sync client gives up after the first failed request", "Active", "Ada Lovelace", "When the server answers"] {
+    for shown in ["Bug", "#1432", "Sync client gives up after the first failed request", "Active", "Ada Lovelace", "When the server answers"] {
         assert!(text.contains(shown), "{shown:?} in {text:?}");
     }
     let tabs = chips_named(&overview.children, "Work item").unwrap();
@@ -1830,9 +1833,22 @@ fn tasks_rig() -> Rig {
 
 /// Types `title` into the board's New issue field and presses Add, and returns the board that shows it.
 fn add_issue(page: &PageRuntime, events: &mpsc::Receiver<Event>, title: &str) -> Tree {
+    // The header's New issue opens the line to type it in.
     let board = tree(events, "the board", |tree| {
-        input_named(&tree.children, "New issue").is_some()
+        let mut new = Vec::new();
+        buttons_named(&tree.children, "New issue", &mut new);
+        !new.is_empty() || input_named(&tree.children, "New issue").is_some()
     });
+    // It stays open after an issue is added, for the next.
+    let board = match input_named(&board.children, "New issue") {
+        Some(_) => board,
+        None => {
+            let mut new = Vec::new();
+            buttons_named(&board.children, "New issue", &mut new);
+            assert!(page.dispatch(&new[0], None));
+            tree(events, "the line to add an issue", |tree| input_named(&tree.children, "New issue").is_some())
+        }
+    };
     let field = input_named(&board.children, "New issue").unwrap();
     assert!(page.dispatch(&field, Some(&json!({ "value": title }))));
     let typed = tree(events, "the typed title", |tree| {

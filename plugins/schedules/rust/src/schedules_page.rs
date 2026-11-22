@@ -7,7 +7,7 @@ use crate::{
     page_ask::{ask, ask_quiet, busy, clear_error, error, listen},
     schedule::{Agent, DAYS, DAY_NUMBERS, Draft, EVERY_HOURS, Run, RunIn, Schedule, When, describe_moment, describe_next, describe_once_next, describe_when, next_run},
     store::{read_schedules, read_watches},
-    view::{busy_button, button, field, field_group, small_badge, textarea},
+    view::{CLOSE, EXTERNAL, PAUSE, PENCIL, PLAY, PLUS, REFRESH, RESUME, TRASH, busy_button, button, field, field_group, icon_button, small_badge, textarea},
     worktree_setup::{WorktreeSetup, include_text, worktree_change},
 };
 use serde_json::{Value, json};
@@ -16,7 +16,7 @@ use wings_plugin::{
     format::ago,
     git, host, messages, poll,
     task::spawn,
-    ui::{Choice, Combobox, Node, card, checkbox, chip, chips, combobox, confirm, disclosure, empty, heading, list, list_row, loading, muted, notice, page, row, select, slot, stack, text, text_input, title, toolbar, toolbar_with},
+    ui::{Choice, Combobox, Entry, Node, card, checkbox, chip, chips, combobox, confirm, disclosure, empty, entry, list, list_row, loading, muted, notice, page, row, rows_card, section, select, slot, stack, text, text_input, title, toolbar},
 };
 
 /// How often "in 2 h" is worked out again.
@@ -273,7 +273,7 @@ fn save() {
 }
 
 fn agent_chips(f: &Form) -> Node {
-    chips("Agent", &[("claude", Agent::Claude.label()), ("opencode", Agent::OpenCode.label())], f.agent.id(), |value| with(|p| p.form.agent = Agent::from_id(value).unwrap_or(Agent::Claude)))
+    chips("Agent", &[("claude", Agent::Claude.label()), ("opencode", Agent::OpenCode.label())], f.agent.id(), |value| with(|p| p.form.agent = Agent::from_id(value).unwrap_or(Agent::Claude))).prop("segmented", true)
 }
 
 fn schedule_fields(f: &Form) -> Vec<Node> {
@@ -323,7 +323,7 @@ fn schedule_fields(f: &Form) -> Vec<Node> {
                         }
                     })
                 },
-            )).child(when),
+            ).prop("segmented", true)).child(when),
         ),
     ];
     // The chat is Claude Code's: another agent has nothing to choose.
@@ -333,7 +333,7 @@ fn schedule_fields(f: &Form) -> Vec<Node> {
             field_group(
                 "Run in",
                 Some("A terminal runs claude with the prompt. A Claude chat opens the run as a chat tab that starts with it. If the chat plugin is off, it falls back to a terminal.".into()),
-                chips("Run in", &[("terminal", "Terminal"), ("chat", "Claude chat")], f.run_in.id(), |value| with(|p| p.form.run_in = RunIn::from_id(Some(value)))),
+                chips("Run in", &[("terminal", "Terminal"), ("chat", "Claude chat")], f.run_in.id(), |value| with(|p| p.form.run_in = RunIn::from_id(Some(value)))).prop("segmented", true),
             ),
         );
     }
@@ -419,7 +419,8 @@ fn form_view(p: &Page) -> Node {
             chips("Start an agent", &[("schedule", "On a schedule"), ("assigned", "When something is assigned to me")], if f.kind == Kind::Schedule { "schedule" } else { "assigned" }, |kind| {
                 with(|p| p.form.kind = if kind == "assigned" { Kind::Assigned } else { Kind::Schedule });
                 load_form_data();
-            }),
+            })
+            .prop("segmented", true),
         ));
     }
     fields.push(field(
@@ -457,42 +458,30 @@ fn form_view(p: &Page) -> Node {
 
 // ---------- the list ----------
 
-/// A saved entry's card: its name, Paused while it is, its project, agent and `what` starts it, then `lines`, with
-/// `actions` beside them. `below`, like a watch's tickets, goes under it all.
-fn entry_card(key: String, enabled: bool, name: &str, project: &str, agent: Agent, what: &str, lines: Vec<Node>, actions: Vec<Node>, below: Option<Node>) -> Node {
-    let head = row()
-        .prop("gap", "l")
-        .prop("justify", "between")
-        .prop("wrap", true)
-        .prop("grow", true)
-        .child(
-            stack()
-                .prop("gap", "xs")
-                .prop("grow", true)
-                .child(row().prop("gap", "m").prop("wrap", true).child(title(name).prop("truncate", true)).maybe((!enabled).then(|| small_badge("Paused", None, None))))
-                .child(muted(format!("{project} · {} · {what}", agent.label())).prop("size", "small"))
-                .children(lines),
-        )
-        .child(row().prop("gap", "s").prop("wrap", true).prop("align", "start").children(actions));
-    let content = match below {
-        Some(below) => stack().prop("gap", "m").child(head).child(below),
-        None => head,
-    };
-    list_row(key, card().child(content))
+/// A saved entry's row: its name, Paused while it is, then its project, agent and `what` starts it and `lines` under it,
+/// with `actions` at its end. `below`, like a watch's tickets, goes under the lines.
+fn entry_row(key: String, enabled: bool, name: &str, project: &str, agent: Agent, what: &str, lines: Vec<Node>, actions: Vec<Node>, below: Option<Node>) -> Node {
+    let detail = stack()
+        .prop("gap", "xs")
+        .child(muted(format!("{project} · {} · {what}", agent.label())).prop("size", "small"))
+        .children(lines)
+        .maybe(below);
+    entry(Entry {
+        lead: None,
+        title: row().prop("gap", "m").prop("wrap", true).child(title(name).prop("truncate", true)).maybe((!enabled).then(|| small_badge("Paused", None, None))),
+        detail: Some(detail),
+        trailing: Some(row().prop("gap", "xs").prop("align", "center").children(actions)),
+    })
+    .key(key)
 }
 
-/// An entry's Edit, Pause or Resume, and Delete buttons, which name it `label` to a screen reader.
+/// An entry's Edit, Pause or Resume, and Delete buttons, which name it `label` to a screen reader and as a tooltip.
 fn entry_actions(id: &str, enabled: bool, label: &str, working: bool, toggle: &'static str) -> Vec<Node> {
     let (edit_id, toggle_id, delete_id) = (id.to_owned(), id.to_owned(), id.to_owned());
     vec![
-        button("Edit", "outline", Some("sm"), Some(format!("Edit {label}")), false, move || edit(Editing::Entry(edit_id.clone()))),
-        button(if enabled { "Pause" } else { "Resume" }, "outline", Some("sm"), Some(format!("{} {label}", if enabled { "Pause" } else { "Resume" })), working, move || ask(toggle, json!({ "entry": toggle_id }), || {})),
-        Node::new("Button")
-            .prop("variant", "ghost")
-            .prop("size", "icon-sm")
-            .prop("label", format!("Delete {label}"))
-            .on("onClick", move |_| with(|p| p.deleting = Some(delete_id.clone())))
-            .child(Node::new("Icon").prop("name", "trash")),
+        icon_button(&format!("Edit {label}"), &PENCIL, false, move || edit(Editing::Entry(edit_id.clone()))),
+        icon_button(&format!("{} {label}", if enabled { "Pause" } else { "Resume" }), if enabled { &PAUSE } else { &RESUME }, working, move || ask(toggle, json!({ "entry": toggle_id }), || {})),
+        icon_button(&format!("Delete {label}"), &TRASH, false, move || with(|p| p.deleting = Some(delete_id.clone()))),
     ]
 }
 
@@ -521,7 +510,7 @@ fn schedule_item(s: &Schedule, project: &str, now: i64, working: bool) -> Node {
     let name = s.title();
     let next = next_run(s);
     let run_id = s.id.clone();
-    let mut actions = vec![button("Run now", "outline", Some("sm"), Some(format!("Run {name} now")), working, move || ask("runNow", json!({ "entry": run_id }), || {}))];
+    let mut actions = vec![icon_button(&format!("Run {name} now"), &PLAY, working, move || ask("runNow", json!({ "entry": run_id }), || {}))];
     actions.extend(entry_actions(&s.id, s.enabled, &name, working, "toggle"));
     let once = matches!(s.when, When::Once { .. });
     let lines = if once && next.is_none() {
@@ -536,7 +525,7 @@ fn schedule_item(s: &Schedule, project: &str, now: i64, working: bool) -> Node {
         };
         vec![text(when).prop("size", "small"), last_run(s.last_run.as_ref(), now, "Last run ")]
     };
-    entry_card(s.id.clone(), s.enabled, &name, project, s.agent, &describe_when(&s.when), lines, actions, None)
+    entry_row(s.id.clone(), s.enabled, &name, project, s.agent, &describe_when(&s.when), lines, actions, None)
 }
 
 fn ticket_row(w: &Watch, t: &AssignedTicket, p: &Page, working: bool, now: i64) -> Node {
@@ -544,7 +533,7 @@ fn ticket_row(w: &Watch, t: &AssignedTicket, p: &Page, working: bool, now: i64) 
     let asked = w.asks(t);
     let elsewhere = started_elsewhere(t);
     let label = if started_at.is_some() { "Start again" } else if asked && elsewhere.is_none() { "Start" } else { "Start anyway" };
-    let variant = if label == "Start" { "default" } else { "outline" };
+    let variant = if label == "Start" { "secondary" } else { "outline" };
     let force = !asked || elsewhere.is_some() || started_at.is_some();
     let start = {
         let (entry, ticket) = (w.id.clone(), t.ticket.id.clone());
@@ -593,7 +582,7 @@ fn ticket_row(w: &Watch, t: &AssignedTicket, p: &Page, working: bool, now: i64) 
                     .prop("wrap", true)
                     .prop("align", "start")
                     .child(badge)
-                    .child(button("Open", "ghost", Some("sm"), Some(format!("Open {}", t.ticket.title)), false, move || host::open_url(&url)))
+                    .child(icon_button(&format!("Open {}", t.ticket.title), &EXTERNAL, false, move || host::open_url(&url)))
                     .maybe(started_at.map(|at| ago_text("Started ", at, now)))
                     .child(start_control),
             ),
@@ -609,21 +598,18 @@ fn watch_item(w: &Watch, p: &Page, now: i64, working: bool) -> Node {
     let mut actions: Vec<Node> = Vec::new();
     if w.enabled && check.and_then(|c| c.problem) == Some(crate::assigned::Problem::SignedOut) {
         let id = w.id.clone();
-        actions.push(button("Sign in", "default", Some("sm"), Some(format!("Sign in for {label}")), working, move || ask("signIn", json!({ "entry": id }), || {})));
+        actions.push(button("Sign in", "secondary", Some("sm"), Some(format!("Sign in for {label}")), working, move || ask("signIn", json!({ "entry": id }), || {})));
     }
     if w.enabled && check.and_then(|c| c.problem) == Some(crate::assigned::Problem::Missing) {
         let id = w.id.clone();
-        actions.push(button("Install", "default", Some("sm"), Some(format!("Install the CLI for {label}")), working, move || ask("install", json!({ "entry": id }), || {})));
+        actions.push(button("Install", "secondary", Some("sm"), Some(format!("Install the CLI for {label}")), working, move || ask("install", json!({ "entry": id }), || {})));
     }
     if w.enabled && !unsupported {
         let id = w.id.clone();
-        actions.push(busy_button(
-            if failed { "Try again" } else { "Check now" },
-            "outline",
-            Some("sm"),
-            Some(format!("{} {label} {}", if failed { "Try" } else { "Check" }, if failed { "again" } else { "now" })),
-            p.checking.as_deref() == Some(w.id.as_str()),
-            working,
+        actions.push(icon_button(
+            &format!("{} {label} {}", if failed { "Try" } else { "Check" }, if failed { "again" } else { "now" }),
+            &REFRESH,
+            p.checking.as_deref() == Some(w.id.as_str()) || working,
             move || {
                 with(|p| p.checking = Some(id.clone()));
                 ask("checkWatch", json!({ "entry": id }), || with(|p| p.checking = None));
@@ -651,44 +637,31 @@ fn watch_item(w: &Watch, p: &Page, now: i64, working: bool) -> Node {
     if w.last_run.is_some() {
         lines.push(last_run(w.last_run.as_ref(), now, "Last started "));
     }
-    entry_card(w.id.clone(), w.enabled, w.title(), &project, w.agent, w.source.as_ref().map_or("Checking the remote", |source| source.label()), lines, actions, below)
+    entry_row(w.id.clone(), w.enabled, w.title(), &project, w.agent, w.source.as_ref().map_or("Checking the remote", |source| source.label()), lines, actions, below)
 }
 
 fn waiting_item(w: &Watch, ticket: &Waiting, project: &str, working: bool) -> Node {
     let (start, dismiss) = ((w.id.clone(), ticket.ticket.id.clone()), (w.id.clone(), ticket.ticket.id.clone()));
     let url = ticket.ticket.url.clone();
-    list_row(
-        format!("{}:{}", w.id, ticket.ticket.id),
-        card().child(
-            row()
-                .prop("gap", "l")
-                .prop("justify", "between")
-                .prop("wrap", true)
-                .prop("grow", true)
-                .child(
-                    stack()
-                        .prop("gap", "xs")
-                        .prop("grow", true)
-                        .child(title(ticket.ticket.title.as_str()).prop("truncate", true))
-                        .child(muted(format!("#{} · {project} · {}", ticket.ticket.id, w.agent.label())).prop("size", "small"))
-                        .child(text("Starts a new worktree on a feature branch and opens the agent in it.").prop("size", "small")),
-                )
-                .child(
-                    row()
-                        .prop("gap", "s")
-                        .prop("wrap", true)
-                        .prop("align", "start")
-                        .child(button("Open", "ghost", Some("sm"), Some(format!("Open {}", ticket.ticket.title)), working, move || host::open_url(&url)))
-                        .child(busy_button("Start", "default", Some("sm"), Some(format!("Start {}", ticket.ticket.title)), working, false, move || ask("startTicket", json!({ "entry": start.0, "ticket": start.1 }), || {})))
-                        .child(button("Dismiss", "outline", Some("sm"), Some(format!("Dismiss {}", ticket.ticket.title)), working, move || ask("dismissWaiting", json!({ "entry": dismiss.0, "ticket": dismiss.1 }), || {}))),
-                ),
+    entry(Entry {
+        lead: None,
+        title: title(ticket.ticket.title.as_str()).prop("truncate", true),
+        detail: Some(
+            stack()
+                .prop("gap", "xs")
+                .child(muted(format!("#{} · {project} · {}", ticket.ticket.id, w.agent.label())).prop("size", "small"))
+                .child(muted("Starts a new worktree on a feature branch and opens the agent in it.").prop("size", "small")),
         ),
-    )
-}
-
-/// A section's heading, in a list of its own so it starts where the rows below it do.
-fn section_heading(label: &str) -> Node {
-    list().child(list_row("heading", heading(3, label)))
+        trailing: Some(
+            row()
+                .prop("gap", "xs")
+                .prop("align", "center")
+                .child(icon_button(&format!("Open {}", ticket.ticket.title), &EXTERNAL, false, move || host::open_url(&url)))
+                .child(busy_button("Start", "secondary", Some("sm"), Some(format!("Start {}", ticket.ticket.title)), working, false, move || ask("startTicket", json!({ "entry": start.0, "ticket": start.1 }), || {})))
+                .child(icon_button(&format!("Dismiss {}", ticket.ticket.title), &CLOSE, working, move || ask("dismissWaiting", json!({ "entry": dismiss.0, "ticket": dismiss.1 }), || {}))),
+        ),
+    })
+    .key(format!("{}:{}", w.id, ticket.ticket.id))
 }
 
 /// A ticket's title from what the entry waits on or listed, else its number.
@@ -742,10 +715,7 @@ fn list_view(p: &Page, now: i64) -> Node {
     }
     if !waiting.is_empty() {
         body.push(
-            stack()
-                .prop("gap", "m")
-                .child(section_heading("Waiting for you"))
-                .child(list().children(waiting.iter().map(|(w, ticket)| waiting_item(w, ticket, &name_of_project(projects, &w.project_id), working)))),
+            section("Waiting for you", None, [rows_card(waiting.iter().map(|(w, ticket)| waiting_item(w, ticket, &name_of_project(projects, &w.project_id), working)))]),
         );
     }
     if empty_list {
@@ -757,12 +727,7 @@ fn list_view(p: &Page, now: i64) -> Node {
             .child(slot("children", button("Add entry", "default", None, None, false, || edit(Editing::New)))),
         );
     } else {
-        body.push(
-            stack()
-                .prop("gap", "m")
-                .maybe((!waiting.is_empty()).then(|| section_heading("Entries")))
-                .child(list().children(schedules.iter().map(|s| schedule_item(s, &name_of_project(projects, &s.project_id), now, working)).chain(watches.iter().map(|w| watch_item(w, p, now, working))))),
-        );
+        body.push(section("Entries", None, [rows_card(schedules.iter().map(|s| schedule_item(s, &name_of_project(projects, &s.project_id), now, working)).chain(watches.iter().map(|w| watch_item(w, p, now, working))))]));
     }
     stack().prop("gap", "l").children(body)
 }
@@ -776,7 +741,7 @@ fn toolbar_actions(p: &Page) -> Option<Node> {
         let everywhere = p.everywhere;
         button(&if everywhere { "This project".to_owned() } else { format!("All projects ({elsewhere} more)") }, "ghost", None, None, false, move || with(|p| p.everywhere = !everywhere))
     });
-    (shown > 0 || scope.is_some()).then(|| row().prop("gap", "s").maybe(scope).maybe((shown > 0).then(|| button("Add entry", "default", None, None, false, || edit(Editing::New)))))
+    (shown > 0 || scope.is_some()).then(|| row().prop("gap", "s").maybe(scope).prop("align", "center").maybe((shown > 0).then(|| icon_button("Add entry", &PLUS, false, || edit(Editing::New)))))
 }
 
 fn view() -> Vec<Node> {
@@ -794,8 +759,8 @@ fn view() -> Vec<Node> {
                 Editing::Entry(id) => p.schedules.iter().find(|s| s.id == *id).map(|s| s.title()).or_else(|| p.watches.iter().find(|w| w.id == *id).map(|w| w.title().to_owned())).unwrap_or_else(|| "New entry".to_owned()),
                 _ => "New entry".to_owned(),
             };
-            let back = row().prop("gap", "s").child(button("← Schedules", "ghost", None, None, false, go_back)).child(muted(name));
-            return vec![page(toolbar_with("Schedules", back, None), vec![stack().prop("maxWidth", 720).child(form_view(p))])];
+            let crumb = row().prop("gap", "s").prop("align", "center").child(button("← Schedules", "ghost", None, None, false, go_back)).child(text(name).prop("weight", "strong").prop("truncate", true));
+            return vec![page(Node::new("Toolbar").child(slot("title", crumb)), vec![stack().prop("maxWidth", 720).child(form_view(p))])];
         }
         vec![page(toolbar("Schedules", toolbar_actions(p)), vec![list_view(p, now)])]
     })
@@ -836,4 +801,84 @@ pub fn start() {
     poll::while_focused(CLOCK_MS, false, || {});
     open_with(host::view_args());
     messages::tell(WANT, &Value::Null);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wings_plugin::ui::tree_json;
+
+    fn fill() {
+        let schedule = Schedule::from_json(&json!({ "id": "a1", "name": "Morning review", "projectId": "p", "agent": "claude", "prompt": "Check CI", "when": { "kind": "every", "hours": 6 }, "enabled": true, "anchor": 0 })).unwrap();
+        let watch = Watch::from_json(&json!({
+            "id": "w1", "name": "Frontend", "projectId": "p", "agent": "claude", "prompt": "x", "minFreeGb": 10, "enabled": false, "primed": true, "seen": [], "states": ["Open"],
+            "waiting": [{ "id": "42", "title": "FE: coupon", "url": "https://x.test/42", "at": 1 }],
+            "source": { "kind": "github", "host": "github.com", "path": "a/b" }, "tickets": [],
+        }))
+        .unwrap();
+        with(|p| {
+            p.projects = Some(vec![Project { id: "p".into(), name: "shop".into(), path: String::new() }]);
+            (p.schedules, p.watches) = (vec![schedule], vec![watch]);
+            p.editing = Editing::List;
+        });
+    }
+
+    /// The tree's icon buttons, by the name a screen reader and the tooltip give them.
+    fn icon_buttons(tree: &Value, found: &mut Vec<String>) {
+        if tree["type"] == "Button" && tree["props"]["size"] == "icon-sm" {
+            assert_eq!(tree["props"]["label"], tree["props"]["title"], "an icon button's tooltip is its name");
+            found.push(tree["props"]["label"].as_str().unwrap().to_owned());
+        }
+        for child in tree["children"].as_array().into_iter().flatten() {
+            icon_buttons(child, found);
+        }
+    }
+
+    #[test]
+    fn the_list_is_sections_of_hairline_rows_with_icon_actions() {
+        fill();
+        let drawn = PAGE.with(|p| tree_json(list_view(&p.borrow(), 1_000)));
+        let json = drawn.to_string();
+        assert!(!json.contains(r#""type":"Heading""#), "a section is a small label, not a heading: {json}");
+        assert_eq!(json.matches(r#""type":"Section""#).count(), 2, "{json}");
+        assert_eq!(json.matches(r#""variant":"rows""#).count(), 2, "{json}");
+        let mut icons = Vec::new();
+        icon_buttons(&drawn, &mut icons);
+        for name in ["Run Morning review now", "Edit Morning review", "Pause Morning review", "Delete Morning review", "Resume Frontend in shop", "Open FE: coupon", "Dismiss FE: coupon"] {
+            assert!(icons.iter().any(|label| label == name), "{name} is an icon button: {icons:?}");
+        }
+        for text in ["Run now", "Pause", "Resume", "Edit", "Open", "Dismiss"] {
+            assert!(!json.contains(&format!(r#""text":"{text}""#)), "{text} is no text button: {json}");
+        }
+    }
+
+    #[test]
+    fn adding_an_entry_is_a_plus_icon_button_in_the_header() {
+        fill();
+        let mut icons = Vec::new();
+        icon_buttons(&tree_json(PAGE.with(|p| toolbar_actions(&p.borrow()).expect("the header's actions"))), &mut icons);
+        assert_eq!(icons, ["Add entry"]);
+    }
+
+    #[test]
+    fn the_forms_exclusive_choices_are_segmented_tracks_and_the_days_stay_toggles() {
+        fill();
+        with(|p| p.editing = Editing::New);
+        let json = PAGE.with(|p| tree_json(form_view(&p.borrow()))).to_string();
+        // Start an agent, Agent, Run in, When.
+        assert_eq!(json.matches(r#""type":"Chips""#).count(), 4, "{json}");
+        assert_eq!(json.matches(r#""segmented":true"#).count(), 4, "{json}");
+    }
+
+    #[test]
+    fn the_edit_page_names_the_place_once_as_a_breadcrumb() {
+        fill();
+        with(|p| {
+            p.editing = Editing::Entry("a1".into());
+            p.form = Form::new(p.schedules.first(), None, p.projects.as_deref().unwrap_or_default(), None);
+        });
+        let json = tree_json(view().remove(0)).to_string();
+        assert_eq!(json.matches("Schedules").count(), 1, "the page name is said once: {json}");
+        assert!(json.contains("← Schedules") && json.contains("Morning review"), "{json}");
+    }
 }

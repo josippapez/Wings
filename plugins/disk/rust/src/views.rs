@@ -13,7 +13,7 @@ use serde_json::json;
 use wings_plugin::{
     format::{ago, basename},
     host,
-    ui::{Node, badge, card, empty, gauge, loading, muted, notice, page, row, slot, spinner, stack, text, text_input, toolbar},
+    ui::{Node, badge, card, empty, gauge, loading, muted, notice, page, row, rows_card, slot, spinner, stack, text, text_input, toolbar},
 };
 
 /// What a scan of `root` is called: the disk's name for a whole disk, the home folder, or the folder's own name.
@@ -48,7 +48,7 @@ fn build(p: &Page) -> Vec<Node> {
 
 // ---------- the disks ----------
 
-fn disk_card(disk: &DiskRow, startup: bool) -> Node {
+fn disk_row(disk: &DiskRow) -> Node {
     let total = disk.disk.total;
     let percent = if total > 0 { (disk.used as f64 / total as f64 * 100.0).round() } else { 0.0 };
     let purgeable = if disk.purgeable > 0 { format!(", includes {} purgeable", bytes(disk.purgeable)) } else { String::new() };
@@ -59,10 +59,10 @@ fn disk_card(disk: &DiskRow, startup: bool) -> Node {
         .child(title(name.as_str()).prop("truncate", true))
         .maybe((disk.disk.kind != "unknown").then(|| badge_of(if disk.disk.kind == "ssd" { "SSD" } else { "HDD" }, "secondary")))
         .maybe(disk.disk.removable.then(|| badge_of("Removable", "outline")));
-    let scan = named_button("Scan", &format!("Scan {name}"), if startup { "default" } else { "secondary" }, "sm", move || start_scan(mount.clone()));
-    card()
+    let scan = named_button("Scan", &format!("Scan {name}"), "secondary", "sm", move || start_scan(mount.clone()));
+    gap(stack(), "m")
         .key(disk.disk.mount.clone())
-        .child(gap(row(), "m").child(heading).child(scan))
+        .child(gap(row(), "m").prop("align", "center").child(heading).child(scan))
         .child(gauge(format!("{} used", bytes(disk.used)), percent, (75, 90), Some(format!("{} free of {}{purgeable}", bytes(disk.disk.free), bytes(total)))))
 }
 
@@ -84,7 +84,8 @@ fn places(p: &Page) -> Vec<(String, String)> {
 fn place_row(name: &str, path: &str, starred: bool) -> Node {
     let (star_path, scan_path) = (path.to_owned(), path.to_owned());
     let star_button = named_button(if starred { "★" } else { "☆" }, &format!("Star {name}"), "ghost", "icon-sm", move || star(&star_path, !starred)).prop("title", if starred { "Remove the star" } else { "Star this folder" });
-    Node::new("ListItem")
+    gap(row(), "m")
+        .prop("align", "center")
         .key(path)
         .child(gap(stack(), "none").prop("grow", true).child(text(name).prop("weight", "medium").prop("truncate", true)).child(muted(path).prop("size", "small").prop("truncate", true)))
         .child(star_button)
@@ -111,6 +112,7 @@ fn submit_scan() {
 fn scan_folder(p: &Page) -> Node {
     let field = text_input("Scan a folder", &p.scan_text, |text| with(|p| p.scan_text = text)).prop("placeholder", "~/Downloads");
     let labelled = gap(stack(), "s")
+        .prop("grow", true)
         .child(row().child(text("Scan a folder").prop("weight", "medium").prop("size", "field")).child(stack().prop("grow", true).child(field)))
         .maybe(p.scan_error.as_ref().map(|error| text(error.as_str()).prop("size", "field").prop("tone", "danger")));
     let scan = button("Scan", "secondary", "default", submit_scan).prop("disabled", p.scan_text.trim().is_empty());
@@ -125,7 +127,8 @@ fn scan_row(scan: &crate::state::ScanInfo, disks: Option<&Vec<DiskRow>>) -> Node
         Phase::Failed(_) => "Failed".into(),
     };
     let (open_root, forget_root) = (scan.root.clone(), scan.root.clone());
-    Node::new("ListItem")
+    gap(row(), "m")
+        .prop("align", "center")
         .key(scan.root.clone())
         .child(gap(stack(), "none").prop("grow", true).child(text(name.as_str()).prop("weight", "medium").prop("truncate", true)).child(muted(scan.root.as_str()).prop("size", "small").prop("truncate", true)))
         .child(text(size).prop("tone", if matches!(scan.phase, Phase::Failed(_)) { "danger" } else { "muted" }))
@@ -145,15 +148,13 @@ fn overview(p: &Page) -> Vec<Node> {
         Some(Err(error)) => vec![notice("danger", error.as_str())],
         None => vec![loading().text("Looking for disks")],
         Some(Ok(rows)) if rows.is_empty() => vec![muted("Wings found no disks.")],
-        Some(Ok(rows)) => rows.iter().enumerate().map(|(i, disk)| disk_card(disk, i == 0)).collect(),
+        Some(Ok(rows)) => vec![rows_card(rows.iter().map(disk_row))],
     };
     let places = places(p);
-    let folders = card()
-        .child(Node::new("List").children(places.iter().map(|(name, path)| place_row(name, path, p.starred.contains(path)))))
-        .child(scan_folder(p));
+    let folders = rows_card(places.iter().map(|(name, path)| place_row(name, path, p.starred.contains(path))).chain([scan_folder(p)]));
     let rows = p.disks.as_ref().and_then(|d| d.as_ref().ok());
     let scans = p.scans.as_deref().filter(|scans| !scans.is_empty()).map(|scans| {
-        section("Scans", vec![card().child(Node::new("List").children(scans.iter().map(|scan| scan_row(scan, rows))))])
+        section("Scans", vec![rows_card(scans.iter().map(|scan| scan_row(scan, rows)))])
     });
     let content = gap(stack(), "l")
         .prop("maxWidth", 860)
@@ -176,7 +177,7 @@ fn frame(name: &str, actions: Option<Node>, body: Node) -> Vec<Node> {
 
 fn scanning(name: &str, phase: Option<&Phase>, root: &str) -> Vec<Node> {
     let stop_root = root.to_owned();
-    let stop = button("Stop", "outline", "sm", move || stop_scan(stop_root.clone()));
+    let stop = button("Stop", "ghost", "sm", move || stop_scan(stop_root.clone()));
     let expected = match phase {
         Some(Phase::Scanning { expected, .. }) => expected.filter(|expected| *expected > 0),
         _ => None,
@@ -214,4 +215,31 @@ fn no_scan(name: &str, root: &str) -> Vec<Node> {
     let again = root.to_owned();
     let content = empty(&format!("No results for {name}"), "Wings doesn't have this scan any more. Scan it again to see what takes the space.").child(slot("children", button("Scan again", "default", "default", move || start_scan(again.clone()))));
     frame(name, None, content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::df::Disk;
+    use wings_plugin::ui::tree_json;
+
+    fn disk(name: &str) -> DiskRow {
+        DiskRow { disk: Disk { name: name.into(), mount: format!("/Volumes/{name}"), fs: "apfs".into(), kind: "ssd".into(), removable: false, total: 100, free: 40 }, used: 60, purgeable: 0, others: Vec::new() }
+    }
+
+    /// The path field sits in a stack that takes the row's width, so it isn't squeezed to its placeholder next to Scan.
+    #[test]
+    fn the_scan_a_folder_field_takes_the_rows_width() {
+        let tree = tree_json(with(|p| scan_folder(p))).to_string();
+        assert!(tree.contains(r#""props":{"gap":"s","grow":true},"type":"Stack""#), "{tree}");
+    }
+
+    /// Disks are the rows of one card, every Scan button the same kind (none solid).
+    #[test]
+    fn the_disks_are_one_card_of_rows_with_secondary_scan_buttons() {
+        let tree = tree_json(rows_card([disk_row(&disk("A")), disk_row(&disk("B"))])).to_string();
+        assert_eq!(tree.matches(r#""variant":"rows""#).count(), 1, "{tree}");
+        assert_eq!(tree.matches(r#""variant":"secondary"},"type":"Button""#).count(), 2, "{tree}");
+        assert!(!tree.contains(r#""variant":"default""#), "{tree}");
+    }
 }

@@ -9,7 +9,7 @@ use crate::{
         Activity, Change, Comment, ItemArgs, LinkIds, LinkedItem, PrLink, Revision, all_link_ids, comments_of, discussion_of, ids_query, item_args, item_tab_args, js_number, last_segment, link_ids, linked_items,
         pr_status, pull_request_links, revisions_of, summary_of, tags_of,
     },
-    parts::{avatar, badge, card_of, gap, large_title, pill, pill_button, skeleton, skeletons, strong, time_text, tone_dot, type_dot},
+    parts::{EXTERNAL_LINK, REFRESH, avatar, badge, card_of, fact, gap, icon_button, joined, pill, pill_button, section_label, skeleton, skeletons, strong, time_text, tone_dot, type_dot},
     sections::state_tone,
     type_color::type_color,
     urls::{pr_url, work_item_url},
@@ -21,7 +21,7 @@ use wings_plugin::{
     format::plural,
     host, messages,
     task::{join_all, spawn},
-    ui::{Node, card, empty, heading, muted, page, row, stack, text},
+    ui::{Node, card, empty, muted, page, row, stack, text},
 };
 
 /// The pull requests whose titles are asked for, one call each; the rest show by number, behind Show all.
@@ -242,8 +242,13 @@ fn button(label: &str, variant: &str, on_click: impl Fn() + 'static) -> Node {
 }
 
 fn toolbar(id: u64, kind: Option<&str>, actions: Vec<Node>) -> Node {
-    let node = Node::new("Toolbar").child(Node::new("Slot").prop("name", "title").text(format!("{} #{id}", kind.unwrap_or("Work item"))));
-    if actions.is_empty() { node } else { node.child(Node::new("Slot").prop("name", "actions").children(actions)) }
+    // The kind strong and the number muted after it, as the design system's header has a name and its context.
+    let title = gap(row(), "m")
+        .prop("align", "center")
+        .child(text(kind.unwrap_or("Work item")).prop("weight", "strong"))
+        .child(muted(format!("#{id}")).prop("size", "small"));
+    let node = Node::new("Toolbar").child(Node::new("Slot").prop("name", "title").child(title));
+    if actions.is_empty() { node } else { node.child(Node::new("Slot").prop("name", "actions").child(gap(row(), "xs").prop("align", "center").children(actions))) }
 }
 
 /// A column at most 860 points wide, centred in the room it has.
@@ -316,7 +321,7 @@ fn build(p: &Page) -> Vec<Node> {
     let toolbar = toolbar(
         args.id,
         Some(kind),
-        vec![button("Refresh", "outline", reload), Node::new("Button").prop("size", "sm").on("onClick", move |_| open_url(url.clone())).text("Open in Azure DevOps")],
+        vec![icon_button("Refresh", &REFRESH, reload), icon_button("Open in Azure DevOps", &EXTERNAL_LINK, move || open_url(url.clone()))],
     );
     vec![page(toolbar, [content])]
 }
@@ -368,9 +373,9 @@ fn header(p: &Page, item: &Shown, args: &ItemArgs, parent_id: Option<u64>, paren
     };
     let created = f["System.CreatedDate"].as_str().and_then(time_text).map(|ago| {
         let by = f["System.CreatedBy"]["displayName"].as_str().filter(|name| !name.is_empty()).map_or(" ".to_owned(), |name| format!(" by {name} "));
-        muted(format!("created{by}{ago}")).prop("size", "small")
+        fact(format!("created{by}{ago}"))
     });
-    let updated = f["System.ChangedDate"].as_str().and_then(time_text).map(|ago| muted(format!("updated {ago}")).prop("size", "small"));
+    let updated = f["System.ChangedDate"].as_str().and_then(time_text).map(|ago| fact(format!("updated {ago}")));
     let person = gap(row(), "s").prop("wrap", true).maybe(who.map(|who| avatar(who, true))).child(match who {
         Some(who) => strong(who),
         None => muted("Unassigned"),
@@ -379,20 +384,13 @@ fn header(p: &Page, item: &Shown, args: &ItemArgs, parent_id: Option<u64>, paren
         let args = args.clone();
         Node::new("Button").prop("variant", "link").prop("size", "xs").on("onClick", move |_| open_item(&args, id)).text(format!("Child of #{id}{}", parent_title.map_or(String::new(), |t| format!(" {t}"))))
     });
+    // The toolbar names the place (the kind and the number); the body names the thing, and says the number no more.
+    let facts: Vec<Node> = [(!sprint.is_empty()).then(|| fact(sprint)), (!area.is_empty() && area != project).then(|| fact(area)), created, updated].into_iter().flatten().collect();
     gap(stack(), "s")
-        .child(gap(row(), "s").prop("wrap", true).child(type_dot(type_color(kind))).child(text(kind)).maybe(parent))
-        .child(large_title(f["System.Title"].as_str().unwrap_or_default()).child(muted(format!(" #{}", item.id))))
-        .child(
-            gap(row(), "s")
-                .prop("wrap", true)
-                .child(state_node)
-                .child(person)
-                .maybe((!sprint.is_empty()).then(|| pill(sprint, "outline", None)))
-                .maybe((!area.is_empty() && area != project).then(|| pill(area, "secondary", None)))
-                .maybe(created)
-                .maybe(updated),
-        )
-        .maybe((!tags.is_empty()).then(|| gap(row(), "s").prop("wrap", true).children(tags.iter().map(|tag| gap(stack(), "s").key(tag.clone()).child(pill(tag.as_str(), "secondary", None))))))
+        .child(gap(row(), "s").prop("wrap", true).prop("align", "center").child(type_dot(type_color(kind))).child(strong(f["System.Title"].as_str().unwrap_or_default()).prop("grow", true)).maybe(parent))
+        .child(gap(row(), "m").prop("wrap", true).prop("align", "center").child(state_node).child(person))
+        .maybe((!facts.is_empty()).then(|| joined(facts)))
+        .maybe((!tags.is_empty()).then(|| gap(row(), "s").prop("wrap", true).children(tags.iter().map(|tag| gap(stack(), "s").key(tag.clone()).child(pill(tag.as_str(), "outline", None))))))
 }
 
 // ---------- summary ----------
@@ -448,8 +446,9 @@ fn part_error(message: &str) -> Node {
     card_of(vec![text(message).prop("tone", "danger"), row().child(button("Try again", "outline", reload))])
 }
 
+/// A page section: a small muted label over the card that holds its text.
 fn section(label: &str, blocks: &[Block]) -> Node {
-    card_of(vec![strong(label), crate::parts::html(blocks)])
+    gap(stack(), "s").child(section_label(label)).child(card_of(vec![crate::parts::html(blocks)]))
 }
 
 fn overview(p: &Page, item: &Shown) -> Node {
@@ -474,7 +473,7 @@ fn overview(p: &Page, item: &Shown) -> Node {
         .child(card().child(gap(stack(), "m").maybe(head).child(description)))
         .maybe((!item.repro.is_empty()).then(|| section("Repro steps", &item.repro)))
         .maybe((!item.acceptance.is_empty()).then(|| section("Acceptance criteria", &item.acceptance)))
-        .child(heading(3, format!("Discussion{}", comments.map_or(String::new(), |n| format!(" · {n}")))))
+        .child(section_label(format!("Discussion{}", comments.map_or(String::new(), |n| format!(" · {n}")))))
         .child(discussion)
 }
 
@@ -500,7 +499,7 @@ fn activity_node(activity: &Activity, updates: &Updates, author: Option<&str>) -
                     gap(row(), "s")
                         .child(avatar(by, true))
                         .child(strong(by.as_str()))
-                        .maybe((Some(by.as_str()) == author).then(|| pill("Author", "secondary", None)))
+                        .maybe((Some(by.as_str()) == author).then(|| pill("Author", "outline", None)))
                         .maybe(time_text(at).map(|ago| muted(ago).prop("size", "small").prop("grow", true))),
                 )
                 .child(crate::parts::html(&updates.comment_blocks[*comment])),
@@ -583,11 +582,11 @@ fn links_tab(p: &Page, args: &ItemArgs, project: &str, links: &LinkIds) -> Node 
             } else {
                 gap(stack(), "s").children(ids.iter().map(|id| link_row(args, *id, linked.and_then(|linked| linked.get(id)))))
             };
-            gap(stack(), "s").key(*title).child(heading(3, format!("{title} · {}", ids.len()))).child(rows)
+            gap(stack(), "s").key(*title).child(section_label(format!("{title} · {}", ids.len()))).child(rows)
         }))
         .maybe((!p.prs.is_empty()).then(|| {
             gap(stack(), "s")
-                .child(heading(3, format!("Pull requests · {}", p.prs.len())))
+                .child(section_label(format!("Pull requests · {}", p.prs.len())))
                 .child(gap(stack(), "s").children(p.prs.iter().take(shown).map(|pr| pr_row(args, project, pr))))
                 .maybe((p.prs.len() > PRS_SHOWN && !p.all_prs).then(|| {
                     Node::new("Button").prop("variant", "link").prop("size", "sm").on("onClick", |_| with(|p| p.all_prs = true)).text(format!("Show all {}", p.prs.len()))
@@ -716,6 +715,24 @@ mod tests {
         });
         // The parent and the child are one query, not a call each.
         assert_eq!(asked.borrow().iter().filter(|args| args[0] == "boards").count(), 1);
+    }
+
+    /// The page follows the design system: the header's Refresh and Open are ghost icon buttons with tooltips, the number is
+    /// said once, the facts are one style and a section is a small muted label, not a heading.
+    #[test]
+    fn the_page_has_icon_buttons_says_the_number_once_and_labels_its_sections() {
+        az_answering(false, false);
+        opened();
+        block_on(load());
+        block_on(async {});
+        let page: String = view().into_iter().map(|n| wings_plugin::ui::tree_json(n).to_string()).collect();
+        for label in ["Refresh", "Open in Azure DevOps"] {
+            assert!(page.contains(&format!(r#""label":"{label}""#)) && page.contains(r#""size":"icon-sm""#), "{label}: {page}");
+            assert!(!page.contains(&format!(r#""text":"{label}""#)), "{label} is not a text button: {page}");
+        }
+        assert_eq!(page.matches("#1432").count(), 1, "{page}");
+        assert!(!page.contains(r#""type":"Heading""#) && page.contains("Discussion"), "{page}");
+        assert!(!page.contains(r#""variant":"secondary""#) && !page.contains(r#""size":"large""#), "{page}");
     }
 
     #[test]

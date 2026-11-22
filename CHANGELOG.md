@@ -2,6 +2,13 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.84 · 2026-11-22
+
+- **One look across the plugins**: Issues, Schedules, PR tracker, Work item, Changes, Disk usage and Worktrees follow the same design as Claude chat and Settings. Headers name the page with its context greyed after it, actions are icon buttons with tooltips, choices between views are segmented tracks, toggles are checkboxes, and lists are rows in one card instead of a card each.
+- **Issues**: New issue is a + button that opens a full-width line under the filters; view, sort and toggles sit in a bar under the header.
+- **Long checkbox labels wrap** instead of running past their card in a narrow sidebar.
+- **Issues 0.30.0, Schedules 0.10.0, PR tracker 0.34.0, Work item 0.13.0, Changes 0.16.0, Disk usage 0.4.0, Worktrees 0.8.0**: the above.
+
 ## 0.2.83 · 2026-11-22
 
 - **Very long chats open**: a plugin page gets ten times as long for each step, so a Claude chat reading back a session with many screenshots no longer stops with "the page ran for too long".

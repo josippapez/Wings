@@ -40,6 +40,8 @@ impl PageView {
             } else {
                 Toggled::False
             })
+            // A label longer than the room wraps under itself: it ran past a 360 point sidebar's card.
+            .min_w_0()
             .flex()
             .items_center()
             .gap(px(8.0))
@@ -68,7 +70,7 @@ impl PageView {
                         div().into_any_element()
                     }),
             )
-            .child(self.inline(&checkbox.children, cx));
+            .child(div().min_w_0().child(self.inline(&checkbox.children, cx)));
         match checkbox.on_change.clone() {
             Some(handler) => {
                 let keyboard_handler = handler.clone();

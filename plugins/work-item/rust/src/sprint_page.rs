@@ -143,6 +143,7 @@ fn build(p: &Page) -> Vec<Node> {
         .prop("label", "Show")
         .prop("value", if mine { "mine" } else { "all" })
         .prop("options", json!([{ "value": "mine", "label": "Mine" }, { "value": "all", "label": "Whole sprint" }]))
+        .prop("segmented", true)
         .on("onChange", |event| set_mine(event["value"] == "mine"));
     let body = match (&p.answer, sprint) {
         (Some(Err(error)), _) => gap(stack(), "s").child(empty("Couldn't load the sprint", &truncate(error, 300))),
@@ -242,6 +243,18 @@ mod tests {
         assert_eq!(all.org, "https://dev.azure.com/acme");
         answering("git@github.com:acme/web.git");
         assert!(matches!(block_on(read_sprint("/work/other", true)), Ok(None)));
+    }
+
+    /// Mine and Whole sprint are a segmented track, as Settings' choices are, not two plain chips.
+    #[test]
+    fn mine_and_whole_sprint_are_a_segmented_track() {
+        with(|p| {
+            p.project = Some(Some(("/work/web".into(), "/work/web".into())));
+            p.mine = Some(true);
+            p.answer = Some(Err("later".into()));
+        });
+        let page: String = view().into_iter().map(|n| wings_plugin::ui::tree_json(n).to_string()).collect();
+        assert!(page.contains(r#""segmented":true"#) && page.contains("Whole sprint"), "{page}");
     }
 
     #[test]

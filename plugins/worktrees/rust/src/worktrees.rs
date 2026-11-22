@@ -196,6 +196,16 @@ pub fn shorten_path(path: &str) -> String {
     }
 }
 
+/// `path` as it reads next to its repo: relative to the folder the repo is in (`acme-web-search` for a sibling of
+/// `/Users/me/dev/acme-web`), else `~`-relative as `shorten_path`.
+pub fn relative_path(root: &str, path: &str) -> String {
+    let parent = trim(root).rfind('/').map_or("", |at| &trim(root)[..at]);
+    match trim(path).strip_prefix(parent).and_then(|rest| rest.strip_prefix('/')) {
+        Some(rest) if !parent.is_empty() && !rest.is_empty() => rest.to_owned(),
+        _ => shorten_path(path),
+    }
+}
+
 /// The lines of `git branch --format=%(refname:short)%09%(upstream:track)` whose upstream is gone.
 pub fn gone_branches(text: &str) -> BTreeSet<String> {
     text.lines()
@@ -343,6 +353,16 @@ locked
         assert_eq!(shorten_path("/rooted"), "/rooted");
         assert_eq!(shorten_path("/srv/app"), "/srv/app");
         assert_eq!(gone_branches("a\t[gone]\nb\t[ahead 1]\nc\t\nd\t[gone]\n").into_iter().collect::<Vec<_>>(), ["a", "d"]);
+    }
+
+    #[test]
+    fn a_path_reads_relative_to_the_folder_its_repo_is_in_else_from_home() {
+        assert_eq!(relative_path("/Users/me/dev/app", "/Users/me/dev/app-feature"), "app-feature");
+        assert_eq!(relative_path("/Users/me/dev/app/", "/Users/me/dev/app"), "app");
+        assert_eq!(relative_path("/Users/me/dev/app", "/Users/me/dev/app/.wt/a"), "app/.wt/a");
+        assert_eq!(relative_path("/Users/me/dev/app", "/Users/me/other/x"), "~/other/x");
+        assert_eq!(relative_path("/srv/app", "/opt/x"), "/opt/x");
+        assert_eq!(relative_path("/app", "/app-x"), "/app-x");
     }
 
     #[test]

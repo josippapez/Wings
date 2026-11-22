@@ -4,8 +4,59 @@ use crate::{checklist::iso_to_ms, types::CheckState};
 use wings_plugin::{
     format::ago,
     host,
-    ui::{Node, badge, muted},
+    ui::{Node, badge, icon, muted, row, slot, text},
 };
+
+/// Lucide's `refresh-cw` and `external-link`, which the pages' icon buttons draw.
+pub const REFRESH: [&str; 4] = ["M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8", "M21 3v5h-5", "M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16", "M8 16H3v5"];
+pub const EXTERNAL_LINK: [&str; 3] = ["M15 3h6v6", "M10 14 21 3", "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"];
+
+/// A ghost icon button with a tooltip, as Claude chat's header has them: `label` is what it is read out as and what the
+/// tooltip says.
+pub fn icon_button(label: &str, paths: &[&str], disabled: bool, on_click: impl Fn() + 'static) -> Node {
+    Node::new("Button")
+        .prop("variant", "ghost")
+        .prop("size", "icon-sm")
+        .prop("label", label)
+        .prop("title", label)
+        .prop("disabled", disabled)
+        .on("onClick", move |_| on_click())
+        .child(icon(24, 2.0, paths).prop("size", 16))
+}
+
+/// A page whose `top` (the header and the bars under it) stays put over its `body`.
+pub fn page_with(top: Vec<Node>, body: impl IntoIterator<Item = Node>) -> Node {
+    Node::new("Page").child(Node::new("Slot").prop("name", "toolbar").children(top)).child(Node::new("Slot").prop("name", "body").children(body))
+}
+
+/// A header's title as the design system has it: the name strong and its context muted and small after it.
+pub fn title_with_context(name: &str, context: &str) -> Node {
+    slot(
+        "title",
+        row()
+            .prop("gap", "m")
+            .prop("align", "center")
+            .child(text(name).prop("weight", "strong").prop("truncate", true).prop("title", name))
+            .maybe((!context.is_empty()).then(|| muted(context).prop("size", "small").prop("truncate", true).prop("title", context))),
+    )
+}
+
+/// A small muted label over a section of a page, with its count: "Conversation · 3".
+pub fn section_label(label: impl Into<String>) -> Node {
+    muted(label).prop("size", "small").prop("weight", "medium")
+}
+
+/// `parts` as one line of muted facts split by " · ", each keeping its own tone.
+pub fn joined(parts: Vec<Node>) -> Node {
+    let mut line = row().prop("gap", "s").prop("wrap", true).prop("align", "center");
+    for (at, part) in parts.into_iter().enumerate() {
+        if at > 0 {
+            line = line.child(muted("·").prop("size", "small").key(format!("dot{at}")));
+        }
+        line = line.child(part.key(format!("part{at}")));
+    }
+    line
+}
 
 fn state_word(state: CheckState) -> &'static str {
     match state {
@@ -67,11 +118,6 @@ pub fn tag(label: &str, required: bool) -> Node {
 /// A column of a row, which takes a fixed `width` in points.
 pub fn column(width: u32) -> Node {
     Node::new("Stack").prop("width", width)
-}
-
-/// The text at its large size, as a page's title.
-pub fn large_text(text: impl Into<String>) -> Node {
-    wings_plugin::ui::text(text).prop("size", "large")
 }
 
 /// How long ago `iso` was, or none when it isn't a time.

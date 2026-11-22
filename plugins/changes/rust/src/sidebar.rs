@@ -471,19 +471,21 @@ fn view() -> Vec<Node> {
         // An icon, as the switch and the pop-out left a 250 point sidebar no room for the word.
         let refresh = Node::new("Button")
             .prop("variant", "ghost")
-            .prop("size", "sm")
+            .prop("size", "icon-sm")
             .prop("label", "Refresh")
+            .prop("title", "Refresh")
             .on("onClick", |_| {
                 forget_repos();
                 spawn(reload());
             })
             .child(icon(24, 2.0, &["M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8", "M21 3v5h-5", "M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16", "M8 16H3v5"]));
-        let switch = chips("Show in the sidebar", &[("files", "Files"), ("graph", "Graph")], p.section.name(), |picked| pick(if picked == "graph" { Section::Graph } else { Section::Files }));
+        let switch = chips("Show in the sidebar", &[("files", "Files"), ("graph", "Graph")], p.section.name(), |picked| pick(if picked == "graph" { Section::Graph } else { Section::Files })).prop("segmented", true);
         let graph_root = repo.root.clone();
         let pop_out = Node::new("Button")
             .prop("variant", "ghost")
-            .prop("size", "sm")
+            .prop("size", "icon-sm")
             .prop("label", "Open in a window")
+            .prop("title", "Open in a window")
             .on("onClick", move |_| ask(GRAPH, json!({ "root": graph_root })))
             .child(icon(24, 2.0, &["M15 3h6v6", "M10 14 21 3", "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"]));
         let actions = row().prop("gap", "xs").maybe(p.loading.then(|| spinner().prop("label", "Refreshing"))).child(switch).child(refresh).child(pop_out);
@@ -498,7 +500,8 @@ fn view() -> Vec<Node> {
                 "history" => View::History,
                 _ => View::Uncommitted,
             });
-        });
+        })
+        .prop("segmented", true);
         let body = match (p.view, &p.changes) {
             (View::History, _) => history_body(p, &repo.root),
             (_, Some(c)) => changes_body(c, p.view.mode(), &p.collapsed),
@@ -565,10 +568,21 @@ pub fn start() {
 mod tests {
     use serde_json::json;
 
-    use super::{choose, place};
+    use super::{Repo, choose, place, view, with};
 
     fn repo(root: &str) -> Option<String> {
         Some(root.to_owned())
+    }
+
+    /// The header's Files / Graph choice and the Changes / Branch / History choice are segmented tracks, and the
+    /// header's icon buttons carry a tooltip.
+    #[test]
+    fn the_sidebars_choices_are_segmented_tracks_and_its_icon_buttons_have_tooltips() {
+        with(|page| page.repo = Some(Repo { root: "/shop".into(), name: "shop".into(), branch: "main".into() }));
+        let tree = wings_plugin::ui::tree_json(view().remove(0)).to_string();
+        assert_eq!(tree.matches(r#""segmented":true"#).count(), 2, "{tree}");
+        assert!(tree.contains(r#""title":"Refresh""#) && tree.contains(r#""title":"Open in a window""#), "{tree}");
+        assert!(tree.contains(r#""size":"icon-sm""#), "{tree}");
     }
 
     #[test]

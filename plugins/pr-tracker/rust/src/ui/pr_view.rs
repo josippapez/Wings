@@ -17,7 +17,7 @@ use wings_plugin::{
     markdown::markdown,
     host,
     task::spawn,
-    ui::{Node, card, confirm, empty, heading, muted, notice, page, row, stack, text},
+    ui::{Node, card, confirm, empty, muted, notice, page, row, stack, text},
 };
 
 /// The native app draws a page of at most 5,000 nodes, so a long conversation shows in steps.
@@ -195,33 +195,36 @@ pub fn build(p: &Page) -> Vec<Node> {
     let run_open = tab == Tab::Checks && st.is_some_and(run_view::is_open);
     let open = reviewable(st);
 
+    // Refresh and Open in the host are ghost icon buttons with tooltips; Open diff is the one solid button.
+    let url = args.url.clone();
+    let host_name = info(args.provider).name;
     let mut actions = vec![
-        button("Refresh", "outline", pr_page::refresh),
-        busy_button("Send to agent", "outline", p.busy == Some("agent"), || pr_page::run("agent", None)),
-        {
-            let url = args.url.clone();
-            button(format!("Open in {}", info(args.provider).name), "outline", move || host::open_url(&url))
-        },
+        parts::icon_button("Refresh", &parts::REFRESH, false, pr_page::refresh),
+        parts::icon_button(&format!("Open in {host_name}"), &parts::EXTERNAL_LINK, false, move || host::open_url(&url)),
+        busy_button("Send to agent", "secondary", p.busy == Some("agent"), || pr_page::run("agent", None)),
     ];
     if p.can.approve && open {
-        actions.push(busy_button("Approve", "outline", approving, || ui(|u| u.pending = Some(Pending { label: "Approve".into(), vote: None }))));
+        actions.push(busy_button("Approve", "secondary", approving, || ui(|u| u.pending = Some(Pending { label: "Approve".into(), vote: None }))));
     }
     if p.can.vote && open {
-        let menu = Node::new("Button").prop("variant", "outline").prop("size", "sm").prop("disabled", approving).on("onClick", |_| ui(|u| u.vote_menu = !u.vote_menu)).text("Vote ▾");
+        let menu = Node::new("Button").prop("variant", "secondary").prop("size", "sm").prop("disabled", approving).on("onClick", |_| ui(|u| u.vote_menu = !u.vote_menu)).text("Vote ▾");
         actions.push(menu);
     }
     actions.push(busy_button("Open diff", "default", p.busy == Some("diff"), || pr_page::run("diff", None)));
+    // The toolbar names the place: the repository strong and the number muted after it, once. The body names the thing.
+    let place = line("m")
+        .prop("align", "center")
+        .child(text(args.repo.as_str()).prop("weight", "strong").prop("truncate", true).prop("title", args.repo.as_str()))
+        .child(muted(ref_of(args.provider, args.number)).prop("size", "small"));
     let mut toolbar = Node::new("Toolbar");
     toolbar = match &p.back {
         Some(back) => {
             let back = back.clone();
-            toolbar.child(Node::new("Slot").prop("name", "children").child(
-                line("s").child(button("← All pull requests", "ghost", move || back())).child(muted("/")).child(muted(reference.clone()).prop("truncate", true)),
-            ))
+            toolbar.child(Node::new("Slot").prop("name", "children").child(line("s").prop("align", "center").child(button("← All pull requests", "ghost", move || back())).child(muted("/")).child(place)))
         }
-        None => toolbar.child(Node::new("Slot").prop("name", "title").text(reference.clone())),
+        None => toolbar.child(Node::new("Slot").prop("name", "title").child(place)),
     };
-    toolbar = toolbar.child(Node::new("Slot").prop("name", "actions").children(actions));
+    toolbar = toolbar.child(Node::new("Slot").prop("name", "actions").child(line("xs").prop("align", "center").prop("wrap", true).children(actions)));
 
     let mut body: Vec<Node> = Vec::new();
     if let Some(pending) = pending {
@@ -273,10 +276,9 @@ fn confirm_pending(vote: Option<String>, label: String, sha: String) {
 fn wrap(p: &Page, st: Option<&Status>, run_open: bool, verdict: Option<(bool, String)>) -> Node {
     let args = p.args.as_ref().unwrap();
     let title = st.map_or(args.title.as_str(), |s| s.title.as_str());
-    let number = ref_of(args.provider, args.number);
     let overview = p.overview.as_ref();
     let header = col("m")
-        .child(line("m").prop("align", "baseline").child(parts::large_text(title).prop("weight", "strong")).child(parts::large_text(number).prop("tone", "muted")))
+        .child(text(title).prop("weight", "strong"))
         .child(
             line("l")
                 .prop("wrap", true)
@@ -470,7 +472,7 @@ fn overview_tab(p: &Page, overview: &Overview) -> Node {
             .text(format!("{} {resolved} resolved", if show_resolved { "Collapse" } else { "Expand" }))
     });
     let head = line("m")
-        .child(heading(3, format!("Conversation{}", if entries.is_some() { format!(" · {threads}") } else { String::new() })).prop("grow", true))
+        .child(parts::section_label(format!("Conversation{}", if entries.is_some() { format!(" · {threads}") } else { String::new() })).prop("grow", true))
         .maybe(toggle);
 
     let conversation = match &entries {

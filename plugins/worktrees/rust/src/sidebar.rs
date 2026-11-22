@@ -6,7 +6,7 @@
 use crate::{
     elsewhere::{self, Saved, Scan, elsewhere_repos, find_repo_folders, repos_with_worktrees},
     git::{Outcome, Removal, Repo, load_repos, prune, remove_worktrees, rows_of},
-    worktrees::{Row, shorten_path},
+    worktrees::{Row, Worktree, relative_path, shorten_path},
 };
 use serde_json::Value;
 use std::{cell::RefCell, future::Future, pin::Pin, rc::Rc};
@@ -15,7 +15,7 @@ use wings_plugin::{
     git::{forget_default_branch, forget_repo_roots, on_change, repo_root},
     host,
     task::{join, join_all, spawn},
-    ui::{Node, badge, card, checkbox, confirm, empty, loading, muted, notice, page, row, spinner, stack, text, toolbar},
+    ui::{Entry, Node, badge, checkbox, confirm, empty, entry, icon, loading, muted, notice, page, row, rows_card, slot, spinner, stack, text},
 };
 
 #[derive(Clone, Copy, PartialEq)]
@@ -254,9 +254,54 @@ fn confirm_card(p: &Page, asked: &Ask, repo: &Repo, branch: Option<&str>, workin
     )
 }
 
-/// One worktree: its branch, where it is, what state it is in, and what can be done with it. `confirm` is the card
-/// asking to remove it, which takes the place of its buttons. Without `can_open` there is no "Open in new pane".
-fn worktree_item(root: &str, r: &Row, working: bool, confirm: Option<Node>, can_open: bool) -> Node {
+/// Lucide's `square-terminal`, `trash-2` and `rotate-cw`, drawn by the ghost icon buttons below.
+const TERMINAL: [&str; 3] = ["M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z", "m7 11 2-2-2-2", "M11 13h4"];
+const TRASH: [&str; 5] = ["M3 6h18", "M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6", "M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2", "M10 11v6", "M14 11v6"];
+const REFRESH: [&str; 2] = ["M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8", "M21 3v5h-5"];
+
+/// A ghost icon button with its name as the label and the tooltip, as the Issues tab's New issue.
+fn icon_button(label: &str, tip: &str, paths: &[&str], disabled: bool, on_click: impl Fn() + 'static) -> Node {
+    let button = Node::new("Button")
+        .prop("variant", "ghost")
+        .prop("size", "icon-sm")
+        .prop("label", label)
+        .prop("title", tip)
+        .on("onClick", move |_| on_click())
+        .child(icon(24, 2.0, paths).prop("size", 16));
+    if disabled { button.prop("disabled", true) } else { button }
+}
+
+/// A small secondary button at the end of a section's label.
+fn small_button(label: impl Into<String>, disabled: bool, on_click: impl Fn() + 'static) -> Node {
+    button(label, "secondary", disabled, on_click).prop("size", "sm")
+}
+
+/// A section's label: its name, its context muted after it, and `actions` at the end, which wrap under the label when
+/// there is no room for both.
+fn section_label(name: &str, context: Option<String>, actions: Vec<Node>) -> Node {
+    let title = row()
+        .prop("gap", "m")
+        .prop("align", "center")
+        .child(text(name).prop("weight", "strong"))
+        .maybe(context.map(|context| muted(&context).prop("size", "small").prop("truncate", true).prop("title", context)));
+    row().prop("gap", "m").prop("align", "center").prop("justify", "between").prop("wrap", true).child(title).maybe((!actions.is_empty()).then(|| row().prop("gap", "s").prop("wrap", true).children(actions)))
+}
+
+/// What a worktree's branch is called on its row.
+fn branch_name(wt: &Worktree) -> String {
+    match (&wt.branch, &wt.head) {
+        (Some(branch), _) => branch.clone(),
+        _ if wt.bare => "(bare)".into(),
+        (None, Some(head)) => format!("detached {}", head.chars().take(7).collect::<String>()),
+        _ => "(no branch)".into(),
+    }
+}
+
+/// One worktree as a row of its repo's card: the branch with its state badges after it, the folder muted and the time
+/// of its last commit at the end, and the actions as ghost icon buttons. Without `can_open` there is no "Open in new
+/// pane". What stops a removal is the disabled button's tooltip. `confirm` is the card asking to remove it, which
+/// follows the row.
+fn worktree_item(root: &str, r: &Row, working: bool, confirm: Option<Node>, can_open: bool) -> Vec<Node> {
     let wt = &r.wt;
     let flags = [
         (wt.main, "main", Some("info")),
@@ -269,82 +314,71 @@ fn worktree_item(root: &str, r: &Row, working: bool, confirm: Option<Node>, can_
         (r.locked, "locked", Some("warn")),
         (r.in_pane, "open in a pane", Some("info")),
     ];
-    let flags: Vec<Node> = flags.into_iter().filter(|flag| flag.0).map(|(_, label, tone)| badge(label, tone).key(label)).collect();
-    let name = match (&wt.branch, &wt.head) {
-        (Some(branch), _) => branch.clone(),
-        _ if wt.bare => "(bare)".into(),
-        (None, Some(head)) => format!("detached {}", head.chars().take(7).collect::<String>()),
-        _ => "(no branch)".into(),
-    };
+    let flags = flags.into_iter().filter(|flag| flag.0).map(|(_, label, tone)| badge(label, tone).key(label));
+    let title = row().prop("gap", "s").prop("align", "center").prop("wrap", true).child(text(branch_name(wt)).prop("weight", "medium").prop("truncate", true)).children(flags);
+    let path = relative_path(root, &wt.path);
     // git prints seconds.
     let when = r.last_commit.map(|seconds| muted(ago(seconds * 1000.0, host::now())).prop("size", "small"));
-    let actions = confirm.unwrap_or_else(|| {
-        let open = (!r.missing && can_open).then(|| {
-            let path = wt.path.clone();
-            button("Open in new pane", "ghost", false, move || {
-                let opened = host::open_pane(&path);
-                spawn(async move {
-                    if let Err(error) = opened.await {
-                        with(|page| page.notes = vec![("danger", error)]);
-                    }
-                });
-            })
-        });
-        let remove = if r.removable {
-            let asked = Ask { kind: Kind::Remove, root: root.to_owned(), paths: vec![wt.path.clone()] };
-            button("Remove", "outline", working, move || ask(asked.clone()))
-        } else {
-            muted(r.why.unwrap_or_default()).prop("size", "tiny")
-        };
-        row().prop("gap", "s").prop("justify", "end").prop("wrap", true).maybe(open).child(remove)
+    let detail = muted(&path).prop("size", "small").prop("truncate", true).prop("title", shorten_path(&wt.path));
+    let open = (!r.missing && can_open).then(|| {
+        let path = wt.path.clone();
+        icon_button("Open in new pane", "Open in new pane", &TERMINAL, false, move || {
+            let opened = host::open_pane(&path);
+            spawn(async move {
+                if let Err(error) = opened.await {
+                    with(|page| page.notes = vec![("danger", error)]);
+                }
+            });
+        })
     });
-    card().key(&wt.path).child(
-        stack()
-            .prop("gap", "xs")
-            .child(row().child(text(name).prop("weight", "strong").prop("truncate", true).prop("grow", true)).maybe(when))
-            .child(muted(shorten_path(&wt.path)).prop("size", "small").prop("mono", true).prop("truncate", true))
-            .maybe((!flags.is_empty()).then(|| row().prop("wrap", true).prop("gap", "xs").children(flags)))
-            .child(actions),
-    )
+    let asked = Ask { kind: Kind::Remove, root: root.to_owned(), paths: vec![wt.path.clone()] };
+    let remove = icon_button("Remove", r.why.unwrap_or("Remove worktree"), &TRASH, !r.removable || working, move || ask(asked.clone()));
+    let actions = row().prop("gap", "xs").prop("align", "center").maybe(when).maybe(open).child(remove);
+    let item = entry(Entry { lead: None, title, detail: Some(detail), trailing: Some(actions) }).key(&wt.path);
+    let confirm = confirm.map(|confirm| entry(Entry { lead: None, title: confirm, detail: None, trailing: None }).key(format!("{}:confirm", wt.path)));
+    [Some(item), confirm].into_iter().flatten().collect()
 }
 
-/// One repo: its name and path, the buttons that act on several worktrees at once, and a card for each worktree.
-/// Whatever is being confirmed in the repo shows here too, under those buttons or in its worktree. A repo outside
-/// your projects gets no "Open in new pane": Wings opens panes only in your projects.
+/// One repo: its name as a section label with its folder and default branch muted after it, the small buttons that
+/// act on several worktrees at once at its end, and one card of a row for each worktree. Whatever is being confirmed
+/// in the repo shows here too, under the label or under its worktree. A repo outside your projects gets no "Open in
+/// new pane": Wings opens panes only in your projects.
 fn repo_section(p: &Page, repo: &Repo, can_open: bool) -> Node {
     let rows = rows_of(repo, &p.cwds);
     let asked = p.asked.as_ref().filter(|asked| asked.root == repo.root);
     let working = p.busy.as_ref().is_some_and(|busy| busy.ends_with(&format!(":{}", repo.root)));
     let several = |kind: Kind, label: String, paths: Vec<String>| {
         let asked = Ask { kind, root: repo.root.clone(), paths };
-        button(label, "outline", working, move || ask(asked.clone()))
+        small_button(label, working, move || ask(asked.clone()))
     };
     let paths = |rows: Vec<&Row>| rows.into_iter().map(|row| row.wt.path.clone()).collect::<Vec<_>>();
     let bulk = paths(rows.iter().filter(|row| row.bulk).collect());
     let missing = paths(rows.iter().filter(|row| row.missing && !row.locked).collect());
     let default = repo.facts.default_branch.as_ref().map(|branch| format!(" · default {branch}")).unwrap_or_default();
-    let buttons = (rows.len() > 1 && (!missing.is_empty() || !bulk.is_empty())).then(|| {
-        row()
-            .prop("wrap", true)
-            .prop("gap", "s")
-            .maybe((!missing.is_empty()).then(|| several(Kind::Prune, format!("Prune {} missing", missing.len()), missing.clone())))
-            .maybe((!bulk.is_empty()).then(|| several(Kind::Bulk, format!("Remove {} merged & clean", bulk.len()), bulk.clone())))
-    });
+    let buttons = if rows.len() > 1 {
+        [
+            (!missing.is_empty()).then(|| several(Kind::Prune, format!("Prune {} missing", missing.len()), missing.clone())),
+            (!bulk.is_empty()).then(|| several(Kind::Bulk, format!("Remove {} merged & clean", bulk.len()), bulk.clone())),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    } else {
+        Vec::new()
+    };
     stack()
         .key(&repo.root)
         .prop("gap", "s")
-        .child(Node::new("Heading").text(basename(&repo.root)))
-        .child(muted(format!("{}{default}", shorten_path(&repo.root))).prop("truncate", true))
-        .maybe(buttons)
+        .child(section_label(&basename(&repo.root), Some(format!("{}{default}", shorten_path(&repo.root))), buttons))
         .maybe(asked.filter(|asked| asked.kind != Kind::Remove).map(|asked| confirm_card(p, asked, repo, None, working)))
-        .child(stack().prop("gap", "s").children(rows.iter().map(|row| {
+        .child(rows_card(rows.iter().flat_map(|row| {
             let removing = asked.filter(|asked| asked.kind == Kind::Remove && asked.paths[0] == row.wt.path);
             worktree_item(&repo.root, row, working, removing.map(|asked| confirm_card(p, asked, repo, row.wt.branch.as_deref(), working)), can_open)
         })))
 }
 
-/// The "Elsewhere on this Mac" section: the button that scans the disks for repos with worktrees, what a scan is
-/// doing or found, and the repos it found.
+/// The "Elsewhere on this Mac" section: its label with the button that scans the disks for repos with worktrees at its
+/// end, what a scan is doing or found, and the repos it found.
 fn elsewhere_section(p: &Page, found: &[&Repo]) -> Node {
     let at = p.scanned_at;
     let note = match &p.scanning {
@@ -355,17 +389,12 @@ fn elsewhere_section(p: &Page, found: &[&Repo]) -> Node {
         None => format!("Scanned {}. No repo outside your projects has more than one worktree.", ago(at, host::now())),
     };
     let note = muted(note).prop("size", "small");
-    let stop = p.scan.clone().map(|scan| button("Stop", "outline", false, move || scan.stop()));
+    let stop = p.scan.clone().map(|scan| small_button("Stop", false, move || scan.stop()));
+    let actions = [Some(small_button(if at == 0.0 { "Scan this Mac" } else { "Scan again" }, p.scanning.is_some(), scan_mac)), stop].into_iter().flatten().collect();
     stack()
         .key("elsewhere")
         .prop("gap", "s")
-        .child(
-            row()
-                .prop("justify", "between")
-                .prop("wrap", true)
-                .child(Node::new("Heading").text("Elsewhere on this Mac"))
-                .child(row().prop("gap", "xs").child(button(if at == 0.0 { "Scan this Mac" } else { "Scan again" }, "outline", p.scanning.is_some(), scan_mac)).maybe(stop)),
-        )
+        .child(section_label("Elsewhere on this Mac", None, actions))
         .child(if p.scanning.is_some() { note.prop("numeric", true) } else { note })
         .maybe(p.scan_error.as_ref().map(|error| notice("danger", error)))
         .children(p.other_errors.iter().map(|error| notice("warn", error).key(error)))
@@ -378,24 +407,26 @@ fn view() -> Vec<Node> {
         let Some(repos) = &p.repos else {
             return vec![loading()];
         };
-        let removable: usize = repos.iter().map(|repo| rows_of(repo, &p.cwds).iter().filter(|row| row.bulk).count()).sum();
-        let refresh_button = button("Refresh", "outline", false, || {
+        let refresh_button = icon_button("Refresh", "Refresh", &REFRESH, false, || {
             // The button only: focus and pane changes keep what was found.
             forget_repo_roots();
             forget_default_branch(None);
             spawn(refresh());
         });
-        let actions = row().prop("gap", "xs").maybe(p.loading.then(|| spinner().prop("label", "Refreshing"))).child(refresh_button);
-        let summary = if removable > 0 { format!("{} merged and clean", plural(removable, "worktree")) } else { "Of your projects".into() };
+        let actions = row().prop("gap", "xs").prop("align", "center").maybe(p.loading.then(|| spinner().prop("label", "Refreshing"))).child(refresh_button);
+                let title = row().prop("gap", "m").prop("align", "center").child(text("Worktrees").prop("weight", "strong"));
+        let header = Node::new("Toolbar").child(slot("title", title)).child(slot("actions", actions));
         let none = repos.is_empty().then(|| empty("None of your projects is a git repo.", "Add a project that is a git repo, or open a terminal in one, and its worktrees show here."));
-        let body = [muted(summary).prop("truncate", true)]
-            .into_iter()
-            .chain(p.notes.iter().enumerate().map(|(at, (tone, note))| notice(tone, note).key(format!("note{at}"))))
+        let body = p
+            .notes
+            .iter()
+            .enumerate()
+            .map(|(at, (tone, note))| notice(tone, note).key(format!("note{at}")))
             .chain(p.errors.iter().map(|error| notice("warn", error).key(error)))
             .chain(none)
             .chain(repos.iter().map(|repo| repo_section(p, repo, true)))
             .chain([elsewhere_section(p, &elsewhere_repos(&p.others, repos))]);
-        vec![page(toolbar("Worktrees", Some(actions)), body.collect::<Vec<_>>())]
+        vec![page(header, body.collect::<Vec<_>>())]
     })
 }
 
@@ -427,4 +458,56 @@ pub fn start() {
             refresh().await;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::worktrees::{Facts, Probe, describe, parse_worktrees};
+    use wings_plugin::ui::tree_json;
+
+    fn buttons(value: &Value, out: &mut Vec<Value>) {
+        match value {
+            Value::Object(map) => {
+                if map.get("type") == Some(&Value::from("Button")) {
+                    out.push(value["props"].clone());
+                }
+                map.values().for_each(|child| buttons(child, out));
+            }
+            Value::Array(list) => list.iter().for_each(|child| buttons(child, out)),
+            _ => {}
+        }
+    }
+
+    fn drawn(can_open: bool) -> Vec<Vec<Value>> {
+        let list = parse_worktrees(LIST);
+        let probes = list.iter().map(|wt| (wt.path.clone(), Probe { dirty: Some(false), last_commit: Some(1000.0) })).collect();
+        describe(&list, &Facts::default(), &probes, &[], false)
+            .iter()
+            .map(|row| {
+                let mut found = Vec::new();
+                worktree_item("/dev/app", row, false, None, can_open).into_iter().for_each(|node| buttons(&tree_json(node), &mut found));
+                found
+            })
+            .collect()
+    }
+
+    const LIST: &str = "worktree /dev/app\nHEAD 1\nbranch refs/heads/main\n\nworktree /dev/app-a\nHEAD 2\nbranch refs/heads/a\n\nworktree /dev/app-b\nHEAD 3\nbranch refs/heads/b\nlocked\n";
+
+    #[test]
+    fn a_worktrees_actions_are_ghost_icon_buttons_with_a_tooltip_and_what_stops_a_removal_is_the_tooltip() {
+        host::testing::set_now(2_000_000.0);
+        let rows = drawn(true);
+        for button in rows.iter().flatten() {
+            assert_eq!((button["variant"].as_str(), button["size"].as_str()), (Some("ghost"), Some("icon-sm")));
+            assert!(button["label"].is_string() && button["title"].is_string(), "{button}");
+        }
+        // The main worktree's Remove is disabled; a free one has an enabled one; a locked one is disabled and says why.
+        assert_eq!((rows[0][1]["disabled"].as_bool(), rows[0][1]["title"].as_str()), (Some(true), Some("The main worktree stays.")));
+        assert_eq!(rows[1][1]["label"], "Remove");
+        assert!(rows[1][1]["disabled"].is_null());
+        assert_eq!((rows[2][1]["disabled"].as_bool(), rows[2][1]["title"].as_str()), (Some(true), Some("Locked.")));
+        // Outside your projects there is no "Open in new pane".
+        assert!(drawn(false)[1].iter().all(|b| b["label"] == "Remove"));
+    }
 }
