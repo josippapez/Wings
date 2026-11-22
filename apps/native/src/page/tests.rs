@@ -2551,6 +2551,42 @@ fn a_floating_split_reports_its_width_and_keeps_its_pane() {
     }
 }
 
+/// A floating split with `insetBelow` sets its main pane in by the pane's width where it is at least that wide, so a line
+/// of the main pane ends before the pane instead of running under it, and tells the page; narrower, the pane floats over.
+/// The chat's side panel covered the end of its lines, code and errors in a 1000 point tab.
+#[test]
+fn a_floating_split_sets_its_main_pane_in_where_it_has_room() {
+    let source = || {
+        let mut heard = String::new();
+        fake::page("page", move |event| {
+            if let Some(("5:narrow", payload)) = event {
+                heard = payload["inset"].to_string();
+            }
+            let inset = heard.clone();
+            json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Split",
+                "props": { "defaultSize": 200, "side": "end", "float": true, "collapseBelow": 1200, "insetBelow": 600, "onNarrow": "5:narrow" },
+                "children": [
+                { "id": 2, "type": "Slot", "props": { "name": "start" }, "children": [
+                    { "id": 9, "type": "Stack", "props": { "fill": true }, "children": [text(3, 4, format!("Main, inset {inset}."))] }] },
+                { "id": 6, "type": "Slot", "props": { "name": "end" }, "children": [text(7, 8, "Side".into())] }] }] })
+        })
+    };
+    for (width, inset, said) in [(800.0, true, "Main, inset true."), (500.0, false, "Main, inset false.")] {
+        let mut app = TestApp::new();
+        app.background_executor().allow_parking();
+        let host = hosted(&mut app);
+        let source = source();
+        let bounds = gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(width), px(300.0)));
+        let mut window = app.open_window_with_options(
+            gpui::WindowOptions { window_bounds: Some(gpui::WindowBounds::Windowed(bounds)), ..Default::default() },
+            |_, cx| PageView::in_plugin(&host, &source, cx),
+        );
+        settle(&app, &mut window, shows(said));
+        assert_eq!(window.read(|view, _| view.split_inset(1)), Some(inset));
+        assert!(window.read(|view, _| view.text().contains("Side")), "the pane stays at {width}");
+    }
+}
+
 /// How long a click that swaps a long conversation for another window of it, scrolled to its first message, takes to
 /// draw: as a click on a far prompt on Claude chat's rail does. Run with `--ignored --nocapture`.
 #[test]

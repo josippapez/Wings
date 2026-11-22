@@ -632,6 +632,9 @@ pub struct Split {
     pub on_narrow: Option<String>,
     /// A floating pane with this handler hears Escape in it and a press outside it.
     pub on_close: Option<String>,
+    /// With `float`: while the split is at least this wide, `start` is set in from the right by the floating pane's width,
+    /// so nothing of it goes under the pane. `onNarrow` then also says `inset`.
+    pub inset_below: Option<f32>,
     /// The space each side of the divider, so cards in the two panes don't touch it. `none` by default: a list or a rail
     /// runs up to the divider.
     pub gap: Gap,
@@ -1647,6 +1650,9 @@ impl Walk {
                     float: on("float"),
                     on_narrow: handler("onNarrow"),
                     on_close: handler("onClose"),
+                    inset_below: number(&props, "insetBelow")
+                        .filter(|below| *below > 0.0)
+                        .map(|below| below.min(10_000.0) as f32),
                     gap: str_prop(&props, "gap").and_then(Gap::choose).unwrap_or(Gap::None),
                     start: slots.take("start"),
                     end: slots.take("end"),

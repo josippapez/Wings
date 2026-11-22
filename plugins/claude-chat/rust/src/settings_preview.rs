@@ -5,25 +5,45 @@ use wings_plugin::ui::{Node, card, disclosure, gauge, icon, muted, row, stack, t
 
 use crate::{folds::Kind, view_mode::Mode};
 
-/// What a view mode shows of the mock turn: `thought` is None when it is left out, else whether it shows open.
-#[derive(Debug, PartialEq, Eq)]
+/// What a view mode shows of the mock turn: `thought` is None when it is left out, else whether it shows open. Every
+/// other field is whether that kind of fold shows open.
+#[derive(Debug, PartialEq, Eq, Default)]
 pub struct Shows {
     pub thought: Option<bool>,
     pub steps: bool,
     pub command: bool,
     pub read: bool,
     pub edit: bool,
+    pub search: bool,
+    pub web: bool,
+    pub subagent: bool,
+    pub other: bool,
+    pub summary: bool,
+    pub note: bool,
 }
 
 /// What `mode` opens, given which kinds of fold Verbose is set to open (`prefs::opens`). Normal shuts every fold and leaves
-/// the thoughts out, Thinking adds them open, and Verbose opens what is ticked.
+/// the thoughts out, Thinking adds them open, and Verbose opens what is ticked: a call's output only inside an open run.
 pub fn shows(mode: Mode, opens: impl Fn(Kind) -> bool) -> Shows {
     match mode {
-        Mode::Normal => Shows { thought: None, steps: false, command: false, read: false, edit: false },
-        Mode::Thinking => Shows { thought: Some(true), steps: false, command: false, read: false, edit: false },
+        Mode::Normal => Shows::default(),
+        Mode::Thinking => Shows { thought: Some(true), ..Shows::default() },
         Mode::Verbose => {
             let steps = opens(Kind::Steps);
-            Shows { thought: Some(opens(Kind::Thought)), steps, command: steps && opens(Kind::Command), read: steps && opens(Kind::Read), edit: steps && opens(Kind::Edit) }
+            let call = |kind| steps && opens(kind);
+            Shows {
+                thought: Some(opens(Kind::Thought)),
+                steps,
+                command: call(Kind::Command),
+                read: call(Kind::Read),
+                edit: call(Kind::Edit),
+                search: call(Kind::Search),
+                web: call(Kind::Web),
+                subagent: call(Kind::Subagent),
+                other: call(Kind::Other),
+                summary: opens(Kind::Summary),
+                note: opens(Kind::Note),
+            }
         }
     }
 }
@@ -57,15 +77,25 @@ fn steps_body(shows: &Shows) -> Node {
         .maybe(shows.read.then(|| line("41  fn parse(input: &str) -> Ast {", None)))
         .child(call("Edit", "src/parser.rs"))
         .maybe(shows.edit.then_some(diff))
+        .child(call("Grep", "parse_ident"))
+        .maybe(shows.search.then(|| line("src/parser.rs:41\nsrc/lexer.rs:9", None)))
+        .child(call("WebFetch", "docs.example.com/parser"))
+        .maybe(shows.web.then(|| small("The parser guide: trailing newlines are kept unless trimmed.")))
+        .child(call("Agent", "Audit the discount code"))
+        .maybe(shows.subagent.then(|| small("Two checks skip the expiry date. Both are fixed.")))
+        .child(call("Skill", "review"))
+        .maybe(shows.other.then(|| small("Reviewed 3 files, no findings.")))
 }
 
-/// One made-up turn as `mode` shows it: your message, what Claude thought, its run of tool calls, and its reply.
-pub fn turn(mode: Mode, opens: impl Fn(Kind) -> bool) -> Node {
+/// One made-up turn as `mode` shows it: your message, what Claude thought, its run of tool calls, its reply, and what came
+/// after it (a finished agent's summary, a note from Claude Code and a subagent's report, whole when `report` says so in
+/// every mode): every kind of fold Settings ticks.
+pub fn turn(mode: Mode, opens: impl Fn(Kind) -> bool, report: bool) -> Node {
     let shows = shows(mode, opens);
     let thought = shows.thought.map(|open| {
         disclosure("Thought for 4s", muted("The test expects the trailing newline, and the parser trims it.")).prop("open", open).key(format!("thought-{open}"))
     });
-    let steps = disclosure("Ran 1 command · Read 1 file · Edited 1 file", steps_body(&shows)).prop("open", shows.steps).key(format!("steps-{}", shows.steps));
+    let steps = disclosure("Ran 1 command · Read 1 file · Edited 1 file · 4 more", steps_body(&shows)).prop("open", shows.steps).key(format!("steps-{}", shows.steps));
     stack()
         .prop("gap", "s")
         .key(format!("turn-{}", mode.name()))
@@ -73,6 +103,9 @@ pub fn turn(mode: Mode, opens: impl Fn(Kind) -> bool) -> Node {
         .maybe(thought)
         .child(steps)
         .child(text("The parser now keeps the trailing newline, and the test passes."))
+        .child(kind(Kind::Summary, shows.summary))
+        .child(kind(Kind::Note, shows.note))
+        .child(self::report(report))
 }
 
 /// A fold as the chat draws it: its line, and under it the body when it is open. The key carries the state, so a tick
@@ -179,8 +212,8 @@ pub fn places(sidebar: bool) -> Node {
 
 /// A made-up chat session as the view options show it, for the pane beside the choices: a turn as the view mode and the fold
 /// ticks show it, at the text size, then an edit's diff in its layout, and where the session panel sits.
-pub fn session(mode: Mode, opens: impl Fn(Kind) -> bool, scale: f32, split: bool, sidebar: bool) -> Node {
-    let chat = Node::new("Scroll").prop("textScale", scale as f64).child(turn(mode, opens));
+pub fn session(mode: Mode, opens: impl Fn(Kind) -> bool, report: bool, scale: f32, split: bool, sidebar: bool) -> Node {
+    let chat = Node::new("Scroll").prop("textScale", scale as f64).child(turn(mode, opens, report));
     stack().prop("gap", "m").child(card().child(chat)).child(card().child(diff(split))).child(places(sidebar))
 }
 
@@ -202,7 +235,7 @@ mod tests {
     #[test]
     fn each_view_mode_opens_a_little_more_and_verbose_follows_what_is_ticked() {
         let all = |_| true;
-        assert_eq!(shows(Mode::Normal, all), Shows { thought: None, steps: false, command: false, read: false, edit: false });
+        assert_eq!(shows(Mode::Normal, all), Shows::default());
         assert_eq!(shows(Mode::Thinking, all).thought, Some(true));
         assert!(!shows(Mode::Thinking, all).steps);
         let verbose = shows(Mode::Verbose, all);
@@ -216,7 +249,7 @@ mod tests {
 
     #[test]
     fn the_session_holds_the_turn_at_the_text_size_with_the_diff_in_its_layout_and_the_panel_where_it_sits() {
-        let json = |split, sidebar| wings_plugin::ui::tree_json(session(Mode::Verbose, |_| true, 1.25, split, sidebar));
+        let json = |split, sidebar| wings_plugin::ui::tree_json(session(Mode::Verbose, |_| true, true, 1.25, split, sidebar));
         let (one, two) = (json(false, false), json(true, true));
         assert!(one.to_string().contains("\"textScale\":1.25") && one.to_string().contains("Fix the failing parser test"));
         // The layout and the place change what is drawn.
@@ -225,6 +258,23 @@ mod tests {
         assert!(two.to_string().contains("Wings sidebar") && !one.to_string().contains("Wings sidebar"));
         // The diff card shows the same edit as the turn above it.
         assert_eq!(one.to_string().matches("trim_end()").count(), 2, "{one}");
+    }
+
+    /// Every tick under "What starts open" changes the session beside it in Verbose, and the subagent reports' tick in
+    /// every mode: the session had only the run, its command, read, edit and the thinking.
+    #[test]
+    fn every_fold_tick_changes_the_session_preview() {
+        let json = |mode, opens: &dyn Fn(Kind) -> bool, report| wings_plugin::ui::tree_json(session(mode, opens, report, 1.0, false, false)).to_string();
+        for (kind, _, _) in crate::folds::KINDS {
+            let all = json(Mode::Verbose, &|_| true, true);
+            let without = json(Mode::Verbose, &|other| other != kind, true);
+            assert_ne!(all, without, "{kind:?} changes nothing in the session");
+        }
+        for mode in [Mode::Normal, Mode::Thinking, Mode::Verbose] {
+            assert_ne!(json(mode, &|_| true, true), json(mode, &|_| true, false), "the report tick in {}", mode.name());
+        }
+        // Normal keeps every fold shut: a tick changes nothing there but the report.
+        assert_eq!(json(Mode::Normal, &|_| true, true), json(Mode::Normal, &|_| false, true));
     }
 
     #[test]

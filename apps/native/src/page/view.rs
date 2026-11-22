@@ -210,6 +210,8 @@ pub struct PageView {
     /// Whether each `Split` was narrower than its `collapseBelow` when it was last drawn, by node id. A split not in
     /// here hasn't been measured yet and draws its fixed pane.
     split_narrow: HashMap<u64, bool>,
+    /// Whether each floating `Split` was at least its `insetBelow` wide when last drawn, so its start is set in.
+    split_inset: HashMap<u64, bool>,
     /// Whether each `expandable` text was cut short when it was last drawn, by node id, and the ones opened.
     text_cut: HashMap<u64, bool>,
     text_open: HashSet<u64>,
@@ -393,6 +395,7 @@ impl PageView {
         self.pressed_open = false;
         self.select_bounds.clear();
         self.split_narrow.clear();
+        self.split_inset.clear();
         self.focused = None;
         self.suggestions_closed = false;
         self.highlight = None;
@@ -634,6 +637,7 @@ impl PageView {
             pressed_open: false,
             select_bounds: HashMap::new(),
             split_narrow: HashMap::new(),
+            split_inset: HashMap::new(),
             text_cut: HashMap::new(),
             text_open: HashSet::new(),
             focused: None,
@@ -1278,6 +1282,12 @@ impl PageView {
     #[cfg(all(test, feature = "test-support"))]
     pub(super) fn split_narrow(&self, id: u64) -> Option<bool> {
         self.split_narrow.get(&id).copied()
+    }
+
+    /// Whether the floating split `id` set its start in when last drawn, none before it was measured.
+    #[cfg(all(test, feature = "test-support"))]
+    pub(super) fn split_inset(&self, id: u64) -> Option<bool> {
+        self.split_inset.get(&id).copied()
     }
 
     /// The mark of rail `id` the pointer is on, and that mark's title as its card shows it.
@@ -2589,16 +2599,25 @@ impl PageView {
         // Measures the split's own width, which the fixed pane doesn't change, and draws again only when it crosses
         // the threshold. A drag that crosses it shows or hides the pane a frame late, which nobody sees as wrong, and
         // it saves sizing the split from what it holds.
-        let measure = split.collapse_below.map(|below| {
+        let (collapse_below, inset_below) = (split.collapse_below, split.inset_below.filter(|_| split.float));
+        let measure = (collapse_below.is_some() || inset_below.is_some()).then(|| {
             let entity = cx.entity();
             let on_narrow = split.on_narrow.clone();
             canvas(
                 move |bounds, _, cx| {
-                    let narrow = bounds.size.width.as_f32() < below;
+                    let width = bounds.size.width.as_f32();
+                    let narrow = collapse_below.is_some_and(|below| width < below);
+                    let inset = inset_below.is_some_and(|below| width >= below);
                     entity.update(cx, |view, cx| {
-                        if view.split_narrow.insert(id, narrow) != Some(narrow) {
+                        let moved = view.split_narrow.insert(id, narrow) != Some(narrow);
+                        let set_in = inset_below.is_some() && view.split_inset.insert(id, inset) != Some(inset);
+                        if moved || set_in {
                             if let Some(handler) = &on_narrow {
-                                view.send(handler, Some(&serde_json::json!({ "narrow": narrow })));
+                                let mut payload = serde_json::json!({ "narrow": narrow });
+                                if inset_below.is_some() {
+                                    payload["inset"] = serde_json::json!(inset);
+                                }
+                                view.send(handler, Some(&payload));
                             }
                             cx.notify();
                         }
@@ -2678,7 +2697,17 @@ impl PageView {
     /// outside it send `onClose`.
     fn floating_split(&self, split: &tree::Split, container: gpui::Div, cx: &mut Context<Self>) -> AnyElement {
         let id = split.id;
-        let main = div().flex_1().min_w_0().min_h_0().flex().flex_col().overflow_hidden().children(self.nodes(&split.start, cx));
+        // Set in by the pane's width where the split has room, so nothing of the main pane goes under the pane.
+        let inset = split.inset_below.is_some() && !split.end.is_empty() && self.split_inset.get(&id) == Some(&true);
+        let main = div()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .when(inset, |main| main.pr(px(split.size)))
+            .children(self.nodes(&split.start, cx));
         if split.end.is_empty() {
             return container.child(main).into_any_element();
         }

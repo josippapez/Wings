@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.85 · 2026-11-22
+
+- **Claude chat's panel stops covering the chat**: where the tab has room, the open session panel moves the conversation and the message box aside, so long lines, code and errors no longer run under it. A chat with a prompt rail keeps its rail: it moves aside once there's room for both.
+- **Every Claude chat setting shows in the sample chat**: searches, web fetches, subagent calls, other tools, summaries, notes from Claude Code and subagent reports now change the session preview in Settings too.
+- **Claude chat 0.43.3**: the above.
+
 ## 0.2.84 · 2026-11-22
 
 - **One look across the plugins**: Issues, Schedules, PR tracker, Work item, Changes, Disk usage and Worktrees follow the same design as Claude chat and Settings. Headers name the page with its context greyed after it, actions are icon buttons with tooltips, choices between views are segmented tracks, toggles are checkboxes, and lists are rows in one card instead of a card each.

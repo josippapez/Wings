@@ -129,6 +129,9 @@ pub struct Chat {
     /// Whether the tab is narrower than the side panel and the conversation need side by side, as the page's split says: None
     /// until it has measured. Then the panel floats over the conversation, and Escape or a press outside puts it away.
     pub narrow: Option<bool>,
+    /// In a narrow tab, whether the tab has room for the open panel beside a readable column (`view::INSET_BELOW`): the
+    /// conversation and the message box then sit left of the panel instead of under it.
+    pub inset: bool,
     /// Your choice for every chat of showing diffs side by side (`prefs::diff_split`). A narrow tab keeps one column.
     pub diff_split: bool,
     /// The session panel's sections you folded, by key (`prefs::panel_closed`), for every chat. All open until you fold one.
@@ -227,6 +230,7 @@ thread_local! {
         fork_ask: false,
         forked_from: None,
         narrow: None,
+        inset: false,
         diff_split: false,
         panel_closed: Vec::new(),
         backdrop: None,
@@ -1529,9 +1533,13 @@ pub(crate) fn session_panel_moved(place: &str) {
     }
 }
 
-/// The page's split says whether the tab is narrower than `view::SIDE_BELOW`, so the side panel covers the conversation.
-pub fn set_narrow(narrow: bool) {
-    with(|c| c.narrow = Some(narrow));
+/// The page's split says whether the tab is narrower than `view::SIDE_BELOW`, so the side panel covers the conversation,
+/// and whether it has room to set the conversation in beside the panel (`inset`, only while it asked).
+pub fn set_narrow(narrow: bool, inset: bool) {
+    with(|c| {
+        c.narrow = Some(narrow);
+        c.inset = inset;
+    });
 }
 
 /// The header's button for the session panel, at any width: in Wings' sidebar it opens it on this chat or closes it

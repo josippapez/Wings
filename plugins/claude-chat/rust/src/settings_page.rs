@@ -139,7 +139,7 @@ fn kind_text(kind: Kind, label: &'static str) -> (&'static str, &'static str) {
 /// The mock session, as the view options are now.
 fn session_now() -> Node {
     let mode = Mode::of(prefs::detailed().get(), prefs::thinking().get());
-    session(mode, |kind| prefs::opens(kind).get(), prefs::scale_of(&prefs::text_size().get()), prefs::diff_split().get(), prefs::in_sidebar(&prefs::session_panel().get()))
+    session(mode, |kind| prefs::opens(kind).get(), !prefs::fold_reports().get(), prefs::scale_of(&prefs::text_size().get()), prefs::diff_split().get(), prefs::in_sidebar(&prefs::session_panel().get()))
 }
 
 /// The session in a section of its own, as a pane beside the choices or over them.

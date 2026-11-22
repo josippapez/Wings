@@ -43,6 +43,12 @@ pub(crate) const BUDGET: usize = 3_500;
 /// it away.
 const SIDE: u32 = 340;
 const SIDE_BELOW: u32 = COLUMN + 16 + 2 * (SIDE + 12);
+/// In a narrower tab, the open panel sets the conversation and the message box in beside it while the tab holds a column of
+/// at least 480 points and the panel: they went under it, cutting off long lines, code and errors. With a prompt rail, only
+/// while the tab also keeps the rail's room beside the whole column (the app's 64-point rail and 28-point gap either side),
+/// so setting in never takes the rail away.
+const INSET_BELOW: u32 = 480 + SIDE;
+const INSET_BELOW_RAIL: u32 = COLUMN + 2 * (64 + 28) + SIDE;
 /// The widest the collapsed pill gets: the panel's own width. Past it the project and branch are cut.
 const RAIL_MOST: u32 = SIDE;
 /// The most subagents the session panel lists.
@@ -71,7 +77,9 @@ fn chat_page(c: &Chat) -> Node {
     let rail = crate::rail::Rail::of(&c.session.items, &built, crate::rail::state_at());
     let body = crate::rail::watch(body, &rail, last);
     // The rail goes down to the checklist and the message box, not past them: it is laid over the conversation alone.
-    let conversation = stack().prop("fill", true).prop("gap", "none").children(crate::rail::marks(c, &rail)).child(body);
+    let marks = crate::rail::marks(c, &rail);
+    let inset_below = if marks.is_empty() { INSET_BELOW } else { INSET_BELOW_RAIL };
+    let conversation = stack().prop("fill", true).prop("gap", "none").children(marks).child(body);
     // The session panel is a card on the right that the app leaves out of a narrow tab and that shows by default; only the
     // header's button puts it away and brings it back, also where it covers the conversation in a narrow tab. A panel left
     // out leaves its terminals out with it. In Wings' sidebar (`session_side.rs`) the conversation has the tab's width.
@@ -83,11 +91,14 @@ fn chat_page(c: &Chat) -> Node {
             .prop("side", "end")
             .prop("float", true)
             .prop("collapseBelow", SIDE_BELOW)
-            .on("onNarrow", |payload| chat::set_narrow(payload["narrow"].as_bool().unwrap_or(false)));
+            .on("onNarrow", |payload| chat::set_narrow(payload["narrow"].as_bool().unwrap_or(false), payload["inset"].as_bool().unwrap_or(false)));
+        // An open panel in a narrow tab sets the conversation in beside it where there's room for both.
+        let set_in = c.narrow == Some(true) && side_shown(c) && !side_railed(c);
+        let split = if set_in { split.prop("insetBelow", inset_below) } else { split };
         // Where the panel covers the conversation, in a narrow tab, the message box is under the split, not in it: the
         // panel ends above the box and scrolls when it is taller than that, so it never covers what you type, nor the
-        // box's buttons. In a wide tab it sits beside the column and reaches down beside the box.
-        let (start, under) = match c.narrow == Some(true) {
+        // box's buttons. In a wide tab, or set in beside it, the panel sits beside the column and reaches down beside the box.
+        let (start, under) = match c.narrow == Some(true) && !(set_in && c.inset) {
             true => (vec![conversation], Some(composer(c))),
             false => (vec![conversation, composer(c)], None),
         };
@@ -1874,7 +1885,7 @@ mod tests {
                 assert!(side_button(c).is_some(), "the button is there at any width");
             });
         }
-        chat::set_narrow(false);
+        chat::set_narrow(false, false);
         chat::toggle_side();
         assert!(!chat::with(|c| side_shown(c)));
         chat::toggle_side();
@@ -1897,7 +1908,7 @@ mod tests {
 
     #[test]
     fn only_the_button_puts_the_panel_away_even_over_a_narrow_tab() {
-        chat::set_narrow(true);
+        chat::set_narrow(true, false);
         chat::with(|c| c.side_open = true);
         chat::escape();
         assert!(chat::with(|c| c.side_open), "Escape leaves it");
@@ -1951,6 +1962,41 @@ mod tests {
             wings_plugin::host::testing::set_now(1_000_000.0 + 4.0 * 60_000.0);
             let side = side_sections(c, false).into_iter().map(|node| wings_plugin::ui::tree_json(node).to_string()).collect::<String>();
             assert!(side.contains("Cache expired"), "{side}");
+        });
+    }
+
+    /// In a narrow tab with room, the open panel sets the conversation and the message box in beside it: they went under
+    /// it. Collapsed to its rail, or with no room, it floats over as before, with the box under the split.
+    #[test]
+    fn an_open_panel_in_a_narrow_tab_with_room_sets_the_conversation_in_beside_it() {
+        chat::with(|c| {
+            c.state = State::Running;
+            c.side_in_wings = false;
+            c.side_open = true;
+            c.side_rail = Some(false);
+            c.narrow = Some(true);
+            let page = |c: &Chat| wings_plugin::ui::tree_json(chat_page(c));
+            let split = |page: &serde_json::Value| -> serde_json::Value {
+                fn find(node: &serde_json::Value) -> Option<serde_json::Value> {
+                    if node["type"] == "Split" {
+                        return Some(node.clone());
+                    }
+                    node["children"].as_array()?.iter().find_map(find)
+                }
+                find(page).expect("the split")
+            };
+            let composer_in_start = |split: &serde_json::Value| split["children"][0].to_string().contains("Ask anything");
+            c.inset = false;
+            let no_room = split(&page(c));
+            assert_eq!(no_room["props"]["insetBelow"], INSET_BELOW);
+            assert!(!composer_in_start(&no_room), "with no room the box sits under the split");
+            c.inset = true;
+            assert!(composer_in_start(&split(&page(c))), "set in, the box moves with the conversation");
+            c.side_rail = Some(true);
+            assert!(split(&page(c))["props"].get("insetBelow").is_none(), "the rail floats over");
+            c.narrow = Some(false);
+            c.side_rail = None;
+            assert!(split(&page(c))["props"].get("insetBelow").is_none(), "a wide tab has room already");
         });
     }
 
