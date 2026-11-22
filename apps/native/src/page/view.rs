@@ -210,8 +210,9 @@ pub struct PageView {
     /// Whether each `Split` was narrower than its `collapseBelow` when it was last drawn, by node id. A split not in
     /// here hasn't been measured yet and draws its fixed pane.
     split_narrow: HashMap<u64, bool>,
-    /// Whether each floating `Split` was at least its `insetBelow` wide when last drawn, so its start is set in.
-    split_inset: HashMap<u64, bool>,
+    /// Whether each floating `Split` with `insetBelow` was at least that wide when last measured, and how far it sets its
+    /// start in then.
+    split_inset: HashMap<u64, (bool, f32)>,
     /// Whether each `expandable` text was cut short when it was last drawn, by node id, and the ones opened.
     text_cut: HashMap<u64, bool>,
     text_open: HashSet<u64>,
@@ -1284,10 +1285,10 @@ impl PageView {
         self.split_narrow.get(&id).copied()
     }
 
-    /// Whether the floating split `id` set its start in when last drawn, none before it was measured.
+    /// How far the floating split `id` set its start in when last drawn, none before it was measured.
     #[cfg(all(test, feature = "test-support"))]
-    pub(super) fn split_inset(&self, id: u64) -> Option<bool> {
-        self.split_inset.get(&id).copied()
+    pub(super) fn split_inset(&self, id: u64) -> Option<f32> {
+        self.split_inset.get(&id).map(|(_, by)| *by)
     }
 
     /// The mark of rail `id` the pointer is on, and that mark's title as its card shows it.
@@ -2600,6 +2601,7 @@ impl PageView {
         // the threshold. A drag that crosses it shows or hides the pane a frame late, which nobody sees as wrong, and
         // it saves sizing the split from what it holds.
         let (collapse_below, inset_below) = (split.collapse_below, split.inset_below.filter(|_| split.float));
+        let (inset_column, pane) = (split.inset_column, split.size);
         let measure = (collapse_below.is_some() || inset_below.is_some()).then(|| {
             let entity = cx.entity();
             let on_narrow = split.on_narrow.clone();
@@ -2608,10 +2610,16 @@ impl PageView {
                     let width = bounds.size.width.as_f32();
                     let narrow = collapse_below.is_some_and(|below| width < below);
                     let inset = inset_below.is_some_and(|below| width >= below);
+                    let by = if inset { inset_by(width, pane, inset_column) } else { 0.0 };
                     entity.update(cx, |view, cx| {
                         let moved = view.split_narrow.insert(id, narrow) != Some(narrow);
-                        let set_in = inset_below.is_some() && view.split_inset.insert(id, inset) != Some(inset);
-                        if moved || set_in {
+                        let was = if inset_below.is_some() { view.split_inset.insert(id, (inset, by)) } else { None };
+                        // The page hears when the split crosses a threshold; a step of how far it is set in only draws this view.
+                        let crossed = moved || (inset_below.is_some() && was.map(|(was, _)| was) != Some(inset));
+                        if crossed || was.map(|(_, was)| was) != Some(by) {
+                            cx.notify();
+                        }
+                        if crossed {
                             if let Some(handler) = &on_narrow {
                                 let mut payload = serde_json::json!({ "narrow": narrow });
                                 if inset_below.is_some() {
@@ -2619,7 +2627,6 @@ impl PageView {
                                 }
                                 view.send(handler, Some(&payload));
                             }
-                            cx.notify();
                         }
                     })
                 },
@@ -2698,7 +2705,10 @@ impl PageView {
     fn floating_split(&self, split: &tree::Split, container: gpui::Div, cx: &mut Context<Self>) -> AnyElement {
         let id = split.id;
         // Set in by the pane's width where the split has room, so nothing of the main pane goes under the pane.
-        let inset = split.inset_below.is_some() && !split.end.is_empty() && self.split_inset.get(&id) == Some(&true);
+        let inset = match self.split_inset.get(&id) {
+            Some((true, by)) if !split.end.is_empty() => *by,
+            _ => 0.0,
+        };
         let main = div()
             .flex_1()
             .min_w_0()
@@ -2706,7 +2716,7 @@ impl PageView {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .when(inset, |main| main.pr(px(split.size)))
+            .when(inset > 0.0, |main| main.pr(px(inset)))
             .children(self.nodes(&split.start, cx));
         if split.end.is_empty() {
             return container.child(main).into_any_element();
@@ -3388,6 +3398,17 @@ fn send_shortcut(
     window.prevent_default();
     cx.stop_propagation();
     true
+}
+
+/// How far a floating split `width` wide sets its start in for its pane `pane` wide: the pane's width, or with `column`, only
+/// as far as keeps a centred column that wide clear of the pane, in 8-point steps so a drag of the window draws the view
+/// a few dozen times rather than at every point.
+fn inset_by(width: f32, pane: f32, column: Option<f32>) -> f32 {
+    let pane = pane.min(width / 2.0);
+    match column {
+        None => pane,
+        Some(column) => (((column + 2.0 * pane - width).max(0.0) / 8.0).ceil() * 8.0).min(pane),
+    }
 }
 
 fn gap(gap: Gap) -> f32 {

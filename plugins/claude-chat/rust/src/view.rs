@@ -43,12 +43,14 @@ pub(crate) const BUDGET: usize = 3_500;
 /// it away.
 const SIDE: u32 = 340;
 const SIDE_BELOW: u32 = COLUMN + 16 + 2 * (SIDE + 12);
-/// In a narrower tab, the open panel sets the conversation and the message box in beside it while the tab holds a column of
-/// at least 480 points and the panel: they went under it, cutting off long lines, code and errors. With a prompt rail, only
-/// while the tab also keeps the rail's room beside the whole column (the app's 64-point rail and 28-point gap either side),
-/// so setting in never takes the rail away.
+/// In a narrower tab, the open panel moves the conversation and the message box left, only as far as keeps the column
+/// (with its 8 points of margin either side) clear of the panel: they went under it, cutting off long lines, code and
+/// errors. That needs a tab that holds a column of at least 480 points and the panel; with a prompt rail, one that keeps
+/// the rail's room beside the whole column once it is moved (the app's 64-point rail and 28-point gap either side, and the
+/// app's 8-point steps), so moving never takes the rail away.
+const INSET_COLUMN: u32 = COLUMN + 16;
 const INSET_BELOW: u32 = 480 + SIDE;
-const INSET_BELOW_RAIL: u32 = COLUMN + 2 * (64 + 28) + SIDE;
+const INSET_BELOW_RAIL: u32 = (INSET_COLUMN + 2 * SIDE + COLUMN + 2 * (64 + 28) + 8) / 2;
 /// The widest the collapsed pill gets: the panel's own width. Past it the project and branch are cut.
 const RAIL_MOST: u32 = SIDE;
 /// The most subagents the session panel lists.
@@ -94,7 +96,7 @@ fn chat_page(c: &Chat) -> Node {
             .on("onNarrow", |payload| chat::set_narrow(payload["narrow"].as_bool().unwrap_or(false), payload["inset"].as_bool().unwrap_or(false)));
         // An open panel in a narrow tab sets the conversation in beside it where there's room for both.
         let set_in = c.narrow == Some(true) && side_shown(c) && !side_railed(c);
-        let split = if set_in { split.prop("insetBelow", inset_below) } else { split };
+        let split = if set_in { split.prop("insetBelow", inset_below).prop("insetColumn", INSET_COLUMN) } else { split };
         // Where the panel covers the conversation, in a narrow tab, the message box is under the split, not in it: the
         // panel ends above the box and scrolls when it is taller than that, so it never covers what you type, nor the
         // box's buttons. In a wide tab, or set in beside it, the panel sits beside the column and reaches down beside the box.
@@ -1989,6 +1991,7 @@ mod tests {
             c.inset = false;
             let no_room = split(&page(c));
             assert_eq!(no_room["props"]["insetBelow"], INSET_BELOW);
+            assert_eq!(no_room["props"]["insetColumn"], INSET_COLUMN, "moved only as far as the column needs");
             assert!(!composer_in_start(&no_room), "with no room the box sits under the split");
             c.inset = true;
             assert!(composer_in_start(&split(&page(c))), "set in, the box moves with the conversation");

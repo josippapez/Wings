@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.86 · 2026-11-22
+
+- **Claude chat moves aside only as far as it needs**: with the session panel open, the chat stays centred where it already clears the panel, and in a narrower tab moves left just enough, keeping the prompt rail. 0.2.85 moved it the panel's whole width even when there was room.
+- **Claude chat 0.43.4**: the above.
+
 ## 0.2.85 · 2026-11-22
 
 - **Claude chat's panel stops covering the chat**: where the tab has room, the open session panel moves the conversation and the message box aside, so long lines, code and errors no longer run under it. A chat with a prompt rail keeps its rail: it moves aside once there's room for both.

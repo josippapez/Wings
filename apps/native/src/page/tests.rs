@@ -2551,38 +2551,48 @@ fn a_floating_split_reports_its_width_and_keeps_its_pane() {
     }
 }
 
-/// A floating split with `insetBelow` sets its main pane in by the pane's width where it is at least that wide, so a line
-/// of the main pane ends before the pane instead of running under it, and tells the page; narrower, the pane floats over.
-/// The chat's side panel covered the end of its lines, code and errors in a 1000 point tab.
+/// A floating split with `insetBelow` sets its main pane in where it is at least that wide, and tells the page; narrower,
+/// the pane floats over. With `insetColumn` it sets in only as far as keeps a centred column that wide clear of the pane,
+/// and not at all where the column already clears it. The chat's side panel covered the end of its lines in a 1000 point
+/// tab, and then moved the whole chat aside in a tab that had room for it centred.
 #[test]
-fn a_floating_split_sets_its_main_pane_in_where_it_has_room() {
-    let source = || {
+fn a_floating_split_sets_its_main_pane_in_only_as_far_as_its_column_needs() {
+    let source = |column: Option<f32>| {
         let mut heard = String::new();
         fake::page("page", move |event| {
             if let Some(("5:narrow", payload)) = event {
                 heard = payload["inset"].to_string();
             }
-            let inset = heard.clone();
-            json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Split",
-                "props": { "defaultSize": 200, "side": "end", "float": true, "collapseBelow": 1200, "insetBelow": 600, "onNarrow": "5:narrow" },
+            let mut props = json!({ "defaultSize": 200, "side": "end", "float": true, "collapseBelow": 1200, "insetBelow": 600, "onNarrow": "5:narrow" });
+            if let Some(column) = column {
+                props["insetColumn"] = json!(column);
+            }
+            json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Split", "props": props,
                 "children": [
                 { "id": 2, "type": "Slot", "props": { "name": "start" }, "children": [
-                    { "id": 9, "type": "Stack", "props": { "fill": true }, "children": [text(3, 4, format!("Main, inset {inset}."))] }] },
+                    { "id": 9, "type": "Stack", "props": { "fill": true }, "children": [text(3, 4, format!("Main, inset {heard}."))] }] },
                 { "id": 6, "type": "Slot", "props": { "name": "end" }, "children": [text(7, 8, "Side".into())] }] }] })
         })
     };
-    for (width, inset, said) in [(800.0, true, "Main, inset true."), (500.0, false, "Main, inset false.")] {
+    // Width, column, whether it is set in, and by how far: the pane's 200 points, or as far as a 300 point column needs
+    // (300 + 2 * 200 - 640 = 60, in 8 point steps), or nothing where the column clears the pane (300 + 400 <= 800).
+    for (width, column, said, by) in [
+        (800.0, None, "Main, inset true.", 200.0),
+        (500.0, None, "Main, inset false.", 0.0),
+        (640.0, Some(300.0), "Main, inset true.", 64.0),
+        (800.0, Some(300.0), "Main, inset true.", 0.0),
+    ] {
         let mut app = TestApp::new();
         app.background_executor().allow_parking();
         let host = hosted(&mut app);
-        let source = source();
+        let source = source(column);
         let bounds = gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(width), px(300.0)));
         let mut window = app.open_window_with_options(
             gpui::WindowOptions { window_bounds: Some(gpui::WindowBounds::Windowed(bounds)), ..Default::default() },
             |_, cx| PageView::in_plugin(&host, &source, cx),
         );
         settle(&app, &mut window, shows(said));
-        assert_eq!(window.read(|view, _| view.split_inset(1)), Some(inset));
+        assert_eq!(window.read(|view, _| view.split_inset(1)), Some(by), "{width} wide, column {column:?}");
         assert!(window.read(|view, _| view.text().contains("Side")), "the pane stays at {width}");
     }
 }

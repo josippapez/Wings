@@ -635,6 +635,9 @@ pub struct Split {
     /// With `float`: while the split is at least this wide, `start` is set in from the right by the floating pane's width,
     /// so nothing of it goes under the pane. `onNarrow` then also says `inset`.
     pub inset_below: Option<f32>,
+    /// With `insetBelow`: the width of the centred column `start` holds. Then `start` is set in only as far as keeps that
+    /// column clear of the pane, and not at all where it already is, in place of the pane's whole width.
+    pub inset_column: Option<f32>,
     /// The space each side of the divider, so cards in the two panes don't touch it. `none` by default: a list or a rail
     /// runs up to the divider.
     pub gap: Gap,
@@ -1653,6 +1656,9 @@ impl Walk {
                     inset_below: number(&props, "insetBelow")
                         .filter(|below| *below > 0.0)
                         .map(|below| below.min(10_000.0) as f32),
+                    inset_column: number(&props, "insetColumn")
+                        .filter(|column| *column > 0.0)
+                        .map(|column| column.min(10_000.0) as f32),
                     gap: str_prop(&props, "gap").and_then(Gap::choose).unwrap_or(Gap::None),
                     start: slots.take("start"),
                     end: slots.take("end"),
