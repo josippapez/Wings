@@ -225,6 +225,7 @@ fn header(c: &Chat) -> Node {
         .child(crate::view_mode::mode_button(c))
         .maybe(crate::titles_view::header_button(c))
         .maybe(crate::fork_view::header_button(c))
+        .maybe(remote_button(c))
         .maybe(side_button(c))
         .maybe(account_menu(c))
         .child(icon_button("Past sessions", &HISTORY, chat::open_past).shortcut("cmd-y"))
@@ -288,10 +289,13 @@ fn conversation(c: &Chat) -> (Node, Vec<(usize, usize)>, usize) {
     blocks.reverse();
     // A fork says where it came from, at the top.
     let forked = c.forked_from.as_ref().map(|from| muted(format!("Forked from {}", truncate(from, 80))).prop("size", "small").key("forked"));
-    let lead = usize::from(forked.is_some());
+    // An empty first child, so the column's gap sits above the first message: the slim header has no room under it, and
+    // the scroll keeps none at its top, so the message touched the header.
+    let top = stack().key("top");
+    let lead = 1 + usize::from(forked.is_some());
     let prompts: Vec<(usize, usize)> = prompts.into_iter().rev().map(|(item, back)| (item, lead + built - 1 - back)).collect();
     crate::rail::place(placed.into_iter().map(|(start, end, back)| (start, end, lead + built - 1 - back)).collect());
-    let mut nodes: Vec<Node> = forked.into_iter().chain(blocks).collect();
+    let mut nodes: Vec<Node> = std::iter::once(top).chain(forked).chain(blocks).collect();
     // Reading an older part, what Claude does now isn't here: it shows once you are back at the newest.
     if newest {
         newest_end(c, &mut nodes);
@@ -1092,13 +1096,12 @@ fn composer(c: &Chat) -> Node {
             .prop("disabled", !open || !typed)
             .child(icon(14, 2.0, &[SEND]))
     };
-    // A key to press, drawn as a keycap beside what it does, not a button that looks like one more control in the row.
+    // A key to press, drawn as a keycap, not a button that looks like one more control in the row. The keycap alone: with
+    // its "to use it" the full row ran under the send button.
     let tab = suggested.map(|_| {
         row()
-            .prop("gap", "xs")
             .prop("align", "center")
-            .child(badge("Tab", None).prop("title", "Use the suggested message"))
-            .child(muted("to use it"))
+            .child(badge("Tab", None).prop("title", "Press Tab to use the suggested message"))
             // A gap before the send button, which the hint butted against.
             .child(stack().prop("width", 6))
             .key("tab")
@@ -1529,7 +1532,6 @@ fn pickers(c: &Chat) -> Vec<Node> {
         let options: Vec<(String, String)> = MODES.iter().map(|(value, name)| (value.to_string(), name.to_string())).collect();
         pickers.push(select("Permission mode", &options, mode, chat::pick_mode).prop("variant", "ghost"));
     }
-    pickers.extend(remote_button(c));
     pickers.extend(crate::branch::button_node(c));
     pickers.extend(crate::pull_view::create_button(c));
     pickers.extend(crate::worktree::button_node(c));
@@ -1539,27 +1541,29 @@ fn pickers(c: &Chat) -> Vec<Node> {
 /// Lucide's `smartphone`, on the Remote Control button.
 const PHONE: [&str; 2] = ["M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z", "M12 18h.01"];
 
-/// Remote Control, once Claude Code runs: a quiet button that turns it on, and while it is on a lit one with a menu to open
-/// the chat on claude.ai, copy its link or turn it off, as Claude Code's own indicator does.
+/// The header's Remote Control, once Claude Code runs: a quiet button that turns it on, and while it is on a lit one with a
+/// menu to open the chat on claude.ai, copy its link or turn it off, as Claude Code's own indicator does. In the header, not
+/// the message box, whose row ran out of room with it there.
 fn remote_button(c: &Chat) -> Option<Node> {
     use crate::remote::Remote;
     c.session.id.as_ref()?;
-    let glyph = || icon(24, 2.0, &PHONE).prop("size", 14);
+    let glyph = || icon(24, 2.0, &PHONE).prop("size", 16);
     Some(match &c.session.remote {
         Remote::Off => button("", "ghost", false, chat::toggle_remote)
             .prop("size", "icon-sm")
             .prop("label", "Remote Control")
             .prop("title", "Remote Control: go on with this chat from claude.ai or the Claude app")
             .child(glyph()),
-        Remote::Connecting | Remote::Disconnecting(_) => button("Remote Control", "ghost", true, || {}).prop("size", "sm"),
+        Remote::Connecting => button("", "ghost", true, || {}).prop("size", "icon-sm").prop("label", "Remote Control").prop("title", "Turning Remote Control on"),
+        Remote::Disconnecting(_) => button("", "ghost", true, || {}).prop("size", "icon-sm").prop("label", "Remote Control").prop("title", "Turning Remote Control off"),
         Remote::On(url) => {
+            // The lit icon alone, as the header's other buttons: named, it took the chat's title's room.
             let trigger = Node::new("Button")
                 .prop("variant", "secondary")
-                .prop("size", "sm")
+                .prop("size", "icon-sm")
                 .prop("label", "Remote Control")
                 .prop("title", "Remote Control is on: this chat is on claude.ai and in the Claude app")
-                .child(glyph())
-                .child(text("Remote"));
+                .child(glyph());
             let (open, copied) = (url.clone(), url.clone());
             let items = vec![
                 Node::new("Button").key("open").on("onClick", move |_| wings_plugin::host::open_url(&open)).text("Open on claude.ai"),

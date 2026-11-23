@@ -1342,6 +1342,13 @@ esac"##,
     fast[1]["response"]["response"]["fast_mode_disabled_reason"] = json!("sdk_opt_in_required");
     fast[1]["response"]["response"]["output_style"] = json!("default");
     fast[1]["response"]["response"]["available_output_styles"] = json!(["default", "Concise", "Explanatory", "Learning"]);
+    // The message box's row at its fullest: fast mode, output styles, Remote Control on and a suggestion that Tab takes.
+    let mut full_row = suggested.clone();
+    for key in ["models", "fast_mode_state", "fast_mode_disabled_reason", "available_output_styles"] {
+        full_row[1]["response"]["response"][key] = fast[1]["response"]["response"][key].clone();
+    }
+    full_row[1]["response"]["response"]["output_style"] = json!("Explanatory");
+    full_row.push(answer("remote-control", json!({ "session_url": "https://claude.ai/code/session_01", "bridge_session_id": "b1" })));
     // Claude Code's lines about the session itself: a compaction, then a retry under way, and the conversation cleared. The fake
     // prints a turn at once, so a thought shows no duration here (its unit test has one).
     let compacting = opened(vec![
@@ -1678,7 +1685,7 @@ esac"##,
         ("mentioned-card", mentioned.clone(), None, Some("hover:-220,450"), "Mentioned"),
         // Part way through the wait before the card opens: the cue fills by the pointer, and no card yet.
         ("mentioned-cue", mentioned, None, Some("hovercue:-220,450;wait:1500"), "Mentioned"),
-        ("long-draft", opened(vec![init.clone()]), None, Some(long_draft.as_str()), "Remote Control"),
+        ("long-draft", opened(vec![init.clone()]), None, Some(long_draft.as_str()), "What should Claude do?"),
         ("long-older", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, Some(older.as_str()), "Jump to the latest"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
@@ -1686,9 +1693,9 @@ esac"##,
         ("new", opened(vec![init.clone()]), None, None, "What should Claude do?"),
         // The header's account button, open: the accounts with the one in use checked.
         ("accounts", opened(vec![init.clone()]), None, Some("menu:Claude account"), "What should Claude do?"),
-        // Remote Control on: the lit button by the model menu, and its menu open.
-        ("remote", opened(vec![init.clone(), answer("remote-control", json!({ "session_url": "https://claude.ai/code/session_01", "bridge_session_id": "b1" }))]), None, None, "Remote"),
-        ("remote-menu", opened(vec![init.clone(), answer("remote-control", json!({ "session_url": "https://claude.ai/code/session_01", "bridge_session_id": "b1" }))]), None, Some("menu:Remote Control"), "Remote"),
+        // Remote Control on: the lit button in the top bar, and its menu open.
+        ("remote", opened(vec![init.clone(), answer("remote-control", json!({ "session_url": "https://claude.ai/code/session_01", "bridge_session_id": "b1" }))]), None, None, "What should Claude do?"),
+        ("remote-menu", opened(vec![init.clone(), answer("remote-control", json!({ "session_url": "https://claude.ai/code/session_01", "bridge_session_id": "b1" }))]), None, Some("menu:Remote Control"), "Turn off Remote Control"),
         // The model and effort menu open over the message box.
         ("models", opened(vec![init.clone()]), None, Some("select:Model and effort"), "What should Claude do?"),
         // A model with fast mode has its button by the model menu, and the output styles have a menu of their own.
@@ -1756,6 +1763,7 @@ esac"##,
         // sidebar's Pop out makes it a tab (the `subagent-tab` scenes).
         ("subagent", subagent, None, Some("disclose:Ran 1 subagent · 1 running"), "Survey the callers of applyDiscount"),
         ("suggestion", suggested, None, None, "Tab"),
+        ("composer-full", full_row, None, None, "Tab"),
         ("subagents", subagents, None, None, "Waiting on 2 subagents"),
         // A finished turn with its tokens and cost (an API key pays per token) under it, and the next turn's counter.
         ("spend", spend, None, None, "Worked for 14s · 12.3k tokens"),

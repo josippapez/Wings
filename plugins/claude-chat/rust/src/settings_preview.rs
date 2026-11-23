@@ -171,22 +171,17 @@ pub fn sample(scale: f32) -> Node {
 /// Lucide's `smartphone`, as on the chat's Remote Control button (`view.rs`).
 const PHONE: [&str; 2] = ["M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z", "M12 18h.01"];
 
-/// The foot of a new chat's message box: its Remote Control button lit and named when the chat starts with it on, else
-/// the quiet icon you press to turn it on.
+/// The top of a new chat: its Remote Control button lit when the chat starts with it on, else the quiet icon you press to
+/// turn it on.
 pub fn remote(on: bool) -> Node {
-    let glyph = icon(24, 2.0, &PHONE).prop("size", 14);
-    let button = if on {
-        Node::new("Button").prop("variant", "secondary").prop("size", "sm").prop("label", "Remote Control").child(glyph).child(text("Remote"))
-    } else {
-        Node::new("Button").prop("variant", "ghost").prop("size", "icon-sm").prop("label", "Remote Control").child(glyph)
-    };
+    let glyph = icon(24, 2.0, &PHONE).prop("size", 16);
+    let button = Node::new("Button").prop("variant", if on { "secondary" } else { "ghost" }).prop("size", "icon-sm").prop("label", "Remote Control").child(glyph);
     let said = if on { "On as the chat starts" } else { "Off until you press it" };
     row()
         .prop("gap", "m")
         .prop("align", "center")
         .key(format!("remote-{on}"))
-        .child(small("Opus 5.5 · High"))
-        .child(small("Auto"))
+        .child(text("Claude chat").prop("weight", "strong").prop("size", "small"))
         .child(button)
         .child(small(said))
 }

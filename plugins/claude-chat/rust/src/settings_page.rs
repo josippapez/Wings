@@ -242,7 +242,7 @@ fn choices() -> Node {
             [together([
                 toggle(
                     checkbox("Turn on Remote Control in every new chat", prefs::remote_on_start().get(), |on| drop(prefs::remote_on_start().set(on))).key("remote-on-start"),
-                    "Each new chat turns on Remote Control as it starts, so you can follow and answer it on claude.ai or in the Claude app. The button by the model menu still turns it off for that chat.",
+                    "Each new chat turns on Remote Control as it starts, so you can follow and answer it on claude.ai or in the Claude app. The phone button at the top of the chat still turns it off for that chat.",
                 ),
                 preview(settings_preview::remote(prefs::remote_on_start().get())),
             ])],
