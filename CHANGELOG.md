@@ -2,6 +2,13 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.89 · 2026-11-23
+
+- **Tools update in place**: Update runs in the tool's row with a spinner and keeps Settings open, then shows the new version. If it fails, or needs a password, the row shows the last lines of what it said with Run in terminal and Try again.
+- **Tools from another Homebrew tap**, like OpenCode, show their newest version and update by their full name, instead of "couldn't look up the newest".
+- **Claude chat: Open a terminal an agent used**: a call that opened, read or messaged a terminal has an Open button that shows it, and says so once that terminal is closed.
+- **Claude chat 0.47.0**: the above.
+
 ## 0.2.88 · 2026-11-23
 
 - **Claude chats restart in their own folder**: after an update or restart, a chat in a project that wasn't on screen started Claude Code in the project that was. A chat now saves its folder, an older chat takes it from its session, and a plugin tab is told its own project rather than the one on screen.

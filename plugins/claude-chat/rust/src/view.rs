@@ -715,6 +715,7 @@ fn step(tool: &Tool, opened: bool, c: &Chat) -> Node {
         )
         .children(facts(tool))
         .maybe(open_subagent(tool, c))
+        .maybe(open_terminal(tool))
         .maybe(crate::plan_doc_view::step_link(c, tool))
         .maybe(crate::actions_view::background_button(tool, c));
     // A mod that draws the call's row draws it here instead, and its result under it.
@@ -745,6 +746,15 @@ fn open_subagent(tool: &Tool, c: &Chat) -> Option<Node> {
     }
     let id = tool.id.clone();
     Some(button("Open", "ghost", false, move || crate::tasks_view::open_subagent(&id)).prop("size", "sm").prop("title", "Its conversation, in the sidebar"))
+}
+
+/// A call that opened, messaged or read a terminal has an Open that shows it. A terminal Wings no longer lists is closed:
+/// its button waits and says so.
+fn open_terminal(tool: &Tool) -> Option<Node> {
+    let pane = crate::terminals::target(tool)?;
+    let open = crate::terminals::is_open(&pane);
+    let title = if open { "Show that terminal" } else { "That terminal is closed" };
+    Some(button("Open", "ghost", false, move || crate::terminals::focus(&pane)).prop("size", "sm").prop("disabled", !open).prop("title", title).key("open-terminal"))
 }
 
 /// A small mono text on a call's head line.
@@ -2469,6 +2479,43 @@ mod tests {
         let opened = chat::with(|c| wings_plugin::ui::tree_json(step(&tool, true, c))).to_string();
         assert!(opened.contains("\"code\":\"Write the release notes\""), "{opened}");
         chat::with(|c| c.open_outputs.clear());
+    }
+
+    /// The call that opened a terminal, or read or messaged one, has an Open that shows that terminal; once Wings no longer
+    /// lists it the button is there but waits, with the reason on hover.
+    #[test]
+    fn a_call_that_opened_a_terminal_has_an_open_that_shows_it() {
+        let mut tool = call("p1", "mcp__wings__open_pane", Detail::Plain, r#"{"paneId":"48","commandRun":true}"#);
+        tool.summary = "make all".into();
+        let button_of = |tool: &Tool| {
+            let (tree, handlers) = chat::with(|c| wings_plugin::ui::export(vec![step(tool, false, c)]));
+            let found = tree.to_string();
+            let line = tree[0]["children"][0]["children"][0]["children"].as_array().unwrap().iter().find(|child| child["props"]["title"].as_str().is_some_and(|title| title.contains("terminal"))).cloned();
+            (line, handlers, found)
+        };
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let kept = calls.clone();
+        wings_plugin::host::testing::answer(move |method, params| {
+            kept.borrow_mut().push((method.to_owned(), params.clone()));
+            Ok(serde_json::Value::Null)
+        });
+        crate::terminals::hear(&[serde_json::json!({ "paneId": "48", "cwd": "/work/shop", "command": "make all" })]);
+        let (line, handlers, found) = button_of(&tool);
+        let line = line.unwrap_or_else(|| panic!("{found}"));
+        assert_eq!((line["type"].as_str(), line["props"]["title"].as_str(), line["props"]["disabled"].as_bool()), (Some("Button"), Some("Show that terminal"), Some(false)), "{found}");
+        assert!(handlers.call(line["props"]["onClick"].as_str().unwrap_or_default(), &serde_json::json!({})));
+        assert_eq!(*calls.borrow(), [("focusPane".to_owned(), serde_json::json!({ "paneId": "48" }))]);
+        // A message to a pane and a read of one name it in their input.
+        let mut read = call("p2", "mcp__wings__read_pane", Detail::Plain, "$ ok");
+        read.summary = "48".into();
+        assert!(button_of(&read).0.is_some());
+        // It closed: the button waits and says so, and a click does nothing.
+        crate::terminals::hear(&[]);
+        let (line, _, found) = button_of(&tool);
+        let line = line.unwrap_or_else(|| panic!("{found}"));
+        assert_eq!((line["props"]["title"].as_str(), line["props"]["disabled"].as_bool()), (Some("That terminal is closed"), Some(true)), "{found}");
+        // A call that opened nothing has no button.
+        assert!(button_of(&call("p3", "Bash", Detail::Plain, "ok")).0.is_none());
     }
 
     /// A call a mod draws the row of (a button holding its words, as a mod's hook for MCP calls draws it) opens with a click

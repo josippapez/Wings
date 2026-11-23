@@ -3,7 +3,7 @@
 //! version you last marked read. A check runs off the window's thread at launch, every six hours while Wings is in
 //! front and on Check now; Settings only draws what the last one found.
 
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 
 use gpui::{
     AnyElement, Context, FontWeight, Role, SharedString, Subscription, Task, Window, div,
@@ -11,6 +11,7 @@ use gpui::{
 };
 
 use crate::{
+    agents::AgentState,
     icons::{Icon, icon},
     markdown,
     page::plugin::OpenPane,
@@ -47,8 +48,18 @@ pub(super) struct Tools {
     lookup: Arc<dyn Lookup + Send>,
     task: Option<Task<()>>,
     timer: Option<Task<()>>,
-    /// The tabs an Update runs in, each rechecked when its shell ends.
-    updating: Vec<Subscription>,
+    /// The tabs a "Run in terminal" runs in, each rechecked when its shell ends.
+    terminals: Vec<Subscription>,
+    /// The updates running or failed, by program. One runs at a time, as Homebrew allows one `upgrade` at a time.
+    runs: HashMap<String, Run>,
+}
+
+/// An Update run from its row.
+enum Run {
+    /// Running in the background, then looking at the tool again. Dropping it ends the wait, not the program.
+    Going(#[allow(dead_code)] Task<()>),
+    /// It didn't work: the last lines it printed, and the line to try in a terminal.
+    Failed { error: SharedString, command: String },
 }
 
 impl Default for Tools {
@@ -63,7 +74,8 @@ impl Default for Tools {
             lookup: Arc::new(tools::System),
             task: None,
             timer: None,
-            updating: Vec::new(),
+            terminals: Vec::new(),
+            runs: HashMap::new(),
         }
     }
 }
@@ -76,6 +88,11 @@ impl Tools {
 
     pub(super) fn updates(&self) -> usize {
         self.list.as_deref().map_or(0, tools::updates)
+    }
+
+    /// Whether an update is running, so the other Update buttons wait.
+    fn is_updating(&self) -> bool {
+        self.runs.values().any(|run| matches!(run, Run::Going(_)))
     }
 }
 
@@ -213,6 +230,85 @@ impl Workspace {
         cx.notify_workspace();
     }
 
+    /// Runs the update of `program` in the background, with nothing to read from, then looks at that tool again. A failure
+    /// stays in the row with the last lines it printed and a way to run it in a terminal.
+    fn start_update(&mut self, program: String, cx: &mut Context<Self>) {
+        if self.tools.is_updating() {
+            return;
+        }
+        let Some(tool) = self.tools.list.iter().flatten().find(|tool| tool.program == program) else {
+            return;
+        };
+        let (Some(plan), Some(command)) = (tool.plan(), tool.command()) else {
+            return;
+        };
+        let want = tools::wants(&self.plugin_programs())
+            .into_iter()
+            .find(|want| want.program == program);
+        let lookup = self.tools.lookup.clone();
+        let work = cx.background_executor().spawn(async move {
+            let (path, _) = lookup
+                .find(&plan.program)
+                .ok_or_else(|| format!("Couldn't find {} on this Mac.", plan.program))?;
+            lookup.update(&path, &plan.args)?;
+            Ok::<_, String>(want.and_then(|want| tools::check(&*lookup, &[want]).pop()))
+        });
+        let key = program.clone();
+        let task = cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |this, cx| this.updated(program, command, result, cx));
+        });
+        self.tools.runs.insert(key, Run::Going(task));
+        cx.notify_workspace();
+    }
+
+    fn updated(
+        &mut self,
+        program: String,
+        command: String,
+        result: Result<Option<ToolStatus>, String>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(status) => {
+                self.tools.runs.remove(&program);
+                match (status, self.tools.list.as_mut()) {
+                    (Some(status), Some(list)) => {
+                        if let Some(slot) = list.iter_mut().find(|tool| tool.program == program) {
+                            *slot = status;
+                        }
+                    }
+                    _ => self.check_tools(cx),
+                }
+            }
+            Err(error) => {
+                let error = if error.is_empty() { "It stopped without saying why.".into() } else { error };
+                self.tools.runs.insert(program, Run::Failed { error: error.into(), command });
+            }
+        }
+        cx.notify_workspace();
+    }
+
+    /// What failed in a row, tried in a terminal instead, where a password or an answer can be typed.
+    fn run_in_terminal(&mut self, program: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(Run::Failed { command, .. }) = self.tools.runs.remove(program) {
+            self.update_tool(command, window, cx);
+        }
+    }
+
+    /// Shows `running` as updating and `failed` as an update that printed `error`, for screenshots.
+    #[cfg(feature = "test-support")]
+    pub fn show_tool_runs(&mut self, running: &str, failed: &str, error: &str, cx: &mut Context<Self>) {
+        let command = |program: &str| {
+            let tool = self.tools.list.iter().flatten().find(|tool| tool.program == program);
+            tool.and_then(ToolStatus::command).unwrap_or_default()
+        };
+        let command = command(failed);
+        self.tools.runs.insert(running.into(), Run::Going(Task::ready(())));
+        self.tools.runs.insert(failed.into(), Run::Failed { error: error.to_owned().into(), command });
+        cx.notify_workspace();
+    }
+
     /// Runs `command` in a new tab of the project on screen, so you see what it prints and can answer a password prompt,
     /// and looks at the tools again when its shell ends. Settings closes to show the tab. The shell ends by itself only
     /// when the command worked: a failure stays on screen to read.
@@ -232,7 +328,7 @@ impl Workspace {
                 self.show(tab, window, cx);
                 self.sync_plugins(cx);
                 if let Some(view) = self.terminal(pane) {
-                    self.tools.updating.push(cx.subscribe(
+                    self.tools.terminals.push(cx.subscribe(
                         &view,
                         |this, _, _: &TerminalEvent, cx| this.check_tools(cx),
                     ));
@@ -301,7 +397,10 @@ impl Workspace {
         )];
         match &tools.list {
             None => rows.push(div().px(px(16.0)).py(px(12.0)).text_size(px(12.0)).text_color(rgb(theme::MUTED_FOREGROUND)).child(if tools.checking { "Looking for your tools…" } else { "Not checked yet." }).into_any_element()),
-            Some(list) => rows.extend(list.iter().map(|tool| tool_row(tool, cx))),
+            Some(list) => rows.extend(
+                list.iter()
+                    .map(|tool| tool_row(tool, tools.runs.get(&tool.program), tools.is_updating(), cx)),
+            ),
         }
         let mut cards = vec![rows];
         if let Some(news) = self.whats_new(cx) {
@@ -445,8 +544,11 @@ impl Workspace {
 }
 
 /// A tool's row: its name and whether it is current, what uses it, its versions and where it came from, and Update.
-fn tool_row(tool: &ToolStatus, cx: &mut Context<Workspace>) -> AnyElement {
-    let status = if !tool.found {
+fn tool_row(tool: &ToolStatus, run: Option<&Run>, busy: bool, cx: &mut Context<Workspace>) -> AnyElement {
+    let going = matches!(run, Some(Run::Going(_)));
+    let status = if going {
+        Some((theme::WORKING, "Updating…"))
+    } else if !tool.found {
         Some((theme::IDLE, "Not installed"))
     } else if tool.has_update() {
         Some((theme::WORKING, "Update available"))
@@ -484,19 +586,50 @@ fn tool_row(tool: &ToolStatus, cx: &mut Context<Workspace>) -> AnyElement {
     };
     let command = tool.command();
     let name = tool.name.clone();
+    let program = tool.program.clone();
+    let failed = match run {
+        Some(Run::Failed { error, .. }) => Some(error.clone()),
+        _ => None,
+    };
+    // One update runs at a time, so the others wait; a running one reads "Updating…".
     let update = command.clone().map(|command| {
-        ui::button(
+        let button = ui::button(
             SharedString::from(format!("tools-update-{}", tool.program)),
-            format!("Update {name}: runs {command} in a new tab"),
+            if going { format!("Updating {name}") } else { format!("Update {name}: runs {command}") },
+            if failed.is_some() { Variant::Outline } else { Variant::Secondary },
+            busy,
+            if going { "Updating…" } else if failed.is_some() { "Try again" } else { "Update" },
+        )
+        .h(px(28.0));
+        if busy {
+            button
+        } else {
+            let program = program.clone();
+            button.on_click(cx.listener(move |this, _, _, cx| {
+                this.tools.runs.remove(&program);
+                this.start_update(program.clone(), cx)
+            }))
+        }
+    });
+    let terminal = failed.is_some().then(|| {
+        let program = program.clone();
+        ui::button(
+            SharedString::from(format!("tools-terminal-{}", tool.program)),
+            format!("Run the update of {} in a terminal tab", tool.name),
             Variant::Secondary,
             false,
-            "Update",
+            "Run in terminal",
         )
         .h(px(28.0))
-        .on_click(cx.listener(move |this, _, window, cx| {
-            this.update_tool(command.clone(), window, cx)
-        }))
+        .on_click(cx.listener(move |this, _, window, cx| this.run_in_terminal(&program, window, cx)))
     });
+    // A failed row keeps its buttons under the error, so the text keeps the row's width.
+    let (controls, retry) = if failed.is_some() {
+        let buttons = div().flex().flex_wrap().gap(px(8.0)).pt(px(4.0)).children(terminal).children(update);
+        (None, Some(buttons))
+    } else {
+        (update.map(IntoElement::into_any_element), None)
+    };
     div()
         .id(SharedString::from(format!("tools-{}", tool.program)))
         .role(Role::Group)
@@ -525,6 +658,12 @@ fn tool_row(tool: &ToolStatus, cx: &mut Context<Workspace>) -> AnyElement {
                                 .font_weight(FontWeight::MEDIUM)
                                 .child(tool.name.clone()),
                         )
+                        .when(going, |line| {
+                            line.child(ui::status_dot_slot(
+                                AgentState::Working,
+                                format!("tools-update-{}", tool.program),
+                            ))
+                        })
                         .children(status.map(|(tone, label)| {
                             ui::badge(Variant::Secondary, Some(tone), true, label)
                         })),
@@ -533,13 +672,21 @@ fn tool_row(tool: &ToolStatus, cx: &mut Context<Workspace>) -> AnyElement {
                     col.child(muted(tool.uses.clone()))
                 })
                 .child(muted(details))
+                .children(failed.clone().map(|error| {
+                    div()
+                        .text_size(px(12.0))
+                        .line_height(px(16.5))
+                        .text_color(rgb(theme::DANGER))
+                        .child(format!("Update failed.\n{error}"))
+                }))
+                .children(retry)
                 .when(tool.found && tool.source == Source::Unknown, |col| {
                     col.child(muted(
                         "Update it the way you installed it.".to_owned(),
                     ))
                 }),
         )
-        .children(update)
+        .children(controls)
         .into_any_element()
 }
 

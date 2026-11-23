@@ -72,6 +72,92 @@ fn the_update_command_is_fixed_for_each_source() {
 }
 
 #[test]
+fn the_update_runs_a_fixed_program_with_fixed_arguments() {
+    let plan = |program, source| update_plan(program, &source).map(|c| (c.program, c.args));
+    let args = |program: &str, args: &[&str]| Some((program.to_owned(), args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>()));
+    assert_eq!(plan("gh", Source::Homebrew("gh".into())), args("brew", &["upgrade", "gh"]));
+    assert_eq!(
+        plan("opencode", Source::Homebrew("anomalyco/tap/opencode-v2".into())),
+        args("brew", &["upgrade", "anomalyco/tap/opencode-v2"])
+    );
+    assert_eq!(
+        plan("az", Source::HomebrewCask("azure-cli".into())),
+        args("brew", &["upgrade", "--cask", "azure-cli"])
+    );
+    assert_eq!(plan("claude", Source::ClaudeInstaller), args("claude", &["update"]));
+    // Two slashes, an option or a space is no package.
+    for bad in ["a/b", "a/b/c/d", "--all", "a/b/-c", "a b", "a/b/c;x"] {
+        assert_eq!(plan("gh", Source::Homebrew(bad.into())), None, "{bad}");
+    }
+    assert_eq!(
+        update_command("opencode", &Source::Homebrew("anomalyco/tap/opencode-v2".into())).as_deref(),
+        Some("brew upgrade anomalyco/tap/opencode-v2")
+    );
+}
+
+#[test]
+fn a_failed_update_shows_the_last_lines_it_printed() {
+    let text = "==> Upgrading gh\n\n  \nDownloading\nError: one\nError: two\nError: three\n";
+    assert_eq!(last_lines(text), "Error: one\nError: two\nError: three");
+    assert_eq!(last_lines(""), "");
+    let long = "x".repeat(400);
+    assert_eq!(last_lines(&long).chars().count(), 161);
+}
+
+const TAP_FORMULA: &str = r#"{"formulae":[{"name":"opencode-v2","full_name":"anomalyco/tap/opencode-v2","tap":"anomalyco/tap","versions":{"stable":"2.4.0"}}],"casks":[]}"#;
+const CORE_FORMULA: &str = r#"{"formulae":[{"name":"gh","full_name":"gh","tap":"homebrew/core","versions":{"stable":"2.105.0"}}],"casks":[]}"#;
+const TAP_CASK: &str = r#"{"formulae":[],"casks":[{"token":"thing","full_token":"someone/tap/thing","tap":"someone/tap","version":"3.1.4,abc"}]}"#;
+
+#[test]
+fn brew_info_names_a_tap_of_someone_elses_and_reads_its_newest_version() {
+    let formula = Source::Homebrew("opencode-v2".into());
+    assert_eq!(
+        brew_info_args(&formula).unwrap(),
+        ["info", "--json=v2", "opencode-v2"]
+    );
+    assert_eq!(
+        brew_info_args(&Source::HomebrewCask("thing".into())).unwrap(),
+        ["info", "--json=v2", "--cask", "thing"]
+    );
+    assert_eq!(brew_info_args(&Source::Unknown), None);
+    assert_eq!(
+        parse_brew_info(&formula, TAP_FORMULA),
+        Some(BrewInfo { source: Source::Homebrew("anomalyco/tap/opencode-v2".into()), latest: Some("2.4.0".into()) })
+    );
+    assert_eq!(
+        parse_brew_info(&Source::HomebrewCask("thing".into()), TAP_CASK),
+        Some(BrewInfo { source: Source::HomebrewCask("someone/tap/thing".into()), latest: Some("3.1.4".into()) })
+    );
+    // Core keeps its name and its newest version comes from the API.
+    let gh = Source::Homebrew("gh".into());
+    assert_eq!(parse_brew_info(&gh, CORE_FORMULA), Some(BrewInfo { source: gh.clone(), latest: None }));
+    assert_eq!(parse_brew_info(&gh, "Error: nope"), None);
+    // A name that could be an option is refused.
+    let bad = TAP_FORMULA.replace("anomalyco/tap/opencode-v2", "--force");
+    assert_eq!(parse_brew_info(&formula, &bad), None);
+}
+
+#[test]
+fn a_tool_from_a_tap_of_someone_elses_is_read_from_brew_and_updated_by_its_full_name() {
+    let mut mac = mac();
+    mac.programs.insert("brew", ("/opt/homebrew/Library/brew.sh", ""));
+    mac.programs.insert("opencode", ("/opt/homebrew/Cellar/opencode-v2/2.3.0/bin/opencode", "opencode 2.3.0"));
+    mac.brew.insert("opencode-v2", TAP_FORMULA);
+    mac.brew.insert("gh", CORE_FORMULA);
+    let tools = check(&mac, &wants(&[]));
+    let get = |program: &str| tools.iter().find(|t| t.program == program).unwrap();
+    let opencode = get("opencode");
+    assert_eq!(opencode.source, Source::Homebrew("anomalyco/tap/opencode-v2".into()));
+    assert_eq!(opencode.latest.as_deref(), Some("2.4.0"));
+    assert_eq!(opencode.command().as_deref(), Some("brew upgrade anomalyco/tap/opencode-v2"));
+    // The API isn't asked about what it doesn't have, and core still uses it.
+    let asked = mac.asked.lock().unwrap().clone();
+    assert!(asked.iter().all(|url| !url.contains("opencode")), "{asked:?}");
+    assert_eq!(get("gh").source, Source::Homebrew("gh".into()));
+    assert_eq!(get("gh").latest.as_deref(), Some("2.105.0"));
+}
+
+#[test]
 fn the_newest_version_is_read_from_each_sources_answer() {
     let formula = Source::Homebrew("gh".into());
     assert_eq!(
@@ -142,6 +228,8 @@ struct Mac {
     programs: HashMap<&'static str, (&'static str, &'static str)>,
     web: HashMap<String, String>,
     asked: std::sync::Mutex<Vec<String>>,
+    /// What `brew info --json=v2 [--cask] <name>` prints, by name.
+    brew: HashMap<&'static str, &'static str>,
 }
 
 impl Lookup for Mac {
@@ -152,9 +240,18 @@ impl Lookup for Mac {
 
     fn run(&self, program: &Path, args: &[&str]) -> Option<String> {
         let name = program.file_name()?.to_str()?;
+        if name == "brew" {
+            let (&asked, rest) = args.split_last()?;
+            assert_eq!(&rest[..2], ["info", "--json=v2"]);
+            return self.brew.get(asked).map(|printed| (*printed).to_owned());
+        }
         let (_, printed) = self.programs.get(name)?;
         let expected: &[&str] = if name == "az" { &["version", "-o", "json"] } else { &["--version"] };
         (args == expected).then(|| (*printed).to_owned())
+    }
+
+    fn update(&self, _: &Path, _: &[String]) -> Result<(), String> {
+        Ok(())
     }
 
     fn get(&self, url: &str, _: u64) -> Option<String> {

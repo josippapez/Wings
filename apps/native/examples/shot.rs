@@ -3009,6 +3009,32 @@ fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
                 );
                 wait(cx, window, Duration::from_millis(100));
             }
+            if section == "tools" {
+                handle
+                    .update(cx, |workspace, _, cx| {
+                        workspace.show_tool_runs(
+                            "claude",
+                            "az",
+                            "Error: sudo: a terminal is required to read the password\nError: azure-cli: failed to upgrade the cask",
+                            cx,
+                        )
+                    })
+                    .expect("show the made-up updates");
+                wait(cx, window, Duration::from_millis(300));
+                save(cx, window, &name("settings-tools-updating"));
+                cx.simulate_event(
+                    window,
+                    gpui::ScrollEvent {
+                        position: point(px(width / 2.0 + 100.0), px(400.0)),
+                        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-380.0))),
+                        modifiers: Modifiers::default(),
+                        touch_phase: gpui::TouchPhase::Moved,
+                        source: gpui::ScrollSource::Pointer,
+                    },
+                );
+                wait(cx, window, Duration::from_millis(200));
+                save(cx, window, &name("settings-tools-failed"));
+            }
         }
         cx.simulate_keystrokes(window, "escape");
         wait(cx, window, Duration::from_millis(200));
@@ -3093,6 +3119,7 @@ fn made_up_tools() -> (Vec<wings_native::tools::ToolStatus>, Vec<wings_native::t
     let tools = vec![
         tool("claude", "Claude Code", "Claude chat", Some("2.1.329"), Some("2.1.331"), Source::ClaudeInstaller),
         tool("gh", "GitHub CLI", "PR tracker, Changes, Tasks", Some("2.105.0"), Some("2.105.0"), Source::Homebrew("gh".into())),
+        tool("opencode", "OpenCode", "Connecting OpenCode to Wings", Some("2.3.0"), Some("2.4.0"), Source::Homebrew("anomalyco/tap/opencode-v2".into())),
         tool("glab", "GitLab CLI", "PR tracker", None, None, Source::Unknown),
         tool("az", "Azure CLI", "PR tracker, Schedules, Work item", Some("2.92.0"), Some("2.93.0"), Source::HomebrewCask("azure-cli".into())),
         tool("git", "Git", "Branches and changes, PR tracker, Worktrees, and 4 more", Some("2.39.5"), None, Source::Unknown),

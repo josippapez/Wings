@@ -1917,7 +1917,19 @@ esac"##,
         // Issue keys Issues knows and a dev server's address are links; UTF-8 and a key never filed aren't.
         ("links", linked, None, None, "never filed"),
         // The terminal Claude opened, live in the side panel with what it runs and buttons to open it as a tab and close it.
-        ("terminal", built, None, None, "beside the chat"),
+        ("terminal", built.clone(), None, None, "beside the chat"),
+        // The call that opened a terminal has an Open that shows it, here among others that name it: a read, and a message.
+        ("terminal-open", opened(vec![
+            init.clone(),
+            user("Build the shop, check the output, then tell the agent in the other tab."),
+            tool("o1", "mcp__wings__open_pane", json!({ "command": "make all", "run": true })),
+            output("o1", "{\"paneId\":\"1\",\"commandTyped\":true,\"commandRun\":true}", false),
+            tool("o2", "mcp__wings__read_pane", json!({ "pane_id": "1", "lines": 40 })),
+            output("o2", "Finished build in 2.4s", false),
+            tool("o3", "mcp__wings__open_pane", json!({ "command": "pnpm dev", "run": true })),
+            output("o3", "{\"paneId\":\"9\",\"commandTyped\":true,\"commandRun\":true}", false),
+            text("The build finished and the dev server is up."),
+        ]), None, Some("disclose:Used 3 tools"), "pnpm dev"),
         // The button beside your message forks before it, and asks first what that does.
         ("fork-from", rewound_again, None, Some("press:Fork from here"), "Start a new chat from this session"),
         // The header's Fork asks first, and says what a fork is.
@@ -2026,6 +2038,17 @@ esac"##,
     let split = host_over("fixture-storage-claude-chat-split", &[("diff-split", json!(true)), ("detailed-output", json!(true))]);
     // A newer Claude Code is out (2.1.331, against the fake `claude`'s 2.1.329): the header's pill is a button that updates.
     let update_host = host_over("fixture-storage-claude-chat-update", &[("claude-latest", json!("2.1.331"))]);
+    // A terminal is open in Wings (pane 1), and the one the second call opened (pane 9) is not.
+    let panes_host = host_over("fixture-storage-claude-chat-panes", &[]);
+    panes_host.publish_panes(vec![PaneEntry {
+        pane_id: "1".into(),
+        cwd: project.clone(),
+        command: "make all".into(),
+        project: "shop".into(),
+        project_id: project.clone(),
+        session: None,
+        focused: false,
+    }]);
     // Large text: the conversation's text a fifth bigger.
     let large = host_over("fixture-storage-claude-chat-large", &[("text-size", json!("large"))]);
     // The Thinking view mode: what Claude thought shows open, with the calls still folded. (Verbose is `detailed` above.)
@@ -2097,6 +2120,7 @@ esac"##,
         let host = match name {
             "detailed" | "read-ts" => &detailed,
             "large-text" => &large,
+            "terminal-open" => &panes_host,
             "claude-update" | "claude-updated" => &update_host,
             "view-thinking" => &thinking_host,
             "bookmarks" => &bookmarks_host,
@@ -2273,7 +2297,9 @@ esac"##,
         // The side panel shows by default and floats over a tab's right side, beside the conversation while the tab is wide
         // enough to leave it clear (1,480 points) and over it in a narrower one, so a few scenes are drawn at 1,600 too and at
         // 1,280 just under it.
-        let widths: &[f32] = if ["conversation", "work", "ask-bash", "tasks", "terminal", "folder", "long-message", "subagents", "subagent"].contains(&name) {
+        let widths: &[f32] = if name == "terminal-open" {
+            &[1000.0, 640.0]
+        } else if ["conversation", "work", "ask-bash", "tasks", "terminal", "folder", "long-message", "subagents", "subagent"].contains(&name) {
             &[1600.0, 1280.0, 1000.0, 640.0]
         } else if name == "prompt-rail" {
             // The rail is drawn only where the tab has room beside the conversation's column, so 640 has none to show.

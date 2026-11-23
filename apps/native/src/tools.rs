@@ -76,6 +76,12 @@ fn is_package(name: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"@._+-".contains(&b))
 }
 
+/// A formula or cask as `brew` names it: a package name, or `user/tap/name` for one from a tap of someone else's.
+fn is_brew_name(name: &str) -> bool {
+    let parts: Vec<&str> = name.split('/').collect();
+    matches!(parts.len(), 1 | 3) && parts.iter().all(|part| is_package(part))
+}
+
 /// How the program at `resolved` (its path with the symlinks followed) was installed.
 pub fn detect_source(resolved: &Path) -> Source {
     let parts: Vec<&str> = resolved
@@ -104,22 +110,54 @@ pub fn detect_source(resolved: &Path) -> Source {
     Source::Unknown
 }
 
-/// The line that updates `program` to its newest version, typed into a terminal. `None` when Wings doesn't know how the
-/// program was installed. Only fixed words and a checked package name go into it.
-pub fn update_command(program: &str, source: &Source) -> Option<String> {
-    match source {
-        Source::Homebrew(formula) if is_package(formula) => Some(format!("brew upgrade {formula}")),
-        Source::HomebrewCask(cask) if is_package(cask) => {
-            Some(format!("brew upgrade --cask {cask}"))
+/// A program and its arguments, run as they are: nothing goes through a shell.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Command {
+    pub program: String,
+    pub args: Vec<String>,
+}
+
+impl Command {
+    fn new(program: &str, args: &[&str]) -> Self {
+        Self {
+            program: program.into(),
+            args: args.iter().map(|arg| (*arg).into()).collect(),
         }
-        Source::ClaudeInstaller if program == "claude" => Some("claude update".into()),
+    }
+
+    /// The line to type in a terminal. Only fixed words and a checked package name are in it.
+    pub fn line(&self) -> String {
+        std::iter::once(self.program.as_str())
+            .chain(self.args.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+/// What updates `program` to its newest version. `None` when Wings doesn't know how the program was installed. Only
+/// fixed words and a checked package name go into it.
+pub fn update_plan(program: &str, source: &Source) -> Option<Command> {
+    match source {
+        Source::Homebrew(formula) if is_brew_name(formula) => {
+            Some(Command::new("brew", &["upgrade", formula]))
+        }
+        Source::HomebrewCask(cask) if is_brew_name(cask) => {
+            Some(Command::new("brew", &["upgrade", "--cask", cask]))
+        }
+        Source::ClaudeInstaller if program == "claude" => Some(Command::new("claude", &["update"])),
         _ => None,
     }
+}
+
+/// The line that updates `program`, typed into a terminal.
+pub fn update_command(program: &str, source: &Source) -> Option<String> {
+    update_plan(program, source).map(|plan| plan.line())
 }
 
 /// Where the newest version of a program installed by `source` is told, and how it is read from the answer.
 pub fn latest_url(source: &Source) -> Option<String> {
     match source {
+        // The API only has homebrew/core and homebrew/cask; a tap of someone else's is read with `brew_info`.
         Source::Homebrew(formula) if is_package(formula) => {
             Some(format!("https://formulae.brew.sh/api/formula/{formula}.json"))
         }
@@ -145,6 +183,59 @@ pub fn parse_latest(source: &Source, body: &str) -> Option<String> {
         Source::ClaudeInstaller => parse_version(body.trim()),
         Source::Unknown => None,
     }
+}
+
+/// What `brew info` says about a formula or cask: the name `brew` wants for it, and its newest version when it is from a
+/// tap of someone else's, which the API doesn't cover.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BrewInfo {
+    pub source: Source,
+    pub latest: Option<String>,
+}
+
+/// The arguments that ask `brew` about `source`, whose answer `parse_brew_info` reads. `None` for a source that isn't
+/// Homebrew's.
+pub fn brew_info_args(source: &Source) -> Option<Vec<String>> {
+    let args = |extra: &[&str], name: &String| {
+        let mut args: Vec<String> = ["info", "--json=v2"].map(String::from).into();
+        args.extend(extra.iter().map(|arg| (*arg).to_owned()));
+        args.push(name.clone());
+        Some(args)
+    };
+    match source {
+        Source::Homebrew(name) if is_brew_name(name) => args(&[], name),
+        Source::HomebrewCask(name) if is_brew_name(name) => args(&["--cask"], name),
+        _ => None,
+    }
+}
+
+/// `brew info --json=v2`'s answer for `source`. From homebrew/core or homebrew/cask the source stays as it is and the
+/// newest version is the API's; from any other tap the source takes the full name (`user/tap/name`), which `brew upgrade`
+/// needs, and the newest version is the one in the tap's local metadata.
+pub fn parse_brew_info(source: &Source, body: &str) -> Option<BrewInfo> {
+    let json: serde_json::Value = serde_json::from_str(body).ok()?;
+    let (entry, full, newest, core) = match source {
+        Source::Homebrew(_) => {
+            let entry = &json["formulae"][0];
+            (entry, &entry["full_name"], &entry["versions"]["stable"], "homebrew/core")
+        }
+        Source::HomebrewCask(_) => {
+            let entry = &json["casks"][0];
+            (entry, &entry["full_token"], &entry["version"], "homebrew/cask")
+        }
+        _ => return None,
+    };
+    if entry["tap"].as_str()? == core {
+        return Some(BrewInfo { source: source.clone(), latest: None });
+    }
+    let full = full.as_str().filter(|name| is_brew_name(name))?.to_owned();
+    Some(BrewInfo {
+        source: match source {
+            Source::Homebrew(_) => Source::Homebrew(full),
+            _ => Source::HomebrewCask(full),
+        },
+        latest: newest.as_str().and_then(parse_version),
+    })
 }
 
 /// The first `x.y.z` in `text`, as those three numbers: what `--version` prints, or a version a server sends. Anything
@@ -197,11 +288,16 @@ impl ToolStatus {
         }
     }
 
-    /// The line the Update button runs, when there is an update and a way to run it.
-    pub fn command(&self) -> Option<String> {
+    /// What the Update button runs, when there is an update and a way to run it.
+    pub fn plan(&self) -> Option<Command> {
         self.has_update()
-            .then(|| update_command(&self.program, &self.source))
+            .then(|| update_plan(&self.program, &self.source))
             .flatten()
+    }
+
+    /// The line for a terminal, when there is one.
+    pub fn command(&self) -> Option<String> {
+        self.plan().map(|plan| plan.line())
     }
 }
 
@@ -291,6 +387,9 @@ pub trait Lookup: Sync {
     fn run(&self, program: &Path, args: &[&str]) -> Option<String>;
     /// The body at an https `url`, up to `max` bytes.
     fn get(&self, url: &str, max: u64) -> Option<String>;
+    /// Runs `args` on `program` to the end, with nothing to read from, and says how it went: the last lines it printed when
+    /// it didn't work.
+    fn update(&self, program: &Path, args: &[String]) -> Result<(), String>;
 }
 
 /// This Mac: the search path Wings' plugins use, the programs on it and the three hosts the newest versions come from.
@@ -301,6 +400,26 @@ const HOSTS: [&str; 3] = [
     "downloads.claude.ai",
     "raw.githubusercontent.com",
 ];
+
+/// How long an update may run, and how much of what it prints is kept.
+const UPDATE_LIMIT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+const UPDATE_OUTPUT: u64 = 256 * 1024;
+const SHOWN_LINES: usize = 3;
+const SHOWN_WIDTH: usize = 160;
+
+/// The last few lines `text` has, for a short error: blank lines dropped, each cut to a readable width.
+pub fn last_lines(text: &str) -> String {
+    let lines: Vec<String> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| match line.char_indices().nth(SHOWN_WIDTH) {
+            Some((at, _)) => format!("{}…", &line[..at]),
+            None => line.to_owned(),
+        })
+        .collect();
+    lines[lines.len().saturating_sub(SHOWN_LINES)..].join("\n")
+}
 
 impl Lookup for System {
     fn find(&self, program: &str) -> Option<(PathBuf, PathBuf)> {
@@ -335,6 +454,56 @@ impl Lookup for System {
         let _ = child.kill();
         let _ = child.wait();
         text
+    }
+
+    fn update(&self, program: &Path, args: &[String]) -> Result<(), String> {
+        use std::{
+            io::Read,
+            process::{Command, Stdio},
+            time::{Duration, Instant},
+        };
+        let mut child = Command::new(program)
+            .args(args)
+            .env("PATH", wings_plugins::exec::search_path())
+            // Nothing to answer: Homebrew skips its prompts and its hints.
+            .env("NONINTERACTIVE", "1")
+            .env("HOMEBREW_NO_ENV_HINTS", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| format!("Couldn't start it: {error}"))?;
+        let read = |pipe: Option<Box<dyn Read + Send>>| {
+            std::thread::spawn(move || {
+                let mut text = String::new();
+                if let Some(pipe) = pipe {
+                    let mut bytes = Vec::new();
+                    let _ = pipe.take(UPDATE_OUTPUT).read_to_end(&mut bytes);
+                    text = String::from_utf8_lossy(&bytes).into_owned();
+                }
+                text
+            })
+        };
+        let out = read(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+        let err = read(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+        let deadline = Instant::now() + UPDATE_LIMIT;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+            }
+        };
+        let output = format!("{}\n{}", out.join().unwrap_or_default(), err.join().unwrap_or_default());
+        match status {
+            Some(status) if status.success() => Ok(()),
+            Some(_) => Err(last_lines(&output)),
+            None => Err(format!("Gave up after {} minutes.\n{}", UPDATE_LIMIT.as_secs() / 60, last_lines(&output))),
+        }
     }
 
     fn get(&self, url: &str, max: u64) -> Option<String> {
@@ -396,11 +565,21 @@ fn check_one(lookup: &dyn Lookup, want: &Want) -> Option<ToolStatus> {
     if !want.known && is_system(&resolved) {
         return None;
     }
-    let source = detect_source(&resolved);
+    let mut source = detect_source(&resolved);
     let installed = installed_version(lookup, &want.program, &path);
-    let latest = latest_url(&source)
-        .and_then(|url| lookup.get(&url, 1024 * 1024))
-        .and_then(|body| parse_latest(&source, &body));
+    // Which tap it came from decides its name for `brew upgrade` and where its newest version is read.
+    let tap_latest = brew_info_args(&source).and_then(|args| {
+        let (brew, _) = lookup.find("brew")?;
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let info = parse_brew_info(&source, &lookup.run(&brew, &args)?)?;
+        source = info.source;
+        info.latest
+    });
+    let latest = tap_latest.or_else(|| {
+        latest_url(&source)
+            .and_then(|url| lookup.get(&url, 1024 * 1024))
+            .and_then(|body| parse_latest(&source, &body))
+    });
     Some(status(true, installed, latest, source))
 }
 

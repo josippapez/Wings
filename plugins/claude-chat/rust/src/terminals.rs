@@ -45,7 +45,50 @@ thread_local! {
 
 /// Keeps the panes as Wings lists them, now and on every change.
 pub fn start() {
-    wings_plugin::host::on_panes(|list| PANES.with(|panes| *panes.borrow_mut() = from_list(list)));
+    wings_plugin::host::on_panes(listed);
+}
+
+/// Keeps `list`, Wings' open panes.
+fn listed(list: &[Value]) {
+    PANES.with(|panes| *panes.borrow_mut() = from_list(list));
+}
+
+/// Whether Wings lists the pane `id` among its open terminals.
+pub fn is_open(id: &str) -> bool {
+    PANES.with(|panes| panes.borrow().iter().any(|pane| pane.id == id))
+}
+
+/// Sets the open panes, as a test hears them.
+#[cfg(test)]
+pub fn hear(list: &[Value]) {
+    listed(list);
+}
+
+/// Has Wings show the pane `id`: its project and tab come to the front and the keyboard goes to it.
+pub fn focus(id: &str) {
+    drop(wings_plugin::host::call("focusPane", serde_json::json!({ "paneId": id })));
+}
+
+/// The pane a Wings tool call is about: the one `open_pane` opened (named in its result), or the `pane_id` that
+/// `send_to_agent` and `read_pane` were given.
+pub fn target(tool: &crate::session::Tool) -> Option<String> {
+    let (server, name) = tool.name.strip_prefix("mcp__")?.rsplit_once("__")?;
+    if !server.contains("wings") {
+        return None;
+    }
+    match name {
+        "open_pane" => {
+            let (output, failed) = tool.output.as_ref()?;
+            let reply: Value = serde_json::from_str(output.trim()).ok().filter(|_| !failed)?;
+            reply["paneId"].as_str().map(str::to_owned)
+        }
+        "send_to_agent" | "read_pane" => {
+            let given = tool.input.fields.iter().find(|(field, _)| field == "pane_id").map(|(_, id)| id.as_str());
+            let said = given.unwrap_or(tool.summary.as_str());
+            (!said.is_empty() && said.len() <= 40 && !said.contains(char::is_whitespace)).then(|| said.to_owned())
+        }
+        _ => None,
+    }
 }
 
 /// The panes of Wings' list. A name is the folder's, then `-2`, `-3` for the next of the same folder.
@@ -198,6 +241,31 @@ mod tests {
             json!({ "paneId": "3", "cwd": "/work/my api", "command": "cargo watch", "project": "Api" }),
             json!({ "cwd": "/work/none" }),
         ])
+    }
+
+    fn wings_call(name: &str, summary: &str, fields: &[(&str, &str)], output: Option<&str>) -> crate::session::Tool {
+        crate::session::Tool {
+            id: "w".into(),
+            name: name.into(),
+            summary: summary.into(),
+            output: output.map(|said| (said.to_owned(), false)),
+            detail: crate::session::Detail::Plain,
+            input: crate::session::Input { whole: String::new(), fields: fields.iter().map(|(name, value)| ((*name).to_owned(), (*value).to_owned())).collect() },
+            images: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_call_names_the_pane_it_opened_or_was_given() {
+        let opened = |output| wings_call("mcp__wings__open_pane", "make all", &[("run", "true")], output);
+        assert_eq!(target(&opened(Some(r#"{"paneId":"48","commandRun":true}"#))), Some("48".into()));
+        assert_eq!(target(&opened(None)), None, "no result yet");
+        assert_eq!(target(&opened(Some("no project here"))), None);
+        assert_eq!(target(&wings_call("mcp__wings__read_pane", "48", &[("lines", "50")], Some("$ ok"))), Some("48".into()));
+        assert_eq!(target(&wings_call("mcp__wings__send_to_agent", "go on, fix it", &[("pane_id", "7")], None)), Some("7".into()));
+        assert_eq!(target(&wings_call("mcp__wings__close_pane", "7", &[], None)), None);
+        assert_eq!(target(&wings_call("mcp__other__read_pane", "7", &[], None)), None);
+        assert_eq!(target(&wings_call("Bash", "ls", &[], Some(r#"{"paneId":"1"}"#))), None);
     }
 
     #[test]
