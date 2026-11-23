@@ -137,12 +137,12 @@ async fn open_agent(s: &Schedule) -> Run {
         let project = projects.iter().find(|p| p.id == s.project_id).ok_or("The project is no longer in Wings.")?;
         let mut fell_back = None;
         if s.run_in.for_agent(s.agent) == RunIn::Chat {
-            match host::open_plugin_tab("claude-chat", "chat", &json!({ "cwd": project.path, "prompt": s.prompt })).await {
+            match host::open_plugin_tab_in("claude-chat", "chat", &project.id, &json!({ "cwd": project.path, "prompt": s.prompt })).await {
                 Ok(_) => return Ok::<(Option<String>, Option<String>), String>((None, None)),
                 Err(error) => fell_back = Some(format!("Claude chat didn't open ({error}), so it ran in a terminal.")),
             }
         }
-        let answer = host::call("openPane", json!({ "command": s.agent.command(), "args": [s.prompt], "cwd": project.path, "placement": "tab" }))
+        let answer = host::call("openPane", json!({ "command": s.agent.command(), "args": [s.prompt], "cwd": project.path, "placement": "tab", "background": true }))
             .await
             .map_err(|error| fell_back.as_ref().map_or(error.clone(), |why| format!("{why} The terminal failed too: {error}")))?;
         Ok((answer["paneId"].as_str().map(str::to_owned), fell_back))
@@ -344,7 +344,7 @@ mod tests {
             assert_eq!((run.ok, run.error, run.pane_id), (true, None, Some("9".into())));
             assert_eq!(methods(&calls), ["openPane"]);
             let (_, params) = calls.borrow().iter().find(|(method, _)| method == "openPane").cloned().unwrap();
-            assert_eq!(params, json!({ "command": command, "args": ["Review the open PRs"], "cwd": "/work", "placement": "tab" }));
+            assert_eq!(params, json!({ "command": command, "args": ["Review the open PRs"], "cwd": "/work", "placement": "tab", "background": true }));
         }
     }
 

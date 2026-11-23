@@ -186,6 +186,18 @@ fn drafts(data: &[u8]) -> Option<bool> {
     if data.is_empty() || data == b"\x1b" {
         return None;
     }
+    // Shift-Return is a new line in the draft, not Enter.
+    if data == b"\x1b\r" {
+        return Some(true);
+    }
+    // Keys that can't put text in the prompt say nothing about it: arrows, Page Up/Down, Home/End, Delete and other
+    // escape sequences, Backspace, and Ctrl shortcuts like an agent's Ctrl-P menu. Tab (a suggestion), Ctrl-V and Ctrl-Y
+    // (paste and yank), Ctrl-R (history) and Ctrl-_ (undo) can.
+    let escape_sequence = data.len() > 1 && data[0] == 0x1b && !data.starts_with(b"\x1b[200~");
+    let no_text_key = matches!(data, [byte] if (*byte < 0x20 || *byte == 0x7f) && !matches!(byte, 0x03 | b'\r' | b'\t' | 0x16 | 0x19 | 0x12 | 0x1f));
+    if escape_sequence || no_text_key {
+        return None;
+    }
     // Enter submits what is typed, Ctrl-C clears it. A paste that ends in Enter is still a paste.
     let sends = !data.starts_with(b"\x1b[200~")
         && data
@@ -515,6 +527,19 @@ mod tests {
         assert_eq!(drafts(b"\x1b"), None);
         // A paste that ends in Enter is still a paste.
         assert_eq!(drafts(b"\x1b[200~x\r\x1b[201~\r"), Some(true));
+    }
+
+    /// Moving around an agent's screen or opening its menu leaves no draft, so a message can still reach an empty prompt;
+    /// Shift-Return keeps a draft going, and keys that can add text still count.
+    #[test]
+    fn keys_that_add_no_text_leave_no_draft_and_shift_return_keeps_one() {
+        for neutral in [&b"\x1b[A"[..], b"\x1b[B", b"\x1b[5~", b"\x1b[6~", b"\x1b[H", b"\x1b[3~", b"\x1b[1;5C", b"\x1bb", &[0x10], &[0x7f], &[0x0f]] {
+            assert_eq!(drafts(neutral), None, "{neutral:?}");
+        }
+        assert_eq!(drafts(b"\x1b\r"), Some(true));
+        for adds in [&b"\t"[..], &[0x16], &[0x19], &[0x12], &[0x1f]] {
+            assert_eq!(drafts(adds), Some(true), "{adds:?}");
+        }
     }
 
     #[test]

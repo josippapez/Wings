@@ -9,11 +9,8 @@ use std::path::{Path, PathBuf};
 use gpui::{AnyElement, Context, MouseButton, Pixels, Point, Subscription, canvas, prelude::*};
 
 use crate::{
-    ui,
-    workspace::{
-        Workspace,
-        drag_slot::{DRAG_THRESHOLD, Laid},
-    },
+    ui::{self, behaviors::drag as pointer_drag},
+    workspace::{Workspace, drag_slot::Laid},
 };
 
 use super::order::Sort;
@@ -125,17 +122,11 @@ impl Workspace {
             return;
         };
         if !drag.moving {
-            if (at - drag.from).magnitude() < DRAG_THRESHOLD {
+            if !pointer_drag::past_threshold(drag.from, at) {
                 return;
             }
             drag.moving = true;
-            let this = cx.weak_entity();
-            drag._escape = Some(cx.intercept_keystrokes(move |event, _, cx| {
-                if event.keystroke.key == "escape" {
-                    let _ = this.update(cx, |this, cx| this.cancel_drag(cx));
-                    cx.stop_propagation();
-                }
-            }));
+            drag._escape = Some(pointer_drag::cancel_on_escape(cx, |this, cx| this.cancel_drag(cx)));
         }
         drag.y = at.y;
         let rows = self.side.rows.borrow();

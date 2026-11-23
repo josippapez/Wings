@@ -15,7 +15,7 @@ use wings_plugins::{
 use crate::{
     icons::{Icon, icon, plugin_glyph},
     theme,
-    ui::{self, Variant, behaviors::EscapeExt},
+    ui::{self, Variant, behaviors::{EscapeExt, TrapTabExt}},
 };
 
 use super::Workspace;
@@ -861,6 +861,7 @@ impl Workspace {
                 )
                 .child(ui::dialog_panel(
                     panel
+                        .trap_tab(focus)
                         .on_escape(cx.listener(|this, _: &KeyDownEvent, _, cx| this.skip_review(cx)))
                         .child(
                             ui::dialog_body()

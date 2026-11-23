@@ -104,7 +104,7 @@ fn contributors(share: &Share, week: bool) -> Node {
     let switch = row().prop("gap", "xs").child(pick("Last 24h", !week, false)).child(pick("Last 7 days", week, true));
     // The note and the switch share a line, so the toggle does not take a row of its own.
     let header = row()
-        .prop("gap", "s")
+        .prop("gap", "l")
         .prop("align", "center")
         .prop("wrap", true)
         .child(stack().prop("grow", true).child(muted("Approximate share of usage · sessions on this computer only")))

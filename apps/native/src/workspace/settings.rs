@@ -2,7 +2,7 @@
 //! with what it does and its control. It lists only the settings the native app honours.
 
 use crate::workspace::NotifyWorkspace;
-use std::{cell::Cell, time::Duration};
+use std::{cell::{Cell, RefCell}, rc::Rc, time::Duration};
 
 use gpui::{
     AnyElement, Context, Div, Entity, FocusHandle, FontWeight, KeyDownEvent, MouseButton, Pixels,
@@ -38,6 +38,7 @@ pub(super) enum Section {
     Keyboard,
     Editor,
     Agents,
+    Tools,
     Notifications,
     Plugins,
     /// A plugin's own settings page, the desktop's `plugin:<id>` section.
@@ -63,7 +64,7 @@ pub(super) const RESIZE: Duration = Duration::from_millis(200);
 const EASE_OUT: (f32, f32, f32, f32) = (0.0, 0.0, 0.2, 1.0);
 
 impl Section {
-    const ALL: [Section; 9] = [
+    const ALL: [Section; 10] = [
         Section::General,
         Section::Text,
         Section::Cursor,
@@ -71,6 +72,7 @@ impl Section {
         Section::Keyboard,
         Section::Editor,
         Section::Agents,
+        Section::Tools,
         Section::Notifications,
         Section::Plugins,
     ];
@@ -84,6 +86,7 @@ impl Section {
             Section::Keyboard => "Keyboard",
             Section::Editor => "Editor",
             Section::Agents => "Agents",
+            Section::Tools => "Tools",
             Section::Notifications => "Notifications",
             Section::Plugins => "Plugins",
             Section::Plugin(_) => "Plugin settings",
@@ -99,6 +102,7 @@ impl Section {
             Section::Keyboard => Icon::Keyboard,
             Section::Editor => Icon::Code,
             Section::Agents => Icon::Bot,
+            Section::Tools => Icon::Wrench,
             Section::Notifications => Icon::Bell,
             Section::Plugins | Section::Plugin(_) => Icon::Puzzle,
         }
@@ -192,6 +196,10 @@ pub(super) struct SettingsDialog {
     _family_events: Subscription,
     /// The select whose menu is open.
     menu: Option<&'static str>,
+    /// The open menu's item the keys are on.
+    keys: ui::behaviors::MenuKeys,
+    /// The open menu's choices as it last drew them, for the keys: the text and what choosing does.
+    open_choices: RefCell<Vec<(String, Rc<Choose>)>>,
     /// The Plugins section's GitHub link field.
     pub(super) link: Entity<TextField>,
     _link_events: Subscription,
@@ -297,6 +305,8 @@ impl Workspace {
             family_error: None,
             _family_events: events,
             menu: None,
+            keys: Default::default(),
+            open_choices: Default::default(),
             link,
             _link_events: link_events,
             recording: None,
@@ -308,6 +318,8 @@ impl Workspace {
     /// Shows `section` in Settings, which is open.
     pub(super) fn set_settings_section(&mut self, section: Section, cx: &mut Context<Self>) {
         let agents = section == Section::Agents;
+        // Nothing has been checked yet when Settings opens before the launch check ran.
+        let tools = section == Section::Tools && self.tools.is_unchecked() && self.config.socket.is_some();
         if let Some(dialog) = &mut self.settings {
             dialog.section = section;
             dialog.menu = None;
@@ -319,6 +331,9 @@ impl Workspace {
             self.load_opencode_status(cx);
             self.load_harnesses(cx);
             self.load_ai_status(cx);
+        }
+        if tools {
+            self.check_tools(cx);
         }
         cx.notify_workspace();
     }
@@ -454,6 +469,28 @@ impl Workspace {
         cx.notify_workspace();
     }
 
+    /// The open select's keys. True when it took the key.
+    fn select_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        let Some(dialog) = self.settings.as_mut().filter(|dialog| dialog.menu.is_some()) else {
+            return false;
+        };
+        let labels: Vec<Option<String>> =
+            dialog.open_choices.borrow().iter().map(|(label, _)| Some(label.clone())).collect();
+        match dialog.keys.press(event, &labels) {
+            ui::behaviors::MenuKey::Ignored => return false,
+            ui::behaviors::MenuKey::Moved => {}
+            ui::behaviors::MenuKey::Pick(at) => {
+                let choose = dialog.open_choices.borrow().get(at).map(|(_, choose)| choose.clone());
+                dialog.menu = None;
+                if let Some(choose) = choose {
+                    choose(self, cx);
+                }
+            }
+        }
+        cx.notify_workspace();
+        true
+    }
+
     /// A select: its trigger, and its menu while open. A choice closes the menu.
     pub(super) fn select(
         &self,
@@ -478,11 +515,20 @@ impl Workspace {
             .iter()
             .find(|(_, selected, _)| *selected)
             .map_or_else(SharedString::default, |(label, ..)| label.clone());
+        let highlight = self.settings.as_ref().and_then(|d| d.keys.highlight);
+        let choices: Vec<_> = choices.into_iter().map(|(label, selected, choose)| (label, selected, Rc::new(choose))).collect();
+        if let Some(dialog) = self.settings.as_ref().filter(|_| open) {
+            *dialog.open_choices.borrow_mut() =
+                choices.iter().map(|(label, _, choose)| (label.to_string(), choose.clone())).collect();
+        }
         let items: Vec<AnyElement> = choices
             .into_iter()
             .enumerate()
             .map(|(index, (label, selected, choose))| {
-                ui::select_item(SharedString::from(format!("{id}-{index}")), label, selected)
+                ui::menu_highlight(
+                    ui::select_item(SharedString::from(format!("{id}-{index}")), label, selected),
+                    highlight == Some(index),
+                )
                     .children(ui::spot(|| format!("select-item:{id}-{index}")))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(dialog) = &mut this.settings {
@@ -504,6 +550,7 @@ impl Workspace {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(dialog) = &mut this.settings {
                             dialog.menu = (dialog.menu != Some(id)).then_some(id);
+                            dialog.keys = Default::default();
                         }
                         cx.notify_workspace();
                     })),
@@ -688,6 +735,7 @@ impl Workspace {
             Section::Keyboard => self.keyboard_cards(cx),
             Section::Editor => self.editor_cards(cx),
             Section::Agents => self.agents_cards(cx),
+            Section::Tools => self.tools_cards(cx),
             Section::Notifications => self.notification_cards(cx),
             Section::Plugins | Section::Plugin(_) => Vec::new(),
         }
@@ -1316,6 +1364,7 @@ impl Workspace {
     ) -> Option<AnyElement> {
         let dialog = self.settings.as_ref()?;
         let section = &dialog.section;
+        let updates = self.tools.updates();
         let nav = Section::ALL.map(|item| {
             nav_item(
                 SharedString::from(format!("settings-{}", item.label())),
@@ -1323,6 +1372,13 @@ impl Workspace {
                 item.icon(),
                 *section == item,
             )
+            // Tools says how many programs have an update.
+            .when(item == Section::Tools && updates > 0, |row| {
+                row.child(
+                    ui::badge(ui::Variant::Secondary, Some(theme::WORKING), true, updates.to_string())
+                        .ml_auto(),
+                )
+            })
             .on_click(
                 cx.listener(move |this, _, _, cx| this.set_settings_section(item.clone(), cx)),
             )
@@ -1454,8 +1510,19 @@ impl Workspace {
                         .max_w_full()
                         .max_h_full()
                         .trap_tab(&dialog.focus)
+                        // An open select takes the arrow keys, letters and Enter, before a field in the dialog.
+                        .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                            if this.select_key(event, cx) {
+                                cx.stop_propagation();
+                            }
+                        }))
                         .on_escape(cx.listener(|this, _: &KeyDownEvent, window, cx| {
-                            this.close_settings(window, cx);
+                            // The first Escape closes an open select, the next the dialog.
+                            match this.settings.as_mut().filter(|dialog| dialog.menu.is_some()) {
+                                Some(dialog) => dialog.menu = None,
+                                None => this.close_settings(window, cx),
+                            }
+                            cx.notify_workspace();
                         }))
                         .children(ui::spot(|| "settings-dialog".into()))
                         .child(sidebar)

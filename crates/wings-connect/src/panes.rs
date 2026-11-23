@@ -4,7 +4,14 @@
 //! `server`, so only processes of this user can call it, and the first three are described to Claude as the
 //! cross-session reach they are. The logic works on plain data behind `Host`, so the tests need no app.
 
-use std::path::PathBuf;
+use std::{
+    fs::OpenOptions,
+    io::{Read, Seek, SeekFrom},
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, Instant},
+};
 
 use serde_json::{json, Value};
 
@@ -111,10 +118,22 @@ pub trait Host {
     /// for up to `SETUP_APPROVAL_WAIT`. `pane` names who asks, `current` is the command now. Whether the user allowed it;
     /// an error when they didn't answer in time.
     fn approve_setup(&self, project: &str, pane: &str, current: Option<&str>, proposed: &str) -> Result<bool, String>;
+    /// Asks before applying a project's already configured setup to an existing linked worktree.
+    fn approve_worktree_setup(
+        &self,
+        _project: &str,
+        _pane: &str,
+        _folder: &Path,
+        _files: &[String],
+        _command: Option<&str>,
+    ) -> Result<bool, String> {
+        Err("Wings can't ask for approval to set up an existing worktree here".into())
+    }
 }
 
 /// How long `worktree_setup` waits for the user to answer. The bridge to Claude Code waits a little longer (bridge.rs).
 pub const SETUP_APPROVAL_WAIT: std::time::Duration = std::time::Duration::from_secs(300);
+const SETUP_EXECUTION_WAIT: Duration = Duration::from_secs(15 * 60);
 
 const CROSS_SESSION: &str = "Any Claude Code session on this computer can call this, so it can see what your other sessions show.";
 
@@ -208,6 +227,17 @@ pub fn tools() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "name": "setup_worktree",
+            "description": "Apply a Wings project's already configured local include files and setup command to an existing git linked worktree, such as one made with git worktree add. Use this right after creating a worktree yourself. The folder must be a currently registered linked worktree of the Wings project, never its main checkout, an ordinary subfolder or another repo. Wings shows one approval dialog naming the folder, the exact relative local files to copy and the command. If the user declines or does not answer, nothing is copied or run. The command runs outside your shell and can take up to 15 minutes. Returns the copied/skipped files and errors, command exit code and final output.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "folder": { "type": "string", "description": "Absolute path to the existing linked git worktree to set up." }
+                },
+                "required": ["folder"]
+            }
+        }),
     ]
 }
 
@@ -263,6 +293,7 @@ pub fn call_tool(host: &dyn Host, name: &str, args: &Value, caller: &dyn Fn() ->
         },
         "worktree_setup" => worktree_setup(host, caller().as_deref(), args),
         "create_worktree" => create_worktree(host, caller().as_deref(), args),
+        "setup_worktree" => setup_worktree(host, caller().as_deref(), args),
         _ => return None,
     })
 }
@@ -377,6 +408,145 @@ fn worktree_setup(host: &dyn Host, caller: Option<&str>, args: &Value) -> Result
         "note": now.has_include_file.then_some("This repo has a .worktreeinclude, so that file is used and the include list is ignored."),
     })
     .to_string())
+}
+
+/// Applies an approved project's configured setup to an existing linked worktree, without adding it to Wings.
+fn setup_worktree(host: &dyn Host, _caller: Option<&str>, args: &Value) -> Result<String, String> {
+    let folder = args.get("folder").and_then(Value::as_str).map(str::trim).filter(|p| !p.is_empty()).ok_or("setup_worktree needs a folder")?;
+    let spaces = host.spaces();
+    let folder = Path::new(folder).canonicalize().map_err(|_| format!("{folder} isn't on disk any more"))?;
+    let mut owners = Vec::new();
+    for space in &spaces {
+        let Some(owner) = wings_spaces::spaces::settings_owner_in(&spaces, &space.id) else { continue };
+        if owners.iter().any(|known: &String| known == &owner.id) {
+            continue;
+        }
+        if wings_spaces::worktree::linked_worktree(Path::new(&owner.path), &folder).is_ok() {
+            owners.push(owner.id.clone());
+        }
+    }
+    let [id] = owners.as_slice() else {
+        return Err(format!("{} isn't a linked git worktree of a Wings project", folder.display()));
+    };
+    let setup = wings_spaces::spaces::worktree_setup(&spaces, id).ok_or("unknown project")?;
+    let root = PathBuf::from(&setup.path);
+    let folder = wings_spaces::worktree::linked_worktree(&root, &folder)?;
+    let files = wings_spaces::worktree::local_copy_files(&root, setup.include.as_ref().map(|lines| lines.join("\n")).as_deref())
+        .map_err(|e| format!("Couldn't list the local files to copy: {e}"))?;
+    let command = setup.setup.filter(|line| !line.is_empty());
+    if files.is_empty() && command.is_none() {
+        return Ok(json!({
+            "project": setup.project,
+            "folder": folder,
+            "note": "This project has no local files or setup command to apply.",
+        })
+        .to_string());
+    }
+    let pane = "An agent".to_string();
+    if !host.approve_worktree_setup(&setup.project, &pane, &folder, &files, command.as_deref())? {
+        return Err("The user declined the worktree setup".into());
+    }
+    // The folder might have been removed or re-registered while the approval dialog was open.
+    let folder = wings_spaces::worktree::linked_worktree(&root, &folder)?;
+    let local = wings_spaces::worktree::copy_local_selected(&root, &folder, &files);
+    let mut reply = json!({
+        "project": setup.project,
+        "folder": folder,
+        "approvedFiles": files,
+        "copiedFiles": local.copied,
+        "copiedFileNames": local.copied_file_names,
+        "skippedFiles": local.skipped,
+    });
+    if !local.errors.is_empty() {
+        reply["copyErrors"] = json!(local.errors);
+    }
+    if let Some(command) = command {
+        let result = run_setup_command(&folder, &command, SETUP_EXECUTION_WAIT)?;
+        reply["command"] = json!(command);
+        reply["exitCode"] = json!(result.exit_code);
+        reply["timedOut"] = json!(result.timed_out);
+        reply["output"] = json!(result.output);
+    } else {
+        reply["command"] = Value::Null;
+        reply["exitCode"] = Value::Null;
+        reply["timedOut"] = json!(false);
+        reply["note"] = json!("This project has no setup command. Only the local files were copied.");
+    }
+    Ok(reply.to_string())
+}
+
+struct SetupRun {
+    exit_code: Option<i32>,
+    timed_out: bool,
+    output: String,
+}
+
+/// Runs the configured line in a new process group with files, not pipes, for output. A descendant that retains stdout
+/// or stderr therefore cannot hold this tool call open after its shell exits.
+fn run_setup_command(folder: &Path, command: &str, timeout: Duration) -> Result<SetupRun, String> {
+    use std::os::unix::process::CommandExt;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    static NEXT_LOG: AtomicU64 = AtomicU64::new(0);
+    let output = loop {
+        let nonce = NEXT_LOG.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("wings-setup-{}-{nonce}.log", std::process::id()));
+        match OpenOptions::new().write(true).read(true).create_new(true).mode(0o600).open(&path) {
+            Ok(file) => break (path, file),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.to_string()),
+        }
+    };
+    let (output_path, output_file) = output;
+    let stderr = output_file.try_clone().map_err(|e| e.to_string())?;
+    let mut child = Command::new("/bin/sh")
+        .args(["-c", command])
+        .current_dir(folder)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(output_file))
+        .stderr(Stdio::from(stderr))
+        .env("PATH", wings_plugins::exec::search_path())
+        .process_group(0)
+        .spawn()
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&output_path);
+            format!("Couldn't start the setup command: {e}")
+        })?;
+    let start = Instant::now();
+    let mut timed_out = false;
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            break status;
+        }
+        if start.elapsed() >= timeout {
+            timed_out = true;
+            signal_group(child.id(), "TERM");
+            std::thread::sleep(Duration::from_secs(2));
+            // The shell can exit on TERM while a descendant ignores it. Kill the group regardless.
+            signal_group(child.id(), "KILL");
+            break child.wait().map_err(|e| e.to_string())?;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let output = log_tail(&output_path, 32 * 1024);
+    let _ = std::fs::remove_file(output_path);
+    Ok(SetupRun { exit_code: status.code(), timed_out, output: tail(&output, 40, 32 * 1024).0 })
+}
+
+fn signal_group(pid: u32, signal: &str) {
+    let _ = Command::new("/bin/kill").args([format!("-{signal}"), format!("-{pid}")]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
+}
+
+fn log_tail(path: &Path, bytes: u64) -> String {
+    let Ok(mut file) = std::fs::File::open(path) else { return String::new() };
+    let size = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let start = size.saturating_sub(bytes);
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return String::new();
+    }
+    let mut output = Vec::new();
+    let _ = file.take(bytes).read_to_end(&mut output);
+    String::from_utf8_lossy(&output).into_owned()
 }
 
 fn list_sessions(host: &dyn Host, caller: Option<&str>) -> Value {
@@ -628,6 +798,8 @@ mod tests {
         /// What the user answers to a setup approval: `None` is no answer in time.
         approval: Option<bool>,
         asked: RefCell<Vec<Asked>>,
+        existing_approval: Option<bool>,
+        existing_asked: RefCell<Vec<(String, String, PathBuf, Vec<String>, Option<String>)>>,
         /// What a worktree made through the host looks like, and the (project, branch, base) it was asked for.
         made: RefCell<Option<Made>>,
         worktrees: RefCell<Vec<(String, String, Option<String>)>>,
@@ -659,6 +831,16 @@ mod tests {
         fn approve_setup(&self, project: &str, pane: &str, current: Option<&str>, proposed: &str) -> Result<bool, String> {
             self.asked.borrow_mut().push((project.into(), pane.into(), current.map(str::to_string), proposed.into()));
             self.approval.ok_or_else(|| "The user didn't answer".to_string())
+        }
+        fn approve_worktree_setup(&self, project: &str, pane: &str, folder: &Path, files: &[String], command: Option<&str>) -> Result<bool, String> {
+            self.existing_asked.borrow_mut().push((
+                project.into(),
+                pane.into(),
+                folder.to_path_buf(),
+                files.to_vec(),
+                command.map(str::to_string),
+            ));
+            self.existing_approval.ok_or_else(|| "The user didn't answer".to_string())
         }
         fn output(&self, pane_id: &str) -> Option<Vec<u8>> {
             self.output.get(pane_id).cloned()
@@ -719,7 +901,7 @@ mod tests {
     fn tools_have_valid_shapes_and_other_names_are_left_alone() {
         let tools = tools();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["list_sessions", "read_pane", "open_pane", "close_pane", "send_to_agent", "notify", "create_worktree", "worktree_setup"]);
+        assert_eq!(names, ["list_sessions", "read_pane", "open_pane", "close_pane", "send_to_agent", "notify", "create_worktree", "worktree_setup", "setup_worktree"]);
         for tool in &tools {
             assert!(!tool["name"].as_str().unwrap().contains("__"));
             assert!(tool["description"].as_str().unwrap().len() < 2048);
@@ -1078,5 +1260,125 @@ mod tests {
         assert!(call(&allowed, json!({ "setup": "a\nb" })).unwrap_err().contains("one line"));
         assert!(call(&allowed, json!({ "setup": 5 })).unwrap_err().contains("setup is a string"));
         assert_eq!(allowed.asked.borrow().len(), 2);
+    }
+
+    fn linked_fixture(name: &str) -> (PathBuf, PathBuf) {
+        let base = std::env::temp_dir().join(format!("wings-setup-worktree-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let repo = base.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |dir: &Path, args: &[&str]| {
+            assert!(
+                Command::new("git")
+                    .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"])
+                    .args(args)
+                    .current_dir(dir)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .unwrap()
+                    .success(),
+                "{args:?}"
+            );
+        };
+        git(&repo, &["init"]);
+        std::fs::write(repo.join(".gitignore"), ".env\n").unwrap();
+        std::fs::write(repo.join("readme"), "x").unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "first"]);
+        std::fs::write(repo.join(".env"), "TOKEN=ok").unwrap();
+        let linked = base.join("linked");
+        git(&repo, &["worktree", "add", "-b", "fix", linked.to_str().unwrap()]);
+        (repo.canonicalize().unwrap(), linked.canonicalize().unwrap())
+    }
+
+    #[test]
+    fn setup_worktree_approves_the_frozen_files_then_copies_and_runs() {
+        if wings_plugins::exec::find_program("git").is_none() {
+            return;
+        }
+        let (repo, linked) = linked_fixture("apply");
+        let mut owner = space("s1", "app", repo.to_str().unwrap());
+        owner.worktree_include = Some(".env".into());
+        owner.worktree_setup = Some("printf 'one\\ntwo\\n' && printf ran > setup-ran".into());
+        let host = Fake { spaces: vec![owner].into(), existing_approval: Some(true), ..Fake::default() };
+        let reply: Value = serde_json::from_str(&run(&host, "setup_worktree", json!({ "folder": linked }), None).unwrap()).unwrap();
+        assert_eq!((reply["copiedFiles"].as_u64(), reply["exitCode"].as_i64(), reply["timedOut"].as_bool()), (Some(1), Some(0), Some(false)));
+        assert_eq!(reply["approvedFiles"], json!([".env"]));
+        assert_eq!(reply["copiedFileNames"], json!([".env"]));
+        assert!(reply["output"].as_str().unwrap().contains("one\ntwo"));
+        assert_eq!(std::fs::read_to_string(linked.join(".env")).unwrap(), "TOKEN=ok");
+        assert!(linked.join("setup-ran").is_file());
+        assert_eq!(host.existing_asked.borrow()[0].1, "An agent");
+        assert_eq!(host.existing_asked.borrow()[0].2, linked);
+        assert_eq!(host.existing_asked.borrow()[0].3, vec![".env"]);
+        let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
+
+    #[test]
+    fn setup_worktree_refuses_unregistered_folders_and_does_nothing_when_there_is_no_setup() {
+        if wings_plugins::exec::find_program("git").is_none() {
+            return;
+        }
+        let (repo, linked) = linked_fixture("refuse");
+        let mut owner = space("s1", "app", repo.to_str().unwrap());
+        owner.worktree_include = Some(".env".into());
+        let denied = Fake { spaces: vec![owner.clone()].into(), existing_approval: Some(false), ..Fake::default() };
+        assert_eq!(run(&denied, "setup_worktree", json!({ "folder": linked }), None).unwrap_err(), "The user declined the worktree setup");
+        assert!(!linked.join(".env").exists());
+        assert_eq!(denied.existing_asked.borrow().len(), 1);
+        let silent = Fake { spaces: vec![owner.clone()].into(), ..Fake::default() };
+        assert_eq!(run(&silent, "setup_worktree", json!({ "folder": linked }), None).unwrap_err(), "The user didn't answer");
+        assert!(!linked.join(".env").exists());
+        for folder in [&repo, &repo.join("subfolder")] {
+            assert!(run(&denied, "setup_worktree", json!({ "folder": folder }), None).is_err());
+        }
+        let mut empty_owner = space("s1", "app", repo.to_str().unwrap());
+        empty_owner.worktree_include = Some("nothing".into());
+        let empty = Fake { spaces: vec![empty_owner].into(), ..Fake::default() };
+        let reply: Value = serde_json::from_str(&run(&empty, "setup_worktree", json!({ "folder": linked }), None).unwrap()).unwrap();
+        assert!(reply["note"].as_str().unwrap().contains("no local files or setup command"));
+        assert!(empty.existing_asked.borrow().is_empty());
+        let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
+
+    #[test]
+    fn setup_worktree_include_only_reports_the_files_actually_copied() {
+        if wings_plugins::exec::find_program("git").is_none() {
+            return;
+        }
+        let (repo, linked) = linked_fixture("include-only");
+        let mut owner = space("s1", "app", repo.to_str().unwrap());
+        owner.worktree_include = Some(".env".into());
+        let host = Fake { spaces: vec![owner].into(), existing_approval: Some(true), ..Fake::default() };
+        let copied: Value = serde_json::from_str(&run(&host, "setup_worktree", json!({ "folder": linked }), None).unwrap()).unwrap();
+        assert_eq!(copied["copiedFiles"].as_u64(), Some(1));
+        assert_eq!(copied["copiedFileNames"], json!([".env"]));
+        assert!(copied["command"].is_null() && copied["exitCode"].is_null());
+        assert!(copied["note"].as_str().unwrap().contains("no setup command"));
+        let skipped: Value = serde_json::from_str(&run(&host, "setup_worktree", json!({ "folder": linked }), None).unwrap()).unwrap();
+        assert_eq!(skipped["copiedFiles"].as_u64(), Some(0));
+        assert_eq!(skipped["copiedFileNames"], json!([]));
+        assert_eq!(skipped["skippedFiles"].as_u64(), Some(1));
+        let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    }
+
+    #[test]
+    fn setup_runner_tails_output_and_kills_its_process_group_on_timeout() {
+        let dir = std::env::temp_dir();
+        let output = run_setup_command(&dir, "i=1; while [ $i -le 45 ]; do echo line-$i; i=$((i+1)); done; exit 7", Duration::from_secs(1)).unwrap();
+        assert_eq!((output.exit_code, output.timed_out), (Some(7), false));
+        assert!(output.output.starts_with("line-6\n") && output.output.lines().count() == 40);
+        let merged = run_setup_command(&dir, "printf stdout; printf stderr >&2; printf after", Duration::from_secs(1)).unwrap();
+        assert_eq!(merged.output, "stdoutstderrafter");
+        let child_dir = std::env::temp_dir().join(format!("wings-setup-child-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&child_dir);
+        std::fs::create_dir_all(&child_dir).unwrap();
+        let started = Instant::now();
+        let timeout = run_setup_command(&child_dir, "(trap '' TERM; while :; do sleep 1; done) & echo $! > child.pid; wait", Duration::from_millis(20)).unwrap();
+        assert!(timeout.timed_out && started.elapsed() < Duration::from_secs(3));
+        let pid = std::fs::read_to_string(child_dir.join("child.pid")).unwrap();
+        assert!(!Command::new("/bin/kill").args(["-0", pid.trim()]).status().unwrap().success());
+        let _ = std::fs::remove_dir_all(child_dir);
     }
 }

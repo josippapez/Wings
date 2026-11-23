@@ -62,7 +62,7 @@ pub(in crate::workspace) fn nav_row_with(
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(theme::MUTED_FOREGROUND))
         .child(glyph)
-        .child(div().flex_1().min_w_0().truncate().child(label));
+        .child(crate::ui::behaviors::cut_text("label", label).flex_1());
     match look {
         Look::Plain => row.cursor_pointer().hover(|style| {
             style

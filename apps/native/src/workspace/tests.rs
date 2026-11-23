@@ -1279,6 +1279,26 @@ fn right_clicking_a_pane_title_opens_its_menu_and_escape_closes_it() {
 }
 
 #[test]
+fn a_context_menu_s_items_are_picked_with_the_keys() {
+    let (_app, mut window) = open();
+    window.draw();
+    let area = window.read(|workspace, _| workspace.area.unwrap());
+    window.simulate_event(MouseDownEvent {
+        position: point(area.left() + px(40.0), area.top() + px(15.0)),
+        button: MouseButton::Right,
+        modifiers: Modifiers::default(),
+        click_count: 1,
+        first_mouse: false,
+    });
+    window.draw();
+    // Down goes to Rename; Enter picks it, which closes the menu and opens the pane's name field.
+    window.simulate_keystroke("down");
+    window.simulate_keystroke("enter");
+    assert!(window.read(|w, _| w.menu.is_none()));
+    assert!(window.read(|w, _| w.panes.get(&0).is_some_and(|pane| pane.renaming.is_some())));
+}
+
+#[test]
 fn moving_a_pane_to_another_tab_puts_it_beside_that_tabs_focused_pane() {
     use Active::{Issues, Terminal};
     let (_app, mut window) = open();

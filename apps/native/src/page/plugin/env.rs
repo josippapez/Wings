@@ -52,6 +52,7 @@ pub struct OpenPane {
     pub cwd: PathBuf,
     pub project: PathBuf,
     pub input: Option<String>,
+    /// `tab`, `right`, `down`, or `background`: a tab in its project that is not shown (`openPane`'s `background`).
     pub placement: String,
     /// The Claude Code account the pane's shell runs under instead of its project's (`openPane`'s `claudeAccount`).
     pub claude_account: Option<AccountPick>,
@@ -66,6 +67,9 @@ pub struct OpenView {
     pub place: String,
     pub args: Option<serde_json::Value>,
     pub new_tab: bool,
+    /// The project the tab opens in, which Wings then shows, as `openPane` does (`openView`'s `projectId`). None is the
+    /// project on screen.
+    pub project: Option<PathBuf>,
     /// The frame of the tab a new tab goes right after (`openView`'s `after: "self"`).
     pub after: Option<u64>,
 }

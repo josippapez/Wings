@@ -30,6 +30,9 @@ pub fn hear(session: &mut Session, line: &Value) -> bool {
         }
         return true;
     }
+    if crate::goal::hear(session, line) {
+        return true;
+    }
     if line["type"] != "system" {
         return false;
     }
@@ -58,6 +61,23 @@ pub fn hear(session: &mut Session, line: &Value) -> bool {
             });
             note(session, said);
         }
+        // The model ended the stream with a refusal: the turn runs again on another model, or it does not run again.
+        "model_refusal_fallback" => note(
+            session,
+            Some(match (text("original_model"), text("fallback_model")) {
+                (Some(from), Some(to)) => format!("{from} declined this request, so Claude retried it on {to}"),
+                _ => "The model declined this request, so Claude retried it on another model".to_owned(),
+            }),
+        ),
+        "model_refusal_no_fallback" => note(
+            session,
+            Some(match text("original_model") {
+                Some(from) => format!("{from} declined this request and no other model was tried"),
+                None => "The model declined this request and no other model was tried".to_owned(),
+            }),
+        ),
+        // Skills and MCP prompts that load mid-chat: the whole list as it is now.
+        "commands_changed" if line["commands"].is_array() => session.commands = crate::session::commands(&line["commands"]),
         "notification" => note(session, text("text").map(str::to_owned)),
         "informational" => note(session, text("content").map(str::to_owned)),
         // A summary of what happened while you were away, which can run to a paragraph.
@@ -287,6 +307,25 @@ mod tests {
     fn a_model_fallback_without_text_names_both_models() {
         let session = heard(r#"{"type":"system","subtype":"model_fallback","original_model":"claude-opus-5-5","fallback_model":"claude-sonnet-5-5","trigger":"overload"}"#);
         assert_eq!(session.items, [Item::Notice("Switched from claude-opus-5-5 to claude-sonnet-5-5".into())]);
+    }
+
+    #[test]
+    fn commands_changed_replaces_the_slash_menu_list() {
+        let mut session = Session::default();
+        session.hear(&json!({ "type": "control_response", "response": { "subtype": "success", "request_id": "initialize", "response": { "commands": [{ "name": "old", "description": "", "argumentHint": "" }] } } }));
+        session.hear(&json!({ "type": "system", "subtype": "commands_changed", "commands": [
+            { "name": "old", "description": "", "argumentHint": "" },
+            { "name": "mcp__notes__summarize", "description": "Summarize the notes", "argumentHint": "[topic]" }] }));
+        assert_eq!(session.commands.iter().map(|command| command.name.as_str()).collect::<Vec<_>>(), ["old", "mcp__notes__summarize"]);
+        assert!(session.items.is_empty());
+    }
+
+    #[test]
+    fn a_model_refusal_is_a_note_with_or_without_a_fallback() {
+        let session = heard(r#"{"type":"system","subtype":"model_refusal_fallback","original_model":"claude-opus-5-5","fallback_model":"claude-sonnet-5-5"}"#);
+        assert_eq!(session.items, [Item::Notice("claude-opus-5-5 declined this request, so Claude retried it on claude-sonnet-5-5".into())]);
+        let session = heard(r#"{"type":"system","subtype":"model_refusal_no_fallback","original_model":"claude-opus-5-5"}"#);
+        assert_eq!(session.items, [Item::Notice("claude-opus-5-5 declined this request and no other model was tried".into())]);
     }
 
     #[test]

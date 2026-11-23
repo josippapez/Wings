@@ -392,3 +392,35 @@ fn settings_agents_chooses_the_model_for_names_and_summaries() {
     assert!(saved.contains(r#""engine":"off""#), "{saved}");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// A select in Settings is chosen from with the keys: Up from nothing goes to the last choice, Enter picks it, and
+/// Escape closes the menu before the dialog.
+#[test]
+fn a_settings_select_is_chosen_with_the_keys() {
+    use super::plugin_tests::click_spot;
+    use wings_agents::ai::Engine;
+    let dir = std::env::temp_dir().join(format!("wings-native-ai-keys-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("ai.json"), r#"{"engine":"apple"}"#).unwrap();
+    let ai_dir = dir.clone();
+    let (app, mut window) = super::tests::open_sized(
+        Some(gpui::size(gpui::px(1280.0), gpui::px(900.0))),
+        move |config| config.ai = Some(ai_dir),
+    );
+    window.update(|w, window, cx| {
+        w.open_settings(window, cx);
+        w.set_settings_section(settings::Section::Agents, cx);
+    });
+    app.run_until_parked();
+    window.draw();
+    click_spot(&mut window, "select:ai-engine");
+    window.simulate_keystroke("escape");
+    assert!(window.read(|w, _| w.settings.is_some()), "Escape closes the menu first, not the dialog");
+    click_spot(&mut window, "select:ai-engine");
+    window.simulate_keystroke("up");
+    window.simulate_keystroke("enter");
+    app.run_until_parked();
+    assert_eq!(window.read(|w, _| w.ai_view_engine()), Some(Engine::Off));
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -36,6 +36,15 @@ pub(super) struct Menu {
     pub(super) target: MenuTarget,
     /// The pane menu's "Move to tab" list is open beside it.
     moving: bool,
+    /// The item the keys are on.
+    keys: ui::behaviors::MenuKeys,
+}
+
+fn target_path(target: &MenuTarget) -> PathBuf {
+    match target {
+        MenuTarget::Project(path) => path.clone(),
+        _ => PathBuf::new(),
+    }
 }
 
 type Run = Box<dyn Fn(&mut Workspace, &mut Window, &mut Context<Workspace>)>;
@@ -60,6 +69,7 @@ impl Workspace {
             at,
             target,
             moving: false,
+            keys: Default::default(),
         });
         cx.stop_propagation();
         cx.notify_workspace();
@@ -69,6 +79,66 @@ impl Workspace {
         if let Some(menu) = self.menu.take() {
             self.leave("menu", menu, crate::ui::motion::POPUP_IN, cx);
         }
+    }
+
+    /// The open menu's keys: Up, Down, Home, End and letters move the highlight, Enter picks. True when the menu took
+    /// the key.
+    pub(super) fn menu_key(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(target) = self.menu.as_ref().map(|menu| menu.target.clone()) else {
+            return false;
+        };
+        let mut entries: Vec<(SharedString, Option<Run>)> = Vec::new();
+        let mut groups = match &target {
+            MenuTarget::Tab(tab) => self.tab_items(*tab),
+            MenuTarget::Pane(pane) => self.pane_items(*pane),
+            MenuTarget::Project(path) => self.project_items(path),
+            MenuTarget::Agent(pane) => self.agent_items(*pane),
+            MenuTarget::Sidebar(key) => self.sidebar_items(key),
+        };
+        let checks = match &target {
+            MenuTarget::Project(path) if !self.projects.iter().any(|entry| entry.path == *path && entry.child) => {
+                self.section_choices(path)
+            }
+            _ => Vec::new(),
+        };
+        let last = groups.len().saturating_sub(1);
+        for (index, group) in groups.drain(..).enumerate() {
+            if index == last && index > 0 {
+                for (key, title, on) in &checks {
+                    let (project, key, on) = (target_path(&target), key.clone(), *on);
+                    entries.push((
+                        title.clone().into(),
+                        run(move |this, _, cx| {
+                            this.menu = None;
+                            this.set_section_off(&project, &key, on, cx);
+                        }),
+                    ));
+                }
+            }
+            entries.extend(group.into_iter().map(|Item(_, label, _, action)| (label, action)));
+        }
+        let labels: Vec<Option<String>> =
+            entries.iter().map(|(label, run)| run.as_ref().map(|_| label.to_string())).collect();
+        let Some(menu) = self.menu.as_mut() else {
+            return false;
+        };
+        match menu.keys.press(event, &labels) {
+            ui::behaviors::MenuKey::Ignored => return false,
+            ui::behaviors::MenuKey::Moved => {}
+            ui::behaviors::MenuKey::Pick(at) => {
+                if let Some((_, Some(action))) = entries.get(at) {
+                    self.menu = None;
+                    action(self, window, cx);
+                }
+            }
+        }
+        cx.notify_workspace();
+        true
     }
 
     /// The open menu, above everything else, where it was opened.
@@ -83,9 +153,11 @@ impl Workspace {
         };
         let mut children = Vec::new();
         let mut checks = match &menu.target {
-            MenuTarget::Project(path) => self.section_checks(path, cx),
+            MenuTarget::Project(path) => self.section_checks(path, menu.keys.highlight, cx),
             _ => Vec::new(),
         };
+        // The items in the order the keys go through them: the sections' checks come before the last group.
+        let mut place = 0;
         let last = groups.len().saturating_sub(1);
         for (index, group) in groups.into_iter().enumerate() {
             if index > 0 {
@@ -93,10 +165,14 @@ impl Workspace {
             }
             // The sections' checks go above the last group, "Remove from sidebar".
             if index == last && index > 0 && !checks.is_empty() {
+                place += checks.len();
                 children.append(&mut checks);
                 children.push(ui::menu_separator());
             }
-            children.extend(group.into_iter().map(|item| self.menu_item(item, cx)));
+            for item in group {
+                children.push(self.menu_item(item, menu.keys.highlight == Some(place), cx));
+                place += 1;
+            }
         }
         if let MenuTarget::Pane(pane) = menu.target {
             children.push(self.move_to_tab(pane, menu.moving, cx));
@@ -110,20 +186,29 @@ impl Workspace {
     }
 
     /// A project's plugin sections, a check on each it shows; a click turns one off or on.
-    fn section_checks(&self, project: &std::path::Path, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    fn section_checks(
+        &self,
+        project: &std::path::Path,
+        highlight: Option<usize>,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         if self.projects.iter().any(|entry| entry.path == project && entry.child) {
             return Vec::new();
         }
         self.section_choices(project)
             .into_iter()
-            .map(|(key, title, on)| {
+            .enumerate()
+            .map(|(at, (key, title, on))| {
                 let project = project.to_path_buf();
                 // The check stands where the other items have their icon, so all the labels line up.
                 let glyph = match on {
                     true => crate::icons::icon(Icon::Check, 16.0, crate::theme::MUTED_FOREGROUND).into_any_element(),
                     false => div().size(px(16.0)).flex_none().into_any_element(),
                 };
-                ui::menu_item_with(ElementId::Name(format!("menu-section-{key}").into()), glyph, title, false, false)
+                ui::menu_highlight(
+                    ui::menu_item_with(ElementId::Name(format!("menu-section-{key}").into()), glyph, title, false, false),
+                    highlight == Some(at),
+                )
                     .role(Role::MenuItemCheckBox)
                     .aria_toggled(if on { Toggled::True } else { Toggled::False })
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -138,11 +223,12 @@ impl Workspace {
     fn menu_item(
         &self,
         Item(glyph, label, destructive, action): Item,
+        highlighted: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let id = ElementId::Name(format!("menu-{label}").into());
         let disabled = action.is_none();
-        ui::menu_item(id, glyph, label, destructive, disabled)
+        ui::menu_highlight(ui::menu_item(id, glyph, label, destructive, disabled), highlighted)
             .on_hover(cx.listener(|this, over: &bool, _, cx| {
                 if let Some(menu) = this.menu.as_mut().filter(|menu| *over && menu.moving) {
                     menu.moving = false;
@@ -271,7 +357,7 @@ impl Workspace {
             .collect();
         let mut list = Vec::new();
         let some = !others.is_empty();
-        list.extend(others.into_iter().map(|item| self.menu_item(item, cx)));
+        list.extend(others.into_iter().map(|item| self.menu_item(item, false, cx)));
         if some {
             list.push(ui::menu_separator());
         }
@@ -282,6 +368,7 @@ impl Workspace {
                 false,
                 run(move |this, window, cx| this.move_pane_to(pane, None, window, cx)),
             ),
+            false,
             cx,
         ));
         div()

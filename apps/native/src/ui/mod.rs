@@ -35,7 +35,7 @@ pub use glow::glow;
 pub use live::view_spinner_layer;
 pub use drag::{RESIZE_EDGE, Side, resize_edge, window_drag};
 pub use menu::{
-    context_menu, dropdown_menu, dropup_menu, menu, menu_item, menu_item_text, menu_item_with, menu_separator,
+    context_menu, dropdown_menu, dropup_menu, menu, menu_highlight, menu_item, menu_item_text, menu_item_with, menu_separator,
 };
 pub use parts::{board_box, disclosure_trigger, dot, gauge, heading, list, list_item, plain_card};
 pub use sheet::{
@@ -506,7 +506,7 @@ pub fn option_item(
         .flex()
         .items_baseline()
         .gap(px(8.0))
-        .child(div().flex_1().min_w_0().truncate().child(label.clone()))
+        .child(behaviors::cut_text("label", label.clone()).flex_1())
         .children(detail.map(|detail| {
             div()
                 .flex_none()

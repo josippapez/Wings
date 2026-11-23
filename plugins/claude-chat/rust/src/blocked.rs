@@ -125,6 +125,10 @@ pub fn notice(at: usize, said: &str, c: &Chat) -> Node {
     let Some(at) = call.and_then(|call| c.session.blocked.iter().position(|blocked| blocked.tool_id == call && blocked.notice == said)) else {
         return line;
     };
+    // Allowed, the line says so after a separator, as the lines around it join their parts.
+    if c.session.blocked[at].allowed {
+        return muted(format!("{said} · Allowed")).prop("size", "small");
+    }
     row().prop("gap", "s").prop("align", "center").prop("wrap", true).child(line).child(action(at, &c.session.blocked[at]))
 }
 

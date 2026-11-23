@@ -12,6 +12,7 @@ pub mod secrets;
 #[cfg(unix)]
 pub mod terminal_server;
 pub mod theme;
+pub mod tools;
 pub mod updater;
 
 #[cfg(feature = "ui")]

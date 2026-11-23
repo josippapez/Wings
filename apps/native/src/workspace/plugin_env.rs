@@ -1102,6 +1102,23 @@ impl Workspace {
                         Err("The view has no native sidebar page".into())
                     });
                 } else if plan.place == "tab" {
+                    // In that project's tabs without showing it: the project on screen and its tab and keys stay.
+                    if let Some(project) = plan.project.clone() {
+                        if !self.projects.iter().any(|open| open.path == project) {
+                            return reply.err("The tab's project is no longer open".into());
+                        }
+                        let shown = self.config.project.clone();
+                        let opened = self.in_project(project, window, cx, |this, _, cx| {
+                            this.new_plugin_tab(&plan.plugin, &plan.id, plan.args, cx).is_some()
+                        });
+                        self.show_project_again(shown, window, cx);
+                        self.sync_plugins(cx);
+                        return reply.done(if opened {
+                            Ok("null".into())
+                        } else {
+                            Err("The view has no native tab page".into())
+                        });
+                    }
                     let before: Vec<usize> = self.plugin_tabs.iter().map(|tab| tab.id).collect();
                     let opened = if plan.new_tab {
                         self.new_plugin_tab(&plan.plugin, &plan.id, plan.args, cx)
@@ -1274,6 +1291,9 @@ impl Workspace {
         window: &mut gpui::Window,
         cx: &mut Context<Self>,
     ) {
+        if plan.placement == "background" {
+            return self.open_plugin_pane_behind(plan, reply, window, cx);
+        }
         let replace = plan.replace.clone();
         match self.place_plugin_pane(plan, window, cx) {
             Ok((pane, tab)) => {
@@ -1292,6 +1312,36 @@ impl Workspace {
         }
     }
 
+    /// A tab of `plan`'s project with a new shell, the project on screen and its tab and keys left as they are, as the
+    /// tabs Claude's `open_pane` opens.
+    fn open_plugin_pane_behind(
+        &mut self,
+        plan: OpenPane,
+        reply: crate::page::runtime::Reply,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) {
+        let shown = self.config.project.clone();
+        let project = plan.project.clone();
+        if !self.projects.iter().any(|open| open.path == project) {
+            return reply.err("The pane's project is no longer open".into());
+        }
+        let placed = self.in_project(project, window, cx, |this, window, cx| this.place_plugin_pane(plan, window, cx));
+        self.show_project_again(shown, window, cx);
+        self.sync_plugins(cx);
+        match placed {
+            Ok((pane, _)) => reply.ok(serde_json::json!({ "paneId": pane.to_string() }).to_string()),
+            Err(error) => reply.err(error),
+        }
+    }
+
+    /// Back to `shown` when working in another project had to show it, as one not entered yet has to be.
+    fn show_project_again(&mut self, shown: PathBuf, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        if self.config.project != shown {
+            self.switch_project(shown, window, cx);
+        }
+    }
+
     /// Starts the shell `plan` asks for and puts it in a tab of its own, or in a split of the tab on screen, without
     /// showing it: the pane and its tab.
     pub(super) fn place_plugin_pane(
@@ -1302,7 +1352,7 @@ impl Workspace {
     ) -> Result<(usize, Active), String> {
         let pane = self.start_plugin_pane(&plan, window, cx)?;
         let split =
-            (plan.placement != "tab")
+            (!matches!(plan.placement.as_str(), "tab" | "background"))
                 .then_some(self.active)
                 .and_then(|active| match active {
                     Active::Terminal(id) => Some(id),

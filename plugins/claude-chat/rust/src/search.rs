@@ -78,7 +78,7 @@ fn matches(item: &Item, needle: &str) -> bool {
         Item::Note(title, body) => has(title) || has(body),
         Item::Finished(done) => has(&done.description) || has(&done.report),
         Item::Ask(Ask { tool, summary, detail, .. }) => has(tool) || has(summary) || has(detail),
-        Item::Tool(tool) => {
+        Item::Tool(tool) | Item::Shell(tool) => {
             has(&tool.name)
                 || has(&tool.summary)
                 || match &tool.detail {
@@ -186,7 +186,7 @@ pub fn bar(c: &Chat) -> Option<Node> {
         });
     let none = search.hits.is_empty();
     let nav = |label: &str, paths: &[&str], forward: bool, keys: &str| {
-        button("", "ghost", none, move || step(forward)).prop("size", "icon-sm").prop("label", label).prop("title", label).shortcut(keys).child(icon(24, 2.0, paths).prop("size", 16))
+        button("", "ghost", false, move || step(forward)).prop("disabled", none).prop("size", "icon-sm").prop("label", label).prop("title", label).shortcut(keys).child(icon(24, 2.0, paths).prop("size", 16))
     };
     let line = row()
         .prop("gap", "m")
@@ -311,5 +311,15 @@ mod tests {
         assert!(chat::with(|c| c.open_steps.contains(&2)));
         close();
         assert_eq!(chat::with(|c| mark(c, 2, 4, stack()).count()), plain, "closed, nothing is marked");
+    }
+
+    #[cfg(feature = "chat")]
+    #[test]
+    fn with_no_matches_the_step_buttons_are_off_and_show_no_spinner() {
+        chat::with(|c| c.session.items = talk());
+        open_bar();
+        set_query("zzz".into());
+        let shown = chat::with(|c| wings_plugin::ui::tree_json(bar(c).expect("the bar"))).to_string();
+        assert!(shown.contains("\"disabled\":true") && !shown.contains("Spinner"), "{shown}");
     }
 }

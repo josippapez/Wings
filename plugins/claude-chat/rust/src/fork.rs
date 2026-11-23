@@ -29,6 +29,14 @@ pub fn flags(resume: Option<&str>, how: &Launch, dirs: &[String]) -> Vec<String>
     flags
 }
 
+/// The flag that starts Claude Code as the agent `name`, which takes on that agent's prompt, tools and model for the whole
+/// session. None for no agent, and for a name that isn't one: agents are named in letters, digits and `-_.:`, and the name
+/// comes from the tab's saved state, so it is checked before it goes on a command line.
+pub fn agent_flag(name: Option<&str>) -> Option<String> {
+    let name = name.filter(|name| !name.starts_with('-') && !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || "-_.:".contains(c)))?;
+    Some(format!("--agent={name}"))
+}
+
 /// What a fork before a message asks as it starts: Claude Code's `rewind_conversation` to that message, which drops it and
 /// what followed, and gives its text back for the message box. Only the conversation: your files stay as they are. None for
 /// a plain fork, or a message the history doesn't hold.
@@ -74,6 +82,23 @@ pub fn add(dirs: &mut Vec<String>, dir: String) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_agent_goes_on_the_command_line_joined_to_its_flag_and_only_if_it_is_a_name() {
+        assert_eq!(agent_flag(Some("Explore")).as_deref(), Some("--agent=Explore"));
+        assert_eq!(agent_flag(Some("dev-core:mid-tier-coder")).as_deref(), Some("--agent=dev-core:mid-tier-coder"));
+        assert_eq!(agent_flag(None), None);
+        assert_eq!(agent_flag(Some("")), None);
+        assert_eq!(agent_flag(Some("--dangerously-skip-permissions")), None);
+        assert_eq!(agent_flag(Some("a b")), None);
+    }
+
+    #[test]
+    fn initialize_lists_the_agents_to_start_as() {
+        let mut options = crate::composer::Options::default();
+        options.initialized(&json!({ "agents": [{ "name": "Plan", "description": "Plans" }, { "description": "no name" }] }));
+        assert_eq!(options.agent_types, [("Plan".to_owned(), "Plans".to_owned())]);
+    }
 
     fn prompts(uuids: &[&str]) -> Vec<Prompt> {
         uuids.iter().enumerate().map(|(at, uuid)| Prompt { at, uuid: (*uuid).to_owned(), parent: None }).collect()

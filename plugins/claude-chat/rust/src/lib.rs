@@ -57,7 +57,13 @@ mod limit_view;
 mod limit_wait;
 #[cfg(any(feature = "chat", test))]
 mod mentions;
+mod goal;
+#[cfg(feature = "chat")]
+mod goal_view;
 mod notices;
+mod scheduled;
+#[cfg(feature = "chat")]
+mod scheduled_view;
 #[cfg(feature = "chat")]
 mod pictures_view;
 mod plan_doc;
@@ -106,6 +112,10 @@ mod settings_page;
 #[cfg(any(feature = "settings", test))]
 mod settings_preview;
 mod setup;
+mod shell;
+mod skills;
+#[cfg(feature = "chat")]
+mod skills_view;
 mod spend;
 #[cfg(feature = "chat")]
 mod setup_view;
@@ -136,3 +146,4 @@ mod view;
 mod view_mode;
 #[cfg(feature = "chat")]
 mod worktree;
+mod workflow;

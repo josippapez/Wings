@@ -165,12 +165,9 @@ impl Workspace {
                             .items_center()
                             .gap(px(6.0))
                             .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
+                                crate::ui::behaviors::cut_text("name", name)
                                     .text_size(px(13.0))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(name),
+                                    .font_weight(FontWeight::MEDIUM),
                             )
                             .children(account.map(account_badge)),
                     )
@@ -282,7 +279,7 @@ impl Workspace {
                     .flex_1()
                     .flex()
                     .flex_col()
-                    .child(div().min_w_0().truncate().text_size(px(13.0)).font_weight(FontWeight::MEDIUM).child(agent.name))
+                    .child(crate::ui::behaviors::cut_text("name", agent.name).text_size(px(13.0)).font_weight(FontWeight::MEDIUM))
                     .child(
                         div()
                             .flex()

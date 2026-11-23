@@ -10,9 +10,6 @@ use gpui::{
     LayoutId, Pixels, Window, point, px,
 };
 
-/// How far the pointer moves before a press is a drag, so a click still selects: the desktop's `trackDrag` threshold.
-pub(super) const DRAG_THRESHOLD: f64 = 5.0;
-
 /// Where each item was laid out when last drawn, in the window, by key.
 pub(super) type Laid<K> = Rc<RefCell<HashMap<K, Bounds<Pixels>>>>;
 

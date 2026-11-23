@@ -376,7 +376,8 @@ mod tests {
         }
         git(&dir, &["clone", "-q", "--bare", "src", "repo"]);
         let marker = dir.join("ran");
-        git(&dir.join("repo"), &["config", "diff.external", &format!("touch {}", marker.display())]);
+        // Named with --git-dir: git 2.56 no longer finds a bare repo from inside it, which is what the test guards.
+        git(&dir, &["--git-dir", "repo", "config", "diff.external", &format!("touch {}", marker.display())]);
         let p = plugin(&dir, &["git diff"], &[]);
         let _ = exec(&p, "git", &["diff".into(), "HEAD~1".into(), "HEAD".into()], Some(&dir.join("repo")), EXEC_TIMEOUT, None);
         assert!(!marker.exists(), "git ran the shipped repo's diff.external");

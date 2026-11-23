@@ -1,7 +1,7 @@
 //! A page's right-click menu, in two halves. A `Stack` with `onContextMenu` tells the page where the right button went
 //! down and what was under the pointer, and a `PopupMenu` is the list of actions the page then opens at that point.
 use super::*;
-use crate::ui::behaviors::{DismissReason, bind_layer, popup_at};
+use crate::ui::behaviors::{DismissReason, MenuKey, bind_layer, popup_at};
 use gpui::{Bounds, MouseButton, MouseDownEvent, Point};
 use serde_json::{Value, json};
 
@@ -166,6 +166,7 @@ impl PageView {
                         .text_color(rgb(theme::palette().muted_foreground))
                         .child(description)
                 }));
+            let row = ui::menu_highlight(row, self.popup_keys.highlight == Some(at));
             Some(match item.on_click.clone() {
                 Some(handler) if !item.disabled => row
                     .cursor_pointer()
@@ -184,9 +185,35 @@ impl PageView {
             })
         });
         let on_close = menu.on_close.clone();
+        // What the keys pick and jump by: each item's handler and text, none for one that is off.
+        let (labels, picks): (Vec<Option<String>>, Vec<Option<String>>) = menu
+            .items
+            .iter()
+            .map(|node| match node {
+                Node::Button(item) if !item.disabled && item.on_click.is_some() => {
+                    let text = plain_text(&item.children);
+                    let label = if text.trim().is_empty() { item.label.clone().unwrap_or_default() } else { text };
+                    (Some(label), item.on_click.clone())
+                }
+                _ => (None, None),
+            })
+            .unzip();
         let list = ui::menu(ElementId::NamedInteger("page-popup-menu".into(), id), "Menu")
             .track_focus(&self.popup_focus)
-            .children(items);
+            .children(items)
+            .on_key_down(cx.listener(move |view, event: &KeyDownEvent, _, cx| {
+                match view.popup_keys.press(event, &labels) {
+                    MenuKey::Moved => {}
+                    MenuKey::Pick(at) => {
+                        if let Some(handler) = &picks[at] {
+                            view.act(handler, None);
+                        }
+                    }
+                    MenuKey::Ignored => return,
+                }
+                cx.stop_propagation();
+                cx.notify();
+            }));
         // Escape, or a press outside, which closes it without counting as a click in the page, which could then write or
         // copy. `render` gives the keyboard back as the page leaves the menu out.
         let list = bind_layer(

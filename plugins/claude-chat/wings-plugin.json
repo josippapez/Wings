@@ -1,7 +1,7 @@
 {
   "id": "claude-chat",
   "name": "Claude chat",
-  "version": "0.44.1",
+  "version": "0.45.0",
   "minWingsVersion": "0.2.77",
   "description": "Experimental. Runs Claude Code as a chat in a tab instead of a terminal: messages, tool calls and permission prompts as cards, with Enter to send. Open a new chat from the + menu, or move a Claude terminal into one with its Chat badge.",
   "api": 1,
@@ -31,10 +31,11 @@
       "az repos pr show [--id --organization --output]"
     ],
     "processes": [
-      "claude [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --replay-user-messages --prompt-suggestions --resume --fork-session --add-dir --include-hook-events]",
-      "claude-rtk [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --replay-user-messages --prompt-suggestions --resume --fork-session --add-dir --include-hook-events]",
+      "claude [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --replay-user-messages --prompt-suggestions --resume --fork-session --add-dir --include-hook-events --agent]",
+      "claude-rtk [-p --input-format --output-format --verbose --include-partial-messages --permission-prompt-tool --replay-user-messages --prompt-suggestions --resume --fork-session --add-dir --include-hook-events --agent]",
       "claude edit-permission-rules [--json]",
       "claude edit-hook [--json]",
+      "claude edit-skill-overrides [--json]",
       "claude edit-memory-settings [--json]"
     ],
     "fetch": [

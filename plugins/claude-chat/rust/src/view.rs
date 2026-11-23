@@ -36,6 +36,24 @@ pub(crate) const COLUMN: u32 = 760;
 /// The most nodes the conversation sends. The app draws a page of at most 5,000, and a long session's whole history
 /// made more: the page was refused and stayed on Loading. The toolbar and the message box take the rest.
 pub(crate) const BUDGET: usize = 3_500;
+
+/// The most nodes the whole page may make, under the 5,000 Wings draws: what the conversation leaves to the rest of the page
+/// and to what a step adds before the next build.
+const PAGE_NODES: usize = 4_800;
+
+/// The least the conversation keeps, whatever the rest of the page takes.
+const BUDGET_LEAST: usize = 600;
+
+/// The most subagents the side panel lists, the newest, as it sends a row for each.
+const SUBAGENTS_LISTED: usize = 60;
+
+/// How many nodes the conversation may make: `BUDGET`, less what the rest of the page (the header, the message box and the side
+/// panel, whose lists grow with the session) and the reply being written take from the page's 5,000.
+fn budget(c: &Chat) -> usize {
+    let side: usize = if side_shown(c) { side(c).iter().map(Node::count).sum() } else { 0 };
+    let outside = header(c).count() + composer(c).count() + side + BUDGET / 4;
+    PAGE_NODES.saturating_sub(outside).clamp(BUDGET_LEAST, BUDGET)
+}
 /// The side panel's width, while it is in the chat. It floats over the right of the tab and takes no width from the
 /// conversation, which stays centered in the whole tab. The column is 760 wide, drawn with 8 points of margin either side,
 /// so the panel sits beside it while the tab holds that and the panel (with its 12 points of padding) either side of the
@@ -119,6 +137,7 @@ fn chat_page(c: &Chat) -> Node {
         .children(main)
         .maybe(crate::plugins_view::dialog(c))
         .maybe(crate::setup_view::dialog(c))
+        .maybe(crate::skills_view::dialog(c))
         .maybe(crate::tasks_view::dialog(c))
         .maybe(crate::rewind_view::dialog(c))
         .maybe(crate::fork_view::dialog(c))
@@ -213,6 +232,7 @@ fn header(c: &Chat) -> Node {
         // The app's status dot and the folder after the title, as a terminal pane's header has them.
         .child(Node::new("Dot").prop("state", c.agent.as_ref().map_or("idle", |agent| agent.0.as_str())))
         .child(text(name.as_str()).prop("weight", "strong").prop("truncate", true).prop("title", name.as_str()))
+        .maybe(c.agent_type.as_ref().map(|agent| badge(format!("@{agent}"), Some("info")).prop("title", "Claude Code runs as this agent. Changing it restarts the chat, from the picker before the first message")))
         .maybe((!c.folder.is_empty()).then(|| {
             let place = c.branch.as_ref().map_or_else(|| c.folder.clone(), |branch| format!("{} · {branch}", c.folder));
             muted(place.as_str()).prop("size", "small").prop("truncate", true).prop("title", place.as_str())
@@ -267,7 +287,8 @@ fn conversation(c: &Chat) -> (Node, Vec<(usize, usize)>, usize) {
                 return (new, Vec::new(), 0);
             }
         };
-        return (Node::new("Scroll").child(column().child(body)), Vec::new(), 0);
+        // The same empty first child as the conversation has: its gap keeps a failure's banner clear of the header.
+        return (Node::new("Scroll").child(column().child(stack().key("top")).child(body)), Vec::new(), 0);
     }
     let items = &c.session.items;
     let (end, newest) = (end_of(c), c.until.is_none());
@@ -410,12 +431,13 @@ fn block_before(c: &Chat, end: usize, from: usize) -> (usize, Option<Block>) {
 /// spent, so a long session's other items stay out of it. Says whether the budget cut them short of `from`.
 pub(crate) fn window(c: &Chat, end: usize, from: usize) -> (Vec<Block>, bool) {
     let (mut blocks, mut spent, mut at) = (Vec::new(), 0, end);
+    let budget = budget(c);
     while at > from {
         let (start, block) = block_before(c, at, from);
         at = start;
         let Some(block) = block else { continue };
         let size = block.size();
-        if spent + size > BUDGET {
+        if spent + size > budget {
             // The newest item always shows, as plain text when it is too big to lay out.
             if blocks.is_empty() {
                 blocks.push(Block { node: plain(start, &c.session.items[start]), edited: None, ..block });
@@ -568,6 +590,7 @@ pub(crate) fn item_node(at: usize, item: &Item, c: &Chat, own: bool) -> Option<N
         Item::Thought(said, ms) => thought(at, said, *ms, crate::folds::is_open(c, Kind::Thought, c.open_outputs.contains(&format!("thought-{at}")))),
         Item::Ask(ask) if ask.answer.is_none() => ask_node(ask, c),
         Item::Error(said) => notice("danger", said.as_str()),
+        Item::Shell(tool) => step(tool, c.open_outputs.contains(&tool.id), c),
         Item::Stopped => muted("Stopped"),
         Item::Worked(ms, spend) => {
             // The cost shows when an API key pays per token; on a subscription it is only in the hover.
@@ -667,11 +690,12 @@ fn step(tool: &Tool, opened: bool, c: &Chat) -> Node {
     let failure = tool.output.as_ref().filter(|(_, failed)| *failed).map(|(output, _)| badge(exit_code(output).map_or("Failed".to_owned(), |code| format!("Failed · exit {code}")), Some("danger")));
     // A subagent's description is a sentence, not a command or a path: plain text.
     let subagent = matches!(tool.name.as_str(), "Task" | "Agent");
+    let shell = tool.name == "Shell";
     let head = row()
         .prop("gap", "s")
         .prop("align", "baseline")
         .child(mark)
-        .child(text(tool.name.as_str()).prop("weight", "medium"))
+        .maybe((!shell).then(|| text(tool.name.as_str()).prop("weight", "medium")))
         .maybe(failure)
         .child(
             text(tool.summary.as_str())
@@ -842,12 +866,12 @@ fn finished(at: usize, done: &Finished, c: &Chat) -> Node {
         "stopped" | "killed" => muted("■"),
         _ => text("✓").prop("tone", "success"),
     };
+    let tone = if done.failed() { "danger" } else { "muted" };
+    // A command's description can be the whole command, many lines long: the line is cut at its first break and its
+    // width, as a call's line is, and the hover has all of it.
+    let title = text(done.title()).prop("size", "small").prop("tone", tone).prop("truncate", true).prop("grow", true).prop("title", done.title());
     // Under a second, a time says nothing.
-    let title = match done.took {
-        Some(ms) if ms >= 1000 => format!("{} · {}", done.title(), took(ms)),
-        _ => done.title(),
-    };
-    let title = text(title).prop("size", "small").prop("tone", if done.failed() { "danger" } else { "muted" });
+    let time = done.took.filter(|ms| *ms >= 1000).map(|ms| text(took(ms)).prop("size", "small").prop("tone", tone));
     let open = if done.kind == "Agent" {
         let id = done.call.clone();
         (!id.is_empty() && c.session.subagents.contains_key(&id)).then(|| button("Open", "outline", false, move || crate::tasks_view::open_subagent(&id)).prop("title", "Its transcript"))
@@ -855,7 +879,7 @@ fn finished(at: usize, done: &Finished, c: &Chat) -> Node {
         let id = done.task.clone();
         c.session.tasks.iter().any(|task| task.id == id && task.has_output()).then(|| button("Open", "outline", false, move || chat::open_task(&id)).prop("title", "What it printed"))
     };
-    let line = row().prop("gap", "s").prop("align", "center").child(mark).child(title).maybe(open.map(|open| open.prop("size", "sm")));
+    let line = row().prop("gap", "s").prop("align", "center").child(mark).child(title).maybe(time).maybe(open.map(|open| open.prop("size", "sm")));
     let opened = crate::folds::is_open(c, Kind::Summary, c.open_outputs.contains(&format!("finished-{at}")));
     let id = format!("finished-{at}");
     let body = if opened { text(done.report.as_str()).prop("tone", "muted").prop("size", "small") } else { stack() };
@@ -1136,6 +1160,7 @@ fn composer(c: &Chat) -> Node {
             .prop("maxWidth", COLUMN)
             .maybe(latest(c))
             .maybe(todo_card(c))
+            .maybe(crate::goal_view::chip(c))
             .maybe(crate::mods_view::above_prompt(c))
             .maybe(queued(c))
             .maybe(crate::branch::panel(c))
@@ -1298,6 +1323,7 @@ pub(crate) fn side_sections(c: &Chat, place: bool) -> Vec<Node> {
     sections.extend(crate::bookmarks::section(c));
     sections.extend(crate::plan_doc_view::section(c));
     sections.extend(crate::tasks_view::section(c));
+    sections.extend(crate::scheduled_view::section(c));
     sections.extend(crate::fork_view::folders(c));
     sections.extend(crate::refs_view::section(c));
     sections.extend(crate::mods_view::panes(c));
@@ -1375,7 +1401,10 @@ fn subagents(c: &Chat) -> Option<Node> {
     }
     let running = tasks.iter().filter(|tool| subagent_runs(tool, c)).count();
     let title = if running > 0 { format!("Subagents · {running} running") } else { format!("Subagents · {} done", tasks.len()) };
-    let rows = tasks.iter().map(|tool| subagent_row(tool, c));
+    // Each listed is a row the page sends: a session of hundreds lists the newest.
+    let hidden = tasks.len().saturating_sub(SUBAGENTS_LISTED);
+    let earlier = (hidden > 0).then(|| muted(format!("{} earlier, not listed", plural(hidden, "subagent"))).prop("size", "small").key("earlier"));
+    let rows = earlier.into_iter().chain(tasks.iter().skip(hidden).map(|tool| subagent_row(tool, c)));
     Some(fold_list(c, "subagents", title, rows))
 }
 
@@ -1507,6 +1536,22 @@ fn pickers(c: &Chat) -> Vec<Node> {
         let (options, value) = model_options(session);
         pickers.push(select("Model and effort", &options, &value, chat::pick_model_effort).prop("variant", "ghost"));
     }
+    // Which agent Claude Code runs as, until there is a message: Claude Code takes it only as it starts, so a pick restarts it.
+    if !session.options.agent_types.is_empty() && session.items.is_empty() && !session.working {
+        let mut options = vec![(String::new(), "Agent: none".to_owned())];
+        options.extend(session.options.agent_types.iter().map(|(name, _)| (name.clone(), format!("Agent: {name}"))));
+        let value = c.agent_type.clone().unwrap_or_default();
+        pickers.push(select("Start as an agent. Picking one restarts Claude Code in this chat", &options, &value, chat::pick_agent).prop("variant", "ghost"));
+    }
+    // Ultracode, while Claude Code offers it: a lit button while it is on, as fast mode's is.
+    if session.options.ultracode_available {
+        let on = session.options.ultracode;
+        let title = match on {
+            true => "Ultracode is on: Claude plans a workflow for each substantive task, which uses more of your limits. Click to turn it off",
+            false => "Ultracode: Claude plans a workflow for each substantive task, which uses more of your limits. For this session",
+        };
+        pickers.push(button("Ultracode", if on { "secondary" } else { "ghost" }, false, chat::toggle_ultracode).prop("size", "sm").prop("label", if on { "Ultracode, on" } else { "Ultracode" }).prop("title", title));
+    }
     // Fast mode, for a model that has it: a lit button while it is on.
     if session.current_model().is_some_and(|model| model.fast) {
         let options = &session.options;
@@ -1598,7 +1643,11 @@ fn account_menu(c: &Chat) -> Option<Node> {
     let title = format!("Claude account: {shown}. Pick another to start a new chat under it");
     let glyph = icon(24, 2.0, &ACCOUNT).prop("size", 16);
     let trigger = Node::new("Button").prop("variant", "ghost").prop("label", "Claude account").prop("title", title.as_str());
-    let trigger = trigger.prop("size", "sm").child(glyph).child(text(shown.as_str()).prop("truncate", true));
+    // In a narrow tab only the glyph shows, so the title keeps room beside it; the name is in the tooltip.
+    let trigger = match c.narrow == Some(true) {
+        true => trigger.prop("size", "icon-sm").child(glyph),
+        false => trigger.prop("size", "sm").child(glyph).child(text(shown.as_str()).prop("truncate", true)),
+    };
     let items = c.accounts.iter().map(|account| {
         let label = account_label(account);
         let value = account.name.clone().unwrap_or_else(|| chat::DEFAULT_ACCOUNT.to_owned());
@@ -1834,6 +1883,26 @@ mod tests {
         assert_eq!(chat::with(|c| (c.until, shows(c).1)), (None, 3_000));
     }
 
+    /// A session that ran many subagents lists each in the side panel, which the page sends whole whatever the conversation
+    /// shows: the conversation's budget is what the rest of the page leaves under the 5,000 nodes Wings draws.
+    #[test]
+    fn a_long_session_with_many_subagents_stays_within_the_page_limit_as_you_scroll_up() {
+        let agent = |n: usize| Item::Tool(crate::session::Tool { id: format!("a{n}"), name: "Agent".into(), summary: format!("Survey the callers of function {n}"), output: Some(("done".into(), false)), detail: crate::session::Detail::Plain, input: Default::default(), images: Vec::new() });
+        chat::with(|c| {
+            c.state = chat::State::Running;
+            c.session.items = (0..400).flat_map(|n| [Item::User(format!("Prompt {n}")), agent(n), Item::Text(format!("Answer {n}"))]).collect();
+            c.shown = PAGE;
+            c.until = None;
+        });
+        let mut most = chat::with(|c| chat_page(c).count());
+        for _ in 0..60 {
+            chat::with(show_older);
+            most = most.max(chat::with(|c| chat_page(c).count()));
+        }
+        assert!(most <= 4_800, "the page had {most} nodes, and Wings refuses one over 5,000");
+        chat::with(|c| (c.session.items.clear(), c.until = None));
+    }
+
     #[test]
     fn a_suggestion_taken_with_tab_shows_again_once_the_box_is_emptied_and_typing_your_own_dismisses_it() {
         chat::with(|c| {
@@ -1933,6 +2002,49 @@ mod tests {
 
     fn page_text(c: &Chat) -> String {
         wings_plugin::ui::tree_json(chat_page(c)).to_string()
+    }
+
+    #[test]
+    fn polish_shell_command_uses_one_bash_row_without_a_zero_exit_code() {
+        chat::with(|c| {
+            c.state = State::Running;
+            c.session = crate::session::Session::default();
+            let row = |text: &str| serde_json::json!({ "type": "user", "message": { "role": "user", "content": text }, "parent_tool_use_id": null, "uuid": "u", "isReplay": true });
+            c.session.hear(&row("<bash-input>echo hi</bash-input>"));
+            c.session.hear(&row("<bash-stdout>hi</bash-stdout><bash-stderr></bash-stderr><bash-exit-code>0</bash-exit-code>"));
+            let shown = wings_plugin::ui::tree_json(chat_page(c));
+            fn command_nodes<'a>(node: &'a serde_json::Value, command: &str, found: &mut Vec<&'a serde_json::Value>) {
+                if node["type"] == "Text" && node["children"].as_array().is_some_and(|children| children.iter().any(|child| child["text"] == command)) {
+                    found.push(node);
+                }
+                for child in node["children"].as_array().into_iter().flatten() {
+                    command_nodes(child, command, found);
+                }
+            }
+            let mut commands = Vec::new();
+            command_nodes(&shown, "$ echo hi", &mut commands);
+            // The row, and its input again in the fold once it opens, as a Bash call's does.
+            assert!(!commands.is_empty(), "{shown}");
+            assert_eq!(commands[0]["props"]["mono"], true, "{shown}");
+            let shown = shown.to_string();
+            assert!(!shown.contains("Ran echo hi") && !shown.contains("Shell output"), "{shown}");
+            assert!(!shown.contains("exit 0"), "{shown}");
+        });
+    }
+
+    #[test]
+    fn polish_shell_failed_command_shows_its_folded_streams_and_exit_code() {
+        chat::with(|c| {
+            c.state = State::Running;
+            c.session = crate::session::Session::default();
+            let row = |text: &str| serde_json::json!({ "type": "user", "message": { "role": "user", "content": text }, "parent_tool_use_id": null, "uuid": "u", "isReplay": true });
+            c.session.hear(&row("<bash-input>sh -c 'exit 7'</bash-input>"));
+            c.session.hear(&row("<bash-stdout>starting</bash-stdout><bash-stderr>warning</bash-stderr><bash-exit-code>7</bash-exit-code>"));
+            c.open_outputs.insert("shell-0".into());
+            let shown = page_text(c);
+            assert!(shown.contains("Failed · exit 7") && shown.contains("starting") && shown.contains("warning"), "{shown}");
+            assert!(!shown.contains("<bash-"), "{shown}");
+        });
     }
 
     #[test]
@@ -2248,8 +2360,8 @@ mod tests {
             c.forked_from = Some("Fix the build".into());
         });
         let (_, found, _) = chat::with(|c| conversation(c));
-        // A fork's note is the first child, so the first message is the second.
-        assert_eq!(found, [(0, 1), (3, 4)]);
+        // An empty child opens the column (its gap sits above the first message), then a fork's note: the first message is the third.
+        assert_eq!(found, [(0, 2), (3, 5)]);
     }
 
     #[test]
@@ -2270,6 +2382,19 @@ mod tests {
         assert!(chat::with(|c| crate::fork_view::header_dialog(c).is_some() && c.state == State::Running));
         crate::fork_view::close_ask();
         assert!(chat::with(|c| crate::fork_view::header_dialog(c).is_none() && c.state == State::Running));
+    }
+
+    /// A background command whose description is the whole command, many lines and wider than the chat, ends on a line
+    /// cut at its width, with all of it on hover, and its time apart, so the line never runs past the conversation.
+    #[test]
+    fn a_long_finished_command_is_cut_to_its_line_with_all_of_it_on_hover() {
+        let description = format!("cd /tmp/probe && cat > in.jsonl <<'EOF'\n{}\nEOF", "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"/goal clear\"}} ".repeat(8));
+        let done = Finished { task: "t1".into(), call: "c1".into(), kind: "Command", description, status: "completed".into(), took: Some(1500), report: String::new() };
+        let tree = chat::with(|c| wings_plugin::ui::tree_json(finished(0, &done, c)));
+        let title = &tree["children"][0]["children"][1];
+        assert_eq!(title["props"]["truncate"], true, "{tree}");
+        assert_eq!(title["props"]["title"], done.title(), "{tree}");
+        assert!(!tree.to_string().contains(" · 1s"), "the time is its own text, not cut off with the title: {tree}");
     }
 
     fn call(id: &str, name: &str, detail: Detail, output: &str) -> Tool {
@@ -2497,6 +2622,44 @@ mod tests {
         assert_eq!(model_options(&session).1, "opus@xhigh");
         session.model = Some("haiku".into());
         assert_eq!(model_options(&session).1, "haiku@");
+    }
+
+    #[test]
+    fn a_new_chat_offers_the_agents_claude_code_lists_and_the_header_names_the_one_it_runs_as() {
+        use wings_plugin::ui::tree_json;
+        let drawn = |c: &Chat| format!("{}{}", pickers(c).into_iter().map(|node| tree_json(node).to_string()).collect::<String>(), tree_json(header(c)));
+        chat::with(|c| {
+            assert!(!drawn(c).contains("Agent:"), "no picker before Claude Code lists agents");
+            // As `initialize` lists them.
+            c.session.options.initialized(&serde_json::json!({ "agents": [
+                { "name": "Explore", "description": "Fast read-only search" },
+                { "name": "dev-core:mid-tier-coder", "description": "Implements", "model": "sonnet" } ] }));
+            let shown = drawn(c);
+            assert!(shown.contains("Agent: Explore") && shown.contains("Agent: dev-core:mid-tier-coder") && shown.contains("restarts Claude Code"), "{shown}");
+            assert!(!shown.contains("@Explore"));
+            c.agent_type = Some("Explore".into());
+            assert!(drawn(c).contains("@Explore"), "{}", drawn(c));
+            // With a message in the chat the agent can't change without losing it: no picker.
+            c.session.items.push(Item::User("hi".into()));
+            assert!(!pickers(c).into_iter().any(|node| tree_json(node).to_string().contains("Agent:")));
+            c.session.items.clear();
+            c.session.options = Default::default();
+            c.agent_type = None;
+        });
+    }
+
+    #[test]
+    fn the_message_box_has_an_ultracode_switch_only_while_claude_code_offers_it() {
+        use wings_plugin::ui::tree_json;
+        let drawn = |c: &Chat| pickers(c).into_iter().map(|node| tree_json(node).to_string()).collect::<String>();
+        chat::with(|c| {
+            assert!(!drawn(c).contains("Ultracode"), "{}", drawn(c));
+            c.session.options.applied(&serde_json::json!({ "ultracode": false, "ultracodeAvailable": true }));
+            assert!(drawn(c).contains("\"label\":\"Ultracode\""), "{}", drawn(c));
+            c.session.options.applied(&serde_json::json!({ "ultracode": true, "ultracodeAvailable": true }));
+            assert!(drawn(c).contains("Ultracode, on"), "{}", drawn(c));
+            c.session.options = Default::default();
+        });
     }
 
     /// A session as long as the ones the prompt rail is clicked through: `prompts` turns, each your message, a run of

@@ -14,7 +14,7 @@ use super::{
 use crate::{
     theme, ui,
     ui::behaviors::{
-        DismissReason, Placement, Reveal, RevealExt, Side, bind_layer, listbox, popup_on_parent, position,
+        DismissReason, MenuKey, Placement, Reveal, RevealExt, Side, bind_layer, listbox, popup_on_parent, position,
     },
 };
 
@@ -23,9 +23,6 @@ pub(super) const LIST_BUTTON_PADDING: f32 = 2.0;
 
 /// A raised card's 10pt padding and 1pt border over the field a message box's list opens upward from.
 const MESSAGE_CARD_EDGE: f32 = 11.0;
-
-/// `ui::menu_item`'s fill under the pointer, the desktop's `--accent`, on the item the arrow keys picked out.
-const MENU_ACCENT: u32 = 0xffffff14;
 
 impl PageView {
     pub(super) fn checkbox(&self, checkbox: &tree::Checkbox, cx: &mut Context<Self>) -> AnyElement {
@@ -902,7 +899,7 @@ impl PageView {
                 cx.stop_propagation();
                 view.toggle_menu(id, cx);
                 if view.menu == Some(id) {
-                    view.menu_highlight = None;
+                    view.menu_keys.highlight = None;
                     view.menu_recovery.open(&view.menu_focus, window, cx);
                 }
             }));
@@ -924,14 +921,15 @@ impl PageView {
                     text
                 };
                 // A `pressed` item is the one in use, as a select's picked option: checked at its end.
-                let row = ui::menu_item_text(
-                    ElementId::NamedInteger(format!("page-menu-{id}-item").into(), at as u64),
-                    label,
-                    item.variant == tree::Variant::Destructive,
-                    item.disabled,
+                let row = ui::menu_highlight(
+                    ui::menu_item_text(
+                        ElementId::NamedInteger(format!("page-menu-{id}-item").into(), at as u64),
+                        label,
+                        item.variant == tree::Variant::Destructive,
+                        item.disabled,
+                    ),
+                    self.menu_keys.highlight == Some(at),
                 )
-                // The arrow keys' item, in the look of the one under the pointer.
-                .when(self.menu_highlight == Some(at), |row| row.bg(rgba(MENU_ACCENT)))
                 .when(item.pressed, |row| {
                     row.aria_selected(true).child(crate::icons::icon(
                         crate::icons::Icon::Check,
@@ -958,22 +956,31 @@ impl PageView {
                     _ => None,
                 })
                 .collect();
+            // What typing jumps by: each item's text, none for one that can't be picked.
+            let labels: Vec<Option<String>> = menu
+                .items
+                .iter()
+                .zip(&picks)
+                .map(|(node, pick)| match node {
+                    Node::Button(item) if pick.is_some() => {
+                        let text = plain_text(&item.children);
+                        Some(if text.trim().is_empty() { item.label.clone().unwrap_or_default() } else { text })
+                    }
+                    _ => None,
+                })
+                .collect();
             let list = ui::menu(ElementId::NamedInteger("page-menu".into(), id), name)
                 .track_focus(&self.menu_focus)
                 .children(items)
                 .on_key_down(cx.listener(move |view, event: &KeyDownEvent, window, cx| {
-                    let key = event.keystroke.key.as_str();
-                    let enabled = |at: usize| picks[at].is_some();
-                    if let Some(moved) =
-                        listbox::highlight_after(key, listbox::Focus::Real, view.menu_highlight, picks.len(), enabled)
-                    {
-                        view.menu_highlight = moved;
-                    } else if key == "enter"
-                        && let Some(handler) = view.menu_highlight.and_then(|at| picks.get(at)?.clone())
-                    {
-                        view.pick_menu_item(&handler, window, cx);
-                    } else {
-                        return;
+                    match view.menu_keys.press(event, &labels) {
+                        MenuKey::Moved => {}
+                        MenuKey::Pick(at) => {
+                            if let Some(handler) = picks[at].clone() {
+                                view.pick_menu_item(&handler, window, cx);
+                            }
+                        }
+                        MenuKey::Ignored => return,
                     }
                     cx.stop_propagation();
                     cx.notify();

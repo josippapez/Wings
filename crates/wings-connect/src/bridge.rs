@@ -26,13 +26,15 @@ Wings' open terminal panes, and let you message the agents in them. Run anything
 a watcher, a long build or test run) with open_pane and run, not Bash in the background, so the user sees it in a tab and can \
 stop it. Read its output with read_pane. To hear when it finishes, run the waitCommand from open_pane's reply with Bash in \
 the background instead of polling. Close a tab you opened with close_pane once you're done with it, unless the user \
-should keep it, like a dev server they're using. create_worktree sets up a git worktree of a Wings project for a branch (new, existing or only on the remote), with its local files copied in; use it instead of git worktree add, and follow its reply to run the project's setup command. worktree_setup reads and changes what a project's new worktrees get (local files copied in, a setup command). Keep Bash for quick commands. Tools from the plugins turned on in Wings are named \
+should keep it, like a dev server they're using. create_worktree sets up a git worktree of a Wings project for a branch (new, existing or only on the remote), with its local files copied in; use it instead of git worktree add, and follow its reply to run the project's setup command. setup_worktree applies those existing project settings to a linked worktree you just created outside Wings, after the user approves. worktree_setup reads and changes what a project's new worktrees get (local files copied in, a setup command). Keep Bash for quick commands. Tools from the plugins turned on in Wings are named \
 <plugin>__<tool>, like cyclops__start_timer. With Wings closed there are none.";
 /// Claude Code cuts a server's instructions at this many characters.
 const MAX_INSTRUCTIONS: usize = 4096;
 /// How long `initialize` waits for Wings to hand over its plugins' lines before answering with the static text.
-/// Longer than the longest wait inside Wings: a worktree_setup change waits up to 5 minutes for the user.
+/// Longer than the longest ordinary wait inside Wings: a worktree_setup change waits up to 5 minutes for the user.
 const TOOL_WAIT: Duration = Duration::from_secs(310);
+/// Approval can take five minutes, then setup_worktree can run its command for fifteen more.
+const SETUP_WORKTREE_WAIT: Duration = Duration::from_secs(1_210);
 const INSTRUCTIONS_WAIT: Duration = Duration::from_secs(2);
 
 struct Bridge {
@@ -178,7 +180,12 @@ fn handle(bridge: &Bridge, message: Value) {
                 "ppid": std::os::unix::process::parent_id(),
                 "sessionId": message["params"]["_meta"]["ai.opencode/sessionID"],
             });
-            Ok(match bridge.ask(request, TOOL_WAIT) {
+            let timeout = if message["params"]["name"].as_str() == Some("setup_worktree") {
+                SETUP_WORKTREE_WAIT
+            } else {
+                TOOL_WAIT
+            };
+            Ok(match bridge.ask(request, timeout) {
                 Some(reply) => reply.get("result").cloned().unwrap_or_else(|| {
                     let error = reply.get("error").and_then(Value::as_str).unwrap_or("Wings couldn't run the tool");
                     json!({ "content": [{ "type": "text", "text": error }], "isError": true })

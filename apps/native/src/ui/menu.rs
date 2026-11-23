@@ -140,7 +140,7 @@ fn item(
         .relative()
         .children(super::spot(|| format!("menu:{label}")))
         .children(glyph)
-        .child(div().flex_1().min_w_0().truncate().child(label.clone()))
+        .child(super::behaviors::cut_text("label", label.clone()).flex_1())
         .when(disabled, |item| {
             item.opacity(0.5).a11y_synthetic_children(|builder| {
                 builder.parent_node().set_disabled();
@@ -155,6 +155,11 @@ fn item(
                 }))
             })
         })
+}
+
+/// An item the arrow keys are on, in the look of the one under the pointer.
+pub fn menu_highlight<E: Styled>(item: E, on: bool) -> E {
+    if on { item.bg(rgba(ACCENT)) } else { item }
 }
 
 /// The hairline between groups of items.

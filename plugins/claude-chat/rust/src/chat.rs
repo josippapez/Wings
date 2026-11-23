@@ -120,6 +120,8 @@ pub struct Chat {
     pub task: Option<String>,
     /// The folders you added with /add-dir, which Claude Code is let into each time it starts here, and the tab keeps.
     pub dirs: Vec<String>,
+    /// The agent Claude Code runs as (`--agent`), which the tab keeps and a restart is needed to change.
+    pub agent_type: Option<String>,
     /// The message the Fork from here dialog is about, by its uuid.
     pub fork_from: Option<String>,
     /// The header's Fork is asking before it forks.
@@ -226,6 +228,7 @@ thread_local! {
         doing: (String::new(), 0),
         task: None,
         dirs: Vec::new(),
+        agent_type: None,
         fork_from: None,
         fork_ask: false,
         forked_from: None,
@@ -394,6 +397,7 @@ async fn open_with(args: Value, saved: Value) {
         c.cwd = cwd;
         c.program = program;
         c.dirs = dirs;
+        c.agent_type = saved["agent"].as_str().or(args["agent"].as_str()).map(str::to_owned);
         c.picked = picked;
         c.forked_from = args["forkedFrom"].as_str().filter(|_| how.fork).map(str::to_owned);
     });
@@ -413,13 +417,13 @@ fn launch(resume: Option<String>) {
 
 /// `launch`, as a copy of the session when `how` says so, and with the folders you added.
 pub fn launch_with(resume: Option<String>, how: Launch) {
-    let (run, cwd, program, start_mode, dirs, prompt) = with(|c| {
+    let (run, cwd, program, start_mode, dirs, prompt, agent) = with(|c| {
         if how.fork {
             // A fork in a new tab has no conversation yet to name it by: the chat it came from named it.
             c.forked_from = Some(name(c).or_else(|| c.forked_from.clone()).unwrap_or_else(|| "an earlier session".into()));
         }
         let run = begin(c);
-        (run, c.cwd.clone(), c.program.clone(), c.session.start_mode.clone(), c.dirs.clone(), c.first_prompt.take())
+        (run, c.cwd.clone(), c.program.clone(), c.session.start_mode.clone(), c.dirs.clone(), c.first_prompt.take(), c.agent_type.clone())
     });
     load_files(run, cwd.clone());
     load_git(run, cwd.clone());
@@ -440,6 +444,8 @@ pub fn launch_with(resume: Option<String>, how: Launch) {
             .map(str::to_owned)
             .to_vec();
         args.extend(fork::flags(resume.as_deref(), &how, &dirs));
+        // A session that starts again keeps the agent it was started as.
+        args.extend(fork::agent_flag(agent.as_deref()));
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         // Under the account the session's transcript is in, which a plain `claude --resume` would not find if it isn't the
         // default one; a new chat gets the account you picked, else its project's, as a terminal there does.
@@ -529,6 +535,7 @@ pub(crate) async fn follow(run: u32, process: host::Process) {
 pub(crate) fn save_tab() {
     let (id, dirs, picked, prompted) = with(|c| (c.session.id.clone(), c.dirs.clone(), picked_json(&c.picked), c.prompted));
     let mut state = json!({ "sessionId": id, "dirs": dirs, "account": picked, "prompted": prompted });
+    state["agent"] = with(|c| c.agent_type.clone()).into();
     // A wait for a usage limit's reset goes on after Wings restarts.
     state["limitArmed"] = with(|c| c.session.limit.armed).into();
     // Comments left in the diff viewer and not sent yet stay across a restart.
@@ -909,6 +916,7 @@ fn open_builtin(c: &mut Chat, local: crate::builtin::Local) -> String {
             c.session.plugins.ask()
         }
         Local::Setup(which) => c.session.setup.open(which),
+        Local::Skills => c.session.skills.open(),
     }
 }
 
@@ -949,6 +957,12 @@ pub fn send() {
                 c.draft.clear();
                 return Some(open_builtin(c, local));
             }
+            // `!command` runs in the chat's folder, as in a terminal, and Claude reads what it printed with your next message.
+            if let Some(command) = crate::shell::command(&text) {
+                c.draft.clear();
+                composer::forget();
+                return Some(crate::shell::line(command));
+            }
             // /status, /export and /btw open a dialog, and /plan sets the mode and sends its task, all in this one write.
             if let Some(line) = c.session.typed_command(&text, host::now() as u64, n) {
                 c.draft.clear();
@@ -987,6 +1001,10 @@ pub fn send() {
 /// which only your "Let agents message each other" gives, it is sent as yours would be, or queued while Claude works.
 /// Whether it was sent, or why the chat won't take it.
 pub(crate) fn take_agent_message(text: &str, submit: bool) -> Result<bool, String> {
+    // Only what you type runs as a shell command: another agent's text is never one.
+    if submit && crate::shell::command(text).is_some() {
+        return Err("A message that starts with ! runs as a shell command, which only the person at the keyboard may start".to_owned());
+    }
     with(|c| {
         if c.input.is_none() {
             return Err("Claude Code isn't running in this chat, so it can't take a message now".to_owned());
@@ -1185,6 +1203,28 @@ pub fn toggle_fast() {
     });
 }
 
+/// Starts the chat over as the agent `name` (`--agent`), from the picker before the first message, or as Claude Code itself
+/// for an empty `name`. Claude Code takes an agent only as it starts, so this restarts it: a chat with a conversation in it
+/// has no picker, and what is said here is never lost.
+pub fn pick_agent(name: &str) {
+    let picked = with(|c| {
+        let listed = name.is_empty() || c.session.options.agent_types.iter().any(|(known, _)| known == name);
+        let empty = c.session.items.is_empty() && !c.session.working;
+        (listed && empty).then(|| c.agent_type = Some(name.to_owned()).filter(|name| !name.is_empty()))
+    });
+    if picked.is_some() {
+        launch(None);
+    }
+}
+
+/// Turns ultracode on or off for this session, from its switch next to the model and effort menu.
+pub fn toggle_ultracode() {
+    write(|c, n| {
+        let on = !c.session.options.ultracode;
+        c.session.options.set_ultracode(on, n)
+    });
+}
+
 pub fn pick_mode(mode: &str) {
     write(|c, n| Some(c.session.set_mode(mode, n)));
 }
@@ -1196,16 +1236,24 @@ pub fn cycle_mode() {
     }
 }
 
+pub fn close_skills() {
+    with(|c| c.session.skills.open = false);
+}
+
+pub fn search_skills(query: &str) {
+    with(|c| c.session.skills.query = query.to_owned());
+}
+
 /// Escape: closes the dialog or sheet that is open, else stops the turn while Claude works.
 pub fn escape() {
     let (dialog, working) = with(|c| {
-        let open = c.panel.is_some() || c.plugins.is_some() || c.task.is_some() || c.session.rewind.is_some() || c.session.setup.open.is_some();
+        let open = c.panel.is_some() || c.plugins.is_some() || c.task.is_some() || c.session.rewind.is_some() || c.session.setup.open.is_some() || c.session.skills.open;
         (open, c.session.working)
     });
     match composer::escape(dialog, working) {
         Escape::Close => with(|c| {
             // The one opened last is on top: the setup dialog's form, then the dialogs over the chat.
-            let _ = c.session.setup.form.take().is_some() || c.session.setup.open.take().is_some() || c.session.rewind.take().is_some() || c.task.take().is_some() || c.plugins.take().is_some() || c.panel.take().is_some();
+            let _ = std::mem::take(&mut c.session.skills.open) || c.session.setup.form.take().is_some() || c.session.setup.open.take().is_some() || c.session.rewind.take().is_some() || c.task.take().is_some() || c.plugins.take().is_some() || c.panel.take().is_some();
         }),
         Escape::Stop => stop(),
         Escape::Nothing => {}
@@ -1579,6 +1627,26 @@ pub fn refresh_task() {
 
 pub fn close_task() {
     with(|c| c.task = None);
+}
+
+/// Sends `text` as your message, or queues it while Claude works, as a click on a button does what typing it would.
+pub fn send_text(text: &str) {
+    write(|c, n| {
+        if c.session.working {
+            return Some(c.session.queue(text, Vec::new(), host::now() as u64, n));
+        }
+        let line = c.session.send(text, &[], host::now() as u64, n);
+        c.doing = (c.session.activity(), host::now() as u64);
+        Some(line)
+    });
+}
+
+/// Asks Claude to stop the scheduled task `id` (`scheduled.rs`).
+pub fn stop_scheduled(id: &str) {
+    let ask = with(|c| c.session.scheduled.stop(id));
+    if let Some(ask) = ask {
+        send_text(&ask);
+    }
 }
 
 /// Stops the background task `id`.

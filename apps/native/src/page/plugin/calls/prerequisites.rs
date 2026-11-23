@@ -284,6 +284,7 @@ fn opening_a_view_checks_the_manifest_placement_and_arguments() {
     assert_eq!(plan.place, "tab");
     assert_eq!(plan.args, Some(json!({ "cwd": "/repo" })));
     assert!(plan.new_tab);
+    assert_eq!(plan.project, None);
     for (id, options) in [
         ("missing", json!({})),
         ("history", json!({ "as": "window" })),
@@ -293,4 +294,39 @@ fn opening_a_view_checks_the_manifest_placement_and_arguments() {
     ] {
         assert!(!rig.refuses("openView", open(id, options)).is_empty());
     }
+}
+
+#[test]
+fn a_tab_opens_in_the_project_its_id_names_and_in_no_other() {
+    let rig = Rig::new(
+        json!({ "contributes": { "views": [{ "id": "history", "title": "History", "page": "history.html", "opens": ["sidebar", "tab"] }] } }),
+        vec![],
+    );
+    rig.host.publish_projects(vec![Project { id: "other".into(), path: "/elsewhere".into(), name: "Other".into(), parent_id: None, hidden_sections: Vec::new() }]);
+    let tab = |project: Value| json!({ "id": "history", "as": "tab", "newTab": true, "projectId": project });
+    rig.allows("openView", tab(json!("other")));
+    let Seen::OpenView(plan) = &rig.env.seen()[0] else {
+        panic!("no view plan")
+    };
+    assert_eq!(plan.project, Some("/elsewhere".into()));
+    // An id Wings doesn't know, and a place that has no project, open nothing.
+    assert_eq!(rig.refuses("openView", tab(json!("/etc"))), "no project /etc");
+    assert!(rig.refuses("openView", json!({ "id": "history", "as": "sidebar", "projectId": "other" })).contains("projectId"));
+    assert!(rig.refuses("openView", json!({ "id": "history", "as": "tab", "projectId": "other" })).contains("projectId"));
+    assert_eq!(rig.env.seen().len(), 1);
+}
+
+#[test]
+fn a_background_pane_is_a_tab_that_is_not_shown_and_nothing_else() {
+    let rig = Rig::new(json!({ "permissions": { "panes": [] } }), vec![]);
+    let path = rig.root.config("probe").root.canonicalize().unwrap();
+    *rig.env.projects.lock().unwrap() = vec![path];
+    rig.allows("openPane", open_pane(json!({ "background": true })));
+    rig.allows("openPane", open_pane(json!({ "background": false })));
+    let placements: Vec<String> = rig.env.seen().into_iter().filter_map(|seen| if let Seen::OpenPane(plan) = seen { Some(plan.placement) } else { None }).collect();
+    assert_eq!(placements, ["background", "tab"]);
+    for wrong in [json!({ "background": "yes" }), json!({ "background": true, "placement": "right" })] {
+        assert!(rig.refuses("openPane", open_pane(wrong)).contains("background"));
+    }
+    assert_eq!(rig.env.seen().len(), 2);
 }

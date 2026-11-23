@@ -87,9 +87,25 @@ pub fn section(c: &Chat) -> Option<Node> {
         return None;
     }
     let title = format!("Mentioned · {}", shown.len());
-    let rows = shown.iter().map(|(found, detail)| row_of(found, *detail));
-    Some(crate::view::fold_list(c, "refs", title, rows))
+    // Newest first, as many as `LISTED_NODES` holds: each row is a hover card, and a chat that named a hundred issues sent
+    // a page over the 5,000 nodes Wings draws.
+    let mut rows = Vec::new();
+    let mut spent = 0;
+    for (found, detail) in &shown {
+        let row = row_of(found, *detail);
+        spent += row.count();
+        if spent > LISTED_NODES && !rows.is_empty() {
+            break;
+        }
+        rows.push(row);
+    }
+    let hidden = shown.len() - rows.len();
+    let earlier = (hidden > 0).then(|| muted(format!("{hidden} earlier, not listed")).prop("size", "small").key("earlier"));
+    Some(crate::view::fold_list(c, "refs", title, rows.into_iter().chain(earlier)))
 }
+
+/// The most nodes the Mentioned list sends.
+const LISTED_NODES: usize = 1_000;
 
 fn small(said: impl Into<String>) -> Node {
     text(said).prop("size", "small")
@@ -118,7 +134,19 @@ fn row_of(found: &Ref, detail: Option<&Detail>) -> Node {
         Ref::Issue(key) => crate::view::inset(line(small(key.as_str()).prop("mono", true).prop("links", true))),
         Ref::GitHub { url, .. } | Ref::Azure { url, .. } => {
             let url = url.clone();
-            list_button([line(small(found.label()).prop("mono", true))], move || open_pull_request(&url))
+            let (name, number) = found.parts();
+            let label = found.label();
+            // Only the repo is cut short in a narrow row: the number at the end stays, to tell two pull requests apart.
+            let both = row()
+                .prop("gap", "none")
+                .prop("align", "center")
+                .prop("grow", true)
+                .child(small(name).prop("mono", true).prop("truncate", true).prop("title", label))
+                .child(small(number).prop("mono", true));
+            list_button(
+                [line(both)],
+                move || open_pull_request(&url),
+            )
         }
     };
     let hover = Node::new("HoverCard").prop("width", 300).child(trigger);
@@ -224,6 +252,71 @@ mod tests {
         assert_eq!(text.matches("HoverCard").count(), 25);
         assert!(!text.contains("earlier"));
         assert!(text.contains(&format!("\"maxHeight\":{}", crate::view::LIST_HEIGHT)), "{text}");
+    }
+
+    /// A chat that names hundreds of issues lists the newest that fit and counts the rest, so the page stays under the
+    /// 5,000 nodes Wings draws.
+    #[test]
+    fn a_chat_that_names_hundreds_of_issues_lists_the_newest_and_counts_the_rest() {
+        chat::with(|c| {
+            c.refs.list = (1..=200).map(|n| Ref::Issue(format!("WIN-{n}"))).collect();
+            c.refs.details = (1..=200)
+                .map(|n| {
+                    let issue = Issue { title: format!("Issue number {n} with a title"), status: "in_progress".into(), kind: "bug, high".into(), priority: Some("high".into()), parent: Some("WIN-1 The epic".into()) };
+                    (format!("WIN-{n}"), Detail::Issue(issue))
+                })
+                .collect();
+        });
+        let section = chat::with(|c| section(c).expect("the section"));
+        let nodes = section.count();
+        let text = wings_plugin::ui::tree_json(section).to_string();
+        chat::with(|c| (c.refs.list.clear(), c.refs.details.clear()));
+        assert!(nodes <= LISTED_NODES + 50, "the list sent {nodes} nodes");
+        assert!(text.contains("WIN-200") && text.contains("earlier, not listed"), "{text}");
+        assert!(!text.contains("\"WIN-1\""), "the oldest isn't listed: {text}");
+    }
+
+    #[test]
+    fn a_long_pull_request_label_cuts_the_repo_and_keeps_its_number_before_the_state_badge() {
+        let reference = Ref::Azure {
+            url: "https://dev.azure.com/acme/_git/Sciensus.Digital.Core.BE/pullrequest/7755".into(),
+            org: "acme".into(),
+            repo: "Sciensus.Digital.Core.BE".into(),
+            number: 7755,
+        };
+        let label = reference.label();
+        let (name, number) = reference.parts();
+        assert_eq!((name.as_str(), number.as_str()), ("Sciensus.Digital.Core.BE", " !7755"));
+        chat::with(|c| {
+            c.refs.list = vec![reference.clone()];
+            c.refs.details.insert(
+                reference.key().into(),
+                Detail::Pr(Pr {
+                    title: "Use the new service".into(),
+                    state: "Merged",
+                    author: "alice".into(),
+                    branch: "feature/service".into(),
+                    checks: None,
+                    lines: None,
+                    review: None,
+                }),
+            );
+        });
+
+        let tree = chat::with(|c| wings_plugin::ui::tree_json(section(c).expect("the section")));
+        fn text_node<'a>(node: &'a Value, text: &str) -> Option<&'a Value> {
+            if node["type"] == "Text" && node["children"].as_array().is_some_and(|children| children.iter().any(|child| child["text"] == text)) {
+                return Some(node);
+            }
+            node["children"].as_array()?.iter().find_map(|child| text_node(child, text))
+        }
+        let name_node = text_node(&tree, &name).expect("the repo's name");
+        assert_eq!(name_node["props"]["truncate"], true, "{tree}");
+        assert_eq!(name_node["props"]["title"], label, "{tree}");
+        let number_node = text_node(&tree, &number).expect("the PR's number, apart from the name");
+        assert!(number_node["props"]["truncate"].is_null(), "the number is never cut: {tree}");
+        assert!(tree.to_string().contains("\"type\":\"Badge\""), "{tree}");
+        assert!(tree.to_string().contains("Merged"), "{tree}");
     }
 
     #[test]

@@ -165,6 +165,8 @@ pub fn has_include_file(root: &Path) -> bool {
 #[serde(rename_all = "camelCase")]
 pub struct LocalCopy {
     pub copied: usize,
+    /// Relative names successfully copied, in the order they were copied.
+    pub copied_file_names: Vec<String>,
     /// Already in the worktree, or a link, which isn't followed.
     pub skipped: usize,
     pub errors: Vec<String>,
@@ -262,23 +264,18 @@ fn local_files(root: &Path, patterns: &[String]) -> Result<Vec<String>, String> 
     Ok(files)
 }
 
-/// Copies the project's gitignored local setup from the main checkout `root` into the new worktree `to`. The
-/// patterns come from `root/.worktreeinclude` when it exists, else `custom` (the project's own list), else
-/// `DEFAULT_INCLUDE`. Files are copied, not linked, so an edit in a worktree can't change the main checkout's copy;
-/// one that's already there stays. The executable bit goes along (`fs::copy` keeps the mode).
-pub fn copy_local(root: &Path, to: &Path, custom: Option<&str>) -> LocalCopy {
-    let mut out = LocalCopy::default();
+/// The current local files a worktree setup would copy, using the same include precedence as `copy_local`.
+/// The names are relative to `root` and safe to show for approval before a copy.
+pub fn local_copy_files(root: &Path, custom: Option<&str>) -> Result<Vec<String>, String> {
     let text = match std::fs::read_to_string(root.join(".worktreeinclude")) {
         Ok(text) => text,
         Err(_) => custom.map(str::to_string).unwrap_or_else(default_include),
     };
-    let files = match local_files(root, &pattern_lines(&text)) {
-        Ok(files) => files,
-        Err(e) => {
-            out.errors.push(format!("Couldn't list the local files to copy: {e}"));
-            return out;
-        }
-    };
+    local_files(root, &pattern_lines(&text))
+}
+
+fn copy_selected(root: &Path, to: &Path, files: impl IntoIterator<Item = String>) -> LocalCopy {
+    let mut out = LocalCopy::default();
     for rel in files {
         // git only lists paths inside the repo; this keeps a bad one from writing outside the worktree.
         if Path::new(&rel).components().any(|c| !matches!(c, Component::Normal(_))) {
@@ -304,12 +301,34 @@ pub fn copy_local(root: &Path, to: &Path, custom: Option<&str>) -> LocalCopy {
         }
         let copied = std::fs::copy(&src, &dest).map(|_| ());
         match copied {
-            Ok(()) => out.copied += 1,
+            Ok(()) => {
+                out.copied += 1;
+                out.copied_file_names.push(rel);
+            }
             Err(e) if out.errors.len() < 20 => out.errors.push(format!("{rel}: {e}")),
             Err(_) => {}
         }
     }
     out
+}
+
+/// Copies an already approved list returned by `local_copy_files`, without re-evaluating include files.
+pub fn copy_local_selected(root: &Path, to: &Path, files: &[String]) -> LocalCopy {
+    copy_selected(root, to, files.iter().cloned())
+}
+
+/// Copies the project's gitignored local setup from the main checkout `root` into the new worktree `to`. The
+/// patterns come from `root/.worktreeinclude` when it exists, else `custom` (the project's own list), else
+/// `DEFAULT_INCLUDE`. Files are copied, not linked, so an edit in a worktree can't change the main checkout's copy;
+/// one that's already there stays. The executable bit goes along (`fs::copy` keeps the mode).
+pub fn copy_local(root: &Path, to: &Path, custom: Option<&str>) -> LocalCopy {
+    let files = match local_copy_files(root, custom) {
+        Ok(files) => files,
+        Err(e) => {
+            return LocalCopy { errors: vec![format!("Couldn't list the local files to copy: {e}")], ..Default::default() };
+        }
+    };
+    copy_selected(root, to, files)
 }
 
 /// Whether `path`, with its symlinks resolved, is inside `root`.
@@ -448,6 +467,11 @@ fn registered(repo: &Path, path: &Path) -> Result<(PathBuf, Option<String>), Str
         .find(|(p, _)| p.canonicalize().map(|p| p == want).unwrap_or(false))
         .map(|(_, branch)| (want, branch))
         .ok_or_else(|| format!("{} isn't a git worktree of {}", path.display(), repo.display()))
+}
+
+/// Checks that `path` is a currently registered linked worktree of `repo`, never the main checkout.
+pub fn linked_worktree(repo: &Path, path: &Path) -> Result<PathBuf, String> {
+    registered(repo, path).map(|(path, _)| path)
 }
 
 /// The worktree's branch and uncommitted changes, after checking it's a linked worktree of `repo`.

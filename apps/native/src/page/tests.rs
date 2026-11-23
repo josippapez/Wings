@@ -1098,6 +1098,20 @@ fn a_menu_s_items_are_picked_with_the_arrow_keys_and_enter() {
     settle(&app, &mut window, shows("picked reveal"));
 }
 
+#[test]
+fn typing_a_menu_item_s_first_letter_goes_to_it() {
+    let (app, mut window) = open(row_menu());
+    settle(&app, &mut window, shows("picked nothing"));
+    window.draw();
+    let trigger = crate::ui::spot_at("page-menu:More").expect("the menu's button is drawn");
+
+    click(&mut window, center(trigger));
+    settle(&app, &mut window, PageView::menu_open);
+    key(&mut window, "t->t");
+    key(&mut window, "enter");
+    settle(&app, &mut window, shows("picked trash"));
+}
+
 /// `row_menu` at the foot of a 400pt window, under lines that fill it, as a chat's menus by its message box are.
 fn foot_menu() -> String {
     fake::page("page", move |_| {
@@ -3259,6 +3273,19 @@ fn a_popup_menu_draws_its_items_sends_a_click_on_one_and_hears_escape() {
     settle(&app, &mut window, shows("Heard 4:onCopy."));
     key(&mut window, "escape");
     settle(&app, &mut window, shows("Heard 3:onClose."));
+}
+
+/// The arrow keys, a typed letter and Enter pick a `PopupMenu`'s item.
+#[test]
+fn a_popup_menu_s_items_are_picked_with_the_keys() {
+    let (app, mut window) = open(popup_menu_page());
+    settle(&app, &mut window, shows("Copy link"));
+    key(&mut window, "down");
+    key(&mut window, "enter");
+    settle(&app, &mut window, shows("Heard 4:onCopy."));
+    key(&mut window, "o->o");
+    key(&mut window, "enter");
+    settle(&app, &mut window, shows("Heard 6:onOpen."));
 }
 
 /// A press outside a `PopupMenu` sends `onClose`.

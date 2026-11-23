@@ -402,9 +402,9 @@ mod tests {
         }
         // The fold kinds, subagent reports, pause, stop and Remote Control.
         assert_eq!(ticks_seen, KINDS.len() + 4);
-        // Remote Control's example shows the lit button only when it starts on.
+        // Remote Control's example shows the lit (secondary) icon button only when it starts on.
         let json = |on| wings_plugin::ui::tree_json(settings_preview::remote(on)).to_string();
-        assert!(json(true).contains("\"Remote\"") && !json(false).contains("\"Remote\""));
+        assert!(json(true).contains("\"secondary\"") && !json(false).contains("\"secondary\""));
     }
 
     #[test]

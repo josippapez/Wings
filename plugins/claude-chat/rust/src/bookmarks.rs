@@ -175,7 +175,8 @@ pub fn section(c: &Chat) -> Option<Node> {
 fn row_of(mark: &Mark, items: &[Item]) -> Node {
     let at = mark.at;
     let who = if matches!(items.get(at), Some(Item::Text(_))) { "Claude" } else { "You" };
-    let line = text(mark.text.lines().next().unwrap_or_default()).prop("size", "small").prop("clamp", true).prop("title", mark.text.as_str());
+    // Markdown's backticks are left out: the line is plain text and they would show as they are.
+    let line = text(mark.text.lines().next().unwrap_or_default().replace('`', "")).prop("size", "small").prop("clamp", true).prop("title", mark.text.as_str());
     let jump = entry(Entry { lead: None, title: line, detail: Some(muted(who).prop("size", "small")), trailing: None }).on("onClick", move |_| crate::rail::go(at));
     let remove = button("", "ghost", false, move || toggle(at)).prop("size", "icon-sm").prop("label", "Remove the bookmark").prop("title", "Remove this bookmark").child(icon(24, 2.0, &REMOVE).prop("size", 14));
     stack().prop("gap", "none").key(format!("bookmark-{at}")).child(row().prop("gap", "xs").prop("align", "center").child(stack().prop("grow", true).child(jump)).child(remove))
@@ -252,5 +253,12 @@ mod tests {
         // No session, nowhere to keep one: no button.
         chat::with(|c| c.session.id = None);
         assert!(chat::with(|c| toggle_button(1, c).is_none() && with_button(1, c, None).is_none()));
+    }
+
+    #[test]
+    fn a_bookmarks_line_shows_no_markdown_backticks() {
+        let mark = Mark { at: 1, text: "Now in `src/discount.ts` and `checkout.ts`".into(), found: true };
+        let shown = wings_plugin::ui::tree_json(row_of(&mark, &talk())).to_string();
+        assert!(shown.contains("\"text\":\"Now in src/discount.ts and checkout.ts\""), "{shown}");
     }
 }

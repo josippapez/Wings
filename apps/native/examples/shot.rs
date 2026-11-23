@@ -370,6 +370,9 @@ fn main() {
     if std::env::args().nth(2).as_deref() == Some("plugins-install") {
         return plugins_install(&mut cx, &config, &out);
     }
+    if std::env::args().nth(2).as_deref() == Some("--setup-existing-worktree") {
+        return setup_existing_worktree(&mut cx, &config, &out);
+    }
     // `-- <out-dir> plugins-drop` renders only dropping a .wings-plugin file on the window and a plugin's README.
     // `-- <out-dir> plugins-agent` renders only the sidebar's Agents with a plugin tab's agent, as Claude chat lists one.
     if std::env::args().nth(2).as_deref() == Some("plugins-agent") {
@@ -2582,6 +2585,34 @@ fn plugins_install(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     }
 }
 
+fn setup_existing_worktree(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+    for width in [1000.0, 640.0] {
+        let config = base.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open worktree setup fixture");
+        let window: AnyWindowHandle = handle.into();
+        wait(cx, window, Duration::from_secs(1));
+        handle
+            .update(cx, |w, _, cx| {
+                w.show_existing_worktree_setup_approval(
+                    "acme-web",
+                    "/work/acme-web-worktrees/fix-login",
+                    &[".claude/rules/project.md", ".mcp.json", ".env"],
+                    Some("pnpm install"),
+                    cx,
+                )
+            })
+            .unwrap();
+        wait(cx, window, Duration::from_millis(1300));
+        wait_fake(cx, window, Duration::from_secs(1));
+        save(cx, window, &out.join(format!("setup-existing-worktree-{width}.png")));
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+    }
+}
+
 /// A `.wings-plugin` file dragged over the window, the review it opens once dropped, and an installed plugin's page with
 /// its README. Temp folders only.
 /// The sidebar's Agents with a made-up chat tab's agent working beside the terminals.
@@ -2916,6 +2947,8 @@ fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
                     cx,
                 );
                 workspace.show_harnesses(made_up_harnesses(), cx);
+                let (tools, changelog) = made_up_tools();
+                workspace.show_tools(tools, changelog, "2.1.329", Some("/work/wings".into()), cx);
                 workspace.show_ai_status(
                     wings_agents::ai::Status {
                         engine: wings_agents::ai::Engine::Ollama,
@@ -2940,6 +2973,7 @@ fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             "keyboard",
             "editor",
             "agents",
+            "tools",
             "notifications",
             "plugins",
         ];
@@ -2949,19 +2983,31 @@ fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             wait(cx, window, Duration::from_millis(200));
             save(cx, window, &name(&format!("settings-{section}")));
             // Agents runs past the first screen: its names, summaries and sleep settings are further down.
-            if section == "agents" {
+            if section == "agents" || section == "tools" {
                 cx.simulate_event(
                     window,
                     gpui::ScrollEvent {
                         position: point(px(width / 2.0 + 100.0), px(400.0)),
-                        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-560.0))),
+                        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(if section == "tools" { -1400.0 } else { -560.0 }))),
                         modifiers: Modifiers::default(),
                         touch_phase: gpui::TouchPhase::Moved,
                         source: gpui::ScrollSource::Pointer,
                     },
                 );
                 wait(cx, window, Duration::from_millis(200));
-                save(cx, window, &name("settings-agents-scrolled"));
+                save(cx, window, &name(&format!("settings-{section}-scrolled")));
+                // The next section starts at its top.
+                cx.simulate_event(
+                    window,
+                    gpui::ScrollEvent {
+                        position: point(px(width / 2.0 + 100.0), px(400.0)),
+                        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(2000.0))),
+                        modifiers: Modifiers::default(),
+                        touch_phase: gpui::TouchPhase::Moved,
+                        source: gpui::ScrollSource::Pointer,
+                    },
+                );
+                wait(cx, window, Duration::from_millis(100));
             }
         }
         cx.simulate_keystrokes(window, "escape");
@@ -3029,6 +3075,38 @@ fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
         wait(cx, window, Duration::from_millis(300));
     }
+}
+
+/// Made-up command-line tools and Claude Code changelog for Settings, Tools: current, with an update by each way of
+/// installing, one that isn't installed and one Wings doesn't know the source of.
+fn made_up_tools() -> (Vec<wings_native::tools::ToolStatus>, Vec<wings_native::tools::Entry>) {
+    use wings_native::tools::{Entry, Source, ToolStatus};
+    let tool = |program: &str, name: &str, uses: &str, installed: Option<&str>, latest: Option<&str>, source| ToolStatus {
+        program: program.into(),
+        name: name.into(),
+        uses: uses.into(),
+        found: installed.is_some(),
+        installed: installed.map(Into::into),
+        latest: latest.map(Into::into),
+        source,
+    };
+    let tools = vec![
+        tool("claude", "Claude Code", "Claude chat", Some("2.1.329"), Some("2.1.331"), Source::ClaudeInstaller),
+        tool("gh", "GitHub CLI", "PR tracker, Changes, Tasks", Some("2.105.0"), Some("2.105.0"), Source::Homebrew("gh".into())),
+        tool("glab", "GitLab CLI", "PR tracker", None, None, Source::Unknown),
+        tool("az", "Azure CLI", "PR tracker, Schedules, Work item", Some("2.92.0"), Some("2.93.0"), Source::HomebrewCask("azure-cli".into())),
+        tool("git", "Git", "Branches and changes, PR tracker, Worktrees, and 4 more", Some("2.39.5"), None, Source::Unknown),
+    ];
+    let entry = |version: &str, notes: &[&str]| Entry {
+        version: version.into(),
+        notes: notes.iter().map(|n| (*n).into()).collect(),
+    };
+    let changelog = vec![
+        entry("2.1.331", &["Added `/rewind` to step a session back to an earlier message", "Fixed a crash when resuming a session that had a very long tool result in its last message", "Plugins can now ship hooks"]),
+        entry("2.1.330", &["Added the `--max-budget` flag", "Improved how permission prompts show long commands", "Fixed the status line flickering", "Fixed `claude update` on slow networks", "Added a Windows installer", "Improved startup time", "Fixed MCP servers not reconnecting"]),
+        entry("2.1.329", &["Older note"]),
+    ];
+    (tools, changelog)
 }
 
 /// Made-up agent CLIs for Settings, Agents: one of each state the rows show.

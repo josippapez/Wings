@@ -241,7 +241,11 @@ pub fn pill(narrow: bool) -> Option<Node> {
     };
     match &state.outcome {
         Some(Err(why)) => return Some(again("Update failed", "danger", format!("Claude Code could not update: {why}. Click to try again"))),
-        Some(Ok(line)) => return Some(badge(format!("Updated to {version}"), Some("success")).prop("title", format!("{line}. {OPEN_CHATS}").as_str())),
+        Some(Ok(line)) => {
+            // Narrow, the version is in the tooltip only, so the chat's title keeps its room.
+            let label = if narrow { "Updated".to_owned() } else { format!("Updated to {version}") };
+            return Some(badge(label, Some("success")).prop("title", format!("Updated to {version}. {line}. {OPEN_CHATS}").as_str()));
+        }
         None => {}
     }
     match standing(Some(version), state.latest.as_deref()) {
@@ -393,7 +397,8 @@ mod tests {
         assert_eq!(pill_of(State { latest: None, ..known.clone() }, true), None);
         let newer = pill_of(State { latest: Some("2.1.331".into()), ..known.clone() }, true).unwrap();
         assert!(newer.contains("\"text\":\"Update\"") && !newer.contains("Update to") && newer.contains("Button"), "{newer}");
-        assert!(pill_of(State { outcome: Some(Ok("done".into())), ..known }, true).unwrap().contains("Updated to"));
+        let done = pill_of(State { outcome: Some(Ok("done".into())), ..known }, true).unwrap();
+        assert!(done.contains("\"text\":\"Updated\"") && !done.contains("\"text\":\"Updated to"), "the version is in the tooltip only: {done}");
     }
 
     #[cfg(feature = "chat")]

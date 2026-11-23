@@ -53,6 +53,8 @@ pub enum Item {
     Ask(Ask),
     /// Something went wrong, as Claude Code said it.
     Error(String),
+    /// A command you ran from the message box with `!`, kept separate from Claude's tool calls.
+    Shell(Tool),
     /// You stopped the turn.
     Stopped,
     /// What Claude Code added to the conversation in your name, like a background task's notice: what it is, and
@@ -523,6 +525,10 @@ pub struct Session {
     pub restored: Option<String>,
     /// The background tasks heard of, running or ended, in the order they started.
     pub tasks: Vec<Task>,
+    /// The goal `/goal` set, while Claude Code works to meet it (`goal.rs`).
+    pub goal: Option<crate::goal::Goal>,
+    /// The scheduled tasks and the wakeup this chat's Claude set (`scheduled.rs`).
+    pub scheduled: crate::scheduled::Scheduled,
     /// The plans Claude proposed with ExitPlanMode, which stay readable and commentable after the answer (`plan_doc.rs`).
     pub plans: crate::plan_doc::Plans,
     /// Fast mode and the output style.
@@ -555,6 +561,12 @@ pub struct Session {
     pub limit: crate::limit_wait::LimitWait,
     /// The rename dialog, and how the last turn ended (`titles.rs`).
     pub naming: crate::titles::Naming,
+    /// How the background tasks nest, and the rows of workflow runs (`workflow.rs`).
+    pub flows: crate::workflow::Flows,
+    /// What the `!` commands printed that Claude hasn't read (`shell.rs`).
+    pub shell: crate::shell::Shell,
+    /// The `/skills` dialog (`skills.rs`).
+    pub skills: crate::skills::Skills,
 }
 
 impl Session {
@@ -580,6 +592,7 @@ impl Session {
             self.announced = Some(id.to_owned());
         }
         self.agents.learn(line);
+        self.flows.heard(line);
         // A subagent's edits count for the turn that started it.
         self.edits.heard(line, self.items.len());
         // A subagent's own messages are kept apart, under the tool call that started it, and stay out of the conversation.
@@ -746,6 +759,10 @@ impl Session {
             }
             // Claude Code echoes each message of yours it reads when it runs with `--replay-user-messages`. The ones sent
             // while it was idle are on the page already.
+            // What a `!` command printed, which waits for your next message and shows as one shell row.
+            "user" if line["isReplay"] == true && line["message"]["content"].as_str().is_some_and(|text| self.shell.heard(text)) => {
+                self.shell_row(line["message"]["content"].as_str().unwrap_or_default());
+            }
             "user" if line["isReplay"] == true => self.echoed(line["uuid"].as_str().unwrap_or_default()),
             // What Claude Code adds in a turn on its own, like a skill's text once the Skill tool loads it (`isSynthetic` as it
             // prints it, `isMeta` in the transcript), isn't yours to see as a message.
@@ -760,6 +777,7 @@ impl Session {
                 let first = self.items.len();
                 self.mods.tool_answered(line);
                 self.user(&line["message"]["content"]);
+                crate::scheduled::answered(self, line);
                 let said = (first..self.items.len()).find(|at| matches!(self.items[*at], Item::User(_) | Item::UserImages(..)));
                 if let (Some(at), Some(uuid)) = (said, line["uuid"].as_str()) {
                     self.prompts.push(Prompt { at, uuid: uuid.to_owned(), parent: parent.map(str::to_owned) });
@@ -901,6 +919,8 @@ impl Session {
         self.subagents.clear();
         self.agents.clear();
         self.tasks.clear();
+        self.goal = None;
+        self.scheduled = Default::default();
         self.suggestion = None;
         self.status = None;
         self.title = None;
@@ -1024,6 +1044,7 @@ impl Session {
             || self.edits.answered(id, response, &self.prompts, &mut self.items)
             || self.answered_task(id, response)
             || self.setup.answered(id, response)
+            || self.skills.answered(id, response)
             || self.plans.answered(id, response)
             || self.cmds.answered(id, response)
             || self.mods.answered(id, response)
@@ -1079,6 +1100,7 @@ impl Session {
                     self.model = settings["model"].as_str().map(str::to_owned);
                 }
                 self.default_effort = settings["effortLevel"].as_str().map(str::to_owned);
+                self.options.applied(&answer["applied"]);
                 self.model_efforts = settings["modelSettings"]
                     .as_object()
                     .into_iter()
@@ -1171,6 +1193,9 @@ impl Session {
 
     fn user(&mut self, content: &Value) {
         if let Some(text) = content.as_str() {
+            if self.shell_row(text) {
+                return;
+            }
             return self.items.extend(said_or_finished(text));
         }
         let first = self.items.len();
@@ -1180,7 +1205,12 @@ impl Session {
                 "image" => pictures.extend(images::of_block(block)),
                 // What Claude Code writes in your name when a turn is stopped, which `Stopped` shows.
                 "text" if block["text"].as_str().is_some_and(|text| text.starts_with("[Request interrupted by user")) => {}
-                "text" => self.items.extend(said_or_finished(block["text"].as_str().unwrap_or_default())),
+                "text" => {
+                    let text = block["text"].as_str().unwrap_or_default();
+                    if !self.shell_row(text) {
+                        self.items.extend(said_or_finished(text));
+                    }
+                }
                 "tool_result" => {
                     let id = block["tool_use_id"].as_str().unwrap_or_default();
                     let output = match &block["content"] {
@@ -1225,8 +1255,44 @@ impl Session {
         }
     }
 
+    /// Records one terminal row from a `!` command. Input starts its row and output completes it.
+    fn shell_row(&mut self, text: &str) -> bool {
+        let text = text.trim();
+        if !(text.starts_with("<bash-input>") || text.starts_with("<bash-stdout>")) {
+            return false;
+        }
+        let inner = |name: &str| text.split_once(&format!("<{name}>"))?.1.split_once(&format!("</{name}>")).map(|(inside, _)| inside.trim());
+        if let Some(command) = inner("bash-input") {
+            let id = format!("shell-{}", self.items.len());
+            self.items.push(Item::Shell(Tool {
+                id,
+                name: "Shell".into(),
+                summary: format!("$ {command}"),
+                output: None,
+                detail: Detail::Plain,
+                input: Input::default(),
+                images: Vec::new(),
+            }));
+            return true;
+        }
+        let Some(stdout) = inner("bash-stdout") else {
+            return false;
+        };
+        let stderr = inner("bash-stderr").unwrap_or_default();
+        let code = inner("bash-exit-code").and_then(|code| code.parse::<i32>().ok()).unwrap_or_default();
+        let failed = code != 0;
+        // As a Bash call's output reads: the exit code first when it failed, then what it printed, unlabelled.
+        let exit = failed.then(|| format!("Exit code {code}")).unwrap_or_default();
+        let output = [exit.as_str(), stdout, stderr].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n");
+        if let Some(Item::Shell(shell)) = self.items.iter_mut().rev().find(|item| matches!(item, Item::Shell(Tool { output: None, .. }))) {
+            shell.output = Some((cut(output.trim_end(), OUTPUT_KEPT), failed));
+        }
+        true
+    }
+
     /// Keeps the checklist up with the calls that change it.
     fn track(&mut self, tool: &str, id: &str, input: &Value) {
+        self.scheduled.called(tool, id, input);
         let text = |key: &str| input[key].as_str().map(str::to_owned);
         match tool {
             "TodoWrite" => {
@@ -1290,7 +1356,8 @@ impl Session {
         self.limit.user_spoke();
         self.naming.user_spoke();
         // The limits are asked again with each message: the chat may only write when you send something.
-        line(&json!({ "type": "user", "message": { "role": "user", "content": content(text, images) }, "parent_tool_use_id": null, "uuid": uuid })) + &usage()
+        let content = crate::shell::with_context(content(text, images), &self.shell.take());
+        line(&json!({ "type": "user", "message": { "role": "user", "content": content }, "parent_tool_use_id": null, "uuid": uuid })) + &usage()
     }
 
     /// Whether `text` is one of a Claude Code plugin's own slash commands (its entry in the commands list has a `plugin`
@@ -1310,7 +1377,7 @@ impl Session {
         self.suggestion = None;
         self.limit.user_spoke();
         self.naming.user_spoke();
-        let sent = user_line(text, &images, "next", &uuid);
+        let sent = user_line(text, &images, "next", &uuid, &self.shell.take());
         self.queued.push(Queued { uuid, text: text.to_owned(), images });
         sent
     }
@@ -1328,7 +1395,7 @@ impl Session {
     pub fn send_now(&mut self, uuid: &str, stamp: u64, n: u32) -> Option<String> {
         let queued = self.queued.iter_mut().find(|queued| queued.uuid == uuid)?;
         let fresh = self::uuid(stamp, n);
-        let mut now: Value = serde_json::from_str(&user_line(&queued.text, &queued.images, "now", &fresh)).unwrap_or_default();
+        let mut now: Value = serde_json::from_str(&user_line(&queued.text, &queued.images, "now", &fresh, "")).unwrap_or_default();
         // Claude Code puts work aside for a message only when a person sent it.
         now["origin"] = json!({ "kind": "human" });
         let lines = [cancel(uuid, n), line(&now)].concat();
@@ -1624,8 +1691,8 @@ fn line(message: &Value) -> String {
 
 /// Your message `text` for Claude Code to read as `priority` says (`next`: at its next step, `now`: at once), stamped
 /// `uuid`, which it echoes when it reads it.
-fn user_line(text: &str, images: &[(String, String)], priority: &str, uuid: &str) -> String {
-    line(&json!({ "type": "user", "message": { "role": "user", "content": content(text, images) }, "parent_tool_use_id": null, "priority": priority, "uuid": uuid }))
+fn user_line(text: &str, images: &[(String, String)], priority: &str, uuid: &str, shell: &str) -> String {
+    line(&json!({ "type": "user", "message": { "role": "user", "content": crate::shell::with_context(content(text, images), shell) }, "parent_tool_use_id": null, "priority": priority, "uuid": uuid }))
 }
 
 /// A message's `content`: the text alone when there are no pictures, else a block for each picture and then the text,
@@ -1677,7 +1744,7 @@ fn is_plugin(command: &Value) -> bool {
 }
 
 /// The slash commands `initialize` or a reload of the plugins lists.
-fn commands(list: &Value) -> Vec<Command> {
+pub(crate) fn commands(list: &Value) -> Vec<Command> {
     let text = |value: &Value, key: &str| value[key].as_str().unwrap_or_default().to_owned();
     list.as_array()
         .into_iter()
@@ -1821,6 +1888,9 @@ fn input_of(tool: &str, input: &Value) -> Input {
 
 /// What a tool is doing, in one line: the command it runs, the file or the pattern, or else its first text input.
 pub fn summary(tool: &str, input: &Value) -> String {
+    if let Some(said) = crate::scheduled::summary(tool, input) {
+        return said;
+    }
     let text = summarized(tool, input).map(|(_, text)| text).unwrap_or_default();
     // A command's indented script or aligned text, said on one line, would show its runs of spaces as gaps.
     let line: Vec<&str> = text.lines().next().unwrap_or_default().split_whitespace().collect();
@@ -2348,7 +2418,7 @@ mod tests {
         let session = heard(concat!(
             r#"{"type":"user","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}},{"type":"text","text":"what is this?"}]}}"#,
             "\n",
-            r#"{"type":"user","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]}}"#,
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"BBBB"}}]}}"#,
         ));
         let [Item::UserImages(text, first), Item::UserImages(none, second)] = &session.items[..] else {
             panic!("{:?}", session.items)
@@ -3623,7 +3693,7 @@ mod tests {
     fn only_the_newest_pictures_show_and_an_oversize_one_is_not_sent() {
         images::reset();
         let mut session = Session::default();
-        let pictures: Vec<(String, String)> = (0..images::SHOWN + 3).map(|_| ("image/png".to_owned(), "AAAA".to_owned())).collect();
+        let pictures: Vec<(String, String)> = (0..images::SHOWN + 3).map(|n| ("image/png".to_owned(), format!("A{n:03}"))).collect();
         session.send("many", &pictures, 1, 1);
         let Some(Item::UserImages(_, ids)) = session.items.first() else {
             panic!("{:?}", session.items)

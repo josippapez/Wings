@@ -2,6 +2,26 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.87 · 2026-11-23
+
+- **Tools in Settings**: the command-line programs Wings and your turned-on plugins run, each with your version and the newest, and an Update for the ones installed with Homebrew or Claude's installer, which runs in a terminal tab. Wings checks when it starts and every six hours, and the Tools entry counts the updates waiting. Claude Code's row lists what's new since the version you last read, and in the Wings project opens a Claude chat that compares those changes with what Claude chat supports.
+- **Scheduled runs open in the background**: a run, in a Claude chat or a terminal, opens in its own project and leaves the project you're looking at on screen. A chat run used to open in the project on screen.
+- **Agents set up the worktrees they make**: Claude can copy a project's local files into a worktree it made itself and run the project's setup command there, once you allow it.
+- **Messaging an agent works again after arrows and shortcuts**: arrows, Page Up and Down, Backspace and shortcuts like Ctrl-P no longer count as unsent text, which kept Wings from writing to an agent whose prompt was empty.
+- **The keyboard reaches more places**: plugin popup menus, right-click menus and Settings selects take Up and Down, Home and End, a typed letter and Enter, and Escape closes an open select before the dialog. The plugin review and the setup approval take the keyboard when they open and keep Tab inside, as the command palette and the history sheet now do. Escape closes the diff viewer without reaching what's under it, and Page Up, Page Down and letters move through its file list.
+- **Cut-off text shows whole on hover** in menus, the sidebar, agent names and the diff file list.
+- **Claude chat**:
+  - `/goal` shows a bar above the message box with the goal, how long it has run, its missed checks and the latest reason, and Clear. The chat notes each missed check and when the goal is met.
+  - Scheduled tasks and `/loop` wakeups read as plain rows, and the side panel lists them with Stop.
+  - Skills and MCP prompts that load mid-chat show in the slash menu, and a model's refusal and the retry on another model are noted.
+  - An Ultracode button beside the model menu, workflow runs as a tree of their phases and agents, and a new chat can start as one of your Claude Code agents.
+  - `!command` runs a shell command and hands Claude its output with your next message. `/skills` lists the skills and sets how Claude sees each.
+  - A long chat that names many issues no longer stops with "the page's tree has over 5000 nodes" when you scroll up: Mentioned lists the newest that fit and counts the rest, and Subagents the newest 60.
+  - A picture you sent stays yours: a picture in another chat tab no longer takes its place.
+  - A long background command's finished line is cut to fit, with all of it on hover, and a long pull request name in Mentioned keeps its number.
+  - In a narrow tab the title keeps its room beside the Update pill, and the account shows as its icon. Search shows plain arrows when nothing matches, an allowed block reads "· Allowed", bookmarks show no markdown backticks, the plan page's bar no longer squeezes a title, and the usage note and a failed start's banner no longer touch what's beside them.
+- **Claude chat 0.45.0, Schedules 0.10.1**: the above.
+
 ## 0.2.86 · 2026-11-22
 
 - **Claude chat moves aside only as far as it needs**: with the session panel open, the chat stays centred where it already clears the panel, and in a narrower tab moves left just enough, keeping the prompt rail. 0.2.85 moved it the panel's whole width even when there was room.

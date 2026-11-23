@@ -949,6 +949,47 @@ impl Host for NativeHost<'_> {
             .recv_timeout(panes::SETUP_APPROVAL_WAIT)
             .map_err(|_| "The user didn't answer".to_string())
     }
+
+    fn approve_worktree_setup(
+        &self,
+        project: &str,
+        pane: &str,
+        folder: &std::path::Path,
+        files: &[String],
+        command: Option<&str>,
+    ) -> Result<bool, String> {
+        let ask = (
+            project.to_owned(),
+            pane.to_owned(),
+            folder.to_string_lossy().into_owned(),
+            files.to_vec(),
+            command.map(str::to_owned),
+        );
+        let (answered, behind) = self
+            .server
+            .env
+            .on_window(WINDOW_WAIT, move |workspace, _, cx| {
+                let (project, pane, folder, files, command) = ask;
+                let behind = !workspace.window_active;
+                (
+                    workspace.ask_existing_worktree_setup_approval(project, pane, folder, files, command, cx),
+                    behind,
+                )
+            })?;
+        if behind {
+            let _ = self.notify(
+                "Claude: Worktree setup".into(),
+                wings_plugins::permissions::clip(
+                    &format!("An agent asks to set up an existing worktree for {project}"),
+                    200,
+                ),
+                None,
+            );
+        }
+        answered
+            .recv_timeout(panes::SETUP_APPROVAL_WAIT)
+            .map_err(|_| "The user didn't answer".to_string())
+    }
 }
 
 // ---- Connecting Claude Code ----

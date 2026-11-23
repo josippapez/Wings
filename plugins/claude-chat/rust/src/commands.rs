@@ -281,8 +281,8 @@ mod tests {
     fn the_slash_menu_offers_these_commands_unless_claude_code_lists_them() {
         let listed = |names: &[&str]| names.iter().map(|name| Command { name: (*name).into(), description: String::new(), hint: String::new(), plugin: false, builtin: false }).collect::<Vec<_>>();
         let own: Vec<String> = own_commands(&listed(&["clear"])).map(|command| command.name).collect();
-        assert_eq!(own, ["status", "export", "btw", "plan", "remote-control", "plugins", "mcp", "usage", "cost", "context", "hooks", "memory", "permissions"]);
+        assert_eq!(own, ["status", "export", "btw", "plan", "remote-control", "plugins", "mcp", "usage", "cost", "context", "hooks", "memory", "permissions", "skills"]);
         let own: Vec<String> = own_commands(&listed(&["plan", "status", "usage"])).map(|command| command.name).collect();
-        assert_eq!(own, ["export", "btw", "remote-control", "plugins", "mcp", "cost", "context", "hooks", "memory", "permissions"]);
+        assert_eq!(own, ["export", "btw", "remote-control", "plugins", "mcp", "cost", "context", "hooks", "memory", "permissions", "skills"]);
     }
 }

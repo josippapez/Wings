@@ -12,7 +12,7 @@ use gpui::{
 };
 use wings_agents::history::{Filter, Hit};
 
-use crate::ui::behaviors::{Reveal, RevealExt};
+use crate::ui::behaviors::{Reveal, RevealExt, TrapTabExt};
 use crate::{
     actions::{
         ClosePane, CloseTab, DecreaseFontSize, Find, FocusDown, FocusLeft, FocusRight, FocusUp,
@@ -694,6 +694,7 @@ impl Workspace {
                 )
                 .child(ui::dialog_panel(
                     panel
+                        .trap_tab(&palette.focus)
                         .key_context("Palette")
                         .h_auto()
                         .flex_col()

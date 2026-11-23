@@ -793,9 +793,17 @@ pub fn open_new_tab_beside(id: &str, args: &Value) -> Pending<Result<Value, Stri
 /// `wings.openView` for the view `view` of another of Wings' own plugins, as a new tab with `args` for the view to read with
 /// `view_args`. Needs `permissions.openViews` naming `"<plugin> <view>"` in the manifest, the other plugin installed and on,
 /// and Wings 0.2.59 (older Wings refuse it). Rejects with why when it isn't allowed or the plugin is off, so a caller can fall
-/// back. The tab opens in the project on screen, so pass the folder in `args`.
+/// back. The tab opens in the project on screen, so pass the folder in `args`; `open_plugin_tab_in` names the project.
 pub fn open_plugin_tab(plugin: &str, view: &str, args: &Value) -> Pending<Result<Value, String>> {
     call("openView", json!({ "plugin": plugin, "id": view, "as": "tab", "args": args, "newTab": true }))
+}
+
+/// `open_plugin_tab` in the project `project_id` (an `id` of `projects`) rather than the one on screen, in the background:
+/// the tab is added to that project's tabs, and the project, tab and keyboard on screen stay as they are. Rejects with
+/// `no project <id>` for an id Wings doesn't have. Needs Wings 0.2.87; an older Wings ignores `projectId` and opens the tab
+/// in the project on screen, and shows it.
+pub fn open_plugin_tab_in(plugin: &str, view: &str, project_id: &str, args: &Value) -> Pending<Result<Value, String>> {
+    call("openView", json!({ "plugin": plugin, "id": view, "as": "tab", "args": args, "newTab": true, "projectId": project_id }))
 }
 
 /// `wings.setProjectSection`: the rows of the plugin's section `section` under the project `project` in the sidebar, or

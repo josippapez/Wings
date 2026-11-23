@@ -182,8 +182,8 @@ pub fn page_of(c: &Chat) -> Option<Node> {
     let pending = c.review.iter().filter(|comment| comment.path == mine).count();
     let newest = plans.first().is_some_and(|(_, newest)| newest.id == plan.id);
 
-    let name = plan_doc::title(plan);
-    let trail = row().prop("gap", "s").prop("align", "center").child(back()).child(text(name.as_str()).prop("truncate", true).prop("title", name.as_str()));
+    // Only the way back: the plan's name is the page's heading below, and in the bar beside three buttons it was cut to "…".
+    let trail = back();
     let actions = match waiting {
         Some(request) => {
             let (revise_request, approve_request, auto_request) = (request.clone(), request.clone(), request);

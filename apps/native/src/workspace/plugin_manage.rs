@@ -191,6 +191,7 @@ impl Workspace {
         }
         if shown.is_none() && !self.manage.reviews.is_empty() {
             self.arm_review(cx);
+            self.take_review_focus(cx);
         }
     }
 
@@ -213,6 +214,7 @@ impl Workspace {
             self.arm_review(cx);
         } else if let Some(done) = done {
             self.leave("review", done, crate::ui::motion::POPUP_IN, cx);
+            self.give_back_review_focus(cx);
         }
         cx.notify_workspace();
     }

@@ -2,7 +2,7 @@
 use super::*;
 use gpui::{PathBuilder, UniformListScrollHandle, canvas, point, uniform_list};
 
-use crate::ui::behaviors::{Reveal, RevealExt};
+use crate::ui::behaviors::{Reveal, RevealExt, listbox};
 use std::ops::Range;
 
 #[derive(Default)]
@@ -41,21 +41,6 @@ impl Columns {
 fn window_range(visible: Range<usize>, total: usize) -> Range<usize> {
     let start = visible.start.saturating_sub(12);
     start..visible.end.saturating_add(12).min(total).min(start + 256)
-}
-
-fn navigate(key: &str, current: usize, total: usize, page: usize) -> Option<usize> {
-    if total == 0 {
-        return None;
-    }
-    Some(match key {
-        "down" => (current + 1).min(total - 1),
-        "up" => current.saturating_sub(1),
-        "pagedown" => current.saturating_add(page).min(total - 1),
-        "pageup" => current.saturating_sub(page),
-        "home" => 0,
-        "end" => total - 1,
-        _ => return None,
-    })
 }
 
 impl PageView {
@@ -155,9 +140,9 @@ impl PageView {
                 let state = graphs.entry(id).or_default();
                 let current = state.cursor.min(keyboard_graph.total.saturating_sub(1));
                 let key = event.keystroke.key.as_str();
-                if let Some(index) = navigate(
+                if let Some(index) = listbox::clamp_after(
                     key,
-                    current,
+                    Some(current),
                     keyboard_graph.total,
                     state.wanted.len().saturating_sub(24).max(1),
                 ) {
@@ -393,14 +378,6 @@ mod tests {
         assert_eq!(window_range(5_000..5_030, 10_000), 4_988..5_042);
         assert_eq!(window_range(0..10_000, 10_000).len(), 256);
         assert_eq!(window_range(9_990..10_000, 10_000), 9_978..10_000);
-    }
-    #[test]
-    fn navigation_clamps_and_pages() {
-        assert_eq!(navigate("end", 0, 10_000, 20), Some(9_999));
-        assert_eq!(navigate("down", 9_999, 10_000, 20), Some(9_999));
-        assert_eq!(navigate("pageup", 12, 10_000, 20), Some(0));
-        assert_eq!(navigate("pagedown", 12, 10_000, 20), Some(32));
-        assert_eq!(navigate("home", 500, 10_000, 20), Some(0));
     }
     #[test]
     fn a_sidebar_dragged_from_widest_to_narrowest_changes_columns_twice() {

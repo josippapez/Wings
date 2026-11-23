@@ -8,11 +8,11 @@ use gpui::{
     AnyElement, Axis, Context, MouseButton, Pixels, Point, Subscription, canvas, prelude::*,
 };
 
-use crate::ui;
+use crate::ui::{self, behaviors::drag as pointer_drag};
 
 use super::{
     Active, Workspace,
-    drag_slot::{DRAG_THRESHOLD, Laid, Slot},
+    drag_slot::{Laid, Slot},
 };
 
 /// The title bar's drag: where each tab was laid out, the press on one and the drag it becomes.
@@ -90,17 +90,11 @@ impl Workspace {
             return;
         };
         if !drag.moving {
-            if (at - drag.from).magnitude() < DRAG_THRESHOLD {
+            if !pointer_drag::past_threshold(drag.from, at) {
                 return;
             }
             drag.moving = true;
-            let this = cx.weak_entity();
-            drag._escape = Some(cx.intercept_keystrokes(move |event, _, cx| {
-                if event.keystroke.key == "escape" {
-                    let _ = this.update(cx, |this, cx| this.cancel_tab_drag(cx));
-                    cx.stop_propagation();
-                }
-            }));
+            drag._escape = Some(pointer_drag::cancel_on_escape(cx, |this, cx| this.cancel_tab_drag(cx)));
         }
         drag.x = at.x;
         let laid = self.tab_drags.laid.borrow();

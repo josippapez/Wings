@@ -36,7 +36,9 @@ pub fn section(c: &Chat) -> Option<Node> {
         parts.push(format!("{failed} failed"));
     }
     let title = parts.join(" · ");
-    Some(crate::view::fold(c, "tasks", title, running.into_iter().map(task_row).chain(done.into_iter().map(done_row))))
+    // A workflow's phases and agents, and what a subagent started, are under it.
+    let tree = crate::workflow::tree(&c.session, &running, &task_row);
+    Some(crate::view::fold(c, "tasks", title, tree.into_iter().chain(done.into_iter().map(done_row))))
 }
 
 /// One task that ended: how it ended, its name and how long it ran, with its output on a click when Claude Code keeps it.
@@ -106,7 +108,7 @@ fn task_row(task: &Task) -> Node {
 }
 
 /// The small square on Stop, in a 14-point box.
-const STOP: &str = "M3.5 3.5h7v7h-7z";
+pub(crate) const STOP: &str = "M3.5 3.5h7v7h-7z";
 
 /// A click on a subagent, by the id of the call that started it or a background agent's own id: its conversation, in Wings'
 /// right sidebar, which has a button that pops it out into a tab beside the chat's. One place, so what it does can change in
@@ -169,6 +171,38 @@ mod tests {
             assert_eq!(drawn.matches("\"type\":\"ListRow\"").count(), 2, "{drawn}");
             assert_eq!(drawn.matches("\"name\":\"lead\"").count(), 2, "{drawn}");
             c.session.tasks.clear();
+        });
+    }
+
+    #[test]
+    fn a_workflow_run_is_a_tree_of_its_phases_and_agents_and_a_task_sits_under_the_subagent_that_started_it() {
+        chat::with(|c| {
+            let hear = |c: &mut Chat, line: serde_json::Value| c.session.hear(&line);
+            hear(c, serde_json::json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": [
+                { "task_id": "w1", "task_type": "local_workflow", "description": "Survey the API" },
+                { "task_id": "a1", "task_type": "local_agent", "subagent_type": "general-purpose", "description": "Reader" },
+                { "task_id": "b1", "task_type": "local_bash", "description": "Watch the build", "parent_task_id": "a1" },
+            ] }));
+            // As Claude Code 2.1.330 sends a run's rows with its progress.
+            hear(c, serde_json::json!({ "type": "system", "subtype": "task_progress", "task_id": "w1", "description": "Survey the API", "usage": { "total_tokens": 9, "tool_uses": 3, "duration_ms": 5000 },
+                "workflow_progress": [
+                    { "type": "workflow_phase", "index": 0, "title": "Search", "kind": "phase" },
+                    { "type": "workflow_phase", "index": 1, "title": "Verify", "kind": "phase" },
+                    { "type": "workflow_agent", "index": 0, "label": "find sources", "phaseIndex": 0, "phaseTitle": "Search", "state": "start" },
+                    { "type": "workflow_agent", "index": 0, "label": "find sources", "phaseIndex": 0, "phaseTitle": "Search", "state": "done", "tokens": 4200, "toolCalls": 7 },
+                    { "type": "workflow_agent", "index": 1, "label": "check claim 1", "phaseIndex": 1, "phaseTitle": "Verify", "state": "progress", "toolCalls": 2 },
+                    { "type": "workflow_agent", "index": 2, "label": "check claim 2", "phaseIndex": 1, "phaseTitle": "Verify", "state": "error", "error": "rate limited" },
+                ] }));
+            let drawn = tree_json(section(c).expect("a group")).to_string();
+            let at = |needle: &str| drawn.find(needle).unwrap_or_else(|| panic!("{needle} is not drawn: {drawn}"));
+            // The run, then its phases each with its agents, in order, the way the terminal's progress view lists them.
+            assert!(at("Survey the API") < at("Search") && at("Search") < at("find sources") && at("find sources") < at("Verify") && at("Verify") < at("check claim 1"), "{drawn}");
+            assert!(drawn.contains("1 of 1 done") && drawn.contains("0 of 2 done · 1 failed") && drawn.contains("rate limited"), "{drawn}");
+            // The command is under the subagent that started it, which is under no one: the run is not drawn between them.
+            assert!(at("Reader") < at("Watch the build"), "{drawn}");
+            assert!(drawn.contains("\"width\":16"), "a nested row is moved in: {drawn}");
+            c.session.tasks.clear();
+            c.session.flows = Default::default();
         });
     }
 

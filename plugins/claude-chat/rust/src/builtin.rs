@@ -17,6 +17,8 @@ pub enum Local {
     Dialog(Show),
     /// The hooks, memory or permissions dialog.
     Setup(Which),
+    /// The skills dialog.
+    Skills,
 }
 
 /// Each built-in command: its name, what the slash menu says it does (empty for an alias the menu doesn't offer) and what
@@ -32,6 +34,7 @@ pub const TABLE: &[(&str, &str, Local)] = &[
     ("memory", "Show the instruction files and memories Claude Code loads", Local::Setup(Which::Memory)),
     ("permissions", "List the allow, ask and deny rules", Local::Setup(Which::Permissions)),
     ("allowed-tools", "", Local::Setup(Which::Permissions)),
+    ("skills", "List the skills Claude Code has, and change how Claude sees each", Local::Skills),
 ];
 
 /// What a draft opens, when the draft is exactly a built-in command that no plugin or skill of Claude Code's took.

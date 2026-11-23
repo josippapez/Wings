@@ -21,6 +21,7 @@ mod finder_tests;
 mod floating;
 mod global_hotkey;
 mod harnesses;
+mod tools;
 mod history;
 #[cfg(all(test, feature = "test-support"))]
 mod hotkey_tests;
@@ -87,7 +88,7 @@ use gpui::{
     Subscription, Task, Window, canvas, deferred, div, prelude::*, px, rgb, rgba,
 };
 
-use crate::ui::behaviors::{Reveal, RevealExt};
+use crate::ui::behaviors::{EscapeExt, Reveal, RevealExt};
 use crate::{
     actions::{
         ActivateTab, ClosePane, CloseTab, CloseWindow, DecreaseFontSize, FocusDown, FocusLeft,
@@ -285,12 +286,16 @@ pub struct Workspace {
     opencode: opencode::Link,
     /// The agent CLIs Settings, Agents lists.
     harnesses: harnesses::Checks,
+    /// The command-line tools Settings, Tools lists.
+    tools: tools::Tools,
     /// The right-click menu that is open.
     menu: Option<context_menu::Menu>,
     /// What the Plugins section is doing: installs, reviews waiting, updates found.
     manage: plugin_manage::Manage,
     /// The plugin review and the setup approval, which show one at a time over everything.
     review_focus: FocusHandle,
+    /// What had the keyboard before the review or the approval took it.
+    review_recovery: crate::ui::behaviors::FocusRecovery,
     /// Setup commands agents asked to set, waiting for you.
     setup_asks: setup_approval::SetupAsks,
     worktree_setup: Option<worktree_setup::WorktreeSetupDialog>,
@@ -473,8 +478,10 @@ impl Workspace {
             hotkey: Default::default(),
             opencode: Default::default(),
             harnesses: Default::default(),
+            tools: Default::default(),
             manage: Default::default(),
             review_focus: cx.focus_handle(),
+            review_recovery: Default::default(),
             setup_asks: Default::default(),
             worktree_setup: None,
             watching_mounts: false,
@@ -649,6 +656,7 @@ impl Workspace {
             clipboard_write: settings.clipboard_write.unwrap_or(defaults.clipboard_write),
             images: settings.images.unwrap_or(defaults.images),
         });
+        this.tools.read = settings.tools_read.clone();
         let prefs = settings::Prefs::default();
         this.prefs = settings::Prefs {
             quick_terminal: settings.quick_terminal.unwrap_or(prefs.quick_terminal),
@@ -681,6 +689,7 @@ impl Workspace {
         this.check_disk_access(cx);
         this.start_update_checks(window, cx);
         this.start_plugin_update_checks(window, cx);
+        this.start_tool_checks(window, cx);
         this.offer_official_plugins(cx);
         // The cached pieces need the workspace's entity, which exists once this returns (see `parts`).
         let workspace = cx.weak_entity();
@@ -1238,12 +1247,18 @@ impl Render for Workspace {
             .when(
                 self.menu.is_some() || self.inbox.open.is_some() || self.new_tab_menu,
                 |root| {
-                    root.capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                        if event.keystroke.key == "escape" {
+                    let workspace = cx.entity();
+                    root.capture_escape(move |_, _, cx| {
+                        workspace.update(cx, |this, cx| {
                             this.close_menu(cx);
                             this.close_inbox(cx);
                             this.new_tab_menu = false;
                             cx.notify_workspace();
+                        });
+                        true
+                    })
+                    .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                        if this.menu_key(event, window, cx) {
                             cx.stop_propagation();
                         }
                     }))

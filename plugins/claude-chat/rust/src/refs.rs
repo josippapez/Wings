@@ -28,10 +28,17 @@ impl Ref {
 
     /// How a row names it: `ABC-12`, `cli/cli#123`, `shop !45`.
     pub fn label(&self) -> String {
+        let (name, number) = self.parts();
+        format!("{name}{number}")
+    }
+
+    /// The label in two: the name, which a narrow row may cut short, and the number after it (`#123`, ` !45`), which it keeps,
+    /// as the number is what tells two pull requests of one long repo apart. An issue's key is all name.
+    pub fn parts(&self) -> (String, String) {
         match self {
-            Ref::Issue(key) => key.clone(),
-            Ref::GitHub { repo, number, .. } => format!("{repo}#{number}"),
-            Ref::Azure { repo, number, .. } => format!("{repo} !{number}"),
+            Ref::Issue(key) => (key.clone(), String::new()),
+            Ref::GitHub { repo, number, .. } => (repo.clone(), format!("#{number}")),
+            Ref::Azure { repo, number, .. } => (repo.clone(), format!(" !{number}")),
         }
     }
 }

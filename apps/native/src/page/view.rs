@@ -203,7 +203,9 @@ pub struct PageView {
     /// What had the keyboard before the open `Menu` took it, its button, which gets it back as the menu closes.
     menu_recovery: crate::ui::behaviors::FocusRecovery,
     /// The open `Menu`'s item the arrow keys picked out, by its index in the menu's items, which Enter picks.
-    menu_highlight: Option<usize>,
+    menu_keys: crate::ui::behaviors::MenuKeys,
+    /// The same for an open popup menu.
+    popup_keys: crate::ui::behaviors::MenuKeys,
     /// Where each select and combobox was drawn, by node id, and how tall the window was: its menu is as wide, and as
     /// tall as the room on one side of it.
     select_bounds: HashMap<u64, (gpui::Bounds<Pixels>, Pixels)>,
@@ -670,7 +672,8 @@ impl PageView {
             actions_focus: RefCell::default(),
             menu_focus: cx.focus_handle(),
             menu_recovery: Default::default(),
-            menu_highlight: None,
+            menu_keys: Default::default(),
+            popup_keys: Default::default(),
             actions_within: HashSet::new(),
             reveal: None,
             dialog_focus: cx.focus_handle(),
@@ -3038,6 +3041,7 @@ impl Render for PageView {
         let popup = self.tree.as_ref().and_then(|tree| popup_in(&tree.children)).map(|menu| menu.id);
         if popup.is_some() != self.popup_shown.is_some() {
             // Only where the page may take the keyboard, as a dialog: a menu never pulls it from a terminal.
+            self.popup_keys = Default::default();
             if popup.is_some() {
                 if may_take {
                     self.popup_before = window.focused(cx);
@@ -3360,18 +3364,7 @@ impl PageView {
                 .iter()
                 .any(|context| context.get(PAGE_CONTEXT).is_some_and(|id| **id == page)),
         };
-        let from = window.focused(cx);
-        // Bounded, as a page with no control besides the focused one comes back to it.
-        for _ in 0..1000 {
-            if mods.shift {
-                window.focus_prev(cx);
-            } else {
-                window.focus_next(cx);
-            }
-            if inside(window, &**cx) || window.focused(cx) == from {
-                break;
-            }
-        }
+        crate::ui::behaviors::cycle_until(inside, mods.shift, window, cx);
         window.prevent_default();
         cx.stop_propagation();
     }

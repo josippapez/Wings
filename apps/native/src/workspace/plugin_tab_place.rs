@@ -122,4 +122,67 @@ mod tests {
             assert_eq!(w.active, Active::Terminal(w.terminals.last().unwrap().id));
         });
     }
+
+    /// Two projects, the first on screen, with a plugin whose main asks `call` of Wings once it hears of the second: the
+    /// folder, the first and the second.
+    fn two_projects(data: &Data, call: &'static str, params: fn(&std::path::Path) -> Value) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf, (gpui::TestApp, gpui::TestAppWindow<Workspace>)) {
+        let dir = crate::projects::test_dir("tab-project");
+        let (shown, other) = (dir.join("shown"), dir.join("other"));
+        std::fs::create_dir_all(&shown).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let (shown, other) = (shown.canonicalize().unwrap(), other.canonicalize().unwrap());
+        let list = dir.join("spaces.json");
+        std::fs::write(&list, json!([{ "id": shown, "name": "shown", "path": shown }, { "id": other, "name": "other", "path": other }]).to_string()).unwrap();
+        let views = json!([{ "id": "chat", "title": "Chat", "page": "dist/chat.html", "opens": ["tab"], "multiple": true }]);
+        let main = fake::script("main", {
+            let other = other.clone();
+            move || {
+                let (other, mut asked) = (other.clone(), false);
+                move |cx: &mut Cx<'_>, hear: Hear<'_>| {
+                    // The list the plugin hears first may not have the project yet.
+                    let known = matches!(&hear, Hear::Deliver("projects", _, text) if text.contains(other.to_str().unwrap()));
+                    if known && !asked {
+                        asked = true;
+                        cx.call(call, params(&other));
+                    }
+                }
+            }
+        });
+        data.install_script("chatty", json!({ "permissions": { "panes": [] }, "contributes": { "views": views } }), &main, &[("chat", &fake::idle("page"))], "chatty-scope");
+        let opened = open_plugins(data, &Arc::default(), |config| {
+            config.project = shown.clone();
+            config.projects = Some(list.clone());
+        });
+        (dir, shown, other, opened)
+    }
+
+    #[test]
+    fn a_tab_a_plugin_opens_for_a_project_joins_that_project_and_leaves_the_one_on_screen_alone() {
+        let data = Data::temp();
+        let (dir, shown, other, (app, mut window)) = two_projects(&data, "openView", |other| {
+            json!({ "id": "chat", "as": "tab", "args": { "n": 1 }, "newTab": true, "projectId": other })
+        });
+        let (active, terminals) = window.read(|w, _| (w.active, w.terminals.len()));
+        until(&app, &mut window, "the tab never opened", |w| w.parked.get(other.as_path()).is_some_and(|parked| parked.plugin_tabs.len() == 1));
+        window.read(|w, _| {
+            assert_eq!(w.project(), shown);
+            assert_eq!((w.active, w.terminals.len(), w.plugin_tabs.len()), (active, terminals, 0));
+        });
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_terminal_a_plugin_opens_in_the_background_joins_its_project_and_leaves_the_one_on_screen_alone() {
+        let data = Data::temp();
+        let (dir, shown, other, (app, mut window)) = two_projects(&data, "openPane", |other| {
+            json!({ "command": null, "args": [], "cwd": other, "placement": "tab", "background": true })
+        });
+        let (active, terminals) = window.read(|w, _| (w.active, w.terminals.len()));
+        until(&app, &mut window, "the terminal never opened", |w| w.parked.get(other.as_path()).is_some_and(|parked| !parked.terminals.is_empty()));
+        window.read(|w, _| {
+            assert_eq!(w.project(), shown);
+            assert_eq!((w.active, w.terminals.len()), (active, terminals));
+        });
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

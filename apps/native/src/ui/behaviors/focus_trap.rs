@@ -12,6 +12,17 @@ const MAX_STEPS: usize = 1000;
 /// Moves the keyboard to the next tab stop inside `within` (the dialog's focus handle, which its panel tracks), or the
 /// previous one when `back`, wrapping at its ends. Leaves it where it was when `within` has no tab stop.
 pub fn cycle(within: &FocusHandle, back: bool, window: &mut Window, cx: &mut App) {
+    cycle_until(|window, cx| within.contains_focused(window, cx), back, window, cx);
+}
+
+/// `cycle` for a region that isn't one focus handle: steps until `inside` says the keyboard is in it, as a page's
+/// controls are, and leaves it where it was when none is.
+pub fn cycle_until(
+    inside: impl Fn(&Window, &App) -> bool,
+    back: bool,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let from = window.focused(cx);
     for _ in 0..MAX_STEPS {
         if back {
@@ -19,7 +30,7 @@ pub fn cycle(within: &FocusHandle, back: bool, window: &mut Window, cx: &mut App
         } else {
             window.focus_next(cx);
         }
-        if within.contains_focused(window, cx) {
+        if inside(window, cx) {
             return;
         }
         if window.focused(cx) == from {

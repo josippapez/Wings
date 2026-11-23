@@ -147,6 +147,13 @@ impl Shared {
             replace = Some((access.plugin.manifest.id.clone(), frame));
             placement = "tab";
         }
+        // In its project without showing it: the project on screen, its tab and the keyboard stay as they are.
+        match params.get("background") {
+            None | Some(Value::Null | Value::Bool(false)) => {}
+            Some(Value::Bool(true)) if placement == "tab" && replace.is_none() => placement = "background",
+            Some(Value::Bool(true)) => return Err("openPane background only works with placement \"tab\"".into()),
+            _ => return Err("openPane background must be true or false".into()),
+        }
         let text = |key: &str| match params.get(key) {
             None | Some(Value::Null) => Ok(None),
             Some(Value::String(value)) => Ok(Some(value.as_str())),
@@ -307,6 +314,19 @@ impl Shared {
         if after.is_some() && place != "tab" {
             return Err("openView after only works with as: \"tab\"".into());
         }
+        // The project the tab opens in is one of Wings' projects, by its id, as `pastSessions`'s.
+        let project = match params.get("projectId").filter(|value| !value.is_null()) {
+            None => None,
+            Some(project) => {
+                if place != "tab" || !new_tab || after.is_some() {
+                    return Err("openView projectId only works with as: \"tab\" and newTab: true, and not after".into());
+                }
+                let project = js_string(Some(project));
+                let known = self.projects.lock().unwrap();
+                let found = known.iter().find(|known| known.id == project).ok_or_else(|| format!("no project {project}"))?;
+                Some(std::path::PathBuf::from(&found.path))
+            }
+        };
         access.env.open_view(
             super::OpenView {
                 plugin: owner,
@@ -314,6 +334,7 @@ impl Shared {
                 place,
                 args,
                 new_tab,
+                project,
                 after,
             },
             reply,

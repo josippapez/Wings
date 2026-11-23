@@ -110,6 +110,12 @@ pub struct Options {
     /// The output styles Claude Code has, and the one in use.
     pub styles: Vec<String>,
     pub style: Option<String>,
+    /// Ultracode, which plans a workflow for each substantive task, is on for the session, and whether Claude Code lets
+    /// it be turned on (dynamic workflows are on and the model has them).
+    pub ultracode: bool,
+    pub ultracode_available: bool,
+    /// The agents a chat can start as (`--agent`), by name with what each is for, as `initialize` lists them.
+    pub agent_types: Vec<(String, String)>,
 }
 
 /// The reason `initialize` gives for fast mode being off in a session an SDK started: it wants an opt in, which the flag
@@ -123,6 +129,28 @@ impl Options {
         self.fast_blocked = answer["fast_mode_disabled_reason"].as_str().filter(|reason| !GET_ROUND.contains(reason)).map(str::to_owned);
         self.styles = answer["available_output_styles"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect();
         self.style = answer["output_style"].as_str().map(str::to_owned);
+        self.agent_types = answer["agents"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|agent| Some((agent["name"].as_str()?.to_owned(), agent["description"].as_str().unwrap_or_default().to_owned())))
+            .collect();
+    }
+
+    /// Takes in what `get_settings` says is in force: whether ultracode is on, and whether it can be.
+    pub fn applied(&mut self, applied: &Value) {
+        self.ultracode = applied["ultracode"] == true;
+        self.ultracode_available = applied["ultracodeAvailable"] == true;
+    }
+
+    /// The line that turns ultracode on or off for the session, from the next message on, which the switch then shows. It
+    /// leaves the effort level as it is, and is not saved to your settings. None while Claude Code doesn't offer it.
+    pub fn set_ultracode(&mut self, on: bool, n: u32) -> Option<String> {
+        if !self.ultracode_available {
+            return None;
+        }
+        self.ultracode = on;
+        Some(request(&format!("ultracode-{n}"), json!({ "subtype": "apply_flag_settings", "settings": { "ultracode": on } })))
     }
 
     /// The line that turns fast mode on or off for this session, which the menu then shows. It is a setting of the
@@ -203,6 +231,24 @@ mod tests {
         assert_eq!(next_mode("plan"), "auto");
         assert_eq!(next_mode("auto"), "default");
         assert_eq!(next_mode("bypassPermissions"), "default");
+    }
+
+    #[test]
+    fn ultracode_is_offered_when_get_settings_says_it_can_be_and_one_setting_turns_it_on_or_off() {
+        let mut options = Options::default();
+        assert_eq!(options.set_ultracode(true, 1), None, "nothing is sent before Claude Code says it is available");
+        // As Claude Code 2.1.330 answers `get_settings`.
+        options.applied(&json!({ "model": "claude-haiku-5-5", "ultracode": false, "ultracodeRequested": false, "ultracodeAvailable": true }));
+        assert!(options.ultracode_available && !options.ultracode);
+        let on = lines(&options.set_ultracode(true, 2).unwrap());
+        assert_eq!((on["request_id"].as_str(), &on["request"]), (Some("ultracode-2"), &json!({ "subtype": "apply_flag_settings", "settings": { "ultracode": true } })));
+        assert!(options.ultracode);
+        let off = lines(&options.set_ultracode(false, 3).unwrap());
+        assert_eq!(off["request"]["settings"], json!({ "ultracode": false }));
+        assert!(!options.ultracode);
+        // A session that starts with it on in your settings shows it on.
+        options.applied(&json!({ "ultracode": true, "ultracodeAvailable": true }));
+        assert!(options.ultracode);
     }
 
     #[test]

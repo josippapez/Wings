@@ -11,7 +11,7 @@ use super::{
     patch::{DiffLine, DiffLineKind, DiffStatus},
     rows::{CodeRow, ListRow, Notes, code_rows, file_path, list_rows, with_notes},
 };
-use crate::ui::behaviors::{Reveal, RevealExt};
+use crate::ui::behaviors::{EscapeExt, Reveal, RevealExt, listbox};
 use crate::{
     icons::{Icon, icon},
     markdown::{Block, Opener},
@@ -97,6 +97,8 @@ pub struct Viewer {
     horizontal: gpui::ScrollHandle,
     focus: FocusHandle,
     files_focus: FocusHandle,
+    /// What was typed in the file list, to jump to the file it starts.
+    files_typeahead: listbox::Typeahead,
     code_focus: FocusHandle,
     refresh_focus: FocusHandle,
     close_focus: FocusHandle,
@@ -205,6 +207,7 @@ impl Viewer {
             horizontal: gpui::ScrollHandle::new(),
             focus: cx.focus_handle(),
             files_focus: cx.focus_handle().tab_stop(true),
+            files_typeahead: Default::default(),
             code_focus: cx.focus_handle().tab_stop(true),
             refresh_focus: cx.focus_handle().tab_stop(true),
             close_focus: cx.focus_handle().tab_stop(true),
@@ -758,13 +761,22 @@ impl Viewer {
         cx.notify();
     }
 
+    /// How many rows the file list shows at once, for Page Up and Page Down.
+    fn files_page(&self) -> usize {
+        let size = self.files_scroll.0.borrow().last_item_size;
+        match size {
+            Some(size) if !self.list_rows.is_empty() && size.contents.height > px(0.0) => {
+                let row = size.contents.height / self.list_rows.len() as f32;
+                ((size.item.height / row) as usize).max(1)
+            }
+            _ => 1,
+        }
+    }
+
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = &event.keystroke;
         let pressed = matches!(key.key.as_str(), "enter" | "space");
-        if key.key == "escape" && self.close_menus() {
-            cx.notify();
-        } else if key.key == "escape"
-            || (key.modifiers.platform && key.key == "w")
+        if (key.modifiers.platform && key.key == "w")
             || (pressed && self.close_focus.is_focused(window))
         {
             cx.emit(Event::Close);
@@ -781,17 +793,24 @@ impl Viewer {
         } else if self.files_focus.is_focused(window) {
             // Up and down go through the discussion and the files the list shows, in its order.
             let listed = self.listed();
-            let Some(last) = listed.len().checked_sub(1) else {
-                return;
-            };
             let open = (!self.discussion_open).then_some(self.selected);
             let at = listed.iter().position(|entry| *entry == open);
-            let next = match (key.key.as_str(), at) {
-                ("down", Some(at)) => (at + 1).min(last),
-                ("up", Some(at)) => at.saturating_sub(1),
-                ("down" | "home", _) => 0,
-                ("up" | "end", _) => last,
-                _ => return,
+            let next = match listbox::clamp_after(key.key.as_str(), at, listed.len(), self.files_page()) {
+                Some(next) => next,
+                // Typing a file's name goes to it.
+                None => {
+                    let files = self.view.update.patch.as_ref().map(|diff| &diff.files);
+                    let name = |at: usize| {
+                        let file = files?.get((*listed.get(at)?)?)?;
+                        Some(file_path(file).rsplit('/').next().unwrap_or_default().to_owned())
+                    };
+                    let Some(next) = listbox::typed_text(event).and_then(|text| {
+                        self.files_typeahead.press(text, std::time::Instant::now(), at, listed.len(), name)
+                    }) else {
+                        return;
+                    };
+                    next
+                }
             };
             match listed[next] {
                 Some(index) => self.select_file(index, cx),
@@ -1141,11 +1160,8 @@ impl Viewer {
                             .child(div().flex_none().child(name))
                             .when_some(folder.filter(|_| depth.is_none()), |text, folder| {
                                 text.child(
-                                    div()
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_color(rgb(theme::MUTED_FOREGROUND))
-                                        .child(folder),
+                                    ui::behaviors::cut_text("folder", folder)
+                                        .text_color(rgb(theme::MUTED_FOREGROUND)),
                                 )
                             }),
                     )
@@ -1499,6 +1515,14 @@ impl Render for Viewer {
             .role(if docked { Role::Region } else { Role::Dialog })
             .aria_label(self.view.title.clone())
             .track_focus(&self.focus)
+            // A menu open in it closes first; else the viewer does.
+            .on_escape(cx.listener(|this, _: &KeyDownEvent, _, cx| {
+                if this.close_menus() {
+                    cx.notify();
+                } else {
+                    cx.emit(Event::Close);
+                }
+            }))
             .on_key_down(cx.listener(Self::key))
             .children(ui::spot(|| "diff".into()))
             .children(self.stack_menus(cx))
@@ -1939,6 +1963,14 @@ mod layout_tests {
             );
             assert_eq!(v.listed_files(), [1, 0, 2], "folders first, then files");
         });
+
+        // Typing a file's name goes to the file: "a" from README.md is the first of api.rs and app.rs.
+        window.update(|v, window, cx| {
+            v.files_focus.focus(window, cx);
+            v.select_file(2, cx);
+        });
+        window.simulate_keystroke("a->a");
+        assert_eq!(window.read(|v, _| v.selected_file()), 1);
 
         window.update(|v, _, cx| {
             v.set_split(false, cx);
