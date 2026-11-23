@@ -2,8 +2,9 @@
 //! no Claude turn. One table maps a name to what opens: adding one is one line here, which the send and the slash menu
 //! both read.
 //!
-//! A command only counts typed whole: with anything after it, it goes to Claude Code. So does one Claude Code lists under
-//! the same name, because a plugin or skill registered it, and headless Claude Code leaves its own built-ins out of that list.
+//! A command only counts typed whole: with anything after it, it goes to Claude Code. So does one a plugin or skill
+//! registered under the same name. Claude Code lists its own built-ins too, `/mcp` and `/usage` among them, marked
+//! `"builtin": true`: those still open here.
 
 use crate::{plugins::Show, session::Command, setup::Which, usage::Panel};
 
@@ -33,10 +34,10 @@ pub const TABLE: &[(&str, &str, Local)] = &[
     ("allowed-tools", "", Local::Setup(Which::Permissions)),
 ];
 
-/// What a draft opens, when the draft is exactly a built-in command that Claude Code doesn't list as its own.
+/// What a draft opens, when the draft is exactly a built-in command that no plugin or skill of Claude Code's took.
 pub fn find(text: &str, listed: &[Command]) -> Option<Local> {
     let name = text.trim().strip_prefix('/')?;
-    if listed.iter().any(|command| command.name == name) {
+    if listed.iter().any(|command| command.name == name && !command.builtin) {
         return None;
     }
     TABLE.iter().find(|(known, ..)| *known == name).map(|(.., local)| *local)
@@ -47,7 +48,7 @@ pub fn menu(listed: &[Command]) -> impl Iterator<Item = Command> + '_ {
     TABLE
         .iter()
         .filter(move |(name, description, _)| !description.is_empty() && listed.iter().all(|command| command.name != *name))
-        .map(|(name, description, _)| Command { name: (*name).to_owned(), description: (*description).to_owned(), hint: String::new(), plugin: false })
+        .map(|(name, description, _)| Command { name: (*name).to_owned(), description: (*description).to_owned(), hint: String::new(), plugin: false, builtin: false })
 }
 
 #[cfg(test)]
@@ -55,7 +56,7 @@ mod tests {
     use super::*;
 
     fn listed(names: &[&str]) -> Vec<Command> {
-        names.iter().map(|name| Command { name: (*name).into(), description: String::new(), hint: String::new(), plugin: false }).collect()
+        names.iter().map(|name| Command { name: (*name).into(), description: String::new(), hint: String::new(), plugin: false, builtin: false }).collect()
     }
 
     #[test]

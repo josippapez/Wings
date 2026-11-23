@@ -87,7 +87,7 @@ pub fn hear(session: &mut Session, line: &Value) -> bool {
             let at = text("tool_use_id").and_then(|id| session.items.iter().position(|item| matches!(item, Item::Tool(tool) if tool.id == id)));
             if let (Some(at), Some("classifier")) = (at, text("decision_reason_type")) {
                 if let Item::Tool(tool) = &session.items[at] {
-                    let blocked = crate::blocked::of(&said, tool);
+                    let blocked = crate::blocked::of(&said, tool, session.now);
                     crate::blocked::keep(session, blocked);
                 }
             }

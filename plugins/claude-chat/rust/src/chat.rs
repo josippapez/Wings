@@ -734,6 +734,13 @@ pub(crate) fn hear(run: u32, line: &Value) {
             with(|c| c.session.mods.expire(host::now() as u64));
         });
     }
+    // A block auto mode made leaves the side panel's Recently blocked once its time is up: one redraw then.
+    if line["type"] == "system" && line["subtype"] == "permission_denied" && line["decision_reason_type"] == "classifier" {
+        task::spawn(async move {
+            host::sleep(crate::blocked::LISTED_FOR as u32 + 50).await;
+            with(|_| ());
+        });
+    }
     // A notification a mod booked for later is raised when its time comes.
     if let Some(wait) = crate::mods::notify_wait(line, host::now() as u64) {
         task::spawn(async move {

@@ -27,11 +27,21 @@ pub struct Blocked {
     pub approval: String,
     /// Whether you allowed it.
     pub allowed: bool,
+    /// When it was blocked (ms): the side panel lists it for `LISTED_FOR` after.
+    pub at: u64,
 }
 
-/// A block the classifier made on `tool`, said as `notice`.
-pub fn of(notice: &str, tool: &Tool) -> Blocked {
-    Blocked { tool_id: tool.id.clone(), notice: notice.to_owned(), summary: format!("{} {}", tool.name, tool.summary).trim().to_owned(), approval: approval(tool), allowed: false }
+/// How long the side panel's Recently blocked lists a block (ms). The note under the call keeps its button.
+pub const LISTED_FOR: u64 = 5 * 60 * 1000;
+
+/// A block the classifier made on `tool` at `at` (ms), said as `notice`.
+pub fn of(notice: &str, tool: &Tool, at: u64) -> Blocked {
+    Blocked { tool_id: tool.id.clone(), notice: notice.to_owned(), summary: format!("{} {}", tool.name, tool.summary).trim().to_owned(), approval: approval(tool), allowed: false, at }
+}
+
+/// The blocks the side panel lists at `now` (ms), with where each is kept: the ones from the last `LISTED_FOR`.
+pub fn listed(session: &Session, now: u64) -> Vec<(usize, &Blocked)> {
+    session.blocked.iter().enumerate().filter(|(_, blocked)| now.saturating_sub(blocked.at) < LISTED_FOR).collect()
 }
 
 /// Keeps `blocked`, unless the same call was blocked already.
@@ -119,16 +129,18 @@ pub fn notice(at: usize, said: &str, c: &Chat) -> Node {
 }
 
 #[cfg(feature = "chat")]
-/// The side panel's Recently blocked, newest first, while there is any.
+/// The side panel's Recently blocked, newest first, while there is any from the last `LISTED_FOR`.
 pub fn section(c: &Chat) -> Option<Node> {
-    if c.session.blocked.is_empty() {
+    let listed = listed(&c.session, host::now() as u64);
+    if listed.is_empty() {
         return None;
     }
-    let rows = c.session.blocked.iter().enumerate().rev().map(|(at, blocked)| {
+    let count = listed.len();
+    let rows = listed.into_iter().rev().map(|(at, blocked)| {
         let said = text(blocked.summary.clone()).prop("size", "small").prop("truncate", true).prop("grow", true).prop("title", blocked.notice.clone());
         crate::view::inset(stack().prop("grow", true).child(row().prop("gap", "s").prop("align", "center").child(said).child(action(at, blocked)))).key(format!("blocked-{at}"))
     });
-    Some(crate::view::fold(c, "blocked", format!("Recently blocked · {}", c.session.blocked.len()), rows))
+    Some(crate::view::fold(c, "blocked", format!("Recently blocked · {count}"), rows))
 }
 
 #[cfg(test)]
@@ -175,10 +187,25 @@ mod tests {
         let mut session = Session::default();
         let push = tool("Bash", "git push", Detail::Command("git push".into()));
         let force = Tool { id: "t2".into(), ..tool("Bash", "git push -f", Detail::Command("git push -f".into())) };
-        keep(&mut session, of("Auto mode blocked Bash: push", &push));
-        keep(&mut session, of("Auto mode blocked Bash: push", &push));
-        keep(&mut session, of("Auto mode blocked Bash: push", &force));
+        keep(&mut session, of("Auto mode blocked Bash: push", &push, 1));
+        keep(&mut session, of("Auto mode blocked Bash: push", &push, 1));
+        keep(&mut session, of("Auto mode blocked Bash: push", &force, 1));
         assert_eq!(session.blocked.iter().map(|blocked| blocked.tool_id.as_str()).collect::<Vec<_>>(), ["t1", "t2"]);
         assert!(session.blocked[1].approval.contains("git push -f"));
+    }
+
+    #[test]
+    fn the_side_panel_lists_a_block_for_five_minutes_and_keeps_where_each_is() {
+        let mut session = Session::default();
+        let push = tool("Bash", "git push", Detail::Command("git push".into()));
+        let force = Tool { id: "t2".into(), ..tool("Bash", "git push -f", Detail::Command("git push -f".into())) };
+        keep(&mut session, of("Auto mode blocked Bash: push", &push, 1_000));
+        keep(&mut session, of("Auto mode blocked Bash: push", &force, 61_000));
+        let ids = |now| listed(&session, now).into_iter().map(|(at, blocked)| (at, blocked.tool_id.clone())).collect::<Vec<_>>();
+        assert_eq!(ids(1_000 + LISTED_FOR - 1), [(0, "t1".to_owned()), (1, "t2".to_owned())]);
+        assert_eq!(ids(1_000 + LISTED_FOR), [(1, "t2".to_owned())]);
+        assert!(ids(61_000 + LISTED_FOR).is_empty());
+        // Gone from the list, a block is still kept, for the button under its call.
+        assert_eq!(session.blocked.len(), 2);
     }
 }

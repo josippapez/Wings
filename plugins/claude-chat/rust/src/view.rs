@@ -1739,7 +1739,7 @@ mod tests {
             chat::with(|c| {
                 c.session.queued.clear();
                 c.session.commands = crate::session::Session::default().commands;
-                c.session.commands.push(crate::session::Command { name: "toolbox:lint".into(), description: String::new(), hint: String::new(), plugin: true });
+                c.session.commands.push(crate::session::Command { name: "toolbox:lint".into(), description: String::new(), hint: String::new(), plugin: true, builtin: false });
                 for (n, text) in texts.iter().enumerate() {
                     c.session.queue(text, Vec::new(), 1, n as u32 + 1);
                 }

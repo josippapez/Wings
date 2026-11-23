@@ -397,6 +397,8 @@ pub struct Command {
     pub hint: String,
     /// Whether a plugin of Claude Code's gives it. Claude Code holds such a command until the turn ends.
     pub plugin: bool,
+    /// One of Claude Code's own, which it lists from 2.1.330 on (`"builtin": true`), not a plugin's or a skill's.
+    pub builtin: bool,
 }
 
 /// The permission modes Claude Code runs in, as `set_permission_mode` takes them, with what the chat calls them.
@@ -1680,7 +1682,7 @@ fn commands(list: &Value) -> Vec<Command> {
     list.as_array()
         .into_iter()
         .flatten()
-        .map(|command| Command { name: text(command, "name"), description: text(command, "description"), hint: text(command, "argumentHint"), plugin: is_plugin(command) })
+        .map(|command| Command { name: text(command, "name"), description: text(command, "description"), hint: text(command, "argumentHint"), plugin: is_plugin(command), builtin: command["builtin"] == true })
         .collect()
 }
 
@@ -3235,7 +3237,7 @@ mod tests {
 
     #[test]
     fn a_plugins_skills_are_the_commands_named_after_it() {
-        let commands = |names: &[&str]| names.iter().map(|name| Command { name: (*name).into(), description: String::new(), hint: String::new(), plugin: false }).collect::<Vec<_>>();
+        let commands = |names: &[&str]| names.iter().map(|name| Command { name: (*name).into(), description: String::new(), hint: String::new(), plugin: false, builtin: false }).collect::<Vec<_>>();
         let all = commands(&["toolbox:lint", "toolbox:format", "toolbox-extra:x", "review", "release-notes:write"]);
         assert_eq!([plugins::skills(&all, "toolbox"), plugins::skills(&all, "release-notes"), plugins::skills(&all, "lint-guard")], [2, 1, 0]);
     }
@@ -3291,6 +3293,25 @@ mod tests {
         // The next toggle sends only what this chat set and Claude Code kept.
         let line = session.plugins.set_plugin("lint-guard@team-tools", true, 3).unwrap();
         assert_eq!(sent(&line)["request"]["settings"]["enabledPlugins"], json!({ "pixel-perfect@claude-plugins-official": false, "lint-guard@team-tools": true }));
+    }
+
+    /// Claude Code 2.1.330 lists its own `/mcp`, `/usage` and `/context` in `initialize`'s answer: they still open here,
+    /// and a plugin's command of the same name still goes to Claude Code.
+    #[test]
+    fn claude_codes_own_listed_built_ins_open_here_and_a_plugins_namesake_does_not() {
+        use crate::builtin::{Local, find};
+        let mut session = Session::default();
+        session.hear(&json!({ "type": "control_response", "response": { "subtype": "success", "request_id": "initialize", "response": { "commands": [
+            { "name": "mcp", "description": "Manage MCP servers", "argumentHint": "[reconnect|enable|disable [<server>|all]]", "builtin": true },
+            { "name": "usage", "description": "Show session cost, plan usage, and what's contributing to your limits", "argumentHint": "", "aliases": ["cost", "stats"], "builtin": true },
+            { "name": "context", "description": "Show current context usage", "argumentHint": "", "builtin": true },
+            { "name": "permissions", "description": "Review the rules", "argumentHint": "" }] } } }));
+        assert!(session.commands.iter().take(3).all(|command| command.builtin));
+        assert_eq!(find("/mcp", &session.commands), Some(Local::Dialog(Show::Mcp)));
+        assert_eq!(find("/usage", &session.commands), Some(Local::Panel(crate::usage::Panel::Usage)));
+        assert_eq!(find("/cost", &session.commands), Some(Local::Panel(crate::usage::Panel::Usage)));
+        assert_eq!(find("/context", &session.commands), Some(Local::Panel(crate::usage::Panel::Context)));
+        assert_eq!(find("/permissions", &session.commands), None);
     }
 
     #[test]

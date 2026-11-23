@@ -969,6 +969,8 @@ esac"##,
                 { "name": "compact", "description": "Clear the conversation but keep a summary in context", "argumentHint": "<instructions>" },
                 { "name": "release", "description": "Bump the version, write the changelog and publish", "argumentHint": "" },
                 { "name": "init", "description": "Write a CLAUDE.md for this project", "argumentHint": "" },
+                // Claude Code 2.1.330 lists its own /mcp too, which still opens the chat's dialog.
+                { "name": "mcp", "description": "Manage MCP servers", "argumentHint": "[reconnect|enable|disable [<server>|all]]", "builtin": true },
             ],
             "current_permission_mode": "default",
         })),
