@@ -200,7 +200,7 @@ fn file_row(setup: &Setup, file: &File) -> Node {
 /// A file or folder by its name, a line about it, its path, a fact at its end, and the buttons that open a file that is
 /// there (`openable`) and copy its path.
 fn path_row(setup: &Setup, path: &str, name: &str, about: &str, fact: String, depth: usize, openable: bool) -> Node {
-    let head = row().prop("gap", "s").prop("align", "baseline").child(title(name).prop("truncate", true).prop("title", name)).maybe((!about.is_empty()).then(|| small(about).prop("truncate", true).prop("title", about)));
+    let head = row().prop("gap", "s").prop("align", "baseline").child(title(name).prop("truncate", true).prop("shrink", "last").prop("title", name)).maybe((!about.is_empty()).then(|| small(about).prop("truncate", true).prop("title", about)));
     let place = text(path).prop("mono", true).prop("size", "small").prop("tone", "muted").prop("truncate", true).prop("title", path);
     let copied = setup.copied.as_deref() == Some(path);
     let owned = path.to_owned();
@@ -406,4 +406,17 @@ fn set_rule_behavior(behavior: &str) {
 
 fn set_rule_file(file: &str) {
     with_form(|form| form.file = file.to_owned());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A memory file's name keeps its width while the line about it has any to give: "feedback_tes…" was cut short beside a
+    /// description that read nearly whole.
+    #[test]
+    fn a_files_name_shrinks_after_the_line_about_it() {
+        let shown = wings_plugin::ui::tree_json(path_row(&Setup::default(), "/m/feedback_tests.md", "feedback_tests.md", "Run the checkout tests before saying it is done", String::new(), 0, true)).to_string();
+        assert!(shown.contains(r#""shrink":"last""#), "{shown}");
+    }
 }

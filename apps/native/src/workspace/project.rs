@@ -116,7 +116,7 @@ impl Workspace {
             });
             let (plugin_tabs, pages) = if keeps_jobs {
                 let shown = std::mem::take(&mut self.plugin_tabs);
-                let pages = self.restore_plugin_tabs(&project.plugin_tabs, cx);
+                let pages = self.restore_plugin_tabs(&project.plugin_tabs, &path, cx);
                 (std::mem::replace(&mut self.plugin_tabs, shown), Some(pages))
             } else {
                 (Vec::new(), None)

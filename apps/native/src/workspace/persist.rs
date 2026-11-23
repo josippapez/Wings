@@ -139,7 +139,7 @@ impl Workspace {
     ) {
         let restored = match opened {
             Some(opened) => opened,
-            None => self.restore_plugin_tabs(&project.plugin_tabs, cx),
+            None => self.restore_plugin_tabs(&project.plugin_tabs, &self.config.project.clone(), cx),
         };
         let terminal = project
             .active

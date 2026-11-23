@@ -2,6 +2,15 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.88 · 2026-11-23
+
+- **Claude chats restart in their own folder**: after an update or restart, a chat in a project that wasn't on screen started Claude Code in the project that was. A chat now saves its folder, an older chat takes it from its session, and a plugin tab is told its own project rather than the one on screen.
+- **Ultracode in the model menu**: a switch at the end of Claude chat's model menu, and the model button shows "· Ultracode" in an accent colour while it's on.
+- **Slash commands typed fast open**: Enter or Tab in a message box no longer picks from a list drawn before your last key, so `/mcp`, `/hooks` or `/usage` typed quickly opens its dialog, as picking them from the list now does too.
+- **Scrolling to the top of a long Claude chat loads older messages again** and keeps your place.
+- **Claude chat**: with the session panel in Wings' sidebar the header no longer cuts the title and folder to "…", and file names in the Memory dialog are no longer cut before their description.
+- **Claude chat 0.46.0**: the above.
+
 ## 0.2.87 · 2026-11-23
 
 - **Tools in Settings**: the command-line programs Wings and your turned-on plugins run, each with your version and the newest, and an Update for the ones installed with Homebrew or Claude's installer, which runs in a terminal tab. Wings checks when it starts and every six hours, and the Tools entry counts the updates waiting. Claude Code's row lists what's new since the version you last read, and in the Wings project opens a Claude chat that compares those changes with what Claude chat supports.

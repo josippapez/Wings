@@ -125,7 +125,7 @@ mod tests {
 
     /// Two projects, the first on screen, with a plugin whose main asks `call` of Wings once it hears of the second: the
     /// folder, the first and the second.
-    fn two_projects(data: &Data, call: &'static str, params: fn(&std::path::Path) -> Value) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf, (gpui::TestApp, gpui::TestAppWindow<Workspace>)) {
+    fn two_projects(data: &Data, call: &'static str, page: &str, params: fn(&std::path::Path) -> Value) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf, (gpui::TestApp, gpui::TestAppWindow<Workspace>)) {
         let dir = crate::projects::test_dir("tab-project");
         let (shown, other) = (dir.join("shown"), dir.join("other"));
         std::fs::create_dir_all(&shown).unwrap();
@@ -148,7 +148,7 @@ mod tests {
                 }
             }
         });
-        data.install_script("chatty", json!({ "permissions": { "panes": [] }, "contributes": { "views": views } }), &main, &[("chat", &fake::idle("page"))], "chatty-scope");
+        data.install_script("chatty", json!({ "permissions": { "panes": [] }, "contributes": { "views": views } }), &main, &[("chat", page)], "chatty-scope");
         let opened = open_plugins(data, &Arc::default(), |config| {
             config.project = shown.clone();
             config.projects = Some(list.clone());
@@ -159,7 +159,7 @@ mod tests {
     #[test]
     fn a_tab_a_plugin_opens_for_a_project_joins_that_project_and_leaves_the_one_on_screen_alone() {
         let data = Data::temp();
-        let (dir, shown, other, (app, mut window)) = two_projects(&data, "openView", |other| {
+        let (dir, shown, other, (app, mut window)) = two_projects(&data, "openView", &fake::idle("page"), |other| {
             json!({ "id": "chat", "as": "tab", "args": { "n": 1 }, "newTab": true, "projectId": other })
         });
         let (active, terminals) = window.read(|w, _| (w.active, w.terminals.len()));
@@ -171,10 +171,38 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// A page that asks `project` as it starts and keeps the folder of the answer.
+    fn asking_its_project() -> String {
+        fake::script("page", || {
+            let mut wait = fake::Pending::default();
+            move |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+                Hear::Start => wait.call(cx, "project", json!({}), ()),
+                Hear::Deliver(kind, id, text) => {
+                    if let Some(((), Ok(project))) = wait.answered(kind, id, text) {
+                        cx.save("project", &project["path"]);
+                    }
+                }
+                _ => {}
+            }
+        })
+    }
+
+    #[test]
+    fn a_tab_of_a_project_not_on_screen_is_told_its_own_project_by_project() {
+        let data = Data::temp();
+        let (dir, shown, other, (app, mut window)) = two_projects(&data, "openView", &asking_its_project(), |other| {
+            json!({ "id": "chat", "as": "tab", "args": { "n": 1 }, "newTab": true, "projectId": other })
+        });
+        until(&app, &mut window, "the tab's page never asked", |_| data.saved("chatty", "chatty-scope", "project").is_some());
+        assert_eq!(window.read(|w, _| w.project().to_path_buf()), shown);
+        assert_eq!(data.saved("chatty", "chatty-scope", "project"), Some(json!(other)));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn a_terminal_a_plugin_opens_in_the_background_joins_its_project_and_leaves_the_one_on_screen_alone() {
         let data = Data::temp();
-        let (dir, shown, other, (app, mut window)) = two_projects(&data, "openPane", |other| {
+        let (dir, shown, other, (app, mut window)) = two_projects(&data, "openPane", &fake::idle("page"), |other| {
             json!({ "command": null, "args": [], "cwd": other, "placement": "tab", "background": true })
         });
         let (active, terminals) = window.read(|w, _| (w.active, w.terminals.len()));

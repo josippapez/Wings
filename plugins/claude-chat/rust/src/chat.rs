@@ -378,8 +378,14 @@ async fn open_with(args: Value, saved: Value) {
     let dirs: Vec<String> = dirs.as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect();
     let moved = saved["cwd"].as_str().filter(|cwd| !cwd.is_empty());
     crate::worktree::restore(moved);
-    let cwd = match moved.or(args["cwd"].as_str()) {
-        Some(cwd) => cwd.to_owned(),
+    // A tab saved before it kept its folder is found by the folder its session ran in, never by the project on screen,
+    // which may be another one.
+    let ran_in = match (moved, saved["sessionId"].as_str()) {
+        (None, Some(id)) => session_folder(id).await,
+        _ => None,
+    };
+    let cwd = match moved.map(str::to_owned).or(ran_in).or_else(|| args["cwd"].as_str().map(str::to_owned)) {
+        Some(cwd) => cwd,
         None => match host::call("project", json!({})).await.ok().and_then(|project| project["path"].as_str().map(str::to_owned)) {
             Some(path) => path,
             None => return with(|c| c.state = State::Failed("Open a project first. A chat runs Claude Code in a project's folder.".into())),
@@ -408,6 +414,12 @@ async fn open_with(args: Value, saved: Value) {
         return;
     }
     launch_with(resume, how);
+}
+
+/// The folder the session `id` was started in: the `cwd` its transcript's first entries carry.
+async fn session_folder(id: &str) -> Option<String> {
+    let entries = host::transcript_cut(id, &["user", "assistant"], HISTORY_ALL, HISTORY_CUT).await.ok()?;
+    entries.as_array()?.iter().find_map(|entry| entry["cwd"].as_str().filter(|cwd| !cwd.is_empty()).map(str::to_owned))
 }
 
 /// Starts Claude Code anew in the tab, going on with `resume` or in a new session, in place of the one running.
@@ -540,8 +552,10 @@ pub(crate) fn save_tab() {
     state["limitArmed"] = with(|c| c.session.limit.armed).into();
     // Comments left in the diff viewer and not sent yet stay across a restart.
     state["reviewComments"] = with(|c| crate::review::to_json(&c.review));
-    // A chat moved into a worktree opens again there: its session is found by that folder.
-    if let Some(cwd) = crate::worktree::made() {
+    // The chat opens again in its own folder, not in the project on screen then: a session is found by its folder, and a
+    // chat moved into a worktree is in that one.
+    let cwd = with(|c| c.cwd.clone());
+    if !cwd.is_empty() {
         state["cwd"] = cwd.into();
     }
     drop(host::call("setTabState", json!({ "state": state })));
@@ -1309,8 +1323,18 @@ pub fn recall_newer() {
 }
 
 /// Puts the command in the message box, to add what it takes.
+/// A built-in that opens a view (`/mcp`) opens it, as Enter on the typed name does: an Enter that reached the list drawn
+/// for `/mc` before the page showed `/mcp` otherwise only filled `/mcp ` in.
 pub fn insert_command(name: &str) {
-    with(|c| c.draft = format!("/{name} "));
+    let opens = with(|c| {
+        let whole = format!("/{name}");
+        let opens = crate::builtin::find(&whole, &c.session.commands).is_some();
+        c.draft = if opens { whole } else { format!("/{name} ") };
+        opens
+    });
+    if opens {
+        send();
+    }
 }
 
 /// The commands whose name holds what the draft has after its `/`, while that is one word: Claude Code's, and the ones the
@@ -1751,6 +1775,19 @@ mod tests {
     }
 
     #[test]
+    fn picking_a_built_in_from_the_slash_list_opens_it_and_any_other_command_is_filled_in_for_its_arguments() {
+        let _opened = opened();
+        running(false);
+        let process = host::spawn("claude", &[], "/work/shop", "", |_| {});
+        with(|c| (c.input, c.plugins, c.draft) = (Some(process.input()), None, "/m".into()));
+        super::insert_command("mcp");
+        with(|c| assert!(c.plugins.is_some() && c.draft.is_empty(), "{:?}", c.draft));
+        with(|c| c.plugins = None);
+        super::insert_command("review");
+        with(|c| assert!(c.plugins.is_none() && c.draft == "/review "));
+    }
+
+    #[test]
     fn the_failed_banner_is_one_sentence_without_a_doubled_error() {
         let said = super::why(&json!({ "code": 1, "stderr": "Error: Invalid API key · Please run /login\n" }));
         assert_eq!(said, "Claude Code stopped: Invalid API key. Please run /login");
@@ -1943,6 +1980,69 @@ mod tests {
 
     fn user_lines(input: &str) -> Vec<Value> {
         input.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok()).filter(|line| line["type"] == "user").collect()
+    }
+
+    /// Wings answering `project` with `/work/shown`, `transcript` with entries that ran in `/work/ran`, and `tabState` with `saved`.
+    fn wings_showing_another_project(saved: Value) -> Rc<RefCell<Vec<(String, Value)>>> {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let kept = calls.clone();
+        host::testing::answer(move |method, params| {
+            kept.borrow_mut().push((method.to_owned(), params.clone()));
+            Ok(match method {
+                "tabState" => saved.clone(),
+                "project" => json!({ "path": "/work/shown" }),
+                "transcript" => json!([{ "type": "user", "message": {} }, { "type": "user", "cwd": "/work/ran", "message": {} }]),
+                _ => Value::Null,
+            })
+        });
+        calls
+    }
+
+    #[test]
+    fn a_restored_tab_without_a_saved_folder_starts_where_its_session_ran_not_in_the_project_on_screen() {
+        let saved = json!({ "sessionId": "s1", "dirs": [] });
+        let calls = wings_showing_another_project(saved.clone());
+        wings_plugin::task::block_on(super::open_with(json!({}), saved));
+        assert_eq!(asked(&calls, "spawn")[0]["cwd"], "/work/ran");
+        assert_eq!(with(|c| c.cwd.clone()), "/work/ran");
+    }
+
+    #[test]
+    fn a_saved_folder_wins_over_the_transcript_and_a_new_chat_without_one_starts_in_the_project() {
+        let saved = json!({ "sessionId": "s1", "cwd": "/work/saved" });
+        let calls = wings_showing_another_project(saved.clone());
+        wings_plugin::task::block_on(super::open_with(json!({}), saved));
+        assert_eq!(asked(&calls, "spawn")[0]["cwd"], "/work/saved");
+        let calls = wings_showing_another_project(json!({}));
+        wings_plugin::task::block_on(super::open_with(json!({}), json!({})));
+        assert_eq!(asked(&calls, "spawn")[0]["cwd"], "/work/shown");
+    }
+
+    #[test]
+    fn a_tab_saves_the_folder_it_runs_in() {
+        let calls = wings_with_tab(json!({}));
+        wings_plugin::task::block_on(super::open_with(json!({ "cwd": "/work/shop" }), json!({})));
+        assert_eq!(asked(&calls, "setTabState").last().unwrap()["state"]["cwd"], "/work/shop");
+    }
+
+    #[test]
+    fn picking_the_ultracode_row_of_the_model_menu_sends_the_setting_and_shows_it_on() {
+        let calls = wings_with_tab(json!({}));
+        let process = host::spawn("claude", &[], "/work/shop", "", |_| {});
+        with(|c| {
+            c.input = Some(process.input());
+            c.session.models = vec![crate::session::Model { value: "opus".into(), name: "Opus 5.5".into(), efforts: vec!["high".into()], resolved: "claude-opus-5-5".into(), fast: false }];
+            c.session.options.applied(&json!({ "ultracode": false, "ultracodeAvailable": true }));
+        });
+        let (tree, handlers) = wings_plugin::ui::export(with(|c| crate::view::pickers(c)));
+        let menu = tree.as_array().unwrap().iter().find(|node| node["props"]["label"] == "Model and effort").unwrap();
+        assert!(handlers.call(menu["props"]["onChange"].as_str().unwrap(), &json!({ "value": crate::view::ULTRACODE })));
+        wings_plugin::task::block_on(async {});
+        assert!(with(|c| c.session.options.ultracode));
+        let writes: Vec<String> = asked(&calls, "processWrite").iter().map(|params| params["text"].as_str().unwrap_or_default().to_owned()).collect();
+        assert!(writes.iter().any(|text| text.contains("apply_flag_settings") && text.contains("\"ultracode\":true")), "{writes:?}");
+        let after = wings_plugin::ui::export(with(|c| crate::view::pickers(c))).0;
+        assert_eq!(after[0]["props"]["badge"], "Ultracode");
     }
 
     #[test]

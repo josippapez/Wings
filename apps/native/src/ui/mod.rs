@@ -442,6 +442,15 @@ pub fn select_trigger(
     label: impl Into<SharedString>,
     value: impl Into<SharedString>,
 ) -> Stateful<Div> {
+    select_trigger_with(id, label, div().truncate().child(value.into()))
+}
+
+/// A `select_trigger` showing `content` where its value goes.
+pub fn select_trigger_with(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    content: impl IntoElement,
+) -> Stateful<Div> {
     div()
         .id(id)
         .role(Role::ComboBox)
@@ -463,8 +472,58 @@ pub fn select_trigger(
         .text_size(px(14.0))
         .hover(|style| style.bg(rgba(INPUT_FILL_HOVER)))
         .focus_visible(|style| style.border_color(rgb(theme::palette().foreground)))
-        .child(div().truncate().child(value.into()))
+        .child(content)
         .child(icon(Icon::ChevronDown, 16.0, theme::palette().muted_foreground))
+}
+
+/// The colour of a setting a select's menu offers as a toggle, and of the word its trigger shows while it is on.
+pub const TOGGLE_ACCENT: u32 = 0xc4a7ff;
+
+/// A select's toggle row: a setting, not a choice. A sparkle and its `label` in the accent colour, a muted `detail`
+/// under it, and a switch showing `on`, on a faint accent ground, set apart from the choices above by a line.
+pub fn toggle_item(
+    id: ElementId,
+    label: impl Into<SharedString>,
+    detail: Option<SharedString>,
+    on: bool,
+) -> Stateful<Div> {
+    let label = label.into();
+    div()
+        .id(id)
+        .role(Role::MenuItem)
+        .aria_label(label.clone())
+        .aria_toggled(if on { Toggled::True } else { Toggled::False })
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .px(px(8.0))
+        .py(px(6.0))
+        .rounded(px(6.0))
+        .cursor_pointer()
+        .bg(rgba(TOGGLE_ACCENT << 8 | 0x1a))
+        .hover(|style| style.bg(rgba(TOGGLE_ACCENT << 8 | 0x2e)))
+        .child(icon(Icon::Sparkles, 14.0, TOGGLE_ACCENT))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .text_size(px(13.0))
+                        .text_color(rgb(TOGGLE_ACCENT))
+                        .child(label),
+                )
+                .children(detail.map(|detail| {
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(rgb(theme::palette().muted_foreground))
+                        .child(detail)
+                })),
+        )
+        .child(switch("toggle-item-switch", on))
 }
 
 /// One choice in a select's menu, with a check on the chosen one.

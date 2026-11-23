@@ -607,10 +607,18 @@ impl PageView {
             &select.label
         };
         // Pressed before the menu's own press-outside closes it, so the click knows the menu was open.
-        let trigger = ui::select_trigger(
+        let shown = div().flex().items_center().gap(px(5.0)).min_w_0().child(
+            div().truncate().child(select.shown().to_owned()),
+        ).children(select.badge.clone().map(|badge| {
+            div()
+                .flex_none()
+                .text_color(rgb(ui::TOGGLE_ACCENT))
+                .child(format!("· {badge}"))
+        }));
+        let trigger = ui::select_trigger_with(
             ElementId::NamedInteger("page-select".into(), id),
             name.to_owned(),
-            select.shown().to_owned(),
+            shown,
         )
         .map(|trigger| match select.quiet {
             true => trigger
@@ -644,8 +652,36 @@ impl PageView {
             let room = menu_room(bounds, window_height);
             let current = select.current();
             let items = select.options.iter().enumerate().map(|(at, option)| {
+                let item_id =
+                    ElementId::NamedInteger(format!("page-select-{id}-item").into(), at as u64);
+                if let Some(on) = option.toggle {
+                    let item = ui::toggle_item(
+                        item_id,
+                        option.label.clone(),
+                        option.detail.clone().map(Into::into),
+                        on,
+                    );
+                    let item = match option.disabled {
+                        true => item.opacity(0.5).cursor_default(),
+                        false => {
+                            let (on_change, value) = (select.on_change.clone(), option.value.clone());
+                            item.on_click(cx.listener(move |view, _, _, cx| {
+                                view.pick(on_change.as_deref(), &value, cx)
+                            }))
+                        }
+                    };
+                    return div()
+                        .mt(px(4.0))
+                        .pt(px(4.0))
+                        .border_t_1()
+                        .border_color(rgba(theme::HAIRLINE_STRONG))
+                        .flex()
+                        .flex_col()
+                        .child(item)
+                        .into_any_element();
+                }
                 let item = ui::select_item(
-                    ElementId::NamedInteger(format!("page-select-{id}-item").into(), at as u64),
+                    item_id,
                     option.label.clone(),
                     current == Some(option.value.as_str()),
                 );
@@ -829,6 +865,15 @@ impl PageView {
                 let count = handlers.len();
                 let highlight = view.highlight.or(picker.then_some(0));
                 let key = event.keystroke.key.as_str();
+                // The page hasn't given back all the text typed, so these options were drawn for older text: Enter and Tab
+                // go to the page with the field's, which it answers with the text it has. Picking from them took `/m`'s
+                // first option for a `/mcp` typed in full.
+                let behind = field.is_some_and(|(input, _)| {
+                    view.inputs.borrow().get(&input).is_some_and(|state| !state.sent.is_empty())
+                });
+                if behind && matches!(key, "enter" | "tab") {
+                    return;
+                }
                 let moved = listbox::highlight_after(key, listbox::Focus::Virtual, highlight, count, |_| true);
                 match key {
                     _ if moved.is_some() => view.highlight = moved.flatten(),
@@ -1017,7 +1062,9 @@ fn widest_option(select: &tree::Select, cx: &gpui::App) -> Pixels {
         .iter()
         .map(|option| width(&option.label))
         .fold(0.0, f32::max);
-    px((widest.ceil() + 48.0).min(360.0))
+    // A toggle row also holds a sparkle, a switch and a line of detail.
+    let toggles = select.options.iter().any(|option| option.toggle.is_some());
+    px((widest.ceil() + 48.0).max(if toggles { 320.0 } else { 0.0 }).min(360.0))
 }
 
 /// How tall a select's or combobox's menu may be: as the desktop's, no taller than the room under `anchor`, or over it

@@ -87,7 +87,7 @@ impl Workspace {
             (None, Some(tab)) if args.is_none() || tab.args == args => Some(tab.id),
             (None, Some(tab)) => {
                 let id = tab.id;
-                let state = self.plugin_env.tab_state(None);
+                let state = self.plugin_env.tab_state(None).in_project(self.config.project.clone());
                 self.plugin_page(plugin, view, args.as_ref(), state.clone(), cx)
                     .and_then(|(page, _)| {
                         let tab = self.plugin_tabs.iter_mut().find(|tab| tab.id == id)?;
@@ -140,7 +140,8 @@ impl Workspace {
         args: Option<serde_json::Value>,
         cx: &mut Context<Self>,
     ) -> Option<usize> {
-        self.new_plugin_tab_with_state(plugin, view, args, None, None, cx)
+        let project = self.config.project.clone();
+        self.new_plugin_tab_with_state(plugin, view, args, None, None, &project, cx)
     }
 
     fn new_plugin_tab_with_state(
@@ -150,9 +151,10 @@ impl Workspace {
         args: Option<serde_json::Value>,
         initial: Option<serde_json::Value>,
         key: Option<String>,
+        project: &std::path::Path,
         cx: &mut Context<Self>,
     ) -> Option<usize> {
-        let state = self.plugin_env.tab_state(initial).with_key(key);
+        let state = self.plugin_env.tab_state(initial).with_key(key).in_project(project.to_owned());
         let (page, title) = self.plugin_page(plugin, view, args.as_ref(), state.clone(), cx)?;
         let focus = cx.focus_handle().tab_stop(true);
         page.update(cx, |page, _| page.set_host_focus(focus.clone()));
@@ -203,6 +205,7 @@ impl Workspace {
     pub(super) fn restore_plugin_tabs(
         &mut self,
         saved: &[SavedPluginTab],
+        project: &std::path::Path,
         cx: &mut Context<Self>,
     ) -> Vec<Option<usize>> {
         saved
@@ -214,6 +217,7 @@ impl Workspace {
                     tab.args.clone(),
                     tab.state.clone(),
                     tab.key.clone(),
+                    project,
                     cx,
                 )
             })

@@ -42,6 +42,8 @@ struct State {
     /// The tab's own name, which it keeps when Wings restarts: the programs the terminal server kept running for the tab
     /// are for the page of the tab with the same key.
     key: String,
+    /// The project the tab belongs to, which `project` answers for its page whichever project is on screen.
+    project: Option<std::path::PathBuf>,
 }
 
 /// An agent a tab's page runs, as the sidebar lists it.
@@ -82,6 +84,7 @@ impl FrameState {
                 show: None,
                 frame: None,
                 key: new_key(),
+                project: None,
             })),
         }
     }
@@ -92,6 +95,17 @@ impl FrameState {
             self.state.lock().unwrap().key = key;
         }
         self
+    }
+
+    /// The same, as a tab of `project`.
+    pub fn in_project(self, project: std::path::PathBuf) -> Self {
+        self.state.lock().unwrap().project = Some(project);
+        self
+    }
+
+    /// The project the tab belongs to, for a tab; none for a block or a tab made without one.
+    pub(super) fn project(&self) -> Option<std::path::PathBuf> {
+        self.state.lock().unwrap().project.clone().filter(|_| self.is_tab())
     }
 
     /// The tab's own name, which it keeps when Wings restarts.

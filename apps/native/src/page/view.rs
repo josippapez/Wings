@@ -1540,6 +1540,9 @@ impl PageView {
         anchor.seen = children
             .iter()
             .zip(&edges.ids)
+            // An empty child, like a column's first one that leaves a gap above the messages, stays where it is as older
+            // ones come in above what is in view: kept in place by it, the view never moved.
+            .filter(|(child, _)| child.size.height > px(0.0))
             .skip_while(|(child, _)| child.bottom() <= view.top())
             .take_while(|(child, _)| child.top() < view.bottom())
             .filter_map(|(child, id)| Some(((*id)?, child.top() - view.top())))
@@ -1856,6 +1859,11 @@ impl PageView {
         let element = div()
             .when(text.truncate || code, |el| el.min_w_0())
             .when(text.grow, |el| el.flex_1())
+            // The box is what shares the row's width, so it keeps its own as the text does: with a tooltip, the name still shrank first.
+            .when(text.shrink_last, |mut el| {
+                el.style().flex_shrink = Some(0.001);
+                el
+            })
             .child(element);
         // A tooltip needs an id to hang on.
         let element = element

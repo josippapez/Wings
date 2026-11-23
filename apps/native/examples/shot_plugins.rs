@@ -1720,6 +1720,13 @@ esac"##,
         lines.push(answer("settings", json!({ "effective": { "model": "opus", "effortLevel": "high" }, "applied": { "ultracode": false, "ultracodeAvailable": true } })));
         lines
     };
+    // Ultracode on, so the model button says so and the menu's last row is lit.
+    let ultracode = {
+        let mut lines = opened(vec![init.clone()]);
+        lines.push(ready[0].clone());
+        lines.push(answer("settings", json!({ "effective": { "model": "opus", "effortLevel": "xhigh" }, "applied": { "ultracode": true, "ultracodeAvailable": true } })));
+        lines
+    };
     let shell = {
         let row = |text: &str| json!({ "type": "user", "isReplay": true, "uuid": "u-shell", "message": { "role": "user", "content": text } });
         opened(vec![
@@ -1733,8 +1740,10 @@ esac"##,
     let scenes: Vec<Scene> = vec![
         // A workflow run in the side panel: its phases and agents under it, and a command under the subagent that started it.
         ("workflow", workflow, None, None, "check claim 2"),
-        // A new chat lists the agents Claude Code has, and the Ultracode switch sits beside the model menu.
+        // A new chat lists the agents Claude Code has, and the Ultracode switch ends the model menu.
         ("agent-picker", agents, None, None, "Ultracode"),
+        // Ultracode on: the model button reads "· Ultracode" and the open menu ends with its lit switch row.
+        ("ultracode-menu", ultracode, None, Some("select:Model and effort"), "What should Claude do"),
         // /skills lists the session's skills, with a menu for each one Claude Code lets you change.
         ("skills", opened(vec![init.clone()]), None, Some("type:/skills;keys:enter"), "Name only"),
         // A successful `!` command and a failed one, each with its output under one row.
@@ -2378,9 +2387,10 @@ esac"##,
                             cx.simulate_event(window, gpui::MouseDownEvent { button: gpui::MouseButton::Right, position, modifiers: gpui::Modifiers::default(), click_count: 1, first_mouse: false });
                             cx.simulate_event(window, gpui::MouseUpEvent { button: gpui::MouseButton::Right, position, modifiers: gpui::Modifiers::default(), click_count: 1 });
                         }
-                        // The wheel all the way up or down the conversation.
+                        // The wheel all the way up or down the conversation, over its left side: at 640 the middle is the margin of the
+                        // panel that floats over the chat, which takes the wheel.
                         Some(("scroll", way)) => cx.simulate_event(window, gpui::ScrollEvent {
-                            position: point(px(width / 2.0), px(300.0)),
+                            position: point(px(100.0), px(300.0)),
                             delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(if way == "up" { 100_000.0 } else { -100_000.0 }))),
                             modifiers: gpui::Modifiers::default(),
                             touch_phase: gpui::TouchPhase::Moved,
@@ -2405,7 +2415,11 @@ esac"##,
                             eprintln!("[measure] {name} {width}: rail click to the far prompt's window drawn: {:?}", started.elapsed());
                         }
                         Some(("more", _)) => assert!(handle.update(&mut cx, |view, _, cx| view.press_more(cx)).unwrap()),
-                        Some(("disclose", summary)) => assert!(handle.update(&mut cx, |view, _, cx| view.press_disclosure(summary, cx)).unwrap()),
+                        // The dialog that holds it fills when Claude Code answers: it is waited for, not pressed before it is there.
+                        Some(("disclose", summary)) => {
+                            until(&mut cx, summary);
+                            assert!(handle.update(&mut cx, |view, _, cx| view.press_disclosure(summary, cx)).unwrap());
+                        }
                         Some(("menu", label)) => assert!(handle.update(&mut cx, |view, _, cx| view.open_menu(label, 0, cx)).unwrap()),
                         Some(("select", label)) => assert!(handle.update(&mut cx, |view, _, cx| view.open_select(label, cx)).unwrap()),
                         _ => panic!("{act}"),

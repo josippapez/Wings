@@ -501,6 +501,11 @@ impl Link for FrameLink {
             let tab = self.state.as_ref().filter(|state| state.is_tab()).map(|_| self.id);
             return self.shared.tab_call(method, params, tab, reply);
         }
+        if method == "project"
+            && let Some(project) = self.state.as_ref().and_then(|state| state.project())
+        {
+            return self.shared.project_of(project, reply);
+        }
         self.shared.call(method, params, reply)
     }
 }

@@ -397,10 +397,22 @@ impl Shared {
         Ok(())
     }
 
+    /// `project` for a page shown as a tab of the project at `path`: that project, not the one on screen.
+    pub(super) fn project_of(&self, path: std::path::PathBuf, reply: Reply) {
+        if self.access.is_none() {
+            return reply.err(format!("{} is turned off or not installed", self.config.id));
+        }
+        reply.done(self.project_at(Some(path)));
+    }
+
     /// The project on screen, as the desktop's `project` call gives the project a page is about.
     fn project(&self, access: &Access) -> Result<String, String> {
+        self.project_at(access.env.current_project())
+    }
+
+    fn project_at(&self, at: Option<std::path::PathBuf>) -> Result<String, String> {
         let projects = self.projects.lock().unwrap();
-        to_json(&access.env.current_project().and_then(|path| {
+        to_json(&at.and_then(|path| {
             projects
                 .iter()
                 .find(|project| std::path::Path::new(&project.path) == path)

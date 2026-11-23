@@ -1534,6 +1534,9 @@ fn a_select_menu_longer_than_the_window_scrolls_to_its_last_option() {
     settle(&app, &mut window, shows("Picked o59."));
 }
 
+/// How many milliseconds the task field's page takes to hear a key, which a test of a page that is behind sets.
+static TASK_LAG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// A task field with recent tasks to pick from and a Start button under it, as Cyclops' timer form: the tree is what
 /// wings-plugin-ui/native's `Combobox` renders, the field and the tasks that match it as chips, or a muted line when
 /// none do, and only the field once it holds a task.
@@ -1549,6 +1552,9 @@ fn task_field() -> String {
     fake::page("page", move |event| {
         match event {
             Some(("3:onChange", change)) => {
+                thread::sleep(Duration::from_millis(
+                    TASK_LAG.load(std::sync::atomic::Ordering::Relaxed),
+                ));
                 typed = change["value"].as_str().unwrap_or_default().to_owned()
             }
             Some(("7:onClick", _)) => started += 1,
@@ -1669,6 +1675,25 @@ fn a_combobox_lists_its_options_over_the_page_and_the_keyboard_or_a_click_picks_
         &mut window,
         shows("Task=Checkout redesign!, started 3."),
     );
+}
+
+/// Enter on a list drawn for older text picks nothing: the page was still hearing "re" when Down and Enter came, and the
+/// list was the five tasks of the empty field, whose first took the Enter.
+#[test]
+fn a_combobox_does_not_pick_from_options_the_page_drew_for_older_text() {
+    let (app, mut window) = open(task_field());
+    settle(&app, &mut window, shows("Task=, started 0."));
+    click(&mut window, TASK);
+    nothing_happens(&app);
+    window.draw();
+    TASK_LAG.store(300, std::sync::atomic::Ordering::Relaxed);
+    window.simulate_input("re");
+    key(&mut window, "down");
+    key(&mut window, "enter");
+    settle(&app, &mut window, shows("Task=re,"));
+    nothing_happens(&app);
+    TASK_LAG.store(0, std::sync::atomic::Ordering::Relaxed);
+    assert!(window.read(|view, _| view.text()).contains("Task=re,"));
 }
 
 /// Cyclops' edit form: the task field takes the keyboard when the form opens, holding a task that more than one recent
@@ -2214,6 +2239,39 @@ fn a_following_scroll_asks_for_older_items_at_its_top_and_stays_on_what_it_showe
     });
     // The 30 older rows are at least 300 points, so a view left at the top would show them and one kept in place is
     // further down.
+    settle(&app, &mut window, |view| view.text().contains("Older 0") && view.follow_scrolled(1).is_some_and(|(top, _)| top >= 300.0));
+}
+
+/// A chat's scroll as the conversation draws it: an empty first child, which leaves the gap above the first message.
+fn older_rows_below_a_gap(heard: u32) -> Value {
+    let mut tree = older_rows(heard);
+    let rows = tree["children"][0]["children"][0]["children"].as_array_mut().unwrap();
+    rows.insert(0, json!({ "id": 3, "type": "Stack", "props": {}, "children": [] }));
+    tree["children"][0]["children"][0]["props"] = json!({ "gap": "s" });
+    tree
+}
+
+/// The empty first child stays at the top as older items come in below it, so keeping the view on it kept it at the top
+/// of the older items: Scrolling up to the top of a long chat showed the oldest loaded item and never asked again.
+#[test]
+fn an_empty_first_child_does_not_keep_the_view_at_the_top_when_older_items_arrive() {
+    let mut app = TestApp::new();
+    app.background_executor().allow_parking();
+    let host = hosted(&mut app);
+    let source = counting(older_rows_below_a_gap);
+    let bounds = gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(500.0), px(300.0)));
+    let mut window = app.open_window_with_options(
+        gpui::WindowOptions { window_bounds: Some(gpui::WindowBounds::Windowed(bounds)), ..Default::default() },
+        |_, cx| PageView::in_plugin(&host, &source, cx),
+    );
+    settle(&app, &mut window, |view| view.follow_scrolled(1).is_some_and(|(top, max)| max > 300.0 && top >= max - 24.0));
+    window.simulate_event(gpui::ScrollEvent {
+        position: point(px(60.0), px(150.0)),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(100_000.0))),
+        modifiers: gpui::Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+        source: Default::default(),
+    });
     settle(&app, &mut window, |view| view.text().contains("Older 0") && view.follow_scrolled(1).is_some_and(|(top, _)| top >= 300.0));
 }
 

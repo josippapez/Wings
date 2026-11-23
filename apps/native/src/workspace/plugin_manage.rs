@@ -439,11 +439,11 @@ impl Workspace {
             let tabs: Vec<SavedPluginTab> =
                 noted.iter().filter(|(at, _)| *at == path).map(|(_, tab)| tab.clone()).collect();
             if path == shown {
-                self.restore_plugin_tabs(&tabs, cx);
+                self.restore_plugin_tabs(&tabs, &path, cx);
             } else if self.parked.contains_key(&path) {
                 // Opened aside, so the shown project's tabs stay as they are, then handed to the parked project.
                 let kept = std::mem::take(&mut self.plugin_tabs);
-                self.restore_plugin_tabs(&tabs, cx);
+                self.restore_plugin_tabs(&tabs, &path, cx);
                 let opened = std::mem::replace(&mut self.plugin_tabs, kept);
                 if let Some(parked) = self.parked.get_mut(&path) {
                     parked.plugin_tabs.extend(opened);

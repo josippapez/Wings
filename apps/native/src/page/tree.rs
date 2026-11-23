@@ -783,6 +783,11 @@ pub struct SelectOption {
     pub value: String,
     pub label: String,
     pub disabled: bool,
+    /// A muted line under the label.
+    pub detail: Option<String>,
+    /// A setting rather than a choice: the row is set apart at the end of the menu with a switch showing this state, and
+    /// picking it sends its value as any option does.
+    pub toggle: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -801,6 +806,8 @@ pub struct Select {
     /// `variant: "ghost"`: a select as wide as its choice, with no box until you point at it, for a row of settings
     /// beside a field, like a chat's model and effort.
     pub quiet: bool,
+    /// A word in an accent colour after what the select shows, like a chat's "Ultracode" when it is on.
+    pub badge: Option<String>,
 }
 
 /// wings-plugin-ui's `Menu`: a button that opens a list of actions over the page, under it. The page sends the button
@@ -1866,6 +1873,9 @@ impl Walk {
                     line: kind == "Chips" && on("line"),
                     segmented: kind == "Chips" && on("segmented"),
                     quiet: kind == "Select" && str_prop(&props, "variant") == Some("ghost"),
+                    badge: str_prop(&props, "badge")
+                        .filter(|badge| !badge.is_empty())
+                        .map(|badge| cut(badge.to_owned())),
                 };
                 if kind == "Chips" {
                     Node::Chips(select)
@@ -1937,6 +1947,8 @@ fn options(props: &Map<String, Value>) -> Vec<SelectOption> {
                 label: str_prop(option, "label")
                     .map_or_else(|| value.clone(), |l| cut(l.to_owned())),
                 disabled: option.get("disabled") == Some(&Value::Bool(true)),
+                detail: str_prop(option, "detail").map(|detail| cut(detail.to_owned())),
+                toggle: option.get("toggle").and_then(Value::as_bool),
                 value,
             })
         })
@@ -2601,22 +2613,41 @@ mod tests {
                 SelectOption {
                     value: "a".into(),
                     label: "Alpha".into(),
-                    disabled: false
+                    disabled: false,
+                    detail: None,
+                    toggle: None,
                 },
                 SelectOption {
                     value: "b".into(),
                     label: "Beta".into(),
-                    disabled: true
+                    disabled: true,
+                    detail: None,
+                    toggle: None,
                 },
                 // No label is the value, so the option still shows something.
                 SelectOption {
                     value: "c".into(),
                     label: "c".into(),
-                    disabled: false
+                    disabled: false,
+                    detail: None,
+                    toggle: None,
                 },
             ]
         );
         assert_eq!((select.current(), select.shown()), (Some("b"), "Beta"));
+    }
+
+    #[test]
+    fn a_select_option_can_be_a_toggle_with_a_detail_and_a_select_can_carry_a_badge() {
+        let chosen = select(json!({"label":"Model","badge":"Ultracode","options":[
+            {"value":"a"},
+            {"value":"u","label":"Ultracode","detail":"Plans bigger work","toggle":true},
+            {"value":"v","toggle":"on"}]}));
+        assert_eq!(chosen.badge.as_deref(), Some("Ultracode"));
+        assert_eq!(chosen.options[0].toggle, None);
+        assert_eq!((chosen.options[1].toggle, chosen.options[1].detail.as_deref()), (Some(true), Some("Plans bigger work")));
+        assert_eq!(chosen.options[2].toggle, None);
+        assert_eq!(select(json!({"badge":""})).badge, None);
     }
 
     /// Tabs of the "line" variant are chips the app underlines; a select has no such look.

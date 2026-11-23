@@ -223,6 +223,12 @@ fn side_button(c: &Chat) -> Option<Node> {
     })
 }
 
+/// Whether the header keeps to icons, with no version and no account name: in a narrow tab, and with the panel in Wings'
+/// sidebar, where the page has no split to say how wide its tab is, and a 1000-point tab cut the title and folder to "…".
+fn header_tight(c: &Chat) -> bool {
+    c.narrow == Some(true) || c.side_in_wings
+}
+
 fn header(c: &Chat) -> Node {
     let name = chat::name(c).unwrap_or_else(|| "Claude chat".into());
     let title = row()
@@ -240,7 +246,7 @@ fn header(c: &Chat) -> Node {
     let actions = row()
         .prop("gap", "xs")
         .prop("align", "center")
-        .maybe(crate::claude_version::pill(c.narrow == Some(true)))
+        .maybe(crate::claude_version::pill(header_tight(c)))
         .child(crate::search::header_button(c))
         .child(crate::view_mode::mode_button(c))
         .maybe(crate::titles_view::header_button(c))
@@ -1527,14 +1533,29 @@ fn queued_note(count: usize) -> &'static str {
     if count == 1 { "Claude reads it after its current step" } else { "Claude reads them after its current step" }
 }
 
+/// The value of the menu's Ultracode switch, which no model and effort (`model@effort`) can be.
+pub(crate) const ULTRACODE: &str = "ultracode:toggle";
+const ULTRACODE_DETAIL: &str = "Runs big tasks as workflows. Costs more.";
+
 /// The model with its effort in one menu, as "Opus 5.5 · High", and the permission mode, once Claude Code has said what
 /// it has.
-fn pickers(c: &Chat) -> Vec<Node> {
+pub(crate) fn pickers(c: &Chat) -> Vec<Node> {
     let session = &c.session;
     let mut pickers = Vec::new();
     if !session.models.is_empty() {
         let (options, value) = model_options(session);
-        pickers.push(select("Model and effort", &options, &value, chat::pick_model_effort).prop("variant", "ghost"));
+        let mut menu = select("Model and effort", &options, &value, |picked| match picked {
+            ULTRACODE => chat::toggle_ultracode(),
+            _ => chat::pick_model_effort(picked),
+        })
+        .prop("variant", "ghost");
+        // Ultracode, while Claude Code offers it, is a switch at the end of this menu, and the button says so while it is on.
+        if session.options.ultracode_available {
+            let mut all: Vec<serde_json::Value> = options.iter().map(|(value, label)| serde_json::json!({ "value": value, "label": label })).collect();
+            all.push(serde_json::json!({ "value": ULTRACODE, "label": "Ultracode", "detail": ULTRACODE_DETAIL, "toggle": session.options.ultracode }));
+            menu = menu.prop("options", all).prop("badge", if session.options.ultracode { "Ultracode" } else { "" });
+        }
+        pickers.push(menu);
     }
     // Which agent Claude Code runs as, until there is a message: Claude Code takes it only as it starts, so a pick restarts it.
     if !session.options.agent_types.is_empty() && session.items.is_empty() && !session.working {
@@ -1542,15 +1563,6 @@ fn pickers(c: &Chat) -> Vec<Node> {
         options.extend(session.options.agent_types.iter().map(|(name, _)| (name.clone(), format!("Agent: {name}"))));
         let value = c.agent_type.clone().unwrap_or_default();
         pickers.push(select("Start as an agent. Picking one restarts Claude Code in this chat", &options, &value, chat::pick_agent).prop("variant", "ghost"));
-    }
-    // Ultracode, while Claude Code offers it: a lit button while it is on, as fast mode's is.
-    if session.options.ultracode_available {
-        let on = session.options.ultracode;
-        let title = match on {
-            true => "Ultracode is on: Claude plans a workflow for each substantive task, which uses more of your limits. Click to turn it off",
-            false => "Ultracode: Claude plans a workflow for each substantive task, which uses more of your limits. For this session",
-        };
-        pickers.push(button("Ultracode", if on { "secondary" } else { "ghost" }, false, chat::toggle_ultracode).prop("size", "sm").prop("label", if on { "Ultracode, on" } else { "Ultracode" }).prop("title", title));
     }
     // Fast mode, for a model that has it: a lit button while it is on.
     if session.current_model().is_some_and(|model| model.fast) {
@@ -1644,7 +1656,7 @@ fn account_menu(c: &Chat) -> Option<Node> {
     let glyph = icon(24, 2.0, &ACCOUNT).prop("size", 16);
     let trigger = Node::new("Button").prop("variant", "ghost").prop("label", "Claude account").prop("title", title.as_str());
     // In a narrow tab only the glyph shows, so the title keeps room beside it; the name is in the tooltip.
-    let trigger = match c.narrow == Some(true) {
+    let trigger = match header_tight(c) {
         true => trigger.prop("size", "icon-sm").child(glyph),
         false => trigger.prop("size", "sm").child(glyph).child(text(shown.as_str()).prop("truncate", true)),
     };
@@ -1948,6 +1960,19 @@ mod tests {
         assert!(chat::typed("  "));
         assert!(!chat::typed("   "));
         assert!(chat::typed("a"));
+    }
+
+    #[test]
+    fn with_the_panel_in_the_sidebar_the_header_keeps_to_icons_as_in_a_narrow_tab() {
+        chat::with(|c| {
+            (c.narrow, c.side_in_wings) = (None, false);
+            assert!(!header_tight(c));
+            c.narrow = Some(true);
+            assert!(header_tight(c));
+            (c.narrow, c.side_in_wings) = (None, true);
+            assert!(header_tight(c), "the page has no split to measure its tab with");
+            c.side_in_wings = false;
+        });
     }
 
     #[test]
@@ -2649,16 +2674,24 @@ mod tests {
     }
 
     #[test]
-    fn the_message_box_has_an_ultracode_switch_only_while_claude_code_offers_it() {
+    fn the_model_menu_ends_with_an_ultracode_switch_only_while_claude_code_offers_it() {
         use wings_plugin::ui::tree_json;
-        let drawn = |c: &Chat| pickers(c).into_iter().map(|node| tree_json(node).to_string()).collect::<String>();
+        let menu = |c: &Chat| pickers(c).into_iter().map(|node| tree_json(node)).find(|json| json["props"]["label"] == "Model and effort").unwrap();
         chat::with(|c| {
-            assert!(!drawn(c).contains("Ultracode"), "{}", drawn(c));
+            c.session.models = vec![crate::session::Model { value: "opus".into(), name: "Opus 5.5".into(), efforts: vec!["high".into()], resolved: "claude-opus-5-5".into(), fast: false }];
+            let none = menu(c);
+            assert!(!none.to_string().contains("Ultracode"), "{none}");
             c.session.options.applied(&serde_json::json!({ "ultracode": false, "ultracodeAvailable": true }));
-            assert!(drawn(c).contains("\"label\":\"Ultracode\""), "{}", drawn(c));
+            let off = menu(c);
+            let last = off["props"]["options"].as_array().unwrap().last().unwrap().clone();
+            assert_eq!((last["label"].as_str(), last["toggle"].as_bool()), (Some("Ultracode"), Some(false)), "{off}");
+            assert!(last["detail"].as_str().is_some() && off["props"]["badge"] == "", "{off}");
             c.session.options.applied(&serde_json::json!({ "ultracode": true, "ultracodeAvailable": true }));
-            assert!(drawn(c).contains("Ultracode, on"), "{}", drawn(c));
+            let on = menu(c);
+            assert_eq!(on["props"]["options"].as_array().unwrap().last().unwrap()["toggle"], true);
+            assert_eq!(on["props"]["badge"], "Ultracode", "{on}");
             c.session.options = Default::default();
+            c.session.models.clear();
         });
     }
 
