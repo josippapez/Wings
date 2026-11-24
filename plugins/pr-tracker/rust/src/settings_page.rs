@@ -9,9 +9,9 @@ use crate::{
 use serde_json::Value;
 use std::cell::RefCell;
 use wings_plugin::{
-    host,
+    host, messages,
     task::spawn,
-    ui::{Entry, Node, button, checkbox, confirm, entry, muted, row, rows_card, section, select, stack, text, text_input},
+    ui::{Entry, Node, button, checkbox, confirm, entry, muted, row, rows_card, section, select, setting, setting_tick, stack, text, text_input},
 };
 
 struct Host {
@@ -71,7 +71,7 @@ fn change(at: usize, save: bool) {
             }
         });
         if done_ok(at) {
-            ipc::send(ipc::TOKENS_CHANGED, &Value::Null);
+            messages::send(ipc::TOKENS_CHANGED, &Value::Null);
         }
     });
 }
@@ -127,16 +127,6 @@ fn notify_label(value: &str) -> &'static str {
 /// How wide a menu is at the end of its row.
 const MENU_WIDTH: u32 = 220;
 
-/// A setting as a row: its name and what it does on the left, its control at the end, as Wings' own Settings rows are.
-fn setting(name: &str, detail: &str, control: Node) -> Node {
-    entry(Entry { lead: None, title: text(name).prop("weight", "medium"), detail: Some(muted(detail).prop("size", "small")), trailing: Some(control) })
-}
-
-/// A tick as a row: the tick's label is its name, and what it does is under it.
-fn toggle(tick: Node, detail: &str) -> Node {
-    entry(Entry { lead: None, title: tick, detail: Some(muted(detail).prop("size", "small")), trailing: None })
-}
-
 /// A menu with the width it has in a row.
 fn menu(node: Node) -> Node {
     stack().prop("width", MENU_WIDTH).child(node)
@@ -188,7 +178,7 @@ fn watch_field() -> Node {
 
 /// A section of one tick and what it does.
 fn flag_field(title: &str, help: &str, label: &str, on: bool, set: fn(bool)) -> Node {
-    section(title, None, [rows_card([toggle(checkbox(label, on, set), help)])])
+    section(title, None, [rows_card([setting_tick(checkbox(label, on, set), help)])])
 }
 
 fn view() -> Vec<Node> {

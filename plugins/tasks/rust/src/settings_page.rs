@@ -5,19 +5,14 @@ use crate::{
     parts::stack,
     settings::{self, DEFAULT_VIEWS, SECTION_ORDERS},
 };
-use wings_plugin::ui::{Entry, Node, checkbox, chips, entry, muted, rows_card, section, select, text};
+use wings_plugin::ui::{Entry, Node, checkbox, chips, entry, muted, rows_card, section, select, setting};
 
 /// A menu's width, as Wings' own Settings and PR tracker's have it.
 const MENU_WIDTH: u32 = 220;
 
-/// A setting as a row: its name and what it does on the left, its control at the end, as Wings' own Settings rows are.
-fn setting(name: &str, detail: &str, control: Node) -> Node {
-    entry(Entry { lead: None, title: text(name).prop("weight", "medium"), detail: Some(muted(detail).prop("size", "small")), trailing: Some(control) })
-}
-
 fn view() -> Vec<Node> {
     let views: Vec<(String, String)> = DEFAULT_VIEWS.iter().map(|(value, label)| ((*value).to_owned(), (*label).to_owned())).collect();
-    let track = |node: Node| node.prop("segmented", true);
+    let track = |node: Node| node.segmented();
     vec![stack("l")
         .child(section(
             "Issues board",

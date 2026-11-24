@@ -3,7 +3,7 @@
 use super::{badges, links::{self, Which, refresh_links}, problems, projects, status};
 use crate::{forges, ipc, remote};
 use serde_json::Value;
-use wings_plugin::{host, remote::Remote, task::join_all};
+use wings_plugin::{host, messages, remote::Remote, task::join_all};
 
 /// Forgets what the tracker kept about its accounts and their pull requests, so the next look at them asks again.
 fn clear_caches() {
@@ -61,5 +61,5 @@ pub async fn retry() {
 
 /// The open tabs' PRs load again, after a sign-in or Try again.
 fn refresh_tabs() {
-    ipc::send(ipc::REFRESH, &Value::Null);
+    messages::send(ipc::REFRESH, &Value::Null);
 }

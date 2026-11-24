@@ -5,12 +5,10 @@
 use crate::{df::Hidden, entry::Kind};
 use serde_json::{Value, json};
 
-/// A tab tells main it needs the scans and the Collector, and main tells everyone what it holds on every change.
-pub const WANT: &str = "disk-want";
+/// Main tells everyone the scans and the Collector on every change, and a tab that opens asks for them (`messages::want`).
 pub const STATE: &str = "disk-state";
-/// A tab asks main to do something: `{ id, op, ... }`. Main answers with `{ id, error, result }`.
+/// A tab asks main to do something: `{ op, ... }` (`messages::ask`), answered with what the op gives, or its error.
 pub const ASK: &str = "disk-ask";
-pub const DONE: &str = "disk-done";
 /// Main tells every tab to read the disks again: space was freed.
 pub const REFRESH: &str = "disk-refresh";
 

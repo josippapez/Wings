@@ -894,7 +894,7 @@ fn exclusive_choices(children: &[&Value], at: &At, budget: &mut usize) -> Option
                 crate::mod_pane::act(crate::mod_pane::act_message(&instance, "press", press, key.as_deref(), None));
             }
         })
-        .prop("segmented", true),
+        .segmented(),
     )
 }
 

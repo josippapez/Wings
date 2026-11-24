@@ -16,7 +16,7 @@ use crate::{
 use serde_json::{Value, json};
 use wings_plugin::{
     format::basename,
-    ui::{Node, confirm, dot, empty, heading, list_button, loading, muted, notice, page, row, slot, spinner, stack, text},
+    ui::{Node, confirm, dot, empty, heading, icon_button, icons, list_button, loading, muted, notice, page, row, slot, spinner, stack, text},
 };
 
 /// More folders than this and the ones in the middle go behind a menu.
@@ -81,27 +81,12 @@ fn walk(by: isize) {
     sync_level();
 }
 
-/// Lucide's `rotate-cw` and `folder-open`.
-const ROTATE_CW: [&str; 2] = ["M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8", "M21 3v5h-5"];
-const FOLDER_OPEN: [&str; 1] = ["m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"];
-
-/// A ghost icon button named and explained by `label`.
-fn icon_button(label: &str, paths: &[&str], on_click: impl Fn() + 'static) -> Node {
-    Node::new("Button")
-        .prop("variant", "ghost")
-        .prop("size", "icon-sm")
-        .prop("label", label)
-        .prop("title", label)
-        .on("onClick", move |_| on_click())
-        .child(wings_plugin::ui::icon(24, 2.0, paths).prop("size", 16))
-}
-
 fn toolbar(p: &Page, done: &Done, name: &str, focus: &str) -> Node {
     let (rescan, reveal) = (p.root.clone().unwrap_or_default(), focus.to_owned());
     let followed = p.trail.root == p.root;
     let actions = gap(row(), "xs")
-        .child(icon_button("Rescan", &ROTATE_CW, move || start_scan(rescan.clone())))
-        .child(icon_button("Reveal in Finder", &FOLDER_OPEN, move || run("reveal", json!({ "path": reveal }))));
+        .child(icon_button("Rescan", &icons::ROTATE_CW, move || start_scan(rescan.clone())))
+        .child(icon_button("Reveal in Finder", &icons::FOLDER_OPEN, move || run("reveal", json!({ "path": reveal }))));
     let history = gap(row(), "none")
         .child(named_button("‹", "Back", "ghost", "icon-sm", || walk(-1)).prop("title", "Back").prop("disabled", !(followed && p.trail.at > 0)))
         .child(named_button("›", "Forward", "ghost", "icon-sm", || walk(1)).prop("title", "Forward").prop("disabled", !(followed && p.trail.at + 1 < p.trail.stack.len())));
@@ -437,19 +422,4 @@ pub fn mapped(p: &Page, _scan: &ScanInfo, done: &Done, name: &str) -> Vec<Node> 
     let error = p.action_error.as_ref().map(|error| Node::new("Bar").prop("edge", "bottom").child(dismissible("danger", error, || with(|p| p.action_error = None))));
     let body = error.into_iter().chain([content(p, name, &focus, done), collector_bar(p)]);
     vec![page(toolbar(p, done, name, &focus), body).prop("flush", true)]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use wings_plugin::ui::tree_json;
-
-    /// Rescan and Reveal in Finder are ghost icon buttons that name themselves and carry a tooltip.
-    #[test]
-    fn the_map_actions_are_ghost_icon_buttons_with_tooltips() {
-        let tree = tree_json(icon_button("Rescan", &ROTATE_CW, || {})).to_string();
-        for want in [r#""variant":"ghost""#, r#""size":"icon-sm""#, r#""label":"Rescan""#, r#""title":"Rescan""#, "Svg"] {
-            assert!(tree.contains(want), "{want} in {tree}");
-        }
-    }
 }

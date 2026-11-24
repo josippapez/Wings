@@ -17,7 +17,7 @@ use wings_plugin::{
     markdown::markdown,
     host,
     task::spawn,
-    ui::{Node, card, confirm, empty, muted, notice, page, row, stack, text},
+    ui::{Node, card, confirm, empty, icon_button, icons, muted, notice, page, row, section_label, stack, text},
 };
 
 /// The native app draws a page of at most 5,000 nodes, so a long conversation shows in steps.
@@ -129,12 +129,11 @@ fn line(gap: &str) -> Node {
 }
 
 fn button(label: impl Into<String>, variant: &str, on_click: impl Fn() + 'static) -> Node {
-    Node::new("Button").prop("variant", variant).prop("size", "sm").on("onClick", move |_| on_click()).text(label)
+    busy_button(label, variant, false, on_click)
 }
 
 fn busy_button(label: impl Into<String>, variant: &str, busy: bool, on_click: impl Fn() + 'static) -> Node {
-    let node = Node::new("Button").prop("variant", variant).prop("size", "sm").on("onClick", move |_| on_click());
-    if busy { node.prop("disabled", true).child(wings_plugin::ui::spinner()).text(label) } else { node.text(label) }
+    wings_plugin::ui::button(label, variant, busy, on_click).size("sm")
 }
 
 fn avatar(name: &str, small: bool) -> Node {
@@ -199,8 +198,8 @@ pub fn build(p: &Page) -> Vec<Node> {
     let url = args.url.clone();
     let host_name = info(args.provider).name;
     let mut actions = vec![
-        parts::icon_button("Refresh", &parts::REFRESH, false, pr_page::refresh),
-        parts::icon_button(&format!("Open in {host_name}"), &parts::EXTERNAL_LINK, false, move || host::open_url(&url)),
+        icon_button("Refresh", &icons::REFRESH_CW, pr_page::refresh),
+        icon_button(&format!("Open in {host_name}"), &icons::EXTERNAL_LINK, move || host::open_url(&url)),
         busy_button("Send to agent", "secondary", p.busy == Some("agent"), || pr_page::run("agent", None)),
     ];
     if p.can.approve && open {
@@ -472,7 +471,7 @@ fn overview_tab(p: &Page, overview: &Overview) -> Node {
             .text(format!("{} {resolved} resolved", if show_resolved { "Collapse" } else { "Expand" }))
     });
     let head = line("m")
-        .child(parts::section_label(format!("Conversation{}", if entries.is_some() { format!(" · {threads}") } else { String::new() })).prop("grow", true))
+        .child(section_label(format!("Conversation{}", if entries.is_some() { format!(" · {threads}") } else { String::new() })).prop("grow", true))
         .maybe(toggle);
 
     let conversation = match &entries {

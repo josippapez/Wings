@@ -9,7 +9,7 @@ use wings_plugin::{
     local_time::local,
     markdown::markdown,
     ui::{
-        Entry, Node, badge, button, card, chip, confirm, disclosure, empty, entry, gauge, icon, list, list_button, loading, muted,
+        Entry, Node, badge, button, card, chip, confirm, disclosure, empty, entry, gauge, icon, icon_button, icons, list, list_button, loading, muted,
         notice, row, select, slot, spinner, stack, text, text_input,
     },
 };
@@ -163,28 +163,12 @@ fn chat_page(c: &Chat) -> Node {
 /// Lucide's icons, as the app draws them in its headers: `square-terminal`, `rotate-ccw-clock` (Past sessions), `plus`
 /// and `settings`, in a 24-point box.
 const HISTORY: [&str; 3] = ["M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8", "M3 3v5h5", "M12 7v5l4 2"];
-const PLUS: [&str; 2] = ["M5 12h14", "M12 5v14"];
 /// Lucide's `zap`, on the fast mode button.
 const FAST: [&str; 1] = ["M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"];
-/// Lucide's `chevron-right` and `chevron-left`, which collapse the side panel to its rail and open it again.
-const CHEVRON_RIGHT: [&str; 1] = ["m9 18 6-6-6-6"];
-const CHEVRON_LEFT: [&str; 1] = ["m15 18-6-6 6-6"];
-/// Lucide's `panel-right`.
-const PANEL: [&str; 2] = ["M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z", "M15 3v18"];
 const SETTINGS: [&str; 2] = [
     "M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915",
     "M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0",
 ];
-
-/// A quiet square button holding one of those icons, named by its tooltip, as the app's pane and header buttons are.
-pub(crate) fn icon_button(label: &str, paths: &[&str], on_click: impl Fn() + 'static) -> Node {
-    icon_button_titled(label, label, paths, on_click)
-}
-
-/// `icon_button`, with a tooltip other than its label.
-fn icon_button_titled(label: &str, title: &str, paths: &[&str], on_click: impl Fn() + 'static) -> Node {
-    button("", "ghost", false, on_click).prop("size", "icon-sm").prop("label", label).prop("title", title).child(icon(24, 2.0, paths).prop("size", 16))
-}
 
 /// Whether the side panel is on the page while it is in the chat: by default, at any width, beside the conversation in a
 /// wide tab and over it in a narrow one. The header's button turns it off for every chat.
@@ -214,7 +198,7 @@ fn side_button(c: &Chat) -> Option<Node> {
         (false, 0) => format!("Show the {place}"),
         (false, n) => format!("Show the {place}, {n} running"),
     };
-    let glyph = icon(24, 2.0, &PANEL).prop("size", 16);
+    let glyph = icon(24, 2.0, &icons::PANEL_RIGHT).prop("size", 16);
     let button = button("", if shown { "secondary" } else { "ghost" }, false, chat::toggle_side).prop("label", "Side panel").prop("title", title.as_str()).shortcut("cmd-alt-b");
     Some(match live {
         0 => button.prop("size", "icon-sm").child(glyph),
@@ -255,7 +239,7 @@ fn header(c: &Chat) -> Node {
         .maybe(side_button(c))
         .maybe(account_menu(c))
         .child(icon_button("Past sessions", &HISTORY, chat::open_past).shortcut("cmd-y"))
-        .child(icon_button_titled("New chat", if chat::in_use(c) { "New chat in a new tab, this one keeps running" } else { "New chat" }, &PLUS, chat::new_chat).shortcut("cmd-shift-n"))
+        .child(icon_button("New chat", &icons::PLUS, chat::new_chat).tooltip(if chat::in_use(c) { "New chat in a new tab, this one keeps running" } else { "New chat" }).shortcut("cmd-shift-n"))
         .child(icon_button("Settings", &SETTINGS, chat::open_settings));
     Node::new("Bar").prop("variant", "slim").child(row().prop("gap", "m").prop("align", "center").child(title).child(actions))
 }
@@ -1323,7 +1307,7 @@ fn rail(c: &Chat, no_sections: bool) -> Option<Node> {
     if live > 0 {
         face = face.child(badge(live.to_string(), Some("info")));
     }
-    face = face.child(icon(24, 2.0, &CHEVRON_LEFT).prop("size", 14));
+    face = face.child(icon(24, 2.0, &icons::CHEVRON_LEFT).prop("size", 14));
     Some(button("", "outline", false, || chat::set_side_rail(false)).prop("size", "sm").prop("label", "Expand the side panel").prop("title", title.as_str()).child(face).key("side-rail"))
 }
 
@@ -1339,7 +1323,7 @@ fn side(c: &Chat) -> Vec<Node> {
     if sections.is_empty() {
         return terminals(c);
     }
-    let collapse = icon_button_titled("Collapse the side panel", "Collapse the side panel to a rail", &CHEVRON_RIGHT, || chat::set_side_rail(true));
+    let collapse = icon_button("Collapse the side panel", &icons::CHEVRON_RIGHT, || chat::set_side_rail(true)).tooltip("Collapse the side panel to a rail");
     let top = row().prop("align", "center").child(inset(muted("Session").prop("size", "small")).prop("grow", true)).child(collapse).key("side-collapse");
     // Taller than the room it has, the card keeps its edge and its sections scroll inside it.
     let summary = card().prop("variant", "raised").prop("scroll", true).child(stack().prop("gap", "m").child(top).children(sections));

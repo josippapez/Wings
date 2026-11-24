@@ -25,7 +25,8 @@ struct Ready(u32);
 
 impl Wake for Ready {
     fn wake(self: Arc<Self>) {
-        READY.with(|ready| {
+        // `try_with`: a sender dropped as the thread ends wakes a task after the queue is gone, which needs no run.
+        let _ = READY.try_with(|ready| {
             let mut ready = ready.borrow_mut();
             if !ready.contains(&self.0) {
                 ready.push_back(self.0);
@@ -118,6 +119,104 @@ impl SingleFlight {
                 Poll::Ready(())
             }
         })
+    }
+}
+
+/// Something to wait for that happens once, like a scan ending: clones share it, `open` lets every wait go on, and a
+/// wait for a gate that is open is ready at once.
+#[derive(Clone, Default)]
+pub struct Gate(Rc<RefCell<(bool, Vec<Waker>)>>);
+
+impl Gate {
+    pub fn open(&self) {
+        let waiting = {
+            let mut gate = self.0.borrow_mut();
+            gate.0 = true;
+            std::mem::take(&mut gate.1)
+        };
+        waiting.into_iter().for_each(Waker::wake);
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.0.borrow().0
+    }
+
+    /// Ready once the gate is open, now if it is.
+    pub fn wait(&self) -> impl Future<Output = ()> + use<> {
+        let gate = self.0.clone();
+        std::future::poll_fn(move |cx| {
+            let mut gate = gate.borrow_mut();
+            if gate.0 {
+                Poll::Ready(())
+            } else {
+                wait_once(&mut gate.1, cx.waker());
+                Poll::Pending
+            }
+        })
+    }
+}
+
+struct Slot<T> {
+    value: Option<T>,
+    sent: bool,
+    dropped: bool,
+    waker: Option<Waker>,
+}
+
+/// The sending end of a `oneshot`.
+pub struct Sender<T>(Rc<RefCell<Slot<T>>>);
+
+/// The receiving end of a `oneshot`: a future of the value, or `None` when the sender was dropped without sending.
+pub struct Receiver<T>(Rc<RefCell<Slot<T>>>);
+
+/// A value that is sent once, from one place and waited for in another: what a hand-written `Waker` and a slot did each time.
+pub fn oneshot<T>() -> (Sender<T>, Receiver<T>) {
+    let slot = Rc::new(RefCell::new(Slot { value: None, sent: false, dropped: false, waker: None }));
+    (Sender(slot.clone()), Receiver(slot))
+}
+
+impl<T> Sender<T> {
+    pub fn send(self, value: T) {
+        let waker = {
+            let mut slot = self.0.borrow_mut();
+            slot.value = Some(value);
+            slot.sent = true;
+            slot.waker.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+}
+
+impl<T> Drop for Sender<T> {
+    fn drop(&mut self) {
+        let waker = {
+            let mut slot = self.0.borrow_mut();
+            if slot.sent {
+                return;
+            }
+            slot.dropped = true;
+            slot.waker.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+}
+
+impl<T> Future for Receiver<T> {
+    type Output = Option<T>;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
+        let mut slot = self.0.borrow_mut();
+        if let Some(value) = slot.value.take() {
+            Poll::Ready(Some(value))
+        } else if slot.dropped {
+            Poll::Ready(None)
+        } else {
+            slot.waker = Some(cx.waker().clone());
+            Poll::Pending
+        }
     }
 }
 
@@ -226,6 +325,44 @@ mod tests {
             run_ready();
         }
         assert_eq!(polls.get(), 3);
+    }
+
+    #[test]
+    fn a_gate_lets_every_wait_go_on_once_it_opens_and_never_holds_one_when_open() {
+        let gate = Gate::default();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        for n in 1..=2 {
+            let (gate, seen) = (gate.clone(), seen.clone());
+            spawn(async move {
+                gate.wait().await;
+                seen.borrow_mut().push(n);
+            });
+        }
+        run_ready();
+        assert!(seen.borrow().is_empty() && !gate.is_open());
+        gate.open();
+        run_ready();
+        assert_eq!(*seen.borrow(), [1, 2]);
+        block_on(gate.wait());
+    }
+
+    #[test]
+    fn a_oneshot_gives_its_value_once_sent_and_none_when_its_sender_is_dropped() {
+        let (tx, rx) = oneshot();
+        let got = Rc::new(RefCell::new(None));
+        let slot = got.clone();
+        spawn(async move { *slot.borrow_mut() = Some(rx.await) });
+        run_ready();
+        assert!(got.borrow().is_none());
+        tx.send(7);
+        run_ready();
+        assert_eq!(*got.borrow(), Some(Some(7)));
+        let (tx, rx) = oneshot::<u8>();
+        drop(tx);
+        assert_eq!(block_on(rx), None);
+        let (tx, rx) = oneshot();
+        tx.send("early");
+        assert_eq!(block_on(rx), Some("early"));
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! is narrow the session sits above them. A fold kind the session doesn't show has a small preview under its row.
 
 use std::cell::{Cell, RefCell};
-use wings_plugin::{host::AccountChoice, task::spawn, ui::{Entry, Node, card, checkbox, chips as choose, entry, muted, row, rows_card, section, select, stack, text}};
+use wings_plugin::{host::AccountChoice, task::spawn, ui::{Entry, Node, card, checkbox, chips as choose, entry, muted, row, rows_card, section, select, setting, setting_tick, stack, text}};
 
 /// How wide the background's menu is at the end of its row.
 const MENU_WIDTH: u32 = 200;
@@ -81,22 +81,12 @@ fn per_account(accounts: &[AccountChoice]) -> Option<Node> {
 
 /// A choice between a few, on the segmented track other Wings settings use.
 fn chips(label: &str, options: &[(&str, &str)], value: &str, on_change: impl Fn(&str) + 'static) -> Node {
-    choose(label, options, value, on_change).prop("segmented", true)
-}
-
-/// A setting as a row: its name and what it does on the left, its control at the end.
-fn setting(name: &str, detail: &str, control: Node) -> Node {
-    entry(Entry { lead: None, title: text(name).prop("weight", "medium"), detail: Some(muted(detail).prop("size", "small")), trailing: Some(control) })
+    choose(label, options, value, on_change).segmented()
 }
 
 /// A row of a name and what it does, for the choices drawn under it.
 fn about(name: &str, detail: &str) -> Node {
     entry(Entry { lead: None, title: text(name).prop("weight", "medium"), detail: Some(muted(detail).prop("size", "small")), trailing: None })
-}
-
-/// A setting that is a tick: the tick's label is its name.
-fn toggle(tick: Node, detail: &str) -> Node {
-    entry(Entry { lead: None, title: tick, detail: Some(muted(detail).prop("size", "small")), trailing: None })
 }
 
 /// A section: its rows in one card split by hairlines, as Wings' own Settings panes group theirs.
@@ -171,14 +161,14 @@ fn choices() -> Node {
     for (kind, key, label) in KINDS {
         let (label, detail) = kind_text(kind, label);
         let open = prefs::opens(kind).get();
-        let tick = toggle(checkbox(label, open, move |on| drop(prefs::opens(kind).set(on))).key(key), detail);
+        let tick = setting_tick(checkbox(label, open, move |on| drop(prefs::opens(kind).set(on))).key(key), detail);
         // Every tick has its own example under it, though the session beside them shows some in Verbose: the example is
         // what the tick itself changes, in any view mode.
         starts.push(together([tick, preview(settings_preview::kind(kind, open))]));
         if kind == Kind::Summary {
             let open = !prefs::fold_reports().get();
             starts.push(together([
-                toggle(checkbox(REPORT_LABEL, open, |on| drop(prefs::fold_reports().set(!on))).key("fold-reports"), REPORT_DETAIL),
+                setting_tick(checkbox(REPORT_LABEL, open, |on| drop(prefs::fold_reports().set(!on))).key("fold-reports"), REPORT_DETAIL),
                 preview(settings_preview::report(open)),
             ]));
         }
@@ -217,7 +207,7 @@ fn choices() -> Node {
             "Plan limit",
             [
                 together([
-                    toggle(
+                    setting_tick(
                         checkbox("Tell Claude to pause near the limit", prefs::pause_near_limit().get(), |on| drop(prefs::pause_near_limit().set(on))).key("pause-near-limit"),
                         "When your plan's 5-hour or weekly usage passes the share you pick, Claude is told to pause and ask you before more work, in every Claude Code session in Wings. Past the limit, work is billed as extra usage.",
                     ),
@@ -225,7 +215,7 @@ fn choices() -> Node {
                     preview(limit("Claude pauses and asks", prefs::percent(&pause_at), false)),
                 ]),
                 together([
-                    toggle(
+                    setting_tick(
                         checkbox("Stop the chat's turn near the limit", prefs::stop_near_limit().get(), |on| drop(prefs::stop_near_limit().set(on))).key("stop-near-limit"),
                         "A chat can also stop Claude's turn itself, as its Stop button does, once at this share and once more when the limit is used up. Send a message to go on.",
                     ),
@@ -240,7 +230,7 @@ fn choices() -> Node {
         .child(group(
             "Remote Control",
             [together([
-                toggle(
+                setting_tick(
                     checkbox("Turn on Remote Control in every new chat", prefs::remote_on_start().get(), |on| drop(prefs::remote_on_start().set(on))).key("remote-on-start"),
                     "Each new chat turns on Remote Control as it starts, so you can follow and answer it on claude.ai or in the Claude app. The phone button at the top of the chat still turns it off for that chat.",
                 ),

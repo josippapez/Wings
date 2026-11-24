@@ -4,7 +4,7 @@
 //! background too: that is when a run, or a new ticket, is wanted.
 
 use crate::{
-    ASK, DONE, STATE, WANT,
+    ASK, STATE,
     approvals,
     assigned::{Project, Watch, WatchDraft},
     schedule::{Draft, Run, RunIn, Schedule, When, claim, clean_draft, clean_prompt, describe_when, due_at, on_start, refuse_past},
@@ -71,7 +71,7 @@ async fn tell_state() {
     for w in read_watches().unwrap_or_default() {
         targets.insert(w.id.clone(), targets_of(&w, &projects).await.iter().map(|p| json!({ "id": p.id, "name": p.name })).collect::<Vec<_>>().into());
     }
-    messages::tell(STATE, &json!({ "targets": targets, "signInCode": sign_in_code(), "approvals": approvals::waiting() }));
+    messages::publish(STATE, &json!({ "targets": targets, "signInCode": sign_in_code(), "approvals": approvals::waiting() }));
 }
 
 /// Shows each project the schedules and "assigned" entries that run in it, and removes the section from the rest.
@@ -251,15 +251,11 @@ async fn run_op(ask: &Value) -> Result<(), String> {
     }
 }
 
-async fn serve(ask: Value) {
-    let error = run_op(&ask).await.err();
-    messages::tell(DONE, &json!({ "id": ask["id"], "error": error }));
-}
 
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
-    messages::on(ASK, |ask| spawn(serve(ask.clone())));
-    messages::on(WANT, |_| changed());
+    messages::answer(ASK, |ask| async move { run_op(&ask).await.map(|()| Value::Null) });
+    messages::on_want(STATE, changed);
     host::on_projects(|_| changed());
     tools::register_all();
     // A schedule that came due while Wings was closed counts from now, then the timer starts.

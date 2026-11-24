@@ -45,7 +45,7 @@ pub fn error_text(message: &str) -> Node {
 
 /// A button of the given `size` and `variant`.
 pub fn button(label: &str, variant: &str, size: &str, on_click: impl Fn() + 'static) -> Node {
-    Node::new("Button").prop("variant", variant).prop("size", size).on("onClick", move |_| on_click()).text(label)
+    wings_plugin::ui::button(label, variant, false, on_click).size(size)
 }
 
 /// Whether a key event is one that asks to delete the focused issue: Delete, or Backspace without a modifier.

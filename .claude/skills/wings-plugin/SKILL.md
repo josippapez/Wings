@@ -31,7 +31,8 @@ The reference is `plugins/README.md`: layout, build, helpers, manifest, permissi
 
 ## Rules that keep plugins fast and safe
 
-- Reach for the SDK modules before writing your own (the Helpers table in `plugins/README.md`): `messages` between frames, `settings::Setting`, `cli::Cli`, `git`, `cache::Cached` and `Batch`, `poll::while_focused`, `task::spawn`. No request ids, hello messages or sign-in handling by hand.
+- Reach for the SDK modules before writing your own (the Helpers table in `plugins/README.md`): `messages` between frames (`ask`/`answer` for a page that asks main, `publish`/`want` for main's state), `approvals::Approvals` for a tool call that waits on the person, `settings::Setting`, `cli::Cli`, `git`, `cache::Cached` and `Batch`, `poll::while_focused`, `task::spawn`, `Gate` and `oneshot`. No request ids, hello messages or sign-in handling by hand.
+- Build pages from `ui`'s parts (`icon_button`, `setting`, `section_label`, `toolbar_titled`, `page_with`, `ui::icons`, `Node::size`/`tooltip`), not a local copy of them. Seven plugins each had their own `button` and six their own `icon_button` until they moved there.
 - Work from `host::on_panes`. Each pane has a live `cwd` and a `session` while Claude runs in it.
 - Follow a session with `sessions::follow` rather than polling `transcript`, which rereads the whole file.
 - Keep no map of what you sent. Wings skips a repeated badge or pane status, and drops a closed pane's badge and status, so set them on every pass and send `null` only to clear a pane that stays open. Repaint on `git::on_change` rather than a fast git poll.

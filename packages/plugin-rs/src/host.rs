@@ -31,13 +31,17 @@ pub(crate) mod ffi {
 }
 
 /// Outside Wings there is no host: a plugin's own tests, built for this computer, run what doesn't reach for one.
-/// Nothing is drawn or sent, a call is never answered, the clock stands at 0 (`testing::set_now` moves it) and the timezone is UTC.
+/// Nothing is drawn, a broadcast is kept for `testing::take_broadcasts`, a call is never answered, a timer waits for `testing::fire_timers`, the clock stands at 0 (`testing::set_now` moves it) and the timezone is UTC.
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::missing_safety_doc)]
 pub(crate) mod ffi {
     pub unsafe fn render(_: *const u8, _: usize) {}
     pub unsafe fn call(_: u32, _: *const u8, _: usize, _: *const u8, _: usize) {}
-    pub unsafe fn broadcast(_: *const u8, _: usize) {}
+    pub unsafe fn broadcast(at: *const u8, len: usize) {
+        // SAFETY: the caller's live string, as on the wasm side.
+        let text = String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(at, len) }).into_owned();
+        super::testing::SENT.with(|sent| sent.borrow_mut().push(text));
+    }
     pub unsafe fn timer(_: u32, _: u32) {}
     pub unsafe fn now() -> f64 {
         super::testing::NOW.with(std::cell::Cell::get)
@@ -119,6 +123,38 @@ pub mod testing {
     thread_local! {
         pub(super) static ANSWER: RefCell<Option<Answer>> = const { RefCell::new(None) };
         pub(super) static NOW: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
+        pub(super) static SENT: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// The broadcasts this frame sent since the last call, as the other frames would have received them.
+    pub fn take_broadcasts() -> Vec<Value> {
+        SENT.with(|sent| std::mem::take(&mut *sent.borrow_mut())).iter().map(|text| serde_json::from_str(text).unwrap_or(Value::Null)).collect()
+    }
+
+    /// Has this frame hear `message` as a broadcast from another frame.
+    pub fn deliver_broadcast(message: &Value) {
+        super::deliver("broadcast", 0, message.to_string());
+    }
+
+    /// Ends every `sleep` that is waiting, as if its time had passed.
+    pub fn fire_timers() {
+        let waiting: Vec<_> = super::TIMERS.with(|timers| timers.borrow_mut().drain().map(|(_, wait)| wait).collect());
+        for wait in waiting {
+            super::finish(&wait, ());
+        }
+    }
+
+    /// A frame that is both sides: runs what can run, and hears each broadcast it sent as if another frame had, until
+    /// nothing is left to do. A page asks main, main answers, and the answer comes back, all on this thread.
+    pub fn settle() {
+        loop {
+            crate::task::run_ready();
+            let sent = take_broadcasts();
+            if sent.is_empty() {
+                return;
+            }
+            sent.iter().for_each(deliver_broadcast);
+        }
     }
 
     /// From now on, on this thread, the clock stands at `ms`.

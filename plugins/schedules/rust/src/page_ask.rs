@@ -1,53 +1,36 @@
 //! A page asks main for a change and hears how it went: `ask` is an action that keeps the page busy and shows its error,
 //! `ask_quiet` hands the result to the caller.
 
-use crate::{ASK, DONE};
+use crate::ASK;
 use serde_json::Value;
-use std::{cell::{Cell, RefCell}, collections::HashMap};
-use wings_plugin::{host, messages};
+use std::cell::{Cell, RefCell};
+use wings_plugin::{messages, task::spawn};
 
 type Done = Box<dyn FnOnce(Result<(), String>)>;
 
 thread_local! {
-    static PENDING: RefCell<HashMap<String, (bool, Done)>> = RefCell::new(HashMap::new());
+    /// How many actions wait for main.
+    static ACTIONS: Cell<u32> = const { Cell::new(0) };
     static ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
-    static NEXT: Cell<u32> = const { Cell::new(0) };
-    static PREFIX: RefCell<&'static str> = const { RefCell::new("") };
-}
-
-/// Hears how main did each change this frame asked for. `prefix` tells this frame's asks from another's.
-pub fn listen(prefix: &'static str) {
-    PREFIX.with(|slot| *slot.borrow_mut() = prefix);
-    messages::on(DONE, |done| {
-        let Some(id) = done["id"].as_str() else {
-            return;
-        };
-        let Some((action, finish)) = PENDING.with(|pending| pending.borrow_mut().remove(id)) else {
-            return;
-        };
-        let result = match done["error"].as_str() {
-            Some(error) => Err(error.to_owned()),
-            None => Ok(()),
-        };
-        if let (true, Err(error)) = (action, &result) {
-            ERROR.with(|slot| *slot.borrow_mut() = Some(error.clone()));
-        }
-        finish(result);
-    });
 }
 
 fn send(op: &str, mut args: Value, action: bool, finish: Done) {
-    let id = format!("{}{}-{}", PREFIX.with(|prefix| *prefix.borrow()), host::now() as i64, NEXT.with(|next| {
-        next.set(next.get() + 1);
-        next.get()
-    }));
-    args["id"] = id.clone().into();
     args["op"] = op.into();
     if action {
         ERROR.with(|slot| *slot.borrow_mut() = None);
+        ACTIONS.with(|count| count.set(count.get() + 1));
     }
-    PENDING.with(|pending| pending.borrow_mut().insert(id, (action, finish)));
-    messages::tell(ASK, &args);
+    let reply = messages::ask(ASK, args);
+    spawn(async move {
+        let result = reply.await.map(drop);
+        if action {
+            ACTIONS.with(|count| count.set(count.get() - 1));
+            if let Err(error) = &result {
+                ERROR.with(|slot| *slot.borrow_mut() = Some(error.clone()));
+            }
+        }
+        finish(result);
+    });
 }
 
 /// Asks for `op` with `args`, as an action: the page is busy until main answers, an error shows, and `after` runs when it worked.
@@ -61,7 +44,7 @@ pub fn ask_quiet(op: &str, args: Value, done: impl FnOnce(Result<(), String>) + 
 }
 
 pub fn busy() -> bool {
-    PENDING.with(|pending| pending.borrow().values().any(|(action, _)| *action))
+    ACTIONS.with(|count| count.get() > 0)
 }
 
 pub fn error() -> Option<String> {

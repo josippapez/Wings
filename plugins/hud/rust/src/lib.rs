@@ -23,6 +23,5 @@ pub const CONTEXT_CRITICAL: f64 = 85.0;
 pub const LIMIT_WARN: f64 = 75.0;
 pub const LIMIT_CRITICAL: f64 = 90.0;
 
-/// What main tells the sidebar: the snapshot, under this name. The sidebar asks for it with `WANT` when it starts.
+/// What main tells the sidebar: the snapshot, under this name. The sidebar asks for it when it starts (`messages::want`).
 pub const SNAPSHOT: &str = "hud";
-pub const WANT: &str = "hud:want";

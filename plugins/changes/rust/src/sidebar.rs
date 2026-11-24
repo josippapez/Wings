@@ -16,7 +16,7 @@ use wings_plugin::{
     git::{branch_label, ok, on_change, repo_root},
     host, messages, poll,
     task::{join, join_all, spawn},
-    ui::{Node, card, checkbox, chips, empty, icon, list, list_button, list_row, loading, muted, notice, page, row, search_field, spinner, stack, text, toolbar_with},
+    ui::{Node, card, checkbox, chips, empty, icon_button, icons, list, list_button, list_row, loading, muted, notice, page, row, search_field, spinner, stack, text, toolbar_with},
 };
 
 /// How long the search waits after the last key before it asks git.
@@ -295,8 +295,7 @@ fn show(view: View) {
 }
 
 fn button(label: &str, variant: &str, disabled: bool, on_click: impl Fn() + 'static) -> Node {
-    let button = Node::new("Button").prop("variant", variant).on("onClick", move |_| on_click()).text(label);
-    if disabled { button.prop("disabled", true) } else { button }
+    wings_plugin::ui::button(label, variant, false, on_click).disabled(disabled)
 }
 
 struct Folder<'a> {
@@ -469,25 +468,13 @@ fn view() -> Vec<Node> {
             }];
         };
         // An icon, as the switch and the pop-out left a 250 point sidebar no room for the word.
-        let refresh = Node::new("Button")
-            .prop("variant", "ghost")
-            .prop("size", "icon-sm")
-            .prop("label", "Refresh")
-            .prop("title", "Refresh")
-            .on("onClick", |_| {
-                forget_repos();
-                spawn(reload());
-            })
-            .child(icon(24, 2.0, &["M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8", "M21 3v5h-5", "M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16", "M8 16H3v5"]));
-        let switch = chips("Show in the sidebar", &[("files", "Files"), ("graph", "Graph")], p.section.name(), |picked| pick(if picked == "graph" { Section::Graph } else { Section::Files })).prop("segmented", true);
+        let refresh = icon_button("Refresh", &icons::REFRESH_CW, || {
+            forget_repos();
+            spawn(reload());
+        });
+        let switch = chips("Show in the sidebar", &[("files", "Files"), ("graph", "Graph")], p.section.name(), |picked| pick(if picked == "graph" { Section::Graph } else { Section::Files })).segmented();
         let graph_root = repo.root.clone();
-        let pop_out = Node::new("Button")
-            .prop("variant", "ghost")
-            .prop("size", "icon-sm")
-            .prop("label", "Open in a window")
-            .prop("title", "Open in a window")
-            .on("onClick", move |_| ask(GRAPH, json!({ "root": graph_root })))
-            .child(icon(24, 2.0, &["M15 3h6v6", "M10 14 21 3", "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"]));
+        let pop_out = icon_button("Open in a window", &icons::EXTERNAL_LINK, move || ask(GRAPH, json!({ "root": graph_root })));
         let actions = row().prop("gap", "xs").maybe(p.loading.then(|| spinner().prop("label", "Refreshing"))).child(switch).child(refresh).child(pop_out);
         if p.section == Section::Graph {
             let notice = p.open_error.as_ref().map(|error| notice("warn", error).key("open-error"));
@@ -501,7 +488,7 @@ fn view() -> Vec<Node> {
                 _ => View::Uncommitted,
             });
         })
-        .prop("segmented", true);
+        .segmented();
         let body = match (p.view, &p.changes) {
             (View::History, _) => history_body(p, &repo.root),
             (_, Some(c)) => changes_body(c, p.view.mode(), &p.collapsed),

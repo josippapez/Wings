@@ -2,11 +2,11 @@
 //! pane opens it to copy the link. It lists what is shared, with Copy link, Open and Stop.
 
 use crate::{
-    ASK, DONE, STATE, WANT,
+    ASK, STATE,
     shares::Share,
 };
 use serde_json::{Value, json};
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use wings_plugin::{
     host, messages,
     task::spawn,
@@ -41,7 +41,6 @@ struct Page {
 
 thread_local! {
     static PAGE: RefCell<Page> = RefCell::new(Page::default());
-    static NEXT: Cell<u32> = const { Cell::new(0) };
 }
 
 fn with<T>(change: impl FnOnce(&mut Page) -> T) -> T {
@@ -50,14 +49,13 @@ fn with<T>(change: impl FnOnce(&mut Page) -> T) -> T {
 
 /// Asks main for `op` with `args`: the page is busy until it answers, and an error shows.
 fn ask(op: &str, mut args: Value) {
-    let id = NEXT.with(|next| {
-        next.set(next.get() + 1);
-        format!("p{}", next.get())
-    });
-    args["id"] = id.into();
     args["op"] = op.into();
     with(|page| (page.busy, page.error) = (true, None));
-    messages::tell(ASK, &args);
+    let reply = messages::ask(ASK, args);
+    spawn(async move {
+        let reply = reply.await;
+        with(|page| (page.busy, page.error) = (false, reply.err()));
+    });
 }
 
 fn small(label: &str, variant: &str, disabled: bool, on_click: impl Fn() + 'static) -> Node {
@@ -169,12 +167,5 @@ fn hear(state: &Value) {
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     wings_plugin::run(view);
-    messages::on(STATE, hear);
-    messages::on(DONE, |done| {
-        with(|p| {
-            p.busy = false;
-            p.error = done["error"].as_str().map(str::to_owned);
-        })
-    });
-    messages::tell(WANT, &Value::Null);
+    messages::want(STATE, hear);
 }

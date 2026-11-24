@@ -10,11 +10,8 @@ use crate::{
 use std::cell::RefCell;
 use wings_plugin::{
     task::spawn,
-    ui::{Node, icon},
+    ui::{Node, icon_button, icons},
 };
-
-/// Lucide's `plus`, as Claude chat's New chat button draws it.
-const PLUS: [&str; 2] = ["M5 12h14", "M12 5v14"];
 
 #[derive(Default)]
 struct Add {
@@ -60,13 +57,7 @@ fn submit() {
 /// The header's New issue button: opens the line to add one, and puts it away again.
 pub fn button() -> Node {
     let open = with(|add| add.open);
-    Node::new("Button")
-        .prop("variant", if open { "secondary" } else { "ghost" })
-        .prop("size", "icon-sm")
-        .prop("label", "New issue")
-        .prop("title", "New issue")
-        .on("onClick", |_| with(|add| add.open = !add.open))
-        .child(icon(24, 2.0, &PLUS).prop("size", 16))
+    icon_button("New issue", &icons::PLUS, || with(|add| add.open = !add.open)).prop("variant", if open { "secondary" } else { "ghost" })
 }
 
 /// The line to add an issue, as a bar under the Issues tab's filters, while the New issue button has it open. Escape puts

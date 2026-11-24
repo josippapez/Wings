@@ -10,7 +10,7 @@
 use serde_json::{Value, json};
 use wings_plugin::{
     host::storage,
-    ui::{Entry, Node, button, entry, icon, muted, row, stack, text},
+    ui::{Entry, Node, button, entry, icon, icons, muted, row, stack, text},
 };
 
 use crate::{
@@ -22,7 +22,6 @@ use crate::{
 const START: usize = 80;
 
 const BOOKMARK: [&str; 1] = ["m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"];
-const REMOVE: [&str; 2] = ["M18 6 6 18", "m6 6 12 12"];
 
 #[derive(Clone, Debug, PartialEq)]
 struct Mark {
@@ -178,7 +177,7 @@ fn row_of(mark: &Mark, items: &[Item]) -> Node {
     // Markdown's backticks are left out: the line is plain text and they would show as they are.
     let line = text(mark.text.lines().next().unwrap_or_default().replace('`', "")).prop("size", "small").prop("clamp", true).prop("title", mark.text.as_str());
     let jump = entry(Entry { lead: None, title: line, detail: Some(muted(who).prop("size", "small")), trailing: None }).on("onClick", move |_| crate::rail::go(at));
-    let remove = button("", "ghost", false, move || toggle(at)).prop("size", "icon-sm").prop("label", "Remove the bookmark").prop("title", "Remove this bookmark").child(icon(24, 2.0, &REMOVE).prop("size", 14));
+    let remove = button("", "ghost", false, move || toggle(at)).prop("size", "icon-sm").prop("label", "Remove the bookmark").prop("title", "Remove this bookmark").child(icon(24, 2.0, &icons::CLOSE).prop("size", 14));
     stack().prop("gap", "none").key(format!("bookmark-{at}")).child(row().prop("gap", "xs").prop("align", "center").child(stack().prop("grow", true).child(jump)).child(remove))
 }
 

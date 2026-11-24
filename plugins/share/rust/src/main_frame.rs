@@ -2,7 +2,7 @@
 //! shared, and takes a link down when its port has closed.
 
 use crate::{
-    ASK, DONE, STATE, WANT, approvals,
+    ASK, STATE, approvals,
     shares::{self, Share},
     tools,
     tunnel::{self, Fail},
@@ -56,7 +56,7 @@ pub fn refresh() -> impl Future<Output = ()> {
 
 /// Tells the modal what waits for an answer and what is shared.
 pub fn changed() {
-    messages::tell(STATE, &state_message());
+    messages::publish(STATE, &state_message());
 }
 
 /// What the modal is told: the asks that wait, the links, and whether OpenTunnel is missing.
@@ -185,8 +185,8 @@ async fn install() -> Result<(), String> {
 }
 
 /// What the modal asks for: the user's answer to an ask, a link to stop, or OpenTunnel to install.
-async fn serve(ask: Value) {
-    let result = match ask["op"].as_str().unwrap_or_default() {
+async fn serve(ask: Value) -> Result<Value, String> {
+    match ask["op"].as_str().unwrap_or_default() {
         "install" => install().await,
         "answer" => approvals::answer(ask["approval"].as_str().unwrap_or_default(), ask["allow"] == true),
         "stop" => {
@@ -200,14 +200,14 @@ async fn serve(ask: Value) {
             }
         }
         other => Err(format!("Share's main doesn't do {other}.")),
-    };
-    messages::tell(DONE, &json!({ "id": ask["id"], "error": result.err() }));
+    }
+    .map(|()| Value::Null)
 }
 
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
-    messages::on(ASK, |ask| spawn(serve(ask.clone())));
-    messages::on(WANT, |_| changed());
+    messages::answer(ASK, serve);
+    messages::publish_on_want(STATE, state_message);
     tools::register_all();
     host::on_panes(|list| {
         with(|state| state.panes = list.iter().filter_map(|pane| pane["paneId"].as_str().map(str::to_owned)).collect());

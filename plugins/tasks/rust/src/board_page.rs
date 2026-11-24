@@ -20,7 +20,7 @@ use std::{cell::RefCell, collections::HashMap, future::Future, rc::Rc};
 use wings_plugin::{
     host,
     task::spawn,
-    ui::{Node, checkbox, chips, empty, loading, search_field, slot},
+    ui::{Node, checkbox, chips, empty, loading, page_with, search_field, slot, title_with_context, toolbar_titled},
 };
 
 /// How many cards a column of the board shows at first, and rows the list does, and how many more each Show more adds.
@@ -286,18 +286,18 @@ fn search_index(store: &Store, version: u64) -> Rc<Index> {
 fn view() -> Vec<Node> {
     let project = feed::project();
     let Some(project) = project else {
-        return vec![page(vec![header("", None)], [loading().text("Loading issues")])];
+        return vec![page_with(vec![header("", None)], [loading().text("Loading issues")])];
     };
     let Some(project) = project else {
-        return vec![page(vec![header("", None)], [empty("No project open", "Open a project to see its issues.")])];
+        return vec![page_with(vec![header("", None)], [empty("No project open", "Open a project to see its issues.")])];
     };
     let (store, read_error, version) = feed::with(|f| (f.store.clone(), f.error.clone(), f.version));
     if let (None, Some(error)) = (&store, &read_error) {
-        return vec![page(vec![header(&project.name, None)], [empty("Couldn't read the issues", error)])];
+        return vec![page_with(vec![header(&project.name, None)], [empty("Couldn't read the issues", error)])];
     }
     let tab_ready = with(|p| p.folded.is_some());
     if !tab_ready {
-        return vec![page(vec![header(&project.name, None)], [loading().text("Loading issues")])];
+        return vec![page_with(vec![header(&project.name, None)], [loading().text("Loading issues")])];
     }
     build(&project, store.as_deref(), version)
 }
@@ -348,41 +348,32 @@ fn build(project: &Project, store: Option<&Store>, version: u64) -> Vec<Node> {
         _ => body.push(loading().text("Loading issues")),
     }
     let flush = all.is_some() && !layout.list;
-    let page = page(top, body);
+    let page = page_with(top, body);
     vec![if flush { page.prop("flush", true) } else { page }]
 }
 
 /// How wide the header's search field is.
 const SEARCH_WIDTH: u32 = 220;
 
-/// A page whose `top` (the header and the bars under it) stays put over its `body`.
-fn page(top: Vec<Node>, body: impl IntoIterator<Item = Node>) -> Node {
-    Node::new("Page").child(Node::new("Slot").prop("name", "toolbar").children(top)).child(Node::new("Slot").prop("name", "body").children(body))
-}
-
 /// The tab's header, as Claude chat's: "Issues" strong with the project muted after it, and the search and New issue at
 /// the end.
 fn header(project: &str, search: Option<Node>) -> Node {
-    let title = row("m")
-        .prop("align", "center")
-        .child(Node::new("Text").prop("weight", "strong").text("Issues"))
-        .maybe((!project.is_empty()).then(|| muted(project).prop("size", "small").prop("weight", "normal").prop("truncate", true).prop("title", project)));
     let actions = row("s")
         .prop("align", "center")
         .maybe(search.map(|search| stack("none").prop("width", SEARCH_WIDTH).child(search)))
         .child(add_issue::button());
-    Node::new("Toolbar").child(slot("title", title)).child(slot("actions", actions))
+    toolbar_titled(title_with_context("Issues", project), Some(actions))
 }
 
 /// How the issues are shown, under the header: the view and the order on tracks, what's left out as ticks, and the counts
 /// of the whole project at the end.
 fn filter_bar(layout: Layout, has_parents: bool, show_canceled: bool, canceled: usize, all: &[Issue]) -> Node {
     let view = chips("View", &[("board", "Board"), ("list", "List")], if layout.list { "list" } else { "board" }, move |value| pick(Layout { list: value == "list", ..layout }))
-        .prop("segmented", true);
+        .segmented();
     let sort = row("s")
         .prop("align", "center")
         .child(muted("Sort").prop("size", "small"))
-        .child(chips("Sort", &Sort::OPTIONS, layout.sort.as_str(), move |value| pick(Layout { sort: Sort::parse(value).unwrap_or_default(), ..layout })).prop("segmented", true));
+        .child(chips("Sort", &Sort::OPTIONS, layout.sort.as_str(), move |value| pick(Layout { sort: Sort::parse(value).unwrap_or_default(), ..layout })).segmented());
     let choices = row("l")
         .prop("wrap", true)
         .prop("align", "center")

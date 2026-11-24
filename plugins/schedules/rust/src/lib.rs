@@ -35,11 +35,8 @@ mod tools;
 mod watches;
 mod worktree_setup;
 
-/// What a page tells main: `{ id, op, ... }` for the change it asks for, which main answers with `DONE`.
+/// What a page asks main: `{ op, ... }` for the change it wants (`messages::ask`), which main answers, with its error when it failed.
 pub const ASK: &str = "ask";
-/// What main tells back: `{ id, error }`, the error null when it worked.
-pub const DONE: &str = "done";
-/// A page asks main for `STATE`.
-pub const WANT: &str = "want";
-/// What a page can't read itself: `{ targets, signInCode, approvals }`.
+/// What a page can't read itself: `{ targets, signInCode, approvals }`, which main tells on every change and a page
+/// that opens asks for (`messages::want`).
 pub const STATE: &str = "state";

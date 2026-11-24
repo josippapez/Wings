@@ -143,7 +143,7 @@ fn build(p: &Page) -> Vec<Node> {
         .prop("label", "Show")
         .prop("value", if mine { "mine" } else { "all" })
         .prop("options", json!([{ "value": "mine", "label": "Mine" }, { "value": "all", "label": "Whole sprint" }]))
-        .prop("segmented", true)
+        .segmented()
         .on("onChange", |event| set_mine(event["value"] == "mine"));
     let body = match (&p.answer, sprint) {
         (Some(Err(error)), _) => gap(stack(), "s").child(empty("Couldn't load the sprint", &truncate(error, 300))),

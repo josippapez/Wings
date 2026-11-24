@@ -6,14 +6,14 @@ use crate::{
     ipc,
     pulls::{Agent, Filter, PullRow, PullsAnswer, Scope, count_pulls, filter_of, filter_pulls, split_title},
     types::PrArgs,
-    ui::parts::{REFRESH, icon_button, joined, page_with, tag, time_text, title_with_context},
+    ui::parts::{tag, time_text},
 };
 use serde_json::{Value, json};
 use std::{cell::RefCell, rc::Rc};
 use wings_plugin::{
-    host, poll,
+    host, messages, poll,
     task::spawn,
-    ui::{Node, button, chips, empty, list_button, muted, notice, row, rows_card, stack, text},
+    ui::{Node, button, chips, empty, icon_button, icons, joined, list_button, muted, notice, page_with, row, rows_card, stack, text, title_with_context, toolbar_titled},
 };
 
 /// How often the list is asked for again while Wings is in front.
@@ -65,7 +65,7 @@ fn read(clear: bool) {
         return;
     };
     spawn(async move {
-        let asked = ipc::ask(ipc::PULLS, json!({ "path": path })).await.and_then(|value| serde_json::from_value::<PullsAnswer>(value).map_err(|error| error.to_string()));
+        let asked = messages::ask(ipc::PULLS, json!({ "path": path })).await.and_then(|value| serde_json::from_value::<PullsAnswer>(value).map_err(|error| error.to_string()));
         with(|s| {
             if s.reads == number {
                 s.answer = Some(asked);
@@ -89,7 +89,7 @@ fn act() {
         return;
     };
     spawn(async move {
-        let done = ipc::ask(ipc::PULLS_ACTION, json!({ "path": path })).await;
+        let done = messages::ask(ipc::PULLS_ACTION, json!({ "path": path })).await;
         with(|s| {
             s.signing = false;
             s.sign_error = done.err();
@@ -134,7 +134,7 @@ fn start(store: Store, on_open: impl Fn(PrArgs) + 'static) {
         }
     }
     poll::while_focused(REFETCH_MS, false, || read(false));
-    ipc::hear(ipc::REFRESH, |_| read(false));
+    messages::hear(ipc::REFRESH, |_| read(false));
 }
 
 /// The block's list: the page of the Pull requests block, which opens a pull request in a tab.
@@ -295,7 +295,7 @@ fn chip_options(current: Filter, counts: [usize; 4]) -> Vec<(String, String)> {
 fn filter_chips(s: &State, counts: [usize; 4]) -> Node {
     let options = chip_options(s.filter, counts);
     let options: Vec<(&str, &str)> = options.iter().map(|(v, l)| (v.as_str(), l.as_str())).collect();
-    chips("Show", &options, s.filter.name(), |value| set_filter(filter_of(&json!({ "filter": value })))).prop("segmented", true)
+    chips("Show", &options, s.filter.name(), |value| set_filter(filter_of(&json!({ "filter": value })))).segmented()
 }
 
 fn build(s: &State) -> Vec<Node> {
@@ -311,11 +311,11 @@ fn build(s: &State) -> Vec<Node> {
     };
     let ready = matches!(&s.answer, Some(Ok(PullsAnswer { rows: Some(_), .. })));
     let counts = count_pulls(&rows);
-    let refresh = icon_button("Refresh", &REFRESH, s.loading, || read(false));
+    let refresh = icon_button("Refresh", &icons::REFRESH_CW, || read(false)).disabled(s.loading);
     let chips_node = ready.then(|| filter_chips(s, counts));
     if s.store == Store::Tab {
-        let actions = Node::new("Slot").prop("name", "actions").child(row().prop("gap", "xs").prop("align", "center").child(refresh));
-        let mut top = vec![Node::new("Toolbar").child(title_with_context("Pull requests", name)).child(actions)];
+        let actions = row().prop("gap", "xs").prop("align", "center").child(refresh);
+        let mut top = vec![toolbar_titled(title_with_context("Pull requests", name), Some(actions))];
         top.extend(chips_node.map(|chips| Node::new("Bar").prop("edge", "bottom").child(row().prop("gap", "m").prop("wrap", true).prop("align", "center").child(chips))));
         return vec![page_with(top, [body(s, &rows)])];
     }

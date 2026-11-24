@@ -2,7 +2,7 @@
 //! main as operations. A page in a worktree Wings made shows its main project's issues, so the project here has the main
 //! project's id and name; its path stays the worktree's, where terminals open.
 
-use crate::{ask::ask, domain::{Op, Store}, home::home_of, storage::read_store};
+use crate::{domain::{Op, Store}, home::home_of, storage::read_store};
 use serde_json::{Value, json};
 use std::{cell::RefCell, future::Future, rc::Rc};
 use wings_plugin::{host, messages, task::spawn};
@@ -92,7 +92,7 @@ pub fn apply(op: Op) -> impl Future<Output = Result<(), String>> {
         let project = feed.project.clone().flatten();
         (feed.only.clone().or_else(|| project.clone().map(|p| p.id)).unwrap_or_default(), project.map(|p| p.name).unwrap_or_default())
     });
-    async move { ask("op", json!({ "projectId": id, "projectName": name, "op": op.to_value() })).await }
+    async move { messages::ask("op", json!({ "projectId": id, "projectName": name, "op": op.to_value() })).await.map(drop) }
 }
 
 /// Opens an issue's tab.

@@ -18,7 +18,7 @@ use crate::{
 use serde_json::{Value, json};
 use std::{cell::RefCell, collections::HashMap, future::Future, rc::Rc};
 use wings_plugin::{
-    host,
+    host, messages,
     task::spawn,
     ui::{self, Choice, Combobox, Node, combobox, empty, loading, page, select, slot},
 };
@@ -539,7 +539,8 @@ fn file_row(file: &crate::domain::FileChange, first_commit: Option<String>) -> N
 
 fn open_diff(commit: Option<String>, path: String) {
     let root = feed::project().flatten().map(|p| p.path).unwrap_or_default();
-    run(crate::ask::ask("open-diff", json!({ "commit": commit, "path": path, "root": root })));
+    let reply = messages::ask("open-diff", json!({ "commit": commit, "path": path, "root": root }));
+    run(async move { reply.await.map(drop) });
 }
 
 /// The files agents' journals reported for the issue, newest first, with the rows past the first ten folded.
@@ -650,7 +651,8 @@ fn activity(issue: &Issue) -> Node {
 
 fn resume(id: &str, kind: Option<&str>) {
     let cwd = feed::project().flatten().map(|p| p.path).unwrap_or_default();
-    run(crate::ask::ask("open-session", json!({ "session": { "id": id, "kind": kind }, "cwd": cwd })));
+    let reply = messages::ask("open-session", json!({ "session": { "id": id, "kind": kind }, "cwd": cwd }));
+    run(async move { reply.await.map(drop) });
 }
 
 fn start_agent(key: &str, kind: &str) {

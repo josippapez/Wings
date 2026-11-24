@@ -3,14 +3,14 @@
 //! time. Where the tab is, the scan it shows and the folder in the middle, is kept while the tab is open.
 
 use crate::{
-    ask::{ask, listen},
+    ask::ask,
     bytes::{bytes, count},
     df::DiskRow,
     disks::load_disks,
     entry::{Entry, parent_path},
     level::{Level, MOST, fetch},
     rows::{Extras, Row, rows_of},
-    state::{Collector, Done, Phase, ScanInfo, STATE, TrashResult, REFRESH, WANT},
+    state::{Collector, Done, Phase, ScanInfo, STATE, TrashResult, REFRESH},
     sunburst::{Layout, MIN_ANGLE, RINGS, layout},
 };
 use serde_json::{Value, json};
@@ -599,8 +599,6 @@ pub fn star(path: &str, on: bool) {
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     wings_plugin::run_filled(crate::views::view);
-    listen();
-    messages::on(STATE, on_state);
     messages::on(REFRESH, |_| reload_disks());
     host::on_projects(|projects| {
         let list = projects.iter().map(|project| (project["name"].as_str().unwrap_or_default().to_owned(), project["path"].as_str().unwrap_or_default().to_owned())).collect();
@@ -609,7 +607,7 @@ pub fn start() {
     with(|page| page.starred = read_starred());
     reload_disks();
     poll::while_focused(REFETCH_MS, false, reload_disks);
-    messages::tell(WANT, &Value::Null);
+    messages::want(STATE, on_state);
 }
 
 #[cfg(test)]

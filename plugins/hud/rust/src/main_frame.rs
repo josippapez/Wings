@@ -6,7 +6,7 @@
 //! way Claude Code does. MCP servers come from the tool lists Claude Code records as it connects to them.
 
 use crate::{
-    LIMIT_CRITICAL, LIMIT_WARN, SNAPSHOT, WANT,
+    LIMIT_CRITICAL, LIMIT_WARN, SNAPSHOT,
     format::MINUTE,
     session::{Session, ingest, session, start_run},
     view::{REPORT_WITHIN, limits, pane_status, snapshot, state},
@@ -54,7 +54,7 @@ fn tell_sidebar() {
     let Some(follow) = main(|m| m.follow.clone()) else {
         return;
     };
-    messages::tell(SNAPSHOT, &follow.all(|sessions| state(|state| snapshot(state, sessions))));
+    messages::publish(SNAPSHOT, &follow.all(|sessions| state(|state| snapshot(state, sessions))));
 }
 
 /// Changes come in bursts while Claude works, so the strips and the sidebar are drawn at most every 300 ms. Wings
@@ -230,7 +230,7 @@ pub fn start() {
     });
     main(|m| m.follow = Some(follow));
     // The sidebar opened: what there is to show, at once.
-    messages::on(WANT, |_| tell_sidebar());
+    messages::on_want(SNAPSHOT, tell_sidebar);
 
     // Saved before limits were kept per account, it is a single object: start over.
     if let Ok(Value::Array(saved)) = storage::get("limits") {

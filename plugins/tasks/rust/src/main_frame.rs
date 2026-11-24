@@ -2,7 +2,6 @@
 //! Every change goes through `writer::write`.
 
 use crate::{
-    ask::serve,
     claude_hooks,
     commands::resume_command,
     domain::{Actor, Op},
@@ -14,7 +13,7 @@ use crate::{
 };
 use serde_json::Value;
 use std::cell::RefCell;
-use wings_plugin::{host, task::spawn};
+use wings_plugin::{host, messages, task::spawn};
 
 thread_local! {
     /// The panes as Wings last listed them.
@@ -26,8 +25,8 @@ fn text(value: &Value, name: &str) -> String {
 }
 
 /// What a page asks for: an operation on a project's issues, a session to open, or a file's diff.
-async fn answer(what: String, payload: Value) -> Result<(), String> {
-    match what.as_str() {
+async fn answer(what: &str, payload: Value) -> Result<(), String> {
+    match what {
         "op" => {
             let op = Op::from_value(&payload["op"])?;
             write(&text(&payload, "projectId"), &text(&payload, "projectName"), &op, &Actor::You).map(drop)
@@ -60,7 +59,9 @@ pub fn start() {
         PANES.with(|panes| *panes.borrow_mut() = list.to_vec());
         on_section_panes(list);
     });
-    serve(|what, payload| Box::pin(answer(what, payload)));
+    for what in ["op", "open-session", "open-diff"] {
+        messages::answer(what, move |payload| async move { answer(what, payload).await.map(|()| Value::Null) });
+    }
     // Picks up every project as soon as Wings tells us which exist, and again when that changes.
     host::on_projects(|list| {
         // A worktree Wings made has no store of its own: its issues are in its main project, which is listed too.

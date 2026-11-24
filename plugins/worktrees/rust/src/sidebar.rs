@@ -15,7 +15,7 @@ use wings_plugin::{
     git::{forget_default_branch, forget_repo_roots, on_change, repo_root},
     host,
     task::{join, join_all, spawn},
-    ui::{Entry, Node, badge, checkbox, confirm, empty, entry, icon, loading, muted, notice, page, row, rows_card, slot, spinner, stack, text},
+    ui::{Entry, Node, badge, button, checkbox, confirm, empty, entry, icon_button, icons, loading, muted, notice, page, row, rows_card, slot, spinner, stack, text},
 };
 
 #[derive(Clone, Copy, PartialEq)]
@@ -209,11 +209,6 @@ fn scan_mac() {
     });
 }
 
-fn button(label: impl Into<String>, variant: &str, disabled: bool, on_click: impl Fn() + 'static) -> Node {
-    let button = Node::new("Button").prop("variant", variant).on("onClick", move |_| on_click()).text(label);
-    if disabled { button.prop("disabled", true) } else { button }
-}
-
 /// A repo's own settings and hooks can make git run programs, and `git worktree remove` (which looks for changes
 /// first) and `git branch -d` do. That is why removing is a warning in a repo that isn't one of your projects.
 const OUTSIDE_WARNING: &str = "This repo is outside your projects. Removing a worktree, and its branch if you tick that, runs git in it, and a repo's own settings and hooks can make git run programs. Only remove worktrees of repos you trust.";
@@ -248,32 +243,15 @@ fn confirm_card(p: &Page, asked: &Ask, repo: &Repo, branch: Option<&str>, workin
         title,
         body,
         [
-            button(if *kind == Kind::Prune { "Prune" } else { "Remove" }, "destructive", working, move || do_confirm(checked)),
-            button("Cancel", "ghost", working, || with(|page| page.asked = None)),
+            button(if *kind == Kind::Prune { "Prune" } else { "Remove" }, "destructive", false, move || do_confirm(checked)).disabled(working),
+            button("Cancel", "ghost", false, || with(|page| page.asked = None)).disabled(working),
         ],
     )
 }
 
-/// Lucide's `square-terminal`, `trash-2` and `rotate-cw`, drawn by the ghost icon buttons below.
-const TERMINAL: [&str; 3] = ["M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z", "m7 11 2-2-2-2", "M11 13h4"];
-const TRASH: [&str; 5] = ["M3 6h18", "M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6", "M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2", "M10 11v6", "M14 11v6"];
-const REFRESH: [&str; 2] = ["M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8", "M21 3v5h-5"];
-
-/// A ghost icon button with its name as the label and the tooltip, as the Issues tab's New issue.
-fn icon_button(label: &str, tip: &str, paths: &[&str], disabled: bool, on_click: impl Fn() + 'static) -> Node {
-    let button = Node::new("Button")
-        .prop("variant", "ghost")
-        .prop("size", "icon-sm")
-        .prop("label", label)
-        .prop("title", tip)
-        .on("onClick", move |_| on_click())
-        .child(icon(24, 2.0, paths).prop("size", 16));
-    if disabled { button.prop("disabled", true) } else { button }
-}
-
 /// A small secondary button at the end of a section's label.
 fn small_button(label: impl Into<String>, disabled: bool, on_click: impl Fn() + 'static) -> Node {
-    button(label, "secondary", disabled, on_click).prop("size", "sm")
+    button(label, "secondary", false, on_click).size("sm").disabled(disabled)
 }
 
 /// A section's label: its name, its context muted after it, and `actions` at the end, which wrap under the label when
@@ -322,7 +300,7 @@ fn worktree_item(root: &str, r: &Row, working: bool, confirm: Option<Node>, can_
     let detail = muted(&path).prop("size", "small").prop("truncate", true).prop("title", shorten_path(&wt.path));
     let open = (!r.missing && can_open).then(|| {
         let path = wt.path.clone();
-        icon_button("Open in new pane", "Open in new pane", &TERMINAL, false, move || {
+        icon_button("Open in new pane", &icons::SQUARE_TERMINAL, move || {
             let opened = host::open_pane(&path);
             spawn(async move {
                 if let Err(error) = opened.await {
@@ -332,7 +310,7 @@ fn worktree_item(root: &str, r: &Row, working: bool, confirm: Option<Node>, can_
         })
     });
     let asked = Ask { kind: Kind::Remove, root: root.to_owned(), paths: vec![wt.path.clone()] };
-    let remove = icon_button("Remove", r.why.unwrap_or("Remove worktree"), &TRASH, !r.removable || working, move || ask(asked.clone()));
+    let remove = icon_button("Remove", &icons::TRASH_2, move || ask(asked.clone())).tooltip(r.why.unwrap_or("Remove worktree")).disabled(!r.removable || working);
     let actions = row().prop("gap", "xs").prop("align", "center").maybe(when).maybe(open).child(remove);
     let item = entry(Entry { lead: None, title, detail: Some(detail), trailing: Some(actions) }).key(&wt.path);
     let confirm = confirm.map(|confirm| entry(Entry { lead: None, title: confirm, detail: None, trailing: None }).key(format!("{}:confirm", wt.path)));
@@ -407,7 +385,7 @@ fn view() -> Vec<Node> {
         let Some(repos) = &p.repos else {
             return vec![loading()];
         };
-        let refresh_button = icon_button("Refresh", "Refresh", &REFRESH, false, || {
+        let refresh_button = icon_button("Refresh", &icons::ROTATE_CW, || {
             // The button only: focus and pane changes keep what was found.
             forget_repo_roots();
             forget_default_branch(None);

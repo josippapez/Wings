@@ -3,14 +3,13 @@
 use crate::{
     collector,
     disks::{disks_now, is_snapshot_date},
-    gate::Gate,
     protect::protected_reason,
     scans::{recompute_hidden, remove_from_scans},
     state::{Collected, TrashResult},
 };
 use serde_json::Value;
 use std::{cell::RefCell, rc::Rc};
-use wings_plugin::{host, task::map_limit};
+use wings_plugin::{host, task::{Gate, map_limit}};
 
 /// What a command printed, trimmed: its errors, else its output.
 fn said(out: &Value) -> String {

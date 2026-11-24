@@ -7,7 +7,7 @@ use wings_plugin::{
     format::plural,
     host,
     markdown::{code_block, markdown},
-    ui::{Node, button, dialog as panel, heading, icon, loading, muted, notice, row, stack, text},
+    ui::{Node, button, dialog as panel, heading, icon, icons, loading, muted, notice, row, stack, text},
 };
 
 use crate::{
@@ -150,14 +150,11 @@ fn copy_export() {
     });
 }
 
-/// Lucide's `copy`, and its `check` for a button that was used.
-const COPY: [&str; 2] = ["M10 8h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2z", "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"];
-const CHECK: [&str; 1] = ["M20 6 9 17l-5-5"];
 
 /// A small copy icon, a check once it was used. `key` names it among the others.
 pub fn copy_button(key: &str, label: &str, c: &Chat, on_click: impl Fn() + 'static) -> Node {
     let copied = c.session.cmds.copied.as_deref() == Some(key);
-    let (label, paths): (&str, &[&str]) = if copied { ("Copied", &CHECK) } else { (label, &COPY) };
+    let (label, paths): (&str, &[&str]) = if copied { ("Copied", &icons::CHECK) } else { (label, &icons::COPY) };
     button("", "ghost", false, on_click).prop("size", "icon-sm").prop("label", label).prop("title", label).child(icon(24, 2.0, paths).prop("size", 14)).key(key)
 }
 

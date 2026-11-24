@@ -4,14 +4,13 @@
 use crate::{
     collector,
     disks::{disks_now, hidden_of},
-    gate::Gate,
     level::detail_for,
     paths::{expand_home, home_folder, inside, tidy},
     state::{Collected, Done, Phase, Progress, STATE, ScanInfo},
 };
 use serde_json::{Value, json};
 use std::{cell::{Cell, RefCell}, collections::HashMap, rc::Rc};
-use wings_plugin::{host, messages, task::spawn};
+use wings_plugin::{host, messages, task::{Gate, spawn}};
 
 /// What a scan's own answer holds: the root and nothing under it. Wings keeps the tree, and what is under a folder is
 /// asked for when it is shown.
@@ -47,7 +46,12 @@ pub fn scan_of(root: &str) -> Option<ScanInfo> {
 
 /// Tells every tab the scans and the Collector.
 pub fn publish() {
-    messages::tell(STATE, &json!({ "scans": summaries().iter().map(ScanInfo::to_value).collect::<Vec<_>>(), "collector": collector::now().to_value() }));
+    messages::publish(STATE, &state());
+}
+
+/// What every tab is told, and what a tab that opens later is told when it asks.
+pub fn state() -> Value {
+    json!({ "scans": summaries().iter().map(ScanInfo::to_value).collect::<Vec<_>>(), "collector": collector::now().to_value() })
 }
 
 /// Keeps `phase` for `root`, or drops the scan with none, and tells every tab. `quiet` keeps the time the scan last changed state: progress changes none.

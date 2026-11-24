@@ -22,7 +22,6 @@ mod collector;
 mod df;
 mod disks;
 mod entry;
-mod gate;
 mod level;
 #[cfg(feature = "main")]
 mod main_frame;

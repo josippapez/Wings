@@ -2,12 +2,12 @@
 //! or change one. It reads the saved entries itself and asks main for every change.
 
 use crate::{
-    STATE, WANT,
+    STATE,
     assigned::{AssignedTicket, DEFAULT_MIN_FREE_GB, DEFAULT_PROMPT, Project, Waiting, Watch, WatchDraft, WATCH_NAME, describe_check, started_elsewhere, state_options, title_wanted},
-    page_ask::{ask, ask_quiet, busy, clear_error, error, listen},
+    page_ask::{ask, ask_quiet, busy, clear_error, error},
     schedule::{Agent, DAYS, DAY_NUMBERS, Draft, EVERY_HOURS, Run, RunIn, Schedule, When, describe_moment, describe_next, describe_once_next, describe_when, next_run},
     store::{read_schedules, read_watches},
-    view::{CLOSE, EXTERNAL, PAUSE, PENCIL, PLAY, PLUS, REFRESH, RESUME, TRASH, busy_button, button, field, field_group, icon_button, small_badge, textarea},
+    view::{RESUME, busy_button, button, field, field_group, icon_button, small_badge, textarea},
     worktree_setup::{WorktreeSetup, include_text, worktree_change},
 };
 use serde_json::{Value, json};
@@ -16,7 +16,7 @@ use wings_plugin::{
     format::ago,
     git, host, messages, poll,
     task::spawn,
-    ui::{Choice, Combobox, Entry, Node, card, checkbox, chip, chips, combobox, confirm, disclosure, empty, entry, list, list_row, loading, muted, notice, page, row, rows_card, section, select, slot, stack, text, text_input, title, toolbar},
+    ui::{Choice, Combobox, Entry, Node, card, checkbox, chip, chips, combobox, confirm, disclosure, empty, entry, icons, list, list_row, loading, muted, notice, page, row, rows_card, section, select, slot, stack, text, text_input, title, toolbar},
 };
 
 /// How often "in 2 h" is worked out again.
@@ -273,7 +273,7 @@ fn save() {
 }
 
 fn agent_chips(f: &Form) -> Node {
-    chips("Agent", &[("claude", Agent::Claude.label()), ("opencode", Agent::OpenCode.label())], f.agent.id(), |value| with(|p| p.form.agent = Agent::from_id(value).unwrap_or(Agent::Claude))).prop("segmented", true)
+    chips("Agent", &[("claude", Agent::Claude.label()), ("opencode", Agent::OpenCode.label())], f.agent.id(), |value| with(|p| p.form.agent = Agent::from_id(value).unwrap_or(Agent::Claude))).segmented()
 }
 
 fn schedule_fields(f: &Form) -> Vec<Node> {
@@ -323,7 +323,7 @@ fn schedule_fields(f: &Form) -> Vec<Node> {
                         }
                     })
                 },
-            ).prop("segmented", true)).child(when),
+            ).segmented()).child(when),
         ),
     ];
     // The chat is Claude Code's: another agent has nothing to choose.
@@ -333,7 +333,7 @@ fn schedule_fields(f: &Form) -> Vec<Node> {
             field_group(
                 "Run in",
                 Some("A terminal runs claude with the prompt. A Claude chat opens the run as a chat tab that starts with it. If the chat plugin is off, it falls back to a terminal.".into()),
-                chips("Run in", &[("terminal", "Terminal"), ("chat", "Claude chat")], f.run_in.id(), |value| with(|p| p.form.run_in = RunIn::from_id(Some(value)))).prop("segmented", true),
+                chips("Run in", &[("terminal", "Terminal"), ("chat", "Claude chat")], f.run_in.id(), |value| with(|p| p.form.run_in = RunIn::from_id(Some(value)))).segmented(),
             ),
         );
     }
@@ -420,7 +420,7 @@ fn form_view(p: &Page) -> Node {
                 with(|p| p.form.kind = if kind == "assigned" { Kind::Assigned } else { Kind::Schedule });
                 load_form_data();
             })
-            .prop("segmented", true),
+            .segmented(),
         ));
     }
     fields.push(field(
@@ -479,9 +479,9 @@ fn entry_row(key: String, enabled: bool, name: &str, project: &str, agent: Agent
 fn entry_actions(id: &str, enabled: bool, label: &str, working: bool, toggle: &'static str) -> Vec<Node> {
     let (edit_id, toggle_id, delete_id) = (id.to_owned(), id.to_owned(), id.to_owned());
     vec![
-        icon_button(&format!("Edit {label}"), &PENCIL, false, move || edit(Editing::Entry(edit_id.clone()))),
-        icon_button(&format!("{} {label}", if enabled { "Pause" } else { "Resume" }), if enabled { &PAUSE } else { &RESUME }, working, move || ask(toggle, json!({ "entry": toggle_id }), || {})),
-        icon_button(&format!("Delete {label}"), &TRASH, false, move || with(|p| p.deleting = Some(delete_id.clone()))),
+        icon_button(&format!("Edit {label}"), &icons::PENCIL, false, move || edit(Editing::Entry(edit_id.clone()))),
+        icon_button(&format!("{} {label}", if enabled { "Pause" } else { "Resume" }), if enabled { &icons::PAUSE } else { &RESUME }, working, move || ask(toggle, json!({ "entry": toggle_id }), || {})),
+        icon_button(&format!("Delete {label}"), &icons::TRASH, false, move || with(|p| p.deleting = Some(delete_id.clone()))),
     ]
 }
 
@@ -510,7 +510,7 @@ fn schedule_item(s: &Schedule, project: &str, now: i64, working: bool) -> Node {
     let name = s.title();
     let next = next_run(s);
     let run_id = s.id.clone();
-    let mut actions = vec![icon_button(&format!("Run {name} now"), &PLAY, working, move || ask("runNow", json!({ "entry": run_id }), || {}))];
+    let mut actions = vec![icon_button(&format!("Run {name} now"), &icons::PLAY, working, move || ask("runNow", json!({ "entry": run_id }), || {}))];
     actions.extend(entry_actions(&s.id, s.enabled, &name, working, "toggle"));
     let once = matches!(s.when, When::Once { .. });
     let lines = if once && next.is_none() {
@@ -582,7 +582,7 @@ fn ticket_row(w: &Watch, t: &AssignedTicket, p: &Page, working: bool, now: i64) 
                     .prop("wrap", true)
                     .prop("align", "start")
                     .child(badge)
-                    .child(icon_button(&format!("Open {}", t.ticket.title), &EXTERNAL, false, move || host::open_url(&url)))
+                    .child(icon_button(&format!("Open {}", t.ticket.title), &icons::EXTERNAL_LINK, false, move || host::open_url(&url)))
                     .maybe(started_at.map(|at| ago_text("Started ", at, now)))
                     .child(start_control),
             ),
@@ -608,7 +608,7 @@ fn watch_item(w: &Watch, p: &Page, now: i64, working: bool) -> Node {
         let id = w.id.clone();
         actions.push(icon_button(
             &format!("{} {label} {}", if failed { "Try" } else { "Check" }, if failed { "again" } else { "now" }),
-            &REFRESH,
+            &icons::ROTATE_CW,
             p.checking.as_deref() == Some(w.id.as_str()) || working,
             move || {
                 with(|p| p.checking = Some(id.clone()));
@@ -656,9 +656,9 @@ fn waiting_item(w: &Watch, ticket: &Waiting, project: &str, working: bool) -> No
             row()
                 .prop("gap", "xs")
                 .prop("align", "center")
-                .child(icon_button(&format!("Open {}", ticket.ticket.title), &EXTERNAL, false, move || host::open_url(&url)))
+                .child(icon_button(&format!("Open {}", ticket.ticket.title), &icons::EXTERNAL_LINK, false, move || host::open_url(&url)))
                 .child(busy_button("Start", "secondary", Some("sm"), Some(format!("Start {}", ticket.ticket.title)), working, false, move || ask("startTicket", json!({ "entry": start.0, "ticket": start.1 }), || {})))
-                .child(icon_button(&format!("Dismiss {}", ticket.ticket.title), &CLOSE, working, move || ask("dismissWaiting", json!({ "entry": dismiss.0, "ticket": dismiss.1 }), || {}))),
+                .child(icon_button(&format!("Dismiss {}", ticket.ticket.title), &icons::CLOSE, working, move || ask("dismissWaiting", json!({ "entry": dismiss.0, "ticket": dismiss.1 }), || {}))),
         ),
     })
     .key(format!("{}:{}", w.id, ticket.ticket.id))
@@ -741,7 +741,7 @@ fn toolbar_actions(p: &Page) -> Option<Node> {
         let everywhere = p.everywhere;
         button(&if everywhere { "This project".to_owned() } else { format!("All projects ({elsewhere} more)") }, "ghost", None, None, false, move || with(|p| p.everywhere = !everywhere))
     });
-    (shown > 0 || scope.is_some()).then(|| row().prop("gap", "s").maybe(scope).prop("align", "center").maybe((shown > 0).then(|| icon_button("Add entry", &PLUS, false, || edit(Editing::New)))))
+    (shown > 0 || scope.is_some()).then(|| row().prop("gap", "s").maybe(scope).prop("align", "center").maybe((shown > 0).then(|| icon_button("Add entry", &icons::PLUS, false, || edit(Editing::New)))))
 }
 
 fn view() -> Vec<Node> {
@@ -786,9 +786,7 @@ fn open_with(args: Option<Value>) {
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     wings_plugin::run_filled(view);
-    listen("s");
     reload();
-    messages::on(STATE, hear);
     host::on_projects(|list| {
         with(|p| p.projects = Some(Project::list(&Value::Array(list.to_vec()))));
         // A form that was waiting for its project's branches finds them.
@@ -800,7 +798,7 @@ pub fn start() {
     // "in 2 h" is worked out again each time the page is built, which this makes happen.
     poll::while_focused(CLOCK_MS, false, || {});
     open_with(host::view_args());
-    messages::tell(WANT, &Value::Null);
+    messages::want(STATE, hear);
 }
 
 #[cfg(test)]

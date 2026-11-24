@@ -3,11 +3,11 @@
 
 use crate::{
     actions, answers, collector,
-    scans::{forget_scan, publish, start_scan, stop_scan},
-    state::{ASK, Collected, DONE, WANT},
+    scans::{forget_scan, publish, start_scan, state, stop_scan},
+    state::{ASK, Collected, STATE},
 };
 use serde_json::{Value, json};
-use wings_plugin::{messages, task::spawn, tools};
+use wings_plugin::{messages, tools};
 
 fn text(asked: &Value, name: &str) -> String {
     asked[name].as_str().unwrap_or_default().to_owned()
@@ -72,17 +72,7 @@ fn register_tools() {
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     register_tools();
-    messages::on(WANT, |_| publish());
-    messages::on(ASK, |asked| {
-        let asked = asked.clone();
-        spawn(async move {
-            let id = asked["id"].clone();
-            let told = match answer(asked).await {
-                Ok(result) => json!({ "id": id, "result": result }),
-                Err(error) => json!({ "id": id, "error": error }),
-            };
-            messages::tell(DONE, &told);
-        });
-    });
+    messages::publish_on_want(STATE, state);
+    messages::answer(ASK, answer);
     publish();
 }

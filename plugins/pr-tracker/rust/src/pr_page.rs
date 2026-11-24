@@ -16,7 +16,7 @@ use crate::{
 use serde_json::{Value, json};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use wings_plugin::{
-    host, poll,
+    host, messages, poll,
     task::{SingleFlight, join, spawn},
 };
 
@@ -104,7 +104,7 @@ async fn load_overview() {
             let (url, cwd) = read(|p| p.args.as_ref().map(|a| (a.url.clone(), a.cwd.clone()))).unwrap_or_default();
             let mut told = overview.status.clone();
             told.items = None;
-            ipc::send(ipc::PR_STATUS, &json!({ "url": url, "cwd": cwd, "status": told }));
+            messages::send(ipc::PR_STATUS, &json!({ "url": url, "cwd": cwd, "status": told }));
             with(|p| {
                 p.errors[0] = None;
                 p.problem = None;
@@ -217,7 +217,7 @@ fn ask_main(op: &str, extra: Value) -> impl std::future::Future<Output = Result<
     if let (Some(payload), Some(extra)) = (payload.as_object_mut(), extra.as_object()) {
         payload.extend(extra.clone());
     }
-    ipc::ask(ipc::PR, payload)
+    messages::ask(ipc::PR, payload)
 }
 
 /// Opens the diff viewer, or sends the PR's diff to the agent on its branch (`agent`), at a thread's lines when given.
@@ -253,7 +253,7 @@ pub fn fix_problem() {
         p.notice = None;
     });
     spawn(async move {
-        let result = ipc::ask(ipc::PULLS_ACTION, json!({ "path": path })).await;
+        let result = messages::ask(ipc::PULLS_ACTION, json!({ "path": path })).await;
         with(|p| {
             p.problem_busy = false;
             p.notice = result.err();
@@ -346,7 +346,7 @@ fn view() -> Vec<wings_plugin::ui::Node> {
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     wings_plugin::run_filled(view);
-    ipc::hear(ipc::REFRESH, |_| {
+    messages::hear(ipc::REFRESH, |_| {
         with(|p| p.link = None);
         if read(|p| p.args.is_some()) {
             refresh();

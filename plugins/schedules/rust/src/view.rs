@@ -1,20 +1,17 @@
 //! The pieces both pages draw with, as the nodes `wings-plugin-ui/native` makes of them.
 
-use wings_plugin::ui::{Node, icon, muted, row, spinner, stack, text};
+use wings_plugin::ui::{self, Node, muted, row, spinner, stack, text};
 
 /// A button of `variant` and `size` ("sm", "icon-sm") that a screen reader names `aria`.
 pub fn button(label: &str, variant: &str, size: Option<&str>, aria: Option<String>, disabled: bool, on_click: impl Fn() + 'static) -> Node {
-    let mut button = Node::new("Button").prop("variant", variant).on("onClick", move |_| on_click());
+    let mut button = ui::button(label, variant, false, on_click).disabled(disabled);
     if let Some(size) = size {
-        button = button.prop("size", size);
+        button = button.size(size);
     }
     if let Some(aria) = aria {
-        button = button.prop("label", aria);
+        button = button.aria_label(&aria);
     }
-    if disabled {
-        button = button.prop("disabled", true);
-    }
-    button.text(label)
+    button
 }
 
 /// `button` that shows a spinner before its label while `busy`, and takes no clicks then.
@@ -23,22 +20,17 @@ pub fn busy_button(label: &str, variant: &str, size: Option<&str>, aria: Option<
     if busy { Node::new("Button").prop("variant", variant).prop("disabled", true).child(spinner()).text(label) } else { button }
 }
 
-/// Lucide icons, as the paths `icon` draws on a 24-point grid.
-pub const PLUS: [&str; 2] = ["M5 12h14", "M12 5v14"];
-pub const PLAY: [&str; 1] = ["m6 3 14 9-14 9z"];
+/// Lucide's `circle-play`, which the Resume button draws; the other icons are in `ui::icons`.
 pub const RESUME: [&str; 2] = ["M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0z", "m10 8 6 4-6 4z"];
-pub const PAUSE: [&str; 2] = ["M8 5v14", "M16 5v14"];
-pub const PENCIL: [&str; 2] = ["M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z", "m15 5 4 4"];
-pub const TRASH: [&str; 3] = ["M3 6h18", "M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6", "M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"];
-pub const REFRESH: [&str; 2] = ["M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8", "M21 3v5h-5"];
-pub const EXTERNAL: [&str; 3] = ["M15 3h6v6", "M10 14 21 3", "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"];
-pub const CLOSE: [&str; 2] = ["M18 6 6 18", "m6 6 12 12"];
 
-/// A quiet square button holding one of those icons, named by `label`, which is also its tooltip. It shows a spinner
+/// A quiet square button holding one of the icons, named by `label`, which is also its tooltip. It shows a spinner
 /// instead of the icon, and takes no clicks, while `busy`.
 pub fn icon_button(label: &str, paths: &[&str], busy: bool, on_click: impl Fn() + 'static) -> Node {
-    let glyph = if busy { spinner() } else { icon(24, 2.0, paths).prop("size", 16) };
-    button("", "ghost", Some("icon-sm"), Some(label.to_owned()), busy, on_click).prop("title", label).child(glyph)
+    if busy {
+        button("", "ghost", Some("icon-sm"), Some(label.to_owned()), true, on_click).tooltip(label).child(spinner())
+    } else {
+        ui::icon_button(label, paths, on_click)
+    }
 }
 
 pub fn small_badge(label: &str, tone: Option<&str>, variant: Option<&str>) -> Node {
@@ -64,8 +56,7 @@ pub fn field_group(label: &str, hint: Option<String>, content: Node) -> Node {
 
 /// A multi-line text field, `rows` high at first.
 pub fn textarea(label: &str, value: &str, rows: u32, disabled: bool, on_change: impl Fn(String) + 'static) -> Node {
-    let area = Node::new("Textarea").prop("label", label).prop("value", value).prop("rows", rows).on("onChange", move |event| on_change(event["value"].as_str().unwrap_or_default().to_owned()));
-    if disabled { area.prop("disabled", true) } else { area }
+    ui::textarea(label, value, rows, on_change).disabled(disabled)
 }
 
 /// Label and value pairs, one per line.

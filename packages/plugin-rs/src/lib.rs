@@ -7,6 +7,7 @@
 //! in handlers and tasks. The page is built again after every turn (an event, an answer, a timer), and sent to the
 //! app when it differs from the last one.
 
+pub mod approvals;
 pub mod azure;
 pub mod cache;
 pub mod cli;

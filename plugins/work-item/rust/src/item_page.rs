@@ -9,7 +9,7 @@ use crate::{
         Activity, Change, Comment, ItemArgs, LinkIds, LinkedItem, PrLink, Revision, all_link_ids, comments_of, discussion_of, ids_query, item_args, item_tab_args, js_number, last_segment, link_ids, linked_items,
         pr_status, pull_request_links, revisions_of, summary_of, tags_of,
     },
-    parts::{EXTERNAL_LINK, REFRESH, avatar, badge, card_of, fact, gap, icon_button, joined, pill, pill_button, section_label, skeleton, skeletons, strong, time_text, tone_dot, type_dot},
+    parts::{avatar, badge, card_of, fact, gap, pill, pill_button, skeleton, skeletons, strong, time_text, tone_dot, type_dot},
     sections::state_tone,
     type_color::type_color,
     urls::{pr_url, work_item_url},
@@ -21,7 +21,7 @@ use wings_plugin::{
     format::plural,
     host, messages,
     task::{join_all, spawn},
-    ui::{Node, card, empty, muted, page, row, stack, text},
+    ui::{Node, card, empty, icon_button, icons, joined, muted, page, row, section_label, stack, text},
 };
 
 /// The pull requests whose titles are asked for, one call each; the rest show by number, behind Show all.
@@ -238,7 +238,7 @@ fn open_item(args: &ItemArgs, id: u64) {
 // ---------- the page ----------
 
 fn button(label: &str, variant: &str, on_click: impl Fn() + 'static) -> Node {
-    Node::new("Button").prop("variant", variant).prop("size", "sm").on("onClick", move |_| on_click()).text(label)
+    wings_plugin::ui::button(label, variant, false, on_click).size("sm")
 }
 
 fn toolbar(id: u64, kind: Option<&str>, actions: Vec<Node>) -> Node {
@@ -321,7 +321,7 @@ fn build(p: &Page) -> Vec<Node> {
     let toolbar = toolbar(
         args.id,
         Some(kind),
-        vec![icon_button("Refresh", &REFRESH, reload), icon_button("Open in Azure DevOps", &EXTERNAL_LINK, move || open_url(url.clone()))],
+        vec![icon_button("Refresh", &icons::REFRESH_CW, reload), icon_button("Open in Azure DevOps", &icons::EXTERNAL_LINK, move || open_url(url.clone()))],
     );
     vec![page(toolbar, [content])]
 }

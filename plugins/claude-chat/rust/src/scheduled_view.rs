@@ -3,7 +3,7 @@
 
 use wings_plugin::{
     format::clock,
-    ui::{Entry, Node, button, entry, icon, muted, row, stack, text},
+    ui::{Entry, Node, button, entry, icon, icons, muted, row, stack, text},
 };
 
 use crate::{
@@ -11,8 +11,7 @@ use crate::{
     scheduled::Job,
 };
 
-/// Lucide's `rotate-cw` for a recurring task, and `clock` for a one-time one or a wakeup, in a 24-point box.
-const REPEAT: [&str; 2] = ["M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8", "M21 3v5h-5"];
+/// Lucide's `clock` for a one-time task or a wakeup, in a 24-point box.
 const CLOCK: [&str; 2] = ["M12 6v6l4 2", "M2 12a10 10 0 1 0 20 0a10 10 0 1 0-20 0"];
 
 /// A one-time task or wakeup keeps showing this long past its time, as Claude Code may run it a little late.
@@ -40,7 +39,7 @@ fn row_of(job: &Job) -> Node {
     };
     let detail = if job.stopping { "Stopping".to_owned() } else { format!("{}{kind}{next}", job.when) };
     let main = entry(Entry {
-        lead: Some(icon(24, 2.0, if job.recurring { &REPEAT[..] } else { &CLOCK[..] }).prop("size", 14)),
+        lead: Some(icon(24, 2.0, if job.recurring { &icons::ROTATE_CW[..] } else { &CLOCK[..] }).prop("size", 14)),
         title: text(job.what.as_str()).prop("size", "small").prop("clamp", true).prop("title", job.what.as_str()),
         detail: Some(muted(detail).prop("size", "small")),
         trailing: None,

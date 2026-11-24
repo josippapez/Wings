@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use wings_plugin::{
     format::{ago, parse_time},
     host,
-    ui::{Node, card, icon, muted, row, stack, text, title},
+    ui::{Node, card, muted, row, stack, text, title},
 };
 
 pub fn gap(node: Node, gap: &str) -> Node {
@@ -16,41 +16,9 @@ pub fn strong(text: impl Into<String>) -> Node {
     title(text)
 }
 
-/// Lucide's `refresh-cw` and `external-link`, which the header's icon buttons draw.
-pub const REFRESH: [&str; 4] = ["M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8", "M21 3v5h-5", "M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16", "M8 16H3v5"];
-pub const EXTERNAL_LINK: [&str; 3] = ["M15 3h6v6", "M10 14 21 3", "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"];
-
-/// A ghost icon button with a tooltip: `label` is what it is read out as and what the tooltip says.
-pub fn icon_button(label: &str, paths: &[&str], on_click: impl Fn() + 'static) -> Node {
-    Node::new("Button")
-        .prop("variant", "ghost")
-        .prop("size", "icon-sm")
-        .prop("label", label)
-        .prop("title", label)
-        .on("onClick", move |_| on_click())
-        .child(icon(24, 2.0, paths).prop("size", 16))
-}
-
-/// A small muted label over a section of a page, with its count: "Discussion · 3".
-pub fn section_label(label: impl Into<String>) -> Node {
-    muted(label).prop("size", "small").prop("weight", "medium")
-}
-
 /// A fact as muted text, with its tone only when it is a status.
 pub fn fact(label: impl Into<String>) -> Node {
     muted(label).prop("size", "small")
-}
-
-/// `parts` as one line split by " · ".
-pub fn joined(parts: Vec<Node>) -> Node {
-    let mut line = gap(row(), "s").prop("wrap", true).prop("align", "center");
-    for (at, part) in parts.into_iter().enumerate() {
-        if at > 0 {
-            line = line.child(muted("·").prop("size", "small").key(format!("dot{at}")));
-        }
-        line = line.child(part.key(format!("part{at}")));
-    }
-    line
 }
 
 pub fn avatar(name: &str, small: bool) -> Node {

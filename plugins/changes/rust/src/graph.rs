@@ -10,7 +10,7 @@ use wings_plugin::{
     format::grouped,
     messages,
     task::spawn,
-    ui::{icon, muted, page, row, spinner, toolbar_with, Node},
+    ui::{icon_button, icons, muted, page, row, spinner, toolbar_with, Node},
 };
 
 /// Shows the repo main named, reading its history again.
@@ -23,14 +23,7 @@ fn load(repo: &Value) {
 fn view() -> Vec<Node> {
     with(|p| {
         let total = p.rows.len();
-        let refresh = Node::new("Button")
-            .prop("variant", "ghost")
-            .prop("size", "icon-sm")
-            .prop("label", "Refresh")
-            .prop("title", "Refresh")
-            .on("onClick", |_| messages::tell(GRAPH_WANT, &Value::Null))
-            .child(icon(24, 2.0, &["M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8", "M21 3v5h-5", "M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16", "M8 16H3v5"]));
-        let refresh = if p.loading || p.root.is_none() { refresh.prop("disabled", true) } else { refresh };
+        let refresh = icon_button("Refresh", &icons::REFRESH_CW, || messages::tell(GRAPH_WANT, &Value::Null)).disabled(p.loading || p.root.is_none());
         let actions = row().prop("gap", "xs").maybe(p.loading.then(|| spinner().prop("label", "Loading"))).child(refresh);
         let said = if p.loading {
             "Loading…".to_owned()

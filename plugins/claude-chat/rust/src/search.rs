@@ -10,19 +10,15 @@
 //! frame (`refresh`), and nothing is read while the bar is closed. A jump brings the hit into what the page shows
 //! (`view::show_item`), opens the run of tool calls it is in, and scrolls to it as a click on the prompt rail does.
 
-use wings_plugin::ui::{Node, badge, button, icon, muted, row, stack, text_input};
+use wings_plugin::ui::{Node, badge, button, icon, icon_button, icons, muted, row, stack, text_input};
 
 use crate::{
     chat::{self, Chat},
     folds::Kind,
     session::{Ask, Detail, Item},
-    view::{folds, icon_button},
+    view::folds,
 };
 
-const SEARCH: [&str; 2] = ["M3 11a8 8 0 1 0 16 0a8 8 0 1 0-16 0", "m21 21-4.3-4.3"];
-const UP: [&str; 1] = ["m18 15-6-6-6 6"];
-const DOWN: [&str; 1] = ["m6 9 6 6 6-6"];
-const CLOSE: [&str; 2] = ["M18 6 6 18", "m6 6 12 12"];
 
 #[derive(Default)]
 pub struct Search {
@@ -167,7 +163,7 @@ fn close() {
 /// The header's button, which opens the bar and shuts it again.
 pub fn header_button(c: &Chat) -> Node {
     let (label, on) = if c.search.open { ("Close search", close as fn()) } else { ("Search", open_bar as fn()) };
-    icon_button(label, &SEARCH, on).shortcut("cmd-shift-f")
+    icon_button(label, &icons::SEARCH, on).shortcut("cmd-shift-f")
 }
 
 /// The bar under the header while search is open.
@@ -193,9 +189,9 @@ pub fn bar(c: &Chat) -> Option<Node> {
         .prop("align", "center")
         .child(stack().prop("grow", true).child(field))
         .maybe(search.count().map(|said| muted(said).prop("size", "small")))
-        .child(nav("Previous match", &UP, false, "cmd-shift-g"))
-        .child(nav("Next match", &DOWN, true, "cmd-g"))
-        .child(icon_button("Close search", &CLOSE, close));
+        .child(nav("Previous match", &icons::CHEVRON_UP, false, "cmd-shift-g"))
+        .child(nav("Next match", &icons::CHEVRON_DOWN, true, "cmd-g"))
+        .child(icon_button("Close search", &icons::CLOSE, close));
     Some(Node::new("Bar").prop("variant", "slim").child(line).key("search"))
 }
 

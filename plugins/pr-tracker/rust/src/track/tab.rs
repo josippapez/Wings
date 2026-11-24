@@ -5,7 +5,7 @@
 use super::{badges, diff, problems, projects, retry, state::{self, Loaded}, status::prefetch};
 use crate::{forges, ipc, remote::remote_for, types::{Link, PrArgs, Provider, Status}};
 use serde_json::Value;
-use wings_plugin::{host, task::spawn};
+use wings_plugin::{host, messages, task::spawn};
 
 /// The link a tab's request is about: a pane's, else one a list or a tab found before, else asked of its forge. In the
 /// folder of the project the tab came from, where the diff and the snippets are read.
@@ -76,12 +76,12 @@ fn tab_status(payload: &Value) {
 }
 
 pub fn serve() {
-    ipc::answer(ipc::PULLS, |payload| async move { projects::pulls_for(payload["path"].as_str().unwrap_or_default()).await });
-    ipc::answer(ipc::PR, pr_op);
-    ipc::answer(ipc::PULLS_ACTION, pulls_action);
-    ipc::hear(ipc::PR_STATUS, tab_status);
+    messages::answer(ipc::PULLS, |payload| async move { projects::pulls_for(payload["path"].as_str().unwrap_or_default()).await });
+    messages::answer(ipc::PR, pr_op);
+    messages::answer(ipc::PULLS_ACTION, pulls_action);
+    messages::hear(ipc::PR_STATUS, tab_status);
     // Settings saved or removed a token: ask again with it.
-    ipc::hear(ipc::TOKENS_CHANGED, |_| {
+    messages::hear(ipc::TOKENS_CHANGED, |_| {
         spawn(async {
             retry::retry().await;
             projects::refresh_projects(true).await;

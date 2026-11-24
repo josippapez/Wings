@@ -21,11 +21,8 @@ mod shares;
 mod tools;
 mod tunnel;
 
-/// A page tells main what it wants: `{ id, op, ... }`, which main answers with `DONE`.
+/// A page asks main to do something: `{ op, ... }` (`messages::ask`), which main answers, with its error when it failed.
 pub const ASK: &str = "ask";
-/// What main tells back: `{ id, error }`, the error null when it worked.
-pub const DONE: &str = "done";
-/// A page asks main for `STATE`.
-pub const WANT: &str = "want";
-/// What a page can't read itself: `{ approvals, shares }`.
+/// What a page can't read itself: `{ approvals, shares, missing }`, which main tells on every change and a page that
+/// opens asks for (`messages::want`).
 pub const STATE: &str = "state";

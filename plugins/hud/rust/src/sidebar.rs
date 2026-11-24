@@ -2,7 +2,7 @@
 //! keeps the state and tells it here.
 
 use crate::{
-    CONTEXT_CRITICAL, CONTEXT_WARN, LIMIT_CRITICAL, LIMIT_WARN, SNAPSHOT, WANT,
+    CONTEXT_CRITICAL, CONTEXT_WARN, LIMIT_CRITICAL, LIMIT_WARN, SNAPSHOT,
     format::gb,
     view::{limits_for, shown},
 };
@@ -183,8 +183,7 @@ fn view() -> Vec<Node> {
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     wings_plugin::run(view);
-    messages::on(SNAPSHOT, |hud| PAGE.with(|page| page.borrow_mut().hud = Some(hud.clone())));
-    messages::tell(WANT, &Value::Null);
+    messages::want(SNAPSHOT, |hud| PAGE.with(|page| page.borrow_mut().hud = Some(hud.clone())));
 }
 
 #[cfg(test)]

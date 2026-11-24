@@ -7,70 +7,23 @@ use crate::{
     schedule::Draft,
 };
 use serde_json::Value;
-use std::{
-    cell::{Cell, RefCell},
-    future::poll_fn,
-    rc::Rc,
-    task::{Poll, Waker},
-};
-use wings_plugin::{host, task::spawn};
+pub use wings_plugin::approvals::Answer;
+use wings_plugin::{approvals::Approvals, host};
 
-/// Under the 120 s Wings gives a plugin's tool call, so the call can still say nobody answered.
-const WAIT_MS: u32 = 100_000;
 const VIEW: &str = "approve";
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum Answer {
-    Allow,
-    Deny,
-    Timeout,
-    /// Wings couldn't show the modal, so nobody could answer.
-    Unshown,
-}
-
-#[derive(Default)]
-struct Slot {
-    answer: Option<Answer>,
-    waker: Option<Waker>,
-}
-
-struct Ask {
-    approval: Approval,
-    slot: Rc<RefCell<Slot>>,
-}
-
 thread_local! {
-    static PENDING: RefCell<Vec<Ask>> = const { RefCell::new(Vec::new()) };
-    static NEXT: Cell<u32> = const { Cell::new(0) };
+    static ASKS: Approvals<Approval> = Approvals::new(VIEW, changed);
 }
 
 /// What agents are waiting for the user to allow, oldest first.
 pub fn waiting() -> Vec<Value> {
-    PENDING.with(|pending| pending.borrow().iter().map(|ask| ask.approval.to_json()).collect())
-}
-
-fn settle(id: &str, answer: Answer) -> bool {
-    let Some(ask) = PENDING.with(|pending| {
-        let mut pending = pending.borrow_mut();
-        pending.iter().position(|ask| ask.approval.id == id).map(|at| pending.remove(at))
-    }) else {
-        return false;
-    };
-    changed();
-    if PENDING.with(|pending| pending.borrow().is_empty()) {
-        drop(host::close_view(VIEW));
-    }
-    let mut slot = ask.slot.borrow_mut();
-    slot.answer = Some(answer);
-    if let Some(waker) = slot.waker.take() {
-        waker.wake();
-    }
-    true
+    ASKS.with(|asks| asks.waiting(|_, approval| approval.to_json()))
 }
 
 /// The user's answer to the ask `id`.
 pub fn answer(id: &str, allow: bool) -> Result<(), String> {
-    if settle(id, if allow { Answer::Allow } else { Answer::Deny }) { Ok(()) } else { Err("That request is gone: the agent stopped waiting.".into()) }
+    ASKS.with(|asks| asks.answer(id, allow, "That request is gone: the agent stopped waiting."))
 }
 
 /// Shows the schedule ask in the modal, and gives the user's answer, or `Timeout`.
@@ -85,38 +38,12 @@ pub async fn ask_start(asker: Option<String>, project_name: &str, start: StartAs
 }
 
 async fn wait_for(asker: Option<String>, project_name: &str, what: What, project_id: &str, title: &str) -> Answer {
-    let id = NEXT.with(|next| {
-        next.set(next.get() + 1);
-        next.get().to_string()
+    let (name, notice, project) = (project_name.to_owned(), title.to_owned(), project_id.to_owned());
+    let waiting = ASKS.with(|asks| {
+        asks.ask(
+            |id| Approval { id: id.to_owned(), asker, project_name: project_name.to_owned(), what },
+            move || drop(host::notify_with(&notice, &format!("In {name}. Allow or deny it in Wings."), None, Some(&project))),
+        )
     });
-    let slot = Rc::new(RefCell::new(Slot::default()));
-    PENDING.with(|pending| pending.borrow_mut().push(Ask { approval: Approval { id: id.clone(), asker, project_name: project_name.to_owned(), what }, slot: slot.clone() }));
-    let late = id.clone();
-    spawn(async move {
-        host::sleep(WAIT_MS).await;
-        settle(&late, Answer::Timeout);
-    });
-    changed();
-    // An ask Wings can't show fails at once: waiting out the 100 s for an answer nobody can give told the agent the user
-    // hadn't answered, when the user never saw it.
-    let shown = id.clone();
-    spawn(async move {
-        if host::open_view_with(VIEW, "modal", &Value::Null).await.is_err() {
-            settle(&shown, Answer::Unshown);
-        }
-    });
-    if !host::focused() {
-        drop(host::notify_with(&title, &format!("In {project_name}. Allow or deny it in Wings."), None, Some(&project_id)));
-    }
-    poll_fn(|cx| {
-        let mut slot = slot.borrow_mut();
-        match slot.answer.take() {
-            Some(answer) => Poll::Ready(answer),
-            None => {
-                slot.waker = Some(cx.waker().clone());
-                Poll::Pending
-            }
-        }
-    })
-    .await
+    waiting.await
 }

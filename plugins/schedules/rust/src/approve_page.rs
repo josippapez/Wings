@@ -2,9 +2,9 @@
 //! on a ticket. Main opens this modal for each ask and closes it once none is left.
 
 use crate::{
-    STATE, WANT,
+    STATE,
     approval::{Approval, StartAsk, What},
-    page_ask::{ask, busy, error, listen},
+    page_ask::{ask, busy, error},
     schedule::{RunIn, describe_when},
     view::{button, properties},
 };
@@ -145,7 +145,5 @@ fn hear(state: &Value) {
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     wings_plugin::run(view);
-    listen("a");
-    messages::on(STATE, hear);
-    messages::tell(WANT, &Value::Null);
+    messages::want(STATE, hear);
 }

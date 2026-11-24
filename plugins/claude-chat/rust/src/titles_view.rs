@@ -2,15 +2,13 @@
 //! Rename sends `rename_session`, so the name is the one Claude Code's `/resume` shows, and the tab follows it once Claude
 //! Code says the title changed.
 
-use wings_plugin::ui::{self, Node, button, dialog as panel, icon, muted, notice, row, stack, text_input};
+use wings_plugin::ui::{self, Node, button, dialog as panel, icon, icons, muted, notice, row, stack, text_input};
 
 use crate::{
     chat::{self, Chat, State},
     session::Item,
 };
 
-/// Lucide's `pencil`, in a 24-point box.
-const PENCIL: [&str; 2] = ["M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z", "m15 5 4 4"];
 const WIDTH: u32 = 480;
 
 /// The header's Rename, while Claude Code runs in the chat.
@@ -20,7 +18,7 @@ pub fn header_button(c: &Chat) -> Option<Node> {
             .prop("size", "icon-sm")
             .prop("label", "Rename")
             .prop("title", "Rename this session: the name Claude Code lists it by")
-            .child(icon(24, 2.0, &PENCIL).prop("size", 14))
+            .child(icon(24, 2.0, &icons::PENCIL).prop("size", 14))
     })
 }
 
