@@ -450,7 +450,14 @@ impl Link for FrameLink {
         // open a file in your editor: what reaches an agent, like the answer to its permission prompt, is what you just
         // asked for in the page, never the plugin alone, and a picker never opens by itself. A write another page handed
         // on with your click there counts as one here (`pages`), and goes before a click of this page's own.
-        if matches!(method, "copyText" | "processWrite" | "pickFiles" | "openFile" | "openLink") && !(method == "processWrite" && self.unprompted_write(&params)) {
+        // Arming a message for later (`processArm`) needs a click too; taking it back, or arming what is armed already,
+        // doesn't.
+        let unprompted = match method {
+            "processWrite" => self.unprompted_write(&params),
+            "processArm" => params["text"].is_null() || self.armed_already(&params),
+            _ => false,
+        };
+        if matches!(method, "copyText" | "processWrite" | "processArm" | "pickFiles" | "openFile" | "openLink") && !unprompted {
             let handed = method == "processWrite" && self.role == Role::Page && self.shared.take_grant(self.id);
             let acted = handed
                 || self
@@ -480,7 +487,7 @@ impl Link for FrameLink {
         // A scan or a program is named by a token of the frame's, which only that frame can reach.
         let owner = match method {
             "diskFind" | "diskUsage" | "diskUsageCancel" => Some("A scan"),
-            "spawn" | "processWrite" | "processStop" | "processNote" | "adopt" => Some("A program"),
+            "spawn" | "processWrite" | "processArm" | "processStop" | "processNote" | "adopt" => Some("A program"),
             _ => None,
         };
         if let Some(owner) = owner {
@@ -517,6 +524,10 @@ impl FrameLink {
             return false;
         };
         self.shared.unprompted(&format!("{}:{token}", self.id), text)
+    }
+
+    fn armed_already(&self, params: &serde_json::Value) -> bool {
+        params["token"].as_str().is_some_and(|token| self.shared.armed_already(&format!("{}:{token}", self.id), params))
     }
 
     /// Where the frame runs, which the programs it starts stay with through an update or restart of the plugin: main,

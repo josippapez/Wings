@@ -1466,6 +1466,49 @@ fn an_agents_row_shows_its_summary_under_its_status() {
     );
 }
 
+/// An agent run in one of the sidebar's one-off terminals shows in the Agents list too: the terminal is probed like a
+/// pane, and its agent gets a row of its own.
+#[cfg(unix)]
+#[test]
+fn an_agent_in_a_one_off_terminal_shows_in_the_agents_list() {
+    use crate::agents::{AgentKind, AgentState, Scan};
+    let (_app, mut window) = open();
+    window.update(|w, window, cx| w.open_loose(super::quick::Place::Full, window, cx));
+    let (probes, focused) = window.update(|w, _, cx| {
+        w.window_active = true;
+        w.probes(cx)
+    });
+    let probe = probes.iter().find(|probe| probe.pane_id == "loose-0").expect("the one-off terminal is probed");
+    assert_eq!(probe.space_id, crate::terminal_server::LOOSE);
+    assert!(probe.shell_pid.is_some());
+    assert_eq!(focused.as_deref(), Some("loose-0"), "the one on screen is the one you're looking at");
+    window.update(|w, _, cx| {
+        let agent = crate::agents::Agent {
+            pane_id: "loose-0".into(),
+            space_id: crate::terminal_server::LOOSE.into(),
+            pid: 1,
+            kind: AgentKind::Claude,
+            session_id: None,
+            name: None,
+            state: AgentState::Working,
+            waiting_for: None,
+            args: Vec::new(),
+            launcher: None,
+            started_at: 0,
+            state_since: None,
+            direct: true,
+            summary: Some("Reading the logs".into()),
+            weak_name: false,
+            claude_dir: None,
+        };
+        w.apply(Scan { agents: vec![agent], panes: HashMap::new() }, cx);
+        assert!(w.agents.is_empty(), "no pane of a project runs it");
+        assert_eq!(w.loose_agents.keys().copied().collect::<Vec<_>>(), [0]);
+    });
+    window.draw();
+    assert!(crate::ui::spot_at("loose-agent-summary:0").is_some(), "its row is in the Agents list");
+}
+
 #[test]
 fn a_new_notification_plays_the_chosen_sound_as_settings_say_and_once_per_burst() {
     use super::sound::{PLAYED, SoundId};

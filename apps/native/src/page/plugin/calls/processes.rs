@@ -439,3 +439,40 @@ fn a_page_cannot_name_an_account_folder_of_its_own() {
     }
     std::fs::remove_file(&script).unwrap();
 }
+
+/// A chat's "Continue when it resets": your click arms one message, and the page may write exactly that message without
+/// a click once its time has come, once. Before its time, another text, a second write, or arming without a click are
+/// refused; taking it back needs no click.
+#[test]
+fn a_message_your_click_armed_goes_once_its_time_has_come_without_another_click() {
+    let rig = rig(&["cat []"]);
+    let caller = Caller::start(&rig.host);
+    caller.send("spawn", spawn("chat", "cat", &[]));
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as f64;
+    let said = "Your limit has reset. Continue.";
+    let message = |text: &str| json!({ "type": "user", "message": { "role": "user", "content": text }, "parent_tool_use_id": null, "uuid": "u1" }).to_string();
+    let usage = "{\"type\":\"control_request\",\"request_id\":\"usage-1\",\"request\":{\"subtype\":\"get_usage\"}}";
+    let refused = Err("A page can write to a program only right after you click or type in it".to_owned());
+    // Arming needs your click.
+    assert_eq!(caller.call("processArm", json!({ "token": "chat", "text": said, "at": now - 1_000.0 })), refused);
+    // Armed for later: not yet.
+    assert_eq!(caller.call_after_click("processArm", json!({ "token": "chat", "text": said, "at": now + 3_600_000.0 })), Ok(Value::Null));
+    assert_eq!(caller.call("processWrite", json!({ "token": "chat", "text": format!("{}\n", message(said)) })), refused);
+    // Armed for now: the same message goes, with the read of the usage after it, and only once.
+    assert_eq!(caller.call_after_click("processArm", json!({ "token": "chat", "text": said, "at": now - 1_000.0 })), Ok(Value::Null));
+    // Arming what is armed already, as a page back after an update does, needs no click.
+    assert_eq!(caller.call("processArm", json!({ "token": "chat", "text": said, "at": now - 1_000.0 })), Ok(Value::Null));
+    assert_eq!(caller.call("processWrite", json!({ "token": "chat", "text": format!("{}\n", message("Something else")) })), refused);
+    caller.send("processWrite", json!({ "token": "chat", "text": format!("{}\n{usage}\n", message(said)) }));
+    let (lines, answers) = hear(&caller, 3);
+    assert_eq!((lines.len(), answers), (2, vec![Ok(Value::Null)]));
+    assert_eq!(caller.call("processWrite", json!({ "token": "chat", "text": format!("{}\n", message(said)) })), refused, "once");
+    // Taking it back needs no click.
+    assert_eq!(caller.call_after_click("processArm", json!({ "token": "chat", "text": said, "at": now - 1_000.0 })), Ok(Value::Null));
+    assert_eq!(caller.call("processArm", json!({ "token": "chat", "text": null })), Ok(Value::Null));
+    assert_eq!(caller.call("processWrite", json!({ "token": "chat", "text": format!("{}\n", message(said)) })), refused);
+    // Further than a day ahead, or no message, is refused.
+    assert!(caller.call_after_click("processArm", json!({ "token": "chat", "text": said, "at": now + 26.0 * 3_600_000.0 })).is_err());
+    assert!(caller.call_after_click("processArm", json!({ "token": "chat", "text": "  ", "at": now })).is_err());
+    caller.send("processStop", json!({ "token": "chat" }));
+}

@@ -26,8 +26,10 @@ Wings' open terminal panes, and let you message the agents in them. Run anything
 a watcher, a long build or test run) with open_pane and run, not Bash in the background, so the user sees it in a tab and can \
 stop it. Read its output with read_pane. To hear when it finishes, run the waitCommand from open_pane's reply with Bash in \
 the background instead of polling. Close a tab you opened with close_pane once you're done with it, unless the user \
-should keep it, like a dev server they're using. create_worktree sets up a git worktree of a Wings project for a branch (new, existing or only on the remote), with its local files copied in; use it instead of git worktree add, and follow its reply to run the project's setup command. setup_worktree applies those existing project settings to a linked worktree you just created outside Wings, after the user approves. worktree_setup reads and changes what a project's new worktrees get (local files copied in, a setup command). Keep Bash for quick commands. Tools from the plugins turned on in Wings are named \
-<plugin>__<tool>, like cyclops__start_timer. With Wings closed there are none.";
+should keep it, like a dev server they're using. Keep Bash for quick commands. Tools from the plugins turned on in Wings are named \
+<plugin>__<tool>, like tasks__list. More Wings commands run through Bash: `wings tools` lists them, for example \
+`wings disk folder_usage path=…`, `wings pr-tracker failing_checks`, `wings call create_worktree branch=…` (not git worktree add). \
+With Wings closed there are none.";
 /// Claude Code cuts a server's instructions at this many characters.
 const MAX_INSTRUCTIONS: usize = 4096;
 /// How long `initialize` waits for Wings to hand over its plugins' lines before answering with the static text.
@@ -86,6 +88,13 @@ fn instructions(plugin_lines: &[&str]) -> String {
         text.push_str(line);
     }
     text
+}
+
+/// The tools Claude Code is told of: the app's list without the ones it marks `cliOnly`, which stay `wings` commands.
+/// A `tools/call` of one still runs it.
+fn listed(tools: Option<Value>) -> Value {
+    let Some(Value::Array(tools)) = tools else { return json!([]) };
+    Value::Array(tools.into_iter().filter(|t| t["cliOnly"] != true).collect())
 }
 
 /// `version` is the Wings version the server reports to Claude Code.
@@ -170,7 +179,7 @@ fn handle(bridge: &Bridge, message: Value) {
         "ping" => Ok(json!({})),
         "tools/list" => {
             let tools = bridge.ask(json!({ "op": "list" }), Duration::from_secs(5)).and_then(|r| r.get("tools").cloned());
-            Ok(json!({ "tools": tools.unwrap_or_else(|| json!([])) }))
+            Ok(json!({ "tools": listed(tools) }))
         }
         "tools/call" => {
             let request = json!({
@@ -250,7 +259,7 @@ mod tests {
 
     impl crate::server::Handler for Echo {
         fn tools(&self) -> Vec<Value> {
-            vec![json!({ "name": "echo", "inputSchema": { "type": "object" } })]
+            vec![json!({ "name": "echo", "inputSchema": { "type": "object" } }), json!({ "name": "quiet", "cliOnly": true, "inputSchema": { "type": "object" } })]
         }
         fn instructions(&self) -> Vec<String> {
             vec!["Echo (echo): says it back.".into()]
@@ -305,10 +314,24 @@ mod tests {
         assert_eq!((init["protocolVersion"].as_str(), init["serverInfo"]["version"].as_str()), (Some("2025-06-18"), Some("1.2.3")));
         assert!(init["instructions"].as_str().unwrap().ends_with("\nEcho (echo): says it back."));
         handle(&bridge, json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
-        assert_eq!(replies(2)[1]["result"]["tools"][0]["name"], "echo");
+        // The cli-only tool stays out of Claude's list, but the app still lists it for `wings tools` and a call still runs it.
+        assert_eq!(replies(2)[1]["result"]["tools"], json!([{ "name": "echo", "inputSchema": { "type": "object" } }]));
+        assert_eq!(bridge.ask(json!({ "op": "list" }), Duration::from_secs(5)).unwrap()["tools"][1]["name"], "quiet");
+        handle(&bridge, json!({ "jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": { "name": "quiet", "arguments": {} } }));
+        assert_eq!(replies(3)[2]["result"]["content"][0]["text"], "quiet {}");
         handle(&bridge, json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "echo", "arguments": { "a": 1 } } }));
-        assert_eq!(replies(3)[2], json!({ "jsonrpc": "2.0", "id": 3, "result": { "content": [{ "type": "text", "text": "echo {\"a\":1}" }], "isError": false } }));
+        assert_eq!(replies(4)[3], json!({ "jsonrpc": "2.0", "id": 3, "result": { "content": [{ "type": "text", "text": "echo {\"a\":1}" }], "isError": false } }));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_static_instructions_point_at_the_cli_for_what_the_tool_list_leaves_out() {
+        assert!(INSTRUCTIONS.contains("`wings tools`") && INSTRUCTIONS.contains("wings call create_worktree"));
+        // It was 2,941 characters before the worktree and plugin commands moved to Bash.
+        assert!(INSTRUCTIONS.chars().count() < 2_941, "{}", INSTRUCTIONS.chars().count());
+        for gone in ["setup_worktree", "worktree_setup", "disk__", "changes__"] {
+            assert!(!INSTRUCTIONS.contains(gone), "{gone}");
+        }
     }
 
     #[test]

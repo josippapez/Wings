@@ -180,11 +180,12 @@ impl Running {
                     .mcp_tools
                     .iter()
                     .map(move |tool| {
-                        serde_json::json!({
+                        let listed = serde_json::json!({
                             "name": format!("{id}__{}", tool.name),
                             "description": tool.description,
                             "inputSchema": tool.input_schema,
-                        })
+                        });
+                        if tool.cli_only { wings_connect::server::cli_only(listed) } else { listed }
                     })
             })
             .collect()

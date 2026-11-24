@@ -137,8 +137,11 @@ const SETUP_EXECUTION_WAIT: Duration = Duration::from_secs(15 * 60);
 
 const CROSS_SESSION: &str = "Any Claude Code session on this computer can call this, so it can see what your other sessions show.";
 
+/// The tools left out of Claude's MCP tool list: `wings call <tool>` in Bash.
+const CLI_ONLY: [&str; 3] = ["create_worktree", "worktree_setup", "setup_worktree"];
+
 pub fn tools() -> Vec<Value> {
-    vec![
+    let tools = vec![
         json!({
             "name": "list_sessions",
             "description": format!("List the terminal panes open in Wings, with each one's project, folder, running program and, for a pane running an agent (Claude Code or opencode), its kind, state (working, blocked, done or idle), what it is waiting for, session id and name. thisPane marks the pane you run in. Read one pane's output with read_pane. tabs lists the agents that run in a tab instead of a terminal, like a Claude chat: each one's tabId (send_to_agent takes it as pane_id), project, folder, state, what it does, session id, name and Claude Code account; thisTab marks the one you run in. {CROSS_SESSION}"),
@@ -229,7 +232,7 @@ pub fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "setup_worktree",
-            "description": "Apply a Wings project's already configured local include files and setup command to an existing git linked worktree, such as one made with git worktree add. Use this right after creating a worktree yourself. The folder must be a currently registered linked worktree of the Wings project, never its main checkout, an ordinary subfolder or another repo. Wings shows one approval dialog naming the folder, the exact relative local files to copy and the command. If the user declines or does not answer, nothing is copied or run. The command runs outside your shell and can take up to 15 minutes. Returns the copied/skipped files and errors, command exit code and final output.",
+            "description": "Apply a Wings project's already configured local include files and setup command to an existing git linked worktree, such as one made with git worktree add. Use this right after creating a worktree yourself. The folder must be a currently registered linked worktree of the Wings project, never its main checkout, an ordinary subfolder or another repo. Wings shows one approval dialog naming the folder, the exact relative local files to copy and the command. If the user declines or does not answer, nothing is copied or run. The command runs outside your shell and can take up to 15 minutes, so from Bash (`wings call setup_worktree folder=...`) run it in the background: Bash gives up after 10. Returns the copied/skipped files and errors, command exit code and final output.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -238,7 +241,8 @@ pub fn tools() -> Vec<Value> {
                 "required": ["folder"]
             }
         }),
-    ]
+    ];
+    tools.into_iter().map(|tool| if CLI_ONLY.iter().any(|name| tool["name"] == *name) { crate::server::cli_only(tool) } else { tool }).collect()
 }
 
 /// Runs one of these tools. `None` when `name` isn't one. `caller` finds the pane the calling Claude runs in, and is
@@ -902,6 +906,8 @@ mod tests {
         let tools = tools();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert_eq!(names, ["list_sessions", "read_pane", "open_pane", "close_pane", "send_to_agent", "notify", "create_worktree", "worktree_setup", "setup_worktree"]);
+        let quiet: Vec<&str> = tools.iter().filter(|t| t["cliOnly"] == true).map(|t| t["name"].as_str().unwrap()).collect();
+        assert_eq!(quiet, ["create_worktree", "worktree_setup", "setup_worktree"]);
         for tool in &tools {
             assert!(!tool["name"].as_str().unwrap().contains("__"));
             assert!(tool["description"].as_str().unwrap().len() < 2048);

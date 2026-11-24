@@ -277,7 +277,7 @@ pub struct Panel {
 pub(crate) static PANEL_ICONS: std::sync::LazyLock<Vec<String>> =
     std::sync::LazyLock::new(|| serde_json::from_str(include_str!("plugin-icons.json")).expect("plugin-icons.json"));
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpTool {
     pub name: String,
@@ -286,6 +286,18 @@ pub struct McpTool {
     /// JSON Schema for the tool's arguments; an object schema. Defaults to taking no arguments.
     #[serde(default = "empty_schema")]
     pub input_schema: Value,
+    /// Left out of the MCP server's tool list so it doesn't take Claude's context; still `wings <plugin> <tool>` in
+    /// Bash, and still what other plugins reach with `callTool`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cli_only: bool,
+}
+
+/// Whether `cli_only` is set doesn't make a tool another one: the plugin offers the same access either way, so a
+/// manifest that only flips it doesn't ask for a new approval.
+impl PartialEq for McpTool {
+    fn eq(&self, other: &Self) -> bool {
+        (&self.name, &self.description, &self.input_schema) == (&other.name, &other.description, &other.input_schema)
+    }
 }
 
 fn empty_schema() -> Value {

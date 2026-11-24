@@ -49,7 +49,26 @@ pub(super) const GRACE: Duration = Duration::from_secs(30);
 pub(super) const RESTART_GRACE: Duration = Duration::from_secs(120);
 
 /// The calls of this module, which the frame's link hands here with where the frame runs.
-pub(super) const CALLS: [&str; 6] = ["spawn", "processWrite", "processStop", "processNote", "processes", "adopt"];
+pub(super) const CALLS: [&str; 7] = ["spawn", "processWrite", "processArm", "processStop", "processNote", "processes", "adopt"];
+
+/// How long after its time an armed message may still go (`processArm`), as a computer asleep at the time wakes later.
+const ARMED_FOR_MS: u64 = 24 * 3_600_000;
+/// How far ahead a message may be armed: a plan's limit resets within a day.
+const ARM_AHEAD_MOST_MS: u64 = 25 * 3_600_000;
+/// The longest message that may be armed.
+const ARMED_TEXT_MAX: usize = 4096;
+
+/// The one message a page may write later without a click, as your click armed it (`processArm`): its text, and the
+/// time (ms since the epoch) from which it may go.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Armed {
+    text: String,
+    from: u64,
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_millis() as u64)
+}
 
 #[derive(Deserialize)]
 struct SpawnRequest {
@@ -217,6 +236,8 @@ pub(super) struct Running {
     /// What Claude Code asked of the chat's message box and the page hasn't answered yet, by request id: a plugin's
     /// read (`ui_prompt_read`) or fill (`ui_prompt_fill`), the only answers a page may write unprompted (`unprompted`).
     pub(super) asks: Mutex<HashMap<String, &'static str>>,
+    /// The message your click armed to go later, like a chat's "Continue when it resets" (`processArm`).
+    armed: Mutex<Option<Armed>>,
 }
 
 impl Running {
@@ -394,6 +415,23 @@ impl Drop for Handover {
     }
 }
 
+/// The message `processArm`'s params arm, checked: none for a null `text`.
+fn armed_of(params: &Value) -> Result<Option<Armed>, String> {
+    let text = match params.get("text") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::String(text)) if !text.trim().is_empty() && text.len() <= ARMED_TEXT_MAX => text.clone(),
+        Some(_) => return Err("processArm text is null or a message of 1 to 4,096 bytes".into()),
+    };
+    let from = params["at"]
+        .as_f64()
+        .filter(|at| at.is_finite() && *at >= 0.0)
+        .ok_or("processArm needs at, the time in ms since the epoch the message may go from")? as u64;
+    if from > now_ms() + ARM_AHEAD_MOST_MS {
+        return Err("processArm's at is at most 25 hours ahead".into());
+    }
+    Ok(Some(Armed { text, from }))
+}
+
 impl Shared {
     /// A call of `CALLS` from a frame that runs at `place`.
     pub(super) fn process_call(self: &Arc<Self>, place: Option<Place>, method: &str, params: Value, reply: Reply) {
@@ -405,6 +443,7 @@ impl Shared {
         let result = match method {
             "spawn" => self.spawn(token, place, &params, reply.clone(), access),
             "processWrite" => self.write(&token, &params, reply.clone()),
+            "processArm" => self.arm(&token, &params).map(|()| reply.clone().ok("null".into())),
             "processNote" => self.note(&token, &params).map(|()| reply.clone().ok("null".into())),
             "processes" => session_id(params.get("session")).map(|session| reply.clone().ok(self.left(place.as_ref(), session.as_deref()).to_string())),
             "adopt" => self.adopt(token, place.as_ref(), &params, reply.clone()),
@@ -460,6 +499,7 @@ impl Shared {
                 out: Mutex::new(Out { listener: Some(listener), ..Out::default() }),
                 order: Mutex::default(),
                 asks: Mutex::default(),
+                armed: Mutex::default(),
             })
         };
         // Only a tab's page has a place that comes back after a restart, and only Wings' own plugins keep a program
@@ -541,15 +581,19 @@ impl Shared {
     }
 
     /// Whether `text` is only what a page may write to its program `token` without a click: Claude Code control requests
-    /// that draw what its plugins show (`ui_attach`, `ui_render`, `ui_panes`), and answers to the reads and fills of the
-    /// message box the program asked for (`asks`) and nobody answered yet, each in its ask's shape: `{ text, cursor }` for
-    /// a read, `{ filled }` for a fill. None of it reaches the agent, answers its questions or starts a turn. The answers
-    /// it lets through are no longer pending.
+    /// that draw what its plugins show (`ui_attach`, `ui_render`, `ui_panes`) or read the plan's usage (`get_usage`),
+    /// answers to the reads and fills of the message box the program asked for (`asks`) and nobody answered yet, each in
+    /// its ask's shape: `{ text, cursor }` for a read, `{ filled }` for a fill, and the one message your click armed
+    /// (`processArm`), word for word, once its time has come. Apart from that message none of it reaches the agent,
+    /// answers its questions or starts a turn. What it lets through is no longer pending.
     pub(super) fn unprompted(&self, token: &str, text: &str) -> bool {
         let Some(running) = self.processes.lock().unwrap().get(token).cloned() else {
             return false;
         };
         let mut asks = running.asks.lock().unwrap();
+        let mut armed = running.armed.lock().unwrap();
+        let now = now_ms();
+        let mut sent_armed = false;
         let mut answered = Vec::new();
         let mut lines = text.lines().filter(|line| !line.trim().is_empty()).peekable();
         let allowed = lines.peek().is_some()
@@ -559,7 +603,14 @@ impl Shared {
                 };
                 match line["type"].as_str() {
                     // Stopping the turn makes Claude do nothing, so a chat's "stop near the limit" may send it unasked.
-                    Some("control_request") => matches!(line["request"]["subtype"].as_str(), Some("ui_attach" | "ui_render" | "ui_panes" | "interrupt")),
+                    Some("control_request") => matches!(line["request"]["subtype"].as_str(), Some("ui_attach" | "ui_render" | "ui_panes" | "interrupt" | "get_usage")),
+                    Some("user") => {
+                        let fits = !sent_armed
+                            && line["message"]["role"] == "user"
+                            && armed.as_ref().is_some_and(|armed| line["message"]["content"] == armed.text.as_str() && (armed.from..armed.from + ARMED_FOR_MS).contains(&now));
+                        sent_armed |= fits;
+                        fits
+                    }
                     Some("control_response") if line["response"]["subtype"] == "success" => {
                         let id = line["response"]["request_id"].as_str().unwrap_or_default();
                         let Some(fields) = line["response"]["response"].as_object() else {
@@ -583,8 +634,36 @@ impl Shared {
             for id in answered {
                 asks.remove(&id);
             }
+            if sent_armed {
+                *armed = None;
+            }
         }
         allowed
+    }
+
+    /// Whether `params` asks `processArm` for what the program `token` has armed already: a page that comes back after an
+    /// update of its plugin arms again without a click, and changes nothing.
+    pub(super) fn armed_already(&self, token: &str, params: &Value) -> bool {
+        let Some(running) = self.processes.lock().unwrap().get(token).cloned() else {
+            return false;
+        };
+        let wanted = armed_of(params);
+        matches!((&*running.armed.lock().unwrap(), wanted), (Some(armed), Ok(Some(wanted))) if *armed == wanted)
+    }
+
+    /// `processArm`: with `text` and `at`, the one message the page may write to the program later without a click, from
+    /// `at` (ms since the epoch) for a day; with `text` null, none. Arming needs your click (`PluginFrame::call`).
+    fn arm(&self, token: &str, params: &Value) -> Result<(), String> {
+        let armed = armed_of(params)?;
+        let running = self
+            .processes
+            .lock()
+            .unwrap()
+            .get(token)
+            .cloned()
+            .ok_or_else(|| format!("No program is running as {}", shown(token)))?;
+        *running.armed.lock().unwrap() = armed;
+        Ok(())
     }
 
     fn write(&self, token: &str, params: &Value, reply: Reply) -> Result<(), String> {

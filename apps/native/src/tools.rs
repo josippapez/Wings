@@ -25,13 +25,14 @@ pub const APP_USES: [(&str, &str, bool); 4] = [
 ];
 
 /// Names for the programs people know by an acronym. Any other program is listed under its own name.
-const NAMES: [(&str, &str); 6] = [
+const NAMES: [(&str, &str); 7] = [
     ("claude", "Claude Code"),
     ("opencode", "OpenCode"),
     ("gh", "GitHub CLI"),
     ("glab", "GitLab CLI"),
     ("az", "Azure CLI"),
     ("git", "Git"),
+    ("opentunnel", "OpenTunnel"),
 ];
 
 /// Where the newest Claude Code version is published, as plain text.

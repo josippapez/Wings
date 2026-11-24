@@ -3,6 +3,8 @@ export interface McpTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  /** Left out of the MCP tool list; the tool stays a `wings <plugin> <tool>` command. Only written when true. */
+  cliOnly?: boolean;
 }
 
 /**

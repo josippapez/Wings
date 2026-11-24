@@ -173,7 +173,7 @@ pub struct Chat {
     titled: Option<String>,
     pub(crate) input: Option<ProcessInput>,
     /// Each request the chat writes gets the next number, for its id.
-    requests: u32,
+    pub(crate) requests: u32,
     /// Which start of Claude Code the page shows: one started before it is let go of, and its lines are dropped.
     pub(crate) run: u32,
     /// The folder Claude Code runs in.

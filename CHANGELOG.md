@@ -2,6 +2,15 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.93 · 2026-11-24
+
+- **Claude chat: "Continue when it resets" continues**: at the reset Wings refused the message, since nothing had been clicked right before it, and the chat showed it sent and kept spinning. Your click on the button now arms that one message with Wings, which lets it go at the reset. After a restart of Wings the card asks for the click again. A message Claude Code never got says so instead of spinning.
+- **Agents in one-off terminals**: an agent started in a terminal from the sidebar's Terminal row shows in the Agents list, named after the terminal's folder, and a click opens that terminal.
+- **Fewer Wings tools in Claude's list**: rarely used tools (disk usage, failing checks, changed files, schedules, project info, worktrees, performance) are commands Claude runs with Bash instead of MCP tools, which leaves 21 of 45 in its tool list. `wings tools` lists every command and `wings call <tool>` runs any of them. Plugins mark a tool `cliOnly` in their manifest.
+- **"Load Wings tools at session start" applies to every Claude account**: it only ever changed the default account's setup.
+- **Share** (new plugin, off until you turn it on): Claude can share an app running on a local port at a public OpenTunnel link, after you allow it in Wings. A terminal whose app is shared shows the link with Open, Copy and Stop, and the link comes down when the app stops. Needs `opentunnel` (`brew install anomalyco/tap/opentunnel`).
+- **Claude chat 0.50.0**: the above.
+
 ## 0.2.92 · 2026-11-24
 
 - **Claude chats are kept apart from the terminal server for real**: 0.2.90 moved each chat's Claude into a process group of its own, but the terminal server that was already running kept its old code through the update. This release brings terminal server v9: terminals and chats that run now stay on the old server until they end, and new ones start on the new server.

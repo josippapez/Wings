@@ -83,7 +83,22 @@ pub fn wings_mcp_entry(config: &Path) -> Option<Value> {
 /// statusline` in front of your status line, in each of `accounts`. Every one is tried, and the first to fail is the one
 /// reported.
 pub fn connect(claude: &Path, exe: &Path, socket: &Path, accounts: &[Option<String>], always_load: Option<bool>) -> Result<(), String> {
+    let always_load = follow_switch(always_load, wings_mcp_entry(&claude_accounts::user_config(None)).as_ref());
     each(accounts, |account| connect_account(claude, exe, socket, account, always_load))
+}
+
+/// What `alwaysLoad` a connected account gets: the one asked for, else the default account's, because Settings' "Load
+/// Wings tools at session start" shows that account's and means all of them. `None` (leave each account's own) only
+/// while the default account has no Wings entry to follow.
+pub fn follow_switch(asked: Option<bool>, default_entry: Option<&Value>) -> Option<bool> {
+    asked.or_else(|| default_entry.map(|e| e["alwaysLoad"] == true))
+}
+
+/// Whether the account's own server entry has the `alwaysLoad` the switch says.
+fn follows_switch(account: Option<&str>) -> bool {
+    let default = wings_mcp_entry(&claude_accounts::user_config(None));
+    let wanted = follow_switch(None, default.as_ref());
+    wanted.is_none_or(|on| wings_mcp_entry(&claude_accounts::user_config(account)).is_some_and(|e| (e["alwaysLoad"] == true) == on))
 }
 
 /// `connect` for one account. The server is removed first so a moved app is repointed rather than left dangling.
@@ -108,17 +123,18 @@ pub fn connect_account(claude: &Path, exe: &Path, socket: &Path, account: Option
 pub fn ensure_connected(claude: &Path, exe: &Path, socket: &Path, account: Option<&str>) -> Result<(), String> {
     let registered = claude_mcp(claude, account, &["get", "wings"])
         .is_ok_and(|out| String::from_utf8_lossy(&out.stdout).lines().any(|l| l.trim() == format!("Command: {}", exe.display())));
-    if registered {
+    if registered && follows_switch(account) {
         settings::add(&settings::settings_path(account), exe).map(|_| ())
     } else {
-        connect_account(claude, exe, socket, account, None)
+        let default = wings_mcp_entry(&claude_accounts::user_config(None));
+        connect_account(claude, exe, socket, account, follow_switch(None, default.as_ref()))
     }
 }
 
 /// `ensure_connected`, unless the account's files show Wings there already: reading them tells, where asking `claude`
 /// takes half a second.
 pub fn connect_if_needed(claude: &Path, exe: &Path, socket: &Path, account: Option<&str>) -> Result<(), String> {
-    if has_wings(&claude_accounts::user_config(account), &settings::settings_path(account), exe) {
+    if has_wings(&claude_accounts::user_config(account), &settings::settings_path(account), exe) && follows_switch(account) {
         return Ok(());
     }
     ensure_connected(claude, exe, socket, account)
@@ -230,6 +246,22 @@ mod tests {
         let plain = json!({ "type": "stdio", "command": "/Old/Wings", "args": ["--mcp", "/old.sock"], "env": {} });
         assert_eq!(mcp_add_json(Some(&plain), None, exe, socket), None);
         assert_eq!(mcp_add_json(None, None, exe, socket), None);
+    }
+
+    #[test]
+    fn every_account_follows_the_default_accounts_always_load() {
+        let on = json!({ "command": "/Apps/Wings", "alwaysLoad": true });
+        let off = json!({ "command": "/Apps/Wings" });
+        // An account connected later, with no choice made for it, gets the switch's state.
+        assert_eq!(follow_switch(None, Some(&on)), Some(true));
+        assert_eq!(follow_switch(None, Some(&off)), Some(false));
+        // Toggling the switch wins; with no default entry nothing is changed.
+        assert_eq!(follow_switch(Some(false), Some(&on)), Some(false));
+        assert_eq!(follow_switch(None, None), None);
+        // So the entry written for a new account carries the flag.
+        let (exe, socket) = (Path::new("/Apps/Wings"), Path::new("/data/mcp.sock"));
+        assert_eq!(mcp_add_json(None, follow_switch(None, Some(&on)), exe, socket).unwrap()["alwaysLoad"], true);
+        assert_eq!(mcp_add_json(None, follow_switch(None, Some(&off)), exe, socket), None);
     }
 
     #[test]

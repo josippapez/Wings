@@ -144,16 +144,12 @@ impl LimitWait {
         Some((self.generation, (resets - now + AFTER_MS) as u32))
     }
 
-    /// Arms again for a reset the tab kept across a restart of Wings: the card knows the window no more.
-    pub fn rearm(&mut self, resets: f64, now: f64) -> Option<(u32, u32)> {
-        if self.hit.is_none() {
+    /// The card for a reset the tab kept across a restart of Wings, not armed: the card knows the window no more. None
+    /// for a reset more than a day gone.
+    pub fn offer(&mut self, resets: f64, now: f64) {
+        if self.hit.is_none() && resets + WAIT_MOST_MS > now {
             self.hit = Some(Hit { window: None, resets_at: Some(resets) });
         }
-        let armed = self.arm(resets, now);
-        if armed.is_none() {
-            self.hit = None;
-        }
-        armed
     }
 
     /// "Not now": no more wait, and no card.
@@ -389,12 +385,18 @@ mod tests {
     }
 
     #[test]
-    fn a_reset_kept_across_a_restart_arms_again_only_while_it_is_ahead() {
+    fn a_reset_kept_across_a_restart_offers_the_button_again_unarmed() {
         let mut wait = LimitWait::default();
-        assert!(wait.rearm(RESET, NOW).is_some());
-        assert_eq!(wait.card(NOW, &[]).unwrap().window, None);
+        wait.offer(RESET, NOW);
+        let card = wait.card(NOW, &[]).unwrap();
+        assert_eq!((card.window, card.phase, wait.armed), (None, Phase::Offer, None));
+        // Reset while Wings was closed: "Continue" now.
         let mut wait = LimitWait::default();
-        assert_eq!(wait.rearm(NOW - 1.0, NOW), None);
+        wait.offer(NOW - 1.0, NOW);
+        assert_eq!(wait.card(NOW, &[]).unwrap().phase, Phase::Passed);
+        // Long gone: no card.
+        let mut wait = LimitWait::default();
+        wait.offer(NOW - WAIT_MOST_MS - 1.0, NOW);
         assert_eq!(wait.card(NOW, &[]), None);
     }
 

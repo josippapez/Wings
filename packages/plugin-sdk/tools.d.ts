@@ -55,6 +55,8 @@ export interface Tool<I extends object = object> {
   /** What Claude reads to decide when to call the tool. */
   readonly description: string;
   readonly input: Schema<I>;
+  /** Left out of Claude's MCP tool list: still `wings <plugin> <tool>` in Bash. See `contributes.mcpTools[].cliOnly`. */
+  readonly cliOnly?: boolean;
   run(input: I, context: ToolContext): unknown;
 }
 
@@ -63,8 +65,8 @@ export interface Tool<I extends object = object> {
  * or a JSON value, or a promise of one; a thrown error is sent back to Claude as a failed call. A tool that takes
  * nothing leaves out `input`.
  */
-export function tool<I extends object>(definition: { description: string; input: Schema<I>; run(input: I, context: ToolContext): unknown }): Tool<I>;
-export function tool(definition: { description: string; run(input: {}, context: ToolContext): unknown }): Tool<{}>;
+export function tool<I extends object>(definition: { description: string; input: Schema<I>; cliOnly?: boolean; run(input: I, context: ToolContext): unknown }): Tool<I>;
+export function tool(definition: { description: string; cliOnly?: boolean; run(input: {}, context: ToolContext): unknown }): Tool<{}>;
 
 /**
  * Answers Claude's calls to each tool in `tools`, by name, with `wings.onTool`. The input is checked first, so a wrong

@@ -27,7 +27,7 @@ export async function readTools(dir) {
     globalThis.wings = before;
   }
   if (!loaded.tools || typeof loaded.tools !== "object") throw new Error("src/tools.ts must export `tools`: an object of tool() definitions, keyed by tool name.");
-  return Object.entries(loaded.tools).map(([name, { description, input }]) => ({ name, description, inputSchema: input.schema }));
+  return Object.entries(loaded.tools).map(([name, { description, input, cliOnly }]) => ({ name, description, inputSchema: input.schema, ...(cliOnly ? { cliOnly: true } : {}) }));
 }
 
 /** Where the array that starts at `start` in `text` ends. Only square brackets count, and not the ones in strings. */

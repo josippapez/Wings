@@ -82,12 +82,12 @@ impl Workspace {
     /// no pane runs an agent, so a newly started agent shows up at most that late, and the first check after Wings comes
     /// to the front is at most that late too.
     pub(super) fn detect_every(&self) -> std::time::Duration {
-        detect_interval(self.window_active, !self.agents.is_empty())
+        detect_interval(self.window_active, !self.agents.is_empty() || !self.loose_agents.is_empty())
     }
 
     /// Every pane in every project, and the one you're looking at while the window has focus,
     /// which never turns Done.
-    fn probes(&self, cx: &App) -> (Vec<PaneProbe>, Option<String>) {
+    pub(super) fn probes(&self, cx: &App) -> (Vec<PaneProbe>, Option<String>) {
         let mut projects = HashMap::new();
         let shown = self.terminals.iter().map(|tab| (&self.config.project, tab));
         let parked = self
@@ -102,7 +102,7 @@ impl Workspace {
         for (pane, path) in self.page_terminal_projects() {
             projects.insert(pane, path.to_string_lossy().into_owned());
         }
-        let probes = self
+        let mut probes: Vec<PaneProbe> = self
             .panes
             .iter()
             .filter_map(|(id, pane)| {
@@ -117,8 +117,22 @@ impl Workspace {
                 })
             })
             .collect();
-        let focused = match self.active {
-            Active::Terminal(id) if self.window_active => self
+        // The sidebar's one-off terminals belong to no project, and the Agents list shows theirs all the same.
+        #[cfg(unix)]
+        probes.extend(self.loose.iter().map(|quick| {
+            let view = quick.view().read(cx);
+            PaneProbe {
+                pane_id: loose_pane(quick.key),
+                space_id: crate::terminal_server::LOOSE.to_owned(),
+                shell_pid: view.process_id(),
+                foreground_pid: view.foreground_pid(),
+                title: view.title().unwrap_or_default(),
+                codex_status: None,
+            }
+        }));
+        let focused = match (self.loose_page(), self.active) {
+            (Some(key), _) if self.window_active => Some(loose_pane(key)),
+            (None, Active::Terminal(id)) if self.window_active => self
                 .terminals
                 .iter()
                 .find(|tab| tab.id == id)
@@ -134,11 +148,22 @@ impl Workspace {
             ai.observe(&mut scan.agents);
         }
         let by_pane = |id: &str| id.parse::<usize>().ok();
-        let agents: HashMap<usize, Agent> = scan
+        let (loose, agents): (Vec<Agent>, Vec<Agent>) = scan
             .agents
+            .into_iter()
+            .partition(|agent| loose_key(&agent.pane_id).is_some());
+        let agents: HashMap<usize, Agent> = agents
             .into_iter()
             .filter_map(|agent| Some((by_pane(&agent.pane_id)?, agent)))
             .collect();
+        let loose: HashMap<usize, Agent> = loose
+            .into_iter()
+            .filter_map(|agent| Some((loose_key(&agent.pane_id)?, agent)))
+            .collect();
+        if loose != self.loose_agents {
+            self.loose_agents = loose;
+            cx.notify_workspace();
+        }
         let info = scan
             .panes
             .into_iter()
@@ -265,6 +290,17 @@ fn detect_interval(window_active: bool, agent_running: bool) -> std::time::Durat
     } else {
         agents::IDLE_EVERY
     }
+}
+
+
+/// The id a one-off terminal's probe goes by: `loose-<key>`, apart from the panes' numbers.
+pub(super) fn loose_pane(key: usize) -> String {
+    format!("loose-{key}")
+}
+
+/// The one-off terminal a probe id names.
+pub(super) fn loose_key(pane: &str) -> Option<usize> {
+    pane.strip_prefix("loose-")?.parse().ok()
 }
 
 #[cfg(test)]

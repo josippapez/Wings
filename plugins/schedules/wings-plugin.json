@@ -1,13 +1,13 @@
 {
   "id": "schedules",
   "name": "Schedules",
-  "version": "0.10.1",
+  "version": "0.10.2",
   "minWingsVersion": "0.2.59",
   "icon": "icon.svg",
   "description": "Starts a coding agent (Claude Code or OpenCode) with a prompt in one of your projects by itself: every few hours, at a set time on the days you pick, or once on a date. It can also watch a project's Azure DevOps, GitHub or GitLab for tickets assigned to you, and offer to start an agent on each in a new worktree. Each run opens in a new tab and you get a notification. Wings has to be running, and a run missed while it was closed isn't made up, except a one-off date, which runs when Wings next starts.",
   "api": 1,
   "native": true,
-  "mcpInstructions": "Schedules (schedules__*): add starts an agent with a prompt in a project every few hours, at a set time on chosen days, or once on a given date (date with time), once the user allows it in Wings; add_assigned watches a project for tickets assigned to the user and offers to start an agent on each; list shows both, with the tickets and their state; update changes one; remove deletes one. Use them when the user wants an agent run on a schedule or asks what is assigned to them.",
+  "mcpInstructions": "Schedules: for an agent run on a schedule, or tickets assigned to the user, run `wings schedules list`, `add`, `add_assigned`, `update` or `remove` in Bash; `wings schedules <tool> --help` shows the arguments.",
   "main": "dist/native/main.wasm",
   "permissions": {
     "panes": [
@@ -77,6 +77,7 @@
     "mcpTools": [
       {
         "name": "list",
+        "cliOnly": true,
         "description": "Lists every schedule and every assigned entry, one line each: id, kind, project, agent, enabled, and for an assigned entry its source, last check, the states it asks about and the tickets assigned to the user with their state and whether each is asked about. Then the tickets waiting for the user's answer. Read-only.",
         "inputSchema": {
           "type": "object",
@@ -86,6 +87,7 @@
       },
       {
         "name": "add",
+        "cliOnly": true,
         "description": "Adds a timed schedule: Wings starts an agent with this prompt in a new tab of the project every few hours, at a time of day on the days given, or once on a date (date with time, then it never runs again), while Wings runs. It starts by itself, so the user has to allow it in a dialog in Wings first: the call waits up to 100 seconds for their answer and fails, saving nothing, when they deny or don't answer.",
         "inputSchema": {
           "type": "object",
@@ -157,6 +159,7 @@
       },
       {
         "name": "add_assigned",
+        "cliOnly": true,
         "description": "Adds an entry that watches a project's Azure DevOps, GitHub or GitLab for tickets assigned to the user and offers to start an agent on each in a new worktree. It checks once and returns what it found. One entry per project. Nothing starts until the user presses Start on the Schedules page or allows the start tool in a dialog: the entry never lets agents start without asking until the user turns that on.",
         "inputSchema": {
           "type": "object",
@@ -223,6 +226,7 @@
       },
       {
         "name": "check",
+        "cliOnly": true,
         "description": "Checks for assigned tickets now, in one assigned entry or in every enabled one, and returns what each found. Use it after a ticket was assigned, instead of waiting for the next check.",
         "inputSchema": {
           "type": "object",
@@ -238,6 +242,7 @@
       },
       {
         "name": "start",
+        "cliOnly": true,
         "description": "Starts an agent on one assigned ticket: makes a worktree on a feature branch and opens the agent in it, in the entry's project or another project of the same repo host and project. The ticket must be waiting, or listed by the last check in a state the entry asks about, and not started before. One that already has a branch, or was started before, needs force. It waits up to 100 seconds for the user to allow it in a dialog in Wings, and fails, starting nothing, when they deny or don't answer, unless the user turned on, for this entry on the Schedules page, that agents can start its tickets without asking.",
         "inputSchema": {
           "type": "object",
@@ -274,6 +279,7 @@
       },
       {
         "name": "update",
+        "cliOnly": true,
         "description": "Changes a schedule or an assigned entry: only the fields given change, and an empty string or list clears one. For a schedule, a new agent, prompt or timing waits for the user to allow it in a dialog in Wings (up to 100 seconds) and fails, changing nothing, when they deny or don't answer; a new name alone doesn't ask. For an assigned entry, the tickets it already asked about or started stay as they are.",
         "inputSchema": {
           "type": "object",
@@ -373,6 +379,7 @@
       },
       {
         "name": "remove",
+        "cliOnly": true,
         "description": "Removes a schedule or an assigned entry by its id from list. What it was waiting to ask about goes with it. Tabs it already started stay open.",
         "inputSchema": {
           "type": "object",

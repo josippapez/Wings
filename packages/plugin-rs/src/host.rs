@@ -921,6 +921,13 @@ impl ProcessInput {
         call("processWrite", json!({ "token": self.0, "text": text }))
     }
 
+    /// `wings.processArm`: lets the page later write one user message with `text` as its content, word for word, without
+    /// a click, from `at` (ms since the epoch) for a day, like a chat's "Continue when it resets". Arming needs your click,
+    /// and `None` takes it back. Wings forgets it when it quits. Needs Wings 0.2.93.
+    pub fn arm(&self, text: Option<&str>, at: f64) -> Pending<Result<Value, String>> {
+        call("processArm", json!({ "token": self.0, "text": text, "at": at }))
+    }
+
     /// Closes the program's input once the writes before it have gone, which tells a program like Claude to finish.
     /// Wings kills it if it is still running 3 s later.
     pub fn stop(&self) {

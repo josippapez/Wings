@@ -116,32 +116,49 @@ fn ask(op: &str, mut request: Value) -> Result<Value, String> {
 /// A plugin tool's name on the socket: `<plugin>__<tool>`, as Claude sees it.
 const SEPARATOR: &str = "__";
 
-/// `wings tools`: the commands the plugins that are on add, which are their MCP tools, one per line.
-pub fn tools() -> i32 {
-    let reply = match ask("list", json!({})) {
-        Ok(reply) => reply,
-        Err(e) => return fail(&e),
-    };
+/// The commands `wings tools` lists, as (command, first sentence of what it does) from a socket `list` reply: every
+/// plugin tool as `wings <plugin> <tool>`, and each of Wings' own as `wings call <tool>`, or the command of its own
+/// when it has one.
+fn command_rows(reply: &Value) -> Vec<(String, String)> {
     let mut rows: Vec<(String, String)> = reply["tools"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|t| {
-            let (plugin, tool) = t["name"].as_str()?.split_once(SEPARATOR)?;
+            let name = t["name"].as_str()?;
+            let command = match name.split_once(SEPARATOR) {
+                Some((plugin, tool)) => format!("wings {plugin} {tool}"),
+                None => match name {
+                    "worktree_setup" => "wings worktree-setup".to_string(),
+                    "performance" => "wings performance".to_string(),
+                    _ => format!("wings call {name}"),
+                },
+            };
             let first = t["description"].as_str().unwrap_or_default().split(". ").next().unwrap_or_default().trim_end_matches('.').to_string();
-            Some((format!("wings {plugin} {tool}"), first))
+            Some((command, first))
         })
         .collect();
+    rows.sort();
+    rows
+}
+
+/// `wings tools`: the commands Wings and the plugins that are on add, which are their MCP tools, the ones left out of
+/// Claude's tool list (`cliOnly`) included, one per line.
+pub fn tools() -> i32 {
+    let reply = match ask("list", json!({})) {
+        Ok(reply) => reply,
+        Err(e) => return fail(&e),
+    };
+    let rows = command_rows(&reply);
     if rows.is_empty() {
         println!("No plugin that's on adds commands.");
         return 0;
     }
-    rows.sort();
     let width = rows.iter().map(|(c, _)| c.len()).max().unwrap_or(0);
     for (command, about) in rows {
         println!("{command:<width$}  {about}");
     }
-    println!("\nRun one with key=value arguments, like `wings tasks list status=todo`. `wings <plugin> <tool> --help` shows its arguments.");
+    println!("\nRun one with key=value arguments, like `wings tasks list status=todo` or `wings call create_worktree branch=fix`. Add --help to see its arguments.");
     0
 }
 
@@ -162,23 +179,41 @@ pub fn plugin_tool(args: &[String]) -> i32 {
     };
     let name = format!("{plugin}{SEPARATOR}{tool}");
     if rest.iter().any(|a| a == "--help" || a == "-h") {
-        let reply = match ask("list", json!({})) {
-            Ok(reply) => reply,
-            Err(e) => return fail(&e),
-        };
-        let Some(found) = reply["tools"].as_array().into_iter().flatten().find(|t| t["name"] == json!(name)) else {
-            return fail(&format!("{plugin} has no command {tool}, or it's off. `wings tools` lists them."));
-        };
-        println!("{}\n", found["description"].as_str().unwrap_or_default());
-        let required: Vec<&str> = found["inputSchema"]["required"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
-        for (key, schema) in found["inputSchema"]["properties"].as_object().into_iter().flatten() {
-            let kind = schema["type"].as_str().unwrap_or("value");
-            let need = if required.contains(&key.as_str()) { " (required)" } else { "" };
-            println!("  {key}=<{kind}>{need}  {}", schema["description"].as_str().unwrap_or_default());
-        }
-        return 0;
+        return tool_help(&name, &format!("{plugin} has no command {tool}, or it's off"));
     }
     call_tool(&name, rest)
+}
+
+/// `wings call <tool> [key=value ...]`: runs one of Wings' own tools, like `create_worktree`, which the MCP server may
+/// leave out of Claude's list. Plugin tools are `wings <plugin> <tool>`.
+pub fn call(args: &[String]) -> i32 {
+    let [tool, rest @ ..] = args else {
+        eprintln!("Usage: wings call <tool> [key=value ...]. `wings tools` lists them; `wings call <tool> --help` shows one's arguments.");
+        return 2;
+    };
+    if rest.iter().any(|a| a == "--help" || a == "-h") {
+        return tool_help(tool, &format!("Wings has no tool {tool}"));
+    }
+    call_tool(tool, rest)
+}
+
+/// Prints the description and arguments of the tool `name` from the app's list, or `missing` as the failure.
+fn tool_help(name: &str, missing: &str) -> i32 {
+    let reply = match ask("list", json!({})) {
+        Ok(reply) => reply,
+        Err(e) => return fail(&e),
+    };
+    let Some(found) = reply["tools"].as_array().into_iter().flatten().find(|t| t["name"] == json!(name)) else {
+        return fail(&format!("{missing}. `wings tools` lists them."));
+    };
+    println!("{}\n", found["description"].as_str().unwrap_or_default());
+    let required: Vec<&str> = found["inputSchema"]["required"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    for (key, schema) in found["inputSchema"]["properties"].as_object().into_iter().flatten() {
+        let kind = schema["type"].as_str().unwrap_or("value");
+        let need = if required.contains(&key.as_str()) { " (required)" } else { "" };
+        println!("  {key}=<{kind}>{need}  {}", schema["description"].as_str().unwrap_or_default());
+    }
+    0
 }
 
 /// `wings worktree-setup [project=<name|path>] [include='["a","b"]'] [setup=<command>]`: Wings' own `worktree_setup`
@@ -533,6 +568,22 @@ pub fn install_command(exe: &Path) -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn wings_tools_lists_plugin_and_builtin_tools_with_the_command_that_runs_each() {
+        let reply = json!({ "tools": [
+            { "name": "tasks__list", "description": "Lists issues. More." },
+            { "name": "disk__folder_usage", "cliOnly": true, "description": "Size of a folder." },
+            { "name": "create_worktree", "cliOnly": true, "description": "Make a worktree. Use it." },
+            { "name": "worktree_setup", "cliOnly": true, "description": "Read setup." },
+            { "name": "performance", "cliOnly": true, "description": "Measure." },
+            { "name": "read_pane", "description": "Read a pane." },
+        ] });
+        let rows = super::command_rows(&reply);
+        let commands: Vec<&str> = rows.iter().map(|(c, _)| c.as_str()).collect();
+        assert_eq!(commands, ["wings call create_worktree", "wings call read_pane", "wings disk folder_usage", "wings performance", "wings tasks list", "wings worktree-setup"]);
+        assert_eq!(rows[0].1, "Make a worktree");
+    }
+
     #[test]
     fn performance_takes_seconds_and_json_and_refuses_the_rest() {
         let args = |a: &[&str]| super::performance_args(&a.iter().map(|s| s.to_string()).collect::<Vec<_>>());

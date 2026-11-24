@@ -53,7 +53,10 @@ fn tasks(rig: &Rig) -> Arc<PluginHost> {
     let tasks = plugin(json!({
         "id": "tasks",
         "contributes": {
-            "mcpTools": [{ "name": "where", "description": "where", "inputSchema": { "type": "object" } }],
+            "mcpTools": [
+                { "name": "where", "description": "where", "inputSchema": { "type": "object" } },
+                { "name": "quiet", "description": "quiet", "inputSchema": { "type": "object" }, "cliOnly": true },
+            ],
             "hooks": ["SessionStart", "PreToolUse", "UserPromptSubmit"],
         },
     }));
@@ -143,4 +146,25 @@ fn a_tool_call_from_claude_carries_its_pane_project_and_session() {
         answer.wait(WAIT),
         Some(Err("other is turned off in Wings".into()))
     );
+}
+
+#[test]
+fn a_cli_only_tool_is_marked_in_the_list_and_still_answers_claude_and_other_plugins() {
+    let rig = Rig::new(json!({}), vec![]);
+    let _tasks = tasks(&rig);
+    let listed = rig.env.running.mcp_tools();
+    assert!(listed[0].get("cliOnly").is_none());
+    assert_eq!((listed[1]["name"].as_str(), listed[1]["cliOnly"].as_bool()), (Some("tasks__quiet"), Some(true)));
+    // Claude's call (the `wings tasks quiet` command and a direct MCP call both come this way) is checked against all tools.
+    ask(&rig, "where", json!({}), false);
+    let (reply, answer) = Reply::channel();
+    rig.env.running.call_for_claude("tasks", "quiet", json!({}), &caller(), false, reply);
+    assert!(!matches!(answer.wait(WAIT), Some(Err(e)) if e.contains("has no tool")));
+    // Another plugin's `callTool` goes through `Running::call_tool`, which has no idea of the flag.
+    let (reply, answer) = Reply::channel();
+    rig.env.running.call_tool(
+        crate::page::plugin::ToolCall { target: "tasks".into(), tool: "quiet".into(), input: json!({}), project: None },
+        reply,
+    );
+    assert!(!matches!(answer.wait(WAIT), Some(Err(e)) if e.contains("has no tool")));
 }

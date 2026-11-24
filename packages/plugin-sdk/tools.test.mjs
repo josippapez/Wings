@@ -25,7 +25,7 @@ registerTools(
         return { input, context };
       },
     }),
-    ping: tool({ description: "Pings.", run: () => "pong" }),
+    ping: tool({ description: "Pings.", cliOnly: true, run: () => "pong" }),
   },
   { onTool: (name, handler) => (handlers[name] = handler) },
 );
@@ -78,12 +78,12 @@ export const tools = {
     input: s.object({ status: s.enum(STATUSES).optional().describe("Only these."), limit: s.integer({ minimum: 1, maximum: 200 }).optional() }),
     run: () => "",
   }),
-  ping: tool({ description: "Pings.", run: () => "pong" }),
+  ping: tool({ description: "Pings.", cliOnly: true, run: () => "pong" }),
 };
 `;
 const EXPECTED = [
   { name: "list", description: "Lists things.", inputSchema: { type: "object", properties: { status: { type: "string", enum: ["todo", "done"], description: "Only these." }, limit: { type: "integer", minimum: 1, maximum: 200 } }, additionalProperties: false } },
-  { name: "ping", description: "Pings.", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
+  { name: "ping", description: "Pings.", inputSchema: { type: "object", properties: {}, additionalProperties: false }, cliOnly: true },
 ];
 
 test("the manifest tools are the tools' JSON Schema, in order, and a file that can't be read says why", async (t) => {

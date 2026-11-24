@@ -1,0 +1,102 @@
+{
+  "id": "share",
+  "name": "Share",
+  "version": "0.1.0",
+  "minWingsVersion": "0.2.57",
+  "icon": "icon.svg",
+  "description": "Puts an app that runs on your computer at a public https link with OpenTunnel, for Claude to send you or someone else: share_port, list_shares and stop_share. You allow each port in Wings first, a badge on the pane of a shared program has Open, Copy link and Stop, and a link comes down when its port closes. Anyone who has a link can open the app. Needs OpenTunnel (brew install anomalyco/tap/opentunnel).",
+  "api": 1,
+  "main": "dist/native/main.wasm",
+  "mcpInstructions": "Share (share__*): share_port puts a program that runs on a local port at a public https link (OpenTunnel); list_shares shows the links; stop_share ends one by name or port. Use share_port when the user says \"share this app\", \"send me a link\", \"open it on my phone\" or \"show the running app to someone\". The user must allow each port in Wings first. Anyone with the link can open the app. Stop it when they are done.",
+  "permissions": {
+    "exec": [
+      "opentunnel route add [--name]",
+      "opentunnel route list []",
+      "opentunnel route remove []"
+    ],
+    "ports": true,
+    "openUrl": [
+      "https://"
+    ],
+    "panes": [
+      "brew install anomalyco/tap/opentunnel"
+    ],
+    "notify": true
+  },
+  "contributes": {
+    "ui": [
+      "badges"
+    ],
+    "views": [
+      {
+        "id": "share",
+        "title": "Public links",
+        "page": "dist/native/share.wasm",
+        "opens": [
+          "modal"
+        ],
+        "width": 560,
+        "height": 420,
+        "button": false
+      }
+    ],
+    "mcpTools": [
+      {
+        "name": "share_port",
+        "description": "Puts the app that listens on localhost:<port> at a public https link with OpenTunnel and answers with the link, host, port and name. Only this computer's own port is shared, never another host. The user has to allow each port in a dialog in Wings first: the call waits up to 100 seconds for their answer and shares nothing when they deny or don't answer. Sharing the same port again gives the same link. Anyone who has the link can open the app, including endpoints meant only for localhost, and a Vite dev server shows \"Blocked request\" until the link's host is in its server.allowedHosts. The link comes down when the port closes, or with stop_share. The first link ever made creates the tunnel, which can take a few minutes: if the call fails with a timeout, call it again. Fails with how to install OpenTunnel when it isn't installed.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535,
+              "description": "The port the app listens on on this computer, like 3000 or 5173."
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 63,
+              "description": "A readable name for the link, which becomes its first part: lowercase letters, digits and dashes, not starting or ending with a dash. Leave out for a random one that can't be guessed. A readable name can be guessed, so use one only when the app is fine to be found."
+            }
+          },
+          "required": [
+            "port"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "list_shares",
+        "description": "Lists every link OpenTunnel has: its name, public url, target, the local port it points at, and whether Wings made it. Read-only.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "stop_share",
+        "description": "Ends a link, so the app is no longer public. Give its name, or the port it points at, which ends every link to that port. Needs no answer from the user.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 63,
+              "description": "The link's name, as share_port and list_shares give it."
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535,
+              "description": "The local port to stop sharing."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    ]
+  }
+}

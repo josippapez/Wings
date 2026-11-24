@@ -31,21 +31,44 @@ pub fn card(c: &Chat) -> Option<Node> {
     Some(confirm("Usage limit reached", body, [actions]).key("limit-wait"))
 }
 
-/// "Continue when it resets": sleeps until then, once.
+/// "Continue when it resets": sleeps until then, once. Wings lets the message go then without another click only
+/// because this click armed it (`processArm`), so it is armed with Wings here, in the click.
 pub fn arm() {
     let armed = chat::with(|c| {
         let resets = c.session.limit.resets_at(&c.session.limits)?;
-        c.session.limit.arm(resets, host::now())
+        let (generation, delay) = c.session.limit.arm(resets, host::now())?;
+        Some((generation, delay, resets, c.input.clone()))
     });
-    if let Some((generation, delay)) = armed {
-        sleep(generation, delay);
-        chat::save_tab();
+    let Some((generation, delay, resets, input)) = armed else {
+        return;
+    };
+    if let Some(input) = input {
+        let held = input.arm(Some(limit_wait::CONTINUE), resets);
+        task::spawn(async move {
+            // A Wings that won't hold it would refuse the message at the reset: the card offers the button again.
+            if held.await.is_err() {
+                chat::with(|c| {
+                    if c.session.limit.generation == generation {
+                        c.session.limit.unarm();
+                    }
+                });
+                chat::save_tab();
+            }
+        });
     }
+    sleep(generation, delay);
+    chat::save_tab();
 }
 
 /// Takes the wait back, and keeps the card.
 fn unarm() {
-    chat::with(|c| c.session.limit.unarm());
+    let input = chat::with(|c| {
+        c.session.limit.unarm();
+        c.input.clone()
+    });
+    if let Some(input) = input {
+        drop(input.arm(None, 0.0));
+    }
     chat::save_tab();
 }
 
@@ -55,14 +78,14 @@ fn dismiss() {
     chat::save_tab();
 }
 
-/// Arms again after a start of the tab, for the reset it kept (`Chat::limit_resume`). Called as the chat begins.
+/// The card again after a start of the tab, for the reset it kept (`Chat::limit_resume`). Called as the chat begins. It
+/// is not armed again: what your click armed with Wings is gone with the Wings that quit, so the card asks the click
+/// again ("Continue when it resets", or "Continue" once it has reset).
 pub(crate) fn resume(c: &mut Chat) {
     let Some(resets) = c.limit_resume.take() else {
         return;
     };
-    if let Some((generation, delay)) = c.session.limit.rearm(resets, host::now()) {
-        sleep(generation, delay);
-    }
+    c.session.limit.offer(resets, host::now());
 }
 
 /// The one sleep of an arm: the host's timer, not a poll.
@@ -90,12 +113,28 @@ fn send_now() {
     say(limit_wait::CONTINUE);
 }
 
+/// Sends `said` as your message. When Claude Code doesn't get it, the chat says so and isn't left working on it.
 fn say(said: &'static str) {
-    chat::write(|c, n| {
-        let line = c.session.send(said, &[], host::now() as u64, n);
+    let written = chat::with(|c| {
+        let input = c.input.clone()?;
+        c.requests += 1;
+        let line = c.session.send(said, &[], host::now() as u64, c.requests);
         c.doing = (c.session.activity(), host::now() as u64);
-        Some(line)
+        Some((input, line))
     });
+    if let Some((input, line)) = written {
+        let wrote = input.write(&line);
+        task::spawn(async move {
+            if let Err(error) = wrote.await {
+                chat::with(|c| {
+                    c.session.working = false;
+                    c.session.items.push(crate::session::Item::Error(format!("Claude Code didn't get the message to continue: {error}")));
+                });
+                chat::report_agent();
+            }
+        });
+        crate::reattach::sync();
+    }
     chat::report_agent();
 }
 
@@ -205,20 +244,57 @@ mod tests {
     }
 
     #[test]
-    fn a_reset_the_tab_kept_arms_again_as_the_chat_begins_and_the_tab_keeps_the_arm() {
+    fn a_reset_the_tab_kept_offers_the_button_again_as_the_chat_begins() {
         let calls = wings();
         with(|c| {
             c.limit_resume = Some(RESET);
             chat::begin(c);
-            assert_eq!(c.session.limit.armed, Some(RESET));
+            assert_eq!(c.session.limit.armed, None, "what was armed with Wings is gone with it");
             assert_eq!(c.limit_resume, None);
+            assert!(card(c).is_some());
         });
-        chat::save_tab();
-        let saved = calls.borrow().iter().rev().find(|(method, _)| method == "setTabState").map(|(_, params)| params["state"]["limitArmed"].clone());
-        assert_eq!(saved, Some(json!(RESET)));
-        // "Not now" drops it, and so does the tab's state.
+        // "Not now" drops the card, and the tab keeps no arm.
         dismiss();
         let saved = calls.borrow().iter().rev().find(|(method, _)| method == "setTabState").map(|(_, params)| params["state"]["limitArmed"].clone());
         assert_eq!(saved, Some(Value::Null));
+    }
+
+    /// The click arms the message with Wings, which lets it go at the reset without another click; Cancel takes it back.
+    #[test]
+    fn the_click_arms_the_continue_with_wings_and_cancel_takes_it_back() {
+        let calls = limited();
+        arm();
+        task::block_on(async {});
+        let arms: Vec<Value> = calls.borrow().iter().filter(|(method, _)| method == "processArm").map(|(_, params)| params.clone()).collect();
+        assert_eq!(arms.len(), 1);
+        assert_eq!((arms[0]["text"].as_str(), arms[0]["at"].as_f64()), (Some(limit_wait::CONTINUE), Some(RESET)));
+        unarm();
+        let last = calls.borrow().iter().rev().find(|(method, _)| method == "processArm").map(|(_, params)| params["text"].clone());
+        assert_eq!(last, Some(Value::Null));
+    }
+
+    /// A Wings that won't hold the message (refused, or one before 0.2.93) leaves the card offering the button again.
+    #[test]
+    fn a_refused_arm_leaves_the_card_offering_the_button() {
+        let _ = limited();
+        host::testing::answer(|method, _| if method == "processArm" { Err("A page can write to a program only right after you click or type in it".into()) } else { Ok(Value::Null) });
+        arm();
+        task::block_on(async {});
+        assert_eq!(with(|c| c.session.limit.armed), None);
+    }
+
+    /// The message that didn't reach Claude Code says so, and the chat isn't left working on it.
+    #[test]
+    fn a_continue_claude_code_never_got_leaves_the_chat_idle_with_why() {
+        let _ = limited();
+        arm();
+        let generation = with(|c| c.session.limit.generation);
+        host::testing::answer(|method, _| if method == "processWrite" { Err("A page can write to a program only right after you click or type in it".into()) } else { Ok(Value::Null) });
+        fire(generation);
+        task::block_on(async {});
+        with(|c| {
+            assert!(!c.session.working);
+            assert!(c.session.items.iter().any(|item| matches!(item, Item::Error(said) if said.contains("didn't get the message to continue"))));
+        });
     }
 }

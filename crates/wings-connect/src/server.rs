@@ -20,6 +20,13 @@ use wings_spaces::spaces::Space;
 /// Tool names are `<plugin id>__<tool>`, so Claude can tell which plugin a tool comes from.
 pub const SEPARATOR: &str = "__";
 
+/// Marks a tool definition as one the MCP server leaves out of Claude's tool list: it stays in the app's `list` answer,
+/// so `wings tools` and `wings <plugin> <tool> --help` show it, and a call of it still runs.
+pub fn cli_only(mut tool: Value) -> Value {
+    tool["cliOnly"] = json!(true);
+    tool
+}
+
 /// What a tool call returns to Claude: text, and whether it failed.
 pub struct ToolResult {
     pub text: String,

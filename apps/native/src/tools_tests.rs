@@ -209,6 +209,15 @@ fn only_what_the_app_and_the_plugins_run_is_listed() {
 }
 
 #[test]
+fn opentunnel_is_listed_by_name_while_share_runs_it() {
+    let wants = wants(&[plugin("Share", &["opentunnel route add [--name]", "opentunnel route list []"])]);
+    let tool = wants.iter().find(|w| w.program == "opentunnel").unwrap();
+    assert_eq!((tool.name.as_str(), tool.known, tool.plugins.as_slice()), ("OpenTunnel", true, ["Share".to_owned()].as_slice()));
+    // It is no part of the app: with no plugin that runs it, it isn't listed.
+    assert!(super::wants(&[]).iter().all(|w| w.program != "opentunnel"));
+}
+
+#[test]
 fn what_uses_a_tool_is_cut_to_three() {
     let want = Want {
         program: "git".into(),

@@ -32,17 +32,23 @@ impl Workspace {
     pub(super) fn agent_list(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let pending = self.pending_agents(cx.background_executor().now());
         let tabs = self.tab_agents();
-        if self.agents.is_empty() && pending.is_empty() && tabs.is_empty() {
+        if self.agents.is_empty() && self.loose_agents.is_empty() && pending.is_empty() && tabs.is_empty() {
             return None;
         }
-        let count = self.agents.len() + pending.len() + tabs.len();
+        let count = self.agents.len() + self.loose_agents.len() + pending.len() + tabs.len();
         let focused = self.focused_pane();
         // Rows keep their place: a click, a state change or a project switch never moves one. A blocked agent shows
         // in its row's colour instead.
         let mut rows: Vec<AnyElement> = in_place(&self.agents)
             .into_iter()
-            .map(|(pane, agent)| self.agent_row(pane, agent, focused == Some(pane), cx))
+            .map(|(pane, agent)| self.agent_row(At::Pane(pane), agent, focused == Some(pane), cx))
             .collect();
+        let shown_loose = self.loose_page();
+        rows.extend(
+            in_place(&self.loose_agents)
+                .into_iter()
+                .map(|(key, agent)| self.agent_row(At::Loose(key), agent, shown_loose == Some(key), cx)),
+        );
         rows.extend(tabs.into_iter().map(|(project, tab, agent)| {
             let state = tab_state(&agent.state);
             self.tab_agent_row(project, tab, agent, state, cx)
@@ -87,7 +93,7 @@ impl Workspace {
 
     fn agent_row(
         &self,
-        pane: usize,
+        at: At,
         agent: &Agent,
         focused: bool,
         cx: &mut Context<Self>,
@@ -96,14 +102,31 @@ impl Workspace {
             .name
             .clone()
             .unwrap_or_else(|| agents::label(agent.kind).into());
-        let project = self
-            .projects
-            .iter()
-            .find(|p| p.path.as_os_str() == agent.space_id.as_str())
-            .map_or_else(|| agent.space_id.clone(), |p| p.name.clone());
+        // A one-off terminal's agent is in no project: its row names the folder the terminal is in, as its sidebar row does.
+        let project = match at {
+            At::Pane(_) => self
+                .projects
+                .iter()
+                .find(|p| p.path.as_os_str() == agent.space_id.as_str())
+                .map_or_else(|| agent.space_id.clone(), |p| p.name.clone()),
+            At::Loose(key) => self.loose_terminal(key).map_or_else(|| "~".to_owned(), |quick| quick.title(cx)),
+        };
         let blocked = agent.state == AgentState::Blocked;
         let path = PathBuf::from(&agent.space_id);
-        let account = self.agent_accounts.get(&pane).cloned();
+        let account = match at {
+            At::Pane(pane) => self.agent_accounts.get(&pane).cloned(),
+            At::Loose(_) => agent
+                .claude_dir
+                .as_deref()
+                .zip(self.config.agents.as_deref())
+                .and_then(|(dir, default)| wings_spaces::claude_accounts::label(dir, default))
+                .map(SharedString::new),
+        };
+        // A one-off terminal's row counts down from the top of the ids, clear of the panes' numbers.
+        let (id, slot, summary_spot) = match at {
+            At::Pane(pane) => (pane, format!("agent-{pane}"), format!("agent-summary:{pane}")),
+            At::Loose(key) => (usize::MAX - key, format!("loose-agent-{key}"), format!("loose-agent-summary:{key}")),
+        };
         let mut label = match &account {
             Some(account) => format!("{name}, {account} account, {project}, {}", status(agent)),
             None => format!("{name}, {project}, {}", status(agent)),
@@ -112,7 +135,7 @@ impl Workspace {
             label.push_str(&format!(". {summary}"));
         }
         div()
-            .id(("agent", pane))
+            .id(("agent", id))
             .role(Role::Button)
             .aria_label(label)
             .flex()
@@ -132,15 +155,18 @@ impl Workspace {
                 row.bg(rgba(BLOCKED_ROW))
                     .hover(|style| style.bg(rgba(BLOCKED_ROW_HOVER)))
             })
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.go_to_pane(path.clone(), pane, window, cx)
+            .on_click(cx.listener(move |this, _, window, cx| match at {
+                At::Pane(pane) => this.go_to_pane(path.clone(), pane, window, cx),
+                At::Loose(key) => this.place_quick(key, super::quick::Place::Full, false, window, cx),
             }))
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                    this.open_menu(MenuTarget::Agent(pane), event.position, cx)
-                }),
-            )
+            .when_some(at.pane(), |row, pane| {
+                row.on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                        this.open_menu(MenuTarget::Agent(pane), event.position, cx)
+                    }),
+                )
+            })
             .child(
                 div()
                     .size(px(16.0))
@@ -181,10 +207,7 @@ impl Workspace {
                             .line_height(px(16.0))
                             .text_color(rgb(theme::MUTED_FOREGROUND))
                             .child(div().flex_none().child(format!("{project},")))
-                            .child(crate::ui::status_dot_slot(
-                                agent.state,
-                                format!("agent-{pane}"),
-                            ))
+                            .child(crate::ui::status_dot_slot(agent.state, slot))
                             .child(div().min_w_0().truncate().child(status(agent))),
                     )
                     // The desktop's `text-muted-foreground/70`: what the agent just did, from Settings' model.
@@ -195,7 +218,7 @@ impl Workspace {
                             .text_size(px(11.0))
                             .line_height(px(16.0))
                             .text_color(rgba(theme::MUTED_FOREGROUND << 8 | 0xb3))
-                            .children(crate::ui::spot(|| format!("agent-summary:{pane}")))
+                            .children(crate::ui::spot(|| summary_spot))
                             .child(summary)
                     })),
             )
@@ -573,6 +596,22 @@ fn glyph(kind: AgentKind) -> (Icon, u32) {
         AgentKind::Claude => (Icon::Claude, theme::CLAUDE),
         AgentKind::Opencode => (Icon::Opencode, theme::FOREGROUND),
         _ => (Icon::Terminal, theme::FOREGROUND),
+    }
+}
+
+/// Where an agent row's agent runs: a pane of a project's tab, or one of the sidebar's one-off terminals by its key.
+#[derive(Clone, Copy)]
+enum At {
+    Pane(usize),
+    Loose(usize),
+}
+
+impl At {
+    fn pane(self) -> Option<usize> {
+        match self {
+            At::Pane(pane) => Some(pane),
+            At::Loose(_) => None,
+        }
     }
 }
 

@@ -243,6 +243,8 @@ pub struct Workspace {
     exits: exits::Exits,
     /// What each pane's agent is doing, from the last detection, by pane.
     agents: HashMap<usize, Agent>,
+    /// The same for the sidebar's one-off terminals, by their key.
+    loose_agents: HashMap<usize, Agent>,
     /// The account each pane's Claude runs under, by name, when it isn't the default one.
     agent_accounts: HashMap<usize, SharedString>,
     /// What each pane runs now, from the last detection.
@@ -451,6 +453,7 @@ impl Workspace {
             side: Default::default(),
             exits: Default::default(),
             agents: HashMap::new(),
+            loose_agents: HashMap::new(),
             agent_accounts: HashMap::new(),
             pane_info: HashMap::new(),
             agent_terminals: Default::default(),

@@ -378,6 +378,28 @@ mod tests {
     }
 
     #[test]
+    fn a_tool_can_be_cli_only_and_that_alone_is_not_a_different_tool() {
+        let dir = std::env::temp_dir().join(format!("wings-cli-only-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("main.js"), "").unwrap();
+        let manifest = |extra: &str| {
+            format!(r#"{{ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js", "contributes": {{ "mcpTools": [{{ "name": "a", "description": "A"{extra} }}, {{ "name": "b" }}] }} }}"#)
+        };
+        fs::write(dir.join("wings-plugin.json"), manifest(r#", "cliOnly": true"#)).unwrap();
+        let tools = load(&dir).unwrap().manifest.contributes.mcp_tools;
+        assert_eq!(tools.iter().map(|t| t.cli_only).collect::<Vec<_>>(), [true, false]);
+        // Left out, it is off; not a boolean, it is refused. Flipping it keeps an approval, as it asks for nothing new.
+        fs::write(dir.join("wings-plugin.json"), manifest("")).unwrap();
+        let plain = load(&dir).unwrap().manifest.contributes.mcp_tools;
+        assert!(!plain[0].cli_only);
+        assert_eq!(plain, tools);
+        fs::write(dir.join("wings-plugin.json"), manifest(r#", "cliOnly": "yes""#)).unwrap();
+        assert!(load(&dir).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn mcp_instructions_are_capped() {
         let dir = std::env::temp_dir().join(format!("wings-instr-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);

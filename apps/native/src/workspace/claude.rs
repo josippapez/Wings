@@ -66,7 +66,7 @@ const PERFORMANCE_SETTLE: Duration = Duration::from_millis(250);
 
 /// Wings' `performance` tool, which only this app has.
 fn performance_tool() -> Value {
-    json!({
+    wings_connect::server::cli_only(json!({
         "name": "performance",
         "description": "Measure Wings' own CPU, window frames per second and which views render most, over a few seconds, for checking a change's cost in the running app. Turns counting on for that window if the performance readout is off (without showing its card), then puts it back. Returns JSON: seconds, cpuPercent (of one core), frames, framesPerSecond, renders (view, count, perSecond; most first), causes (at: file:line that notified the workspace, which redraws all its pieces, with count, perSecond; most first), cardShown (the readout's card was on, so its own update is in the numbers) and a one-line summary. Does not draw frames itself. Leave Wings alone while it runs for an idle number: a Claude session working in Wings draws too.",
         "inputSchema": {
@@ -75,7 +75,7 @@ fn performance_tool() -> Value {
                 "seconds": { "type": "number", "description": format!("How long to measure, {} to {}. Default {}.", PERFORMANCE_SECONDS.0, PERFORMANCE_SECONDS.1, PERFORMANCE_SECONDS.2) }
             }
         }
-    })
+    }))
 }
 
 /// `performance`: counts for `seconds` (a number, clamped) and answers the measurement as JSON. `wait` sleeps, off the

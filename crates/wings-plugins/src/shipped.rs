@@ -413,6 +413,37 @@ fn schedules_calls_pass_its_own_manifest() {
 }
 
 #[test]
+fn share_calls_pass_its_own_manifest_and_nothing_else_of_opentunnel_does() {
+    let p = own_plugin("share");
+    assert!(["share_port", "list_shares", "stop_share"].iter().all(|tool| p.manifest.contributes.mcp_tools.iter().any(|t| t.name == *tool)));
+    assert_calls_pass(
+        &p,
+        &[
+            ("opentunnel", &["route", "list"]),
+            ("opentunnel", &["route", "add", "3000"]),
+            ("opentunnel", &["route", "add", "3000", "--name", "my-app"]),
+            ("opentunnel", &["route", "remove", "my-app"]),
+        ],
+    );
+    // The commands that make or end the tunnel itself, another profile, a PROXY header and a route for another host.
+    for refused in [
+        &["delete", "--yes"][..],
+        &["down"],
+        &["up"],
+        &["serve"],
+        &["route", "list", "--profile", "other"],
+        &["--profile", "other", "route", "list"],
+        &["route", "add", "3000", "--proxy-protocol", "v1"],
+        &["route", "add", "3000", "--api", "https://example.com"],
+        &["route", "remove", "x", "--profile", "other"],
+    ] {
+        let args: Vec<String> = refused.iter().map(|a| a.to_string()).collect();
+        assert!(!may_exec(&p, "opentunnel", &args), "{refused:?} allowed");
+    }
+    assert_eq!(p.manifest.permissions.panes.as_deref(), Some(&["brew install anomalyco/tap/opentunnel".to_owned()][..]));
+}
+
+#[test]
 fn tasks_calls_pass_its_own_manifest() {
     let p = own_plugin("tasks");
     let org = "https://dev.azure.com/contoso";
