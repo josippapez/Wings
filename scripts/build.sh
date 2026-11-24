@@ -53,15 +53,19 @@ done
 echo $$ > "$lock/pid"
 trap 'rm -rf "$lock"' EXIT INT TERM
 
+# Whether the other slot holds a build that is still running.
+other_running() {
+  for slot in $slots; do
+    [ "$slot" = "$lock" ] || ! held_by_running "$slot" || return 0
+  done
+  return 1
+}
+
 # Under 8 GB free, drop the build caches first: the next build makes them again. Not while the other slot builds,
 # whose compile would lose them midway.
 free_kb=$(df -k "$root" | awk 'NR==2 {print $4}')
 if [ "$free_kb" -lt 8388608 ]; then
-  other=""
-  for slot in $slots; do
-    [ "$slot" = "$lock" ] || ! held_by_running "$slot" || other=1
-  done
-  if [ -n "$other" ]; then
+  if other_running; then
     echo "build.sh: under 8 GB free, but another build is running, so the build caches stay" >&2
   else
     echo "build.sh: under 8 GB free, deleting the incremental build caches" >&2
@@ -70,4 +74,9 @@ if [ "$free_kb" -lt 8388608 ]; then
 fi
 
 cd "$root"
-"$@"
+status=0
+"$@" || status=$?
+# Not while the other slot builds, which may be about to link objects its binary's last link didn't use.
+other_running || python3 -I scripts/prune-objects.py apps/native/target/debug plugins/target/debug ||
+  echo "build.sh: couldn't remove the object files no binary links" >&2
+exit "$status"

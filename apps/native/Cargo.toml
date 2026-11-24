@@ -122,6 +122,27 @@ required-features = ["test-support"]
 # Builds .wings-plugin packages for the install tests; the version wings-plugins unpacks them with.
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
+# Debug builds (tests, screenshot runs, `cargo run`) compile plugin modules with an optimised Cranelift: unoptimised, it
+# took 26 s for Claude chat's modules on every screenshot run.
+[profile.dev.package.cranelift-codegen]
+opt-level = 3
+[profile.dev.package.cranelift-frontend]
+opt-level = 3
+[profile.dev.package.cranelift-entity]
+opt-level = 3
+[profile.dev.package.cranelift-bforest]
+opt-level = 3
+[profile.dev.package.regalloc2]
+opt-level = 3
+[profile.dev.package.wasmparser]
+opt-level = 3
+[profile.dev.package.wasmtime-environ]
+opt-level = 3
+[profile.dev.package.wasmtime-internal-cranelift]
+opt-level = 3
+[profile.dev.package.wasmtime]
+opt-level = 3
+
 [[example]]
 name = "bench_redraw"
 required-features = ["test-support"]
