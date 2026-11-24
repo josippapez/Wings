@@ -2,6 +2,13 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.100 · 2026-11-24
+
+- **A selection in Claude chat stays while the chat updates**: text you are selecting with the mouse is no longer lost when a new message, a tool call or the status line redraws the chat.
+- **Copying a list or a table reads right**: a list item's bullet or number stays on the line with its text, and a table row's cells stay on one line.
+- **Changes 0.17.1**: its icon buttons are the same size as every other plugin's. **Issues 0.31.1**: a long change from an issue's page is sent in parts instead of being refused.
+- **For plugin authors**: the SDK has the parts plugins kept rebuilding (`icon_button`, `setting`, `section_label`, `toolbar_titled`, `ui::icons` and more), and `messages::ask`/`answer`, `publish`/`want` and `approvals::Approvals` for a page that asks its main. `cargo test --all-features` runs every frame's tests.
+
 ## 0.2.99 · 2026-11-24
 
 - **Plugins: Update all is back on the Installed tab** whenever updates are waiting, as well as on Updates.
