@@ -18,7 +18,7 @@ const WIDTH: u32 = 520;
 /// Run in background on a command Claude is waiting for. Not before it is allowed, when nothing runs yet.
 pub fn background_button(tool: &Tool, c: &Chat) -> Option<Node> {
     let waiting = c.session.items.iter().any(|item| matches!(item, Item::Ask(ask) if ask.answer.is_none()));
-    (tool.name == "Bash" && tool.output.is_none() && c.session.working && c.state == State::Running && !waiting).then(|| {
+    (tool.name == "Bash" && c.session.runs(tool) && c.session.working && c.state == State::Running && !waiting).then(|| {
         let id = tool.id.clone();
         let moving = c.session.ops.moving.contains(&tool.id);
         ui::button("Run in background", "outline", moving, move || move_to_background(&id))
@@ -31,7 +31,7 @@ pub fn background_button(tool: &Tool, c: &Chat) -> Option<Node> {
 /// The same button beside the status line, for the command Claude waits on now: its step is folded away until you open it.
 pub fn status_button(c: &Chat) -> Option<Node> {
     let tool = c.session.items.iter().rev().find_map(|item| match item {
-        Item::Tool(tool) if tool.output.is_none() => Some(tool),
+        Item::Tool(tool) if c.session.runs(tool) => Some(tool),
         _ => None,
     })?;
     background_button(tool, c)

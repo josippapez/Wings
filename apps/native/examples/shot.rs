@@ -2948,7 +2948,7 @@ fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
                 );
                 workspace.show_harnesses(made_up_harnesses(), cx);
                 let (tools, changelog) = made_up_tools();
-                workspace.show_tools(tools, changelog, "2.1.329", Some("/work/wings".into()), cx);
+                workspace.show_tools(tools, changelog, "2.1.329", cx);
                 workspace.show_ai_status(
                     wings_agents::ai::Status {
                         engine: wings_agents::ai::Engine::Ollama,

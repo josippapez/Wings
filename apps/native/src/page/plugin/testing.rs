@@ -90,6 +90,9 @@ pub(super) struct FakeEnv {
     pub picks: Mutex<Vec<PathBuf>>,
     /// The socket of the terminal server that runs the programs tabs keep through a restart, when a test starts one.
     pub job_server: Mutex<Option<PathBuf>>,
+    /// The server the app starts once `job_server` no longer answers, and the one it found gone.
+    pub job_server_after: Mutex<Option<PathBuf>>,
+    pub job_server_gone: Mutex<Vec<PathBuf>>,
     log: Mutex<Vec<Seen>>,
     changed: Condvar,
 }
@@ -111,6 +114,8 @@ impl FakeEnv {
             past: Mutex::default(),
             picks: Mutex::default(),
             job_server: Mutex::default(),
+            job_server_after: Mutex::default(),
+            job_server_gone: Mutex::default(),
             log: Mutex::default(),
             changed: Condvar::new(),
         })
@@ -432,6 +437,11 @@ impl Env for FakeEnv {
 
     fn job_server(&self) -> Option<PathBuf> {
         self.job_server.lock().unwrap().clone()
+    }
+
+    fn replace_job_server(&self, gone: &std::path::Path, _error: &str) -> Option<PathBuf> {
+        self.job_server_gone.lock().unwrap().push(gone.to_owned());
+        self.job_server_after.lock().unwrap().clone()
     }
 
     /// The server's jobs of `plugin` that haven't ended, as the app lists them as it starts.

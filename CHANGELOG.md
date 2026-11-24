@@ -2,6 +2,16 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.90 · 2026-11-24
+
+- **Claude chats keep running through updates again**: a chat whose terminal server had stopped ran Claude inside Wings, so the next update or restart ended it. It now starts a new terminal server instead. Chats now run in their own process group, so nothing a chat starts can stop the server and every other chat with it. Wings logs the server's starts, failures and endings in `terminal-server/app.log`.
+- **Claude chat: questions read better**: each option is a row with its whole description under its label, the header is quiet text, Something else is the last option and opens a field, and there's one main button.
+- **Claude chat: commands anywhere in a message**: type `/` after a space to complete a command partway through your message. Tab inserts the top match, the arrows pick one, and Enter still sends what you typed.
+- **Claude chat: a command cut off by a restart** shows as interrupted, instead of spinning forever.
+- **Claude chat: a pasted picture isn't lost** when the message box moves as the tab narrows.
+- **Tools**: the "Check what Claude chat needs" button is gone.
+- **Claude chat 0.48.0**: the above.
+
 ## 0.2.89 · 2026-11-23
 
 - **Tools update in place**: Update runs in the tool's row with a spinner and keeps Settings open, then shows the new version. If it fails, or needs a password, the row shows the last lines of what it said with Run in terminal and Try again.

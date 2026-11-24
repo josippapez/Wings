@@ -51,7 +51,7 @@ impl Session {
     /// on without waiting for it, and lists it with the background tasks. None for a call that isn't a command that runs
     /// now, and while the last click on it waits for its answer.
     pub fn background(&mut self, id: &str) -> Option<String> {
-        let running = self.items.iter().any(|item| matches!(item, Item::Tool(tool) if tool.id == id && tool.name == "Bash" && tool.output.is_none()));
+        let running = self.items.iter().any(|item| matches!(item, Item::Tool(tool) if tool.id == id && tool.name == "Bash" && self.runs(tool)));
         if !running || !self.ops.moving.insert(id.to_owned()) {
             return None;
         }

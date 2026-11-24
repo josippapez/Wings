@@ -119,6 +119,16 @@ pub fn socket(dir: &Path, version: u32) -> PathBuf {
     dir.join(format!("v{version}.sock"))
 }
 
+/// What the app did with its terminal servers, in their folder beside their own logs: the installed app's stderr goes
+/// nowhere, so a server that didn't start, or one that vanished, left nothing to read. One line each, the time first.
+pub const LOG: &str = "app.log";
+
+/// Adds `message` to the app's log in the server folder `dir` (`LOG`), and prints it on stderr as before.
+pub fn note(dir: &Path, message: &str) {
+    eprintln!("{message}");
+    let _ = crate::page::log::append_to(&dir.join(LOG), message, std::time::SystemTime::now());
+}
+
 /// Makes `dir` a folder only this user can open, so nobody else reaches the sockets in it.
 pub(crate) fn private_dir(dir: &Path) -> io::Result<()> {
     fs::DirBuilder::new()
@@ -244,7 +254,7 @@ pub fn start_detached(
     let reason = format!(
         "Couldn't start the terminal server with launchd, so it starts directly and may end with the app: {error}"
     );
-    eprintln!("{reason}");
+    note(log.parent().unwrap_or(log), &reason);
     writeln!(
         &fs::OpenOptions::new().create(true).append(true).open(log)?,
         "{reason}"
@@ -550,6 +560,20 @@ impl Servers {
             }
             // A socket left by a server that crashed answers nothing; the next server there replaces it.
             let Ok(mut control) = Control::connect(&path) else {
+                // A server removes its socket as it stops, so one of the app's own version left behind ended abruptly.
+                if socket_version(&path) == Some(ours) {
+                    let started = fs::metadata(&path)
+                        .and_then(|meta| meta.modified())
+                        .map(crate::page::log::stamp);
+                    note(
+                        dir,
+                        &format!(
+                            "The terminal server v{ours} ended without stopping, killed or crashed: nothing answers {}, which it started at {}",
+                            path.display(),
+                            started.as_deref().unwrap_or("an unknown time")
+                        ),
+                    );
+                }
                 continue;
             };
             let version = control.welcome().server_version;
@@ -670,9 +694,15 @@ impl Servers {
             .run(&self.dir, self.version)
             .and_then(|()| wait(&socket))
         {
-            Ok(()) => Some(socket),
+            Ok(()) => {
+                self.note(&format!("Started the terminal server v{}", self.version));
+                Some(socket)
+            }
             Err(error) => {
-                eprintln!("Couldn't start the terminal server, so panes run in the app: {error}");
+                self.note(&format!(
+                    "Couldn't start the terminal server v{}, so new terminals and the programs tabs keep run in Wings and end when it quits: {error}",
+                    self.version
+                ));
                 None
             }
         }
@@ -712,8 +742,17 @@ impl Servers {
         {
             return current.clone();
         }
+        self.note(&format!(
+            "The terminal server at {} stopped answering, so Wings starts another",
+            gone.display()
+        ));
         *current = self.start_one();
         current.clone()
+    }
+
+    /// `note` in this app's server folder.
+    pub fn note(&self, message: &str) {
+        note(&self.dir, message);
     }
 
     /// Takes the pane a server runs for the saved pane `history_id`, once.

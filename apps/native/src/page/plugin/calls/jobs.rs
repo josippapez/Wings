@@ -246,3 +246,27 @@ fn a_program_runs_in_the_app_when_no_terminal_server_can_run_it_its_page_is_in_n
     let _ = std::fs::remove_file(&marker);
     std::fs::remove_file(&script).unwrap();
 }
+
+#[test]
+fn a_tabs_program_runs_in_a_new_terminal_server_once_the_one_it_had_stopped_answering() {
+    // A server that was killed leaves its socket behind with nobody listening, as it did on 2026-11-23.
+    let gone = tmp().join(format!("wings-job-gone-{}.sock", std::process::id()));
+    let _ = std::fs::remove_file(&gone);
+    drop(std::os::unix::net::UnixListener::bind(&gone).unwrap());
+    let (server, _host) = test_host(Config::default());
+    let marker = tmp().join(format!("wings-job-replaced-{}", std::process::id()));
+    let script = marks_its_end(&marker, "replaced");
+    let rig = rig(&script, &gone);
+    *rig.env.job_server_after.lock().unwrap() = Some(server.clone());
+    let page = Caller::in_tab(&rig.host, new_tab());
+    running(&page, &script, &[]);
+    assert_eq!(hear(&page, 2), (vec!["first".to_owned()], vec![Ok(Value::Null)]));
+    // The app was told that server was gone, and the new one runs the program, so it outlives Wings.
+    assert_eq!(*rig.env.job_server_gone.lock().unwrap(), vec![gone.clone()]);
+    assert_eq!(Control::connect(&server).unwrap().jobs().unwrap().len(), 1, "the new terminal server runs it");
+    page.send("processStop", json!({ "token": "chat" }));
+    hear(&page, 2);
+    let _ = std::fs::remove_file(&marker);
+    let _ = std::fs::remove_file(&gone);
+    std::fs::remove_file(&script).unwrap();
+}

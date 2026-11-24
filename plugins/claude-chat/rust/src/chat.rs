@@ -69,6 +69,8 @@ pub struct Chat {
     /// The suggestion you put in the message box with Tab: editing it keeps the suggestion, so emptying the box shows it
     /// again.
     took_suggestion: Option<String>,
+    /// Whether Tab on a bare mid-message `/` asked for every command.
+    slash_all: bool,
     /// The pictures pasted into the message, as (media type, base64), sent with it.
     pub images: Vec<(String, String)>,
     /// How many items are shown, back from where they end.
@@ -202,6 +204,7 @@ thread_local! {
         session: Session::default(),
         draft: String::new(),
         took_suggestion: None,
+        slash_all: false,
         images: Vec::new(),
         shown: PAGE,
         until: None,
@@ -445,6 +448,8 @@ pub fn launch_with(resume: Option<String>, how: Launch) {
                 with(|c| {
                     if c.run == run {
                         entries.as_array().into_iter().flatten().for_each(|entry| c.session.hear(entry));
+                        // The process that ran a call with no result here is gone.
+                        c.session.stop_replayed();
                     }
                 });
             }
@@ -1350,6 +1355,47 @@ pub fn command_matches(c: &Chat) -> Vec<Command> {
     commands::menu(&c.session.commands, typed)
 }
 
+/// The commands the `/word` partway through the draft completes (`commands::mid_menu`), with where the word starts.
+pub fn mid_matches(c: &Chat) -> Option<(usize, Vec<Command>)> {
+    let (start, query) = commands::mid_active(&c.draft)?;
+    Some((start, commands::mid_menu(&c.session.commands, query, c.slash_all)))
+}
+
+/// Whether Tab means something in a mid-message `/word`: it inserts a match, or on a bare `/` lists every command.
+pub fn takes_tab(c: &Chat) -> bool {
+    commands::mid_active(&c.draft).is_some_and(|(_, query)| query.is_empty() && !c.slash_all || mid_matches(c).is_some_and(|(_, found)| !found.is_empty()))
+}
+
+/// Replaces the `/word` partway through the draft with the command's full name. It only writes the text: only a command
+/// that starts the message runs.
+pub fn insert_mid_command(name: &str) {
+    with(|c| {
+        if let Some((start, _)) = commands::mid_active(&c.draft) {
+            c.draft = format!("{}/{name} ", &c.draft[..start]);
+            c.slash_all = false;
+        }
+    });
+}
+
+/// Tab: in a mid-message `/word` it inserts the top match, and on a bare `/` lists every
+/// command; anywhere else it takes the suggested next message.
+pub fn tab() {
+    let name = with(|c| {
+        if !takes_tab(c) {
+            return Err(false);
+        }
+        match mid_matches(c) {
+            Some((_, found)) if !found.is_empty() => Ok(found[0].name.clone()),
+            _ => Err(true),
+        }
+    });
+    match name {
+        Ok(name) => insert_mid_command(&name),
+        Err(true) => with(|c| c.slash_all = true),
+        Err(false) => accept_suggestion(),
+    }
+}
+
 /// The files that match the `@word` the draft ends in, with where the word starts. None while a slash command is being
 /// typed: that menu wins.
 pub fn mention_matches(c: &Chat) -> Option<(usize, Vec<&str>)> {
@@ -1402,7 +1448,7 @@ pub fn insert_mention(path: &str) {
 /// waiting for it, or a background task or subagent. A new chat, a resume or a fork then opens in a new tab beside this one,
 /// and this one keeps running.
 pub fn in_use(c: &Chat) -> bool {
-    let subagent = |item: &Item| matches!(item, Item::Tool(tool) if matches!(tool.name.as_str(), "Task" | "Agent") && tool.output.is_none());
+    let subagent = |item: &Item| matches!(item, Item::Tool(tool) if matches!(tool.name.as_str(), "Task" | "Agent") && c.session.runs(tool));
     c.state == State::Running
         && (c.session.working || !c.session.queued.is_empty() || c.session.tasks.iter().any(|task| task.ended.is_none()) || c.session.items.iter().any(subagent))
 }
@@ -1555,7 +1601,7 @@ pub fn accept_suggestion() {
 /// What of the draft the page draws, when no list is built from it: whether the box is empty (the suggestion shows in it)
 /// and whether the send button has anything to send. None while a `/`, `@` or `#` word makes a list of what it matches.
 fn drawn_from(c: &Chat) -> Option<(bool, bool)> {
-    let list = c.draft.starts_with('/') || mentions::active(&c.draft).is_some() || issues::active(&c.draft).is_some();
+    let list = c.draft.starts_with('/') || commands::mid_active(&c.draft).is_some() || mentions::active(&c.draft).is_some() || issues::active(&c.draft).is_some();
     (!list).then(|| (c.draft.is_empty(), c.draft.trim().is_empty()))
 }
 
@@ -1566,6 +1612,7 @@ pub fn typed(value: &str) -> bool {
     let before = with(|c| drawn_from(c).zip(Some(c.session.suggestion.clone())));
     with(|c| {
         c.draft = value.to_owned();
+        c.slash_all = false;
         if !c.draft.is_empty() && c.took_suggestion.as_ref().is_none_or(|took| Some(took) != c.session.suggestion.as_ref()) {
             c.session.suggestion = None;
         }
@@ -1726,7 +1773,8 @@ pub fn toggle_steps(first: usize) {
 #[cfg(test)]
 mod tests {
     use super::{changes_counted, review_event, shortstat};
-    use super::{State, first_prompt, new_chat, resume, with};
+    use super::{State, first_prompt, new_chat, resume, typed, with};
+    use crate::{commands, session::Command};
     use crate::fork::Launch;
     use serde_json::{Value, json};
     use std::{cell::RefCell, rc::Rc};
@@ -1785,6 +1833,66 @@ mod tests {
         with(|c| c.plugins = None);
         super::insert_command("review");
         with(|c| assert!(c.plugins.is_none() && c.draft == "/review "));
+    }
+
+    fn command(name: &str) -> Command {
+        Command { name: name.into(), description: String::new(), hint: String::new(), plugin: false, builtin: false }
+    }
+
+    fn mid_names() -> Vec<String> {
+        with(|c| super::mid_matches(c).map(|(_, found)| found.into_iter().map(|command| command.name).collect()).unwrap_or_default())
+    }
+
+    fn with_commands(draft: &str) {
+        with(|c| {
+            c.session.commands = vec![command("compact"), command("commit"), command("myplugin:deploy-app")];
+            c.session.suggestion = None;
+        });
+        typed(draft);
+    }
+
+    #[test]
+    fn a_slash_after_a_space_lists_the_commands_by_prefix_or_bare_name_and_a_path_closes_the_list() {
+        with_commands("run the tests, then /com");
+        assert_eq!(mid_names(), ["compact", "commit"]);
+        typed("run /deploy");
+        assert_eq!(mid_names(), ["myplugin:deploy-app"]);
+        typed("see /tmp/notes.md");
+        assert!(mid_names().is_empty());
+        // A leading `/` keeps its own list, and a bare mid `/` lists nothing until Tab.
+        typed("/com");
+        assert!(mid_names().is_empty() && !with(|c| super::command_matches(c).is_empty()));
+        typed("run /");
+        assert!(mid_names().is_empty());
+        assert!(with(|c| super::takes_tab(c)));
+    }
+
+    #[test]
+    fn tab_inserts_the_top_match_with_its_full_name_and_enter_sends_the_message_as_typed() {
+        running(false);
+        with_commands("then /deploy");
+        super::tab();
+        assert_eq!(with(|c| c.draft.clone()), "then /myplugin:deploy-app ");
+    }
+
+    #[test]
+    fn tab_on_a_bare_slash_lists_every_command_and_inserting_only_writes_the_text() {
+        with_commands("then /");
+        super::tab();
+        assert_eq!(with(|c| c.draft.clone()), "then /");
+        assert_eq!(mid_names().len(), 3 + commands::own_commands(&with(|c| c.session.commands.clone())).count());
+        super::insert_mid_command("commit");
+        assert_eq!(with(|c| c.draft.clone()), "then /commit ");
+        assert!(with(|c| c.plugins.is_none() && c.panel.is_none()));
+    }
+
+    #[test]
+    fn a_key_in_a_mid_message_slash_word_redraws_the_page_and_other_words_do_not() {
+        with_commands("hello world");
+        assert!(typed("hello /c"));
+        assert!(typed("hello /co"));
+        assert!(typed("hello "));
+        assert!(!typed("hello wor"));
     }
 
     #[test]

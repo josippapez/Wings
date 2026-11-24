@@ -38,16 +38,21 @@ pub fn line(plugin: &str, frame: &str, message: &str) {
 }
 
 fn append(file: &Path, plugin: &str, frame: &str, message: &str, now: SystemTime) -> std::io::Result<()> {
+    append_to(file, &format!("{plugin} {frame}: {message}"), now)
+}
+
+/// Adds `text` to `file` as one line after the time, cut to `MOST_CHARS`, once a full file is moved aside (`.log.old`).
+pub(crate) fn append_to(file: &Path, text: &str, now: SystemTime) -> std::io::Result<()> {
     if fs::metadata(file).is_ok_and(|kept| kept.len() >= MOST_BYTES) {
         fs::rename(file, file.with_extension("log.old"))?;
     }
-    let message: String = message.chars().take(MOST_CHARS).map(|c| if c == '\n' { ' ' } else { c }).collect();
+    let text: String = text.chars().take(MOST_CHARS).map(|c| if c == '\n' { ' ' } else { c }).collect();
     let mut log = fs::OpenOptions::new().create(true).append(true).open(file)?;
-    writeln!(log, "{} {plugin} {frame}: {message}", stamp(now))
+    writeln!(log, "{} {text}", stamp(now))
 }
 
 /// `now` as `2026-11-13T09:05:00Z`.
-fn stamp(now: SystemTime) -> String {
+pub(crate) fn stamp(now: SystemTime) -> String {
     let secs = now.duration_since(UNIX_EPOCH).map_or(0, |since| since.as_secs());
     let (days, rest) = (secs / 86_400, secs % 86_400);
     // Days since 1970 to a date, by Howard Hinnant's `civil_from_days`.

@@ -4,7 +4,7 @@
 //! next as long as it stays where it is, and a row of a list keeps them when it is keyed.
 
 use serde_json::{Map, Value, json};
-use std::{borrow::Cow, cell::{Cell, RefCell}, collections::HashMap, rc::Rc};
+use std::{borrow::Cow, cell::{Cell, RefCell}, collections::{HashMap, VecDeque}, rc::Rc};
 
 type Handler = Rc<dyn Fn(&Value)>;
 
@@ -108,6 +108,9 @@ impl Node {
 
 thread_local! {
     static HANDLERS: RefCell<HashMap<String, Handler>> = RefCell::new(HashMap::new());
+    /// The pasted-image handlers that the last few builds dropped, newest build last: the app sends an event by the name
+    /// it drew last, which may be of a page this plugin has since built again with that field in another place.
+    static GONE: RefCell<VecDeque<HashMap<String, Handler>>> = const { RefCell::new(VecDeque::new()) };
     static FILL: Cell<bool> = const { Cell::new(false) };
     /// A handler said the page is as it was (`unchanged`).
     static UNCHANGED: Cell<bool> = const { Cell::new(false) };
@@ -230,11 +233,29 @@ fn imported(tree: &Value, on: &Rc<dyn Fn(&str, &Value)>) -> Option<Node> {
     Some(node)
 }
 
-/// The page's JSON, as `wings.render` takes it. The handlers of this build replace the last one's.
+/// How many builds a dropped handler is kept for: the app may be that many builds behind the page when its event is sent.
+const GONE_BUILDS: usize = 16;
+
+/// The one event kept past its node's move: a paste carries its data and isn't about an item of a list. A click's handler
+/// may hold the index of a row the page has since changed, so it is never run from an older build.
+const KEPT: &str = ":onPasteImage";
+
+/// The page's JSON, as `wings.render` takes it. The handlers of this build replace the last one's, but a pasted-image
+/// handler this build has no node for keeps answering for `GONE_BUILDS` builds.
 pub(crate) fn render(page: Vec<Node>) -> String {
     let mut handlers = HashMap::new();
     let children = build(page.into_iter().map(Child::Node).collect(), 0, &mut handlers);
-    HANDLERS.with(|slot| *slot.borrow_mut() = handlers);
+    let last = HANDLERS.with(|slot| slot.replace(handlers));
+    HANDLERS.with(|slot| {
+        let now = slot.borrow();
+        GONE.with(|gone| {
+            let mut gone = gone.borrow_mut();
+            gone.push_back(last.into_iter().filter(|(name, _)| name.ends_with(KEPT) && !now.contains_key(name)).collect());
+            if gone.len() > GONE_BUILDS {
+                gone.pop_front();
+            }
+        });
+    });
     let mut props = if FILL.with(Cell::get) { json!({ "fill": true }) } else { json!({}) };
     if let Some(palette) = PALETTE.with(|palette| palette.borrow().clone()) {
         props["palette"] = palette;
@@ -245,7 +266,10 @@ pub(crate) fn render(page: Vec<Node>) -> String {
 /// Runs the handler `handler` names. True when it called `unchanged`, so the page needn't be built for it.
 pub(crate) fn dispatch(handler: &str, payload: Value) -> bool {
     UNCHANGED.with(|flag| flag.set(false));
-    if let Some(handler) = HANDLERS.with(|handlers| handlers.borrow().get(handler).cloned()) {
+    let found = HANDLERS
+        .with(|handlers| handlers.borrow().get(handler).cloned())
+        .or_else(|| GONE.with(|gone| gone.borrow().iter().rev().find_map(|dropped| dropped.get(handler).cloned())));
+    if let Some(handler) = found {
         handler(&payload);
     }
     UNCHANGED.with(|flag| flag.replace(false))

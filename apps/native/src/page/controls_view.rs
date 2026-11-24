@@ -738,7 +738,7 @@ impl PageView {
         let picker = combobox
             .field
             .iter()
-            .any(|node| matches!(node, Node::Input(input) if input.select_on_focus || input.enter_submits));
+            .any(|node| matches!(node, Node::Input(input) if input.auto_highlight && (input.select_on_focus || input.enter_submits)));
         let options = combobox
             .options
             .iter()

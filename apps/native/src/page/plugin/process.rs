@@ -474,12 +474,17 @@ impl Shared {
             && let Some(socket) = access.env.job_server()
         {
             self.room(&self.processes.lock().unwrap(), &token)?;
-            let launch = process::launch(&access.plugin, &program, &args, &cwd, config_dir.as_deref(), notifications)?;
+            let launch = || process::launch(&access.plugin, &program, &args, &cwd, config_dir.as_deref(), notifications);
             let owner = json!({
                 "plugin": self.config.id, "tab": tab, "token": shown(&token), "program": program, "args": args,
                 "cwd": cwd.to_string_lossy(), "session": session,
             });
-            match server::start(&socket, launch, owner, input.as_deref()) {
+            // A server that stopped answering (killed, say) is replaced, as for a pane, and the program tried there once.
+            let started = server::start(&socket, launch()?, owner.clone(), input.as_deref()).or_else(|error| {
+                let again = access.env.replace_job_server(&socket, &error.to_string()).ok_or(error)?;
+                server::start(&again, launch().map_err(std::io::Error::other)?, owner, input.as_deref())
+            });
+            match started {
                 Ok((job, events)) => {
                     let started = running(Proc::Server(job.clone()), program, args, cwd, place, listener);
                     self.processes.lock().unwrap().insert(token, started.clone());
@@ -487,7 +492,11 @@ impl Shared {
                     return Ok(());
                 }
                 // The terminal server can't run it: the app does, as for a program that needn't survive.
-                Err(error) => eprintln!("[plugins] {}: the terminal server didn't start {program}, so Wings runs it: {error}", self.config.id),
+                Err(error) => crate::page::log::line(
+                    &self.config.id,
+                    "process",
+                    &format!("the terminal server didn't start {program}, so Wings runs it and it ends when Wings quits: {error}"),
+                ),
             }
         }
         #[cfg(not(unix))]

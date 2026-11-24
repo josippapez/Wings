@@ -200,7 +200,7 @@ pub(crate) fn side_railed(c: &Chat) -> bool {
 
 /// What is alive in the session panel: a terminal Claude opened, a background task and a subagent that run.
 pub fn live_in_side(c: &Chat) -> usize {
-    let subagents = c.session.items.iter().filter(|item| matches!(item, Item::Tool(tool) if matches!(tool.name.as_str(), "Task" | "Agent") && tool.output.is_none())).count();
+    let subagents = c.session.items.iter().filter(|item| matches!(item, Item::Tool(tool) if matches!(tool.name.as_str(), "Task" | "Agent") && c.session.runs(tool))).count();
     c.terminals.len() + c.session.tasks.iter().filter(|task| task.ended.is_none()).count() + subagents
 }
 
@@ -621,9 +621,13 @@ pub(crate) fn item_node(at: usize, item: &Item, c: &Chat, own: bool) -> Option<N
 pub(crate) fn steps(first: usize, tools: &[&Tool], c: &Chat) -> Node {
     let open = crate::folds::is_open(c, Kind::Steps, c.open_steps.contains(&first));
     let failed = tools.iter().filter(|tool| matches!(tool.output, Some((_, true)))).count();
-    let mut said = describe(tools);
+    let mut said = describe(tools, &c.session);
     if failed > 0 {
         said.push_str(&format!(" · {failed} failed"));
+    }
+    let cut = tools.iter().filter(|tool| c.session.was_interrupted(tool)).count();
+    if cut > 0 {
+        said.push_str(&format!(" · {cut} interrupted"));
     }
     // With `outputs_open` each call's output shows unless its kind starts shut or you shut it, else only what you opened.
     let calls = |outputs_open: bool| {
@@ -649,7 +653,7 @@ pub(crate) fn steps(first: usize, tools: &[&Tool], c: &Chat) -> Node {
 }
 
 /// What a run of tool calls did, by kind: "Ran 2 commands · Read 3 files".
-fn describe(tools: &[&Tool]) -> String {
+fn describe(tools: &[&Tool], session: &Session) -> String {
     let kinds: [(&[&str], &str, &str); 8] = [
         (&["Bash"], "Ran", "command"),
         (&["Read"], "Read", "file"),
@@ -668,7 +672,7 @@ fn describe(tools: &[&Tool]) -> String {
             // The checklist shows above the message box: how often it changed says nothing.
             // A call that has no result yet still runs: "Running 2 commands" when all do, "Ran 1 command · 1 running" when some
             // are done, so the count never says running for one that has ended.
-            let running = if *verb == "Ran" { tools.iter().filter(|tool| names.contains(&tool.name.as_str()) && tool.output.is_none()).count() } else { 0 };
+            let running = if *verb == "Ran" { tools.iter().filter(|tool| names.contains(&tool.name.as_str()) && session.runs(tool)).count() } else { 0 };
             (n > 0).then(|| match (noun.is_empty(), running) {
                 (true, _) => (*verb).to_owned(),
                 (false, 0) => format!("{verb} {}", plural(n, noun)),
@@ -688,6 +692,7 @@ fn describe(tools: &[&Tool]) -> String {
 fn step(tool: &Tool, opened: bool, c: &Chat) -> Node {
     let output = tool.output.as_ref().map(|(output, failed)| (output.as_str(), *failed)).filter(|(output, _)| !output.trim().is_empty());
     let mark = match &tool.output {
+        None if c.session.was_interrupted(tool) => lead(text("–").prop("tone", "muted")).prop("title", "Stopped when Claude Code restarted"),
         None => lead(spinner()),
         // The mark of a failure is in the same 16 point box as the others, so the names line up; its pill follows the name.
         Some((_, true)) => lead(text("✗").prop("tone", "danger")),
@@ -993,56 +998,68 @@ fn questions_node(ask: &Ask, draft: &Draft) -> Node {
     for (q, question) in questions.iter().enumerate().filter(|(q, _)| count < 2 || *q == step) {
         let multi = question["multiSelect"] == true;
         let options = question["options"].as_array().map(Vec::as_slice).unwrap_or_default();
-        // One row an option, as Claude Code's own menu lists them, marked when picked: a round mark for one answer, a box
-        // for several.
-        let chips = list().children(options.iter().enumerate().map(|(o, option)| {
-            let request = ask.request.clone();
-            let picked = draft.is_picked(q, o);
-            let mark = choice_mark(multi, picked);
-            let line = row()
-                .prop("gap", "s")
-                .prop("align", "center")
-                .child(mark)
-                .child(text(option["label"].as_str().unwrap_or_default()).prop("weight", "medium"))
-                .maybe(option["description"].as_str().filter(|said| !said.is_empty()).map(|said| muted(truncate(said, 120)).prop("size", "small").prop("grow", true)));
-            let advance = count > 1 && !multi && !last;
-            list_button([line], move || {
-                chat::edit(&request, |draft| {
-                    draft.toggle(q, o, multi);
-                    if advance && draft.has_answer(q) {
-                        draft.step = q + 1;
-                    }
-                })
-            })
-            .key(format!("{q}-{o}"))
-        }));
-        let (request, sent) = (ask.request.clone(), ask.request.clone());
-        // Enter goes on to the next question, or on the last sends the answers once every question has one.
-        let other = text_input("Other", draft.other(q), move |said| chat::edit(&request, |draft| draft.set_other(q, said, multi)))
-            .prop("placeholder", "Something else")
-            .on("onKeyDown", move |event| {
-                if event["key"] != "Enter" {
-                    return;
-                }
-                if last {
-                    chat::submit(&sent);
-                } else {
-                    chat::edit(&sent, |draft| {
-                        if draft.has_answer(q) {
+        // One row an option, as Claude Code's own menu lists them: a mark, the label, and the whole description under it
+        // in muted text, so every row's words start at one x. A round mark is one answer, a box is several.
+        let advance = count > 1 && !multi && !last;
+        let mut rows: Vec<Node> = options
+            .iter()
+            .enumerate()
+            .map(|(o, option)| {
+                let request = ask.request.clone();
+                let words = stack()
+                    .prop("gap", "xs")
+                    .prop("grow", true)
+                    .child(text(option["label"].as_str().unwrap_or_default()).prop("weight", "medium"))
+                    .maybe(option["description"].as_str().filter(|said| !said.is_empty()).map(|said| muted(said).prop("size", "small")));
+                let line = row().prop("gap", "m").prop("align", "start").child(choice_mark(multi, draft.is_picked(q, o))).child(words);
+                list_button([line], move || {
+                    chat::edit(&request, |draft| {
+                        draft.toggle(q, o, multi);
+                        if advance && draft.has_answer(q) {
                             draft.step = q + 1;
                         }
-                    });
-                }
+                    })
+                })
+                .key(format!("{q}-{o}"))
             })
-            .key(format!("other-{q}"));
-        let header = question["header"].as_str().filter(|header| !header.is_empty()).map(|header| badge(header, None));
+            .collect();
+        // "Something else" is the last option: picked, it opens a text field under it. Enter goes on to the next question,
+        // or on the last sends the answers once every question has one.
+        let (toggle, request, sent) = (ask.request.clone(), ask.request.clone(), ask.request.clone());
+        let other_picked = draft.other_picked(q);
+        let other_line = row().prop("gap", "m").prop("align", "center").child(choice_mark(multi, other_picked)).child(text("Something else").prop("weight", "medium").prop("grow", true));
+        rows.push(list_button([other_line], move || chat::edit(&toggle, |draft| draft.toggle_other(q, multi))).key(format!("{q}-other")));
+        if other_picked {
+            let field = text_input("Other", draft.other(q), move |said| chat::edit(&request, |draft| draft.set_other(q, said, multi)))
+                .prop("placeholder", "Type your answer")
+                .prop("autoFocus", true)
+                .prop("grow", true)
+                .on("onKeyDown", move |event| {
+                    if event["key"] != "Enter" {
+                        return;
+                    }
+                    if last {
+                        chat::submit(&sent);
+                    } else {
+                        chat::edit(&sent, |draft| {
+                            if draft.has_answer(q) {
+                                draft.step = q + 1;
+                            }
+                        });
+                    }
+                })
+                .key(format!("other-{q}"));
+            // Set in to the words above, past the mark.
+            rows.push(row().key(format!("other-row-{q}")).child(stack().prop("width", 24)).child(field));
+        }
+        // The header is quiet context over the question, not a chip that reads as a button.
+        let header = question["header"].as_str().filter(|header| !header.is_empty()).map(|header| muted(header.to_uppercase()).prop("size", "small").prop("weight", "medium"));
         body.push(
             stack()
-                .prop("gap", "xs")
+                .prop("gap", "m")
                 .key(format!("q-{q}"))
-                .child(row().prop("gap", "s").prop("align", "start").maybe(header).child(text(question["question"].as_str().unwrap_or_default()).prop("weight", "medium").prop("grow", true)))
-                .child(chips)
-                .child(other),
+                .child(stack().prop("gap", "xs").maybe(header).child(text(question["question"].as_str().unwrap_or_default()).prop("weight", "strong")))
+                .child(list().children(rows)),
         );
     }
     let ready = draft.answers(&ask.input["questions"]).is_some();
@@ -1091,7 +1108,9 @@ fn composer(c: &Chat) -> Node {
     let field = Node::new("Textarea")
         .prop("label", "Message")
         .prop("placeholder", suggested.unwrap_or("Ask anything. @ files, / commands"))
-        .prop("takesTab", suggested.is_some())
+        .prop("takesTab", suggested.is_some() || chat::takes_tab(c))
+        // Older Wings ignore this and highlight the first command, so Enter inserts it.
+        .prop("autoHighlight", chat::mid_matches(c).is_none_or(|(_, found)| found.is_empty()))
         // Shift-Tab goes to the next permission mode, and Up and Down from the first and last line recall prompts.
         .prop("takesShiftTab", true)
         .prop("historyKeys", true)
@@ -1112,7 +1131,7 @@ fn composer(c: &Chat) -> Node {
             match event["key"].as_str() {
                 Some("Enter") => chat::send(),
                 Some("Tab") if shift => chat::cycle_mode(),
-                Some("Tab") => chat::accept_suggestion(),
+                Some("Tab") => chat::tab(),
                 Some("Escape") => chat::escape(),
                 Some("ArrowUp") => {
                     if !chat::take_queued() {
@@ -1432,7 +1451,7 @@ fn background_of<'a>(tool: &Tool, c: &'a Chat) -> Option<&'a Task> {
 /// A subagent runs until its call's result, or for one in the background, until its task ends: the call is answered the
 /// moment it is launched.
 fn subagent_runs(tool: &Tool, c: &Chat) -> bool {
-    background_of(tool, c).map_or(tool.output.is_none(), |task| task.ended.is_none())
+    background_of(tool, c).map_or(c.session.runs(tool), |task| task.ended.is_none())
 }
 
 fn subagent_row(tool: &Tool, c: &Chat) -> Node {
@@ -1442,6 +1461,7 @@ fn subagent_row(tool: &Tool, c: &Chat) -> Node {
     let failed = background.map_or(matches!(tool.output, Some((_, true))), |task| task.ended.as_deref() == Some("failed"));
     let mark = match (running, failed) {
         (true, _) => spinner(),
+        (false, _) if background.is_none() && c.session.was_interrupted(tool) => text("–").prop("tone", "muted"),
         (false, true) => text("✗").prop("tone", "danger"),
         (false, false) => text("✓").prop("tone", "success"),
     };
@@ -1714,10 +1734,21 @@ fn suggestions(c: &Chat) -> Option<Node> {
         let chip = chip(label, false, move || pick()).key(key);
         if detail.is_empty() { chip } else { chip.child(muted(truncate(detail, 100)).prop("size", "small")) }
     };
+    let mid = chat::mid_matches(c).map(|(_, found)| found).unwrap_or_default();
     let commands = chat::command_matches(c);
     let files = chat::mention_matches(c).map(|(_, found)| found).unwrap_or_default();
     let terminals = chat::terminal_matches(c);
-    let options: Vec<Node> = if !commands.is_empty() {
+    let options: Vec<Node> = if !mid.is_empty() {
+        // Partway through the message: Tab, or an arrow and Enter, write the name in. The field sends `autoHighlight: false`, so
+        // nothing is highlighted until an arrow moves and Enter sends the message as typed.
+        mid.into_iter()
+            .map(|command| {
+                let name = command.name.clone();
+                let chip = chip(format!("/{}", command.name), false, move || chat::insert_mid_command(&name)).key(&command.name);
+                if command.description.is_empty() { chip } else { chip.child(muted(truncate(&command.description, 100)).prop("size", "small")) }
+            })
+            .collect()
+    } else if !commands.is_empty() {
         commands
             .into_iter()
             .map(|command| {
@@ -1799,13 +1830,37 @@ mod tests {
     }
 
     #[test]
+    fn a_call_cut_off_by_a_restart_shows_interrupted_with_no_spinner_and_no_background_button() {
+        chat::with(|c| {
+            c.state = State::Running;
+            c.session = Session::default();
+            c.session.working = true;
+            c.session.hear(&serde_json::json!({ "type": "assistant", "message": { "content": [{ "type": "tool_use", "id": "b1", "name": "Bash", "input": { "command": "rg -c x f" } }] } }));
+            c.session.stop_replayed();
+            c.session.hear(&serde_json::json!({ "type": "user", "message": { "role": "user", "content": "what is the status?" } }));
+        });
+        let tree = chat::with(|c| match c.session.items.first() {
+            Some(Item::Tool(tool)) => wings_plugin::ui::tree_json(step(tool, false, c)).to_string(),
+            other => panic!("{other:?}"),
+        });
+        assert!(!tree.contains("Spinner") && !tree.contains("Run in background"), "{tree}");
+        assert!(tree.contains("Stopped when Claude Code restarted"), "{tree}");
+        chat::with(|c| {
+            let Some(Item::Tool(tool)) = c.session.items.first() else { panic!() };
+            assert_eq!(describe(&[tool], &c.session), "Ran 1 command");
+            c.session = Session::default();
+        });
+    }
+
+    #[test]
     fn a_fold_of_calls_still_running_says_running_not_ran() {
         let done = call("a", "Bash", Detail::Plain, "ok");
         let mut pending = call("b", "Bash", Detail::Plain, "");
         pending.output = None;
-        assert_eq!(describe(&[&done]), "Ran 1 command");
-        assert_eq!(describe(&[&pending]), "Running 1 command");
-        assert_eq!(describe(&[&done, &pending]), "Ran 1 command · 1 running");
+        let session = Session::default();
+        assert_eq!(describe(&[&done], &session), "Ran 1 command");
+        assert_eq!(describe(&[&pending], &session), "Running 1 command");
+        assert_eq!(describe(&[&done, &pending], &session), "Ran 1 command · 1 running");
     }
 
     #[test]

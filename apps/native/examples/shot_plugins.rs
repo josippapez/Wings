@@ -1191,6 +1191,15 @@ esac"##,
         })
         .collect();
     std::fs::write(root.join(format!("projects/-work-shop/{LONG}.jsonl")), history.iter().map(|line| format!("{line}\n")).collect::<String>()).unwrap();
+    // A session Claude Code's process died in, mid-command: its Bash call has no result, and you wrote again after.
+    const CUT: &str = "7c9e1f4d-5a7b-4c6d-8dcf-1b4a7c9d1e65";
+    let cut = [
+        user("Count the answers in the legal text."),
+        text("I'll count them with ripgrep."),
+        tool("cut-1", "Bash", json!({ "command": "rg -c \"Odgovor\" /tmp/legal/esav.txt; rg -c \"Pitanje\" /tmp/legal/esav.txt" })),
+        user("what's the current status?"),
+    ];
+    std::fs::write(root.join(format!("projects/-work-shop/{CUT}.jsonl")), cut.iter().map(|line| format!("{line}\n")).collect::<String>()).unwrap();
     // Each: its name, what the fake prints, its exit code and stderr when it fails, what to do once the page is up (press a
     // button or type), and the text to wait for.
     type Scene<'a> = (&'a str, Vec<serde_json::Value>, Option<(&'a str, &'a str)>, Option<&'a str>, &'a str);
@@ -1263,7 +1272,8 @@ esac"##,
         json!({ "type": "user", "isSynthetic": true, "message": { "role": "user", "content": [{ "type": "text", "text": "Stop hook feedback:\n[every test in src/cart passes]: The last run shows 2 failures in src/cart/discount.test.ts, so the condition is not met yet." }] } }),
         text("Two discount tests fail. I'll look at applyDiscount next."),
     ]);
-    // What Claude scheduled: a recurring task, a one-time one and the wakeup of a loop, as the tools' results say them.
+    // What Claude scheduled: a recurring task, a one-time one and the wakeup of a loop, as the tools' results say them. The
+    // wakeup is half an hour out because it hides two minutes after its time, and a full run takes longer than a few minutes.
     let soon = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
     let result = |id: &str, said: &str, structured: serde_json::Value| json!({ "type": "user", "message": { "role": "user", "content": [{ "type": "tool_result", "tool_use_id": id, "content": said }] }, "tool_use_result": structured });
     let scheduled = opened(vec![
@@ -1273,9 +1283,9 @@ esac"##,
         result("c1", "Scheduled recurring job 5a8f492d", json!({ "id": "5a8f492d", "humanSchedule": "Every 10 minutes", "recurring": true, "durable": false, "nextFireAt": soon + 420_000 })),
         tool("c2", "CronCreate", json!({ "cron": "47 12 * * *", "prompt": "Remind me to merge the discount branch", "recurring": false })),
         result("c2", "Scheduled one-shot job 91bc03e7", json!({ "id": "91bc03e7", "humanSchedule": "In about 2 hours", "recurring": false, "durable": false, "nextFireAt": soon + 9_000_000 })),
-        tool("w1", "ScheduleWakeup", json!({ "delaySeconds": 270, "prompt": "check CI", "reason": "wait for the CI run on the discount branch" })),
-        result("w1", "Next wakeup scheduled", json!({ "scheduledFor": soon + 270_000, "clampedDelaySeconds": 270, "wasClamped": false })),
-        text("Set: the deploy check every 10 minutes, the merge reminder at 5 PM, and a look at CI in 4 minutes."),
+        tool("w1", "ScheduleWakeup", json!({ "delaySeconds": 1800, "prompt": "check CI", "reason": "wait for the CI run on the discount branch" })),
+        result("w1", "Next wakeup scheduled", json!({ "scheduledFor": soon + 1_800_000, "clampedDelaySeconds": 1800, "wasClamped": false })),
+        text("Set: the deploy check every 10 minutes, the merge reminder at 5 PM, and a look at CI in half an hour."),
         json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 9_200, "num_turns": 4, "result": "", "total_cost_usd": 0.02 }),
     ]);
     // Your messages as a transcript has them, each with the uuid Claude Code knows it by, which a rewind names. The fake
@@ -1709,14 +1719,15 @@ esac"##,
         json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 6_000, "num_turns": 2, "result": "", "total_cost_usd": 0.04 }),
     ]);
     let agents = {
-        let mut lines = opened(vec![init.clone()]);
         let mut ready_with = ready[0].clone();
         ready_with["response"]["response"]["agents"] = json!([
             { "name": "Explore", "description": "Fast read-only search" },
             { "name": "Plan", "description": "Plans the implementation" },
             { "name": "dev-core:mid-tier-coder", "description": "Implements", "model": "sonnet" },
         ]);
-        lines.push(ready_with);
+        // In place of `ready`'s own initialize answer: the chat takes the first answer to its request.
+        let mut lines = vec![init.clone(), ready_with];
+        lines.extend(ready[1..].iter().cloned());
         lines.push(answer("settings", json!({ "effective": { "model": "opus", "effortLevel": "high" }, "applied": { "ultracode": false, "ultracodeAvailable": true } })));
         lines
     };
@@ -1741,7 +1752,7 @@ esac"##,
         // A workflow run in the side panel: its phases and agents under it, and a command under the subagent that started it.
         ("workflow", workflow, None, None, "check claim 2"),
         // A new chat lists the agents Claude Code has, and the Ultracode switch ends the model menu.
-        ("agent-picker", agents, None, None, "Ultracode"),
+        ("agent-picker", agents, None, None, "What should Claude do"),
         // Ultracode on: the model button reads "· Ultracode" and the open menu ends with its lit switch row.
         ("ultracode-menu", ultracode, None, Some("select:Model and effort"), "What should Claude do"),
         // /skills lists the session's skills, with a menu for each one Claude Code lets you change.
@@ -1754,6 +1765,8 @@ esac"##,
         ("allowed", allowed, None, Some("press:Allow and retry"), "You allowed this command"),
         ("limit-card", limit_hit, None, None, "Continue when it resets"),
         ("rename", renaming, None, Some("press:Rename"), "Generate a name"),
+        // The chat restarted on it: the call shows as interrupted, with no spinner and no Run in background.
+        ("interrupted", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": CUT, "model": "claude-opus-5-5" })]), None, Some("disclose:Ran 1 command"), "esav.txt"),
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
         // A click on the first prompt's tick on the rail of the long session, timed.
         ("long-rail", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, Some("rail:0"), "Step 0 passes"),
@@ -1792,6 +1805,8 @@ esac"##,
         // Up twice from the empty box recalls the second newest of the prompts sent.
         ("recall", recalled, None, Some("keys:up;keys:up"), "Now bump the version."),
         ("slash", opened(vec![init.clone()]), None, Some("type:/re;keys:down"), "/review"),
+        // `/` after a space completes a command partway through a message too, with no row picked until the arrows pick one.
+        ("slash-mid", opened(vec![init.clone()]), None, Some("type:check the diff, then /re"), "/review"),
         // /usage opens the usage dialog over the conversation instead of going to Claude as a message, and so does /context.
         ("usage", work.iter().cloned().chain([full_usage.clone()]).collect(), None, Some("type:/usage;keys:enter"), "Plan usage limits"),
         ("usage-end", work.iter().cloned().chain([full_usage]).collect(), None, Some("type:/usage;keys:enter;scroll:down"), "Cache read tokens"),
@@ -2326,6 +2341,7 @@ esac"##,
                 terminal
             });
             let args = matches!(name, "long" | "long-older" | "long-rail" | "long-rail-streaming").then(|| json!({ "resume": LONG, "cwd": root.canonicalize().unwrap() }));
+            let args = if name == "interrupted" { Some(json!({ "resume": CUT, "cwd": root.canonicalize().unwrap() })) } else { args };
             // The comments the tab kept, as a restart reads them.
             let kept = (name == "review-comments").then(|| json!({ "reviewComments": [
                 { "id": "1:-1", "path": "src/config.rs", "old": false, "line": 3, "quote": "    let timeout = 30;", "body": "Why 30? The load balancer drops idle connections after 25 s." },

@@ -149,6 +149,9 @@ mod tests {
     thread_local! {
         static BUILDS: Cell<u32> = const { Cell::new(0) };
         static SAID: Cell<bool> = const { Cell::new(false) };
+        static MOVED: Cell<bool> = const { Cell::new(false) };
+        static CLICKED: Cell<u32> = const { Cell::new(0) };
+        static PASTED: Cell<u32> = const { Cell::new(0) };
     }
 
     fn view() -> Vec<ui::Node> {
@@ -196,5 +199,32 @@ mod tests {
         SAID.with(|said| said.set(false));
         event(&name);
         assert_eq!(builds(), first + 2);
+    }
+
+    fn moving() -> Vec<ui::Node> {
+        let field = ui::Node::new("Textarea").on("onPasteImage", |_| PASTED.with(|pasted| pasted.set(pasted.get() + 1)));
+        let click = ui::Node::new("Button").on("onClick", |_| CLICKED.with(|clicked| clicked.set(clicked.get() + 1)));
+        match MOVED.with(Cell::get) {
+            true => vec![ui::stack().child(ui::stack()), field],
+            false => vec![field, click],
+        }
+    }
+
+    #[test]
+    fn an_event_for_a_handler_the_page_drew_before_it_moved_still_reaches_it() {
+        run(moving);
+        settle();
+        let drawn = ui::handler_named(":onPasteImage");
+        let clicked = ui::handler_named(":onClick");
+        // The page is built again with the field a place lower, before the app has drawn that and while it still
+        // sends the name it drew last.
+        MOVED.with(|moved| moved.set(true));
+        settle();
+        assert_ne!(ui::handler_named(":onPasteImage"), drawn);
+        event(&drawn);
+        assert_eq!(PASTED.with(Cell::get), 1);
+        // A click may hold the index of a row that has changed, so one for a node that is gone is dropped.
+        event(&clicked);
+        assert_eq!(CLICKED.with(Cell::get), 0);
     }
 }

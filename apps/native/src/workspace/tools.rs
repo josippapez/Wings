@@ -3,7 +3,7 @@
 //! version you last marked read. A check runs off the window's thread at launch, every six hours while Wings is in
 //! front and on Check now; Settings only draws what the last one found.
 
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use gpui::{
     AnyElement, Context, FontWeight, Role, SharedString, Subscription, Task, Window, div,
@@ -41,8 +41,6 @@ pub(super) struct Tools {
     changelog: Vec<Entry>,
     /// The Claude Code version whose notes you have read: What's new lists what came after it. Saved with the window.
     pub(super) read: Option<String>,
-    /// A project that holds the Claude chat plugin's source, which "Check what Claude chat needs" opens a chat in.
-    repo: Option<PathBuf>,
     checking: bool,
     error: Option<SharedString>,
     lookup: Arc<dyn Lookup + Send>,
@@ -68,7 +66,6 @@ impl Default for Tools {
             list: None,
             changelog: Vec::new(),
             read: None,
-            repo: None,
             checking: false,
             error: None,
             lookup: Arc::new(tools::System),
@@ -96,11 +93,10 @@ impl Tools {
     }
 }
 
-/// What a check reads: the tools, Claude Code's changelog when it is installed, and the project with Claude chat's source.
+/// What a check reads: the tools, and Claude Code's changelog when it is installed.
 struct Found {
     list: Vec<ToolStatus>,
     changelog: Option<Vec<Entry>>,
-    repo: Option<PathBuf>,
 }
 
 impl Workspace {
@@ -153,7 +149,6 @@ impl Workspace {
             return;
         }
         let wants = tools::wants(&self.plugin_programs());
-        let projects: Vec<PathBuf> = self.projects.iter().map(|p| p.path.clone()).collect();
         let lookup = self.tools.lookup.clone();
         self.tools.checking = true;
         self.tools.error = None;
@@ -165,12 +160,7 @@ impl Workspace {
                 .then(|| lookup.get(tools::CHANGELOG, tools::MAX_CHANGELOG))
                 .flatten()
                 .map(|text| tools::parse_changelog(&text));
-            let repo = tools::wings_repo(&projects);
-            Found {
-                list,
-                changelog,
-                repo,
-            }
+            Found { list, changelog }
         });
         self.tools.task = Some(cx.spawn(async move |this, cx| {
             let found = work.await;
@@ -181,9 +171,8 @@ impl Workspace {
     fn checked_tools(&mut self, found: Found, cx: &mut Context<Self>) {
         let tools = &mut self.tools;
         tools.checking = false;
-        let mut changed = tools.list.as_ref() != Some(&found.list) || tools.repo != found.repo;
+        let mut changed = tools.list.as_ref() != Some(&found.list);
         tools.list = Some(found.list);
-        tools.repo = found.repo;
         // A failed fetch of the changelog keeps the last one.
         if let Some(entries) = found.changelog.filter(|entries| *entries != tools.changelog) {
             tools.changelog = entries;
@@ -220,13 +209,11 @@ impl Workspace {
         list: Vec<ToolStatus>,
         changelog: Vec<Entry>,
         read: &str,
-        repo: Option<PathBuf>,
         cx: &mut Context<Self>,
     ) {
         self.tools.list = Some(list);
         self.tools.changelog = changelog;
         self.tools.read = Some(read.into());
-        self.tools.repo = repo;
         cx.notify_workspace();
     }
 
@@ -346,22 +333,6 @@ impl Workspace {
         if let Some(newest) = self.tools.changelog.first() {
             self.tools.read = Some(newest.version.clone());
             self.save(cx);
-            cx.notify_workspace();
-        }
-    }
-
-    /// A Claude chat in the project that holds its source, asked to compare the changelog with what it supports.
-    fn ask_claude_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(repo), Some(read)) = (self.tools.repo.clone(), self.tools.read.clone()) else {
-            return;
-        };
-        let prompt = tools::compatibility_prompt(&tools::unread(&self.tools.changelog, &read));
-        self.switch_project(repo.clone(), window, cx);
-        let args = serde_json::json!({ "cwd": repo.to_string_lossy(), "prompt": prompt });
-        if self.open_plugin_view("claude-chat", "chat", Some(args), window, cx) {
-            self.close_settings(window, cx);
-        } else {
-            self.tools.error = Some("Claude chat isn't turned on, so it can't open a chat.".into());
             cx.notify_workspace();
         }
     }
@@ -516,16 +487,6 @@ impl Workspace {
             "Mark as read",
         )
         .on_click(cx.listener(|this, _, _, cx| this.mark_changelog_read(cx)));
-        let ask = tools.repo.is_some().then(|| {
-            ui::button(
-                "tools-ask-chat",
-                "Open a Claude chat that checks what Claude chat doesn't support yet",
-                Variant::Outline,
-                false,
-                "Check what Claude chat needs",
-            )
-            .on_click(cx.listener(|this, _, window, cx| this.ask_claude_chat(window, cx)))
-        });
         rows.push(
             div()
                 .flex()
@@ -535,7 +496,6 @@ impl Workspace {
                 .px(px(16.0))
                 .py(px(12.0))
                 .child(mark)
-                .children(ask)
                 .child(full)
                 .into_any_element(),
         );

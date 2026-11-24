@@ -164,6 +164,42 @@ pub fn menu(listed: &[Command], typed: &str) -> Vec<Command> {
     matches
 }
 
+/// The `/word` the draft ends in when it comes after a space or a line start, as Claude Code completes a command partway
+/// through a message: where the word starts and what follows its `/`. None for the message's own first word (the
+/// leading `/` has its menu), and for a word that isn't last or has no `/` in front.
+pub fn mid_active(draft: &str) -> Option<(usize, &str)> {
+    let start = draft.char_indices().rev().find(|(_, ch)| ch.is_whitespace()).map_or(0, |(at, ch)| at + ch.len_utf8());
+    if start == 0 {
+        return None;
+    }
+    draft[start..].strip_prefix('/').map(|query| (start, query))
+}
+
+/// The commands a mid-message `/query` completes: names that start with it, or whose part after the last `:` does, so
+/// `/deploy` finds `myplugin:deploy-app`. A query with a `/` in it is a path and matches none. An empty query lists every
+/// command, which Tab asks for (`all`); without it nothing matches.
+pub fn mid_menu(listed: &[Command], query: &str, all: bool) -> Vec<Command> {
+    if query.contains('/') || (query.is_empty() && !all) {
+        return Vec::new();
+    }
+    let query = query.to_lowercase();
+    let mut seen = std::collections::HashSet::new();
+    let mut matches: Vec<(bool, Command)> = listed
+        .iter()
+        .cloned()
+        .chain(own_commands(listed))
+        .filter_map(|command| {
+            let name = command.name.to_lowercase();
+            let full = name.starts_with(&query);
+            (full || name.rsplit(':').next().is_some_and(|bare| bare.starts_with(&query))).then_some((!full, command))
+        })
+        .filter(|(_, command)| seen.insert(command.name.clone()))
+        .collect();
+    matches.sort_by_key(|(bare, _)| *bare);
+    matches.truncate(if query.is_empty() { 40 } else { 8 });
+    matches.into_iter().map(|(_, command)| command).collect()
+}
+
 pub fn own_commands(listed: &[Command]) -> impl Iterator<Item = Command> + '_ {
     [
         ("status", "Show the version, account, model and settings sources", ""),
@@ -198,6 +234,20 @@ mod tests {
         let names: Vec<String> = menu(&listed, "P").into_iter().map(|command| command.name).collect();
         assert_eq!(names.len(), 8);
         assert_eq!(names[..4], ["plan", "plugins", "permissions", "dev-core:skill-0-plan"], "{names:?}");
+    }
+
+    #[test]
+    fn a_slash_word_after_a_space_completes_by_prefix_or_bare_name_and_a_path_matches_nothing() {
+        let skill = |name: &str| Command { name: name.into(), description: String::new(), hint: String::new(), plugin: false, builtin: false };
+        let listed = [skill("compact"), skill("myplugin:deploy-app"), skill("commit"), skill("review")];
+        assert_eq!(mid_active("run the tests, then /com"), Some((20, "com")));
+        assert_eq!(mid_active("see\n/x"), Some((4, "x")));
+        assert_eq!((mid_active("/com"), mid_active("run /com "), mid_active("run com")), (None, None, None));
+        let names = |query: &str, all: bool| mid_menu(&listed, query, all).into_iter().map(|command| command.name).collect::<Vec<_>>();
+        assert_eq!(names("com", false), ["compact", "commit"]);
+        assert_eq!(names("deploy", false), ["myplugin:deploy-app"]);
+        assert!(names("tmp/notes.md", false).is_empty() && names("", false).is_empty());
+        assert!(names("", true).len() >= 4);
     }
 
     #[test]

@@ -565,6 +565,12 @@ pub trait Env: Send + Sync + 'static {
     fn job_server(&self) -> Option<PathBuf> {
         None
     }
+    /// The terminal server at `gone` couldn't start a program a tab asked to keep (`error`): the app says so in the
+    /// terminal server's log and, when that server no longer answers, starts another, as it does for a pane. The
+    /// server to try once more, `None` to run the program in the app.
+    fn replace_job_server(&self, _gone: &std::path::Path, _error: &str) -> Option<PathBuf> {
+        None
+    }
     /// The programs of `plugin` the terminal server kept running from Wings' run before this one, once: the plugin's
     /// host takes them over as it starts.
     fn left_jobs(&self, _plugin: &str) -> Vec<LeftJob> {

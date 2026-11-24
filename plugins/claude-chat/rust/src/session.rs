@@ -317,6 +317,8 @@ pub struct Draft {
     picked: HashSet<(usize, usize)>,
     /// The "Other" text of each question.
     other: HashMap<usize, String>,
+    /// The questions whose "Something else" row is picked, which shows its text field.
+    other_open: HashSet<usize>,
     /// The question shown, when several are asked one at a time.
     pub step: usize,
 }
@@ -324,6 +326,24 @@ pub struct Draft {
 impl Draft {
     pub fn is_picked(&self, question: usize, option: usize) -> bool {
         self.picked.contains(&(question, option))
+    }
+
+    /// Whether the "Something else" row of the question is picked: opened, or holding text.
+    pub fn other_picked(&self, question: usize) -> bool {
+        self.other_open.contains(&question) || !self.other(question).trim().is_empty()
+    }
+
+    /// Picks the "Something else" row, or takes it back (and its text). A question that takes one answer drops its options.
+    pub fn toggle_other(&mut self, question: usize, multi: bool) {
+        if self.other_picked(question) {
+            self.other_open.remove(&question);
+            self.other.remove(&question);
+            return;
+        }
+        if !multi {
+            self.picked.retain(|(q, _)| *q != question);
+        }
+        self.other_open.insert(question);
     }
 
     pub fn other(&self, question: usize) -> &str {
@@ -338,6 +358,7 @@ impl Draft {
         if !multi {
             self.picked.retain(|(q, _)| *q != question);
             self.other.remove(&question);
+            self.other_open.remove(&question);
         }
         self.picked.insert((question, option));
     }
@@ -437,6 +458,9 @@ pub struct Session {
     /// Whether this chat is on claude.ai and in the Claude app too.
     pub remote: crate::remote::Remote,
     pub items: Vec<Item>,
+    /// The calls the transcript this start of Claude Code resumed holds without a result: the process that ran them is
+    /// gone, so no result will come (`stop_replayed`).
+    pub interrupted: HashSet<String>,
     /// Claude's text of the message it is writing now, before the whole message comes.
     pub live: String,
     /// Claude is thinking before it writes.
@@ -1915,13 +1939,35 @@ impl Session {
         self.limits.sort_by_key(|(shown, ..)| *shown != "5h");
     }
 
+    /// Whether `tool` still runs: it has no result and was not cut off by the death of a Claude Code process.
+    pub fn runs(&self, tool: &Tool) -> bool {
+        tool.output.is_none() && !self.interrupted.contains(&tool.id)
+    }
+
+    /// Whether `tool` was cut off: it has no result, and the Claude Code process that ran it ended before it answered.
+    pub fn was_interrupted(&self, tool: &Tool) -> bool {
+        tool.output.is_none() && self.interrupted.contains(&tool.id)
+    }
+
+    /// Called once the transcript of a resumed session is read, before the new Claude Code process says anything: a call
+    /// the transcript holds without a result belonged to a process that is gone, since a process that ends writes none
+    /// and Claude Code does not rerun it on resume (measured in real transcripts). Nothing here depends on timing: only on
+    /// which process the call was heard from. A call this process makes is never in the set.
+    pub fn stop_replayed(&mut self) {
+        let cut: Vec<String> = self.items.iter().filter_map(|item| match item {
+            Item::Tool(tool) if tool.output.is_none() => Some(tool.id.clone()),
+            _ => None,
+        }).collect();
+        self.interrupted.extend(cut);
+    }
+
     /// What Claude is doing now, as the line under the conversation says it: the tool it runs, else thinking or writing.
     pub fn activity(&self) -> String {
         if let Some(status) = &self.status {
             return status.clone();
         }
         let running = self.items.iter().rev().find_map(|item| match item {
-            Item::Tool(tool) if tool.output.is_none() => Some(tool),
+            Item::Tool(tool) if self.runs(tool) => Some(tool),
             _ => None,
         });
         match running {
@@ -1941,7 +1987,7 @@ impl Session {
     /// The subagents the turn under way started: how many, and how many of them still run.
     pub fn turn_subagents(&self) -> (usize, usize) {
         self.turn().iter().fold((0, 0), |(started, running), item| match item {
-            Item::Tool(tool) if matches!(tool.name.as_str(), "Task" | "Agent") => (started + 1, running + usize::from(tool.output.is_none())),
+            Item::Tool(tool) if matches!(tool.name.as_str(), "Task" | "Agent") => (started + 1, running + usize::from(self.runs(tool))),
             _ => (started, running),
         })
     }
@@ -1953,7 +1999,7 @@ impl Session {
             return None;
         }
         let running: Vec<&Tool> = self.turn().iter().filter_map(|item| match item {
-            Item::Tool(tool) if tool.output.is_none() => Some(tool),
+            Item::Tool(tool) if self.runs(tool) => Some(tool),
             _ => None,
         }).collect();
         (!running.is_empty() && running.iter().all(|tool| matches!(tool.name.as_str(), "Task" | "Agent"))).then_some(running.len())
@@ -4012,5 +4058,22 @@ mod tests {
         session.hear(&old);
         session.hear(&old);
         assert_eq!(session.items.iter().filter(|item| matches!(item, Item::Report(_))).count(), 3);
+    }
+
+    #[test]
+    fn a_call_the_transcript_holds_without_a_result_is_interrupted_once_the_chat_restarts_on_it() {
+        let mut session = Session::default();
+        session.hear(&json!({ "type": "user", "message": { "role": "user", "content": "count" } }));
+        session.hear(&json!({ "type": "assistant", "message": { "content": [{ "type": "tool_use", "id": "b1", "name": "Bash", "input": { "command": "sleep 99" } }] } }));
+        session.stop_replayed();
+        // The new process starts a turn of its own.
+        session.hear(&json!({ "type": "user", "message": { "role": "user", "content": "what's the status?" } }));
+        session.hear(&json!({ "type": "assistant", "message": { "content": [{ "type": "tool_use", "id": "b2", "name": "Bash", "input": { "command": "ls" } }] } }));
+        let tools: Vec<&Tool> = session.items.iter().filter_map(|item| if let Item::Tool(tool) = item { Some(tool) } else { None }).collect();
+        assert!(session.was_interrupted(tools[0]) && !session.runs(tools[0]));
+        assert!(session.runs(tools[1]) && !session.was_interrupted(tools[1]), "a call of the live process still runs");
+        assert_eq!(session.activity(), "Running ls", "the live call is what Claude does, not the cut one");
+        assert_eq!(session.turn_subagents(), (0, 0));
+        assert!(session.background("b1").is_none());
     }
 }

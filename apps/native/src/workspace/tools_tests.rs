@@ -281,16 +281,3 @@ fn a_window_without_the_socket_checks_nothing_by_itself() {
     window.read(|w, _| assert!(w.tools.list.is_none()));
     window.draw();
 }
-
-#[test]
-fn asking_claude_chat_without_the_plugin_says_so_and_keeps_settings() {
-    let (app, mut window, _) = open_with_mac();
-    checked(&app, &mut window);
-    window.update(|w, window, cx| {
-        w.open_settings(window, cx);
-        w.tools.repo = Some(w.config.project.clone());
-        w.ask_claude_chat(window, cx);
-        assert!(w.settings.is_some());
-        assert!(w.tools.error.is_some());
-    });
-}

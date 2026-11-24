@@ -245,6 +245,25 @@ fn a_killed_server_ends_its_panes_events_and_the_next_app_starts_another() {
     let next = Servers::connect(&folder.0, Some(&start));
     assert_eq!(next.current(), Some(socket.clone()));
     assert!(next.claim("h-killed").is_none(), "its panes went with it");
+    // The app's log says when each server started and that the first one ended without stopping.
+    let log = std::fs::read_to_string(folder.0.join(terminal_server::LOG)).unwrap();
+    let said: Vec<&str> = log
+        .lines()
+        .map(|line| line.split_once(' ').unwrap().1)
+        .collect();
+    assert_eq!(said.len(), 3, "{log}");
+    assert_eq!(
+        said[0],
+        format!("Started the terminal server v{SERVER_VERSION}")
+    );
+    assert!(
+        said[1].starts_with(&format!(
+            "The terminal server v{SERVER_VERSION} ended without stopping, killed or crashed: nothing answers {}",
+            socket.display()
+        )),
+        "{log}"
+    );
+    assert_eq!(said[2], said[0]);
 }
 
 #[test]
@@ -292,6 +311,11 @@ fn with_no_server_to_start_new_panes_run_in_the_app() {
         servers.replace(&terminal_server::socket(&folder.0, SERVER_VERSION)),
         None
     );
+    // Each start that failed is in the app's log, with why.
+    let log = std::fs::read_to_string(folder.0.join(terminal_server::LOG)).unwrap();
+    let failed = format!("Couldn't start the terminal server v{SERVER_VERSION}, so new terminals");
+    assert_eq!(log.matches(&failed).count(), 2, "{log}");
+    assert!(log.contains("No such file or directory"), "{log}");
 }
 
 #[test]

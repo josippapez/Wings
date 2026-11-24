@@ -1893,6 +1893,11 @@ fn a_message_box_sends_escape_shift_tab_and_the_history_keys_to_the_page_as_your
 /// A chat's message box with its slash commands under it as wings-plugin-ui/native's `Combobox` renders them: a Textarea
 /// that sends on Enter, then the commands that match as chips. What it heard: the text, the pick, and the keys.
 fn slash_box() -> String {
+    slash_box_with(true)
+}
+
+/// The same, with the field's `autoHighlight` as `auto`.
+fn slash_box_with(auto: bool) -> String {
     let (mut typed, mut picked, mut heard) = (String::new(), String::from("none"), Vec::<String>::new());
     fake::page("page", move |event| {
         match event {
@@ -1905,7 +1910,7 @@ fn slash_box() -> String {
             None => {}
         }
         let mut stack = vec![json!({ "id": 3, "type": "Textarea", "props": { "label": "Message", "rows": 2, "value": typed,
-            "submitOnEnter": true, "takesShiftTab": true, "onChange": "3:onChange", "onKeyDown": "3:onKeyDown" } })];
+            "submitOnEnter": true, "takesShiftTab": true, "autoHighlight": auto, "onChange": "3:onChange", "onKeyDown": "3:onKeyDown" } })];
         if typed == "/" {
             let chips: Vec<Value> = ["help", "compact"]
                 .iter()
@@ -1944,6 +1949,31 @@ fn tab_in_a_message_box_with_a_list_picks_the_first_option_or_the_one_the_arrows
     key(&mut window, "down");
     key(&mut window, "tab");
     settle(&app, &mut window, shows("text=/compact , picked=compact, heard=."));
+}
+
+#[test]
+fn with_auto_highlight_off_enter_in_a_message_box_with_a_list_reaches_the_page_and_tab_still_picks_the_first() {
+    let (app, mut window) = open(slash_box_with(false));
+    settle(&app, &mut window, shows("text=, picked=none, heard=."));
+    window.update(|_, window, cx| window.focus_next(cx));
+    window.draw();
+    window.simulate_input("/");
+    settle(&app, &mut window, shows("text=/, picked=none,"));
+    // Nothing is highlighted, so Enter is the page's: it hears the key and nothing is picked.
+    key(&mut window, "enter");
+    settle(&app, &mut window, shows("text=/, picked=none, heard=Enter."));
+    // An arrow highlights a row, and Enter then picks it.
+    key(&mut window, "down");
+    key(&mut window, "enter");
+    settle(&app, &mut window, shows("text=/help , picked=help,"));
+    // Tab takes the first option with nothing highlighted.
+    for _ in "/help ".chars() {
+        key(&mut window, "backspace");
+    }
+    window.simulate_input("/");
+    settle(&app, &mut window, shows("text=/, picked=help,"));
+    key(&mut window, "tab");
+    settle(&app, &mut window, shows("text=/help , picked=help,"));
 }
 
 /// Cyclops' start time, a `type="time"` input holding 08:30, and what the page hears.

@@ -646,31 +646,6 @@ pub fn unread<'a>(entries: &'a [Entry], read: &str) -> Vec<&'a Entry> {
         .collect()
 }
 
-/// The first of the user's projects that holds the Claude chat plugin's source, which is the Wings repo.
-pub fn wings_repo(projects: &[PathBuf]) -> Option<PathBuf> {
-    projects
-        .iter()
-        .find(|path| path.join("plugins/claude-chat/wings-plugin.json").is_file())
-        .cloned()
-}
-
-/// What Claude chat is asked in a Wings project: compare the changes with what the plugin supports.
-pub fn compatibility_prompt(unread: &[&Entry]) -> String {
-    let mut prompt = String::from(
-        "Claude Code has released new versions. Compare the changelog entries below with the Claude chat plugin in \
-         plugins/claude-chat and list what Claude chat doesn't support yet: new commands, settings, tools, message or \
-         stream types, hooks, permission modes and anything else a chat would need to show or send. For each, say \
-         where in plugins/claude-chat it would go. Don't change any files.\n",
-    );
-    for entry in unread.iter().take(15) {
-        prompt.push_str(&format!("\n## {}\n", entry.version));
-        for note in entry.notes.iter().take(40) {
-            prompt.push_str(&format!("- {note}\n"));
-        }
-    }
-    prompt
-}
-
 #[cfg(test)]
 #[path = "tools_tests.rs"]
 mod tests;

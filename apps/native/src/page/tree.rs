@@ -892,6 +892,10 @@ pub struct Input {
     pub select_on_focus: bool,
     /// A combobox's field shows its options when it takes the keyboard, unless the page sends `openOnFocus: false`.
     pub open_on_focus: bool,
+    /// A picker's or message box's combobox has its first option highlighted until the arrows move, so Enter takes it,
+    /// unless the page sends `autoHighlight: false`: then nothing is highlighted until an arrow key, Enter goes to the
+    /// page, and Tab still takes the first option.
+    pub auto_highlight: bool,
     /// `type="password"`: the text shows as dots and can't be copied. Any other type is plain text here, but time.
     pub password: bool,
     /// `type="time"`: digits alone make HH:MM, and the page hears "" until it is a whole time, as from a browser.
@@ -1815,6 +1819,7 @@ impl Walk {
                 auto_focus: on("autoFocus"),
                 select_on_focus: on("selectOnFocus"),
                 open_on_focus: props.get("openOnFocus") != Some(&Value::Bool(false)),
+                auto_highlight: props.get("autoHighlight") != Some(&Value::Bool(false)),
                 password: kind == "TextInput" && str_prop(&props, "type") == Some("password"),
                 time: kind == "TextInput" && str_prop(&props, "type") == Some("time"),
             }),
@@ -2463,6 +2468,18 @@ mod tests {
         assert_eq!(props(json!({"takesShiftTab":true})), (true, false));
         assert_eq!(props(json!({"historyKeys":false})), (false, false));
         assert_eq!(props(json!({})), (false, false));
+    }
+
+    #[test]
+    fn a_field_highlights_its_first_option_unless_the_page_sends_auto_highlight_false() {
+        let auto = |props: Value| match parse_one(json!({"id":1,"type":"Textarea","props":props,"children":[]})) {
+            Node::Input(input) => input.auto_highlight,
+            other => panic!("{other:?}"),
+        };
+        assert!(auto(json!({})));
+        assert!(auto(json!({"autoHighlight":true})));
+        assert!(auto(json!({"autoHighlight":"no"})));
+        assert!(!auto(json!({"autoHighlight":false})));
     }
 
     #[test]

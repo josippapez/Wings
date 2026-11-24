@@ -740,6 +740,21 @@ mod tests {
     }
 
     #[test]
+    fn a_job_runs_in_a_process_group_of_its_own_so_a_signal_to_its_group_spares_the_server() {
+        let (path, _host) = host(Config::default());
+        let (job, events) = Job::start(&path, job_spawn("ps -o pgid= -p $$ | tr -d ' '; cat"), b"").unwrap();
+        let rx = read_job(events);
+        let group = match next_event(&rx) {
+            JobEvent::Line(_, text) => String::from_utf8(text).unwrap(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(group, job.pid().unwrap().to_string(), "the job leads a group of its own");
+        assert_ne!(group, unsafe { libc::getpgrp() }.to_string(), "not the server's");
+        job.stop().unwrap();
+        assert!(matches!(next_event(&rx), JobEvent::Ended(_)));
+    }
+
+    #[test]
     fn a_job_reads_what_it_starts_with_and_each_write_and_prints_lines_bigger_than_a_frame() {
         let (path, _host) = host(Config::default());
         let (job, events) = Job::start(&path, job_spawn("read a; echo \"got $a\"; cat"), b"hello\n").unwrap();

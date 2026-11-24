@@ -530,6 +530,16 @@ impl Env for AppEnv {
     }
 
     #[cfg(unix)]
+    fn replace_job_server(&self, gone: &std::path::Path, error: &str) -> Option<PathBuf> {
+        let servers = &self.servers.get()?.0;
+        servers.note(&format!(
+            "A tab's program couldn't start in the terminal server at {}: {error}",
+            gone.display()
+        ));
+        servers.replace(gone)
+    }
+
+    #[cfg(unix)]
     fn left_jobs(&self, plugin: &str) -> Vec<crate::page::plugin::LeftJob> {
         let Some(servers) = self.servers.get() else {
             return Vec::new();

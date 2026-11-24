@@ -384,28 +384,6 @@ fn only_the_newest_versions_of_a_long_changelog_are_kept() {
 }
 
 #[test]
-fn the_prompt_for_claude_chat_holds_the_unread_notes() {
-    let entries = parse_changelog(CHANGELOG_TEXT);
-    let prompt = compatibility_prompt(&unread(&entries, "2.1.329"));
-    assert!(prompt.contains("plugins/claude-chat"));
-    assert!(prompt.contains("## 2.1.331\n- Added `/rewind`\n"));
-    assert!(prompt.contains("## 2.1.330\n- Plugins can ship hooks\n"));
-    assert!(!prompt.contains("Older note"));
-}
-
-#[test]
-fn the_wings_repo_is_the_project_that_holds_claude_chats_source() {
-    let dir = std::env::temp_dir().join(format!("wings-tools-repo-{}", std::process::id()));
-    let (other, wings) = (dir.join("other"), dir.join("wings"));
-    std::fs::create_dir_all(other.join("plugins")).unwrap();
-    std::fs::create_dir_all(wings.join("plugins/claude-chat")).unwrap();
-    assert_eq!(wings_repo(&[other.clone(), wings.clone()]), None);
-    std::fs::write(wings.join("plugins/claude-chat/wings-plugin.json"), "{}").unwrap();
-    assert_eq!(wings_repo(&[other, wings.clone()]), Some(wings));
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
 fn a_tool_only_the_app_uses_is_missed_only_when_the_app_cannot_work_without_it() {
     let nothing = Mac::default();
     let missing = |plugins: &[(String, Vec<String>)]| -> Vec<String> {

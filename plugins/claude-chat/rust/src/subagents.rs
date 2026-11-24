@@ -166,7 +166,7 @@ pub fn state_of(session: &Session, agent: &str, chat: Option<&str>, ready: bool)
     let task = session.tasks.iter().find(|task| task.id == agent);
     let running = match task {
         Some(task) => task.ended.is_none(),
-        None => call.and_then(|call| tool(session, call)).is_some_and(|tool| tool.output.is_none()),
+        None => call.and_then(|call| tool(session, call)).is_some_and(|tool| session.runs(tool)),
     };
     let since = sub.map(|sub| sub.started).filter(|started| *started > 0).or(task.map(|task| task.started));
     let took = sub.filter(|sub| !running && sub.started > 0).map(|sub| sub.last.saturating_sub(sub.started));

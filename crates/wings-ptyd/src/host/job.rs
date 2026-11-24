@@ -75,6 +75,7 @@ struct JobOut {
 impl HostJob {
     /// Starts the program `spawn` names, with `input` as what it reads first. Nobody hears it until `attach`.
     pub(super) fn start(host: &Arc<Host>, id: u32, spawn: JobSpawn, input: Vec<u8>) -> std::io::Result<Arc<HostJob>> {
+        use std::os::unix::process::CommandExt;
         let mut child = Command::new(&spawn.program)
             .args(&spawn.args)
             .current_dir(&spawn.cwd)
@@ -83,6 +84,9 @@ impl HostJob {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            // A group of its own: in the server's, a signal anything it runs sends its group (a Claude Code's dozen
+            // MCP servers and hooks) would end the server and every other job with it.
+            .process_group(0)
             .spawn()?;
         let (stdin, stdout, stderr) = (child.stdin.take().unwrap(), child.stdout.take().unwrap(), child.stderr.take().unwrap());
         let (sender, writes) = mpsc::channel();
