@@ -2521,6 +2521,7 @@ impl PageView {
                 Justify::Start => el,
                 Justify::End => el.justify_end(),
                 Justify::Between => el.justify_between(),
+                Justify::Center => el.justify_center(),
             })
             .when(row.wrap, |el| el.flex_wrap())
             .when(row.grow, |el| el.flex_1())

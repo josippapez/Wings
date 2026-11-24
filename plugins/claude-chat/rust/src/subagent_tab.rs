@@ -295,6 +295,18 @@ mod tests {
         assert_eq!(with(|tab| tab.agent.clone()).as_deref(), Some("b2c3d4e5f60718a9b"));
     }
 
+    /// A picture clicked in the sidebar opens over the chat, which has the room: in the sidebar the dialog was its width.
+    #[test]
+    fn a_picture_clicked_in_the_sidebar_opens_over_the_chat() {
+        let calls = record();
+        start_sidebar();
+        told(&subagents::show_message("s1", "a1b2c3d4e5f60718a", "count lines"));
+        chat::show_picture("p0123456789abcdef");
+        assert!(chat::with(|c| c.picture.is_none()), "not in the sidebar");
+        let told_chat = tells(&calls).into_iter().find(|params| params["message"]["kind"] == "picture").expect("the chat is told");
+        assert_eq!((told_chat["name"].as_str(), told_chat["message"]["id"].as_str()), (Some("chat:s1"), Some("p0123456789abcdef")));
+    }
+
     #[test]
     fn the_sidebars_pop_out_asks_the_chat_for_a_tab_and_leaves_the_sidebar_empty() {
         let calls = record();

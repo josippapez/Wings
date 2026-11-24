@@ -85,7 +85,7 @@ macro_rules! choice {
 // The first variant of each is what a missing or unknown value means, as in ui.d.ts.
 choice!(Gap { M = "m", None = "none", Xs = "xs", S = "s", L = "l" });
 choice!(Align { Center = "center", Start = "start", Baseline = "baseline" });
-choice!(Justify { Start = "start", End = "end", Between = "between" });
+choice!(Justify { Start = "start", End = "end", Between = "between", Center = "center" });
 choice!(Edge { None = "none", Top = "top", Bottom = "bottom" });
 choice!(
     /// `field` is native.js's own, for a `Field`'s label and hint.
@@ -2468,6 +2468,18 @@ mod tests {
         assert_eq!(props(json!({"takesShiftTab":true})), (true, false));
         assert_eq!(props(json!({"historyKeys":false})), (false, false));
         assert_eq!(props(json!({})), (false, false));
+    }
+
+    /// A row can center what it holds, as a picture in its dialog asks: "center" was read as the start, so the picture sat
+    /// at the dialog's left.
+    #[test]
+    fn a_row_centers_what_it_holds_when_asked() {
+        let justify = |props: Value| match parse_one(json!({"id":1,"type":"Row","props":props,"children":[]})) {
+            Node::Row(row) => row.justify,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(justify(json!({"justify":"center"})), Justify::Center);
+        assert_eq!(justify(json!({})), Justify::Start);
     }
 
     #[test]

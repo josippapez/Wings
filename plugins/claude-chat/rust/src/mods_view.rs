@@ -693,7 +693,11 @@ fn node(el: &Value, at: &At, budget: &mut usize) -> Option<Node> {
                 boxed.children(drawn.collect::<Vec<_>>())
             };
             // A box with a border is a card, as an entry of the Feedback pane is.
-            Some(if props["borderStyle"].is_string() { card().child(boxed) } else { boxed })
+            let drawn = if props["borderStyle"].is_string() { card().child(boxed) } else { boxed };
+            // `flexGrow` (Ink's `Spacer` too) and a `height` of 100% take the room left, so a pane's buttons can sit at its
+            // foot: the teach-back pane put them on top, as it couldn't pin them there.
+            let grows = props["flexGrow"].as_f64().is_some_and(|grow| grow > 0.0) || props["height"] == "100%";
+            Some(if grows { drawn.prop("grow", true) } else { drawn })
         }
         "Text" | "span" | "b" => {
             let styled = |node: Node| {
@@ -915,6 +919,21 @@ mod tests {
     fn at(instance: &str) -> At<'_> {
         static NONE: std::sync::LazyLock<HashMap<String, String>> = std::sync::LazyLock::new(HashMap::new);
         At { instance, drafts: &NONE }
+    }
+
+    /// A pane that fills its height with a spacer before its buttons keeps them at its foot: the box that is 100% high and
+    /// the one that grows both take the room left.
+    #[test]
+    fn a_box_that_grows_or_is_full_height_takes_the_room_left() {
+        let pane = json!({ "type": "Box", "props": { "flexDirection": "column", "height": "100%" }, "children": [
+            { "type": "Text", "children": ["Lesson"] },
+            { "type": "Box", "props": { "flexGrow": 1 } },
+            { "type": "Box", "props": {}, "children": [{ "type": "Text", "children": ["Next"] }] },
+        ] });
+        let drawn = wings_plugin::ui::tree_json(node(&pane, &at("x"), &mut 1_000).unwrap());
+        assert_eq!(drawn["props"]["grow"], true, "{drawn}");
+        assert_eq!(drawn["children"][1]["props"]["grow"], true, "{drawn}");
+        assert!(drawn["children"][2]["props"]["grow"].is_null(), "{drawn}");
     }
 
     #[test]

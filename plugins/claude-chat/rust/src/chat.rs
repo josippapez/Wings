@@ -1043,6 +1043,11 @@ pub(crate) fn take_agent_message(text: &str, submit: bool) -> Result<bool, Strin
 
 /// Shows the picture `id` large, in a dialog.
 pub fn show_picture(id: &str) {
+    // A subagent in Wings' sidebar would show it the sidebar's width: the chat it follows shows it over its own page.
+    if let Some(session) = crate::subagent_tab::with(|tab| tab.session.clone()).filter(|session| !session.is_empty() && crate::subagent_tab::with(|tab| tab.sidebar) == Some(true)) {
+        drop(wings_plugin::pages::tell(&crate::subagents::chat_page(&session), &serde_json::json!({ "kind": "picture", "id": id }), false));
+        return;
+    }
     with(|c| c.picture = Some(id.to_owned()));
 }
 

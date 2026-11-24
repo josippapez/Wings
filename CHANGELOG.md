@@ -2,6 +2,13 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.95 · 2026-11-24
+
+- **Claude chat: a picture shown large is centered** in its dialog, which plugin rows can now ask for.
+- **Claude chat: a picture in a subagent's sidebar opens over the chat**, at the chat's size, instead of inside the narrow sidebar.
+- **Claude chat: a Claude Code plugin's pane can fill its height**: a box that grows (`flexGrow`, Ink's `Spacer`) or is 100% high takes the room left, so a pane's buttons can sit at its foot.
+- **Claude chat 0.52.0**: the above.
+
 ## 0.2.94 · 2026-11-24
 
 - **A Claude Code plugin's pane opens in its chat's project**: a pane a chat in another project opened, like a teach-back lesson, showed in the sidebar of the project on screen. It now opens in the chat's own project's sidebar.

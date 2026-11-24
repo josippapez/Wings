@@ -50,6 +50,14 @@ fn told(message: &Value, _from: Option<&str>, write: bool) {
     if message["kind"] == "pop" {
         return pop(message);
     }
+    // A picture clicked in the subagent's sidebar, shown large over the chat.
+    if message["kind"] == "picture" {
+        // The subagent's page registered it with Wings, which keeps a plugin's pictures for all its pages.
+        if let Some(id) = message["id"].as_str().filter(|id| (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')) {
+            chat::show_picture(id);
+        }
+        return;
+    }
     let message = message.clone();
     chat::write(move |c, n| {
         let stamp = host::now() as u64;
