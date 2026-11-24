@@ -1,7 +1,7 @@
 #!/bin/sh
-# Builds and test runs happen in the main checkout, one at a time: each one a subagent ran in its own place made another
-# multi-GB target folder and filled the disk. A subagent builds through `scripts/build.sh`, which queues it behind any
-# build already running and runs it in the main checkout; any other build command of a subagent is refused.
+# Builds and test runs happen in the main checkout's target folders: each one a subagent ran in its own place made
+# another multi-GB target folder and filled the disk. A subagent builds through `scripts/build.sh`, which runs up to two
+# at once in the main checkout and queues the rest; any other build command of a subagent is refused.
 input=$(cat)
 [ -n "$(printf '%s' "$input" | jq -r '.agent_id // empty')" ] || exit 0
 command=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')

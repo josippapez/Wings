@@ -1,7 +1,8 @@
 #!/bin/sh
-# Runs one build or test command in the main checkout, one at a time across every session and agent, in the one set of
-# target folders (`apps/native/target`, `plugins/target`): each place that built on its own made a target folder of
-# several GB and filled the disk. A command waits for the build before it to finish.
+# Runs a build or test command in the main checkout, at most two at a time across every session and agent, in the one
+# set of target folders (`apps/native/target`, `plugins/target`): each place that built on its own made a target folder
+# of several GB and filled the disk. Cargo locks a target folder only while it compiles, so two commands in the same
+# folder take turns compiling and then run their tests or screenshots side by side. A third waits for one to finish.
 #   sh scripts/build.sh cargo test --manifest-path apps/native/Cargo.toml --features test-support --lib <filter>
 #   sh scripts/build.sh sh plugins/build-rust.sh claude-chat
 #   sh scripts/build.sh pnpm --dir plugins shot /tmp/shots --claude-chat
@@ -21,27 +22,51 @@ if [ -n "${CARGO_TARGET_DIR:-}" ]; then
   exit 2
 fi
 
-lock="$root/.build.lock"
+# Two slots. The first keeps the name the one-at-a-time script used, so a copy of it still running counts.
+slots="$root/.build.lock $root/.build.lock.2"
+# Whether `lock` is held by a build that is still running. One that ended without letting go (killed, the machine
+# slept) leaves its lock behind, which goes.
+held_by_running() {
+  [ -d "$1" ] || return 1
+  holder=$(cat "$1/pid" 2>/dev/null || true)
+  # Just taken, its pid not written yet.
+  [ -n "$holder" ] || return 0
+  kill -0 "$holder" 2>/dev/null && return 0
+  rm -rf "$1"
+  return 1
+}
+lock=""
 waited=0
-until mkdir "$lock" 2>/dev/null; do
-  holder=$(cat "$lock/pid" 2>/dev/null || true)
-  # A build that ended without letting go (killed, the machine slept) leaves its lock behind.
-  if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
-    rm -rf "$lock"
-    continue
+until [ -n "$lock" ]; do
+  for slot in $slots; do
+    if mkdir "$slot" 2>/dev/null || { ! held_by_running "$slot" && mkdir "$slot" 2>/dev/null; }; then
+      lock=$slot
+      break
+    fi
+  done
+  if [ -z "$lock" ]; then
+    [ "$waited" -eq 0 ] && echo "build.sh: waiting, two builds are already running" >&2
+    waited=1
+    sleep 2
   fi
-  [ "$waited" -eq 0 ] && echo "build.sh: waiting for the build already running (pid ${holder:-?})" >&2
-  waited=$((waited + 1))
-  sleep 2
 done
 echo $$ > "$lock/pid"
 trap 'rm -rf "$lock"' EXIT INT TERM
 
-# Under 8 GB free, drop the build caches first: the next build makes them again.
+# Under 8 GB free, drop the build caches first: the next build makes them again. Not while the other slot builds,
+# whose compile would lose them midway.
 free_kb=$(df -k "$root" | awk 'NR==2 {print $4}')
 if [ "$free_kb" -lt 8388608 ]; then
-  echo "build.sh: under 8 GB free, deleting the incremental build caches" >&2
-  rm -rf "$root/apps/native/target/debug/incremental" "$root/plugins/target/debug/incremental"
+  other=""
+  for slot in $slots; do
+    [ "$slot" = "$lock" ] || ! held_by_running "$slot" || other=1
+  done
+  if [ -n "$other" ]; then
+    echo "build.sh: under 8 GB free, but another build is running, so the build caches stay" >&2
+  else
+    echo "build.sh: under 8 GB free, deleting the incremental build caches" >&2
+    rm -rf "$root/apps/native/target/debug/incremental" "$root/plugins/target/debug/incremental"
+  fi
 fi
 
 cd "$root"
