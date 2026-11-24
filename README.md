@@ -62,7 +62,7 @@ The app is signed with a self-signed certificate and is not notarized, so the fi
 
 ## Build from source
 
-You need Rust (`rustup`) and Zig 0.17 or newer, which builds the terminal library. Building plugins also needs Node 24 and pnpm.
+You need Rust (`rustup`) and Zig 0.17 or newer, which builds the terminal library. Building the repo's plugins (`sh plugins/build-rust.sh`) also needs `rustup target add wasm32-unknown-unknown`, and packaging a release needs Node and pnpm for its signing tool.
 
 ```sh
 cd apps/native
