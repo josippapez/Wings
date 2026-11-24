@@ -77,15 +77,14 @@ fn without(list: &Option<Vec<String>>, key: &str) -> Option<Vec<String>> {
 /// entry on both issues. Returns whether anything changed. The caller gives copies: a failure half way leaves them as they were.
 pub fn relate(issues: &mut [Issue], at: usize, op: &Relations, by: &Actor, now: f64) -> Result<bool, String> {
     let mut changed = false;
-    let log = |issues: &mut [Issue], who: Option<usize>, kind: &str, text: String| -> Result<(), String> {
+    let log = |issues: &mut [Issue], who: Option<usize>, kind: &str, text: String| {
         let Some(who) = who else {
-            return Ok(());
+            return;
         };
-        append(&mut issues[who], vec![entry(now, by, kind, text)])?;
+        append(&mut issues[who], vec![entry(now, by, kind, text)]);
         if who != at {
             issues[who].updated_at = now;
         }
-        Ok(())
     };
     let other = |issues: &[Issue], raw: &str| -> Result<usize, String> {
         if !is_key(raw) {
@@ -106,7 +105,7 @@ pub fn relate(issues: &mut [Issue], at: usize, op: &Relations, by: &Actor, now: 
                 return Err(format!("{key} has child issues, so it has to stay an epic or a feature. Move them to another parent first."));
             }
             let text = format!("Type: {} → {}", issues[at].kind.label(), wanted.label());
-            log(issues, Some(at), "type", text)?;
+            log(issues, Some(at), "type", text);
             issues[at].kind = wanted;
             changed = true;
         }
@@ -118,8 +117,8 @@ pub fn relate(issues: &mut [Issue], at: usize, op: &Relations, by: &Actor, now: 
         if wanted.is_empty() {
             if let Some(old) = issues[at].parent.clone() {
                 let old_at = find(issues, &old);
-                log(issues, Some(at), "link", format!("Parent removed (was {old})"))?;
-                log(issues, old_at, "link", format!("Child removed: {key}"))?;
+                log(issues, Some(at), "link", format!("Parent removed (was {old})"));
+                log(issues, old_at, "link", format!("Child removed: {key}"));
                 issues[at].parent = None;
                 changed = true;
             }
@@ -139,11 +138,11 @@ pub fn relate(issues: &mut [Issue], at: usize, op: &Relations, by: &Actor, now: 
             }
             if let Some(old) = issues[at].parent.clone() {
                 let old_at = find(issues, &old);
-                log(issues, old_at, "link", format!("Child removed: {key}"))?;
+                log(issues, old_at, "link", format!("Child removed: {key}"));
             }
             let parent_key = issues[parent].key.clone();
-            log(issues, Some(at), "link", format!("Parent: {parent_key}"))?;
-            log(issues, Some(parent), "link", format!("Child: {key}"))?;
+            log(issues, Some(at), "link", format!("Parent: {parent_key}"));
+            log(issues, Some(parent), "link", format!("Child: {key}"));
             issues[at].parent = Some(parent_key);
             changed = true;
         }
@@ -163,8 +162,8 @@ pub fn relate(issues: &mut [Issue], at: usize, op: &Relations, by: &Actor, now: 
         }
         issues[at].related.get_or_insert_with(Vec::new).push(raw.clone());
         issues[peer].related.get_or_insert_with(Vec::new).push(key.clone());
-        log(issues, Some(at), "link", format!("Linked to {raw} as related"))?;
-        log(issues, Some(peer), "link", format!("Linked to {key} as related"))?;
+        log(issues, Some(at), "link", format!("Linked to {raw} as related"));
+        log(issues, Some(peer), "link", format!("Linked to {key} as related"));
         changed = true;
     }
     for raw in key_list(&op.related_remove) {
@@ -177,8 +176,8 @@ pub fn relate(issues: &mut [Issue], at: usize, op: &Relations, by: &Actor, now: 
         if let Some(peer) = peer {
             issues[peer].related = without(&issues[peer].related, &key);
         }
-        log(issues, Some(at), "link", format!("Unlinked from {raw} (related)"))?;
-        log(issues, peer, "link", format!("Unlinked from {key} (related)"))?;
+        log(issues, Some(at), "link", format!("Unlinked from {raw} (related)"));
+        log(issues, peer, "link", format!("Unlinked from {key} (related)"));
         changed = true;
     }
 
@@ -204,8 +203,8 @@ pub fn relate(issues: &mut [Issue], at: usize, op: &Relations, by: &Actor, now: 
             stack.extend(issues[next].blocked_by.iter().flatten().filter_map(|k| find(issues, k)));
         }
         issues[at].blocked_by.get_or_insert_with(Vec::new).push(raw.clone());
-        log(issues, Some(at), "link", format!("Blocked by {raw}"))?;
-        log(issues, Some(blocker), "link", format!("Blocks {key}"))?;
+        log(issues, Some(at), "link", format!("Blocked by {raw}"));
+        log(issues, Some(blocker), "link", format!("Blocks {key}"));
         changed = true;
     }
     for raw in key_list(&op.blocked_by_remove) {
@@ -215,8 +214,8 @@ pub fn relate(issues: &mut [Issue], at: usize, op: &Relations, by: &Actor, now: 
         let key = issues[at].key.clone();
         issues[at].blocked_by = without(&issues[at].blocked_by, &raw);
         let blocker = find(issues, &raw);
-        log(issues, Some(at), "link", format!("No longer blocked by {raw}"))?;
-        log(issues, blocker, "link", format!("No longer blocks {key}"))?;
+        log(issues, Some(at), "link", format!("No longer blocked by {raw}"));
+        log(issues, blocker, "link", format!("No longer blocks {key}"));
         changed = true;
     }
     Ok(changed)

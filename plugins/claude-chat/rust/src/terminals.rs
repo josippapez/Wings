@@ -66,7 +66,7 @@ pub fn hear(list: &[Value]) {
 
 /// Has Wings show the pane `id`: its project and tab come to the front and the keyboard goes to it.
 pub fn focus(id: &str) {
-    drop(wings_plugin::host::call("focusPane", serde_json::json!({ "paneId": id })));
+    drop(host::focus_pane(&id));
 }
 
 /// The pane a Wings tool call is about: the one `open_pane` opened (named in its result), or the `pane_id` that

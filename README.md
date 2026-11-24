@@ -71,11 +71,29 @@ cargo test --features test-support        # tests
 WINGS_SWITCH=1 sh scripts/build-mac-app.sh  # build Wings.app
 ```
 
-More about the app is in [apps/native/README.md](apps/native/README.md). Signing and releasing are in [docs/signing.md](docs/signing.md), [docs/releasing.md](docs/releasing.md) and [docs/switch-to-native.md](docs/switch-to-native.md). The earlier Tauri app in `apps/desktop` is deprecated and no longer released.
+More about the app is in [apps/native/README.md](apps/native/README.md). Signing and releasing are in [docs/signing.md](docs/signing.md), [docs/releasing.md](docs/releasing.md) and [docs/switch-to-native.md](docs/switch-to-native.md). The earlier Tauri app is gone from the repo; copies of it still installed update to the native app.
 
 ## Plugins
 
-A plugin is a folder with a `wings-plugin.json` and some TypeScript, run in a sandbox and limited to the permissions it declares. See [plugins/README.md](plugins/README.md) for installing plugins and for the ones in this repo. To write one, use [`wings-plugin-sdk`](https://www.npmjs.com/package/wings-plugin-sdk) and [`wings-plugin-ui`](https://www.npmjs.com/package/wings-plugin-ui), whose sources are in `packages/`.
+A plugin is a folder with a `wings-plugin.json` and a Rust crate that builds to WebAssembly, run in a sandbox and limited to the permissions it declares. See [plugins/README.md](plugins/README.md) for installing plugins and for the ones in this repo.
+
+### Build a plugin
+
+You need Rust. Install the SDK's author commands and the WebAssembly target once:
+
+```sh
+cargo install cargo-wings-plugin
+rustup target add wasm32-unknown-unknown
+```
+
+```sh
+cargo wings-plugin new my-plugin   # a starter plugin in ./my-plugin: manifest, a Rust crate with a main and a sidebar page, a release workflow
+cd my-plugin
+cargo wings-plugin dev             # rebuilds on each save and has the running Wings restart the plugin
+cargo wings-plugin pack            # writes my-plugin.wings-plugin, the file Wings installs
+```
+
+To share it, push the repo to GitHub and tag a release (`git tag v0.1.0 && git push origin v0.1.0`): the starter's workflow attaches the `.wings-plugin` file. Anyone installs it by pasting the repo link into Plugins, Add plugin in Wings. The SDK is the [`wings-plugin`](https://crates.io/crates/wings-plugin) crate: its API is on [docs.rs](https://docs.rs/wings-plugin), and the manifest, permissions and every host call are in [plugins/README.md](plugins/README.md). The sources are in `packages/plugin-rs` and `packages/cargo-wings-plugin`.
 
 ## License
 

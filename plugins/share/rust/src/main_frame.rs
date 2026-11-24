@@ -177,7 +177,7 @@ async fn on_action(action: Value) -> Result<(), String> {
 
 /// Install, on the badge or in the modal: runs the Homebrew command in a terminal tab, where you see it work.
 async fn install() -> Result<(), String> {
-    host::call("openPane", json!({ "command": tunnel::INSTALL, "args": [], "placement": "tab" })).await?;
+    host::OpenPane::new().command(tunnel::INSTALL, &[]).open().await?;
     with(|state| state.install_pane = None);
     set_missing(false);
     drop(refresh());

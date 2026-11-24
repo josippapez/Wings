@@ -230,6 +230,7 @@ pub fn rebuild(session: &mut Session, entries: &[Value], note: Option<&Note>, li
     }
     .filter(|_| !dropped);
     let history = &entries[..cut.unwrap_or(entries.len())];
+    session.read_back(entries);
     history.iter().for_each(|entry| session.hear(entry));
     let shown: HashSet<&str> = match cut {
         Some(_) => HashSet::new(),

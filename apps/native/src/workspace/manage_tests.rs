@@ -358,7 +358,7 @@ fn plugin_updates_timer_is_launch_anchored_defers_until_focus_and_stops_on_drop(
 }
 
 #[test]
-fn a_plugins_page_opens_when_its_row_is_clicked_and_closes_when_it_is_clicked_again() {
+fn a_plugins_page_opens_when_its_row_is_clicked_and_closes_with_its_back_button() {
     let data = Data::temp();
     let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
     install(&mut window, package("demo", "1.0.0", &[]), github(), None).unwrap();
@@ -367,12 +367,19 @@ fn a_plugins_page_opens_when_its_row_is_clicked_and_closes_when_it_is_clicked_ag
         w.manage.selected = None;
         cx.notify();
     });
-    for open in [Some("demo"), None] {
-        window.draw();
-        window.simulate_click(crate::ui::spot_at("plugin-row-0").unwrap().center(), gpui::MouseButton::Left);
-        assert_eq!(window.read(|w, _| w.manage.selected.clone()).as_deref(), open);
-    }
-    // What went wrong with a plugin shows in its row, where its switch is, while its page is closed.
+    window.draw();
+    assert!(crate::ui::spot_at("plugin-row-0").is_some());
+    window.simulate_click(crate::ui::spot_at("plugin-row-0").unwrap().center(), gpui::MouseButton::Left);
+    assert_eq!(window.read(|w, _| w.manage.selected.clone()).as_deref(), Some("demo"));
+    // Its page is in place of the list.
+    crate::ui::forget_spots();
+    window.draw();
+    assert!(crate::ui::spot_at("plugin-row-0").is_none());
+    window.simulate_click(crate::ui::spot_at("plugin-back").unwrap().center(), gpui::MouseButton::Left);
+    assert!(window.read(|w, _| w.manage.selected.is_none()));
+    window.draw();
+    assert!(crate::ui::spot_at("plugin-row-0").is_some());
+    // What went wrong with a plugin shows in its row, where its switch is.
     assert!(crate::ui::spot_at("plugin-row-error-0").is_none());
     window.update(|w, _, cx| {
         w.manage.row_error.insert("demo".into(), "It couldn't be turned on".into());
@@ -381,6 +388,71 @@ fn a_plugins_page_opens_when_its_row_is_clicked_and_closes_when_it_is_clicked_ag
     window.draw();
     assert!(window.read(|w, _| w.manage.selected.is_none()));
     assert!(crate::ui::spot_at("plugin-row-error-0").is_some());
+}
+
+#[test]
+fn a_row_keeps_its_size_whatever_state_its_plugin_is_in() {
+    let data = Data::temp();
+    let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    install(&mut window, package("demo", "1.0.0", &[]), github(), None).unwrap();
+    window.update(|w, window, cx| {
+        w.show_plugins("demo", &[], window, cx);
+        w.manage.selected = None;
+        cx.notify();
+    });
+    window.draw();
+    let on = crate::ui::spot_at("plugin-row-0").unwrap().size;
+    for state in ["update", "error", "busy"] {
+        window.update(|w, _, cx| {
+            match state {
+                "update" => {
+                    w.manage.updates.insert("demo".into(), "1.1.0".into());
+                }
+                "error" => {
+                    w.manage.row_error.insert("demo".into(), "It couldn't be turned on. ".repeat(6));
+                }
+                _ => {
+                    w.manage.busy.insert("demo".into());
+                }
+            }
+            cx.notify();
+        });
+        window.draw();
+        assert_eq!(crate::ui::spot_at("plugin-row-0").unwrap().size, on, "{state}");
+    }
+}
+
+#[test]
+fn the_tabs_list_installed_plugins_and_updates_and_the_search_filters_them() {
+    use super::plugin_manage_ui::PluginsTab;
+    let data = Data::temp();
+    let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    install(&mut window, package("demo", "1.0.0", &[]), github(), None).unwrap();
+    window.update(|w, window, cx| {
+        w.show_plugins("demo", &[], window, cx);
+        w.manage.selected = None;
+        w.manage.tab = PluginsTab::Updates;
+        cx.notify();
+    });
+    window.draw();
+    // Nothing to update, so no row.
+    crate::ui::forget_spots();
+    assert!(crate::ui::spot_at("plugin-row-0").is_none());
+    window.update(|w, _, cx| {
+        w.manage.updates.insert("demo".into(), "1.1.0".into());
+        cx.notify();
+    });
+    window.draw();
+    assert!(crate::ui::spot_at("plugin-row-0").is_some());
+    window.update(|w, window, cx| {
+        w.manage.tab = PluginsTab::Installed;
+        w.settings.as_ref().unwrap().search.update(cx, |field, _| field.text = "zzz".into());
+        let _ = window;
+        cx.notify();
+    });
+    crate::ui::forget_spots();
+    window.draw();
+    assert!(crate::ui::spot_at("plugin-row-0").is_none());
 }
 
 #[test]

@@ -1,4 +1,4 @@
-//! A timer that runs only while the user is in Wings: `wings-plugin-sdk/poll`.
+//! A timer that runs only while the user is in Wings.
 
 use crate::{host, task};
 use std::{cell::Cell, rc::Rc};

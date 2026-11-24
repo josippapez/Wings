@@ -6,7 +6,7 @@ use crate::{
     main_frame::changed,
     schedule::Draft,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{
     cell::{Cell, RefCell},
     future::poll_fn,
@@ -58,7 +58,7 @@ fn settle(id: &str, answer: Answer) -> bool {
     };
     changed();
     if PENDING.with(|pending| pending.borrow().is_empty()) {
-        drop(host::call("closeView", json!({ "id": VIEW })));
+        drop(host::close_view(VIEW));
     }
     let mut slot = ask.slot.borrow_mut();
     slot.answer = Some(answer);
@@ -106,7 +106,7 @@ async fn wait_for(asker: Option<String>, project_name: &str, what: What, project
         }
     });
     if !host::focused() {
-        drop(host::call("notify", json!({ "title": title, "body": format!("In {project_name}. Allow or deny it in Wings."), "projectId": project_id })));
+        drop(host::notify_with(&title, &format!("In {project_name}. Allow or deny it in Wings."), None, Some(&project_id)));
     }
     poll_fn(|cx| {
         let mut slot = slot.borrow_mut();

@@ -23,7 +23,7 @@ pub use svg::Svg;
 
 /// The largest tree JSON the host parses.
 pub const MAX_JSON_BYTES: usize = 2 * 1024 * 1024;
-pub const MAX_NODES: usize = 5_000;
+pub const MAX_NODES: usize = 20_000;
 pub const MAX_DEPTH: usize = 32;
 /// A longer text is cut to this many characters: a long paragraph of a chat's reply fits.
 pub const MAX_TEXT_CHARS: usize = 20_000;
@@ -34,7 +34,7 @@ pub const MAX_OPTIONS: usize = 200;
 const MAX_TRACKED: usize = 2_000;
 /// A text input holds this many characters of what the page gave it. The rest of the page's text is cut to
 /// `MAX_TEXT_CHARS`, which would cut what the person typed in a long field.
-pub const MAX_INPUT_CHARS: usize = 20_000;
+pub const MAX_INPUT_CHARS: usize = 200_000;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum TreeError {
@@ -2738,6 +2738,29 @@ mod tests {
             "x".repeat(MAX_JSON_BYTES)
         );
         assert_eq!(Tree::parse(&huge), Err(TreeError::TooLarge));
+    }
+
+    /// A long chat came to over 5,000 nodes and its page was refused whole.
+    #[test]
+    fn a_page_of_20000_nodes_is_taken_and_one_more_is_refused() {
+        let nodes = |count: usize| -> Value {
+            Value::Array((0..count).map(|id| json!({"id":id,"type":"#text","text":"a"})).collect())
+        };
+        assert!(tree(nodes(20_000)).is_ok());
+        assert_eq!(tree(nodes(20_001)), Err(TreeError::TooManyNodes));
+    }
+
+    /// A paste into the chat's message box over 20,000 characters lost its tail.
+    #[test]
+    fn a_text_field_keeps_200000_characters_of_its_value_and_cuts_the_rest() {
+        let value = |len: usize| match parse_one(
+            json!({"id":1,"type":"Textarea","props":{"value":"x".repeat(len)},"children":[]}),
+        ) {
+            Node::Input(input) => input.value.chars().count(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(value(200_000), 200_000);
+        assert_eq!(value(200_001), 200_000);
     }
 
     #[test]

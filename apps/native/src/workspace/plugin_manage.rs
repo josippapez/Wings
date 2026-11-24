@@ -36,9 +36,16 @@ pub(super) struct Manage {
     pub(super) reviews: Vec<PluginView>,
     /// The plugin whose Remove was pressed and waits for a second click.
     pub(super) removing: Option<String>,
-    /// The plugin whose page is open in the list.
+    /// The plugin whose page is open, in place of the list.
     pub(super) selected: Option<String>,
+    /// Which list the Plugins page shows.
+    pub(super) tab: super::plugin_manage_ui::PluginsTab,
     pub(super) browsing_available: bool,
+    /// The GitHub link field shows under the header, from Add plugin.
+    pub(super) adding_link: bool,
+    /// The open menu, and where each menu button was last drawn (`add`, or a plugin's id), for it to open under.
+    pub(super) menu: Option<super::plugin_manage_ui::PluginMenu>,
+    pub(super) menu_bounds: Rc<RefCell<HashMap<String, gpui::Bounds<gpui::Pixels>>>>,
     /// Newer versions the last check found, by plugin id.
     pub(super) updates: HashMap<String, String>,
     /// The official catalogue from the most recent successful check.
@@ -798,6 +805,7 @@ impl Workspace {
                             && let Some(dialog) = &this.settings
                         {
                             dialog.link.update(cx, |field, _| field.text.clear());
+                            this.manage.adding_link = false;
                         }
                         // A new plugin, or one whose update asks for more, waits for you to approve it.
                         if !view.approved || !view.enabled {
@@ -1173,6 +1181,41 @@ impl Workspace {
             self.manage
                 .updates
                 .insert((*id).to_owned(), (*version).to_owned());
+        }
+        cx.notify_workspace();
+    }
+
+    /// Settings, Plugins as a list: the tab (`installed`, `browse` or `updates`), what is typed in the search, the menu
+    /// open (`add`, or a plugin's id), the official plugins Browse lists and `updates` found, as `(plugin, version)`.
+    pub fn show_plugins_list(
+        &mut self,
+        tab: &str,
+        query: &str,
+        menu: Option<&str>,
+        available: Vec<Available>,
+        updates: &[(&str, &str)],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use super::plugin_manage_ui::{PluginMenu, PluginsTab};
+        self.open_settings(window, cx);
+        if let Some(dialog) = &mut self.settings {
+            dialog.section = Section::Plugins;
+            dialog.search.update(cx, |field, _| field.text = query.to_owned());
+        }
+        self.manage.selected = None;
+        self.manage.tab = match tab {
+            "browse" => PluginsTab::Browse,
+            "updates" => PluginsTab::Updates,
+            _ => PluginsTab::Installed,
+        };
+        self.manage.menu = menu.map(|menu| match menu {
+            "add" => PluginMenu::Add,
+            id => PluginMenu::Row(id.to_owned()),
+        });
+        self.manage.available = available;
+        for (id, version) in updates {
+            self.manage.updates.insert((*id).to_owned(), (*version).to_owned());
         }
         cx.notify_workspace();
     }

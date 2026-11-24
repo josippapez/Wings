@@ -181,7 +181,7 @@ pub fn want() {
         return;
     };
     task::spawn(async move {
-        let answer = host::call("callTool", json!({ "name": "tasks__list", "arguments": {} })).await;
+        let answer = host::call_tool("tasks__list", &json!({})).await;
         let found = answer.ok().filter(|answer| answer["isError"] != true).and_then(|answer| answer["text"].as_str().map(parse_tasks)).unwrap_or_default();
         chat::with(|c| {
             c.issues.wings = found;

@@ -125,7 +125,7 @@ pub fn load(dir: &Path) -> Result<Plugin, String> {
     if !dir.join(manifest.main.trim_start_matches('/')).is_file() {
         // A TypeScript plugin's repo holds its source, and its built files come in its release.
         return Err(if dir.join("src").is_dir() {
-            format!("{} isn't built. Install the plugin from a release, or run `wings-plugin build` in its folder", manifest.main)
+            format!("{} isn't built. Install the plugin from a release, or run `cargo wings-plugin build` in its folder", manifest.main)
         } else {
             format!("{} is missing", manifest.main)
         });

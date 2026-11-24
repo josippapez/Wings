@@ -124,6 +124,21 @@ pub(crate) fn frame_file(dir: &Path, name: &str) -> Option<PathBuf> {
     loading::resolve(dir, &format!("{NATIVE_DIR}/{name}.wasm")).filter(|file| file.is_file())
 }
 
+/// Every module the plugins in `paths` have, turned on or not: the `.wasm` files in each one's `dist/native`, whose
+/// compiled code `wasm::prune_compiled` keeps.
+pub fn modules(paths: &PluginPaths) -> Vec<PathBuf> {
+    let store = load_store(paths);
+    store
+        .list()
+        .iter()
+        .filter_map(|listed| store.dir(&listed.manifest.id))
+        .filter_map(|dir| std::fs::read_dir(dir.join(NATIVE_DIR)).ok())
+        .flatten()
+        .filter_map(|entry| Some(entry.ok()?.path()))
+        .filter(|path| path.extension().is_some_and(|extension| extension == "wasm"))
+        .collect()
+}
+
 /// The source of the frame whose own build is `bundle` (`dist/native/<page>.wasm`, or `main.wasm`) in the plugin in
 /// `dir`: its module (`runtime::wasm`), only if that file is inside the plugin's folder. A script is no frame source.
 pub fn page_source(dir: &Path, bundle: &Path) -> std::io::Result<String> {

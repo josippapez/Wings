@@ -62,7 +62,7 @@ struct Entry {
     /// reach the old plugin's tokens even if deleting them failed.
     #[serde(default = "new_scope")]
     scope: String,
-    /// A plugin folder the user linked (`wings-plugin dev`) and runs in place, instead of a copy in the plugins
+    /// A plugin folder the user linked (`cargo wings-plugin dev`) and runs in place, instead of a copy in the plugins
     /// folder. `source` stays `File` for these: a new kind would make an older build drop the whole state file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     folder: Option<PathBuf>,
@@ -638,6 +638,11 @@ pub fn latest_version(repo: &str, folder: Option<&str>) -> Result<Option<String>
 
 /// The repo whose `plugins/` folder Settings offers to install from.
 const OFFICIAL_REPO: &str = "josippapez/Wings";
+
+/// Whether `repo` (`owner/name`) is Wings' own repo, where the official plugins live.
+pub fn is_official_repo(repo: &str) -> bool {
+    repo.eq_ignore_ascii_case(OFFICIAL_REPO)
+}
 /// Wings' own plugins that are no longer in the repo: Notes became the Project page.
 const RETIRED: &[&str] = &["notes"];
 

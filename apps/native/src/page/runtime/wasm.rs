@@ -12,17 +12,21 @@
 //! `wings_deliver(kind, id, text)` (see `Message`) and `wings_timer(id)`. Strings are UTF-8, as a pointer and a length;
 //! one the host wrote is the module's to free.
 //!
-//! debt: each such frame has a thread of its own, and `Limits::default()` whatever its plugin's are. A module is compiled once for as long
-//! as the app runs, and its compiled code is kept on disk for the next launch (`keep_compiled_in`), never pruned: each
-//! build of a module leaves a file a few times its size. Clear the folder of the ones no installed plugin has if it grows.
+//! Each frame runs on a thread of its own, under the limits of its role (a page's or a main's): a plugin's manifest
+//! declares none. What a frame may hold of the host is bounded too: its memory and table, its timers
+//! (`MAX_TIMERS`), the calls it waits on (`MAX_WAITING_CALLS`) and their arguments (`MAX_PARAMS_BYTES`), and each host
+//! call takes fuel from its turn (`charge`). A module is compiled once for as long as the app runs, and its compiled
+//! code is kept on disk for the next launch, signed so that only code this install compiled is read back
+//! (`keep_compiled_in`); the code of modules no installed plugin has is removed as the app starts (`prune_compiled`).
 
 use super::{
-    Command, Event, HEAP_BYTES, Inbox, Job, Link, PAGE_HEAP_BYTES, PageRuntime, QUEUED_COMMANDS, Queue,
-    Reply, Role, THREAD_STACK_BYTES, Tree, message, overran,
+    Command, Event, HEAP_BYTES, Inbox, Job, Link, Message, PAGE_HEAP_BYTES, PageRuntime, QUEUED_COMMANDS, Queue,
+    Reply, Role, Store as StorageCall, THREAD_STACK_BYTES, Tree, message, overran,
 };
 use std::{
     cell::RefCell,
     collections::HashMap,
+    path::PathBuf,
     rc::Rc,
     sync::{
         Arc, Mutex, OnceLock,
@@ -31,9 +35,7 @@ use std::{
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-    path::PathBuf,
 };
-use super::Store as StorageCall;
 use wasmtime::{Caller, Config, Extern, Instance, Linker, Module, Store, StoreLimits, StoreLimitsBuilder, Trap, TypedFunc};
 
 /// The first line of the source of a page that is a WebAssembly module, before the module's path.
@@ -45,6 +47,31 @@ const TURN_FUEL: u64 = 1_000_000_000;
 /// reading back a 96 MB session with 138 pictures ran out of a main's turn and was stopped. A page stuck in a loop is
 /// stopped after about ten seconds, on its own thread.
 const PAGE_TURN_FUEL: u64 = 10 * TURN_FUEL;
+/// What a host call costs a turn, besides a unit for each byte it reads from or writes into the frame's memory, as a
+/// `memory.copy` costs: some microseconds of a busy loop. Fuel counts the module's own instructions alone, so a loop of
+/// host calls paid a few units a call, whatever the host did for it, and ran far past its turn.
+const CALL_FUEL: u64 = 10_000;
+/// What an import that only reads a value (`now`, `focused`, `utc_offset`) or sets a timer costs a turn.
+const QUICK_FUEL: u64 = 100;
+/// The most timers a frame may have set and not yet run: a frame setting them in a loop grew the host's list without
+/// bound.
+const MAX_TIMERS: usize = 10_000;
+/// The most calls a frame may wait on, counted from the call to its answer reaching the frame: a frame calling in a
+/// loop had the host hold an answer, and for some calls a thread, for each. A page waits on tens at most (one per
+/// project or pane it asks about).
+const MAX_WAITING_CALLS: usize = 4_096;
+/// The most JSON a call's arguments may be. They are parsed into the host's memory before any call looks at them, and
+/// `[0,0,...]` takes some sixteen times its length parsed. The longest a call takes is `processWrite`'s 8 MB of text.
+const MAX_PARAMS_BYTES: usize = 16 * 1024 * 1024;
+/// The call a module makes from its panic hook, `{ "message": <the panic, as Rust words it> }`, just before it traps:
+/// the host keeps the message for the frame's fatal error, which the plugins' log keeps. A host before this one refuses
+/// it as a method it doesn't know.
+pub const PANICKED: &str = "panicked";
+/// The most of a panic's message that is kept.
+const MAX_PANIC_CHARS: usize = 1000;
+/// The most elements a frame's table may have. A Rust module's one table holds a slot for each function called by
+/// pointer: 726 in the largest of Wings' own (Claude chat's page). Unbounded, a table of four billion could take 32 GB.
+const TABLE_ELEMENTS: usize = 65_536;
 
 type Emit = Rc<RefCell<Box<dyn FnMut(Event)>>>;
 
@@ -56,6 +83,10 @@ pub(super) struct Host {
     emit: Emit,
     /// When each timer the page set is due, with the id it gave it.
     pub(super) timers: Vec<(Instant, u32)>,
+    /// The calls the frame made whose answer hasn't reached it yet.
+    waiting: usize,
+    /// What the frame said as it panicked (`PANICKED`), for the trap that follows.
+    panicked: Option<String>,
     limits: StoreLimits,
 }
 
@@ -64,9 +95,25 @@ fn turn_fuel(page: bool) -> u64 {
     if page { PAGE_TURN_FUEL } else { TURN_FUEL }
 }
 
-/// What a frame's memory may grow to: a page's more than a main's.
+/// What a frame's memory may grow to, a page's more than a main's, and its one memory and one table, as a Rust module
+/// has. The size is each memory's, and wasmtime takes modules with the multi-memory proposal by default: a module could
+/// have declared ten thousand memories of that size.
 fn limits(page: bool) -> StoreLimits {
-    StoreLimitsBuilder::new().memory_size(if page { PAGE_HEAP_BYTES } else { HEAP_BYTES }).build()
+    StoreLimitsBuilder::new()
+        .memory_size(if page { PAGE_HEAP_BYTES } else { HEAP_BYTES })
+        .memories(1)
+        .tables(1)
+        .table_elements(TABLE_ELEMENTS)
+        .instances(1)
+        .build()
+}
+
+/// The compiler's settings. No GC proposal, which no plugin uses: in builds without wasmtime's `gc` feature, as this
+/// one, a module using its types could abort the app before 48.0.9 (GHSA-rc4p-x33f-vpr2).
+fn config() -> Config {
+    let mut config = Config::new();
+    config.consume_fuel(true).wasm_gc(false);
+    config
 }
 
 impl Host {
@@ -77,6 +124,8 @@ impl Host {
             queue,
             emit,
             timers: Vec::new(),
+            waiting: 0,
+            panicked: None,
             limits: limits(render),
         }
     }
@@ -97,30 +146,62 @@ impl Host {
         Ok(())
     }
 
-    /// The `call` import: a host call the frame named `id`, answered later through its queue.
-    pub(super) fn call(&self, id: u32, method: &str, params: &str) -> wasmtime::Result<()> {
-        self.link.call(
-            method,
-            serde_json::from_str(params)?,
-            Reply {
-                call: id,
-                queue: self.queue.clone(),
-                note: None,
-            },
-        );
+    /// The `call` import: a host call the frame named `id`, answered later through its queue. One made while
+    /// `MAX_WAITING_CALLS` are unanswered stops the frame, and arguments past `MAX_PARAMS_BYTES` are refused unparsed.
+    pub(super) fn call(&mut self, id: u32, method: &str, params: &str) -> wasmtime::Result<()> {
+        if self.waiting >= MAX_WAITING_CALLS {
+            return Err(wasmtime::Error::msg(format!(
+                "the frame made a call while {MAX_WAITING_CALLS} of its calls were still unanswered"
+            )));
+        }
+        self.waiting += 1;
+        let reply = Reply {
+            call: id,
+            queue: self.queue.clone(),
+            note: None,
+        };
+        if params.len() > MAX_PARAMS_BYTES {
+            reply.err(format!("A call's arguments are limited to {} MB", MAX_PARAMS_BYTES >> 20));
+            return Ok(());
+        }
+        let params: serde_json::Value = serde_json::from_str(params)?;
+        if method == PANICKED {
+            self.panicked = params["message"].as_str().map(|message| message.chars().take(MAX_PANIC_CHARS).collect());
+            reply.ok("null".into());
+            return Ok(());
+        }
+        self.link.call(method, params, reply);
         Ok(())
     }
 
-    /// The `timer` import.
-    pub(super) fn timer(&mut self, id: u32, ms: u32) {
+    /// `error`, the frame's last, with what it said as it panicked before it: a Rust module that panics traps on an
+    /// `unreachable`, and its message was lost.
+    pub(super) fn fatal(&mut self, error: wasmtime::Error) -> wasmtime::Error {
+        match self.panicked.take() {
+            Some(message) => error.context(message),
+            None => error,
+        }
+    }
+
+    /// An answer to one of the frame's calls is about to reach it.
+    fn answered(&mut self) {
+        self.waiting = self.waiting.saturating_sub(1);
+    }
+
+    /// The `timer` import. One past `MAX_TIMERS` set and not yet run stops the frame.
+    pub(super) fn timer(&mut self, id: u32, ms: u32) -> wasmtime::Result<()> {
+        if self.timers.len() >= MAX_TIMERS {
+            return Err(wasmtime::Error::msg(format!("the frame set more than {MAX_TIMERS} timers")));
+        }
         let due = Instant::now() + Duration::from_millis(ms.into());
         self.timers.push((due, id));
+        Ok(())
     }
 }
 
 /// A frame the serve loop runs: a module, or a test's stand-in for one.
 pub(super) trait Frame {
-    fn timers(&mut self) -> &mut Vec<(Instant, u32)>;
+    fn host(&mut self) -> &mut Host;
     fn command(&mut self, command: Command) -> wasmtime::Result<()>;
     fn fire(&mut self, id: u32) -> wasmtime::Result<()>;
 }
@@ -136,9 +217,7 @@ pub(super) fn open(
     let (inputs, input_received) = mpsc::sync_channel(QUEUED_COMMANDS);
     let closed = Arc::new(AtomicBool::new(false));
     let stopped = Arc::new(AtomicBool::new(false));
-    let queue = Queue {
-        jobs: jobs.clone(),
-    };
+    let queue = Queue::new(jobs.clone());
     let path = path.to_owned();
     let spawned = thread::Builder::new()
         .name("page-wasm".into())
@@ -157,11 +236,7 @@ pub(super) fn open(
     }
     PageRuntime {
         link: Some(link),
-        inbox: Inbox {
-            queue,
-            stopped,
-            behind: Arc::default(),
-        },
+        inbox: Inbox { queue, stopped },
         closed,
         _attached: None,
         jobs,
@@ -169,49 +244,58 @@ pub(super) fn open(
     }
 }
 
-static KEPT: OnceLock<PathBuf> = OnceLock::new();
+#[cfg(unix)]
+mod cache;
+
+/// No compiled code is kept where folders can't be made this user's alone.
+#[cfg(not(unix))]
+mod cache {
+    pub(super) struct Kept;
+    impl Kept {
+        pub(super) fn read(&self) -> Option<Vec<u8>> {
+            None
+        }
+        pub(super) fn write(&self, _: &[u8]) {}
+    }
+    pub(super) fn keep_in(_: std::path::PathBuf) {}
+    pub(super) fn kept(_: &[u8]) -> Option<Kept> {
+        None
+    }
+    pub(super) fn prune(_: &[std::path::PathBuf]) -> std::io::Result<usize> {
+        Ok(0)
+    }
+}
 
 /// Keeps each module's compiled code in `dir`, so the next launch loads it in place of compiling. Said once, when the
-/// app starts; without it every launch compiles. The folder is made for this user alone, and has to stay the app's own:
-/// what is read back from it runs as it is, unchecked, so nothing a plugin can write may ever land there.
+/// app starts; without it every launch compiles. The folder is made for this user alone, and what is read back from it
+/// is only what this install compiled and signed (`cache`): compiled code runs as it is, unchecked.
 pub fn keep_compiled_in(dir: PathBuf) {
-    let _ = KEPT.set(dir);
+    cache::keep_in(dir);
 }
 
-/// Where the compiled code of the module `bytes` is kept: a file named by the module's hash, so another build of the
-/// page is another file. Code from another version of the compiler is refused when it is read, and compiled again.
-#[cfg(unix)]
-fn kept_file(bytes: &[u8]) -> Option<PathBuf> {
-    use sha2::{Digest, Sha256};
-    let dir = KEPT.get()?;
-    crate::terminal_server::private_dir(dir).ok()?;
-    let hash: String = Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect();
-    Some(dir.join(format!("{hash}.cwasm")))
+/// Removes the compiled code of every module but `modules`, the `.wasm` files of the installed plugins, from the folder
+/// `keep_compiled_in` was given. Said once, as the app starts, off the window's thread: it reads every module.
+pub fn prune_compiled(modules: &[PathBuf]) {
+    if let Err(error) = cache::prune(modules) {
+        eprintln!("[plugins] couldn't clear compiled code no plugin has: {error}");
+    }
 }
 
-#[cfg(not(unix))]
-fn kept_file(_: &[u8]) -> Option<PathBuf> {
-    None
-}
-
-/// The module `bytes`: its code from `kept` when it is there and this compiler's, and otherwise compiled, and kept.
-fn load(engine: &wasmtime::Engine, bytes: &[u8], kept: Option<&std::path::Path>) -> wasmtime::Result<Module> {
-    if let Some(code) = kept.and_then(|file| std::fs::read(file).ok())
-        // SAFETY: the file is in the folder `keep_compiled_in` was given, which only this user can open
-        // (`private_dir`) and only `load` writes, with what `Module::serialize` gave it.
+/// The module `bytes`: its code from `kept` when this install compiled and signed it, and otherwise compiled, and
+/// kept. Code from another version of the compiler is refused when it is read, and compiled again.
+fn load(engine: &wasmtime::Engine, bytes: &[u8], kept: Option<&cache::Kept>) -> wasmtime::Result<Module> {
+    if let Some(code) = kept.and_then(cache::Kept::read)
+        // SAFETY: `code` is what `Module::serialize` gave this install for this very module: it carries the install's
+        // signature over the module's hash and the code (`cache`), which only this app can make.
         && let Ok(module) = unsafe { Module::deserialize(engine, code) }
     {
         return Ok(module);
     }
     let module = Module::new(engine, bytes)?;
-    if let Some(file) = kept
+    if let Some(kept) = kept
         && let Ok(code) = module.serialize()
     {
-        // Whole or not at all: a launch that reads while this one writes sees the old file or none.
-        let part = file.with_extension(format!("{}.part", std::process::id()));
-        if std::fs::write(&part, code).and_then(|()| std::fs::rename(&part, file)).is_err() {
-            let _ = std::fs::remove_file(&part);
-        }
+        kept.write(&code);
     }
     Ok(module)
 }
@@ -225,7 +309,7 @@ fn compiled(path: &str) -> wasmtime::Result<(wasmtime::Engine, Module)> {
     let engine = match ENGINE.get() {
         Some(engine) => engine,
         None => {
-            let engine = wasmtime::Engine::new(Config::new().consume_fuel(true))?;
+            let engine = wasmtime::Engine::new(&config())?;
             ENGINE.get_or_init(|| (engine, Mutex::default()))
         }
     };
@@ -237,7 +321,7 @@ fn compiled(path: &str) -> wasmtime::Result<(wasmtime::Engine, Module)> {
         Some(module) => module.clone(),
         None => {
             let bytes = std::fs::read(path)?;
-            slot.insert(load(&engine.0, &bytes, kept_file(&bytes).as_deref())?).clone()
+            slot.insert(load(&engine.0, &bytes, cache::kept(&bytes).as_ref())?).clone()
         }
     };
     Ok((engine.0.clone(), module))
@@ -248,6 +332,15 @@ fn compiled(path: &str) -> wasmtime::Result<(wasmtime::Engine, Module)> {
 #[cfg(any(test, feature = "test-support"))]
 pub fn compile_now(path: &str) -> wasmtime::Result<()> {
     compiled(path).map(|_| ())
+}
+
+/// The frame of `module`, under its limits and with its first turn's fuel, before it starts.
+fn instantiate(engine: &wasmtime::Engine, module: &Module, host: Host) -> wasmtime::Result<(Store<Host>, Instance)> {
+    let mut store = Store::new(engine, host);
+    store.limiter(|host| &mut host.limits);
+    store.set_fuel(turn_fuel(store.data().render))?;
+    let instance = imports(engine)?.instantiate(&mut store, module)?;
+    Ok((store, instance))
 }
 
 /// What the page exports for the host to call.
@@ -263,10 +356,7 @@ struct Page {
 impl Page {
     fn start(path: &str, host: Host) -> wasmtime::Result<Self> {
         let (engine, module) = compiled(path)?;
-        let mut store = Store::new(&engine, host);
-        store.limiter(|host| &mut host.limits);
-        store.set_fuel(turn_fuel(store.data().render))?;
-        let instance = imports(&engine)?.instantiate(&mut store, &module)?;
+        let (mut store, instance) = instantiate(&engine, &module, host)?;
         let start = instance.get_typed_func::<(), ()>(&mut store, "wings_start")?;
         let mut page = Page {
             alloc: instance.get_typed_func(&mut store, "wings_alloc")?,
@@ -276,7 +366,9 @@ impl Page {
             store,
             instance,
         };
-        start.call(&mut page.store, ())?;
+        if let Err(error) = start.call(&mut page.store, ()) {
+            return Err(page.store.data_mut().fatal(error));
+        }
         Ok(page)
     }
 
@@ -294,8 +386,8 @@ impl Page {
 }
 
 impl Frame for Page {
-    fn timers(&mut self) -> &mut Vec<(Instant, u32)> {
-        &mut self.store.data_mut().timers
+    fn host(&mut self) -> &mut Host {
+        self.store.data_mut()
     }
 
     fn command(&mut self, command: Command) -> wasmtime::Result<()> {
@@ -344,7 +436,7 @@ fn serve(
         stopped.store(true, Ordering::Relaxed);
         let ran_out = error.downcast_ref::<Trap>() == Some(&Trap::OutOfFuel);
         (emit.borrow_mut())(Event::Error {
-            message: if ran_out { overran() } else { message(format!("{error:#}")) },
+            message: if ran_out { overran() } else { fatal_message(&error) },
             fatal: true,
         });
     };
@@ -361,6 +453,17 @@ fn serve(
     }
 }
 
+/// A frame's last error as one short text: what happened (the panic and the trap, or a host call's own error), then
+/// where. wasmtime puts where first, and `message` keeps the first 500 characters: each of the 115 traps in a plugins'
+/// log said only where, never what.
+fn fatal_message(error: &wasmtime::Error) -> String {
+    let backtrace = error.downcast_ref::<wasmtime::WasmBacktrace>().map(ToString::to_string);
+    let mut said: Vec<String> =
+        error.chain().map(ToString::to_string).filter(|said| Some(said) != backtrace.as_ref()).collect();
+    said.extend(backtrace);
+    message(said.join(": "))
+}
+
 fn run(
     mut page: impl Frame,
     received: &Received,
@@ -370,7 +473,8 @@ fn run(
     let jobs = &received.jobs;
     loop {
         let wait = page
-            .timers()
+            .host()
+            .timers
             .iter()
             .map(|(due, _)| due.saturating_duration_since(Instant::now()))
             .min();
@@ -391,18 +495,21 @@ fn run(
         if closed.load(Ordering::Relaxed) {
             return;
         }
-        if let Some(Job::Frame(command)) = job
-            && let Err(error) = page.command(command)
-        {
-            return fail(error);
+        if let Some(Job::Frame(command)) = job {
+            if let Command::Deliver { message: Message::Resolve | Message::Reject, .. } = command {
+                page.host().answered();
+            }
+            if let Err(error) = page.command(command) {
+                return fail(page.host().fatal(error));
+            }
         }
         let now = Instant::now();
-        let timers = page.timers();
+        let timers = &mut page.host().timers;
         let due: Vec<u32> = timers.iter().filter(|(at, _)| *at <= now).map(|(_, id)| *id).collect();
         timers.retain(|(at, _)| *at > now);
         for id in due {
             if let Err(error) = page.fire(id) {
-                return fail(error);
+                return fail(page.host().fatal(error));
             }
         }
     }
@@ -439,9 +546,22 @@ fn hand(caller: &mut Caller<'_, Host>, text: &str) -> wasmtime::Result<u64> {
     Ok(u64::from(at) << 32 | u64::from(len))
 }
 
+/// Takes what a host call costs from the turn's fuel: `CALL_FUEL` and a unit for each of the `bytes` it moves in or out
+/// of the frame's memory, or `QUICK_FUEL` for one that only reads a value. A turn that can't pay stops as one that ran
+/// out.
+fn charge(caller: &mut Caller<'_, Host>, cost: u64) -> wasmtime::Result<()> {
+    let fuel = caller.get_fuel()?;
+    if fuel < cost {
+        caller.set_fuel(0)?;
+        return Err(Trap::OutOfFuel.into());
+    }
+    caller.set_fuel(fuel - cost)
+}
+
 fn imports(engine: &wasmtime::Engine) -> wasmtime::Result<Linker<Host>> {
     let mut linker = Linker::new(engine);
     linker.func_wrap("wings", "render", |mut caller: Caller<'_, Host>, at: u32, len: u32| {
+        charge(&mut caller, CALL_FUEL + u64::from(len))?;
         let json = text(&mut caller, at, len)?;
         caller.data().render(&json)
     })?;
@@ -449,15 +569,17 @@ fn imports(engine: &wasmtime::Engine) -> wasmtime::Result<Linker<Host>> {
         "wings",
         "call",
         |mut caller: Caller<'_, Host>, id: u32, method: u32, method_len: u32, params: u32, params_len: u32| {
+            charge(&mut caller, CALL_FUEL + u64::from(method_len) + u64::from(params_len))?;
             let method = text(&mut caller, method, method_len)?;
             let params = text(&mut caller, params, params_len)?;
-            caller.data().call(id, &method, &params)
+            caller.data_mut().call(id, &method, &params)
         },
     )?;
     linker.func_wrap(
         "wings",
         "storage",
         |mut caller: Caller<'_, Host>, op: u32, op_len: u32, key: u32, key_len: u32, json: u32, json_len: u32| {
+            charge(&mut caller, CALL_FUEL + u64::from(op_len) + u64::from(key_len) + u64::from(json_len))?;
             let op = text(&mut caller, op, op_len)?;
             let key = text(&mut caller, key, key_len)?;
             let json = text(&mut caller, json, json_len)?;
@@ -473,31 +595,43 @@ fn imports(engine: &wasmtime::Engine) -> wasmtime::Result<Linker<Host>> {
                 Ok(json) => format!("{{\"ok\":{json}}}"),
                 Err(error) => serde_json::json!({ "error": error }).to_string(),
             };
+            charge(&mut caller, answer.len() as u64)?;
             hand(&mut caller, &answer)
         },
     )?;
     // What the page's tab was opened with, as JSON. Nothing (a length of 0) for a page opened without args.
-    linker.func_wrap("wings", "view_args", |mut caller: Caller<'_, Host>| match caller.data().link.view_args() {
-        Some(args) => hand(&mut caller, &args),
-        None => Ok(0),
+    linker.func_wrap("wings", "view_args", |mut caller: Caller<'_, Host>| {
+        let args = caller.data().link.view_args();
+        charge(&mut caller, CALL_FUEL + args.as_ref().map_or(0, |args| args.len() as u64))?;
+        match args {
+            Some(args) => hand(&mut caller, &args),
+            None => Ok(0),
+        }
     })?;
     linker.func_wrap("wings", "broadcast", |mut caller: Caller<'_, Host>, at: u32, len: u32| {
+        charge(&mut caller, CALL_FUEL + u64::from(len))?;
         let json = text(&mut caller, at, len)?;
         // A broadcast the host refuses (too long) is the page's loss, as a JS page's rejected promise nobody awaits.
         let _ = caller.data().link.broadcast(json);
         Ok(())
     })?;
     linker.func_wrap("wings", "timer", |mut caller: Caller<'_, Host>, id: u32, ms: u32| {
-        caller.data_mut().timer(id, ms);
+        charge(&mut caller, QUICK_FUEL)?;
+        caller.data_mut().timer(id, ms)
     })?;
-    linker.func_wrap("wings", "now", || {
-        SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |since| since.as_secs_f64() * 1000.0)
+    linker.func_wrap("wings", "now", |mut caller: Caller<'_, Host>| {
+        charge(&mut caller, QUICK_FUEL)?;
+        Ok(SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |since| since.as_secs_f64() * 1000.0))
     })?;
     // debt: UTC where `localtime_r` isn't (Windows).
     #[cfg(not(unix))]
-    linker.func_wrap("wings", "utc_offset", |_: f64| -> i32 { 0 })?;
+    linker.func_wrap("wings", "utc_offset", |mut caller: Caller<'_, Host>, _: f64| -> wasmtime::Result<i32> {
+        charge(&mut caller, QUICK_FUEL)?;
+        Ok(0)
+    })?;
     #[cfg(unix)]
-    linker.func_wrap("wings", "utc_offset", |ms: f64| -> i32 {
+    linker.func_wrap("wings", "utc_offset", |mut caller: Caller<'_, Host>, ms: f64| -> wasmtime::Result<i32> {
+        charge(&mut caller, QUICK_FUEL)?;
         let at = (ms / 1000.0).floor() as libc::time_t;
         // SAFETY: `localtime_r` writes the `tm` it is given and keeps neither pointer.
         let local = unsafe {
@@ -505,31 +639,200 @@ fn imports(engine: &wasmtime::Engine) -> wasmtime::Result<Linker<Host>> {
             libc::localtime_r(&at, &mut local);
             local
         };
-        (local.tm_gmtoff / 60) as i32
+        Ok((local.tm_gmtoff / 60) as i32)
     })?;
-    linker.func_wrap("wings", "focused", |caller: Caller<'_, Host>| caller.data().link.focused() as i32)?;
+    linker.func_wrap("wings", "focused", |mut caller: Caller<'_, Host>| {
+        charge(&mut caller, QUICK_FUEL)?;
+        Ok(caller.data().link.focused() as i32)
+    })?;
     Ok(linker)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{cache::tests::kept_in, *};
 
     /// A module with nothing in it: the header alone.
     const EMPTY: &[u8] = b"\0asm\x01\0\0\0";
 
+    /// A module of `sections`, each its id and contents.
+    fn module(sections: &[(u8, Vec<u8>)]) -> Vec<u8> {
+        let mut bytes = EMPTY.to_vec();
+        for (id, contents) in sections {
+            bytes.push(*id);
+            leb(&mut bytes, contents.len() as u32);
+            bytes.extend(contents);
+        }
+        bytes
+    }
+
+    fn leb(out: &mut Vec<u8>, mut n: u32) {
+        loop {
+            let byte = (n & 0x7f) as u8;
+            n >>= 7;
+            if n == 0 {
+                return out.push(byte);
+            }
+            out.push(byte | 0x80);
+        }
+    }
+
+    fn name(out: &mut Vec<u8>, name: &str) {
+        leb(out, name.len() as u32);
+        out.extend(name.as_bytes());
+    }
+
+    /// A module that exports one function, `export`, that does nothing.
+    fn exporting(export: &str) -> Vec<u8> {
+        let mut exports = vec![1];
+        name(&mut exports, export);
+        exports.extend([0, 0]);
+        module(&[(1, vec![1, 0x60, 0, 0]), (3, vec![1, 0]), (7, exports), (10, vec![1, 2, 0, 0x0b])])
+    }
+
+    /// A link that refuses what a frame asks of it.
+    struct Quiet;
+
+    impl Link for Quiet {
+        fn broadcast(&self, _: String) -> Result<(), String> {
+            Ok(())
+        }
+        fn storage(&self, _: StorageCall) -> Result<String, String> {
+            Err("no storage".into())
+        }
+        fn call(&self, method: &str, _: serde_json::Value, reply: Reply) {
+            reply.err(format!("no {method}"));
+        }
+    }
+
+    fn host(page: bool) -> Host {
+        let (jobs, _) = mpsc::sync_channel(1);
+        Host::new(page, Arc::new(Quiet), Queue::new(jobs), Rc::new(RefCell::new(Box::new(|_| {}))))
+    }
+
+    fn engine() -> wasmtime::Engine {
+        wasmtime::Engine::new(&config()).unwrap()
+    }
+
     #[test]
     fn a_modules_compiled_code_is_kept_and_read_back() {
         let dir = tempfile::tempdir().unwrap();
-        let kept = dir.path().join("empty.cwasm");
-        let engine = wasmtime::Engine::new(Config::new().consume_fuel(true)).unwrap();
+        let kept = kept_in(dir.path(), EMPTY);
+        let engine = engine();
         load(&engine, EMPTY, Some(&kept)).unwrap();
-        let written = std::fs::read(&kept).expect("the compiled code, kept");
-        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1, "no part file is left");
+        let written = std::fs::read(&kept.file).expect("the compiled code, kept");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2, "the code and the secret, and no part file");
         // Bytes that aren't a module compile to nothing, so a module from them can only be the kept code.
         load(&engine, b"not a module", Some(&kept)).expect("the kept code, read back");
-        assert_eq!(std::fs::read(&kept).unwrap(), written);
+        assert_eq!(std::fs::read(&kept.file).unwrap(), written);
         assert!(load(&engine, b"not a module", None).is_err());
+    }
+
+    /// `Module::deserialize` runs any compiled code it is handed. A cache file another program swapped in, here a
+    /// module's code as `Module::serialize` gives it, ran in the app in place of the module's own.
+    #[test]
+    fn a_cache_file_swapped_from_outside_is_compiled_again_and_never_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = engine();
+        let (own, other) = (exporting("own"), exporting("other"));
+        let kept = kept_in(dir.path(), &own);
+        load(&engine, &own, Some(&kept)).unwrap();
+
+        std::fs::write(&kept.file, Module::new(&engine, &other).unwrap().serialize().unwrap()).unwrap();
+        let loaded = load(&engine, &own, Some(&kept)).unwrap();
+        let exports: Vec<_> = loaded.exports().map(|export| export.name().to_owned()).collect();
+        assert_eq!(exports, ["own"]);
+        // And what it compiled in its place is kept, signed.
+        assert!(load(&engine, b"not a module", Some(&kept)).is_ok());
+    }
+
+    /// No plugin uses the GC proposal, and in builds without wasmtime's `gc` feature, as this one, a module using its
+    /// function subtypes could abort the app before 48.0.9 (GHSA-rc4p-x33f-vpr2): such a module isn't compiled at all.
+    #[test]
+    fn a_module_using_the_gc_proposal_is_not_compiled() {
+        // (type (sub (func))): a function type that isn't final, which only the GC proposal has.
+        let subtype = module(&[(1, vec![1, 0x50, 0, 0x60, 0, 0])]);
+        let default = wasmtime::Engine::new(Config::new().consume_fuel(true)).unwrap();
+        assert!(Module::new(&default, &subtype).is_ok(), "the compiler's own settings take it");
+        assert!(Module::new(&engine(), &subtype).is_err());
+    }
+
+    /// One memory and one table of a size a plugin's has: a memory's limit is each memory's, and a module could have
+    /// declared ten thousand of them, or a table of four billion slots.
+    #[test]
+    fn a_module_with_a_second_memory_or_a_huge_table_does_not_start() {
+        let engine = engine();
+        let start = |bytes: &[u8]| instantiate(&engine, &Module::new(&engine, bytes).unwrap(), host(true)).map(|_| ());
+        let mut table = vec![1, 0x70, 0];
+        leb(&mut table, 726);
+        assert!(start(&module(&[(4, table), (5, vec![1, 0, 17])])).is_ok(), "Claude chat's page's table and memory");
+        assert!(start(&module(&[(5, vec![2, 0, 1, 0, 1])])).is_err(), "a second memory");
+        let mut huge = vec![1, 0x70, 0];
+        leb(&mut huge, 100_000_000);
+        assert!(start(&module(&[(4, huge)])).is_err(), "a table of 100 million slots");
+        assert!(start(&module(&[(4, vec![2, 0x70, 0, 1, 0x70, 0, 1])])).is_err(), "a second table");
+    }
+
+    /// The log kept the first 500 characters of a trap, and wasmtime words where it happened first: every trap logged
+    /// said where, and not what.
+    #[test]
+    fn a_traps_message_says_what_happened_before_where() {
+        // (func (export "boom") unreachable), called through a chain of functions, as a panic deep in a module is.
+        let mut exports = vec![1];
+        name(&mut exports, "boom");
+        exports.extend([0, 0]);
+        let mut code = vec![40];
+        for function in 0..40u8 {
+            // Each calls the next, and the last traps.
+            let body: Vec<u8> = if function == 39 { vec![0, 0x00, 0x0b] } else { vec![0, 0x10, function + 1, 0x0b] };
+            code.push(body.len() as u8);
+            code.extend(body);
+        }
+        let mut functions = vec![40];
+        functions.extend([0; 40]);
+        let boom = module(&[(1, vec![1, 0x60, 0, 0]), (3, functions), (7, exports), (10, code)]);
+        let engine = engine();
+        let (mut store, instance) = instantiate(&engine, &Module::new(&engine, &boom).unwrap(), host(true)).unwrap();
+        let error = instance.get_typed_func::<(), ()>(&mut store, "boom").unwrap().call(&mut store, ()).unwrap_err();
+        let said = fatal_message(&store.data_mut().fatal(error));
+        assert!(said.starts_with("wasm trap: wasm `unreachable` instruction executed: error while executing at wasm backtrace:"), "{said}");
+    }
+
+    /// Fuel counts the module's instructions alone: a main calling the host in a loop, each call a few instructions,
+    /// ran for minutes past the second its turn has. Each call now costs the turn `CALL_FUEL`.
+    #[test]
+    fn a_frame_calling_the_host_in_a_loop_runs_out_of_its_turn() {
+        // (import "wings" "broadcast" (func (param i32 i32))) (memory (export "memory") 1)
+        // (func (export "spin") (loop (call 0 (i32.const 0) (i32.const 0)) (br 0)))
+        let mut imports = vec![1];
+        name(&mut imports, "wings");
+        name(&mut imports, "broadcast");
+        imports.extend([0, 0]);
+        let mut exports = vec![2];
+        name(&mut exports, "memory");
+        exports.extend([2, 0]);
+        name(&mut exports, "spin");
+        exports.extend([0, 1]);
+        let body = [0, 0x03, 0x40, 0x41, 0, 0x41, 0, 0x10, 0, 0x0c, 0, 0x0b, 0x0b];
+        let mut code = vec![1, body.len() as u8];
+        code.extend(body);
+        let spin = module(&[
+            (1, vec![2, 0x60, 2, 0x7f, 0x7f, 0, 0x60, 0, 0]),
+            (2, imports),
+            (3, vec![1, 1]),
+            (5, vec![1, 0, 1]),
+            (7, exports),
+            (10, code),
+        ]);
+        let (done, ended) = mpsc::channel();
+        thread::spawn(move || {
+            let engine = engine();
+            let (mut store, instance) = instantiate(&engine, &Module::new(&engine, &spin).unwrap(), host(false)).unwrap();
+            let spin = instance.get_typed_func::<(), ()>(&mut store, "spin").unwrap();
+            let _ = done.send(spin.call(&mut store, ()).unwrap_err().downcast_ref::<Trap>().copied());
+        });
+        let stopped = ended.recv_timeout(Duration::from_secs(20)).expect("the loop to be stopped within its turn");
+        assert_eq!(stopped, Some(Trap::OutOfFuel));
     }
 }
 

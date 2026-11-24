@@ -3,8 +3,10 @@
 //! or tildes opens one, and a line that is those three again closes it. Only a fence at the start of a line is cut out: one
 //! indented under a list item stays in its list, which a cut would split in two.
 
-/// The most text one `copyText` takes: Wings refuses more than 1 MB.
-pub const COPY_MAX: usize = 1_000_000;
+/// The most text one `copyText` takes: Wings refuses more than 16 MB (16 * 1024 * 1024 bytes).
+pub const COPY_MAX: usize = 16 * 1024 * 1024;
+/// What the limit is called in what the chat says when a text is over it.
+pub const COPY_MAX_NAME: &str = "16 MB";
 
 #[derive(Debug, PartialEq)]
 pub enum Part {

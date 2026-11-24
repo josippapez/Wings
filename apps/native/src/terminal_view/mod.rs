@@ -280,6 +280,7 @@ impl TerminalView {
             cols: 80,
             rows: 24,
             history_id: Some(history_id),
+            replay_bytes: Some(wings_ptyd::output::replay_bytes(look(cx).scrollback)),
             env,
         };
         let kept = wings_ptyd::output::restored(history.clone());
@@ -542,7 +543,7 @@ impl TerminalView {
         snapshot::screen_text(&self.latest.lock().unwrap())
     }
 
-    /// The pane's latest output, up to 1 MiB, to save for the next launch.
+    /// The pane's latest output, up to 1 MiB, more with a bigger scrollback setting (`worker::history_bytes`), to save for the next launch.
     pub fn recent_output(&self) -> Vec<u8> {
         self.runtime
             .recent

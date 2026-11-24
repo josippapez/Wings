@@ -13,11 +13,13 @@ use std::{cell::RefCell, collections::HashSet};
 use wings_plugin::{
     host,
     task::spawn,
-    ui::{Node, list, list_row, muted, notice, row, stack, text},
+    ui::{Node, button, list, list_row, muted, notice, row, stack, text},
 };
 
-/// A long log draws its end, where the error is: the native app draws a page of at most 5,000 nodes.
+/// A long log draws its end, where the error is, and "Show earlier" adds this many lines a click, up to `MOST_LINES`: the
+/// native app takes a page of at most 20,000 nodes, and a line is a few of them.
 const SHOWN_LINES: usize = 500;
+const MOST_LINES: usize = 2_500;
 
 enum Load<T> {
     Loading,
@@ -39,6 +41,8 @@ struct Ui {
     /// The step the log is of, and how that step stood when it was read.
     log: Option<(String, Option<(CheckState, Option<f64>)>, Load<Log>)>,
     folded_open: HashSet<usize>,
+    /// How many times "Show earlier" was pressed for the step shown.
+    earlier: usize,
 }
 
 thread_local! {
@@ -162,7 +166,10 @@ fn refresh() {
 }
 
 fn pick(id: String) {
-    ui(|u| u.picked = Some(id));
+    ui(|u| {
+        u.picked = Some(id);
+        u.earlier = 0;
+    });
     sync_log(false);
 }
 
@@ -345,7 +352,8 @@ fn step_log(step: &RunStep, u: &Ui) -> Node {
     if log.entries.is_empty() {
         return muted(if step.state == CheckState::Running { "No output yet." } else { "This step wrote nothing." }).prop("size", "small");
     }
-    let shown = last_lines(&log.entries, SHOWN_LINES);
+    let room = (SHOWN_LINES * (1 + u.earlier)).min(MOST_LINES);
+    let shown = last_lines(&log.entries, room);
     let last = match shown.last() {
         Some(LogEntry::Group { title, lines }) => lines.last().unwrap_or(title).n,
         Some(LogEntry::Line(l)) => l.n,
@@ -375,8 +383,73 @@ fn step_log(step: &RunStep, u: &Ui) -> Node {
                 .children(open.then(|| lines.iter().map(|l| log_line(l, digits))).into_iter().flatten())
         }
     });
-    stack()
-        .prop("gap", "xs")
-        .maybe((shown.len() != log.entries.len()).then(|| muted(format!("Showing the last {SHOWN_LINES} of {} lines.", log.total)).prop("size", "tiny")))
-        .child(stack().prop("gap", "none").children(lines))
+    let cut = shown.len() != log.entries.len();
+    let earlier = cut.then(|| {
+        let more = SHOWN_LINES.min(MOST_LINES - room).min(log.total.saturating_sub(room));
+        let said = format!("Showing the last {room} of {} lines.", log.total);
+        let said = if more == 0 { format!("{said} Open the run on the CI's page to read the rest.") } else { said };
+        row()
+            .prop("gap", "s")
+            .prop("align", "center")
+            .maybe((more > 0).then(|| button(format!("Show {more} earlier lines"), "ghost", false, show_earlier).prop("size", "sm")))
+            .child(muted(said).prop("size", "tiny"))
+    });
+    stack().prop("gap", "xs").maybe(earlier).child(stack().prop("gap", "none").children(lines))
+}
+
+/// "Show earlier": the log of the shown step draws another page of lines before the ones it draws.
+fn show_earlier() {
+    ui(|u| u.earlier += 1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runlog::Style;
+    use wings_plugin::ui::tree_json;
+
+    fn step() -> RunStep {
+        RunStep { id: "s1".into(), name: "Build".into(), state: CheckState::Failed, seconds: None, log: Some("l".into()) }
+    }
+
+    fn with_log(total: usize) {
+        let entries = (1..=total).map(|n| LogEntry::Line(LogLine { n, time: None, tone: None, spans: vec![Span { text: format!("line {n}"), style: Style::default() }] })).collect();
+        ui(|u| *u = Ui { log: Some(("s1".into(), None, Load::Done(Log { entries, total }))), ..Ui::default() });
+    }
+
+    fn drawn() -> String {
+        tree_json(ui(|u| step_log(&step(), u))).to_string()
+    }
+
+    /// A log of 1,300 lines drew its last 500 and no way to the rest; now each press draws 500 more before them, up to the
+    /// whole log, and the last lines stay where they were.
+    #[test]
+    fn show_earlier_draws_another_page_of_lines_before_the_ones_shown() {
+        with_log(1_300);
+        let first = drawn();
+        assert!(first.contains("line 1300") && first.contains("line 801") && !first.contains("\"line 800\""), "the last 500");
+        assert!(first.contains("Show 500 earlier lines") && first.contains("Showing the last 500 of 1300 lines."));
+        show_earlier();
+        let second = drawn();
+        assert!(second.contains("line 301") && !second.contains("\"line 300\"") && second.contains("line 1300"));
+        show_earlier();
+        let all = drawn();
+        assert!(all.contains("line 1\"") && all.contains("line 1300") && !all.contains("earlier lines") && !all.contains("Showing the last"), "{all}");
+        // The last press offers only what is left.
+        with_log(1_300);
+        show_earlier();
+        assert!(drawn().contains("Show 300 earlier lines"));
+    }
+
+    #[test]
+    fn a_very_long_log_stops_at_what_a_page_holds_and_says_where_to_read_the_rest() {
+        with_log(10_000);
+        (0..10).for_each(|_| show_earlier());
+        let most = drawn();
+        assert!(most.contains("line 10000") && most.contains("line 7501") && !most.contains("\"line 7500\""));
+        assert!(!most.contains("earlier lines") && most.contains("Showing the last 2500 of 10000 lines. Open the run"));
+        // Another step starts at the end again.
+        pick("s2".into());
+        assert_eq!(ui(|u| u.earlier), 0);
+    }
 }

@@ -298,12 +298,15 @@ impl System for Os {
         if let Err(error) = claude_accounts::sync_shared_setup(name) {
             eprintln!("[claude] couldn't share the default account's setup with {name}: {error}");
         }
+        claude_accounts::SettingsWatcher::resync_all();
         Ok(())
     }
 
     fn share_claude_setup(&self, name: &str, on: bool) -> Result<(), String> {
         claude_accounts::create_dir(name).map_err(|error| error.to_string())?;
-        claude_accounts::set_shared_setup(name, on)
+        let shared = claude_accounts::set_shared_setup(name, on);
+        claude_accounts::SettingsWatcher::resync_all();
+        shared
     }
 
     fn connect_claude_account(&self, name: &str) {
@@ -363,6 +366,17 @@ pub(super) struct AppEnv {
 }
 
 impl AppEnv {
+    /// The state of a sidebar's page, which only names the sidebar's header (`setTabTitle`): the window draws it again
+    /// each time the name changes.
+    pub(super) fn sidebar_state(&self) -> crate::page::plugin::FrameState {
+        let redraw = self.events.clone();
+        crate::page::plugin::FrameState::new(crate::page::plugin::StatePlace::Sidebar, None, |_| Err("A sidebar's page keeps no state".into())).on_agent(
+            move || {
+                let _ = redraw.try_send(UiEvent::Run(Box::new(|_, _, cx| cx.notify_workspace())));
+            },
+        )
+    }
+
     pub(super) fn tab_state(
         &self,
         initial: Option<serde_json::Value>,
@@ -380,6 +394,7 @@ impl AppEnv {
         // The sidebar's Agents shows what the tab's agent does and the tab strip its title; nothing in the main column does.
         .on_agent(move || {
             let _ = redraw.try_send(UiEvent::RunQuietly(Box::new(|workspace, _, cx| {
+                workspace.sync_sidebar_activity();
                 workspace.notify_pieces(&[Piece::Sidebar, Piece::TitleBar], cx)
             })));
         })

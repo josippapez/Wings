@@ -367,6 +367,7 @@ impl Workspace {
             official_plugins_asked: self.prefs.official_plugins_asked.then_some(true),
             tools_read: self.tools.read.clone(),
             right_width: Some(self.plugin_ui.right_size.width),
+            window_bounds: self.window_bounds.clone(),
             ..self.side.saved()
         };
         if let Err(error) = saved::save(path, &self.project_key(), project, settings) {

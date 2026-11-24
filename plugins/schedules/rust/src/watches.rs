@@ -451,11 +451,8 @@ async fn start_ticket_once(id: &str, ticket_id: &str, force: bool, project_id: O
         }
         let branch = branch_name(&ticket);
         // The base is a branch of the entry's own repo: another project starts from its default.
-        let mut params = json!({ "projectId": project.id, "branch": branch });
-        if let (Some(base), true) = (&w.base, project.id == w.project_id) {
-            params["base"] = base.clone().into();
-        }
-        let made = host::call("createWorktree", params).await?;
+        let base = w.base.as_ref().filter(|_| project.id == w.project_id).map(String::as_str);
+        let made = host::create_worktree(Some(&project.id), &branch, base).await?;
         made_worktree = true;
         made_in = made["projectId"].as_str().map(str::to_owned);
         target = branch.clone();
@@ -463,7 +460,12 @@ async fn start_ticket_once(id: &str, ticket_id: &str, force: bool, project_id: O
         issue_problem = problem;
         let filled = fill_prompt(&w.prompt, &ticket)?;
         let prompt = key.map_or(filled.clone(), |key| with_issue_key(&filled, &key));
-        let opened = host::call("openPane", json!({ "command": w.agent.command(), "args": [prompt], "cwd": made["path"], "placement": "tab" })).await?;
+        let args = [prompt.as_str()];
+        let mut pane = host::OpenPane::new().command(w.agent.command(), &args);
+        if let Some(path) = made["path"].as_str() {
+            pane = pane.cwd(path);
+        }
+        let opened = pane.open().await?;
         Ok(opened["paneId"].as_str().map(str::to_owned))
     }
     .await;

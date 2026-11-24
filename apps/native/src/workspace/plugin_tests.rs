@@ -406,6 +406,46 @@ fn a_tabs_page_names_its_own_tab_and_no_other() {
     assert_eq!(labels.iter().filter(|label| *label == "Chat").count(), 1, "the other tab keeps its view's title: {labels:?}");
 }
 
+/// A sidebar page that names its header over two lines as it starts.
+fn header_naming_page() -> String {
+    fake::script("page", || {
+        let mut asked = false;
+        move |cx: &mut Cx<'_>, _: Hear<'_>| {
+            if !std::mem::replace(&mut asked, true) {
+                cx.call("setTabTitle", json!({ "title": "Quiz\nmod" }));
+            }
+        }
+    })
+}
+
+#[test]
+fn a_sidebars_page_names_its_own_header() {
+    let data = Data::temp();
+    data.install_script(
+        "sider",
+        json!({ "contributes": { "sidebars": [{ "id": "side", "title": "Side", "page": "dist/side.html" }, { "id": "other", "title": "Other", "page": "dist/other.html" }] } }),
+        &fake::idle("main"),
+        &[("side", &header_naming_page()), ("other", &side_page())],
+        "sider-scope",
+    );
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.update(|w, _, cx| {
+        w.show_sidebar("sider", "other", cx);
+        w.show_sidebar("sider", "side", cx);
+    });
+    let title = |window: &TestAppWindow<Workspace>, id: &str| window.read(|w, cx| w.sidebar_pages[&("sider".to_owned(), id.to_owned())].read(cx).header_title());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while title(&window, "side").is_none() {
+        assert!(Instant::now() < deadline, "the page didn't name its header");
+        app.run_until_parked();
+        window.draw();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // On one line, and no other sidebar's page is renamed.
+    assert_eq!(title(&window, "side").as_deref(), Some("Quiz mod"));
+    assert_eq!(title(&window, "other"), None);
+}
+
 /// A main that opens its view `approve` as a modal on the action `open`, and closes it on `close`.
 fn modal_main() -> String {
     fake::script("main", || {
@@ -3313,9 +3353,9 @@ fn settings_shows_a_plugins_own_icon_on_its_row() {
         cx.notify();
     });
     window.draw();
-    // Half the row's 32 tile.
+    // Half the row's 36 tile.
     let tile = glyph_at("own").expect("the row shows the plugin's icon");
-    assert_eq!(tile.size, size(px(16.0), px(16.0)));
+    assert_eq!(tile.size, size(px(18.0), px(18.0)));
 }
 
 /// A settings page that counts its loads in the plugin's storage, and keeps whether it is focused there.

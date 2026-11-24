@@ -15,7 +15,7 @@ use std::{
 use serde_json::{Value, json};
 use wings_plugin::{
     host, pages,
-    ui::{Node, empty, loading, page, toolbar},
+    ui::{Node, empty, loading, slot},
 };
 
 use crate::{chat, mods, subagents};
@@ -228,6 +228,8 @@ pub struct Side {
     pub tree: Value,
     /// Whether the chat said the pane closed.
     pub closed: bool,
+    /// The title the sidebar's header was last given (`setTabTitle`), so it is said again only when it changes.
+    pub named: String,
 }
 
 thread_local! {
@@ -258,6 +260,8 @@ fn told_side(message: &Value) {
                 return;
             }
             SIDE.with(|side| *side.borrow_mut() = Some(Side { session: session.to_owned(), pane: pane.to_owned(), title: pane.to_owned(), ..Side::default() }));
+            // The last pane's title isn't this one's: the header goes back to the sidebar's own until this pane says its title.
+            drop(host::set_tab_title(None));
             // What you typed in the last pane's fields isn't this one's.
             chat::with(|c| c.session.mods.drafts.clear());
             drop(pages::name(Some(&page_name(session, pane))));
@@ -277,19 +281,25 @@ fn told_side(message: &Value) {
             side.closed = false;
             side.title = message["title"].as_str().unwrap_or(&side.pane).to_owned();
             side.tree = message["tree"].clone();
+            // The sidebar's header is the pane's title, so the page has no toolbar of its own.
+            if side.named != side.title {
+                side.named = side.title.clone();
+                drop(host::set_tab_title(Some(&side.title)));
+            }
         }),
         _ => {}
     }
 }
 
-/// The sidebar's page: the pane's tree under a toolbar with its title, scrolling in its frame.
+/// The sidebar's page: the pane's tree, scrolling in its frame, under the sidebar's header, which holds the pane's title
+/// (`told_side` names it).
 pub fn view() -> Vec<Node> {
     let shown = SIDE.with(|side| side.borrow().as_ref().map(|side| (side.session.clone(), side.pane.clone(), side.title.clone(), side.tree.clone(), side.closed)));
     let Some((session, pane, title, tree, closed)) = shown else {
         return Vec::new();
     };
     if session.is_empty() {
-        return vec![page(toolbar("Pane", None), [empty("No pane open", "Open one from a Claude chat's side panel.")])];
+        return vec![Node::new("Page").child(slot("body", empty("No pane open", "Open one from a Claude chat's side panel.")))];
     }
     let body = if closed {
         empty("This pane was closed", "The plugin that opened it closed it.")
@@ -298,7 +308,7 @@ pub fn view() -> Vec<Node> {
     } else {
         chat::with(|c| crate::mods_view::pane_body(&pane, &title, &tree, &c.session.mods.drafts)).unwrap_or_else(|| empty("Nothing to show", "The plugin draws nothing in this pane now."))
     };
-    vec![page(toolbar(&title, None), [body])]
+    vec![Node::new("Page").child(slot("body", body))]
 }
 
 #[cfg(test)]
@@ -307,6 +317,7 @@ mod tests {
 
     use super::*;
     use crate::mods::Pane;
+    use wings_plugin::ui::tree_json;
 
     fn record() -> Rc<RefCell<Vec<(String, Value)>>> {
         let calls = Rc::new(RefCell::new(Vec::new()));
@@ -383,6 +394,12 @@ mod tests {
         told_side(&show_message("s1", "feedback"));
         told_side(&json!({ "kind": "mod-pane", "pane": "feedback", "open": true, "title": "Feedback", "tree": feedback_tree() }));
         assert_eq!(with_side(|side| (side.title.clone(), side.tree == feedback_tree())), Some(("Feedback".into(), true)));
+        // The sidebar's header takes the pane's title once (and the page draws no toolbar of its own).
+        told_side(&json!({ "kind": "mod-pane", "pane": "feedback", "open": true, "title": "Feedback", "tree": feedback_tree() }));
+        wings_plugin::task::block_on(async {});
+        let titled: Vec<Value> = calls.borrow().iter().filter(|(method, _)| method == "setTabTitle").map(|(_, params)| params["title"].clone()).collect();
+        assert_eq!(titled, [json!(null), json!("Feedback")]);
+        assert!(!tree_json(view().remove(0)).to_string().contains("Toolbar"));
         // Its Close button hands the chat the press, with the click as the chat's one write.
         let message = act_message("feedback", "press", &json!({ "plugin": "feedback", "handle": 21 }), Some("close-pane"), None);
         act(message.clone());

@@ -1402,6 +1402,61 @@ fn a_boards_columns_are_boxes_inside_the_pages_padding() {
     assert!(pressed_at(&app, &mut window, (30.0, 54.0), "Pressed 1."));
 }
 
+/// A board of one column `2` of 120 varied cards, in a page with no padding of its own.
+fn long_board() -> String {
+    fake::page("page", |_| {
+        let cards: Vec<Value> = (0..120).map(varied_row).collect();
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            { "id": 8, "type": "Page", "props": { "flush": true }, "children": [{ "id": 9, "type": "Slot", "props": { "name": "body" }, "children": [
+                { "id": 1, "type": "Board", "props": { "label": "Issues" }, "children": [
+                    { "id": 2, "type": "BoardColumn", "props": { "count": 120 }, "children": [
+                        { "id": 3, "type": "Slot", "props": { "name": "title" }, "children": [text_node(4, "To do")] },
+                        { "id": 5, "type": "Slot", "props": { "name": "body" }, "children": cards }] }] }] }] }] })
+    })
+}
+
+/// A board's column of many cards lays out the cards in view, and a wheel turn brings later
+/// cards in: every card was laid out before, so a board's frame grew with its cards.
+#[test]
+fn a_board_column_draws_the_cards_in_view_wherever_it_is_scrolled() {
+    let (app, mut window) = open_narrow(long_board(), 500.0);
+    settle(&app, &mut window, |view| view.windowed_drawn(2).is_some_and(|(_, of, tops)| of == 120 && tops.len() == 120));
+    let (drawn, _, _) = window.read(|view, _| view.windowed_drawn(2)).unwrap();
+    assert!(drawn.start == 0 && drawn.len() < 40, "{drawn:?}");
+    scroll_by(&mut window, -3_000.0);
+    draws(&app, &mut window);
+    let (drawn, _, tops) = window.read(|view, _| view.windowed_drawn(2)).unwrap();
+    let in_view: Vec<usize> = (0..120).filter(|at| tops[*at] < 400.0 && tops.get(at + 1).is_none_or(|next| *next > 0.0)).collect();
+    assert!(in_view.len() > 2 && in_view.iter().all(|at| drawn.contains(at)), "{in_view:?} not all in {drawn:?}");
+    assert!(drawn.start > 20 && drawn.len() < 40, "{drawn:?}");
+}
+
+/// A lanes board of many lanes draws the lanes in view, and a wheel turn in the lanes brings the later ones in.
+#[test]
+fn a_board_of_many_lanes_draws_the_lanes_in_view() {
+    let source = fake::page("page", |_| {
+        let lanes: Vec<Value> = (0..60)
+            .map(|lane| {
+                json!({ "id": 100 + lane, "type": "BoardRow", "children": [
+                    { "id": 200 + lane, "type": "BoardColumn", "props": { "cell": true }, "children": [
+                        { "id": 300 + lane, "type": "Slot", "props": { "name": "body" }, "children": [text(400 + lane, 500 + lane, format!("Lane {lane}."))] }] }] })
+            })
+            .collect();
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            { "id": 8, "type": "Page", "props": { "flush": true }, "children": [{ "id": 9, "type": "Slot", "props": { "name": "body" }, "children": [
+                { "id": 1, "type": "Board", "props": { "label": "Issues", "lanes": true }, "children": [
+                    { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": lanes }] }] }] }] })
+    });
+    let (app, mut window) = open_narrow(source, 500.0);
+    settle(&app, &mut window, |view| view.windowed_drawn(1).is_some_and(|(_, of, tops)| of == 60 && tops.len() == 60));
+    let (drawn, _, _) = window.read(|view, _| view.windowed_drawn(1)).unwrap();
+    assert!(drawn.start == 0 && drawn.len() < 40, "{drawn:?}");
+    scroll_by(&mut window, -3_000.0);
+    draws(&app, &mut window);
+    let (drawn, _, _) = window.read(|view, _| view.windowed_drawn(1)).unwrap();
+    assert!(drawn.start > 10 && drawn.len() < 40, "{drawn:?}");
+}
+
 /// A stack of two strings and a button, as a `Time` with its prefix ("Updated ", "14 h ago") makes. The button can be
 /// pressed.
 fn two_strings() -> String {

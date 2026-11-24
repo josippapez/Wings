@@ -55,10 +55,15 @@ pub(super) struct PluginSettings {
     pub(super) page: Entity<PageView>,
 }
 
-/// The desktop dialog's sizes: `w-[min(820px,calc(100%-4rem))] h-[min(600px,…)]`, and 1100 x 760 for Plugins, which has
-/// a list and a details pane side by side. A plugin's own page keeps the smaller one, as there.
+/// The desktop dialog's sizes: `w-[min(820px,calc(100%-4rem))] h-[min(600px,…)]`, and 1100 x 760 for Plugins, whose
+/// page is a list that opens a plugin's own page, with an info column beside it when there is room. A plugin's own
+/// settings page keeps the smaller one, as there. Below `COMPACT_BELOW` window points wide the section list shrinks to
+/// its icons, so a plugin's name and description keep their room.
 const SIZE: (f32, f32) = (820.0, 600.0);
 const LARGE_SIZE: (f32, f32) = (1100.0, 760.0);
+const COMPACT_BELOW: f32 = 800.0;
+const NAV_WIDTH: f32 = 208.0;
+const NAV_COMPACT_WIDTH: f32 = 56.0;
 /// The desktop's `transition-[width,height] duration-200 ease-out` between the two.
 pub(super) const RESIZE: Duration = Duration::from_millis(200);
 const EASE_OUT: (f32, f32, f32, f32) = (0.0, 0.0, 0.2, 1.0);
@@ -203,6 +208,9 @@ pub(super) struct SettingsDialog {
     /// The Plugins section's GitHub link field.
     pub(super) link: Entity<TextField>,
     _link_events: Subscription,
+    /// The Plugins section's search field.
+    pub(super) search: Entity<TextField>,
+    _search_events: Subscription,
     /// Takes the next key press as the global shortcut, while its button waits for one.
     pub(super) recording: Option<Subscription>,
     /// How far the dialog is from its size to its larger size, 0 to 1, on its way when the section changed between
@@ -294,6 +302,25 @@ impl Workspace {
                 FieldEvent::Cancel => this.close_settings(window, cx),
                 FieldEvent::Changed => cx.notify_workspace(),
             });
+        let search = cx.new(|cx| {
+            let mut field = TextField::new(Role::SearchInput, "Search plugins", "Search plugins", px(176.0), cx);
+            field.fill = true;
+            field.bare = true;
+            field
+        });
+        let search_events =
+            cx.subscribe_in(&search, window, |this, field, event, window, cx| match event {
+                FieldEvent::Cancel => {
+                    // Escape clears a search first, and closes Settings when there is none.
+                    if field.read(cx).text.is_empty() {
+                        this.close_settings(window, cx)
+                    } else {
+                        field.update(cx, |field, _| field.text.clear());
+                        cx.notify_workspace();
+                    }
+                }
+                _ => cx.notify_workspace(),
+            });
         let focus = cx.focus_handle();
         let mut recovery = FocusRecovery::default();
         recovery.open(&focus, window, cx);
@@ -309,6 +336,8 @@ impl Workspace {
             open_choices: Default::default(),
             link,
             _link_events: link_events,
+            search,
+            _search_events: search_events,
             recording: None,
             large: Cell::new(None),
         });
@@ -320,6 +349,7 @@ impl Workspace {
         let agents = section == Section::Agents;
         // Nothing has been checked yet when Settings opens before the launch check ran.
         let tools = section == Section::Tools && self.tools.is_unchecked() && self.config.socket.is_some();
+        self.manage.menu = None;
         if let Some(dialog) = &mut self.settings {
             dialog.section = section;
             dialog.menu = None;
@@ -1365,15 +1395,18 @@ impl Workspace {
         let dialog = self.settings.as_ref()?;
         let section = &dialog.section;
         let updates = self.tools.updates();
+        // The section list is only its icons in a narrow window.
+        let compact = window.viewport_size().width.as_f32() < COMPACT_BELOW;
         let nav = Section::ALL.map(|item| {
             nav_item(
                 SharedString::from(format!("settings-{}", item.label())),
                 item.label(),
                 item.icon(),
                 *section == item,
+                compact,
             )
             // Tools says how many programs have an update.
-            .when(item == Section::Tools && updates > 0, |row| {
+            .when(item == Section::Tools && updates > 0 && !compact, |row| {
                 row.child(
                     ui::badge(ui::Variant::Secondary, Some(theme::WORKING), true, updates.to_string())
                         .ml_auto(),
@@ -1397,12 +1430,15 @@ impl Workspace {
                 name,
                 Icon::Puzzle,
                 section.plugin() == Some(id.as_str()),
+                compact,
             )
             .on_click(
                 cx.listener(move |this, _, window, cx| this.open_plugin_settings(&id, window, cx)),
             )
         });
         let plugin_nav: Vec<_> = plugin_nav.collect();
+        let (width, height) = dialog.size(section.is_large(), window, cx);
+        let nav_width = if compact { NAV_COMPACT_WIDTH } else { NAV_WIDTH };
         let content = div()
             .id("settings-content")
             .flex_1()
@@ -1426,15 +1462,19 @@ impl Workspace {
                     .gap(px(12.0))
                     .p(px(24.0))
                     .overflow_y_scroll()
-                    .child(
-                        div()
-                            .text_size(px(15.0))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(section.label()),
-                    )
+                    // Plugins has its own header, with its actions, which starts below the close button.
+                    .when(*section == Section::Plugins, |content| content.pt(px(40.0)))
+                    .when(*section != Section::Plugins, |content| {
+                        content.child(
+                            div()
+                                .text_size(px(15.0))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(section.label()),
+                        )
+                    })
                     .map(|content| {
                         if *section == Section::Plugins {
-                            content.child(self.plugins_section(cx))
+                            content.child(self.plugins_section(width - nav_width - 48.0, cx))
                         } else {
                             content
                                 .children(self.section_cards(section, cx).into_iter().map(ui::card))
@@ -1443,59 +1483,64 @@ impl Workspace {
             });
         // The desktop's `nav w-52 gap-3 p-3 pt-4 bg-black/15`: the title, the sections, then the version at the foot.
         let sidebar = div()
-            .w(px(208.0))
+            .w(px(nav_width))
             .flex_none()
             .flex()
             .flex_col()
             .gap(px(12.0))
-            .p(px(12.0))
+            .p(px(if compact { 8.0 } else { 12.0 }))
             .pt(px(16.0))
             .bg(rgba(0x00000026))
             .border_r_1()
             .border_color(rgba(HAIRLINE))
-            .child(
-                div()
-                    .px(px(8.0))
-                    .child(
-                        div()
-                            .text_size(px(16.0))
-                            .line_height(px(16.0))
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Settings"),
-                    )
-                    .child(
-                        div()
-                            .mt(px(4.0))
-                            .text_size(px(12.0))
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
-                            .child("These apply to every terminal right away."),
-                    ),
-            )
+            .when(!compact, |sidebar| {
+                sidebar.child(
+                    div()
+                        .px(px(8.0))
+                        .child(
+                            div()
+                                .text_size(px(16.0))
+                                .line_height(px(16.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .child("Settings"),
+                        )
+                        .child(
+                            div()
+                                .mt(px(4.0))
+                                .text_size(px(12.0))
+                                .text_color(rgb(theme::MUTED_FOREGROUND))
+                                .child("These apply to every terminal right away."),
+                        ),
+                )
+            })
             .child(div().flex().flex_col().gap(px(2.0)).children(nav).when(
                 !plugin_nav.is_empty(),
                 |list| {
-                    list.child(
-                        div()
-                            .px(px(8.0))
-                            .pt(px(12.0))
-                            .pb(px(4.0))
-                            .text_size(px(12.0))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
-                            .child("Plugin settings"),
-                    )
+                    list.when(!compact, |list| {
+                        list.child(
+                            div()
+                                .px(px(8.0))
+                                .pt(px(12.0))
+                                .pb(px(4.0))
+                                .text_size(px(12.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(rgb(theme::MUTED_FOREGROUND))
+                                .child("Plugin settings"),
+                        )
+                    })
                     .children(plugin_nav)
                 },
             ))
-            .child(
-                div()
-                    .mt_auto()
-                    .px(px(8.0))
-                    .text_size(px(12.0))
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
-                    .child(format!("Wings {WINGS_VERSION}")),
-            );
-        let (width, height) = dialog.size(section.is_large(), window, cx);
+            .when(!compact, |sidebar| {
+                sidebar.child(
+                    div()
+                        .mt_auto()
+                        .px(px(8.0))
+                        .text_size(px(12.0))
+                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                        .child(format!("Wings {WINGS_VERSION}")),
+                )
+            });
         let (backdrop, panel) = ui::dialog("settings", "Settings", &dialog.focus, width, height);
         Some(
             backdrop
@@ -1517,10 +1562,13 @@ impl Workspace {
                             }
                         }))
                         .on_escape(cx.listener(|this, _: &KeyDownEvent, window, cx| {
-                            // The first Escape closes an open select, the next the dialog.
-                            match this.settings.as_mut().filter(|dialog| dialog.menu.is_some()) {
-                                Some(dialog) => dialog.menu = None,
-                                None => this.close_settings(window, cx),
+                            // The first Escape closes an open select or Plugins' menu, the next the dialog.
+                            if this.manage.menu.take().is_some() {
+                            } else {
+                                match this.settings.as_mut().filter(|dialog| dialog.menu.is_some()) {
+                                    Some(dialog) => dialog.menu = None,
+                                    None => this.close_settings(window, cx),
+                                }
                             }
                             cx.notify_workspace();
                         }))
@@ -1599,6 +1647,7 @@ fn nav_item(
     label: impl Into<SharedString>,
     glyph: Icon,
     selected: bool,
+    compact: bool,
 ) -> gpui::Stateful<gpui::Div> {
     let label = label.into();
     div()
@@ -1629,7 +1678,13 @@ fn nav_item(
         .child(icon(glyph, 16.0, theme::MUTED_FOREGROUND))
         .children(ui::spot(|| format!("settings-nav:{label}")))
         .relative()
-        .child(div().min_w_0().truncate().child(label))
+        // Only the icon in a narrow window, named by a tooltip.
+        .when(compact, |item| {
+            item.justify_center().px(px(0.0)).tooltip(ui::tooltip(label.clone(), None))
+        })
+        .when(!compact, |item| {
+            item.child(div().min_w_0().truncate().child(label))
+        })
 }
 
 /// `10,000`, as the desktop writes line counts.

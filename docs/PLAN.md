@@ -94,7 +94,6 @@ wings/
   bins/
     wings-hook/                 # tiny: read hook JSON on stdin → socket; exit 0 fast
     wings-mcp-bridge/           # stdio MCP server that relays to the app
-  apps/desktop/                 # Tauri app: src-tauri/ + web/ (React)
   integrations/claude-code/     # template of the Wings Claude Code plugin
   packages/
     plugin-sdk/                 # TS SDK for plugin authors (types generated from wings-protocol)

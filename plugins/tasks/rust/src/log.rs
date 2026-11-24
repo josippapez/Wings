@@ -22,18 +22,10 @@ pub fn touch(issue: &mut Issue, actor: &Actor, now: f64) {
     }
 }
 
-pub fn append(issue: &mut Issue, entries: Vec<LogEntry>) -> Result<(), String> {
-    if issue.log.len() + entries.len() > limits::LOG {
-        return Err(format!("{} already has {} log entries, the most one issue keeps.", issue.key, limits::LOG));
-    }
+/// Adds `entries` to the end of the log. Nothing counts them: the issue's whole size is held to `ISSUE_BUDGET` when it
+/// is saved.
+pub fn append(issue: &mut Issue, entries: Vec<LogEntry>) {
     issue.log.extend(entries);
-    Ok(())
-}
-
-/// Like `append`, but drops what doesn't fit instead of failing: for entries the plugin writes on its own.
-pub fn append_loose(issue: &mut Issue, entries: Vec<LogEntry>) {
-    let room = limits::LOG.saturating_sub(issue.log.len());
-    issue.log.extend(entries.into_iter().take(room));
 }
 
 pub fn entry(at: f64, by: &Actor, kind: &str, text: impl Into<String>) -> LogEntry {

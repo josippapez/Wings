@@ -141,7 +141,7 @@ pub async fn check_mentions(project: &Project, remote: &Remote, items: &[ListedP
         Note { args: serde_json::to_value(args_of(&pr.link, &pr.title, &project.path)).unwrap_or_default(), title: pr.title.clone(), hit }
     }).collect();
     for note in notes_for(&project.name, &notes) {
-        drop(host::call("notify", json!({ "title": note.title, "body": note.body, "actions": note.actions, "projectId": project.id })));
+        drop(host::notify_with(&note.title, &note.body, Some(note.actions.as_slice()), Some(&project.id)));
     }
     Ok(())
 }

@@ -201,7 +201,7 @@ fn read(fresh: bool) {
             let default = head.ok().filter(|out| out["code"] == 0).and_then(|out| default_branch(out["stdout"].as_str().unwrap_or_default()));
             with(|p| p.default = Some((cwd.clone(), default)));
         }
-        let asked = host::call("callTool", json!({ "name": TOOL, "arguments": { "cwd": cwd, "fresh": fresh } })).await;
+        let asked = host::call_tool(TOOL, &json!({ "cwd": cwd, "fresh": fresh })).await;
         let load = match asked {
             Ok(answer) if answer["isError"] != true => parse(answer["text"].as_str().unwrap_or_default()),
             Ok(answer) => Load::Failed(truncate(answer["text"].as_str().unwrap_or("The PR tracker couldn't say"), 200)),

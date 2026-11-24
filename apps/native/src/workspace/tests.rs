@@ -9,7 +9,8 @@ use crate::{
     layout::DIVIDER,
 };
 use gpui::{
-    Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, TestApp, TestAppWindow, point, size,
+    Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, TestApp, TestAppWindow, point, px,
+    size,
 };
 
 fn open() -> (TestApp, TestAppWindow<Workspace>) {
@@ -126,6 +127,50 @@ pub(super) fn press(window: &mut TestAppWindow<Workspace>, key: &str) {
         "ctrl-shift"
     };
     window.simulate_keystroke(&format!("{prefix}-{key}"));
+}
+
+#[test]
+fn window_bounds_save_only_on_quit_and_survive_routine_workspace_saves() {
+    let dir = std::env::temp_dir().join(format!("wings-native-window-state-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = dir.join("workspace.json");
+    std::fs::write(
+        &state,
+        br#"{"version":1,"window_bounds":{"state":"windowed","display":"kept-display","x":12.0,"y":24.0,"width":800.0,"height":600.0},"projects":{}}"#,
+    )
+    .unwrap();
+
+    let (mut app, mut window) = open_config(|config| {
+        config.project = dir.clone();
+        config.state = Some(state.clone());
+    });
+    window.update(|workspace, _, cx| workspace.save(cx));
+    let bounds = |path: &std::path::Path| {
+        serde_json::from_slice::<serde_json::Value>(&std::fs::read(path).unwrap()).unwrap()
+            ["window_bounds"]
+            .clone()
+    };
+    assert_eq!(
+        bounds(&state),
+        serde_json::json!({"state":"windowed","display":"kept-display","x":12.0,"y":24.0,"width":800.0,"height":600.0})
+    );
+
+    window.simulate_resize(size(px(777.0), px(555.0)));
+    assert_eq!(
+        bounds(&state),
+        serde_json::json!({"state":"windowed","display":"kept-display","x":12.0,"y":24.0,"width":800.0,"height":600.0})
+    );
+
+    app.update(|cx| cx.shutdown());
+    assert!(matches!(
+        &bounds(&state),
+        serde_json::Value::Object(object)
+            if object["state"] == "windowed"
+                && object["width"] == 777.0
+                && object["height"] == 555.0
+    ));
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// Cmd-Shift on macOS, Ctrl-Shift-Alt elsewhere: the desktop's "extra" chord.

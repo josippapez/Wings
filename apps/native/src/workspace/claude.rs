@@ -716,7 +716,7 @@ impl Server {
                     let view = workspace.install_package(&bytes, source, expected, window, cx)?;
                     Ok(installed(workspace, view, window, cx))
                 }
-                // `wings-plugin dev` sends this after each build. Linking a linked folder again is the reload.
+                // `cargo wings-plugin dev` sends this after each build. Linking a linked folder again is the reload.
                 "link" => {
                     let linked = workspace.link_plugin(Path::new(&folder), window, cx)?;
                     if linked.review {

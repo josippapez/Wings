@@ -162,6 +162,7 @@ impl Workspace {
             .collect();
         if loose != self.loose_agents {
             self.loose_agents = loose;
+            self.sync_sidebar_activity();
             cx.notify_workspace();
         }
         let info = scan
@@ -185,6 +186,7 @@ impl Workspace {
                 })
                 .collect();
             let before = std::mem::replace(&mut self.agents, agents);
+            self.sync_sidebar_activity();
             self.sync_sessions();
             self.inbox_agents(&before);
             self.pane_info = info;

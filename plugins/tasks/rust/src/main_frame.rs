@@ -12,7 +12,7 @@ use crate::{
     tool_defs,
     writer::{load_project, write},
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::cell::RefCell;
 use wings_plugin::{host, task::spawn};
 
@@ -37,10 +37,10 @@ async fn answer(what: String, payload: Value) -> Result<(), String> {
             let (id, kind) = (text(&payload["session"], "id"), payload["session"]["kind"].as_str());
             let pane = PANES.with(|panes| panes.borrow().iter().find(|p| p["session"]["sessionId"] == id.as_str()).map(|p| text(p, "paneId")));
             match pane {
-                Some(pane) => host::call("focusPane", json!({ "paneId": pane })).await.map(drop),
+                Some(pane) => host::focus_pane(&pane).await.map(drop),
                 None => {
                     let command = resume_command(&id, kind)?;
-                    host::call("openPane", json!({ "command": command, "args": [], "cwd": text(&payload, "cwd"), "placement": "tab" })).await.map(drop)
+                    host::OpenPane::new().command(&command, &[]).cwd(&text(&payload, "cwd")).open().await.map(drop)
                 }
             }
         }
@@ -74,6 +74,7 @@ pub fn start() {
 mod tests {
     use super::*;
     use crate::{kv::memory, storage::slot_of, writer::CLOCK};
+    use serde_json::json;
     use wings_plugin::task::block_on;
 
     type Sections = std::rc::Rc<RefCell<Vec<(String, String, Value)>>>;

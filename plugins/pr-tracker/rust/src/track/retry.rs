@@ -2,7 +2,7 @@
 
 use super::{badges, links::{self, Which, refresh_links}, problems, projects, status};
 use crate::{forges, ipc, remote};
-use serde_json::{Value, json};
+use serde_json::Value;
 use wings_plugin::{host, remote::Remote, task::join_all};
 
 /// Forgets what the tracker kept about its accounts and their pull requests, so the next look at them asks again.
@@ -29,7 +29,7 @@ pub async fn sign_in(remote: Option<Remote>) -> Result<(), String> {
     let Some(remote) = remote.filter(forges::is_known) else { return Ok(()) };
     // Bitbucket and Codeberg have no CLI to sign in with: the token is pasted in Settings.
     if forges::provider_of(&remote).and_then(forges::cli_of).is_none() {
-        return host::call("openSettings", json!({})).await.map(drop);
+        return host::open_settings().await.map(drop);
     }
     let key = forges::problem_key(&remote);
     let shown = key.clone();

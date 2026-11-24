@@ -218,7 +218,10 @@ pub const EVERY_HOURS: [i64; 8] = [1, 2, 3, 4, 6, 8, 12, 24];
 pub const DAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 /// `Date.getDay()` for each of `DAYS`.
 pub const DAY_NUMBERS: [i64; 7] = [1, 2, 3, 4, 5, 6, 0];
+/// The longest prompt of a run in a terminal: the host passes `openPane` args up to 4 KB together.
 pub const MAX_PROMPT_BYTES: usize = 4000;
+/// The longest prompt of a run in the Claude chat, in characters: the chat tab gets it as an arg, no shell reads it.
+pub const MAX_CHAT_PROMPT_CHARS: usize = 20_000;
 
 const HOUR: i64 = 3_600_000;
 /// A run that starts later than this after its time was held up (the Mac slept), so the next one counts from now.
@@ -309,6 +312,9 @@ pub fn name_of(name: &str, prompt: &str) -> String {
     if !name.is_empty() {
         return name.to_owned();
     }
+    // A chat run's prompt keeps its line breaks, which a title doesn't.
+    let prompt = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+    let prompt = prompt.as_str();
     if prompt.chars().count() > 48 { format!("{}…", prompt.chars().take(47).collect::<String>().trim_end()) } else { prompt.to_owned() }
 }
 
@@ -318,8 +324,21 @@ impl Schedule {
     }
 }
 
-/// The prompt as `openPane` takes it: one line, and nothing a shell or the agent's own flags could read. Fails with what the form shows.
-pub fn clean_prompt(raw: &str) -> Result<String, String> {
+/// The prompt as the run takes it. In a terminal, as `openPane` takes it: one line, and nothing a shell or the agent's own
+/// flags could read. In the Claude chat, as typed (line breaks kept) up to `MAX_CHAT_PROMPT_CHARS`: the chat tab gets it
+/// as an arg, and it is sent as the chat's first message. Fails with what the form shows.
+pub fn clean_prompt(raw: &str, run_in: RunIn) -> Result<String, String> {
+    if run_in == RunIn::Chat {
+        let prompt = raw.replace("\r\n", "\n");
+        let prompt = prompt.trim();
+        if prompt.is_empty() {
+            return Err("Write what the agent should do.".into());
+        }
+        if prompt.chars().count() > MAX_CHAT_PROMPT_CHARS {
+            return Err("The prompt is too long. Keep it under 20,000 characters.".into());
+        }
+        return Ok(prompt.to_owned());
+    }
     let mut one = String::new();
     let mut chars = raw.chars().peekable();
     while let Some(c) = chars.next() {
@@ -382,7 +401,7 @@ pub fn clean_draft(d: &Draft) -> Result<Draft, String> {
             When::Once { date: date.clone(), time: time.clone() }
         }
     };
-    Ok(Draft { name: d.name.trim().chars().take(80).collect(), project_id: d.project_id.clone(), agent: d.agent, run_in: d.run_in.for_agent(d.agent), prompt: clean_prompt(&d.prompt)?, when })
+    Ok(Draft { name: d.name.trim().chars().take(80).collect(), project_id: d.project_id.clone(), agent: d.agent, run_in: d.run_in.for_agent(d.agent), prompt: clean_prompt(&d.prompt, d.run_in.for_agent(d.agent))?, when })
 }
 
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -608,10 +627,30 @@ mod tests {
 
     #[test]
     fn a_prompt_is_one_line_that_cant_read_as_a_flag() {
-        assert_eq!(clean_prompt("  Fix the\n\n  build\tplease ").unwrap(), "Fix the build please");
-        assert!(clean_prompt("--resume").unwrap_err().contains("dash"));
-        assert!(clean_prompt(" \n ").unwrap_err().starts_with("Write what"));
-        assert!(clean_prompt(&"é".repeat(2001)).unwrap_err().contains("too long"));
+        let terminal = |raw: &str| clean_prompt(raw, RunIn::Terminal);
+        assert_eq!(terminal("  Fix the\n\n  build\tplease ").unwrap(), "Fix the build please");
+        assert!(terminal("--resume").unwrap_err().contains("dash"));
+        assert!(terminal(" \n ").unwrap_err().starts_with("Write what"));
+        assert!(terminal(&"é".repeat(2001)).unwrap_err().contains("too long"));
+    }
+
+    #[test]
+    fn a_chat_runs_prompt_keeps_its_lines_and_may_be_twenty_thousand_characters() {
+        let chat = |raw: &str| clean_prompt(raw, RunIn::Chat);
+        // No shell reads it: line breaks stay, and a dash is only a dash.
+        assert_eq!(chat("  Fix the build:\r\n\n- tests\n- lint \n").unwrap(), "Fix the build:\n\n- tests\n- lint");
+        assert_eq!(chat("--resume the work").unwrap(), "--resume the work");
+        assert!(chat(" \n ").unwrap_err().starts_with("Write what"));
+        assert_eq!(chat(&"é".repeat(MAX_CHAT_PROMPT_CHARS)).unwrap().chars().count(), MAX_CHAT_PROMPT_CHARS);
+        assert!(chat(&"é".repeat(MAX_CHAT_PROMPT_CHARS + 1)).unwrap_err().contains("20,000"));
+        // The same prompt in a terminal is held to 4 KB, and a draft takes the limit of where it runs.
+        assert!(clean_prompt(&"a".repeat(5000), RunIn::Terminal).unwrap_err().contains("4 KB"));
+        let draft = |agent, run_in| Draft { name: String::new(), project_id: "p".into(), agent, run_in, prompt: "a".repeat(5000), when: When::Every { hours: 6 } };
+        assert!(clean_draft(&draft(Agent::Claude, RunIn::Chat)).is_ok());
+        assert!(clean_draft(&draft(Agent::Claude, RunIn::Terminal)).is_err());
+        assert!(clean_draft(&draft(Agent::OpenCode, RunIn::Chat)).is_err(), "only Claude Code runs in the chat");
+        // A title is one line.
+        assert_eq!(name_of("", "Fix the build:\n\n- tests"), "Fix the build: - tests");
     }
 
     #[test]

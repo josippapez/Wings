@@ -110,6 +110,11 @@ impl Workspace {
             dialog.section = Section::Plugins;
         }
         self.manage.browsing_available = review == Review::Available;
+        self.manage.tab = if review == Review::Available {
+            super::plugin_manage_ui::PluginsTab::Browse
+        } else {
+            super::plugin_manage_ui::PluginsTab::Installed
+        };
         self.manage.selected = match &review {
             Review::Installed(id) => Some(id.clone()),
             Review::Available => None,

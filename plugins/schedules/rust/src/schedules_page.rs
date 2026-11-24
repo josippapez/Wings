@@ -202,7 +202,7 @@ fn load_form_data() {
         });
     });
     spawn(async move {
-        let Ok(setup) = host::call("worktreeSetup", json!({ "projectId": id })).await else {
+        let Ok(setup) = host::worktree_setup(Some(&id)).await else {
             return;
         };
         let setup = WorktreeSetup::from_json(&setup);
@@ -302,7 +302,7 @@ fn schedule_fields(f: &Form) -> Vec<Node> {
         row().child(field("Every", None, select("Every", &hours, &f.hours.to_string(), |hours| with(|p| p.form.hours = hours.parse().unwrap_or(24)))))
     };
     let mut fields = vec![
-        field("Prompt", Some("What the agent is asked to do. It goes in as one line: line breaks become spaces.".into()), textarea("Prompt", &f.prompt, 4, false, |prompt| with(|p| p.form.prompt = prompt))),
+        field("Prompt", Some(if f.run_in.for_agent(f.agent) == RunIn::Chat { "What the agent is asked to do, up to 20,000 characters. It goes in as you wrote it.".into() } else { "What the agent is asked to do, up to 4 KB. It goes in as one line: line breaks become spaces.".into() }), textarea("Prompt", &f.prompt, 4, false, |prompt| with(|p| p.form.prompt = prompt))),
         field_group(
             "When",
             None,

@@ -108,7 +108,7 @@ async fn look(url: String, link: Link, panes: Vec<Pane>) {
     let base = st.base.clone().or_else(|| st.branch.split(" → ").nth(1).map(str::to_owned));
     let text = message_for(&PrInfo { link: &link, title: &st.title, base: base.as_deref() }, &found, &failures_of(&found.checks, &details));
     for pane in &panes {
-        if host::call("sendToAgent", json!({ "paneId": pane.id, "text": text })).await.is_ok() {
+        if host::send_to_agent(&pane.id, &text).await.is_ok() {
             return with_memory(|memory| drop(memory.insert(url, settled(&next, true, now))));
         }
         // No agent there any more, on a permission prompt, or text typed and unsent: the next look tries again, and the news is still new then.

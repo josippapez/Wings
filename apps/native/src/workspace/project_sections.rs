@@ -220,13 +220,33 @@ impl Workspace {
     /// project's sections after it and its worktrees: issues, pull requests and schedules belong to the repo, so they
     /// come once after its worktrees.
     pub(super) fn sidebar_rows(&self, order: &[usize], cx: &mut Context<Self>) -> Vec<AnyElement> {
-        self.sidebar_slots(order)
-            .into_iter()
-            .map(|slot| match slot {
-                ListItem::Row(index) => self.sidebar_row(index, cx).into_any_element(),
-                ListItem::Sections(project, groups) => self.project_sections(project, groups, cx),
-            })
-            .collect()
+        let mut elements = Vec::new();
+        let mut slots = self.sidebar_slots(order).into_iter().peekable();
+        while let Some(slot) = slots.next() {
+            match slot {
+                ListItem::Row(index) if self.current_project_group(index) => {
+                    let mut rows = vec![self.sidebar_row(index, cx)];
+                    while matches!(slots.peek(), Some(ListItem::Row(next)) if self.current_project_group(*next)) {
+                        if let Some(ListItem::Row(next)) = slots.next() {
+                            rows.push(self.sidebar_row(next, cx));
+                        }
+                    }
+                    elements.push(div()
+                        .relative().flex_none().flex().flex_col().gap(px(1.0))
+                        .rounded(px(theme::RADIUS))
+                        .bg(rgba(super::project::SIDEBAR_ACCENT))
+                        .children(ui::spot(|| "current-project-card".into()))
+                        .children(rows)
+                        .child(div().absolute().top_0().left_0().size_full()
+                            .rounded(px(theme::RADIUS))
+                            .border_1().border_color(rgba(super::HAIRLINE)))
+                        .into_any_element());
+                }
+                ListItem::Row(index) => elements.push(self.sidebar_row(index, cx)),
+                ListItem::Sections(project, groups) => elements.push(self.project_sections(project, groups, cx)),
+            }
+        }
+        elements
     }
 
     /// What `sidebar_rows` draws for `order`, one slot per element.

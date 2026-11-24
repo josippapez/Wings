@@ -1,4 +1,4 @@
-//! Follows the Claude sessions that run in panes, as `wings-plugin-sdk/sessions` does: which pane runs which session,
+//! Follows the Claude sessions that run in panes: which pane runs which session,
 //! each run's backlog from the transcript, then the entries Claude appends, oldest first and each once.
 
 use crate::{format, host, task};

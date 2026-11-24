@@ -14,8 +14,9 @@ use crate::{
     subagents::{self, Heard},
 };
 
-/// How many of the transcript's newest entries the tab reads as it opens.
-const HISTORY: u32 = 400;
+/// How many of the transcript's newest entries the tab reads as it opens, and how much of each string of them: as many as
+/// the host gives and the cut the chat's own history is read with, so a long subagent's whole run shows.
+const HISTORY: u32 = 10_000;
 
 #[derive(Debug, Default)]
 pub struct Tab {
@@ -171,7 +172,7 @@ fn load() {
         return;
     };
     task::spawn(async move {
-        let read = host::subagent_transcript(&session, &agent, &subagents::KINDS, Some(HISTORY)).await;
+        let read = host::subagent_transcript_cut(&session, &agent, &subagents::KINDS, HISTORY, chat::HISTORY_CUT).await;
         // A subagent that has only just started may have no transcript yet: what the chat passes on still shows.
         let entries = match read {
             Ok(entries) => entries.as_array().cloned().unwrap_or_default(),
@@ -293,6 +294,16 @@ mod tests {
         told(&subagents::show_message("s1", "../x", "x"));
         told(&subagents::show_message("", "a1b2c3d4e5f60718a", "x"));
         assert_eq!(with(|tab| tab.agent.clone()).as_deref(), Some("b2c3d4e5f60718a9b"));
+    }
+
+    #[test]
+    fn a_subagent_tab_reads_up_to_ten_thousand_entries_with_their_strings_cut() {
+        let calls = record();
+        start_sidebar();
+        told(&subagents::show_message("s1", "a1b2c3d4e5f60718a", "count lines"));
+        wings_plugin::task::block_on(async {});
+        let read = calls.borrow().iter().find(|(method, _)| method == "transcript").map(|(_, params)| params.clone()).expect("the transcript is read");
+        assert_eq!((read["agent"].as_str(), read["last"].as_u64(), read["cut"].as_u64()), (Some("a1b2c3d4e5f60718a"), Some(10_000), Some(4_000)));
     }
 
     /// A picture clicked in the sidebar opens over the chat, which has the room: in the sidebar the dialog was its width.

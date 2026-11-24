@@ -1,14 +1,18 @@
-//! Asks before deleting an issue. With child issues (at any depth) it offers to delete only this one, which leaves them without
-//! a parent, or all of them. Keep it closes the card, and a failed delete leaves it open with the reason.
+//! Asks before deleting an issue, in a dialog over the page. With child issues (at any depth) it offers to delete only this
+//! one, which leaves them without a parent, or all of them. Keep it, Escape or a press beside it closes the dialog, and a
+//! failed delete leaves it open with the reason.
 
 use crate::{
     domain::{Issue, Op},
     feed,
-    parts::line,
+    parts::{line, row, stack},
     relations::descendants_of,
 };
 use std::cell::RefCell;
-use wings_plugin::{task::spawn, ui::{Node, confirm}};
+use wings_plugin::{task::spawn, ui::{Node, dialog}};
+
+/// The dialog's width in points.
+const WIDTH: u32 = 460;
 
 struct Deleting {
     key: String,
@@ -54,8 +58,7 @@ fn delete(key: String, children: bool) {
     });
 }
 
-/// The card for the issue being asked about, when it is `issue`. Focus starts on the delete that keeps the most, so Enter
-/// never takes more than asked.
+/// The dialog for the issue being asked about, when it is `issue`. The delete that keeps the most comes first.
 pub fn node(issue: &Issue, issues: &[Issue]) -> Option<Node> {
     let (busy, error) = with(|d| d.as_ref().filter(|d| d.key == issue.key).map(|d| (d.busy, d.error.clone())))?;
     let below = descendants_of(issues, &issue.key).len();
@@ -68,10 +71,12 @@ pub fn node(issue: &Issue, issues: &[Issue]) -> Option<Node> {
     } else {
         vec![action(format!("Delete {}", issue.key), "destructive", Box::new(move || delete(key.clone(), false)))]
     };
-    actions.push(action("Keep it".into(), "ghost", Box::new(cancel)));
-    let body = match error {
-        Some(error) => Node::new("Notice").prop("tone", "danger").text(error),
-        None => line(format!("{}This removes {} and its log. Keys are never used again.", if below > 0 { format!("It has {children}. ") } else { String::new() }, if below > 0 { "what you delete" } else { "the issue" }), None, Some("small")),
-    };
-    Some(confirm(format!("Delete {} {}?", issue.key, issue.title), [body], actions))
+    actions.insert(0, action("Keep it".into(), "ghost", Box::new(cancel)));
+    let said = line(format!("{}This removes {} and its log. Keys are never used again.", if below > 0 { format!("It has {children}. ") } else { String::new() }, if below > 0 { "what you delete" } else { "the issue" }), None, None);
+    let body = stack("m")
+        .child(line(issue.title.clone(), None, None).prop("weight", "medium"))
+        .child(said)
+        .maybe(error.map(|error| Node::new("Notice").prop("tone", "danger").text(error)))
+        .child(row("s").prop("justify", "end").prop("wrap", true).children(actions));
+    Some(dialog(&format!("Delete {}?", issue.key), WIDTH, cancel).child(body))
 }

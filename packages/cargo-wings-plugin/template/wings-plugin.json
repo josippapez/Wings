@@ -1,0 +1,22 @@
+{
+  "id": "hello-wings",
+  "name": "Hello Wings",
+  "version": "0.1.0",
+  "minWingsVersion": "0.2.17",
+  "description": "Shows the folder each pane is in as a badge, lists them in a sidebar, and lets Claude ask for them.",
+  "api": 1,
+  "main": "dist/native/main.wasm",
+  "icon": "icon.svg",
+  "contributes": {
+    "ui": ["badges"],
+    "sidebars": [{ "id": "panes", "title": "Panes", "page": "dist/native/sidebar.wasm" }],
+    "mcpTools": [
+      {
+        "name": "pane_folders",
+        "description": "Lists the folder each open terminal pane in Wings is in.",
+        "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+      }
+    ],
+    "mcpInstructions": "Hello Wings: to see which folder each Wings terminal pane is in, run `wings hello-wings pane_folders` in Bash."
+  }
+}

@@ -57,10 +57,11 @@ fn scopes_of(branches: &[String], current: Option<&str>, default: Option<&str>, 
     Value::Array(scopes)
 }
 
-/// About 2 MB of patch in all. Past this the biggest files turn into "Too large to show" entries, since the viewer
-/// would take seconds to draw them.
-pub const MAX_PATCH_LINES: u64 = 50_000;
-pub const MAX_PATCH_BYTES: usize = 2 * 1024 * 1024;
+/// Up to 8 MB of patch in all, the most Wings' viewer takes (`apps/native/src/diff/patch.rs` says not to impose a smaller
+/// limit here), and the changed lines that fill it at about 40 bytes a line. Past this the biggest files turn into "Too
+/// large to show" entries.
+pub const MAX_PATCH_LINES: u64 = 200_000;
+pub const MAX_PATCH_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_PATCH_FILES: usize = 1_500;
 
 /// A patch for files git doesn't track yet, read with `git grep`, since Wings refuses `git diff --no-index`.
@@ -415,10 +416,27 @@ mod tests {
     #[test]
     fn a_commit_opens_only_by_a_full_hash_and_one_too_large_says_how_large() {
         let hash = "0123456789abcdef0123456789abcdef01234567";
-        let sent = fake(&[("show --format= --diff-merges=first-parent -M --no-color --no-ext-diff --no-textconv --no-relative --numstat", 0, "60000\t5\tbig.json\x002\t1\t\0a\0b\0")]);
+        let sent = fake(&[("show --format= --diff-merges=first-parent -M --no-color --no-ext-diff --no-textconv --no-relative --numstat", 0, "250000\t5\tbig.json\x002\t1\t\0a\0b\0")]);
         assert_eq!(block_on(async { open_commit("/r", &json!({ "hash": "HEAD" })).await }).unwrap_err(), "That isn't a commit hash.");
         block_on(async move { open_commit("/r", &json!({ "hash": hash, "subject": "Add data", "author": "Ana", "at": 0 })).await }).unwrap();
-        assert_eq!(sent.borrow()[0]["error"], "Too large to show: 2 files, 60008 changed lines.");
+        assert_eq!(sent.borrow()[0]["error"], "Too large to show: 2 files, 250008 changed lines.");
         assert_eq!(numstat_size(""), (0, 0));
+    }
+
+    /// A commit of 60,000 changed lines and 3 MB of patch, and one of 9 MB, which the viewer can't take.
+    #[test]
+    fn a_commit_of_sixty_thousand_lines_and_three_megabytes_opens_and_one_over_eight_does_not() {
+        let hash = "0123456789abcdef0123456789abcdef01234567";
+        const SHOW: &str = "show --format= --diff-merges=first-parent -M --no-color --no-ext-diff --no-textconv --no-relative";
+        let numstat: &'static str = Box::leak(format!("{SHOW} --numstat").into_boxed_str());
+        let patch: &'static str = Box::leak(format!("{SHOW} --patch").into_boxed_str());
+        let big = |mb: usize| -> &'static str { Box::leak(format!("diff --git a/a.json b/a.json\n{}", "+x\n".repeat(mb * 1024 * 1024 / 3)).into_boxed_str()) };
+        let (three, nine) = (big(3), big(9));
+        let sent = fake(Vec::leak(vec![(numstat, 0, "60000\t0\ta.json\0"), (patch, 0, three)]));
+        block_on(async move { open_commit("/r", &json!({ "hash": hash, "subject": "Add data", "author": "Ana", "at": 0 })).await }).unwrap();
+        assert_eq!(sent.borrow()[0]["patch"].as_str().map(str::len), Some(three.len()));
+        let sent = fake(Vec::leak(vec![(numstat, 0, "60000\t0\ta.json\0"), (patch, 0, nine)]));
+        block_on(async move { open_commit("/r", &json!({ "hash": hash, "subject": "Add data", "author": "Ana", "at": 0 })).await }).unwrap();
+        assert!(sent.borrow()[0]["error"].as_str().is_some_and(|error| error.starts_with("Too large to show: 9 MB")));
     }
 }

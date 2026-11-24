@@ -1,4 +1,4 @@
-//! A setting kept in `host::storage`, that every frame of the plugin hears change: `wings-plugin-sdk/settings`.
+//! A setting kept in `host::storage`, that every frame of the plugin hears change.
 
 use crate::{host, messages};
 use serde_json::{Value, json};

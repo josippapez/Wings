@@ -54,11 +54,11 @@ pub fn finished(key: &str, language: &str, diff: &Diff, look: Look) -> Node {
     view(key, language, &[lines], diff.more, look)
 }
 
-/// The change an ask waits on, as a diff, when it has one to show whole: a preview that was cut, or an ask whose text was
-/// cut, is not one to allow by.
+/// The change an ask waits on, as a diff, when it has one to show whole: a preview that was cut is not one to allow by.
+/// An ask whose text was cut still shows its diff: the diff has its own limit (`more`), and holds every line it shows.
 pub fn ask_diff<'a>(ask: &'a crate::session::Ask) -> Option<&'a Preview> {
     match &ask.preview {
-        Peek::Ready(preview) if !ask.cut_short && preview.more == 0 => Some(preview),
+        Peek::Ready(preview) if preview.more == 0 => Some(preview),
         _ => None,
     }
 }
@@ -226,6 +226,10 @@ mod tests {
 
     #[test]
     fn the_choice_is_offered_and_kept_at_any_width() {
+        // A sidebar shows one column with no choice: the test above covers it.
+        if SIDEBAR {
+            return;
+        }
         chat::with(|c| {
             for narrow in [None, Some(false), Some(true)] {
                 c.narrow = narrow;
@@ -257,8 +261,9 @@ mod tests {
         assert!(ask_diff(&ask).is_none());
         ask.preview = Peek::Ready(preview.clone());
         assert!(ask_diff(&ask).is_some());
+        // The text of the ask was too long for the card, but the diff holds the whole change: it shows.
         ask.cut_short = true;
-        assert!(ask_diff(&ask).is_none());
+        assert!(ask_diff(&ask).is_some());
         ask.cut_short = false;
         ask.preview = Peek::Ready(Preview { more: 3, ..preview });
         assert!(ask_diff(&ask).is_none());

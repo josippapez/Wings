@@ -89,6 +89,7 @@ fn spawn_request(history_id: &str) -> Spawn {
         cols: 80,
         rows: 24,
         history_id: Some(history_id.into()),
+        replay_bytes: None,
         // The app's own panes get `pane_env`; this test's environment is enough for a shell.
         env: std::env::vars().collect(),
     }

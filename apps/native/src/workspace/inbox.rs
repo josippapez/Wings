@@ -25,8 +25,8 @@ use super::{
     title_bar::TITLE_BAR_HEIGHT,
 };
 
-/// The most the list keeps, as the desktop's `MAX_NOTIFICATIONS`.
-const MAX: usize = 100;
+/// The most the list keeps (the desktop's `MAX_NOTIFICATIONS` is 100): a busy day of agents and plugins filled 100.
+const MAX: usize = 1000;
 /// The desktop's `--chart-1`, the count's colour while a plugin's notification is unread.
 const ACCENT: u32 = 0x7aa7f2;
 
@@ -659,5 +659,21 @@ fn ago(now: u64, at: u64) -> String {
             1 => "yesterday".into(),
             days => format!("{days} days ago"),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_list_keeps_a_thousand_notifications_and_drops_the_oldest() {
+        let mut inbox = Inbox::default();
+        for n in 0..1_100 {
+            inbox.add(Kind::Done, format!("n{n}"), String::new(), String::new(), None, None);
+        }
+        assert_eq!(inbox.events.len(), 1000);
+        assert_eq!(inbox.events[0].title.as_ref(), "n1099");
+        assert_eq!(inbox.events[999].title.as_ref(), "n100");
     }
 }

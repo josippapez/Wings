@@ -43,3 +43,5 @@ pub mod transcripts;
 pub mod ui;
 #[cfg(feature = "ui")]
 pub mod workspace;
+#[cfg(feature = "ui")]
+pub mod window_state;

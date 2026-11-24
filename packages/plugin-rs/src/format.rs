@@ -1,4 +1,4 @@
-//! How Wings writes numbers and times, as `wings-plugin-sdk/format` does.
+//! How Wings writes numbers and times.
 
 use crate::host;
 

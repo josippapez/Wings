@@ -294,11 +294,13 @@ mod tests {
         assert_eq!(last_line(""), "Done");
     }
 
+    #[cfg(feature = "settings")]
     fn page(state: State) -> String {
         STATE.with(|kept| *kept.borrow_mut() = state);
         wings_plugin::ui::tree_json(section()).to_string()
     }
 
+    #[cfg(feature = "settings")]
     #[test]
     fn the_button_is_primary_only_when_a_newer_version_is_out_and_busy_while_it_runs() {
         let known = State { current: Some("2.1.329".into()), latest: Some("2.1.329".into()), ..State::default() };
@@ -312,6 +314,7 @@ mod tests {
         assert!(unread.contains("Newest version unknown"));
     }
 
+    #[cfg(feature = "settings")]
     #[test]
     fn the_result_line_says_what_happened_and_that_open_chats_keep_the_old_version() {
         let known = State { current: Some("2.1.331".into()), latest: Some("2.1.331".into()), ..State::default() };

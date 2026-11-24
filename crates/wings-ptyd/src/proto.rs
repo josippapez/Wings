@@ -288,6 +288,10 @@ pub struct Spawn {
     pub cols: u16,
     pub rows: u16,
     pub history_id: Option<String>,
+    /// How many bytes of the pane's output the host keeps (`output::replay_bytes` of the app's scrollback setting), or
+    /// none for `REPLAY_BYTES`. The host holds it between `REPLAY_BYTES` and `MAX_REPLAY_BYTES`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay_bytes: Option<usize>,
     /// The shell's whole environment but its `WINGS_PANE_ID`, which the host adds. The app builds it, so a pane gets
     /// the same one whoever started the host.
     pub env: Vec<(String, String)>,
@@ -420,6 +424,7 @@ mod tests {
                 cols: 80,
                 rows: 24,
                 history_id: None,
+                replay_bytes: None,
                 env: vec![("TERM".into(), "xterm-256color".into())],
             }),
         };

@@ -36,7 +36,7 @@ fn names_of(names: &Value) -> Vec<String> {
     names.as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect()
 }
 
-/// Tells the page named `name` `message` (JSON of up to 64 KB). With `write`, right after your click or key in this page,
+/// Tells the page named `name` `message` (JSON of up to 1,000,000 characters). With `write`, right after your click or key in this page,
 /// which goes with it: that page may then write once to a program it runs. It fails when no page has that name.
 pub fn tell(name: &str, message: &Value, write: bool) -> Pending<Result<Value, String>> {
     host::call("tellPage", json!({ "name": name, "message": message, "write": write }))

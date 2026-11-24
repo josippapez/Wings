@@ -1,6 +1,6 @@
 [package]
 name = "wings-native"
-version = "0.2.95"
+version = "0.2.96"
 edition = "2024"
 publish = false
 
@@ -63,9 +63,13 @@ tar = "0.4.46"
 flate2 = "1.1.10"
 tempfile = "3.27.0"
 plist = "1.10.1"
-# Runs a plugin page built to WebAssembly (`page/runtime/wasm.rs`): the trial of Rust plugins. An LTS release, with
-# the compiler and nothing else of its defaults (no WASI, component model, async or cache).
-wasmtime = { version = "=48.0.8", default-features = false, features = ["runtime", "cranelift", "std", "anyhow"] }
+# Runs a plugin page built to WebAssembly (`page/runtime/wasm.rs`): the trial of Rust plugins. An LTS release (48, a
+# multiple of 12, supported until August 2028), kept at its latest patch: 48.0.9 fixed a guest aborting the process in
+# builds without the `gc` feature, which this is (GHSA-rc4p-x33f-vpr2). With the compiler and nothing else of its
+# defaults (no WASI, component model, async or cache).
+wasmtime = { version = "=48.0.10", default-features = false, features = ["runtime", "cranelift", "std", "anyhow"] }
+# Signs the compiled code kept on disk (`page/runtime/wasm.rs`), which runs unchecked when read back.
+hmac = "0.12.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # A diff's syntax colours (`diff/highlight.rs`): TextMate-style grammars, so the desktop's pierre-dark theme applies as is,

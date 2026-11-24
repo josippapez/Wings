@@ -1,4 +1,4 @@
-//! Running az, gh or glab from a plugin, as `wings-plugin-sdk/cli` does: tells "not installed", "signed out" and a plain
+//! Running az, gh or glab from a plugin: tells "not installed", "signed out" and a plain
 //! failure apart, and keeps what a pane badge needs to offer Install or Sign in. The plugin still lists each command in
 //! `permissions.exec`.
 

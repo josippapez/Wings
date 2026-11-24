@@ -966,23 +966,31 @@ fn feedback_field(request: &str, draft: &Draft, label: &str, placeholder: &str) 
     text_input(label, draft.feedback.as_str(), move |said| chat::edit(&request, |draft| draft.feedback = said)).prop("placeholder", placeholder)
 }
 
+/// The longest detail a card draws as text: the rest is drawn as code.
+const LONG_DETAIL: usize = 16_000;
+
 fn permission_node(ask: &Ask, draft: &Draft, c: &Chat) -> Node {
     let (deny, once, always) = (ask.request.clone(), ask.request.clone(), ask.request.clone());
     let mut body: Vec<Node> = ask.reason.iter().map(|why| muted(why.as_str())).collect();
     // An edit or a write that was read against its file shows as a diff, with the lines round it.
-    match crate::diff_view::ask_diff(ask) {
+    let diff = crate::diff_view::ask_diff(ask);
+    match diff {
         Some(preview) => body.extend(crate::diff_view::ask_body(ask, preview, crate::diff_view::look(c))),
+        // Past what a line of text reads well, the detail is one `Code` node, which holds far more than a text.
+        None if ask.detail.len() > LONG_DETAIL => body.push(wings_plugin::markdown::highlighted_code(ask.detail.as_str(), "")),
         None => body.push(text(ask.detail.as_str()).prop("mono", true).prop("size", "small")),
     }
-    if ask.cut_short {
+    // A diff holds the whole change, so an ask whose text was cut is still one to allow when it shows as one.
+    let cut_short = ask.cut_short && diff.is_none();
+    if cut_short {
         body.push(text("This is too long to show here in full, so it can't be allowed here. Open the session in the terminal to read it.").prop("tone", "warn"));
     }
     body.push(feedback_field(&ask.request, draft, "Reason for denying", "Why not, or what to do instead (Claude reads it)"));
-    let always = (!ask.suggestions.is_empty()).then(|| button("Always allow", "secondary", false, move || chat::allow(&always, true)).prop("disabled", ask.cut_short));
+    let always = (!ask.suggestions.is_empty()).then(|| button("Always allow", "secondary", false, move || chat::allow(&always, true)).prop("disabled", cut_short));
     confirm(
         format!("Allow {}?", ask.tool),
         body,
-        [button("Deny", "outline", false, move || chat::deny(&deny)), button("Allow once", "default", false, move || chat::allow(&once, false)).prop("disabled", ask.cut_short)]
+        [button("Deny", "outline", false, move || chat::deny(&deny)), button("Allow once", "default", false, move || chat::allow(&once, false)).prop("disabled", cut_short)]
             .into_iter()
             .chain(always),
     )
@@ -1204,7 +1212,7 @@ fn composer(c: &Chat) -> Node {
     // that the arrows move through and Enter picks from, as a combobox's. Keyed, so the field stays the same one as the
     // list comes and goes, and keeps the keyboard.
     let field = stack().prop("gap", "s").key("message").child(field.prop("grow", true).key("field")).maybe(suggestions(c));
-    let message_box = card().prop("variant", "raised").maybe(review_chips(c)).maybe(pasted(c)).child(field).child(controls);
+    let message_box = card().prop("variant", "raised").maybe(keep_notes(c)).maybe(review_chips(c)).maybe(pasted(c)).child(field).child(controls);
     // Reading an older part, the conversation ends at the bar in a line of text cut through: a hairline makes it an edge, and the
     // button over the message box has room round it.
     let older = c.until.is_some();
@@ -1226,6 +1234,21 @@ fn composer(c: &Chat) -> Node {
 /// While you read an older part of a long session, a button over the message box back to the newest.
 fn latest(c: &Chat) -> Option<Node> {
     c.until.is_some().then(|| row().prop("justify", "center").child(button("Jump to the latest", "outline", false, || chat::with(show_latest)).prop("size", "sm")))
+}
+
+/// What went wrong with keeping what the tab holds: a comment that didn't fit, and a save Wings refused.
+fn keep_notes(c: &Chat) -> Option<Node> {
+    let notes: Vec<Node> = [(&c.review_note, "keep-review"), (&c.save_error, "keep-save")]
+        .into_iter()
+        .filter_map(|(note, key)| {
+            let said = match key {
+                "keep-save" => format!("This tab couldn't be saved, so it would open again without what changed: {}", note.as_deref()?),
+                _ => note.clone()?,
+            };
+            Some(notice("warn", said).key(key))
+        })
+        .collect();
+    (!notes.is_empty()).then(|| stack().prop("gap", "xs").children(notes))
 }
 
 /// The comments left in Wings' diff viewer, above the message that will carry them: how many and on how many files, a chip
@@ -1673,7 +1696,7 @@ fn remote_button(c: &Chat) -> Option<Node> {
             let (open, copied) = (url.clone(), url.clone());
             let items = vec![
                 Node::new("Button").key("open").on("onClick", move |_| wings_plugin::host::open_url(&open)).text("Open on claude.ai"),
-                Node::new("Button").key("copy").on("onClick", move |_| drop(wings_plugin::host::call("copyText", serde_json::json!({ "text": copied })))).text("Copy link"),
+                Node::new("Button").key("copy").on("onClick", move |_| drop(wings_plugin::host::copy_text(&copied))).text("Copy link"),
                 Node::new("Button").key("off").on("onClick", |_| chat::toggle_remote()).text("Turn off Remote Control"),
             ];
             Node::new("Menu").child(trigger).children(items)
@@ -1825,6 +1848,20 @@ mod tests {
         let end = end_of(c);
         let (window, _) = window(c, end, end.saturating_sub(c.shown));
         (window.last().map_or(end, |block| block.start), end)
+    }
+
+    #[test]
+    fn a_permission_card_for_a_long_write_is_read_whole_and_can_be_allowed() {
+        let content = "let x = 1;\n".repeat(3_000);
+        let input = serde_json::json!({ "tool_name": "Write", "input": { "file_path": "/a/b.rs", "content": content } });
+        let mut session = Session::default();
+        session.hear(&serde_json::json!({ "type": "control_request", "request_id": "r1", "request": { "subtype": "can_use_tool", "tool_name": "Write", "input": input["input"].clone() } }));
+        let Some(crate::session::Item::Ask(ask)) = session.items.first() else { panic!("{:?}", session.items) };
+        assert!(ask.detail.len() > 30_000 && !ask.cut_short, "36,000 characters are kept whole");
+        let drawn = chat::with(|c| wings_plugin::ui::tree_json(permission_node(ask, &Draft::default(), c)).to_string());
+        assert!(drawn.contains("\"Code\""), "a long detail is one code node");
+        assert!(!drawn.contains("too long to show"), "{}", &drawn[..300]);
+        assert!(!drawn.contains("\"disabled\":true"));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! The tools Claude, or another plugin, calls: `wings-plugin-sdk/tools`' `registerTools`. A tool's input is checked
+//! The tools Claude, or another plugin, calls. A tool's input is checked
 //! against its schema before its handler runs, so a wrong one goes back as an error that names the field to fix and
 //! the handler only ever sees an input that fits. The schema is the JSON Schema the manifest's `contributes.mcpTools`
 //! has for the tool, of the kinds `s` builds: `object`, `string` (with `minLength`, `maxLength`, `format` and `enum`),

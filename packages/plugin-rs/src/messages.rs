@@ -1,4 +1,4 @@
-//! Named events between the frames of one plugin, as `wings-plugin-sdk/messages` sends them over `wings.broadcast`, so
+//! Named events between the frames of one plugin, sent over `wings.broadcast`, so
 //! a frame in Rust and one in TypeScript hear each other. Only its `tell` and `on` are here: asks, queries, and a
 //! message too long for one broadcast, which comes in parts, are not.
 

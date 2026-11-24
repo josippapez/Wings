@@ -31,7 +31,7 @@ use serde_json::{json, Value};
 use wings_terminal::shell::pane_command;
 
 use crate::{
-    output::{Kept, REPLAY_BYTES},
+    output::{Kept, MAX_REPLAY_BYTES, REPLAY_BYTES},
     pane_id,
     proto::{self, Attached, Call, Frame, HostMsg, JobStarted, PaneInfo, Request, Spawn, Spawned, CHUNK, JOBS, PROTO},
     SERVER_VERSION,
@@ -92,7 +92,7 @@ const TICK: Duration = Duration::from_secs(1);
 
 /// What a client may send ahead of a request: a spawn's saved output (a ring's worth, and its end), or a write to a job
 /// of up to a line's worth.
-const MAX_STAGED: usize = job::LINE_LIMIT + REPLAY_BYTES;
+const MAX_STAGED: usize = job::LINE_LIMIT + MAX_REPLAY_BYTES;
 
 /// Serves on `path` as `version` until `serve` returns, with the executable it runs from watched for an update.
 pub fn main(path: &Path, idle: Option<Duration>, version: u32) -> Result<Stopped, io::Error> {
@@ -488,7 +488,7 @@ impl Host {
             child: Mutex::new(child),
             out: Mutex::new(PaneOut {
                 kept: {
-                    let mut kept = Kept::default();
+                    let mut kept = Kept::with_cap(spawn.replay_bytes.map_or(REPLAY_BYTES, |bytes| bytes.clamp(REPLAY_BYTES, MAX_REPLAY_BYTES)));
                     kept.resized(spawn.cols, spawn.rows);
                     kept
                 },
@@ -762,7 +762,7 @@ impl Client {
         }
         queue.bytes += frame.len();
         queue.frames.push_back((pane, frame));
-        if queue.bytes > self.cap + 2 * REPLAY_BYTES {
+        if queue.bytes > self.cap + 2 * MAX_REPLAY_BYTES {
             queue.closed = true;
             queue.frames.clear();
         }
@@ -993,6 +993,7 @@ mod tests {
             cols: 80,
             rows: 24,
             history_id: Some(format!("h-{name}")),
+            replay_bytes: None,
             env: pane_env(None).into_iter().filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?))).collect(),
         }
     }

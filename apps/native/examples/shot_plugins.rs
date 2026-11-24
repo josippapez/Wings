@@ -8,6 +8,8 @@
 //! repos in that folder, popovers too (`shot_plugins/external.rs`).
 //! `--claude-chat` renders Claude chat's page over a fake `claude` that prints made-up sessions.
 //! `--tooltips` points at a titled Button and Text of a made-up page until their tooltips show.
+//! `--ui-gallery` renders the pages the Rust SDK's newer `ui` builders draw (`ui_gallery.json`, kept in step by a test in
+//! `packages/plugin-rs/src/ui/more.rs`).
 //! `--prompt-rail` renders a `PromptRail` of 40 prompts with one pointed at, and one of 300 that has scrolled.
 //! Nothing shows on screen and focus doesn't move. macOS only (real Metal rendering).
 //!
@@ -145,6 +147,10 @@ fn main() {
     }
     if std::env::args().any(|arg| arg == "--prompt-rail") {
         prompt_rail(out);
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--ui-gallery") {
+        ui_gallery(out);
         return;
     }
     if std::env::args().any(|arg| arg == "--claude-chat") {
@@ -444,6 +450,24 @@ fn prompt_rail(out: PathBuf) {
         }
         save(&mut cx, window, out.join(format!("prompt-rail-{name}.png")));
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
+    }
+}
+
+/// The pages of `shot_plugins/ui_gallery.json`, which the Rust SDK's `ui` builders draw, at 1000 and 640 points.
+fn ui_gallery(out: PathBuf) {
+    let gallery: serde_json::Value = serde_json::from_str(include_str!("shot_plugins/ui_gallery.json")).expect("the gallery is JSON");
+    let host = PluginHost::new(PluginConfig { id: "ui-gallery".into(), root: out.join("fixture-storage-ui-gallery"), scope: "shot".into() });
+    let mut cx = app();
+    for (name, height) in [("widgets", 1500.0), ("panes", 560.0)] {
+        let tree = gallery[name].clone();
+        let source = fake::page("page", move |_| tree.clone());
+        for width in [1000.0, 640.0] {
+            let handle = cx.open_offscreen_window(size(px(width), px(height)), |_, cx| cx.new(|cx| PageView::in_plugin(&host, &source, cx))).unwrap();
+            let window = handle.into();
+            wait(&mut cx, window, Duration::from_millis(800));
+            save(&mut cx, window, out.join(format!("ui-gallery-{name}-{width}.png")));
+            let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        }
     }
 }
 
@@ -980,6 +1004,36 @@ fn feedback_pane() -> serde_json::Value {
         entry("MEDIUM", "yellow", "Bug", "red", "plugins test script / claude-chat crate features", "Claude chat's view and rail tests never run under plain cargo test / pnpm test", "The claude-chat crate gates view.rs, rail.rs and the other page modules behind the `chat` feature, and has no default features."),
         entry("LOW", "gray", "Bug", "red", "wings builds rule hook", "Subagent build hook refuses read-only commands that merely mention cargo test or build-rust.sh", "The PreToolUse hook that stops subagents from building matches command text."),
         entry("MEDIUM", "yellow", "Pain point", "yellow", "orchestration / Wings lead session", "Lead released and stopped with requested features unbuilt", "After a builder declined the stacked multi-file diff, the lead released anyway.")] })
+}
+
+/// The scenes of a pane in Wings' sidebar: the scene's name, the pane's id and title, its tree, what the sidebar shows
+/// when it has drawn it, and the sidebar's width.
+fn pane_sidebar_cases() -> Vec<(&'static str, &'static str, &'static str, serde_json::Value, [&'static str; 4], f32)> {
+    let mut cases = vec![("pane-sidebar", "feedback", "Feedback", feedback_pane(), ["This project", "88 open", "Close", "Lead released"], 420.0)];
+    for width in [320.0, 420.0, 480.0] {
+        cases.push(("pane-sidebar-quiz", "teach-back", "Teach-back", quiz_pane(), ["Question 3 of 7", "Skip", "Back", "prescription"], width));
+    }
+    cases
+}
+
+/// The Teach-back mod's quiz, as its `Pane` render draws it (`lessonView` and `questionCard`): the lesson's title with a
+/// dismiss, a Progress, the question, its answers as plain buttons with hotkeys, and Back and Skip. Made-up lesson.
+fn quiz_pane() -> serde_json::Value {
+    let plain = |key: &str, hotkey: &str, label: &str, handle: u64| json!({ "type": "Button", "props": { "key": key, "plain": true, "hotkey": hotkey, "label": label }, "press": { "plugin": "teach-back", "handle": handle } });
+    json!({ "type": "Box", "props": { "flexDirection": "column", "paddingX": 1, "gap": 1 }, "children": [
+        { "type": "Box", "props": { "justifyContent": "space-between" }, "children": [
+            { "type": "Text", "props": { "bold": true }, "children": ["Keying the PDF cache by prescription"] },
+            { "type": "Button", "props": { "key": "back-to-list", "plain": true, "role": "dismiss", "label": "✕" }, "press": { "plugin": "teach-back", "handle": 3 } }] },
+        { "type": "Progress", "props": { "label": "Question 3 of 7", "value": 2, "max": 7 } },
+        { "type": "Box", "props": { "flexDirection": "column", "gap": 1 }, "children": [
+            { "type": "Markdown", "props": { "text": "Why is the cache keyed on the prescription id and not on the PDF's file name?" } },
+            plain("pick-2-0", "1", "1. A prescription has at most one Rx PDF, so keying on its id makes a second upload replace the first instead of piling up", 11),
+            plain("pick-2-1", "2", "2. File names are not unique across clinics", 12),
+            plain("pick-2-2", "3", "3. The id is shorter, so the cache file names fit the filesystem's limit", 13),
+            plain("pick-2-3", "4", "4. It makes the cache faster to read", 14)] },
+        { "type": "Box", "props": { "gap": 2 }, "children": [
+            plain("prev", "b", "← Back", 15),
+            { "type": "Button", "props": { "key": "next", "variant": "primary", "hotkey": "n", "label": "Skip →" }, "press": { "plugin": "teach-back", "handle": 16 } }] }] })
 }
 
 /// A chat tab as the workspace draws one: the window's backdrop layer, and over it the tab's card, which leaves the slot of
@@ -3051,7 +3105,10 @@ esac"##,
     // A pane a Claude Code plugin opened, in Wings' sidebar: `/feedback` asks Claude Code to focus its pane, and the chat
     // opens it in the pane sidebar, which it then feeds the pane's tree. As for the subagent sidebar, the chat runs in a
     // window behind and the sidebar is drawn alone at the sidebar's width.
-    if only.as_deref().is_none_or(|only| only == "pane-sidebar") {
+    for (scene, pane_id, pane_title, tree, expects, width) in pane_sidebar_cases() {
+        if only.as_deref().is_some_and(|only| only != scene) {
+            continue;
+        }
         let side_page = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/claude-chat/dist/native/pane.wasm");
         let side_page = side_page.canonicalize().expect("sh build-rust.sh claude-chat, in plugins/");
         wings_native::page::runtime::wasm::compile_now(&side_page.to_string_lossy()).unwrap();
@@ -3059,17 +3116,17 @@ esac"##,
         let lines = opened(vec![
             init.clone(),
             answer("ui-attach", json!({ "surfaces": ["desktop"] })),
-            user("/feedback"),
-            json!({ "type": "system", "subtype": "ui_panes", "panes": [{ "id": "feedback", "title": "Feedback", "plugin": "feedback" }], "shown_id": "feedback", "focused_id": null, "focus_requested_id": "feedback" }),
-            text("Feedback pane opened."),
+            user(&format!("/{pane_id}")),
+            json!({ "type": "system", "subtype": "ui_panes", "panes": [{ "id": pane_id, "title": pane_title, "plugin": pane_id }], "shown_id": pane_id, "focused_id": null, "focus_requested_id": pane_id }),
+            text("Pane opened."),
         ]);
-        let fixture = root.join("pane-sidebar.jsonl");
+        let fixture = root.join(format!("{scene}.jsonl"));
         std::fs::write(&fixture, lines.iter().map(|line| format!("{line}\n")).collect::<String>()).unwrap();
-        let answers = root.join("answers-pane-sidebar");
+        let answers = root.join(format!("answers-{scene}"));
         let _ = std::fs::remove_dir_all(&answers);
         std::fs::create_dir_all(&answers).unwrap();
-        let pane = answer("REQUEST_ID", json!({ "tree": feedback_pane(), "props": {}, "rewritten": false, "hooked": true }));
-        std::fs::write(answers.join("instance-feedback"), format!("{pane}\n")).unwrap();
+        let pane = answer("REQUEST_ID", json!({ "tree": tree, "props": {}, "rewritten": false, "hooked": true }));
+        std::fs::write(answers.join(format!("instance-{pane_id}")), format!("{pane}\n")).unwrap();
         // SAFETY: the pages of the scenes before are closed, so nothing reads these while they change.
         unsafe {
             std::env::set_var("CHAT_FIXTURE", &fixture);
@@ -3078,7 +3135,9 @@ esac"##,
             std::env::set_var("CHAT_STDERR", "");
         }
         // The sidebar first, so it has its name when the chat asks it to show the pane.
-        let handle = cx.open_offscreen_window(size(px(420.0), px(760.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, &side_source, None, cx))).unwrap();
+        // As Wings' right sidebar runs it: with a state that lets the page name the sidebar's header (`setTabTitle`).
+        let state = wings_native::page::plugin::FrameState::new(wings_native::page::plugin::StatePlace::Sidebar, None, |_| Ok(()));
+        let handle = cx.open_offscreen_window(size(px(width), px(760.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_state(&host, &side_source, None, state, cx))).unwrap();
         handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
         let window: AnyWindowHandle = handle.into();
         let deadline = Instant::now() + Duration::from_secs(30);
@@ -3089,15 +3148,21 @@ esac"##,
         let chat = cx.open_offscreen_window(size(px(1000.0), px(760.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, &source, None, cx))).unwrap();
         chat.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
         let chat: AnyWindowHandle = chat.into();
-        for expected in ["Feedback", "88 open", "Resolved 22", "Lead released"] {
+        for expected in expects {
             let deadline = Instant::now() + Duration::from_secs(30);
             while !handle.read_with(&cx, |view, _| view.text().contains(expected)).unwrap() {
                 assert!(Instant::now() < deadline, "the pane sidebar did not show {expected:?}: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
                 wait(&mut cx, window, Duration::from_millis(20));
             }
         }
+        // The sidebar's header is the pane's title, which the page named.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while handle.read_with(&cx, |view, _| view.header_title()).unwrap().as_deref() != Some(pane_title) {
+            assert!(Instant::now() < deadline, "the pane did not name the sidebar's header {pane_title:?}");
+            wait(&mut cx, window, Duration::from_millis(20));
+        }
         wait(&mut cx, window, Duration::from_millis(300));
-        save(&mut cx, window, out.join("claude-chat-pane-sidebar-420.png"));
+        save(&mut cx, window, out.join(format!("claude-chat-{scene}-{width}.png")));
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
         let _ = cx.update_window(chat, |_, window, _| window.remove_window());
     }
@@ -3562,14 +3627,17 @@ fn shoot_pages(out: &std::path::Path, host: &PluginHost, prefix: &str, pages: &[
                 }
             };
             for label in presses {
-                // Each chip shows once the page has loaded what it needs.
+                // Each chip shows once the page has loaded what it needs. `menu:<name>` opens the menu of the button
+                // named so, and a label no chip shows presses the button that shows it.
                 let deadline = Instant::now() + Duration::from_secs(10);
-                while !handle
-                    .read_with(&cx, |view, _| {
-                        view.press_chip(label) || view.turn_on_chip(label)
-                    })
-                    .unwrap()
-                {
+                while !match label.strip_prefix("menu:") {
+                    Some(menu) => handle.update(&mut cx, |view, _, cx| view.open_menu(menu, 0, cx)).unwrap(),
+                    None => handle
+                        .read_with(&cx, |view, _| {
+                            view.press_chip(label) || view.turn_on_chip(label) || view.press(label, 0)
+                        })
+                        .unwrap(),
+                } {
                     assert!(
                         Instant::now() < deadline,
                         "nothing to press for {label}: {}",
@@ -3753,6 +3821,9 @@ fn tasks(out: PathBuf) {
                 "may have been removed",
             ),
             ("settings", &module("settings"), None, Tab, &[], "Keep issues local"),
+            // The toolbar's … opens its menu over the page, and Delete issue asks in a dialog.
+            ("issue-more", issue, Some(&args), Tab, &["menu:More"], "Delete issue"),
+            ("issue-delete", issue, Some(&args), Tab, &["Delete issue"], "Keys are never used again"),
             // The header's New issue opens the line to add one under the filters.
             ("board-new", board, None, Tab, &["Board", "New issue"], "Cancel"),
         ],
@@ -3769,6 +3840,31 @@ fn tasks(out: PathBuf) {
             ("block", block, None, Block, &[], "No issues yet"),
         ],
     );
+    // A project past the first steps: a Done column of 40 and an issue with 130 log entries, each with its Show more.
+    let (long_host, long_project) = repo_host(&out, "tasks-long", include_str!("../../../plugins/tasks/wings-plugin.json"));
+    long_host.publish_project(Some(std::path::Path::new(&long_project)));
+    let (seeded, done) = std::sync::mpsc::channel();
+    let seed = long_host
+        .open_page(&tasks_seed_long(&long_project), move |event| match event {
+            wings_native::page::runtime::Event::Tree(tree) if tree.text().contains("Seeded") => {
+                let _ = seeded.send(());
+            }
+            other => fail_on_error(other),
+        })
+        .unwrap();
+    done.recv_timeout(Duration::from_secs(10)).expect("the issues to be stored");
+    drop(seed);
+    long_host.start_main(&module("main"), fail_on_error).unwrap();
+    let long_args = json!({ "key": "WEB-41", "projectId": long_project });
+    shoot_pages(
+        &out,
+        &long_host,
+        "tasks-long",
+        &[
+            ("board", board, None, Tab, &["Board"], "Show 10 more"),
+            ("issue", issue, Some(&long_args), Tab, &[], "Show 30 earlier"),
+        ],
+    );
     // On its own, after the others: Group by parent stays on for every Issues tab once it's turned on.
     shoot_pages(
         &out,
@@ -3783,6 +3879,30 @@ fn tasks(out: PathBuf) {
             "No parent",
         )],
     );
+}
+
+/// Made-up issues past the Issues pages' first steps: 40 done tasks and one issue with 130 log entries.
+fn tasks_seed_long(project: &str) -> String {
+    struct Seed(String);
+    impl Guest for Seed {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+            let slot = slot_of(&self.0);
+            for n in 1..=40u64 {
+                let at = now - n * 3_600_000;
+                let issue = json!({ "key": format!("WEB-{n}"), "title": format!("Finished task number {n}"), "status": "done", "type": "task", "sessions": [],
+                                    "log": [{ "at": at, "by": "you", "kind": "created", "text": "Created" }], "createdAt": at, "updatedAt": at });
+                cx.save(&format!("issues/{slot}/WEB-{n}"), &issue);
+            }
+            let log: Vec<serde_json::Value> = (0..130u64).map(|n| json!({ "at": now - (130 - n) * 60_000, "by": "you", "kind": "note", "text": format!("Step {n} of the long run.") })).collect();
+            let long = json!({ "key": "WEB-41", "title": "A long-running migration", "status": "in_progress", "type": "task", "sessions": [], "log": log, "createdAt": now - 130 * 60_000, "updatedAt": now });
+            cx.save(&format!("issues/{slot}/WEB-41"), &long);
+            cx.save(&format!("issues/{slot}"), &json!({ "v": 3, "path": self.0, "prefix": "WEB", "next": 42 }));
+            cx.render(&json!({ "id": 0, "type": "#root", "props": {}, "children": [{ "id": 1, "type": "#text", "text": "Seeded" }] }));
+        }
+    }
+    let project = project.to_owned();
+    fake::source("page", move || Box::new(Seed(project.clone())))
 }
 
 /// The slot the plugin keeps a project under (`plugins/tasks/rust/src/storage.rs` `slot_of`).

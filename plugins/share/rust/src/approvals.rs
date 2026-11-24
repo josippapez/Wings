@@ -66,7 +66,7 @@ fn settle(id: &str, answer: Answer) -> bool {
     };
     changed();
     if PENDING.with(|pending| pending.borrow().is_empty()) && OPENED_FOR_ASK.with(|opened| opened.replace(false)) {
-        drop(host::call("closeView", json!({ "id": VIEW })));
+        drop(host::close_view(VIEW));
     }
     let mut slot = ask.slot.borrow_mut();
     slot.answer = Some(answer);
@@ -105,7 +105,7 @@ pub async fn ask(asker: Option<String>, port: u16) -> Answer {
         }
     });
     if !host::focused() {
-        drop(host::call("notify", json!({ "title": format!("Share localhost:{port} publicly?"), "body": "Allow or deny it in Wings." })));
+        drop(host::notify(&format!("Share localhost:{port} publicly?"), "Allow or deny it in Wings."));
     }
     poll_fn(|cx| {
         let mut slot = slot.borrow_mut();

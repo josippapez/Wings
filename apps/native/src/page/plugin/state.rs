@@ -22,6 +22,8 @@ fn new_key() -> String {
 pub enum StatePlace {
     Tab,
     Block,
+    /// A page in a sidebar, which keeps no state; it only names its header (`setTabTitle`).
+    Sidebar,
 }
 
 struct State {
@@ -29,7 +31,7 @@ struct State {
     save: Box<dyn Fn(Value) -> Result<(), String> + Send + Sync>,
     /// What a tab's page says of the agent it runs, for the sidebar's Agents.
     agent: Option<TabAgent>,
-    /// What a tab's page names its tab, in place of its view's title.
+    /// What a tab's page names its tab, or a sidebar's page its header, in place of its view's or sidebar's title.
     title: Option<String>,
     /// Called when the agent or the title changes, so the window draws them again.
     agent_changed: Option<Box<dyn Fn() + Send + Sync>>,
@@ -135,6 +137,11 @@ impl FrameState {
         self.place == StatePlace::Tab
     }
 
+    /// Whether this is a sidebar page's, which has no place its programs stay at.
+    pub(super) fn in_sidebar(&self) -> bool {
+        self.place == StatePlace::Sidebar
+    }
+
     pub(super) fn show(&self) -> Result<(), String> {
         match (&self.state.lock().unwrap().show, self.place) {
             (Some(show), StatePlace::Tab) => Ok(show(self)),
@@ -181,14 +188,14 @@ impl FrameState {
         Ok(())
     }
 
-    /// What the page named its tab, if it did.
+    /// What the page named its tab or sidebar header, if it did.
     pub fn title(&self) -> Option<String> {
         self.state.lock().unwrap().title.clone()
     }
 
     pub(crate) fn set_title(&self, title: Option<String>) -> Result<(), String> {
-        if self.place != StatePlace::Tab {
-            return Err("Only a page shown as a tab can name its tab".into());
+        if self.place == StatePlace::Block {
+            return Err("Only a page shown as a tab or in a sidebar can name its tab".into());
         }
         let mut state = self.state.lock().unwrap();
         if state.title != title {

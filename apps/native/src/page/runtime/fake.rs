@@ -13,7 +13,6 @@ use std::{
     fs,
     io::Read,
     sync::{Arc, Mutex},
-    time::Instant,
 };
 
 /// What a fake frame does, as the module's exports are what a real one does. Each is one turn.
@@ -64,7 +63,9 @@ impl Cx<'_> {
     /// The `timer` import: `Guest::timer` is called with the id in `ms`.
     pub fn later(&mut self, ms: u32) -> u32 {
         let id = self.id();
-        self.host.timer(id, ms);
+        if let Err(error) = self.host.timer(id, ms) {
+            self.failed = Some(error);
+        }
         id
     }
 
@@ -200,7 +201,9 @@ pub(super) struct Fake {
 /// Starts `guest`, which can stop at once.
 pub(super) fn start(guest: Box<dyn Guest>, host: Host) -> wasmtime::Result<Fake> {
     let mut fake = Fake { guest, host, next: 0 };
-    fake.turn(|guest, cx| guest.start(cx))?;
+    if let Err(error) = fake.turn(|guest, cx| guest.start(cx)) {
+        return Err(fake.host.fatal(error));
+    }
     Ok(fake)
 }
 
@@ -213,8 +216,8 @@ impl Fake {
 }
 
 impl Frame for Fake {
-    fn timers(&mut self) -> &mut Vec<(Instant, u32)> {
-        &mut self.host.timers
+    fn host(&mut self) -> &mut Host {
+        &mut self.host
     }
 
     fn command(&mut self, command: Command) -> wasmtime::Result<()> {

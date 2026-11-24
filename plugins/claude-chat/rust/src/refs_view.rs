@@ -61,7 +61,7 @@ pub fn refresh_issues() {
 async fn look_up(found: &Ref) -> Detail {
     let detail = match found {
         Ref::Issue(key) => {
-            let answer = host::call("callTool", json!({ "name": "tasks__get", "arguments": { "key": key } })).await;
+            let answer = host::call_tool("tasks__get", &json!({ "key": key })).await;
             answer.ok().filter(|answer| answer["isError"] != true).and_then(|answer| refs::issue_of(answer["text"].as_str()?)).map(Detail::Issue)
         }
         Ref::GitHub { url, .. } => printed(host::exec("gh", &["pr", "view", url, "--json", refs::GH_FIELDS]).await).and_then(|pr| refs::github_pr(&pr)).map(Detail::Pr),

@@ -189,6 +189,7 @@ impl Workspace {
         // Showing or floating one makes it the one Ctrl-` acts on, as the desktop's `last`.
         if shown {
             self.loose_last = Some(key);
+            self.see_agent(super::sidebar::AgentKey::Loose(key));
         }
         view.update(cx, |view, cx| view.set_visible(shown, cx));
         if shown {

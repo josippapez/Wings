@@ -187,6 +187,7 @@ impl Workspace {
 
     /// Shows another project. The one shown now keeps its tabs and shells for when it comes back.
     pub fn switch_project(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let seen = self.see_project(&path);
         if self.welcome {
             // The removed project left nothing to keep.
             self.welcome = false;
@@ -194,6 +195,9 @@ impl Workspace {
             return self.enter_project(window, cx);
         }
         if path == self.config.project {
+            if seen {
+                self.notify_pieces(&[super::parts::Piece::Sidebar], cx);
+            }
             return;
         }
         self.save(cx);

@@ -2,11 +2,12 @@
 //! project's files and folders match it, and what the draft becomes once you pick one. A line range follows a picked
 //! file as `#L10` or `#L10-20`, which Claude Code reads as lines of that file. It makes no host calls, so its tests run.
 
-/// The most files kept. A big monorepo lists far more, and every keystroke ranks them all; the first ones git lists
-/// (its order is by path) are enough for a menu of eight.
-pub const MOST_FILES: usize = 20_000;
+/// The most files kept. A big monorepo lists more, and every keystroke ranks them all: 200,000 paths rank in about 15 ms (native release)
+/// (`a_keystroke_ranks_two_hundred_thousand_paths_quickly`), and the first 20,000 that git listed (its order
+/// is by path) left every file after them out of the menu.
+pub const MOST_FILES: usize = 200_000;
 /// The most folders kept, derived from the files' paths.
-pub const MOST_DIRS: usize = 5_000;
+pub const MOST_DIRS: usize = 50_000;
 /// How many entries, files and folders together, the menu offers.
 pub const MENU: usize = 8;
 
@@ -312,5 +313,24 @@ mod tests {
     fn the_list_is_capped() {
         let paths: Vec<String> = (0..MOST_FILES + 5).map(|n| format!("f{n}")).collect();
         assert_eq!(Files::from_git(&paths.join("\0")).paths.len(), MOST_FILES);
+    }
+
+    /// 200,000 files are all known, the last one included, and one keystroke's ranking of them is quick.
+    #[test]
+    fn a_keystroke_ranks_two_hundred_thousand_paths_quickly() {
+        let path = |n: u32| format!("packages/pkg{:04}/src/module{}/file{n}.ts", n % 4_000, n % 37);
+        let listed: String = (0..200_000).map(|n| path(n) + "\0").collect();
+        let known = Files::from_git(&listed);
+        assert!(known.contains(&path(199_999)), "the last file is known");
+        assert_eq!(known.matches("file199999"), [path(199_999).as_str()]);
+        // The worst keystroke, one letter that every path holds, and a longer one.
+        for query in ["e", "module3", "file1999"] {
+            let start = std::time::Instant::now();
+            let found = known.matches(query);
+            let took = start.elapsed();
+            eprintln!("ranking {query:?} on 200,000 paths: {took:?}");
+            assert_eq!(found.len(), MENU);
+            assert!(took.as_millis() < 1_000, "{query}: {took:?}");
+        }
     }
 }

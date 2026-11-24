@@ -5,7 +5,7 @@
 
 use std::cell::RefCell;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 use wings_plugin::{
     format::basename,
     host, task,
@@ -179,7 +179,7 @@ pub fn started(run: u32) {
 /// A worktree of the chat's project, as Wings' `createWorktree` makes it, on a branch named from `message`: its folder.
 async fn make(cwd: &str, message: &str) -> Result<String, String> {
     // The project the folder is: a worktree's own project is its repo's, so the new one sits beside the same repo.
-    let project = host::call("project", json!({})).await.unwrap_or(Value::Null);
+    let project = host::project().await.unwrap_or(Value::Null);
     let id = match (project["path"].as_str() == Some(cwd), project["parentId"].as_str(), project["id"].as_str()) {
         (true, Some(parent), _) => parent.to_owned(),
         (true, None, Some(id)) => id.to_owned(),
@@ -187,8 +187,7 @@ async fn make(cwd: &str, message: &str) -> Result<String, String> {
     };
     let mut attempt = 1;
     loop {
-        let params = json!({ "projectId": id, "branch": branch_name(message, attempt) });
-        match host::call("createWorktree", params).await {
+        match host::create_worktree(Some(&id), &branch_name(message, attempt), None).await {
             Ok(made) => return made["path"].as_str().map(str::to_owned).ok_or_else(|| "Wings didn't say where it made it".to_owned()),
             // A name that is taken (the branch or its folder): the next one.
             Err(error) if error.contains("already exists") && attempt < TRIES => attempt += 1,
@@ -200,6 +199,7 @@ async fn make(cwd: &str, message: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::{cell::RefCell, rc::Rc};
 
     type Calls = Rc<RefCell<Vec<(String, Value)>>>;
@@ -320,7 +320,7 @@ mod tests {
         assert!(!intercept());
         task::block_on(async {});
         let made = called(&calls, "createWorktree");
-        assert_eq!(made, [json!({ "projectId": "/work/shop", "branch": "claude/fix-the-login-bug" })]);
+        assert_eq!(made, [json!({ "projectId": "/work/shop", "branch": "claude/fix-the-login-bug", "base": null })]);
         // Claude Code starts in the new folder, once, and the header names it.
         let spawned = called(&calls, "spawn");
         assert_eq!(spawned.len(), 1);

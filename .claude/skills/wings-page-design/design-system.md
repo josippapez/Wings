@@ -6,7 +6,7 @@ where it goes.
 
 ## Ground and colour
 
-The app's palette (`apps/native/src/theme.rs`, mirrored in `packages/plugin-ui/plugin-ui.css`):
+The app's palette (`apps/native/src/theme.rs`):
 
 | Role | Use it for |
 | --- | --- |

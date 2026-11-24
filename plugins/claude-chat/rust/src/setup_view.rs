@@ -6,7 +6,6 @@
 //! that confirms it. A file opens in your editor from its Open button, which Wings allows for Claude Code's own files; its
 //! path can be copied instead, and a folder's only is.
 
-use serde_json::json;
 use wings_plugin::{
     format::{ago, tokens},
     host, task,
@@ -347,7 +346,7 @@ fn open(path: &str) {
 /// Puts `path` on the clipboard, from your click on its button, and marks that row Copied.
 fn copy(path: &str) {
     chat::with(|c| c.session.setup.copied = Some(path.to_owned()));
-    drop(host::call("copyText", json!({ "text": path })));
+    drop(host::copy_text(&path));
 }
 
 /// Shows `edit` with what it changes, to confirm. Nothing is written yet.

@@ -7,7 +7,7 @@ use crate::{
     ASK, DONE, STATE, WANT,
     approvals,
     assigned::{Project, Watch, WatchDraft},
-    schedule::{Draft, Run, RunIn, Schedule, When, claim, clean_draft, describe_when, due_at, on_start, refuse_past},
+    schedule::{Draft, Run, RunIn, Schedule, When, claim, clean_draft, clean_prompt, describe_when, due_at, on_start, refuse_past},
     store::{read_schedules, read_watches, save_schedules, save_watches},
     tools,
     watches::{CHECK_MS, add_watch, check_all, check_one, check_watch, dismiss, install, remove_watch, save_watch, sign_in, sign_in_code, start_ticket, targets_of, toggle_watch},
@@ -142,7 +142,9 @@ async fn open_agent(s: &Schedule) -> Run {
                 Err(error) => fell_back = Some(format!("Claude chat didn't open ({error}), so it ran in a terminal.")),
             }
         }
-        let answer = host::call("openPane", json!({ "command": s.agent.command(), "args": [s.prompt], "cwd": project.path, "placement": "tab", "background": true }))
+        // A terminal types the prompt into a shell: one line, and up to 4 KB, as a chat's longer one with line breaks is not.
+        let prompt = clean_prompt(&s.prompt, RunIn::Terminal).map_err(|why| fell_back.as_ref().map_or(why.clone(), |first| format!("{first} The prompt can't run in a terminal: {why}")))?;
+        let answer = host::OpenPane::new().command(s.agent.command(), &[prompt.as_str()]).cwd(&project.path).background().open()
             .await
             .map_err(|error| fell_back.as_ref().map_or(error.clone(), |why| format!("{why} The terminal failed too: {error}")))?;
         Ok((answer["paneId"].as_str().map(str::to_owned), fell_back))
@@ -326,11 +328,11 @@ mod tests {
     #[test]
     fn a_claude_chat_run_opens_the_chat_tab_in_the_project_with_the_prompt_and_starts_no_terminal() {
         let calls = wings(Ok(Value::Null), Ok(json!({ "paneId": "9" })));
-        let run = block_on(open_agent(&schedule(crate::schedule::Agent::Claude, RunIn::Chat)));
+        let run = block_on(open_agent(Box::leak(Box::new(schedule(crate::schedule::Agent::Claude, RunIn::Chat)))));
         assert_eq!((run.ok, run.error, run.pane_id), (true, None, None));
         assert_eq!(methods(&calls), ["openView"]);
         let (_, params) = calls.borrow().iter().find(|(method, _)| method == "openView").cloned().unwrap();
-        assert_eq!(params, json!({ "plugin": "claude-chat", "id": "chat", "as": "tab", "args": { "cwd": "/work", "prompt": "Review the open PRs" }, "newTab": true }));
+        assert_eq!(params, json!({ "plugin": "claude-chat", "id": "chat", "as": "tab", "args": { "cwd": "/work", "prompt": "Review the open PRs" }, "newTab": true, "projectId": "p" }));
     }
 
     #[test]
@@ -340,7 +342,7 @@ mod tests {
             (crate::schedule::Agent::OpenCode, RunIn::Chat, "opencode --prompt"),
         ] {
             let calls = wings(Ok(Value::Null), Ok(json!({ "paneId": "9" })));
-            let run = block_on(open_agent(&schedule(agent, run_in)));
+            let run = block_on(open_agent(Box::leak(Box::new(schedule(agent, run_in)))));
             assert_eq!((run.ok, run.error, run.pane_id), (true, None, Some("9".into())));
             assert_eq!(methods(&calls), ["openPane"]);
             let (_, params) = calls.borrow().iter().find(|(method, _)| method == "openPane").cloned().unwrap();
@@ -351,14 +353,14 @@ mod tests {
     #[test]
     fn a_chat_that_cannot_open_falls_back_to_a_terminal_and_the_run_says_why() {
         let calls = wings(Err("claude-chat is turned off or not installed".into()), Ok(json!({ "paneId": "9" })));
-        let run = block_on(open_agent(&schedule(crate::schedule::Agent::Claude, RunIn::Chat)));
+        let run = block_on(open_agent(Box::leak(Box::new(schedule(crate::schedule::Agent::Claude, RunIn::Chat)))));
         assert_eq!(methods(&calls), ["openView", "openPane"]);
         assert!(run.ok && run.pane_id.as_deref() == Some("9"));
         let why = run.error.unwrap();
         assert!(why.contains("claude-chat is turned off or not installed") && why.contains("ran in a terminal"), "{why}");
         // Both failing is a failed run that names both.
         wings(Err("no chat".into()), Err("no terminal".into()));
-        let run = block_on(open_agent(&schedule(crate::schedule::Agent::Claude, RunIn::Chat)));
+        let run = block_on(open_agent(Box::leak(Box::new(schedule(crate::schedule::Agent::Claude, RunIn::Chat)))));
         let why = run.error.unwrap();
         assert!(!run.ok && why.contains("no chat") && why.contains("no terminal"), "{why}");
     }

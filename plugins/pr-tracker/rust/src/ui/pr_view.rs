@@ -330,7 +330,7 @@ fn branch(branch: &str) -> Node {
         .prop("size", "icon-xs")
         .prop("label", if copied { "Copied".to_owned() } else { format!("Copy branch name {source}") })
         .on("onClick", move |_| {
-            drop(host::call("copyText", json!({ "text": name })));
+            drop(host::copy_text(&name));
             ui(|u| u.copied = true);
             spawn(async {
                 host::sleep(1500).await;
@@ -688,9 +688,11 @@ fn snippet(p: &Page, root: &Comment, latest: Option<i64>) -> Option<Node> {
     };
     let lines = root.snippet.clone().or(read);
     let gone = root.snippet.is_none() && now && matches!(held, Some(Snip::Done(None)));
+    // A read of the thread's own push that found nothing: the commit or the file couldn't be read from the clone.
+    let failed = root.snippet.is_none() && !now && matches!(held, Some(Snip::Done(None)));
     let iteration = root.range.as_ref().and_then(|r| r.iteration);
     let older = iteration.zip(latest).is_some_and(|(i, l)| i < l);
-    let loading = lines.is_none() && p.can.snippet && root.path.is_some() && root.range.is_some() && !gone;
+    let loading = lines.is_none() && p.can.snippet && root.path.is_some() && root.range.is_some() && !gone && !failed;
     let shown = lines.clone().or_else(|| loading.then(|| root.range.as_ref().map(|r| placeholder_lines(r.start, r.end, iteration.is_some()))).flatten());
     let bar = older.then(|| {
         let (it, l) = (iteration.unwrap(), latest.unwrap());
@@ -708,6 +710,10 @@ fn snippet(p: &Page, root: &Comment, latest: Option<i64>) -> Option<Node> {
     });
     if gone {
         return Some(col("s").maybe(bar).child(small("These lines are no longer in the latest code.").prop("tone", "muted")));
+    }
+    if failed {
+        let retry = button("Try again", "ghost", move || pr_page::retry_snippet(id, false));
+        return Some(col("s").maybe(bar).child(line("s").child(small("Couldn't read these lines from the repo.").prop("tone", "muted")).child(retry)));
     }
     let shown = shown?;
     Some(col("s").maybe(bar).child(code_lines(&shown, lines.is_none())))
@@ -781,6 +787,23 @@ mod tests {
         assert_eq!((lines.first().map(|l| l.n), lines.last().map(|l| l.n)), (Some(6), Some(13)));
         assert_eq!(lines.iter().filter(|l| l.hit).count(), 1);
         assert_eq!(placeholder_lines(10, 10, false).last().map(|l| l.n), Some(10));
+    }
+
+    /// A read that found no lines says so with Try again, instead of showing the loading lines for good.
+    #[test]
+    fn a_threads_code_that_couldnt_be_read_says_so_instead_of_loading_forever() {
+        let root = Comment {
+            id: 30001, reply_to: None, path: Some("src/a.cs".into()), line: Some(6), side: "additions".into(), author: "Ann".into(), body: "why?".into(), created_at: "t1".into(), url: "u".into(),
+            can_reply: Some(true), by: None, discussion: None, thread: None, range: Some(crate::types::LineRange { start: 6, end: 6, iteration: Some(1) }), snippet: None, refs: None, system: false,
+        };
+        let mut p = pr_page::empty();
+        p.can.snippet = true;
+        let shown = |p: &Page| wings_plugin::ui::tree_json(snippet(p, &root, Some(1)).unwrap()).to_string();
+        p.snippets.insert((root.id, false), Snip::Loading);
+        assert!(shown(&p).contains("Spinner"));
+        p.snippets.insert((root.id, false), Snip::Done(None));
+        let failed = shown(&p);
+        assert!(failed.contains("Couldn't read these lines") && failed.contains("Try again") && !failed.contains("Spinner"), "{failed}");
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Which forge a git remote URL points at, as `wings-plugin-sdk/git`'s `parseRemote` tells.
+//! Which forge a git remote URL points at.
 
 use crate::azure::{self, AzureRemote};
 use serde_json::{Value, json};

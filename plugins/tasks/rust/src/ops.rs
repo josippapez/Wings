@@ -5,7 +5,7 @@ use crate::{
     domain::{
         Actor, Create, DESCRIPTION_TEMPLATE, Issue, IssueType, LogEntry, Op, Priority, STATUS_NAMES, Status, Store, TYPE_NAMES, Update, check_enum, has_content, limits, normalize_key, priority_label,
     },
-    log::{append, append_loose, entry, touch, upsert_files},
+    log::{append, entry, touch, upsert_files},
     relations::{descendants_of, relate},
 };
 use std::collections::HashSet;
@@ -109,9 +109,6 @@ fn create_issue(store: &Store, op: &Create, by: &Actor, now: f64) -> Result<Appl
     if let Some(priority) = &op.priority {
         check_enum(priority, &Priority::NAMES, "priority")?;
     }
-    if store.issues.len() >= limits::ISSUES {
-        return Err(format!("A project holds up to {} issues. Remove one first.", limits::ISSUES));
-    }
     let mut issue = Issue {
         key: format!("{}-{}", store.prefix, store.next),
         title,
@@ -135,7 +132,7 @@ fn create_issue(store: &Store, op: &Create, by: &Actor, now: f64) -> Result<Appl
     touch(&mut issue, by, now);
     if let Some(branch) = &op.branch {
         let entries = apply_links(&mut issue, &Update { branch: Some(branch.clone()), ..Update::default() }, by, now)?;
-        append(&mut issue, entries)?;
+        append(&mut issue, entries);
     }
     let mut issues = store.issues.clone();
     issues.push(issue);
@@ -184,7 +181,7 @@ fn remove_issue(store: &Store, index: usize, children: bool, by: &Actor, now: f6
             if next == *i {
                 return next;
             }
-            append_loose(&mut next, notes.into_iter().map(|t| entry(now, by, "link", t)).collect());
+            append(&mut next, notes.into_iter().map(|t| entry(now, by, "link", t)).collect());
             next.updated_at = now;
             next
         })
@@ -271,7 +268,7 @@ fn update_issue(store: &Store, index: usize, op: &Op, by: &Actor, now: f64) -> R
     if !changed {
         return Ok(Applied { store: store.clone(), issue: current.clone(), changed: false });
     }
-    append(&mut next, entries)?;
+    append(&mut next, entries);
     touch(&mut next, by, now);
     issues[index] = next.clone();
     Ok(Applied { store: Store { prefix: store.prefix.clone(), next: store.next, issues }, issue: next, changed: true })
@@ -354,13 +351,21 @@ mod tests {
     }
 
     #[test]
-    fn a_full_log_refuses_more_entries_instead_of_dropping_old_ones() {
+    fn a_project_takes_new_issues_past_three_hundred() {
+        let mut s = fresh();
+        for i in 0..=300 {
+            s = make(&s, &format!("i{i}"), |_| {});
+        }
+        assert_eq!((s.issues.len(), s.issues.iter().any(|i| i.key == "WEB-301")), (301, true));
+    }
+
+    #[test]
+    fn a_log_keeps_every_entry_past_three_hundred() {
         let mut s = make(&fresh(), "A", |_| {});
-        for i in 1..limits::LOG {
+        for i in 1..=400 {
             s = note(&s, "WEB-1", &format!("n{i}"), &Actor::You, 1.0);
         }
-        assert_eq!(s.issues[0].log.len(), limits::LOG);
-        assert!(err(&s, Op::Note { key: "WEB-1".into(), text: "more".into() }).contains("already has"));
+        assert_eq!((s.issues[0].log.len(), s.issues[0].log.last().map(|e| e.text.as_str())), (401, Some("n400")));
     }
 
     #[test]
@@ -435,7 +440,7 @@ mod tests {
     }
 
     #[test]
-    fn files_one_row_per_path_the_newest_win_past_100_the_oldest_go_texts_are_cut_no_log_entry() {
+    fn files_one_row_per_path_the_newest_win_past_the_most_the_oldest_go_texts_are_cut_no_log_entry() {
         let a = agent("s-a", Some("one"), Some("claude"));
         let b = agent("s-b", None, None);
         let files = |list: &[(&str, &str)]| Op::Files { key: "WEB-1".into(), files: list.iter().map(|(p, w)| ((*p).into(), (*w).into())).collect() };
@@ -449,14 +454,15 @@ mod tests {
         assert_eq!(issue.sessions.iter().map(|x| (x.id.as_str(), x.seen)).collect::<Vec<_>>(), [("s-a", 10.0), ("s-b", 20.0)], "the session is recorded and refreshed like any write");
         assert!(!apply_op(&s, &files(&[]), &a, 30.0).unwrap().changed);
 
-        let many: Vec<(String, String)> = (0..105).map(|i| (format!("f{i}.ts"), "w".to_owned())).collect();
+        let many: Vec<(String, String)> = (0..limits::FILES + 5).map(|i| (format!("f{i}.ts"), "w".to_owned())).collect();
         let op = |rows: &[(String, String)]| Op::Files { key: "WEB-1".into(), files: rows.to_vec() };
-        let mut t = apply_op(&make(&fresh(), "A", |_| {}), &op(&many[..60]), &a, 1.0).unwrap().store;
-        t = apply_op(&t, &op(&many[60..]), &a, 2.0).unwrap().store;
+        let first = many.len() - 45;
+        let mut t = apply_op(&make(&fresh(), "A", |_| {}), &op(&many[..first]), &a, 1.0).unwrap().store;
+        t = apply_op(&t, &op(&many[first..]), &a, 2.0).unwrap().store;
         let rows = t.issues[0].files.as_ref().unwrap();
         assert_eq!(rows.len(), limits::FILES);
         assert!(rows[..45].iter().all(|f| f.at == 2.0));
-        assert_eq!(rows.iter().filter(|f| f.at == 1.0).count(), 55);
+        assert_eq!(rows.iter().filter(|f| f.at == 1.0).count(), limits::FILES - 45);
 
         let long = apply_op(&make(&fresh(), "A", |_| {}), &Op::Files { key: "WEB-1".into(), files: vec![("p".repeat(500), "w".repeat(500))] }, &a, 1.0).unwrap().store.issues[0].files.as_ref().unwrap()[0].clone();
         assert_eq!((long.path.chars().count(), long.what.chars().count()), (limits::FILE_PATH, limits::FILE_WHAT));
@@ -465,13 +471,13 @@ mod tests {
     #[test]
     fn an_issue_with_a_full_log_still_takes_its_files_and_an_old_issue_without_files_formats_fine() {
         let mut s = make(&fresh(), "A", |_| {});
-        for i in 1..limits::LOG {
+        for i in 1..300 {
             s = note(&s, "WEB-1", &format!("n{i}"), &Actor::You, 1.0);
         }
         let out = apply_op(&s, &Op::Files { key: "WEB-1".into(), files: vec![("a.ts".into(), "x".into())] }, &agent("s", None, None), 5.0).unwrap();
         assert!(out.changed);
         assert_eq!(out.issue.files.as_ref().unwrap().len(), 1);
-        assert_eq!(out.issue.log.len(), limits::LOG);
+        assert_eq!(out.issue.log.len(), 300);
         let old = make(&fresh(), "Old", |_| {}).issues[0].clone();
         assert!(old.files.is_none());
         assert!(!format_issue(&old, &[]).contains("Files changed"));

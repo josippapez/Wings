@@ -10,8 +10,30 @@ use std::cell::RefCell;
 /// pages: the event's data.
 pub const EVENT: &str = "review-comment";
 
-/// The most comments a chat holds before the next message: more is a review sent in pieces.
-pub const MAX: usize = 50;
+/// The most bytes of comments a chat keeps before the next message, as saved in the tab's state. Wings keeps 64,000
+/// characters of a tab's state, in which the session, the folders and the rest take some, so the comments get this much:
+/// a count (there were 50) said nothing of what fits, a long comment with its quoted lines taking what ten short ones do.
+pub const KEEP_BYTES: usize = 40_000;
+
+/// What `apply` did with an event.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Applied {
+    /// Not a comment, or one taken back that wasn't there: nothing changed.
+    Nothing,
+    /// A comment kept or replaced, or one taken back.
+    Changed,
+    /// A comment that can't be kept, for there is no room left for it in the tab's state.
+    Full,
+}
+
+impl Applied {
+    pub fn changed(self) -> bool {
+        self == Self::Changed
+    }
+}
+
+/// What the page says when a comment can't be kept.
+pub const FULL: &str = "That comment wasn't kept: the comments here fill what a tab can save. Send them with a message first, or remove some.";
 
 thread_local! {
     static KEY: RefCell<Option<String>> = const { RefCell::new(None) };
@@ -83,29 +105,49 @@ pub fn to_json(comments: &[Comment]) -> Value {
 
 /// The comments a tab kept.
 pub fn from_json(saved: &Value) -> Vec<Comment> {
-    saved.as_array().into_iter().flatten().filter_map(Comment::of).take(MAX).collect()
+    let mut kept = Vec::new();
+    for comment in saved.as_array().into_iter().flatten().filter_map(Comment::of) {
+        if fits(&kept, &comment) {
+            kept.push(comment);
+        }
+    }
+    kept
+}
+
+/// The bytes a comment takes in the tab's state.
+fn size(comment: &Comment) -> usize {
+    comment.json().to_string().len()
+}
+
+/// Whether `comment` fits after `kept` within `KEEP_BYTES`.
+pub fn fits(kept: &[Comment], comment: &Comment) -> bool {
+    kept.iter().map(size).sum::<usize>() + size(comment) <= KEEP_BYTES
 }
 
 /// A comment, or a comment taken back, that the Changes plugin sent for this chat (`data`), applied to `comments`. Whether
-/// they changed. A comment with an id already there replaces it.
-pub fn apply(comments: &mut Vec<Comment>, data: &Value) -> bool {
+/// they changed, or that there was no room for one. A comment with an id already there replaces it.
+pub fn apply(comments: &mut Vec<Comment>, data: &Value) -> Applied {
     let Some(id) = data["id"].as_str() else {
-        return false;
+        return Applied::Nothing;
     };
     if data["delete"] == true {
         let before = comments.len();
         comments.retain(|comment| comment.id != id);
-        return comments.len() != before;
+        return if comments.len() != before { Applied::Changed } else { Applied::Nothing };
     }
     let Some(comment) = Comment::of(data) else {
-        return false;
+        return Applied::Nothing;
     };
-    match comments.iter().position(|had| had.id == id) {
-        Some(at) => comments[at] = comment,
-        None if comments.len() < MAX => comments.push(comment),
-        None => return false,
+    let at = comments.iter().position(|had| had.id == id);
+    let others: Vec<Comment> = comments.iter().filter(|had| had.id != id).cloned().collect();
+    if !fits(&others, &comment) {
+        return Applied::Full;
     }
-    true
+    match at {
+        Some(at) => comments[at] = comment,
+        None => comments.push(comment),
+    }
+    Applied::Changed
 }
 
 /// "2 comments on 2 files", "1 comment on the plan", or both.
@@ -201,22 +243,43 @@ mod tests {
     fn a_comment_event_adds_one_a_repeat_replaces_it_and_a_delete_removes_it() {
         let mut list = Vec::new();
         let event = |id: &str, body: &str| json!({ "chat": "c", "path": "src/a.rs", "side": "old", "line": 4, "quote": "q", "body": body, "id": id });
-        assert!(apply(&mut list, &event("7:-1", "First")));
-        assert!(apply(&mut list, &event("7:-2", "Second")));
-        assert!(apply(&mut list, &event("7:-1", "First, again")));
+        assert!(apply(&mut list, &event("7:-1", "First")).changed());
+        assert!(apply(&mut list, &event("7:-2", "Second")).changed());
+        assert!(apply(&mut list, &event("7:-1", "First, again")).changed());
         assert_eq!(list.iter().map(|c| c.body.as_str()).collect::<Vec<_>>(), ["First, again", "Second"]);
         assert!(list[0].old);
         // The same draft number from another viewer is another comment.
-        assert!(apply(&mut list, &event("9:-1", "Elsewhere")));
+        assert!(apply(&mut list, &event("9:-1", "Elsewhere")).changed());
         assert_eq!(list.len(), 3);
-        assert!(apply(&mut list, &json!({ "chat": "c", "delete": true, "id": "7:-2" })));
-        assert!(!apply(&mut list, &json!({ "chat": "c", "delete": true, "id": "7:-2" })));
+        assert!(apply(&mut list, &json!({ "chat": "c", "delete": true, "id": "7:-2" })).changed());
+        assert!(!apply(&mut list, &json!({ "chat": "c", "delete": true, "id": "7:-2" })).changed());
         assert_eq!(list.len(), 2);
         // What isn't a comment changes nothing.
-        assert!(!apply(&mut list, &json!({ "path": "a", "line": 1, "body": "no id" })));
-        assert!(!apply(&mut list, &json!({ "id": "1:1", "path": "a", "line": 0, "body": "no line" })));
-        assert!(!apply(&mut list, &json!({ "id": "1:2", "path": "a", "line": 1, "body": "  " })));
+        assert!(!apply(&mut list, &json!({ "path": "a", "line": 1, "body": "no id" })).changed());
+        assert!(!apply(&mut list, &json!({ "id": "1:1", "path": "a", "line": 0, "body": "no line" })).changed());
+        assert!(!apply(&mut list, &json!({ "id": "1:2", "path": "a", "line": 1, "body": "  " })).changed());
         assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn comments_are_bounded_by_the_bytes_they_take_and_one_that_does_not_fit_is_refused() {
+        let event = |id: &str, body: &str| json!({ "chat": "c", "path": "src/a.rs", "line": 4, "quote": "q", "body": body, "id": id });
+        let mut list = Vec::new();
+        // More than fifty short comments are all kept.
+        for n in 0..80 {
+            assert_eq!(apply(&mut list, &event(&format!("1:{n}"), "short")), Applied::Changed);
+        }
+        assert_eq!(list.len(), 80);
+        // A few long ones fill the room, and the next is refused, not dropped without a word.
+        let long = "x".repeat(12_000);
+        let mut list = Vec::new();
+        let results: Vec<Applied> = (0..5).map(|n| apply(&mut list, &event(&format!("2:{n}"), &long))).collect();
+        assert_eq!(results, [Applied::Changed, Applied::Changed, Applied::Changed, Applied::Full, Applied::Full]);
+        assert!(to_json(&list).to_string().len() <= KEEP_BYTES);
+        // A comment replaced by a longer one is judged without its old self.
+        assert_eq!(apply(&mut list, &event("2:0", "short again")), Applied::Changed);
+        // What the tab saved comes back whole.
+        assert_eq!(from_json(&to_json(&list)), list);
     }
 
     #[test]

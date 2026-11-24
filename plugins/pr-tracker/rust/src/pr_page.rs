@@ -50,6 +50,9 @@ pub struct Page {
     pub back: Option<Rc<dyn Fn()>>,
     /// Whether the tab is the project picker, which a tab opened with no PR starts as.
     pub picking: bool,
+    /// Whether the overview, the conversation and the pushes have each answered once. A code thread's lines are read
+    /// at its push's commits, so none is read before: read too soon, a thread's code never came.
+    pub loaded: bool,
 }
 
 thread_local! {
@@ -167,6 +170,8 @@ async fn load_pushes() {
 /// The overview, the conversation and the pushes, at once.
 async fn load_all() {
     join(load_overview(), join(load_comments(), load_pushes())).await;
+    with(|p| p.loaded = true);
+    ensure_snippets();
 }
 
 /// Loads again, once at a time: a call while one runs makes it go once more when it is done.
@@ -180,7 +185,7 @@ pub fn refresh() {
 /// Called when the conversation, the pushes or what a card shows changes, never from drawing.
 pub fn ensure_snippets() {
     let wanted: Vec<(Comment, bool)> = read(|p| {
-        if !p.can.snippet {
+        if !p.can.snippet || !p.loaded {
             return Vec::new();
         }
         pr_view::wanted_snippets(p).into_iter().filter(|(c, now)| !p.snippets.contains_key(&(c.id, *now))).collect()
@@ -196,6 +201,12 @@ pub fn ensure_snippets() {
             with(|p| p.snippets.insert((root.id, now), Snip::Done(lines)));
         });
     }
+}
+
+/// Reads a thread's lines again after a read that found none.
+pub fn retry_snippet(id: i64, now: bool) {
+    with(|p| p.snippets.remove(&(id, now)));
+    ensure_snippets();
 }
 
 // ---------- what only main can do ----------
@@ -312,10 +323,11 @@ fn open_pr(args: PrArgs, back: Option<Rc<dyn Fn()>>) {
     refresh();
 }
 
-fn empty() -> Page {
+pub(crate) fn empty() -> Page {
     Page {
         args: None, link: None, overview: None, comments: None, pushes: Vec::new(), can: Can { approve: false, vote: false, snippet: false, run: false },
         errors: [None, None, None], problem: None, problem_busy: false, notice: None, busy: None, snippets: HashMap::new(), back: None, picking: false,
+        loaded: false,
     }
 }
 
@@ -403,6 +415,22 @@ mod tests {
             assert!(p.error().is_none() && p.problem.is_none());
             assert!(p.can.approve);
         });
+    }
+
+    /// The conversation can answer before the pushes do: a thread's code waits for them, or it is read at no commit,
+    /// finds nothing and never comes.
+    #[test]
+    fn a_threads_code_is_read_only_once_the_pushes_have_loaded() {
+        let root = Comment {
+            id: 30001, reply_to: None, path: Some("src/a.cs".into()), line: Some(6), side: "additions".into(), author: "Ann".into(), body: "why?".into(), created_at: "t1".into(), url: "u".into(),
+            can_reply: Some(true), by: None, discussion: None, thread: None, range: Some(crate::types::LineRange { start: 6, end: 6, iteration: Some(1) }), snippet: None, refs: None, system: false,
+        };
+        with(|p| *p = Page { can: Can { approve: false, vote: false, snippet: true, run: false }, comments: Some(vec![root.clone()]), ..empty() });
+        ensure_snippets();
+        assert!(read(|p| p.snippets.is_empty()), "nothing is read before the pushes");
+        with(|p| p.loaded = true);
+        ensure_snippets();
+        assert!(read(|p| matches!(p.snippets.get(&(root.id, false)), Some(Snip::Loading))));
     }
 
     #[test]

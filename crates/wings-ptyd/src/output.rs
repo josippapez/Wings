@@ -8,6 +8,16 @@ use wings_agents::program_status::{codex_report, CodexReport};
 /// 1 MB of plain shell output; output heavy in escape codes, like Claude Code's, fills it faster, but the repaint
 /// after attaching redraws whatever is on screen. It grows only as output arrives, so a quiet pane holds little.
 pub const REPLAY_BYTES: usize = 1 << 20;
+/// What a line of scrollback costs, on average, in the output that made it: 10,000 lines were about 1 MB.
+pub const REPLAY_BYTES_PER_LINE: usize = 100;
+/// The most a pane may be asked to keep: the most scrollback the app offers (100,000 lines) at that rate.
+pub const MAX_REPLAY_BYTES: usize = 100_000 * REPLAY_BYTES_PER_LINE;
+
+/// What to keep of a pane's output for `scrollback_lines` of history: `REPLAY_BYTES_PER_LINE` for each, never less than
+/// `REPLAY_BYTES` and never more than `MAX_REPLAY_BYTES`.
+pub fn replay_bytes(scrollback_lines: usize) -> usize {
+    scrollback_lines.saturating_mul(REPLAY_BYTES_PER_LINE).clamp(REPLAY_BYTES, MAX_REPLAY_BYTES)
+}
 
 /// The last `cap` bytes written, oldest first from `start` once full.
 pub struct Ring {
@@ -108,8 +118,15 @@ pub struct Kept {
 
 impl Default for Kept {
     fn default() -> Kept {
+        Kept::with_cap(REPLAY_BYTES)
+    }
+}
+
+impl Kept {
+    /// A pane that keeps the last `cap` bytes of its output.
+    pub fn with_cap(cap: usize) -> Kept {
         // Only the cursor (25) starts on, as in a fresh xterm.
-        Kept { ring: Ring::new(REPLAY_BYTES), modes: MODES.map(|m| m == 25), codex_status: None, codex_generation: 0, pushed: 0, sizes: Vec::new() }
+        Kept { ring: Ring::new(cap), modes: MODES.map(|m| m == 25), codex_status: None, codex_generation: 0, pushed: 0, sizes: Vec::new() }
     }
 }
 
@@ -322,6 +339,18 @@ mod tests {
         assert_eq!(drawn.iter().map(|(size, _)| *size).collect::<Vec<_>>(), [Some((60, 30)), Some((100, 50))]);
         assert_eq!(drawn[1].1, b"end");
         assert_eq!(kept.sizes.len(), 2, "the sizes from before the ring's oldest byte are dropped");
+    }
+
+    #[test]
+    fn what_a_pane_keeps_follows_its_scrollback_at_100_bytes_a_line_between_1_mb_and_10_mb() {
+        assert_eq!(replay_bytes(1_000), REPLAY_BYTES);
+        assert_eq!(replay_bytes(10_000), REPLAY_BYTES);
+        assert_eq!(replay_bytes(25_000), 2_500_000);
+        assert_eq!(replay_bytes(100_000), 10_000_000);
+        assert_eq!(replay_bytes(usize::MAX), MAX_REPLAY_BYTES);
+        let mut kept = Kept::with_cap(replay_bytes(50_000));
+        kept.push(&mut vte::Parser::new(), &Mutex::new(String::new()), &vec![b'x'; 6_000_000]);
+        assert_eq!(kept.replay().0.len(), 5_000_000);
     }
 
     #[test]

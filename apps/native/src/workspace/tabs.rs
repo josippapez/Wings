@@ -121,6 +121,15 @@ impl Workspace {
         }
         let moved = self.active != active;
         self.active = active;
+        match active {
+            Active::Plugin(tab) => self.see_agent(super::sidebar::AgentKey::Tab(tab)),
+            Active::Terminal(_) => {
+                if let Some(pane) = self.focused_pane() {
+                    self.see_agent(super::sidebar::AgentKey::Pane(pane));
+                }
+            }
+            _ => {}
+        }
         self.issues_open |= active == Active::Issues;
         if moved {
             self.leave_loose(cx);

@@ -217,15 +217,18 @@ impl Drop for Runtime {
     }
 }
 
-/// As much of each pane's output as the desktop app keeps to replay after a restart (`REPLAY_BYTES`).
-const HISTORY_BYTES: usize = 1 << 20;
+/// As much of each pane's output as the server keeps of a pane with that much scrollback, to replay after a restart
+/// (`wings_ptyd::output::replay_bytes`): 1 MB for up to 10,000 lines, then 100 bytes for each.
+fn history_bytes(scrollback: usize) -> usize {
+    wings_ptyd::output::replay_bytes(scrollback)
+}
 
 /// The pane's latest output, saved on quit and replayed into its next shell.
 type Recent = Arc<Mutex<VecDeque<u8>>>;
 
-fn keep_recent(recent: &mut VecDeque<u8>, bytes: &[u8]) {
+fn keep_recent(recent: &mut VecDeque<u8>, bytes: &[u8], scrollback: usize) {
     recent.extend(bytes);
-    let over = recent.len().saturating_sub(HISTORY_BYTES);
+    let over = recent.len().saturating_sub(history_bytes(scrollback));
     recent.drain(..over);
 }
 
@@ -464,8 +467,8 @@ fn run_model(
         // Replies, titles and clipboard writes belong to the old program. None reach the new shell.
         pane.take_events();
         let mut kept = recent.lock().unwrap();
-        keep_recent(&mut kept, &history);
-        keep_recent(&mut kept, &end);
+        keep_recent(&mut kept, &history, options.scrollback);
+        keep_recent(&mut kept, &end, options.scrollback);
         drop(kept);
         *latest.lock().unwrap() = Arc::new(snapshot(&mut pane, None, false, None));
     }
@@ -488,7 +491,7 @@ fn run_model(
                         .recv_blocking()
                         .expect("output notification follows its bytes");
                     pane.feed(&bytes);
-                    keep_recent(&mut recent.lock().unwrap(), &bytes);
+                    keep_recent(&mut recent.lock().unwrap(), &bytes, options.scrollback);
                     let mut result = Ok(());
                     for event in pane.take_events() {
                         match event {
@@ -597,7 +600,7 @@ fn run_model(
                     }
                     let mut kept = recent.lock().unwrap();
                     kept.clear();
-                    keep_recent(&mut kept, &bytes);
+                    keep_recent(&mut kept, &bytes, options.scrollback);
                     stored = None;
                     Ok(())
                 }
@@ -690,11 +693,20 @@ mod tests {
     }
 
     #[test]
+    fn recent_output_grows_with_the_scrollback_setting_at_100_bytes_a_line() {
+        let mut recent = VecDeque::new();
+        keep_recent(&mut recent, &vec![b'a'; 12_000_000], 100_000);
+        assert_eq!(recent.len(), 10_000_000);
+        keep_recent(&mut recent, b"bcd", 50_000);
+        assert_eq!(recent.len(), 5_000_000, "a smaller setting trims what is kept on the next output");
+    }
+
+    #[test]
     fn recent_output_keeps_the_last_mebibyte() {
         let mut recent = VecDeque::new();
-        keep_recent(&mut recent, &vec![b'a'; HISTORY_BYTES - 1]);
-        keep_recent(&mut recent, b"bcd");
-        assert_eq!(recent.len(), HISTORY_BYTES);
+        keep_recent(&mut recent, &vec![b'a'; (1 << 20) - 1], 10_000);
+        keep_recent(&mut recent, b"bcd", 10_000);
+        assert_eq!(recent.len(), 1 << 20);
         assert_eq!(
             recent.iter().rev().take(3).copied().collect::<Vec<_>>(),
             b"dcb"

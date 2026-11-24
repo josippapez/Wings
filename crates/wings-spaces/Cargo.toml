@@ -12,6 +12,8 @@ name = "wings_spaces"
 serde = { version = "1", features = ["derive"] }
 # An account's `settings.json` copy keeps the default account's key order.
 serde_json = { version = "1", features = ["preserve_order"] }
+# Follows the accounts' `settings.json` files (`claude_accounts::SettingsWatcher`).
+notify = "8"
 # Names a project's folder in the Project page's data.
 sha2 = "0.11"
 # `find_program` finds git the way the plugin runner finds any program.

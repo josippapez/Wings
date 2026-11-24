@@ -20,10 +20,10 @@ use std::{cell::RefCell, collections::HashMap, future::Future, rc::Rc};
 use wings_plugin::{
     host,
     task::spawn,
-    ui::{Choice, Combobox, Node, combobox, empty, loading, page, select, slot},
+    ui::{self, Choice, Combobox, Node, combobox, empty, loading, page, select, slot},
 };
 
-/// The log entries the activity shows, newest first: the app draws at most 5,000 nodes in a page, and an issue keeps up to 300.
+/// The log entries the activity shows at first, newest first, and how many more each Show earlier adds.
 const LOG_SHOWN: usize = 100;
 /// Rows of Files changed shown before the rest fold away.
 const FILE_ROWS: usize = 10;
@@ -47,13 +47,13 @@ struct Page {
     args: Option<Args>,
     /// An error from the last change.
     error: Option<String>,
-    /// The menu in the toolbar that is open.
-    menu: Option<&'static str>,
     edits: HashMap<&'static str, Edit>,
     /// What is typed in each issue picker.
     queries: HashMap<&'static str, String>,
     /// The text last copied, for the "Copied" a button shows for a moment.
     copied: Option<String>,
+    /// The issue whose activity shows more than its newest entries, and how many more, after Show earlier.
+    earlier: Option<(String, usize)>,
 }
 
 thread_local! {
@@ -190,7 +190,7 @@ fn prop(label: &str, actions: Option<Node>, content: Vec<Node>) -> Node {
 
 fn copy(text: String) {
     spawn(async move {
-        drop(host::call("copyText", json!({ "text": text })).await);
+        drop(host::copy_text(&text).await);
         with(|p| p.copied = Some(text.clone()));
         host::sleep(1500).await;
         with(|p| {
@@ -612,8 +612,14 @@ fn composer(issue: &Issue) -> Node {
         }))
 }
 
+/// How many of `issue`'s newest log entries its activity shows.
+fn log_shown(issue: &Issue) -> usize {
+    LOG_SHOWN + with(|p| p.earlier.as_ref().filter(|(key, _)| *key == issue.key).map_or(0, |(_, more)| *more))
+}
+
 fn activity(issue: &Issue) -> Node {
-    let entries: Vec<&crate::domain::LogEntry> = issue.log.iter().rev().take(LOG_SHOWN).collect();
+    let shown = log_shown(issue);
+    let entries: Vec<&crate::domain::LogEntry> = issue.log.iter().rev().take(shown).collect();
     let items = entries.iter().enumerate().map(|(n, e)| {
         let by = actor_name(&e.by, &issue.sessions);
         let time = line(ago_text(e.at), Some("muted"), Some("small"));
@@ -625,12 +631,19 @@ fn activity(issue: &Issue) -> Node {
             row("s").key(format!("{}-{n}", e.at)).prop("wrap", true).child(Node::new("Avatar").prop("name", author.as_str()).prop("size", "small")).child(line(author.as_str(), None, None).prop("weight", "strong")).child(muted(e.text.as_str())).child(time)
         }
     });
-    let earlier = issue.log.len().saturating_sub(LOG_SHOWN);
+    let earlier = issue.log.len().saturating_sub(shown);
+    let key = issue.key.clone();
+    let more = (earlier > 0).then(|| {
+        row("s")
+            .prop("wrap", true)
+            .child(muted(format!("{earlier} earlier {}", if earlier == 1 { "entry" } else { "entries" })).prop("size", "small"))
+            .child(Node::new("Button").prop("variant", "ghost").prop("size", "sm").on("onClick", move |_| with(|p| p.earlier = Some((key.clone(), shown)))).text(format!("Show {} earlier", earlier.min(LOG_SHOWN))))
+    });
     stack("m")
         .child(section_heading("Activity", format!("{} {}", issue.log.len(), if issue.log.len() == 1 { "entry" } else { "entries" })))
         .child(composer(issue))
         .child(stack("m").children(items))
-        .maybe((earlier > 0).then(|| muted(format!("{earlier} earlier entries are in the issue, not shown here.")).prop("size", "small")))
+        .maybe(more)
 }
 
 // ---------- the toolbar ----------
@@ -646,28 +659,21 @@ fn start_agent(key: &str, kind: &str) {
     let kind = kind.to_owned();
     run(async move {
         let (command, args) = agent_command(&key, Some(&kind))?;
-        host::call("openPane", json!({ "command": command, "args": args, "cwd": cwd, "placement": "tab" })).await.map(drop)
+        host::OpenPane::new().command(&command, &args.iter().map(String::as_str).collect::<Vec<_>>()).cwd(&cwd).open().await.map(drop)
     });
 }
 
-/// A button that shows its items under it when pressed: the app has no popup menu yet.
-fn menu(name: &'static str, label: &str, aria: Option<&str>, variant: Option<&str>, items: Vec<(String, bool, Rc<dyn Fn()>)>) -> Node {
-    let open = with(|p| p.menu == Some(name));
-    let mut trigger = Node::new("Button").prop("size", "sm").on("onClick", move |_| with(|p| p.menu = if p.menu == Some(name) { None } else { Some(name) })).text(label);
-    if let Some(variant) = variant {
-        trigger = trigger.prop("variant", variant);
-    }
+/// A button that opens `items` in a menu over the page, lined up with its right edge. A destructive item is drawn red.
+fn menu(label: &str, aria: Option<&str>, variant: &str, items: Vec<(String, bool, Rc<dyn Fn()>)>) -> Node {
+    let mut trigger = Node::new("Button").prop("size", "sm").prop("variant", variant).text(label);
     if let Some(aria) = aria {
-        trigger = trigger.prop("label", aria);
+        trigger = trigger.prop("label", aria).prop("title", aria);
     }
-    stack("xs").child(trigger).maybe(open.then(|| {
-        stack("xs").children(items.into_iter().map(|(label, destructive, select)| {
-            Node::new("Button").key(label.clone()).prop("variant", if destructive { "destructive" } else { "ghost" }).on("onClick", move |_| {
-                with(|p| p.menu = None);
-                select();
-            }).text(label)
-        }))
-    }))
+    let items = items.into_iter().map(|(label, destructive, select)| {
+        let item = Node::new("Button").key(label.clone()).on("onClick", move |_| select()).text(label);
+        if destructive { item.prop("variant", "destructive") } else { item }
+    });
+    ui::menu(trigger, items, true)
 }
 
 fn toolbar(issue: Option<&Issue>, key: &str) -> Node {
@@ -702,8 +708,8 @@ fn toolbar(issue: Option<&Issue>, key: &str) -> Node {
         "actions",
         row("s")
             .child(resume_button.text("Resume"))
-            .child(menu("start", "Start agent", None, Some("default"), agents))
-            .child(menu("more", "…", Some("More"), Some("ghost"), vec![("Delete issue".to_owned(), true, Rc::new(move || ask_to_delete(&delete_key)) as Rc<dyn Fn()>)])),
+            .child(menu("Start agent", None, "default", agents))
+            .child(menu("…", Some("More"), "ghost", vec![("Delete issue".to_owned(), true, Rc::new(move || ask_to_delete(&delete_key)) as Rc<dyn Fn()>)])),
     ))
 }
 
@@ -739,7 +745,7 @@ fn view() -> Vec<Node> {
     let issues = &store.issues;
     let error = with(|p| p.error.clone());
     let confirming = delete_confirm::node(issue, issues);
-    let notices = (error.is_some() || confirming.is_some()).then(|| stack("s").maybe(error.map(|e| Node::new("Card").child(error_text(&e)))).maybe(confirming));
+    let notices = error.map(|e| Node::new("Card").child(error_text(&e)));
     let main = stack("l")
         .child(description(issue))
         .maybe(issue.kind.can_parent().then(|| children_section(issue, issues)))
@@ -747,7 +753,7 @@ fn view() -> Vec<Node> {
         .child(activity(issue));
     let head = stack("s").child(title_row(issue));
     let grid = row("l").prop("align", "start").child(stack("l").prop("grow", true).child(head).child(main)).child(Node::new("Stack").prop("width", 16)).child(properties(issue, issues, &project));
-    vec![page(toolbar(Some(issue), &key), [stack("l").prop("maxWidth", 1040).maybe(notices).child(grid)])]
+    vec![page(toolbar(Some(issue), &key), [stack("l").prop("maxWidth", 1040).maybe(notices).child(grid).maybe(confirming)])]
 }
 
 /// The args the tab was opened with.
@@ -766,4 +772,29 @@ pub fn start() {
     with(|p| p.args = args);
     wings_plugin::run_filled(view);
     feed::watch(only);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        domain::{Actor, LogEntry},
+        testing::{fresh, make},
+    };
+
+    /// An issue with more entries than its activity shows at first shows 100 more a click, until all show.
+    #[test]
+    fn a_long_activity_shows_earlier_entries_in_steps() {
+        let mut issue = make(&fresh(), "A", |_| {}).issues[0].clone();
+        issue.log = (0..250).map(|n| LogEntry { at: f64::from(n), by: Actor::You, kind: "status".into(), text: format!("e{n}") }).collect();
+        let shown = || wings_plugin::ui::tree_json(activity(&issue)).to_string();
+        let first = shown();
+        assert!(first.contains("150 earlier entries") && first.contains("Show 100 earlier") && first.contains("e249") && !first.contains("e149"), "{first}");
+        with(|p| p.earlier = Some((issue.key.clone(), 100)));
+        let second = shown();
+        assert!(second.contains("50 earlier entries") && second.contains("Show 50 earlier") && second.contains("e50") && !second.contains("e49\""), "{second}");
+        with(|p| p.earlier = Some((issue.key.clone(), 200)));
+        let all = shown();
+        assert!(all.contains("e0") && !all.contains("earlier"), "{all}");
+    }
 }

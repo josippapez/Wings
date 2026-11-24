@@ -71,7 +71,7 @@ pub fn format_list(issues: &[Issue], filter: Option<Status>, project_name: &str,
 }
 
 /// The most log entries `get` prints. The earlier ones stay in the issue.
-const GET_LOG: usize = 40;
+const GET_LOG: usize = 100;
 /// The most changed files `get` prints.
 const GET_FILES: usize = 30;
 

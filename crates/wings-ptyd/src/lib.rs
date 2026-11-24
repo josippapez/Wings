@@ -17,7 +17,7 @@ pub mod responsibility;
 /// The server's own version, apart from the app's, in its `welcome`. Bump it when what the server runs changes (`host`,
 /// `output`, `proto`), so an app can tell an older server that still runs from before an update, and leave it to finish
 /// its panes: a server that keeps its version keeps running its old code through every update.
-pub const SERVER_VERSION: u32 = 9;
+pub const SERVER_VERSION: u32 = 10;
 
 /// The id a pane's shell gets in `WINGS_PANE_ID`, from the number the server gave it.
 pub fn pane_id(number: u32) -> String {
@@ -39,7 +39,7 @@ mod tests {
         let hash = sources.iter().flat_map(|source| source.bytes()).fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3));
         assert_eq!(
             (super::SERVER_VERSION, format!("{hash:016x}")),
-            (9, "639cfc1e21d52422".to_owned()),
+            (10, "277834df441aa7fc".to_owned()),
             "the server's code changed: bump SERVER_VERSION, then put the new version and hash here"
         );
     }

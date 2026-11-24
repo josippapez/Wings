@@ -274,7 +274,7 @@ pub fn set_sidebar(to: &'static str) {
 }
 
 fn notify(project: &Project, note: crate::watch::Notification) {
-    drop(host::call("notify", json!({ "title": note.title, "body": note.body, "actions": note.actions, "projectId": project.id })));
+    drop(host::notify_with(&note.title, &note.body, Some(note.actions.as_slice()), Some(&project.id)));
 }
 
 /// Notifies about the PRs that ask for your review and didn't on the last check, and with "all" also the PRs that
@@ -313,7 +313,7 @@ async fn announce_finished(project: &Project, repo: &str, items: &[ListedPr]) {
         match read.await {
             Ok(st) => {
                 if let Some(ended) = final_state(&st) {
-                    drop(host::call("emit", json!({ "name": "pr-state", "data": event_for(&t, ended) })).await);
+                    drop(host::emit("pr-state", &json!(event_for(&t, ended))).await);
                 }
             }
             Err(_) => TRACKED.with(|tracked| {

@@ -6,7 +6,7 @@
 //! A call that only moves data answers on the frame's thread. One that reads the disk or runs a program runs on a thread
 //! of its own and answers when it is done, as the desktop's async commands do, so a slow call holds up no one.
 
-use std::{path::PathBuf, sync::Arc, thread, time::Instant};
+use std::{path::PathBuf, sync::{Arc, Mutex}, thread, time::Instant};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -32,7 +32,38 @@ use super::{
 use crate::page::runtime::Reply;
 
 /// The most a page may put on the clipboard at once, in UTF-8 bytes: far more than a branch name or a code block.
-const COPY_MAX: usize = 1024 * 1024;
+const COPY_MAX: usize = 16 * 1024 * 1024;
+/// The most threads a plugin's calls run on at once (`Shared::off_thread`). Each call had a thread of its own, so a
+/// frame calling in a loop started thousands, past the 4,096 a macOS process may have, and the app's own then failed.
+/// The busiest plugins ask about each project at once (`exec` of `gh` or `git`), tens at a time.
+const CALL_THREADS: usize = 64;
+/// The most calls that wait for one of those threads. More are refused at once.
+const CALLS_QUEUED: usize = 1024;
+
+type Job = Box<dyn FnOnce() + Send>;
+
+/// The threads a plugin's calls run on, and the calls waiting for one, oldest first.
+#[derive(Default)]
+pub(super) struct Workers {
+    running: usize,
+    queued: std::collections::VecDeque<Job>,
+}
+
+/// Runs `job`, then each call waiting, until none waits.
+fn work_on(pool: &Mutex<Workers>, mut job: Job) {
+    loop {
+        // A call that panics loses its answer, as on a thread of its own, and not the thread the others wait for.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+        let mut workers = pool.lock().unwrap();
+        match workers.queued.pop_front() {
+            Some(next) => job = next,
+            None => {
+                workers.running -= 1;
+                return;
+            }
+        }
+    }
+}
 /// The lines `readPane` reads when it isn't told, and the most lines and bytes it answers, so a frame's turn stays small.
 const READ_PANE_LINES: u64 = 100;
 const READ_PANE_LINES_MAX: u64 = 500;
@@ -547,7 +578,7 @@ impl Shared {
             "copyText" => {
                 let text = js_string(params.get("text"));
                 if text.len() > COPY_MAX {
-                    return reply.err("copyText is limited to 1 MB of text".into());
+                    return reply.err("copyText is limited to 16 MB of text".into());
                 }
                 reply.done(access.env.copy_text(text).map(|_| "null".into()))
             }
@@ -564,21 +595,33 @@ impl Shared {
         }
     }
 
-    /// Runs `work` on a thread of its own and answers with what it returns.
+    /// Runs `work` off the frame's thread and answers with what it returns: on a thread of the plugin's, of which there
+    /// are at most `CALL_THREADS`, or after the calls waiting for one. More than `CALLS_QUEUED` waiting are refused.
     pub(super) fn off_thread(
         &self,
         reply: Reply,
         work: impl FnOnce(&Reply) -> Result<String, String> + Send + 'static,
     ) {
         let spare = reply.clone();
-        let spawned = thread::Builder::new()
-            .name("plugin-call".into())
-            .spawn(move || {
-                let result = work(&reply);
-                reply.done(result);
-            });
-        if let Err(error) = spawned {
-            spare.err(format!("The call couldn't start: {error}"));
+        let job: Job = Box::new(move || {
+            let result = work(&reply);
+            reply.done(result);
+        });
+        let mut workers = self.workers.lock().unwrap();
+        if workers.running == CALL_THREADS {
+            if workers.queued.len() == CALLS_QUEUED {
+                drop(workers);
+                return spare.err(format!("{} has {CALLS_QUEUED} calls waiting already", self.config.id));
+            }
+            return workers.queued.push_back(job);
+        }
+        let pool = self.workers.clone();
+        match thread::Builder::new().name("plugin-call".into()).spawn(move || work_on(&pool, job)) {
+            Ok(_) => workers.running += 1,
+            Err(error) => {
+                drop(workers);
+                spare.err(format!("The call couldn't start: {error}"));
+            }
         }
     }
 

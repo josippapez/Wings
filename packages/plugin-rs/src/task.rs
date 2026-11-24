@@ -74,7 +74,7 @@ struct Flight {
     waiting: RefCell<Vec<Waker>>,
 }
 
-/// `wings-plugin-sdk/async`'s `singleFlight`: a function made to run once at a time. Calling it while it runs doesn't
+/// A function made to run once at a time. Calling it while it runs doesn't
 /// start a second run: it makes it run once more when this one is done, however many calls came meanwhile.
 #[derive(Clone)]
 pub struct SingleFlight(Rc<Flight>);

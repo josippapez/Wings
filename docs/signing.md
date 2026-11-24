@@ -31,7 +31,7 @@ rm /tmp/wings.key /tmp/wings.p12
 ## Build
 
 ```sh
-cd apps/desktop && pnpm build:mac
+cd apps/native && WINGS_SWITCH=1 sh scripts/build-mac-app.sh
 ```
 
 It signs with the certificate when your keychain has it, and ad hoc otherwise. `codesign -dr - <Wings.app>` should print `identifier "dev.wings.app" and certificate leaf = H"..."`, which stays the same from build to build.

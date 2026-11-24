@@ -446,6 +446,11 @@ impl PageView {
         Self::start(cx, host.page(false, 0, None, None, source))
     }
 
+    /// What the page named its sidebar's header with `setTabTitle`, in place of the sidebar's title.
+    pub fn header_title(&self) -> Option<String> {
+        self.source.title()
+    }
+
     /// The page, shown in a card with a 14px corner and a 1px border (`workspace::page_card`, the sidebar's cards).
     pub fn in_card(self) -> Self {
         Self {

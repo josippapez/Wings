@@ -104,7 +104,7 @@ fn share_card(share: &Share, copied: bool, busy: bool) -> Node {
                     .prop("gap", "s")
                     .prop("wrap", true)
                     .child(small(copy_label, "secondary", false, move || {
-                        drop(host::call("copyText", json!({ "text": url })));
+                        drop(host::copy_text(&url));
                         let name = name.clone();
                         with(|page| page.copied = Some(name));
                     }))

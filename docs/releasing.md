@@ -26,7 +26,7 @@ The version must be higher than the running app's, or nothing is offered. The sc
 
 ## The desktop app is deprecated
 
-`apps/desktop`, the earlier Tauri app, is deprecated and no longer released. Don't bump its version or run its `pnpm release:mac`. Copies of it still installed update through the `latest.json` each release carries, which installs the native app in its place. The native app reads no files from `apps/desktop`.
+The earlier Tauri app was removed from the repo. Copies of it still installed update through the `latest.json` each release carries, which installs the native app in its place. The version comes from `apps/native/Cargo.toml`, and the signing CLI is `apps/native`'s own `@tauri-apps/cli`.
 
 ## Gatekeeper
 

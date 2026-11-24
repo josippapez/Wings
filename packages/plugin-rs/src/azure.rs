@@ -1,4 +1,4 @@
-//! Azure DevOps, as `wings-plugin-sdk/git` and `wings-plugin-sdk/azure` read it: an Azure remote, and the work items of
+//! Azure DevOps: an Azure remote, and the work items of
 //! an organization, which one `az` call answers for many ids. The plugin lists `az rest [--resource --url -o]` in
 //! `permissions.exec`.
 

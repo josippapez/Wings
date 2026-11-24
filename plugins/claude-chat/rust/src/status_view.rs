@@ -3,7 +3,6 @@
 //! Wings lets a page copy only on a click, once, so the export copies on its dialog's Copy button, not on the Enter that
 //! asked for it: the text is not known until Claude Code answers.
 
-use serde_json::json;
 use wings_plugin::{
     format::plural,
     host,
@@ -140,9 +139,9 @@ fn copy_export() {
         return;
     };
     let said = if text.len() > COPY_MAX {
-        Item::Error("The conversation is too long to copy: Wings copies up to 1 MB. Export it from a terminal instead.".into())
+        Item::Error(format!("The conversation is too long to copy: Wings copies up to {}. Export it from a terminal instead.", crate::copy::COPY_MAX_NAME))
     } else {
-        drop(host::call("copyText", json!({ "text": text })));
+        drop(host::copy_text(&text));
         Item::Notice(format!("Copied the conversation to the clipboard ({})", plural(text.lines().count(), "line")))
     };
     chat::with(|c| {
@@ -196,10 +195,10 @@ pub fn reply(at: usize, said: &str, c: &Chat) -> Node {
 /// Puts `text` on the clipboard, from your click on a Copy button, and marks that button Copied.
 fn copy(key: String, text: &str) {
     if text.len() > COPY_MAX {
-        return chat::with(|c| c.session.items.push(Item::Error("That is too long to copy: Wings copies up to 1 MB.".into())));
+        return chat::with(|c| c.session.items.push(Item::Error(format!("That is too long to copy: Wings copies up to {}.", crate::copy::COPY_MAX_NAME))));
     }
     chat::with(|c| c.session.cmds.copied = Some(key.clone()));
-    drop(host::call("copyText", json!({ "text": text })));
+    drop(host::copy_text(&text));
     // One redraw after the pause puts the copy icon back; a newer copy keeps its own check.
     wings_plugin::task::spawn(async move {
         host::sleep(COPIED_FOR).await;
@@ -274,5 +273,18 @@ mod tests {
         forget_copied("reply-2");
         assert!(label("reply-2").contains("Copy this reply"));
         assert!(!label("reply-2").contains("Copied"));
+    }
+
+    #[test]
+    fn a_text_of_a_few_megabytes_is_copied_and_one_over_the_hosts_limit_says_what_it_is() {
+        chat::with(|c| c.session.items.clear());
+        copy("reply-9".into(), &"x".repeat(2_000_000));
+        assert_eq!(chat::with(|c| (c.session.cmds.copied.clone(), c.session.items.len())), (Some("reply-9".into()), 0), "2 MB is copied");
+        copy("reply-10".into(), &"x".repeat(crate::copy::COPY_MAX + 1));
+        assert!(chat::with(|c| matches!(c.session.items.last(), Some(Item::Error(text)) if text.contains("16 MB"))));
+        chat::with(|c| {
+            c.session.items.clear();
+            c.session.cmds.copied = None;
+        });
     }
 }

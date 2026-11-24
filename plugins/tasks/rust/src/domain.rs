@@ -9,15 +9,13 @@
 use serde_json::{Map, Value, json};
 
 pub mod limits {
-    pub const ISSUES: usize = 300;
     pub const TITLE: usize = 200;
     pub const DESCRIPTION: usize = 20_000;
     pub const NOTE: usize = 20_000;
     pub const BRANCH: usize = 200;
     pub const PR: usize = 500;
-    pub const LOG: usize = 300;
     pub const COMMIT: usize = 40;
-    pub const FILES: usize = 100;
+    pub const FILES: usize = 500;
     pub const FILE_PATH: usize = 300;
     pub const FILE_WHAT: usize = 300;
 }

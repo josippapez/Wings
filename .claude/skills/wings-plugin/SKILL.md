@@ -5,7 +5,7 @@ description: Creates or changes a Wings plugin, a folder with `wings-plugin.json
 
 # Wings plugins
 
-The reference is `plugins/README.md`: layout, build, helpers, manifest, permissions and every `wings.*` call. Read it first. The SDK is the `wings-plugin` crate in `packages/plugin-rs`. `plugins/dev-servers/` is the smallest plugin, `plugins/changes/` has a main and two pages, and `plugins/pr-tracker/` is the largest. For anything a page shows, follow the `wings-page-design` skill and render it with `shot_plugins` before calling it done.
+The reference is `plugins/README.md`: layout, build, helpers, manifest, permissions and every `wings.*` call. Read it first. The SDK is the `wings-plugin` crate in `packages/plugin-rs`. It is published on crates.io, and `cargo wings-plugin` (`packages/cargo-wings-plugin`: `new`, `build`, `check`, `pack`, `dev`) is the author tool for a plugin that lives in its own repo; the plugins here build with `plugins/build-rust.sh`. `plugins/dev-servers/` is the smallest plugin, `plugins/changes/` has a main and two pages, and `plugins/pr-tracker/` is the largest. For anything a page shows, follow the `wings-page-design` skill and render it with `shot_plugins` before calling it done.
 
 ## Where the pieces live
 

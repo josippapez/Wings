@@ -2,6 +2,24 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.96 · 2026-11-24
+
+- **A new Plugins page**: Installed, Browse and Updates with a search, an Add plugin menu for a GitHub link or a file, calmer rows with one status each, and a page per plugin with what it adds to Wings, what it can reach and its README. In a narrow window, Settings shows its sections as icons.
+- **Sidebar polish**: a project or agent that finished while you were away is bold until you open it, the current project and its worktrees share one card, the Projects header has a filter menu (hide idle projects or worktrees), and agent rows show the model and how long ago they changed.
+- **Wings opens where you left it**: its size, place and screen are kept when it quits, and it opens centered when that screen is gone.
+- **Claude accounts stay in step**: a change to the default account's settings reaches the accounts that share its setup right away.
+- **Claude Code plugin panes read like Wings panels**: one header named after the pane, the content from the top, a plugin's choices as full-width rows that wrap, picked-one-of filters as a segmented control, and no plugin can pin a row to the pane's foot. Long button labels wrap instead of being cut short.
+- **Issues: no caps**: a project takes any number of issues and an issue any number of log entries. Board columns, the list and an issue's activity show more with Show more, the issue's … menu opens over the page, and deleting asks in a dialog.
+- **Bigger limits**: plugin pages hold 20,000 elements (boards draw only the cards in view), a plugin keeps 500 MB, pages send each other up to 1 MB, a text box holds 200,000 characters, a copy takes 16 MB, the inbox keeps 1,000 notifications, and an agent reads the last 2,000 lines of a pane. A terminal keeps output across restarts in step with your scrollback setting, up to 10 MB.
+- **Claude chat**: every picture shows, not only the newest 12. A long permission request can be read whole and allowed. A subagent's tab reads its whole run. A resumed chat says when its earliest messages weren't loaded. A review comment that can't be kept says so. @-mentions know up to 200,000 files.
+- **PR tracker**: a review comment's code no longer loads forever, and a CI run's log shows earlier lines with Show earlier.
+- **HUD** lists every Claude session, and one that ended says so instead of showing another session's numbers.
+- **Schedules**: a run in a Claude chat keeps its prompt's lines, up to 20,000 characters. **Changes** opens diffs up to 8 MB.
+- **Safer plugins**: Wings signs the plugin code it keeps compiled and prunes what no plugin uses, counts a plugin's calls against its time budget, bounds what one plugin can hold, and runs a plugin's calls on threads of its own. A plugin that stops says what happened. After an update, the first plugin page asks once for keychain access to "dev.wings.app.wasm-cache"; Deny only turns the cache off.
+- **Terminal server v10**: terminals and chats running now stay on the old server until they end.
+- **Build a plugin with cargo**: `cargo install cargo-wings-plugin`, then `cargo wings-plugin new`. The SDK is `wings-plugin` on crates.io. The npm packages and the old TypeScript code are gone.
+- **Claude chat 0.53.0, Issues 0.31.0, PR tracker 0.35.0, HUD 0.10.0, Schedules 0.11.0, Changes 0.17.0, Share 0.2.1**: the above.
+
 ## 0.2.95 · 2026-11-24
 
 - **Claude chat: a picture shown large is centered** in its dialog, which plugin rows can now ask for.

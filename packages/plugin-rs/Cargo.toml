@@ -2,8 +2,21 @@
 name = "wings-plugin"
 version = "0.1.0"
 edition = "2024"
-publish = false
 description = "Write a Wings plugin in Rust, built to WebAssembly."
+license = "MIT"
+repository = "https://github.com/josippapez/Wings"
+homepage = "https://github.com/josippapez/Wings"
+documentation = "https://docs.rs/wings-plugin"
+readme = "README.md"
+keywords = ["wings", "plugin", "wasm", "webassembly", "terminal"]
+categories = ["wasm", "api-bindings", "development-tools"]
+# The tests read the Wings app's source (`apps/native`), which a published crate doesn't have.
+exclude = ["tests/", "target/", ".gitignore"]
+
+[package.metadata.docs.rs]
+# A plugin is built for WebAssembly, where the crate talks to the app. Document that build.
+default-target = "wasm32-unknown-unknown"
+targets = ["wasm32-unknown-unknown"]
 
 [dependencies]
 serde_json = "1"

@@ -34,6 +34,12 @@ const THREAD_STACK_BYTES: usize = 4 * 1024 * 1024;
 /// Clicks and messages waiting for a frame that is busy. More than this are dropped, as a stuck frame can't use them
 /// anyway, and the sender never waits for it; a broadcast waits on a thread instead (`Inbox::deliver`).
 const QUEUED_COMMANDS: usize = 256;
+/// Broadcasts that wait for room in the queue of a frame that is behind. More are dropped, as a frame this far behind
+/// misses what `Inbox::send` tells it: a frame broadcasting in a loop to a busy one grew the host's memory without bound.
+const MAX_BROADCASTS_BEHIND: usize = 1024;
+/// ... and the bytes of those broadcasts: a broadcast may be 1,000,000 characters, so 1,024 of them are far more than a
+/// frame this far behind is worth. More than this waiting are dropped as well.
+const MAX_BROADCAST_BYTES_BEHIND: usize = 64 * 1024 * 1024;
 const MAX_MESSAGE_CHARS: usize = 500;
 
 #[derive(Debug, PartialEq)]
@@ -191,7 +197,7 @@ impl Reply {
         (
             Reply {
                 call: 0,
-                queue: Queue { jobs },
+                queue: Queue::new(jobs),
                 note: None,
             },
             Answer(answers),
@@ -260,16 +266,9 @@ impl Reply {
             text,
         };
         // An answer is never dropped. A call answered on the frame's own thread, with its queue full, must not wait
-        // for itself, so that one is handed to a thread that can.
-        match self.queue.try_send(command) {
-            Err(mpsc::TrySendError::Full(job)) => {
-                let jobs = self.queue.jobs;
-                thread::spawn(move || {
-                    let _ = jobs.send(job);
-                });
-            }
-            Ok(()) | Err(mpsc::TrySendError::Disconnected(_)) => {}
-        }
+        // for itself, so that one waits behind the queue. It had a thread of its own, and a frame making calls in a
+        // loop that were answered at once started one for each.
+        self.queue.hand(command, false);
     }
 }
 
@@ -290,15 +289,96 @@ enum Job {
     Wake,
 }
 
-/// A frame's way into its thread: the thread's queue.
+/// A frame's way into its thread: the thread's queue, and what waits for room in it.
 #[derive(Clone)]
 pub(crate) struct Queue {
     jobs: mpsc::SyncSender<Job>,
+    behind: Arc<Mutex<Behind>>,
+}
+
+/// What found the frame's queue full, in the order it came, each with the bytes of it when it is a broadcast, and
+/// whether a thread is handing it on.
+#[derive(Default)]
+struct Behind {
+    waiting: VecDeque<(Job, Option<usize>)>,
+    broadcasts: usize,
+    broadcast_bytes: usize,
+    handing: bool,
 }
 
 impl Queue {
+    fn new(jobs: mpsc::SyncSender<Job>) -> Self {
+        Self { jobs, behind: Arc::default() }
+    }
+
     fn try_send(&self, command: Command) -> Result<(), mpsc::TrySendError<Job>> {
         self.jobs.try_send(Job::Frame(command))
+    }
+
+    /// Puts `command` in the frame's queue, or behind it when it is full or others wait already: one thread hands
+    /// what waits on in order as the frame makes room. Never waits. A `broadcast` is dropped (`Full`) when
+    /// `MAX_BROADCASTS_BEHIND` broadcasts, or `MAX_BROADCAST_BYTES_BEHIND` bytes of them, wait already; anything else always waits.
+    fn hand(&self, command: Command, broadcast: bool) -> Delivery {
+        let bytes = broadcast.then(|| match &command {
+            Command::Deliver { text, .. } => text.len(),
+            Command::Event { .. } => 0,
+        });
+        let mut behind = self.behind.lock().unwrap();
+        let job = if behind.handing {
+            Job::Frame(command)
+        } else {
+            match self.try_send(command) {
+                Ok(()) => return Delivery::Queued,
+                Err(mpsc::TrySendError::Disconnected(_)) => return Delivery::Stopped,
+                Err(mpsc::TrySendError::Full(job)) => job,
+            }
+        };
+        if let Some(bytes) = bytes {
+            if behind.broadcasts >= MAX_BROADCASTS_BEHIND
+                || behind.broadcast_bytes + bytes > MAX_BROADCAST_BYTES_BEHIND
+            {
+                return Delivery::Full;
+            }
+            behind.broadcasts += 1;
+            behind.broadcast_bytes += bytes;
+        }
+        behind.waiting.push_back((job, bytes));
+        if !behind.handing {
+            let (jobs, waiting) = (self.jobs.clone(), self.behind.clone());
+            // Without a thread, what waits goes with the next one handed on.
+            behind.handing = thread::Builder::new()
+                .name("frame-behind".into())
+                .spawn(move || hand_on(&jobs, &waiting))
+                .is_ok();
+        }
+        Delivery::Queued
+    }
+}
+
+/// Hands what waits behind a frame's queue on, in order, until nothing does.
+fn hand_on(jobs: &mpsc::SyncSender<Job>, behind: &Mutex<Behind>) {
+    loop {
+        let job = {
+            let mut behind = behind.lock().unwrap();
+            let Some((job, bytes)) = behind.waiting.pop_front() else {
+                behind.handing = false;
+                return;
+            };
+            if let Some(bytes) = bytes {
+                behind.broadcasts -= 1;
+                behind.broadcast_bytes -= bytes;
+            }
+            job
+        };
+        if jobs.send(job).is_err() {
+            // The frame has stopped: what waited goes with it.
+            let mut behind = behind.lock().unwrap();
+            behind.waiting.clear();
+            behind.broadcasts = 0;
+            behind.broadcast_bytes = 0;
+            behind.handing = false;
+            return;
+        }
     }
 }
 
@@ -307,21 +387,13 @@ impl Queue {
 pub struct Inbox {
     queue: Queue,
     stopped: Arc<AtomicBool>,
-    behind: Arc<Mutex<Behind>>,
-}
-
-/// The broadcasts that found the frame's queue full, in the order they came, and whether a thread is handing them on.
-#[derive(Default)]
-struct Behind {
-    waiting: VecDeque<Job>,
-    handing: bool,
 }
 
 impl Inbox {
-    /// Hands the frame the JSON of a broadcast, which it parses for its `onBroadcast` listeners. Never waits, and is never
-    /// lost while the frame runs: a frame behind the agent it streams has a full queue for as long as it is behind
-    /// (`Reply::lines_in_order`), so a broadcast that finds it full, like a change of a setting, waits on a thread for
-    /// room, after any that waited before it.
+    /// Hands the frame the JSON of a broadcast, which it parses for its `onBroadcast` listeners. Never waits, and is not
+    /// lost while the frame runs and isn't far behind: a frame behind the agent it streams has a full queue for as long
+    /// as it is behind (`Reply::lines_in_order`), so a broadcast that finds it full, like a change of a setting, waits on
+    /// a thread for room, after any that waited before it, up to `MAX_BROADCASTS_BEHIND` of them and `MAX_BROADCAST_BYTES_BEHIND` bytes.
     pub fn deliver(&self, json: String) -> Delivery {
         if self.stopped.load(Ordering::Relaxed) {
             return Delivery::Stopped;
@@ -331,38 +403,7 @@ impl Inbox {
             id: 0,
             text: json,
         };
-        let mut behind = self.behind.lock().unwrap();
-        if behind.handing {
-            behind.waiting.push_back(Job::Frame(command));
-            return Delivery::Queued;
-        }
-        match self.queue.try_send(command) {
-            Ok(()) => return Delivery::Queued,
-            Err(mpsc::TrySendError::Disconnected(_)) => return Delivery::Stopped,
-            Err(mpsc::TrySendError::Full(job)) => behind.waiting.push_back(job),
-        }
-        behind.handing = true;
-        let (jobs, behind) = (self.queue.jobs.clone(), self.behind.clone());
-        thread::spawn(move || {
-            loop {
-                let job = {
-                    let mut behind = behind.lock().unwrap();
-                    let Some(job) = behind.waiting.pop_front() else {
-                        behind.handing = false;
-                        return;
-                    };
-                    job
-                };
-                if jobs.send(job).is_err() {
-                    // The frame has stopped: what waited goes with it.
-                    let mut behind = behind.lock().unwrap();
-                    behind.waiting.clear();
-                    behind.handing = false;
-                    return;
-                }
-            }
-        });
-        Delivery::Queued
+        self.queue.hand(command, true)
     }
 
     /// Tells the frame `message`, with the text its listeners parse. Never waits.
@@ -468,4 +509,4 @@ fn overran() -> String {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

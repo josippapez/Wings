@@ -1,21 +1,26 @@
-//! Settings, Plugins and the dialog that asks before a plugin runs, laid out like the desktop's `plugins-section.tsx`:
-//! install from a GitHub link or a file at the top, and the installed plugins below. A row says what the plugin does and
-//! flags only what needs you (approval, an update). Clicking it opens its page under it, and clicking again closes it.
+//! Settings, Plugins and the dialog that asks before a plugin runs. The page is a header with Add plugin (a GitHub link
+//! or a file), a filter bar (Installed, Browse, Updates, and a search) and a list of rows. A row says what the plugin
+//! does, with one status word, and clicking it opens the plugin's own page (`plugin_detail_ui.rs`) in place of the list.
 
 use crate::workspace::NotifyWorkspace;
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
+
 use gpui::{
-    AnimationExt, AnyElement, Context, ExternalPaths, FontWeight, KeyDownEvent, MouseButton, Role,
-    SharedString, deferred, div, prelude::*, px, rgb, rgba,
+    AnimationExt, AnyElement, Bounds, ClipboardItem, Context, ElementId, ExternalPaths, FontWeight, KeyDownEvent,
+    MouseButton, Pixels, Role, SharedString, deferred, div, prelude::*, px, rgb, rgba,
 };
 use wings_plugins::{
     manifest::Manifest,
-    store::{PluginView, Source},
+    store::{self, Available, PluginView, Source},
 };
 
 use crate::{
     icons::{Icon, icon, plugin_glyph},
     theme,
-    ui::{self, Variant, behaviors::{EscapeExt, TrapTabExt}},
+    ui::{
+        self, ButtonSize, Variant,
+        behaviors::{DismissReason, EscapeExt, TrapTabExt, bind_layer},
+    },
 };
 
 use super::Workspace;
@@ -165,31 +170,17 @@ pub(super) fn access_groups(manifest: &Manifest) -> Vec<(&'static str, Vec<Strin
 const PANE_OUTPUT: &str = "Read what your terminals show, their recent output. That can include passwords, tokens and other secrets a program printed";
 
 /// What a plugin built for JavaScript says in its page in Settings.
-const BUILT_FOR_JAVASCRIPT: &str = "Wings runs plugins built to WebAssembly. This version is written in JavaScript, so it doesn't run. Install an update if one is offered, or ask its author for a version written in Rust.";
+pub(super) const BUILT_FOR_JAVASCRIPT: &str = "Wings runs plugins built to WebAssembly. This version is written in JavaScript, so it doesn't run. Install an update if one is offered, or ask its author for a version written in Rust.";
 
-fn muted(text: impl Into<SharedString>) -> gpui::Div {
+pub(super) fn muted(text: impl Into<SharedString>) -> gpui::Div {
     div()
         .text_size(px(12.0))
         .text_color(rgb(theme::MUTED_FOREGROUND))
         .child(text.into())
 }
 
-/// A small amber label by a plugin's name, for a row that needs you.
-fn flag(text: impl Into<SharedString>) -> gpui::Div {
-    div()
-        .flex_none()
-        .px(px(6.0))
-        .py(px(1.0))
-        .rounded(px(6.0))
-        .bg(rgba(0xe9b65f26))
-        .text_size(px(11.0))
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(theme::WORKING))
-        .child(text.into())
-}
-
 /// The groups of `access_groups`, each a title over its items as small code chips.
-fn access_list(manifest: &Manifest) -> AnyElement {
+pub(super) fn access_list(manifest: &Manifest) -> AnyElement {
     let groups = access_groups(manifest);
     if groups.is_empty() {
         return muted("It doesn't ask for any access beyond showing things in Wings.")
@@ -225,27 +216,9 @@ fn access_list(manifest: &Manifest) -> AnyElement {
         .into_any_element()
 }
 
-/// Where the plugin came from, as the desktop's `Source` says it.
-fn source_line(view: &PluginView) -> String {
-    if view.dev {
-        return "From this repo (development build)".into();
-    }
-    if let Some(folder) = &view.folder {
-        return format!("Linked from {}", folder.display());
-    }
-    match &view.source {
-        Some(Source::Github {
-            repo,
-            folder: Some(folder),
-        }) => format!("From GitHub, {repo}/{folder}"),
-        Some(Source::Github { repo, folder: None }) => format!("From GitHub, {repo}"),
-        _ => "From a file".into(),
-    }
-}
-
 /// The plugin's own SVG (`own`), else a puzzle piece, dimmed for a plugin that is off. It has no colour of its own:
 /// amber is the page's one accent, for what needs you.
-fn plugin_icon(on: bool, own: Option<&str>, side: f32) -> gpui::Div {
+pub(super) fn plugin_icon(on: bool, own: Option<&str>, side: f32) -> gpui::Div {
     div()
         .size(px(side))
         .flex_none()
@@ -264,6 +237,185 @@ fn plugin_icon(on: bool, own: Option<&str>, side: f32) -> gpui::Div {
                 theme::MUTED_FOREGROUND
             },
         ))
+}
+
+/// Which list the Plugins page shows under its header.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum PluginsTab {
+    #[default]
+    Installed,
+    Browse,
+    Updates,
+}
+
+/// The menu that is open on the Plugins page: the header's Add plugin, or one plugin's more actions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum PluginMenu {
+    Add,
+    Row(String),
+}
+
+/// The width of the action slot at a row's end (Review, Update or Install), the same in every row so a state change
+/// never moves the switch beside it.
+const ACTION_W: f32 = 84.0;
+/// A row's height: its name line, and its description at two lines.
+const ROW_H: f32 = 76.0;
+
+/// The one word a plugin's row says about it, and its tone. What needs you comes before what is fine.
+pub(super) fn status_word(
+    approved: bool,
+    enabled: bool,
+    runs: bool,
+    update: Option<&str>,
+) -> (String, u32) {
+    if !approved {
+        ("Needs approval".into(), theme::WORKING)
+    } else if enabled && !runs {
+        ("Couldn't start".into(), theme::DANGER)
+    } else if let Some(version) = update {
+        (format!("Update {version}"), theme::INFO)
+    } else if enabled {
+        ("On".into(), theme::DONE)
+    } else {
+        ("Off".into(), theme::MUTED_FOREGROUND)
+    }
+}
+
+/// Whether a plugin matches what was typed in the search: every word of it is in the name or the description.
+pub(super) fn matches_query(query: &str, name: &str, description: &str) -> bool {
+    let haystack = format!("{name} {description}").to_lowercase();
+    query
+        .to_lowercase()
+        .split_whitespace()
+        .all(|word| haystack.contains(word))
+}
+
+/// The installed plugins a tab lists, those matching `query`: all of them, or with Updates only those with a newer
+/// version found.
+pub(super) fn listed(
+    views: &[PluginView],
+    updates: &HashMap<String, String>,
+    tab: PluginsTab,
+    query: &str,
+) -> Vec<PluginView> {
+    views
+        .iter()
+        .filter(|view| tab != PluginsTab::Updates || updates.contains_key(&view.manifest.id))
+        .filter(|view| matches_query(query, &view.manifest.name, &view.manifest.description))
+        .cloned()
+        .collect()
+}
+
+/// What Browse lists: the official plugins not installed yet, those matching `query`.
+pub(super) fn browse(available: &[Available], views: &[PluginView], query: &str) -> Vec<Available> {
+    available
+        .iter()
+        .filter(|plugin| !views.iter().any(|view| view.manifest.id == plugin.id))
+        .filter(|plugin| matches_query(query, &plugin.name, &plugin.description))
+        .cloned()
+        .collect()
+}
+
+/// Where a plugin came from, as its page's byline says it.
+pub(super) fn source_label(view: &PluginView) -> String {
+    if view.dev {
+        return "Wings plugin".into();
+    }
+    if view.folder.is_some() {
+        return "Linked folder".into();
+    }
+    match &view.source {
+        Some(Source::Github { repo, folder: Some(folder) })
+            if store::is_official_repo(repo) && folder.starts_with("plugins/") =>
+        {
+            "Wings plugin".into()
+        }
+        Some(Source::Github { repo, .. }) => format!("GitHub · {repo}"),
+        _ => "From a file".into(),
+    }
+}
+
+/// Where a plugin's page opens from its "Adds to Wings" list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Open {
+    /// A sidebar or a view, by id.
+    Page(String),
+    /// Its page in Settings.
+    Settings,
+}
+
+/// One thing a plugin adds to Wings, with what opens it where something does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Adds {
+    pub(super) kind: &'static str,
+    pub(super) name: String,
+    pub(super) open: Option<Open>,
+}
+
+/// What the manifest says a plugin adds to Wings, in the order the page lists it.
+pub(super) fn adds_to_wings(manifest: &Manifest) -> Vec<Adds> {
+    let c = &manifest.contributes;
+    let item = |kind, name: String, open| Adds { kind, name, open };
+    c.sidebars
+        .iter()
+        .map(|s| item("Sidebar", s.title.clone(), Some(Open::Page(s.id.clone()))))
+        .chain(c.views.iter().map(|v| item("View", v.title.clone(), Some(Open::Page(v.id.clone())))))
+        .chain(c.project_sections.iter().map(|s| item("Project section", s.title.clone(), None)))
+        .chain(c.blocks.iter().map(|b| item("Project block", b.title.clone(), None)))
+        .chain(c.ui.iter().map(|kind| item("Pane", ui_name(kind), None)))
+        .chain(c.mcp_tools.iter().map(|t| item("MCP tool", t.name.clone(), None)))
+        .chain(c.hooks.iter().map(|h| item("Claude Code hook", h.clone(), None)))
+        .chain(c.links.iter().map(|l| item("Link in messages", l.title.clone(), None)))
+        .chain(c.settings.iter().map(|_| item("Settings", "Settings page".into(), Some(Open::Settings))))
+        .collect()
+}
+
+/// One plain line over the access list: what turning the plugin on lets it do, in a few words.
+pub(super) fn access_summary(manifest: &Manifest) -> String {
+    let p = &manifest.permissions;
+    let phrases: Vec<&str> = [
+        (!p.exec.is_empty() || !p.processes.is_empty(), "run commands as you"),
+        (!p.fetch.is_empty() || !p.post.is_empty() || !p.secrets.is_empty(), "call web addresses"),
+        (p.panes.is_some() || p.send_to_agents || p.worktrees, "open terminals and type into your agents"),
+        (
+            !p.transcript.is_empty() || p.pane_output || p.statusline || p.agent_activity || p.disk_usage || p.ports || p.claude_accounts,
+            "read what your terminals, sessions or disks hold",
+        ),
+        (p.notify, "show notifications"),
+        (!p.call_tools.is_empty() || !p.open_views.is_empty() || !p.events.is_empty(), "use other plugins"),
+    ]
+    .into_iter()
+    .filter_map(|(yes, phrase)| yes.then_some(phrase))
+    .collect();
+    match phrases.as_slice() {
+        [] => "It doesn't ask for any access beyond showing things in Wings.".into(),
+        [one] => format!("Turned on, it can {one}."),
+        [init @ .., last] => format!("Turned on, it can {} and {last}.", init.join(", ")),
+    }
+}
+
+/// A button as small as the page's rows want: 28 tall, 13 text.
+fn small(button: gpui::Stateful<gpui::Div>) -> gpui::Stateful<gpui::Div> {
+    button.h(px(28.0)).px(px(10.0)).text_size(px(13.0))
+}
+
+/// An element id of a control in `scope`'s rows, such as `plugin-row` or `plugin-detail`.
+fn control_id(scope: &str, name: &str, index: usize) -> ElementId {
+    ElementId::NamedInteger(format!("{scope}-{name}").into(), index as u64)
+}
+
+/// Draws nothing but notes where it is each draw, under `key`, for a menu that opens under its button.
+fn track(map: Rc<RefCell<HashMap<String, Bounds<Pixels>>>>, key: String) -> impl IntoElement {
+    gpui::canvas(
+        move |bounds, _, _| {
+            map.borrow_mut().insert(key.clone(), bounds);
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
 }
 
 impl Workspace {
@@ -289,15 +441,93 @@ impl Workspace {
         }
     }
 
-    pub(super) fn plugins_section(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn plugins_section(&self, content_w: f32, cx: &mut Context<Self>) -> AnyElement {
+        if self.settings.is_none() {
+            return div().into_any_element();
+        }
+        let views = self.plugin_views();
+        let open = self
+            .manage
+            .selected
+            .as_deref()
+            .and_then(|id| views.iter().find(|view| view.manifest.id == id))
+            .cloned();
+        let menu = self.plugins_menu(&views, cx);
+        let page = match open {
+            Some(view) => self.plugin_detail(view, content_w, cx),
+            None => self.plugins_list(views, cx),
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .child(page)
+            .children(menu)
+            .into_any_element()
+    }
+
+    /// The page header: its title strong, with `actions` at the right end.
+    fn page_header(left: impl IntoElement, actions: impl IntoElement) -> gpui::Div {
+        div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .justify_between()
+            .gap(px(8.0))
+            .child(left)
+            .child(actions)
+    }
+
+    /// The list of plugins: its header with Add plugin, the filter bar, and the rows of a tab.
+    fn plugins_list(&self, views: Vec<PluginView>, cx: &mut Context<Self>) -> AnyElement {
         let Some(dialog) = &self.settings else {
             return div().into_any_element();
         };
         let manage = &self.manage;
-        let typed = !dialog.link.read(cx).text.trim().is_empty();
         let installing = manage.installing.is_some();
-        let install =
+        let typed = !dialog.link.read(cx).text.trim().is_empty();
+        let query = dialog.search.read(cx).text.clone();
+        let updatable: Vec<String> = views
+            .iter()
+            .filter(|view| manage.updates.contains_key(&view.manifest.id))
+            .map(|view| view.manifest.id.clone())
+            .collect();
+        let updating = updatable.iter().any(|id| manage.busy.contains(id));
+        let tab = manage.tab;
+
+        let add = small(ui::button(
+            "plugin-add",
+            "Add plugin",
+            Variant::Outline,
+            installing,
             div()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .child(icon(Icon::Plus, 14.0, theme::FOREGROUND))
+                .child(match manage.installing {
+                    Some(_) => "Installing…",
+                    None => "Add plugin",
+                }),
+        ))
+        .aria_expanded(manage.menu == Some(PluginMenu::Add))
+        .child(track(manage.menu_bounds.clone(), "add".into()))
+        .when(!installing, |button| {
+            button.on_click(cx.listener(|this, _, _, cx| {
+                this.manage.menu = (this.manage.menu != Some(PluginMenu::Add)).then_some(PluginMenu::Add);
+                cx.notify_workspace();
+            }))
+        });
+        let header = Self::page_header(
+            div()
+                .text_size(px(15.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child("Plugins"),
+            add,
+        );
+
+        let link_card = manage.adding_link.then(|| {
+            ui::card([div()
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
@@ -309,77 +539,65 @@ impl Workspace {
                         .flex_wrap()
                         .items_center()
                         .gap(px(8.0))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(220.0))
-                                .child(ui::input(dialog.link.clone())),
-                        )
+                        .child(div().flex_1().min_w(px(180.0)).child(ui::input(dialog.link.clone())))
                         .child(
                             ui::button(
                                 "plugin-install-link",
                                 "Install",
                                 Variant::Default,
                                 !typed || installing,
-                                if manage.installing == Some("link") {
-                                    "Installing…"
-                                } else {
-                                    "Install"
-                                },
+                                if manage.installing == Some("link") { "Installing…" } else { "Install" },
                             )
                             .when(typed && !installing, |button| {
-                                button.on_click(cx.listener(|this, _, window, cx| {
-                                    this.install_from_link(window, cx)
-                                }))
+                                button.on_click(cx.listener(|this, _, window, cx| this.install_from_link(window, cx)))
                             }),
                         )
                         .child(
-                            ui::button(
-                                "plugin-install-file",
-                                "Choose a file",
-                                Variant::Outline,
-                                installing,
-                                if manage.installing == Some("file") {
-                                    "Installing…"
-                                } else {
-                                    "Choose a file"
-                                },
-                            )
-                            .when(!installing, |button| {
-                                button.on_click(cx.listener(|this, _, window, cx| {
-                                    this.install_from_file(window, cx)
-                                }))
-                            }),
+                            ui::button("plugin-install-cancel", "Cancel", Variant::Ghost, false, "Cancel")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.manage.adding_link = false;
+                                    cx.notify_workspace();
+                                })),
                         ),
                 )
-                .child(muted(
-                    "Paste a GitHub repo or plugin folder link, or choose or drop a .wings-plugin file.",
-                ))
-                .when_some(manage.error.clone(), |column, error| {
-                    column.child(
-                        div()
-                            .text_size(px(12.0))
-                            .text_color(rgb(theme::DANGER))
-                            .child(error),
-                    )
-                });
+                .child(muted("Paste a GitHub repo or plugin folder link."))
+                .into_any_element()])
+        });
+        let error = manage.error.clone().map(|error| {
+            div().text_size(px(12.0)).text_color(rgb(theme::DANGER)).child(error)
+        });
 
-        let views = self.plugin_views();
-        let updatable: Vec<String> = views
-            .iter()
-            .filter(|view| manage.updates.contains_key(&view.manifest.id))
-            .map(|view| view.manifest.id.clone())
-            .collect();
-        let updating = updatable.iter().any(|id| manage.busy.contains(id));
-        let installed = format!("{} installed", views.len());
-        let header = div()
+        let tab_button = |id: &'static str, label: String, to: PluginsTab, cx: &mut Context<Self>| {
+            ui::segment(id, label, tab == to).on_click(cx.listener(move |this, _, _, cx| {
+                this.manage.tab = to;
+                this.manage.menu = None;
+                cx.notify_workspace();
+            }))
+        };
+        let updates_label = if updatable.is_empty() {
+            "Updates".to_owned()
+        } else {
+            format!("Updates {}", updatable.len())
+        };
+        let bar = div()
             .flex()
+            .flex_wrap()
             .items_center()
-            .justify_between()
             .gap(px(8.0))
-            .child(muted(installed).font_weight(FontWeight::MEDIUM))
+            .child(ui::segmented([
+                tab_button("plugins-tab-installed", "Installed".into(), PluginsTab::Installed, cx),
+                tab_button("plugins-tab-browse", "Browse".into(), PluginsTab::Browse, cx),
+                tab_button("plugins-tab-updates", updates_label, PluginsTab::Updates, cx),
+            ]))
             .child(
                 div()
+                    .w(px(220.0))
+                    .flex_none()
+                    .child(ui::search_box(dialog.search.clone(), None)),
+            )
+            .child(
+                div()
+                    .ml_auto()
                     .flex()
                     .items_center()
                     .gap(px(4.0))
@@ -392,390 +610,375 @@ impl Workspace {
                         )
                         .children(ui::spot(|| "plugin-check-updates".into()))
                         .when(!manage.checking, |button| {
-                            button.on_click(
-                                cx.listener(|this, _, _, cx| this.check_plugin_updates(true, cx)),
-                            )
+                            button.on_click(cx.listener(|this, _, _, cx| this.check_plugin_updates(true, cx)))
                         }),
                     )
-                    .when(!updatable.is_empty(), |row| {
-                        let label = format!("Update all ({})", updatable.len());
+                    .when(tab == PluginsTab::Updates && !updatable.is_empty(), |row| {
+                        let ids = updatable.clone();
                         row.child(
                             header_button(
                                 "plugin-update-all",
-                                label.into(),
+                                format!("Update all ({})", updatable.len()).into(),
                                 Icon::CircleArrowUp,
                                 updating,
                             )
                             .when(!updating, |button| {
                                 button.on_click(cx.listener(move |this, _, window, cx| {
-                                    this.update_plugins(updatable.clone(), window, cx)
+                                    this.update_plugins(ids.clone(), window, cx)
                                 }))
                             }),
                         )
                     }),
             );
 
-        let available: Vec<_> = manage
-            .available
-            .iter()
-            .filter(|plugin| !views.iter().any(|view| view.manifest.id == plugin.id))
-            .cloned()
-            .collect();
-        let selected = manage.selected.clone();
-        let rows: Vec<AnyElement> = views
-            .into_iter()
-            .enumerate()
-            .map(|(index, view)| {
-                let open = selected.as_deref() == Some(view.manifest.id.as_str());
-                self.plugin_row(index, view, open, cx)
-            })
-            .collect();
+        let rows: Vec<AnyElement> = if tab == PluginsTab::Browse {
+            browse(&manage.available, &views, &query)
+                .into_iter()
+                .enumerate()
+                .map(|(index, plugin)| self.browse_row(index, plugin, cx))
+                .collect()
+        } else {
+            listed(&views, &manage.updates, tab, &query)
+                .into_iter()
+                .enumerate()
+                .map(|(index, view)| self.plugin_row(index, view, cx))
+                .collect()
+        };
+        let body = if rows.is_empty() {
+            let searching = !query.trim().is_empty();
+            let words = match (tab, searching) {
+                (_, true) => "No plugin matches that search.",
+                (PluginsTab::Installed, _) => "No plugins yet. Browse the official ones, or use Add plugin for a GitHub link or a file.",
+                (PluginsTab::Browse, _) if manage.checking => "Checking the official list…",
+                (PluginsTab::Browse, _) => "Nothing to install from the official list right now. Check for updates to load it again.",
+                (PluginsTab::Updates, _) => "Every plugin is up to date.",
+            };
+            ui::card([muted(words).px(px(16.0)).py(px(16.0)).into_any_element()])
+        } else {
+            ui::card(rows)
+        };
         div()
             .flex()
             .flex_col()
             .gap(px(12.0))
-            .child(muted("Plugins add features to Wings. Each one runs only after you approve what it can do."))
-            .child(ui::card([install.into_any_element()]))
             .child(header)
-            .child(if rows.is_empty() {
-                ui::card([muted("No plugins yet. Paste a GitHub link or drop a .wings-plugin file to add one.")
-                    .px(px(16.0))
-                    .py(px(16.0))
-                    .into_any_element()])
-            } else {
-                ui::card(rows)
-            })
-            .when(!available.is_empty(), |column| {
-                column.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(8.0))
-                        .child(muted("Available").font_weight(FontWeight::MEDIUM))
-                        .child(ui::card(available.into_iter().enumerate().map(|(index, plugin)| {
-                            let label = format!("Install {}", plugin.name);
-                            let link = plugin.link.clone();
-                            div()
-                                .id(("plugin-available", index))
-                                .flex()
-                                .items_center()
-                                .gap(px(12.0))
-                                .px(px(16.0))
-                                .py(px(10.0))
-                                .child(plugin_icon(false, None, 32.0))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .flex()
-                                        .flex_col()
-                                        .gap(px(2.0))
-                                        .child(
-                                            div().flex().items_baseline().gap(px(8.0))
-                                                .child(div().truncate().font_weight(FontWeight::MEDIUM).child(plugin.name))
-                                                .child(muted(plugin.version).text_size(px(11.0)).flex_none()),
-                                        )
-                                        .child(muted(plugin.description).text_size(px(12.0))),
-                                )
-                                .child(
-                                    ui::button(("plugin-available-install", index), label, Variant::Secondary, manage.installing.is_some(), "Install")
-                                        .when(manage.installing.is_none(), |button| {
-                                            button.on_click(cx.listener(move |this, _, window, cx| {
-                                                this.install_available(link.clone(), window, cx)
-                                            }))
-                                        }),
-                                )
-                                .into_any_element()
-                        })))
-                )
-            })
+            .child(muted("Plugins add features to Wings. Each one runs only after you approve what it can do."))
+            .children(link_card)
+            .children(error)
+            .child(bar)
+            .child(body)
             .into_any_element()
     }
 
-    /// One installed plugin: its row, and its page under it while it is the selected one.
-    fn plugin_row(
-        &self,
-        index: usize,
-        view: PluginView,
-        open: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let manage = &self.manage;
-        let id = view.manifest.id.clone();
-        let on = view.enabled && view.approved;
-        let busy = manage.busy.contains(&id);
-        let update = manage.updates.get(&id).cloned();
-        let runs = self.plugin_runs(&id);
-        let javascript = self.built_for_javascript(&view);
-        // What it does, or its state when it doesn't say.
-        let about = match view.manifest.description.trim() {
-            "" => self.plugin_status(&view),
-            description => description.to_owned(),
-        };
-        let select = id.clone();
-        let toggled = view.clone();
-        let row = div()
-            .id(("plugin-row", index))
-            .role(Role::Button)
-            .aria_label(view.manifest.name.clone())
-            .aria_selected(open)
+    /// The name and version of a plugin, its one status word, and its description at a fixed two lines (or what went
+    /// wrong, in its place), as a row and a page's header say them.
+    fn row_words(
+        name: String,
+        version: String,
+        word: Option<(String, u32)>,
+        about: impl IntoElement,
+    ) -> gpui::Div {
+        div()
+            .flex_1()
+            .min_w_0()
             .flex()
-            .items_center()
-            .gap(px(12.0))
-            .px(px(16.0))
-            .py(px(10.0))
-            .cursor_pointer()
-            .hover(|style| style.bg(rgba(theme::HOVER)))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.manage.selected = (!open).then(|| select.clone());
-                this.manage.browsing_available = false;
-                this.manage.removing = None;
-                cx.notify_workspace();
-            }))
-            .children(ui::spot(move || format!("plugin-row-{index}")))
-            .child(plugin_icon(on, view.icon_svg.as_deref(), 32.0))
+            .flex_col()
+            .gap(px(2.0))
             .child(
                 div()
-                    .flex_1()
-                    .min_w_0()
                     .flex()
-                    .flex_col()
-                    .gap(px(2.0))
+                    .items_center()
+                    .gap(px(8.0))
                     .child(
                         div()
-                            .flex()
-                            .flex_wrap()
-                            .items_baseline()
-                            .gap_x(px(8.0))
-                            .gap_y(px(2.0))
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_size(px(13.0))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(view.manifest.name.clone()),
-                            )
-                            .child(
-                                muted(view.manifest.version.clone())
-                                    .text_size(px(11.0))
-                                    .flex_none(),
-                            )
-                            .when(!view.approved, |name| name.child(flag("Needs approval")))
-                            .when_some(update.clone(), |name, version| {
-                                name.child(flag(format!("Update {version}")))
-                            })
-                            .when(javascript, |name| name.child(flag("Built for JavaScript")))
-                            .when(on && !runs && !javascript, |name| {
-                                name.child(flag("No native build"))
-                            }),
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(13.0))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(name),
                     )
-                    // Whole while its page is open, which then doesn't repeat it.
-                    .child(muted(about).when(!open, |about| about.truncate()))
-                    // In the row, where the switch that failed is, whether or not its page is open.
-                    .when_some(manage.row_error.get(&id).cloned(), |text, error| {
-                        text.child(
-                            div()
-                                .relative()
-                                .text_size(px(12.0))
-                                .text_color(rgb(theme::DANGER))
-                                .child(error)
-                                .children(ui::spot(move || format!("plugin-row-error-{index}"))),
-                        )
-                    }),
+                    .child(muted(version).text_size(px(11.0)).flex_none())
+                    .children(word.map(|(word, tone)| ui::badge(Variant::Secondary, Some(tone), true, word))),
             )
-            .child(
-                icon(
-                    if open { Icon::ChevronDown } else { Icon::ChevronRight },
-                    14.0,
-                    theme::MUTED_FOREGROUND,
-                ),
-            )
-            .child(
-                ui::switch(("plugin-on", index), on)
-                    .aria_label(format!(
-                        "{} {}",
-                        view.manifest.name,
-                        if on { "on" } else { "off" }
-                    ))
-                    .when(busy, |switch| switch.opacity(0.5))
-                    .when(!busy, |switch| {
-                        switch
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.toggle_plugin(toggled.clone(), !on, window, cx)
-                            }))
-                    }),
-            );
-        if !open {
-            return row.into_any_element();
-        }
-        div()
-            .flex()
-            .flex_col()
-            .child(row)
-            .child(self.plugin_details(index, view, cx))
-            .into_any_element()
+            .child(about)
     }
 
-    /// The selected plugin's page: where it came from, what it does, its buttons and what it can access.
-    fn plugin_details(&self, index: usize, view: PluginView, cx: &mut Context<Self>) -> AnyElement {
-        let manage = &self.manage;
+    /// The fixed-height description box of a row: two lines, cut after them.
+    fn clamped(text: String, color: u32) -> gpui::Div {
+        div()
+            .h(px(32.0))
+            .overflow_hidden()
+            .line_height(px(16.0))
+            .line_clamp(2)
+            .text_size(px(12.0))
+            .text_color(rgb(color))
+            .child(text)
+    }
+
+    /// The slot at a row's end: Review while its access waits for you, Update when a newer version is found, else empty.
+    /// Always `ACTION_W` wide.
+    pub(super) fn action_slot(
+        &self,
+        scope: &'static str,
+        index: usize,
+        view: &PluginView,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let id = view.manifest.id.clone();
-        let busy = manage.busy.contains(&id);
-        let update = manage.updates.get(&id).cloned();
-        let github = matches!(view.source, Some(Source::Github { .. })) && !view.dev;
-        let mut buttons = div().flex().flex_wrap().gap(px(8.0));
+        let busy = self.manage.busy.contains(&id);
+        let slot = div().w(px(ACTION_W)).flex_none().flex().justify_end();
         if !view.approved {
             let review = view.clone();
-            buttons = buttons.child(
-                ui::button(
-                    ("plugin-review", index),
-                    "Review access to turn it on",
+            return slot.child(
+                small(ui::button(
+                    control_id(scope, "review", index),
+                    format!("Review access for {}", view.manifest.name),
                     Variant::Outline,
                     false,
-                    div()
-                        .text_color(rgb(theme::WORKING))
-                        .child("Review access to turn it on"),
-                )
+                    div().text_color(rgb(theme::WORKING)).child("Review"),
+                ))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.queue_reviews([review.clone()], cx);
                     cx.notify_workspace();
                 })),
             );
         }
-        if let Some(version) = update {
-            let ids = vec![id.clone()];
-            buttons = buttons.child(
-                ui::button(
-                    ("plugin-update", index),
-                    format!("Update to {version}"),
+        match self.manage.updates.get(&id) {
+            Some(version) => slot.child(
+                small(ui::button(
+                    control_id(scope, "update", index),
+                    format!("Update {} to {version}", view.manifest.name),
                     Variant::Secondary,
                     busy,
-                    format!("Update to {version}"),
-                )
+                    "Update",
+                ))
                 .when(!busy, |button| {
+                    let ids = vec![id.clone()];
                     button.on_click(cx.listener(move |this, _, window, cx| {
                         this.update_plugins(ids.clone(), window, cx)
                     }))
                 }),
-            );
+            ),
+            None => slot,
         }
-        if github {
-            let ids = vec![id.clone()];
-            buttons = buttons.child(
-                ui::button(
-                    ("plugin-reinstall", index),
-                    "Reinstall from GitHub",
-                    Variant::Outline,
-                    busy,
-                    "Reinstall from GitHub",
-                )
-                .when(!busy, |button| {
-                    button.on_click(cx.listener(move |this, _, window, cx| {
-                        this.update_plugins(ids.clone(), window, cx)
+    }
+
+    /// A plugin's switch, which turns it on or off without opening its page.
+    pub(super) fn plugin_switch(
+        &self,
+        scope: &'static str,
+        index: usize,
+        view: &PluginView,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let on = view.enabled && view.approved;
+        let busy = self.manage.busy.contains(&view.manifest.id);
+        let toggled = view.clone();
+        ui::switch(control_id(scope, "on", index), on)
+            .aria_label(format!("{} {}", view.manifest.name, if on { "on" } else { "off" }))
+            .when(busy, |switch| switch.opacity(0.5))
+            .when(!busy, |switch| {
+                switch
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.toggle_plugin(toggled.clone(), !on, window, cx)
                     }))
-                }),
-            );
-        }
-        if !view.dev {
-            if manage.removing.as_deref() == Some(id.as_str()) {
-                let gone = id.clone();
-                buttons = buttons
-                    .child(
-                        ui::button(
-                            ("plugin-remove-confirm", index),
-                            "Remove plugin",
-                            Variant::Destructive,
-                            busy,
-                            "Remove plugin",
-                        )
-                        .when(!busy, |button| {
-                            button.on_click(cx.listener(move |this, _, window, cx| {
-                                this.remove_plugin_now(&gone, window, cx)
-                            }))
-                        }),
-                    )
-                    .child(
-                        ui::button(
-                            ("plugin-keep", index),
-                            "Keep",
-                            Variant::Ghost,
-                            false,
-                            "Keep",
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.manage.removing = None;
-                            cx.notify_workspace();
-                        })),
-                    );
-            } else {
-                let asked = id.clone();
-                buttons = buttons.child(
-                    ui::button(
-                        ("plugin-remove", index),
-                        "Remove",
-                        Variant::Outline,
-                        busy,
-                        div().text_color(rgb(theme::DANGER)).child("Remove"),
-                    )
-                    .when(!busy, |button| {
-                        button.on_click(cx.listener(move |this, _, _, cx| {
-                            this.manage.removing = Some(asked.clone());
-                            cx.notify_workspace();
-                        }))
-                    }),
-                );
-            }
-        }
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(14.0))
-            // Under the name, past the icon, so it reads as this row's.
-            .pl(px(60.0))
-            .pr(px(16.0))
-            .pb(px(16.0))
-            .child(muted(source_line(&view)))
-            .when(self.built_for_javascript(&view), |details| {
-                details.child(muted(BUILT_FOR_JAVASCRIPT))
-            })
-            .child(buttons)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .text_size(px(13.0))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("What it can access"),
-                    )
-                    .child(access_list(&view.manifest)),
-            )
-            .when_some(self.plugin_readme(&view), |page, blocks| {
-                page.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(8.0))
-                        .pt(px(16.0))
-                        .border_t_1()
-                        .border_color(rgba(theme::BORDER))
-                        .child(
-                            div()
-                                .text_size(px(13.0))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child("README"),
-                        )
-                        .child(crate::markdown::render(
-                            &format!("plugin-readme-{index}"),
-                            &blocks,
-                        ))
-                        .children(ui::spot(|| "plugin-readme".into())),
-                )
             })
             .into_any_element()
+    }
+
+    /// The ⋯ button at a row's end, which opens the plugin's menu under it.
+    pub(super) fn more_button(&self, scope: &'static str, index: usize, id: &str, cx: &mut Context<Self>) -> AnyElement {
+        let open = self.manage.menu == Some(PluginMenu::Row(id.to_owned()));
+        let which = PluginMenu::Row(id.to_owned());
+        ui::icon_button(control_id(scope, "more", index), Icon::Ellipsis, "More actions", ButtonSize::Sm)
+            .aria_expanded(open)
+            .child(track(self.manage.menu_bounds.clone(), id.to_owned()))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.manage.menu = (this.manage.menu.as_ref() != Some(&which)).then(|| which.clone());
+                cx.notify_workspace();
+            }))
+            .into_any_element()
+    }
+
+    /// One installed plugin: its icon, name, version and one status word, a two-line description, and at the end the
+    /// action slot, the switch and the more menu. Its click opens the plugin's page.
+    fn plugin_row(&self, index: usize, view: PluginView, cx: &mut Context<Self>) -> AnyElement {
+        let manage = &self.manage;
+        let id = view.manifest.id.clone();
+        let on = view.enabled && view.approved;
+        let runs = self.plugin_runs(&id);
+        let (word, tone) = status_word(view.approved, view.enabled, runs, manage.updates.get(&id).map(String::as_str));
+        let about = match view.manifest.description.trim() {
+            "" => self.plugin_status(&view),
+            description => description.to_owned(),
+        };
+        // What went wrong with its switch shows in place of the description, where the row doesn't change height.
+        let about = match manage.row_error.get(&id).cloned() {
+            Some(error) => Self::clamped(error, theme::DANGER)
+                .relative()
+                .children(ui::spot(move || format!("plugin-row-error-{index}")))
+                .into_any_element(),
+            None => Self::clamped(about, theme::MUTED_FOREGROUND).into_any_element(),
+        };
+        let select = id.clone();
+        div()
+            .id(("plugin-row", index))
+            .role(Role::Button)
+            .aria_label(view.manifest.name.clone())
+            .flex()
+            .items_center()
+            .gap(px(12.0))
+            .px(px(16.0))
+            .h(px(ROW_H))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgba(theme::HOVER)))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.manage.selected = Some(select.clone());
+                this.manage.removing = None;
+                this.manage.menu = None;
+                cx.notify_workspace();
+            }))
+            .children(ui::spot(move || format!("plugin-row-{index}")))
+            .child(plugin_icon(on, view.icon_svg.as_deref(), 36.0))
+            .child(Self::row_words(
+                view.manifest.name.clone(),
+                view.manifest.version.clone(),
+                Some((word, tone)),
+                about,
+            ))
+            .child(self.action_slot("plugin-row", index, &view, cx))
+            .child(self.plugin_switch("plugin-row", index, &view, cx))
+            .child(self.more_button("plugin-row", index, &id, cx))
+            .into_any_element()
+    }
+
+    /// One official plugin that isn't installed: the same row, with Install in its action slot.
+    fn browse_row(&self, index: usize, plugin: Available, cx: &mut Context<Self>) -> AnyElement {
+        let busy = self.manage.installing.is_some();
+        let link = plugin.link.clone();
+        div()
+            .id(("plugin-available", index))
+            .flex()
+            .items_center()
+            .gap(px(12.0))
+            .px(px(16.0))
+            .h(px(ROW_H))
+            .child(plugin_icon(false, None, 36.0))
+            .child(Self::row_words(
+                plugin.name.clone(),
+                plugin.version,
+                None,
+                Self::clamped(plugin.description, theme::MUTED_FOREGROUND),
+            ))
+            .child(div().w(px(ACTION_W)).flex_none().flex().justify_end().child(
+                small(ui::button(
+                    ("plugin-available-install", index),
+                    format!("Install {}", plugin.name),
+                    Variant::Secondary,
+                    busy,
+                    "Install",
+                ))
+                .when(!busy, |button| {
+                    button.on_click(cx.listener(move |this, _, window, cx| {
+                        this.install_available(link.clone(), window, cx)
+                    }))
+                }),
+            ))
+            .into_any_element()
+    }
+
+    /// The open menu, when one is: Add plugin's, or a plugin's more actions.
+    fn plugins_menu(&self, views: &[PluginView], cx: &mut Context<Self>) -> Option<AnyElement> {
+        let which = self.manage.menu.clone()?;
+        let key = match &which {
+            PluginMenu::Add => "add".to_owned(),
+            PluginMenu::Row(id) => id.clone(),
+        };
+        let trigger = self.manage.menu_bounds.borrow().get(&key).copied()?;
+        let close = |this: &mut Self, cx: &mut Context<Self>| {
+            this.manage.menu = None;
+            cx.notify_workspace();
+        };
+        let menu = match which {
+            PluginMenu::Add => ui::menu("plugin-add-menu", "Add plugin")
+                .child(
+                    ui::menu_item("plugin-add-link", Icon::Globe, "From a GitHub link…", false, false)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.manage.adding_link = true;
+                            close(this, cx);
+                        })),
+                )
+                .child(
+                    ui::menu_item("plugin-add-file", Icon::FileText, "Choose a file…", false, false)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            close(this, cx);
+                            this.install_from_file(window, cx);
+                        })),
+                ),
+            PluginMenu::Row(id) => {
+                let view = views.iter().find(|view| view.manifest.id == id)?;
+                let github = matches!(view.source, Some(Source::Github { .. })) && !view.dev;
+                let busy = self.manage.busy.contains(&id);
+                let (details, copy, reinstall, remove) = (id.clone(), id.clone(), id.clone(), id.clone());
+                ui::menu("plugin-row-menu", "Plugin actions")
+                    .child(
+                        ui::menu_item("plugin-menu-details", Icon::FileText, "Details", false, false)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.manage.selected = Some(details.clone());
+                                close(this, cx);
+                            })),
+                    )
+                    .child(
+                        ui::menu_item("plugin-menu-check", Icon::RefreshCw, "Check for update", false, self.manage.checking)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                close(this, cx);
+                                this.check_plugin_updates(true, cx);
+                            })),
+                    )
+                    .child(
+                        ui::menu_item("plugin-menu-copy", Icon::Copy, "Copy ID", false, false)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
+                                close(this, cx);
+                            })),
+                    )
+                    .when(github, |menu| {
+                        menu.child(
+                            ui::menu_item("plugin-menu-reinstall", Icon::RotateCcwClock, "Reinstall", false, busy)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    close(this, cx);
+                                    this.update_plugins(vec![reinstall.clone()], window, cx);
+                                })),
+                        )
+                    })
+                    .when(!view.dev, |menu| {
+                        menu.child(ui::menu_separator()).child(
+                            ui::menu_item("plugin-menu-remove", Icon::Trash, "Remove…", true, busy)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    // The page asks once more, with the plugin's name over the button.
+                                    this.manage.selected = Some(remove.clone());
+                                    this.manage.removing = Some(remove.clone());
+                                    close(this, cx);
+                                })),
+                        )
+                    })
+            }
+        };
+        let menu = bind_layer(
+            menu,
+            cx.listener(move |this, reason: &DismissReason, _, cx| {
+                // A press on the button that opened it is its own toggle.
+                if let DismissReason::OutsidePress(at) = reason
+                    && trigger.contains(at)
+                {
+                    return;
+                }
+                this.manage.menu = None;
+                cx.notify_workspace();
+            }),
+        );
+        Some(ui::dropdown_menu(trigger, true, menu))
     }
 
     /// Over everything, where a `.wings-plugin` file can be dropped anywhere on the window, as on the desktop's. It
@@ -1015,5 +1218,95 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    fn view(name: &str, description: &str) -> PluginView {
+        let manifest: Manifest = serde_json::from_value(serde_json::json!({
+            "id": name.to_lowercase(), "name": name, "version": "1.0.0", "description": description, "api": 1,
+            "main": "main.wasm",
+        }))
+        .unwrap();
+        PluginView { manifest, enabled: true, approved: true, source: None, icon_svg: None, dev: false, folder: None }
+    }
+
+    #[test]
+    fn a_row_says_one_word_and_what_needs_you_comes_first() {
+        let word = |approved, enabled, runs, update| status_word(approved, enabled, runs, update).0;
+        assert_eq!(word(false, true, true, Some("2.0.0")), "Needs approval");
+        assert_eq!(word(true, true, false, Some("2.0.0")), "Couldn't start");
+        assert_eq!(word(true, true, true, Some("2.0.0")), "Update 2.0.0");
+        assert_eq!(word(true, true, true, None), "On");
+        assert_eq!(word(true, false, false, None), "Off");
+        assert_eq!(status_word(true, true, true, None).1, theme::DONE);
+        assert_eq!(status_word(false, false, false, None).1, theme::WORKING);
+        assert_eq!(status_word(true, true, false, None).1, theme::DANGER);
+    }
+
+    #[test]
+    fn the_search_matches_every_word_in_the_name_or_the_description() {
+        assert!(matches_query("", "Notes", ""));
+        assert!(matches_query("  NOTES ", "Notes", "Keeps notes beside each project."));
+        assert!(matches_query("keeps project", "Notes", "Keeps notes beside each project."));
+        assert!(!matches_query("keeps calendar", "Notes", "Keeps notes beside each project."));
+    }
+
+    #[test]
+    fn the_tabs_list_what_they_name_and_browse_leaves_out_what_is_installed() {
+        let views = [view("Notes", "Keeps notes."), view("Board", "A board.")];
+        let updates = HashMap::from([("board".to_owned(), "2.0.0".to_owned())]);
+        let names = |list: Vec<PluginView>| list.into_iter().map(|v| v.manifest.name).collect::<Vec<_>>();
+        assert_eq!(names(listed(&views, &updates, PluginsTab::Installed, "")), ["Notes", "Board"]);
+        assert_eq!(names(listed(&views, &updates, PluginsTab::Updates, "")), ["Board"]);
+        assert_eq!(names(listed(&views, &updates, PluginsTab::Installed, "keeps")), ["Notes"]);
+        let entry = |id: &str, description: &str| Available {
+            id: id.into(),
+            name: id.into(),
+            description: description.into(),
+            version: "1.0.0".into(),
+            link: String::new(),
+        };
+        let available = [entry("notes", "Notes"), entry("disk", "Disk usage"), entry("hud", "A status line")];
+        let ids = |list: Vec<Available>| list.into_iter().map(|p| p.id).collect::<Vec<_>>();
+        assert_eq!(ids(browse(&available, &views, "")), ["disk", "hud"]);
+        assert_eq!(ids(browse(&available, &views, "disk")), ["disk"]);
+    }
+
+    #[test]
+    fn the_byline_names_where_a_plugin_came_from() {
+        let mut plugin = view("Notes", "");
+        plugin.source = Some(Source::Github { repo: "josippapez/Wings".into(), folder: Some("plugins/notes".into()) });
+        assert_eq!(source_label(&plugin), "Wings plugin");
+        plugin.source = Some(Source::Github { repo: "owner/repo".into(), folder: None });
+        assert_eq!(source_label(&plugin), "GitHub · owner/repo");
+        plugin.source = Some(Source::File);
+        assert_eq!(source_label(&plugin), "From a file");
+        plugin.dev = true;
+        assert_eq!(source_label(&plugin), "Wings plugin");
+    }
+
+    #[test]
+    fn the_page_lists_what_the_manifest_adds_and_what_opens_it() {
+        let manifest: Manifest = serde_json::from_value(serde_json::json!({
+            "id": "demo", "name": "Demo", "version": "1.0.0", "api": 1, "main": "main.wasm",
+            "permissions": { "exec": ["gh pr view"], "notify": true },
+            "contributes": {
+                "ui": ["badges"],
+                "mcpTools": [{ "name": "pr_status" }],
+                "sidebars": [{ "id": "side", "title": "Board", "page": "dist/side.html" }],
+                "settings": { "page": "dist/settings.html" },
+            },
+        }))
+        .unwrap();
+        let adds: Vec<_> = adds_to_wings(&manifest).into_iter().map(|a| (a.kind, a.name, a.open)).collect();
+        assert_eq!(
+            adds,
+            [
+                ("Sidebar", "Board".to_owned(), Some(Open::Page("side".into()))),
+                ("Pane", "Pane badges".to_owned(), None),
+                ("MCP tool", "pr_status".to_owned(), None),
+                ("Settings", "Settings page".to_owned(), Some(Open::Settings)),
+            ]
+        );
+        assert_eq!(access_summary(&manifest), "Turned on, it can run commands as you and show notifications.");
     }
 }

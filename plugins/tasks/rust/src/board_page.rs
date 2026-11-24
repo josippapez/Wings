@@ -16,15 +16,14 @@ use crate::{
     settings::{self, Layout},
 };
 use serde_json::{Value, json};
-use std::{cell::RefCell, future::Future, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, future::Future, rc::Rc};
 use wings_plugin::{
     host,
     task::spawn,
     ui::{Node, checkbox, chips, empty, loading, search_field, slot},
 };
 
-/// How many cards a column of the board shows, and rows the list does: the app draws at most 5,000 nodes in a page, and a
-/// project holds up to 300 issues.
+/// How many cards a column of the board shows at first, and rows the list does, and how many more each Show more adds.
 const COLUMN_CARDS: usize = 30;
 const LIST_ROWS: usize = 150;
 
@@ -54,6 +53,8 @@ struct Page {
     error: Option<String>,
     /// What a search looks at, made again when the issues change.
     index: Option<(u64, Rc<Index>)>,
+    /// How many more than the first step each column, lane cell or the list shows, by its key, after a Show more.
+    more: HashMap<String, usize>,
 }
 
 thread_local! {
@@ -89,7 +90,7 @@ fn fold(lane: &str, open: bool) {
         }
         folded.clone()
     });
-    drop(host::call("setTabState", json!({ "state": { "folded": folded } })));
+    drop(host::set_tab_state(&json!({ "folded": folded })));
 }
 
 fn is_closed(i: &Issue) -> bool {
@@ -257,13 +258,15 @@ fn lane_node(lane: &Lane, issues: &[Issue], folded: &[String]) -> Node {
         .child(Node::new("Badge").prop("variant", "secondary").text(lane.count.to_string()))
         .maybe(actions);
     let cells = lane.columns.iter().map(|c| {
+        let key = format!("{lane_key}:{}", c.status.as_str());
+        let shown = limit(&key, COLUMN_CARDS).min(c.issues.len());
         Node::new("BoardColumn")
             .key(c.status.as_str())
             .prop("label", c.status.label())
             .prop("cell", true)
-            .child(slot("body", stack("s").children(c.issues.iter().take(COLUMN_CARDS).map(|i| card(i, issues, true)))))
+            .child(slot("body", stack("s").children(c.issues.iter().take(shown).map(|i| card(i, issues, true))).maybe(show_more(&key, c.issues.len(), shown, COLUMN_CARDS))))
     });
-    stack("s").key(lane_key).child(header).maybe(open.then(|| Node::new("BoardRow").children(cells)))
+    stack("s").key(lane_key.as_str()).child(header).maybe(open.then(|| Node::new("BoardRow").children(cells)))
 }
 
 fn search_index(store: &Store, version: u64) -> Rc<Index> {
@@ -327,7 +330,7 @@ fn build(project: &Project, store: Option<&Store>, version: u64) -> Vec<Node> {
     if let (Some(shown), Some(all)) = (&shown, all) {
         let doomed = asking().and_then(|key| shown.iter().find(|i| i.key == key).copied());
         if let Some(confirm) = doomed.and_then(|issue| confirm_node(issue, all)) {
-            body.push(stack("s").child(confirm));
+            body.push(confirm);
         }
     }
     match (&shown, all) {
@@ -396,20 +399,35 @@ fn by_parent_list(layout: Layout, has_parents: bool) -> bool {
     has_parents && layout.by_parent
 }
 
-fn shown_notice(total: usize, shown: usize) -> Option<Node> {
-    (total > shown).then(|| muted(format!("{} more not shown: search to narrow them.", total - shown)).prop("size", "small"))
+/// How many of the column, lane cell or list `key` shows: `step` at first, and `step` more after each Show more.
+fn limit(key: &str, step: usize) -> usize {
+    step + with(|p| p.more.get(key).copied().unwrap_or(0))
+}
+
+/// What's past the `shown` of `total`, and a button that shows `step` more of `key`.
+fn show_more(key: &str, total: usize, shown: usize, step: usize) -> Option<Node> {
+    let left = total.saturating_sub(shown);
+    (left > 0).then(|| {
+        let key = key.to_owned();
+        row("s")
+            .key(format!("more-{key}"))
+            .prop("wrap", true)
+            .child(muted(format!("{left} more not shown")).prop("size", "small"))
+            .child(Node::new("Button").prop("variant", "ghost").prop("size", "sm").on("onClick", move |_| with(|p| *p.more.entry(key.clone()).or_default() += step)).text(format!("Show {} more", left.min(step))))
+    })
 }
 
 fn plain_board(project: &Project, shown: &[&Issue], all: &[Issue], show_canceled: bool, sort: Sort) -> Node {
     let columns = board_columns(shown.iter().copied(), show_canceled, sort);
     Node::new("Board").prop("label", format!("Issues for {}", project.name)).children(columns.into_iter().map(|Column { status, issues: column }| {
         let empty = EMPTY.iter().find(|(s, _)| *s == status).map_or("", |(_, text)| *text);
-        let more = shown_notice(column.len(), COLUMN_CARDS);
+        let shown = limit(status.as_str(), COLUMN_CARDS).min(column.len());
+        let more = show_more(status.as_str(), column.len(), shown, COLUMN_CARDS);
         Node::new("BoardColumn")
             .key(status.as_str())
             .prop("count", column.len())
             .child(slot("title", column_title(status)))
-            .child(slot("body", stack("s").maybe(column.is_empty().then(|| muted(empty).prop("size", "small"))).children(column.iter().take(COLUMN_CARDS).map(|i| card(i, all, false))).maybe(more)))
+            .child(slot("body", stack("s").maybe(column.is_empty().then(|| muted(empty).prop("size", "small"))).children(column.iter().take(shown).map(|i| card(i, all, false))).maybe(more)))
     }))
 }
 
@@ -430,7 +448,7 @@ fn lanes_board(project: &Project, shown: &[&Issue], all: &[Issue], folded: &[Str
 /// Issues as rows like Linear's list: by parent, each epic over its children indented under it, or by status. Groups fold.
 fn issue_list(project: &Project, shown: &[&Issue], all: &[Issue], by_parent: bool, show_canceled: bool, sort: Sort, folded: &[String]) -> Node {
     let is_open = |group: &str| !folded.iter().any(|k| k == group);
-    let mut budget = LIST_ROWS;
+    let mut budget = limit("list", LIST_ROWS);
     let mut take = |wanted: usize| {
         let given = wanted.min(budget);
         budget -= given;
@@ -494,18 +512,18 @@ fn issue_list(project: &Project, shown: &[&Issue], all: &[Issue], by_parent: boo
             out = out.child(list_group(is_open(&group), &group, summary, body));
         }
     }
-    out.maybe(shown_notice(shown.len(), shown.len() - hidden))
+    out.maybe(show_more("list", shown.len(), shown.len() - hidden, LIST_ROWS))
 }
 
 #[unsafe(no_mangle)]
 pub fn start() {
     let layout = settings::last_layout().unwrap_or_else(|| settings::start_layout(&settings::default_view()));
-    PAGE.with(|page| *page.borrow_mut() = Some(Page { show_canceled: false, layout, folded: None, query: String::new(), error: None, index: None }));
+    PAGE.with(|page| *page.borrow_mut() = Some(Page { show_canceled: false, layout, folded: None, query: String::new(), error: None, index: None, more: HashMap::new() }));
     wings_plugin::run_filled(view);
     feed::watch(None);
     // The folded rows are kept with the tab.
     spawn(async {
-        let saved = host::call("tabState", json!({})).await.unwrap_or(Value::Null);
+        let saved = host::tab_state().await.unwrap_or(Value::Null);
         let folded: Vec<String> = saved["folded"].as_array().map(|k| k.iter().filter_map(|k| k.as_str().map(str::to_owned)).collect()).unwrap_or_default();
         with(|p| p.folded = Some(folded));
     });
@@ -529,6 +547,20 @@ mod tests {
         assert!(!text.contains("Issues, web"), "{text}");
         assert!(text.contains(r#""weight":"strong""#) && text.contains(r#""tone":"muted""#), "{text}");
         assert!(text.contains(&format!(r#""width":{SEARCH_WIDTH}"#)) && text.contains(r#""label":"New issue""#), "{text}");
+    }
+
+    /// A column longer than its first 30 cards shows 30 more a click, each column on its own, until all show.
+    #[test]
+    fn a_long_column_shows_more_in_steps_until_all_show() {
+        PAGE.with(|page| *page.borrow_mut() = Some(Page { show_canceled: false, layout: settings::start_layout("board"), folded: None, query: String::new(), error: None, index: None, more: HashMap::new() }));
+        assert_eq!(limit("todo", COLUMN_CARDS), 30);
+        let more = json(show_more("todo", 75, 30, COLUMN_CARDS).unwrap());
+        assert!(more.contains("45 more not shown") && more.contains("Show 30 more"), "{more}");
+        with(|p| *p.more.entry("todo".into()).or_default() += COLUMN_CARDS);
+        assert_eq!(limit("todo", COLUMN_CARDS), 60);
+        assert!(json(show_more("todo", 75, 60, COLUMN_CARDS).unwrap()).contains("Show 15 more"));
+        assert!(show_more("todo", 75, 75, COLUMN_CARDS).is_none());
+        assert_eq!(limit("done", COLUMN_CARDS), 30, "each column keeps its own");
     }
 
     /// How the issues are shown sits in a bar under the header: the view and the order on tracks, the rest as ticks.

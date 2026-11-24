@@ -773,7 +773,7 @@ pub async fn reply(link: &Link, root: &Comment, body: &str) -> Result<Comment, F
 
 /// What `az` printed for a POST `permissions.post` names, or its error.
 async fn post(url: &str, fields: &Value) -> Result<Value, ForgeError> {
-    let out = host::call("post", json!({ "program": "az", "url": url, "host": null, "fields": fields })).await?;
+    let out = host::post("az", url, None, fields).await?;
     if out["code"] != 0 {
         let message = last_line(out["stderr"].as_str().unwrap_or_default());
         return Err(if message.is_empty() { "az failed".into() } else { message.into() });

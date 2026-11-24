@@ -546,6 +546,7 @@ mod tests {
             cols: 80,
             rows: 24,
             history_id: Some("h1".into()),
+            replay_bytes: None,
             env: pane_env(None).into_iter().filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?))).collect(),
         }
     }
@@ -635,6 +636,26 @@ mod tests {
             let (attached, mut events, _) = Pane::attach(&path, &info).unwrap();
             assert_eq!(events.next(&attached), Event::Replay(Vec::new(), vec![(0, 80, 24)]));
         }
+        pane.kill().unwrap();
+    }
+
+    /// A pane asked to keep more than 1 MB keeps it: a 3 MB history comes back whole.
+    #[test]
+    fn a_pane_spawned_with_a_bigger_replay_keeps_more_than_a_megabyte() {
+        let (path, _host) = host(Config::default());
+        let mut command = Spawn { replay_bytes: Some(4 << 20), ..spawn_request() };
+        command.env.retain(|(k, _)| k != "SHELL");
+        command.env.push(("SHELL".into(), "/bin/cat".into()));
+        let history = b"a line of saved output\n".repeat(130_000);
+        let (pane, _events) = Pane::spawn(&path, command, &history).unwrap();
+        let info = Control::connect(&path).unwrap().list().unwrap().remove(0);
+        let (attached, mut events, _) = Pane::attach(&path, &info).unwrap();
+        let mut replay = Vec::new();
+        if let Event::Replay(bytes, _) = events.next(&attached) {
+            replay = bytes;
+        }
+        assert!(history.len() > 2 << 20);
+        assert!(replay.len() >= history.len(), "{} of {} bytes kept", replay.len(), history.len());
         pane.kill().unwrap();
     }
 

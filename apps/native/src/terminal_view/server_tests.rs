@@ -29,6 +29,7 @@ fn spawn_request() -> Spawn {
         cols: 80,
         rows: 24,
         history_id: Some("h1".into()),
+        replay_bytes: None,
         env: wings_terminal::shell::pane_env(None)
             .into_iter()
             .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))

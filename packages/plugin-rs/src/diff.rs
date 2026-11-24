@@ -1,5 +1,5 @@
-//! The diff viewer, from the main script: `wings.openDiff` and `wings.updateDiff`, and `wings-plugin-sdk/async`'s
-//! `openDiffWhile` and `openLiveDiff` over them.
+//! The diff viewer, from the main script: `wings.openDiff` and `wings.updateDiff`, and a diff kept open while something
+//! runs or kept up to date as it changes, over them.
 
 use crate::{host, poll, task};
 use serde_json::{Value, json};
@@ -40,8 +40,27 @@ where
     F: Fn(Value) -> Fut + 'static,
     Fut: Future<Output = Result<(), String>> + 'static,
 {
-    host::on("comment", move |token, comment| {
-        let done = handler(comment.clone());
+    answered("comment", handler);
+}
+
+/// `wings.onReply`: hears a reply typed under a comment of a viewer, `{ diffId, replyTo, body }`, where `replyTo` is the
+/// `id` of the comment it answers. An `Err` shows under the reply.
+pub fn on_reply<F, Fut>(handler: F)
+where
+    F: Fn(Value) -> Fut + 'static,
+    Fut: Future<Output = Result<(), String>> + 'static,
+{
+    answered("reply", handler);
+}
+
+/// Hears each message of `kind`, and tells the host how `handler` did with it (`actionDone`).
+fn answered<F, Fut>(kind: &'static str, handler: F)
+where
+    F: Fn(Value) -> Fut + 'static,
+    Fut: Future<Output = Result<(), String>> + 'static,
+{
+    host::on(kind, move |token, message| {
+        let done = handler(message.clone());
         task::spawn(async move {
             let error = done.await.err();
             drop(host::call("actionDone", json!({ "token": token, "error": error })));

@@ -355,7 +355,7 @@ fn main() {
         return;
     }
     // `-- <out-dir> sidebar` renders only the sidebar's states.
-    if std::env::args().nth(2).as_deref() == Some("sidebar") {
+    if matches!(std::env::args().nth(2).as_deref(), Some("sidebar" | "sidebar-polish")) {
         return sidebar(&mut cx, &config, &out);
     }
     // `-- <out-dir> tab-drag` renders only dragging a tab along the title bar.
@@ -444,6 +444,10 @@ fn main() {
     // `-- <out-dir> right-splits` renders only two sidebar pages split in the right sidebar at 1280 and 640 points.
     if std::env::args().nth(2).as_deref() == Some("right-splits") {
         return right_splits(&mut cx, &config, &out);
+    }
+    // `-- <out-dir> right-named` renders only a sidebar whose page names its own header (`setTabTitle`), at 1280 and 640.
+    if std::env::args().nth(2).as_deref() == Some("right-named") {
+        return right_named(&mut cx, &config, &out);
     }
     // `-- <out-dir> diff-comments` renders only a plugin's diff with review threads: under their lines docked and filling
     // the window, a reply being written, and the discussion.
@@ -977,6 +981,27 @@ fn sidebar(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         let window: AnyWindowHandle = handle.into();
         let name = |state: &str| out.join(format!("sidebar-{state}-{width}.png"));
         wait(cx, window, Duration::from_secs(3));
+        if std::env::args().nth(2).as_deref() == Some("sidebar-polish") {
+            handle.update(cx, |workspace, window, cx| workspace.sample_sidebar_polish(window, cx)).unwrap();
+            wait(cx, window, Duration::from_millis(300));
+            save(cx, window, &name("unread-card"));
+            click(cx, window, spot("sidebar-filter"));
+            wait(cx, window, Duration::from_millis(300));
+            save(cx, window, &name("filters"));
+            click(cx, window, spot("menu:Show idle projects"));
+            wait(cx, window, Duration::from_millis(300));
+            save(cx, window, &name("active-only"));
+            click(cx, window, spot("sidebar-filter"));
+            wait(cx, window, Duration::from_millis(300));
+            click(cx, window, spot("menu:Show worktrees"));
+            wait(cx, window, Duration::from_millis(300));
+            save(cx, window, &name("no-worktrees"));
+            click(cx, window, spot("agent-row:900"));
+            wait(cx, window, Duration::from_millis(300));
+            save(cx, window, &name("read"));
+            let _ = cx.update_window(window, |_, window, _| window.remove_window());
+            continue;
+        }
         save(cx, window, &name("counts"));
         // Pointing at the shown project's row: its buttons replace the pin. Where things are comes from where they were
         // last drawn, not from coordinates that go stale as the sidebar changes.
@@ -1647,6 +1672,7 @@ fn older_servers(cx: &mut VisualTestAppContext, base: &Config, fake: &Path, out:
                 cols: 80,
                 rows: 24,
                 history_id: Some(history.into()),
+                replay_bytes: None,
                 env: std::env::vars().collect(),
             };
             let (pane, _events) =
@@ -2295,6 +2321,45 @@ fn right_splits(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     }
 }
 
+fn right_named(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+    let data = Data::temp();
+    // A page that names its header "Feedback" as it starts, under the manifest's "Claude Code pane".
+    let page = fake::script("page", || {
+        let mut named = false;
+        move |cx: &mut Cx<'_>, _: Hear<'_>| {
+            if !std::mem::replace(&mut named, true) {
+                cx.call("setTabTitle", serde_json::json!({ "title": "Feedback" }));
+                cx.render(&serde_json::json!({ "id": 0, "type": "#root", "props": {}, "children": [{ "id": 1, "type": "#text", "text": "88 open · 11 high" }] }));
+            }
+        }
+    });
+    data.install_script(
+        "claude-chat",
+        serde_json::json!({ "name": "Claude chat", "contributes": {
+            "sidebars": [{ "id": "pane", "title": "Claude Code pane", "page": "dist/pane.html" }],
+        } }),
+        &fake::idle("main"),
+        &[("pane", &page)],
+        "claude-chat-scope",
+    );
+    let mut config = base.clone();
+    config.plugins = Some(data.paths());
+    for width in [1280.0, 640.0] {
+        let config = config.clone();
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                cx.new(|cx| Workspace::new(config, window, cx))
+            })
+            .expect("open an offscreen window");
+        let window: AnyWindowHandle = handle.into();
+        wait(cx, window, Duration::from_secs(1));
+        handle.update(cx, |w, _, cx| w.shot_sidebar("claude-chat", "pane", cx)).unwrap();
+        wait(cx, window, Duration::from_millis(800));
+        save(cx, window, &out.join(format!("right-named-{width}.png")));
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+    }
+}
+
 fn diff_sidebar(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     let (repo, patch) = stack_repo();
     let data = Data::temp();
@@ -2537,6 +2602,39 @@ fn plugins_install(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
                 .unwrap();
             wait(cx, window, Duration::from_millis(300));
         };
+        let list = |cx: &mut VisualTestAppContext, tab: &'static str, query: &'static str, menu: Option<&'static str>| {
+            let entry = |id: &str, name: &str, description: &str| wings_plugins::store::Available {
+                id: id.into(),
+                name: name.into(),
+                description: description.into(),
+                version: "1.0.0".into(),
+                link: format!("https://github.com/example/{id}"),
+            };
+            let available = vec![
+                entry("issues", "Issues", "A board of the project's issues, with the agent's work on each."),
+                entry("changes", "Changes", "What changed in the repo, file by file, with line counts."),
+                entry("disk", "Disk usage", "What takes space on a disk or in a folder."),
+            ];
+            handle
+                .update(cx, |w, window, cx| {
+                    w.close_dialogs(cx);
+                    w.show_plugins_list(tab, query, menu, available, &[("tracker", "1.3.0")], window, cx)
+                })
+                .unwrap();
+            wait(cx, window, Duration::from_millis(400));
+        };
+        list(cx, "installed", "", None);
+        save(cx, window, &name("plugins-list"));
+        list(cx, "installed", "board", None);
+        save(cx, window, &name("plugins-search"));
+        list(cx, "installed", "", Some("tracker"));
+        save(cx, window, &name("plugins-row-menu"));
+        list(cx, "installed", "", Some("add"));
+        save(cx, window, &name("plugins-add-menu"));
+        list(cx, "browse", "", None);
+        save(cx, window, &name("plugins-browse"));
+        list(cx, "updates", "", None);
+        save(cx, window, &name("plugins-updates-tab"));
         show(cx, "tracker");
         save(cx, window, &name("plugins-update"));
         handle

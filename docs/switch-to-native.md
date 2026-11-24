@@ -1,6 +1,6 @@
 # Switching from the desktop app to the native app
 
-The native app (`apps/native`) replaces the Tauri desktop app (`apps/desktop`). This is how the switch build is made, what it does with your data, how to install it by hand or ship it through the desktop's updater, and how to go back.
+The native app (`apps/native`) replaces the Tauri desktop app (removed from the repo). This is how the switch build is made, what it does with your data, how to install it by hand or ship it through the desktop's updater, and how to go back.
 
 ## The two native builds
 

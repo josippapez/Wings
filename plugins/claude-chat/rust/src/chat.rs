@@ -34,7 +34,7 @@ pub const PAGE: usize = 80;
 /// How many entries of a resumed session's transcript are read back.
 /// How many entries of a session read back the chat asks for, and how much of each string of them: a whole long session,
 /// its tool outputs cut as the conversation cuts them anyway.
-pub(crate) const HISTORY_ALL: u32 = 10_000;
+pub(crate) const HISTORY_ALL: u32 = crate::session::HISTORY_ALL;
 pub(crate) const HISTORY_CUT: u32 = 4_000;
 /// What a session read back is made of: your messages (those sent while Claude worked are attachments), Claude's, where a
 /// rewind cut it, and its name.
@@ -195,6 +195,10 @@ pub struct Chat {
     pub accounts: Vec<host::AccountChoice>,
     /// The comments left on lines in Wings' diff viewer for this chat, which go with the next message (`review.rs`).
     pub review: Vec<crate::review::Comment>,
+    /// Why a comment wasn't kept, shown by the comments until you act on them (`review::FULL`).
+    pub review_note: Option<String>,
+    /// Why Wings refused to save the tab's state, which the tab would lose on a restart. Cleared by the next save that works.
+    pub save_error: Option<String>,
     /// Which plan is open as a document, and the comment being written on it (`plan_doc_view.rs`).
     pub plan_view: crate::plan_doc::View,
 }
@@ -264,6 +268,8 @@ thread_local! {
         limit_resume: None,
         accounts: Vec::new(),
         review: Vec::new(),
+        review_note: None,
+        save_error: None,
         plan_view: Default::default(),
     });
 }
@@ -356,7 +362,7 @@ pub fn start() {
 /// Finds the folder and the session the tab is for, and starts Claude Code there.
 async fn open() {
     let args = host::view_args().unwrap_or(Value::Null);
-    let saved = host::call("tabState", json!({})).await.unwrap_or(Value::Null);
+    let saved = host::tab_state().await.unwrap_or(Value::Null);
     open_with(args, saved).await;
 }
 
@@ -389,7 +395,7 @@ async fn open_with(args: Value, saved: Value) {
     };
     let cwd = match moved.map(str::to_owned).or(ran_in).or_else(|| args["cwd"].as_str().map(str::to_owned)) {
         Some(cwd) => cwd,
-        None => match host::call("project", json!({})).await.ok().and_then(|project| project["path"].as_str().map(str::to_owned)) {
+        None => match host::project().await.ok().and_then(|project| project["path"].as_str().map(str::to_owned)) {
             Some(path) => path,
             None => return with(|c| c.state = State::Failed("Open a project first. A chat runs Claude Code in a project's folder.".into())),
         },
@@ -447,7 +453,9 @@ pub fn launch_with(resume: Option<String>, how: Launch) {
             if let Ok(entries) = host::transcript_cut(id, &HISTORY_KINDS, HISTORY_ALL, HISTORY_CUT).await {
                 with(|c| {
                     if c.run == run {
-                        entries.as_array().into_iter().flatten().for_each(|entry| c.session.hear(entry));
+                        let read = entries.as_array().map(Vec::as_slice).unwrap_or_default();
+                        c.session.read_back(read);
+                        read.iter().for_each(|entry| c.session.hear(entry));
                         // The process that ran a call with no result here is gone.
                         c.session.stop_replayed();
                     }
@@ -563,8 +571,17 @@ pub(crate) fn save_tab() {
     if !cwd.is_empty() {
         state["cwd"] = cwd.into();
     }
-    drop(host::call("setTabState", json!({ "state": state })));
+    let saved = host::set_tab_state(&state);
+    // A refused save is shown, not dropped: the tab would open again without what it holds. A page that is no tab (a
+    // subagent's or a pane's sidebar runs this code too) has nothing to keep, so Wings' refusal there says nothing.
+    task::spawn(async move {
+        let error = saved.await.err().filter(|error| error != NOT_A_TAB);
+        with(|c| c.save_error = error);
+    });
 }
+
+/// What Wings answers a page that isn't a tab when it saves its tab's state.
+const NOT_A_TAB: &str = "State can only be saved by a page shown as a tab or block";
 
 /// Lists the project's files for @-mentions: git's own list, so ignored files stay out. Done here, not by Claude Code's
 /// file suggestions, because Wings lets the page write to Claude Code only on a click or a key.
@@ -640,7 +657,7 @@ fn stdout(out: Result<Value, String>) -> Option<String> {
 /// The lines added and removed, as the Changes plugin counts them for its sidebar: new files too. With Changes off, git's
 /// count of the files it already tracks.
 async fn counted(cwd: &str) -> Option<(u64, u64)> {
-    let asked = host::call("callTool", json!({ "name": "changes__changed_files", "arguments": { "cwd": cwd } })).await;
+    let asked = host::call_tool("changes__changed_files", &json!({ "cwd": cwd })).await;
     if let Some(counts) = asked.ok().filter(|answer| answer["isError"] != true).and_then(|answer| changes_counted(answer["text"].as_str()?)) {
         return Some(counts);
     }
@@ -1012,6 +1029,7 @@ pub fn send() {
     report_agent();
     // The comments the message took are not kept for the next one.
     if had_review {
+        with(|c| c.review_note = None);
         save_tab();
     }
 }
@@ -1088,13 +1106,17 @@ pub fn remove_review(index: usize) {
         if index < c.review.len() {
             c.review.remove(index);
         }
+        c.review_note = None;
     });
     save_tab();
 }
 
 /// Takes every review comment off the message.
 pub fn clear_review() {
-    with(|c| c.review.clear());
+    with(|c| {
+        c.review.clear();
+        c.review_note = None;
+    });
     save_tab();
 }
 
@@ -1103,7 +1125,16 @@ fn review_comment(data: &Value) {
     if data["chat"].as_str() != Some(crate::review::key().as_str()) {
         return;
     }
-    if with(|c| crate::review::apply(&mut c.review, data)) {
+    let applied = with(|c| {
+        let applied = crate::review::apply(&mut c.review, data);
+        match applied {
+            crate::review::Applied::Full => c.review_note = Some(crate::review::FULL.to_owned()),
+            crate::review::Applied::Changed => c.review_note = None,
+            crate::review::Applied::Nothing => {}
+        }
+        applied
+    });
+    if applied.changed() {
         save_tab();
     }
 }
@@ -1194,7 +1225,7 @@ pub fn stop() {
 
 /// Opens the Claude chat page in Wings Settings, where the defaults for every chat are.
 pub fn open_settings() {
-    drop(host::call("openSettings", json!({})));
+    drop(host::open_settings());
 }
 
 /// The background hint's Settings link: opens Settings, and the hint is not shown again.
@@ -1570,7 +1601,7 @@ pub fn open_past() {
 /// Asks the Changes plugin to show its sidebar: a plugin can only open its own pages, so it hears this event instead.
 pub fn open_changes() {
     crate::session_side::covered();
-    drop(host::call("emit", json!({ "name": "open-changes" })));
+    drop(host::emit("open-changes", &Value::Null));
 }
 
 /// The event that asks the Changes plugin to open its diff viewer on every change in this chat's folder: uncommitted ones,
@@ -1807,6 +1838,34 @@ mod tests {
             c.session.working = working;
             c.run
         })
+    }
+
+    /// A sidebar running the chat's code is no tab: Wings refuses its save, and that is no failure to show.
+    #[test]
+    fn a_page_that_is_no_tab_shows_no_failed_save() {
+        host::testing::answer(|method, _| if method == "setTabState" { Err(super::NOT_A_TAB.into()) } else { Ok(Value::Null) });
+        with(|c| c.save_error = Some("old".into()));
+        super::save_tab();
+        wings_plugin::task::block_on(async {});
+        assert_eq!(with(|c| c.save_error.clone()), None);
+    }
+
+    #[test]
+    fn a_comment_that_does_not_fit_is_said_so_and_a_refused_tab_save_is_kept_to_show() {
+        host::testing::answer(|method, _| if method == "setTabState" { Err("Tab state is limited to 64 KB".into()) } else { Ok(Value::Null) });
+        with(|c| c.review.clear());
+        let event = |id: &str, body: &str| json!({ "chat": crate::review::key(), "path": "src/a.rs", "line": 4, "quote": "q", "body": body, "id": id });
+        let long = "x".repeat(12_000);
+        for n in 0..4 {
+            super::review_comment(&event(&format!("1:{n}"), &long));
+        }
+        wings_plugin::task::block_on(async {});
+        assert_eq!(with(|c| c.review.len()), 3, "the fourth was refused");
+        assert_eq!(with(|c| c.review_note.clone()).as_deref(), Some(crate::review::FULL));
+        assert_eq!(with(|c| c.save_error.clone()).as_deref(), Some("Tab state is limited to 64 KB"));
+        super::clear_review();
+        assert!(with(|c| c.review_note.is_none()));
+        with(|c| c.save_error = None);
     }
 
     #[test]

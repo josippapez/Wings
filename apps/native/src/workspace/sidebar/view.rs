@@ -26,7 +26,7 @@ use crate::workspace::{
     Workspace,
     context_menu::MenuTarget,
     drag_slot::Slot,
-    project::{SIDEBAR_ACCENT, SIDEBAR_FOREGROUND},
+    project::SIDEBAR_FOREGROUND,
     project_sections::ListItem,
 };
 
@@ -36,6 +36,11 @@ use super::{
 };
 
 impl Workspace {
+    pub(in crate::workspace) fn current_project_group(&self, index: usize) -> bool {
+        let root = |at: usize| (0..=at).rev().find(|&at| !self.projects[at].child).unwrap_or(at);
+        self.projects.iter().position(|entry| entry.path == self.config.project)
+            .is_some_and(|active| root(active) == root(index))
+    }
     /// The docked sidebar, as wide as it was dragged, while it is docked or still sliding shut. Toggling it slides the
     /// panes over, as the desktop does, while its contents fade, narrowing with it down to the narrowest sidebar and
     /// clipped below that, as the desktop's `min-w-[200px]` list; the terminals refit once the panes hold still.
@@ -125,12 +130,14 @@ impl Workspace {
     }
 
     pub(super) fn project_order(&self) -> Ordered {
+        let tabs = self.tab_agents();
         let busy: HashSet<PathBuf> = self
             .agents
             .values()
             .map(|agent| PathBuf::from(&agent.space_id))
+            .chain(tabs.iter().map(|(project, _, _)| project.clone()))
             .collect();
-        order::order(
+        let mut ordered = order::order(
             &self.projects,
             &OrderBy {
                 sort: self.side.sort,
@@ -139,7 +146,32 @@ impl Workspace {
                 active: &self.config.project,
                 busy: &busy,
             },
-        )
+        );
+        let keep = |rows: &mut Vec<usize>| {
+            let mut filtered = Vec::new();
+            let mut at = 0;
+            while at < rows.len() {
+                let end = (at + 1..rows.len())
+                    .find(|&next| !self.projects[rows[next]].child)
+                    .unwrap_or(rows.len());
+                let group = &rows[at..end];
+                let active = group.iter().any(|&index| self.projects[index].path == self.config.project);
+                let busy = group.iter().any(|&index| {
+                    let path = &self.projects[index].path;
+                    self.project_agents(path).iter().any(|state| matches!(state, agents::AgentState::Working | agents::AgentState::Blocked))
+                        || tabs.iter().any(|(project, _, agent)| project == path && matches!(agent.state.as_str(), "working" | "blocked"))
+                        || self.side.git.status.get(path).is_some_and(|status| status.changed + status.ahead + status.behind > 0)
+                });
+                if self.side.filters.idle || active || busy {
+                    filtered.extend(group.iter().copied().filter(|&index| self.side.filters.worktrees || !self.projects[index].child));
+                }
+                at = end;
+            }
+            *rows = filtered;
+        };
+        keep(&mut ordered.shown);
+        keep(&mut ordered.older);
+        ordered
     }
 
     fn project_list(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -204,17 +236,32 @@ impl Workspace {
     /// Scrolls the project list just enough to show the row of `path`, the project on screen, which is never under Older.
     pub(in crate::workspace) fn reveal_project(&self, path: &Path) {
         let shown = self.dragged_order(self.project_order().shown);
-        let row = self.sidebar_slots(&shown).iter().position(
-            |item| matches!(item, ListItem::Row(index) if self.projects[*index].path == path),
-        );
+        let mut position = 0;
+        let mut in_card = false;
+        let mut row = None;
+        for item in self.sidebar_slots(&shown) {
+            let card = matches!(&item, ListItem::Row(index) if self.current_project_group(*index));
+            if card && in_card {
+                if matches!(&item, ListItem::Row(index) if self.projects[*index].path == path) {
+                    row = Some(position - 1);
+                    break;
+                }
+                continue;
+            }
+            in_card = card;
+            if matches!(&item, ListItem::Row(index) if self.projects[*index].path == path) {
+                row = Some(position);
+                break;
+            }
+            position += 1;
+        }
         if let Some(row) = row {
             self.side.scroll.reveal(row, Reveal::Nearest);
         }
     }
 
-    /// "Projects" and its buttons: refresh the git counts, sort, add.
+    /// "Projects" and its buttons: filter, sort, add.
     fn projects_header(&self, cx: &mut Context<Self>) -> AnyElement {
-        let checking = self.side.git.checking;
         let sorts = Sort::ALL.map(|sort| {
             ui::select_item(
                 SharedString::from(format!("sort-{}", sort.key())),
@@ -243,22 +290,23 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .child(
-                        ui::icon_button(
-                            "refresh-git",
-                            Icon::RefreshCw,
-                            if checking {
-                                "Checking git status…"
-                            } else {
-                                "Refresh git status"
-                            },
-                            ButtonSize::Xs,
-                        )
-                        .when(checking, |button| button.opacity(0.5))
-                        .when(!checking, |button| {
-                            button.on_click(
-                                cx.listener(|this, _, _, cx| this.refresh_git(None, true, cx)),
-                            )
-                        }),
+                        div().relative()
+                            .child(ui::icon_button("filter-projects", Icon::SlidersHorizontal, "Filter projects", ButtonSize::Xs)
+                                .focusable().tab_stop(true)
+                                .aria_expanded(self.side.filter_menu.is_some())
+                                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                                    if matches!(event.keystroke.key.as_str(), "enter" | "space" | "down") {
+                                        this.toggle_project_filters(window, cx);
+                                        cx.stop_propagation();
+                                    }
+                                }))
+                                .on_click(cx.listener(|this, _, window, cx| this.toggle_project_filters(window, cx)))
+                                .children(ui::spot(|| "sidebar-filter".into()))
+                                .child({
+                                    let trigger = self.side.filters.trigger.clone();
+                                    gpui::canvas(move |bounds, _, _| trigger.set(Some(bounds)), |_, _, _, _| {}).absolute().top_0().left_0().size_full()
+                                }))
+                            .children(self.project_filter_menu(cx)),
                     )
                     .child(
                         div()
@@ -314,6 +362,7 @@ impl Workspace {
     ) -> AnyElement {
         let entry = &self.projects[index];
         let active = entry.path == self.config.project;
+        let unread = self.project_unread(&entry.path);
         let states = self.project_agents(&entry.path);
         let agents = states.len();
         let glyph = match agents::roll_up(states) {
@@ -362,7 +411,6 @@ impl Workspace {
             .relative()
             .rounded(px(theme::RADIUS))
             .cursor_pointer()
-            .when(active, |row| row.bg(rgba(SIDEBAR_ACCENT)))
             .when(!active, |row| {
                 row.hover(|style| style.bg(rgba(theme::HOVER)))
             })
@@ -430,11 +478,12 @@ impl Workspace {
                                             .truncate()
                                             .text_size(px(13.0))
                                             .line_height(px(18.0))
-                                            .font_weight(if active {
-                                                FontWeight::SEMIBOLD
+                                            .font_weight(if unread {
+                                                FontWeight::BOLD
                                             } else {
                                                 FontWeight::MEDIUM
                                             })
+                                            .when(unread, |name| name.children(ui::spot(|| format!("project-unread:{}", entry.name))))
                                             .text_color(rgb(SIDEBAR_FOREGROUND))
                                             .child(title),
                                     )

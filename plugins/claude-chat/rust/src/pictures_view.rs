@@ -1,5 +1,5 @@
 //! Pictures in the conversation: thumbnails in your messages and under the tool call that gave them back, and the dialog
-//! that shows one large when you click it. Only the newest pictures show (`images::SHOWN`): an older one is a note.
+//! that shows one large when you click it. Every picture shows; only one Wings wouldn't keep is a note.
 
 use wings_plugin::ui::{Node, dialog, image, muted, row};
 

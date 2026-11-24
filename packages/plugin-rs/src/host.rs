@@ -11,6 +11,9 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
+mod more;
+pub use more::*;
+
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod ffi {
     #[link(wasm_import_module = "wings")]
@@ -439,7 +442,8 @@ pub fn on_agent_message(listener: impl Fn(&str, bool) -> Result<bool, String> + 
 }
 
 /// `wings.setTabTitle`: names the tab this page shows in, as a terminal's tab shows what runs in it: one line of at most
-/// 80 characters, or `None` for its view's title again. Wings 0.2.37.
+/// 80 characters, or `None` for its view's title again. Wings 0.2.37. In a sidebar's page it names the sidebar's header
+/// in place of the manifest's title, until the page closes (Wings 0.2.96).
 pub fn set_tab_title(title: Option<&str>) -> Pending<Result<Value, String>> {
     call("setTabTitle", json!({ "title": title }))
 }
@@ -524,6 +528,12 @@ pub fn transcript_with_images(session: &str, kinds: &[&str], last: Option<u32>) 
 /// which Wings finds in the session's folder. Needs Wings 0.2.41.
 pub fn subagent_transcript(session: &str, agent: &str, kinds: &[&str], last: Option<u32>) -> Pending<Result<Value, String>> {
     call("transcript", json!({ "sessionId": session, "agent": agent, "types": kinds, "last": last, "images": "register" }))
+}
+
+/// `subagent_transcript` with each string of an entry cut to `cut` characters, as `transcript_cut` does for a session's
+/// own: up to 10,000 entries of a long subagent's transcript, each tool output cut. Needs Wings 0.2.43.
+pub fn subagent_transcript_cut(session: &str, agent: &str, kinds: &[&str], last: u32, cut: u32) -> Pending<Result<Value, String>> {
+    call("transcript", json!({ "sessionId": session, "agent": agent, "types": kinds, "last": last, "images": "register", "cut": cut }))
 }
 
 /// `wings.registerImage` (Wings 0.2.40): keeps a picture, a png, jpeg, gif or webp of up to 5 MB as base64, in Wings
@@ -1118,7 +1128,7 @@ mod tests {
     use crate::task::{block_on, run_ready};
 
     /// Answers every call with `Ok(null)` and keeps what was called, in order. A method in `fail` is refused once.
-    fn record(fail: &'static [&'static str]) -> Rc<RefCell<Vec<(String, Value)>>> {
+    pub(super) fn record(fail: &'static [&'static str]) -> Rc<RefCell<Vec<(String, Value)>>> {
         let calls = Rc::new(RefCell::new(Vec::new()));
         let kept = calls.clone();
         let refused = RefCell::new(fail.to_vec());
@@ -1134,6 +1144,17 @@ mod tests {
             }
         });
         calls
+    }
+
+    /// A subagent's transcript is read with its strings cut and the entries it asks for, in one call.
+    #[test]
+    fn a_subagent_transcript_can_be_read_with_its_strings_cut() {
+        let calls = record(&[]);
+        drop(subagent_transcript_cut("s1", "a1", &["user"], 10_000, 4_000));
+        assert_eq!(
+            *calls.borrow(),
+            [("transcript".to_owned(), json!({ "sessionId": "s1", "agent": "a1", "types": ["user"], "last": 10_000, "images": "register", "cut": 4_000 }))]
+        );
     }
 
     #[test]

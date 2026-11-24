@@ -217,7 +217,8 @@ impl Workspace {
             return false;
         };
         let (host, source) = (installed.host.clone(), page.source.clone());
-        let page = cx.new(|cx| PageView::in_plugin(&host, &source, cx).in_card());
+        let state = self.plugin_env.sidebar_state();
+        let page = cx.new(|cx| PageView::in_plugin_with_state(&host, &source, None, state, cx).in_card());
         self.sidebar_pages.insert(key.clone(), page);
         self.sync_page_terminals(cx);
         true
@@ -382,14 +383,11 @@ impl Workspace {
             else {
                 continue;
             };
-            let Some(title) = installed
-                .sidebars
-                .iter()
-                .find(|page| page.id == key.1)
-                .map(|page| page.title.clone())
-            else {
+            let Some(title) = installed.sidebars.iter().find(|page| page.id == key.1).map(|page| page.title.clone()) else {
                 continue;
             };
+            // What the page names its header, as a tab's page names its tab.
+            let title = page.read(cx).header_title().unwrap_or(title);
             // On screen, so its spinners turn in the window's layer and a step of them doesn't draw the page again.
             crate::ui::place_view(page.entity_id(), window);
             let glyph = sidebar_glyph(installed, &key.1, 14.0);

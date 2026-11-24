@@ -1,4 +1,4 @@
-//! GitHub reads that one `gh` call answers for many repositories, as `wings-plugin-sdk/github` does, so a plugin that
+//! GitHub reads that one `gh` call answers for many repositories, so a plugin that
 //! lists the pull requests of every project starts one process, not two per project. The plugin lists `gh graphql` in
 //! `permissions.post`: `gh api graphql` takes its query in a field, which `exec` refuses.
 

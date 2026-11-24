@@ -49,9 +49,12 @@ pub(super) struct Windowing {
 /// Whether `column`, the one child of a `Scroll`, is drawn a window at a time: it is long, and each child is one element
 /// with an id, as a chat's messages are. A run of plain strings is one element of several nodes.
 pub(super) fn windowed(column: &tree::Stack) -> bool {
-    column.children.len() > WINDOW_FROM
-        && !column.inset
-        && column.children.iter().all(|child| !matches!(child, Node::Str { .. }) && child.id().is_some())
+    !column.inset && windowed_nodes(&column.children, WINDOW_FROM)
+}
+
+/// Whether `children`, more than `from` of them, are each one element with an id, so they can be drawn a window at a time.
+pub(super) fn windowed_nodes(children: &[Node], from: usize) -> bool {
+    children.len() > from && children.iter().all(|child| !matches!(child, Node::Str { .. }) && child.id().is_some())
 }
 
 impl PageView {
@@ -65,9 +68,26 @@ impl PageView {
         watch: Option<popup_menu_view::ChildrenWatch>,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        let count = stack.children.len();
-        let ids: Vec<u64> = stack.children.iter().filter_map(Node::id).collect();
-        let space = px(gap(stack.gap));
+        let (parts, places) =
+            self.windowed_parts(&stack.children, px(gap(stack.gap)), stack.enter, stack.links, state, stuck, cx);
+        let element = Self::stack_box(stack).children(parts);
+        self.with_context_menu(element, stack, watch, Some(places), cx)
+    }
+
+    /// `children`, a column's, drawn a window at a time in the scroll `state` keeps, `space` apart: the elements to put in
+    /// the column (spacers and the children drawn) and what turns the places they are laid out at into the children's.
+    pub(super) fn windowed_parts(
+        &self,
+        children: &[Node],
+        space: Pixels,
+        enter: bool,
+        links: bool,
+        state: &Rc<FollowScroll>,
+        stuck: bool,
+        cx: &mut Context<Self>,
+    ) -> (Vec<AnyElement>, popup_menu_view::ChildrenPlaces) {
+        let count = children.len();
+        let ids: Vec<u64> = children.iter().filter_map(Node::id).collect();
         let now = cx.background_executor().now();
         let handle = &state.handle;
         let mut kept = state.windowing.borrow_mut();
@@ -128,22 +148,22 @@ impl PageView {
         let pivot = bottoms.partition_point(|bottom| *bottom <= top).min(count - 1);
         let mut start = bottoms.partition_point(|bottom| *bottom <= top - margin).min(pivot);
         let mut end = tops.partition_point(|at| *at < top + view + margin).max(pivot + 1);
-        if let Some((first, last)) = self.pinned(stack) {
+        if let Some((first, last)) = self.pinned(children) {
             start = start.min(first);
             end = end.max(last + 1);
         }
         let rises: Vec<bool> = (start..end)
-            .map(|at| stack.enter && kept.seen.get(&ids[at]).is_some_and(|seen| now.saturating_duration_since(*seen) < ui::motion::RISE))
+            .map(|at| enter && kept.seen.get(&ids[at]).is_some_and(|seen| now.saturating_duration_since(*seen) < ui::motion::RISE))
             .collect();
         kept.drawn = (start..end, count);
         drop(kept);
 
         let before = LINKED.with(Cell::get);
-        LINKED.with(|cell| cell.set(before || stack.links));
+        LINKED.with(|cell| cell.set(before || links));
         let above: Vec<AnyElement> =
-            (start..pivot).map(|at| self.column_child(&stack.children[at], stack.enter, rises[at - start], cx)).collect();
+            (start..pivot).map(|at| self.column_child(&children[at], enter, rises[at - start], cx)).collect();
         let below: Vec<AnyElement> =
-            (pivot..end).map(|at| self.column_child(&stack.children[at], stack.enter, rises[at - start], cx)).collect();
+            (pivot..end).map(|at| self.column_child(&children[at], enter, rises[at - start], cx)).collect();
         LINKED.with(|cell| cell.set(before));
 
         // The children before the pivot hang from its top, in a box as tall as their kept heights and the ones not drawn,
@@ -165,7 +185,9 @@ impl PageView {
             )
         });
         let after = (end < count).then(|| div().flex_none().h(total - tops[end]));
-        let element = Self::stack_box(stack).children(hanging).children(below).children(after);
+        let mut parts: Vec<AnyElement> = hanging.into_iter().map(IntoElement::into_any_element).collect();
+        parts.extend(below);
+        parts.extend(after.into_iter().map(IntoElement::into_any_element));
 
         let state = state.clone();
         let tree = self.trees;
@@ -217,7 +239,7 @@ impl PageView {
             }
             places
         };
-        self.with_context_menu(element, stack, watch, Some(Box::new(places)), cx)
+        (parts, Box::new(places))
     }
 
     /// A child of a windowed column. In a column whose children rise, one that was there before its rise ended is drawn
@@ -238,15 +260,14 @@ impl PageView {
 
     /// The first and last children of `stack` that hold an end of the selection, the field with the keyboard or the open
     /// menu: they are drawn wherever they are.
-    fn pinned(&self, stack: &tree::Stack) -> Option<(usize, usize)> {
+    fn pinned(&self, children: &[Node]) -> Option<(usize, usize)> {
         let mut held: Vec<u64> = self.selection_ends().map_or_else(Vec::new, |(anchor, head)| vec![anchor, head]);
         held.extend(self.focused);
         held.extend(self.menu);
         if held.is_empty() {
             return None;
         }
-        let mut found = stack
-            .children
+        let mut found = children
             .iter()
             .enumerate()
             .filter(|(_, child)| held.iter().any(|id| selection_view::has_node(std::slice::from_ref(*child), *id)))

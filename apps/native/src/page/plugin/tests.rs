@@ -318,19 +318,19 @@ fn a_broadcast_reaches_the_other_frames_of_its_plugin_in_order_and_never_the_sen
 }
 
 #[test]
-fn a_broadcast_over_64000_characters_of_json_is_refused_and_one_of_64000_goes_through() {
+fn a_broadcast_over_1000000_characters_of_json_is_refused_and_one_of_1000000_goes_through() {
     let root = Root::new();
     let host = PluginHost::new(root.config("fixture"));
     let (sender, listener) = (open(&host, &probe()), open(&host, &probe()));
-    sender.send(json!({ "chars": 64_000 }));
-    // JS string units, as on the desktop: 31,999 emoji and two quotes are 64,000, one more is not.
-    sender.send(json!({ "emoji": 31_999 }));
-    sender.send(json!({ "chars": 64_001 }));
-    sender.send(json!({ "emoji": 32_000 }));
+    sender.send(json!({ "chars": 1_000_000 }));
+    // JS string units, as on the desktop: 499,999 emoji and two quotes are 1,000,000, one more is not.
+    sender.send(json!({ "emoji": 499_999 }));
+    sender.send(json!({ "chars": 1_000_001 }));
+    sender.send(json!({ "emoji": 500_000 }));
     let report = sender.report("four results", |r| {
         r["results"].as_array().unwrap().len() == 4
     });
-    let refused = "A broadcast is limited to 64 KB";
+    let refused = "A broadcast is limited to 1 MB";
     assert_eq!(report["results"], json!(["sent", "sent", refused, refused]));
 
     // The refused ones went to no one: what comes after them is the listener's next message.
@@ -340,7 +340,7 @@ fn a_broadcast_over_64000_characters_of_json_is_refused_and_one_of_64000_goes_th
     });
     assert_eq!(
         report["heard"],
-        json!(["text of 63998", "text of 63998", "after"])
+        json!(["text of 999998", "text of 999998", "after"])
     );
 }
 
@@ -633,4 +633,73 @@ fn a_main_that_stops_is_started_again_until_its_plugin_is_dropped() {
     // The next restart would have come 4 s after that stop.
     std::thread::sleep(Duration::from_secs(5));
     assert_eq!(starts(&root), 2, "a dropped plugin's main started again");
+}
+
+/// A value to store is parsed into the host's memory before storage measures it, and `[0,0,...]` takes some sixteen
+/// times its length as a value: one past the 1 MB a value may be is refused unparsed.
+#[test]
+fn a_stored_value_past_1_mb_is_refused_before_it_is_parsed() {
+    let rig = super::testing::Rig::new(json!({}), vec![]);
+    // Not even JSON: what refuses it says which check came first.
+    let text = format!("[{}x]", "0,".repeat(600_000));
+    let refused = super::testing::Frame::start(
+        &rig.host,
+        &fake::script("page", move || {
+            let text = text.clone();
+            move |cx: &mut Cx<'_>, heard: fake::Hear<'_>| {
+                if let fake::Hear::Start = heard {
+                    let answer = cx.link().storage(Store::Set("big".into(), text.clone()));
+                    show(cx, json!(answer.unwrap_err()));
+                }
+            }
+        }),
+    )
+    .report("the refusal", |_| true);
+    assert_eq!(refused, "A stored value is limited to 1 MB, and this one is 1172 KB.");
+}
+
+/// A refusal is kept in the plugins' log once, and often names what was asked: a frame asking in a loop grew the set of
+/// those it had logged, and the log, without bound. Past 256 the frame's refusals aren't logged.
+#[test]
+fn a_frames_refusals_in_the_log_stop_at_256() {
+    let rig = super::testing::Rig::new(json!({}), vec![]);
+    let caller = super::testing::Caller::start(&rig.host);
+    for n in 0..300 {
+        assert!(caller.call(&format!("refusedLoop{n}"), json!({})).is_err());
+    }
+    let said = crate::page::log::SAID.lock().unwrap();
+    let logged = said.iter().filter(|line| line.contains("refused: unknown method refusedLoop")).count();
+    assert_eq!(logged, 256);
+}
+
+/// Each call that runs off the frame's thread had a thread of its own: a frame calling in a loop started one for each,
+/// past the 4,096 a macOS process may have. A plugin's calls now share `CALL_THREADS` of them, and wait in order.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_plugins_calls_share_its_threads_instead_of_starting_one_each() {
+    use std::sync::{Arc, Condvar, Mutex};
+    let rig = super::testing::Rig::new(json!({}), vec![]);
+    let before = crate::page::runtime::tests::threads();
+    let gate = Arc::new((Mutex::new(false), Condvar::new()));
+    let answers: Vec<_> = (0..600)
+        .map(|n| {
+            let (reply, answer) = crate::page::runtime::Reply::channel();
+            let gate = gate.clone();
+            rig.host.shared.off_thread(reply, move |_| {
+                let (open, opened) = &*gate;
+                let _open = opened.wait_while(open.lock().unwrap(), |open| !*open).unwrap();
+                Ok(n.to_string())
+            });
+            answer
+        })
+        .collect();
+    let grew = crate::page::runtime::tests::threads() - before;
+    *gate.0.lock().unwrap() = true;
+    gate.1.notify_all();
+    for (n, answer) in answers.iter().enumerate() {
+        assert_eq!(answer.wait(WAIT), Some(Ok(n.to_string())));
+    }
+    eprintln!("[measure] 600 waiting calls of one plugin started {grew} threads");
+    // Room for what other tests start meanwhile.
+    assert!(grew < 250, "600 calls started {grew} threads");
 }

@@ -112,12 +112,8 @@ fn view() -> Vec<Node> {
         }
         let mut out = vec![heading("Usage").key("usage-title"), usage.key("usage")];
 
-        let Some(s) = s else {
-            out.push(empty("No Claude session in your panes.", "Run claude in a pane to see its context, MCP servers and skills.").key("empty"));
-            return out;
-        };
-        let id = s["id"].as_str().unwrap_or_default();
-        if sessions.len() > 1 {
+        // The list of sessions to pick one from, with the one shown selected (none when the followed one has gone).
+        let picker = |selected: &str| {
             let options: Vec<(String, String)> = sessions
                 .iter()
                 .map(|x| {
@@ -125,16 +121,28 @@ fn view() -> Vec<Node> {
                     let name = x["name"].as_str().map_or_else(|| id.chars().take(8).collect(), str::to_owned);
                     (id.to_owned(), format!("{} · {name}", x["project"].as_str().unwrap_or_default()))
                 })
-                .collect();
-            out.push(
-                select("Session", &options, id, |picked| {
-                    PAGE.with(|page| {
-                        let mut page = page.borrow_mut();
-                        page.picked = Some((picked.to_owned(), page.followed.clone()));
-                    });
-                })
-                .key("session"),
-            );
+                .collect::<Vec<_>>();
+            select("Session", &options, selected, |picked| {
+                PAGE.with(|page| {
+                    let mut page = page.borrow_mut();
+                    page.picked = Some((picked.to_owned(), page.followed.clone()));
+                });
+            })
+            .key("session")
+        };
+        let Some(s) = s else {
+            if sessions.is_empty() {
+                out.push(empty("No Claude session in your panes.", "Run claude in a pane to see its context, MCP servers and skills.").key("empty"));
+            } else {
+                // Not another session's numbers in its place.
+                out.push(empty("That session isn't running any more.", "Pick another one, or select a pane that runs Claude.").key("gone"));
+                out.push(picker(""));
+            }
+            return out;
+        };
+        let id = s["id"].as_str().unwrap_or_default();
+        if sessions.len() > 1 {
+            out.push(picker(id));
         }
 
         out.push(heading("Context").key("context-title"));
@@ -177,4 +185,32 @@ pub fn start() {
     wings_plugin::run(view);
     messages::on(SNAPSHOT, |hud| PAGE.with(|page| page.borrow_mut().hud = Some(hud.clone())));
     messages::tell(WANT, &Value::Null);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_followed_session_that_is_gone_says_so_instead_of_showing_another_sessions_numbers() {
+        let context = |percent: u32| json!({ "percent": percent, "tokens": 1000.0, "window": 200000.0, "cache": "warm" });
+        let hud = json!({
+            "overview": { "limits": [], "statusline": true },
+            "sessions": [
+                { "id": "a", "project": "one", "context": context(41), "servers": [], "skills": [] },
+                { "id": "b", "project": "two", "context": context(77), "servers": [], "skills": [] },
+            ],
+        });
+        let shown = |followed: &str| {
+            PAGE.with(|page| *page.borrow_mut() = Page { hud: Some(hud.clone()), followed: Some(followed.into()), picked: None });
+            wings_plugin::ui::tree_json(stack().children(view())).to_string()
+        };
+        let own = shown("b");
+        assert!(own.contains("Context window") && own.contains("77"), "{own}");
+        let gone = shown("c");
+        assert!(gone.contains("isn't running any more"), "{gone}");
+        assert!(!gone.contains("Context window") && !gone.contains("\"percent\":41"), "{gone}");
+        assert!(gone.contains("two ·"), "it offers the sessions to pick from");
+    }
 }

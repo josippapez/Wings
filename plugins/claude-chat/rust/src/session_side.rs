@@ -183,7 +183,7 @@ pub fn toggle() {
         open_here();
     } else {
         RELAY.with(|relay| relay.borrow_mut().open = false);
-        drop(host::call("closeView", json!({ "id": SIDEBAR })));
+        drop(host::close_view(SIDEBAR));
     }
 }
 
@@ -229,7 +229,7 @@ pub fn moved(sidebar: bool) {
         std::mem::take(&mut relay.open)
     });
     if open {
-        drop(host::call("closeView", json!({ "id": SIDEBAR })));
+        drop(host::close_view(SIDEBAR));
     }
 }
 
@@ -583,7 +583,7 @@ mod tests {
         told(&click, Some("session-side:s9"), true);
         assert!(called(&calls, "emit").is_empty(), "not from a page that follows another chat");
         told(&click, Some(&page_name("s1")), true);
-        assert_eq!(called(&calls, "emit"), [json!({ "name": "open-changes" })]);
+        assert_eq!(called(&calls, "emit"), [json!({ "name": "open-changes", "data": null })]);
         // The sidebar says whether it shows, for the header's button.
         told(&json!({ "kind": "session-open", "open": true }), Some(&page_name("s1")), false);
         assert!(shown());

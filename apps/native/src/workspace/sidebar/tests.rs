@@ -14,10 +14,188 @@ use crate::{
     projects::{test_dir, test_repo},
     saved,
     workspace::{
-        Workspace,
+        Workspace, NotifyWorkspace,
         tests::{drag_to, moves, open_config, press, release},
     },
 };
+
+fn sidebar_agent(pane: usize, project: &Path, state: crate::agents::AgentState) -> crate::agents::Agent {
+    crate::agents::Agent {
+        pane_id: pane.to_string(), space_id: project.to_string_lossy().into_owned(),
+        pid: 1, kind: crate::agents::AgentKind::Claude, session_id: None,
+        name: Some("Fix checkout".into()), state, waiting_for: None,
+        args: vec!["--model".into(), "opus".into()], launcher: None,
+        started_at: super::now_ms() - 240_000, state_since: Some(super::now_ms() - 240_000),
+        direct: true, summary: None, weak_name: false, claude_dir: None,
+    }
+}
+
+#[test]
+fn sidebar_unread_completion_is_bold_until_its_project_and_agent_are_opened() {
+    use crate::agents::{AgentState, Scan};
+    use super::AgentKey;
+    let dir = test_dir("sidebar-unread-completion");
+    let (_app, mut window, folders) = open(&dir, &["alpha", "beta"]);
+    // Make a real pane in beta, then leave it while its agent works.
+    let pane = window.update(|w, window, cx| {
+        w.switch_project(folders[1].clone(), window, cx);
+        let pane = w.focused_pane().unwrap();
+        w.switch_project(folders[0].clone(), window, cx);
+        pane
+    });
+    let apply = |window: &mut TestAppWindow<Workspace>, state| window.update(|w, _, cx| {
+        w.apply(Scan { agents: vec![sidebar_agent(pane, &folders[1], state)], panes: Default::default() }, cx)
+    });
+    apply(&mut window, AgentState::Working);
+    apply(&mut window, AgentState::Done);
+    window.draw();
+    assert!(crate::ui::spot_at("project-unread:beta").is_some(), "the completed project's name is not bold");
+    assert!(crate::ui::spot_at(&format!("agent-unread:{pane}")).is_some(), "the completed agent's name is not bold");
+    window.simulate_click(row("beta"), MouseButton::Left);
+    window.read(|w, _| {
+        assert!(!w.project_unread(&folders[1]));
+        assert!(!w.agent_unread(AgentKey::Pane(pane), AgentState::Done));
+    });
+    // A new turn must be unread again even if the same session and pane are reused.
+    window.update(|w, window, cx| w.switch_project(folders[0].clone(), window, cx));
+    apply(&mut window, AgentState::Working);
+    apply(&mut window, AgentState::Done);
+    window.read(|w, _| {
+        assert!(w.project_unread(&folders[1]));
+        assert!(w.agent_unread(AgentKey::Pane(pane), AgentState::Done));
+    });
+    window.draw();
+    window.simulate_click(crate::ui::spot_at(&format!("agent-row:{pane}")).unwrap().center(), MouseButton::Left);
+    window.read(|w, _| {
+        assert_eq!(w.project(), folders[1]);
+        assert!(!w.project_unread(&folders[1]));
+        assert!(!w.agent_unread(AgentKey::Pane(pane), AgentState::Done));
+    });
+}
+
+#[test]
+fn sidebar_current_project_and_worktrees_share_one_card() {
+    let dir = test_dir("sidebar-project-card");
+    let (_app, mut window, folders) = open(&dir, &["alpha", "alpha-fix", "beta"]);
+    window.update(|w, _, cx| {
+        w.projects[1].child = true;
+        cx.notify_workspace();
+    });
+    window.draw();
+    let card = crate::ui::spot_at("current-project-card").expect("the project has no shared card");
+    assert!(card.contains(&row("alpha")) && card.contains(&row("alpha-fix")));
+    assert!(!card.contains(&row("beta")));
+    assert_eq!(crate::ui::spot_at("project:alpha").unwrap().origin.x,
+        crate::ui::spot_at("project:beta").unwrap().origin.x, "the card shifted its rows sideways");
+    assert_eq!(row("alpha-fix").y - row("alpha").y, row("beta").y - row("alpha-fix").y,
+        "the card changed the spacing between rows");
+    window.update(|w, window, cx| w.switch_project(folders[1].clone(), window, cx));
+    window.draw();
+    let card = crate::ui::spot_at("current-project-card").unwrap();
+    assert!(card.contains(&row("alpha")) && card.contains(&row("alpha-fix")));
+}
+
+#[test]
+fn sidebar_filter_menu_hides_idle_projects_and_worktrees_and_keeps_its_choices() {
+    let dir = test_dir("sidebar-project-filters");
+    let (app, mut window, folders) = open(&dir, &["alpha", "beta", "beta-fix", "gamma"]);
+    window.update(|w, _, cx| w.refresh_git(None, true, cx));
+    until(&app, &window, "git did not settle", |w| !w.side.git.checking);
+    window.update(|w, _, cx| {
+        w.projects[2].child = true;
+        w.side.git.status.insert(folders[1].clone(), GitStatus { branch: None, changed: 1, ahead: 0, behind: 0 });
+        cx.notify_workspace();
+    });
+    window.draw();
+    let filter = crate::ui::spot_at("sidebar-filter").expect("the header still has Refresh instead of Filter").center();
+    window.simulate_click(filter, MouseButton::Left);
+    window.draw();
+    let pick = |window: &mut TestAppWindow<Workspace>, label: &str| {
+        window.simulate_click(crate::ui::spot_at(&format!("menu:{label}")).unwrap().center(), MouseButton::Left);
+        window.draw();
+    };
+    pick(&mut window, "Show idle projects");
+    assert_eq!(window.read(|w, _| w.project_order().shown), [0, 1, 2]);
+    window.simulate_click(filter, MouseButton::Left);
+    window.draw();
+    pick(&mut window, "Show worktrees");
+    assert_eq!(window.read(|w, _| w.project_order().shown), [0, 1]);
+    // A working child keeps its idle parent visible, even when worktrees are hidden.
+    window.update(|w, _, cx| {
+        w.side.git.status.remove(&folders[1]);
+        w.agents.insert(76, sidebar_agent(76, &folders[2], crate::agents::AgentState::Working));
+        w.agents.insert(77, sidebar_agent(77, &folders[3], crate::agents::AgentState::Working));
+        cx.notify_workspace();
+    });
+    assert_eq!(window.read(|w, _| w.project_order().shown), [0, 1, 3]);
+    window.simulate_click(filter, MouseButton::Left);
+    window.draw();
+    window.simulate_keystroke("escape");
+    assert!(window.read(|w, _| w.side.filter_menu.is_none()));
+    let saved = saved::load_settings(&dir.join("workspace.json"));
+    assert_eq!((saved.sidebar_show_idle, saved.sidebar_show_worktrees), (Some(false), Some(false)));
+    drop((window, app));
+    let (_app, window, _) = open(&dir, &["alpha", "beta", "beta-fix", "gamma"]);
+    assert!(window.read(|w, _| !w.side.filters.idle && !w.side.filters.worktrees));
+}
+
+#[test]
+fn sidebar_agent_age_steps_in_a_live_slot_without_redrawing_the_sidebar() {
+    let dir = test_dir("sidebar-agent-age");
+    let (app, mut window, folders) = open(&dir, &["alpha"]);
+    window.update(|w, _, cx| w.refresh_git(None, true, cx));
+    until(&app, &window, "git did not settle", |w| !w.side.git.checking);
+    window.update(|w, _, cx| {
+        w.agents.insert(77, sidebar_agent(77, &folders[0], crate::agents::AgentState::Working));
+        cx.notify_workspace();
+    });
+    window.draw();
+    app.run_until_parked();
+    window.draw();
+    assert!(crate::ui::live::placed("agent-age-77").is_some(), "the agent's age isn't in a live slot");
+    let drawn = |window: &TestAppWindow<Workspace>| window.read(|w, cx| {
+        let parts = w.parts.as_ref().unwrap();
+        (parts.sidebar.read(cx).drawn, parts.main.read(cx).drawn, parts.title_bar.read(cx).drawn)
+    });
+    let before = drawn(&window);
+    for _ in 0..3 {
+        app.advance_clock(Duration::from_secs(1));
+        app.run_until_parked();
+        window.draw();
+    }
+    let after = drawn(&window);
+    eprintln!("[measure] sidebar agent age, 3 clock steps: sidebar {}, main {}, title bar {}", after.0 - before.0, after.1 - before.1, after.2 - before.2);
+    assert_eq!(after, before, "an age step redrew the window's pieces");
+}
+
+#[test]
+fn sidebar_filter_menu_uses_keyboard_dismissal_and_trigger_toggle() {
+    let dir = test_dir("sidebar-filter-keys");
+    let (_app, mut window, _) = open(&dir, &["alpha"]);
+    window.draw();
+    let trigger = crate::ui::spot_at("sidebar-filter").unwrap().center();
+    window.simulate_click(trigger, MouseButton::Left);
+    window.draw();
+    assert!(window.read(|w, _| w.side.filter_menu.is_some()));
+    window.simulate_click(trigger, MouseButton::Left);
+    assert!(window.read(|w, _| w.side.filter_menu.is_none()), "the trigger reopened its own menu");
+    window.draw();
+    window.simulate_click(trigger, MouseButton::Left);
+    window.draw();
+    window.simulate_keystroke("home");
+    window.simulate_keystroke("enter");
+    assert!(window.read(|w, _| !w.side.filters.idle && w.side.filter_menu.is_none()));
+    window.draw();
+    window.simulate_click(trigger, MouseButton::Left);
+    window.draw();
+    window.simulate_keystroke("escape");
+    assert!(window.read(|w, _| w.side.filter_menu.is_none()));
+    window.draw();
+    window.simulate_click(trigger, MouseButton::Left);
+    window.draw();
+    window.simulate_mouse_down(point(px(500.0), px(400.0)), MouseButton::Left);
+    assert!(window.read(|w, _| w.side.filter_menu.is_none()));
+}
 
 /// The project list of folders `names` in order, made unless it is there already, so a relaunch finds what was
 /// changed. The first folder is the project shown.

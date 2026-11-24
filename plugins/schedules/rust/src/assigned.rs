@@ -1,7 +1,7 @@
 //! The "When something is assigned to me" entries: where a project's tickets come from, what to ask that forge, which
 //! tickets are new, and what Start does with one. No `wings`, no I/O, so unit tests drive it.
 
-use crate::schedule::{Agent, Run, clean_prompt, int, text};
+use crate::schedule::{Agent, Run, RunIn, clean_prompt, int, text};
 use serde_json::{Map, Value, json};
 use std::collections::HashSet;
 use wings_plugin::remote::{Remote, parse_remote};
@@ -590,7 +590,7 @@ pub fn fill_prompt(template: &str, t: &Ticket) -> Result<String, String> {
         }
     }
     out.push_str(rest);
-    clean_prompt(&out)
+    clean_prompt(&out, RunIn::Terminal)
 }
 
 pub fn format_gb(bytes: f64) -> String {
@@ -650,7 +650,7 @@ pub fn clean_watch_draft(d: &WatchDraft) -> Result<WatchDraft, String> {
         name: Some(words(d.name.as_deref().unwrap_or_default(), 80)).filter(|name| !name.is_empty()),
         project_id: d.project_id.clone(),
         agent: d.agent,
-        prompt: clean_prompt(&d.prompt)?,
+        prompt: clean_prompt(&d.prompt, RunIn::Terminal)?,
         min_free_gb: d.min_free_gb,
         states: d.states.as_ref().map(|states| dedupe(states.iter().map(|x| words(x, 100))).into_iter().take(FETCH_LIMIT).collect()),
         prefixes: dedupe(d.prefixes.iter().map(|x| words(x, 40))).into_iter().take(20).collect(),

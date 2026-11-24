@@ -140,7 +140,7 @@ pub fn on_section_panes(panes: &[Value]) {
 }
 
 fn show_order(order: &str) {
-    drop(host::call("setSectionSort", json!({ "sectionId": SECTION, "sort": order })));
+    drop(host::set_section_sort(SECTION, &order));
 }
 
 /// Tells Wings the order the section starts in, sorts again when the setting changes, and hears the menu on the section's

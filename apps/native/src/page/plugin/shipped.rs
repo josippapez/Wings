@@ -2350,7 +2350,7 @@ fn tasks_board_deletes_an_issue_after_asking() {
     })
     .expect("a card has its delete button");
     assert!(page.dispatch(&trash, None));
-    let asking = tree(&events, "the question", |tree| tree.text().contains("Delete WEB-1 Fix the login redirect?"));
+    let asking = tree(&events, "the question", |tree| tree.text().contains("Fix the login redirectThis removes the issue and its log."));
     let mut delete = Vec::new();
     buttons_named(&asking.children, "Delete WEB-1", &mut delete);
     assert!(page.dispatch(&delete[0], None));

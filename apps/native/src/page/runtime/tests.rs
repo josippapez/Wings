@@ -316,3 +316,252 @@ fn a_broadcast_to_a_frame_behind_its_agent_waits_for_room_in_order_instead_of_be
         ])
     );
 }
+
+/// The threads this process has now.
+#[cfg(target_os = "macos")]
+pub(crate) fn threads() -> i32 {
+    let mut info: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_taskinfo>() as i32;
+    // SAFETY: `proc_pidinfo` writes at most `size` bytes of this process's task info into `info`.
+    let got = unsafe {
+        libc::proc_pidinfo(std::process::id() as i32, libc::PROC_PIDTASKINFO, 0, (&raw mut info).cast(), size)
+    };
+    assert_eq!(got, size, "proc_pidinfo");
+    info.pti_threadnum
+}
+
+/// The fatal error the page stopped with.
+fn stopped_with(page: &Page) -> String {
+    loop {
+        match page.next() {
+            Event::Error { message, fatal: true } => return message,
+            Event::Error { .. } | Event::Tree(_) => {}
+        }
+    }
+}
+
+#[test]
+fn a_frame_setting_timers_in_a_loop_is_stopped_before_the_hosts_list_of_them_grows_without_bound() {
+    struct Sets;
+    impl Guest for Sets {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            for _ in 0..20_000 {
+                cx.later(60_000);
+            }
+            show(cx, serde_json::json!("set them all"));
+        }
+    }
+    let page = start_in_plugin(&fake::source("page", || Box::new(Sets)));
+    let message = stopped_with(&page);
+    assert!(message.contains("more than 10000 timers"), "{message}");
+}
+
+/// Every call is answered, and a frame calling in a loop had the host keep an answer, and before that often a thread,
+/// for each: one made while 4,096 are unanswered stops it. Answers that reach the frame make room again.
+#[test]
+fn a_frame_making_calls_in_a_loop_is_stopped_and_one_that_hears_its_answers_is_not() {
+    struct Calls {
+        heard: u32,
+    }
+    impl Guest for Calls {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            for _ in 0..4_000 {
+                cx.call("nothing", serde_json::json!({}));
+            }
+        }
+        fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, _id: u32, _text: &str) {
+            if kind != "reject" {
+                return;
+            }
+            self.heard += 1;
+            if self.heard == 4_000 {
+                for _ in 0..4_000 {
+                    cx.call("nothing", serde_json::json!({}));
+                }
+            }
+            if self.heard == 8_000 {
+                show(cx, serde_json::json!("heard them all"));
+            }
+        }
+    }
+    let page = start_in_plugin(&fake::source("page", || Box::new(Calls { heard: 0 })));
+    assert_eq!(shown(&page.tree()), "heard them all");
+
+    struct Floods;
+    impl Guest for Floods {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            for _ in 0..5_000 {
+                cx.call("nothing", serde_json::json!({}));
+            }
+            show(cx, serde_json::json!("made them all"));
+        }
+    }
+    let page = start_in_plugin(&fake::source("page", || Box::new(Floods)));
+    let message = stopped_with(&page);
+    assert!(message.contains("4096 of its calls were still unanswered"), "{message}");
+}
+
+/// A call's arguments are parsed into the host's memory before any call looks at them: past 16 MB they are refused
+/// unread.
+#[test]
+fn a_calls_arguments_past_16_mb_are_refused_before_they_are_parsed() {
+    struct Big;
+    impl Guest for Big {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            cx.call("nothing", serde_json::Value::String("x".repeat(17 * 1024 * 1024)));
+        }
+        fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, _id: u32, text: &str) {
+            show(cx, serde_json::json!([kind, text]));
+        }
+    }
+    let page = start_in_plugin(&fake::source("page", || Box::new(Big)));
+    assert_eq!(shown(&page.tree()), serde_json::json!(["reject", "A call's arguments are limited to 16 MB"]));
+}
+
+/// An answer that found the frame's queue full had a thread of its own until the frame took it: a page making calls
+/// that are answered at once, as a refusal is, started one for each past the 256 its queue holds.
+#[cfg(target_os = "macos")]
+#[test]
+fn answers_that_find_the_frames_queue_full_wait_without_a_thread_each_and_all_arrive_in_order() {
+    const CALLS: u32 = 1_500;
+    struct Counts {
+        before: i32,
+        grew: i32,
+        heard: Vec<u32>,
+        ids: Vec<u32>,
+    }
+    impl Guest for Counts {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            self.ids = (0..CALLS).map(|_| cx.call("nothing", serde_json::json!({}))).collect();
+            self.grew = threads() - self.before;
+        }
+        fn deliver(&mut self, cx: &mut Cx<'_>, kind: &str, id: u32, _text: &str) {
+            if kind == "reject" {
+                self.heard.push(id);
+            }
+            if self.heard.len() == CALLS as usize {
+                show(cx, serde_json::json!({ "grew": self.grew, "in_order": self.heard == self.ids }));
+            }
+        }
+    }
+    let before = threads();
+    let page = start_in_plugin(&fake::source("page", move || {
+        Box::new(Counts { before, grew: 0, heard: Vec::new(), ids: Vec::new() })
+    }));
+    let seen = shown(&page.tree());
+    assert_eq!(seen["in_order"], true);
+    // The frame's own thread and the one handing on what waits, with room for what other tests start meanwhile.
+    let grew = seen["grew"].as_i64().unwrap();
+    eprintln!("[measure] {CALLS} answers to a frame with a full queue started {grew} threads");
+    assert!(grew < 600, "the process grew by {grew} threads for {CALLS} answers");
+}
+
+/// Broadcasts for a frame behind its agent wait for room, but not without bound: a plugin's frame broadcasting in a
+/// loop to a busy one grew the host's memory by each message.
+#[test]
+fn a_frame_far_behind_misses_broadcasts_past_1024_waiting() {
+    struct Held {
+        gate: Arc<(std::sync::Mutex<(bool, bool)>, std::sync::Condvar)>,
+    }
+    impl Guest for Held {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            show(cx, serde_json::json!("started"));
+        }
+        fn deliver(&mut self, _cx: &mut Cx<'_>, _kind: &str, _id: u32, _text: &str) {
+            let (state, changed) = &*self.gate;
+            let mut state = state.lock().unwrap();
+            state.0 = true;
+            changed.notify_all();
+            while !state.1 {
+                state = changed.wait(state).unwrap();
+            }
+        }
+    }
+    let gate = Arc::new((std::sync::Mutex::new((false, false)), std::sync::Condvar::new()));
+    let made = gate.clone();
+    let page = start_in_plugin(&fake::source("chat", move || Box::new(Held { gate: made.clone() })));
+    assert_eq!(shown(&page.tree()), "started");
+    let inbox = page.runtime.inbox();
+    assert_eq!(inbox.send(Message::Output, 1, "line".into()), Delivery::Queued);
+    {
+        let (state, changed) = &*gate;
+        let state = state.lock().unwrap();
+        let (_state, waited) = changed.wait_timeout_while(state, WAIT, |state| !state.0).unwrap();
+        assert!(!waited.timed_out(), "the frame never took the first line");
+    }
+    while inbox.send(Message::Output, 1, "line".into()) == Delivery::Queued {}
+    let delivered: Vec<Delivery> = (0..1_100).map(|n| inbox.deliver(format!("{{\"n\":{n}}}"))).collect();
+    // The thread handing them on holds the first while it waits for room.
+    let queued = delivered.iter().take_while(|delivery| **delivery == Delivery::Queued).count();
+    assert!((1_024..=1_025).contains(&queued), "{queued} queued");
+    assert!(delivered[queued..].iter().all(|delivery| *delivery == Delivery::Full));
+    let (state, changed) = &*gate;
+    state.lock().unwrap().1 = true;
+    changed.notify_all();
+}
+
+/// A broadcast may be 1,000,000 characters, so the count alone (1,024) let a frame far behind hold a gigabyte of them:
+/// what waits is bounded by bytes too (64 MB: 67 of them at 1,000,000 bytes, and the one the thread hands on).
+#[test]
+fn a_frame_far_behind_misses_broadcasts_past_64_mb_waiting() {
+    struct Held {
+        gate: Arc<(std::sync::Mutex<(bool, bool)>, std::sync::Condvar)>,
+    }
+    impl Guest for Held {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            show(cx, serde_json::json!("started"));
+        }
+        fn deliver(&mut self, _cx: &mut Cx<'_>, _kind: &str, _id: u32, _text: &str) {
+            let (state, changed) = &*self.gate;
+            let mut state = state.lock().unwrap();
+            state.0 = true;
+            changed.notify_all();
+            while !state.1 {
+                state = changed.wait(state).unwrap();
+            }
+        }
+    }
+    let gate = Arc::new((std::sync::Mutex::new((false, false)), std::sync::Condvar::new()));
+    let made = gate.clone();
+    let page = start_in_plugin(&fake::source("chat", move || Box::new(Held { gate: made.clone() })));
+    assert_eq!(shown(&page.tree()), "started");
+    let inbox = page.runtime.inbox();
+    assert_eq!(inbox.send(Message::Output, 1, "line".into()), Delivery::Queued);
+    {
+        let (state, changed) = &*gate;
+        let state = state.lock().unwrap();
+        let (_state, waited) = changed.wait_timeout_while(state, WAIT, |state| !state.0).unwrap();
+        assert!(!waited.timed_out(), "the frame never took the first line");
+    }
+    while inbox.send(Message::Output, 1, "line".into()) == Delivery::Queued {}
+    let big = "x".repeat(1_000_000);
+    let delivered: Vec<Delivery> = (0..100).map(|_| inbox.deliver(big.clone())).collect();
+    // The thread handing them on holds the first while it waits for room.
+    let queued = delivered.iter().take_while(|delivery| **delivery == Delivery::Queued).count();
+    assert!((67..=68).contains(&queued), "{queued} queued");
+    assert!(delivered[queued..].iter().all(|delivery| *delivery == Delivery::Full));
+    let (state, changed) = &*gate;
+    state.lock().unwrap().1 = true;
+    changed.notify_all();
+}
+
+/// A Rust module that panics traps on an `unreachable`, and the panic's message was lost: the frame's fatal error,
+/// which the plugins' log keeps, now carries what its panic hook told the host (`wasm::PANICKED`).
+#[test]
+fn a_frame_that_panics_stops_with_its_panics_message() {
+    struct Panics;
+    impl Guest for Panics {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            cx.call(
+                super::wasm::PANICKED,
+                serde_json::json!({ "message": "panicked at src/chat.rs:12:5:\nindex out of bounds" }),
+            );
+            cx.stop("wasm trap: wasm `unreachable` instruction executed");
+        }
+    }
+    let page = start_in_plugin(&fake::source("page", || Box::new(Panics)));
+    assert_eq!(
+        stopped_with(&page),
+        "panicked at src/chat.rs:12:5:\nindex out of bounds: wasm trap: wasm `unreachable` instruction executed"
+    );
+}

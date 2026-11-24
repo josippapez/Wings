@@ -25,8 +25,9 @@ const OUTPUT_KEPT: usize = 4000;
 /// The most of a tool's input shown as its one-line summary.
 const SUMMARY_KEPT: usize = 200;
 /// The most of what a tool would do that a permission card shows, and of the reason. Past the first, the card can't be
-/// allowed: you would approve what you can't read.
-const ASK_KEPT: usize = 16_000;
+/// allowed: you would approve what you can't read. It is what one `Code` node holds in Wings (400,000 characters: bytes
+/// here, so never more), so a long Write or script is read whole.
+const ASK_KEPT: usize = 400_000;
 const REASON_KEPT: usize = 300;
 /// The most lines of an edit's diff the chat keeps, and the most of a written file's start.
 const DIFF_KEPT: usize = 40;
@@ -34,6 +35,10 @@ const WRITE_KEPT: usize = 40;
 /// The most items kept of each subagent's own transcript: a subagent that searches a repository makes hundreds of tool
 /// calls, and its own tab reads them from its transcript. Older ones go.
 pub const SUBAGENT_KEPT: usize = 200;
+/// How many entries of a session read back the chat asks for: the most the host gives with the strings cut.
+pub const HISTORY_ALL: u32 = 10_000;
+/// What the line at the top of a session read back in part says.
+pub const EARLIER_NOT_LOADED: &str = "Earlier messages aren't loaded";
 /// The tool a subagent hands its final report back to its caller with (Claude Code 2.1.330), its `message` the report.
 const HANDBACK: &str = "SubagentHandback";
 /// The name a tool call with none shows under.
@@ -981,6 +986,14 @@ impl Session {
     }
 
     /// Drops your message at `at` and everything after it.
+    /// Says so at the top when a transcript read back came to the most entries the host gives (`chat::HISTORY_ALL`): a
+    /// session longer than that has its earlier messages unread, which a conversation starting mid-way would hide.
+    pub fn read_back(&mut self, entries: &[Value]) {
+        if entries.len() >= HISTORY_ALL as usize {
+            self.items.push(Item::Divider(EARLIER_NOT_LOADED.to_owned()));
+        }
+    }
+
     fn cut(&mut self, at: usize) {
         self.items.truncate(at);
         self.prompts.retain(|prompt| prompt.at < at);
@@ -2859,6 +2872,23 @@ mod tests {
     }
 
     #[test]
+    fn a_transcript_read_back_at_the_hosts_limit_says_earlier_messages_are_not_loaded() {
+        let entry = json!({ "type": "user", "message": { "role": "user", "content": "hi" } });
+        let mut whole = Session::default();
+        let few = vec![entry.clone(); HISTORY_ALL as usize - 1];
+        whole.read_back(&few);
+        assert!(whole.items.is_empty());
+        let mut cut = Session::default();
+        let most = vec![entry; HISTORY_ALL as usize];
+        cut.read_back(&most);
+        assert_eq!(cut.items, [Item::Divider(EARLIER_NOT_LOADED.into())]);
+        // The rebuild of a chat Wings kept running says it too.
+        let mut rebuilt = Session::default();
+        crate::reattach::rebuild(&mut rebuilt, &most, None, &[], false);
+        assert_eq!(rebuilt.items.first(), Some(&Item::Divider(EARLIER_NOT_LOADED.into())));
+    }
+
+    #[test]
     fn the_card_shows_all_a_tool_would_do_and_the_characters_that_hide() {
         let detail = |extra: Value| {
             let Item::Ask(ask) = asked(extra).items.remove(0) else { panic!() };
@@ -3795,18 +3825,16 @@ mod tests {
     }
 
     #[test]
-    fn only_the_newest_pictures_show_and_an_oversize_one_is_not_sent() {
+    fn every_picture_shows_however_many_came_before_and_an_oversize_one_is_not_sent() {
         images::reset();
         let mut session = Session::default();
-        let pictures: Vec<(String, String)> = (0..images::SHOWN + 3).map(|n| ("image/png".to_owned(), format!("A{n:03}"))).collect();
+        let pictures: Vec<(String, String)> = (0..40).map(|n| ("image/png".to_owned(), format!("A{n:03}"))).collect();
         session.send("many", &pictures, 1, 1);
         let Some(Item::UserImages(_, ids)) = session.items.first() else {
             panic!("{:?}", session.items)
         };
-        assert_eq!(ids.len(), images::SHOWN + 3);
-        let showing: Vec<bool> = ids.iter().map(|id| images::is_shown(id)).collect();
-        assert_eq!(showing.iter().filter(|shown| **shown).count(), images::SHOWN);
-        assert!(!showing[0] && showing[ids.len() - 1]);
+        assert_eq!(ids.len(), 40);
+        assert!(ids.iter().all(|id| images::is_shown(id)), "the oldest pictures show too");
         // Beyond what Wings keeps, the picture isn't copied into the page's queue at all.
         images::reset();
         let big = "A".repeat(5 * 1024 * 1024 / 3 * 4 + 8);

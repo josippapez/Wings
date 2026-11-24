@@ -1,11 +1,18 @@
 //! Boards share a minimum column width across their headers and lane cells.
 
-use super::{PageView, tone_color, tree};
+use super::{FollowScroll, PageView, column_window_view, tone_color, tree};
+use std::rc::Rc;
 use crate::{theme, ui};
 use gpui::{
     AnyElement, Context, ElementId, FontWeight, IntoElement, Role, div, prelude::*, px, relative,
     rgb, rgba,
 };
+
+/// A lanes board with more lanes than this draws them a window at a time: each lane is a row of cells of cards.
+const WINDOW_LANES: usize = 12;
+
+/// A board's column with more cards than this draws them a window at a time.
+const WINDOW_CARDS: usize = 40;
 
 pub(super) fn meter(meter: &tree::Meter) -> AnyElement {
     div()
@@ -57,8 +64,8 @@ impl PageView {
                 el.flex_col()
                     .when(padded, |el| el.px(px(14.0)))
                     .children(board.header.iter().map(|node| self.lane_heads(node, cx)))
-                    .child(
-                        div()
+                    .child({
+                        let lanes = div()
                             .id(ElementId::NamedInteger("page-board-lanes".into(), board.id))
                             .min_h_0()
                             .flex_1()
@@ -66,9 +73,13 @@ impl PageView {
                             .overflow_y_scroll()
                             .flex()
                             .flex_col()
-                            .gap(px(10.0))
-                            .children(self.nodes(&board.body, cx)),
-                    )
+                            .gap(px(10.0));
+                        // Many lanes: the ones in view are drawn, as a long column of a `Scroll` is.
+                        match self.window_of(board.id, &board.body, WINDOW_LANES, 10.0, cx) {
+                            Some((state, inner)) => lanes.track_scroll(&state.handle).child(inner),
+                            None => lanes.children(self.nodes(&board.body, cx)),
+                        }
+                    })
             })
             .when(!board.lanes, |el| {
                 el.when(padded, |el| el.p(px(14.0)))
@@ -129,6 +140,34 @@ impl PageView {
             .children(self.nodes(&column.actions, cx))
     }
 
+    /// `children` drawn a window at a time in a box of their own, for the scroll `id` of a board's column or lanes to put
+    /// round them (as a `Scroll`'s one column is, which is where the children's places are read), and the scroll's state:
+    /// none when there are not enough of them, or they are not each an element with an id.
+    fn window_of(
+        &self,
+        id: u64,
+        children: &[tree::Node],
+        from: usize,
+        space: f32,
+        cx: &mut Context<Self>,
+    ) -> Option<(Rc<FollowScroll>, gpui::Div)> {
+        if !column_window_view::windowed_nodes(children, from) {
+            return None;
+        }
+        let state = self.watched_scroll(id);
+        let (parts, places) = self.windowed_parts(children, px(space), false, false, &state, false, cx);
+        let inner = div()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(space))
+            .children(parts)
+            .on_children_prepainted(move |bounds, window, cx| {
+                places(bounds, window, cx);
+            });
+        Some((state, inner))
+    }
+
     pub(super) fn board_row(&self, children: &[tree::Node], cx: &mut Context<Self>) -> AnyElement {
         div()
             .flex()
@@ -165,8 +204,8 @@ impl PageView {
             .when(!column.cell, |el| {
                 el.child(self.column_head(column, cx).px(px(4.0)).pt(px(2.0)))
             })
-            .child(
-                div()
+            .child({
+                let cards = div()
                     .id(ElementId::NamedInteger(
                         "page-board-cards".into(),
                         column.id,
@@ -175,9 +214,16 @@ impl PageView {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
-                    .overflow_y_scroll()
-                    .children(self.nodes(&column.body, cx)),
-            )
+                    .overflow_y_scroll();
+                // A column of a board, not a lane's cell (which grows with its cards and scrolls in its lane), draws the
+                // cards in view and half a view either side, as a long column of a `Scroll` does.
+                match Some(column).filter(|column| !column.cell).and_then(|column| {
+                    self.window_of(column.id, &column.body, WINDOW_CARDS, 8.0, cx)
+                }) {
+                    Some((state, inner)) => cards.track_scroll(&state.handle).child(inner),
+                    None => cards.children(self.nodes(&column.body, cx)),
+                }
+            })
             .into_any_element()
     }
 }

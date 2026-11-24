@@ -1,0 +1,22 @@
+[package]
+name = "cargo-wings-plugin"
+version = "0.1.0"
+edition = "2024"
+description = "cargo wings-plugin: start, build, check, pack and live-reload a Wings plugin written in Rust."
+license = "MIT"
+repository = "https://github.com/josippapez/Wings"
+homepage = "https://github.com/josippapez/Wings"
+readme = "README.md"
+keywords = ["wings", "plugin", "wasm", "cargo-subcommand", "terminal"]
+categories = ["development-tools::cargo-plugins", "wasm"]
+
+[[bin]]
+name = "cargo-wings-plugin"
+path = "src/main.rs"
+
+[dependencies]
+# Reads the plugin's wings-plugin.json.
+serde_json = "1"
+# Writes the .wings-plugin file, a zip. Deflate through flate2 with the pure-Rust zlib-rs backend only: the default features pull in
+# encryption, bzip2, zstd and xz, none of which Wings reads.
+zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }

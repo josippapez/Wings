@@ -20,7 +20,7 @@ use crate::{
     theme,
 };
 
-use super::{Active, HAIRLINE, Workspace, context_menu::MenuTarget, project::SIDEBAR_ACCENT};
+use super::{Active, HAIRLINE, Workspace, context_menu::MenuTarget, project::SIDEBAR_ACCENT, sidebar::AgentKey};
 
 /// The desktop's `bg-blocked/10` behind an agent that needs you, and `/15` on hover.
 const BLOCKED_ROW: u32 = theme::BLOCKED << 8 | 0x1a;
@@ -112,6 +112,9 @@ impl Workspace {
             At::Loose(key) => self.loose_terminal(key).map_or_else(|| "~".to_owned(), |quick| quick.title(cx)),
         };
         let blocked = agent.state == AgentState::Blocked;
+        let key = match at { At::Pane(pane) => AgentKey::Pane(pane), At::Loose(key) => AgentKey::Loose(key) };
+        let unread = self.agent_unread(key, agent.state);
+        let model = self.known_agent_model(agent.session_id.as_deref()).or_else(|| model_flag(&agent.args));
         let path = PathBuf::from(&agent.space_id);
         let account = match at {
             At::Pane(pane) => self.agent_accounts.get(&pane).cloned(),
@@ -138,6 +141,8 @@ impl Workspace {
             .id(("agent", id))
             .role(Role::Button)
             .aria_label(label)
+            .relative()
+            .children(crate::ui::spot(move || format!("agent-row:{id}")))
             .flex()
             .items_center()
             .gap(px(10.0))
@@ -192,10 +197,13 @@ impl Workspace {
                             .gap(px(6.0))
                             .child(
                                 crate::ui::behaviors::cut_text("name", name)
+                                    .min_w_0().flex_1()
                                     .text_size(px(13.0))
-                                    .font_weight(FontWeight::MEDIUM),
-                            )
-                            .children(account.map(account_badge)),
+                                    .font_weight(if unread { FontWeight::BOLD } else { FontWeight::MEDIUM })
+                                    .when(unread, |name| name.children(crate::ui::spot(move || format!("agent-unread:{id}")))),
+                             )
+                            .children(account.map(account_badge))
+                            .child(agent_metadata(format!("agent-age-{id}"), model, agent.state_since.or((agent.started_at > 0).then_some(agent.started_at)))),
                     )
                     .child(
                         div()
@@ -206,7 +214,7 @@ impl Workspace {
                             .text_size(px(11.0))
                             .line_height(px(16.0))
                             .text_color(rgb(theme::MUTED_FOREGROUND))
-                            .child(div().flex_none().child(format!("{project},")))
+                            .child(div().min_w_0().truncate().child(format!("{project},")))
                             .child(crate::ui::status_dot_slot(agent.state, slot))
                             .child(div().min_w_0().truncate().child(status(agent))),
                     )
@@ -258,6 +266,8 @@ impl Workspace {
             .map_or_else(|| path.to_string_lossy().into_owned(), |p| p.name.clone());
         let shown = self.active == Active::Plugin(tab) && self.config.project == path;
         let blocked = state == AgentState::Blocked;
+        let unread = self.agent_unread(AgentKey::Tab(tab), state);
+        let model = self.known_agent_model(agent.session_id.as_deref());
         let status = agents::state_label(state).to_lowercase();
         let label = match &agent.summary {
             Some(summary) => format!("{}, {project}, {status}. {summary}", agent.name),
@@ -268,6 +278,7 @@ impl Workspace {
             .id(("tab-agent", tab))
             .role(Role::Button)
             .aria_label(label)
+            .relative()
             .flex()
             .items_center()
             .gap(px(10.0))
@@ -302,7 +313,11 @@ impl Workspace {
                     .flex_1()
                     .flex()
                     .flex_col()
-                    .child(crate::ui::behaviors::cut_text("name", agent.name).text_size(px(13.0)).font_weight(FontWeight::MEDIUM))
+                    .child(div().flex().items_center().gap(px(6.0))
+                        .child(crate::ui::behaviors::cut_text("name", agent.name).min_w_0().flex_1().text_size(px(13.0))
+                            .font_weight(if unread { FontWeight::BOLD } else { FontWeight::MEDIUM })
+                            .when(unread, |name| name.children(crate::ui::spot(move || format!("tab-agent-unread:{tab}")))))
+                        .child(agent_metadata(format!("tab-agent-age-{tab}"), model, self.tab_agent_since(tab))))
                     .child(
                         div()
                             .flex()
@@ -312,7 +327,7 @@ impl Workspace {
                             .text_size(px(11.0))
                             .line_height(px(16.0))
                             .text_color(rgb(theme::MUTED_FOREGROUND))
-                            .child(div().flex_none().child(format!("{project},")))
+                            .child(div().min_w_0().truncate().child(format!("{project},")))
                             .child(crate::ui::status_dot_slot(state, format!("tab-agent-{tab}")))
                             .child(div().min_w_0().truncate().child(status)),
                     )
@@ -337,6 +352,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.see_agent(AgentKey::Pane(pane));
         self.switch_project(project.clone(), window, cx);
         self.reveal_project(&project);
         if let Some(tab) = self
@@ -351,6 +367,12 @@ impl Workspace {
             self.focus_pane(pane, window, cx);
         }
         cx.notify_workspace();
+    }
+
+    fn known_agent_model(&self, session: Option<&str>) -> Option<String> {
+        let session = session?;
+        let status = self.plugin_env.statusline.lock().unwrap().view();
+        status["sessions"][session]["model"].as_str().map(compact_model)
     }
 
     /// The panes with an agent session to come back to and no live agent, in every project, in tab order: restored
@@ -410,6 +432,7 @@ impl Workspace {
                         .or_else(|| session.name.clone().map(Into::into))
                         .unwrap_or_else(|| agents::label(kind).into()),
                     phase,
+                    model: self.known_agent_model(Some(&session.id)).or_else(|| model_flag(&session.args)),
                 });
             }
         }
@@ -430,6 +453,7 @@ impl Workspace {
             project: path,
             name,
             phase,
+            model,
         } = row;
         let project = self
             .projects
@@ -481,15 +505,13 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(px(13.0))
-                            .font_weight(FontWeight::MEDIUM)
-                            .when(!resuming, |name| {
-                                name.text_color(rgb(theme::MUTED_FOREGROUND))
-                            })
-                            .child(name),
+                        div().flex().items_center().gap(px(6.0))
+                            .child(crate::ui::behaviors::cut_text("name", name)
+                                .min_w_0().flex_1()
+                                .text_size(px(13.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .when(!resuming, |name| name.text_color(rgb(theme::MUTED_FOREGROUND))))
+                            .child(agent_metadata(format!("pending-agent-{pane}"), model, None)),
                     )
                     .child(
                         div()
@@ -511,6 +533,7 @@ pub(super) struct PendingAgent {
     pub(super) project: PathBuf,
     pub(super) name: SharedString,
     pub(super) phase: Phase,
+    model: Option<String>,
 }
 
 /// What a session with no live agent waits for, as the desktop's rows said it.
@@ -552,7 +575,7 @@ pub(super) fn account_badge(name: SharedString) -> Div {
     .text_color(rgb(theme::MUTED_FOREGROUND))
 }
 
-/// "needs you", "working 42s" or "done", as the desktop's agent rows say it.
+/// The state stays still. Elapsed time has its own live slot at the row's right.
 fn status(agent: &Agent) -> String {
     let label = agents::state_label(agent.state).to_lowercase();
     match (agent.state, agent.state_since) {
@@ -560,24 +583,48 @@ fn status(agent: &Agent) -> String {
             Some(what) => format!("{label}: {what}"),
             None => label,
         },
-        (AgentState::Working, Some(since)) => {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_or(0, |d| d.as_millis() as u64);
-            format!("{label} {}", elapsed(now.saturating_sub(since)))
-        }
         _ => label,
     }
 }
 
-/// "42s", "7m", "1h 5m", like the desktop's `elapsed`.
-fn elapsed(ms: u64) -> String {
-    let s = ms / 1000;
-    match s {
-        0..60 => format!("{s}s"),
-        60..3600 => format!("{}m", s / 60),
-        _ => format!("{}h {}m", s / 3600, s / 60 % 60),
+fn model_flag(args: &[String]) -> Option<String> {
+    args.iter().enumerate().find_map(|(at, arg)| {
+        arg.strip_prefix("--model=").or_else(|| (arg == "--model").then(|| args.get(at + 1).map(String::as_str)).flatten())
+    }).filter(|model| !model.is_empty()).map(compact_model)
+}
+
+fn compact_model(model: &str) -> String {
+    let lower = model.to_lowercase();
+    ["opus", "sonnet", "haiku"].into_iter().find(|name| lower.contains(name))
+        .map(str::to_owned).unwrap_or_else(|| model.to_owned())
+}
+
+fn age(since: u64, now: u64) -> String {
+    let seconds = now.saturating_sub(since) / 1000;
+    match seconds {
+        0..60 => format!("{seconds}s"),
+        60..3600 => format!("{}m", seconds / 60),
+        3600..86400 => format!("{}h", seconds / 3600),
+        _ => format!("{}d", seconds / 86400),
     }
+}
+
+fn agent_metadata(name: String, model: Option<String>, since: Option<u64>) -> Div {
+    div().flex_none().flex().items_center().gap(px(4.0))
+        .text_size(px(11.0)).line_height(px(16.0))
+        .font_family("Menlo").font_weight(FontWeight::NORMAL)
+        .text_color(rgb(theme::MUTED_FOREGROUND))
+        .children(model.map(|model| crate::ui::behaviors::cut_text("model", model).max_w(px(58.0))))
+        .children(since.map(|since| {
+            let said = move || -> SharedString { age(since, now_ms()).into() };
+            div().relative().w(px(28.0)).h(px(16.0))
+                .child(div().text_color(gpui::transparent_black()).child(said()))
+                .child(crate::ui::count_slot(name, said))
+        }))
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |time| time.as_millis() as u64)
 }
 
 /// A tab agent's state, as `setAgent` checked it.
@@ -624,7 +671,7 @@ fn in_place(agents: &std::collections::HashMap<usize, Agent>) -> Vec<(usize, &Ag
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentKind, Icon, elapsed, glyph, in_place};
+    use super::{AgentKind, Icon, age, model_flag, glyph, in_place};
     use crate::agents::{Agent, AgentState};
     use std::collections::HashMap;
 
@@ -674,10 +721,16 @@ mod tests {
     }
 
     #[test]
-    fn elapsed_reads_like_the_desktop() {
-        assert_eq!(elapsed(400), "0s");
-        assert_eq!(elapsed(42_000), "42s");
-        assert_eq!(elapsed(7 * 60_000 + 5_000), "7m");
-        assert_eq!(elapsed(65 * 60_000), "1h 5m");
+    fn sidebar_age_is_compact_and_model_is_only_shown_when_known() {
+        assert_eq!(age(0, 400), "0s");
+        assert_eq!(age(0, 42_000), "42s");
+        assert_eq!(age(0, 7 * 60_000 + 5_000), "7m");
+        assert_eq!(age(0, 65 * 60_000), "1h");
+        assert_eq!(age(10, 0), "0s");
+        assert_eq!(model_flag(&[]), None);
+        assert_eq!(model_flag(&["--model".into()]), None);
+        assert_eq!(model_flag(&["--model".into(), "claude-opus-4-6".into()]), Some("opus".into()));
+        assert_eq!(model_flag(&["--model=sonnet".into()]), Some("sonnet".into()));
+        assert_eq!(model_flag(&["--model=gpt-x".into()]), Some("gpt-x".into()));
     }
 }

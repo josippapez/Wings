@@ -10,7 +10,7 @@ use serde_json::Value;
 use wings_plugin::{
     host,
     markdown::{highlighted_code, markdown},
-    ui::{Node, badge, button, card, list_button, muted, row, select, stack, text, text_input},
+    ui::{Node, badge, button, card, chips, list, list_button, list_row, muted, row, select, stack, text, text_input},
 };
 
 use std::cell::RefCell;
@@ -498,7 +498,7 @@ pub fn menu(c: &Chat) -> Option<Node> {
 }
 
 fn copy(text: &str) {
-    drop(host::call("copyText", json!({ "text": text })));
+    drop(host::copy_text(&text));
     close_menu();
 }
 
@@ -581,7 +581,30 @@ pub fn pane_body(instance: &str, title: &str, tree: &Value, drafts: &HashMap<Str
     if !is_words(&tree) && first_words(&tree).is_some_and(|said| said.trim() == title.trim()) {
         drop_first_text(&mut tree);
     }
+    unpin(&mut tree);
     node(&tree, &At { instance, drafts }, &mut PANE_MOST.clone())
+}
+
+/// Takes out of a pane's tree what asks for the room left (`flexGrow`, a `height` of 100%): the sidebar's content flows
+/// from the top, and a pane that pinned its buttons to its foot left a hole between them and the rest.
+fn unpin(el: &mut Value) {
+    match el {
+        Value::Array(list) => list.iter_mut().for_each(unpin),
+        Value::Object(fields) => {
+            if let Some(Value::Object(props)) = fields.get_mut("props") {
+                props.remove("flexGrow");
+                if props.get("height").is_some_and(|height| height == "100%") {
+                    props.remove("height");
+                }
+            }
+            for key in ["children", "props"] {
+                if let Some(inner) = fields.get_mut(key) {
+                    unpin(inner);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Takes the first text out of a tree, wherever it sits, as `first_words` finds it. Says whether it found one.
@@ -654,7 +677,7 @@ fn node(el: &Value, at: &At, budget: &mut usize) -> Option<Node> {
             let label = props["label"].as_str().unwrap_or_default();
             let share = props["value"].as_f64().map(|value| value / props["max"].as_f64().filter(|max| *max > 0.0).unwrap_or(1.0) * 100.0);
             let said = props["valueText"].as_str().map(str::to_owned).unwrap_or_else(|| share.map_or_else(|| "Running\u{2026}".to_owned(), |share| format!("{}%", share.clamp(0.0, 100.0).round())));
-            let head = row().prop("gap", "s").child(text(label).prop("grow", true).prop("truncate", true)).child(muted(said).prop("size", "small"));
+            let head = row().prop("gap", "s").child(text(label).prop("grow", true)).child(muted(said).prop("size", "small"));
             Some(match share {
                 Some(share) => stack().prop("gap", "xs").child(head).child(meter(label, share, tone(props))),
                 None => head,
@@ -671,8 +694,17 @@ fn node(el: &Value, at: &At, budget: &mut usize) -> Option<Node> {
             };
             // A row of buttons or boxes wraps onto more lines where it is short of room, as a terminal row is cut at its
             // width: kept on one line, the Feedback pane's header ran its buttons over each other in the side panel.
+            if !column && let Some(track) = exclusive_choices(&children, at, budget) {
+                return Some(track);
+            }
             let words_only = children.iter().all(|child| is_words(child));
-            let wraps = !column && (props["flexWrap"] == "wrap" || !words_only);
+            // Buttons carry their own padding, so a row of only buttons sits them close: a gap between them as between
+            // words left the Feedback pane's filters one to a line at the sidebar's width.
+            let gap = if !column && !children.is_empty() && children.iter().all(|child| child["type"] == "Button") { "xs" } else { gap };
+            // A title and a button that is only a sign (a ✕) share a line, the title taking the room left and wrapping in
+            // it: wrapped as a row of buttons, the ✕ dropped under the title in a narrow sidebar.
+            let with_signs = children.iter().any(|child| is_words(child)) && children.iter().all(|child| is_words(child) || is_sign(child));
+            let wraps = !column && (props["flexWrap"] == "wrap" || !(words_only || with_signs));
             let mut boxed = if column { stack() } else { row().prop("wrap", wraps) }.prop("gap", gap);
             if props["alignItems"] == "center" {
                 boxed = boxed.prop("align", "center");
@@ -680,7 +712,9 @@ fn node(el: &Value, at: &At, budget: &mut usize) -> Option<Node> {
             if props["justifyContent"] == "space-between" {
                 boxed = boxed.prop("justify", "between");
             }
-            let boxed = if column || wraps {
+            let boxed = if column {
+                boxed.children(column_children(&children, at, budget))
+            } else if wraps {
                 boxed.children(inner(budget))
             } else {
                 // A row's last text takes the room left and wraps or cuts short in it, as a row of Claude Code's ends
@@ -735,11 +769,16 @@ fn node(el: &Value, at: &At, budget: &mut usize) -> Option<Node> {
                 .prop("variant", variant)
                 .prop("size", "sm")
                 .on("onClick", move |_| crate::mod_pane::act(crate::mod_pane::act_message(&instance, "press", &press, key.as_deref(), None)));
-            let label = props["label"].as_str().map(str::to_owned).or_else(|| children.iter().all(|child| child.is_string()).then(|| words(&children)));
+            let named = props["label"].as_str().map(str::to_owned);
+            let label = named.clone().or_else(|| children.iter().all(|child| child.is_string()).then(|| words(&children)));
+            let dim = props["dimColor"] == true;
             let pressed = match label {
-                // Its words are cut short where the column ends: quiet-tools' row of an MCP call, its summary as the
-                // button's words, ran on past the conversation and under the side panel.
-                Some(label) if props["dimColor"] == true => pressed.prop("label", label.as_str()).child(muted(label).prop("truncate", true)),
+                // A label of its own wraps onto the lines it needs, as Claude Code wraps it: cut short, Teach-back's
+                // answers to a question couldn't be read.
+                Some(label) if named.is_some() => pressed.prop("label", label.as_str()).prop("wrap", true).child(if dim { muted(label) } else { text(label) }),
+                // Words given as its children are cut short where the column ends: quiet-tools' row of an MCP call,
+                // its summary as the button's words, ran on past the conversation and under the side panel.
+                Some(label) if dim => pressed.prop("label", label.as_str()).child(muted(label).prop("truncate", true)),
                 Some(label) => pressed.prop("label", label.as_str()).child(text(label).prop("truncate", true)),
                 // What it holds goes inside it, and it narrows and wraps, or cuts its text short, to fit its column:
                 // quiet-tools' row of an MCP call, a button holding the call's whole summary, ran past the
@@ -816,6 +855,92 @@ fn node(el: &Value, at: &At, budget: &mut usize) -> Option<Node> {
         }
         _ => Some(muted("This part shows only in Claude Code.").prop("size", "small")),
     }
+}
+
+/// A button that is a choice among others, as Teach-back's answers are: plain, and not the one primary action.
+fn is_choice(el: &Value) -> bool {
+    el["type"] == "Button" && el["props"]["plain"] == true && el["props"]["variant"] != "primary"
+}
+
+/// A row of two or more plain buttons of which one is not dimmed and the rest are, as the Feedback pane draws what it
+/// shows (Open / Resolved / Won't fix / Everything, All / Bug / Idea...): the not dimmed one is the pick, as Claude Code
+/// shows a choice in a terminal. They are the app's segmented chips, which keep to one track where a row of ghost buttons,
+/// padded wide, left a last one or two alone on a line of their own. Pressing a chip sends that button's press.
+fn exclusive_choices(children: &[&Value], at: &At, budget: &mut usize) -> Option<Node> {
+    let dimmed = |el: &Value| el["props"]["dimColor"] == true;
+    if children.len() < 2 || !children.iter().all(|child| is_choice(child)) || children.iter().filter(|child| !dimmed(child)).count() != 1 {
+        return None;
+    }
+    let labelled: Vec<(String, &Value)> = children
+        .iter()
+        .map(|el| {
+            let kids = flat(if el["children"].is_null() { &el["props"]["children"] } else { &el["children"] });
+            let label = el["props"]["label"].as_str().map(str::to_owned).or_else(|| kids.iter().all(|child| is_words(child) && !child.is_object()).then(|| words(&kids)))?;
+            Some((label, *el))
+        })
+        .collect::<Option<_>>()?;
+    if *budget < labelled.len() {
+        return None;
+    }
+    *budget -= labelled.len();
+    let options: Vec<(String, &str)> = labelled.iter().enumerate().map(|(place, (label, _))| (place.to_string(), label.as_str())).collect();
+    let options: Vec<(&str, &str)> = options.iter().map(|(value, label)| (value.as_str(), *label)).collect();
+    let picked = children.iter().position(|child| !dimmed(child)).unwrap_or_default().to_string();
+    let presses: Vec<(Value, Option<String>)> = labelled.iter().map(|(_, el)| (el["press"].clone(), el["props"]["key"].as_str().map(str::to_owned))).collect();
+    let instance = at.instance.to_owned();
+    Some(
+        chips("Choose what to show", &options, &picked, move |value| {
+            if let Some((press, key)) = value.parse::<usize>().ok().and_then(|place| presses.get(place)) {
+                crate::mod_pane::act(crate::mod_pane::act_message(&instance, "press", press, key.as_deref(), None));
+            }
+        })
+        .prop("segmented", true),
+    )
+}
+
+/// A button that is only a sign, as a ✕ that dismisses: a label of a character or two.
+fn is_sign(el: &Value) -> bool {
+    el["type"] == "Button" && el["props"]["label"].as_str().is_some_and(|label| label.chars().count() <= 2)
+}
+
+/// The children of a column, drawn: two or more choices in a row become one list of rows, as a sidebar lists what you
+/// pick from, each as wide as the column, wrapping its words and tinted under the pointer. A lone one stays a quiet button.
+fn column_children(children: &[&Value], at: &At, budget: &mut usize) -> Vec<Node> {
+    let mut drawn = Vec::new();
+    let mut place = 0;
+    while place < children.len() {
+        let run = children[place..].iter().take_while(|child| is_choice(child)).count();
+        if run >= 2 {
+            drawn.push(choices(&children[place..place + run], at, budget));
+            place += run;
+        } else {
+            drawn.extend(node(children[place], at, budget));
+            place += 1;
+        }
+    }
+    drawn
+}
+
+/// `buttons` as the rows of a list: each its words, or what it holds, in a row that takes the whole column.
+fn choices(buttons: &[&Value], at: &At, budget: &mut usize) -> Node {
+    let rows = buttons.iter().enumerate().filter_map(|(place, el)| {
+        if *budget == 0 {
+            return None;
+        }
+        *budget -= 1;
+        let props = &el["props"];
+        let children = flat(if el["children"].is_null() { &props["children"] } else { &el["children"] });
+        let (press, key, instance) = (el["press"].clone(), props["key"].as_str().map(str::to_owned), at.instance.to_owned());
+        let said = if props["dimColor"] == true { muted } else { text };
+        let label = props["label"].as_str().map(str::to_owned).or_else(|| children.iter().all(|child| is_words(child) && !child.is_object()).then(|| words(&children)));
+        let content = match label {
+            Some(label) => vec![said(label).prop("grow", true)],
+            None => vec![row().prop("gap", "none").prop("wrap", true).prop("grow", true).children(children.iter().filter_map(|child| node(child, at, budget)))],
+        };
+        let click = list_button(content, move || crate::mod_pane::act(crate::mod_pane::act_message(&instance, "press", &press, key.as_deref(), None)));
+        Some(list_row(props["key"].as_str().map_or_else(|| format!("choice-{place}"), str::to_owned), click))
+    });
+    list().children(rows)
 }
 
 /// A bar `share` percent full, under `label` for a screen reader.
@@ -976,7 +1101,29 @@ mod tests {
         let [toggle, filter] = [1, 2].map(|at| drawn["children"][0]["children"][at]["children"][0].clone());
         assert_eq!((&toggle["props"]["variant"], &filter["props"]["variant"]), (&json!("ghost"), &json!("ghost")), "plain buttons are quiet");
         assert_eq!((&toggle["children"][0]["props"]["tone"], &filter["children"][0]["props"]["tone"]), (&json!(null), &json!("muted")), "a dimmed one in muted words");
-        assert_eq!((&toggle["children"][0]["props"]["truncate"], &filter["children"][0]["props"]["truncate"]), (&json!(true), &json!(true)), "both cut short in a narrow column");
+        assert_eq!((&toggle["props"]["wrap"], &filter["props"]["wrap"]), (&json!(true), &json!(true)), "both wrap in a narrow column");
+        assert_eq!((&toggle["children"][0]["props"]["truncate"], &filter["children"][0]["props"]["truncate"]), (&json!(null), &json!(null)), "neither is cut short");
+        // The Feedback pane's rows of exclusive choices, one picked and the rest dimmed, are one segmented track each, which
+        // keeps to a line where padded ghost buttons left "Everything 117" and "Idea 3" alone on theirs.
+        let plain = |key: &str, label: &str, dim: bool, handle: u64| json!({ "type": "Button", "props": { "key": key, "plain": true, "dimColor": dim, "label": label }, "press": { "plugin": "feedback", "handle": handle } });
+        let filters = json!({ "type": "Box", "props": { "gap": 2, "flexWrap": "wrap" }, "children": [
+            plain("show-open", "Open 88", false, 22), plain("show-resolved", "Resolved 22", true, 23), plain("show-wontfix", "Won't fix 7", true, 24), plain("show-all", "Everything 117", true, 25)] });
+        let track = tree_json(super::drawn(&filters, &at("feedback")).unwrap());
+        assert_eq!((&track["type"], &track["props"]["segmented"], &track["props"]["value"]), (&json!("Chips"), &json!(true), &json!("0")), "{track}");
+        assert_eq!(track["props"]["options"].as_array().map(Vec::len), Some(4));
+        assert_eq!(track["props"]["options"][3]["label"], "Everything 117");
+        // Rows that aren't exclusive choices stay buttons: none dimmed, or every one dimmed.
+        let none_dimmed = json!({ "type": "Box", "children": [plain("a", "Reply", false, 1), plain("b", "Close", false, 2)] });
+        let all_dimmed = json!({ "type": "Box", "children": [plain("a", "Reply", true, 1), plain("b", "Close", true, 2)] });
+        for row in [none_dimmed, all_dimmed] {
+            assert!(!tree_json(super::drawn(&row, &at("feedback")).unwrap()).to_string().contains("Chips"));
+        }
+        // Teach-back's answer to a question, longer than the column: all of it shows.
+        let answer = "1. A prescription has at most one Rx PDF, so keying on its id makes the one-to-one link explicit";
+        let pick = json!({ "type": "Button", "props": { "key": "pick-2-0", "plain": true, "hotkey": "1", "label": answer }, "press": { "plugin": "teach-back", "handle": 5 } });
+        let pressed = tree_json(super::drawn(&pick, &at("teach-back")).unwrap())["children"][0].clone();
+        assert_eq!((&pressed["props"]["wrap"], &pressed["children"][0]["props"]["truncate"]), (&json!(true), &json!(null)));
+        assert!(pressed["children"][0].to_string().contains(answer), "the whole answer is its text: {pressed}");
         // quiet-tools' row of an MCP call: a button holding a text cut short, which narrows to fit.
         let call = json!({ "type": "Button", "props": { "key": "call-t1", "plain": true }, "press": { "plugin": "quiet-tools", "handle": 3 }, "children": [
             { "type": "Text", "props": { "bold": true, "wrap": "truncate-end" }, "children": ["·", " ", "claude_ai_Figma › create_session Check the updated sidebar menu button"] }] });
@@ -990,6 +1137,90 @@ mod tests {
         // A row of words alone still ends in the long part, which takes the room left.
         let words = json!({ "type": "Box", "children": [{ "type": "Text", "children": ["●"] }, { "type": "Text", "children": ["Reindex"] }] });
         assert_eq!(tree_json(super::drawn(&words, &at("x")).unwrap())["children"][1]["props"]["grow"], true);
+    }
+
+    /// Teach-back's quiz: a lesson's title and a dismiss, a Progress, answers as plain buttons, then Back and Skip.
+    fn quiz() -> Value {
+        let plain = |key: &str, label: &str| json!({ "type": "Button", "props": { "key": key, "plain": true, "hotkey": "1", "label": label }, "press": { "plugin": "teach-back", "handle": 5 } });
+        json!({ "type": "Box", "props": { "flexDirection": "column", "gap": 1 }, "children": [
+            { "type": "Box", "props": { "justifyContent": "space-between" }, "children": [
+                { "type": "Text", "props": { "bold": true }, "children": ["Keying the PDF cache by prescription"] },
+                { "type": "Button", "props": { "key": "back-to-list", "plain": true, "label": "\u{2715}" }, "press": { "plugin": "teach-back", "handle": 3 } }] },
+            { "type": "Progress", "props": { "label": "Question 3 of 7 and a label long enough to need a second line in a narrow sidebar", "value": 2, "max": 7 } },
+            { "type": "Box", "props": { "flexDirection": "column", "gap": 1 }, "children": [
+                { "type": "Markdown", "props": { "text": "Why is the cache keyed on the id?" } },
+                plain("pick-0", "1. A prescription has at most one Rx PDF, so keying on its id makes a second upload replace the first"),
+                plain("pick-1", "2. File names are not unique across clinics")] },
+            { "type": "Box", "props": { "gap": 2 }, "children": [
+                plain("prev", "\u{2190} Back"),
+                { "type": "Button", "props": { "key": "next", "variant": "primary", "label": "Skip \u{2192}" }, "press": { "plugin": "teach-back", "handle": 6 } }] }] })
+    }
+
+    #[test]
+    fn a_columns_choices_are_one_list_of_rows_while_a_lone_button_and_the_primary_stay_buttons() {
+        use wings_plugin::ui::tree_json;
+        let drawn = tree_json(super::drawn(&quiz(), &at("teach-back")).unwrap());
+        let choices = &drawn["children"][2]["children"];
+        // The question, then the two answers as the rows of one list: each holds all its words, wrapping, and is pressable.
+        assert_eq!(choices[1]["type"], "List", "{choices}");
+        let rows = choices[1]["children"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["type"], "ListItem");
+        assert_eq!(rows[0]["children"][0]["type"], "ListButton");
+        assert!(rows[0]["children"][0]["props"]["onClick"].is_string(), "pressing a row presses the mod's button: {}", rows[0]);
+        let words = rows[0]["children"][0]["children"][0].clone();
+        assert_eq!((words["props"]["grow"].clone(), words["props"]["truncate"].clone()), (json!(true), json!(null)));
+        assert!(words.to_string().contains("makes a second upload replace the first"), "{words}");
+        // Back and Skip are a row of buttons, not a list: one plain, one primary.
+        let foot = &drawn["children"][3];
+        assert!(foot.to_string().contains("\"Button\"") && !foot.to_string().contains("ListButton"), "{foot}");
+        // A lone plain button in a column stays a quiet button.
+        let lone = json!({ "type": "Box", "props": { "flexDirection": "column" }, "children": [
+            { "type": "Button", "props": { "key": "a", "plain": true, "label": "Only one" }, "press": { "plugin": "x", "handle": 1 } }] });
+        assert!(!tree_json(super::drawn(&lone, &at("x")).unwrap()).to_string().contains("ListButton"));
+    }
+
+    #[test]
+    fn a_title_and_its_dismiss_share_a_line_and_a_progress_label_wraps() {
+        use wings_plugin::ui::tree_json;
+        let drawn = tree_json(super::drawn(&quiz(), &at("teach-back")).unwrap());
+        // The dismiss stays beside the title, which takes the room left, instead of wrapping under it.
+        let header = &drawn["children"][0];
+        assert_eq!(header["props"]["wrap"], json!(false), "{header}");
+        assert_eq!(header["children"][0]["props"]["grow"], true);
+        // The Progress's label wraps in its room rather than being cut short.
+        let label = &drawn["children"][1]["children"][0]["children"][0];
+        assert_eq!((&label["props"]["grow"], &label["props"]["truncate"]), (&json!(true), &json!(null)), "{label}");
+    }
+
+    #[test]
+    fn a_pane_in_the_sidebar_cannot_pin_a_row_to_its_foot() {
+        use wings_plugin::ui::tree_json;
+        let tree = json!({ "type": "Box", "props": { "flexDirection": "column", "height": "100%" }, "children": [
+            { "type": "Text", "children": ["Question"] },
+            { "type": "Box", "props": { "flexGrow": 1 } },
+            { "type": "Box", "props": { "gap": 2 }, "children": [{ "type": "Text", "children": ["Skip"] }] }] });
+        // The column itself and the spacer in it, whether either takes the room left.
+        let free = |drawn: Node| {
+            let drawn = tree_json(drawn);
+            drawn["props"]["grow"] == true || drawn["children"][1]["props"]["grow"] == true
+        };
+        assert!(free(super::drawn(&tree, &at("p")).unwrap()), "in the chat it takes the room left");
+        assert!(!free(pane_body("p", "Other", &tree, &HashMap::new()).unwrap()), "in the sidebar it flows from the top");
+    }
+
+    #[test]
+    fn a_row_of_buttons_sits_them_close_because_each_has_its_own_padding() {
+        use wings_plugin::ui::tree_json;
+        let filters = json!({ "type": "Box", "props": { "gap": 2, "flexWrap": "wrap" }, "children": [
+            { "type": "Button", "props": { "key": "a", "plain": true, "label": "Open 88" }, "press": { "plugin": "feedback", "handle": 1 } },
+            { "type": "Button", "props": { "key": "b", "plain": true, "label": "Resolved 22" }, "press": { "plugin": "feedback", "handle": 2 } }] });
+        assert_eq!(tree_json(super::drawn(&filters, &at("feedback")).unwrap())["props"]["gap"], "xs");
+        // A row with words in it keeps the gap its mod asked for.
+        let header = json!({ "type": "Box", "props": { "gap": 2 }, "children": [
+            { "type": "Text", "children": ["Feedback"] },
+            { "type": "Button", "props": { "key": "a", "plain": true, "label": "Close" }, "press": { "plugin": "feedback", "handle": 1 } }] });
+        assert_eq!(tree_json(super::drawn(&header, &at("feedback")).unwrap())["props"]["gap"], "m");
     }
 
     #[test]

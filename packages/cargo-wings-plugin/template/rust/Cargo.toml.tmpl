@@ -1,0 +1,26 @@
+[package]
+name = "hello-wings"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# The Rust SDK, from crates.io. `cargo update -p wings-plugin` takes a newer release.
+wings-plugin = "0.1"
+serde_json = "1"
+
+[features]
+# The frame a module is: `cargo wings-plugin build` builds each .wasm the manifest names with the feature of its file name,
+# so `dist/native/main.wasm` is `--features main` and `dist/native/sidebar.wasm` is `--features sidebar`.
+main = []
+sidebar = []
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

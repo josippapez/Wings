@@ -712,7 +712,7 @@ fn a_notifications_buttons_keep_three_with_short_labels_and_open_only_tab_views_
 // copyText
 
 #[test]
-fn only_a_page_copies_and_only_right_after_a_click_or_key_and_never_more_than_a_megabyte() {
+fn only_a_page_copies_and_only_right_after_a_click_or_key_and_never_more_than_16_megabytes() {
     const REFUSED: &str = "A page can copy only right after you click or type in it";
     let rig = Rig::new(json!({}), panes());
     let copy = |text: &str| json!({ "text": text });
@@ -722,7 +722,7 @@ fn only_a_page_copies_and_only_right_after_a_click_or_key_and_never_more_than_a_
         Err(REFUSED.into())
     );
     // Nor does a page on its own, or on a hover, a blur or another event that isn't a gesture of yours. A click lets it
-    // copy once, and never a megabyte and more.
+    // copy once, and never 16 MB and more.
     assert_eq!(
         call_at_start(&rig.host, "copyText", copy("unasked")),
         Err(REFUSED.into())
@@ -732,11 +732,15 @@ fn only_a_page_copies_and_only_right_after_a_click_or_key_and_never_more_than_a_
     assert_eq!(page.call_after_click("copyText", copy("fix/login")), Ok(Value::Null));
     // The click is used up by its copy.
     assert_eq!(page.call("copyText", copy("again")), Err(REFUSED.into()));
+    // Over a megabyte was refused; now 8 MB goes. At 16 MB the call's own arguments are over their limit, which is
+    // what refuses text that long.
+    let big = "x".repeat(8 * 1024 * 1024);
+    assert_eq!(page.call_after_click("copyText", copy(&big)), Ok(Value::Null));
     assert_eq!(
-        page.call_after_click("copyText", copy(&"x".repeat(1024 * 1024 + 1))),
-        Err("copyText is limited to 1 MB of text".into())
+        page.call_after_click("copyText", copy(&"x".repeat(16 * 1024 * 1024 + 1))),
+        Err("A call's arguments are limited to 16 MB".into())
     );
-    assert_eq!(rig.env.seen(), [Seen::Copied("fix/login".into())]);
+    assert_eq!(rig.env.seen(), [Seen::Copied("fix/login".into()), Seen::Copied(big)]);
 }
 
 // pickFiles

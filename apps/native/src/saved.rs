@@ -190,6 +190,37 @@ pub struct GlobalHotkey {
     pub accelerator: String,
 }
 
+/// The native window's last rectangle and presentation state. Kept without GPUI types so state-file
+/// reading and migration remain available without the UI feature.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "lowercase")]
+pub enum SavedWindowBounds {
+    Windowed {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display: Option<String>,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    },
+    Maximized {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display: Option<String>,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    },
+    Fullscreen {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display: Option<String>,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    },
+}
+
 /// The desktop's `hotkey.default` in `src/lib/commands.json`.
 pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+KeyJ";
 
@@ -282,6 +313,10 @@ pub struct Settings {
     /// Whether the sidebar's "Older" group is open.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub older_open: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidebar_show_idle: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidebar_show_worktrees: Option<bool>,
     /// The plugin sections turned off under each project, as `plugin:section`, by its folder.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sections_off: BTreeMap<String, BTreeSet<String>>,
@@ -333,6 +368,9 @@ pub struct Settings {
     /// The Claude Code version whose changelog Settings, Tools has shown as read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools_read: Option<String>,
+    /// The native window's position, size and presentation state from the last quit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_bounds: Option<SavedWindowBounds>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -616,6 +654,47 @@ mod tests {
         );
         assert_eq!(load(&path, "/b"), Some(SavedProject::default()));
         assert!(!path.with_extension("json.tmp").exists());
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn window_bounds_round_trip_in_the_workspace_file() {
+        let path = temp_file("window-bounds");
+        for bounds in [
+            SavedWindowBounds::Windowed {
+                display: Some("one".into()),
+                x: 10.0,
+                y: 20.0,
+                width: 800.0,
+                height: 600.0,
+            },
+            SavedWindowBounds::Maximized {
+                display: Some("two".into()),
+                x: 30.0,
+                y: 40.0,
+                width: 900.0,
+                height: 700.0,
+            },
+            SavedWindowBounds::Fullscreen {
+                display: Some("three".into()),
+                x: 50.0,
+                y: 60.0,
+                width: 1000.0,
+                height: 800.0,
+            },
+        ] {
+            save(
+                &path,
+                "/a",
+                SavedProject::default(),
+                Settings {
+                    window_bounds: Some(bounds.clone()),
+                    ..Settings::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(load_settings(&path).window_bounds, Some(bounds));
+        }
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 

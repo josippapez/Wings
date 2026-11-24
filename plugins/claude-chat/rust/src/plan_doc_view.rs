@@ -120,9 +120,11 @@ fn add(id: &str, start: u64) {
         let (number, text) = c.session.plans.shown(&c.session.items).into_iter().find(|(_, plan)| plan.id == id).map(|(number, plan)| (number, plan.text.clone()))?;
         let block = plan_doc::blocks(&text).into_iter().find(|block| block.start == start)?;
         let comment = plan_doc::comment(number, &block, &c.plan_view.draft, host::now() as u64)?;
-        if c.review.len() >= crate::review::MAX {
+        if !crate::review::fits(&c.review, &comment) {
+            c.review_note = Some(crate::review::FULL.to_owned());
             return None;
         }
+        c.review_note = None;
         c.review.push(comment);
         c.plan_view.editing = None;
         c.plan_view.draft.clear();

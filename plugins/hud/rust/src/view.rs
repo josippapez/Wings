@@ -228,14 +228,13 @@ pub fn limits(state: &State, now: f64) -> Vec<Value> {
 }
 
 /// What the sidebar shows: the account-wide part (usage limits and memory), then the sessions that run in panes,
-/// sorted by project, kept well under the 64 KB a broadcast may carry.
+/// sorted by project. Every session is listed: a broadcast carries up to 1,000,000 bytes.
 pub fn snapshot(state: &State, sessions: &[&Session]) -> Value {
     let now = host::now();
     let mut shown = sessions.to_vec();
     shown.sort_by_key(|s| s.project.to_lowercase());
     let sessions: Vec<Value> = shown
         .into_iter()
-        .take(8)
         .map(|s| {
             let ctx = context(state, s);
             let mut view = json!({
@@ -263,10 +262,15 @@ pub fn snapshot(state: &State, sessions: &[&Session]) -> Value {
 
 /// The session the sidebar shows: the one in the selected pane, which it follows from pane to pane. `followed` is the
 /// last such session, kept while the selected pane runs no Claude. A session picked from the list shows in its place
-/// until another pane is selected: `picked` is its id, and what was followed when it was picked.
+/// until another pane is selected: `picked` is its id, and what was followed when it was picked. A session that is
+/// followed or picked and no longer there shows as none, never as another session's numbers; with none ever followed,
+/// the first one is shown.
 pub fn shown<'a>(sessions: &'a [Value], followed: Option<&str>, picked: Option<&(String, Option<String>)>) -> Option<&'a Value> {
     let choice = picked.filter(|(_, over)| over.as_deref() == followed).map(|(id, _)| id.as_str()).or(followed);
-    sessions.iter().find(|s| s["id"].as_str() == choice).or(sessions.first())
+    match choice {
+        Some(choice) => sessions.iter().find(|s| s["id"].as_str() == Some(choice)),
+        None => sessions.first(),
+    }
 }
 
 /// The accounts' limits with the shown session's account first, and whether that account has none: before a session's
@@ -297,9 +301,16 @@ mod tests {
         let picked = ("c".to_owned(), Some("b".to_owned()));
         assert_eq!(id(shown(&sessions, Some("b"), Some(&picked))).as_deref(), Some("c"));
         assert_eq!(id(shown(&sessions, Some("a"), Some(&picked))).as_deref(), Some("a"));
-        // The followed session's pane closed.
-        assert_eq!(id(shown(&sessions, Some("gone"), None)).as_deref(), Some("a"));
+        // The followed session's pane closed: none, not another's numbers.
+        assert_eq!(id(shown(&sessions, Some("gone"), None)), None);
         assert_eq!(shown(&[], Some("a"), None), None);
+    }
+
+    #[test]
+    fn every_session_is_listed_not_the_first_eight() {
+        let sessions: Vec<_> = (0..30).map(|n| session(&format!("s{n:02}"))).collect();
+        let views = snapshot(&State::default(), &sessions.iter().collect::<Vec<_>>());
+        assert_eq!(views["sessions"].as_array().unwrap().len(), 30);
     }
 
     #[test]

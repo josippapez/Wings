@@ -4,16 +4,16 @@
 //! This does what the desktop's plugin host does for its frames (`apps/desktop/src/lib/plugins.ts`, the `broadcast` and
 //! `storage*` cases, and `plugin_storage_*` in `src-tauri/src/lib.rs`):
 //!
-//! - **Broadcast.** The message is JSON (`JSON.stringify(message ?? null)`) of at most 64,000 characters, counted in
-//!   JS string units; a longer one rejects the sender's promise with "A broadcast is limited to 64 KB" and goes to no
-//!   one (`wings-plugin-sdk/messages` sends a bigger message in parts). It goes to every *other* open frame of the same
+//! - **Broadcast.** The message is JSON (`JSON.stringify(message ?? null)`) of at most 1,000,000 characters, counted in
+//!   JS string units; a longer one rejects the sender's promise with "A broadcast is limited to 1 MB" and goes to no
+//!   one, and the SDK doesn't split it into parts. It goes to every *other* open frame of the same
 //!   plugin, never to the sender and never to another plugin's frames, in the order the frames were opened, and each
 //!   frame gets its own parsed copy. A frame still starting up gets it once its bundle has run, which is when its
 //!   listeners exist. The sender doesn't wait for the listeners. A frame that is too far behind, or has stopped,
 //!   misses it, and nothing else is held up.
 //! - **Storage.** One folder of keys per plugin and install scope, kept by `wings-plugin-storage` (the desktop's own
 //!   crate, so the files are the same): keys of 1 to 128 letters, digits and `- _ . : /`, JSON values of at most 1 MB
-//!   and 50 MB together, all frames of the plugin sharing them. Only what `JSON.stringify` keeps is stored, so a value
+//!   and 500 MB together, all frames of the plugin sharing them. Only what `JSON.stringify` keeps is stored, so a value
 //!   with nothing to stringify is refused (`delete` removes a key).
 //!
 //! - **The rest of `wings`.** A host built with `with_access` has the plugin's manifest and the app it runs in (`Env`),
@@ -64,8 +64,8 @@ pub use env::{
     PanePort, Project, Running, SessionEntry, ToolCall,
 };
 
-/// The most JSON a broadcast may hold, in JS string units: what the desktop's host allows.
-pub const MAX_BROADCAST_CHARS: usize = 64_000;
+/// The most JSON a broadcast may hold, in JS string units (the desktop's host allowed 64,000; a page-to-page message has the same 1,000,000 as `MAX_PAGE_MESSAGE_CHARS`).
+pub const MAX_BROADCAST_CHARS: usize = 1_000_000;
 
 fn effective_focus(windows: &HashMap<u64, bool>, role: Role, window: u64) -> bool {
     if role == Role::Main {
@@ -176,6 +176,8 @@ struct Shared {
     next_orphan: AtomicU64,
     /// The names the pages took, and the writes handed between them (see `pages`).
     pages: Mutex<pages::Pages>,
+    /// The threads the frames' calls run on (`off_thread`), and the calls waiting for one.
+    workers: Arc<Mutex<calls::Workers>>,
 }
 
 impl Shared {
@@ -204,7 +206,7 @@ impl Shared {
     }
     fn broadcast(&self, from: u64, json: String) -> Result<(), String> {
         if json.encode_utf16().count() > MAX_BROADCAST_CHARS {
-            return Err("A broadcast is limited to 64 KB".into());
+            return Err("A broadcast is limited to 1 MB".into());
         }
         // A frame that has stopped is dropped from the list as it's found. Delivering never waits for a frame.
         self.frames.lock().unwrap().retain(|frame| {
@@ -272,6 +274,10 @@ impl Shared {
         match call {
             Store::Get(key) => json(&storage.get(id, scope, &key)?),
             Store::Set(key, text) => {
+                // Before it is parsed: `[0,0,...]` takes some sixteen times its length as a value.
+                if text.len() > wings_plugin_storage::MAX_VALUE_BYTES {
+                    return Err(format!("A stored value is limited to 1 MB, and this one is {} KB.", text.len().div_ceil(1024)));
+                }
                 let value = serde_json::from_str(&text).map_err(|error| error.to_string())?;
                 storage.set(id, scope, &key, value)?;
                 json(&())
@@ -305,6 +311,10 @@ struct FrameLink {
     /// left nothing to read when it broke (Claude chat's 110 KB pane, refused on its way to the sidebar).
     refused: Arc<Mutex<std::collections::HashSet<(String, String)>>>,
 }
+
+/// The most refusals one frame has kept in the plugins' log. A refusal often names what was asked (`no pane 7`), so a
+/// frame asking in a loop grew the set of those it had logged without bound.
+const REFUSALS_LOGGED: usize = 256;
 
 /// How long after your click or key a page may still put text on the clipboard: a browser's transient user activation,
 /// which is what lets a desktop page's `navigator.clipboard.writeText` work.
@@ -365,7 +375,8 @@ impl Link for FrameLink {
                     self.refused.clone(),
                 );
                 reply.noting(Arc::new(move |message: &str| {
-                    if refused.lock().unwrap().insert((call.clone(), message.to_owned())) {
+                    let mut refused = refused.lock().unwrap();
+                    if refused.len() < REFUSALS_LOGGED && refused.insert((call.clone(), message.to_owned())) {
                         super::log::line(&plugin, frame, &format!("{call} refused: {message}"));
                     }
                 }))
@@ -395,10 +406,7 @@ impl Link for FrameLink {
             let Some(value) = params.get("state").cloned() else {
                 return reply.err("State must be a JSON value".into());
             };
-            std::thread::spawn(move || {
-                reply.done(state.write(place, value).map(|()| "null".into()))
-            });
-            return;
+            return self.shared.off_thread(reply, move |_| state.write(place, value).map(|()| "null".into()));
         }
         // A tab's page that runs an agent, like Claude chat, lists it with the terminals' agents in the sidebar.
         if method == "setAgent" {
@@ -426,10 +434,10 @@ impl Link for FrameLink {
             };
             return reply.done(state.close().map(|()| "null".into()));
         }
-        // A tab's page names its own tab, as a terminal's tab shows what runs in it.
+        // A tab's page names its own tab, as a terminal's tab shows what runs in it; a sidebar's page names its header.
         if method == "setTabTitle" {
             let Some(state) = self.state.clone() else {
-                return reply.err("Only a page shown as a tab can name its tab".into());
+                return reply.err("Only a page shown as a tab or in a sidebar can name its tab".into());
             };
             let title = match tab_title(params.get("title")) {
                 Ok(title) => title,
@@ -535,6 +543,7 @@ impl FrameLink {
     fn place(&self) -> Option<process::Place> {
         match (self.role, &self.state) {
             (Role::Main, _) => Some(process::Place::Main),
+            (Role::Page, Some(state)) if state.in_sidebar() => None,
             (Role::Page, Some(state)) => Some(process::Place::Page(state.clone())),
             (Role::Page, None) => None,
         }
@@ -577,7 +586,7 @@ fn tab_agent(agent: &serde_json::Value) -> Result<TabAgent, String> {
     })
 }
 
-/// `setTabTitle`'s `title`, checked: one line of at most 80 characters, or none (null or blank) for the view's title.
+/// `setTabTitle`'s `title` (a sidebar's too), checked: one line of at most 80 characters, or none (null or blank) for the view's title.
 fn tab_title(title: Option<&serde_json::Value>) -> Result<Option<String>, String> {
     let title = match title {
         None | Some(serde_json::Value::Null) => return Ok(None),
@@ -679,6 +688,11 @@ pub struct PageOpener {
 }
 
 impl PageOpener {
+    /// What the page named its sidebar's header with `setTabTitle`, if it did.
+    pub fn title(&self) -> Option<String> {
+        self.state.as_ref().and_then(FrameState::title)
+    }
+
     /// Whether the plugin was turned off or restarted since: its pages are not opened again.
     pub fn gone(&self) -> bool {
         self.alive.strong_count() == 0
@@ -748,6 +762,7 @@ impl PluginHost {
                 orphans: Mutex::default(),
                 next_orphan: AtomicU64::new(0),
                 pages: Mutex::default(),
+                workers: Arc::default(),
             }),
             main: Mutex::default(),
             alive: Arc::new(()),

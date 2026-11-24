@@ -1,9 +1,0 @@
-[package]
-name = "wings-bench-grid"
-version = "0.1.0"
-edition = "2021"
-description = "Benchmark-only prototype: parses PTY output with libghostty-vt (through wings-terminal) and encodes changed rows for a canvas renderer"
-publish = false
-
-[dependencies]
-wings-terminal = { path = "../../../../crates/wings-terminal", features = ["grid"] }

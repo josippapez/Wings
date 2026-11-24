@@ -3,7 +3,8 @@
 //! folder Wings runs under (`claude_dir`); a named one is `~/.claude-<name>`. The terminals of a project use the
 //! account assigned to it (`Space::claude_account`). A named account uses the default account's setup (settings, rules,
 //! skills, plugins) unless you turn that off, linked to it, except `settings.json`, which is a copy that keeps the account's
-//! own `model`; see `set_shared_setup`. The desktop and the native app share this.
+//! own `model`; see `set_shared_setup`. That copy syncs both ways as either side changes (`SettingsWatcher`): the file changed
+//! last wins. The desktop and the native app share this.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -14,6 +15,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::spaces::Space;
+
+mod watch;
+pub use watch::SettingsWatcher;
 
 const PREFIX: &str = ".claude-";
 
@@ -505,11 +509,32 @@ fn read_settings(path: &Path) -> Result<Option<Map<String, Value>>, String> {
     }
 }
 
+/// `settings` with its `model` replaced by `model` (none removes it), in the place `settings` has it, or last when it has none.
+/// Every other key and the order of them stay.
+fn with_model(settings: &Map<String, Value>, model: Option<Value>) -> Map<String, Value> {
+    let mut next = Map::new();
+    let mut model = model;
+    for (key, value) in settings {
+        if key == "model" {
+            if let Some(own) = model.take() {
+                next.insert(key.clone(), own);
+            }
+        } else {
+            next.insert(key.clone(), value.clone());
+        }
+    }
+    if let Some(own) = model {
+        next.insert("model".into(), own);
+    }
+    next
+}
+
 /// Only one `sync_settings` at a time: the app restoring terminals and Wings connecting to the account on start both run it.
 static SETTINGS_SYNC: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Writes the account's `settings.json` as a copy of the default account's with the account's own `model`, so the account
-/// keeps its model and shares everything else. A link would give it the default account's model too, which an account on
+/// keeps its model and shares everything else. A change in the copy goes the other way (`share_back`), and the watcher
+/// (`SettingsWatcher`) runs both as the files change; the file that changed last is the source. A link would give it the default account's model too, which an account on
 /// another plan may not have.
 ///
 /// Every key, and the order of them, comes from the default's file, Wings' status line and hooks among them. `model` is the
@@ -542,22 +567,7 @@ fn sync_settings(default_dir: &Path, account: &Path) -> Result<(), String> {
         // What the account had may not be JSON: then it has no model to keep, and is still kept aside as it was.
         (None, read_settings(&was).ok().flatten().and_then(|had| had.get("model").cloned()))
     };
-    let mut next = Map::new();
-    let mut model = own_model;
-    for (key, value) in &default {
-        if key == "model" {
-            // In the place it has in the default's file, with the account's value, or not at all.
-            if let Some(own) = model.take() {
-                next.insert(key.clone(), own);
-            }
-        } else {
-            next.insert(key.clone(), value.clone());
-        }
-    }
-    // The default has none, and the account does: it goes last.
-    if let Some(own) = model {
-        next.insert("model".into(), own);
-    }
+    let next = with_model(&default, own_model);
     if current.as_ref() == Some(&next) {
         return Ok(());
     }
@@ -566,6 +576,40 @@ fn sync_settings(default_dir: &Path, account: &Path) -> Result<(), String> {
     // The file first: with the marker but no file, the next sync would take the account's own settings for Wings' copy.
     write_whole(&at, text.as_bytes(), &source).map_err(io)?;
     std::fs::write(&marker, "").map_err(|e| format!("{SYNCED_SETTINGS}: {e}"))
+}
+
+/// What the default's `settings.json` should become to take in a change made in an account's copy (the account's keys in its
+/// order, with the DEFAULT's own `model`, none when the default has none), or `None` when there is nothing to take in: the
+/// account doesn't share its setup, its `settings.json` isn't Wings' copy (no `SYNCED_SETTINGS`, or not a file), either file
+/// is missing, or the copy says what `sync_settings` would write. A copy or default that isn't JSON is an error.
+fn back_change(default_dir: &Path, account: &Path) -> Result<Option<Map<String, Value>>, String> {
+    if !account.is_dir() || !shares(account) || same_folder(default_dir, account) {
+        return Ok(None);
+    }
+    let at = account.join(SETTINGS);
+    if !account.join(SYNCED_SETTINGS).exists() || !at.symlink_metadata().is_ok_and(|meta| meta.is_file()) {
+        return Ok(None);
+    }
+    let Some(default) = read_settings(&default_dir.join(SETTINGS))? else { return Ok(None) };
+    let Some(copy) = read_settings(&at)? else { return Ok(None) };
+    if with_model(&default, copy.get("model").cloned()) == copy {
+        return Ok(None);
+    }
+    Ok(Some(with_model(&copy, default.get("model").cloned())))
+}
+
+/// The other way round of `sync_settings`: a change made in an account's copy of `settings.json` (a plugin enabled with
+/// `/plugin`, a permission rule Claude Code wrote while running under the account) goes into the default account's file
+/// (`back_change` says what it becomes), so it isn't overwritten by the next sync from the default and reaches the other
+/// accounts. An account's `model` never reaches the default. The file is written whole, like every settings write. A copy
+/// that isn't JSON (a write in progress) is an error and nothing is written.
+fn share_back(default_dir: &Path, account: &Path) -> Result<(), String> {
+    let _one_at_a_time = SETTINGS_SYNC.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(next) = back_change(default_dir, account)? else { return Ok(()) };
+    let target = default_dir.join(SETTINGS);
+    let mut text = serde_json::to_string_pretty(&next).map_err(|e| e.to_string())?;
+    text.push('\n');
+    write_whole(&target, text.as_bytes(), &target).map_err(|e| format!("{}: {e}", target.display()))
 }
 
 /// Links the default account's shared items into an account, writes its `settings.json` (`sync_settings`) and copies its MCP

@@ -17,7 +17,7 @@ pub const MAX_KEY_LEN: usize = 128;
 /// One value's JSON text.
 pub const MAX_VALUE_BYTES: usize = 1024 * 1024;
 /// A plugin's storage in all: every value's JSON text and every key.
-pub const MAX_BYTES: u64 = 50 * 1024 * 1024;
+pub const MAX_BYTES: u64 = 500 * 1024 * 1024;
 
 type Data = BTreeMap<String, Value>;
 
@@ -246,7 +246,7 @@ fn snapshot_size(total: &mut u64, key: &str, len: usize) -> Result<(), String> {
     }
     *total += (len + key.len()) as u64;
     if *total > MAX_BYTES {
-        return Err("A storage snapshot is limited to 50 MB".into());
+        return Err("A storage snapshot is limited to 500 MB".into());
     }
     Ok(())
 }
@@ -330,7 +330,7 @@ impl Storage {
             let total = index.total - index.sizes.get(key).copied().unwrap_or(0) + size;
             if total > MAX_BYTES {
                 return Err(format!(
-                    "{plugin_id}'s storage is limited to 50 MB, and this would make it {} KB. Delete what it no longer needs first.",
+                    "{plugin_id}'s storage is limited to 500 MB, and this would make it {} KB. Delete what it no longer needs first.",
                     total.div_ceil(1024)
                 ));
             }
@@ -502,10 +502,10 @@ mod tests {
         let bucket = dir.path().join("demo.s1");
         fs::create_dir(&bucket).unwrap();
         let bytes = serde_json::to_vec(&json!("x".repeat(MAX_VALUE_BYTES - 2))).unwrap();
-        for i in 0..50 {
+        for i in 0..500 {
             fs::write(bucket.join(file_name(&format!("key{i}"))), &bytes).unwrap();
         }
-        assert!(storage.snapshot("demo", "s1").unwrap_err().contains("50 MB"));
+        assert!(storage.snapshot("demo", "s1").unwrap_err().contains("500 MB"));
         fs::File::create(dir.path().join("demo.s2.json")).unwrap().set_len(MAX_BYTES + 1).unwrap();
         assert!(storage.snapshot("demo", "s2").unwrap_err().contains("read limit"));
     }
@@ -617,22 +617,22 @@ mod tests {
         assert!(error.contains("limited to 1 MB") && error.contains("1025 KB"), "{error}");
         assert_eq!(serde_json::to_vec(&s.get("demo", "s1", "one").unwrap().unwrap()).unwrap().len(), MAX_VALUE_BYTES);
 
-        // In all: just under 50 MB fits; one write that goes over is refused and changes nothing.
+        // In all: just under 500 MB fits; one write that goes over is refused and changes nothing.
         let used = |s: &Storage| s.with("demo", "s1", |index, _| Ok(index.total)).unwrap();
-        for i in 0..48 {
+        for i in 0..498 {
             s.set("demo", "s1", &format!("big{i:02}"), string_of(MAX_VALUE_BYTES)).unwrap();
         }
         let room = (MAX_BYTES - used(&s)) as usize - "last".len();
         s.set("demo", "s1", "last", string_of(room)).unwrap();
         assert_eq!(used(&s), MAX_BYTES);
         let error = s.set("demo", "s1", "more", json!("y")).unwrap_err();
-        assert!(error.contains("limited to 50 MB") && error.contains("51201 KB"), "{error}");
+        assert!(error.contains("limited to 500 MB") && error.contains("512001 KB"), "{error}");
         assert_eq!(s.get("demo", "s1", "more").unwrap(), None);
         // Replacing a value counts its new size, not both.
         s.set("demo", "s1", "last", string_of(room)).unwrap();
         // The total a restart counts from the files is the one kept while running.
         let again = Storage::new(dir.clone());
-        assert_eq!((used(&again), again.keys("demo", "s1").unwrap().len()), (MAX_BYTES, 52));
+        assert_eq!((used(&again), again.keys("demo", "s1").unwrap().len()), (MAX_BYTES, 502));
         // Making room works.
         s.delete("demo", "s1", "big00").unwrap();
         s.set("demo", "s1", "more", json!("y")).unwrap();

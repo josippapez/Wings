@@ -2,6 +2,9 @@
 //! adding, removing, pinning and moving projects, and the peek of a closed sidebar. The window draws it from `view`.
 
 mod drag;
+mod activity;
+mod filters;
+pub(in crate::workspace) use activity::AgentKey;
 mod git;
 mod nav_rows;
 pub(super) use nav_rows::{Look, NAV_GAP, NAV_ROW, nav_row, nav_row_with, row_hint};
@@ -55,6 +58,9 @@ pub(super) struct State {
     swallow_click: bool,
     /// The sort menu is open.
     sort_menu: bool,
+    filters: filters::Filters,
+    filter_menu: Option<filters::Menu>,
+    activity: activity::Activity,
     /// The project asked to be removed while it has tabs open, with the focus of the question.
     pub(in crate::workspace) removing: Option<(PathBuf, FocusHandle)>,
     recovery: FocusRecovery,
@@ -102,6 +108,9 @@ impl Default for State {
             rows: drag::Rows::default(),
             swallow_click: false,
             sort_menu: false,
+            filters: filters::Filters::default(),
+            filter_menu: None,
+            activity: activity::Activity::default(),
             removing: None,
             recovery: FocusRecovery::default(),
             git: git::Git::default(),
@@ -129,6 +138,11 @@ impl State {
             },
             sort: Sort::parse(settings.project_sort.as_deref()),
             older_open: settings.older_open.unwrap_or(false),
+            filters: filters::Filters {
+                idle: settings.sidebar_show_idle.unwrap_or(true),
+                worktrees: settings.sidebar_show_worktrees.unwrap_or(true),
+                ..filters::Filters::default()
+            },
             sections_off: settings.sections_off.clone(),
             last_active: settings.last_active.clone(),
             ..Self::default()
@@ -143,6 +157,8 @@ impl State {
             sidebar_width: Some(self.width),
             project_sort: Some(self.sort.key().to_owned()),
             older_open: Some(self.older_open),
+            sidebar_show_idle: Some(self.filters.idle),
+            sidebar_show_worktrees: Some(self.filters.worktrees),
             sections_off: self.sections_off.clone(),
             last_active: self.last_active.clone(),
             ..saved::Settings::default()

@@ -1,4 +1,4 @@
-//! Loads that are kept (`cached` of `wings-plugin-sdk/async`) and loads that are batched (`batched`).
+//! Loads that are kept (`cached`) and loads that are batched (`batched`).
 
 use crate::{host, task::{spawn, wait_once}};
 use std::{

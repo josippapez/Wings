@@ -270,3 +270,24 @@ fn a_plugin_with_no_javascript_is_loaded_and_its_frames_are_its_modules() {
         assert!(source.starts_with(MARKER) && source.ends_with(".wasm"), "{source}");
     }
 }
+
+/// The modules whose compiled code the app keeps as it starts (`wasm::prune_compiled`): each installed plugin's, a
+/// plugin turned off as well, so turning it on again doesn't compile it again.
+#[test]
+fn the_modules_kept_compiled_are_every_installed_plugins_on_or_off() {
+    let data = Data::temp();
+    data.install("on", WINGS_VERSION, true, true, Current, "scope-on");
+    data.install("off", WINGS_VERSION, true, false, Current, "scope-off");
+    let mut modules: Vec<String> = super::modules(&data.paths())
+        .iter()
+        .map(|module| {
+            let plugin = module.parent().unwrap().parent().unwrap().parent().unwrap().file_name().unwrap();
+            format!("{}/{}", plugin.to_string_lossy(), module.file_name().unwrap().to_string_lossy())
+        })
+        .collect();
+    modules.sort();
+    assert_eq!(
+        modules,
+        ["off/fixture.wasm", "off/main.wasm", "off/plain.wasm", "on/fixture.wasm", "on/main.wasm", "on/plain.wasm"]
+    );
+}

@@ -400,6 +400,12 @@ pub fn spot_at(name: &str) -> Option<gpui::Bounds<gpui::Pixels>> {
     SPOTS.with_borrow(|spots| spots.get(name).copied())
 }
 
+/// Forgets every spot, so a test can tell an element that is gone from one drawn earlier.
+#[cfg(feature = "test-support")]
+pub fn forget_spots() {
+    SPOTS.with_borrow_mut(|spots| spots.clear());
+}
+
 /// The dimness of a dialog's backdrop, for one that fades on its own.
 pub fn backdrop_color() -> gpui::Hsla {
     rgba(BACKDROP).into()

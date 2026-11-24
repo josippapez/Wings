@@ -1141,11 +1141,17 @@ impl Workspace {
         let pages = self.right_pages(&shown, window, cx)?;
         let title = match shown.only() {
             Some((plugin, sidebar)) => self
-                .plugins
-                .iter()
-                .find(|installed| installed.id == *plugin)
-                .and_then(|installed| installed.sidebars.iter().find(|page| page.id == *sidebar))
-                .map_or_else(|| "Sidebar".to_owned(), |page| page.title.clone()),
+                .sidebar_pages
+                .get(&(plugin.clone(), sidebar.clone()))
+                .and_then(|page| page.read(cx).header_title())
+                .or_else(|| {
+                    self.plugins
+                        .iter()
+                        .find(|installed| installed.id == *plugin)
+                        .and_then(|installed| installed.sidebars.iter().find(|page| page.id == *sidebar))
+                        .map(|page| page.title.clone())
+                })
+                .unwrap_or_else(|| "Sidebar".to_owned()),
             None => "Sidebars".to_owned(),
         };
         let width = self.right_width(viewport);

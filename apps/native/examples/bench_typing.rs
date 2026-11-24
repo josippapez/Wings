@@ -8,6 +8,8 @@
 //!
 //! `BENCH_TYPING_KEYS=<n>` keys are timed for each field (120). `BENCH_TYPING_GAP_MS=<ms>` waits between keys as a person
 //! types (0): the processor slows down between them, so a key's frame takes longer than back to back.
+//! `BENCH_TYPING_PRELOAD=<chars>` starts the message boxes with that much text, as a long paste leaves them, and keeps
+//! it while measuring (the boxes aren't cleared).
 
 use std::time::{Duration, Instant};
 
@@ -88,7 +90,9 @@ fn main() {
     ] {
         focus(&mut cx, window, page, label);
         keys(&mut cx, window, Some(page), 10);
-        clear(&mut cx, window);
+        if preload() == 0 {
+            clear(&mut cx, window);
+        }
         let measured = keys(&mut cx, window, Some(page), n);
         report(what, n, measured);
     }
@@ -257,6 +261,11 @@ fn focus(cx: &mut VisualTestAppContext, window: AnyWindowHandle, page: &Entity<P
     settle(cx, window, Duration::from_millis(300));
 }
 
+/// How many characters the message boxes start with (`BENCH_TYPING_PRELOAD`).
+fn preload() -> usize {
+    std::env::var("BENCH_TYPING_PRELOAD").ok().and_then(|n| n.parse().ok()).unwrap_or(0)
+}
+
 /// Empties the field with the keyboard, so each measure starts from the same text.
 fn clear(cx: &mut VisualTestAppContext, window: AnyWindowHandle) {
     cx.simulate_keystrokes(window, "cmd-a backspace");
@@ -306,6 +315,7 @@ fn keys(cx: &mut VisualTestAppContext, window: AnyWindowHandle, page: Option<&En
 /// bookmark buttons, and fields whose text the page sends back on each change.
 fn long_chat_with_box() -> String {
     let mut typed = (String::new(), String::new());
+    typed.0 = "the quick brown fox ".repeat(preload() / 20 + 1).chars().take(preload()).collect();
     fake::page("page", move |event| {
         if let Some((handler, change)) = event {
             let value = change["value"].as_str().unwrap_or_default().to_owned();

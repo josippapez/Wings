@@ -1,4 +1,4 @@
-//! Reading git from a plugin, as `wings-plugin-sdk/git` does, with one rule for error text and trimming. A plugin
+//! Reading git from a plugin, with one rule for error text and trimming. A plugin
 //! still lists each git command it runs in `permissions.exec`.
 
 use crate::{host, task::SingleFlight};

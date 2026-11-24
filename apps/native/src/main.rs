@@ -1,6 +1,5 @@
 use gpui::{
-    App, Bounds, TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowOptions, point,
-    prelude::*, px, size,
+    App, TitlebarOptions, WindowBackgroundAppearance, WindowOptions, point, prelude::*, px, size,
 };
 use wings_native::{
     actions, data_dir,
@@ -49,6 +48,13 @@ fn run() -> Result<(), String> {
         if !side_by_side_running() {
             wings_native::terminal_server::end_all(&wings_native::terminal_server::dir(&from));
         }
+    }
+    // The compiled code of modules no installed plugin has any more, which each build of a plugin left behind. It reads
+    // every module, so not on the window's thread.
+    if let Some(paths) = config.plugins.clone() {
+        let _ = std::thread::Builder::new().name("wasm-cache-prune".into()).spawn(move || {
+            wings_native::page::runtime::wasm::prune_compiled(&wings_native::installed::modules(&paths));
+        });
     }
     // The desktop app's socket: the `wings` command finds Wings there, whichever app serves it.
     #[cfg(unix)]
@@ -108,10 +114,11 @@ fn run() -> Result<(), String> {
             })
             .detach();
 
-            let bounds = Bounds::centered(None, size(px(1000.0), px(640.0)), cx);
+            let restored = wings_native::window_state::restore(config.state.as_deref(), cx);
             let window = cx.open_window(
                 WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    window_bounds: Some(restored.bounds),
+                    display_id: restored.display_id,
                     // The tabs sit in the title bar beside the traffic lights, as in the desktop app.
                     titlebar: Some(TitlebarOptions {
                         title: Some(data_dir::APP_NAME.into()),

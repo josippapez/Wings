@@ -43,6 +43,7 @@ mod parts;
 mod persist;
 mod plugin_env;
 mod plugin_manage;
+mod plugin_detail_ui;
 mod plugin_manage_ui;
 mod plugin_modal;
 mod plugin_tab_place;
@@ -227,6 +228,7 @@ pub struct Workspace {
     tab_layout: Option<(Pixels, bool, Option<f32>, bool, usize)>,
     active: Active,
     config: Config,
+    window_bounds: Option<saved::SavedWindowBounds>,
     /// Where the active tab's panes go, measured every frame.
     area: Option<Bounds<Pixels>>,
     drag: Option<Drag>,
@@ -310,6 +312,9 @@ pub struct Workspace {
     #[cfg(unix)]
     older: older_servers::OlderServers,
     _detection: Option<Task<()>>,
+    /// Keeps the `settings.json` of the default Claude account and of the accounts that share its setup the same as they
+    /// change (`claude_accounts::SettingsWatcher`), on a thread of its own.
+    _settings_sync: Option<wings_spaces::claude_accounts::SettingsWatcher>,
     /// How long each idle agent out of sight has been so, and the timer for the next one due (`sleep.rs`).
     sleep: sleep::Sleep,
     _plugin_events: Task<()>,
@@ -359,11 +364,17 @@ fn shortcut_label(key: &str, extra: bool) -> String {
 
 impl Workspace {
     pub fn new(config: Config, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let window_handle = window.window_handle();
         // Registered before any terminal's, so it runs first and reads each shell's folder while it's alive.
-        let quit = cx.on_app_quit(|this, cx| {
+        let quit = cx.on_app_quit(move |this, cx| {
             // A chat's Claude Code in the terminal server runs on for the next app, as the server's panes do.
             for installed in &this.plugins {
                 installed.host.app_quits();
+            }
+            if let Ok(saved) = window_handle.update(cx, |_, window, app| {
+                crate::window_state::save(window.window_bounds(), window.display(app).as_deref())
+            }) {
+                this.window_bounds = Some(saved);
             }
             this.save(cx);
             this.save_histories(cx);
@@ -444,6 +455,7 @@ impl Workspace {
             active: Active::Issues,
             issues_open: true,
             config,
+            window_bounds: None,
             area: None,
             drag: None,
             projects: spaces.entries(),
@@ -493,6 +505,7 @@ impl Workspace {
             #[cfg(unix)]
             older: Default::default(),
             _detection: None,
+            _settings_sync: None,
             sleep: Default::default(),
             _plugin_events: cx.spawn_in(window, async move |this, cx| {
                 while let Ok(event) = requested.recv().await {
@@ -584,12 +597,18 @@ impl Workspace {
             .agents
             .clone()
             .map(|dir| Self::detect(dir, !this.transcript_plugins.is_empty(), cx));
+        this._settings_sync = this.config.agents.clone().map(|dir| {
+            wings_spaces::claude_accounts::SettingsWatcher::start(dir, |error| {
+                eprintln!("[claude] {error}")
+            })
+        });
         let settings = this
             .config
             .state
             .as_deref()
             .map(saved::load_settings)
             .unwrap_or_default();
+        this.window_bounds = settings.window_bounds.clone();
         if let Some(size) = settings.font_size {
             cx.set_global(TerminalFont(size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE)));
         }
