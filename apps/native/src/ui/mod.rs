@@ -50,7 +50,8 @@ pub use spinner_host::spinner_sync;
 #[cfg(target_os = "macos")]
 pub use spinner_host::turn_spinners_natively;
 pub use status_dot::{
-    spinner as working_spinner, spinner_layer, status_dot, status_dot_slot, view_spinner_slot, view_status_dot_slot,
+    spinner as working_spinner, spinner_layer, spinner_slot, status_dot, status_dot_slot, view_spinner_slot,
+    view_status_dot_slot,
 };
 pub use tooltip::{tip, tooltip, tooltip_exit};
 

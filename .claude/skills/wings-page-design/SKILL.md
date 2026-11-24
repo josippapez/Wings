@@ -32,8 +32,8 @@ Plugin pages are built with `wings_plugin::ui` (`packages/plugin-rs/src/ui.rs`).
 
 ## Check before done
 
-1. **Scene.** Add or update the plugin's scene in `apps/native/examples/shot_plugins.rs` with made-up data. It has a state for each state you touched: navigated in, opened directly, empty, loading and error. Each state is one screenshot. A new plugin gets a flag and a function like the existing ones (`changes`, `hud`, `disk`...). It runs the committed module, so run `sh build-rust.sh` in `plugins/` first.
-2. **Render.** Run `pnpm --dir plugins shot <out-dir> --<plugin>` (it runs `cargo run --manifest-path apps/native/Cargo.toml --example shot_plugins --features test-support -- <out-dir> --<plugin>`) and open every PNG it writes. A page is drawn at 1000 and 640 points wide. macOS only.
+1. **Scene.** Add or update the plugin's scene in `apps/native/examples/shot_plugins.rs` with made-up data. It has a state for each state you touched: navigated in, opened directly, empty, loading and error. Each state is one screenshot. A new plugin gets a flag and a function like the existing ones (`changes`, `hud`, `disk`...). It runs the committed module, so build it first: `sh scripts/build.sh sh plugins/build-rust.sh <plugin>`.
+2. **Render.** Run `sh scripts/build.sh pnpm --dir plugins shot <out-dir> --<plugin>` (it runs `cargo run --manifest-path apps/native/Cargo.toml --example shot_plugins --features test-support -- <out-dir> --<plugin>`) and open every PNG it writes. A page is drawn at 1000 and 640 points wide. macOS only. Claude chat's run is long: `CHAT_SCENE=<name>[,<name>...]` before the command renders only the scenes you touched, and `CHAT_SKIP=<name>` steps past one known to fail. App pages render with `examples/shot.rs`: `sh scripts/build.sh cargo run --manifest-path apps/native/Cargo.toml --example shot --features test-support -- <out-dir> <scene>` (the scene names are the `nth(2)` arms in its `main`, like `plugins-install`).
 3. **Compare.** Hold the page against the app around it.
    - Padding matches the toolbar.
    - Controls sit on the same baseline.
