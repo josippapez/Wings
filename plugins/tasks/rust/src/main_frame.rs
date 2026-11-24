@@ -49,7 +49,7 @@ async fn answer(what: String, payload: Value) -> Result<(), String> {
     }
 }
 
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     tool_defs::register();
     claude_hooks::register();

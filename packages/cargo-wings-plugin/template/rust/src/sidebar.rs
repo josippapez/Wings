@@ -30,7 +30,7 @@ fn view() -> Vec<Node> {
     })
 }
 
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     wings_plugin::run(view);
     messages::on(PANES, |panes| PANES_NOW.with(|now| *now.borrow_mut() = Some(panes.as_array().cloned().unwrap_or_default())));

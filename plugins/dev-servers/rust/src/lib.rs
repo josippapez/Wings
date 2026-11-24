@@ -121,7 +121,7 @@ async fn look() {
     .await;
 }
 
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     host::on_panes(|list| {
         let (stale, settling) = with(|s| {

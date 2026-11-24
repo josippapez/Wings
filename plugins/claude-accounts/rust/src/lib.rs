@@ -19,5 +19,5 @@ mod tests;
 mod views;
 
 #[cfg(feature = "main")]
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {}

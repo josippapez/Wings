@@ -69,7 +69,7 @@ fn register_tools() {
     );
 }
 
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     register_tools();
     messages::on(WANT, |_| publish());

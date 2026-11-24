@@ -162,7 +162,7 @@ fn build(p: &Page) -> Vec<Node> {
     vec![gap(stack(), "s").child(gap(row(), "s").prop("justify", "between").child(muted(shown).prop("size", "small").prop("truncate", true)).child(filter)).child(body)]
 }
 
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     wings_plugin::run(view);
     host::on("project", |_, project| {

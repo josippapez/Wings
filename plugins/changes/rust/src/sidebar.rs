@@ -524,7 +524,7 @@ async fn follow() {
     }
 }
 
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     wings_plugin::run(view);
     host::on_panes(|list| {

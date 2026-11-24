@@ -196,7 +196,7 @@ async fn tell_graph_repo() {
     messages::tell(GRAPH_REPO, &json!({ "root": root, "name": root.as_deref().map(basename) }));
 }
 
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     host::on("project", |_, project| {
         let here = project["folder"].as_str().or(project["path"].as_str()).map(str::to_owned);

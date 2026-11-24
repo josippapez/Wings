@@ -27,7 +27,9 @@ cargo wings-plugin dev     # rebuilds on each save and has the running Wings res
 cargo wings-plugin pack    # writes hello-wings.wings-plugin: the manifest, README, icon and dist/
 ```
 
-`cargo test --manifest-path rust/Cargo.toml` runs the crate's tests on your computer.
+`cargo test --manifest-path rust/Cargo.toml --all-features` runs the crate's tests on your computer, every frame's
+together: each frame's `start` is exported only outside tests (`cfg_attr(not(test), unsafe(no_mangle))`), so they
+don't clash.
 
 `dev` runs `wings plugin link <folder>` after each build, which links this folder into the running Wings. Wings asks
 you to approve the plugin's access the first time.

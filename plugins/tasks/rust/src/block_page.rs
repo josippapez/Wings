@@ -61,7 +61,7 @@ fn view() -> Vec<Node> {
     vec![stack("s").child(top).children(body).maybe(error.map(|e| error_text(&e)))]
 }
 
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     wings_plugin::run(view);
     feed::watch(None);

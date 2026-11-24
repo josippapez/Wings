@@ -220,7 +220,7 @@ fn view() -> Vec<Node> {
     ]
 }
 
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     wings_plugin::run(view);
     // The settings other frames change are read from storage on each build; a change made here is built again by the turn.

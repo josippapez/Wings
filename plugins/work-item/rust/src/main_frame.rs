@@ -275,7 +275,7 @@ async fn act(action: Value) -> Result<(), String> {
     }
 }
 
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     host::on_panes(|list| {
         with(|b| b.panes = list.to_vec());

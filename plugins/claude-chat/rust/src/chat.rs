@@ -299,7 +299,7 @@ fn picked_of(saved: &Value, args: &Value) -> Option<Option<String>> {
 }
 
 #[cfg(not(any(feature = "subagent", feature = "pane", feature = "session")))]
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     // A subagent's tab is a page of this view too, opened with the subagent in its args.
     if crate::subagent_tab::start() {

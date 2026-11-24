@@ -46,20 +46,23 @@ The reference is `plugins/README.md`: layout, build, helpers, manifest, permissi
 
 A new call touches these places. Change them together:
 
-1. `packages/plugin-rs/src/host.rs`: the wrapper the plugins call, with its doc comment.
-2. `apps/native/src/page/runtime/wasm.rs` and `apps/native/src/page/plugin/calls.rs`: the app's side of it, validating its params.
-3. `crates/wings-plugins`: the permission check, with a test.
-4. `apps/native/src/page/plugin/shipped.rs`: a test of a committed plugin that makes the call, when one does.
+1. `packages/plugin-rs/src/host.rs` (or the SDK module it belongs to): the wrapper the plugins call, with its doc comment and the Wings version that has it. `packages/plugin-rs/tests/host_coverage.rs` fails until the SDK wraps every call the app accepts.
+2. The app's side, validating its params: an arm in `apps/native/src/page/plugin/calls.rs` (`call`, or `tab_call` for one that takes a tab), `pages.rs` for calls between a plugin's pages, `process.rs` (its `CALLS` list and handler) for a program a frame runs, `calls/pr_tracker.rs` for a forge call. Every frame's call goes through the one generic `call` import in `wasm.rs`, which needs no change.
+3. The gates in `apps/native/src/page/plugin.rs` `call`, when they apply: the list of calls that need a click or key first, the calls only main may make, and the calls that name a scan or program by the frame's token.
+4. A permission, when it needs one: its field in `crates/wings-plugins/src/manifest.rs`, the check where the call is handled (as `readPane` checks `paneOutput`), and how the Plugins page describes it (`apps/native/src/workspace/plugin_manage_ui.rs`). A call that needs the window goes through the `Env` trait (`page/plugin/env.rs`), its window side in `workspace/plugin_env.rs` and its stand-in in `page/plugin/testing.rs`.
+5. Tests: the app's handler (next to it, as `calls/processes.rs` tests the process calls), and `apps/native/src/page/plugin/shipped.rs` when a committed plugin makes the call.
 
 Then update `plugins/README.md`.
 
 ## Check it
 
 ```sh
-cd plugins && sh build-rust.sh --check
-cd plugins && cargo test --workspace --quiet
-cargo test --manifest-path apps/native/Cargo.toml --features test-support --lib
+sh scripts/build.sh sh plugins/build-rust.sh --check
+sh scripts/build.sh cargo test --manifest-path plugins/Cargo.toml --workspace --all-features
+sh scripts/build.sh cargo test --manifest-path apps/native/Cargo.toml --features test-support --lib
 ```
+
+`--all-features` compiles every frame's modules, so their tests run. Without it a module behind `#[cfg(feature = "<frame>")]` isn't compiled and its tests are skipped without a word (a third of them were). A frame's `start` takes `#[cfg_attr(not(test), unsafe(no_mangle))]`, so the frames' `start`s don't clash in a test build.
 
 A plugin's own tests run on this computer, where the SDK has no host: nothing is drawn or sent, a call is never answered, the clock stands at 0 and the zone is UTC. `host::testing::answer` answers calls with made-up output, `host::testing::set_now` moves the clock and `local_time::testing::zone` sets a zone. The app's tests use Rust fakes (`apps/native/src/page/runtime/fake.rs`), never a real CLI or network.
 

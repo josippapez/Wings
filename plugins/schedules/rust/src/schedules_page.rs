@@ -783,7 +783,7 @@ fn open_with(args: Option<Value>) {
     }
 }
 
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     wings_plugin::run_filled(view);
     listen("s");

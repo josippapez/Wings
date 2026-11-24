@@ -1,6 +1,6 @@
 //! The sidebar page.
 
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     crate::views::start(crate::views::sidebar);
 }

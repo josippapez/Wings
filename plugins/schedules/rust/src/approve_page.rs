@@ -142,7 +142,7 @@ fn hear(state: &Value) {
     }
 }
 
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     wings_plugin::run(view);
     listen("a");

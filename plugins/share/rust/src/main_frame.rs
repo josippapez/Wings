@@ -204,7 +204,7 @@ async fn serve(ask: Value) {
     messages::tell(DONE, &json!({ "id": ask["id"], "error": result.err() }));
 }
 
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     messages::on(ASK, |ask| spawn(serve(ask.clone())));
     messages::on(WANT, |_| changed());

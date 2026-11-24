@@ -51,7 +51,7 @@ mod sidebar {
         vec![text("Hello from a plugin")]
     }
 
-    #[unsafe(no_mangle)]
+    #[cfg_attr(not(test), unsafe(no_mangle))]
     pub fn start() {
         wings_plugin::run(view);
     }

@@ -4,6 +4,6 @@
   "scripts": {
     "shot": "cargo run --manifest-path ../apps/native/Cargo.toml --example shot_plugins --features test-support --",
     "check": "sh build-rust.sh --check",
-    "test": "cargo test --workspace --quiet"
+    "test": "cargo test --workspace --all-features --quiet"
   }
 }

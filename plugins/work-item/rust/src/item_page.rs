@@ -627,7 +627,7 @@ fn history_tab(p: &Page) -> Node {
     }
 }
 
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     with(|p| p.args = host::view_args().as_ref().and_then(item_args));
     wings_plugin::run_filled(view);

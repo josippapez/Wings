@@ -37,7 +37,7 @@ fn panes_changed(list: &[Value]) {
     tell_sidebar();
 }
 
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     host::on_panes(panes_changed);
     // A sidebar that opens after the last change asks for the panes.

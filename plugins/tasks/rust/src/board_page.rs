@@ -515,7 +515,7 @@ fn issue_list(project: &Project, shown: &[&Issue], all: &[Issue], by_parent: boo
     out.maybe(show_more("list", shown.len(), shown.len() - hidden, LIST_ROWS))
 }
 
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     let layout = settings::last_layout().unwrap_or_else(|| settings::start_layout(&settings::default_view()));
     PAGE.with(|page| *page.borrow_mut() = Some(Page { show_canceled: false, layout, folded: None, query: String::new(), error: None, index: None, more: HashMap::new() }));

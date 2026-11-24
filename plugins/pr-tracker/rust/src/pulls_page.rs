@@ -4,7 +4,7 @@
 
 use crate::ui::pulls_list::{block_view, start_block};
 
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     wings_plugin::run(block_view);
     start_block();

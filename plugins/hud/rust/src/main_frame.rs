@@ -190,7 +190,7 @@ fn backlog(id: String) -> std::pin::Pin<Box<dyn Future<Output = Result<Vec<Value
     })
 }
 
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     state(|state| state.started = host::now());
     let follow = sessions::follow(Handlers {

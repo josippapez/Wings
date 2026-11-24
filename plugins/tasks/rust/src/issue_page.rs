@@ -765,7 +765,7 @@ fn args_of(raw: &Value) -> Args {
     }
 }
 
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     let args = host::view_args().filter(Value::is_object).map(|raw| args_of(&raw));
     let only = args.as_ref().and_then(|a| a.project_id.clone());

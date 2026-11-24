@@ -112,7 +112,7 @@ fn on_panes(list: &[Value]) {
     spawn(async { refresh_projects(false).await });
 }
 
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     retry::connect_clis();
     host::on_panes(on_panes);

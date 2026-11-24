@@ -343,7 +343,7 @@ fn view() -> Vec<wings_plugin::ui::Node> {
     read(pr_view::build)
 }
 
-#[unsafe(no_mangle)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     wings_plugin::run_filled(view);
     ipc::hear(ipc::REFRESH, |_| {
