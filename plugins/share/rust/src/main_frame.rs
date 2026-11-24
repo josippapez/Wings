@@ -27,8 +27,6 @@ pub struct State {
     pub panes: Vec<String>,
     /// For each link, the looks in a row its port was gone.
     pub gone: HashMap<String, u32>,
-    /// The ports the user allowed, which stay allowed while they are shared.
-    pub approved: BTreeSet<u16>,
     /// The pane Claude asked from when opentunnel wasn't installed, which shows the Install badge.
     pub install_pane: Option<String>,
 }
@@ -70,9 +68,6 @@ pub async fn take_down(names: &[String]) -> Result<Vec<String>, Fail> {
                 changed();
                 return Err(fail);
             }
-        }
-        if let Some(share) = shares::all().into_iter().find(|share| &share.name == name) {
-            with(|state| state.approved.remove(&share.port));
         }
         shares::forget(std::slice::from_ref(name));
         ended.push(name.clone());

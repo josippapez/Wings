@@ -54,11 +54,10 @@ pub async fn share_port(input: &Value, context: &Value, ask: impl AsyncFn(u16, O
     if let Some(taken) = name.and_then(|name| routes.iter().find(|route| route.name == name && route.port != Some(port))) {
         return Err(format!("The name {} already points at {}. Pick another name, or end that one first with stop_share.", taken.name, taken.target));
     }
-    // One answer is for the port for as long as it stays shared.
-    let allowed = shares::all().iter().any(|share| share.port == port) || with(|state| state.approved.contains(&port));
-    if !allowed {
+    // One answer is for the port for as long as a link Wings made for it stays: a share that failed, or a route that was
+    // there before, keeps nothing, so the next share asks again.
+    if !shares::all().iter().any(|share| share.port == port) {
         denied(ask(port, context["session"]["name"].as_str().map(str::to_owned)).await, port)?;
-        with(|state| state.approved.insert(port));
     }
     let out = tunnel::run(tunnel::add_args(port, name), tunnel::ADD_MS).await.map_err(|fail| match fail {
         Fail::Failed(message) if message.contains("timed out") => format!("{message}. The first link makes a tunnel, which can take a few minutes: call share_port again, it carries on."),
@@ -379,8 +378,37 @@ mod tests {
         assert!(fake.routes.borrow().iter().any(|(name, _)| name == "mine"), "a route the user made was removed");
         assert!(fake.routes.borrow().iter().all(|(name, _)| name != "a"));
         assert_eq!(fake.calls.borrow().iter().filter(|call| call[1] == "remove").count(), 1);
-        // The port was approved while it was shared: it isn't any more.
-        assert!(with(|state| !state.approved.contains(&3000)));
+    }
+
+    /// An Allow counts only while a link Wings made is up: after a route the user made before, or a failed add, the next
+    /// share of the port asks again.
+    #[test]
+    fn a_share_that_kept_no_link_of_wings_asks_again_next_time() {
+        let fake = opentunnel(&[("mine", "127.0.0.1:3000")], &[3000]);
+        let asks = Rc::new(std::cell::Cell::new(0));
+        let share = |asks: Rc<std::cell::Cell<u32>>| {
+            block_on(async move {
+                share_port(&json!({ "port": 3000 }), &json!({}), async |_, _| {
+                    asks.set(asks.get() + 1);
+                    Answer::Allow
+                })
+                .await
+            })
+        };
+        share(asks.clone()).unwrap();
+        assert!(shares::all().is_empty(), "the route was the user's");
+        share(asks.clone()).unwrap();
+        assert_eq!(asks.get(), 2);
+        // The add fails: nothing kept, asked again.
+        fake.routes.borrow_mut().clear();
+        host::testing::answer(|method, params| match (method, params["args"][1].as_str()) {
+            ("exec", Some("list")) => Ok(json!({ "code": 0, "stdout": "No routes configured.\n", "stderr": "" })),
+            ("exec", _) => Ok(json!({ "code": 1, "stdout": "", "stderr": "Error: the service could not start\n" })),
+            _ => Ok(json!([])),
+        });
+        assert!(share(asks.clone()).is_err());
+        assert!(share(asks.clone()).is_err());
+        assert_eq!(asks.get(), 4);
     }
 
     #[test]
