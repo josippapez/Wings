@@ -10,7 +10,7 @@ use gpui::{
 
 use crate::{
     agents,
-    layout::{Dir, Layout, Toward, neighbor},
+    layout::{Dir, Toward, neighbor},
     saved,
     terminal_view::{TerminalEvent, TerminalView},
     text_field::{FieldEvent, TextField},
@@ -485,28 +485,59 @@ impl Workspace {
         let older = self.on_older_server(pane, cx);
         self.panes.remove(&pane);
         let tab = &mut self.terminals[index];
-        if tab.zoomed == Some(pane) {
-            tab.zoomed = None;
-        }
-        let order = tab.layout.panes();
-        let at = order.iter().position(|id| *id == pane).unwrap_or(0);
-        match std::mem::replace(&mut tab.layout, Layout::Pane(pane)).remove(pane) {
-            Some(layout) => {
-                if tab.focused == pane {
-                    tab.focused = if at == 0 { order[1] } else { order[at - 1] };
-                }
-                tab.layout = layout;
-                if self.active == Active::Terminal(tab.id) {
-                    self.show(self.active, window, cx);
-                }
+        if tab.take_out(pane) {
+            if self.active == Active::Terminal(tab.id) {
+                self.show(self.active, window, cx);
             }
-            None => self.close_tab(index, window, cx),
+        } else {
+            self.close_tab(index, window, cx);
         }
         // What's left on its older server may now be able to move.
         #[cfg(unix)]
         if older {
             self.tidy_older_servers(cx);
         }
+        cx.notify_workspace();
+    }
+
+    /// Ends a pane of the project `project`, which isn't on screen, and leaves the screen and the keys as they are.
+    /// When its tab closes with it and was the project's front tab, the neighbour `after_closing` would pick takes over.
+    pub(super) fn close_hidden_pane(&mut self, project: &std::path::Path, pane: usize, cx: &mut Context<Self>) {
+        #[cfg(unix)]
+        let older = self.on_older_server(pane, cx);
+        let Some(parked) = self.parked.get_mut(project) else {
+            return;
+        };
+        let Some(index) = parked
+            .terminals
+            .iter()
+            .position(|tab| tab.layout.panes().contains(&pane))
+        else {
+            return;
+        };
+        self.panes.remove(&pane);
+        if !parked.terminals[index].take_out(pane) {
+            let closed = parked.terminals.remove(index);
+            if parked.active == Active::Terminal(closed.id) {
+                let strip: Vec<Active> = parked
+                    .terminals
+                    .iter()
+                    .map(|tab| Active::Terminal(tab.id))
+                    .chain(parked.plugin_tabs.iter().map(|tab| Active::Plugin(tab.id)))
+                    .chain(parked.project_page.is_some().then_some(Active::Project))
+                    .collect();
+                parked.active = strip
+                    .get(index)
+                    .or_else(|| index.checked_sub(1).and_then(|left| strip.get(left)))
+                    .copied()
+                    .unwrap_or(Active::Issues);
+            }
+        }
+        #[cfg(unix)]
+        if older {
+            self.tidy_older_servers(cx);
+        }
+        self.save(cx);
         cx.notify_workspace();
     }
 

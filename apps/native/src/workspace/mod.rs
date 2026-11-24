@@ -153,6 +153,27 @@ struct TerminalTab {
     focus: FocusHandle,
 }
 
+impl TerminalTab {
+    /// Takes `pane` out of the tab, and the pane before it takes focus: false when it was the last, and the tab closes.
+    fn take_out(&mut self, pane: usize) -> bool {
+        if self.zoomed == Some(pane) {
+            self.zoomed = None;
+        }
+        let order = self.layout.panes();
+        let at = order.iter().position(|id| *id == pane).unwrap_or(0);
+        match std::mem::replace(&mut self.layout, Layout::Pane(pane)).remove(pane) {
+            Some(layout) => {
+                if self.focused == pane {
+                    self.focused = if at == 0 { order[1] } else { order[at - 1] };
+                }
+                self.layout = layout;
+                true
+            }
+            None => false,
+        }
+    }
+}
+
 /// What a project that isn't shown keeps: its tabs, with their shells and plugin pages still running.
 struct Parked {
     terminals: Vec<TerminalTab>,

@@ -1086,7 +1086,7 @@ impl Workspace {
                 reply.ok("null".into());
             }
             UiEvent::ClosePane { pane, reply } => {
-                reply.done(self.close_pane_on_screen(&pane, window, cx).map(|()| "null".into()))
+                reply.done(self.close_named_pane(&pane, window, cx).map(|()| "null".into()))
             }
             UiEvent::OpenDiff(view) => self.open_diff_view(view, window, cx),
             UiEvent::OpenFile { file, line } => self.open_file_in_editor(file, line, cx),

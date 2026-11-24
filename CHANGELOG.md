@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.97 · 2026-11-24
+
+- **An agent can close a terminal it opened in a project that isn't on screen**: it closes there, and you stay on the project, tab and pane you were on. When it was that project's front tab, the tab beside it is in front when you go back.
+
 ## 0.2.96 · 2026-11-24
 
 - **A new Plugins page**: Installed, Browse and Updates with a search, an Add plugin menu for a GitHub link or a file, calmer rows with one status each, and a page per plugin with what it adds to Wings, what it can reach and its README. In a narrow window, Settings shows its sections as icons.

@@ -383,9 +383,9 @@ impl Workspace {
         installed.host.send_agent_message(&found.state, text, self.prefs.agents_message, reply);
     }
 
-    /// Closes a pane of the project on screen, by the id plugins and Claude know it by: Claude's `close_pane` and a
-    /// plugin's `closePane`.
-    pub(super) fn close_pane_on_screen(
+    /// Closes a pane of any project, by the id plugins and Claude know it by: Claude's `close_pane` and a plugin's
+    /// `closePane`. One in a project that isn't on screen closes there, out of sight.
+    pub(super) fn close_named_pane(
         &mut self,
         pane: &str,
         window: &mut Window,
@@ -394,17 +394,20 @@ impl Workspace {
         let id = self
             .plugin_pane(pane)
             .ok_or_else(|| format!("No pane {pane}. It was closed."))?;
-        if !self
-            .terminals
-            .iter()
-            .any(|tab| tab.layout.panes().contains(&id))
-            && !self.is_page_terminal(id)
-        {
-            return Err(format!(
-                "Pane {pane} is in a project that isn't on screen. Close it there."
-            ));
+        let hidden = self.parked.iter().find_map(|(project, parked)| {
+            parked
+                .terminals
+                .iter()
+                .any(|tab| tab.layout.panes().contains(&id))
+                .then(|| project.clone())
+        });
+        if let Some(project) = hidden {
+            self.close_hidden_pane(&project, id, cx);
+        } else if self.terminals.iter().any(|tab| tab.layout.panes().contains(&id)) || self.is_page_terminal(id) {
+            self.close_pane(id, window, cx);
+        } else {
+            return Err(format!("Pane {pane} isn't in a tab. Close it in Wings."));
         }
-        self.close_pane(id, window, cx);
         Ok(())
     }
 }
@@ -810,7 +813,7 @@ impl Host for NativeHost<'_> {
         self.server
             .env
             .on_window(WINDOW_WAIT, move |workspace, window, cx| {
-                workspace.close_pane_on_screen(&pane, window, cx)
+                workspace.close_named_pane(&pane, window, cx)
             })??;
         self.server.opened.lock().unwrap().retain(|p| p != pane_id);
         Ok(())
