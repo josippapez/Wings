@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.92 · 2026-11-24
+
+- **Claude chats are kept apart from the terminal server for real**: 0.2.90 moved each chat's Claude into a process group of its own, but the terminal server that was already running kept its old code through the update. This release brings terminal server v9: terminals and chats that run now stay on the old server until they end, and new ones start on the new server.
+
 ## 0.2.91 · 2026-11-24
 
 - **Claude chat: plugins installed with another show as installed**: after an install, the plugins dialog reads its list again, so plugins that came with the one you installed no longer offer Install.
