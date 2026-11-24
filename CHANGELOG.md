@@ -2,6 +2,14 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.91 · 2026-11-24
+
+- **Claude chat: plugins installed with another show as installed**: after an install, the plugins dialog reads its list again, so plugins that came with the one you installed no longer offer Install.
+- **Claude chat: a notification says whether it reached your phone**: its row reads "Push requested", or why it wasn't pushed.
+- **Claude chat: a skill served by an MCP server** has an MCP badge on its row.
+- **Claude chat: a tool call with no name** shows as "Unnamed tool", and a refused call's error shows without Claude Code's `<tool_use_error>` tags.
+- **Claude chat 0.49.0**: the above.
+
 ## 0.2.90 · 2026-11-24
 
 - **Claude chats keep running through updates again**: a chat whose terminal server had stopped ran Claude inside Wings, so the next update or restart ended it. It now starts a new terminal server instead. Chats now run in their own process group, so nothing a chat starts can stop the server and every other chat with it. Wings logs the server's starts, failures and endings in `terminal-server/app.log`.

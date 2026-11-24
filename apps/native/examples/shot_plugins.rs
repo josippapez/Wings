@@ -1945,6 +1945,19 @@ esac"##,
             output("o3", "{\"paneId\":\"9\",\"commandTyped\":true,\"commandRun\":true}", false),
             text("The build finished and the dev server is up."),
         ]), None, Some("disclose:Used 3 tools"), "pnpm dev"),
+        // A skill an MCP server served is marked so, a notification says whether it was pushed to your phone, and a call
+        // a gateway sent with no name has one to show.
+        ("call-notes", opened(vec![
+            init.clone(),
+            user("Load the release skill, then tell my phone when the build is done."),
+            tool("k1", "Skill", json!({ "skill": "docs:release-checklist" })),
+            json!({ "type": "user", "message": { "role": "user", "content": [{ "type": "tool_result", "tool_use_id": "k1", "content": "Launching skill: docs:release-checklist" }] }, "tool_use_result": { "success": true, "commandName": "docs:release-checklist", "fromMcpServer": true } }),
+            tool("n1", "PushNotification", json!({ "message": "The build finished and all 42 tests pass." })),
+            output("n1", "Mobile push requested.", false),
+            assistant(json!([{ "type": "tool_use", "id": "x1", "name": "", "input": {} }])),
+            output("x1", "<tool_use_error>No such tool available: </tool_use_error>", true),
+            text("The build is done, and your phone has the news."),
+        ]), None, Some("disclose:Loaded 1 skill · Used 2 tools"), "Push requested"),
         // The button beside your message forks before it, and asks first what that does.
         ("fork-from", rewound_again, None, Some("press:Fork from here"), "Start a new chat from this session"),
         // The header's Fork asks first, and says what a fork is.

@@ -719,6 +719,7 @@ fn step(tool: &Tool, opened: bool, c: &Chat) -> Node {
                 .prop("title", if tool.input.whole.is_empty() { tool.summary.as_str() } else { tool.input.whole.as_str() }),
         )
         .children(facts(tool))
+        .maybe(call_note(tool, c))
         .maybe(open_subagent(tool, c))
         .maybe(open_terminal(tool))
         .maybe(crate::plan_doc_view::step_link(c, tool))
@@ -760,6 +761,24 @@ fn open_terminal(tool: &Tool) -> Option<Node> {
     let open = crate::terminals::is_open(&pane);
     let title = if open { "Show that terminal" } else { "That terminal is closed" };
     Some(button("Open", "ghost", false, move || crate::terminals::focus(&pane)).prop("size", "sm").prop("disabled", !open).prop("title", title).key("open-terminal"))
+}
+
+/// What a call's line would leave out: that an MCP server served a skill, and whether a notification went to your phone.
+fn call_note(tool: &Tool, c: &Chat) -> Option<Node> {
+    if tool.name == "Skill" && c.session.mcp_skills.contains(&tool.id) {
+        return Some(badge("MCP", None).prop("title", "An MCP server served this skill"));
+    }
+    let (said, _) = tool.output.as_ref().filter(|_| tool.name == "PushNotification")?;
+    let note = if said.contains("Mobile push requested") {
+        "Push requested"
+    } else if said.contains("Remote Control inactive") {
+        "Not pushed: Remote Control is off"
+    } else if said.contains("disabled in /config") {
+        "Not pushed: turned off in /config"
+    } else {
+        return None;
+    };
+    Some(text(note).prop("size", "small").prop("tone", "muted").prop("title", said.as_str()))
 }
 
 /// A small mono text on a call's head line.
@@ -2092,6 +2111,34 @@ mod tests {
 
     fn page_text(c: &Chat) -> String {
         wings_plugin::ui::tree_json(chat_page(c)).to_string()
+    }
+
+    /// A PushNotification's line says what became of the push, and a Skill an MCP server served says so.
+    #[test]
+    fn a_notification_says_whether_it_was_pushed_and_a_skill_from_an_mcp_server_says_so() {
+        let tool = |id: &str, name: &str, output: &str| crate::session::Tool { id: id.into(), name: name.into(), summary: String::new(), output: Some((output.into(), false)), detail: crate::session::Detail::Plain, input: Default::default(), images: Vec::new() };
+        let shown = |node: Option<Node>| node.map(|node| wings_plugin::ui::tree_json(node).to_string());
+        chat::with(|c| {
+            c.session = crate::session::Session::default();
+            c.session.mcp_skills.insert("s1".into());
+            let said = [
+                ("Terminal notification sent. Mobile push requested.", Some("Push requested")),
+                ("Mobile push requested.", Some("Push requested")),
+                ("Mobile push not sent (Remote Control inactive).", Some("Not pushed: Remote Control is off")),
+                ("Push not sent \u{2014} mobile push is disabled in /config.", Some("Not pushed: turned off in /config")),
+                ("Not sent \u{2014} this terminal is active, so your output here already reaches the user.", None),
+            ];
+            for (output, expected) in said {
+                let drawn = shown(call_note(&tool("p", "PushNotification", output), c));
+                assert_eq!(drawn.is_some(), expected.is_some(), "{output}");
+                if let (Some(drawn), Some(expected)) = (drawn, expected) {
+                    assert!(drawn.contains(expected), "{drawn}");
+                }
+            }
+            assert!(shown(call_note(&tool("s1", "Skill", "Launching skill: docs"), c)).is_some_and(|drawn| drawn.contains("MCP")));
+            assert!(call_note(&tool("s2", "Skill", "Launching skill: docs"), c).is_none());
+            assert!(call_note(&tool("s1", "Bash", "Mobile push requested."), c).is_none());
+        });
     }
 
     #[test]

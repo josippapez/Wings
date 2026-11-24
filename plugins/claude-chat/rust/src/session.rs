@@ -36,6 +36,8 @@ const WRITE_KEPT: usize = 40;
 pub const SUBAGENT_KEPT: usize = 200;
 /// The tool a subagent hands its final report back to its caller with (Claude Code 2.1.330), its `message` the report.
 const HANDBACK: &str = "SubagentHandback";
+/// The name a tool call with none shows under.
+pub const UNNAMED: &str = "Unnamed tool";
 
 #[derive(Debug, PartialEq)]
 pub enum Item {
@@ -461,6 +463,8 @@ pub struct Session {
     /// The calls the transcript this start of Claude Code resumed holds without a result: the process that ran them is
     /// gone, so no result will come (`stop_replayed`).
     pub interrupted: HashSet<String>,
+    /// The Skill calls whose skill an MCP server served, as their results say (`fromMcpServer`).
+    pub mcp_skills: HashSet<String>,
     /// Claude's text of the message it is writing now, before the whole message comes.
     pub live: String,
     /// Claude is thinking before it writes.
@@ -802,6 +806,7 @@ impl Session {
                 self.mods.tool_answered(line);
                 self.user(&line["message"]["content"]);
                 crate::scheduled::answered(self, line);
+                self.served_skill(line);
                 let said = (first..self.items.len()).find(|at| matches!(self.items[*at], Item::User(_) | Item::UserImages(..)));
                 if let (Some(at), Some(uuid)) = (said, line["uuid"].as_str()) {
                     self.prompts.push(Prompt { at, uuid: uuid.to_owned(), parent: parent.map(str::to_owned) });
@@ -1193,7 +1198,8 @@ impl Session {
                     self.thought_since = 0;
                 }
                 "tool_use" => {
-                    let name = block["name"].as_str().unwrap_or("Tool").to_owned();
+                    // A gateway can send a call with no name, which Claude Code answers with an error.
+                    let name = block["name"].as_str().filter(|name| !name.trim().is_empty()).unwrap_or(UNNAMED).to_owned();
                     let id = block["id"].as_str().unwrap_or_default().to_owned();
                     self.track(&name, &id, &block["input"]);
                     self.mods.tool_called(&id, &block["input"]);
@@ -1242,6 +1248,7 @@ impl Session {
                         Value::Array(parts) => texts(parts).join("\n"),
                         _ => String::new(),
                     };
+                    let output = unwrapped(&output).to_owned();
                     // A Read of an image, a screenshot or an MCP tool gives pictures back as image blocks.
                     let shots: Vec<String> = block["content"].as_array().into_iter().flatten().filter(|part| part["type"] == "image").take(images::PER_RESULT).filter_map(images::of_block).collect();
                     let tool = self.items.iter_mut().rev().find_map(|item| match item {
@@ -1883,6 +1890,12 @@ fn untagged(text: &str) -> String {
     out.lines().map(str::trim_end).filter(|line| !line.trim().is_empty()).collect::<Vec<_>>().join("\n")
 }
 
+/// A call's result without the `<tool_use_error>` tags Claude Code wraps a refused call's error in.
+fn unwrapped(output: &str) -> &str {
+    let trimmed = output.trim();
+    trimmed.strip_prefix("<tool_use_error>").and_then(|rest| rest.strip_suffix("</tool_use_error>")).map_or(output, str::trim)
+}
+
 /// The field a tool's summary is made from, as (name, text): the command it runs, the file or the pattern, or else its
 /// first text input.
 fn summarized<'a>(tool: &str, input: &'a Value) -> Option<(&'a str, &'a str)> {
@@ -1937,6 +1950,18 @@ impl Session {
         self.limits.retain(|(shown, ..)| *shown != label);
         self.limits.push((label, used.round() as u64, resets));
         self.limits.sort_by_key(|(shown, ..)| *shown != "5h");
+    }
+
+    /// Notes a Skill call whose result says an MCP server served the skill: `tool_use_result` as Claude Code prints it,
+    /// `toolUseResult` in a transcript.
+    fn served_skill(&mut self, line: &Value) {
+        let result = if line["tool_use_result"].is_object() { &line["tool_use_result"] } else { &line["toolUseResult"] };
+        if result["fromMcpServer"] != true {
+            return;
+        }
+        let ids = line["message"]["content"].as_array().into_iter().flatten().filter_map(|block| block["tool_use_id"].as_str());
+        let skills: Vec<String> = ids.filter(|id| self.items.iter().any(|item| matches!(item, Item::Tool(tool) if tool.id == *id && tool.name == "Skill"))).map(str::to_owned).collect();
+        self.mcp_skills.extend(skills);
     }
 
     /// Whether `tool` still runs: it has no result and was not cut off by the death of a Claude Code process.
@@ -2035,6 +2060,7 @@ fn doing(tool: &str, summary: &str) -> String {
         "WebSearch" => "Searching the web".into(),
         "WebFetch" => format!("Fetching {}", cut(summary, 60)),
         "Task" | "Agent" => "Running a subagent".into(),
+        UNNAMED => "Using a tool with no name".into(),
         // MCP tools are mcp__<server>__<tool>, and a plugin's server is plugin_<plugin>_<server>.
         _ => match tool.strip_prefix("mcp__").and_then(|rest| rest.split("__").next()) {
             Some(server) => format!("Calling {}", if server.starts_with("plugin_") { server.rsplit('_').next().unwrap_or(server) } else { server }),
@@ -2909,6 +2935,39 @@ mod tests {
 
     fn tool_result(session: &mut Session, id: &str, content: &str, error: bool) {
         session.hear(&json!({ "type": "user", "message": { "content": [{ "type": "tool_result", "tool_use_id": id, "content": content, "is_error": error }] } }));
+    }
+
+    /// Claude Code 2.1.331 answers a gateway's call with no name with an error, where it crashed before.
+    #[test]
+    fn a_tool_call_with_no_name_has_one_to_show() {
+        for (id, call) in [("t1", json!({ "type": "tool_use", "id": "t1", "name": "", "input": {} })), ("t2", json!({ "type": "tool_use", "id": "t2", "input": {} }))] {
+            let mut session = Session::default();
+            session.hear(&json!({ "type": "assistant", "message": { "content": [call] } }));
+            let Some(Item::Tool(tool)) = session.items.last() else { panic!("{:?}", session.items) };
+            assert_eq!((tool.id.as_str(), tool.name.as_str()), (id, UNNAMED));
+            assert_eq!(session.activity(), "Using a tool with no name");
+            session.hear(&json!({ "type": "user", "message": { "content": [{ "type": "tool_result", "tool_use_id": id, "content": "<tool_use_error>No such tool available: </tool_use_error>", "is_error": true }] } }));
+            let Some(Item::Tool(tool)) = session.items.last() else { panic!() };
+            assert_eq!(tool.output, Some(("No such tool available:".to_owned(), true)), "the error without its tags");
+        }
+    }
+
+    /// A Skill result says when an MCP server served the skill: `tool_use_result` as Claude Code prints it,
+    /// `toolUseResult` in a transcript.
+    #[test]
+    fn a_skill_an_mcp_server_served_is_noted_from_its_result() {
+        let mut session = Session::default();
+        for (id, key, mcp) in [("s1", "tool_use_result", true), ("s2", "toolUseResult", true), ("s3", "tool_use_result", false)] {
+            tool_call(&mut session, id, "Skill", json!({ "skill": "docs:release" }));
+            let result = json!({ "success": true, "commandName": "docs:release", "fromMcpServer": mcp });
+            session.hear(&json!({ "type": "user", "message": { "content": [{ "type": "tool_result", "tool_use_id": id, "content": "Launching skill: docs:release" }] }, key: result }));
+        }
+        // Another tool's result with the flag marks nothing.
+        tool_call(&mut session, "b1", "Bash", json!({ "command": "ls" }));
+        session.hear(&json!({ "type": "user", "message": { "content": [{ "type": "tool_result", "tool_use_id": "b1", "content": "a" }] }, "tool_use_result": { "fromMcpServer": true } }));
+        let mut marked: Vec<&str> = session.mcp_skills.iter().map(String::as_str).collect();
+        marked.sort_unstable();
+        assert_eq!(marked, ["s1", "s2"]);
     }
 
     /// A session read back: what you sent while Claude worked is an attachment of the turn that read it, with text or

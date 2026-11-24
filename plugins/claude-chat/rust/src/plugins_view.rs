@@ -460,7 +460,8 @@ fn list() {
     });
 }
 
-/// Installs the plugin `id`, from a click on its Install button and nothing else, then reloads the plugins to load it.
+/// Installs the plugin `id`, from a click on its Install button and nothing else, then reloads the plugins to load it and
+/// reads the list again, as the plugins it lists under `optionalDependencies` install with it.
 fn install(id: &str) {
     let Some(args) = chat::with(|c| c.plugins.as_mut()?.discover.install(id)) else {
         return;
@@ -478,6 +479,7 @@ fn install(id: &str) {
         });
         if installed {
             chat::write(|c, _| Some(c.session.plugins.after_install()));
+            list();
         }
     });
 }
@@ -580,5 +582,36 @@ mod tests {
         assert_eq!(status("failed"), ("Failed", "danger"));
         assert_eq!(status("disabled"), ("Off", "muted"));
         assert_eq!(status("pending"), ("Connecting", "info"));
+    }
+
+    #[test]
+    fn a_plugin_that_another_installed_with_it_shows_as_installed_after_the_install() {
+        use serde_json::{Value, json};
+        use wings_plugin::host;
+        const AVAILABLE: &str = include_str!("../tests/available.json");
+        let mut listing: Value = serde_json::from_str(AVAILABLE).unwrap();
+        let first = listing.to_string();
+        // What the list says once api-guard is installed: pixel-perfect, which it lists under optionalDependencies, came with it.
+        for id in ["api-guard@claude-plugins-official", "pixel-perfect@community"] {
+            listing["installed"].as_array_mut().unwrap().push(json!({ "id": id, "scope": "user", "enabled": true }));
+        }
+        let after = listing.to_string();
+        host::testing::answer(move |method, params| match (method, params["args"][1].as_str()) {
+            ("exec", Some("install")) => Ok(json!({ "code": 0, "stdout": "{\"outcome\":\"ok\"}\n", "stderr": "" })),
+            ("exec", Some("list")) => Ok(json!({ "code": 0, "stdout": after.clone(), "stderr": "" })),
+            _ => Ok(Value::Null),
+        });
+        chat::with(|c| {
+            let mut open = Dialog::new(Show::Plugins);
+            open.discover.listed(Ok(json!({ "code": 0, "stdout": first, "stderr": "" })));
+            c.plugins = Some(open);
+        });
+        install("api-guard@claude-plugins-official");
+        wings_plugin::task::block_on(async {});
+        chat::with(|c| {
+            let found = &c.plugins.as_ref().unwrap().discover;
+            assert!(found.is_installed("api-guard@claude-plugins-official"));
+            assert!(found.is_installed("pixel-perfect@community"), "the plugin installed with it");
+        });
     }
 }
