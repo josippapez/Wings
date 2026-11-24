@@ -603,7 +603,8 @@ impl Shared {
                 };
                 match line["type"].as_str() {
                     // Stopping the turn makes Claude do nothing, so a chat's "stop near the limit" may send it unasked.
-                    Some("control_request") => matches!(line["request"]["subtype"].as_str(), Some("ui_attach" | "ui_render" | "ui_panes" | "interrupt" | "get_usage")),
+                    // Which of a mod's panes Wings shows and which has the keys, as Claude Code asked: they tell, and start nothing.
+                    Some("control_request") => matches!(line["request"]["subtype"].as_str(), Some("ui_attach" | "ui_render" | "ui_panes" | "ui_pane_show" | "ui_pane_focus" | "interrupt" | "get_usage")),
                     Some("user") => {
                         let fits = !sent_armed
                             && line["message"]["role"] == "user"

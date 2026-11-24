@@ -442,7 +442,7 @@ impl Link for FrameLink {
         }
         if method == "openView" {
             return match pages::after(self, &params) {
-                Ok(after) => self.shared.open_view_call(params, after, reply),
+                Ok(after) => self.shared.open_view_call(params, after, self.state.as_ref().and_then(|state| state.project()), reply),
                 Err(error) => reply.err(error),
             };
         }

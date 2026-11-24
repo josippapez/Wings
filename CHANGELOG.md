@@ -2,6 +2,13 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.94 · 2026-11-24
+
+- **A Claude Code plugin's pane opens in its chat's project**: a pane a chat in another project opened, like a teach-back lesson, showed in the sidebar of the project on screen. It now opens in the chat's own project's sidebar.
+- **No errors when a plugin opens its pane**: the chat telling Claude Code which pane shows and has the keys was refused, as nothing had been clicked, and showed two errors in the chat.
+- **Claude chat: a cleaner plugins and MCP dialog**: each group is a card with lines between its rows, a status is a dot and a word at the row's end, a tool takes one line, and a server's tools past 40 open with Show more instead of a count you couldn't open. Servers that need a sign-in in a terminal say so once.
+- **Claude chat 0.51.0**: the above.
+
 ## 0.2.93 · 2026-11-24
 
 - **Claude chat: "Continue when it resets" continues**: at the reset Wings refused the message, since nothing had been clicked right before it, and the chat showed it sent and kept spinning. Your click on the button now arms that one message with Wings, which lets it go at the reset. After a restart of Wings the card asks for the click again. A message Claude Code never got says so instead of spinning.

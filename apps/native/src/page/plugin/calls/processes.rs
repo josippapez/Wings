@@ -440,6 +440,21 @@ fn a_page_cannot_name_an_account_folder_of_its_own() {
     std::fs::remove_file(&script).unwrap();
 }
 
+/// Telling Claude Code which of a mod's panes Wings shows, and which has the keys, as it asked: no click is needed.
+#[test]
+fn a_mods_pane_shown_or_focused_is_told_without_a_click() {
+    let rig = rig(&["cat []"]);
+    let caller = Caller::start(&rig.host);
+    caller.send("spawn", spawn("chat", "cat", &[]));
+    for subtype in ["ui_pane_show", "ui_pane_focus"] {
+        let told = json!({ "type": "control_request", "request_id": format!("{subtype}-1"), "request": { "subtype": subtype, "id": "teach-back", "surface": "desktop", "client_id": "wings" } });
+        caller.send("processWrite", json!({ "token": "chat", "text": format!("{told}\n") }));
+        let (lines, answers) = hear(&caller, 2);
+        assert_eq!((lines.len(), answers), (1, vec![Ok(Value::Null)]), "{subtype}");
+    }
+    caller.send("processStop", json!({ "token": "chat" }));
+}
+
 /// A chat's "Continue when it resets": your click arms one message, and the page may write exactly that message without
 /// a click once its time has come, once. Before its time, another text, a second write, or arming without a click are
 /// refused; taking it back needs no click.

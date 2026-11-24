@@ -233,11 +233,12 @@ impl Shared {
     }
 
     /// `openView` from a frame, which opens a new tab right after the tab of the frame `after` when it is given.
-    pub(super) fn open_view_call(&self, params: Value, after: Option<u64>, reply: Reply) {
+    /// `openView`; `tab_project` is the project of the tab whose page asks, when a tab's page asks.
+    pub(super) fn open_view_call(&self, params: Value, after: Option<u64>, tab_project: Option<std::path::PathBuf>, reply: Reply) {
         let Some(access) = self.access.clone() else {
             return reply.err(format!("{} is turned off or not installed", self.config.id));
         };
-        reply_if_error(reply.clone(), self.open_view(&access, &params, after, reply));
+        reply_if_error(reply.clone(), self.open_view(&access, &params, after, tab_project, reply));
     }
 
     /// `openPane` and `openHistory`, which can act on the tab of the page that asks: `tab` is its frame when its page is
@@ -253,7 +254,7 @@ impl Shared {
         reply_if_error(reply, called);
     }
 
-    fn open_view(&self, access: &Access, params: &Value, after: Option<u64>, reply: Reply) -> Result<(), String> {
+    fn open_view(&self, access: &Access, params: &Value, after: Option<u64>, tab_project: Option<std::path::PathBuf>, reply: Reply) -> Result<(), String> {
         let id = js_string(params.get("id"));
         let contributes = &access.plugin.manifest.contributes;
         // A view of another plugin: only a tab, only when the manifest names `<plugin> <view>` and that plugin is one of
@@ -327,6 +328,7 @@ impl Shared {
                 Some(std::path::PathBuf::from(&found.path))
             }
         };
+        let tab_project = tab_project.filter(|_| place == "sidebar");
         access.env.open_view(
             super::OpenView {
                 plugin: owner,
@@ -336,6 +338,7 @@ impl Shared {
                 new_tab,
                 project,
                 after,
+                tab_project,
             },
             reply,
         );
@@ -466,7 +469,7 @@ impl Shared {
             "disks" | "diskFind" | "diskUsage" | "diskUsageCancel" => {
                 self.disk_call(method, params, reply, access)
             }
-            "openView" => reply_if_error(reply.clone(), self.open_view(&access, &params, None, reply)),
+            "openView" => reply_if_error(reply.clone(), self.open_view(&access, &params, None, None, reply)),
             "project" => reply.done(self.project(&access)),
             "closeView" => reply.done(self.close_view(&access, &params)),
             "callTool" => reply_if_error(reply.clone(), self.call_tool(&access, &params, reply)),

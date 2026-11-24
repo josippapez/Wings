@@ -65,8 +65,9 @@ impl Dialog {
     }
 }
 
-/// How many of a server's tools the dialog keeps: past that it says how many more there are.
-pub const TOOLS_KEPT: usize = 40;
+/// How many of a server's tools the dialog keeps, all of which it can list: past that it says how many more there are.
+/// About 3 nodes each, so a whole list stays inside the dialog's budget.
+pub const TOOLS_KEPT: usize = 150;
 /// The longest a tool's description is kept, in characters.
 const TOOL_NOTE: usize = 160;
 

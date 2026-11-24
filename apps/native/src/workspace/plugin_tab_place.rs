@@ -148,7 +148,8 @@ mod tests {
                 }
             }
         });
-        data.install_script("chatty", json!({ "permissions": { "panes": [] }, "contributes": { "views": views } }), &main, &[("chat", page)], "chatty-scope");
+        let sidebars = json!([{ "id": "side", "title": "Side", "page": "dist/side.html" }]);
+        data.install_script("chatty", json!({ "permissions": { "panes": [] }, "contributes": { "views": views, "sidebars": sidebars } }), &main, &[("chat", page), ("side", &fake::idle("page"))], "chatty-scope");
         let opened = open_plugins(data, &Arc::default(), |config| {
             config.project = shown.clone();
             config.projects = Some(list.clone());
@@ -196,6 +197,41 @@ mod tests {
         until(&app, &mut window, "the tab's page never asked", |_| data.saved("chatty", "chatty-scope", "project").is_some());
         assert_eq!(window.read(|w, _| w.project().to_path_buf()), shown);
         assert_eq!(data.saved("chatty", "chatty-scope", "project"), Some(json!(other)));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A page that opens the plugin's sidebar as it starts, as a chat opens a mod's pane.
+    fn opening_its_sidebar() -> String {
+        fake::script("page", || {
+            let mut wait = fake::Pending::default();
+            move |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+                Hear::Start => wait.call(cx, "openView", json!({ "id": "side", "as": "sidebar" }), ()),
+                Hear::Deliver(kind, id, text) => {
+                    if let Some(((), answer)) = wait.answered(kind, id, text) {
+                        cx.save("opened", &json!(answer.is_ok()));
+                    }
+                }
+                _ => {}
+            }
+        })
+    }
+
+    /// A chat in a project not on screen opened a mod's pane in the sidebar of the project that was: a tab's page opens its
+    /// own project's sidebar, which shows when you go there, and the sidebar on screen stays as it was.
+    #[test]
+    fn a_sidebar_a_tab_in_another_project_opens_goes_to_that_projects_sidebar() {
+        let data = Data::temp();
+        let (dir, shown, other, (app, mut window)) = two_projects(&data, "openView", &opening_its_sidebar(), |other| {
+            json!({ "id": "chat", "as": "tab", "args": { "n": 1 }, "newTab": true, "projectId": other })
+        });
+        until(&app, &mut window, "the tab's page never opened its sidebar", |_| data.saved("chatty", "chatty-scope", "opened").is_some());
+        assert_eq!(data.saved("chatty", "chatty-scope", "opened"), Some(json!(true)));
+        let key = ("chatty".to_owned(), "side".to_owned());
+        window.read(|w, _| {
+            assert_eq!(w.project(), shown);
+            assert!(!w.right.contains(&key), "the project on screen got it");
+            assert!(w.parked.get(other.as_path()).and_then(|parked| parked.right.as_ref()).is_some_and(|right| right.contains(&key)));
+        });
         std::fs::remove_dir_all(dir).unwrap();
     }
 

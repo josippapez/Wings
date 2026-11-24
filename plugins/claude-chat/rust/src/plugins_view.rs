@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use wings_plugin::{
     format::plural,
     host, task,
-    ui::{Node, badge, button, card, checkbox, chips, dialog as panel, disclosure, empty, heading, loading, muted, notice, row, search_field, stack, text, title},
+    ui::{Node, badge, button, card, checkbox, chips, dialog as panel, disclosure, dot, empty, heading, loading, muted, notice, row, rows_card, search_field, stack, text, title},
 };
 
 use crate::{
@@ -28,9 +28,10 @@ const FOLD_SIGN_IN: usize = 8;
 const CHECKBOX: u32 = 24;
 /// How far a fold's trigger sets its chevron in.
 const FOLD_PADDING: u32 = 6;
-/// The columns a server's status pill and its button keep, so the pills of every row line up whether it has a button or not.
-const PILL_COLUMN: u32 = 100;
-const ACTION_COLUMN: u32 = 84;
+/// How many of a server's tools an unfolded list shows before its "Show N more".
+const TOOLS_SHOWN: usize = 40;
+/// Said once under a group whose servers need a sign-in this dialog can't start.
+const SIGN_IN_ELSEWHERE: &str = "Sign in to these with /mcp in Claude Code in a terminal.";
 
 pub fn dialog(c: &Chat) -> Option<Node> {
     let open = c.plugins.as_ref()?;
@@ -48,13 +49,13 @@ pub fn dialog(c: &Chat) -> Option<Node> {
         .prop("gap", "s")
         .prop("align", "center")
         .child(stack().prop("grow", true).child(search))
-        .child(button("Refresh", "outline", false, refresh).prop("title", refresh_title))
+        .child(button("Refresh", "ghost", false, refresh).prop("title", refresh_title))
         .maybe(apply);
     let small = |said: &str| muted(said).prop("size", "small");
     let hint = if discovering {
         small("Install adds a plugin to your user settings and reloads the plugins, so this chat has it. Most installed first.")
     } else {
-        small("Plugins turn on or off for this chat only, once reloaded, and your settings stay as they are. MCP servers turn on or off for this project, as /mcp does.")
+        small("A plugin turns on or off for this chat only, and your settings stay as they are. An MCP server turns on or off for this project.")
     };
     let stale = (plugins.stale && !discovering).then(|| small("Refresh to see how the servers you turned on connected."));
     let error = plugins.error.as_deref().map(|why| notice("danger", why));
@@ -156,13 +157,14 @@ fn lists(c: &Chat, open: &Dialog, list: &[Plugin], servers: &[Server], dialog: &
     stack().prop("gap", "l").children(sections).maybe(more)
 }
 
-/// A section of the dialog: its heading over its groups, each a label over its rows. None when no group has a row. A
-/// section named as the dialog is has no heading, which would say it twice.
+/// A section of the dialog: its heading over its groups, each a label over a card of its rows, split by hairlines as
+/// Settings groups its rows. None when no group has a row. A section named as the dialog is has no heading, which would
+/// say it twice.
 fn section(title: &str, dialog: &str, groups: Vec<(&str, Vec<Node>)>) -> Option<Node> {
     let groups: Vec<Node> = groups
         .into_iter()
         .filter(|(_, rows)| !rows.is_empty())
-        .map(|(label, rows)| stack().prop("gap", "xs").child(text(label).prop("size", "small").prop("weight", "medium").prop("tone", "muted")).children(rows))
+        .map(|(label, rows)| stack().prop("gap", "s").child(text(label).prop("size", "small").prop("weight", "medium").prop("tone", "muted")).child(rows_card(rows)))
         .collect();
     (!groups.is_empty()).then(|| stack().prop("gap", "m").maybe((title != dialog).then(|| heading(3, title))).children(groups))
 }
@@ -183,9 +185,10 @@ fn plugin_section(budget: &mut Budget, c: &Chat, unfolded: &BTreeSet<String>, li
                 continue;
             }
             rows.extend(budget.take(plugin_row(plugin, skills(&c.session.commands, &plugin.name))));
-            for server in own {
+            for server in &own {
                 rows.extend(budget.take(server_row(server, true, unfolded)));
             }
+            rows.extend(sign_in_note(&own).map(|note| indent(CHECKBOX * 2, note)));
         }
         groups.push((scope, rows));
     }
@@ -215,7 +218,9 @@ fn server_section(budget: &mut Budget, unfolded: &BTreeSet<String>, servers: &[S
         };
         let mut ranked: Vec<&Server> = own.iter().copied().filter(|server| server.scope == scope).collect();
         ranked.sort_by_key(|server| server.rank());
-        groups.push((label, scope_rows(budget, unfolded, scope, &ranked, fold)));
+        let mut rows = scope_rows(budget, unfolded, scope, &ranked, fold);
+        rows.extend(sign_in_note(&ranked));
+        groups.push((label, rows));
     }
     section("MCP servers", dialog, groups)
 }
@@ -248,6 +253,11 @@ fn scope_rows(budget: &mut Budget, unfolded: &BTreeSet<String>, scope: &str, ran
     rows
 }
 
+/// The one line under a group that has servers needing a sign-in this dialog can't start, in place of the same line under each.
+fn sign_in_note(servers: &[&Server]) -> Option<Node> {
+    servers.iter().any(|server| server.status == "needs-auth" && !server.signs_in()).then(|| muted(SIGN_IN_ELSEWHERE).prop("size", "small"))
+}
+
 /// A plugin: its checkbox and name, its marketplace and how many skills it brings, and whether this chat turned it on or
 /// off apart from your settings.
 fn plugin_row(plugin: &Plugin, skills: usize) -> Node {
@@ -255,9 +265,9 @@ fn plugin_row(plugin: &Plugin, skills: usize) -> Node {
     let toggle = checkbox(plugin.name.as_str(), plugin.on, move |on| set_plugin(&id, on)).prop("disabled", plugin.locked());
     let facts: Vec<String> = [plugin.marketplace.clone()].into_iter().chain((skills > 0).then(|| plural(skills, "skill"))).filter(|fact| !fact.is_empty()).collect();
     let note = if plugin.locked() {
-        Some(badge("Set by your organization", Some("muted")))
+        Some(mark("Set by your organization", "muted"))
     } else if plugin.on != plugin.saved {
-        Some(badge(if plugin.on { "On in this chat" } else { "Off in this chat" }, Some("info")))
+        Some(mark(if plugin.on { "On in this chat" } else { "Off in this chat" }, "info"))
     } else {
         None
     };
@@ -267,12 +277,18 @@ fn plugin_row(plugin: &Plugin, skills: usize) -> Node {
         .key(plugin.id.as_str())
         .child(toggle)
         .child(muted(facts.join(" · ")).prop("size", "small").prop("truncate", true).prop("grow", true))
-        .maybe(note.map(|note| note.prop("size", "sm")))
+        .maybe(note)
 }
 
-/// An MCP server: its checkbox and name over its tools or why it failed, its status as a badge, and the button that
-/// fits its status. The tools are under a disclosure, unfolded when `unfolded` has it. A plugin's server is set in under
-/// its plugin.
+/// A status at a row's end: a dot in its tone and the word, quiet beside the name.
+fn mark(said: &str, tone: &str) -> Node {
+    row().prop("gap", "s").prop("align", "center").child(dot().prop("tone", tone)).child(muted(said).prop("size", "small"))
+}
+
+/// An MCP server: its checkbox and name over its tools or why it failed, and at the row's end the button that fits its
+/// status and the status as a badge, so every row's badge sits at the same right edge as a plugin's note. One that is off
+/// has no badge: its checkbox says so. The tools are under a disclosure, unfolded when `unfolded` has it. A plugin's
+/// server is set in under its plugin.
 fn server_row(server: &Server, nested: bool, unfolded: &BTreeSet<String>) -> Node {
     let name = server.name.clone();
     let (said, tone) = status(&server.status);
@@ -280,9 +296,8 @@ fn server_row(server: &Server, nested: bool, unfolded: &BTreeSet<String>) -> Nod
     let folds = server.error.is_none() && server.status == "connected" && server.tools.is_some_and(|tools| tools > 0);
     let detail = match (&server.error, server.tools) {
         (Some(why), _) if server.status != "pending" => Some(muted(why.as_str()).prop("size", "small").prop("clamp", true).prop("title", why.as_str())),
-        (None, Some(tools)) if server.status == "connected" && tools > 0 => Some(tools_fold(server, unfolded.contains(&key), key)),
+        (None, Some(tools)) if server.status == "connected" && tools > 0 => Some(tools_fold(server, unfolded, key)),
         (None, Some(_)) if server.status == "connected" => Some(muted("No tools").prop("size", "small")),
-        _ if server.status == "needs-auth" && !server.signs_in() => Some(muted("Sign in with /mcp in Claude Code in a terminal").prop("size", "small")),
         _ => None,
     };
     // The status and button keep to the name's line, so an unfolded tool list doesn't pull them down with it.
@@ -290,8 +305,8 @@ fn server_row(server: &Server, nested: bool, unfolded: &BTreeSet<String>) -> Nod
         .prop("gap", "s")
         .prop("align", "center")
         .child(stack().prop("grow", true).child(checkbox(server.short_name(), server.status != "disabled", move |on| set_server(&name, on))))
-        .child(column(PILL_COLUMN, "start", badge(said, Some(tone)).prop("size", "sm")))
-        .child(column(ACTION_COLUMN, "end", server_action(server)));
+        .maybe(server_action(server))
+        .maybe((server.status != "disabled").then(|| mark(said, tone)));
     // What's under the name starts where the name does: a fold's chevron sits in its trigger's padding, so it is set that
     // much less far in.
     let inset = if nested { CHECKBOX } else { 0 } + CHECKBOX - if folds { FOLD_PADDING } else { 0 };
@@ -307,19 +322,23 @@ fn indent(inset: u32, node: Node) -> Node {
     row().prop("gap", "none").child(stack().prop("width", inset)).child(stack().prop("grow", true).child(node))
 }
 
-/// A column `width` points wide holding `node` at its `justify` end, or nothing but the room.
-fn column(width: u32, justify: &str, node: impl Into<Option<Node>>) -> Node {
-    stack().prop("width", width).child(row().prop("justify", justify).maybe(node.into()))
-}
-
-/// A connected server's tool count, which unfolds to list them: each name over the start of its description.
-fn tools_fold(server: &Server, open: bool, key: String) -> Node {
+/// A connected server's tool count, which unfolds to list them: each name over the start of its description. Past
+/// `TOOLS_SHOWN` a "Show N more" lists the rest the dialog kept; what it didn't keep is only counted.
+fn tools_fold(server: &Server, unfolded: &BTreeSet<String>, key: String) -> Node {
     let count = server.tools.unwrap_or(server.listed.len());
+    let open = unfolded.contains(&key);
     // Only an unfolded body is built.
     let body = if open {
-        let left = count.saturating_sub(server.listed.len());
-        let more = (left > 0).then(|| muted(format!("{left} more")).prop("size", "small"));
-        stack().prop("gap", "m").children(server.listed.iter().map(tool_row)).maybe(more)
+        let all_key = format!("alltools:{}", server.name);
+        let shown = if unfolded.contains(&all_key) { server.listed.len() } else { server.listed.len().min(TOOLS_SHOWN) };
+        let hidden = server.listed.len() - shown;
+        let unkept = count.saturating_sub(server.listed.len());
+        let more = if hidden > 0 {
+            Some(row().key("more").child(button(format!("Show {hidden} more"), "ghost", false, move || toggle(&all_key)).prop("size", "sm")))
+        } else {
+            (unkept > 0).then(|| muted(format!("{unkept} more")).prop("size", "small"))
+        };
+        stack().prop("gap", "xs").children(server.listed[..shown].iter().map(tool_row)).maybe(more)
     } else {
         stack()
     };
@@ -327,10 +346,10 @@ fn tools_fold(server: &Server, open: bool, key: String) -> Node {
     disclosure(plural(count, "tool"), body).prop("open", open).on("onOpenChange", move |_| toggle(&fold_key)).key(key)
 }
 
-/// One tool: its name in mono over its description, cut to a line with the whole in a tooltip.
+/// One tool on one line: its name in mono, then its description cut to the line, the whole in a tooltip.
 fn tool_row(tool: &Tool) -> Node {
-    let note = (!tool.description.is_empty()).then(|| muted(tool.description.as_str()).prop("size", "small").prop("truncate", true).prop("title", tool.description.as_str()));
-    stack().prop("gap", "none").key(tool.name.as_str()).child(text(tool.name.as_str()).prop("mono", true).prop("size", "small")).maybe(note)
+    let note = (!tool.description.is_empty()).then(|| muted(tool.description.as_str()).prop("size", "small").prop("truncate", true).prop("grow", true).prop("title", tool.description.as_str()));
+    row().prop("gap", "s").prop("align", "baseline").key(tool.name.as_str()).child(text(tool.name.as_str()).prop("mono", true).prop("size", "small")).maybe(note)
 }
 
 /// What a server's row offers: Reconnect for one that failed, Sign in for one that wants it, Sign out for one that is.
@@ -566,13 +585,46 @@ mod tests {
         assert!(drawn("Plugins").contains("Heading"));
     }
 
+    /// A server's status badge ends its row, after its button, at the right edge a plugin's note ends at; one that is
+    /// off has none, as its checkbox says it.
     #[test]
-    fn every_server_row_keeps_a_column_for_its_pill_and_one_for_its_button() {
-        let drawn = |server: &Server| wings_plugin::ui::tree_json(server_row(server, false, &BTreeSet::new())).to_string();
-        for row in [drawn(&server("a", "disabled", "user")), drawn(&server("b", "failed", "user"))] {
-            assert_eq!(row.matches(&format!("\"width\":{PILL_COLUMN}")).count(), 1, "{row}");
-            assert_eq!(row.matches(&format!("\"width\":{ACTION_COLUMN}")).count(), 1, "{row}");
-        }
+    fn a_servers_badge_ends_its_row_and_one_that_is_off_has_none() {
+        let line = |server: &Server| wings_plugin::ui::tree_json(server_row(server, false, &BTreeSet::new()))["children"][0].clone();
+        let failed = line(&server("b", "failed", "user"));
+        let children = failed["children"].as_array().unwrap();
+        assert_eq!(children.len(), 3, "the name, Reconnect and the badge: {failed}");
+        assert!(children[2].to_string().contains("Failed") && children[1].to_string().contains("Reconnect"), "{failed}");
+        let off = line(&server("a", "disabled", "user"));
+        assert_eq!(off["children"].as_array().unwrap().len(), 1, "{off}");
+        assert!(!off.to_string().contains("\"Off\""), "{off}");
+    }
+
+    /// Past 40 tools an unfolded list has "Show N more", which lists the rest; tools the dialog didn't keep are counted.
+    #[test]
+    fn a_long_tool_list_shows_forty_then_a_button_for_the_rest() {
+        let mut big = with_tools(0);
+        big.listed = (0..45).map(|n| tool(&format!("tool_{n}"), "")).collect();
+        big.tools = Some(45);
+        let drawn = |server: &Server, unfolded: &[&str]| wings_plugin::ui::tree_json(server_row(server, false, &unfolded.iter().map(|key| (*key).to_owned()).collect())).to_string();
+        let first = drawn(&big, &["tools:files"]);
+        assert!(first.contains("tool_39") && !first.contains("tool_40") && first.contains("Show 5 more"), "{first}");
+        let all = drawn(&big, &["tools:files", "alltools:files"]);
+        assert!(all.contains("tool_44") && !all.contains("Show 5 more"), "{all}");
+        big.tools = Some(200);
+        let counted = drawn(&big, &["tools:files", "alltools:files"]);
+        assert!(counted.contains("155 more") && !counted.contains("Show"), "{counted}");
+    }
+
+    /// Servers that need a sign-in this dialog can't start say how once under their group, not under each.
+    #[test]
+    fn the_sign_in_hint_is_said_once_for_a_group() {
+        let waiting: Vec<Server> = (0..3).map(|n| Server { transport: "claudeai-proxy".into(), ..server(&format!("claude.ai {n}"), "needs-auth", "claudeai") }).collect();
+        let ranked: Vec<&Server> = waiting.iter().collect();
+        let rows = scope_rows(&mut Budget::default(), &BTreeSet::new(), "claudeai", &ranked, true);
+        let drawn: String = rows.into_iter().map(|row| wings_plugin::ui::tree_json(row).to_string()).collect();
+        assert!(!drawn.contains("/mcp"), "{drawn}");
+        assert!(sign_in_note(&ranked).is_some());
+        assert!(sign_in_note(&[&with_tools(0)]).is_none());
     }
 
     #[test]

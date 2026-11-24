@@ -1613,6 +1613,21 @@ esac"##,
         line
     }));
     let crowded = opened(crowded);
+    // /mcp with a project server of 45 tools: its list shows 40, then "Show 5 more" for the rest.
+    let mut many_tools: Vec<serde_json::Value> = vec![init.clone()];
+    many_tools.extend(include_str!("../../../plugins/claude-chat/rust/tests/plugins.jsonl").lines().map(|line| {
+        let mut line: serde_json::Value = serde_json::from_str(line).unwrap();
+        if line["response"]["request_id"] == "plugins-servers" {
+            for server in line["response"]["response"]["mcpServers"].as_array_mut().unwrap() {
+                if server["name"] == "tickets" {
+                    let tools: Vec<serde_json::Value> = (1..=45).map(|n| json!({ "name": format!("ticket_action_{n}"), "description": format!("Ticket action number {n}.") })).collect();
+                    server["tools"] = json!(tools);
+                }
+            }
+        }
+        line
+    }));
+    let many_tools = opened(many_tools);
     // A server asks for details in the middle of a turn: a form with a choice, a number, a text and a box.
     let elicited = opened(vec![
         init.clone(),
@@ -1949,6 +1964,8 @@ esac"##,
         // A connected server opens to list its tools, each with the start of its description.
         ("mcp-tools", plugins.clone(), None, Some("type:/mcp;keys:enter;disclose:2 tools"), "Read one ticket by its key"),
         // Eleven that need a sign-in fold under one line, which a click opens.
+        ("mcp-tools-many", many_tools.clone(), None, Some("type:/mcp;keys:enter;disclose:45 tools;scroll:620"), "Show 5 more"),
+        ("mcp-tools-all", many_tools, None, Some("type:/mcp;keys:enter;disclose:45 tools;press:Show 5 more;scroll:720"), "ticket_action_45"),
         ("mcp-fold", crowded.clone(), None, Some("type:/mcp;keys:enter"), "11 need sign-in"),
         ("mcp-fold-open", crowded, None, Some("type:/mcp;keys:enter;disclose:11 need sign-in"), "claude.ai Zoom"),
         // The dialog's Discover view lists what the fake `claude plugin list` prints; three tabs reach its search field (the
@@ -2576,9 +2593,14 @@ esac"##,
                         }
                         // The wheel all the way up or down the conversation, over its left side: at 640 the middle is the margin of the
                         // panel that floats over the chat, which takes the wheel.
+                        // `scroll:up`, `scroll:down`, or `scroll:<points>` down by that much over the middle, where a dialog is.
                         Some(("scroll", way)) => cx.simulate_event(window, gpui::ScrollEvent {
-                            position: point(px(100.0), px(300.0)),
-                            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(if way == "up" { 100_000.0 } else { -100_000.0 }))),
+                            position: if matches!(way, "up" | "down") { point(px(100.0), px(300.0)) } else { point(px(width / 2.0), px(700.0)) },
+                            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(match way {
+                                "up" => 100_000.0,
+                                "down" => -100_000.0,
+                                points => -points.parse::<f32>().unwrap(),
+                            }))),
                             modifiers: gpui::Modifiers::default(),
                             touch_phase: gpui::TouchPhase::Moved,
                             source: Default::default(),

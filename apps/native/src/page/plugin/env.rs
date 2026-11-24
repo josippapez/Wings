@@ -72,6 +72,9 @@ pub struct OpenView {
     pub project: Option<PathBuf>,
     /// The frame of the tab a new tab goes right after (`openView`'s `after: "self"`).
     pub after: Option<u64>,
+    /// For a sidebar a tab's page opens: the tab's project, whose own sidebar it opens in, shown or not. A chat in a project
+    /// not on screen opened a mod's pane in the sidebar of the project that was.
+    pub tab_project: Option<PathBuf>,
 }
 
 /// One plugin's call of another's tool, as the app is asked to run it. The caller's permission is checked.

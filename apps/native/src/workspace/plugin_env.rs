@@ -1104,6 +1104,13 @@ impl Workspace {
             }
             UiEvent::OpenHistory { agents, reply } => self.open_history_resuming(agents, reply, window, cx),
             UiEvent::OpenView { plan, reply } => {
+                // A tab's page in a project not on screen opens its own project's sidebar, which shows when you go there.
+                if plan.place == "sidebar"
+                    && let Some(parked) = plan.tab_project.as_ref().filter(|project| **project != self.config.project).and_then(|project| self.parked.get_mut(project))
+                {
+                    parked.right.get_or_insert_with(Default::default).add((plan.plugin.clone(), plan.id.clone()));
+                    return reply.done(Ok("null".into()));
+                }
                 if plan.place == "sidebar" {
                     let shown = self.open_sidebar_from_plugin(&plan.plugin, &plan.id, cx);
                     reply.done(if shown {
