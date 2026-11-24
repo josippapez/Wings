@@ -103,7 +103,8 @@ impl Workspace {
                     .gap(px(2.0))
                     .overflow_x_scroll()
                     .track_scroll(&self.tab_scroll)
-                    .children(tabs),
+                    .children(tabs)
+                    .children(crate::ui::cutoff::clips_on_purpose()),
             )
             // With no project there is nothing to open a tab in.
             .when(!self.welcome, |bar| bar.child(self.new_tab_buttons(cx)))

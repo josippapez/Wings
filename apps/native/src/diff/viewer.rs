@@ -1263,6 +1263,7 @@ impl Viewer {
                     .restrict_scroll_to_axis()
                     .track_scroll(&self.horizontal)
                     .child(rows.w(px(self.code_width)).min_w(gpui::relative(1.0)))
+                    .children(crate::ui::cutoff::clips_on_purpose())
                     .into_any_element()
             }
         };
@@ -1366,6 +1367,7 @@ impl Viewer {
                 }
             }))
             .child(rows)
+            .children(crate::ui::cutoff::clips_on_purpose())
             .into_any_element()
     }
 

@@ -85,6 +85,7 @@ impl PageView {
                 el.when(padded, |el| el.p(px(14.0)))
                     .children(self.nodes(&board.body, cx))
             })
+            .children(crate::ui::cutoff::clips_on_purpose())
             .into_any_element()
     }
 

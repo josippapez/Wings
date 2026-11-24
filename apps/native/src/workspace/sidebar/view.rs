@@ -67,7 +67,7 @@ impl Workspace {
         if !self.side.slide.running {
             return Some(panel.w(px(width)).into_any_element());
         }
-        let clip = div().flex_none().h_full().overflow_hidden();
+        let clip = div().flex_none().h_full().overflow_hidden().children(crate::ui::cutoff::clips_on_purpose());
         Some(
             self.follow_slide("sidebar-slide", clip, move |clip, share, opacity| {
                 clip.w(px(width * share))

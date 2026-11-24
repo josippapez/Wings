@@ -50,8 +50,10 @@ pub fn button(
     content: impl IntoElement,
 ) -> Stateful<Div> {
     let (fg, bg, hover) = colors(variant);
+    let label = label.into();
     div()
         .id(id)
+        .children(super::cutoff::named(&label))
         .role(Role::Button)
         .aria_label(label)
         .h(px(32.0))
@@ -99,8 +101,10 @@ pub fn chip(
     disabled: bool,
     content: impl IntoElement,
 ) -> Stateful<Div> {
+    let label = label.into();
     div()
         .id(id)
+        .children(super::cutoff::named(&label))
         .role(Role::Button)
         .aria_label(label)
         .aria_toggled(if pressed {

@@ -2,6 +2,8 @@
 //! tabs and dragging one, a terminal's colors and a selection, splits, renaming a pane, a zoomed pane, find, Issues, a
 //! plugin page, agents and Settings, and the pilot and components pages on their own, drawn from the trees React made of them.
 //! Nothing shows on screen and focus doesn't move. macOS only (real Metal rendering).
+//! Each screen is checked for controls cut off at its width (`ui::cutoff`): a `CUT OFF` line under its PNG for each, all
+//! said again at the end, and the run exits with 1.
 //!
 //! cargo run --manifest-path apps/native/Cargo.toml --example shot --features test-support -- <out-dir>
 #![recursion_limit = "256"]
@@ -196,15 +198,25 @@ fn click(
 }
 
 fn save(cx: &mut VisualTestAppContext, window: AnyWindowHandle, path: &Path) {
+    // What this screen cuts off at its width, said under its PNG and again at the end of the run (`ui::cutoff`).
+    let cuts = cx
+        .update_window(window, |_, window, cx| wings_native::ui::cutoff::check(window, cx))
+        .unwrap_or_default();
     let _ = cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx));
     cx.capture_screenshot(window)
         .expect("render the window")
         .save(path)
         .expect("save the PNG");
     println!("{}", path.display());
+    wings_native::ui::cutoff::report(path, &cuts);
 }
 
 fn main() {
+    scenes();
+    wings_native::ui::cutoff::end_run();
+}
+
+fn scenes() {
     // `-- <out-dir> accounts` runs agents under a named account, whose folder is `~/.claude-<name>`: in a made-up home,
     // never the user's.
     if std::env::args().nth(2).as_deref() == Some("accounts") {

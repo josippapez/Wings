@@ -4,6 +4,27 @@
 mod backdrop;
 pub mod behaviors;
 mod button;
+#[cfg(feature = "test-support")]
+pub mod cutoff;
+/// Without `test-support`, nothing notes what a frame cuts off: the pieces `cutoff` reads add nothing to a frame.
+#[cfg(not(feature = "test-support"))]
+pub(crate) mod cutoff {
+    pub(crate) fn named(_: &str) -> Option<gpui::AnyElement> {
+        None
+    }
+
+    pub(crate) fn label(_: impl FnOnce() -> Option<String>) -> Option<gpui::AnyElement> {
+        None
+    }
+
+    pub(crate) fn clips_on_purpose() -> Option<gpui::AnyElement> {
+        None
+    }
+
+    pub(crate) fn card() -> (Option<gpui::AnyElement>, Option<gpui::AnyElement>) {
+        (None, None)
+    }
+}
 mod drag;
 mod glow;
 pub mod hover_cue;
@@ -142,10 +163,12 @@ pub fn untipped_ghost_button(
     content: impl IntoElement,
 ) -> Stateful<Div> {
     let pressed = on == Some(true);
+    let label = label.into();
     div()
         .id(id)
+        .children(cutoff::named(&label))
         .role(Role::Button)
-        .aria_label(label.into())
+        .aria_label(label)
         .when_some(on, |button, on| {
             button.aria_toggled(if on { Toggled::True } else { Toggled::False })
         })
@@ -248,7 +271,9 @@ pub fn input(field: Entity<TextField>) -> Div {
 
 /// A rounded box of rows split by hairlines, like the desktop's settings groups.
 pub fn card(rows: impl IntoIterator<Item = AnyElement>) -> Div {
+    let (opens, closes) = cutoff::card();
     div()
+        .children(opens)
         .flex()
         .flex_col()
         .rounded(px(14.0))
@@ -262,6 +287,7 @@ pub fn card(rows: impl IntoIterator<Item = AnyElement>) -> Div {
                 })
                 .child(row)
         }))
+        .children(closes)
 }
 
 /// One setting in a card: its name and what it does on the left, its control on the right.

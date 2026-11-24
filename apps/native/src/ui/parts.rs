@@ -20,7 +20,9 @@ const TRACK: u32 = 0xffffff29;
 
 /// `.w-card`: a rounded box with a hairline edge around related content, 10px apart.
 pub fn plain_card(content: impl IntoIterator<Item = AnyElement>) -> Div {
+    let (opens, closes) = super::cutoff::card();
     div()
+        .children(opens)
         .min_w_0()
         .flex()
         .flex_col()
@@ -32,6 +34,7 @@ pub fn plain_card(content: impl IntoIterator<Item = AnyElement>) -> Div {
         .border_color(rgba(HAIRLINE))
         .bg(rgba(SURFACE))
         .children(content)
+        .children(closes)
 }
 
 /// `.w-board-column` and `.w-board-cell`: a box on the surface colour with a hairline edge, 8px in.

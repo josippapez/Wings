@@ -291,11 +291,25 @@ impl PageView {
     ) -> AnyElement {
         let bounds = Rc::new(Cell::new(None));
         self.lines.borrow_mut().drawing.push(Line { id, text: text.clone(), lead, layout: layout.clone(), bounds: bounds.clone() });
+        // While the screenshot examples check a frame for what it cuts off, the line says what it drew and where.
+        #[cfg(feature = "test-support")]
+        let noted = crate::ui::cutoff::watching().then(|| (text.clone(), layout.clone()));
         div()
             .relative()
             .child(element)
             // Says where the line was drawn, for a drag that goes past it.
-            .child(canvas(move |drawn, _, _| bounds.set(Some(drawn)), |_, _, _, _| {}).absolute().top_0().left_0().size_full())
+            .child(
+                canvas(move |drawn, _, _| bounds.set(Some(drawn)), move |_drawn, _, _window, _| {
+                    #[cfg(feature = "test-support")]
+                    if let Some((words, layout)) = &noted {
+                        crate::ui::cutoff::note_text(words, layout, _drawn, _window);
+                    }
+                })
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, event: &MouseDownEvent, window, cx| {

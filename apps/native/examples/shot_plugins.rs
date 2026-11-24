@@ -12,6 +12,8 @@
 //! `packages/plugin-rs/src/ui/more.rs`).
 //! `--prompt-rail` renders a `PromptRail` of 40 prompts with one pointed at, and one of 300 that has scrolled.
 //! Nothing shows on screen and focus doesn't move. macOS only (real Metal rendering).
+//! `--list` prints every flag and what it renders (`SCENES`). Each screen is checked for text and controls cut off at its
+//! width (`ui::cutoff`): a `CUT OFF` line under its PNG for each, all said again at the end, and the run exits with 1.
 //!
 //! cargo run --manifest-path apps/native/Cargo.toml --example shot_plugins --features test-support -- <out-dir>
 
@@ -34,6 +36,7 @@ use wings_native::{
         },
         runtime::fake::{self, Cx, Guest, Hear},
     },
+    ui::cutoff,
 };
 
 #[path = "shot_plugins/external.rs"]
@@ -52,6 +55,8 @@ fn wait(cx: &mut VisualTestAppContext, window: AnyWindowHandle, duration: Durati
 }
 
 fn save(cx: &mut VisualTestAppContext, window: AnyWindowHandle, path: PathBuf) {
+    // What this screen cuts off at its width, said under its PNG and again at the end of the run (`ui::cutoff`).
+    let cuts = cx.update_window(window, |_, window, cx| cutoff::check(window, cx)).unwrap_or_default();
     let _ = cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx));
     // `SHOT_FRAMES=<n>` draws each screen n more times from scratch and prints the median ms of a draw and of a frame
     // rendered on the GPU, for what a redraw of that screen costs.
@@ -79,6 +84,7 @@ fn save(cx: &mut VisualTestAppContext, window: AnyWindowHandle, path: PathBuf) {
         .save(&path)
         .expect("save the PNG");
     println!("{}", path.display());
+    cutoff::report(&path, &cuts);
 }
 
 /// An offscreen app with real rendering. Plugin pages run on threads of their own and wake their views from there,
@@ -95,73 +101,58 @@ fn app() -> VisualTestAppContext {
     cx
 }
 
+/// A set of screens this example renders: the flag that picks it, what it shows, and the function that renders it. The
+/// first scene whose flag is given runs, and with none, Worktrees' sidebar. `--list` prints them.
+struct Scene {
+    flag: &'static str,
+    help: &'static str,
+    run: fn(PathBuf),
+}
+
+const SCENES: &[Scene] = &[
+    Scene { flag: "--changes", help: "Changes' built pages", run: changes },
+    Scene { flag: "--stopped", help: "a page that stopped, with its error and Reload, in a tab and a popover", run: stopped },
+    Scene { flag: "--schedules", help: "Schedules' list and forms, empty too, and the modals that ask to allow a schedule", run: schedules },
+    Scene { flag: "--share-missing", help: "Share's modal when `opentunnel` isn't installed: it offers Install", run: share_missing },
+    Scene { flag: "--share", help: "Share's modal: a port asked about, what is shared, nothing shared", run: share },
+    Scene { flag: "--pr-tracker", help: "PR tracker's list, a pull request and its tabs on GitHub and Azure DevOps, settings, host states", run: pr_tracker },
+    Scene { flag: "--hud", help: "the HUD's sidebar: two sessions on two accounts, then none", run: hud },
+    Scene { flag: "--disk", help: "Disk usage's overview and the map of a folder of made-up files", run: disk },
+    Scene { flag: "--work-item", help: "Work item's tab and Sprint block over a fake `az`", run: work_item },
+    Scene { flag: "--external", help: "<folder>: the separately shipped Cyclops plugin, from its repo in <folder>, popovers too", run: external_plugins },
+    Scene { flag: "--tooltips", help: "a titled Button and Text, each pointed at until its tooltip shows", run: tooltips },
+    Scene { flag: "--prompt-rail", help: "a PromptRail of 40 prompts with one pointed at, and one of 300 that has scrolled", run: prompt_rail },
+    Scene { flag: "--ui-gallery", help: "the pages the Rust SDK's `ui` builders draw (shot_plugins/ui_gallery.json)", run: ui_gallery },
+    Scene { flag: "--claude-chat", help: "Claude chat over a fake `claude`; CHAT_SCENE=<name>[,...] renders those alone, CHAT_SKIP=<name>[,...] all but those", run: claude_chat },
+    Scene { flag: "--tasks", help: "the Issues board, list, issue tab and block", run: tasks },
+    Scene { flag: "--worktrees", help: "Worktrees' sidebar over a repo it makes (the scene with no flag)", run: worktrees },
+];
+
 fn main() {
-    let out = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| "shots".into()));
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|arg| arg == "--list") {
+        for scene in SCENES {
+            println!("{:<16} {}", scene.flag, scene.help);
+        }
+        return;
+    }
+    let out = PathBuf::from(args.get(1).cloned().unwrap_or_else(|| "shots".into()));
     std::fs::create_dir_all(&out).expect("create the output folder");
-    if std::env::args().any(|arg| arg == "--changes") {
-        changes(out);
-        return;
-    }
-    if std::env::args().any(|arg| arg == "--stopped") {
-        stopped(out);
-        return;
-    }
-    if std::env::args().any(|arg| arg == "--schedules") {
-        schedules(out);
-        return;
-    }
-    if std::env::args().any(|arg| arg == "--share-missing") {
-        share_missing(out);
-        return;
-    }
-    if std::env::args().any(|arg| arg == "--share") {
-        share(out);
-        return;
-    }
-    if std::env::args().any(|arg| arg == "--pr-tracker") {
-        pr_tracker(out);
-        return;
-    }
-    if std::env::args().any(|arg| arg == "--hud") {
-        hud(out);
-        return;
-    }
-    if std::env::args().any(|arg| arg == "--disk") {
-        disk(out);
-        return;
-    }
-    if std::env::args().any(|arg| arg == "--work-item") {
-        work_item(out);
-        return;
-    }
-    if let Some(at) = std::env::args().position(|arg| arg == "--external") {
-        let root = std::env::args()
-            .nth(at + 1)
-            .expect("--external <folder of the plugin repos>");
-        external::external(out, root.into());
-        return;
-    }
-    if std::env::args().any(|arg| arg == "--tooltips") {
-        tooltips(out);
-        return;
-    }
-    if std::env::args().any(|arg| arg == "--prompt-rail") {
-        prompt_rail(out);
-        return;
-    }
-    if std::env::args().any(|arg| arg == "--ui-gallery") {
-        ui_gallery(out);
-        return;
-    }
-    if std::env::args().any(|arg| arg == "--claude-chat") {
-        claude_chat(out);
-        return;
-    }
-    if std::env::args().any(|arg| arg == "--tasks") {
-        tasks(out);
-        return;
-    }
-    worktrees(out);
+    let scene = SCENES
+        .iter()
+        .find(|scene| args.iter().any(|arg| arg == scene.flag))
+        .unwrap_or(&SCENES[SCENES.len() - 1]);
+    (scene.run)(out);
+    cutoff::end_run();
+}
+
+/// `--external <folder>`: the plugins in the repos in that folder (`shot_plugins/external.rs`).
+fn external_plugins(out: PathBuf) {
+    let root = std::env::args()
+        .skip_while(|arg| arg != "--external")
+        .nth(1)
+        .expect("--external <folder of the plugin repos>");
+    external::external(out, root.into());
 }
 
 /// An app with one project, which does nothing for a plugin.
@@ -3324,13 +3315,15 @@ fn disk_states_main() -> String {
                 return;
             }
             let state = |scans: &serde_json::Value| json!({ "scans": scans, "collector": { "items": [], "total": 0 } });
-            if message["name"] == "disk-want" {
+            if message["name"] == "disk-state:want" {
                 tell(cx, "disk-state", state(&scans));
             }
-            if message["name"] != "disk-ask" || message["payload"]["op"] != "scan" {
+            // The SDK's `messages::ask`: `{ id, payload }` out, `{ id, result }` back on `<name>:answer`.
+            let asked = &message["payload"]["payload"];
+            if message["name"] != "disk-ask" || asked["op"] != "scan" {
                 return;
             }
-            let (id, root) = (&message["payload"]["id"], message["payload"]["root"].as_str().unwrap_or_default());
+            let (id, root) = (&message["payload"]["id"], asked["root"].as_str().unwrap_or_default());
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
             scans = if root.ends_with("/slow") {
                 json!([{ "root": root, "state": "scanning", "expected": 8_000_000_000u64, "startedAt": now - 83_000, "stamp": now,
@@ -3341,7 +3334,7 @@ fn disk_states_main() -> String {
                 return;
             };
             tell(cx, "disk-state", state(&scans));
-            tell(cx, "disk-done", json!({ "id": id, "result": null }));
+            tell(cx, "disk-ask:answer", json!({ "id": id, "result": null }));
         }
     })
 }

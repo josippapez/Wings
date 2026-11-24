@@ -2043,6 +2043,12 @@ impl PageView {
                     .whitespace_normal()
             })
             .when(drop > 0.0, |el| el.mt(px(drop)))
+            // While the screenshot examples check a frame for what it cuts off, a label of plain words, which a squeezed
+            // button draws past its edges, says where it is drawn.
+            .children(ui::cutoff::label(|| {
+                let plain = button.children.iter().all(|node| matches!(node, Node::Str { .. }));
+                (plain && !button.chip && !button.wrap).then(|| plain_text(&button.children))
+            }))
             .when_some(button.title.clone(), |el, title| el.aria_description(title))
             // As the app's own header buttons show theirs: the shortcut beside what the tooltip says.
             .when_some(tip, |el, tip| {
