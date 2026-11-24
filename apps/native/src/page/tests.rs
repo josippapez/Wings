@@ -3531,6 +3531,111 @@ fn cmd_c_copies_the_selected_words() {
     assert_eq!(copied.as_deref(), Some("alpha beta gamma delta"));
 }
 
+/// Ids as the plugin SDK makes them: a hash kept under 2^53, so nearly every one has bits over the 40th.
+const SDK_IDS: usize = 0x1f_2e3d_4c5b_0000;
+
+/// A conversation as a chat sends it while Claude works, its ids from `base`: `older` messages, a message of two
+/// paragraphs, and the line under the conversation, in a following `Scroll`. Each More moves it on a step: a newer
+/// message after the two paragraphs, then other words in the line under them, then the oldest message gone, as the
+/// chat's window of messages slides.
+fn working_chat(base: usize, older: usize) -> String {
+    counting(move |heard| {
+        let id = |n: usize| base + n;
+        let mut items: Vec<Value> = (usize::from(heard >= 3)..older)
+            .map(|i| text(id(1_000 + 2 * i), id(1_001 + 2 * i), format!("Older message {i}.")))
+            .collect();
+        items.push(json!({ "id": id(20), "type": "Stack", "props": { "gap": "m" }, "children": [
+            text(id(21), id(22), "alpha beta gamma delta".into()),
+            text(id(23), id(24), "epsilon zeta eta theta".into())] }));
+        if heard >= 1 {
+            items.push(text(id(30), id(31), "A newer message.".into()));
+        }
+        items.push(text(id(40), id(41), if heard >= 2 { "Calling a tool" } else { "Working" }.into()));
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            { "id": id(2), "type": "Scroll", "props": { "follow": "end" }, "children": [
+                { "id": id(3), "type": "Stack", "props": { "enter": "rise", "gap": "l" }, "children": items }] },
+            { "id": id(4), "type": "Button", "props": { "onClick": "4:onClick" }, "children": [text_node(id(5), "More")] }] })
+    })
+}
+
+/// A selection over a message stays, drawn and copied whole, as a working chat sends new trees around it: a newer
+/// message, other words under it, the oldest message gone. With the plugin SDK's ids, every new tree dropped it.
+#[test]
+fn a_selection_stays_as_a_working_chat_sends_new_trees_around_it() {
+    let mut lost = Vec::new();
+    for (base, older) in [(0, 1), (SDK_IDS, 1), (SDK_IDS, 50)] {
+        let (app, mut window) = open_narrow(working_chat(base, older), 500.0);
+        settle(&app, &mut window, shows("epsilon"));
+        draws(&app, &mut window);
+        for step in ["a newer message", "other words under it", "the oldest message gone"] {
+            let (first, second) = window.read(|view, _| (view.line_bounds("alpha"), view.line_bounds("epsilon")));
+            let (first, second) = (first.expect("the first paragraph"), second.expect("the second paragraph"));
+            drag(&mut window, point(first.left() + px(40.0), first.center().y), point(second.left() + px(40.0), second.center().y));
+            let selected = window.read(|view, _| view.selected_text()).unwrap_or_default();
+            assert!(selected.contains("delta\ne"), "{selected:?}");
+            let trees = window.read(|view, _| view.trees_sent());
+            assert!(window.read(|view, _| view.press("More", 0)));
+            settle(&app, &mut window, move |view| view.trees_sent() > trees);
+            draws(&app, &mut window);
+            let (kept, drawn) = window.read(|view, _| (view.selected_text(), view.highlighted("alpha").is_some()));
+            if kept.as_deref() != Some(selected.as_str()) || !drawn {
+                lost.push(format!("{step}, ids from {base:#x}, {older} older: {kept:?}, drawn {drawn}"));
+            }
+        }
+    }
+    assert!(lost.is_empty(), "the selection was lost after {lost:#?}");
+}
+
+/// A paragraph, a bulleted list, a numbered list, a nested one and a table, as the plugin SDK's `markdown` draws them: a
+/// list item is a row of a spacer as wide as its depth, its mark and its words; a table row is a row of its cells.
+fn formatted_page() -> String {
+    fn item(id: usize, depth: u32, mark: &str, words: &str) -> Value {
+        json!({ "id": id, "type": "Row", "props": { "gap": "s", "align": "start" }, "children": [
+            { "id": id + 1, "type": "Stack", "props": { "width": depth * 16 } },
+            { "id": id + 2, "type": "Text", "props": { "tone": "muted" }, "children": [text_node(id + 3, mark)] },
+            { "id": id + 4, "type": "Text", "props": { "grow": true }, "children": [text_node(id + 5, words)] }] })
+    }
+    fn cells(id: usize, cells: [&str; 2]) -> Value {
+        json!({ "id": id, "type": "Row", "props": { "gap": "m", "align": "start" }, "children": [
+            { "id": id + 1, "type": "Text", "props": { "grow": true }, "children": [text_node(id + 2, cells[0])] },
+            { "id": id + 3, "type": "Text", "props": { "grow": true }, "children": [text_node(id + 4, cells[1])] }] })
+    }
+    let list = |id: usize, items: Vec<Value>| json!({ "id": id, "type": "Stack", "props": { "gap": "xs" }, "children": items });
+    let lead = |id: usize, words: &str| json!({ "id": id, "type": "Text", "props": { "grow": true }, "children": [text_node(id + 1, words)] });
+    fake::page("page", move |_| {
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            { "id": 1, "type": "Stack", "props": { "gap": "m" }, "children": [
+                lead(10, "Bullets:"),
+                list(20, vec![item(30, 0, "\u{2022}", "one"), item(40, 0, "\u{2022}", "two")]),
+                lead(50, "Numbers:"),
+                list(60, vec![item(70, 0, "1.", "first"), item(80, 0, "2.", "second")]),
+                lead(90, "Nested:"),
+                list(100, vec![item(110, 0, "\u{2022}", "outer"), item(120, 1, "\u{2022}", "inner")]),
+                lead(130, "Table:"),
+                list(140, vec![cells(150, ["Name", "Value"]), cells(160, ["alpha", "42"])])] }] })
+    })
+}
+
+/// Copied, a list keeps each item's mark on the line of its words, and a table row its cells on one line: a mark and
+/// its words, drawn side by side, were copied as two lines ("•\none").
+#[test]
+fn a_copy_keeps_a_list_item_s_mark_and_a_table_row_s_cells_on_one_line() {
+    let (app, mut window) = open(formatted_page());
+    settle(&app, &mut window, shows("Table:"));
+    draws(&app, &mut window);
+    let copied = |window: &mut View, from: &str, to: &str| {
+        let (start, end) = window.read(|view, _| (view.line_bounds(from), view.line_bounds(to)));
+        let (start, end) = (start.unwrap_or_else(|| panic!("{from}")), end.unwrap_or_else(|| panic!("{to}")));
+        drag(window, point(start.left() + px(0.5), start.center().y), point(end.right() - px(1.0), end.center().y));
+        key(window, "cmd-c");
+        app.read(|cx| cx.read_from_clipboard().and_then(|item| item.text())).unwrap_or_default()
+    };
+    assert_eq!(copied(&mut window, "Bullets:", "two"), "Bullets:\n\u{2022} one\n\u{2022} two");
+    assert_eq!(copied(&mut window, "Numbers:", "second"), "Numbers:\n1. first\n2. second");
+    assert_eq!(copied(&mut window, "Nested:", "inner"), "Nested:\n\u{2022} outer\n\u{2022} inner");
+    assert_eq!(copied(&mut window, "Table:", "42"), "Table:\nName Value\nalpha 42");
+}
+
 /// A dialog's `Actions` (Cancel and Save) over a clickable `ListRow`, on a page that fills its frame: what each click
 /// reached.
 fn kit() -> String {

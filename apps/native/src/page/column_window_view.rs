@@ -261,9 +261,9 @@ impl PageView {
     /// The first and last children of `stack` that hold an end of the selection, the field with the keyboard or the open
     /// menu: they are drawn wherever they are.
     fn pinned(&self, children: &[Node]) -> Option<(usize, usize)> {
-        let mut held: Vec<u64> = self.selection_ends().map_or_else(Vec::new, |(anchor, head)| vec![anchor, head]);
-        held.extend(self.focused);
-        held.extend(self.menu);
+        let mut held: Vec<u128> = self.selection_ends().map_or_else(Vec::new, |(anchor, head)| vec![anchor, head]);
+        held.extend(self.focused.map(u128::from));
+        held.extend(self.menu.map(u128::from));
         if held.is_empty() {
             return None;
         }

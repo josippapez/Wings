@@ -20,23 +20,22 @@ use super::{PageView, tree::Node};
 /// The desktop terminal's `selectionBackground`, as a text field draws its selection.
 const SELECTED: u32 = 0xffffff33;
 
-/// Where a code block's line numbers start in a line's id: the node's id is under it, so a line is known as its block's.
-const LINE_SHIFT: u32 = 40;
-
-/// The id of the `at`th line of the code block `node`, as a line of text a person selects.
-pub(super) fn line_id(node: u64, at: usize) -> u64 {
-    node | ((at as u64 + 1) << LINE_SHIFT)
+/// The id of the `at`th line of the code block `node`, as a line of text a person selects: the line's number over the
+/// node's whole id, so a line is known as its block's. A plugin's ids are hashes up to 2^53: kept to their low 40 bits
+/// to make room for the number, they matched no node, and every new tree dropped a selection.
+pub(super) fn line_id(node: u64, at: usize) -> u128 {
+    u128::from(node) | ((at as u128 + 1) << 64)
 }
 
 /// The node a line of text is in: itself, or the code block it is a line of.
-fn node_of(id: u64) -> u64 {
-    id & ((1 << LINE_SHIFT) - 1)
+fn node_of(id: u128) -> u64 {
+    id as u64
 }
 
 /// A place in the line of text `id`: the byte `at`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Spot {
-    id: u64,
+    id: u128,
     at: usize,
 }
 
@@ -51,14 +50,14 @@ pub(super) struct Selection {
 
 impl Selection {
     /// The two ends in the order the lines are drawn, by `order` (a line's place on the page).
-    fn ordered(&self, order: &HashMap<u64, usize>) -> Option<(Spot, Spot)> {
+    fn ordered(&self, order: &HashMap<u128, usize>) -> Option<(Spot, Spot)> {
         let (anchor, head) = (self.anchor, self.head);
         let anchor_first = if anchor.id == head.id { anchor.at <= head.at } else { order.get(&anchor.id)? < order.get(&head.id)? };
         Some(if anchor_first { (anchor, head) } else { (head, anchor) })
     }
 
     /// The part of the line `id`, `len` bytes long, that is selected: None when none of it is.
-    fn range_in(&self, id: u64, len: usize, order: &HashMap<u64, usize>) -> Option<Range<usize>> {
+    fn range_in(&self, id: u128, len: usize, order: &HashMap<u128, usize>) -> Option<Range<usize>> {
         let (start, end) = self.ordered(order)?;
         let range = if start.id == end.id {
             (id == start.id).then_some(start.at..end.at)?
@@ -78,7 +77,7 @@ impl Selection {
 /// A line of text a person can select, as the page drew it: its text, how it was laid out, and where it was drawn,
 /// known once it has been (a line scrolled out of a list may not be).
 pub(super) struct Line {
-    id: u64,
+    id: u128,
     text: String,
     /// What the line starts with that isn't drawn as text, a code line's indent, which a copy of the whole line keeps.
     lead: String,
@@ -90,7 +89,7 @@ pub(super) struct Line {
 /// lines lie between a selection's ends, and the ones the render under way draws, which the mouse then goes by.
 #[derive(Default)]
 pub(super) struct Lines {
-    drawn: HashMap<u64, usize>,
+    drawn: HashMap<u128, usize>,
     drawing: Vec<Line>,
 }
 
@@ -101,7 +100,7 @@ impl Lines {
     }
 }
 
-fn order_of(lines: &[Line]) -> HashMap<u64, usize> {
+fn order_of(lines: &[Line]) -> HashMap<u128, usize> {
     lines.iter().enumerate().map(|(at, line)| (line.id, at)).collect()
 }
 
@@ -120,6 +119,11 @@ fn spot_at(lines: &[Line], at: Point<Pixels>, column: Bounds<Pixels>) -> Option<
         return Some(Spot { id: line.id, at: line.text.len() });
     }
     shown.iter().min_by(|a, b| a.1.top().partial_cmp(&b.1.top()).unwrap_or(std::cmp::Ordering::Equal)).map(|(line, _)| Spot { id: line.id, at: 0 })
+}
+
+/// Whether a line drawn at `after` is on the same row as one drawn at `before`, to the right of it.
+fn beside(before: Bounds<Pixels>, after: Bounds<Pixels>) -> bool {
+    after.left() >= before.right() && after.top() < before.bottom() && before.top() < after.bottom()
 }
 
 /// The word `at` is in, or where it is when it is between words.
@@ -177,15 +181,16 @@ pub(super) fn with_selection(
         .collect()
 }
 
-/// Whether a node `id` is anywhere in `nodes`.
-pub(super) fn has_node(nodes: &[Node], id: u64) -> bool {
+/// Whether the node of the line `id` (or the node `id`) is anywhere in `nodes`.
+pub(super) fn has_node(nodes: &[Node], id: u128) -> bool {
     nodes
         .iter()
         .any(|node| node.id() == Some(node_of(id)) || node.parts().into_iter().any(|part| has_node(part, id)))
 }
 
 impl PageView {
-    /// The words selected on the page, lines apart on lines of their own, None when there are none.
+    /// The words selected on the page, lines apart on lines of their own, None when there are none. Lines drawn side by
+    /// side, a list item's mark and its words or a table row's cells, are one line, a space apart.
     pub(crate) fn selected_text(&self) -> Option<String> {
         let selection = self.selection.borrow();
         let selection = selection.as_ref()?;
@@ -195,21 +200,27 @@ impl PageView {
         }
         let lines = self.lines.borrow();
         let order = order_of(&lines.drawing);
-        let parts: Vec<String> = lines
+        let parts: Vec<(Option<Bounds<Pixels>>, String)> = lines
             .drawing
             .iter()
             .filter_map(|line| {
                 let range = selection.range_in(line.id, line.text.len(), &order)?;
                 let lead = if range.start == 0 { line.lead.as_str() } else { "" };
-                Some(format!("{lead}{}", line.text.get(range)?))
+                Some((line.bounds.get(), format!("{lead}{}", line.text.get(range)?)))
             })
             .collect();
-        (!parts.is_empty()).then(|| parts.join("\n"))
+        let mut text = parts.first()?.1.clone();
+        for pair in parts.windows(2) {
+            let ((before, _), (after, words)) = (&pair[0], &pair[1]);
+            text.push(if before.zip(*after).is_some_and(|(before, after)| beside(before, after)) { ' ' } else { '\n' });
+            text.push_str(words);
+        }
+        Some(text)
     }
 
     /// The byte range of `text`, the line `id`, that is selected. A selection whose first line has since changed is
     /// dropped: its range would be of other words.
-    pub(super) fn selection_in(&self, id: u64, text: &str) -> Option<Range<usize>> {
+    pub(super) fn selection_in(&self, id: u128, text: &str) -> Option<Range<usize>> {
         let mut selection = self.selection.borrow_mut();
         let current = selection.as_ref()?;
         if current.anchor.id == id && current.text != text {
@@ -220,8 +231,22 @@ impl PageView {
     }
 
     /// The lines the selection starts and ends in, by id.
-    pub(super) fn selection_ends(&self) -> Option<(u64, u64)> {
+    pub(super) fn selection_ends(&self) -> Option<(u128, u128)> {
         self.selection.borrow().as_ref().map(|selection| (selection.anchor.id, selection.head.id))
+    }
+
+    /// Where the first line of text that starts with `words` was drawn in the last frame.
+    #[cfg(all(test, feature = "test-support"))]
+    pub(in crate::page) fn line_bounds(&self, words: &str) -> Option<Bounds<Pixels>> {
+        self.lines.borrow().drawing.iter().find(|line| line.text.starts_with(words))?.bounds.get()
+    }
+
+    /// The part of that line the last render drew as selected.
+    #[cfg(all(test, feature = "test-support"))]
+    pub(in crate::page) fn highlighted(&self, words: &str) -> Option<Range<usize>> {
+        let lines = self.lines.borrow();
+        let line = lines.drawing.iter().find(|line| line.text.starts_with(words))?;
+        self.selection.borrow().as_ref()?.range_in(line.id, line.text.len(), &lines.drawn)
     }
 
     /// Drops the selection when a line it starts or ends in has left the page.
@@ -233,7 +258,7 @@ impl PageView {
 
     /// `text`, a plain string of the node `id`, as a line a person can select words of.
     pub(super) fn selectable_string(&self, id: u64, text: String, cx: &mut Context<Self>) -> AnyElement {
-        let marks = with_selection(Vec::new(), self.selection_in(id, &text));
+        let marks = with_selection(Vec::new(), self.selection_in(id.into(), &text));
         let styled = StyledText::new(text.clone()).with_highlights(marks);
         let layout = styled.layout().clone();
         self.selectable(id, text, layout, styled.into_any_element(), cx)
@@ -251,13 +276,13 @@ impl PageView {
         element: AnyElement,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        self.selectable_after(id, text, String::new(), layout, element, cx)
+        self.selectable_after(id.into(), text, String::new(), layout, element, cx)
     }
 
     /// `selectable`, for a line drawn after a `lead` that isn't part of its text, which a copy of the whole line keeps.
     pub(super) fn selectable_after(
         &self,
-        id: u64,
+        id: u128,
         text: String,
         lead: String,
         layout: TextLayout,

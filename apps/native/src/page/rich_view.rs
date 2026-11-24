@@ -131,7 +131,7 @@ impl PageView {
             .collect();
         let marks = with_selection(
             spans.iter().map(|span| (span.range.clone(), highlight(&span.style))).collect(),
-            select.then(|| self.selection_in(id, &text)).flatten(),
+            select.then(|| self.selection_in(id.into(), &text)).flatten(),
         );
         let mut styled = StyledText::new(text.clone()).with_highlights(marks);
         let layout = styled.layout().clone();
@@ -326,7 +326,7 @@ impl PageView {
         let runs = with_links(&spans, &links);
         let marks = with_selection(
             runs.iter().map(|run| (run.range.clone(), highlight(&run.style))).collect(),
-            self.selection_in(id, &text),
+            self.selection_in(id.into(), &text),
         );
         let mut styled = StyledText::new(text.clone()).with_highlights(marks);
         let layout = styled.layout().clone();
