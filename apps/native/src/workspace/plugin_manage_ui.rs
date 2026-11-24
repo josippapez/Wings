@@ -613,7 +613,7 @@ impl Workspace {
                             button.on_click(cx.listener(|this, _, _, cx| this.check_plugin_updates(true, cx)))
                         }),
                     )
-                    .when(tab == PluginsTab::Updates && !updatable.is_empty(), |row| {
+                    .when(tab != PluginsTab::Browse && !updatable.is_empty(), |row| {
                         let ids = updatable.clone();
                         row.child(
                             header_button(
@@ -622,6 +622,7 @@ impl Workspace {
                                 Icon::CircleArrowUp,
                                 updating,
                             )
+                            .children(ui::spot(|| "plugin-update-all".into()))
                             .when(!updating, |button| {
                                 button.on_click(cx.listener(move |this, _, window, cx| {
                                     this.update_plugins(ids.clone(), window, cx)

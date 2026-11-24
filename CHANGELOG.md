@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.99 · 2026-11-24
+
+- **Plugins: Update all is back on the Installed tab** whenever updates are waiting, as well as on Updates.
+
 ## 0.2.98 · 2026-11-24
 
 - **Claude accounts is a Wings plugin now**: it lives with the others and updates with them. A copy you installed from its own repo moves over by itself and keeps its approval and saved data.

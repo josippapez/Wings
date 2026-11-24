@@ -456,6 +456,32 @@ fn the_tabs_list_installed_plugins_and_updates_and_the_search_filters_them() {
 }
 
 #[test]
+fn update_all_shows_on_the_installed_and_updates_tabs_while_an_update_waits() {
+    use super::plugin_manage_ui::PluginsTab;
+    let data = Data::temp();
+    let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    install(&mut window, package("demo", "1.0.0", &[]), github(), None).unwrap();
+    let shows = |window: &mut TestAppWindow<Workspace>, tab: PluginsTab| {
+        window.update(|w, window, cx| {
+            w.show_plugins("demo", &[], window, cx);
+            w.manage.selected = None;
+            w.manage.tab = tab;
+            cx.notify();
+        });
+        crate::ui::forget_spots();
+        window.draw();
+        crate::ui::spot_at("plugin-update-all").is_some()
+    };
+    assert!(!shows(&mut window, PluginsTab::Installed), "nothing to update");
+    window.update(|w, _, _| {
+        w.manage.updates.insert("demo".into(), "1.1.0".into());
+    });
+    assert!(shows(&mut window, PluginsTab::Installed));
+    assert!(shows(&mut window, PluginsTab::Updates));
+    assert!(!shows(&mut window, PluginsTab::Browse));
+}
+
+#[test]
 fn plugin_updates_review_opens_the_plugin_or_available_without_approving() {
     let data = Data::temp();
     let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
