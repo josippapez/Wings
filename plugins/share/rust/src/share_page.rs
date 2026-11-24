@@ -27,6 +27,8 @@ struct Page {
     /// What main said, once it has: the asks that wait, oldest first, and the links.
     approvals: Option<Vec<Approval>>,
     shares: Vec<Share>,
+    /// Whether OpenTunnel was missing when Claude last tried to share, so Install shows.
+    missing: bool,
     /// The ask that is first, which Allow waits on.
     shown: Option<String>,
     armed: bool,
@@ -77,6 +79,18 @@ fn approval_card(first: &Approval, more: usize, busy: bool, armed: bool) -> Node
         ))
 }
 
+/// OpenTunnel isn't installed: what it is, and Install, which runs the Homebrew command in a terminal tab.
+fn install_card(busy: bool) -> Node {
+    card().child(
+        stack()
+            .prop("gap", "m")
+            .child(text("OpenTunnel isn't installed").prop("weight", "strong"))
+            .child(muted("Sharing a link needs OpenTunnel, a free command-line tool. Install runs this in a new terminal tab, then ask Claude again:"))
+            .child(text("brew install anomalyco/tap/opentunnel").prop("mono", true).prop("size", "small"))
+            .child(wings_plugin::ui::actions(None, [small("Install", "default", busy, || ask("install", json!({})))])),
+    )
+}
+
 fn share_card(share: &Share, copied: bool, busy: bool) -> Node {
     let (url, open, name) = (share.url.clone(), share.url.clone(), share.name.clone());
     let copy_label = if copied { "Copied" } else { "Copy link" };
@@ -109,11 +123,12 @@ fn view() -> Vec<Node> {
         let Some(approvals) = &p.approvals else {
             return vec![loading()];
         };
-        if approvals.is_empty() && p.shares.is_empty() {
+        if approvals.is_empty() && p.shares.is_empty() && !p.missing {
             return vec![empty("Nothing is shared", "Ask Claude to share a running app. Each link shows here, with a button to copy it.")];
         }
         let body = stack()
             .prop("gap", "m")
+            .maybe(p.missing.then(|| install_card(p.busy)))
             .maybe(approvals.first().map(|first| card().child(approval_card(first, approvals.len() - 1, p.busy, p.armed))))
             .maybe(p.error.clone().map(|error| notice("danger", error)))
             .maybe((!p.shares.is_empty()).then(|| {
@@ -136,6 +151,7 @@ fn hear(state: &Value) {
     let moved = with(|p| {
         let moved = p.shown != first;
         p.shares = state["shares"].as_array().map(|list| list.iter().filter_map(Share::from_json).collect()).unwrap_or_default();
+        p.missing = state["missing"] == true;
         (p.approvals, p.shown) = (Some(approvals), first.clone());
         if moved {
             p.armed = false;

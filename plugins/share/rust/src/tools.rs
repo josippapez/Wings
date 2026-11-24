@@ -18,13 +18,19 @@ fn schema(name: &str) -> Value {
     manifest["contributes"]["mcpTools"].as_array().and_then(|list| list.iter().find(|tool| tool["name"] == name)).map_or(Value::Null, |tool| tool["inputSchema"].clone())
 }
 
-/// What a failed `opentunnel` call tells Claude. A missing one also puts an Install badge on the terminal Claude runs in.
+/// What a failed `opentunnel` call tells Claude. A missing one also opens the modal, which offers Install, and puts an
+/// Install badge on the terminal Claude runs in: a Claude chat has none.
 fn failed(fail: Fail, context: &Value) -> String {
     if fail == Fail::Missing {
         if let Some(pane) = context["paneId"].as_str() {
             with(|state| state.install_pane = Some(pane.to_owned()));
             drop(refresh());
         }
+        crate::main_frame::set_missing(true);
+        approvals::opened_by_user();
+        wings_plugin::task::spawn(async {
+            drop(wings_plugin::host::open_view_with(approvals::VIEW, "modal", &Value::Null).await);
+        });
     }
     fail.message()
 }
@@ -51,6 +57,7 @@ pub async fn share_port(input: &Value, context: &Value, ask: impl AsyncFn(u16, O
     };
     // Before the user is asked: a missing opentunnel, or a name that is taken, can't be shared.
     let routes = tunnel::parse_list(&tunnel::run(tunnel::list_args(), tunnel::QUICK_MS).await.map_err(|fail| failed(fail, context))?);
+    crate::main_frame::set_missing(false);
     if let Some(taken) = name.and_then(|name| routes.iter().find(|route| route.name == name && route.port != Some(port))) {
         return Err(format!("The name {} already points at {}. Pick another name, or end that one first with stop_share.", taken.name, taken.target));
     }
@@ -317,6 +324,20 @@ mod tests {
         assert!(error.contains("isn't installed") && error.contains("brew install anomalyco/tap/opentunnel"), "{error}");
         assert!(!asked.get(), "the user was asked about something that can't work");
         assert_eq!(with(|state| state.install_pane.clone()), Some("7".into()));
+        // The modal opens to offer Install, as a chat has no terminal for the badge.
+        let shown = Rc::new(RefCell::new(Vec::new()));
+        let kept = shown.clone();
+        host::testing::answer(move |method, params| {
+            kept.borrow_mut().push((method.to_owned(), params.clone()));
+            match method {
+                "exec" => Err("opentunnel is not installed or not on PATH".into()),
+                _ => Ok(Value::Null),
+            }
+        });
+        crate::main_frame::set_missing(false);
+        let _ = block_on(async { share_port(&json!({ "port": 3000 }), &json!({}), ask_with(Answer::Allow)).await });
+        assert!(shown.borrow().iter().any(|(method, params)| method == "openView" && params["id"] == "share"), "{:?}", shown.borrow());
+        assert_eq!(crate::main_frame::state_message()["missing"], true, "the modal offers Install");
         for tool in [block_on(async { list_shares(&json!({})).await }), block_on(async { stop_share(&json!({ "name": "x" }), &json!({})).await })] {
             assert!(tool.unwrap_err().contains("brew install"));
         }

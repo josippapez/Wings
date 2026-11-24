@@ -35,6 +35,15 @@ thread_local! {
     static STATE_OF: RefCell<State> = RefCell::new(State::default());
     /// Looks at the ports. A call while a look is running makes it look once more when it is done.
     static REFRESH: SingleFlight = SingleFlight::new(look);
+    /// Whether `opentunnel` was missing the last time a tool ran it, so the modal offers to install it.
+    static MISSING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Notes whether `opentunnel` is missing, and tells the modal when that changed.
+pub fn set_missing(missing: bool) {
+    if MISSING.with(|was| was.replace(missing)) != missing {
+        changed();
+    }
 }
 
 pub fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
@@ -47,7 +56,13 @@ pub fn refresh() -> impl Future<Output = ()> {
 
 /// Tells the modal what waits for an answer and what is shared.
 pub fn changed() {
-    messages::tell(STATE, &json!({ "approvals": approvals::waiting(), "shares": shares::all().iter().map(Share::to_json).collect::<Vec<_>>() }));
+    messages::tell(STATE, &state_message());
+}
+
+/// What the modal is told: the asks that wait, the links, and whether OpenTunnel is missing.
+pub fn state_message() -> Value {
+    let missing = MISSING.with(std::cell::Cell::get);
+    json!({ "approvals": approvals::waiting(), "shares": shares::all().iter().map(Share::to_json).collect::<Vec<_>>(), "missing": missing })
 }
 
 /// The programs in Wings' terminals that listen on a local port, as (pane, port). None when Wings can't read ports.
@@ -155,19 +170,24 @@ async fn on_action(action: Value) -> Result<(), String> {
             approvals::opened_by_user();
             host::open_view_with(approvals::VIEW, "modal", &Value::Null).await.map(drop)
         }
-        ("install", _) => {
-            host::call("openPane", json!({ "command": tunnel::INSTALL, "args": [], "placement": "tab" })).await?;
-            with(|state| state.install_pane = None);
-            drop(refresh());
-            Ok(())
-        }
+        ("install", _) => install().await,
         _ => Err("Unknown action".into()),
     }
 }
 
-/// What the modal asks for: the user's answer to an ask, or a link to stop.
+/// Install, on the badge or in the modal: runs the Homebrew command in a terminal tab, where you see it work.
+async fn install() -> Result<(), String> {
+    host::call("openPane", json!({ "command": tunnel::INSTALL, "args": [], "placement": "tab" })).await?;
+    with(|state| state.install_pane = None);
+    set_missing(false);
+    drop(refresh());
+    Ok(())
+}
+
+/// What the modal asks for: the user's answer to an ask, a link to stop, or OpenTunnel to install.
 async fn serve(ask: Value) {
     let result = match ask["op"].as_str().unwrap_or_default() {
+        "install" => install().await,
         "answer" => approvals::answer(ask["approval"].as_str().unwrap_or_default(), ask["allow"] == true),
         "stop" => {
             let name = ask["name"].as_str().unwrap_or_default().to_owned();

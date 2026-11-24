@@ -36,7 +36,7 @@ impl Fail {
     pub fn message(&self) -> String {
         match self {
             Fail::Missing => format!(
-                "OpenTunnel (the `{PROGRAM}` command) isn't installed on this Mac. Install it with `{INSTALL}`, or press Install on the badge Wings now shows on this terminal, then try again."
+                "OpenTunnel (the `{PROGRAM}` command) isn't installed on this Mac. Wings now shows the user an Install button that runs `{INSTALL}`. Once it is installed, try again."
             ),
             Fail::Failed(message) => message.clone(),
         }
@@ -202,6 +202,17 @@ mod tests {
         assert_eq!(add_args(3000, Some("api")), ["route", "add", "3000", "--name", "api"]);
         assert_eq!(remove_args("api"), ["route", "remove", "api"]);
         assert_eq!(list_args(), ["route", "list"]);
+    }
+
+    /// What opentunnel 0.6.2 printed for the first route on this machine (2026-11-24), word for word: the tunnel's
+    /// making comes first. And its `route list` for it.
+    #[test]
+    fn the_first_routes_output_from_a_real_opentunnel_is_read() {
+        let out = "Creating tunnel...\nGenerating private key...\nGenerating certificate request...\nRequesting certificate...\nWaiting for certificate verification (this can take a few minutes)...........\nSaving tunnel identity...\nTunnel is ready.\nAdded route 71b16883271f5c8d \u{2192} 127.0.0.1:47123\nhttps://71b16883271f5c8d.s4qkjei6qdxd.opentunnel.xyz\n";
+        let added = parse_add(out).unwrap();
+        assert_eq!((added.name.as_str(), added.url.as_str()), ("71b16883271f5c8d", "https://71b16883271f5c8d.s4qkjei6qdxd.opentunnel.xyz"));
+        let routes = parse_list("71b16883271f5c8d.s4qkjei6qdxd.opentunnel.xyz  \u{2192}  127.0.0.1:47123\n");
+        assert_eq!(routes.iter().map(|r| (r.name.as_str(), r.port)).collect::<Vec<_>>(), [("71b16883271f5c8d", Some(47123))]);
     }
 
     #[test]
