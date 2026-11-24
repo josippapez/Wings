@@ -37,6 +37,7 @@ The plugins in this folder install the same way:
 | Plugin | Link |
 | --- | --- |
 | Changes | `github.com/josippapez/Wings/plugins/changes` |
+| Claude accounts | `github.com/josippapez/Wings/plugins/claude-accounts` |
 | Dev servers | `github.com/josippapez/Wings/plugins/dev-servers` |
 | Disk usage | `github.com/josippapez/Wings/plugins/disk` |
 | HUD | `github.com/josippapez/Wings/plugins/hud` |

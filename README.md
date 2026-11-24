@@ -46,6 +46,7 @@ The Issues plugin keeps a local tracker for each project, with types, specs, pri
 A plugin adds badges, sidebars, tabs, blocks and actions to Wings, and can answer Claude Code hooks. Plugins run in a sandbox and can only do what you approved. This repo has plugins for:
 
 - Changes: changed files per pane, the repo's history and a commit graph.
+- Claude accounts: which Claude Code account each project uses, starting Claude as another account, and adding one.
 - Dev servers: a badge with the port while a program in a pane listens on one.
 - Disk usage: a map of what takes the space on a disk, to find big folders and move them to the Trash.
 - HUD: Claude Code usage.

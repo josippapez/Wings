@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.98 · 2026-11-24
+
+- **Claude accounts is a Wings plugin now**: it lives with the others and updates with them. A copy you installed from its own repo moves over by itself and keeps its approval and saved data.
+- **Claude accounts 0.5.0**: the above.
+
 ## 0.2.97 · 2026-11-24
 
 - **An agent can close a terminal it opened in a project that isn't on screen**: it closes there, and you stay on the project, tab and pane you were on. When it was that project's front tab, the tab beside it is in front when you go back.

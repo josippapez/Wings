@@ -2,8 +2,8 @@
 //! frames built over made-up answers: `sh rust/build.sh fake`), installed in a temporary plugins folder and shown in the
 //! app at 1000 and 640 points wide: its sidebar in its states, and its popover under its title bar button.
 //!
-//! Nothing reaches the network or your account: the fake build makes up the answers. Sprint board and Claude accounts are
-//! not here: they have no build over made-up answers to show.
+//! Nothing reaches the network or your account: the fake build makes up the answers. Sprint board is not here: it has no
+//! build over made-up answers to show.
 
 use std::{
     path::{Path, PathBuf},

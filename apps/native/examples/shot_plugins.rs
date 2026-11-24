@@ -4,8 +4,8 @@
 //! `--share` Share's modal (a port asked about, what is shared, nothing shared), `--hud` the HUD's sidebar, with
 //! `--disk` Disk usage's overview and the map of a folder of made-up files it scans, with `--work-item` Work item's tab
 //! and Sprint block, and with `--tasks` the Issues board, list, issue and block, each over made-up data. With
-//! `--external <folder>` it renders the separately shipped Sprint board, Cyclops and Claude accounts plugins from their
-//! repos in that folder, popovers too (`shot_plugins/external.rs`).
+//! `--external <folder>` it renders the separately shipped Sprint board and Cyclops plugins from their repos in that
+//! folder, popovers too (`shot_plugins/external.rs`).
 //! `--claude-chat` renders Claude chat's page over a fake `claude` that prints made-up sessions.
 //! `--tooltips` points at a titled Button and Text of a made-up page until their tooltips show.
 //! `--ui-gallery` renders the pages the Rust SDK's newer `ui` builders draw (`ui_gallery.json`, kept in step by a test in

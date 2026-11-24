@@ -339,6 +339,21 @@ impl Store {
         retired.into_iter().map(|id| self.remove(id).map(|secrets| (id.to_string(), secrets))).collect()
     }
 
+    /// Points the installed copies of plugins that moved into the Wings repo's `plugins/` from a repo of their own at
+    /// their new folder, so they update from there as Wings plugins. Installing from the new place instead would start
+    /// them over with a new scope, and lose their storage and secrets.
+    pub fn adopt_moved_in(&mut self) -> Result<(), String> {
+        let mut moved = false;
+        for (id, old) in MOVED_IN {
+            let Some(entry) = self.entries.get_mut(*id) else { continue };
+            if matches!(&entry.source, Source::Github { repo, folder: None } if repo.eq_ignore_ascii_case(old)) {
+                entry.source = Source::Github { repo: OFFICIAL_REPO.into(), folder: Some(format!("plugins/{id}")) };
+                moved = true;
+            }
+        }
+        if moved { self.save() } else { Ok(()) }
+    }
+
     /// The plugin's current secret scope and the names it stored there.
     pub fn secret_scope(&mut self, id: &str) -> Result<SecretScope, String> {
         let entry = self.entries.entry(id.to_string()).or_insert_with(|| Entry::new(Source::File));
@@ -645,6 +660,8 @@ pub fn is_official_repo(repo: &str) -> bool {
 }
 /// Wings' own plugins that are no longer in the repo: Notes became the Project page.
 const RETIRED: &[&str] = &["notes"];
+/// Wings' own plugins that started in a repo of their own: each one's id and that repo.
+const MOVED_IN: &[(&str, &str)] = &[("claude-accounts", "josippapez/wings-claude-accounts")];
 
 /// A plugin in the official repo, as Settings offers it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -793,6 +810,27 @@ mod tests {
         s.install(&pkg(), Source::Github { repo: "someone/notes".into(), folder: None }, None).unwrap();
         assert!(s.remove_retired().is_empty());
         assert!(s.source("notes").is_some());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_plugin_moved_into_the_wings_repo_updates_from_there_and_keeps_its_scope() {
+        let (mut s, dir) = store();
+        let pkg = || package(&[("wings-plugin.json", &manifest("claude-accounts", &[])), ("main.js", "")]);
+        let old = Source::Github { repo: "josippapez/wings-claude-accounts".into(), folder: None };
+        s.install(&pkg(), old, None).unwrap();
+        let scope = s.secret_scope("claude-accounts").unwrap().scope;
+        s.adopt_moved_in().unwrap();
+        let new = Source::Github { repo: "josippapez/Wings".into(), folder: Some("plugins/claude-accounts".into()) };
+        assert_eq!(s.source("claude-accounts"), Some(new.clone()));
+        assert_eq!(s.secret_scope("claude-accounts").unwrap().scope, scope);
+        let loaded = Store::load(dir.join("plugins"), dir.join("plugins.json"), None);
+        assert!(loaded.is_builtin("claude-accounts"), "saved");
+        // One with its id from another repo stays where it came from.
+        let elsewhere = Source::Github { repo: "someone/claude-accounts".into(), folder: None };
+        s.install(&pkg(), elsewhere.clone(), None).unwrap();
+        s.adopt_moved_in().unwrap();
+        assert_eq!(s.source("claude-accounts"), Some(elsewhere));
         let _ = fs::remove_dir_all(dir);
     }
 

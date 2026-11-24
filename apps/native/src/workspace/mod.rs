@@ -582,6 +582,9 @@ impl Workspace {
                         Err(error) => eprintln!("Couldn't remove a retired plugin: {error}"),
                     }
                 }
+                if let Err(error) = store.lock().unwrap().adopt_moved_in() {
+                    eprintln!("Couldn't point a plugin at its new place in the Wings repo: {error}");
+                }
                 let found = installed::discover_in(&store.lock().unwrap());
                 installed::start(found, paths, &env)
             }
