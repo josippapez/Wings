@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.106 · 2026-11-25
+
+- **Better past session search**: common words in a search barely count now, so a long session no longer comes first just because it contains every word of your question somewhere. Searching by meaning and by words are blended the way the docs search does it. Exact searches, like an id, a quoted phrase or a rare word, still find their session first.
+- **Dropdowns close on a second click**: clicking the button of an open dropdown or menu closes it instead of opening it again, in Settings, the new-tab menu, project sorting, the Add menu, plugin menus, Open in… and Past sessions.
+
 ## 0.2.105 · 2026-11-25
 
 - **Indexing shows on the Settings button**: while past sessions are indexed, the sidebar's Settings button fills up from left to right, and pointing anywhere on it shows how many are done. The update button's hover text now shows anywhere on it too.
