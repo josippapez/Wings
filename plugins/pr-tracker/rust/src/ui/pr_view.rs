@@ -17,7 +17,7 @@ use wings_plugin::{
     markdown::markdown,
     host,
     task::spawn,
-    ui::{Node, card, confirm, empty, icon_button, icons, muted, notice, page, row, section_label, stack, text},
+    ui::{Node, card, confirm, empty, icon_button, icons, muted, notice, page, row, section_label, small, stack, text},
 };
 
 /// The native app draws a page of at most 5,000 nodes, so a long conversation shows in steps.
@@ -143,10 +143,6 @@ fn avatar(name: &str, small: bool) -> Node {
 
 fn skeleton(width: Value, height: u32) -> Node {
     Node::new("Skeleton").prop("width", width).prop("height", height)
-}
-
-fn small(text_: impl Into<String>) -> Node {
-    text(text_).prop("size", "small")
 }
 
 fn tone_badge(label: &str, tone: &str) -> Node {

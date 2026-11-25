@@ -5,7 +5,7 @@ use crate::threads::{Thread, last_activity};
 use crate::types::{Push, PushCommit};
 use serde::Deserialize;
 use std::collections::HashSet;
-use wings_plugin::host;
+use wings_plugin::{format::{MONTHS, civil_from_days}, host};
 
 #[derive(Clone, Default, Deserialize)]
 pub struct Person {
@@ -110,8 +110,6 @@ pub fn timeline_of(threads: &[Thread], pushes: &[Push]) -> Vec<Entry> {
     entries
 }
 
-const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
 /// "Today at 10:50 AM", "Yesterday at 9:33 AM", else "12 Oct, 10:50 AM", in this Mac's timezone. `now` is milliseconds since the epoch.
 pub fn day_time(iso: &str, now: f64) -> String {
     let Some(ms) = iso_to_ms(iso) else { return String::new() };
@@ -125,14 +123,7 @@ pub fn day_time(iso: &str, now: f64) -> String {
         d if d == 0.0 => format!("Today at {time}"),
         d if d == 1.0 => format!("Yesterday at {time}"),
         _ => {
-            // Civil date from days since the epoch.
-            let z = day(then) as i64 + 719_468;
-            let era = z.div_euclid(146_097);
-            let doe = z - era * 146_097;
-            let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-            let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-            let mp = (5 * doy + 2) / 153;
-            let (d, m) = (doy - (153 * mp + 2) / 5 + 1, if mp < 10 { mp + 3 } else { mp - 9 });
+            let (_, m, d) = civil_from_days(day(then) as i64);
             format!("{d} {}, {time}", MONTHS[(m - 1) as usize])
         }
     }

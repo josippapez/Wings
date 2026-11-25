@@ -2,7 +2,7 @@
 //! shows in. Each provider's own mapper builds the `CheckItem`s.
 
 use crate::types::{CheckItem, CheckState, Failing};
-use wings_plugin::format::plural;
+use wings_plugin::format::{days_from_civil, plural};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GroupId {
@@ -117,13 +117,7 @@ pub fn iso_to_ms(iso: &str) -> Option<f64> {
         let m: f64 = digits.get(2..4).map_or(Some(0.0), |m| m.parse().ok())?;
         sign * (h * 60.0 + m)
     };
-    // Days from the civil date, as Howard Hinnant's algorithm counts them.
-    let y = if month <= 2 { year - 1 } else { year };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
+    let days = days_from_civil(year, month, day);
     Some(((days * 86_400) as f64 + hour * 3600.0 + minute * 60.0 + second - offset_minutes * 60.0) * 1000.0)
 }
 

@@ -4,7 +4,7 @@ use super::{problems::{self, Problem}, state};
 use crate::{checklist::iso_to_ms, forges, providers::{self, link_ref}, remote, types::{Link, Status}};
 use serde_json::{Value, json};
 use std::{cell::RefCell, collections::HashSet};
-use wings_plugin::{cli::{ProblemText, last_line}, format::ago, host, task::spawn};
+use wings_plugin::{cli::{ProblemText, last_line}, format::ago_now, host, task::spawn};
 
 thread_local! {
     /// PR urls whose status is loading.
@@ -70,7 +70,7 @@ fn badge_for(link: &Link, loaded: Option<&state::Loaded>, local: Option<(i64, i6
     if !pending.is_empty() {
         rows.push(json!({ "label": "Local", "value": pending.replace("push", "push to the PR"), "tone": "info" }));
     }
-    rows.push(json!({ "label": "Updated", "value": iso_to_ms(&st.updated).map_or_else(|| st.updated.clone(), |ms| ago(ms, host::now())) }));
+    rows.push(json!({ "label": "Updated", "value": iso_to_ms(&st.updated).map_or_else(|| st.updated.clone(), ago_now) }));
     let counts: Vec<Value> = [("push", ahead), ("pull", behind)].into_iter().filter(|(_, value)| *value > 0).map(|(icon, value)| json!({ "icon": icon, "value": value })).collect();
     json!({ "label": format!("{r} {}", st.label), "counts": counts, "tone": st.tone, "icon": st.icon, "title": st.title, "subtitle": subtitle, "rows": rows, "actions": actions })
 }

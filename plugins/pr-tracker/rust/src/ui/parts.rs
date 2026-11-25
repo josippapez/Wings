@@ -2,7 +2,7 @@
 
 use crate::{checklist::iso_to_ms, types::CheckState};
 use wings_plugin::{
-    format::ago,
+    format::{ago, ago_now},
     host,
     ui::{Node, badge, muted},
 };
@@ -71,7 +71,7 @@ pub fn column(width: u32) -> Node {
 
 /// How long ago `iso` was, or none when it isn't a time.
 pub fn time_text(iso: &str) -> Option<String> {
-    iso_to_ms(iso).map(|ms| ago(ms, host::now()))
+    iso_to_ms(iso).map(ago_now)
 }
 
 /// A queued check that has waited this long says so, since "1 h ago" reads as when it ran.
