@@ -506,6 +506,13 @@ fn a_new_chat_says_once_that_settings_can_make_the_background_plain() {
 }
 
 #[test]
+fn the_background_hint_reads_at_one_size_with_both_actions_drawn_as_buttons() {
+    let hint = wings_plugin::ui::tree_json(background_hint()).to_string();
+    assert!(!hint.contains(r#""size":"small""#), "hint text beside size-sm buttons reads at the buttons' size: {hint}");
+    assert!(!hint.contains(r#""variant":"link""#), "a link variant draws as bare text: {hint}");
+}
+
+#[test]
 fn in_the_chat_the_panel_floats_over_the_conversation_with_the_place_and_the_terminals_dock_apart() {
     chat::with(|c| {
         c.side_in_wings = false;

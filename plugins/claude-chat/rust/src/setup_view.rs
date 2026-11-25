@@ -229,7 +229,7 @@ fn permissions_dialog(setup: &Setup) -> Node {
             (None, _) => Some("Claude Code's default".to_owned()),
             (Some(_), from) => from.as_ref().map(|from| format!("set in {from}")),
         };
-        row().prop("gap", "s").prop("align", "baseline").child(text("Default mode").prop("weight", "medium")).child(text(name)).maybe(from.map(small))
+        row().prop("gap", "s").prop("align", "baseline").child(muted("Default mode")).child(text(name).prop("weight", "strong")).maybe(from.map(small))
     });
     panel("Permissions", WIDTH, close)
         .maybe(mode)

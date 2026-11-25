@@ -276,8 +276,8 @@ fn background_hint() -> Node {
         .prop("gap", "s")
         .prop("align", "center")
         .prop("wrap", true)
-        .child(muted("Prefer a plain background? Change it in Settings, top right.").prop("size", "small"))
-        .child(button("Open Settings", "link", false, chat::open_settings_from_hint).prop("size", "sm"))
+        .child(muted("Prefer a plain background? Change it in Settings, top right."))
+        .child(button("Open Settings", "outline", false, chat::open_settings_from_hint).prop("size", "sm"))
         .child(button("Got it", "ghost", false, chat::dismiss_background_hint).prop("size", "sm"))
         .key("background-hint")
 }
