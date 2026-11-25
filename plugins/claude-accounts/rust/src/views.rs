@@ -9,7 +9,7 @@ use serde_json::json;
 use wings_plugin::{
     host, messages,
     task::spawn,
-    ui::{Node, badge, button, card, checkbox, loading, muted, notice, row, select, slot, stack, text, text_input, title},
+    ui::{Node, badge, button, card, checkbox, loading, muted, notice, row, select, section_label, slot, stack, text, text_input, title},
 };
 
 const OPEN_A_PROJECT: &str = "Open a project to choose its Claude account.";
@@ -85,11 +85,11 @@ pub fn sidebar() -> Vec<Node> {
     .prop("disabled", project.is_none())
     .prop("title", if project.is_none() { "Open a project first" } else { "" })
     .prop("aria-expanded", was_adding);
-    out.push(row().child(heading("Accounts")).child(Node::new("Text").prop("grow", true)).child(adding).key("accounts-title"));
+    out.push(row().prop("align", "center").prop("justify", "between").child(section_label("Accounts")).child(adding).key("accounts-title"));
     if let (true, Some(project)) = (s.adding, project) {
         out.push(add_account(project, data, &s).key("add"));
     }
-    out.push(account_list(data, &s).key("accounts"));
+    out.push(card().child(account_list(data, &s)).key("accounts"));
     out
 }
 
@@ -190,7 +190,7 @@ fn start_claude(project: &Project, data: &Loaded, s: &State) -> Option<Node> {
         let (project, name) = (project.clone(), account.name.clone());
         let busy = start.busy && s.starting.as_deref() == Some(key.as_str());
         let shown = if account.signed_in { label } else { format!("{label} · not signed in") };
-        button(shown, "outline", busy, move || spawn(actions::start_claude(project.clone(), name.clone()))).prop("size", "xs").prop("label", start_aria_label(&start_label(account), !account.signed_in)).prop("title", start_title(&start_label(account), !account.signed_in, now.is_none())).key(key)
+        button(shown, "secondary", busy, move || spawn(actions::start_claude(project.clone(), name.clone()))).prop("size", "sm").prop("label", start_aria_label(&start_label(account), !account.signed_in)).prop("title", start_title(&start_label(account), !account.signed_in, now.is_none())).key(key)
     });
     Some(
         stack()

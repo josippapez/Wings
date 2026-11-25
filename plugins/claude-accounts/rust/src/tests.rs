@@ -333,3 +333,27 @@ fn the_project_name_is_a_page_title_not_a_larger_one() {
     let name = &tree[at..at + tree[at..].find(r#""type":"Text""#).expect(&tree)];
     assert!(!name.contains("large"), "{tree}");
 }
+
+fn nodes<'a>(tree: &'a Value, kind: &str, found: &mut Vec<&'a Value>) {
+    if tree["type"] == kind {
+        found.push(tree);
+    }
+    for child in tree["children"].as_array().into_iter().flatten() {
+        nodes(child, kind, found);
+    }
+}
+
+#[test]
+fn the_accounts_sit_in_a_card_under_a_heading_row_that_centres_its_add_button() {
+    wings(None);
+    block_on(actions::reload());
+    with(|s| s.project = Some(Some(web())));
+    let tree = json!({ "children": wings_plugin::ui::export(views::sidebar()).0 });
+    let mut cards = vec![];
+    nodes(&tree, "Card", &mut cards);
+    assert!(cards.iter().any(|card| card["children"][0]["type"] == "List"), "the accounts list is the child of a card");
+    let mut rows = vec![];
+    nodes(&tree, "Row", &mut rows);
+    let head = rows.iter().find(|row| row.to_string().contains("Add account")).expect("the heading row");
+    assert_eq!((head["props"]["align"].as_str(), head["props"]["justify"].as_str()), (Some("center"), Some("between")));
+}

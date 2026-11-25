@@ -5,10 +5,7 @@
 //! is narrow the session sits above them. A fold kind the session doesn't show has a small preview under its row.
 
 use std::cell::{Cell, RefCell};
-use wings_plugin::{host::AccountChoice, task::spawn, ui::{Entry, Node, card, checkbox, chips as choose, entry, muted, row, rows_card, section, select, setting, setting_tick, stack, text}};
-
-/// How wide the background's menu is at the end of its row.
-const MENU_WIDTH: u32 = 200;
+use wings_plugin::{host::AccountChoice, task::spawn, ui::{Entry, Node, card, chips as choose, entry, muted, row, rows_card, section, select, setting, setting_field, setting_toggle, stack, text, SETTING_COLUMN}};
 
 use crate::{
     claude_version,
@@ -51,7 +48,8 @@ fn account_share(account: &AccountChoice, limit: prefs::Limit, name: &str, share
     let menu = select(&format!("{name} {}", if limit == prefs::Limit::Pause { "pause at" } else { "stop at" }), &options, &own, move |share| {
         prefs::set_own_share(who.as_deref(), limit, (!share.is_empty()).then(|| share.to_owned()));
     });
-    stack().prop("width", MENU_WIDTH).child(menu)
+    // Two menus share a line here, so each takes the width a settings row gives its control.
+    stack().prop("width", SETTING_COLUMN).child(menu)
 }
 
 /// What "Same as above" follows: the shared percent, or "off" when the shared checkbox is off.
@@ -161,14 +159,14 @@ fn choices() -> Node {
     for (kind, key, label) in KINDS {
         let (label, detail) = kind_text(kind, label);
         let open = prefs::opens(kind).get();
-        let tick = setting_tick(checkbox(label, open, move |on| drop(prefs::opens(kind).set(on))).key(key), detail);
+        let tick = setting_toggle(label, detail, open, move |on| drop(prefs::opens(kind).set(on))).key(key);
         // Every tick has its own example under it, though the session beside them shows some in Verbose: the example is
         // what the tick itself changes, in any view mode.
         starts.push(together([tick, preview(settings_preview::kind(kind, open))]));
         if kind == Kind::Summary {
             let open = !prefs::fold_reports().get();
             starts.push(together([
-                setting_tick(checkbox(REPORT_LABEL, open, |on| drop(prefs::fold_reports().set(!on))).key("fold-reports"), REPORT_DETAIL),
+                setting_toggle(REPORT_LABEL, REPORT_DETAIL, open, |on| drop(prefs::fold_reports().set(!on))).key("fold-reports"),
                 preview(settings_preview::report(open)),
             ]));
         }
@@ -207,18 +205,24 @@ fn choices() -> Node {
             "Plan limit",
             [
                 together([
-                    setting_tick(
-                        checkbox("Tell Claude to pause near the limit", prefs::pause_near_limit().get(), |on| drop(prefs::pause_near_limit().set(on))).key("pause-near-limit"),
+                    setting_toggle(
+                        "Tell Claude to pause near the limit",
                         "When your plan's 5-hour or weekly usage passes the share you pick, Claude is told to pause and ask you before more work, in every Claude Code session in Wings. Past the limit, work is billed as extra usage.",
-                    ),
+                        prefs::pause_near_limit().get(),
+                        |on| drop(prefs::pause_near_limit().set(on)),
+                    )
+                    .key("pause-near-limit"),
                     setting("Pause at", "The share of the limit.", chips("Pause at", &prefs::LIMIT_SHARES, &pause_at, |share| drop(prefs::pause_at().set(share.to_owned())))),
                     preview(limit("Claude pauses and asks", prefs::percent(&pause_at), false)),
                 ]),
                 together([
-                    setting_tick(
-                        checkbox("Stop the chat's turn near the limit", prefs::stop_near_limit().get(), |on| drop(prefs::stop_near_limit().set(on))).key("stop-near-limit"),
+                    setting_toggle(
+                        "Stop the chat's turn near the limit",
                         "A chat can also stop Claude's turn itself, as its Stop button does, once at this share and once more when the limit is used up. Send a message to go on.",
-                    ),
+                        prefs::stop_near_limit().get(),
+                        |on| drop(prefs::stop_near_limit().set(on)),
+                    )
+                    .key("stop-near-limit"),
                     setting("Stop at", "The share of the limit.", chips("Stop at", &prefs::LIMIT_SHARES, &stop_at, |share| drop(prefs::stop_at().set(share.to_owned())))),
                     preview(limit("The chat stops Claude's turn", prefs::percent(&stop_at), true)),
                 ]),
@@ -230,10 +234,13 @@ fn choices() -> Node {
         .child(group(
             "Remote Control",
             [together([
-                setting_tick(
-                    checkbox("Turn on Remote Control in every new chat", prefs::remote_on_start().get(), |on| drop(prefs::remote_on_start().set(on))).key("remote-on-start"),
+                setting_toggle(
+                    "Turn on Remote Control in every new chat",
                     "Each new chat turns on Remote Control as it starts, so you can follow and answer it on claude.ai or in the Claude app. The phone button at the top of the chat still turns it off for that chat.",
-                ),
+                    prefs::remote_on_start().get(),
+                    |on| drop(prefs::remote_on_start().set(on)),
+                )
+                .key("remote-on-start"),
                 preview(settings_preview::remote(prefs::remote_on_start().get())),
             ])],
         ))
@@ -255,7 +262,7 @@ fn choices() -> Node {
                         "The size of the text in the conversation, in every chat.",
                         chips("Text size", &prefs::TEXT_SIZES, &prefs::text_size().get(), |size| drop(prefs::text_size().set(size.to_owned()))),
                     ),
-                setting(
+                setting_field(
                     "Background",
                     "What lies behind the conversation. Patterns and gradients are dim, move slowly while Wings is in front, and stand still when your Mac reduces motion. Some need a newer Wings.",
                     background(),
@@ -272,8 +279,7 @@ fn choices() -> Node {
 fn background() -> Node {
     let options: Vec<(String, String)> =
         prefs::BACKGROUNDS.iter().map(|(value, label)| ((*value).to_owned(), (*label).to_owned())).collect();
-    let menu = select("Background", &options, &prefs::background().get(), |kind| drop(prefs::background().set(kind.to_owned())));
-    stack().prop("width", MENU_WIDTH).child(menu)
+    select("Background", &options, &prefs::background().get(), |kind| drop(prefs::background().set(kind.to_owned())))
 }
 
 /// A part of the page that isn't a preview, in the rows' inset.
@@ -409,6 +415,27 @@ mod tests {
             node["children"].as_array()?.iter().find_map(tick)
         }
         assert_eq!(tick(&page), Some(true));
+    }
+
+    #[test]
+    fn booleans_are_switches_and_the_background_menu_sits_in_the_shared_control_column() {
+        fn walk<'a>(node: &'a serde_json::Value, found: &mut Vec<&'a serde_json::Value>, kind: &str) {
+            if node["type"] == kind {
+                found.push(node);
+            }
+            for child in node["children"].as_array().into_iter().flatten() {
+                walk(child, found, kind);
+            }
+        }
+        let page = wings_plugin::ui::tree_json(stack().children(view()));
+        let mut boxes = Vec::new();
+        walk(&page, &mut boxes, "Checkbox");
+        assert_eq!(boxes.len(), KINDS.len() + 4);
+        assert!(boxes.iter().all(|b| b["props"]["switch"] == true), "every boolean is a switch");
+        let mut columns = Vec::new();
+        walk(&page, &mut columns, "Stack");
+        let menu = columns.iter().find(|c| c.to_string().contains("\"Background\"") && c["children"][0]["type"] == "Select");
+        assert_eq!(menu.map(|c| c["props"]["width"].clone()), Some(serde_json::json!(SETTING_COLUMN)));
     }
 
     #[test]
