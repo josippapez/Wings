@@ -1674,6 +1674,19 @@ fn an_agent_that_finishes_again_before_you_look_sounds_once() {
 
 /// Fourteen tabs don't fit in 1000 points: they scroll, and the + button after them stays in the window.
 #[test]
+fn five_tabs_fit_a_1000_point_window_without_scrolling() {
+    let (_app, mut window) = open_sized(Some(size(px(1000.0), px(640.0))), |_| {});
+    for _ in 0..3 {
+        press(&mut window, "t");
+    }
+    window.draw();
+    window.read(|workspace, _| {
+        assert_eq!(workspace.tabs().len(), 5);
+        assert_eq!(workspace.tab_scroll.max_offset().x, px(0.0), "the first tab was cut off at the strip's start");
+    });
+}
+
+#[test]
 fn overflowing_tabs_scroll_inside_the_window() {
     let (_app, mut window) = open_sized(Some(size(px(1000.0), px(640.0))), |_| {});
     for _ in 0..14 {

@@ -410,7 +410,8 @@ impl Workspace {
             .aria_selected(selected)
             .track_focus(focus)
             .flex_1()
-            .min_w(px(144.0))
+            // Tabs shrink to 100 before the strip scrolls: at 144, five in a 1000 point window cut the first to a letter.
+            .min_w(px(100.0))
             .h(px(28.0))
             .relative()
             .flex()
