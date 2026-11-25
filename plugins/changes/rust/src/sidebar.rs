@@ -16,7 +16,7 @@ use wings_plugin::{
     git::{branch_label, ok, on_change, repo_root},
     host, messages, poll,
     task::{join, join_all, spawn},
-    ui::{Node, card, checkbox, chips, empty, icon_button, icons, list, list_button, list_row, loading, muted, notice, page, row, search_field, spinner, stack, text, toolbar_with},
+    ui::{Node, checkbox, chips, empty, icon_button, icons, list, list_button, list_row, loading, muted, notice, page, row, search_field, spinner, stack, text, toolbar_with},
 };
 
 /// How long the search waits after the last key before it asks git.
@@ -374,11 +374,17 @@ fn changes_body(c: &Changes, mode: Mode, collapsed: &BTreeSet<String>) -> Vec<No
         .child(text(format!("−{}", c.removed)).prop("tone", "danger").prop("numeric", true))
         .maybe(c.partial.then(|| muted(" (some new files not counted)")));
     let root = c.root.clone();
-    let all = button("View all", "outline", false, move || ask(OPEN, json!({ "root": root, "mode": mode.name(), "path": null })));
+    let all = button("View all", "ghost", false, move || ask(OPEN, json!({ "root": root, "mode": mode.name(), "path": null }))).prop("size", "sm");
     let mut rows = Vec::new();
     tree_rows(&tree(&c.files), 0, &c.root, mode, collapsed, &mut rows);
     vec![
-        card().key("summary").child(row().child(stack().prop("gap", "none").prop("grow", true).child(summary).child(muted(c.against.clone()).prop("truncate", true))).child(all)),
+        // The totals over what they're against, with no card around them, as Orca's git panel has its branch: a card and a
+        // large button took a narrow sidebar's room from the files.
+        row()
+            .key("summary")
+            .prop("align", "center")
+            .child(stack().prop("gap", "none").prop("grow", true).child(summary).child(muted(c.against.clone()).prop("size", "small").prop("truncate", true)))
+            .child(all),
         list().key("tree").children(rows),
     ]
 }
