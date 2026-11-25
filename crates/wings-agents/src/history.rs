@@ -163,6 +163,8 @@ struct Session {
     replying: bool,
     /// A subagent's transcript, whose every entry is a sidechain: it is read like a session's own.
     sidechains: bool,
+    /// Started by a program through the Agent SDK (Python or TypeScript), like an automated review: not listed.
+    by_program: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -186,6 +188,7 @@ struct Entry {
     custom_title: Option<String>,
     #[serde(rename = "prUrl")]
     pr_url: Option<String>,
+    entrypoint: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -294,6 +297,9 @@ impl Session {
         }
         if self.cwd.is_none() {
             self.cwd = entry.cwd.filter(|c| !c.is_empty());
+        }
+        if let Some(entrypoint) = &entry.entrypoint {
+            self.by_program.get_or_insert(matches!(entrypoint.as_str(), "sdk-py" | "sdk-ts"));
         }
         let sidechain = entry.sidechain == Some(true) && !self.sidechains;
         match entry.kind.as_deref() {
@@ -861,7 +867,7 @@ impl History {
             .iter()
             .map(|(path, t)| (t.modified, Some(path), &t.session))
             .chain(opencode.sessions.values().map(|c| (c.updated, None, &c.session)))
-            .filter(|(_, _, s)| !s.messages.is_empty() && project.is_none_or(|p| s.in_project(p)))
+            .filter(|(_, _, s)| !s.messages.is_empty() && s.by_program != Some(true) && project.is_none_or(|p| s.in_project(p)))
             .collect();
         scope.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.2.id.cmp(&b.2.id)));
         // Resuming a session in another account copies its transcript there, so one session can have two: list the one

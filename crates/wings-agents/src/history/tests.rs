@@ -158,6 +158,24 @@ fn a_search_lists_a_folder_again_only_when_a_transcript_comes_or_goes() {
 }
 
 #[test]
+fn sessions_a_program_ran_through_the_agent_sdk_are_left_out() {
+    let dir = temp_claude_dir("sdk");
+    let from = |entrypoint: &str| {
+        let mut line: Value = serde_json::from_str(&user("/tmp/proj", "main", "review this change")).unwrap();
+        line["entrypoint"] = json!(entrypoint);
+        vec![line.to_string(), assistant("looks fine")]
+    };
+    for (id, entrypoint) in [("terminal", "cli"), ("chat", "sdk-cli"), ("python", "sdk-py"), ("node", "sdk-ts")] {
+        transcript(&dir, "/tmp/proj", id, &from(entrypoint));
+    }
+    let history = History::default();
+    let listed = |q: &str| sorted_ids(&history.search(std::slice::from_ref(&dir), q, &Filter::default(), 10));
+    assert_eq!(listed(""), ["chat", "terminal"]);
+    assert_eq!(listed("review"), ["chat", "terminal"]);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn search_matches_every_term_and_filters() {
     let dir = temp_claude_dir("search");
     let edit = json!({ "type": "assistant", "message": { "content": [{ "type": "tool_use", "name": "Write", "input": { "file_path": "/w/app/src/history-sheet.tsx" } }] } }).to_string();
