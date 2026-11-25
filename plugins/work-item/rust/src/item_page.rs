@@ -11,7 +11,7 @@ use crate::{
     },
     parts::{avatar, badge, card_of, fact, gap, pill, pill_button, skeleton, skeletons, strong, time_text, tone_dot, type_dot},
     sections::state_tone,
-    type_color::type_color,
+    type_color::type_tone,
     urls::{pr_url, work_item_url},
     view::{TypeState, other_states},
 };
@@ -387,7 +387,7 @@ fn header(p: &Page, item: &Shown, args: &ItemArgs, parent_id: Option<u64>, paren
     // The toolbar names the place (the kind and the number); the body names the thing, and says the number no more.
     let facts: Vec<Node> = [(!sprint.is_empty()).then(|| fact(sprint)), (!area.is_empty() && area != project).then(|| fact(area)), created, updated].into_iter().flatten().collect();
     gap(stack(), "s")
-        .child(gap(row(), "s").prop("wrap", true).prop("align", "center").child(type_dot(type_color(kind))).child(strong(f["System.Title"].as_str().unwrap_or_default()).prop("grow", true)).maybe(parent))
+        .child(gap(row(), "s").prop("wrap", true).prop("align", "center").child(type_dot(type_tone(kind))).child(strong(f["System.Title"].as_str().unwrap_or_default()).prop("grow", true)).maybe(parent))
         .child(gap(row(), "m").prop("wrap", true).prop("align", "center").child(state_node).child(person))
         .maybe((!facts.is_empty()).then(|| joined(facts)))
         .maybe((!tags.is_empty()).then(|| gap(row(), "s").prop("wrap", true).children(tags.iter().map(|tag| gap(stack(), "s").key(tag.clone()).child(pill(tag.as_str(), "outline", None))))))
@@ -531,7 +531,7 @@ fn link_row(args: &ItemArgs, id: u64, item: Option<&LinkedItem>) -> Node {
     let button = Node::new("ListButton")
         .prop("title", label)
         .on("onClick", move |_| open_item(&args, id))
-        .maybe(item.map(|item| type_dot(type_color(&item.kind))))
+        .maybe(item.map(|item| type_dot(type_tone(&item.kind))))
         .child(muted(format!("#{id}")))
         .child(Node::new("Text").prop("grow", true).text(item.map_or("", |item| item.title.as_str())))
         .maybe(item.filter(|item| !item.state.is_empty()).map(|item| pill(item.state.as_str(), "outline", tone_of(&item.state))))

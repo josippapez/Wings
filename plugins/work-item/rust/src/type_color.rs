@@ -1,25 +1,19 @@
-//! How a work item type looks: Azure DevOps' own colours for the common ones.
+//! How a work item type looks: a tone of the app's palette for the common ones, so a dot sits with the other dots.
 
-/// The colour of a work item type's dot; a type we don't know is grey.
-pub fn type_color(kind: &str) -> u32 {
+/// The tone of a work item type's dot; a type we don't know is muted.
+pub fn type_tone(kind: &str) -> &'static str {
     let kind = kind.to_lowercase();
     let has = |names: &[&str]| names.iter().any(|name| kind.contains(name));
     if has(&["bug"]) {
-        0xcc293d
+        "danger"
     } else if kind == "task" {
-        0xf2cb1d
+        "warn"
     } else if has(&["user story", "product backlog item", "requirement"]) {
-        0x009ccc
+        "info"
     } else if has(&["feature"]) {
-        0x773b93
-    } else if has(&["epic"]) {
-        0xff7b00
-    } else if has(&["issue", "impediment", "risk"]) {
-        0xb4009e
-    } else if has(&["test"]) {
-        0x004b50
+        "success"
     } else {
-        0x8a8a8a
+        "muted"
     }
 }
 
@@ -28,13 +22,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn azures_colours_go_to_the_common_types_and_grey_to_the_rest() {
-        assert_eq!(type_color("Bug"), 0xcc293d);
-        assert_eq!(type_color("User Story"), 0x009ccc);
-        assert_eq!(type_color("Product Backlog Item"), 0x009ccc);
-        assert_eq!(type_color("Task"), 0xf2cb1d);
-        assert_eq!(type_color("Test Case"), 0x004b50);
-        assert_eq!(type_color("Epic"), 0xff7b00);
-        assert_eq!(type_color("Whatever"), 0x8a8a8a);
+    fn the_common_types_get_a_palette_tone_each_and_the_rest_muted() {
+        assert_eq!(type_tone("Bug"), "danger");
+        assert_eq!(type_tone("User Story"), "info");
+        assert_eq!(type_tone("Product Backlog Item"), "info");
+        assert_eq!(type_tone("Task"), "warn");
+        assert_eq!(type_tone("Feature"), "success");
+        assert_eq!(type_tone("Epic"), "muted");
+        assert_eq!(type_tone("Whatever"), "muted");
     }
 }

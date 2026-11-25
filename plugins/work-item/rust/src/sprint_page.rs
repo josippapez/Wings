@@ -7,7 +7,7 @@ use crate::{
     item::item_tab_args,
     parts::{avatar, empty_title, gap, type_dot},
     sections::{BlockItem, assigned_query, block_items, clean_block_state, group_by_state, sprint_query},
-    type_color::type_color,
+    type_color::type_tone,
 };
 use serde_json::{Value, json};
 use std::cell::RefCell;
@@ -100,7 +100,7 @@ fn item_card(item: &BlockItem, org: &str, show_assignee: bool) -> Node {
     let (org, id) = (org.to_owned(), item.id);
     let body = gap(stack(), "xs")
         .child(text(item.title.as_str()).prop("weight", "medium").prop("clamp", true))
-        .child(gap(row(), "s").child(type_dot(type_color(&item.kind))).child(muted(format!("#{}", item.id)).prop("size", "tiny").prop("numeric", true)).maybe(
+        .child(gap(row(), "s").child(type_dot(type_tone(&item.kind))).child(muted(format!("#{}", item.id)).prop("size", "tiny").prop("numeric", true)).maybe(
             item.assignee.as_ref().filter(|_| show_assignee).map(|who| gap(row(), "s").prop("wrap", true).child(avatar(who, true))),
         ));
     card().key(item.id.to_string()).child(Node::new("ListButton").prop("title", label).on("onClick", move |_| open_item(&org, id)).child(body))

@@ -26,9 +26,9 @@ pub fn avatar(name: &str, small: bool) -> Node {
     if small { avatar.prop("size", "small") } else { avatar }
 }
 
-/// A dot in a type's colour.
-pub fn type_dot(color: u32) -> Node {
-    Node::new("Dot").prop("color", color)
+/// A dot in a type's tone.
+pub fn type_dot(tone: &str) -> Node {
+    Node::new("Dot").prop("tone", tone)
 }
 
 /// A state's dot, in the tones a `Dot` takes.
