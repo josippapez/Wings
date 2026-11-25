@@ -746,8 +746,11 @@ impl Session {
             // A task's end, from its update and its notice, whichever comes first.
             "system" if line["subtype"] == "task_started" => {
                 // Waking an agent with SendMessage starts it again under that message's call: the first call is its row's.
-                if let Some(task) = self.tasks.iter_mut().find(|task| line["task_id"] == task.id.as_str() && task.call.is_empty()) {
-                    task.call =line["tool_use_id"].as_str().unwrap_or_default().to_owned();
+                // After a restart only the transcript knows that call.
+                let id = line["task_id"].as_str().unwrap_or_default();
+                let call = self.agents.call_of(id).or(line["tool_use_id"].as_str()).unwrap_or_default().to_owned();
+                if let Some(task) = self.tasks.iter_mut().find(|task| task.id == id && task.call.is_empty()) {
+                    task.call = call;
                 }
             }
             "system" if line["subtype"] == "task_updated" || line["subtype"] == "task_notification" => {
@@ -4196,6 +4199,17 @@ mod tests {
         assert_eq!((session.tasks[0].call.as_str(), session.tasks[0].ended.as_deref(), session.tasks[0].started), ("toolu_first", None, 50_000));
         session.hear(&json!({ "type": "system", "subtype": "task_progress", "task_id": "ag1", "tool_use_id": "toolu_send", "usage": { "total_tokens": 900, "tool_uses": 3, "duration_ms": 4_000 } }));
         assert_eq!(session.meter.agents["toolu_first"].tool_uses, 3);
+    }
+
+    #[test]
+    fn a_background_agent_woken_after_a_restart_runs_again_under_the_call_that_started_it() {
+        let mut session = Session::default();
+        // Read back from the transcript, which keeps the launch's result but none of the task lines.
+        session.hear(&json!({ "type": "user", "message": { "content": [{ "type": "tool_result", "tool_use_id": "toolu_first", "content": "Async agent launched" }] },
+            "toolUseResult": { "isAsync": true, "status": "async_launched", "agentId": "ag1" } }));
+        session.hear(&json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": [{ "task_id": "ag1", "run_id": "run-2", "task_type": "local_agent", "description": "tiny" }] }));
+        session.hear(&json!({ "type": "system", "subtype": "task_started", "task_id": "ag1", "run_id": "run-2", "tool_use_id": "toolu_send", "description": "tiny", "is_backgrounded": true, "task_type": "local_agent" }));
+        assert_eq!(session.tasks[0].call, "toolu_first");
     }
 
     #[test]
