@@ -823,6 +823,19 @@ fn checkbox() -> String {
     })
 }
 
+fn switch_checkbox() -> String {
+    let mut checked = false;
+    fake::page("page", move |event| {
+        if let Some((_, change)) = event {
+            checked = change["checked"].as_bool().unwrap_or_default();
+        }
+        json!({ "id": 0, "type": "#root", "props": {}, "children": [
+            { "id": 1, "type": "Page", "props": {}, "children": [{ "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [
+                { "id": 3, "type": "Checkbox", "props": { "checked": checked, "switch": true, "label": "Keep local", "onChange": "3:onChange" }, "children": [] }
+            ] }] }] })
+    })
+}
+
 fn disabled_checkbox() -> String {
     fake::page("page", |_| {
         json!({ "id": 0, "type": "#root", "props": {}, "children": [
@@ -873,6 +886,20 @@ fn what_the_page_throws_is_shown_under_it_and_what_the_host_does_not_know_is_not
     settle(&app, &mut window, |view| {
         view.error().is_some_and(|error| error.contains("nope"))
     });
+}
+
+#[test]
+fn a_switch_without_words_is_keyboard_operable_like_a_checkbox() {
+    let (app, mut window) = open(switch_checkbox());
+    settle(&app, &mut window, |view| view.checkbox_checked() == Some(false));
+    window.update(|_, window, cx| window.focus_next(cx));
+    window.draw();
+    window.simulate_event(gpui::KeyDownEvent {
+        keystroke: Keystroke::parse("space").unwrap(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    settle(&app, &mut window, |view| view.checkbox_checked() == Some(true));
 }
 
 #[test]

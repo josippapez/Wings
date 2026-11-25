@@ -477,6 +477,9 @@ pub struct Checkbox {
     pub id: u64,
     pub checked: bool,
     pub disabled: bool,
+    /// `switch: true`: drawn as Settings' on/off switch, the name a screen reader reads out in `label`.
+    pub switch: bool,
+    pub label: String,
     pub on_change: Option<String>,
     pub children: Vec<Node>,
 }
@@ -1577,6 +1580,8 @@ impl Walk {
                 id,
                 checked: on("checked"),
                 disabled: on("disabled"),
+                switch: on("switch"),
+                label: text_prop(&props, "label"),
                 on_change: handler("onChange"),
                 children: parts(children),
             }),

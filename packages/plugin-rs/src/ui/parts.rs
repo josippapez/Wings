@@ -2,7 +2,7 @@
 //! settings row, a line of facts, and the props a button takes by name. They only compose nodes the app already draws, so
 //! they work in any Wings that has the nodes.
 
-use super::{Entry, Node, entry, muted, row, slot, text};
+use super::{Entry, Node, button, card, checkbox, entry, muted, notice, row, slot, stack, text, title};
 
 impl Node {
     /// On a `Button`: its size, one of `sm`, `icon-sm`, `icon-xs`...
@@ -85,6 +85,29 @@ pub fn joined(parts: Vec<Node>) -> Node {
 /// Wings' own Settings rows are.
 pub fn setting(name: &str, detail: &str, control: Node) -> Node {
     entry(Entry { lead: None, title: text(name).prop("weight", "medium"), detail: Some(muted(detail).prop("size", "small")), trailing: Some(control) })
+}
+
+/// How wide the control column of a settings row is: Wings' own Settings draws its menus 176 points wide.
+pub const SETTING_COLUMN: u32 = 176;
+
+/// A `setting` whose `control` (a `select` or a `text_input`) fills a column of one width at the end of the row, as Wings'
+/// own Settings rows do, so the menus of a page line up whatever their choices say.
+pub fn setting_field(name: &str, detail: &str, control: Node) -> Node {
+    setting(name, detail, stack().prop("width", SETTING_COLUMN).child(control))
+}
+
+/// A setting that is on or off, as a row of a `rows_card`: the name and what it does on the left and a switch at the
+/// end, as Wings' own Settings draws it. `on_change` hears the next state. Needs Wings 0.2.112 for the switch; an older
+/// Wings draws a checkbox at the end instead.
+pub fn setting_toggle(name: &str, detail: &str, on: bool, on_change: impl Fn(bool) + 'static) -> Node {
+    setting(name, detail, checkbox("", on, on_change).prop("switch", true).aria_label(name))
+}
+
+/// What a page shows in place of what it could not load: a card with a `title` line, the `message` in a danger notice
+/// and, with `retry` as `(label, handler)`, a primary button that tries again.
+pub fn error_state(title_line: &str, message: &str, retry: Option<(&str, Box<dyn Fn()>)>) -> Node {
+    let again = retry.map(|(label, on_click)| row().prop("gap", "s").child(button(label, "default", false, on_click)));
+    card().child(stack().prop("gap", "m").child(title(title_line)).child(notice("danger", message)).maybe(again))
 }
 
 /// A setting that is a tick, as a row of a `rows_card`: the `tick` (a `checkbox`) is labelled with the setting's name,
@@ -186,6 +209,32 @@ mod tests {
         let kinds: Vec<_> = line["children"].as_array().unwrap().iter().map(|child| child["children"][0].get("text").cloned().unwrap_or_else(|| child["children"][0]["text"].clone())).collect();
         assert_eq!(kinds, [json!("a"), json!("·"), json!("b"), json!("·"), json!("c")]);
         assert_eq!(props(section_label("Conversation · 3")), json!({ "tone": "muted", "size": "small", "weight": "medium" }));
+    }
+
+    #[test]
+    fn an_error_state_is_a_card_of_a_title_a_danger_notice_and_a_primary_retry() {
+        let tree = tree_json(error_state("Couldn't scan", "No access", Some(("Try again", Box::new(|| {})))));
+        assert_eq!(tree["type"], "Card");
+        let body = &tree["children"][0];
+        let kinds: Vec<_> = body["children"].as_array().unwrap().iter().map(|child| child["type"].clone()).collect();
+        assert_eq!(kinds, [json!("Text"), json!("Notice"), json!("Row")]);
+        assert_eq!(body["children"][0]["props"], json!({ "weight": "strong" }));
+        assert_eq!(body["children"][1]["props"], json!({ "tone": "danger" }));
+        let retry = &body["children"][2]["children"][0];
+        assert_eq!((&retry["type"], &retry["props"]["variant"], &retry["children"][0]["text"]), (&json!("Button"), &json!("default"), &json!("Try again")));
+        let without = tree_json(error_state("Couldn't read", "Gone", None));
+        assert_eq!(without["children"][0]["children"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_field_setting_puts_its_control_in_a_176_point_column_and_a_toggle_ends_in_a_named_switch() {
+        let field = tree_json(setting_field("View", "Which.", text("menu")));
+        let column = &field["children"][2]["children"][0];
+        assert_eq!((&column["type"], &column["props"]["width"]), (&json!("Stack"), &json!(176)));
+        let toggle = tree_json(setting_toggle("Keep local", "Why.", true, |_| {}));
+        let switch = &toggle["children"][2]["children"][0];
+        assert_eq!(switch["type"], "Checkbox");
+        assert_eq!((&switch["props"]["switch"], &switch["props"]["label"], &switch["props"]["checked"]), (&json!(true), &json!("Keep local"), &json!(true)));
     }
 
     #[test]

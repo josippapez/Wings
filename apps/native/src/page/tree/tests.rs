@@ -252,6 +252,19 @@ fn notices_spinners_checkboxes_and_confirms_have_only_their_supported_parts() {
     assert_eq!(plain_text(&confirm.actions), "Go");
 }
 
+#[test]
+fn a_checkbox_can_be_a_switch_named_by_its_label() {
+    let parsed = tree(json!([
+        {"id":1,"type":"Checkbox","props":{"checked":true,"switch":true,"label":"Keep issues local","onChange":"1:onChange"},"children":[]},
+        {"id":2,"type":"Checkbox","props":{"checked":true},"children":[text(3, "Plain")]}]))
+    .unwrap();
+    let (Node::Checkbox(switch), Node::Checkbox(plain)) = (&parsed.children[0], &parsed.children[1]) else {
+        panic!("two checkboxes")
+    };
+    assert_eq!((switch.switch, switch.label.as_str()), (true, "Keep issues local"));
+    assert!(!plain.switch);
+}
+
 fn slot(name: &str, children: Value) -> Value {
     json!({"id":90,"type":"Slot","props":{"name":name},"children":children})
 }

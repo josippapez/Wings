@@ -28,7 +28,10 @@ const CHECKBOX_EDGE: u32 = 0xffffff55;
 
 impl PageView {
     pub(super) fn checkbox(&self, checkbox: &tree::Checkbox, cx: &mut Context<Self>) -> AnyElement {
-        let label = plain_text(&checkbox.children);
+        let label = match plain_text(&checkbox.children) {
+            words if words.is_empty() => checkbox.label.clone(),
+            words => words,
+        };
         let checked = checkbox.checked;
         let element = div()
             .id(ElementId::NamedInteger("page-checkbox".into(), checkbox.id))
@@ -46,7 +49,13 @@ impl PageView {
             .gap(px(8.0))
             .cursor_pointer()
             .opacity(if checkbox.disabled { 0.5 } else { 1.0 })
-            .child(
+            .child(if checkbox.switch {
+                ui::switch(
+                    ElementId::NamedInteger("page-switch".into(), checkbox.id),
+                    checked,
+                )
+                .into_any_element()
+            } else {
                 div()
                     .size(px(16.0))
                     .flex_none()
@@ -69,9 +78,12 @@ impl PageView {
                         "✓".into_any_element()
                     } else {
                         div().into_any_element()
-                    }),
-            )
-            .child(div().min_w_0().child(self.inline(&checkbox.children, cx)));
+                    })
+                    .into_any_element()
+            })
+            .when(!checkbox.children.is_empty(), |element| {
+                element.child(div().min_w_0().child(self.inline(&checkbox.children, cx)))
+            });
         match checkbox.on_change.clone() {
             Some(handler) => {
                 let keyboard_handler = handler.clone();
