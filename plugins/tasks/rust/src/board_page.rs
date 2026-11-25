@@ -446,7 +446,7 @@ fn issue_list(project: &Project, shown: &[&Issue], all: &[Issue], by_parent: boo
         budget -= given;
         given
     };
-    let mut out = stack("l").prop("maxWidth", 1100);
+    let mut out = stack("l");
     let mut hidden = 0;
     if by_parent {
         let (groups, loose) = issue_tree(shown, show_canceled, sort);

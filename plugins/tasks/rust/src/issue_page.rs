@@ -757,7 +757,7 @@ fn view() -> Vec<Node> {
         .child(activity(issue));
     let head = stack("s").child(title_row(issue));
     let grid = row("l").prop("align", "start").child(stack("l").prop("grow", true).child(head).child(main)).child(Node::new("Stack").prop("width", 16)).child(properties(issue, issues, &project));
-    vec![page(toolbar(Some(issue), &key), [stack("l").prop("maxWidth", 1040).maybe(notices).child(grid).maybe(confirming)])]
+    vec![ui::column_page(toolbar(Some(issue), &key), [stack("l").maybe(notices).child(grid).maybe(confirming)])]
 }
 
 /// The args the tab was opened with.
