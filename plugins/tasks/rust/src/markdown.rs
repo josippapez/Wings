@@ -104,7 +104,8 @@ fn list_item(line: &str) -> Option<(usize, bool, &str)> {
 /// Three or more of the same `-`, `*` or `_`, with spaces between them.
 fn is_rule(line: &str) -> bool {
     let compact: String = line.chars().filter(|c| !c.is_whitespace()).collect();
-    compact.len() >= 3 && compact.chars().all(|c| Some(c) == compact.chars().next()) && "-*_".contains(&compact[..1])
+    let first = compact.chars().next();
+    compact.len() >= 3 && compact.chars().all(|c| Some(c) == first) && first.is_some_and(|c| "-*_".contains(c))
 }
 
 fn fence(line: &str) -> Option<(&'static str, String)> {
@@ -360,6 +361,12 @@ mod tests {
         assert_eq!(blocks[6], Block::Rule);
         assert_eq!(blocks[7], Block::Table { head: vec!["a".into(), "b".into()], rows: vec![vec!["1".into(), "2".into()], vec!["3".into(), String::new()]] });
         assert_eq!(parse_blocks("# Title ##")[0], Block::Heading { level: 1, text: "Title".into() });
+    }
+
+    #[test]
+    fn a_line_of_one_wide_character_repeated_is_a_paragraph_not_a_crash() {
+        assert_eq!(parse_blocks("———"), [Block::Paragraph("———".into())]);
+        assert_eq!(parse_blocks("éé"), [Block::Paragraph("éé".into())]);
     }
 
     #[test]

@@ -96,7 +96,7 @@ pub fn writes_to_history(command: &str) -> bool {
 /// and `web-12` no.
 pub fn issue_key_in(command: &str, prefixes: &[String]) -> Option<String> {
     let bytes = command.as_bytes();
-    (0..bytes.len()).filter(|at| *at == 0 || !bytes[at - 1].is_ascii_alphanumeric()).find_map(|at| {
+    command.char_indices().map(|(at, _)| at).filter(|at| *at == 0 || !bytes[at - 1].is_ascii_alphanumeric()).find_map(|at| {
         prefixes.iter().find_map(|prefix| {
             let digits = command[at..].strip_prefix(prefix.as_str())?.strip_prefix('-')?;
             let count = digits.bytes().take_while(u8::is_ascii_digit).count().min(9);
@@ -146,5 +146,11 @@ mod tests {
         assert!(allowed(r#"git tag v1 WEB-5"#));
         assert_eq!(issue_key_in("WEB-12", &[]), None);
         assert_eq!(issue_key_in("WEB-1234567890", &web()), None);
+    }
+
+    #[test]
+    fn a_commit_message_with_characters_wider_than_a_byte_is_read_without_a_crash() {
+        assert_eq!(local_only_denial("git commit -m \"Open in…, café · WEB-7\"", &web()).as_deref().map(|s| &s[..5]), Some("WEB-7"));
+        assert_eq!(local_only_denial("git commit -m \"Menus close — résumé\"", &web()), None);
     }
 }
