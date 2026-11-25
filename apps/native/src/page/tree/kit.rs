@@ -87,6 +87,7 @@ pub(super) fn list_row(id: u64, children: Vec<Node>, on_click: Option<String>, t
                 on_key_down: None,
                 shortcut: None,
                 description: None,
+                show_on_hover: false,
                 children: vec![line],
             },
             indent: 0.0,

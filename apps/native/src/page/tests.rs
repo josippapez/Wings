@@ -832,6 +832,38 @@ fn disabled_checkbox() -> String {
     })
 }
 
+/// A card with a `showOnHover` Delete button, and the same button outside any card.
+fn card_with_hover_button() -> String {
+    fake::page("page", |_| {
+        json!({ "id": 0, "type": "#root", "props": {}, "children": [
+            { "id": 1, "type": "Page", "props": {}, "children": [{ "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [
+                { "id": 3, "type": "Card", "props": {}, "children": [
+                    { "id": 4, "type": "Text", "props": {}, "children": [text_node(5, "Fix the focus ring")] },
+                    { "id": 6, "type": "Button", "props": { "showOnHover": true, "onClick": "6:onClick" }, "children": [text_node(7, "Delete")] }
+                ] },
+                { "id": 8, "type": "Button", "props": { "showOnHover": true, "onClick": "8:onClick" }, "children": [text_node(9, "Loose")] }
+            ] }] }] })
+    })
+}
+
+#[test]
+fn a_cards_show_on_hover_button_shows_only_while_the_pointer_is_on_the_card() {
+    let (app, mut window) = open(card_with_hover_button());
+    settle(&app, &mut window, shows("Loose"));
+    let hidden = |window: &mut View| {
+        window.draw();
+        window.read(|view, _| view.hidden_buttons())
+    };
+    assert_eq!(hidden(&mut window), [6], "hidden in its card; one outside a card always shows");
+    let card = crate::ui::spot_at("page-hover-card-3").expect("the card is drawn");
+    window.simulate_mouse_move(card.center());
+    app.run_until_parked();
+    assert_eq!(hidden(&mut window), Vec::<u64>::new(), "the pointer is on the card");
+    window.simulate_mouse_move(point(px(600.0), px(500.0)));
+    app.run_until_parked();
+    assert_eq!(hidden(&mut window), [6], "the pointer left the card");
+}
+
 #[test]
 fn what_the_page_throws_is_shown_under_it_and_what_the_host_does_not_know_is_not_drawn() {
     let (app, mut window) = open(throws());

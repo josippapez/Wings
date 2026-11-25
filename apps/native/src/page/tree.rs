@@ -372,6 +372,9 @@ pub struct Button {
     pub shortcut: Option<Shortcut>,
     /// A dim second line under the text of an item of a `PopupMenu`.
     pub description: Option<String>,
+    /// `showOnHover: true`: inside a `Card`, drawn only while the pointer is on the card or the button has the
+    /// keyboard, as a board card's actions.
+    pub show_on_hover: bool,
     pub children: Vec<Node>,
 }
 
@@ -1552,6 +1555,7 @@ impl Walk {
                 description: str_prop(&props, "description")
                     .filter(|text| !text.is_empty())
                     .map(|text| cut(text.to_owned())),
+                show_on_hover: on("showOnHover"),
                 children: parts(children),
             }),
             "Notice" => Node::Notice(Notice {
@@ -1880,6 +1884,7 @@ impl Walk {
                     on_key_down: handler("onKeyDown"),
                     shortcut: str_prop(&props, "shortcut").and_then(Shortcut::parse),
                     description: None,
+                    show_on_hover: false,
                     children: parts(children),
                 },
                 indent: number(&props, "indent")

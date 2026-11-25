@@ -324,6 +324,10 @@ pub struct PageView {
     /// this render: a step of them then draws the layer, not the whole page. Only while a piece of the window puts the page on screen and draws
     /// that layer (`ui::place_view`), and nothing of the page's own is over them.
     spin_in_layer: Cell<bool>,
+    /// The `Card` the pointer is on, whose `showOnHover` buttons show.
+    hovered_card: Option<u64>,
+    /// While a `Card`'s children are drawn: its id, and whether one of them is a `showOnHover` button.
+    drawing_card: Cell<Option<(u64, bool)>>,
     found_links: RefCell<FoundLinks>,
     /// Draws the page's terminals over it, as the workspace does, for the screenshots of a page alone.
     #[cfg(feature = "test-support")]
@@ -334,6 +338,9 @@ pub struct PageView {
     /// How many times the page has rendered, for what draws it again.
     #[cfg(feature = "test-support")]
     renders: Cell<usize>,
+    /// The `showOnHover` buttons the last render drew hidden.
+    #[cfg(feature = "test-support")]
+    hidden_buttons: RefCell<Vec<u64>>,
     /// The nodes the typing bench leaves out of the draw (`bench_view`).
     #[cfg(feature = "test-support")]
     bench_hidden: RefCell<HashSet<u64>>,
@@ -717,6 +724,8 @@ impl PageView {
             terminals_told: None,
             terminals_covered: Cell::new(false),
             spin_in_layer: Cell::new(false),
+            hovered_card: None,
+            drawing_card: Cell::new(None),
             found_links: RefCell::default(),
             #[cfg(feature = "test-support")]
             shot_terminals: None,
@@ -724,6 +733,8 @@ impl PageView {
             shot_layers: Vec::new(),
             #[cfg(feature = "test-support")]
             renders: Cell::new(0),
+            #[cfg(feature = "test-support")]
+            hidden_buttons: RefCell::default(),
             #[cfg(feature = "test-support")]
             bench_hidden: RefCell::default(),
             _events: events,
@@ -1281,6 +1292,42 @@ impl PageView {
     #[cfg(feature = "test-support")]
     pub fn renders(&self) -> usize {
         self.renders.get()
+    }
+
+    /// The `showOnHover` buttons the last render drew hidden.
+    #[cfg(feature = "test-support")]
+    pub fn hidden_buttons(&self) -> Vec<u64> {
+        self.hidden_buttons.borrow().clone()
+    }
+
+    /// `card`'s children, and whether one of them is a `showOnHover` button.
+    fn card_children(&self, card: &tree::Card, cx: &mut Context<Self>) -> (Vec<AnyElement>, bool) {
+        let outer = self.drawing_card.replace(Some((card.id, false)));
+        let children = self.nodes(&card.children, cx);
+        let reveals = self.drawing_card.replace(outer).is_some_and(|(_, reveals)| reveals);
+        (children, reveals)
+    }
+
+    /// A card that holds a `showOnHover` button tells the page when the pointer comes onto it and leaves, which shows
+    /// and hides the button.
+    fn card_hovering(&self, id: u64, card: gpui::Div, reveals: bool, cx: &mut Context<Self>) -> AnyElement {
+        if !reveals {
+            return card.into_any_element();
+        }
+        card.id(ElementId::NamedInteger("page-card-hover".into(), id))
+            .children(ui::spot(|| format!("page-hover-card-{id}")))
+            .on_hover(cx.listener(move |view, hovered: &bool, _, cx| {
+                let now = match *hovered {
+                    true => Some(id),
+                    false if view.hovered_card == Some(id) => None,
+                    false => return,
+                };
+                if view.hovered_card != now {
+                    view.hovered_card = now;
+                    cx.notify();
+                }
+            }))
+            .into_any_element()
     }
 
     /// How far the following `Scroll` `id` is scrolled from its top, and how far it can scroll at most, in points.
@@ -2061,7 +2108,24 @@ impl PageView {
             )
             .when(button.round, |el| el.rounded_full())
         };
+        // A `showOnHover` button in a card is drawn clear until the pointer comes onto the card, or it has the keyboard.
+        let hidden = match (button.show_on_hover, self.drawing_card.get()) {
+            (true, Some((card, _))) => {
+                self.drawing_card.set(Some((card, true)));
+                self.hovered_card != Some(card)
+            }
+            _ => false,
+        };
+        #[cfg(feature = "test-support")]
+        if hidden {
+            self.hidden_buttons.borrow_mut().push(button.id);
+        }
+        let shown = if button.disabled { 0.5 } else { 1.0 };
         let element = element
+            .when(hidden, |el| {
+                el.opacity(0.0)
+                    .focus_visible(move |style| style.border_color(rgb(theme::palette().foreground)).opacity(shown))
+            })
             // A button that holds a text cut short narrows to fit its row and cuts that text, as each desktop page
             // with one makes it do in its own CSS (Issues' linked issues and parent lanes, Disk usage's folders): an
             // issue linked by a long title ran past the properties column and the window's edge.
@@ -2257,6 +2321,7 @@ impl PageView {
             // A card that scrolls shrinks to the room it has and scrolls what it holds, so its edge stays drawn: a
             // floating panel taller than the page was cut off at its foot, border and corners with it.
             Node::Card(card) if card.scrolls => {
+                let (children, reveals) = self.card_children(card, cx);
                 let body = div()
                     .id(ElementId::NamedInteger("page-card-scroll".into(), card.id))
                     .flex_1()
@@ -2266,9 +2331,9 @@ impl PageView {
                     .flex_col()
                     .gap(px(if card.raised { 6.0 } else { 10.0 }))
                     .track_scroll(&self.watched_scroll(card.id).handle)
-                    .children(self.nodes(&card.children, cx));
+                    .children(children);
                 let shell = ui::plain_card([body.into_any_element()]).min_h_0().overflow_hidden().children(ui::spot(|| format!("page-card-{}", card.id)));
-                match card.raised {
+                let shell = match card.raised {
                     true => shell
                         .px(px(12.0))
                         .py(px(10.0))
@@ -2280,12 +2345,14 @@ impl PageView {
                             blur_radius: px(18.0),
                             spread_radius: px(0.0),
                             inset: false,
-                        }])
-                        .into_any_element(),
-                    false => shell.into_any_element(),
-                }
+                        }]),
+                    false => shell,
+                };
+                self.card_hovering(card.id, shell, reveals, cx)
             }
-            Node::Card(card) if card.raised => ui::plain_card(self.nodes(&card.children, cx))
+            Node::Card(card) if card.raised => {
+                let (children, reveals) = self.card_children(card, cx);
+                let shell = ui::plain_card(children)
                 .gap(px(6.0))
                 .px(px(12.0))
                 .py(px(10.0))
@@ -2297,11 +2364,14 @@ impl PageView {
                     blur_radius: px(18.0),
                     spread_radius: px(0.0),
                     inset: false,
-                }])
-                .into_any_element(),
+                }]);
+                self.card_hovering(card.id, shell, reveals, cx)
+            }
             // Rows split by hairlines, as Wings' Settings groups its own: each row keeps the card's inset.
-            Node::Card(card) if card.rows => ui::plain_card(
-                self.nodes(&card.children, cx).into_iter().enumerate().map(|(at, row)| {
+            Node::Card(card) if card.rows => {
+                let (children, reveals) = self.card_children(card, cx);
+                let shell = ui::plain_card(
+                children.into_iter().enumerate().map(|(at, row)| {
                     div()
                         .px(px(12.0))
                         .py(px(10.0))
@@ -2312,9 +2382,13 @@ impl PageView {
             )
             .gap(px(0.0))
             .px(px(0.0))
-            .py(px(0.0))
-            .into_any_element(),
-            Node::Card(card) => ui::plain_card(self.nodes(&card.children, cx)).into_any_element(),
+            .py(px(0.0));
+                self.card_hovering(card.id, shell, reveals, cx)
+            }
+            Node::Card(card) => {
+                let (children, reveals) = self.card_children(card, cx);
+                self.card_hovering(card.id, ui::plain_card(children), reveals, cx)
+            }
             Node::Heading(heading) => ui::heading(self.inline(&heading.children, cx))
                 .when(heading.section, |el| {
                     el.text_size(px(14.0))
@@ -3111,6 +3185,7 @@ impl Render for PageView {
         #[cfg(feature = "test-support")]
         {
             self.renders.set(self.renders.get() + 1);
+            self.hidden_buttons.borrow_mut().clear();
         }
         self.lines.borrow_mut().start();
         let over_backdrop = self.backdrop().is_some();
