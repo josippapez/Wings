@@ -8,7 +8,7 @@ use crate::{
     orderings::open_issues,
     parts::{button, error_text, line, muted, row, session_marker, stack, status_dot, status_summary, type_icon},
 };
-use wings_plugin::ui::{Node, empty, loading};
+use wings_plugin::ui::{Node, empty, error_state, loading};
 
 /// The block lists this many open issues; the board has the rest.
 const BLOCK_ROWS: usize = 8;
@@ -38,7 +38,7 @@ fn view() -> Vec<Node> {
     };
     let (store, error) = feed::with(|f| (f.store.clone(), f.error.clone()));
     if let (None, Some(error)) = (&store, &error) {
-        return vec![empty("Couldn't read the issues", error)];
+        return vec![error_state("Couldn't read the issues", error, None)];
     }
     let top = row("m").prop("justify", "between").prop("wrap", true).child(add_issue::node()).child(button("Open board", "outline", "sm", feed::open_board));
     let body: Vec<Node> = match store.as_deref().map(|s| s.issues.as_slice()) {

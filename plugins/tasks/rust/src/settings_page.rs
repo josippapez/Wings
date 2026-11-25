@@ -5,46 +5,42 @@ use crate::{
     parts::stack,
     settings::{self, DEFAULT_VIEWS, SECTION_ORDERS},
 };
-use wings_plugin::ui::{Entry, Node, checkbox, chips, entry, muted, rows_card, section, select, setting};
-
-/// A menu's width, as Wings' own Settings and PR tracker's have it.
-const MENU_WIDTH: u32 = 220;
+use wings_plugin::ui::{Node, rows_card, section, select, setting_field, setting_toggle};
 
 fn view() -> Vec<Node> {
     let views: Vec<(String, String)> = DEFAULT_VIEWS.iter().map(|(value, label)| ((*value).to_owned(), (*label).to_owned())).collect();
-    let track = |node: Node| node.segmented();
+    let orders: Vec<(String, String)> = SECTION_ORDERS.iter().map(|(value, label)| ((*value).to_owned(), (*label).to_owned())).collect();
     vec![stack("l")
         .child(section(
             "Issues board",
             None,
-            [rows_card([setting(
+            [rows_card([setting_field(
                 "Default view",
                 "The view the Issues tab opens in: Board has a column per status, Board by epic adds a row per epic, and List has lines under each status. Switching views in the tab is remembered until you pick here again.",
-                // A menu: the three names don't fit on a track beside the text in a narrow page.
-                stack("none").prop("width", MENU_WIDTH).child(select("Default view", &views, &settings::default_view(), |value| {
+                select("Default view", &views, &settings::default_view(), |value| {
                     drop(settings::set_default_view(value));
                     drop(settings::set_last_layout(None));
-                })),
+                }),
             )])],
         ))
         .child(section(
             "Sidebar",
             None,
-            [rows_card([setting(
+            [rows_card([setting_field(
                 "Sort by",
                 "Issues an agent is working on right now come first under each project. The rest are sorted by this.",
-                track(chips("Sort by", &SECTION_ORDERS, &settings::section_order(), |value| drop(settings::set_section_order(value)))),
+                select("Sort by", &orders, &settings::section_order(), |value| drop(settings::set_section_order(value))),
             )])],
         ))
         .child(section(
             "Commits and pull requests",
             None,
-            [rows_card([entry(Entry {
-                lead: None,
-                title: checkbox("Keep issues local", settings::keep_local(), |on| drop(settings::set_keep_local(on))),
-                detail: Some(muted("Issues live on this computer. With this on, Claude can't put an issue key like WIN-12 in a commit, tag, pull request or issue comment: the command is stopped and it is asked to take the key out.").prop("size", "small")),
-                trailing: None,
-            })])],
+            [rows_card([setting_toggle(
+                "Keep issues local",
+                "Issues live on this computer. With this on, Claude can't put an issue key like WIN-12 in a commit, tag, pull request or issue comment: the command is stopped and it is asked to take the key out.",
+                settings::keep_local(),
+                |on| drop(settings::set_keep_local(on)),
+            )])],
         ))]
 }
 
@@ -56,6 +52,13 @@ pub fn start() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn find_row<'a>(node: &'a serde_json::Value, name: &str) -> Option<&'a serde_json::Value> {
+        if node["type"] == "ListRow" && node["children"][0]["children"][0]["children"][0]["text"] == name {
+            return Some(node);
+        }
+        node["children"].as_array().into_iter().flatten().find_map(|child| find_row(child, name))
+    }
 
     #[test]
     fn the_default_view_is_a_menu_of_the_three_views_by_name() {
@@ -70,5 +73,20 @@ mod tests {
         let select = find(&page, "Select").into_iter().find(|select| select["props"]["label"] == "Default view").expect("a menu");
         let labels: Vec<&str> = select["props"]["options"].as_array().unwrap().iter().map(|option| option["label"].as_str().unwrap()).collect();
         assert_eq!(labels, ["Board", "Board by epic", "List"]);
+    }
+
+    #[test]
+    fn every_control_sits_at_the_end_of_its_row_in_one_width_and_the_boolean_is_a_switch() {
+        let page = wings_plugin::ui::tree_json(view().remove(0));
+        let rows: Vec<&serde_json::Value> = ["Default view", "Sort by", "Keep issues local"]
+            .iter()
+            .map(|name| find_row(&page, name).unwrap_or_else(|| panic!("a row for {name}")))
+            .collect();
+        for (row, kind) in rows.iter().zip(["Stack", "Stack", "Checkbox"]) {
+            let control = &row["children"][2]["children"][0];
+            assert_eq!(control["type"], kind);
+        }
+        assert_eq!(rows[0]["children"][2]["children"][0]["props"]["width"], rows[1]["children"][2]["children"][0]["props"]["width"]);
+        assert_eq!(rows[2]["children"][2]["children"][0]["props"]["switch"], true);
     }
 }

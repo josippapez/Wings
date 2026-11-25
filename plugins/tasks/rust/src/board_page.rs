@@ -20,7 +20,7 @@ use std::{cell::RefCell, collections::HashMap, future::Future, rc::Rc};
 use wings_plugin::{
     host,
     task::spawn,
-    ui::{Node, checkbox, chips, empty, loading, page_with, search_field, slot, title_with_context, toolbar_titled},
+    ui::{Node, checkbox, chips, empty, error_state, loading, page_with, search_field, slot, title_with_context, toolbar_titled},
 };
 
 /// How many cards a column of the board shows at first, and rows the list does, and how many more each Show more adds.
@@ -294,7 +294,7 @@ fn view() -> Vec<Node> {
     };
     let (store, read_error, version) = feed::with(|f| (f.store.clone(), f.error.clone(), f.version));
     if let (None, Some(error)) = (&store, &read_error) {
-        return vec![page_with(vec![header(&project.name, None)], [empty("Couldn't read the issues", error)])];
+        return vec![page_with(vec![header(&project.name, None)], [error_state("Couldn't read the issues", error, None)])];
     }
     let tab_ready = with(|p| p.folded.is_some());
     if !tab_ready {

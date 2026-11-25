@@ -736,7 +736,7 @@ fn view() -> Vec<Node> {
     let (store, read_error) = feed::with(|f| (f.store.clone(), f.error.clone()));
     let Some(store) = store else {
         return match read_error {
-            Some(error) => plain(toolbar(None, &key), empty("Couldn't read the issues", &error)),
+            Some(error) => plain(toolbar(None, &key), ui::error_state("Couldn't read the issues", &error, None)),
             None => plain(toolbar(None, &key), loading().text("Loading issue")),
         };
     };
