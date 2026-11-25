@@ -967,3 +967,33 @@ fn a_recent_session_in_the_palette_says_when_it_was_in_words_not_as_a_timestamp(
     let entry = super::palette::session_entry(&hit).unwrap();
     assert_eq!(entry.subtitle.as_deref(), Some("acme-web · main · 5 minutes ago"));
 }
+
+#[test]
+fn a_long_session_title_runs_to_the_end_of_its_row_not_to_where_the_hidden_buttons_would_start() {
+    let project = folder("long-title");
+    let claude = made_up_claude(
+        &folder("long-title-claude"),
+        &[(
+            LOGIN,
+            &project,
+            "main",
+            &"Why does the sidebar flicker when I resize the window ".repeat(8),
+            "I looked at it",
+        )],
+    );
+    let (app, mut window) = open_over(&project, &claude);
+    window.update(|w, window, cx| w.open_history(window, cx));
+    wait_for(&app, &window, |w| w.sheet.as_ref().is_some_and(|s| s.results.is_some()), "no results");
+    app.advance_clock(crate::ui::motion::POPUP_IN * 2);
+    app.run_until_parked();
+    crate::ui::forget_spots();
+    window.draw();
+    let row = crate::ui::spot_at("history-row-0").expect("the row is drawn");
+    let title = crate::ui::spot_at("history-title-0").expect("the title is drawn");
+    // The Resume and more buttons show on hover only, so they must not hold space the title could use.
+    assert!(
+        row.right() - title.right() < gpui::px(40.0),
+        "the title stops {:?} short of its row",
+        row.right() - title.right()
+    );
+}

@@ -1208,6 +1208,7 @@ impl Workspace {
         let group = SharedString::from(format!("session-{at}"));
         div()
             .id(("history-session", at))
+            .children(ui::spot(|| format!("history-row-{at}")))
             .group(group.clone())
             .relative()
             .flex()
@@ -1231,7 +1232,13 @@ impl Workspace {
                             .text_size(px(13.0))
                             .font_weight(FontWeight::MEDIUM)
                             .child(agent_mark(hit.agent))
-                            .child(div().min_w_0().truncate().child(title))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .children(ui::spot(|| format!("history-title-{at}")))
+                                    .child(title),
+                            )
                             .children(account.map(super::agent_list::account_badge)),
                     )
                     .children(detail)
