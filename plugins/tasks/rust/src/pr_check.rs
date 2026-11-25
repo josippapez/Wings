@@ -7,8 +7,7 @@ use crate::{
     domain::{Actor, Issue, Op},
     journal::is_live,
     pr_state::{Command, FoundPr, PrState, PrStateEvent, branch_pr_command, branch_pr_of, found_ops, is_pr_of, parse_remote, pr_ops, pr_state_command, pr_state_event_of, pr_state_of},
-    storage::read_store,
-    writer::write,
+    writer::{stored, write},
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -48,7 +47,7 @@ pub async fn check_prs() {
     let projects = host::projects().await.unwrap_or_default();
     for project in projects.as_array().into_iter().flatten().filter(|p| p["parentId"].is_null()) {
         let (id, name, path) = (project["id"].as_str().unwrap_or_default(), project["name"].as_str().unwrap_or_default(), project["path"].as_str().unwrap_or_default());
-        let Ok(store) = read_store(id, name) else {
+        let Ok(store) = stored(id, name) else {
             continue;
         };
         let mut branches: HashMap<String, Option<FoundPr>> = HashMap::new();
@@ -103,7 +102,7 @@ async fn apply_pr_state(event: PrStateEvent) {
         return;
     };
     let (id, name) = (home["id"].as_str().unwrap_or_default(), home["name"].as_str().unwrap_or_default());
-    let Ok(store) = read_store(id, name) else {
+    let Ok(store) = stored(id, name) else {
         return;
     };
     let found = FoundPr { url: event.url.clone(), state: event.state };

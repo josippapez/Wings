@@ -15,9 +15,20 @@ pub mod memory {
     thread_local! {
         static STORED: RefCell<BTreeMap<String, Value>> = const { RefCell::new(BTreeMap::new()) };
         static WRITES: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
+        static READS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    }
+
+    /// How many `entries` and `get` calls were made since the last `reset` or `clear_reads`.
+    pub fn reads() -> (usize, usize) {
+        READS.with(std::cell::Cell::get)
+    }
+
+    pub fn clear_reads() {
+        READS.with(|r| r.set((0, 0)));
     }
 
     pub fn get(key: &str) -> Result<Value, String> {
+        READS.with(|r| r.set((r.get().0, r.get().1 + 1)));
         Ok(peek(key).unwrap_or(Value::Null))
     }
 
@@ -35,6 +46,7 @@ pub mod memory {
     }
 
     pub fn entries(prefix: &str) -> Result<Value, String> {
+        READS.with(|r| r.set((r.get().0 + 1, r.get().1)));
         Ok(STORED.with(|s| Value::Array(s.borrow().iter().filter(|(k, _)| k.starts_with(prefix)).map(|(k, v)| json!([k, v])).collect())))
     }
 
@@ -51,6 +63,8 @@ pub mod memory {
     pub fn reset(initial: &[(&str, Value)]) {
         STORED.with(|s| *s.borrow_mut() = initial.iter().map(|(k, v)| ((*k).to_owned(), v.clone())).collect());
         clear_writes();
+        clear_reads();
+        crate::writer::forget_stores();
     }
 
     pub fn writes() -> Vec<(String, String)> {

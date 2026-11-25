@@ -32,7 +32,7 @@ fn project_key(project_id: &str) -> String {
     format!("issues/{}", slot_of(project_id))
 }
 
-fn issue_key(project_id: &str, key: &str) -> String {
+pub fn issue_key(project_id: &str, key: &str) -> String {
     format!("{}/{key}", project_key(project_id))
 }
 
@@ -138,6 +138,22 @@ pub fn read_store(project_id: &str, project_name: &str) -> Result<Store, String>
     let mut issues: Vec<Issue> = entries.iter().filter(|e| e[0].as_str().is_some_and(|k| k.starts_with(&under))).filter_map(|e| Issue::from_value(&e[1])).collect();
     issues.sort_by_key(|i| key_number(&i.key));
     Ok(Store { prefix: project["prefix"].as_str().unwrap_or_default().to_owned(), next: project["next"].as_f64().unwrap_or(1.0) as u64, issues })
+}
+
+/// One issue as saved, or none when it isn't there. A page patches its copy of the project with these.
+pub fn read_issue(project_id: &str, key: &str) -> Result<Option<Issue>, String> {
+    let value = kv::get(&issue_key(project_id, key))?;
+    if value.is_null() {
+        return Ok(None);
+    }
+    Issue::from_value(&value).map(Some).ok_or_else(|| format!("{key} can't be read"))
+}
+
+/// The keys of the issues that differ between two stores, added, changed or removed.
+pub fn changed_keys(before: &Store, after: &Store) -> Vec<String> {
+    let mut keys: Vec<String> = after.issues.iter().filter(|i| before.issues.iter().find(|was| was.key == i.key) != Some(*i)).map(|i| i.key.clone()).collect();
+    keys.extend(before.issues.iter().filter(|i| !after.issues.iter().any(|a| a.key == i.key)).map(|i| i.key.clone()));
+    keys
 }
 
 /// What a project held before one entry per issue: all of it in `issues:<path>` (format 3 or 2), or old tasks.

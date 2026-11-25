@@ -7,8 +7,7 @@ use crate::{
     domain::{IssueType, Op, Relations, Status, Update, normalize_key},
     format::{format_issue, format_list},
     home::{home_in, pick_project},
-    storage::read_store,
-    writer::write,
+    writer::{stored, write},
 };
 use serde_json::Value;
 use wings_plugin::{host, tools};
@@ -100,14 +99,14 @@ pub async fn run(name: String, input: Value, context: Value) -> Result<String, S
     match name.as_str() {
         "list" => {
             let (id, project_name) = reader_of(&context, text(&input, "project")).await?;
-            let store = read_store(&id, &project_name)?;
+            let store = stored(&id, &project_name)?;
             let status = text(&input, "status").and_then(|s| Status::parse(&s));
             let kind = text(&input, "type").and_then(|s| IssueType::parse(&s));
             Ok(format_list(&store.issues, status, &project_name, kind, input["query"].as_str()))
         }
         "get" => {
             let (id, project_name) = reader_of(&context, text(&input, "project")).await?;
-            let store = read_store(&id, &project_name)?;
+            let store = stored(&id, &project_name)?;
             let wanted = normalize_key(input["key"].as_str().unwrap_or_default());
             let issue = store.issues.iter().find(|i| i.key == wanted).ok_or_else(|| format!("No issue {wanted} in {project_name}. Use list to see the keys."))?;
             Ok(format_issue(issue, &store.issues))

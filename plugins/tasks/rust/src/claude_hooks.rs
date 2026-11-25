@@ -9,8 +9,7 @@ use crate::{
     local_only::{local_only_denial, writes_to_history},
     session_start::{Start, in_review_text, session_start_text, stale_issues},
     settings,
-    storage::read_store,
-    writer::{known_prefix, now, prefixes, remember_prefix, write},
+    writer::{known_prefix, now, prefixes, remember_prefix, stored, write},
 };
 use serde_json::Value;
 use wings_plugin::hooks::{Say, on_hook};
@@ -25,7 +24,7 @@ pub async fn session_start(input: Value, context: Value) -> Option<Say> {
         return None;
     }
     let home = home_of(&context["project"]).await;
-    let store = read_store(&home.id, &home.name).ok()?;
+    let store = stored(&home.id, &home.name).ok()?;
     let issue = session_issue(&store.issues, input["session_id"].as_str().unwrap_or_default());
     let stale = stale_issues(&store.issues, now());
     Some(Say::Context(session_start_text(&Start { project_name: &home.name, keep_local: settings::keep_local(), issue, stale: &stale, now: now() })))
@@ -37,7 +36,7 @@ pub async fn prompt_submit(input: Value, context: Value) -> Option<Say> {
         return None;
     }
     let home = home_of(&context["project"]).await;
-    let store = read_store(&home.id, &home.name).ok()?;
+    let store = stored(&home.id, &home.name).ok()?;
     let issue = session_issue(&store.issues, input["session_id"].as_str().unwrap_or_default())?;
     (issue.status == crate::domain::Status::InReview).then(|| Say::Context(in_review_text(issue)))
 }
@@ -52,7 +51,7 @@ pub async fn journal(input: Value, context: Value) -> Option<Say> {
     let home = home_of(&context["project"]).await;
     let report = journal_of(&input);
     let key = {
-        let store = read_store(&home.id, &home.name).ok()?;
+        let store = stored(&home.id, &home.name).ok()?;
         journal_issue(&store.issues, session_id, report.started)?.key.clone()
     };
     // Written by the journal at the end of the turn, not by the agent.
@@ -76,7 +75,7 @@ pub async fn command_check(input: Value, context: Value) -> Option<Say> {
     if context["project"].is_object() {
         let home = home_of(&context["project"]).await;
         if !known_prefix(&home.id) {
-            let store = read_store(&home.id, &home.name).ok()?;
+            let store = stored(&home.id, &home.name).ok()?;
             remember_prefix(&home.id, &store.prefix, store.issues.len());
         }
     }
@@ -203,5 +202,32 @@ mod tests {
         assert_eq!(say("someone-else"), None);
         tool("update", json!({ "key": key, "status": "done" }), session.clone());
         assert_eq!(say("r-1"), None, "done");
+    }
+
+    /// What a session's message and the journal at the end of its turn read from storage: (entries, gets).
+    fn session_turn(cached: bool) -> (usize, usize) {
+        memory::reset(&[]);
+        let session = json!({ "id": "c-1", "name": "count agent", "kind": "claude" });
+        for n in 0..40 {
+            tool("create", json!({ "title": format!("Issue {n}") }), session.clone());
+        }
+        tool("log", json!({ "key": "WEB-5", "text": "started" }), session.clone());
+        tool("update", json!({ "key": "WEB-5", "status": "in_progress" }), session.clone());
+        crate::writer::NO_STORE_CACHE.with(|c| c.set(!cached));
+        memory::clear_reads();
+        block_on(prompt_submit(json!({ "session_id": "c-1", "prompt": "go on" }), ctx(session.clone())));
+        let input = json!({ "session_id": "c-1", "cwd": "/work/web", "prompt": "go on", "files": [{ "path": "a.rs", "what": "x" }], "more": 0, "commits": ["abc123def456"] });
+        block_on(journal(input, ctx(session)));
+        crate::writer::NO_STORE_CACHE.with(|c| c.set(false));
+        memory::reads()
+    }
+
+    #[test]
+    fn a_session_message_and_its_journal_read_no_entries_from_storage_once_main_has_the_project() {
+        let before = session_turn(false);
+        let after = session_turn(true);
+        eprintln!("session before (entries, gets) {before:?}, after {after:?}");
+        assert!(before.0 >= 2);
+        assert_eq!(after, (0, 0));
     }
 }
