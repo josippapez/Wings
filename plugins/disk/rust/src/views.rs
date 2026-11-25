@@ -13,7 +13,7 @@ use serde_json::json;
 use wings_plugin::{
     format::{ago, basename},
     host,
-    ui::{Node, badge, card, empty, gauge, loading, muted, notice, page, row, rows_card, slot, spinner, stack, text, text_input, toolbar},
+    ui::{Node, badge, error_state, card, empty, gauge, loading, muted, notice, page, row, rows_card, slot, spinner, stack, text, text_input, toolbar},
 };
 
 /// What a scan of `root` is called: the disk's name for a whole disk, the home folder, or the folder's own name.
@@ -203,11 +203,7 @@ fn scanning(name: &str, phase: Option<&Phase>, root: &str) -> Vec<Node> {
 
 fn scan_error(name: &str, message: &str, root: &str) -> Vec<Node> {
     let retry_root = root.to_owned();
-    let body = gap(stack(), "m")
-        .child(title(format!("Couldn't scan {name}")).prop("truncate", true))
-        .child(notice("danger", message))
-        .child(gap(row(), "s").child(button("Try again", "default", "default", move || start_scan(retry_root.clone()))));
-    frame(name, None, card().child(body))
+    frame(name, None, error_state(&format!("Couldn't scan {name}"), message, Some(("Try again", Box::new(move || start_scan(retry_root.clone()))))))
 }
 
 /// The tab was left on a scan and main has lost it, like after Wings restarted.
@@ -241,5 +237,13 @@ mod tests {
         assert_eq!(tree.matches(r#""variant":"rows""#).count(), 1, "{tree}");
         assert_eq!(tree.matches(r#""variant":"secondary"},"type":"Button""#).count(), 2, "{tree}");
         assert!(!tree.contains(r#""variant":"default""#), "{tree}");
+    }
+
+    /// A failed scan is the shared error card: the title, the message in a danger notice, and a primary Try again.
+    #[test]
+    fn a_failed_scan_is_an_error_card_with_a_primary_retry() {
+        let tree = tree_json(Node::new("Page").children(scan_error("broken", "No such folder", "/x"))).to_string();
+        assert_eq!(tree.matches(r#""tone":"danger""#).count(), 1, "{tree}");
+        assert!(tree.contains("Couldn't scan broken") && tree.contains("Try again") && tree.contains(r#""variant":"default""#), "{tree}");
     }
 }

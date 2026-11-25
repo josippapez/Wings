@@ -16,7 +16,7 @@ use crate::{
 use serde_json::{Value, json};
 use wings_plugin::{
     format::basename,
-    ui::{Node, confirm, dot, empty, heading, icon_button, icons, list_button, loading, muted, notice, page, row, slot, spinner, stack, text},
+    ui::{Node, confirm, dot, error_state, heading, icon_button, icons, list_button, loading, muted, notice, page, row, slot, spinner, stack, text},
 };
 
 /// More folders than this and the ones in the middle go behind a menu.
@@ -407,11 +407,11 @@ fn content(p: &Page, name: &str, focus: &str, done: &Done) -> Node {
     }
     match &p.level_error {
         Some((failed, error)) if Some(failed) == key.as_ref() => {
-            let retry = button("Try again", "default", "default", || {
+            let retry = Box::new(|| {
                 with(|p| p.level_error = None);
                 sync_level();
             });
-            stack().prop("grow", true).child(empty(&format!("Couldn't read {}", basename(focus)), error).child(slot("children", retry)))
+            stack().prop("grow", true).child(error_state(&format!("Couldn't read {}", basename(focus)), error, Some(("Try again", retry))))
         }
         _ => stack().prop("grow", true).child(loading().text("Adding detail…")),
     }
