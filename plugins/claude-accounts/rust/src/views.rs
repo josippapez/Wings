@@ -134,7 +134,7 @@ fn project_account(project: &Project, data: &Loaded, s: &State, compact: bool) -
     let picked_from = project.clone();
     let picker = select("Claude account", &options, shown.unwrap_or(DEFAULT), move |value| spawn(actions::pick(picked_from.clone(), value.to_owned())));
 
-    let heading = stack().prop("gap", "xs").child(title(project.name.as_str()).prop("size", "large").prop("truncate", true)).maybe(
+    let heading = stack().prop("gap", "xs").child(title(project.name.as_str()).prop("truncate", true)).maybe(
         (!compact).then(|| small(muted(project.path.as_str())).prop("mono", true).prop("truncate", true).prop("title", project.path.as_str())),
     );
     let mut card = card()

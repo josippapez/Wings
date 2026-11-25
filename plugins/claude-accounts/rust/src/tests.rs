@@ -322,3 +322,14 @@ fn a_signed_out_account_is_told_once_and_again_after_it_has_signed_in_and_out() 
     default.signed_in = false;
     assert_eq!(names(newly_signed_out(&mut told, &[default, work])), [None, Some("work".to_owned())]);
 }
+
+#[test]
+fn the_project_name_is_a_page_title_not_a_larger_one() {
+    wings(None);
+    block_on(actions::reload());
+    with(|s| s.project = Some(Some(web())));
+    let tree = wings_plugin::ui::tree_json(views::sidebar().remove(1)).to_string();
+    let at = tree.find(r#""text":"web""#).expect(&tree);
+    let name = &tree[at..at + tree[at..].find(r#""type":"Text""#).expect(&tree)];
+    assert!(!name.contains("large"), "{tree}");
+}
