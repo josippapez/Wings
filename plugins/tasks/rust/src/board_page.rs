@@ -144,14 +144,15 @@ fn card(i: &Issue, issues: &[Issue], hide_parent: bool) -> Node {
         Node::new("Button")
             .prop("size", "icon-xs")
             .prop("variant", "ghost")
+            .prop("showOnHover", true)
             .prop("label", format!("Delete {}", i.key))
             .on("onClick", move |_| ask_to_delete(&for_delete))
             .child(Node::new("Icon").prop("name", "trash")),
     );
     if let Some(at) = index {
         moves = moves
-            .child(Node::new("Button").prop("size", "xs").prop("variant", "ghost").prop("disabled", at == 0).prop("label", format!("Move {} to {}", i.key, target(-1))).on("onClick", move |_| move_issue(&for_back, status, -1)).text("←"))
-            .child(Node::new("Button").prop("size", "xs").prop("variant", "ghost").prop("disabled", at == Status::FLOW.len() - 1).prop("label", format!("Move {} to {}", i.key, target(1))).on("onClick", move |_| move_issue(&for_forward, status, 1)).text("→"));
+            .child(Node::new("Button").prop("size", "xs").prop("variant", "ghost").prop("showOnHover", true).prop("disabled", at == 0).prop("label", format!("Move {} to {}", i.key, target(-1))).on("onClick", move |_| move_issue(&for_back, status, -1)).text("←"))
+            .child(Node::new("Button").prop("size", "xs").prop("variant", "ghost").prop("showOnHover", true).prop("disabled", at == Status::FLOW.len() - 1).prop("label", format!("Move {} to {}", i.key, target(1))).on("onClick", move |_| move_issue(&for_forward, status, 1)).text("→"));
     }
     Node::new("Card")
         .key(i.key.as_str())
@@ -538,6 +539,28 @@ mod tests {
         assert!(!text.contains("Issues, web"), "{text}");
         assert!(text.contains(r#""weight":"strong""#) && text.contains(r#""tone":"muted""#), "{text}");
         assert!(text.contains(&format!(r#""width":{SEARCH_WIDTH}"#)) && text.contains(r#""label":"New issue""#), "{text}");
+    }
+
+    /// A card's delete and move buttons show while the pointer is on the card, so a column of cards isn't a column of
+    /// buttons; the title, which opens the issue, always shows.
+    #[test]
+    fn a_cards_delete_and_move_buttons_show_on_hover() {
+        let issue = Issue::from_value(&serde_json::json!({ "key": "WEB-1", "title": "Fix it", "status": "todo", "sessions": [], "log": [], "createdAt": 1, "updatedAt": 1 })).unwrap();
+        let card = wings_plugin::ui::tree_json(card(&issue, std::slice::from_ref(&issue), false));
+        let buttons = |value: &Value, out: &mut Vec<(String, bool)>| {
+            fn walk(value: &Value, out: &mut Vec<(String, bool)>) {
+                if value["type"] == "Button" {
+                    out.push((value["props"]["label"].as_str().unwrap_or_default().to_owned(), value["props"]["showOnHover"] == true));
+                }
+                for child in value["children"].as_array().into_iter().flatten() {
+                    walk(child, out);
+                }
+            }
+            walk(value, out);
+        };
+        let mut found = Vec::new();
+        buttons(&card, &mut found);
+        assert_eq!(found, [("Delete WEB-1".to_owned(), true), ("Move WEB-1 to To do".to_owned(), true), ("Move WEB-1 to In progress".to_owned(), true)]);
     }
 
     /// A column longer than its first 30 cards shows 30 more a click, each column on its own, until all show.
