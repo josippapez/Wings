@@ -1591,7 +1591,8 @@ impl Walk {
             }
             "Badge" => Node::Badge(Badge {
                 id,
-                variant: choice(&props, "variant"),
+                // An unset variant is the quiet pill; the loud filled one is only for a badge that asks for `default`.
+                variant: str_prop(&props, "variant").and_then(Variant::choose).unwrap_or(Variant::Secondary),
                 tone,
                 small: str_prop(&props, "size") == Some("sm"),
                 on_click: handler("onClick"),

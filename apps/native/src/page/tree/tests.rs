@@ -44,6 +44,25 @@ fn a_page_with_a_toolbar_fills_the_frame_without_asking() {
     assert!(!tree(json!([button(json!({}))])).unwrap().fill, "not a page");
 }
 
+/// A badge with no variant is the quiet secondary pill, not the loud filled default one; asking for it still works.
+#[test]
+fn a_badge_with_no_variant_is_the_quiet_pill() {
+    let variants: Vec<_> = tree(json!([
+        {"id":1,"type":"Badge","props":{},"children":[]},
+        {"id":2,"type":"Badge","props":{"variant":"default"},"children":[]},
+        {"id":3,"type":"Badge","props":{"variant":"outline"},"children":[]},
+    ]))
+    .unwrap()
+    .children
+    .iter()
+    .map(|node| match node {
+        Node::Badge(badge) => badge.variant,
+        _ => panic!("a badge"),
+    })
+    .collect();
+    assert_eq!(variants, [Variant::Secondary, Variant::Default, Variant::Outline]);
+}
+
 #[test]
 fn parses_a_page_into_its_parts() {
     let parsed = tree(json!([{"id":1,"type":"Page","props":{"flush":true},"children":[
