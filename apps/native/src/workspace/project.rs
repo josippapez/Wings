@@ -427,9 +427,10 @@ impl Workspace {
             .gap(px(6.0))
             .pl(px(14.0))
             .pr(px(10.0))
-            // The panes start under its line.
-            .border_b_1()
-            .border_color(rgba(HAIRLINE))
+            // The panes start under its line. A tab's page is a rounded card with its own border, which the line ran past.
+            .when(matches!(self.active, super::Active::Terminal(_)), |bar| {
+                bar.border_b_1().border_color(rgba(HAIRLINE)).children(crate::ui::spot(|| "project-bar-line".into()))
+            })
             // A name cut short in a narrow column says itself on hover.
             .child(
                 div()

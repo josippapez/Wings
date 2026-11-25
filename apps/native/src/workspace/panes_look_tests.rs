@@ -28,18 +28,21 @@ fn two_panes_share_one_line_with_no_gutter() {
 }
 
 #[test]
-fn a_tab_page_runs_flush_under_the_project_bars_line_as_panes_do() {
+fn a_tab_page_is_a_rounded_card_with_no_project_bar_line_over_it() {
     let (_app, mut window) = open_sized(Some(size(px(1000.0), px(700.0))), |_| {});
     window.draw();
     let panes = window.read(|w, _| w.area.expect("the pane area is measured"));
+    assert!(ui::spot_at("project-bar-line").is_some(), "the panes start under the bar's line");
+    ui::forget_spots();
     window.update(|w, window, cx| {
         w.issues_open = true;
         w.show(super::Active::Issues, window, cx);
     });
     window.draw();
     let card = ui::spot_at("page-card").expect("the tab's page");
-    // An inset, rounded card left the project bar's line running past its corner.
-    assert_eq!((card.left(), card.top(), card.right()), (panes.left(), panes.top(), panes.right()), "where the panes are");
+    assert!(card.left() > panes.left() && card.right() < panes.right(), "an inset card: {card:?} in {panes:?}");
+    // The bar's line ran past the card's rounded corner.
+    assert!(ui::spot_at("project-bar-line").is_none(), "no line over the card");
 }
 
 #[test]
