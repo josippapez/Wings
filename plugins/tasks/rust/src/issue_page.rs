@@ -484,7 +484,8 @@ fn description(issue: &Issue) -> Node {
     let shown = visible_description(issue.description.as_deref());
     let template = description_to_edit(issue);
     if shown.is_empty() {
-        return Node::new("Button").prop("variant", "ghost").on("onClick", move |_| begin("description", &template)).text("Add a description…");
+        // In a row, as wide as its text: alone in the column it stretched across and centred its text, adrift.
+        return row("none").child(Node::new("Button").prop("variant", "ghost").on("onClick", move |_| begin("description", &template)).text("Add a description…"));
     }
     row("s").prop("align", "start").prop("justify", "between").child(markdown(&shown)).child(Node::new("Button").prop("size", "xs").prop("variant", "ghost").on("onClick", move |_| begin("description", &template)).text("Edit"))
 }
