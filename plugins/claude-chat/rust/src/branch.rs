@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use serde_json::Value;
 use wings_plugin::{
     format::truncate,
-    host, task,
+    git, host, task,
     ui::{Choice, Combobox, Node, button, card, combobox, icon, loading, muted, row, stack, text},
 };
 
@@ -87,10 +87,7 @@ pub fn outcome(answer: Result<Value, String>) -> Result<(), String> {
 }
 
 async fn list(cwd: &str, current: &str) -> Vec<Branch> {
-    match host::exec_in(cwd, "git", &["for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes"]).await {
-        Ok(out) if out["code"] == 0 => parse_branches(out["stdout"].as_str().unwrap_or_default(), current),
-        _ => Vec::new(),
-    }
+    git::ok(cwd, &["for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes"]).await.map_or_else(Vec::new, |refs| parse_branches(&refs, current))
 }
 
 async fn switch(cwd: &str, name: &str) -> Result<(), String> {

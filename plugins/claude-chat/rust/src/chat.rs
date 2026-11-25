@@ -11,6 +11,7 @@ use std::{cell::RefCell, collections::{HashMap, HashSet}};
 use serde_json::{Value, json};
 use wings_plugin::{
     format::{basename, truncate},
+    git,
     host::{self, ProcessInput},
     messages, task,
 };
@@ -614,9 +615,8 @@ const NOT_A_TAB: &str = "State can only be saved by a page shown as a tab or blo
 /// file suggestions, because Wings lets the page write to Claude Code only on a click or a key.
 pub(crate) fn load_files(run: u32, cwd: String) {
     task::spawn(async move {
-        let listed = host::exec_in(&cwd, "git", &["ls-files", "--cached", "--others", "--exclude-standard", "-z"]).await;
         // Not a git folder, or no git: no menu, and nothing to tell.
-        let files = listed.ok().filter(|out| out["code"] == 0).map(|out| Files::from_git(out["stdout"].as_str().unwrap_or_default()));
+        let files = git::raw(&cwd, &["ls-files", "--cached", "--others", "--exclude-standard", "-z"]).await.ok().map(|out| Files::from_git(&out));
         with(|c| {
             if c.run == run {
                 c.files = files.unwrap_or_default();
@@ -658,12 +658,12 @@ pub(crate) fn load_git(run: u32, cwd: String) {
         let (mut run, mut cwd) = (run, cwd);
         loop {
             let changes = counted(&cwd).await;
-            let branch = host::exec_in(&cwd, "git", &["rev-parse", "--abbrev-ref", "HEAD"]).await;
+            let branch = git::ok(&cwd, &["rev-parse", "--abbrev-ref", "HEAD"]).await;
             let next = with(|c| {
                 if c.run == run {
                     c.changes = changes;
                     // A detached head has no branch to name.
-                    c.branch = stdout(branch).filter(|name| !name.is_empty() && name != "HEAD");
+                    c.branch = branch.filter(|name| !name.is_empty() && name != "HEAD");
                 }
                 let next = c.count_next.take();
                 c.counting = next.is_some();
@@ -676,11 +676,6 @@ pub(crate) fn load_git(run: u32, cwd: String) {
     });
 }
 
-/// What a git call printed, when it succeeded.
-fn stdout(out: Result<Value, String>) -> Option<String> {
-    out.ok().filter(|out| out["code"] == 0).map(|out| out["stdout"].as_str().unwrap_or_default().trim().to_owned())
-}
-
 /// The lines added and removed, as the Changes plugin counts them for its sidebar: new files too. With Changes off, git's
 /// count of the files it already tracks.
 async fn counted(cwd: &str) -> Option<(u64, u64)> {
@@ -688,7 +683,7 @@ async fn counted(cwd: &str) -> Option<(u64, u64)> {
     if let Some(counts) = asked.ok().filter(|answer| answer["isError"] != true).and_then(|answer| changes_counted(answer["text"].as_str()?)) {
         return Some(counts);
     }
-    stdout(host::exec_in(cwd, "git", &["diff", "--shortstat", "HEAD"]).await).map(|out| shortstat(&out))
+    git::ok(cwd, &["diff", "--shortstat", "HEAD"]).await.map(|out| shortstat(&out))
 }
 
 /// The totals in what Changes' `changed_files` answers: `{ "added": 12, "removed": 3, ... }`.

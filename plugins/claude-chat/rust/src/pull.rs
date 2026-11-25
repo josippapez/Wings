@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use serde_json::{Value, json};
 use wings_plugin::{
     format::{ago, truncate},
-    host, task,
+    git, host, task,
 };
 
 use crate::chat;
@@ -197,8 +197,7 @@ fn read(fresh: bool) {
     let known = with(|p| p.default.as_ref().is_some_and(|(of, _)| *of == cwd));
     task::spawn(async move {
         if !known {
-            let head = host::exec_in(&cwd, "git", &["rev-parse", "--abbrev-ref", "origin/HEAD"]).await;
-            let default = head.ok().filter(|out| out["code"] == 0).and_then(|out| default_branch(out["stdout"].as_str().unwrap_or_default()));
+            let default = git::ok(&cwd, &["rev-parse", "--abbrev-ref", "origin/HEAD"]).await.and_then(|head| default_branch(&head));
             with(|p| p.default = Some((cwd.clone(), default)));
         }
         let asked = host::call_tool(TOOL, &json!({ "cwd": cwd, "fresh": fresh })).await;
