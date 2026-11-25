@@ -99,8 +99,9 @@ fn authenticate(bytes: &[u8], signature: &[u8], key: &str) -> Result<()> {
         .map_err(|e| format!("Update authentication failed: {e}"))
 }
 
+/// A field this app doesn't know is passed over: the feed is signed before it is read, and refusing one stopped every
+/// shipped app from taking a feed that gained a field (the reason for the `.v2` feed).
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Release {
     pub bundle_identifier: String,
     pub version: String,

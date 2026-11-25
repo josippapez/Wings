@@ -216,6 +216,24 @@ fn without_large_malloc_cache() {
     }
 }
 
+/// Opened from the Finder, the app's stderr is /dev/null, so its errors and a panic's message were lost. Unless it runs
+/// in a terminal, they go to `file`, which starts again past 1 MB, keeping the one before as `wings.log.1`.
+#[cfg(unix)]
+fn keep_stderr_in(file: &std::path::Path) {
+    use std::os::fd::AsRawFd;
+    // SAFETY: isatty and dup2 only read and set this process's file descriptors.
+    if unsafe { libc::isatty(libc::STDERR_FILENO) } == 1 {
+        return;
+    }
+    if std::fs::metadata(file).is_ok_and(|meta| meta.len() > 1 << 20) {
+        let _ = std::fs::rename(file, file.with_extension("log.1"));
+    }
+    if let Ok(log) = std::fs::OpenOptions::new().create(true).append(true).open(file) {
+        // SAFETY: as above; the log stays open as stderr when `log` drops.
+        unsafe { libc::dup2(log.as_raw_fd(), libc::STDERR_FILENO) };
+    }
+}
+
 fn main() {
     if let Some(result) = wings_native::updater::installer_entry() {
         if let Err(error) = result {
@@ -227,6 +245,8 @@ fn main() {
     #[cfg(target_os = "macos")]
     without_large_malloc_cache();
     if let Some(dir) = data_dir::state_file().as_deref().and_then(std::path::Path::parent) {
+        #[cfg(unix)]
+        keep_stderr_in(&dir.join("wings.log"));
         wings_native::page::runtime::wasm::keep_compiled_in(dir.join("wasm-cache"));
         wings_native::page::log::keep_in(dir.join("plugins.log"));
     }

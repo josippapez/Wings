@@ -168,6 +168,16 @@ fn metadata_is_authenticated_before_it_is_parsed() {
 }
 
 #[test]
+fn a_feed_with_a_field_this_app_does_not_know_still_offers_its_release() {
+    let mut f = fixture(archive("0.2.0", None, None), |_| {});
+    let mut feed: serde_json::Value = serde_json::from_slice(&f.manifest).unwrap();
+    feed["minimum_macos"] = "15.0".into();
+    f.manifest = serde_json::to_vec(&feed).unwrap();
+    (f.key, f.signature) = signed(&f.manifest, 1);
+    assert!(checked(&f).unwrap().is_some(), "a later app's field is passed over");
+}
+
+#[test]
 fn signed_product_arch_version_size_and_paths_are_bound() {
     for change in [
         |r: &mut Release| r.bundle_identifier = "dev.wings.app".into(),
@@ -904,16 +914,23 @@ fn a_release_with_only_the_first_feed_brings_no_server_version() {
 
 #[test]
 fn the_first_feed_stays_readable_by_apps_that_refuse_unknown_fields() {
-    // The first feed is what apps up to 0.2.10 read: without the server's version, it parses as theirs did.
-    let release: Release =
-        serde_json::from_slice(&fixture(archive("0.2.0", None, None), |_| {}).manifest).unwrap();
-    let json = serde_json::to_value(&release).unwrap();
-    assert!(json.get("server_version").is_none());
-    let newer: std::result::Result<Release, _> = serde_json::from_str(
-        r#"{"bundle_identifier":"x","version":"1.0.0","platform":"p","artifact":"a","size":1,"sha256":"s","later":1}"#,
-    );
-    assert!(
-        newer.is_err(),
-        "a field it doesn't know is refused, as 0.2.10 refuses server_version"
-    );
+    // The first feed is what apps up to 0.2.10 read, with their `Release` (v0.2.10's updater.rs), which refuses a field it
+    // doesn't know: without the server's version, it parses as theirs did.
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct ReleaseUpTo0_2_10 {
+        bundle_identifier: String,
+        version: String,
+        platform: String,
+        artifact: String,
+        size: u64,
+        sha256: String,
+        #[serde(default)]
+        notes: String,
+    }
+    let first = fixture(archive("0.2.0", None, None), |_| {}).manifest;
+    assert!(serde_json::from_slice::<ReleaseUpTo0_2_10>(&first).is_ok());
+    let with_server = serde_json::to_vec(&Release { server_version: Some(1), ..serde_json::from_slice(&first).unwrap() }).unwrap();
+    assert!(serde_json::from_slice::<ReleaseUpTo0_2_10>(&with_server).is_err(), "why the server's version is in the second feed only");
 }
