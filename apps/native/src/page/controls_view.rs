@@ -23,6 +23,8 @@ pub(super) const LIST_BUTTON_PADDING: f32 = 2.0;
 
 /// A raised card's 10pt padding and 1pt border over the field a message box's list opens upward from.
 const MESSAGE_CARD_EDGE: f32 = 11.0;
+/// White at a third over a card's `#2a282f`: `#717076`, 3:1 against it.
+const CHECKBOX_EDGE: u32 = 0xffffff55;
 
 impl PageView {
     pub(super) fn checkbox(&self, checkbox: &tree::Checkbox, cx: &mut Context<Self>) -> AnyElement {
@@ -53,11 +55,13 @@ impl PageView {
                     .justify_center()
                     .rounded(px(4.0))
                     .border_1()
-                    .border_color(rgba(ui::HAIRLINE))
+                    // Its edge is all that shows an unchecked box: 3:1 against a card (WCAG 1.4.11). The divider's
+                    // hairline it had was 1.1:1, barely there.
+                    .border_color(rgba(CHECKBOX_EDGE))
                     .bg(rgba(if checkbox.checked {
                         theme::palette().info << 8 | 0xff
                     } else {
-                        0
+                        ui::INPUT_FILL
                     }))
                     .text_size(px(12.0))
                     .text_color(rgb(theme::palette().background))

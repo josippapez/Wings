@@ -107,7 +107,7 @@ pub const DIALOG: u32 = 0x201d23;
 /// GPUI can't blur what's behind an element, so at 10% the window behind read as not dimmed at all. 40% stands in.
 const BACKDROP: u32 = 0x00000066;
 /// `--input` at 30%, the fill of a field or a select, and at 50% when pointed at.
-const INPUT_FILL: u32 = 0xffffff08;
+pub(crate) const INPUT_FILL: u32 = 0xffffff08;
 const INPUT_FILL_HOVER: u32 = 0xffffff0d;
 /// The dialog's `ring-1 ring-foreground/10`.
 const DIALOG_RING: u32 = theme::FOREGROUND << 8 | 0x1a;
