@@ -57,6 +57,8 @@ impl Render for IssuesView {
             .flex()
             .flex_col()
             .items_center()
+            // Centred in the card like the app's other empty states, not hung from its top.
+            .justify_center()
             .gap(px(8.0))
             .p(px(24.0))
             .overflow_y_scroll()
@@ -76,27 +78,19 @@ impl Render for IssuesView {
                     .child(description),
             )
             .child(
-                div()
-                    .id("issues-open-plugins")
-                    .role(Role::Button)
-                    .aria_label("Open Plugins")
-                    .track_focus(&self.focus)
-                    .mt(px(8.0))
-                    .h(px(32.0))
-                    .px(px(10.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .flex_none()
-                    .border_2()
-                    .border_color(rgba(theme::BORDER))
-                    .rounded(px(theme::RADIUS))
-                    .focus_visible(|style| style.border_color(rgb(theme::FOREGROUND)))
-                    .cursor_pointer()
-                    .hover(|style| style.bg(rgba(theme::HOVER)))
-                    .on_click(cx.listener(|this, _, _, cx| this.open_plugins(cx)))
-                    .children(crate::ui::spot(|| "issues-open-plugins".into()))
-                    .child("Open Plugins"),
+                // The app's own button, not a 2 point border of its own: the page's other buttons are 1 point and
+                // only show a ring while the keyboard has focus on them.
+                crate::ui::button(
+                    "issues-open-plugins",
+                    "Open Plugins",
+                    crate::ui::Variant::Secondary,
+                    false,
+                    "Open Plugins",
+                )
+                .track_focus(&self.focus)
+                .mt(px(8.0))
+                .on_click(cx.listener(|this, _, _, cx| this.open_plugins(cx)))
+                .children(crate::ui::spot(|| "issues-open-plugins".into())),
             )
     }
 }
