@@ -1,6 +1,6 @@
 use gpui::{
     App, Context, EventEmitter, FocusHandle, Focusable, KeyDownEvent, Role, Window, div,
-    prelude::*, px, rgb, rgba,
+    prelude::*, px, rgb,
 };
 
 use crate::theme;
