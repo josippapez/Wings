@@ -16,7 +16,7 @@ use wings_plugin::{
     format::ago,
     git, host, messages, poll,
     task::spawn,
-    ui::{Choice, Combobox, Entry, Node, card, checkbox, chip, chips, combobox, confirm, disclosure, empty, entry, icons, list, list_row, loading, muted, notice, page, row, rows_card, section, select, slot, stack, text, text_input, title, toolbar},
+    ui::{Choice, Combobox, Entry, Node, card, checkbox, chip, chips, combobox, confirm, disclosure, empty, entry, error_state, icons, list, list_row, loading, muted, notice, page, row, rows_card, section, select, slot, stack, text, text_input, title, toolbar},
 };
 
 /// How often "in 2 h" is worked out again.
@@ -750,7 +750,7 @@ fn view() -> Vec<Node> {
         let now = host::now() as i64;
         if p.projects.is_none() {
             return vec![match &p.load_error {
-                Some(error) => page(toolbar("Schedules", None), vec![empty("Couldn't load your schedules", error)]),
+                Some(error) => page(toolbar("Schedules", None), vec![error_state("Couldn't load your schedules", error, None)]),
                 None => page(toolbar("Schedules", None), vec![loading().text("Loading schedules")]),
             }];
         }
