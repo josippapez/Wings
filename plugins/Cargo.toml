@@ -9,3 +9,10 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# `sh build-rust.sh --quick`: a module in a few seconds instead of half a minute, for trying a change. Never committed.
+[profile.quick]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true

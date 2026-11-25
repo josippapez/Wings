@@ -2,3 +2,4 @@
 .claude/settings.local.json
 .claude/worktrees/
 /.build.lock/
+/.build.lock.2/

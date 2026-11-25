@@ -99,6 +99,7 @@ my-plugin/
 rustup target add wasm32-unknown-unknown   # once
 sh build-rust.sh                           # every plugin; `sh build-rust.sh <plugin>` for one
 sh build-rust.sh --check                   # fails when a committed module differs from what rust/ builds
+sh build-rust.sh --quick <plugin>          # in a few seconds, to try a change: bigger, slower modules you build again before committing
 pnpm test                                  # cargo test --workspace: the plugins' own tests
 ```
 

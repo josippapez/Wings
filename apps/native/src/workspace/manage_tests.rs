@@ -305,6 +305,7 @@ fn plugin_updates_timer_is_launch_anchored_defers_until_focus_and_stops_on_drop(
     window.update(|w, window, cx| {
         w.manage.update_source = Some(source.clone());
         w.set_look(|look| look.cursor_blink = false, cx);
+        w.stop_git_sweeps();
         window.activate_window();
     });
     app.run_until_parked();

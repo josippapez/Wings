@@ -61,22 +61,31 @@ other_running() {
   return 1
 }
 
-# Under 8 GB free, drop the build caches first: the next build makes them again. Not while the other slot builds,
-# whose compile would lose them midway.
-free_kb=$(df -k "$root" | awk 'NR==2 {print $4}')
-if [ "$free_kb" -lt 8388608 ]; then
+# The build output nothing uses any more: old builds, old caches and unlinked object files (`scripts/prune-builds.py`).
+prune() {
+  (cd "$root" && python3 -I scripts/prune-builds.py "$@" apps/native/target plugins/target) ||
+    echo "build.sh: couldn't remove the old build output" >&2
+}
+free_kb() { df -k "$root" | awk 'NR==2 {print $4}'; }
+
+# Under 8 GB free, remove the old build output, and if that isn't enough, drop the build caches: the next build makes
+# them again, but compiles a one-line change of the app in 55 s instead of 16 s. Not while the other slot builds, which
+# may be compiling with the caches.
+if [ "$(free_kb)" -lt 8388608 ]; then
   if other_running; then
+    prune --busy
     echo "build.sh: under 8 GB free, but another build is running, so the build caches stay" >&2
   else
-    echo "build.sh: under 8 GB free, deleting the incremental build caches" >&2
-    rm -rf "$root/apps/native/target/debug/incremental" "$root/plugins/target/debug/incremental"
+    prune
+    if [ "$(free_kb)" -lt 8388608 ]; then
+      echo "build.sh: under 8 GB free, deleting the incremental build caches" >&2
+      rm -rf "$root/apps/native/target/debug/incremental" "$root/plugins/target/debug/incremental"
+    fi
   fi
 fi
 
 cd "$root"
 status=0
 "$@" || status=$?
-# Not while the other slot builds, which may be about to link objects its binary's last link didn't use.
-other_running || python3 -I scripts/prune-objects.py apps/native/target/debug plugins/target/debug ||
-  echo "build.sh: couldn't remove the object files no binary links" >&2
+if other_running; then prune --busy; else prune; fi
 exit "$status"

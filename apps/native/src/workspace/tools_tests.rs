@@ -248,6 +248,9 @@ fn checks_run_after_launch_and_every_six_hours_and_never_beforehand() {
         // Only an app that serves the socket checks on its own.
         w.config.socket = Some(std::env::temp_dir().join("wings-tools-never-bound.sock"));
         w.start_tool_checks(window, cx);
+        // A focused cursor blinks every 600 ms, 36000 redraws over six hours, which this test doesn't look at.
+        w.set_look(|look| look.cursor_blink = false, cx);
+        w.stop_git_sweeps();
         window.activate_window();
     });
     app.run_until_parked();

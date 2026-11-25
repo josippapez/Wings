@@ -84,6 +84,12 @@ impl Workspace {
         self.refresh_git(None, false, cx);
     }
 
+    /// Ends the minute sweep, which would run `git` on every project 360 times over a test that advances the clock six hours.
+    #[cfg(test)]
+    pub(in crate::workspace) fn stop_git_sweeps(&mut self) {
+        self.side.git._tasks.clear();
+    }
+
     /// Tells the watcher the list of projects changed.
     pub(super) fn watch_projects_again(&self) {
         if let Some(watcher) = &self.side.git.watcher {
