@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.112 · 2026-11-25
+
+- **Plugin settings match the app's**: a plugin's settings put each control in one column on the right, and an on/off setting is a switch, as in Issues 0.31.6's settings.
+- **One error card**: Disk, Issues and Schedules show a load error the same way, with a retry where there is one.
+- **Plugin updates**: PR tracker 0.35.1's Pull requests section drops its count line and keeps Refresh beside the filters; Claude chat 0.55.5 reads git through the shared helper; Disk 0.4.2; Schedules 0.11.1.
+
 ## 0.2.111 · 2026-11-25
 
 - **Plugins look more like the app**: a plugin page with a header draws it edge to edge, as Changes and Worktrees now do; section headings line up with the card under them; a badge with no style of its own is a quiet pill.
