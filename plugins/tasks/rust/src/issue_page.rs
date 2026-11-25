@@ -12,12 +12,13 @@ use crate::{
     markdown::markdown,
     ops::description_to_edit,
     orderings::{TRAIL_LENGTH, trail_to},
-    parts::{ago_text, button, child_progress, error_text, line, muted, priority_icon, priority_name, row, stack, status_dot, type_icon},
+    parts::{button, child_progress, error_text, line, muted, priority_icon, priority_name, row, stack, status_dot, type_icon},
     relations::{blocks_of, children_of, parent_choices, progress},
 };
 use serde_json::{Value, json};
 use std::{cell::RefCell, collections::HashMap, future::Future, rc::Rc};
 use wings_plugin::{
+    format::ago_now,
     host, messages,
     task::spawn,
     ui::{self, Choice, Combobox, Node, combobox, empty, loading, page, select, slot},
@@ -395,7 +396,7 @@ fn properties(issue: &Issue, issues: &[Issue], project: &Project) -> Node {
         // An unnamed session goes by its agent, so the line under it doesn't name the agent twice.
         let name = s.name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| agent_label(s.kind.as_deref()));
         let (id, kind) = (s.id.clone(), s.kind.clone());
-        let detail = format!("{}{} · seen {}", if s.name.as_ref().is_some_and(|n| !n.is_empty()) { format!("{} · ", agent_label(s.kind.as_deref())) } else { String::new() }, s.id.chars().take(8).collect::<String>(), ago_text(s.seen));
+        let detail = format!("{}{} · seen {}", if s.name.as_ref().is_some_and(|n| !n.is_empty()) { format!("{} · ", agent_label(s.kind.as_deref())) } else { String::new() }, s.id.chars().take(8).collect::<String>(), ago_now(s.seen));
         stack("s")
             .key(s.id.as_str())
             .child(
@@ -420,8 +421,8 @@ fn properties(issue: &Issue, issues: &[Issue], project: &Project) -> Node {
             vec![if commits.is_empty() { muted("None").prop("size", "small") } else { row("s").prop("wrap", true).children(commits.iter().map(|c| copy_button(c, c, "secondary", format!("Copy commit {c}")).key(c.as_str()))) }],
         ))
         .child(prop("Sessions", None, vec![if issue.sessions.is_empty() { muted("None yet").prop("size", "small") } else { stack("s").children(session_rows) }]))
-        .child(prop("Created", None, vec![line(ago_text(issue.created_at), None, Some("small"))]))
-        .child(prop("Updated", None, vec![line(ago_text(issue.updated_at), None, Some("small"))]));
+        .child(prop("Created", None, vec![line(ago_now(issue.created_at), None, Some("small"))]))
+        .child(prop("Updated", None, vec![line(ago_now(issue.updated_at), None, Some("small"))]));
     column
 }
 
@@ -534,7 +535,7 @@ fn file_row(file: &crate::domain::FileChange, first_commit: Option<String>) -> N
             .child(row("s").child(line(name, None, None).prop("mono", true)).maybe(dir.map(|d| line(d, Some("muted"), Some("small")).prop("mono", true).prop("truncate", true))))
             .maybe(counts.map(|(added, removed)| row("s").child(line(format!("+{added}"), Some("success"), Some("small"))).child(line(format!("−{removed}"), Some("danger"), Some("small")))))
             .maybe(if counts.is_none() && !file.what.is_empty() { Some(line(file.what.as_str(), Some("muted"), Some("small")).prop("truncate", true)) } else { None })
-            .child(line(format!("{who}{}", ago_text(file.at)), Some("muted"), Some("tiny")).prop("truncate", true)),
+            .child(line(format!("{who}{}", ago_now(file.at)), Some("muted"), Some("tiny")).prop("truncate", true)),
     )
 }
 
@@ -624,7 +625,7 @@ fn activity(issue: &Issue) -> Node {
     let entries: Vec<&crate::domain::LogEntry> = issue.log.iter().rev().take(shown).collect();
     let items = entries.iter().enumerate().map(|(n, e)| {
         let by = actor_name(&e.by, &issue.sessions);
-        let time = line(ago_text(e.at), Some("muted"), Some("small"));
+        let time = line(ago_now(e.at), Some("muted"), Some("small"));
         if e.kind == "note" {
             let tag = e.by.agent().filter(|a| a.name.as_ref().is_some_and(|n| !n.is_empty())).map(|a| Node::new("Badge").prop("variant", "secondary").text(agent_label(a.kind.as_deref())));
             Node::new("Card").key(format!("{}-{n}", e.at)).child(stack("s").child(row("s").child(Node::new("Avatar").prop("name", by.as_str()).prop("size", "small")).child(line(by.as_str(), None, None).prop("weight", "strong")).maybe(tag).child(time.prop("grow", true))).child(markdown(&e.text)))

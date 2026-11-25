@@ -7,7 +7,7 @@ use crate::{
     domain::{Issue, IssueType, Priority, Status},
 };
 use serde_json::{Value, json};
-use wings_plugin::{format::ago, host, ui::Node};
+use wings_plugin::{format::ago_now, ui::Node};
 
 /// A line of text with a tone and size.
 pub fn line(content: impl Into<String>, tone: Option<&str>, size: Option<&str>) -> Node {
@@ -51,11 +51,6 @@ pub fn button(label: &str, variant: &str, size: &str, on_click: impl Fn() + 'sta
 /// Whether a key event is one that asks to delete the focused issue: Delete, or Backspace without a modifier.
 pub fn is_delete_key(event: &Value) -> bool {
     matches!(event["key"].as_str(), Some("Delete" | "Backspace")) && ["altKey", "ctrlKey", "metaKey", "shiftKey"].iter().all(|m| event[m] != true)
-}
-
-/// How long ago a time was, or nothing for a time that can't be read.
-pub fn ago_text(ms: f64) -> String {
-    ago(ms, host::now())
 }
 
 // ---------- icons ----------
@@ -182,5 +177,5 @@ pub fn status_summary(issues: &[Issue]) -> Node {
 
 /// The time an issue changed, "Updated 5 min ago".
 pub fn when(prefix: &str, ms: f64) -> String {
-    format!("{prefix}{}", ago_text(ms))
+    format!("{prefix}{}", ago_now(ms))
 }

@@ -1,5 +1,7 @@
 //! An issue as text for Claude: what the tools answer with.
 
+use wings_plugin::format::iso_of;
+
 use crate::{
     commands::agent_label,
     domain::{Actor, Issue, IssueType, SessionRef, Status, has_content, key_number, priority_label},
@@ -7,26 +9,9 @@ use crate::{
     search::matches_query,
 };
 
-/// A time as an ISO string, `2026-11-11T10:00:00.000Z`.
-pub fn iso(ms: f64) -> String {
-    let total = ms.floor() as i64;
-    let (days, in_day) = (total.div_euclid(86_400_000), total.rem_euclid(86_400_000));
-    // Howard Hinnant's civil-from-days.
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:03}Z", in_day / 3_600_000, in_day / 60_000 % 60, in_day / 1_000 % 60, in_day % 1_000)
-}
-
 /// A time for Claude, to the minute.
 fn stamp(ms: f64) -> String {
-    format!("{}Z", &iso(ms)[..16])
+    format!("{}Z", &iso_of(ms)[..16])
 }
 
 fn who(by: &Actor, sessions: &[SessionRef]) -> String {
@@ -170,9 +155,9 @@ mod tests {
 
     #[test]
     fn a_time_is_written_as_the_iso_string_javascript_writes() {
-        assert_eq!(iso(0.0), "1970-01-01T00:00:00.000Z");
-        assert_eq!(iso(1_700_000_000_123.0), "2023-11-14T22:13:20.123Z");
-        assert_eq!(iso(951_782_400_000.0), "2000-02-29T00:00:00.000Z");
+        assert_eq!(iso_of(0.0), "1970-01-01T00:00:00.000Z");
+        assert_eq!(iso_of(1_700_000_000_123.0), "2023-11-14T22:13:20.123Z");
+        assert_eq!(iso_of(951_782_400_000.0), "2000-02-29T00:00:00.000Z");
         assert_eq!(stamp(1_700_000_000_123.0), "2023-11-14T22:13Z");
     }
 

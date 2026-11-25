@@ -228,7 +228,7 @@ fn status_column(status: Status) -> Node {
 /// A row's time, as wide as the column that keeps them in line; the empty one is a group head's, which takes 13 points more.
 fn time_column(updated_at: Option<f64>) -> Node {
     match updated_at {
-        Some(at) => column(56).child(row("s").prop("justify", "end").child(line(crate::parts::ago_text(at), Some("muted"), Some("tiny")))),
+        Some(at) => column(56).child(row("s").prop("justify", "end").child(line(wings_plugin::format::ago_now(at), Some("muted"), Some("tiny")))),
         None => column(43),
     }
 }
