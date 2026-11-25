@@ -1972,6 +1972,7 @@ fn a_pane_opened_with_a_claude_account_runs_its_shell_under_that_account() {
         .unwrap()
         .parse()
         .unwrap();
+    wait_for_prompt(&app, &window, pane);
     let terminal = window.read(|w, _| w.terminal(pane).unwrap());
     window.update(|_, _, cx| {
         terminal.update(cx, |view, cx| {
@@ -1982,7 +1983,7 @@ fn a_pane_opened_with_a_claude_account_runs_its_shell_under_that_account() {
         "account-dir:{}",
         wings_spaces::claude_accounts::dir(Some("wings-native-test")).display()
     );
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + super::tests::THREAD_BOUND;
     loop {
         let output = window.read(|_, cx| terminal.read(cx).recent_output());
         if String::from_utf8_lossy(&output).contains(&expected) {

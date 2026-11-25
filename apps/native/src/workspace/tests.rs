@@ -262,12 +262,13 @@ fn a_pane_whose_shell_exits_closes_and_the_pane_before_it_takes_focus() {
     let (app, mut window) = open();
     press(&mut window, "d");
     assert_eq!(panes(&window), (vec![0, 1], 1));
+    wait_for_prompt(&app, &window, 1);
     window.update(|w, _, cx| {
         w.terminal(1)
             .unwrap()
             .update(cx, |view, cx| view.write_input("exit\r", cx))
     });
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + THREAD_BOUND;
     while panes(&window).0 != [0] {
         assert!(
             std::time::Instant::now() < deadline,
