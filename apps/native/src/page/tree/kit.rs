@@ -102,7 +102,7 @@ pub(super) fn list_row(id: u64, children: Vec<Node>, on_click: Option<String>, t
 
 /// `Section`: a heading (`title` slot), a `description` under it at a readable measure, and its rows, one under the
 /// other with no gap, as list buttons are. The heading and the description are in a list button's inset, so they start
-/// where the rows' text does.
+/// where the rows' text does, unless the rows are one `Card`: a card's edge is where they line up, as in Settings.
 ///
 /// `fold` is `Some((open, on_open_change))` for a collapsible one: the heading is then a `Disclosure`'s line (chevron,
 /// the whole line a button) and the description and rows are its body, drawn only while it is open.
@@ -112,27 +112,29 @@ pub(super) fn section(id: u64, children: Vec<Node>, fold: Option<(Option<bool>, 
     let description = slots.take("description");
     let rows = parts(slots.0);
     let mut out = Vec::new();
+    // A card has its own edge, so a heading over it lines up with that rather than with a list button's text.
+    let inset = !matches!(rows.as_slice(), [Node::Card(_)]);
     if let Some((open, on_open_change)) = fold.filter(|_| !title.is_empty()) {
         let mut body = Vec::new();
         if !description.is_empty() {
-            body.push(about(id, description));
+            body.push(about(id, description, true));
         }
         body.push(Node::Stack(stack(part(id, 5), Gap::None, rows)));
         return Node::Disclosure(Disclosure { id, open, on_open_change, section: true, summary: title, body });
     }
     if !title.is_empty() {
         let heading = Node::Heading(Heading { id: part(id, 2), section: false, children: title });
-        out.push(Node::Stack(Stack { inset: true, ..stack(part(id, 1), Gap::M, vec![heading]) }));
+        out.push(Node::Stack(Stack { inset, ..stack(part(id, 1), Gap::M, vec![heading]) }));
     }
     if !description.is_empty() {
-        out.push(about(id, description));
+        out.push(about(id, description, inset));
     }
     out.push(Node::Stack(stack(part(id, 5), Gap::None, rows)));
     Node::Stack(stack(id, Gap::Xs, out))
 }
 
 /// A section's description line: muted, small, at a readable measure, in the rows' inset.
-fn about(id: u64, description: Vec<Node>) -> Node {
+fn about(id: u64, description: Vec<Node>, inset: bool) -> Node {
     let said = Node::Text(Text {
         id: part(id, 4),
         tone: Some(Tone::Muted),
@@ -153,7 +155,7 @@ fn about(id: u64, description: Vec<Node>) -> Node {
         href: None,
         children: description,
     });
-    Node::Stack(Stack { inset: true, measure: Some(MEASURE), ..stack(part(id, 3), Gap::M, vec![said]) })
+    Node::Stack(Stack { inset, measure: Some(MEASURE), ..stack(part(id, 3), Gap::M, vec![said]) })
 }
 
 /// `Actions`: the buttons in the `dismiss` slot (Cancel, Close) first and always ghost, then the rest as the page made

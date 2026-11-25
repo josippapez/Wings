@@ -1087,6 +1087,21 @@ fn a_list_row_with_a_click_is_a_list_button_and_one_without_sits_in_its_inset() 
     }
 }
 
+/// Rows that are one `Card` have an edge of their own, so the heading and description line up with it.
+#[test]
+fn a_section_of_one_card_lines_its_heading_up_with_the_card() {
+    let parsed = tree(json!([{"id":1,"type":"Section","props":{},"children":[
+        slot_text(2, "title", "Entries"),
+        slot_text(4, "description", "What ran."),
+        {"id":6,"type":"Card","props":{},"children":[]},
+    ]}]))
+    .unwrap();
+    let Node::Stack(section) = &parsed.children[0] else { panic!("a stack") };
+    let [Node::Stack(head), Node::Stack(about), Node::Stack(rows)] = section.children.as_slice() else { panic!("{section:?}") };
+    assert!(!head.inset && !about.inset);
+    assert!(matches!(rows.children.as_slice(), [Node::Card(_)]));
+}
+
 #[test]
 fn a_section_puts_its_heading_and_description_in_the_rows_inset_and_its_rows_under_them() {
     let parsed = tree(json!([{"id":1,"type":"Section","props":{},"children":[
