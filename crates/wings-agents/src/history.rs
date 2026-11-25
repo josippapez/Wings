@@ -40,6 +40,25 @@ pub fn project_folder_name(cwd: &str) -> String {
 const EDIT_TOOLS: [&str; 4] = ["Edit", "MultiEdit", "Write", "NotebookEdit"];
 /// Sessions the semantic index adds to a search at most.
 const SIMILAR: usize = 20;
+/// Words too common to tell one session from another, which a search doesn't rank by: repo-docs' keyword search's list,
+/// with the pronouns prompts are full of.
+const STOP_WORDS: &[&str] = &[
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does", "did", "will",
+    "would", "could", "should", "may", "might", "can", "shall", "to", "of", "in", "for", "on", "with", "at", "by", "from",
+    "as", "into", "through", "during", "before", "after", "between", "out", "off", "over", "under", "then", "here",
+    "there", "when", "where", "why", "how", "all", "each", "every", "both", "few", "more", "most", "other", "some", "such",
+    "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very", "just", "because", "but", "and", "or", "if",
+    "while", "that", "this", "it", "its", "i", "my",
+];
+/// BM25+ as Orama scores repo-docs' chunks: k1, b and δ.
+const BM25: (f32, f32, f32) = (1.2, 0.75, 0.5);
+/// What a session's title, id, branches and edited files count for against one of its messages, as repo-docs' keyword
+/// search counts a doc's title and path above its text.
+const META_BOOST: f32 = 2.0;
+/// How repo-docs weighs the two halves of its hybrid search: the words a little, what they mean mostly. Each half is
+/// divided by its best score first.
+const TEXT_WEIGHT: f32 = 0.2;
+const MEANING_WEIGHT: f32 = 0.8;
 /// Snippets per session, and the characters around a match in each.
 const SNIPPETS: usize = 3;
 const BEFORE: usize = 60;
@@ -432,6 +451,70 @@ pub fn terms(query: &str) -> Vec<String> {
     out
 }
 
+/// The terms a search ranks by: its words and phrases without the stop words, or all of them when that leaves none.
+fn ranking_terms(terms: &[String]) -> Vec<&str> {
+    let kept: Vec<&str> = terms.iter().map(String::as_str).filter(|t| !STOP_WORDS.contains(t)).collect();
+    if kept.is_empty() { terms.iter().map(String::as_str).collect() } else { kept }
+}
+
+/// How often `term` starts a word in `text`: inside a word ("ci" in "decision") doesn't count, its start
+/// ("relaunch" in "relaunching") does.
+fn word_starts<'a>(text: &'a str, term: &'a str) -> impl Iterator<Item = usize> + 'a {
+    text.match_indices(term)
+        .map(|(at, _)| at)
+        .filter(|&at| !text[..at].chars().next_back().is_some_and(char::is_alphanumeric))
+}
+
+/// Each session's BM25+ score for `terms`, as Orama scores repo-docs' chunks: its best message's, so a long session
+/// doesn't win by its size, and a word in most messages counts for almost nothing. Its title, id, branches and edited
+/// files count as one more message, `META_BOOST` times.
+fn bm25(sessions: &[&Session], terms: &[&str]) -> Vec<f32> {
+    let (k, b, d) = BM25;
+    let docs: usize = sessions.iter().map(|s| s.messages.len()).sum();
+    if docs == 0 {
+        return vec![0.0; sessions.len()];
+    }
+    let average = sessions.iter().map(|s| s.text.len()).sum::<usize>() as f32 / docs as f32;
+    let score = |idf: f32, tf: f32, length: f32| idf * (d + tf * (k + 1.0)) / (tf + k * (1.0 - b + b * length / average));
+    // Each message's score so far, and the meta's last.
+    let mut scores: Vec<Vec<f32>> = sessions.iter().map(|s| vec![0.0; s.messages.len() + 1]).collect();
+    for term in terms {
+        // (session, message, how often) for each message holding the term.
+        let mut found: Vec<(usize, usize, f32)> = Vec::new();
+        for (i, s) in sessions.iter().enumerate() {
+            let mut last: Option<(usize, f32)> = None;
+            for at in word_starts(&s.folded, term) {
+                let message = s.messages.partition_point(|m| m.start <= at).saturating_sub(1);
+                match &mut last {
+                    Some((m, tf)) if *m == message => *tf += 1.0,
+                    _ => {
+                        if let Some((m, tf)) = last.take() {
+                            found.push((i, m, tf));
+                        }
+                        last = Some((message, 1.0));
+                    }
+                }
+            }
+            if let Some((m, tf)) = last {
+                found.push((i, m, tf));
+            }
+        }
+        let df = found.len() as f32;
+        let idf = (1.0 + (docs as f32 - df + 0.5) / (df + 0.5)).ln();
+        for (i, message, tf) in found {
+            let (start, end) = sessions[i].range(message);
+            scores[i][message] += score(idf, tf, (end - start) as f32);
+        }
+        for (i, s) in sessions.iter().enumerate() {
+            let tf = word_starts(&s.meta, term).count() as f32;
+            if tf > 0.0 {
+                *scores[i].last_mut().unwrap() += META_BOOST * score(idf, tf, average);
+            }
+        }
+    }
+    scores.into_iter().map(|s| s.into_iter().fold(0.0, f32::max)).collect()
+}
+
 /// The passage of `session` (read from `transcript`) that the semantic index found `hit` in. None when it is gone: the
 /// transcript is smaller than when it was indexed, so it was rewritten, or no longer has that message.
 fn similar_snippet(transcript: Option<&PathBuf>, session: &Session, hit: &crate::semantic::Ranked) -> Option<Snippet> {
@@ -714,9 +797,9 @@ pub struct Excerpt {
 }
 
 impl History {
-    /// Uses the semantic index once it has one (`set_semantic`): the sessions it ranks best for a query join those whose
-    /// words match, fused by rank, best first. Without it, the matches are most recent first. It doesn't wait for the
-    /// index's helper to start: `semantic_loading` says to ask again.
+    /// Ranks the sessions whose words match by BM25, and once it has the semantic index (`set_semantic`) adds the
+    /// sessions it ranks best and weighs both halves as repo-docs does. Without a query, the most recent first. It
+    /// doesn't wait for the index's helper to start: `semantic_loading` says to ask again.
     pub fn search(&self, claude_dirs: &[PathBuf], query: &str, filter: &Filter, limit: usize) -> Results {
         self.search_with(claude_dirs, query, filter, limit, false)
     }
@@ -770,13 +853,29 @@ impl History {
                 similar.push((i, snippet));
             }
         }
-        let order: Vec<usize> = if similar.is_empty() {
+        let order: Vec<usize> = if terms.is_empty() {
             matching.clone()
         } else {
-            let ids = |list: &mut dyn Iterator<Item = usize>| list.map(|i| shown[i].2.id.as_str()).collect::<Vec<_>>();
-            let words = ids(&mut matching.iter().copied());
-            let meaning = ids(&mut similar.iter().map(|(i, _)| *i));
-            crate::semantic::fuse(&[&words, &meaning]).into_iter().map(|id| at[id]).collect()
+            // The sessions whose words match and those the index found, by repo-docs' hybrid score: each half divided by
+            // its best, weighed 0.2 for the words (BM25) and 0.8 for the meaning; the most recent first between equals.
+            // BM25 counts its words in these sessions alone: in all of them, a search took up to 114 ms instead of 21.
+            let mut candidates = matching.clone();
+            candidates.extend(similar.iter().map(|(i, _)| *i).filter(|i| matching.binary_search(i).is_err()));
+            let sessions: Vec<&Session> = candidates.iter().map(|&i| shown[i].2).collect();
+            let text = bm25(&sessions, &ranking_terms(&terms));
+            let meaning: HashMap<&str, f32> =
+                ranked.iter().flatten().map(|(id, hit)| (id.as_str(), hit.best.score.max(0.0))).collect();
+            let meaning: Vec<f32> =
+                sessions.iter().map(|s| meaning.get(s.id.as_str()).copied().unwrap_or(0.0)).collect();
+            let best = |of: &[f32]| of.iter().copied().fold(0.0, f32::max);
+            let part = |value: f32, best: f32| if best > 0.0 { value / best } else { 0.0 };
+            let (best_text, best_meaning) = (best(&text), best(&meaning));
+            let hybrid: Vec<f32> = (0..candidates.len())
+                .map(|c| TEXT_WEIGHT * part(text[c], best_text) + MEANING_WEIGHT * part(meaning[c], best_meaning))
+                .collect();
+            let mut order: Vec<usize> = (0..candidates.len()).collect();
+            order.sort_by(|&a, &b| hybrid[b].total_cmp(&hybrid[a]).then(candidates[a].cmp(&candidates[b])));
+            order.into_iter().map(|c| candidates[c]).collect()
         };
         let sessions = order
             .iter()
@@ -1663,25 +1762,77 @@ mod tests {
         assert_eq!(found.sessions[0].matches, 0, "found by meaning, not by its words");
     }
 
+    /// Writes a transcript of `lines` for session `id`, last changed `age` seconds ago.
+    fn aged(claude: &Path, id: &str, age: u64, lines: &[String]) {
+        let path = crate::semantic::tests::write(claude, id, lines);
+        let at = std::time::SystemTime::now() - Duration::from_secs(age);
+        fs::File::options().append(true).open(path).unwrap().set_modified(at).unwrap();
+    }
+
     #[test]
-    fn a_session_matched_by_its_words_and_its_meaning_comes_first() {
-        use crate::semantic::tests::{reply, temp, write};
-        let claude = temp("fuse-claude");
-        let now = std::time::SystemTime::now();
-        for (id, prompt, age) in [
-            ("recent", "history notes for the release", 0),
-            ("both", "history history lost", 60),
-            ("meaning", "scrollback gone today", 120),
-        ] {
-            let path = write(&claude, id, &[user("/p", "main", prompt), reply("okay sure thing")]);
-            fs::File::options().append(true).open(path).unwrap().set_modified(now - Duration::from_secs(age)).unwrap();
-        }
+    fn a_long_session_holding_every_word_somewhere_doesnt_outrank_the_one_that_means_the_query() {
+        use crate::semantic::tests::{reply, temp};
+        let claude = temp("long-claude");
+        // The most recent, and every word of the question is in it, each in a different message.
+        let long: Vec<String> = ["we added scrollback settings for terminals", "the old icon disappears in dark mode", "ask when the build ends", "relaunching needs a signed app", "fine"]
+            .iter()
+            .flat_map(|text| [user("/p", "main", text), reply("done, as you asked")])
+            .collect();
+        aged(&claude, "long", 0, &long);
+        aged(&claude, "meant", 600, &[user("/p", "main", "the pane history is lost after a restart"), reply("kept on disk now")]);
         let dirs = [claude.clone()];
-        let filter = Filter::default();
-        let words = History::default().search(&dirs, "history", &filter, 10);
-        assert_eq!((ids(&words), words.total), (vec!["recent", "both"], 2), "by words alone: most recent first");
-        let fused = with_meaning(&claude, "fuse-dir").search(&dirs, "history", &filter, 10);
-        assert_eq!((ids(&fused), fused.total), (vec!["both", "recent", "meaning"], 3));
+        let query = "the scrollback disappears when relaunching";
+        let found = with_meaning(&claude, "long-dir").search(&dirs, query, &Filter::default(), 10);
+        assert_eq!(ids(&found)[0], "meant", "{:?}", ids(&found));
+        assert!(ids(&found).contains(&"long"), "its words still match: it stays in the list");
+    }
+
+    #[test]
+    fn by_words_the_session_a_rare_word_names_comes_before_one_that_mentions_it_in_passing() {
+        use crate::semantic::tests::{reply, temp};
+        let claude = temp("named-claude");
+        aged(
+            &claude,
+            "passing",
+            0,
+            &[user("/p", "main", "compare our plugin list with what herdr and tmux and iterm offer and keep notes on all of the differences"), reply("noted")],
+        );
+        aged(
+            &claude,
+            "named",
+            600,
+            &[
+                r#"{"type":"custom-title","customTitle":"Herdr desktop app with plugins"}"#.to_string(),
+                user("/p", "main", "build the herdr idea as a desktop app"),
+                reply("planned the herdr style app"),
+            ],
+        );
+        let dirs = [claude.clone()];
+        let found = History::default().search(&dirs, "herdr", &Filter::default(), 10);
+        assert_eq!((ids(&found), found.total), (vec!["named", "passing"], 2), "not most recent first: the session it names");
+        let found = History::default().search(&dirs, "herdr tmux", &Filter::default(), 10);
+        assert_eq!(ids(&found), ["passing"], "every word still has to match");
+    }
+
+    #[test]
+    fn common_words_count_for_little_and_a_long_message_doesnt_win_by_its_size() {
+        let session = |id: &str, texts: &[&str]| {
+            let mut s = Session { id: id.into(), ..Session::default() };
+            for text in texts {
+                s.push(Role::User, text, None);
+            }
+            s.finish();
+            s
+        };
+        let short = session("short", &["the build of the dts decoder"]);
+        let long = session("long", &[&format!("the build {}", "and the logs and the steps of the run ".repeat(40)), "dts once"]);
+        let common = session("common", &["the build", "the build again", "the build passed"]);
+        let scores = bm25(&[&short, &long, &common], &["build", "dts"]);
+        assert!(scores[0] > scores[1], "a short message with both words beats a long one: {scores:?}");
+        assert!(scores[0] > scores[2], "a word in most messages counts for little: {scores:?}");
+        assert_eq!(ranking_terms(&terms("the build of the decoder")), ["build", "decoder"]);
+        assert_eq!(ranking_terms(&terms("the")), ["the"], "only stop words: all of them");
+        assert_eq!(word_starts("a decision on ci", "ci").count(), 1, "inside a word doesn't count");
     }
 
     #[test]

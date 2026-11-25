@@ -1,6 +1,6 @@
 //! Semantic search of past sessions: every Claude Code transcript on this Mac, the subagents' too (counted toward the
 //! session that ran them), embedded in the background with a small local model, so a search worded differently from the
-//! session still finds it. `History::search` fuses what this ranks with its keyword matches (`fuse`).
+//! session still finds it. `History::search` weighs what this ranks with its keyword matches, as repo-docs does.
 //!
 //! The indexer runs on a thread of its own (`start`) and embeds a message at a time in the helper process
 //! (`model::Helper`, at utility priority, one thread). It stops feeding the helper when a key is pressed and goes on a
@@ -357,6 +357,17 @@ impl Semantic {
         }
     }
 
+    /// Reads the index from its file, the first time: the indexer's first round does, off the window's thread.
+    pub fn load(&self) {
+        if !self.loaded.swap(true, Ordering::Relaxed) {
+            let header = self.index.lock().unwrap().header;
+            let read = fs::read(self.dir.join(INDEX)).map(|b| Index::decode(&b, header));
+            if let Ok(index) = read {
+                *self.index.lock().unwrap() = index;
+            }
+        }
+    }
+
     /// Calls `changed` when what the app shows changes: the state, and whether the progress shows. A catch-up of a few
     /// sessions, as every minute while agents work, counts as ready, so it draws nothing.
     fn signal(&self, changed: &dyn Fn()) {
@@ -375,13 +386,7 @@ impl Semantic {
 
     /// One look at the transcripts in `dirs` and the embedding of what changed. How long to wait before the next.
     pub fn round(&self, dirs: &[PathBuf], changed: &dyn Fn()) -> Duration {
-        if !self.loaded.swap(true, Ordering::Relaxed) {
-            let header = self.index.lock().unwrap().header;
-            let read = fs::read(self.dir.join(INDEX)).map(|b| Index::decode(&b, header));
-            if let Ok(index) = read {
-                *self.index.lock().unwrap() = index;
-            }
-        }
+        self.load();
         if !self.enabled() {
             self.progress.set(State::Off, 0, 0);
             *self.embedder.lock().unwrap() = None;
@@ -529,26 +534,6 @@ pub fn passage(text: &str, best: &Best) -> Option<String> {
 
 /// The characters of a chunk a snippet shows.
 const SNIPPET: usize = 240;
-/// Reciprocal rank fusion's constant: a rank's weight is 1 / (K + rank).
-const RRF_K: f32 = 60.0;
-
-/// Lists of ids, each best first, as one, by reciprocal rank fusion: an id high in either list, or in both, comes first.
-/// Ties keep the order in which the ids first appear.
-pub fn fuse<'a>(lists: &[&[&'a str]]) -> Vec<&'a str> {
-    let mut scores: Vec<(&'a str, f32)> = Vec::new();
-    for list in lists {
-        for (rank, &id) in list.iter().enumerate() {
-            let weight = 1.0 / (RRF_K + rank as f32 + 1.0);
-            match scores.iter_mut().find(|(s, _)| *s == id) {
-                Some((_, score)) => *score += weight,
-                None => scores.push((id, weight)),
-            }
-        }
-    }
-    let mut order: Vec<(usize, &(&str, f32))> = scores.iter().enumerate().collect();
-    order.sort_by(|a, b| b.1.1.total_cmp(&a.1.1).then(a.0.cmp(&b.0)));
-    order.into_iter().map(|(_, (id, _))| *id).collect()
-}
 
 #[cfg(test)]
 pub(crate) mod tests;

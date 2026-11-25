@@ -210,13 +210,6 @@ fn progress_shows_only_for_a_round_big_enough() {
 }
 
 #[test]
-fn fusion_puts_what_both_lists_rank_high_first() {
-    assert_eq!(fuse(&[&["a", "b", "c"], &["c", "d"]]), ["c", "a", "b", "d"]);
-    assert_eq!(fuse(&[&["a", "b"], &[]]), ["a", "b"], "one list keeps its order");
-    assert_eq!(fuse(&[&[], &["x", "y"]]), ["x", "y"]);
-}
-
-#[test]
 fn a_passage_is_read_back_only_while_the_message_holds_it() {
     let best = Best { transcript: 0, message: 0, start: 4, len: 7, score: 1.0 };
     assert_eq!(passage("the pane history", &best).as_deref(), Some("…pane hi…"));
@@ -301,12 +294,13 @@ fn the_real_model_finds_a_session_worded_differently() {
     fs::remove_dir_all(claude).unwrap();
 }
 
-/// Indexes this Mac's own sessions with the real helper, then runs the queries in a file of JSON lines (`{"q", "target"}`)
-/// through the history's search. By hand only, as it reads every transcript: set `WINGS_EMBED` (the helper),
-/// `WINGS_SEMANTIC_DIR` (a scratch folder) and `WINGS_QUERIES`, and run the ignored tests named `this_mac`.
+/// How the history's search ranks this Mac's own sessions, against a copy of the app's index (never the app's own): the
+/// queries in a file of JSON lines (`{"q", "target": [id prefixes]}`), each with the rank of its first target in the top
+/// 20 and the search's time. By hand: set `WINGS_EMBED` (the helper), `WINGS_SEMANTIC_DIR` (the copy) and
+/// `WINGS_QUERIES`, and run the ignored tests named `ranking_on_this_mac`.
 #[test]
 #[ignore]
-fn this_macs_sessions_indexed_and_searched() {
+fn ranking_on_this_mac() {
     let var = |name: &str| PathBuf::from(std::env::var_os(name).unwrap_or_else(|| panic!("{name} isn't set")));
     let home = dirs::home_dir().unwrap();
     let mut claude: Vec<PathBuf> = fs::read_dir(&home)
@@ -318,37 +312,41 @@ fn this_macs_sessions_indexed_and_searched() {
         .collect();
     claude.sort();
     let semantic = Semantic::open(var("WINGS_SEMANTIC_DIR"), var("WINGS_EMBED"));
-    let started = Instant::now();
-    semantic.round(&claude, &|| {});
-    let status = semantic.status();
-    let (rows, transcripts) = {
-        let index = semantic.index.lock().unwrap();
-        (index.rows.len(), index.transcripts.len())
-    };
-    println!(
-        "[measure] {} sessions, {transcripts} transcripts, {rows} chunks in {:.0} s; index {:.1} MB; error {:?}",
-        status.sessions,
-        started.elapsed().as_secs_f64(),
-        status.bytes as f64 / 1e6,
-        status.error
-    );
+    semantic.load();
+    semantic.rank("warm up", true).expect("the copy has an index and the helper starts");
     let history = crate::history::History::default();
     history.set_semantic(semantic.clone());
+    let words = crate::history::History::default();
     let filter = crate::history::Filter::default();
+    // The first search reads every transcript.
     history.search(&claude, "warm up", &filter, 1);
+    words.search(&claude, "warm up", &filter, 1);
+    let (mut top3, mut top10, mut queries) = (0, 0, 0);
     for line in fs::read_to_string(var("WINGS_QUERIES")).unwrap().lines() {
         let query: serde_json::Value = serde_json::from_str(line).unwrap();
-        let (q, target) = (query["q"].as_str().unwrap(), query["target"].as_str().unwrap());
+        let q = query["q"].as_str().unwrap();
+        let targets: Vec<&str> = query["target"].as_array().unwrap().iter().map(|t| t.as_str().unwrap()).collect();
         let started = Instant::now();
-        let found = history.search(&claude, q, &filter, 5);
+        let found = history.search(&claude, q, &filter, 20);
         let took = started.elapsed();
-        let words = crate::history::History::default().search(&claude, q, &filter, 5).total;
-        let rank = found.sessions.iter().position(|h| h.id.starts_with(target)).map_or("not in top 5".into(), |r| format!("#{}", r + 1));
-        println!("\nQ: {q}\n   target {target}: {rank}; by words alone {words} sessions; search {:.0} ms", took.as_secs_f64() * 1000.0);
-        for hit in &found.sessions {
-            let title = hit.title.clone().or(hit.first_prompt.clone()).unwrap_or_default();
-            let snippet = hit.snippets.first().map(|s| s.text.chars().take(110).collect::<String>()).unwrap_or_default();
-            println!("   {} {:<50.50} | {snippet}", &hit.id[..8], title.replace('\n', " "));
+        let started = Instant::now();
+        words.search(&claude, q, &filter, 20);
+        let by_words = started.elapsed();
+        let rank = found.sessions.iter().position(|h| targets.iter().any(|t| h.id.starts_with(t))).map(|r| r + 1);
+        queries += 1;
+        top3 += rank.is_some_and(|r| r <= 3) as usize;
+        top10 += rank.is_some_and(|r| r <= 10) as usize;
+        let rank = rank.map_or("not in top 20".into(), |r| format!("#{r}"));
+        println!(
+            "\n[rank] {rank:>13} | {q}\n         search {:.0} ms (by words alone {:.0} ms), {} found",
+            took.as_secs_f64() * 1000.0,
+            by_words.as_secs_f64() * 1000.0,
+            found.total
+        );
+        for hit in found.sessions.iter().take(3) {
+            let title = hit.title.clone().or(hit.first_prompt.clone()).unwrap_or_default().replace('\n', " ");
+            println!("         {} {:>4} msgs {:>4} matching | {:.60}", &hit.id[..8], hit.messages, hit.matches, title);
         }
     }
+    println!("\n[rank] {top3}/{queries} in the top 3, {top10}/{queries} in the top 10");
 }
