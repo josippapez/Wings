@@ -133,7 +133,8 @@ impl TerminalView {
             .flex()
             .items_center()
             .gap(px(4.0))
-            .p(px(4.0))
+            // 6 points so the field's fill clears the bar's 14 point corners instead of hugging them.
+            .p(px(6.0))
             .rounded(px(14.0))
             .border_1()
             .border_color(rgba(theme::HAIRLINE_STRONG))
