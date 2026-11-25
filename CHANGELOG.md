@@ -2,6 +2,14 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.107 · 2026-11-25
+
+- **Live tooltips**: the Settings button's tooltip counts on while indexing, instead of keeping the number it showed first.
+- **Tab pages**: the project bar's line no longer runs past the rounded corner of a tab page like Claude chat.
+- **Room in the message box**: a plugin's output style goes by its own name ("Concise output"), and the agent picker is a robot button until you pick an agent, so every button shows whole. Claude chat 0.55.4.
+- **Motion**: switches slide and folding chevrons turn, at once under Reduce motion.
+- **A log of errors**: opened from the Finder, Wings keeps its errors in wings.log in its data folder.
+
 ## 0.2.106 · 2026-11-25
 
 - **Better past session search**: common words in a search barely count now, so a long session no longer comes first just because it contains every word of your question somewhere. Searching by meaning and by words are blended the way the docs search does it. Exact searches, like an id, a quoted phrase or a rare word, still find their session first.
