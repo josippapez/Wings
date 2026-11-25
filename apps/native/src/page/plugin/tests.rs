@@ -233,6 +233,26 @@ fn a_click_asks_main_which_saves_the_count_and_the_page_shows_what_main_pushed()
     );
 }
 
+std::thread_local! {
+    /// How long `open_frame` waits, on the thread that opens a frame, between starting it and adding it to the plugin's
+    /// frames: a window thread the machine doesn't schedule for a while there, as under a loaded test suite.
+    pub(super) static JOIN_DELAY: std::cell::Cell<Duration> = const { std::cell::Cell::new(Duration::ZERO) };
+}
+
+/// A page asks main as it starts, and main answers at once. The answer went to the frames on the list then, and the
+/// page wasn't on it until the thread that opened it got to add it: with that thread held up, the page stayed on
+/// "Loading…" for good, as a restored tab did under the full test suite.
+#[test]
+fn a_page_hears_main_answer_what_it_asked_as_it_started_while_its_opener_is_held_up() {
+    let root = Root::new();
+    let host = PluginHost::new(root.config("fixture"));
+    host.start_main(&fixture_main(), events().0).unwrap();
+    JOIN_DELAY.set(Duration::from_millis(300));
+    let page = open(&host, &fixture_page());
+    JOIN_DELAY.set(Duration::ZERO);
+    page.shows("Count: 0");
+}
+
 #[test]
 fn every_page_of_the_plugin_shows_the_count_one_of_them_raised() {
     let root = Root::new();

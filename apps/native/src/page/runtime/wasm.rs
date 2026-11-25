@@ -452,6 +452,7 @@ fn serve(
             fatal: true,
         });
     };
+    host.link.wait_to_join();
     #[cfg(any(test, feature = "test-support"))]
     if let Some(guest) = super::fake::claim(path) {
         return match super::fake::start(guest, host) {

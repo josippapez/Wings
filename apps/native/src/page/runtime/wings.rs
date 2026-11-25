@@ -8,6 +8,9 @@ pub trait Link: Send + Sync + 'static {
     fn focused(&self) -> bool {
         true
     }
+    /// Returns once the host hears the frame: called on its thread before its module starts. A page that asks main as
+    /// it starts is answered at once, and an answer sent before the host listed the page was lost.
+    fn wait_to_join(&self) {}
     fn set_visible(&self, _visible: bool) {}
     /// The app is handing the frame a click, key press or pick of yours.
     fn user_event(&self) {}

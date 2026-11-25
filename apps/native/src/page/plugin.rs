@@ -336,6 +336,11 @@ impl Link for FrameLink {
         }
     }
 
+    /// `ready` is set once `open_frame` has put the frame on `frames`, which is what a broadcast reaches.
+    fn wait_to_join(&self) {
+        self.focused();
+    }
+
     fn set_visible(&self, visible: bool) {
         if self.visible.load(Ordering::Relaxed) == visible {
             return;
@@ -1285,6 +1290,8 @@ fn open_frame(
         on_event(event);
     };
     let runtime = PageRuntime::open_plugin(source, role, link, on_event)?;
+    #[cfg(test)]
+    std::thread::sleep(tests::JOIN_DELAY.get());
     let inbox = runtime.inbox();
     let focused = shared.focused.lock().unwrap();
     shared.frames.lock().unwrap().push(Open {
