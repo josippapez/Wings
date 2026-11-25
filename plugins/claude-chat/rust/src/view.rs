@@ -1621,7 +1621,7 @@ fn queued(c: &Chat) -> Option<Node> {
         let said = if queued.text.is_empty() {
             muted(plural(queued.images.len(), "image"))
         } else {
-            text(said_text).prop("truncate", true).prop("expandable", true).prop("title", said_text)
+            text(said_text).prop("truncate", true).prop("expandable", true).prop("title", queued_tip(said_text))
         };
         // From the top: an expanded message is many lines, and More or Less, Send now and the cross sit on its first. The app
         // centres that line in a button's height, so the labels are level on one line too.
@@ -1643,6 +1643,17 @@ fn queued(c: &Chat) -> Option<Node> {
     // The card's line is about the messages Claude reads at its next step, so it goes when only held commands wait.
     let read_soon = c.session.queued.iter().filter(|queued| !c.session.runs_after_turn(&queued.text)).count();
     Some(card().maybe((read_soon > 0).then(|| muted(queued_note(read_soon)))).child(stack().prop("gap", "xs").children(rows)))
+}
+
+/// The most of a queued message its tooltip shows: a big paste filled the screen with it.
+const QUEUED_TIP: usize = 300;
+
+/// The tooltip of a queued message: its start, cut short with an ellipsis when it is long.
+fn queued_tip(said: &str) -> String {
+    match said.char_indices().nth(QUEUED_TIP) {
+        Some((end, _)) => format!("{}…", said[..end].trim_end()),
+        None => said.to_owned(),
+    }
 }
 
 /// What a queued Claude Code plugin command says under its text.
@@ -1992,6 +2003,22 @@ mod tests {
         assert_eq!(both.matches(HELD_NOTE).count(), 1);
         assert_eq!(both.matches("Send now").count(), 1);
         assert!(both.contains("Claude reads it after"));
+    }
+
+    #[test]
+    fn a_huge_queued_message_has_a_short_tooltip_and_a_short_one_keeps_its_own() {
+        let paste = "pasted line of a big log\n".repeat(1000);
+        let tip = queued_tip(&paste);
+        assert!(tip.chars().count() <= QUEUED_TIP + 1 && tip.ends_with('…'), "{}", tip.len());
+        assert_eq!(queued_tip("and lint"), "and lint");
+        let shown = chat::with(|c| {
+            c.session.queued.clear();
+            c.session.queue(&paste, Vec::new(), 1, 1);
+            let shown = wings_plugin::ui::tree_json(queued(c).unwrap()).to_string();
+            c.session.queued.clear();
+            shown
+        });
+        assert!(!shown.contains(&format!("\"title\":\"{}", paste.replace('\n', "\\n"))), "the whole paste is the tooltip");
     }
 
     #[test]
