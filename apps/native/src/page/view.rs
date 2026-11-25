@@ -3703,7 +3703,7 @@ pub(super) fn char_width(font: gpui::FontId, size: f32, c: char, cx: &gpui::App)
 }
 
 /// How many characters the page's text measuring has asked the text system for on this thread.
-#[cfg(feature = "test-support")]
+#[cfg(all(test, feature = "test-support"))]
 pub(super) fn chars_asked() -> usize {
     CHARS_ASKED.with(Cell::get)
 }
