@@ -1,6 +1,6 @@
 [package]
 name = "wings-native"
-version = "0.2.103"
+version = "0.2.104"
 edition = "2024"
 publish = false
 
@@ -27,6 +27,12 @@ path = "src/bin/wings-plugin-worker.rs"
 [[bin]]
 name = "wings-terminal-server"
 path = "src/bin/wings-terminal-server.rs"
+
+# Turns text into vectors for semantic search of past sessions, started by the app with the model it downloads
+# (`wings_agents::semantic`). It ships beside `wings-native` in the bundle.
+[[bin]]
+name = "wings-embed"
+path = "src/bin/wings-embed.rs"
 
 # The `wings` command Claude Code runs (`wings --mcp`, `wings statusline`, `wings hook`) and the `wings` CLI, which talk to
 # the running app over its socket. It ships beside `wings-native` in the bundle, and Claude Code's settings point at it.
@@ -63,6 +69,10 @@ tar = "0.4.46"
 flate2 = "1.1.10"
 tempfile = "3.27.0"
 plist = "1.10.1"
+# The semantic search helper (`src/bin/wings-embed.rs`), and only it: ONNX Runtime, whose prebuilt static library its build
+# downloads once into ~/Library/Caches/ort.pyke.io (about 80 MB), and Hugging Face's tokenizer.
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-rustls", "api-31"] }
+tokenizers = { version = "0.23.2", default-features = false, features = ["onig"] }
 # Runs a plugin page built to WebAssembly (`page/runtime/wasm.rs`): the trial of Rust plugins. An LTS release (48, a
 # multiple of 12, supported until August 2028), kept at its latest patch: 48.0.9 fixed a guest aborting the process in
 # builds without the `gc` feature, which this is (GHSA-rc4p-x33f-vpr2). With the compiler and nothing else of its

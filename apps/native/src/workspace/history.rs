@@ -97,6 +97,11 @@ impl Sessions {
         ai.work(&self.history, &folders)
     }
 
+    /// Fuses what the semantic index finds into each search (`History::set_semantic`).
+    pub fn set_semantic(&self, semantic: Arc<wings_agents::semantic::Semantic>) {
+        self.history.set_semantic(semantic);
+    }
+
     /// Reads transcripts, which takes a while the first time: call it off the main thread.
     pub fn search(&self, query: &str, filter: &Filter, limit: usize) -> Results {
         let folders = match &self.source {
@@ -106,6 +111,7 @@ impl Sessions {
                     total: 0,
                     branches: Vec::new(),
                     opencode_loading: false,
+                    semantic_loading: false,
                 };
             }
             Some(SessionSource::Folders(folders)) => folders.clone(),
@@ -586,7 +592,8 @@ impl Workspace {
                     (found, accounts)
                 })
                 .await;
-            let loading = found.opencode_loading;
+            // Still loading OpenCode's sessions, or the semantic index's helper: the sheet asks again.
+            let loading = found.opencode_loading || found.semantic_loading;
             this.update(cx, |this, cx| {
                 if let Some(sheet) = &mut this.sheet {
                     sheet.results = Some(found);
@@ -960,7 +967,7 @@ impl Workspace {
             .iter()
             .find(|project| project.path == self.config.project);
         let project_name = project.map_or("this project", |project| project.name.as_str());
-        let loading = sheet.results.as_ref().is_some_and(|r| r.opencode_loading);
+        let loading = sheet.results.as_ref().is_some_and(|r| r.opencode_loading || r.semantic_loading);
         let description = if sheet.all {
             "Claude Code and OpenCode sessions in every project.".to_owned()
         } else {

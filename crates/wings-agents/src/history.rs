@@ -38,6 +38,8 @@ pub fn project_folder_name(cwd: &str) -> String {
 
 /// Tools whose input names a file the session changed.
 const EDIT_TOOLS: [&str; 4] = ["Edit", "MultiEdit", "Write", "NotebookEdit"];
+/// Sessions the semantic index adds to a search at most.
+const SIMILAR: usize = 20;
 /// Snippets per session, and the characters around a match in each.
 const SNIPPETS: usize = 3;
 const BEFORE: usize = 60;
@@ -64,6 +66,8 @@ const OPENCODE_MAX_PAGES: usize = 200;
 pub struct History {
     index: Mutex<HashMap<PathBuf, Transcript>>,
     opencode: Mutex<OpenCode>,
+    /// The index of what the sessions say (`semantic`), whose matches a search fuses with its own.
+    semantic: std::sync::OnceLock<std::sync::Arc<crate::semantic::Semantic>>,
 }
 
 /// OpenCode's root sessions, each fetched once and again when its `time.updated` changes.
@@ -136,6 +140,8 @@ struct Session {
     meta: String,
     /// The last message is Claude's, so its next text block continues it.
     replying: bool,
+    /// A subagent's transcript, whose every entry is a sidechain: it is read like a session's own.
+    sidechains: bool,
 }
 
 #[derive(Deserialize)]
@@ -268,7 +274,7 @@ impl Session {
         if self.cwd.is_none() {
             self.cwd = entry.cwd.filter(|c| !c.is_empty());
         }
-        let sidechain = entry.sidechain == Some(true);
+        let sidechain = entry.sidechain == Some(true) && !self.sidechains;
         match entry.kind.as_deref() {
             Some("ai-title") => self.ai_title = entry.ai_title.or(self.ai_title.take()),
             Some("custom-title") => self.custom_title = entry.custom_title.or(self.custom_title.take()),
@@ -426,6 +432,25 @@ pub fn terms(query: &str) -> Vec<String> {
     out
 }
 
+/// The passage of `session` (read from `transcript`) that the semantic index found `hit` in. None when it is gone: the
+/// transcript is smaller than when it was indexed, so it was rewritten, or no longer has that message.
+fn similar_snippet(transcript: Option<&PathBuf>, session: &Session, hit: &crate::semantic::Ranked) -> Option<Snippet> {
+    if fs::metadata(&hit.path).map_or(true, |m| m.len() < hit.len) {
+        return None;
+    }
+    let i = hit.best.message as usize;
+    let (role, text) = if transcript == Some(&hit.path) {
+        let message = session.messages.get(i)?;
+        let (start, end) = session.range(i);
+        (message.role, std::borrow::Cow::Borrowed(&session.text[start..end]))
+    } else {
+        // A subagent's, or the session's copy in another account: read back from that transcript.
+        let messages = transcript_messages(&hit.path, crate::semantic::is_subagent(&hit.path));
+        (Role::Assistant, std::borrow::Cow::Owned(messages.into_iter().nth(i)?))
+    };
+    Some(Snippet { role, text: crate::semantic::passage(&text, &hit.best)? })
+}
+
 /// Reads a transcript from `offset` on. A last line without its newline is kept only if it's complete JSON;
 /// otherwise Claude Code is still writing it, and the next read starts there.
 fn read(path: &Path, offset: u64, session: &mut Session) -> u64 {
@@ -450,6 +475,19 @@ fn read(path: &Path, offset: u64, session: &mut Session) -> u64 {
     }
     session.finish();
     offset
+}
+
+/// Every message of the transcript at `path` as a search reads it, numbered the same way. `sidechains`: a subagent's
+/// transcript, all of whose entries are sidechains. For the semantic index.
+pub fn transcript_messages(path: &Path, sidechains: bool) -> Vec<String> {
+    let mut session = Session { sidechains, ..Session::default() };
+    read(path, 0, &mut session);
+    (0..session.messages.len())
+        .map(|i| {
+            let (start, end) = session.range(i);
+            session.text[start..end].to_owned()
+        })
+        .collect()
 }
 
 fn modified_ms(meta: &fs::Metadata) -> u64 {
@@ -620,7 +658,7 @@ pub struct Filter {
     pub since_ms: Option<u64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Snippet {
     pub role: Role,
     pub text: String,
@@ -660,6 +698,8 @@ pub struct Results {
     pub branches: Vec<String>,
     /// OpenCode's sessions are still being fetched, so more may show up on the next search.
     pub opencode_loading: bool,
+    /// The semantic index's helper is starting, so the next search may find sessions by what they mean.
+    pub semantic_loading: bool,
 }
 
 /// See `History::excerpt`. The texts are whole messages: the caller cuts them to what its model can take.
@@ -674,11 +714,23 @@ pub struct Excerpt {
 }
 
 impl History {
+    /// Uses the semantic index once it has one (`set_semantic`): the sessions it ranks best for a query join those whose
+    /// words match, fused by rank, best first. Without it, the matches are most recent first. It doesn't wait for the
+    /// index's helper to start: `semantic_loading` says to ask again.
     pub fn search(&self, claude_dirs: &[PathBuf], query: &str, filter: &Filter, limit: usize) -> Results {
+        self.search_with(claude_dirs, query, filter, limit, false)
+    }
+
+    /// `search`, waiting for the semantic index's helper when it isn't running: for a caller that can't ask again.
+    fn search_with(&self, claude_dirs: &[PathBuf], query: &str, filter: &Filter, limit: usize, wait: bool) -> Results {
+        let terms = terms(query);
+        let semantic = self.semantic.get().filter(|_| !terms.is_empty());
+        // Before the lock: the query's vector can wait for the helper.
+        let ranked = semantic.and_then(|s| s.rank(query, wait));
+        let semantic_loading = semantic.is_some_and(|s| s.warming());
         let mut index = self.index.lock().unwrap();
         refresh(&mut index, claude_dirs);
         let opencode = self.opencode.lock().unwrap();
-        let terms = terms(query);
         let project = filter.project.as_deref().map(|p| p.trim_end_matches('/')).filter(|p| !p.is_empty());
         // Each session with the time it was last active, and its transcript if it has one.
         let mut scope: Vec<(u64, Option<&PathBuf>, &Session)> = index
@@ -699,17 +751,43 @@ impl History {
             }
         }
         branches.truncate(50);
-        let found: Vec<(u64, Option<&PathBuf>, &Session)> = scope
+        let shown: Vec<(u64, Option<&PathBuf>, &Session)> = scope
             .into_iter()
             .filter(|(_, _, s)| filter.branch.as_ref().is_none_or(|b| s.branches.contains(b)))
             .filter(|(modified, _, _)| filter.since_ms.is_none_or(|since| *modified >= since))
-            .filter(|(_, _, s)| s.matches(&terms))
             .collect();
-        let sessions = found
+        let matching: Vec<usize> = (0..shown.len()).filter(|&i| shown[i].2.matches(&terms)).collect();
+        let at: HashMap<&str, usize> = shown.iter().enumerate().map(|(i, (_, _, s))| (s.id.as_str(), i)).collect();
+        // The sessions that say what the query means, best first, each with the passage that does, read back from its
+        // transcript: one whose passage is gone (its transcript was rewritten or removed) is left out.
+        let mut similar: Vec<(usize, Snippet)> = Vec::new();
+        for (id, hit) in ranked.iter().flatten() {
+            if similar.len() == SIMILAR {
+                break;
+            }
+            let Some(&i) = at.get(id.as_str()) else { continue };
+            if let Some(snippet) = similar_snippet(shown[i].1, shown[i].2, hit) {
+                similar.push((i, snippet));
+            }
+        }
+        let order: Vec<usize> = if similar.is_empty() {
+            matching.clone()
+        } else {
+            let ids = |list: &mut dyn Iterator<Item = usize>| list.map(|i| shown[i].2.id.as_str()).collect::<Vec<_>>();
+            let words = ids(&mut matching.iter().copied());
+            let meaning = ids(&mut similar.iter().map(|(i, _)| *i));
+            crate::semantic::fuse(&[&words, &meaning]).into_iter().map(|id| at[id]).collect()
+        };
+        let sessions = order
             .iter()
             .take(limit)
-            .map(|(modified, transcript, s)| {
-                let (matches, snippets) = if terms.is_empty() { (0, Vec::new()) } else { s.snippets(&terms) };
+            .map(|&i| {
+                let (modified, transcript, s) = &shown[i];
+                let (matches, mut snippets) =
+                    if terms.is_empty() || matching.binary_search(&i).is_err() { (0, Vec::new()) } else { s.snippets(&terms) };
+                if snippets.is_empty() {
+                    snippets.extend(similar.iter().find(|(j, _)| *j == i).map(|(_, snippet)| snippet.clone()));
+                }
                 Hit {
                     id: s.id.clone(),
                     agent: s.agent,
@@ -727,7 +805,12 @@ impl History {
                 }
             })
             .collect();
-        Results { sessions, total: found.len(), branches, opencode_loading: opencode.loading }
+        Results { sessions, total: order.len(), branches, opencode_loading: opencode.loading, semantic_loading }
+    }
+
+    /// Fuses the semantic index's matches with each search's (`search`). Only the first call counts.
+    pub fn set_semantic(&self, semantic: std::sync::Arc<crate::semantic::Semantic>) {
+        let _ = self.semantic.set(semantic);
     }
 
     /// Claims the next OpenCode refresh: false while one runs or one started within `OPENCODE_EVERY`.
@@ -898,7 +981,7 @@ pub fn mcp_tools() -> Vec<Value> {
     vec![
         json!({
             "name": "search_history",
-            "description": "Search past Claude Code and OpenCode sessions on this computer: the prompts, the replies, session titles and the files each Claude Code session edited. Every word or \"quoted phrase\" has to match, ignoring case. Returns the most recent matches first, with snippets. Read one with read_session.",
+            "description": "Search past Claude Code and OpenCode sessions on this computer: the prompts, the replies, session titles and the files each Claude Code session edited. Every word or \"quoted phrase\" has to match, ignoring case, and sessions that say what the query means in other words are found too. Returns the best matches first, with snippets. Read one with read_session.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -933,7 +1016,7 @@ pub fn call_tool(history: &History, claude_dirs: &[PathBuf], name: &str, args: &
         "search_history" => match args.get("query").and_then(Value::as_str) {
             Some(query) => {
                 let filter = Filter { project: args.get("project").and_then(Value::as_str).map(String::from), ..Filter::default() };
-                let results = history.search(claude_dirs, query, &filter, number("limit", 10, 50).max(1));
+                let results = history.search_with(claude_dirs, query, &filter, number("limit", 10, 50).max(1), true);
                 let sessions: Vec<Value> = results
                     .sessions
                     .into_iter()
@@ -1549,5 +1632,75 @@ mod tests {
         println!("refresh after {} KB appended: {:?} (median of 5)", tail.len() / 1000, median(&mut runs));
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A History with the semantic index of `claude`'s transcripts made by the test model, after one round.
+    fn with_meaning(claude: &Path, name: &str) -> History {
+        let (semantic, _) = crate::semantic::tests::fake(&crate::semantic::tests::temp(name), 1);
+        semantic.round(&[claude.to_owned()], &|| {});
+        let history = History::default();
+        history.set_semantic(semantic);
+        history
+    }
+
+    fn ids(results: &Results) -> Vec<&str> {
+        results.sessions.iter().map(|h| h.id.as_str()).collect()
+    }
+
+    #[test]
+    fn a_query_worded_differently_finds_the_session_by_what_it_means() {
+        use crate::semantic::tests::{reply, temp, write};
+        let claude = temp("meaning-claude");
+        write(&claude, "restart", &[user("/p", "main", "the pane history is lost after a restart"), reply("I will keep it on disk")]);
+        write(&claude, "sidebar", &[user("/p", "main", "make the sidebar text bigger please"), reply("done, it uses the setting")]);
+        let dirs = [claude.clone()];
+        let query = "scrollback disappears when relaunching";
+        assert!(History::default().search(&dirs, query, &Filter::default(), 10).sessions.is_empty(), "no session has these words");
+        let found = with_meaning(&claude, "meaning-dir").search(&dirs, query, &Filter::default(), 10);
+        assert_eq!(ids(&found)[0], "restart");
+        let snippet = &found.sessions[0].snippets[0];
+        assert_eq!((snippet.role, snippet.text.as_str()), (Role::User, "the pane history is lost after a restart"));
+        assert_eq!(found.sessions[0].matches, 0, "found by meaning, not by its words");
+    }
+
+    #[test]
+    fn a_session_matched_by_its_words_and_its_meaning_comes_first() {
+        use crate::semantic::tests::{reply, temp, write};
+        let claude = temp("fuse-claude");
+        let now = std::time::SystemTime::now();
+        for (id, prompt, age) in [
+            ("recent", "history notes for the release", 0),
+            ("both", "history history lost", 60),
+            ("meaning", "scrollback gone today", 120),
+        ] {
+            let path = write(&claude, id, &[user("/p", "main", prompt), reply("okay sure thing")]);
+            fs::File::options().append(true).open(path).unwrap().set_modified(now - Duration::from_secs(age)).unwrap();
+        }
+        let dirs = [claude.clone()];
+        let filter = Filter::default();
+        let words = History::default().search(&dirs, "history", &filter, 10);
+        assert_eq!((ids(&words), words.total), (vec!["recent", "both"], 2), "by words alone: most recent first");
+        let fused = with_meaning(&claude, "fuse-dir").search(&dirs, "history", &filter, 10);
+        assert_eq!((ids(&fused), fused.total), (vec!["both", "recent", "meaning"], 3));
+    }
+
+    #[test]
+    fn a_rewritten_transcript_never_shows_a_broken_result() {
+        use crate::semantic::tests::{reply, temp, write};
+        let claude = temp("rewritten-claude");
+        let path = write(
+            &claude,
+            "restart",
+            &[user("/p", "main", "hello there friend"), reply("hi, what shall we do"), user("/p", "main", "the pane history is lost after a restart")],
+        );
+        let dirs = [claude.clone()];
+        let history = with_meaning(&claude, "rewritten-dir");
+        assert_eq!(ids(&history.search(&dirs, "scrollback relaunching", &Filter::default(), 10)), ["restart"]);
+        // Rewritten shorter, as a compaction might: the index's rows for it say nothing true until it is embedded again.
+        fs::write(&path, format!("{}\n", user("/p", "main", "hello there friend"))).unwrap();
+        let found = history.search(&dirs, "scrollback relaunching", &Filter::default(), 10);
+        assert!(found.sessions.is_empty(), "no result pointing at a message that is gone: {:?}", ids(&found));
+        fs::remove_file(&path).unwrap();
+        assert!(history.search(&dirs, "scrollback relaunching", &Filter::default(), 10).sessions.is_empty(), "removed");
     }
 }

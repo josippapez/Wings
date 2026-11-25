@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.104 · 2026-11-25
+
+- **Search past sessions by meaning**: Past sessions and the agents' history search now also find a session by what it was about, not only by its words, with a small model that runs on this Mac. Wings indexes your past Claude Code and OpenCode sessions in the background, subagents included, and pauses while you type. A thin line under Settings in the sidebar shows how far it has got, with the count on hover, and Settings, Agents has its status and an off switch. The model (34 MB) downloads once, the first time.
+
 ## 0.2.103 · 2026-11-25
 
 - **Long branch names fit**: in the Changes graph and History, a branch or tag name too long for its row ends in "…" and shows whole on hover. A commit with several names shows one and a "+N" listing the rest, so its message always stays readable. Any plugin's badge now shortens the same way and can carry a hover text.

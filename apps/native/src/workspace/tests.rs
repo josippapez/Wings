@@ -44,6 +44,7 @@ pub(super) fn open_sized(
     config.project_info = None;
     config.sessions = None;
     config.ai = None;
+    config.semantic = None;
     config.editors = Some(Vec::new());
     change(&mut config);
     let build =

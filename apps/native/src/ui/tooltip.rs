@@ -36,6 +36,14 @@ pub fn tooltip(
     }
 }
 
+/// `tooltip` whose label is read each time it shows: for a row that keeps its drawing while what it says changes.
+pub fn tooltip_with(label: impl Fn() -> SharedString + 'static) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    move |_, cx| {
+        let label = label();
+        cx.new(|_| Tooltip { label, shortcut: None }).into()
+    }
+}
+
 impl Render for Tooltip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let (label, shortcut) = (self.label.clone(), self.shortcut.clone());

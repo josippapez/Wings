@@ -141,6 +141,8 @@ fn shoot(cx: &mut VisualTestAppContext, out: &Path, repo: &Path, project: &Path,
             config.state = None;
             config.projects = None;
             config.agents = None;
+            // Never the user's past sessions' index.
+            config.semantic = None;
             config.plugins = Some(data.paths());
             let handle: WindowHandle<Workspace> = cx
                 .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {

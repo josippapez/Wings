@@ -29,7 +29,7 @@ function fixture({ arch = "arm64", os = "Darwin", version = "0.1.0", security = 
   }
   writeFileSync(join(bin, "cargo"), `#!/bin/sh
 mkdir -p target/release
-for binary in wings-native wings-plugin-worker wings wings-terminal-server; do
+for binary in wings-native wings-plugin-worker wings wings-terminal-server wings-embed; do
   printf '#!/bin/sh\\necho %s\\n' "$binary" > "target/release/$binary"
   chmod +x "target/release/$binary"
 done
@@ -85,6 +85,7 @@ test("packages a signed native bundle and matching local metadata", (t) => {
       "Wings-native.app/Contents/Library/Wings-native Terminals.app/Contents/MacOS/wings-terminal-server",
       "Wings-native.app/Contents/MacOS/",
       "Wings-native.app/Contents/MacOS/wings",
+      "Wings-native.app/Contents/MacOS/wings-embed",
       "Wings-native.app/Contents/MacOS/wings-native",
       "Wings-native.app/Contents/MacOS/wings-plugin-worker",
       "Wings-native.app/Contents/MacOS/wings-terminal-server",
@@ -117,7 +118,7 @@ test("packages a signed native bundle and matching local metadata", (t) => {
   })) {
     assert.match(plist, new RegExp(`<key>${key}</key><string>${value}</string>`));
   }
-  for (const executable of ["wings-native", "wings-plugin-worker", "wings", "wings-terminal-server"]) {
+  for (const executable of ["wings-native", "wings-plugin-worker", "wings", "wings-terminal-server", "wings-embed"]) {
     assert.notEqual(statSync(join(bundle, "Contents/MacOS", executable)).mode & 0o111, 0, `${executable} is executable`);
   }
   // The terminal server's own app, so macOS keys its privacy grants to an app id rather than a file path.

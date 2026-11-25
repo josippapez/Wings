@@ -268,8 +268,9 @@ impl Workspace {
         )
     }
 
-    /// Draws the sidebar again and leaves the panes and title bar as they were drawn: a drag changes nothing else.
-    fn redraw_sidebar(&self, cx: &mut Context<Self>) {
+    /// Draws the sidebar again and leaves the panes and title bar as they were drawn: for a change only the sidebar
+    /// shows, as a drag or the semantic index's progress line coming and going.
+    pub(in crate::workspace) fn redraw_sidebar(&self, cx: &mut Context<Self>) {
         match &self.parts {
             Some(parts) if self.sidebar => parts.sidebar.update(cx, |_, cx| cx.notify()),
             _ => cx.notify_workspace(),

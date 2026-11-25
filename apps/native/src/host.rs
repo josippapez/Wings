@@ -59,6 +59,9 @@ pub struct Config {
     /// The desktop app's `ai/` folder: the model Settings chose for session names and agent summaries, and the names
     /// made so far. `None` makes none, as in tests.
     pub ai: Option<PathBuf>,
+    /// The folder of the semantic index of past sessions, the model it embeds with and its choice in Settings
+    /// (`wings_agents::semantic`). `None` indexes nothing, as in tests.
+    pub semantic: Option<PathBuf>,
     /// The editors "Open in" offers: `None` looks for the installed ones; tests and screenshots list their own.
     pub editors: Option<Vec<wings_editors::EditorView>>,
     /// Where the app serves the socket the `wings` command talks to (`wings_connect::cli::socket`), and connects Claude
@@ -159,6 +162,8 @@ impl Config {
             project_info: crate::projects::desktop_dir(),
             sessions: Some(SessionSource::Accounts(claude_accounts::claude_dir())),
             ai: crate::projects::desktop_dir().map(|dir| dir.join("ai")),
+            // The app's own folder, so the side-by-side app and the replacement never write one index at once.
+            semantic: crate::data_dir::state_file().and_then(|state| Some(state.parent()?.join("semantic"))),
             editors: None,
             socket: None,
             #[cfg(unix)]

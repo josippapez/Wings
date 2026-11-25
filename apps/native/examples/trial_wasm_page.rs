@@ -137,6 +137,8 @@ fn window(cx: &mut VisualTestAppContext, data: &Data, project: &Path, width: f32
     config.state = None;
     config.projects = None;
     config.agents = None;
+    // Never the user's past sessions' index.
+    config.semantic = None;
     config.plugins = Some(data.paths());
     cx.open_offscreen_window(size(px(width), px(900.0)), move |window, cx| cx.new(|cx| Workspace::new(config, window, cx))).unwrap()
 }

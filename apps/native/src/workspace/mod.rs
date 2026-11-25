@@ -68,6 +68,7 @@ mod quick;
 mod rank;
 mod right_edge;
 mod right_stack;
+mod semantic;
 mod settings;
 mod setup_approval;
 mod sidebar;
@@ -307,6 +308,8 @@ pub struct Workspace {
     /// Makes session names and agent summaries, when the app has the desktop's `ai/` folder.
     ai: Option<Arc<wings_agents::ai::Ai>>,
     ai_view: summaries::View,
+    /// Semantic search of the past sessions: its indexer, and its progress the sidebar shows.
+    search: semantic::Search,
     /// What agents and plugins said, for the sidebar's Inbox.
     inbox: inbox::Inbox,
     /// Claude Code's connection, as Settings, Agents shows it.
@@ -512,6 +515,7 @@ impl Workspace {
             sessions,
             ai,
             ai_view: Default::default(),
+            search: Default::default(),
             inbox: Default::default(),
             menu: None,
             claude: Default::default(),
@@ -614,6 +618,7 @@ impl Workspace {
             journal::sync_on_start(this.config.state.clone());
             this.start_usage(wings_connect::usage::Usage::claude(), cx);
         }
+        this.start_semantic(cx);
         this.transcript_plugins = this
             .plugins
             .iter()
@@ -1164,6 +1169,9 @@ impl Render for Workspace {
             ),
         };
         let sidebar = self.sidebar_panel(cx);
+        if sidebar.is_none() {
+            ui::forget_piece(window.window_handle().window_id(), "sidebar");
+        }
         let right = self.right_panel(window.viewport_size().width, window.window_handle().window_id(), cx);
         let notices = self.notices_layer(cx);
         let (under, over) = self.layers(window, cx);

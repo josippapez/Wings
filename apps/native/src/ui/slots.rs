@@ -293,6 +293,13 @@ pub fn view_placed(view: EntityId, id: WindowId) -> bool {
     SLOTS.with_borrow(|slots| slots.on_screen(id, Piece::View(view)))
 }
 
+/// Lets go of the slots the piece `piece` left in the window `id`, for a piece that isn't drawn now (the closed
+/// sidebar): a named piece's slots otherwise count until it draws again, and a layer would go on drawing in them.
+pub fn forget_piece(id: WindowId, piece: impl Into<Piece>) {
+    let piece = piece.into();
+    SLOTS.with_borrow_mut(|slots| slots.slots.retain(|(window, of, _, _), _| *window != id || *of != piece));
+}
+
 /// Lets go of what `view` left in every window: its slots and where it was put. For a view that is gone.
 pub fn forget_view(view: EntityId) {
     SLOTS.with_borrow_mut(|slots| {

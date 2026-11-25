@@ -309,6 +309,7 @@ fn scenes() {
     // Renders never read or change the user's saved tabs, or ask the user's model for names and summaries.
     config.state = None;
     config.ai = None;
+    config.semantic = None;
     config.projects = Some(fake.join("spaces.json"));
     config.agents = Some(claude_dir.clone());
     // The fixture plugin, installed in a made-up desktop data folder and turned on, never the user's plugins.
@@ -405,6 +406,37 @@ fn scenes() {
                 window,
                 &out.join(format!("sidebar-update-{width}.png")),
             );
+            let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        }
+        return;
+    }
+    // `-- <out-dir> semantic` renders the sidebar's line while past sessions are indexed, and the index's switch in
+    // Settings, Agents. (Its tooltip is checked in `workspace::semantic`'s tests: no tooltip on the sidebar's last row
+    // shows in an offscreen window, a plain one neither.)
+    if std::env::args().nth(2).as_deref() == Some("semantic") {
+        for width in [1000.0, 640.0] {
+            let config = config.clone();
+            let handle = cx
+                .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                    cx.new(|cx| Workspace::new(config, window, cx))
+                })
+                .expect("open semantic fixture");
+            let window: AnyWindowHandle = handle.into();
+            settle(&mut cx, window, Duration::from_millis(300));
+            handle
+                .update(&mut cx, |workspace, _, cx| {
+                    workspace.show_semantic_progress(412, 929, cx)
+                })
+                .unwrap();
+            wait(&mut cx, window, Duration::from_millis(300));
+            save(&mut cx, window, &out.join(format!("semantic-sidebar-{width}.png")));
+            handle
+                .update(&mut cx, |workspace, window, cx| {
+                    workspace.sample_semantic_settings(window, cx)
+                })
+                .unwrap();
+            wait(&mut cx, window, Duration::from_millis(600));
+            save(&mut cx, window, &out.join(format!("semantic-settings-{width}.png")));
             let _ = cx.update_window(window, |_, window, _| window.remove_window());
         }
         return;

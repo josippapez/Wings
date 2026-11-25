@@ -43,7 +43,8 @@ pub enum Kind {
     Pulses,
     /// Lines in those views that count the seconds since something started, and don't pulse.
     Counts,
-    /// Bars in those views that fill over a wait, a hover card's cue, at the spinners' pace.
+    /// Bars that fill over a wait: a hover card's cue in those views, at the spinners' pace, and the sidebar's line while
+    /// past sessions are indexed, once a second.
     Progress,
 }
 
@@ -185,8 +186,8 @@ pub fn view_spinner_layer(window: &Window) -> impl IntoElement {
         .child(layer(Kind::Progress, window))
 }
 
-/// What clips what `kind` draws in a slot: the slot's own, which is the lists and scrolls it sits in. A cue (`Progress`) is
-/// for what the pointer is on and escapes them, as a hover card does, so the whole window.
+/// What clips what `kind` draws in a slot of a view: the slot's own, which is the lists and scrolls it sits in. A cue
+/// (`Progress`) is for what the pointer is on and escapes them, as a hover card does, so the whole window.
 pub(crate) fn mask_of(kind: Kind, mask: gpui::ContentMask<Pixels>, window: &Window) -> gpui::ContentMask<Pixels> {
     match kind {
         Kind::Progress => gpui::ContentMask {
@@ -218,7 +219,10 @@ fn lay_out(id: WindowId, kind: Kind, window: &mut Window, cx: &mut App) -> (Dura
     let laid = shown
         .into_iter()
         .filter_map(|(name, mut slot)| {
-            slot.mask = mask_of(kind, slot.mask, window);
+            // A bar in a piece of the window (the sidebar's indexing line) stays inside it, as the piece slides away.
+            if let Piece::View(_) = slot.piece {
+                slot.mask = mask_of(kind, slot.mask, window);
+            }
             let (draw, style) =
                 DRAWS.with_borrow(|draws| draws.get(&(id, kind, name.clone())).map(|it| (it.draw.clone(), it.style.clone())))?;
             let mut element = draw.draw(now, &style, window, cx);

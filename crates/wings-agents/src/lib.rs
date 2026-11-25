@@ -8,6 +8,7 @@ pub mod detect;
 pub mod history;
 pub mod opencode;
 pub mod program_status;
+pub mod semantic;
 
 /// The `space_id` of a pane that belongs to no project (the quick terminal): it starts in the home folder, and no
 /// agent is detected in it, since the Agents list is grouped by project.

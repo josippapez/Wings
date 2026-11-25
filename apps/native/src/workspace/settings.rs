@@ -1290,6 +1290,7 @@ impl Workspace {
         let mut cards = vec![self.harnesses_card(cx)];
         // Where the desktop puts it: after the CLIs, before the connection.
         cards.extend(self.summaries_card(cx));
+        cards.extend(self.semantic_card(cx));
         cards.push(self.sleep_card(cx));
         cards.push(main);
         if !accounts.is_empty() {
@@ -1614,19 +1615,25 @@ impl Workspace {
     }
 
     /// The desktop sidebar's last row: Settings, with its shortcut, as its `SidebarNavRow`, muted until pointed at.
+    /// While past sessions are indexed, a thin line along its foot shows how far it is, and its tooltip says.
     pub(super) fn settings_row(&self, cx: &mut Context<Self>) -> AnyElement {
-        super::sidebar::nav_row(
+        let row = super::sidebar::nav_row(
             "open-settings",
             Icon::Settings,
             "Settings",
             super::sidebar::Look::Plain,
         )
+        .relative()
+        .children(ui::spot(|| "open-settings".into()))
         .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx)))
         .child(super::sidebar::row_hint(
             shortcut_label(",", false),
             super::sidebar::Scale::of(cx),
-        ))
-        .into_any_element()
+        ));
+        match self.indexing_line() {
+            Some((line, tooltip)) => row.child(line).tooltip(tooltip).into_any_element(),
+            None => row.into_any_element(),
+        }
     }
 }
 

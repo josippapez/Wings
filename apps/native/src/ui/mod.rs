@@ -66,7 +66,7 @@ pub use sheet::{
 pub use shimmer::{count_slot, shimmer, shimmer_slot};
 #[cfg(all(test, feature = "test-support"))]
 pub(crate) use status_dot::SPIN_STEP;
-pub use slots::{Piece, bounds_into, cover, drawing_piece, in_piece, start_draw, forget_view, place_view, slot, slot_layer, under, view_placed};
+pub use slots::{Piece, bounds_into, cover, drawing_piece, in_piece, start_draw, forget_piece, forget_view, place_view, slot, slot_layer, under, view_placed};
 pub use spinner_host::spinner_sync;
 #[cfg(target_os = "macos")]
 pub use spinner_host::turn_spinners_natively;
@@ -74,7 +74,7 @@ pub use status_dot::{
     spinner as working_spinner, spinner_layer, spinner_slot, status_dot, status_dot_slot, view_spinner_slot,
     view_status_dot_slot,
 };
-pub use tooltip::{tip, tooltip, tooltip_exit};
+pub use tooltip::{tip, tooltip, tooltip_exit, tooltip_with};
 
 use gpui::{
     AnyElement, BoxShadow, Div, ElementId, Entity, FocusHandle, FontWeight, IntoElement,
