@@ -374,7 +374,7 @@ fn changes_body(c: &Changes, mode: Mode, collapsed: &BTreeSet<String>) -> Vec<No
         .child(text(format!("−{}", c.removed)).prop("tone", "danger").prop("numeric", true))
         .maybe(c.partial.then(|| muted(" (some new files not counted)")));
     let root = c.root.clone();
-    let all = button("View all", "ghost", false, move || ask(OPEN, json!({ "root": root, "mode": mode.name(), "path": null }))).prop("size", "sm");
+    let all = button("View all", "secondary", false, move || ask(OPEN, json!({ "root": root, "mode": mode.name(), "path": null }))).prop("size", "sm");
     let mut rows = Vec::new();
     tree_rows(&tree(&c.files), 0, &c.root, mode, collapsed, &mut rows);
     vec![
@@ -578,6 +578,29 @@ mod tests {
         assert_eq!(tree.matches(r#""segmented":true"#).count(), 2, "{tree}");
         assert!(tree.contains(r#""title":"Refresh""#) && tree.contains(r#""title":"Open in a window""#), "{tree}");
         assert!(tree.contains(r#""size":"icon-sm""#), "{tree}");
+    }
+
+    /// A ghost button reads as plain text, so View all is a small secondary one.
+    #[test]
+    fn view_all_is_a_small_secondary_button() {
+        let c = crate::changes::Changes {
+            root: "/shop".into(),
+            name: "shop".into(),
+            branch: "main".into(),
+            mode: crate::changes::Mode::Uncommitted,
+            base: String::new(),
+            against: "Working tree against HEAD".into(),
+            files: vec![],
+            added: 1,
+            removed: 0,
+            partial: false,
+        };
+        let file = crate::changes::FileChange { path: "a.rs".into(), old_path: None, status: "M".into(), added: Some(1), removed: Some(0), untracked: false };
+        let c = crate::changes::Changes { files: vec![file], ..c };
+        let tree = wings_plugin::ui::tree_json(super::changes_body(&c, crate::changes::Mode::Uncommitted, &Default::default()).remove(0)).to_string();
+        let at = tree.find("View all").expect(&tree);
+        let button = &tree[at..at + tree[at..].find(r#""type":"Button""#).expect(&tree)];
+        assert!(button.contains(r#""variant":"secondary""#) && button.contains(r#""size":"sm""#) && !button.contains("ghost"), "{tree}");
     }
 
     #[test]
