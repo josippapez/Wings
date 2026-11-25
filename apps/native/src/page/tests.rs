@@ -630,6 +630,41 @@ fn column() -> String {
     })
 }
 
+/// A `column` page: a toolbar with a button in its actions, over a body with a button in it, on a page whose column
+/// is 720pt wide.
+fn column_page() -> String {
+    let (mut bar, mut body) = (0, 0);
+    fake::page("page", move |event| {
+        match event {
+            Some(("3:click", _)) => bar += 1,
+            Some(_) => body += 1,
+            None => {}
+        }
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Page", "props": { "column": 720 }, "children": [
+            { "id": 2, "type": "Slot", "props": { "name": "toolbar" }, "children": [{ "id": 10, "type": "Toolbar", "children": [
+                { "id": 11, "type": "Slot", "props": { "name": "title" }, "children": [text_node(12, "Title")] },
+                { "id": 13, "type": "Slot", "props": { "name": "actions" }, "children": [
+                    { "id": 3, "type": "Button", "props": { "onClick": "3:click" }, "children": [text_node(4, "Bar")] }] }] }] },
+            { "id": 5, "type": "Slot", "props": { "name": "body" }, "children": [
+                { "id": 6, "type": "Button", "props": { "onClick": "6:click" }, "children": [text_node(7, "Body")] },
+                text(8, 9, format!("Pressed {bar} {body}.")) ] }] }] })
+    })
+}
+
+#[test]
+fn a_page_column_sets_the_body_and_the_toolbar_in_one_centred_width() {
+    let (app, mut window) = open(column_page());
+    settle(&app, &mut window, shows("Pressed 0 0."));
+    let width = window.update(|_, window, _| window.viewport_size().width.as_f32());
+    assert!(width > 800.0, "the window is narrower than the column");
+    let (left, right) = ((width - 720.0) / 2.0, (width + 720.0) / 2.0);
+    // The toolbar's last button ends where the column does, and the body's first starts where the column starts.
+    window.simulate_click(point(px(right - 6.0), px(22.0)), MouseButton::Left);
+    settle(&app, &mut window, shows("Pressed 1 0."));
+    window.simulate_click(point(px(left + 6.0), px(66.0)), MouseButton::Left);
+    settle(&app, &mut window, shows("Pressed 1 1."));
+}
+
 /// Clicks 6pt from the top at each of `xs`.
 fn click_along(app: &TestApp, window: &mut View, xs: [f32; 2]) {
     for x in xs {

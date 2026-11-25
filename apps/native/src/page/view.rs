@@ -2187,22 +2187,40 @@ impl PageView {
                     .when(page.flush, |body| body.overflow_hidden())
                     .when(!page.flush, |body| {
                         body.gap(px(10.0)).p(px(14.0)).overflow_y_scroll()
-                    })
-                    .children(page.body.iter().map(|node| match node {
-                        Node::Board(board) if page.flush => self.board(board, true, cx),
-                        node => self.node(node, cx),
-                    }));
+                    });
+                let nodes = page.body.iter().map(|node| match node {
+                    Node::Board(board) if page.flush => self.board(board, true, cx),
+                    node => self.node(node, cx),
+                });
+                // A `column` page sets its body in one centred column, the same one its toolbar lines up with.
+                let body = match page.column.filter(|_| !page.flush) {
+                    Some(width) => body.child(
+                        div()
+                            .w_full()
+                            .max_w(px(width))
+                            .mx_auto()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(10.0))
+                            .children(nodes),
+                    ),
+                    None => body.children(nodes),
+                };
                 div()
                     .flex_1()
                     .min_h_0()
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .children(self.nodes(&page.toolbar, cx))
+                    .children(page.toolbar.iter().map(|node| match node {
+                        Node::Toolbar(toolbar) => self.toolbar(toolbar, page.column, cx),
+                        node => self.node(node, cx),
+                    }))
                     .child(body)
                     .into_any_element()
             }
-            Node::Toolbar(toolbar) => self.toolbar(toolbar, cx),
+            Node::Toolbar(toolbar) => self.toolbar(toolbar, None, cx),
             Node::Stack(stack) => self.stack(stack, None, cx).into_any_element(),
             Node::Row(row) => self.row(row, cx),
             Node::Text(text) => self.text_element(text, None, cx),
@@ -2581,22 +2599,21 @@ impl PageView {
         }
     }
 
-    fn toolbar(&self, toolbar: &tree::Toolbar, cx: &mut Context<Self>) -> AnyElement {
-        div()
-            .id(ElementId::NamedInteger("page-toolbar".into(), toolbar.id))
-            .role(Role::Toolbar)
-            .flex_none()
-            .min_h(px(44.0))
+    /// A page's top row. With a page `column` its content sits in that column, centred, so its title starts where the
+    /// body's content does.
+    fn toolbar(&self, toolbar: &tree::Toolbar, column: Option<f32>, cx: &mut Context<Self>) -> AnyElement {
+        let content = div()
+            .min_w_0()
             .flex()
             // Too narrow for the title and the actions, the actions go to a line of their own: on one line they ran
             // off the frame's edge, as a 250 point sidebar cut off Changes' Refresh.
             .flex_wrap()
             .items_center()
             .gap(px(10.0))
-            .px(px(14.0))
-            .py(px(8.0))
-            .border_b_1()
-            .border_color(rgba(ui::HAIRLINE))
+            .map(|el| match column {
+                Some(width) => el.w_full().max_w(px(width)).mx_auto(),
+                None => el.w_full(),
+            })
             .when(!toolbar.title.is_empty(), |bar| {
                 bar.child(
                     div()
@@ -2625,7 +2642,17 @@ impl PageView {
                     .items_center()
                     .gap(px(6.0))
                     .children(self.nodes(&toolbar.actions, cx)),
-            )
+            );
+        div()
+            .id(ElementId::NamedInteger("page-toolbar".into(), toolbar.id))
+            .role(Role::Toolbar)
+            .flex_none()
+            .min_h(px(44.0))
+            .px(px(14.0))
+            .py(px(8.0))
+            .border_b_1()
+            .border_color(rgba(ui::HAIRLINE))
+            .child(content)
             .into_any_element()
     }
 

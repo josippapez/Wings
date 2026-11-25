@@ -25,7 +25,7 @@ Plugin pages are built with `wings_plugin::ui` (`packages/plugin-rs/src/ui.rs`).
    - Use the `ui` functions, not a `Node::new("<kind>")` for something `ui` already has.
    - Use a `tone` or variant, not a colour of your own.
    - Use the page's own spacing, not ad hoc padding.
-5. **Width.** Reading pages centre a column of at most about 860 points. Lists fill the width. The toolbar wraps its actions onto a second line when it is narrow (42f62126), so at 640 points they are never clipped.
+5. **Width.** One rule: a reading page (a detail view, a form, settings) is `column_page(toolbar, body)`, which sets the body in one centred `ui::COLUMN` (860 point) column and lines the toolbar's title and actions up with it, so the header and the content share a left edge. Never put your own `maxWidth` on a stack for a page's body. A wide page (a list, a board, a graph, a log) is plain `page` and fills the width. Lists fill the width. The toolbar wraps its actions onto a second line when it is narrow (42f62126), so at 640 points they are never clipped.
 6. **States.** Each page has a designed loading, empty and error state, using `loading`, `empty` and a `notice` card; a load error is `error_state(title, message, retry)`, a card with the title, a danger notice and a primary retry button, never plain red text.
 7. **Tooltips.** A `button` or `text` that is only an icon, or whose text is cut short, takes a `title` prop (`.prop("title", "...")`), which the app shows as a tooltip on hover (4dbefc8d).
 8. **App pages** (Settings, the plugin manager) follow the controls in `apps/native/src/ui` and the direction in memory `wings-ui-direction`. They don't use one-off styles.

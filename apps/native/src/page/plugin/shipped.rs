@@ -1382,6 +1382,7 @@ fn pr_tracker_tab_opened_with_args_shows_that_pull_request_and_its_checks_with_t
 /// The width of the page's reading column.
 fn column_width(nodes: &[Node]) -> Option<f32> {
     nodes.iter().find_map(|node| match node {
+        Node::Page(page) if page.column.is_some() => page.column,
         Node::Stack(stack) if stack.max_width.is_some() => stack.max_width,
         other => other.parts().into_iter().find_map(column_width),
     })
@@ -1429,7 +1430,8 @@ fn pr_tracker_run_numbers_its_lines_in_a_column_widens_the_page_and_loads_a_pick
     let run = tree(&events, "the failed step's log", |tree| {
         tree.text().contains("Process completed with exit code 1.")
     });
-    assert_eq!(column_width(&run.children), Some(1100.0));
+    // An open run's log is a wide page: no reading column.
+    assert_eq!(column_width(&run.children), None);
 
     fn numbers(nodes: &[Node], found: &mut Vec<String>) {
         for node in nodes {

@@ -222,6 +222,9 @@ pub struct Page {
     pub on_text_scale: Option<String>,
     /// What Wings draws behind the whole page in place of its plain ground (`backdrop`), where the page fills a tab.
     pub backdrop: Option<Backdrop>,
+    /// `column`: the width in points of the one centred column the body is set in and the toolbar's content lines up
+    /// with. A reading page (a detail view, a form) has one; a wide page (a list, a board) doesn't.
+    pub column: Option<f32>,
 }
 
 /// A page's `backdrop`.
@@ -1451,6 +1454,7 @@ impl Walk {
                     body: slots.take("body"),
                     on_text_scale: handler("onTextScale"),
                     backdrop: str_prop(&props, "backdrop").and_then(Backdrop::named),
+                    column: number(&props, "column").filter(|width| *width > 0.0).map(|width| width as f32),
                 })
             }
             "Toolbar" => {

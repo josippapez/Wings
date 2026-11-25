@@ -396,6 +396,16 @@ pub fn page(toolbar: Node, body: impl IntoIterator<Item = Node>) -> Node {
     Node::new("Page").child(slot("toolbar", toolbar)).child(Node::new("Slot").prop("name", "body").children(body))
 }
 
+/// The width in points of a reading page's column (`column_page`).
+pub const COLUMN: u32 = 860;
+
+/// A reading page (a detail view, a form, settings): `page` with its body set in one centred `COLUMN` point column
+/// that its toolbar's content lines up with. A Wings that doesn't know the prop draws it full width.
+/// Wide pages (a list, a board, a graph) use `page`.
+pub fn column_page(toolbar: Node, body: impl IntoIterator<Item = Node>) -> Node {
+    page(toolbar, body).prop("column", COLUMN)
+}
+
 /// A page's top row: its `title` on the left and `actions` on the right.
 pub fn toolbar(title: &str, actions: Option<Node>) -> Node {
     Node::new("Toolbar").child(Node::new("Slot").prop("name", "title").text(title)).maybe(actions.map(|actions| slot("actions", actions)))
