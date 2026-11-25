@@ -698,6 +698,19 @@ pub fn draw_backdrops_under(window: &mut Window) {
     }
 }
 
+#[cfg(feature = "test-support")]
+thread_local! {
+    static SCREENSHOT_GROUND: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+}
+
+/// For screenshots: `rgb` under the glass, where the running app shows the desktop through the window's vibrancy. An
+/// offscreen window has none, so its glass lay on black and a screenshot came out darker than the app, hiding lines a
+/// lighter ground shows.
+#[cfg(feature = "test-support")]
+pub fn set_screenshot_ground(rgb: u32) {
+    SCREENSHOT_GROUND.set(Some(rgb));
+}
+
 /// The window's glass, which everything in the window lies on, in `color`: all over the window but for a hole where a
 /// backdrop shows in the layer under the window. First in the window's root, which paints no ground of its own.
 pub fn window_glass(color: impl Into<Hsla>) -> impl IntoElement {
@@ -705,6 +718,10 @@ pub fn window_glass(color: impl Into<Hsla>) -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
+            #[cfg(feature = "test-support")]
+            if let Some(ground) = SCREENSHOT_GROUND.get() {
+                window.paint_quad(gpui::fill(bounds, gpui::rgb(ground)));
+            }
             // Painted once every piece has been laid out in this draw, so the hole is where the slot is now.
             let id = window.window_handle().window_id();
             window.paint_quad(match hole(id) {

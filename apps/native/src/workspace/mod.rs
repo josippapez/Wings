@@ -351,8 +351,8 @@ pub struct Workspace {
     _quit: Subscription,
 }
 
-/// How a shortcut reads in a button's name. The keys themselves are bound in `actions`.
-/// A page tab's body, as the desktop's `PluginTab` and `ProjectPageTab`: a card like a pane's, in the same `p-2 pt-0`.
+/// A page tab's body: flush under the project bar's line and to the area's edges, as the panes are. An inset, rounded
+/// card left the bar's line running past its corner.
 fn page_card(page: impl IntoElement) -> AnyElement {
     page_card_over(page, None)
 }
@@ -361,24 +361,15 @@ fn page_card(page: impl IntoElement) -> AnyElement {
 /// card's ground.
 fn page_card_over(page: impl IntoElement, backdrop: Option<AnyElement>) -> AnyElement {
     div()
+        .relative()
+        .children(ui::spot(|| "page-card".into()))
         .size_full()
-        .flex()
-        .p(px(8.0))
-        .pt_0()
-        .child(
-            div()
-                .relative()
-                .flex_1()
-                .min_w_0()
-                .min_h_0()
-                .overflow_hidden()
-                .rounded(px(14.0))
-                .border_1()
-                .border_color(rgba(HAIRLINE))
-                .when(backdrop.is_none(), |card| card.bg(rgb(theme::SURFACE)))
-                .children(backdrop)
-                .child(page),
-        )
+        .min_w_0()
+        .min_h_0()
+        .overflow_hidden()
+        .when(backdrop.is_none(), |card| card.bg(rgb(theme::SURFACE)))
+        .children(backdrop)
+        .child(page)
         .into_any_element()
 }
 
@@ -913,8 +904,7 @@ impl Workspace {
                 },
                 Active::Plugin(id) => match self.plugin_tabs.iter().find(|tab| tab.id == id) {
                     // Kept as last drawn until the page changes, so a busy terminal doesn't rebuild it every frame. Over the
-                    // backdrop the page asks for once the window has the layer that draws it (`parts`), at the card's
-                    // radius less its border.
+                    // backdrop the page asks for once the window has the layer that draws it (`parts`), square as the card.
                     Some(tab) => {
                         let backdrop = tab.page.read(cx).backdrop().filter(|_| self.parts.is_some());
                         // On screen unless a terminal fills the area in its place: its spinners turn in the window's
@@ -927,7 +917,7 @@ impl Workspace {
                                 .clone()
                                 .cached(StyleRefinement::default().size_full()),
                             backdrop.map(|(kind, palette)| {
-                                ui::backdrop_slot(format!("tab-{}", tab.id), kind, palette, 13.0).into_any_element()
+                                ui::backdrop_slot(format!("tab-{}", tab.id), kind, palette, 0.0).into_any_element()
                             }),
                         )
                     }

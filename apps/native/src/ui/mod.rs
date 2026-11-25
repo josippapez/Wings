@@ -47,6 +47,8 @@ mod status_dot;
 mod tooltip;
 
 pub use backdrop::{BackdropLayer, backdrop_slot, window_glass};
+#[cfg(feature = "test-support")]
+pub use backdrop::set_screenshot_ground;
 #[cfg(target_os = "macos")]
 pub use backdrop::draw_backdrops_under;
 #[cfg(all(test, feature = "test-support"))]

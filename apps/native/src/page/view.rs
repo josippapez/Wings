@@ -264,8 +264,7 @@ pub struct PageView {
     _restart: Option<Task<()>>,
     /// Shown in a title bar button's popover (`place: "popover"`), whose shell and ground are the popover's.
     popover: bool,
-    /// Whether a rounded card holds the page (`in_card`): its ground follows the card's inner corners, which a clip
-    /// doesn't (gpui clips to a rectangle), so a square ground shows past the curve against the window.
+    /// Whether a tab's or the right panel's card holds the page (`in_card`), which draws the backdrop it asks for.
     in_card: bool,
     /// Where the page's shell is scrolled, so a field that takes the keyboard can be brought into view.
     shell_scroll: gpui::ScrollHandle,
@@ -461,7 +460,7 @@ impl PageView {
         self.source.title()
     }
 
-    /// The page, shown in a card with a 14px corner and a 1px border (`workspace::page_card`, the sidebar's cards).
+    /// The page, shown in a tab's or the right panel's card (`workspace::page_card`), flush as the panes are.
     pub fn in_card(self) -> Self {
         Self {
             in_card: true,
@@ -3300,8 +3299,6 @@ impl Render for PageView {
             .flex()
             .flex_col()
             .overflow_hidden()
-            // The card's radius less its border: the ground is as round as the card's inside.
-            .when(self.in_card, |page| page.rounded(px(13.0)))
             // The desktop's page is transparent on the `bg-surface` of the card, panel or window that holds it, or on the
             // `bg-popover` of a popover. Over a backdrop, the card draws the ground.
             .when(!over_backdrop, |page| {

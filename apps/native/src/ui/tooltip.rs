@@ -20,8 +20,14 @@ use gpui::{
 use crate::{theme, ui::motion};
 
 pub struct Tooltip {
-    label: SharedString,
+    label: Label,
     shortcut: Option<SharedString>,
+}
+
+/// What a tooltip says: fixed when it shows, or read again each time the window draws it.
+enum Label {
+    Fixed(SharedString),
+    Live(Rc<dyn Fn() -> SharedString>),
 }
 
 /// What `.tooltip(..)` takes: a tooltip of `label`, with `shortcut` in a key cap when there is one.
@@ -31,27 +37,36 @@ pub fn tooltip(
 ) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
     let label = label.into();
     move |_, cx| {
-        let (label, shortcut) = (label.clone(), shortcut.clone());
+        let (label, shortcut) = (Label::Fixed(label.clone()), shortcut.clone());
         cx.new(|_| Tooltip { label, shortcut }).into()
     }
 }
 
-/// `tooltip` whose label is read each time it shows: for a row that keeps its drawing while what it says changes.
+/// `tooltip` whose label is read again each time the window draws it, so it counts on while it shows: for a row that
+/// keeps its drawing while what it says changes.
 pub fn tooltip_with(label: impl Fn() -> SharedString + 'static) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    let label: Rc<dyn Fn() -> SharedString> = Rc::new(label);
     move |_, cx| {
-        let label = label();
+        let label = Label::Live(label.clone());
         cx.new(|_| Tooltip { label, shortcut: None }).into()
     }
 }
 
 impl Render for Tooltip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let (label, shortcut) = (self.label.clone(), self.shortcut.clone());
+        let shortcut = self.shortcut.clone();
+        let card: Rc<dyn Fn() -> Div> = match &self.label {
+            Label::Fixed(label) => {
+                let label = label.clone();
+                Rc::new(move || pill(label.clone(), shortcut.clone()))
+            }
+            Label::Live(read) => {
+                let read = read.clone();
+                Rc::new(move || pill(read(), shortcut.clone()))
+            }
+        };
         // tw-animate-css's default 150ms, as the desktop's tooltip sets no duration.
-        tip(
-            motion::TOOLTIP_IN,
-            Rc::new(move || pill(label.clone(), shortcut.clone())),
-        )
+        tip(motion::TOOLTIP_IN, card)
     }
 }
 

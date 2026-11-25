@@ -224,6 +224,22 @@ mod tests {
         assert_eq!(TOLD.with_borrow(|told| told.last().cloned()).as_deref(), Some("Indexing past sessions · 412 of 929"));
     }
 
+    #[test]
+    fn the_tooltip_counts_on_while_it_shows() {
+        let (app, mut window) = open_config(|_| {});
+        window.draw();
+        window.update(|w, _, cx| w.show_semantic_progress(412, 929, cx));
+        window.draw();
+        assert!(hover_until_tooltip(&app, &mut window, "open-settings"), "the tooltip shows");
+        let progress = window.read(|w, _| w.search.progress.clone());
+        progress.set(State::Indexing, 413, 929);
+        app.advance_clock(STEP);
+        app.run_until_parked();
+        window.draw();
+        assert!(tooltip_shown(&mut window), "still shown");
+        assert_eq!(TOLD.with_borrow(|told| told.last().cloned()).as_deref(), Some("Indexing past sessions · 413 of 929"));
+    }
+
     /// Points at `spot` from elsewhere and waits for its tooltip; whether the window then draws one.
     fn hover_until_tooltip(app: &gpui::TestApp, window: &mut gpui::TestAppWindow<Workspace>, spot: &str) -> bool {
         use gpui::{Modifiers, MouseMoveEvent, point};

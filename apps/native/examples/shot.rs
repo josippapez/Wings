@@ -254,7 +254,12 @@ fn save(cx: &mut VisualTestAppContext, window: AnyWindowHandle, path: &Path) {
     wings_native::ui::cutoff::report(path, &cuts);
 }
 
+/// The desktop through the window's vibrancy, as the running app shows it under its glass: worked back from the
+/// sidebar's 39,29,36 over this Mac's wallpaper. An offscreen window has none, and its glass lay on black.
+const VIBRANCY: u32 = 0x39252f;
+
 fn main() {
+    wings_native::ui::set_screenshot_ground(VIBRANCY);
     scenes();
     wings_native::ui::cutoff::end_run();
 }
