@@ -1687,6 +1687,29 @@ fn five_tabs_fit_a_1000_point_window_without_scrolling() {
 }
 
 #[test]
+fn a_mouse_wheel_scrolls_overflowing_tabs_sideways() {
+    let (app, mut window) = open_sized(Some(size(px(1000.0), px(640.0))), |_| {});
+    for _ in 0..8 {
+        press(&mut window, "t");
+    }
+    window.draw();
+    let (strip, before) = window.read(|workspace, _| (workspace.tab_scroll.bounds(), workspace.tab_scroll.offset().x));
+    assert!(before < px(0.0), "the last tab is shown, so the strip starts scrolled");
+    // A wheel turns in lines, up and down only, unlike a trackpad's sideways pixels.
+    window.simulate_event(gpui::ScrollEvent {
+        position: strip.center(),
+        delta: gpui::ScrollDelta::Lines(point(0.0, 3.0)),
+        modifiers: gpui::Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+        source: Default::default(),
+    });
+    app.run_until_parked();
+    window.draw();
+    let after = window.read(|workspace, _| workspace.tab_scroll.offset().x);
+    assert!(after > before, "the wheel moved the strip back toward its first tab: {before:?} to {after:?}");
+}
+
+#[test]
 fn overflowing_tabs_scroll_inside_the_window() {
     let (_app, mut window) = open_sized(Some(size(px(1000.0), px(640.0))), |_| {});
     for _ in 0..14 {
