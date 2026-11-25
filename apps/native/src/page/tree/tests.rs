@@ -33,6 +33,17 @@ fn a_page_paints_in_the_colours_of_its_palette_and_the_apps_for_the_rest() {
     assert_eq!(tree(json!([])).unwrap().palette, None);
 }
 
+/// A page of one `Page` with a toolbar fills the frame without asking, so its toolbar is not inside the shell's padding.
+#[test]
+fn a_page_with_a_toolbar_fills_the_frame_without_asking() {
+    let toolbar = json!({"id":4,"type":"Slot","props":{"name":"toolbar"},"children":[
+        {"id":5,"type":"Toolbar","props":{},"children":[]}]});
+    let page = |slots: Vec<Value>| json!({"id":1,"type":"Page","props":{},"children":slots});
+    assert!(tree(json!([page(vec![toolbar])])).unwrap().fill);
+    assert!(!tree(json!([page(vec![])])).unwrap().fill, "no toolbar: the shell pads it");
+    assert!(!tree(json!([button(json!({}))])).unwrap().fill, "not a page");
+}
+
 #[test]
 fn parses_a_page_into_its_parts() {
     let parsed = tree(json!([{"id":1,"type":"Page","props":{"flush":true},"children":[

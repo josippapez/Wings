@@ -1067,9 +1067,14 @@ impl Tree {
             return Err(TreeError::Invalid("no root".into()));
         }
         let mut walk = Walk { nodes: 0 };
+        let children = walk.children(root.children, 0)?;
+        // A page that is one `Page` with a toolbar draws that toolbar edge to edge whether or not the plugin asked
+        // for `fill`: the shell's own padding put its title 14 points further in than the other pages' and stopped its
+        // hairline short of the edges. The `Page` pads its body by itself.
+        let toolbar_page = matches!(children.as_slice(), [Node::Page(page)] if !page.toolbar.is_empty());
         Ok(Tree {
-            children: walk.children(root.children, 0)?,
-            fill: root.props.get("fill").and_then(Value::as_bool) == Some(true),
+            fill: toolbar_page || root.props.get("fill").and_then(Value::as_bool) == Some(true),
+            children,
             palette: root.props.get("palette").and_then(palette),
         })
     }
