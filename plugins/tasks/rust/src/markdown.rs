@@ -252,7 +252,9 @@ fn span_at(text: &str) -> Option<(Option<Span>, &str)> {
         return Some((Some(Span::Em(em.to_owned())), rest));
     }
     if text.get(..8).is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://")) {
-        let len = text.find(|c: char| c.is_whitespace() || "<>\"'`)]".contains(c)).unwrap_or(text.len()).min(2008);
+        let len = text.find(|c: char| c.is_whitespace() || "<>\"'`)]".contains(c)).unwrap_or(text.len());
+        // The cut at 2008 bytes can fall inside a character, so it moves back to the one before.
+        let len = (0..=len.min(2008)).rev().find(|at| text.is_char_boundary(*at)).unwrap_or(0);
         if len > 8 {
             // A bare URL, without the punctuation that ends a sentence.
             let url = text[..len].trim_end_matches(['.', ',', ';', ':', '!', '?']);
@@ -361,6 +363,13 @@ mod tests {
         assert_eq!(blocks[6], Block::Rule);
         assert_eq!(blocks[7], Block::Table { head: vec!["a".into(), "b".into()], rows: vec![vec!["1".into(), "2".into()], vec!["3".into(), String::new()]] });
         assert_eq!(parse_blocks("# Title ##")[0], Block::Heading { level: 1, text: "Title".into() });
+    }
+
+    #[test]
+    fn a_long_bare_url_with_wide_characters_is_cut_on_a_character_boundary() {
+        let url = format!("https://example.com/x{}", "é".repeat(1500));
+        let spans = parse_inline(&url);
+        assert!(!spans.is_empty());
     }
 
     #[test]
