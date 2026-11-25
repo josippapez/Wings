@@ -319,8 +319,10 @@ fn build(s: &State) -> Vec<Node> {
         top.extend(chips_node.map(|chips| Node::new("Bar").prop("edge", "bottom").child(row().prop("gap", "m").prop("wrap", true).prop("align", "center").child(chips))));
         return vec![page_with(top, [body(s, &rows)])];
     }
-    let header = row().prop("gap", "s").prop("align", "center").prop("justify", "between").child(muted(if ready { format!("{} open", counts[0]) } else { String::new() }).prop("size", "small")).child(refresh);
-    vec![stack().prop("gap", "m").child(header).maybe(chips_node).child(body(s, &rows))]
+    // The Project page's block already has its title bar, so the block has no header of its own: the filters, which carry
+    // the counts, and Refresh share one line.
+    let controls = row().prop("gap", "s").prop("align", "center").prop("justify", if chips_node.is_some() { "between" } else { "end" }).maybe(chips_node).child(refresh);
+    vec![stack().prop("gap", "m").child(controls).child(body(s, &rows))]
 }
 
 /// The block's page.
@@ -432,5 +434,16 @@ mod tests {
     fn the_block_has_the_track_and_the_icon_refresh_too() {
         let block = json_of(build(&state(Store::Block)));
         assert!(block.contains(r#""segmented":true"#) && block.contains(r#""label":"Refresh""#), "{block}");
+    }
+
+    /// The chips already say how many are open, so the block has no muted "4 open" imitating a header, and Refresh sits
+    /// in the same row as the chips.
+    #[test]
+    fn the_block_has_no_count_header_and_refresh_shares_the_filter_row() {
+        let block = json_of(build(&state(Store::Block)));
+        assert!(!block.contains(r#"" open""#) && !block.contains(r#""4 open""#) && !block.contains(r#""2 open""#), "{block}");
+        let tree: Value = serde_json::from_str(&block).unwrap();
+        let controls = tree["children"][0].to_string();
+        assert!(controls.contains(r#""type":"Chips""#) && controls.contains(r#""label":"Refresh""#), "{tree}");
     }
 }
