@@ -386,7 +386,8 @@ fn changes_body(c: &Changes, mode: Mode, collapsed: &BTreeSet<String>) -> Vec<No
 fn commit_row(c: &Commit, key: String, root: &str) -> Node {
     let tiny = |node: Node| node.prop("size", "tiny");
     let pill = |label: String, tone: Option<&str>| {
-        let pill = Node::new("Badge").prop("variant", "outline").text(label);
+        // A pill never runs past its row: the host cuts a long name short, and the title says all of it.
+        let pill = Node::new("Badge").prop("variant", "outline").prop("title", label.clone()).text(label);
         match tone {
             Some(tone) => pill.prop("tone", tone),
             None => pill,
@@ -555,7 +556,8 @@ pub fn start() {
 mod tests {
     use serde_json::json;
 
-    use super::{Repo, choose, place, view, with};
+    use super::{Repo, choose, commit_row, place, view, with};
+    use crate::log::Commit;
 
     fn repo(root: &str) -> Option<String> {
         Some(root.to_owned())
@@ -570,6 +572,13 @@ mod tests {
         assert_eq!(tree.matches(r#""segmented":true"#).count(), 2, "{tree}");
         assert!(tree.contains(r#""title":"Refresh""#) && tree.contains(r#""title":"Open in a window""#), "{tree}");
         assert!(tree.contains(r#""size":"icon-sm""#), "{tree}");
+    }
+
+    #[test]
+    fn a_commits_ref_pills_name_the_whole_ref_as_their_title() {
+        let commit = Commit { hash: "abc".into(), refs: vec!["b:feature/196116-be-prescription-tracker-list".into()], ..Default::default() };
+        let tree = wings_plugin::ui::tree_json(commit_row(&commit, "k".into(), "/shop")).to_string();
+        assert!(tree.contains(r#""title":"feature/196116-be-prescription-tracker-list""#), "{tree}");
     }
 
     #[test]

@@ -22,13 +22,17 @@ pub(super) struct GraphState {
 pub(super) enum Columns {
     #[default]
     All,
+    /// Wide enough for a row to show up to `MAX_REFS` ref pills beside its subject.
+    Wide,
     NoAuthor,
     NoAuthorOrDate,
 }
 
 impl Columns {
     fn fit(width: f32) -> Self {
-        if width >= 520.0 {
+        if width >= 900.0 {
+            Self::Wide
+        } else if width >= 520.0 {
             Self::All
         } else if width >= 380.0 {
             Self::NoAuthor
@@ -36,6 +40,38 @@ impl Columns {
             Self::NoAuthorOrDate
         }
     }
+}
+
+/// The widest a ref's pill is, in points: a branch name named for its ticket is longer than a sidebar.
+const REF_MAX: f32 = 160.0;
+
+/// The narrowest a ref's pill is made: a few letters and an ellipsis.
+const REF_MIN: f32 = 40.0;
+
+/// The most ref pills a row shows in a wide window; a narrower one shows its first, and a "+N" for the rest.
+const MAX_REFS: usize = 3;
+
+/// The subject's least width, in points, so it ends in an ellipsis instead of vanishing behind long pills.
+fn subject_min(columns: Columns) -> f32 {
+    if columns == Columns::NoAuthorOrDate { 48.0 } else { 120.0 }
+}
+
+/// A ref as its pill words, the changes plugin's `describeRef`: a tag's name after a diamond.
+fn ref_label(value: &str) -> String {
+    let name = value.get(2..).unwrap_or(value);
+    if value.starts_with('t') { format!("◆ {name}") } else { name.to_owned() }
+}
+
+/// A row's refs, the ones to show first first: HEAD's, then local branches, remote ones, and the rest (tags).
+fn ref_order(refs: &[String]) -> Vec<&String> {
+    let mut ordered: Vec<&String> = refs.iter().collect();
+    ordered.sort_by_key(|value| match value.chars().next() {
+        Some('H') => 0,
+        Some('b') => 1,
+        Some('r') => 2,
+        _ => 3,
+    });
+    ordered
 }
 
 fn window_range(visible: Range<usize>, total: usize) -> Range<usize> {
@@ -279,26 +315,39 @@ impl PageView {
         .w(px(graph_width))
         .h(px(26.0))
         .flex_none();
-        let refs = row
-            .refs
+        let ordered = ref_order(&row.refs);
+        let shown = if columns == Columns::Wide { MAX_REFS } else { 1 };
+        // A long branch name is cut short with an ellipsis inside the row, and its tooltip says the whole name.
+        // A pill gives way to the subject down to a few letters and an ellipsis, never to an empty ring; the "+N" doesn't.
+        let pill = |at: usize, label: String, color: Option<u32>, tip: String, shrinks: bool| {
+            ui::badge(ui::Variant::Outline, color, true, label)
+                .when(shrinks, |pill| pill.flex_shrink_1().min_w(px(REF_MIN)).max_w(px(REF_MAX)))
+                .id(ElementId::NamedInteger(format!("graph-{}-row-{index}-ref", graph.id).into(), at as u64))
+                .tooltip(ui::tooltip(tip, None))
+                .into_any_element()
+        };
+        let every = ordered.iter().map(|value| ref_label(value)).collect::<Vec<_>>().join("\n");
+        // The narrowest sidebar has no room for a "+N" beside a pill: the pill's tooltip lists every ref instead.
+        let counted = columns != Columns::NoAuthorOrDate && ordered.len() > shown;
+        let mut refs = ordered
             .iter()
-            .map(|value| {
+            .take(shown)
+            .enumerate()
+            .map(|(at, value)| {
                 let color = match value.chars().next() {
                     Some('H') => Some(theme::palette().info),
                     Some('b') => Some(theme::palette().done),
                     Some('t') => Some(theme::palette().working),
                     _ => None,
                 };
-                let name = value.get(2..).unwrap_or(value);
-                // The changes plugin's `describeRef`: a tag's name after a diamond.
-                let label = if value.starts_with('t') {
-                    format!("◆ {name}")
-                } else {
-                    name.to_owned()
-                };
-                ui::badge(ui::Variant::Outline, color, true, label).into_any_element()
+                let label = ref_label(value);
+                let tip = if ordered.len() > shown && !counted { every.clone() } else { label.clone() };
+                pill(at, label, color, tip, true)
             })
             .collect::<Vec<_>>();
+        if counted {
+            refs.push(pill(shown, format!("+{}", ordered.len() - shown), None, every, false));
+        }
         let handler = graph.on_select.clone();
         let id = graph.id;
         element
@@ -309,9 +358,11 @@ impl PageView {
             .child(
                 div()
                     .flex_1()
-                    .min_w_0()
+                    .min_w(px(subject_min(columns)))
+                    .relative()
                     .truncate()
-                    .child(row.subject.clone()),
+                    .child(row.subject.clone())
+                    .children(ui::spot(|| format!("graph-{}-subject-{index}", graph.id))),
             )
             .child(
                 div()
@@ -320,7 +371,7 @@ impl PageView {
                     .text_color(rgb(theme::palette().muted_foreground))
                     .child(row.hash.chars().take(7).collect::<String>()),
             )
-            .when(columns == Columns::All, |element| {
+            .when(matches!(columns, Columns::All | Columns::Wide), |element| {
                 element.child(
                     div()
                         .w(px(110.0))

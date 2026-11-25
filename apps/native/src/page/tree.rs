@@ -494,6 +494,8 @@ pub struct Badge {
     pub small: bool,
     /// A badge that's a button, as a `SummaryChip` with an `onClick` is: plugin-ui.css draws it as the same pill.
     pub on_click: Option<String>,
+    /// What a tooltip says: the whole name of a pill that is cut short with an ellipsis.
+    pub title: Option<String>,
     pub children: Vec<Node>,
 }
 
@@ -1584,6 +1586,7 @@ impl Walk {
                 tone,
                 small: str_prop(&props, "size") == Some("sm"),
                 on_click: handler("onClick"),
+                title: title(&props),
                 children: parts(children),
             }),
             "Empty" => {

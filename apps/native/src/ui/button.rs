@@ -176,5 +176,6 @@ pub fn badge(variant: Variant, tone: Option<u32>, small: bool, content: impl Int
         .text_size(px(if small { 11.0 } else { 12.0 }))
         .font_weight(gpui::FontWeight::MEDIUM)
         .whitespace_nowrap()
-        .child(content)
+        // Words wider than a pill that is made narrower end in an ellipsis, rather than clipped on both sides.
+        .child(div().min_w_0().truncate().child(content))
 }

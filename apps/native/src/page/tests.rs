@@ -119,6 +119,12 @@ fn components() -> String {
 }
 
 fn graph() -> String {
+    graph_refs(&[])
+}
+
+/// `graph`, each of whose commits carries `refs` (`kind:name`).
+fn graph_refs(refs: &[&'static str]) -> String {
+    let refs = refs.to_vec();
     let (mut selected, mut offset, mut end, mut requests) = (-1_i64, 0_u64, 64_u64, 0);
     fake::page("page", move |event| {
         match event {
@@ -133,7 +139,7 @@ fn graph() -> String {
         let rows: Vec<Value> = (offset..end)
             .map(|i| {
                 json!({ "hash": i.to_string(), "subject": format!("Commit {i}"), "author": "Ada", "date": "2026-11-06",
-                    "refs": [], "lane": 0, "color": 0, "merge": false, "lines": [0, 0, 2, 0] })
+                    "refs": refs, "lane": 0, "color": 0, "merge": false, "lines": [0, 0, 2, 0] })
             })
             .collect();
         json!({ "id": 0, "type": "#root", "children": [{ "id": 1, "type": "Page", "props": { "flush": true }, "children": [
@@ -456,6 +462,43 @@ fn a_narrow_graph_drops_the_author_then_the_date() {
         settle(&app, &mut window, |view| view.graph_window().is_some());
         settle(&app, &mut window, |view| view.graph_columns() == Some((author, date)));
     }
+}
+
+/// What the frame the window draws now cuts off, a line each.
+fn cut_off(app: &mut TestApp, window: &mut View) -> Vec<String> {
+    window.draw();
+    let handle = window.handle().into();
+    app.update(|cx| gpui::AppContext::update_window(cx, handle, |_, window, cx| crate::ui::cutoff::check(window, cx)).unwrap())
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+}
+
+#[test]
+fn a_branch_name_longer_than_the_graph_is_cut_short_inside_its_row() {
+    let long = "r:origin/feature/195903-be-prescription-detail-open-the-record-from-the-list";
+    for width in [470.0, 300.0] {
+        let (mut app, mut window) = open_narrow(graph_refs(&[long, "b:feature/196116-be-prescription-tracker-list-add-the-patient-filter", "b:feature/coupons"]), width);
+        settle(&app, &mut window, |view| view.graph_window().is_some());
+        let cuts = cut_off(&mut app, &mut window);
+        assert!(cuts.is_empty(), "at {width}: {cuts:?}");
+        // Three long refs don't take the subject's room: it keeps at least 48 points, and ends in an ellipsis.
+        let subject = crate::ui::spot_at("graph-5-subject-0").expect("the first row's subject").size.width.as_f32();
+        assert!(subject >= 48.0, "at {width}: the subject is {subject} pt wide");
+    }
+}
+
+#[test]
+fn a_badge_wider_than_its_row_is_cut_short_and_keeps_its_name_as_a_tooltip() {
+    let name = "feature/196116-be-prescription-tracker-list-add-the-patient-filter";
+    let source = fake::page("page", move |_| {
+        json!({ "id": 0, "type": "#root", "children": [{ "id": 1, "type": "Row", "props": { "wrap": true, "gap": "xs" }, "children": [
+            { "id": 2, "type": "Badge", "props": { "variant": "outline", "title": name }, "children": [text_node(3, name)] }] }] })
+    });
+    let (mut app, mut window) = open_narrow(source, 300.0);
+    settle(&app, &mut window, |view| view.text().contains("feature/196116"));
+    let cuts = cut_off(&mut app, &mut window);
+    assert!(cuts.is_empty(), "{cuts:?}");
 }
 
 type View = TestAppWindow<PageView>;

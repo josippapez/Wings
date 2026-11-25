@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.103 · 2026-11-25
+
+- **Long branch names fit**: in the Changes graph and History, a branch or tag name too long for its row ends in "…" and shows whole on hover. A commit with several names shows one and a "+N" listing the rest, so its message always stays readable. Any plugin's badge now shortens the same way and can carry a hover text.
+- **Changes 0.17.2**: the above.
+
 ## 0.2.102 · 2026-11-25
 
 - **Pinned plugins**: pinning a plugin to the top bar works again, and every pinned one shows. When their names would take more than half the bar or don't fit, they switch to icons, and the ones that still don't fit go in the "…" menu. The right panel's header is as tall as the project bar beside it.

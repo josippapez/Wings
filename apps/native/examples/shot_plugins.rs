@@ -312,6 +312,10 @@ fn changes(out: PathBuf) {
     git(0, &["tag", "v1.0"]);
     git(0, &["checkout", "-q", "-b", "feature/coupons"]);
     commit(3, "src/cart/coupon.ts", "export const coupon = null;\n", "Add coupon validation");
+    // Branch names as long as a ticket's, local and remote, on one commit: the graph's pills hold them, and a pill wider
+    // than the row used to run past the sidebar's edge.
+    git(0, &["branch", "feature/196116-be-prescription-tracker-list-add-the-patient-filter"]);
+    git(0, &["update-ref", "refs/remotes/origin/feature/195903-be-prescription-detail-open-the-record-from-the-list", "HEAD"]);
     git(0, &["checkout", "-q", "main"]);
     commit(2, "src/cart/total.ts", "export const total = 1;\n", "Count the first item");
     git(1, &["merge", "-q", "--no-ff", "-m", "Merge feature/coupons", "feature/coupons"]);
@@ -352,7 +356,7 @@ fn changes(out: PathBuf) {
     })
     .unwrap();
     let mut cx = app();
-    for (frame, width, height) in [("sidebar", 1000.0, 760.0), ("sidebar", 640.0, 760.0), ("sidebar", 360.0, 760.0), ("sidebar", 250.0, 760.0), ("graph", 1100.0, 420.0)] {
+    for (frame, width, height) in [("sidebar", 1000.0, 760.0), ("sidebar", 640.0, 760.0), ("sidebar", 470.0, 760.0), ("sidebar", 360.0, 760.0), ("sidebar", 250.0, 760.0), ("graph", 1100.0, 420.0)] {
         let source = module(frame);
         let handle = cx
             .open_offscreen_window(size(px(width), px(height)), |_, cx| cx.new(|cx| PageView::in_plugin(&host, &source, cx)))

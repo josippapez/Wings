@@ -2193,20 +2193,27 @@ impl PageView {
             ])
             .into_any_element(),
             Node::Badge(badge) => {
+                // A pill is never wider than its row: its words are cut short with an ellipsis, and a `title` says all.
                 let pill = ui::badge(
                     variant(badge.variant),
                     badge.tone.map(tone_color),
                     badge.small,
                     self.contents(&badge.children, 4.0, cx),
-                );
+                )
+                .flex_shrink_1()
+                .min_w_0()
+                .max_w_full()
+                .text_ellipsis();
+                let pill = pill.id(ElementId::NamedInteger("page-badge".into(), badge.id)).when_some(badge.title.clone(), |pill, title| {
+                    pill.aria_description(title.clone()).tooltip(ui::tooltip(title, None))
+                });
                 let Some(handler) = badge.on_click.clone() else {
                     return pill.into_any_element();
                 };
                 // A summary chip that opens something, like a pull request's checks: the same pill, a button that
                 // lights up under the pointer, as plugin-ui.css's `button.w-summary-chip` does. GPUI clicks a focused
                 // one on Enter and Space.
-                pill.id(ElementId::NamedInteger("page-badge".into(), badge.id))
-                    .role(Role::Button)
+                pill.role(Role::Button)
                     .aria_label(plain_text(&badge.children))
                     .focusable()
                     .tab_stop(true)
