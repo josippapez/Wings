@@ -44,8 +44,7 @@ The `Wings Native` folder is only read. Nothing either app kept is deleted.
 
 `main` (desktop 0.1.121 to 0.1.124) is merged into `native`, with per-account usage limits in `crates/wings-connect`. Still to do:
 
-- **Blockers.**
-  - Bump the desktop's version (`apps/desktop/src-tauri/tauri.conf.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/Cargo.toml`) to 0.2.0 (decided), above the last desktop release. The replacement takes its version from there, and the desktop's updater offers only a higher version than its own 0.1.124.
+- **Blockers.** None. The replacement's version is `apps/native/Cargo.toml`'s, which went on from the desktop's (0.1.124) at 0.2.0, so the desktop's updater offers it.
 - **Follow-ups**, which the desktop does and native doesn't yet:
   - Saving Project page tabs.
 
