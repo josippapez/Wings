@@ -1690,10 +1690,7 @@ pub(crate) fn pickers(c: &Chat) -> Vec<Node> {
     }
     // Which agent Claude Code runs as, until there is a message: Claude Code takes it only as it starts, so a pick restarts it.
     if !session.options.agent_types.is_empty() && session.items.is_empty() && !session.working {
-        let mut options = vec![(String::new(), "Agent: none".to_owned())];
-        options.extend(session.options.agent_types.iter().map(|(name, _)| (name.clone(), format!("Agent: {name}"))));
-        let value = c.agent_type.clone().unwrap_or_default();
-        pickers.push(select("Start as an agent. Picking one restarts Claude Code in this chat", &options, &value, chat::pick_agent).prop("variant", "ghost"));
+        pickers.push(agent_menu(c));
     }
     // Fast mode, for a model that has it: a lit button while it is on.
     if session.current_model().is_some_and(|model| model.fast) {
@@ -1712,9 +1709,9 @@ pub(crate) fn pickers(c: &Chat) -> Vec<Node> {
         pickers.push(fast);
     }
     if session.options.styles.len() > 1 {
-        let options: Vec<(String, String)> = session.options.styles.iter().map(|style| (style.clone(), format!("Style: {style}"))).collect();
+        let options: Vec<(String, String)> = session.options.styles.iter().map(|style| (style.clone(), style_label(style))).collect();
         let value = session.options.style.clone().unwrap_or_default();
-        pickers.push(select("Output style", &options, &value, chat::pick_style).prop("variant", "ghost"));
+        pickers.push(named_select("Output style", &options, &value, chat::pick_style));
     }
     if let Some(mode) = &session.mode {
         let options: Vec<(String, String)> = MODES.iter().map(|(value, name)| (value.to_string(), name.to_string())).collect();
@@ -1724,6 +1721,52 @@ pub(crate) fn pickers(c: &Chat) -> Vec<Node> {
     pickers.extend(crate::pull_view::create_button(c));
     pickers.extend(crate::worktree::button_node(c));
     pickers
+}
+
+/// Lucide's `bot`, on the agent button.
+const BOT: [&str; 6] = ["M12 8V4H8", "M6 8h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2z", "M2 14h2", "M20 14h2", "M15 13v2", "M9 13v2"];
+
+/// The agent Claude Code starts as: a quiet robot until one is picked, then its name. "No agent" as a picker's label took
+/// the room the message box's other buttons needed, which were cut to a few letters.
+fn agent_menu(c: &Chat) -> Node {
+    let glyph = icon(24, 2.0, &BOT).prop("size", 14);
+    let trigger = match c.agent_type.as_deref() {
+        None => Node::new("Button").prop("variant", "ghost").prop("size", "icon-sm").child(glyph),
+        Some(name) => Node::new("Button").prop("variant", "ghost").prop("size", "sm").child(glyph).child(text(own_name(name)).prop("truncate", true)),
+    }
+    .prop("label", "Start as an agent")
+    .prop("title", "Start as an agent. Picking one restarts Claude Code in this chat");
+    let none = Node::new("Button").key("agent:").on("onClick", |_| chat::pick_agent("")).text("No agent");
+    let agents = c.session.options.agent_types.iter().map(|(name, _)| {
+        let picked = name.clone();
+        Node::new("Button").key(format!("agent:{name}")).on("onClick", move |_| chat::pick_agent(&picked)).text(name.as_str())
+    });
+    Node::new("Menu").key("agent").child(trigger).child(none).children(agents)
+}
+
+/// A plugin's style by its own name: in full (`concise-output:concise-output`) with a "Style:" before it, it crammed the
+/// message box's other buttons to a few letters each.
+fn own_name(name: &str) -> &str {
+    name.rsplit_once(':').map_or(name, |(_, own)| own)
+}
+
+/// An output style's name as the picker shows it: `concise-output` as "Concise output", `default` as "Default".
+fn style_label(style: &str) -> String {
+    let words = own_name(style).replace(['-', '_'], " ");
+    let mut letters = words.chars();
+    letters.next().map(|first| first.to_uppercase().chain(letters).collect()).unwrap_or_default()
+}
+
+/// A quiet `select` whose plugin styles say under their name in the menu which plugin they come from.
+fn named_select(title: &str, options: &[(String, String)], value: &str, on_change: impl Fn(&str) + 'static) -> Node {
+    let named: Vec<serde_json::Value> = options
+        .iter()
+        .map(|(value, label)| match value.rsplit_once(':') {
+            Some((plugin, _)) => serde_json::json!({ "value": value, "label": label, "detail": plugin }),
+            None => serde_json::json!({ "value": value, "label": label }),
+        })
+        .collect();
+    select(title, options, value, on_change).prop("variant", "ghost").prop("options", named)
 }
 
 /// Lucide's `smartphone`, on the Remote Control button.
@@ -2937,22 +2980,49 @@ mod tests {
         use wings_plugin::ui::tree_json;
         let drawn = |c: &Chat| format!("{}{}", pickers(c).into_iter().map(|node| tree_json(node).to_string()).collect::<String>(), tree_json(header(c)));
         chat::with(|c| {
-            assert!(!drawn(c).contains("Agent:"), "no picker before Claude Code lists agents");
+            assert!(!drawn(c).contains("No agent"), "no picker before Claude Code lists agents");
             // As `initialize` lists them.
             c.session.options.initialized(&serde_json::json!({ "agents": [
                 { "name": "Explore", "description": "Fast read-only search" },
                 { "name": "dev-core:mid-tier-coder", "description": "Implements", "model": "sonnet" } ] }));
             let shown = drawn(c);
-            assert!(shown.contains("Agent: Explore") && shown.contains("Agent: dev-core:mid-tier-coder") && shown.contains("restarts Claude Code"), "{shown}");
+            assert!(shown.contains("\"Explore\"") && shown.contains("restarts Claude Code"), "{shown}");
             assert!(!shown.contains("@Explore"));
             c.agent_type = Some("Explore".into());
             assert!(drawn(c).contains("@Explore"), "{}", drawn(c));
             // With a message in the chat the agent can't change without losing it: no picker.
             c.session.items.push(Item::User("hi".into()));
-            assert!(!pickers(c).into_iter().any(|node| tree_json(node).to_string().contains("Agent:")));
+            assert!(!pickers(c).into_iter().any(|node| tree_json(node).to_string().contains("No agent")));
             c.session.items.clear();
             c.session.options = Default::default();
             c.agent_type = None;
+        });
+    }
+
+    #[test]
+    fn a_plugins_style_and_agent_go_by_their_own_names_so_the_message_box_has_room() {
+        use wings_plugin::ui::tree_json;
+        chat::with(|c| {
+            c.session.options.initialized(&serde_json::json!({
+                "agents": [{ "name": "dev-core:mid-tier-coder", "description": "Implements" }],
+                "available_output_styles": ["default", "concise-output:concise-output"],
+                "output_style": "concise-output:concise-output",
+            }));
+            let options = |title: &str| -> serde_json::Value {
+                let picker = pickers(c).into_iter().map(tree_json).find(|node| node["props"]["label"].as_str().is_some_and(|label| label.starts_with(title))).expect(title);
+                picker["props"]["options"].clone()
+            };
+            let styles = options("Output style");
+            assert_eq!(styles[1], serde_json::json!({ "value": "concise-output:concise-output", "label": "Concise output", "detail": "concise-output" }));
+            assert_eq!(styles[0]["label"], "Default");
+            // The agent: a robot alone until one is picked, then its own name; the menu lists them in full.
+            let agent = |c: &Chat| pickers(c).into_iter().map(|node| tree_json(node).to_string()).find(|node| node.contains("Start as an agent")).expect("the agent button");
+            assert!(agent(c).contains("icon-sm") && !agent(c).contains("\"mid-tier-coder\""), "{}", agent(c));
+            assert!(agent(c).contains("No agent") && agent(c).contains("dev-core:mid-tier-coder"), "{}", agent(c));
+            c.agent_type = Some("dev-core:mid-tier-coder".into());
+            assert!(agent(c).contains("\"mid-tier-coder\""), "{}", agent(c));
+            c.agent_type = None;
+            c.session.options = Default::default();
         });
     }
 

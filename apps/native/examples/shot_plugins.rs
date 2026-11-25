@@ -1976,6 +1976,24 @@ esac"##,
         lines.push(answer("settings", json!({ "effective": { "model": "opus", "effortLevel": "high" }, "applied": { "ultracode": false, "ultracodeAvailable": true } })));
         lines
     };
+    // A new chat's message box at its fullest: agents to start as, fast mode, a plugin's output style picked, the mode
+    // and the git buttons, which crammed every picker to a few letters.
+    let composer_new = {
+        let mut ready_with = ready[0].clone();
+        let response = &mut ready_with["response"]["response"];
+        response["agents"] = json!([
+            { "name": "Explore", "description": "Fast read-only search" },
+            { "name": "dev-core:mid-tier-coder", "description": "Implements", "model": "sonnet" },
+        ]);
+        for key in ["models", "fast_mode_state", "fast_mode_disabled_reason"] {
+            response[key] = fast[1]["response"]["response"][key].clone();
+        }
+        response["available_output_styles"] = json!(["default", "Explanatory", "concise-output:concise-output"]);
+        response["output_style"] = json!("concise-output:concise-output");
+        let mut lines = vec![init.clone(), ready_with];
+        lines.extend(ready[1..].iter().cloned());
+        lines
+    };
     // Ultracode on, so the model button says so and the menu's last row is lit.
     let ultracode = {
         let mut lines = opened(vec![init.clone()]);
@@ -2120,6 +2138,7 @@ esac"##,
         ("subagent", subagent, None, Some("disclose:Ran 1 subagent · 1 running"), "Survey the callers of applyDiscount"),
         ("suggestion", suggested, None, None, "Tab"),
         ("composer-full", full_row, None, None, "Tab"),
+        ("composer-new", composer_new, None, None, "What should Claude do"),
         ("subagents", subagents, None, None, "Waiting on 2 subagents"),
         // A finished turn with its tokens and cost (an API key pays per token) under it, and the next turn's counter.
         ("spend", spend, None, None, "Worked for 14s · 12.3k tokens"),
