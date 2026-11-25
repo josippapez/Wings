@@ -257,12 +257,9 @@ impl PageView {
             // The twisty is a 12pt chevron centred on the row, as the desktop's and a disclosure's are: the
             // "⌄" glyph it was sits at the bottom of its line, below the row's text.
             .when_some(item.expanded, |el, expanded| {
-                let chevron = crate::icons::icon(
-                    if expanded {
-                        crate::icons::Icon::ChevronDown
-                    } else {
-                        crate::icons::Icon::ChevronRight
-                    },
+                let chevron = crate::icons::disclosure(
+                    ElementId::NamedInteger("page-disclosure".into(), button.id),
+                    expanded,
                     12.0,
                     theme::palette().muted_foreground,
                 );

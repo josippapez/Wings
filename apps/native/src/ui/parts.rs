@@ -8,10 +8,7 @@ use gpui::{
 };
 
 use super::HAIRLINE;
-use crate::{
-    icons::{Icon, icon},
-    theme,
-};
+use crate::theme;
 
 /// `--wings-surface`, under a card.
 const SURFACE: u32 = 0xffffff0a;
@@ -156,8 +153,9 @@ pub fn disclosure_trigger(
     open: bool,
     summary: impl IntoElement,
 ) -> Stateful<Div> {
+    let id = id.into();
     div()
-        .id(id)
+        .id(id.clone())
         .role(Role::Button)
         .aria_label(label)
         .aria_expanded(open)
@@ -176,12 +174,9 @@ pub fn disclosure_trigger(
         .tab_stop(true)
         .focus_visible(|style| style.bg(rgba(theme::HOVER)))
         .child(
-            div().flex_none().h(px(12.0 * 1.45)).flex().items_center().child(icon(
-                if open {
-                    Icon::ChevronDown
-                } else {
-                    Icon::ChevronRight
-                },
+            div().flex_none().h(px(12.0 * 1.45)).flex().items_center().child(crate::icons::disclosure(
+                id,
+                open,
                 12.0,
                 theme::palette().muted_foreground,
             )),

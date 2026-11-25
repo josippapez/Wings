@@ -147,6 +147,35 @@ pub fn icon(icon: Icon, size: f32, color: u32) -> Svg {
         .text_color(rgb(color))
 }
 
+/// A disclosure's chevron, `key`'s: right while closed, down while open, and turning between them as it flips, as the
+/// desktop's `transition-transform` did. It swapped from one to the other before. GPUI draws the turn's end at once
+/// under Reduce motion.
+pub fn disclosure(key: impl Into<gpui::ElementId>, open: bool, size: f32, color: u32) -> gpui::AnyElement {
+    use gpui::{Animation, AnimationExt, Transformation, radians};
+    let key = key.into();
+    let chevron = icon(Icon::ChevronRight, size, color);
+    match crate::ui::motion::flips(&key, open) {
+        0 => chevron.with_transformation(Transformation::rotate(radians(turn(open, 1.0)))).into_any_element(),
+        flipped => {
+            let ease = crate::ui::motion::cubic_bezier(crate::ui::motion::EASE);
+            chevron
+                .with_animation(gpui::ElementId::NamedInteger(format!("disclosure-{key}").into(), flipped as u64), Animation::new(DISCLOSURE).with_easing(ease), move |chevron, t| {
+                    chevron.with_transformation(Transformation::rotate(radians(turn(open, t))))
+                })
+                .into_any_element()
+        }
+    }
+}
+
+/// Tailwind's `transition` time.
+const DISCLOSURE: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// How far a disclosure's chevron has turned, in radians, `t` of the way to `open`.
+fn turn(open: bool, t: f32) -> f32 {
+    let quarter = std::f32::consts::FRAC_PI_2;
+    if open { quarter * t } else { quarter * (1.0 - t) }
+}
+
 /// A plugin's icon, as the desktop's `PluginGlyph`: the built-in icon its manifest names (one of
 /// `plugin-icons.json`), else the plugin's own SVG, else a globe for a name it doesn't know or a puzzle piece when it
 /// names none.
@@ -200,3 +229,22 @@ pub fn plugin_glyph(name: &str, own: Option<&str>, size: f32, color: u32) -> Any
     #[cfg(not(feature = "test-support"))]
     glyph
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_disclosure_chevron_turns_a_quarter_only_when_it_flips() {
+        let key = gpui::ElementId::Name("disclosure-test".into());
+        assert_eq!(crate::ui::motion::flips(&key, false), 0, "shown closed: no turn");
+        assert_eq!(crate::ui::motion::flips(&key, false), 0);
+        assert_eq!(crate::ui::motion::flips(&key, true), 1, "opened: a turn");
+        assert_eq!(crate::ui::motion::flips(&key, true), 1, "the same turn while it runs");
+        assert_eq!(crate::ui::motion::flips(&key, false), 2, "closed again: another");
+        let quarter = std::f32::consts::FRAC_PI_2;
+        assert_eq!((turn(true, 0.0), turn(true, 0.5), turn(true, 1.0)), (0.0, quarter / 2.0, quarter));
+        assert_eq!((turn(false, 0.0), turn(false, 1.0)), (quarter, 0.0));
+    }
+}
+

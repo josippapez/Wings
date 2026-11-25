@@ -1051,3 +1051,21 @@ mod tests {
         assert!(exit_frame(0.5, true).opacity < 1.0);
     }
 }
+
+thread_local! {
+    /// Each control as it was last drawn, and how many times it has flipped since it first showed (`flips`).
+    static FLIPS: std::cell::RefCell<std::collections::HashMap<gpui::ElementId, (bool, usize)>> = Default::default();
+}
+
+/// How many times the control `key` has flipped since it first showed, now that it is `on`: 0 until it first flips, so
+/// it moves when it flips rather than when a page with it opens. A new count keys a new one-shot animation.
+pub fn flips(key: &gpui::ElementId, on: bool) -> usize {
+    FLIPS.with_borrow_mut(|flips| {
+        let seen = flips.entry(key.clone()).or_insert((on, 0));
+        if seen.0 != on {
+            *seen = (on, seen.1 + 1);
+        }
+        seen.1
+    })
+}
+

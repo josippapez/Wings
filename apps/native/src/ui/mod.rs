@@ -44,6 +44,7 @@ mod shimmer;
 pub(crate) mod slots;
 mod spinner_host;
 mod status_dot;
+mod switch;
 mod tooltip;
 
 pub use backdrop::{BackdropLayer, backdrop_slot, window_glass};
@@ -76,6 +77,7 @@ pub use status_dot::{
     spinner as working_spinner, spinner_layer, spinner_slot, status_dot, status_dot_slot, view_spinner_slot,
     view_status_dot_slot,
 };
+pub use switch::switch;
 pub use tooltip::{tip, tooltip, tooltip_exit, tooltip_with};
 #[cfg(all(test, feature = "test-support"))]
 pub(crate) use tooltip::shown_in as tooltip_shown_in;
@@ -228,35 +230,6 @@ pub fn shortcut_icon_button(
         None,
         icon(glyph, size.icon(), theme::palette().muted_foreground),
     )
-}
-
-/// shadcn's `Switch`: a 32 by 18.4 track inside a transparent 1px border, with a 16px knob, on the right and dark when on.
-pub fn switch(id: impl Into<ElementId>, on: bool) -> Stateful<Div> {
-    div()
-        .id(id)
-        .role(Role::Switch)
-        .aria_toggled(if on { Toggled::True } else { Toggled::False })
-        .w(px(32.0))
-        .h(px(18.4))
-        .flex_none()
-        .flex()
-        .items_center()
-        .rounded_full()
-        .border_1()
-        .border_color(rgba(0))
-        .cursor_pointer()
-        // Off, `dark:bg-input/80`.
-        .bg(rgba(if on {
-            theme::palette().foreground << 8 | 0xff
-        } else {
-            0xffffff14
-        }))
-        .when(on, |track| track.justify_end())
-        .child(div().size(px(16.0)).rounded_full().bg(rgb(if on {
-            0x17151a
-        } else {
-            theme::palette().foreground
-        })))
 }
 
 /// shadcn's `Input` frame around a text field: `rounded-lg`, `dark:bg-input/30` and 14px text.

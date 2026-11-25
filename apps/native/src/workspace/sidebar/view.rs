@@ -219,15 +219,7 @@ impl Workspace {
                         .hover(|style| style.bg(rgba(theme::HOVER)))
                         .on_click(cx.listener(|this, _, _, cx| this.toggle_older(cx)))
                         .children(ui::spot(|| "older".into()))
-                        .child(icon(
-                            if open {
-                                Icon::ChevronDown
-                            } else {
-                                Icon::ChevronRight
-                            },
-                            12.0,
-                            theme::MUTED_FOREGROUND,
-                        ))
+                        .child(crate::icons::disclosure("older", open, 12.0, theme::MUTED_FOREGROUND))
                         .child("Older")
                         .child(tops.to_string()),
                 )
