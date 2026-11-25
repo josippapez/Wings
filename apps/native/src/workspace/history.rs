@@ -1209,6 +1209,7 @@ impl Workspace {
         div()
             .id(("history-session", at))
             .group(group.clone())
+            .relative()
             .flex()
             .items_start()
             .gap(px(8.0))
@@ -1244,12 +1245,18 @@ impl Workspace {
                     ),
             )
             .child(
+                // Over the row's right end instead of beside the text: hidden until hover, it still took 220 points and
+                // cut long titles short with room to spare. The sheet's own fill keeps the title from showing through.
                 div()
-                    .relative()
-                    .flex_none()
+                    .absolute()
+                    .top(px(8.0))
+                    .right(px(8.0))
                     .flex()
                     .items_center()
                     .gap(px(2.0))
+                    .pl(px(4.0))
+                    .rounded_full()
+                    .bg(rgba(theme::palette().popover))
                     .opacity(if menu_open { 1.0 } else { 0.0 })
                     .group_hover(group, |style| style.opacity(1.0))
                     .child({
