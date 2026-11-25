@@ -2,6 +2,13 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.110 · 2026-11-25
+
+- **Tabs shrink before they scroll**: tabs get narrower, down to 100 points, before the strip scrolls, so five tabs fit a 1000 point window instead of cutting the first to a letter.
+- **Cleaner Issues board**: a card's delete and move buttons show while the pointer is on the card (Issues 0.31.4), and plugin pages can do the same for their own cards.
+- **Checkboxes you can see**: an unchecked box in a plugin page has a clear edge, where it was nearly invisible.
+- **Issues 0.31.3**: an issue with no description offers to add one under its title, not in the middle of the page.
+
 ## 0.2.109 · 2026-11-25
 
 - **Past sessions without automated runs**: sessions a program started through the Agent SDK, like automated security reviews, no longer fill Past sessions and its search. Your chats and terminal sessions stay.
