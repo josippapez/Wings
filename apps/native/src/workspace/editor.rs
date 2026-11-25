@@ -2,7 +2,7 @@
 //! choice in Settings, Editor, and the project bar's button with the other editors one click further.
 
 use crate::workspace::NotifyWorkspace;
-use gpui::{AnyElement, Context, SharedString, div, prelude::*, px};
+use gpui::{AnyElement, Context, SharedString, div, prelude::*, px, rgb, rgba};
 use wings_editors::EditorView;
 
 use crate::{
@@ -12,6 +12,15 @@ use crate::{
 };
 
 use super::Workspace;
+
+/// How the project bar draws "Open in <editor>": with its words, as an icon, or as the one icon that also stands for the
+/// menu of the other editors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum EditorForm {
+    Full,
+    Icon,
+    Merged,
+}
 
 impl Workspace {
     /// Looks the installed editors up once, off the UI thread, as the desktop does for the app's lifetime.
@@ -82,7 +91,7 @@ impl Workspace {
     }
 
     /// The project bar's "Open in <editor>", and with more editors a menu of the others. Nothing without one.
-    pub(super) fn editor_button(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn editor_button(&self, form: EditorForm, cx: &mut Context<Self>) -> Option<AnyElement> {
         let main = self.default_editor()?.clone();
         let items: Vec<AnyElement> = self
             .editors
@@ -100,6 +109,9 @@ impl Workspace {
             .collect();
         let more = self.editors.len() > 1;
         let id = main.id.clone();
+        // One control in a bar with room for no more: with several editors it opens their menu, else the one editor.
+        let merged = form == EditorForm::Merged;
+        let full = form == EditorForm::Full;
         Some(
             div()
                 .flex()
@@ -110,8 +122,15 @@ impl Workspace {
                         .flex()
                         .items_center()
                         .gap(px(2.0))
-                        .child(
-                            ui::button(
+                        // The redesign's outlined `.btn`: with its words, the button and its chevron share one line.
+                        .when(full, |row| {
+                            row.h(px(26.0))
+                                .rounded(px(6.0))
+                                .border_1()
+                                .border_color(rgba(theme::LINE_STRONG))
+                        })
+                        .child(match form {
+                            EditorForm::Full => ui::button(
                                 "open-in-editor",
                                 format!("Open in {}", main.name),
                                 Variant::Ghost,
@@ -120,22 +139,38 @@ impl Workspace {
                                     .flex()
                                     .items_center()
                                     .gap(px(6.0))
-                                    .text_size(px(12.0))
+                                    .text_size(px(12.5))
+                                    .text_color(rgb(theme::SECONDARY_FOREGROUND))
                                     .child(icon(Icon::Code, 14.0, theme::MUTED_FOREGROUND))
                                     .child(format!("Open in {}", main.name)),
                             )
-                            .h(px(28.0))
+                            .h(px(24.0))
                             .on_click(
                                 cx.listener(move |this, _, _, cx| this.open_in_editor(&id, cx)),
                             ),
-                        )
-                        .when(more, |row| {
+                            // Its name as the tooltip, as a button of only an icon has.
+                            EditorForm::Icon | EditorForm::Merged => ui::icon_button(
+                                "open-in-editor",
+                                Icon::Code,
+                                format!("Open in {}", main.name),
+                                ui::ButtonSize::Sm,
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if merged && more {
+                                    this.editor_menu = !this.editor_menu;
+                                    cx.notify_workspace();
+                                } else {
+                                    this.open_in_editor(&id, cx)
+                                }
+                            })),
+                        })
+                        .when(more && !merged, |row| {
                             row.child(
                                 ui::icon_button(
                                     "open-in-menu",
                                     Icon::ChevronDown,
                                     "Open in…",
-                                    ui::ButtonSize::Sm,
+                                    if full { ui::ButtonSize::Xs } else { ui::ButtonSize::Sm },
                                 )
                                 .on_click(cx.listener(
                                     |this, _, _, cx| {

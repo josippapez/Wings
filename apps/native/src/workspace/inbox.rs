@@ -62,6 +62,8 @@ pub(super) struct Inbox {
     next: usize,
     /// Notifications close together share one sound.
     sound: sound::Burst,
+    /// The panes whose agent finished, with a sound, since you last looked at them or opened the list.
+    finished: HashSet<usize>,
     /// The unread count last drawn, and how many times it has gone up since the window opened: each rise beats the
     /// count, as the desktop's `pulse`.
     drawn_unread: Cell<Option<usize>>,
@@ -139,6 +141,9 @@ impl Workspace {
     /// in front, counts as read.
     pub(super) fn inbox_agents(&mut self, before: &std::collections::HashMap<usize, Agent>) {
         let seen = self.window_active.then(|| self.focused_pane()).flatten();
+        if let Some(pane) = seen {
+            self.inbox.finished.remove(&pane);
+        }
         let mut changed: Vec<(usize, Agent)> = self
             .agents
             .iter()
@@ -169,6 +174,19 @@ impl Workspace {
             } else {
                 (Kind::Done, format!("{name} finished"), String::new())
             };
+            // Finished again before you looked: a command it ran in the background ended, which starts a turn of its
+            // own, and every such turn's end sounded. Its row moves up instead.
+            if kind == Kind::Done && seen != Some(pane) && !self.inbox.finished.insert(pane) {
+                let unread = self.inbox.events.iter().position(|event| {
+                    event.kind == Kind::Done && event.pane == Some(pane) && !event.read
+                });
+                if let Some(at) = unread {
+                    let mut event = self.inbox.events.remove(at);
+                    event.at = now_ms();
+                    self.inbox.events.insert(0, event);
+                    continue;
+                }
+            }
             self.inbox
                 .add(kind, title, project, detail, Some(pane), None);
             self.inbox.events[0].read = seen == Some(pane);
@@ -182,6 +200,7 @@ impl Workspace {
         for event in &mut self.inbox.events {
             event.read = true;
         }
+        self.inbox.finished.clear();
         cx.notify_workspace();
     }
 
@@ -270,6 +289,7 @@ impl Workspace {
         }
         self.inbox.drawn_unread.set(Some(unread));
         let pulse = self.inbox.pulse.get();
+        let size = super::sidebar::Scale::of(cx);
         super::sidebar::nav_row("inbox", Icon::Inbox, "Inbox", super::sidebar::Look::Plain)
             .aria_label(if unread > 0 {
                 format!("Inbox, {unread} unread")
@@ -286,8 +306,8 @@ impl Workspace {
             .on_click(cx.listener(|this, _, _, cx| this.open_inbox(cx)))
             .when(unread > 0, |row| {
                 let count = div()
-                    .h(px(16.0))
-                    .min_w(px(16.0))
+                    .h(size.px(16.0))
+                    .min_w(size.px(16.0))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -305,7 +325,7 @@ impl Workspace {
                         unread.to_string()
                     });
                 if pulse == 0 {
-                    return row.child(count.text_size(px(10.0)));
+                    return row.child(count.text_size(size.px(10.0)));
                 }
                 // Three beats from the count's middle, its pill and its number, as the desktop's `scale` transform;
                 // Reduce motion keeps it still, as the desktop's `animation: none`.
@@ -315,13 +335,13 @@ impl Workspace {
                         .child(ui::motion::surface(count, (0.5, 0.5))),
                     ElementId::NamedInteger("inbox-pulse".into(), pulse),
                     ui::motion::PULSE * ui::motion::PULSE_BEATS,
-                    |count, t, reduced| {
+                    move |count, t, reduced| {
                         let scale = if reduced {
                             1.0
                         } else {
                             ui::motion::pulse_scale(t)
                         };
-                        (count.text_size(px(10.0 * scale)), scale)
+                        (count.text_size(size.px(10.0) * scale), scale)
                     },
                 ))
             })

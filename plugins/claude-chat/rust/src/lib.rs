@@ -49,6 +49,8 @@ mod fork;
 mod fork_view;
 #[cfg(any(feature = "main", all(test, not(feature = "chat"))))]
 mod main_frame;
+#[cfg(any(feature = "main", all(test, not(feature = "chat"))))]
+mod open_chat;
 mod images;
 #[cfg(feature = "chat")]
 mod issues;

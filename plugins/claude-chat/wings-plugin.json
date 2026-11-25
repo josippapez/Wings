@@ -1,8 +1,8 @@
 {
   "id": "claude-chat",
   "name": "Claude chat",
-  "version": "0.53.0",
-  "minWingsVersion": "0.2.96",
+  "version": "0.54.0",
+  "minWingsVersion": "0.2.101",
   "description": "Experimental. Runs Claude Code as a chat in a tab instead of a terminal: messages, tool calls and permission prompts as cards, with Enter to send. Open a new chat from the + menu, or move a Claude terminal into one with its Chat badge.",
   "api": 1,
   "main": "dist/native/main.wasm",
@@ -60,6 +60,24 @@
   },
   "contributes": {
     "hooks": ["UserPromptSubmit", "PreToolUse"],
+    "mcpInstructions": "Handing over: to open Claude in another tab or on another account, or give it a session or a task, call claude-chat__open_chat (project, account by name or email, resume a session id or \"current\", or prompt), or run `wings claude-chat open_chat account=<name>`.",
+    "mcpTools": [
+      {
+        "name": "open_chat",
+        "description": "Opens a Claude chat tab in one of the user's projects, under a Claude Code account you name, to hand work over: use it when the user asks to open Claude in another tab, switch account, or give a session or task to another account. Give resume (a session id, or \"current\" for your own session) to go on with a session, or prompt (up to 8000 characters, for example a handoff summary) to start a new one, not both. A resumed session on another account has its transcript copied there and goes on as a fork by default, so the session you run in stays untouched; fork false goes on with the session itself, only safe when nothing else runs it. The tab opens in the background, and the answer gives its tabId: send_to_agent with it sends the chat a message. Fails, opening nothing, for an unknown project, account or session, or an account that isn't signed in.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "project": { "type": "string", "description": "The project's name, folder or id. Leave out for the project you run in." },
+            "account": { "type": "string", "description": "The Claude Code account's name or its email, as the chat's account menu shows it, or \"default\". Leave out for the project's own account." },
+            "resume": { "type": "string", "maxLength": 36, "description": "The session id to go on with, or \"current\" for the session that makes this call. Not with prompt." },
+            "prompt": { "type": "string", "maxLength": 8000, "description": "The first message of a new session, for example a handoff summary. Not with resume." },
+            "fork": { "type": "boolean", "description": "With resume: go on as a copy, so the original is untouched. True unless you say false." }
+          },
+          "additionalProperties": false
+        }
+      }
+    ],
     "settings": {
       "page": "dist/native/settings.wasm"
     },

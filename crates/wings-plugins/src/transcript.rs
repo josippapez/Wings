@@ -1,6 +1,9 @@
 //! The Claude Code transcript entries a plugin may read, from a session's file and as new lines are appended.
 
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -70,6 +73,54 @@ pub fn find_transcript(claude_dirs: &[PathBuf], session_id: &str) -> Option<Path
     }
     let file = format!("{session_id}.jsonl");
     claude_dirs.iter().find_map(|dir| fs::read_dir(dir.join("projects")).ok()?.flatten().map(|d| d.path().join(&file)).find(|p| p.is_file()))
+}
+
+/// The account folder a transcript is in: `<account>/projects/<folder>/<id>.jsonl`.
+pub fn account_of(transcript: &Path) -> Option<&Path> {
+    transcript.parent()?.parent()?.parent()
+}
+
+/// Makes a Claude session resumable under the account in folder `target`. Claude Code looks for a session only in its
+/// own account's `projects/`, so a transcript from another account is copied into the same project folder there, with
+/// the folder beside it that holds its subagents and tool results. A transcript already there is kept: it may hold the
+/// session's continuation.
+pub fn bring_transcript(transcript: &Path, target: &Path) -> std::io::Result<()> {
+    let (Some(account), Some(folder), Some(name), Some(id)) = (
+        account_of(transcript),
+        transcript.parent().and_then(Path::file_name),
+        transcript.file_name(),
+        transcript.file_stem(),
+    ) else {
+        return Ok(());
+    };
+    let into = target.join("projects").join(folder);
+    if account == target || into.join(name).exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&into)?;
+    let extras = transcript.with_file_name(id);
+    if extras.is_dir() {
+        copy_missing(&extras, &into.join(id))?;
+    }
+    // Written aside and renamed, so a copy cut short is never taken for the transcript, which is never overwritten.
+    let partial = into.join(format!(".{}.partial", name.to_string_lossy()));
+    std::fs::copy(transcript, &partial)?;
+    std::fs::rename(&partial, into.join(name))
+}
+
+/// Copies the files of folder `from` that `to` doesn't have yet.
+fn copy_missing(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let into = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_missing(&entry.path(), &into)?;
+        } else if !into.exists() {
+            std::fs::copy(entry.path(), &into)?;
+        }
+    }
+    Ok(())
 }
 
 /// The transcript of the subagent `agent` of the session `session_id`, which Claude Code keeps in a folder named after

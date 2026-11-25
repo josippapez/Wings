@@ -9,7 +9,7 @@ use gpui::{
 
 use crate::{
     icons::Icon,
-    layout::DIVIDER,
+    layout::SEAM,
     page::PageView,
     saved::SavedSplit,
     theme,
@@ -30,11 +30,10 @@ pub(super) type Key = (String, String);
 pub(super) const MAX_PAGES: usize = 4;
 /// The least a split can be dragged down to, its header and card.
 const MIN_SPLIT_HEIGHT: f32 = 96.0;
-/// A split's header when there are two or more: slimmer than the lone page's.
-const SPLIT_HEADER: f32 = 28.0;
-/// As tall as the project bar beside it, so the sidebar's card starts level with the tab's: at 32 it started 4 points
-/// higher.
-const LONE_HEADER: f32 = super::project::PROJECT_BAR;
+/// A page's header, as tall as a pane's.
+const HEADER: f32 = super::pane_card::HEADER;
+/// How far each side of its line a divider can be grabbed.
+const GRAB: f32 = 3.0;
 
 /// The open pages, top to bottom, and each one's share of the height, which together make 1.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -353,11 +352,11 @@ impl Workspace {
         };
         let count = self.right.len();
         // The pages share what the dividers leave.
-        let space = area.size.height.as_f32() - (count.saturating_sub(1)) as f32 * DIVIDER;
+        let space = area.size.height.as_f32() - (count.saturating_sub(1)) as f32 * SEAM;
         if space <= 0.0 {
             return;
         }
-        let above = (y - area.top()).as_f32() - index as f32 * DIVIDER - DIVIDER / 2.0;
+        let above = (y - area.top()).as_f32() - index as f32 * SEAM - SEAM / 2.0;
         let min = (MIN_SPLIT_HEIGHT / space).min(1.0 / count as f32 / 2.0);
         self.right.set_boundary(index, above / space, min);
         cx.notify_workspace();
@@ -397,9 +396,6 @@ impl Workspace {
                 .flex_1()
                 .min_h_0()
                 .overflow_hidden()
-                .rounded(px(14.0))
-                .border_1()
-                .border_color(rgba(HAIRLINE))
                 .bg(rgb(theme::SURFACE))
                 // The page pads itself, as the desktop's `.w-shell` does, 14px in from the card's edge. It keeps its
                 // last drawing until it changes, so a busy terminal doesn't rebuild it every frame.
@@ -465,13 +461,18 @@ impl Workspace {
             (ElementId::from("close-right-sidebar"), "Close sidebar", key.clone())
         };
         let menu_key = key.clone();
+        let menu_open = key.clone();
         div()
-            .h(px(if many { SPLIT_HEADER } else { LONE_HEADER }))
+            .relative()
+            .h(px(HEADER))
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(4.0))
-            .pl(px(4.0))
+            .gap(px(2.0))
+            .pr(px(6.0))
+            .border_b_1()
+            .border_color(rgba(HAIRLINE))
+            .bg(rgb(theme::SURFACE))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
@@ -486,16 +487,27 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(8.0))
-                    .pl(px(8.0))
-                    .text_size(px(12.0))
+                    .pl(px(12.0))
+                    .text_size(px(13.0))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(if many && focused {
+                    .text_color(rgb(if !many || focused {
                         theme::FOREGROUND
                     } else {
-                        theme::MUTED_FOREGROUND
+                        theme::SECONDARY_FOREGROUND
                     }))
                     .child(glyph)
                     .child(div().min_w_0().truncate().child(title)),
+            )
+            .child(
+                ui::icon_button(
+                    SharedString::from(format!("sidebar-more-{}-{}", menu_open.0, menu_open.1)),
+                    Icon::Ellipsis,
+                    "More",
+                    ButtonSize::Xs,
+                )
+                .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                    this.open_menu(MenuTarget::Sidebar(menu_open.clone()), event.position(), cx)
+                })),
             )
             .child(
                 ui::icon_button(close_id, Icon::X, close_label, ButtonSize::Xs).on_click(
@@ -545,35 +557,43 @@ impl Workspace {
         .into_any_element()
     }
 
-    /// The line between two splits, drawn as a tab's panes' dividers are.
+    /// The line between two splits, one point wide as a tab's panes' is, with a grab area over the splits beside it.
     fn split_divider(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let group = SharedString::from(format!("right-divider-{index}"));
         div()
-            .id(group.clone())
-            .group(group.clone())
-            .role(Role::Splitter)
-            .aria_label("Resize sidebars")
-            .aria_orientation(Orientation::Horizontal)
             .relative()
             .flex_none()
-            .h(px(DIVIDER))
+            .h(px(SEAM))
             .w_full()
-            .cursor_row_resize()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, _, cx| this.start_split_drag(index, cx)),
-            )
+            .bg(rgba(HAIRLINE))
             .child(
                 div()
+                    .id(group.clone())
+                    .group(group.clone())
+                    .role(Role::Splitter)
+                    .aria_label("Resize sidebars")
+                    .aria_orientation(Orientation::Horizontal)
                     .absolute()
-                    .rounded_full()
-                    .left(px(24.0))
-                    .right(px(24.0))
-                    .top(px(3.0))
-                    .h(px(2.0))
-                    .group_hover(group, |style| style.bg(rgba(DIVIDER_HOVER))),
+                    .left_0()
+                    .w_full()
+                    .top(px(-GRAB))
+                    .h(px(SEAM + 2.0 * GRAB))
+                    .cursor_row_resize()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| this.start_split_drag(index, cx)),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .top(px(GRAB))
+                            .h(px(SEAM))
+                            .group_hover(group, |style| style.bg(rgba(DIVIDER_HOVER))),
+                    )
+                    .children(ui::spot(move || format!("right-divider-{index}"))),
             )
-            .children(ui::spot(move || format!("right-divider-{index}")))
             .into_any_element()
     }
 }

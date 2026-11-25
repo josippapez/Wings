@@ -3,14 +3,15 @@
 use crate::workspace::NotifyWorkspace;
 use std::path::PathBuf;
 
-use gpui::{AnyElement, Context, Role, Window, div, prelude::*, px, rgb};
+use gpui::{AnyElement, Context, Role, Window, div, prelude::*, px, rgb, rgba};
 
 use crate::{
     icons::{Icon, icon},
     saved, theme,
+    ui::HAIRLINE,
 };
 
-use super::{Parked, Workspace};
+use super::{Parked, Workspace, editor::EditorForm};
 
 /// The desktop's `--sidebar-accent` behind the shown project, and `--sidebar-foreground`.
 pub(super) const SIDEBAR_ACCENT: u32 = 0xffffff14;
@@ -18,6 +19,91 @@ pub(super) const SIDEBAR_FOREGROUND: u32 = 0xe4e0da;
 
 /// The project bar's height, which the right sidebar's header matches.
 pub(super) const PROJECT_BAR: f32 = 36.0;
+
+/// What the project bar keeps, in points, when its column is narrow: its padding, the gap between its parts, the few
+/// letters of the name and of the branch, an icon button and the gap between plugin buttons.
+const BAR_PADDING: f32 = 24.0;
+const BAR_GAP: f32 = 6.0;
+const NAME_MIN: f32 = 44.0;
+const BRANCH_MIN: f32 = 12.0 + BAR_GAP + 36.0;
+const BAR_BUTTON: f32 = 28.0;
+const PLUGIN_GAP: f32 = 4.0;
+/// What "Open in <editor>" takes besides its editor's name, and a letter of the name.
+const EDITOR_LABEL: f32 = 40.0;
+const LETTER: f32 = 6.5;
+/// What a plugin button with its title takes besides the title's letters: its padding, icon and the gap after it, and
+/// room for a count.
+const LABELLED_BUTTON: f32 = 20.0 + 16.0 + 6.0 + 26.0;
+
+/// How the project bar fits its column: what it draws, in the order a narrow column takes things away.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct BarPlan {
+    pub(super) editor: EditorForm,
+    /// The plugin buttons in the bar; the rest are in its menu.
+    pub(super) inline: usize,
+    /// The branch after the name.
+    pub(super) branch: bool,
+    /// The plugin buttons with their titles after the icons.
+    pub(super) labels: bool,
+}
+
+impl BarPlan {
+    /// The least width the bar needs for the parts of this plan, the name and the branch at their shortest.
+    fn needs(&self, editor: Option<(usize, bool)>, plugins: usize, letters: usize) -> f32 {
+        let mut parts = 2; // the name, the spacer
+        let mut width = BAR_PADDING + NAME_MIN;
+        if self.branch {
+            parts += 2;
+            width += BRANCH_MIN - BAR_GAP;
+        }
+        if let Some((letters, more)) = editor {
+            parts += 1;
+            width += match self.editor {
+                EditorForm::Full => EDITOR_LABEL + LETTER * letters as f32,
+                _ => BAR_BUTTON,
+            };
+            if more && self.editor != EditorForm::Merged {
+                width += BAR_BUTTON + 2.0;
+            }
+        }
+        if plugins > 0 {
+            parts += 1;
+            let menu = (plugins > self.inline) as usize;
+            let buttons = self.inline + menu;
+            width += buttons as f32 * BAR_BUTTON + buttons.saturating_sub(1) as f32 * PLUGIN_GAP;
+            if self.labels {
+                width += self.inline as f32 * (LABELLED_BUTTON - BAR_BUTTON) + LETTER * letters as f32;
+            }
+        }
+        width + (parts - 1) as f32 * BAR_GAP
+    }
+}
+
+/// What the bar draws in a column `width` wide, for an `editor` of that many letters, with whether others are installed,
+/// and `plugins` buttons whose titles take `letters` together: the plugin buttons give up their titles first, then go
+/// into the bar's menu, then the editor's words go, then its menu of the other editors joins its button, and the
+/// branch goes last. All of it when it fits.
+pub(super) fn bar_plan(
+    width: f32,
+    editor: Option<(usize, bool)>,
+    plugins: usize,
+    letters: usize,
+) -> BarPlan {
+    let most = plugins.min(3);
+    let last = BarPlan { editor: EditorForm::Merged, inline: 0, branch: false, labels: false };
+    let mut candidates = vec![BarPlan { editor: EditorForm::Full, inline: most, branch: true, labels: plugins > 0 }];
+    for form in [EditorForm::Full, EditorForm::Icon, EditorForm::Merged] {
+        for inline in (0..=most).rev() {
+            candidates.push(BarPlan { editor: form, inline, branch: true, labels: false });
+        }
+    }
+    candidates.push(last);
+    candidates
+        .iter()
+        .find(|plan| plan.needs(editor, plugins, letters) <= width)
+        .copied()
+        .unwrap_or(last)
+}
 
 impl Workspace {
     /// The current project's saved tabs, or one new terminal.
@@ -279,14 +365,18 @@ impl Workspace {
     }
 
     /// The desktop's project bar above the panes: the project's name and its branch, and Open in <editor>.
-    pub(super) fn project_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn project_bar(&self, width: f32, cx: &mut Context<Self>) -> AnyElement {
         let entry = self.projects.iter().find(|p| p.path == self.config.project);
         let name = entry.map_or_else(
             || self.config.project.to_string_lossy().into_owned(),
             |p| p.name.clone(),
         );
-        let branch = entry.and_then(|p| p.branch.clone());
-        let buttons = self.sidebar_buttons(cx);
+        let editor = self
+            .default_editor()
+            .map(|editor| (editor.name.chars().count(), self.editors.len() > 1));
+        let plan = bar_plan(width, editor, self.bar_button_count(), self.bar_title_letters());
+        let branch = entry.and_then(|p| p.branch.clone()).filter(|_| plan.branch);
+        let buttons = self.sidebar_buttons(plan.inline, plan.labels, cx);
         div()
             .id("project-bar")
             .role(Role::Toolbar)
@@ -299,16 +389,20 @@ impl Workspace {
             .flex()
             .items_center()
             .gap(px(6.0))
-            .pl(px(12.0))
-            .pr(px(8.0))
-            // No hairline under it: the tab's card starts just below, and its rounded corners left a notch of the
-            // window's background against the line. The sidebar's header beside it has none either.
+            .pl(px(14.0))
+            .pr(px(10.0))
+            // The panes start under its line.
+            .border_b_1()
+            .border_color(rgba(HAIRLINE))
+            // A name cut short in a narrow column says itself on hover.
             .child(
                 div()
+                    .id("project-name")
                     .min_w_0()
                     .truncate()
                     .text_size(px(13.0))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .tooltip(crate::ui::tooltip(name.clone(), None))
                     .child(name),
             )
             .when_some(branch, |bar, branch| {
@@ -323,7 +417,7 @@ impl Workspace {
                     )
             })
             .child(div().flex_1())
-            .children(self.editor_button(cx))
+            .children(self.editor_button(plan.editor, cx))
             // The plugins' sidebar buttons at the right end, as in the desktop's project bar.
             .when(!buttons.is_empty(), |bar| {
                 bar.child(

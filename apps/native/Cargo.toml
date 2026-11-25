@@ -1,6 +1,6 @@
 [package]
 name = "wings-native"
-version = "0.2.100"
+version = "0.2.101"
 edition = "2024"
 publish = false
 
@@ -141,6 +141,23 @@ opt-level = 3
 [profile.dev.package.wasmtime-internal-cranelift]
 opt-level = 3
 [profile.dev.package.wasmtime]
+opt-level = 3
+# And save screenshots with an optimised PNG encoder: unoptimised, each took 0.6 s, a third of a screenshot run.
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
+[profile.dev.package.flate2]
+opt-level = 3
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+[profile.dev.package.crc32fast]
+opt-level = 3
+[profile.dev.package.simd-adler32]
+opt-level = 3
+[profile.dev.package.adler2]
 opt-level = 3
 
 [[example]]

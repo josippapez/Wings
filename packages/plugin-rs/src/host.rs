@@ -1087,6 +1087,13 @@ impl Account {
     pub fn picked(session: Option<&str>, name: Option<&str>) -> Self {
         Account(json!({ "session": session, "pick": { "name": name } }))
     }
+
+    /// `picked`, and a `session` whose transcript is in another account is copied into the picked one, so it goes on
+    /// there instead of under the account it ran in. A transcript already in the picked account is kept. Needs the
+    /// `claudeAccounts` permission and Wings 0.2.101.
+    pub fn picked_bringing(session: Option<&str>, name: Option<&str>) -> Self {
+        Account(json!({ "session": session, "pick": { "name": name }, "bring": true }))
+    }
 }
 
 /// A Claude Code account a plugin may start Claude Code under (`Account::picked`).

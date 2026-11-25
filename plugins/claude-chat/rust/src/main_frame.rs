@@ -119,6 +119,7 @@ fn review_data(event: &Value) -> Option<&Value> {
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     crate::plan_limit::listen();
+    crate::open_chat::register();
     // A chat page can't hear another plugin's events, so the main passes the comments on; each page keeps its chat's.
     host::on("pluginEvent", |_, event| {
         if let Some(data) = review_data(event) {

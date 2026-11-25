@@ -60,6 +60,17 @@ fn field(
     })
 }
 
+/// A fact form's field in a row that wraps: `width` points wide when the row has the room, the value's growing to fill
+/// it, and the width of the row when it has less, so a narrow column stacks the fields and none runs past its edge.
+fn form_field(width: f32, grows: bool, field: Entity<TextField>) -> impl IntoElement {
+    div()
+        .min_w_0()
+        .flex_basis(px(width))
+        .flex_grow(if grows { 1.0 } else { 0.0 })
+        .flex_shrink(1.0)
+        .child(field)
+}
+
 impl FactState {
     pub(super) fn new(cx: &mut Context<ProjectPage>) -> Self {
         Self {
@@ -245,18 +256,8 @@ impl ProjectPage {
                 .flex_wrap()
                 .items_center()
                 .gap(px(8.0))
-                .child(
-                    div()
-                        .w(px(160.0))
-                        .flex_none()
-                        .child(self.facts.name.clone()),
-                )
-                .child(
-                    div()
-                        .min_w(px(192.0))
-                        .flex_1()
-                        .child(self.facts.value.clone()),
-                )
+                .child(form_field(160.0, false, self.facts.name.clone()))
+                .child(form_field(192.0, true, self.facts.value.clone()))
                 .child(
                     ui::button("add-fact", "Add fact", Variant::Ghost, false, "Add fact")
                         .h(px(28.0))
@@ -297,8 +298,8 @@ impl ProjectPage {
             .flex_wrap()
             .items_center()
             .gap(px(8.0))
-            .child(div().w(px(160.0)).flex_none().child(edit.name.clone()))
-            .child(div().min_w(px(192.0)).flex_1().child(edit.value.clone()))
+            .child(form_field(160.0, false, edit.name.clone()))
+            .child(form_field(192.0, true, edit.value.clone()))
             .child(
                 ui::button("save-fact", "Save", Variant::Secondary, false, "Save")
                     .h(px(28.0))

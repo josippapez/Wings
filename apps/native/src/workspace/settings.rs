@@ -462,6 +462,13 @@ impl Workspace {
         cx.refresh_windows();
     }
 
+    /// Every part of the sidebar picks the new size up on its next draw.
+    pub(super) fn set_sidebar_text(&mut self, size: f32, cx: &mut Context<Self>) {
+        cx.set_global(super::sidebar::SidebarText(size));
+        self.save(cx);
+        cx.refresh_windows();
+    }
+
     pub(super) fn set_shift_return_meta(&mut self, on: bool, cx: &mut Context<Self>) {
         self.set_look(|look| look.shift_return_meta = on, cx);
     }
@@ -857,12 +864,25 @@ impl Workspace {
             .as_ref()
             .map(|d| (d.family.clone(), d.family_error.clone()));
         let (field, error) = family.expect("the dialog is open");
+        let sidebar = super::sidebar::text_size(cx);
         vec![vec![
             ui::setting_row(
                 "Font family",
                 "Tried before the default monospace fonts. Leave empty for the default. Enter applies it.",
                 error,
                 ui::input(field),
+            ),
+            self.select_row(
+                "sidebar-text",
+                "Sidebar text",
+                "The size of the project names and the other text in the sidebar.",
+                super::sidebar::TEXT_SIZES
+                    .map(|(size, label)| {
+                        let choose: Choose = Box::new(move |this, cx| this.set_sidebar_text(size, cx));
+                        (label.into(), size == sidebar, choose)
+                    })
+                    .into(),
+                cx,
             ),
             self.select_row(
                 "line-height",
@@ -1602,7 +1622,10 @@ impl Workspace {
             super::sidebar::Look::Plain,
         )
         .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx)))
-        .child(super::sidebar::row_hint(shortcut_label(",", false)))
+        .child(super::sidebar::row_hint(
+            shortcut_label(",", false),
+            super::sidebar::Scale::of(cx),
+        ))
         .into_any_element()
     }
 }

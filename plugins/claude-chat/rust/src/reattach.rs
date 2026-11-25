@@ -247,7 +247,7 @@ pub fn rebuild(session: &mut Session, entries: &[Value], note: Option<&Note>, li
         }
         session.cost = note.cost;
         let unread = note.queued.iter().filter(|(uuid, _)| !shown.contains(uuid.as_str()));
-        session.queued = unread.map(|(uuid, text)| Queued { uuid: uuid.clone(), text: text.clone(), images: Vec::new() }).collect();
+        session.queued = unread.map(|(uuid, text)| Queued { uuid: uuid.clone(), text: text.clone(), images: Vec::new(), relayed: false }).collect();
         track.lasting = note.lasting.iter().filter_map(|line| Some((lasting(line)?.to_owned(), line.clone()))).collect();
         track.answers = note.answered.iter().cloned().collect();
     }
@@ -652,7 +652,7 @@ mod tests {
         assert_eq!(after.items, before.session.items);
         assert_eq!(after.live, "Checking the sizes");
         assert!(after.working);
-        assert_eq!(after.queued, [Queued { uuid: before.session.queued[0].uuid.clone(), text: "and the dates".into(), images: Vec::new() }]);
+        assert_eq!(after.queued, [Queued { uuid: before.session.queued[0].uuid.clone(), text: "and the dates".into(), images: Vec::new(), relayed: false }]);
         assert_eq!(after.commands.len(), 1, "Claude Code's answer to the opening, kept in the note");
         assert_eq!((after.model.as_deref(), after.cost), (before.session.model.as_deref(), before.session.cost));
         // It goes on with the same Claude Code: the queued message is read, Claude answers, and the turn ends.

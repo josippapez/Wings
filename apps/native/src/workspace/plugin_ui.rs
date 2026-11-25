@@ -524,16 +524,10 @@ impl Workspace {
         }
     }
 
-    /// The plugins' sidebar buttons, at the project bar's right end: each opens its page in the panel on the right. A
-    /// label the plugin set (`setSidebarLabel`) follows the icon behind a tone dot, as the desktop's `ProjectBar` draws
-    /// it, and its rows show when you point at the button. A sidebar with a popover page shows that instead, under the
-    /// button, while you point at it (the desktop's `WithPopover`).
-    /// The project bar's plugin buttons, as the desktop's: the pinned ones in the order they were pinned, then others up
-    /// to `INLINE_BUTTONS`, and a menu of the rest that also chooses which stay in the bar.
-    pub(super) fn sidebar_buttons(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        // As the desktop's `pagesOf`: each plugin's sidebars, then its pages with a button that open as a tab or a
-        // window (the places a native page can open from here).
-        let all: Vec<BarButton> = self
+    /// The plugins' bar buttons, as the desktop's `pagesOf`: each plugin's sidebars, then its pages with a button that
+    /// open as a tab or a window (the places a native page can open from here).
+    fn bar_buttons(&self) -> Vec<BarButton<'_>> {
+        self
             .plugins
             .iter()
             .flat_map(|installed| {
@@ -576,15 +570,38 @@ impl Workspace {
                     });
                 sidebars.chain(views)
             })
-            .collect();
+            .collect()
+    }
+
+    /// The letters in the titles of the longest plugin buttons the bar can show at once, for the room their titles take.
+    pub(super) fn bar_title_letters(&self) -> usize {
+        let mut letters: Vec<usize> = self.bar_buttons().iter().map(|button| button.title.chars().count()).collect();
+        letters.sort_unstable_by(|a, b| b.cmp(a));
+        letters.iter().take(3).sum()
+    }
+
+    /// How many plugin buttons the project bar has, in the bar and in its menu.
+    pub(super) fn bar_button_count(&self) -> usize {
+        self.bar_buttons().len()
+    }
+
+    /// The plugins' sidebar buttons, at the project bar's right end: each opens its page in the panel on the right. A
+    /// label the plugin set (`setSidebarLabel`) follows the icon behind a tone dot, as the desktop's `ProjectBar` draws
+    /// it, and its rows show when you point at the button. A sidebar with a popover page shows that instead, under the
+    /// button, while you point at it (the desktop's `WithPopover`).
+    /// The project bar's plugin buttons, as the desktop's: the pinned ones in the order they were pinned, then others up
+    /// to `INLINE_BUTTONS`, and a menu of the rest that also chooses which stay in the bar. A narrow bar shows `inline`
+    /// of them at most.
+    pub(super) fn sidebar_buttons(&self, inline: usize, labels: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let all = self.bar_buttons();
         let keys: Vec<String> = all.iter().map(BarButton::key).collect();
-        let (inline, overflow) = split_buttons(&keys, &self.plugin_ui.pinned);
+        let (inline, overflow) = split_buttons(&keys, &self.plugin_ui.pinned, inline);
         let pinned_any = inline
             .iter()
             .any(|at| self.plugin_ui.pinned.contains(&keys[*at]));
         let mut buttons: Vec<AnyElement> = inline
             .iter()
-            .map(|at| self.bar_button(&all[*at], cx))
+            .map(|at| self.bar_button(&all[*at], labels, cx))
             .collect();
         if !overflow.is_empty() || pinned_any {
             let overflow: Vec<&BarButton> = overflow.iter().map(|at| &all[*at]).collect();
@@ -597,11 +614,11 @@ impl Workspace {
         buttons
     }
 
-    fn bar_button(&self, button: &BarButton, cx: &mut Context<Self>) -> AnyElement {
+    fn bar_button(&self, button: &BarButton, labels: bool, cx: &mut Context<Self>) -> AnyElement {
         let installed = button.installed;
         let (plugin, id) = (installed.id.clone(), button.id.clone());
         let opens = match button.kind {
-            Kind::Sidebar(sidebar) => return self.sidebar_button(installed, sidebar, cx),
+            Kind::Sidebar(sidebar) => return self.sidebar_button(installed, sidebar, labels, cx),
             Kind::Tab => Kind::Tab,
             Kind::Window => Kind::Window,
         };
@@ -613,8 +630,13 @@ impl Workspace {
             button.title.clone(),
             ButtonSize::Sm,
             Some(shown),
-            button.glyph(16.0),
+            if labels {
+                titled(button.glyph(14.0), &button.title)
+            } else {
+                button.glyph(16.0)
+            },
         )
+        .when(labels, |button| button_with_title(button, shown))
         .tooltip(ui::tooltip(button.title.clone(), None))
         .on_click(cx.listener(move |this, _, window, cx| {
             this.open_bar_view(&plugin, &id, &opens, window, cx)
@@ -770,6 +792,7 @@ impl Workspace {
         &self,
         installed: &Installed,
         sidebar: &crate::installed::Sidebar,
+        labels: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         {
@@ -777,7 +800,7 @@ impl Workspace {
                 let (plugin, page) = (installed.id.clone(), sidebar.id.clone());
                 let key = (plugin.clone(), page.clone());
                 let open = self.right.contains(&key);
-                let mark = sidebar_glyph(installed, &page, 16.0);
+                let mark = sidebar_glyph(installed, &page, if labels { 14.0 } else { 16.0 });
                 let label = self.plugin_ui.labels.get(&key);
                 let name = match label {
                     Some(label) => format!("{}, {}", sidebar.title, label.text),
@@ -796,14 +819,17 @@ impl Workspace {
                     .items_center()
                     .gap(px(6.0))
                     .child(mark)
-                    .when_some(label, |content, label| {
-                        content.child(ui::dot(tone_dot(label.tone))).child(
+                    .when(labels, |content| content.child(title_text(&sidebar.title)))
+                    .when_some(label, |content, label| match count_of(&label.text) {
+                        // A count is a pill, as the redesign draws a plugin's.
+                        Some(count) => content.child(count_badge(count)),
+                        None => content.child(ui::dot(tone_dot(label.tone))).child(
                             div()
                                 .max_w(px(200.0))
                                 .truncate()
                                 .text_size(px(12.0))
                                 .child(label.text.clone()),
-                        )
+                        ),
                     });
                 let button = ui::untipped_ghost_button(
                     SharedString::from(format!("plugin-sidebar-{plugin}-{page}")),
@@ -812,7 +838,8 @@ impl Workspace {
                     Some(open),
                     content,
                 )
-                .when(label.is_some(), |button| button.w_auto().px(px(8.0)));
+                .when(label.is_some(), |button| button.w_auto().px(px(8.0)))
+                .when(labels, |button| button_with_title(button, open));
                 // The popover shows more than a tooltip would. Typing in it doesn't take the pointer off its button.
                 let button = if has_popover {
                     let key = key.clone();
@@ -1165,9 +1192,9 @@ impl Workspace {
             .flex_none()
             .flex()
             .flex_col()
-            .pb(px(8.0))
-            .pl(px(4.0))
-            .pr(px(8.0))
+            // Flush with the main column, with one line between them.
+            .border_l_1()
+            .border_color(rgba(HAIRLINE))
             .child(pages);
         let panel = panel.child(self.right_resize_edge(cx));
         let Some(share) = share else {
@@ -1390,6 +1417,49 @@ impl HoverPopover {
 
 /// The dot before a sidebar's label: green with no tone, amber or red when the plugin needs attention (the desktop's
 /// `ToneDot`).
+/// A plugin button's title after its icon, as the redesign's `.btn` draws it.
+fn title_text(title: &str) -> AnyElement {
+    div().text_size(px(12.5)).whitespace_nowrap().child(title.to_owned()).into_any_element()
+}
+
+fn titled(glyph: AnyElement, title: &str) -> AnyElement {
+    div().flex().items_center().gap(px(6.0)).child(glyph).child(title_text(title)).into_any_element()
+}
+
+/// A bar button that grows to its title: 26 tall with 10 points at each side, its text a step under the foreground.
+fn button_with_title(button: gpui::Stateful<gpui::Div>, on: bool) -> gpui::Stateful<gpui::Div> {
+    button
+        .w_auto()
+        .h(px(26.0))
+        .px(px(10.0))
+        .rounded(px(6.0))
+        .when(!on, |button| button.text_color(rgb(theme::SECONDARY_FOREGROUND)))
+}
+
+/// The label a plugin set when it is a count: digits only.
+pub(super) fn count_of(text: &str) -> Option<&str> {
+    let text = text.trim();
+    (!text.is_empty() && text.chars().all(|c| c.is_ascii_digit())).then_some(text)
+}
+
+/// The redesign's `.badge`: 11 point semibold digits in an 18 tall pill tinted with the accent.
+fn count_badge(count: &str) -> AnyElement {
+    div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .min_w(px(18.0))
+        .h(px(18.0))
+        .px(px(5.0))
+        .rounded(px(9.0))
+        .bg(rgba(theme::INFO << 8 | 0x24))
+        .text_color(rgb(theme::INFO))
+        .text_size(px(11.0))
+        .font_weight(FontWeight::SEMIBOLD)
+        .child(count.to_owned())
+        .into_any_element()
+}
+
 pub(super) fn tone_dot(tone: Option<Tone>) -> u32 {
     match tone {
         Some(Tone::Warning) => theme::WORKING,
@@ -1588,7 +1658,9 @@ impl BarButton<'_> {
 
 /// Which plugin buttons show in the bar and which go in its menu, by index into `keys`, as the desktop's `ProjectBar`:
 /// the pinned ones in the order they were pinned, then the others in order up to `INLINE_BUTTONS`.
-fn split_buttons(keys: &[String], pinned: &[String]) -> (Vec<usize>, Vec<usize>) {
+///
+/// A narrow bar shows no more than `limit`: the pinned ones that don't fit go in the menu too, after those that were there.
+fn split_buttons(keys: &[String], pinned: &[String], limit: usize) -> (Vec<usize>, Vec<usize>) {
     let mut inline: Vec<usize> = pinned
         .iter()
         .filter_map(|key| keys.iter().position(|k| k == key))
@@ -1598,7 +1670,9 @@ fn split_buttons(keys: &[String], pinned: &[String]) -> (Vec<usize>, Vec<usize>)
         .collect();
     let free = INLINE_BUTTONS.saturating_sub(inline.len()).min(rest.len());
     inline.extend(&rest[..free]);
-    (inline, rest[free..].to_vec())
+    let mut menu = inline.split_off(limit.min(inline.len()));
+    menu.extend(&rest[free..]);
+    (inline, menu)
 }
 
 #[cfg(test)]
@@ -1612,22 +1686,22 @@ mod pin_tests {
     #[test]
     fn three_buttons_show_and_the_rest_go_in_the_menu() {
         let all = keys(&["a:1", "b:1", "c:1", "d:1", "e:1"]);
-        assert_eq!(split_buttons(&all, &[]), (vec![0, 1, 2], vec![3, 4]));
+        assert_eq!(split_buttons(&all, &[], usize::MAX), (vec![0, 1, 2], vec![3, 4]));
     }
 
     #[test]
     fn pinned_buttons_show_first_in_the_order_they_were_pinned_and_take_the_places() {
         let all = keys(&["a:1", "b:1", "c:1", "d:1", "e:1"]);
         assert_eq!(
-            split_buttons(&all, &keys(&["e:1", "c:1"])),
+            split_buttons(&all, &keys(&["e:1", "c:1"]), usize::MAX),
             (vec![4, 2, 0], vec![1, 3])
         );
         // More pinned than places: all of them show, and nothing else.
         let pins = keys(&["e:1", "d:1", "c:1", "b:1"]);
-        assert_eq!(split_buttons(&all, &pins), (vec![4, 3, 2, 1], vec![0]));
+        assert_eq!(split_buttons(&all, &pins, usize::MAX), (vec![4, 3, 2, 1], vec![0]));
         // A pin of a plugin that's gone counts for nothing.
         assert_eq!(
-            split_buttons(&all, &keys(&["gone:1"])),
+            split_buttons(&all, &keys(&["gone:1"]), usize::MAX),
             (vec![0, 1, 2], vec![3, 4])
         );
     }
@@ -1664,7 +1738,7 @@ mod bar_tests {
         let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
         window.update(|w, window, cx| {
             assert_eq!(
-                w.sidebar_buttons(cx).len(),
+                w.sidebar_buttons(usize::MAX, false, cx).len(),
                 2,
                 "the sidebar and Disk usage, not One item"
             );
@@ -1696,7 +1770,7 @@ mod bar_tests {
         );
         let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
         window.update(|w, _, cx| {
-            assert_eq!(w.sidebar_buttons(cx).len(), 1, "Side only, not Helper");
+            assert_eq!(w.sidebar_buttons(usize::MAX, false, cx).len(), 1, "Side only, not Helper");
             assert!(w.open_sidebar_from_plugin("chat", "helper", cx));
         });
     }

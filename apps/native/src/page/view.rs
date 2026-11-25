@@ -769,7 +769,10 @@ impl PageView {
                 .child("Only a terminal this tab's agent opened shows here.")
                 .into_any_element();
         };
-        let place = div().w_full().flex_none().h(px(terminal.height));
+        let place = match terminal.fill {
+            true => div().w_full().flex_1().min_h_0(),
+            false => div().w_full().flex_none().h(px(terminal.height)),
+        };
         if self.terminals_covered.get() {
             return place.into_any_element();
         }
@@ -2677,6 +2680,24 @@ impl PageView {
         let container = div().relative().flex_1().min_h_0().min_w_0().flex().children(measure);
         if split.fixed_end && split.float {
             return self.floating_split(split, container, cx);
+        }
+        if split.fixed_end && split.dock {
+            // A column docked beside `start`: flush, full height, a hairline between, and what it holds shares its height.
+            let column = div()
+                .id(ElementId::NamedInteger("page-split-dock".into(), id))
+                .w(px(split.size))
+                .max_w(relative(0.5))
+                .flex_none()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .border_l_1()
+                .border_color(rgba(ui::HAIRLINE))
+                .children(self.nodes(&split.end, cx));
+            return container
+                .child(div().flex_1().min_w_0().min_h_0().flex().flex_col().overflow_hidden().children(self.nodes(&split.start, cx)))
+                .when(drawn, |el| el.child(column))
+                .into_any_element();
         }
         if split.fixed_end {
             return container

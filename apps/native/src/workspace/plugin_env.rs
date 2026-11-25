@@ -1141,34 +1141,29 @@ impl Workspace {
                         }
                         let shown = self.config.project.clone();
                         let opened = self.in_project(project, window, cx, |this, _, cx| {
-                            this.new_plugin_tab(&plan.plugin, &plan.id, plan.args, cx).is_some()
+                            this.new_plugin_tab(&plan.plugin, &plan.id, plan.args, cx)
                         });
                         self.show_project_again(shown, window, cx);
                         self.sync_plugins(cx);
-                        return reply.done(if opened {
-                            Ok("null".into())
-                        } else {
-                            Err("The view has no native tab page".into())
-                        });
+                        return reply.done(opened.map(opened_tab).ok_or_else(|| "The view has no native tab page".into()));
                     }
                     let before: Vec<usize> = self.plugin_tabs.iter().map(|tab| tab.id).collect();
                     let opened = if plan.new_tab {
-                        self.new_plugin_tab(&plan.plugin, &plan.id, plan.args, cx)
-                            .map(|id| {
-                                self.show(Active::Plugin(id), window, cx);
-                            })
-                            .is_some()
+                        self.new_plugin_tab(&plan.plugin, &plan.id, plan.args, cx).inspect(|id| {
+                            self.show(Active::Plugin(*id), window, cx);
+                        })
                     } else {
                         self.open_plugin_view(&plan.plugin, &plan.id, plan.args, window, cx)
+                            .then_some(self.active)
+                            .and_then(|active| match active {
+                                Active::Plugin(id) => Some(id),
+                                _ => None,
+                            })
                     };
-                    if let Some(frame) = plan.after.filter(|_| opened) {
+                    if let Some(frame) = plan.after.filter(|_| opened.is_some()) {
                         self.place_after(&plan.plugin, frame, &before, cx);
                     }
-                    reply.done(if opened {
-                        Ok("null".into())
-                    } else {
-                        Err("The view has no native tab page".into())
-                    });
+                    reply.done(opened.map(opened_tab).ok_or_else(|| "The view has no native tab page".into()));
                 } else if plan.place == "window" {
                     reply.done(
                         self.open_plugin_window(&plan.plugin, &plan.id, cx)
@@ -1858,4 +1853,10 @@ fn published_projects(
             }
         })
         .collect()
+}
+
+/// What `openView` answers for a tab it opened or showed: its id as `list_sessions` and `send_to_agent` name it, so an
+/// agent that had a plugin open a chat can message it straight away.
+fn opened_tab(id: usize) -> String {
+    serde_json::json!({ "tabId": format!("tab-{id}") }).to_string()
 }

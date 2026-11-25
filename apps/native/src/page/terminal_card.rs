@@ -1,4 +1,4 @@
-//! How a terminal a tab's agent opened shows in the tab's page: a header with what it was opened to run, whether it still
+//! How a terminal a tab's agent opened shows in the tab's page, flush in a docked column: a header with what it was opened to run, whether it still
 //! runs and buttons that open it as a tab of its own and close it, over the live terminal. Wings draws it in `TERMINALS`,
 //! over the place the page's `Terminal` leaves.
 
@@ -24,7 +24,7 @@ pub fn terminal_card(
 ) -> AnyElement {
     let header = div()
         .flex_none()
-        .h(px(30.0))
+        .h(px(32.0))
         .flex()
         .items_center()
         .gap(px(6.0))
@@ -64,9 +64,10 @@ pub fn terminal_card(
         .size_full()
         .flex()
         .flex_col()
-        .rounded(px(10.0))
-        .border_1()
-        .border_color(rgba(theme::HAIRLINE_STRONG))
+        // Flush, as the app's panes are: no rounded card of its own. The column it is docked in draws the hairline beside the
+        // page, and a hairline over each terminal divides those stacked in it.
+        .border_t_1()
+        .border_color(rgba(ui::HAIRLINE))
         .bg(rgb(theme::palette().surface))
         .overflow_hidden()
         .child(header)

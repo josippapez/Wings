@@ -104,15 +104,32 @@ impl TerminalView {
             ),
             _ => "No results".to_string(),
         };
+        // The bar lines up with the card's right edge, and in a pane narrower than it the field gives way, not the bar's left
+        // end, which would be cut off.
+        div()
+            .absolute()
+            // The desktop's `top-10` from the card's top is 10px under the pane header.
+            .top(px(10.0))
+            .left(px(12.0))
+            .right(px(12.0))
+            .flex()
+            .justify_end()
+            .child(self.find_bar_box(find, label, cx))
+    }
+
+    fn find_bar_box(
+        &self,
+        find: &FindBar,
+        label: String,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let [case, regex, previous, next, close] = &find.buttons;
         div()
             .id("find-bar")
             .role(Role::Search)
             .aria_label("Find")
-            .absolute()
-            // The desktop's `top-10` from the card's top is 10px under the pane header.
-            .top(px(10.0))
-            .right(px(12.0))
+            .children(ui::spot(|| "find-bar".to_owned()))
+            .min_w_0()
             .flex()
             .items_center()
             .gap(px(4.0))
@@ -135,7 +152,8 @@ impl TerminalView {
             // The desktop's `Input`, borderless with its `dark:bg-input/30` fill.
             .child(
                 div()
-                    .flex_none()
+                    .min_w_0()
+                    .flex()
                     .rounded(px(theme::RADIUS))
                     .bg(rgba(INPUT_FILL))
                     .child(find.field.clone()),

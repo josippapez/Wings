@@ -651,8 +651,9 @@ fn the_docked_sidebar_slides_shut_and_open_over_320ms() {
     assert!(left(&window) > docked - 30.0, "it starts where it was");
     at(&mut window, 160);
     let halfway = left(&window);
+    // The panes sit flush at the window's edge once shut, so partly over is a few points in from it.
     assert!(
-        halfway < docked - 30.0 && halfway > 30.0,
+        halfway < docked - 30.0 && halfway > 10.0,
         "halfway, the panes are partly over: {halfway}"
     );
     at(&mut window, 170);
@@ -799,7 +800,8 @@ fn dragging_a_project_past_others_moves_it_there_and_saves_the_list_once_it_is_l
 
     // Gamma up past beta's middle, not yet alpha's: it takes beta's place and beta makes room under it.
     let mid = point(gamma.x, beta.y - px(4.0));
-    let frames = moves(&mut window, gamma, mid, 12);
+    // The rows are a little shorter at the default text size, so its first moves stay within the drag's start distance.
+    let frames = moves(&mut window, gamma, mid, 16);
     assert!(
         (row("gamma").y - mid.y).abs() < px(0.5),
         "it follows the pointer: {:?} vs {mid:?}",
@@ -1041,5 +1043,81 @@ fn going_to_an_agent_scrolls_the_project_list_to_its_project() {
     window.update(|w, window, cx| w.go_to_pane(last.clone(), usize::MAX, window, cx));
     window.draw();
     assert!(shows_last(&window));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The height of a project's row, which follows its name's size: the line, plus the row's padding.
+fn row_height(name: &str) -> f32 {
+    crate::ui::spot_at(&format!("project:{name}"))
+        .unwrap_or_else(|| panic!("{name}'s row wasn't drawn"))
+        .size
+        .height
+        .into()
+}
+
+/// The sidebar's text has a size of its own: smaller than it was by default, the Settings choice moves every row's
+/// text with it, and what was chosen comes back after a relaunch.
+#[test]
+fn the_sidebar_text_size_is_its_own_setting_and_comes_back_after_a_relaunch() {
+    let dir = test_dir("sidebar-text-size");
+    let height_after = |window: &mut TestAppWindow<Workspace>, size: f32| {
+        window.update(|w, _, cx| w.set_sidebar_text(size, cx));
+        window.draw();
+        row_height("beta")
+    };
+    let small = {
+        let (_app, mut window, _) = open(&dir, &["alpha", "beta"]);
+        window.draw();
+        assert_eq!(window.read(|_, cx| super::text_size(cx)), 12.0, "not one step below the old 13");
+        let default = row_height("beta");
+        let small = height_after(&mut window, 11.0);
+        let large = height_after(&mut window, 13.0);
+        assert!(small < default && default < large, "{small} {default} {large}");
+        // The terminals' font size is a different setting, and stays where it was.
+        assert_eq!(window.read(|_, cx| crate::terminal_view::font_size(cx)), 13.0);
+        height_after(&mut window, 11.0)
+    };
+    let (_app, mut window, _) = open(&dir, &["alpha", "beta"]);
+    window.draw();
+    assert_eq!(window.read(|_, cx| super::text_size(cx)), 11.0);
+    assert_eq!(row_height("beta"), small);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// An agent's row in the Agents list is drawn outside the sidebar's own files, and its text follows the setting too: the
+/// name, the project and state line and the summary, with the row's height.
+#[test]
+fn an_agents_row_follows_the_sidebar_text_size() {
+    let dir = test_dir("sidebar-text-agent-row");
+    let (_app, mut window, folders) = open(&dir, &["alpha"]);
+    window.update(|w, _, cx| {
+        let mut agent = sidebar_agent(77, &folders[0], crate::agents::AgentState::Working);
+        agent.summary = Some("Reading the tests".into());
+        w.agents.insert(77, agent);
+        cx.notify_workspace();
+    });
+    let height_after = |window: &mut TestAppWindow<Workspace>, size: f32| {
+        window.update(|w, _, cx| w.set_sidebar_text(size, cx));
+        window.draw();
+        let height: f32 = crate::ui::spot_at("agent-row:77").expect("the agent's row wasn't drawn").size.height.into();
+        height
+    };
+    let (small, default, large) = (height_after(&mut window, 11.0), height_after(&mut window, 12.0), height_after(&mut window, 13.0));
+    assert!(small < default && default < large, "{small} {default} {large}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A file saved before the setting existed has no size for it: the sidebar takes the new default, not the old size.
+#[test]
+fn a_file_saved_before_the_sidebar_text_setting_gets_the_default_size() {
+    let dir = test_dir("sidebar-text-old-file");
+    let (_, folders) = list(&dir, &["alpha"]);
+    let file = dir.join("workspace.json");
+    let settings = saved::Settings { font_size: Some(14.0), ..Default::default() };
+    saved::save(&file, &folders[0].to_string_lossy(), saved::SavedProject::default(), settings).unwrap();
+    assert_eq!(saved::load_settings(&file).sidebar_text, None);
+    let (_app, window, _) = open(&dir, &["alpha"]);
+    assert_eq!(window.read(|_, cx| super::text_size(cx)), 12.0);
+    assert_eq!(window.read(|_, cx| crate::terminal_view::font_size(cx)), 14.0);
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -237,6 +237,8 @@ pub struct Queued {
     pub text: String,
     /// The pictures sent with it, as (media type, base64), kept in case it is sent again.
     pub images: Vec<(String, String)>,
+    /// Text another agent wrote (`relayed`), which it is sent again as, not as one of yours.
+    pub relayed: bool,
 }
 
 /// One of your messages: the item it is, and the uuid Claude Code knows it by, which a rewind names.
@@ -524,6 +526,10 @@ pub struct Session {
     /// environment variable Wings can't set, so this is how the chat knows it may rely on them.
     reports_state: bool,
     asked_you: bool,
+    /// When each call was made, by id (ms since the epoch), from its message's timestamp: the calls whose time is known so far.
+    called: std::collections::HashMap<String, f64>,
+    /// How long each finished call ran, in ms, by id. A call you were asked about, or a background command, is not here.
+    pub ran: std::collections::HashMap<String, u64>,
     /// What the session has cost so far, in US dollars.
     pub cost: f64,
     /// The tokens of the turn under way, how far each subagent has got, and the prompt cache's clock (`spend.rs`).
@@ -693,8 +699,8 @@ impl Session {
                 let queued = &line["attachment"];
                 let yours = matches!(queued["origin"]["kind"].as_str(), None | Some("human"));
                 match queued["commandMode"].as_str() {
-                    Some("prompt") if yours => self.user(&queued["prompt"]),
-                    Some("task-notification") => self.user(&queued["prompt"]),
+                    Some("prompt") if yours => self.user(&queued["prompt"], None),
+                    Some("task-notification") => self.user(&queued["prompt"], None),
                     _ => {}
                 }
             }
@@ -781,7 +787,7 @@ impl Session {
                     None => self.meter.note_cache(usage),
                 }
                 self.meter.message(line["message"]["id"].as_str(), usage);
-                self.assistant(&line["message"]);
+                self.assistant(&line["message"], line["timestamp"].as_str().and_then(parse_time));
             }
             // After a rewind Claude Code leaves the dropped entries in the transcript and says what it cut after them.
             "last-prompt" if line["rewound"] == true => {
@@ -799,7 +805,7 @@ impl Session {
             "user" if line["isReplay"] == true => self.echoed(line["uuid"].as_str().unwrap_or_default()),
             // What Claude Code adds in a turn on its own, like a skill's text once the Skill tool loads it (`isSynthetic` as it
             // prints it, `isMeta` in the transcript), isn't yours to see as a message.
-            "user" if line["isMeta"] != true && line["isSynthetic"] != true => {
+            "user" if (line["isMeta"] != true && line["isSynthetic"] != true) || (line["isMeta"] == true && unmarked(&line["message"]["content"]).is_some()) => {
                 let parent = line["parentUuid"].as_str();
                 // In a transcript, an entry that follows what one of your messages followed took its place: the
                 // conversation was rewound to before that message, which Claude Code leaves in the file.
@@ -809,7 +815,7 @@ impl Session {
                 }
                 let first = self.items.len();
                 self.mods.tool_answered(line);
-                self.user(&line["message"]["content"]);
+                self.user(&unmarked(&line["message"]["content"]).unwrap_or_else(|| line["message"]["content"].clone()), line["timestamp"].as_str().and_then(parse_time));
                 crate::scheduled::answered(self, line);
                 self.served_skill(line);
                 let said = (first..self.items.len()).find(|at| matches!(self.items[*at], Item::User(_) | Item::UserImages(..)));
@@ -829,6 +835,10 @@ impl Session {
                     false => request["permission_suggestions"].as_array().cloned().unwrap_or_default(),
                 };
                 let detail = ask_detail(&tool, &request["input"]);
+                // The time it waited for you is not the time it ran.
+                if let Some(call) = request["tool_use_id"].as_str() {
+                    self.called.remove(call);
+                }
                 if tool == "ExitPlanMode" {
                     self.plans.asked(line["request_id"].as_str().unwrap_or_default(), request["tool_use_id"].as_str(), &request["input"]);
                 }
@@ -1043,8 +1053,27 @@ impl Session {
         self.items.push(Item::Finished(finished));
     }
 
+    /// How long the call `id` ran (ms): from its line's time to its result's, or for a command in the background, which
+    /// answers at once, what its notice said when it finished.
+    pub fn ran_for(&self, id: &str) -> Option<u64> {
+        self.ran.get(id).copied().or_else(|| {
+            self.items.iter().rev().find_map(|item| match item {
+                Item::Finished(done) if done.call == id => done.took,
+                _ => None,
+            })
+        })
+    }
+
     /// The hand-backs among transcript `entries`, which a chat reads at the end of a turn as Claude Code may print no line
     /// for one: each shows once, whatever number of times it is read.
+    /// The names the transcript gives the session: Claude Code writes the one it makes up (`ai-title`) there and doesn't
+    /// print it, so a live chat named its tab and its Agents row after the first message.
+    pub fn hear_titles(&mut self, entries: &[Value]) {
+        for entry in entries.iter().filter(|entry| matches!(entry["type"].as_str(), Some("ai-title" | "custom-title"))) {
+            self.hear(entry);
+        }
+    }
+
     pub fn hear_handbacks(&mut self, entries: &[Value]) {
         for entry in entries.iter().filter(|entry| entry["origin"]["handback"] == true || entry["attachment"]["origin"]["handback"] == true) {
             self.hear(entry);
@@ -1183,7 +1212,7 @@ impl Session {
         }
     }
 
-    fn assistant(&mut self, message: &Value) {
+    fn assistant(&mut self, message: &Value, at: Option<f64>) {
         if let Some(model) = message["model"].as_str() {
             self.reported_model = Some(model.to_owned());
         }
@@ -1216,6 +1245,10 @@ impl Session {
                     let id = block["id"].as_str().unwrap_or_default().to_owned();
                     self.track(&name, &id, &block["input"]);
                     self.mods.tool_called(&id, &block["input"]);
+                    // A command in the background answers at once, so what it took is not when its answer came.
+                    if let (Some(at), false) = (at, block["input"]["run_in_background"] == true) {
+                        self.called.insert(id.clone(), at);
+                    }
                     // A subagent's report to its caller is its last word: whole, as a reply, where a call's one-line
                     // summary cut it to 200 characters.
                     if name == HANDBACK
@@ -1234,7 +1267,7 @@ impl Session {
         }
     }
 
-    fn user(&mut self, content: &Value) {
+    fn user(&mut self, content: &Value, at: Option<f64>) {
         if let Some(text) = content.as_str() {
             if self.shell_row(text) {
                 return;
@@ -1270,6 +1303,9 @@ impl Session {
                     });
                     if let Some(tool) = tool {
                         tool.output = Some((cut(&output, OUTPUT_KEPT), block["is_error"] == true));
+                        if let (Some(end), Some(start)) = (at, self.called.remove(id)) {
+                            self.ran.insert(id.to_owned(), (end - start).max(0.0) as u64);
+                        }
                         tool.images = shots;
                         self.files_touched |= matches!(tool.name.as_str(), "Edit" | "MultiEdit" | "Write" | "NotebookEdit" | "Bash" | "Task" | "Agent");
                     }
@@ -1390,6 +1426,12 @@ impl Session {
     /// The line that sends `text` and the pictures `images` (media type and base64) as your message, and the message
     /// shown at once. It goes under a uuid made from `stamp` and `n`, as a queued one does, which a rewind names.
     pub fn send(&mut self, text: &str, images: &[(String, String)], stamp: u64, n: u32) -> String {
+        self.send_as(text, images, stamp, n, false)
+    }
+
+    /// `send`, for text that isn't what you typed: another agent's message or a prompt a tool opened the chat with. Claude
+    /// Code is told so (`relayed`), so it doesn't take it for your own words.
+    pub fn send_as(&mut self, text: &str, images: &[(String, String)], stamp: u64, n: u32, relayed: bool) -> String {
         let uuid = uuid(stamp, n);
         self.prompts.push(Prompt { at: self.items.len(), uuid: uuid.clone(), parent: None });
         let ids = self.keep_pictures(images);
@@ -1401,7 +1443,9 @@ impl Session {
         self.naming.user_spoke();
         // The limits are asked again with each message: the chat may only write when you send something.
         let content = crate::shell::with_context(content(text, images), &self.shell.take());
-        line(&json!({ "type": "user", "message": { "role": "user", "content": content }, "parent_tool_use_id": null, "uuid": uuid })) + &usage()
+        let mut message = json!({ "type": "user", "message": { "role": "user", "content": content }, "parent_tool_use_id": null, "uuid": uuid });
+        relay(&mut message, relayed);
+        line(&message) + &usage()
     }
 
     /// Whether `text` is one of a Claude Code plugin's own slash commands (its entry in the commands list has a `plugin`
@@ -1417,12 +1461,17 @@ impl Session {
     /// the plugin has no randomness, and the uuid must differ from the ones of this session's earlier starts, which share
     /// its transcript.
     pub fn queue(&mut self, text: &str, images: Vec<(String, String)>, stamp: u64, n: u32) -> String {
+        self.queue_as(text, images, stamp, n, false)
+    }
+
+    /// `queue`, for text that isn't what you typed (`send_as`).
+    pub fn queue_as(&mut self, text: &str, images: Vec<(String, String)>, stamp: u64, n: u32, relayed: bool) -> String {
         let uuid = uuid(stamp, n);
         self.suggestion = None;
         self.limit.user_spoke();
         self.naming.user_spoke();
-        let sent = user_line(text, &images, "next", &uuid, &self.shell.take());
-        self.queued.push(Queued { uuid, text: text.to_owned(), images });
+        let sent = user_line(text, &images, "next", &uuid, &self.shell.take(), relayed);
+        self.queued.push(Queued { uuid, text: text.to_owned(), images, relayed });
         sent
     }
 
@@ -1439,9 +1488,11 @@ impl Session {
     pub fn send_now(&mut self, uuid: &str, stamp: u64, n: u32) -> Option<String> {
         let queued = self.queued.iter_mut().find(|queued| queued.uuid == uuid)?;
         let fresh = self::uuid(stamp, n);
-        let mut now: Value = serde_json::from_str(&user_line(&queued.text, &queued.images, "now", &fresh, "")).unwrap_or_default();
+        let mut now: Value = serde_json::from_str(&user_line(&queued.text, &queued.images, "now", &fresh, "", queued.relayed)).unwrap_or_default();
         // Claude Code puts work aside for a message only when a person sent it.
-        now["origin"] = json!({ "kind": "human" });
+        if !queued.relayed {
+            now["origin"] = json!({ "kind": "human" });
+        }
         let lines = [cancel(uuid, n), line(&now)].concat();
         queued.uuid = fresh;
         Some(lines)
@@ -1735,8 +1786,31 @@ fn line(message: &Value) -> String {
 
 /// Your message `text` for Claude Code to read as `priority` says (`next`: at its next step, `now`: at once), stamped
 /// `uuid`, which it echoes when it reads it.
-fn user_line(text: &str, images: &[(String, String)], priority: &str, uuid: &str, shell: &str) -> String {
-    line(&json!({ "type": "user", "message": { "role": "user", "content": crate::shell::with_context(content(text, images), shell) }, "parent_tool_use_id": null, "priority": priority, "uuid": uuid }))
+fn user_line(text: &str, images: &[(String, String)], priority: &str, uuid: &str, shell: &str, relayed: bool) -> String {
+    let mut message = json!({ "type": "user", "message": { "role": "user", "content": crate::shell::with_context(content(text, images), shell) }, "parent_tool_use_id": null, "priority": priority, "uuid": uuid });
+    relay(&mut message, relayed);
+    line(&message)
+}
+
+/// Marks the user message `message` as text you didn't write, when it is: `isSynthetic` has Claude Code count it as not
+/// yours, and `client_composed` has it deliver text that starts with `/` as written instead of running it as a command
+/// (Agent SDK docs, `SDKUserMessage`).
+fn relay(message: &mut Value, relayed: bool) {
+    if relayed {
+        message["isSynthetic"] = json!(true);
+        message["client_composed"] = json!(true);
+    }
+}
+
+/// What Claude Code puts before text it was sent as `isSynthetic`, in the transcript, where it files the message as
+/// `isMeta`: a resumed chat shows the message from what follows it.
+const NOT_USER: &str = "[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]\n";
+
+/// The `content` of a transcript entry that holds text another agent relayed, without Claude Code's marker. None for any
+/// other entry.
+fn unmarked(content: &Value) -> Option<Value> {
+    let text = content.as_str()?.strip_prefix(NOT_USER)?;
+    Some(json!(text))
 }
 
 /// A message's `content`: the text alone when there are no pictures, else a block for each picture and then the text,
@@ -2573,6 +2647,62 @@ mod tests {
         lines.lines().map(|line| serde_json::from_str(line).unwrap()).collect()
     }
 
+    /// Agent SDK docs, `SDKUserMessage`: `isSynthetic` and `client_composed` sit on the user message itself. Claude Code
+    /// 2.1.332 answered such a message with `origin: { kind: "unclassified" }` and kept it in the transcript as `isMeta`,
+    /// its text after `[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]`.
+    #[test]
+    fn text_another_agent_wrote_goes_to_claude_code_as_not_yours_and_what_you_typed_does_not() {
+        let mut session = Session::default();
+        let typed = parsed(&session.send("Run the tests", &[], 1, 1));
+        assert!(typed[0].get("isSynthetic").is_none() && typed[0].get("client_composed").is_none(), "{}", typed[0]);
+        let mut session = Session::default();
+        let relayed = parsed(&session.send_as("(Message from the agent in Wings tab t1, sent through Wings.)\nRun the tests.", &[], 1, 1, true));
+        assert_eq!((relayed[0]["isSynthetic"].clone(), relayed[0]["client_composed"].clone()), (json!(true), json!(true)), "{}", relayed[0]);
+        assert_eq!(relayed[0]["message"]["role"], "user");
+        // Queued while Claude works, it is marked the same, and so is it when sent at once: but never as a person's.
+        let queued = parsed(&session.queue_as("Then this.", Vec::new(), 2, 2, true));
+        assert_eq!(queued[0]["isSynthetic"], json!(true));
+        let again = parsed(&session.send_now(&session.queued[0].uuid.clone(), 3, 3).unwrap());
+        let sent = again.iter().find(|line| line["type"] == "user").unwrap();
+        assert_eq!((sent["isSynthetic"].clone(), sent["priority"].clone(), sent.get("origin").is_none()), (json!(true), json!("now"), true), "{sent}");
+        // Your own queued message still counts as a person's.
+        let mut session = Session::default();
+        session.queue("and stop", Vec::new(), 1, 1);
+        let again = parsed(&session.send_now(&session.queued[0].uuid.clone(), 2, 2).unwrap());
+        let sent = again.iter().find(|line| line["type"] == "user").unwrap();
+        assert_eq!((sent.get("isSynthetic").is_none(), sent["origin"].clone()), (true, json!({ "kind": "human" })));
+    }
+
+    #[test]
+    fn a_resumed_chat_shows_relayed_text_as_a_message_without_claude_codes_marker_and_still_hides_other_meta_entries() {
+        let mut session = Session::default();
+        session.hear(&json!({ "type": "user", "isMeta": true, "uuid": "u1", "origin": { "kind": "unclassified" },
+            "message": { "role": "user", "content": "[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]\n(Message from the agent in Wings tab t1, sent through Wings.)\nRun the tests." } }));
+        session.hear(&json!({ "type": "user", "isMeta": true, "message": { "role": "user", "content": [{ "type": "text", "text": "# Keybindings Skill" }] } }));
+        assert_eq!(session.items, [Item::User("(Message from the agent in Wings tab t1, sent through Wings.)\nRun the tests.".into())]);
+        assert_eq!(session.prompts.len(), 1);
+    }
+
+    /// `initialize`'s answer carries an MCP server's skill under the name Claude Code gives it, `<server>:<skill>`
+    /// (docs: code.claude.com/docs/en/mcp.md#find-and-call-mcp-skills-by-name), like a plugin's. No MCP server with skills was
+    /// available to capture one from, so the entry is built from the shape `initialize` has: name, description, argumentHint.
+    #[test]
+    fn an_mcp_servers_skill_is_listed_as_server_skill_and_picking_it_sends_its_command() {
+        let mut session = Session::default();
+        session.hear(&json!({ "type": "control_response", "response": { "subtype": "success", "request_id": "initialize", "response": { "commands": [
+            { "name": "compact", "description": "Compact", "argumentHint": "", "builtin": true },
+            { "name": "claude_ai_Docs:pdf", "description": "Fill in PDF forms", "argumentHint": "<file>" },
+            { "name": "deploy", "description": "Ship it", "argumentHint": "" }] } } }));
+        let names: Vec<String> = crate::commands::menu(&session.commands, "pdf").into_iter().map(|command| command.name).collect();
+        assert_eq!(names, ["claude_ai_Docs:pdf"]);
+        let mid: Vec<String> = crate::commands::mid_menu(&session.commands, "pdf", false).into_iter().map(|command| command.name).collect();
+        assert_eq!(mid, ["claude_ai_Docs:pdf"], "its part after the colon completes it in the middle of a message");
+        assert_eq!(crate::builtin::find("/claude_ai_Docs:pdf", &session.commands), None);
+        let sent = parsed(&session.send("/claude_ai_Docs:pdf report.pdf", &[], 1, 1));
+        assert_eq!(sent[0]["message"]["content"], "/claude_ai_Docs:pdf report.pdf");
+        assert!(sent[0].get("isSynthetic").is_none(), "a command you typed must run as one");
+    }
+
     #[test]
     fn a_message_sent_while_claude_works_is_queued_for_claudes_next_step_with_a_uuid() {
         let mut session = Session::default();
@@ -2586,7 +2716,7 @@ mod tests {
             sent[0],
             json!({ "type": "user", "message": { "role": "user", "content": "and then stop" }, "parent_tool_use_id": null, "priority": "next", "uuid": uuid })
         );
-        assert_eq!(session.queued, [Queued { uuid: uuid.clone(), text: "and then stop".into(), images: Vec::new() }]);
+        assert_eq!(session.queued, [Queued { uuid: uuid.clone(), text: "and then stop".into(), images: Vec::new(), relayed: false }]);
         // Another write, even in the same millisecond, has another uuid.
         session.queue("more", Vec::new(), 1_700_000_000_123, 6);
         assert_ne!(session.queued[0].uuid, session.queued[1].uuid);
@@ -2965,6 +3095,48 @@ mod tests {
 
     fn tool_result(session: &mut Session, id: &str, content: &str, error: bool) {
         session.hear(&json!({ "type": "user", "message": { "content": [{ "type": "tool_result", "tool_use_id": id, "content": content, "is_error": error }] } }));
+    }
+
+    /// How long a call ran is the time between its message and its result, which Claude Code 2.1.332 stamps on the
+    /// stream (`timestamp`) and in the transcript alike. Unknown, a call to ask you, or a command in the background says nothing.
+    #[test]
+    fn a_call_knows_how_long_it_ran_from_the_timestamps_of_its_message_and_result() {
+        let call = |session: &mut Session, id: &str, at: &str, input: Value| {
+            session.hear(&json!({ "type": "assistant", "timestamp": at, "message": { "content": [{ "type": "tool_use", "id": id, "name": "Bash", "input": input }] } }));
+        };
+        let result = |session: &mut Session, id: &str, at: &str, key: &str| {
+            session.hear(&json!({ "type": "user", "timestamp": at, "message": { "content": [{ "type": "tool_result", "tool_use_id": id, "content": "hi" }] }, key: { "stdout": "hi" } }));
+        };
+        // Live, and as a resumed transcript reads back, a call and its result a few seconds apart.
+        for key in ["tool_use_result", "toolUseResult"] {
+            let mut session = Session::default();
+            call(&mut session, "b1", "2026-11-25T06:29:54.668Z", json!({ "command": "sleep 3" }));
+            result(&mut session, "b1", "2026-11-25T06:29:58.248Z", key);
+            assert_eq!(session.ran.get("b1"), Some(&3_580), "{key}");
+        }
+        // Two calls at once each run from their own message to their own result.
+        let mut session = Session::default();
+        call(&mut session, "a", "2026-11-25T06:00:00.000Z", json!({ "command": "one" }));
+        call(&mut session, "b", "2026-11-25T06:00:00.100Z", json!({ "command": "two" }));
+        result(&mut session, "b", "2026-11-25T06:00:01.100Z", "tool_use_result");
+        result(&mut session, "a", "2026-11-25T06:01:12.000Z", "tool_use_result");
+        assert_eq!((session.ran.get("b"), session.ran.get("a")), (Some(&1_000), Some(&72_000)));
+        // No timestamps, nothing to say.
+        let mut session = Session::default();
+        tool_call(&mut session, "n1", "Bash", json!({ "command": "ls" }));
+        tool_result(&mut session, "n1", "a", false);
+        assert!(session.ran.is_empty());
+        // A command in the background answers at once with its launch notice.
+        let mut session = Session::default();
+        call(&mut session, "g1", "2026-11-25T06:00:00.000Z", json!({ "command": "make", "run_in_background": true }));
+        result(&mut session, "g1", "2026-11-25T06:00:00.300Z", "tool_use_result");
+        assert!(session.ran.is_empty());
+        // A call you were asked about includes the time you took.
+        let mut session = Session::default();
+        call(&mut session, "p1", "2026-11-25T06:00:00.000Z", json!({ "command": "rm x" }));
+        session.hear(&json!({ "type": "control_request", "request_id": "r1", "request": { "subtype": "can_use_tool", "tool_name": "Bash", "tool_use_id": "p1", "input": { "command": "rm x" } } }));
+        result(&mut session, "p1", "2026-11-25T06:00:40.000Z", "tool_use_result");
+        assert!(session.ran.is_empty());
     }
 
     /// Claude Code 2.1.331 answers a gateway's call with no name with an error, where it crashed before.
@@ -4055,6 +4227,9 @@ mod tests {
         assert_eq!((done.kind, done.failed(), done.title().as_str()), ("Command", true, "Command “Run the tests” failed"));
         assert_eq!(done.report, "Background command \"Run the tests\" failed (exit code 1)");
         assert_eq!(session.tasks[1].ended_at, 20_000);
+        // Its call answered at once with its launch notice: opened, it says how long the command ran.
+        assert_eq!(session.ran_for("toolu_bk1"), done.took);
+        assert!(done.took.is_some());
         // A command that ran in the foreground sends a notice too, but was never one of the background tasks.
         let before = session.items.len();
         session.hear(&json!({ "type": "system", "subtype": "task_notification", "task_id": "fg1", "tool_use_id": "toolu_fg1", "status": "completed", "summary": "Ran it" }));

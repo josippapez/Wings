@@ -8,6 +8,8 @@ pub(in crate::workspace) use activity::AgentKey;
 mod git;
 mod nav_rows;
 pub(super) use nav_rows::{Look, NAV_GAP, NAV_ROW, nav_row, nav_row_with, row_hint};
+pub(super) use text::{Scale, SidebarText, TEXT_SIZES, snap_text, text_size};
+mod text;
 mod order;
 mod peek;
 #[cfg(all(test, feature = "test-support"))]
@@ -247,6 +249,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(size) = settings.sidebar_text {
+            cx.set_global(SidebarText(snap_text(size)));
+        }
         self.side = State::load(settings, &self.projects);
         self.side.stamp_missing(&self.projects);
         self.side.touch(&self.config.project);

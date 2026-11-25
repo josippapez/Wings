@@ -31,6 +31,7 @@ use wings_connect::panes::PaneRow;
 use super::{
     Active, TerminalTab, Workspace,
     floating::{EDGE, Gesture, Panel, Rect},
+    pane_card::PaneAction,
 };
 
 /// The layer of the window that draws the terminals floating over their agent, over the panes' terminals.
@@ -512,10 +513,8 @@ impl Workspace {
         )
     }
 
-    /// On a terminal an agent opened, the desktop's buttons: hide it, turn the split, or float it over the agent.
-    pub(super) fn opened_buttons(&self, pane: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let owner = self.opened_by(pane)?;
-        let title = self.pane_title(owner, cx);
+    /// The glyph, tooltip and view of a terminal an agent opened's "move" button: the split turns to the other way.
+    pub(super) fn opened_move(&self, owner: usize) -> (Icon, &'static str, View) {
         let beside = self
             .tab_of(owner)
             .and_then(|tab| {
@@ -523,50 +522,75 @@ impl Workspace {
                     .agent_split(owner, &|pane| self.opened_by(pane).is_some())
             })
             .is_some_and(|(_, dir)| dir == Dir::Row);
-        let (glyph, label, to) = if beside {
+        if beside {
             (Icon::PanelBottom, "Move below", View::Below)
         } else {
             (Icon::PanelRight, "Move to the right", View::Right)
-        };
+        }
+    }
+
+    /// On a terminal an agent opened, the desktop's buttons: hide it, turn the split, or float it over the agent. Only
+    /// those of `shown` that a narrow pane has room for; the rest are in its "…" menu.
+    pub(super) fn opened_buttons(
+        &self,
+        pane: usize,
+        shown: &[PaneAction],
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let owner = self.opened_by(pane)?;
+        if ![PaneAction::Hide, PaneAction::Move, PaneAction::Float]
+            .iter()
+            .any(|action| shown.contains(action))
+        {
+            return None;
+        }
+        let title = self.pane_title(owner, cx);
+        let (glyph, label, to) = self.opened_move(owner);
         Some(
             div()
                 .flex_none()
                 .flex()
                 .items_center()
                 .gap(px(2.0))
-                .child(
-                    ui::icon_button(
-                        ("agent-hide", pane),
-                        Icon::EyeOff,
-                        format!(
-                            "Hide. It keeps running, and comes back from the button on {title}"
-                        ),
-                        ButtonSize::Sm,
-                    )
-                    .children(ui::spot(|| format!("agent-hide:{pane}")))
-                    .on_click(
-                        cx.listener(move |this, _, window, cx| this.toggle_zoom(owner, window, cx)),
-                    ),
-                )
-                .child(
-                    ui::icon_button(("agent-move", pane), glyph, label, ButtonSize::Sm)
-                        .children(ui::spot(|| format!("agent-move:{pane}")))
+                .when(shown.contains(&PaneAction::Hide), |group| {
+                    group.child(
+                        ui::icon_button(
+                            ("agent-hide", pane),
+                            Icon::EyeOff,
+                            format!(
+                                "Hide. It keeps running, and comes back from the button on {title}"
+                            ),
+                            ButtonSize::Sm,
+                        )
+                        .children(ui::spot(|| format!("agent-hide:{pane}")))
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            this.agent_view(owner, to, window, cx)
+                            this.toggle_zoom(owner, window, cx)
                         })),
-                )
-                .child(
-                    ui::icon_button(
-                        ("agent-float", pane),
-                        Icon::PictureInPicture,
-                        "Float over the agent",
-                        ButtonSize::Sm,
                     )
-                    .children(ui::spot(|| format!("agent-float:{pane}")))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.agent_view(owner, View::Float, window, cx)
-                    })),
-                )
+                })
+                .when(shown.contains(&PaneAction::Move), |group| {
+                    group.child(
+                        ui::icon_button(("agent-move", pane), glyph, label, ButtonSize::Sm)
+                            .children(ui::spot(|| format!("agent-move:{pane}")))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.agent_view(owner, to, window, cx)
+                            })),
+                    )
+                })
+                .when(shown.contains(&PaneAction::Float), |group| {
+                    group.child(
+                        ui::icon_button(
+                            ("agent-float", pane),
+                            Icon::PictureInPicture,
+                            "Float over the agent",
+                            ButtonSize::Sm,
+                        )
+                        .children(ui::spot(|| format!("agent-float:{pane}")))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.agent_view(owner, View::Float, window, cx)
+                        })),
+                    )
+                })
                 .into_any_element(),
         )
     }

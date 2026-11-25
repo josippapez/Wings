@@ -61,6 +61,14 @@ impl Workspace {
             .min(self.right_room(viewport))
     }
 
+    /// How wide the main column is: the window less the docked project sidebar and the right panel, the room the project
+    /// bar and the tab's panes share.
+    pub(super) fn main_width(&self, viewport: Pixels) -> f32 {
+        let left = if self.sidebar { self.side.width } else { 0.0 };
+        let right = if self.right.is_empty() { 0.0 } else { self.right_width(viewport) };
+        (viewport.as_f32() - left - right).max(0.0)
+    }
+
     /// The edge was grabbed with the pointer at `x`.
     fn start_right_resize(&mut self, x: Pixels, viewport: Pixels, cx: &mut Context<Self>) {
         let from = self.right_width(viewport);

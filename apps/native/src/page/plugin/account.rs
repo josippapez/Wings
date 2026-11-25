@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use wings_plugins::transcript::find_transcript;
+use wings_plugins::transcript::{bring_transcript, find_transcript};
 use wings_spaces::claude_accounts::{label, valid_name};
 
 #[derive(Debug, Default, Deserialize)]
@@ -18,6 +18,10 @@ pub(super) struct AccountRequest {
     /// still decides over it.
     #[serde(default)]
     pick: Option<Pick>,
+    /// With a `pick`: the session's transcript is copied into the picked account when it is in another, so the session
+    /// goes on under the picked one. Without it a transcript in another account decides over the pick.
+    #[serde(default)]
+    bring: bool,
 }
 
 /// An account picked by its name, `None` for the default one.
@@ -43,17 +47,32 @@ pub(super) fn config_dir(
     dirs: &[PathBuf],
     project: impl FnOnce() -> Option<PathBuf>,
 ) -> Result<Option<PathBuf>, String> {
-    let in_session = request
-        .session
-        .as_deref()
-        .and_then(|id| find_transcript(dirs, id))
-        .and_then(|transcript| dirs.iter().find(|dir| transcript.starts_with(dir)));
-    if let Some(dir) = in_session {
-        return Ok((Some(dir) != dirs.first()).then(|| dir.clone()));
+    let session = request.session.as_deref().unwrap_or_default();
+    let found = request.session.as_deref().and_then(|id| find_transcript(dirs, id));
+    let wanted = match &request.pick {
+        Some(Pick { name: None }) => dirs.first().cloned(),
+        Some(Pick { name: Some(name) }) => Some(picked(name, dirs)?),
+        None => None,
+    };
+    let folder = |dir: &PathBuf| (Some(dir) != dirs.first()).then(|| dir.clone());
+    if let (Some(transcript), Some(wanted)) = (&found, &wanted) {
+        // The session goes on in the picked account when it is there, though an earlier account holds it too, or, when
+        // asked to, once its transcript is copied there.
+        let there = find_transcript(std::slice::from_ref(wanted), session).is_some();
+        if !there && request.bring {
+            bring_transcript(transcript, wanted).map_err(|error| {
+                format!("The session's transcript couldn't be copied to the account in {}: {error}", wanted.display())
+            })?;
+        }
+        if there || request.bring {
+            return Ok(folder(wanted));
+        }
     }
-    match &request.pick {
-        Some(Pick { name: None }) => Ok(None),
-        Some(Pick { name: Some(name) }) => picked(name, dirs).map(Some),
+    if let Some(dir) = found.and_then(|transcript| dirs.iter().find(|dir| transcript.starts_with(dir))) {
+        return Ok(folder(dir));
+    }
+    match wanted {
+        Some(dir) => Ok(folder(&dir)),
         None => Ok(project()),
     }
 }
@@ -94,7 +113,7 @@ mod tests {
     }
 
     fn asking(session: Option<&str>) -> AccountRequest {
-        AccountRequest { session: session.map(str::to_owned), pick: None }
+        AccountRequest { session: session.map(str::to_owned), pick: None, bring: false }
     }
 
     #[test]
@@ -150,7 +169,7 @@ mod tests {
     }
 
     fn picking(session: Option<&str>, name: Option<&str>) -> AccountRequest {
-        AccountRequest { session: session.map(str::to_owned), pick: Some(Pick { name: name.map(str::to_owned) }) }
+        AccountRequest { session: session.map(str::to_owned), pick: Some(Pick { name: name.map(str::to_owned) }), bring: false }
     }
 
     #[test]
@@ -166,6 +185,39 @@ mod tests {
         assert!(config_dir(&picking(None, Some("../work")), &dirs, project).is_err());
         // A resumed session stays in the account its transcript is in.
         assert_eq!(config_dir(&picking(Some(ID), None), &dirs, project), Ok(Some(dirs[1].clone())));
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn a_session_brought_to_the_picked_account_goes_on_there_and_only_when_asked() {
+        // The session is in `.claude-work`; the default account is picked.
+        let (base, dirs) = accounts("bring");
+        let project = || None;
+        // Not asked: the transcript decides, and nothing is copied.
+        assert_eq!(config_dir(&picking(Some(ID), None), &dirs, project), Ok(Some(dirs[1].clone())));
+        assert!(!dirs[0].join(format!("projects/p/{ID}.jsonl")).exists());
+        // Asked: copied into the default account's folder for the same project, which runs it.
+        let bring = AccountRequest { bring: true, ..picking(Some(ID), None) };
+        assert_eq!(config_dir(&bring, &dirs, project), Ok(None));
+        assert!(dirs[0].join(format!("projects/p/{ID}.jsonl")).exists());
+        // The copy is there now: picking the default account goes on there without being asked again.
+        assert_eq!(config_dir(&picking(Some(ID), None), &dirs, project), Ok(None));
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn a_session_brought_to_a_named_account_runs_under_it() {
+        let (base, dirs) = accounts("bring-named");
+        std::fs::remove_dir_all(&dirs[1]).unwrap();
+        let other = base.join(".claude-other");
+        std::fs::create_dir_all(other.join("projects")).unwrap();
+        let dirs = vec![dirs[0].clone(), other.clone()];
+        let folder = dirs[0].join("projects/p");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(format!("{ID}.jsonl")), "{}\n").unwrap();
+        let bring = AccountRequest { bring: true, ..picking(Some(ID), Some("other")) };
+        assert_eq!(config_dir(&bring, &dirs, || None), Ok(Some(other.clone())));
+        assert!(other.join(format!("projects/p/{ID}.jsonl")).is_file());
         std::fs::remove_dir_all(base).unwrap();
     }
 

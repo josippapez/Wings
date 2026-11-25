@@ -316,6 +316,7 @@ impl Workspace {
         let look = look(cx);
         let settings = saved::Settings {
             font_size: Some(font_size(cx)),
+            sidebar_text: Some(super::sidebar::text_size(cx)),
             sidebar_open: Some(self.sidebar),
             font_family: (look.family != DEFAULT_FONT_FAMILY).then(|| look.family.to_string()),
             shift_return_meta: Some(look.shift_return_meta),

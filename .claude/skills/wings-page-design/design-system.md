@@ -88,6 +88,21 @@ As Settings:
 - Reading content is a column of at most 760 to 860 points, centred; lists fill the width.
 - Floating things (the chat's message box, its session panel, popovers) are raised cards with the app's radius.
 
+## Panes and the right panel
+
+A tab's panes sit flush: no rounded card, no gutter, no inset from the window. Two panes share one 1 point hairline
+(`layout::SEAM`), which has a 7 point grab area for resizing. A pane's header is 32 points with a hairline under it: the
+title medium in `SECONDARY_FOREGROUND`, then the folder small and muted, the buttons at the right. The pane with the keys
+shows only by its title, semibold in the foreground, and its buttons: no line or tint marks it.
+Floating and dragged panes keep a rounded, bordered, shadowed card because they sit over others.
+
+The right plugin panel is the same: a flush column with one hairline against the main column, a 32 point header (icon and
+name, the "…" menu and the close button), and stacked pages shared by a 1 point line with the same rule on the focused one.
+
+The project bar has a hairline under it. Its right end has the outlined "Open in <editor>" with its chevron inside, then
+the plugins' buttons with their title (and a count pill when the plugin's label is only digits), which give up their titles
+to icons first as the bar narrows.
+
 ## Motion
 
 Anything that moves (spinners, counts, shimmers, cues, backdrops) draws in a live layer, never by redrawing the page

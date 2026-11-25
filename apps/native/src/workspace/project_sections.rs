@@ -21,7 +21,7 @@ use crate::{
     theme, ui,
 };
 
-use super::{Active, Workspace, plugin_ui::palette};
+use super::{Active, Workspace, plugin_ui::palette, sidebar::Scale};
 
 /// Rows a section lists before "Show more".
 const ROWS_SHOWN: usize = 5;
@@ -380,6 +380,7 @@ impl Workspace {
         hover: &SharedString,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let scale = Scale::of(cx);
         let at = (project.to_path_buf(), group.key.clone());
         let open = !self.sections.collapsed.contains(&at);
         let all = self.sections.expanded.contains(&at);
@@ -431,7 +432,7 @@ impl Workspace {
                     .role(Role::Button)
                     .aria_label(label.clone())
                     .aria_expanded(open)
-                    .h(px(24.0))
+                    .h(scale.px(24.0))
                     .min_w_0()
                     .flex_1()
                     .flex()
@@ -440,7 +441,7 @@ impl Workspace {
                     .px(px(6.0))
                     .rounded(px(6.0))
                     .cursor_pointer()
-                    .text_size(px(11.0))
+                    .text_size(scale.px(11.0))
                     .text_color(rgb(theme::MUTED_FOREGROUND))
                     .hover(|style| style.bg(rgba(theme::HOVER)))
                     .focusable()
@@ -463,14 +464,14 @@ impl Workspace {
                         .id(SharedString::from(format!("{id}-all")))
                         .role(Role::Button)
                         .aria_label(format!("All {lower}"))
-                        .h(px(24.0))
+                        .h(scale.px(24.0))
                         .flex_none()
                         .flex()
                         .items_center()
                         .px(px(6.0))
                         .rounded(px(6.0))
                         .cursor_pointer()
-                        .text_size(px(11.0))
+                        .text_size(scale.px(11.0))
                         .text_color(rgb(theme::MUTED_FOREGROUND))
                         .hover(|style| {
                             style
@@ -503,14 +504,14 @@ impl Workspace {
                     div()
                         .id(SharedString::from(format!("{id}-more")))
                         .role(Role::Button)
-                        .h(px(28.0))
+                        .h(scale.px(28.0))
                         .flex()
                         .items_center()
                         .px(px(6.0))
                         .pl(px(18.0))
                         .rounded(px(6.0))
                         .cursor_pointer()
-                        .text_size(px(12.5))
+                        .text_size(scale.px(12.5))
                         .text_color(rgb(theme::MUTED_FOREGROUND))
                         .hover(|style| {
                             style
@@ -611,6 +612,7 @@ impl Workspace {
         id: &SharedString,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let scale = Scale::of(cx);
         let row = &group.rows[index];
         let tone = row.badge.as_ref().map_or(Tone::Neutral, |(_, tone)| *tone);
         let color = palette(tone).text;
@@ -655,9 +657,11 @@ impl Workspace {
                 div()
                     .id(line)
                     .group(hover.clone())
+                    .relative()
+                    .children(ui::spot({ let row = row.id.clone(); move || format!("section-row:{row}") }))
                     .role(Role::Button)
                     .aria_label(label)
-                    .h(px(28.0))
+                    .h(scale.px(28.0))
                     .w_full()
                     .flex()
                     .items_center()
@@ -687,7 +691,7 @@ impl Workspace {
                             .min_w_0()
                             .flex_1()
                             .truncate()
-                            .text_size(px(12.5))
+                            .text_size(scale.px(12.5))
                             .text_color(rgb(theme::FOREGROUND))
                             .child(title(&row.label).to_owned()),
                     )
@@ -697,7 +701,7 @@ impl Workspace {
                                 .flex_none()
                                 .opacity(0.0)
                                 .group_hover(hover, |style| style.opacity(1.0))
-                                .text_size(px(10.0))
+                                .text_size(scale.px(10.0))
                                 .font_weight(FontWeight::NORMAL)
                                 .text_color(rgb(theme::MUTED_FOREGROUND))
                                 .child(reference),

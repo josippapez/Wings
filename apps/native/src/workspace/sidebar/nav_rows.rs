@@ -13,6 +13,7 @@ use crate::{
     ui::{self, ButtonSize},
 };
 
+use super::Scale;
 use crate::workspace::{Workspace, palette::shortcut_label, project::SIDEBAR_ACCENT, quick::Place};
 
 /// A nav row's height, and the 1px between rows: the desktop's `h-7` in a `gap-px` column.
@@ -58,7 +59,7 @@ pub(in crate::workspace) fn nav_row_with(
         .gap(px(10.0))
         .px(px(8.0))
         .rounded(px(theme::RADIUS))
-        .text_size(px(13.0))
+        // The text size comes from the sidebar column, which sets it from the sidebar text setting.
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(theme::MUTED_FOREGROUND))
         .child(glyph)
@@ -81,10 +82,10 @@ pub(in crate::workspace) fn nav_row_with(
 }
 
 /// The desktop's `RowHint`: a shortcut at the row's right end, plain text at 60%, not a keycap.
-pub(in crate::workspace) fn row_hint(text: impl Into<SharedString>) -> Div {
+pub(in crate::workspace) fn row_hint(text: impl Into<SharedString>, scale: super::Scale) -> Div {
     div()
         .flex_none()
-        .text_size(px(11.0))
+        .text_size(scale.px(11.0))
         .font_weight(FontWeight::NORMAL)
         .text_color(rgb(theme::MUTED_FOREGROUND))
         .opacity(0.6)
@@ -107,7 +108,7 @@ impl Workspace {
             .pb(px(8.0))
             .child(
                 nav_row("nav-search", Icon::Search, "Search", Look::Plain)
-                    .children(shortcut_label(&TogglePalette, cx).map(row_hint))
+                    .children(shortcut_label(&TogglePalette, cx).map(|hint| row_hint(hint, Scale::of(cx))))
                     .on_click(cx.listener(|this, _, window, cx| this.toggle_palette(window, cx))),
             )
             .child(

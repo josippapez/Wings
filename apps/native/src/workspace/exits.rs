@@ -306,7 +306,12 @@ impl Workspace {
         #[cfg(not(unix))]
         let stop_server = None;
         let inbox = self.layer("inbox", |this| &mut this.inbox.open, Self::inbox_layer, cx);
-        let menu = self.layer("menu", |this| &mut this.menu, Self::menu_layer, cx);
+        let menu = self.layer(
+            "menu",
+            |this| &mut this.menu,
+            |this, cx| this.menu_layer(window, cx),
+            cx,
+        );
         let update = self.update_layer(cx);
         let under = [
             dialog("settings", settings),

@@ -32,6 +32,7 @@ use crate::workspace::{
 
 use super::{
     MIN_WIDTH, now_ms,
+    text::{Scale, text_size},
     order::{self, Context as OrderBy, Ordered, Sort},
 };
 
@@ -106,6 +107,7 @@ impl Workspace {
     /// agents stay at the bottom, as in the desktop sidebar.
     pub(in crate::workspace) fn sidebar_column(&self, cx: &mut Context<Self>) -> Div {
         div()
+            .text_size(px(text_size(cx)))
             .relative()
             .flex_none()
             .h_full()
@@ -175,6 +177,7 @@ impl Workspace {
     }
 
     fn project_list(&self, cx: &mut Context<Self>) -> AnyElement {
+        let scale = Scale::of(cx);
         let Ordered { shown, older } = self.project_order();
         let shown = self.dragged_order(shown);
         let tops = older
@@ -211,7 +214,7 @@ impl Workspace {
                         .px(px(8.0))
                         .rounded(px(6.0))
                         .cursor_pointer()
-                        .text_size(px(11.0))
+                        .text_size(scale.px(11.0))
                         .text_color(rgb(theme::MUTED_FOREGROUND))
                         .hover(|style| style.bg(rgba(theme::HOVER)))
                         .on_click(cx.listener(|this, _, _, cx| this.toggle_older(cx)))
@@ -281,7 +284,7 @@ impl Workspace {
             .justify_between()
             .pl(px(16.0))
             .pr(px(8.0))
-            .text_size(px(12.0))
+            .text_size(Scale::of(cx).px(12.0))
             .font_weight(FontWeight::MEDIUM)
             .text_color(rgb(theme::MUTED_FOREGROUND))
             .child("Projects")
@@ -360,6 +363,7 @@ impl Workspace {
         index: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let scale = Scale::of(cx);
         let entry = &self.projects[index];
         let active = entry.path == self.config.project;
         let unread = self.project_unread(&entry.path);
@@ -388,7 +392,7 @@ impl Workspace {
         } else {
             (entry.name.clone(), branch)
         };
-        let counts = status.and_then(|status| git_counts(index, status));
+        let counts = status.and_then(|status| git_counts(index, status, scale));
         let (beside_title, beside_branch) = if subtitle.is_some() {
             (None, counts)
         } else {
@@ -476,8 +480,8 @@ impl Workspace {
                                             .min_w_0()
                                             .flex_1()
                                             .truncate()
-                                            .text_size(px(13.0))
-                                            .line_height(px(18.0))
+                                            .text_size(scale.px(13.0))
+                                            .line_height(scale.px(18.0))
                                             .font_weight(if unread {
                                                 FontWeight::BOLD
                                             } else {
@@ -500,8 +504,8 @@ impl Workspace {
                                                 .min_w_0()
                                                 .flex_1()
                                                 .truncate()
-                                                .text_size(px(11.0))
-                                                .line_height(px(16.0))
+                                                .text_size(scale.px(11.0))
+                                                .line_height(scale.px(16.0))
                                                 .text_color(rgb(theme::MUTED_FOREGROUND))
                                                 .child(branch),
                                         )
@@ -523,7 +527,7 @@ impl Workspace {
                             div()
                                 .when(agents > 0, |slot| {
                                     slot.px(px(4.0))
-                                        .text_size(px(11.0))
+                                        .text_size(scale.px(11.0))
                                         .text_color(rgb(theme::MUTED_FOREGROUND))
                                         .child(agents.to_string())
                                 })
@@ -717,7 +721,7 @@ pub(super) fn worktree_title(name: &str, branch: Option<String>) -> (String, Opt
 }
 
 /// The desktop's `GitCounts`, tinted: changed files, commits to push and commits to pull.
-fn git_counts(index: usize, status: &GitStatus) -> Option<AnyElement> {
+fn git_counts(index: usize, status: &GitStatus, scale: Scale) -> Option<AnyElement> {
     let plural = |n: u32, noun: &str| format!("{n} {noun}{}", if n == 1 { "" } else { "s" });
     let chips: Vec<AnyElement> = [
         (
@@ -754,8 +758,8 @@ fn git_counts(index: usize, status: &GitStatus) -> Option<AnyElement> {
             .flex()
             .items_center()
             .gap(px(2.0))
-            .text_size(px(11.0))
-            .line_height(px(16.0))
+            .text_size(scale.px(11.0))
+            .line_height(scale.px(16.0))
             .text_color(rgb(color))
             .child(icon(glyph, 12.0, color))
             .child(value.to_string())

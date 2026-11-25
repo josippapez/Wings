@@ -343,6 +343,8 @@ pub struct Terminal {
     pub id: u64,
     pub pane: String,
     pub height: f32,
+    /// Takes the height its container leaves (the whole column of a docked split, shared with the others in it), not `height`.
+    pub fill: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -628,6 +630,9 @@ pub struct Split {
     pub pinned: bool,
     /// With `fixed_end`: the fixed pane floats over the right of the split as a card and takes no width from `start`.
     pub float: bool,
+    /// With `fixed_end`, and not `float`: the fixed pane is a column docked beside `start`, full height, flush, with a hairline
+    /// between them, in place of a padded pane.
+    pub dock: bool,
     /// Heard, with `{ "narrow": bool }`, when the split's width crosses `collapse_below`, and once it first has a width.
     pub on_narrow: Option<String>,
     /// A floating pane with this handler hears Escape in it and a press outside it.
@@ -1496,6 +1501,7 @@ impl Walk {
                 id,
                 pane: str_prop(&props, "pane").filter(|pane| pane.len() <= 20).unwrap_or_default().to_owned(),
                 height: number(&props, "height").unwrap_or(220.0).clamp(80.0, 800.0) as f32,
+                fill: on("fill"),
             }),
             "Avatar" => Node::Avatar(Avatar {
                 id,
@@ -1662,6 +1668,7 @@ impl Walk {
                         .map(|below| below.min(10_000.0) as f32),
                     pinned: on("pinned"),
                     float: on("float"),
+                    dock: on("dock"),
                     on_narrow: handler("onNarrow"),
                     on_close: handler("onClose"),
                     inset_below: number(&props, "insetBelow")
@@ -3007,14 +3014,16 @@ mod tests {
         let parsed = tree(json!([
             {"id":1,"type":"Terminal","props":{"pane":"12","height":5000}},
             {"id":2,"type":"Terminal","props":{"pane":"x".repeat(21)}},
+            {"id":6,"type":"Terminal","props":{"pane":"3","fill":true}},
             {"id":3,"type":"Text","props":{"links":true},"children":[{"id":4,"type":"#text","text":"See ABC-12"}]},
             {"id":5,"type":"Stack","props":{"links":true},"children":[]}
         ]))
         .unwrap();
-        assert_eq!(parsed.children[0], Node::Terminal(Terminal { id: 1, pane: "12".into(), height: 800.0 }));
-        assert_eq!(parsed.children[1], Node::Terminal(Terminal { id: 2, pane: String::new(), height: 220.0 }));
-        assert!(matches!(&parsed.children[2], Node::Text(text) if text.links));
-        assert!(matches!(&parsed.children[3], Node::Stack(stack) if stack.links));
+        assert_eq!(parsed.children[0], Node::Terminal(Terminal { id: 1, pane: "12".into(), height: 800.0, fill: false }));
+        assert_eq!(parsed.children[1], Node::Terminal(Terminal { id: 2, pane: String::new(), height: 220.0, fill: false }));
+        assert_eq!(parsed.children[2], Node::Terminal(Terminal { id: 6, pane: "3".into(), height: 220.0, fill: true }));
+        assert!(matches!(&parsed.children[3], Node::Text(text) if text.links));
+        assert!(matches!(&parsed.children[4], Node::Stack(stack) if stack.links));
     }
 
     #[test]

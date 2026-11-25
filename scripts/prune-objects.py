@@ -2,14 +2,15 @@
 
 Debug builds on macOS keep each binary's object files beside it for its debug info, and every incremental build writes
 new ones without removing the old: 23 GB of them filled the disk in a day. An object of the binary `<name>-<hash>` made
-over half an hour before that binary was last linked isn't one it links. A build still running made its objects since.
+over five minutes before that binary was last linked isn't one it links: a build writes the objects it links
+within the minute or two it runs. With half an hour, agents relinking every few minutes left 9.5 GB unpruned.
 """
 
 import os
 import re
 import sys
 
-MARGIN = 30 * 60
+MARGIN = 5 * 60
 
 freed = 0
 for target in sys.argv[1:]:

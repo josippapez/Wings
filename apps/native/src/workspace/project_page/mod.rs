@@ -23,7 +23,7 @@ use std::{
 
 use gpui::{
     AnyElement, Context, Entity, FontWeight, IntoElement, Render, Role, ScrollHandle, SharedString,
-    Subscription, Task, Window, div, prelude::*, px, rgb, rgba,
+    Subscription, Task, Window, canvas, div, prelude::*, px, rgb, rgba,
 };
 use wings_spaces::project_info::{
     Info, Item, MAX_BLOCKS, MAX_SECTIONS, Op, Place, Store, dir_name,
@@ -87,6 +87,8 @@ pub struct ProjectPage {
     visible: bool,
     blocks: Vec<BlockPage>,
     scroll: ScrollHandle,
+    /// The card is narrower than `COMPACT_BELOW`: the page keeps less of its edge to itself.
+    compact: bool,
     /// A match to scroll to at the next frame: the index of the page's child that holds it.
     scroll_to: Option<Match>,
     search: Entity<TextField>,
@@ -112,6 +114,10 @@ pub struct ProjectPage {
     _subs: Vec<Subscription>,
     _poll: Task<()>,
 }
+
+/// The width under which the page's edge shrinks from 24 points to 4: a card in a column that a window leaves a hundred
+/// points or so, where the page's 24 on each side left a few letters a line.
+const COMPACT_BELOW: f32 = 300.0;
 
 /// The project's folder with the home folder as `~`.
 fn tilde(path: &str) -> String {
@@ -201,6 +207,7 @@ impl ProjectPage {
             visible: false,
             blocks,
             scroll: ScrollHandle::new(),
+            compact: false,
             scroll_to: None,
             search,
             applied: String::new(),
@@ -456,15 +463,19 @@ impl ProjectPage {
                 )
             }
         });
+        // The search goes under the name when the two don't fit side by side.
         div()
             .w_full()
             .flex()
+            .flex_wrap()
             .items_start()
             .gap(px(12.0))
             .child(
                 div()
                     .min_w_0()
-                    .flex_1()
+                    .flex_basis(px(120.0))
+                    .flex_grow(1.0)
+                    .flex_shrink(1.0)
                     .flex()
                     .flex_col()
                     .child(
@@ -487,14 +498,22 @@ impl ProjectPage {
                             .text_color(rgb(theme::MUTED_FOREGROUND))
                             .child(chip(Icon::Folder, self.path.clone()))
                             .children(self.branch.clone().map(|b| chip(Icon::GitBranch, b)))
-                            .child(div().px(px(4.0)).child(counts)),
+                            .child(
+                                div()
+                                    .id("project-page-counts")
+                                    .min_w_0()
+                                    .truncate()
+                                    .px(px(4.0))
+                                    .tooltip(ui::tooltip(counts.clone(), None))
+                                    .child(counts),
+                            ),
                     ),
             )
             .child(
                 div()
                     .id("project-page-search")
                     .role(Role::Search)
-                    .flex_none()
+                    .min_w_0()
                     .flex()
                     .items_center()
                     .gap(px(8.0))
@@ -502,6 +521,7 @@ impl ProjectPage {
                     .child(
                         div()
                             .h(px(28.0))
+                            .min_w_0()
                             .flex()
                             .items_center()
                             .pl(px(8.0))
@@ -859,16 +879,36 @@ impl Render for ProjectPage {
                 self.scroll.reveal(index, Reveal::Nearest);
             }
         }
+        // The card's width, noted as it is painted: the page re-draws only when it crosses `COMPACT_BELOW`.
+        let entity = cx.entity();
+        let measure = canvas(
+            move |bounds, _, cx| {
+                let compact = bounds.size.width < px(COMPACT_BELOW);
+                entity.update(cx, |this, cx| {
+                    if this.compact != compact {
+                        this.compact = compact;
+                        cx.notify();
+                    }
+                });
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
         outer
             .child(
-                panel.child(
+                panel
+                    .child(measure)
+                    .child(
                     div()
                         .id("project-page-scroll")
                         .size_full()
                         .flex()
                         .flex_col()
                         .items_center()
-                        .px(px(24.0))
+                        .px(px(if self.compact { 4.0 } else { 24.0 }))
                         .pt(px(40.0))
                         .pb(px(64.0))
                         .overflow_y_scroll()

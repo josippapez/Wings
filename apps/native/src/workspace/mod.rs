@@ -32,7 +32,11 @@ mod links;
 mod manage_tests;
 mod nav;
 #[cfg(all(test, feature = "test-support"))]
+mod narrow_tests;
+#[cfg(all(test, feature = "test-support"))]
 mod nav_tests;
+#[cfg(all(test, feature = "test-support"))]
+mod panes_look_tests;
 #[cfg(unix)]
 mod older_servers;
 mod opencode;
@@ -839,6 +843,14 @@ impl Workspace {
 
     /// The project bar and the active tab's content under it, drawn as a piece of its own (`parts`).
     fn main_part(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let viewport = window.viewport_size().width;
+        let main_width = self.main_width(viewport);
+        // The panes' share: the main column less the diff docked beside the tab.
+        let docked = match self.diff_shown() {
+            Some(diff::Shown::Docked) => self.diff_width(viewport),
+            _ => 0.0,
+        };
+        let tab_width = (main_width - docked).max(0.0);
         let body: AnyElement = if self.welcome {
             self.welcome(cx)
         } else {
@@ -875,21 +887,20 @@ impl Workspace {
                         .left_0()
                         .size_full();
                         let layout = match tab.zoomed {
-                            Some(pane) => self.pane_card(pane, true, true, cx),
+                            Some(pane) => self.pane_card(pane, true, true, tab_width, cx),
                             None => self.layout_element(
                                 tab.id,
                                 &tab.layout,
                                 &mut Vec::new(),
                                 tab.focused,
                                 &self.floating_in(&tab.layout),
+                                tab_width,
                                 cx,
                             ),
                         };
-                        // The desktop's `p-2 pt-0`: the cards sit right under the project bar.
+                        // The panes fill the area, flush with the project bar above and sharing their lines.
                         div()
                             .size_full()
-                            .p(px(8.0))
-                            .pt_0()
                             .child(div().relative().size_full().child(layout).child(measure))
                             .into_any_element()
                     }
@@ -929,7 +940,7 @@ impl Workspace {
             .size_full()
             .flex()
             .flex_col()
-            .when(!self.welcome, |column| column.child(self.project_bar(cx)))
+            .when(!self.welcome, |column| column.child(self.project_bar(main_width, cx)))
             .child(
                 div()
                     .flex_1()

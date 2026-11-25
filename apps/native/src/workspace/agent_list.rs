@@ -20,7 +20,7 @@ use crate::{
     theme,
 };
 
-use super::{Active, HAIRLINE, Workspace, context_menu::MenuTarget, project::SIDEBAR_ACCENT, sidebar::AgentKey};
+use super::{Active, HAIRLINE, Workspace, context_menu::MenuTarget, project::SIDEBAR_ACCENT, sidebar::{AgentKey, Scale}};
 
 /// The desktop's `bg-blocked/10` behind an agent that needs you, and `/15` on hover.
 const BLOCKED_ROW: u32 = theme::BLOCKED << 8 | 0x1a;
@@ -30,6 +30,7 @@ impl Workspace {
     /// The agents in the order they were made (terminals', then tabs', then those coming back), or nothing
     /// while there are none.
     pub(super) fn agent_list(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let scale = Scale::of(cx);
         let pending = self.pending_agents(cx.background_executor().now());
         let tabs = self.tab_agents();
         if self.agents.is_empty() && self.loose_agents.is_empty() && pending.is_empty() && tabs.is_empty() {
@@ -79,8 +80,8 @@ impl Workspace {
                         .justify_between()
                         .px(px(8.0))
                         .pb(px(4.0))
-                        .line_height(px(18.0))
-                        .text_size(px(12.0))
+                        .line_height(scale.px(18.0))
+                        .text_size(scale.px(12.0))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(rgb(theme::MUTED_FOREGROUND))
                         .child("Agents")
@@ -98,6 +99,7 @@ impl Workspace {
         focused: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let scale = Scale::of(cx);
         let name = agent
             .name
             .clone()
@@ -198,12 +200,12 @@ impl Workspace {
                             .child(
                                 crate::ui::behaviors::cut_text("name", name)
                                     .min_w_0().flex_1()
-                                    .text_size(px(13.0))
+                                    .text_size(scale.px(13.0))
                                     .font_weight(if unread { FontWeight::BOLD } else { FontWeight::MEDIUM })
                                     .when(unread, |name| name.children(crate::ui::spot(move || format!("agent-unread:{id}")))),
                              )
                             .children(account.map(account_badge))
-                            .child(agent_metadata(format!("agent-age-{id}"), model, agent.state_since.or((agent.started_at > 0).then_some(agent.started_at)))),
+                            .child(agent_metadata(scale, format!("agent-age-{id}"), model, agent.state_since.or((agent.started_at > 0).then_some(agent.started_at)))),
                     )
                     .child(
                         div()
@@ -211,8 +213,8 @@ impl Workspace {
                             .items_center()
                             .gap(px(4.0))
                             .min_w_0()
-                            .text_size(px(11.0))
-                            .line_height(px(16.0))
+                            .text_size(scale.px(11.0))
+                            .line_height(scale.px(16.0))
                             .text_color(rgb(theme::MUTED_FOREGROUND))
                             .child(div().min_w_0().truncate().child(format!("{project},")))
                             .child(crate::ui::status_dot_slot(agent.state, slot))
@@ -223,8 +225,8 @@ impl Workspace {
                         div()
                             .min_w_0()
                             .truncate()
-                            .text_size(px(11.0))
-                            .line_height(px(16.0))
+                            .text_size(scale.px(11.0))
+                            .line_height(scale.px(16.0))
                             .text_color(rgba(theme::MUTED_FOREGROUND << 8 | 0xb3))
                             .children(crate::ui::spot(|| summary_spot))
                             .child(summary)
@@ -259,6 +261,7 @@ impl Workspace {
         state: AgentState,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let scale = Scale::of(cx);
         let project = self
             .projects
             .iter()
@@ -314,18 +317,18 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .child(div().flex().items_center().gap(px(6.0))
-                        .child(crate::ui::behaviors::cut_text("name", agent.name).min_w_0().flex_1().text_size(px(13.0))
+                        .child(crate::ui::behaviors::cut_text("name", agent.name).min_w_0().flex_1().text_size(scale.px(13.0))
                             .font_weight(if unread { FontWeight::BOLD } else { FontWeight::MEDIUM })
                             .when(unread, |name| name.children(crate::ui::spot(move || format!("tab-agent-unread:{tab}")))))
-                        .child(agent_metadata(format!("tab-agent-age-{tab}"), model, self.tab_agent_since(tab))))
+                        .child(agent_metadata(scale, format!("tab-agent-age-{tab}"), model, self.tab_agent_since(tab))))
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap(px(4.0))
                             .min_w_0()
-                            .text_size(px(11.0))
-                            .line_height(px(16.0))
+                            .text_size(scale.px(11.0))
+                            .line_height(scale.px(16.0))
                             .text_color(rgb(theme::MUTED_FOREGROUND))
                             .child(div().min_w_0().truncate().child(format!("{project},")))
                             .child(crate::ui::status_dot_slot(state, format!("tab-agent-{tab}")))
@@ -335,8 +338,8 @@ impl Workspace {
                         div()
                             .min_w_0()
                             .truncate()
-                            .text_size(px(11.0))
-                            .line_height(px(16.0))
+                            .text_size(scale.px(11.0))
+                            .line_height(scale.px(16.0))
                             .text_color(rgba(theme::MUTED_FOREGROUND << 8 | 0xb3))
                             .child(summary)
                     })),
@@ -448,6 +451,7 @@ impl Workspace {
         focused: Option<usize>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let scale = Scale::of(cx);
         let PendingAgent {
             pane,
             project: path,
@@ -508,17 +512,17 @@ impl Workspace {
                         div().flex().items_center().gap(px(6.0))
                             .child(crate::ui::behaviors::cut_text("name", name)
                                 .min_w_0().flex_1()
-                                .text_size(px(13.0))
+                                .text_size(scale.px(13.0))
                                 .font_weight(FontWeight::MEDIUM)
                                 .when(!resuming, |name| name.text_color(rgb(theme::MUTED_FOREGROUND))))
-                            .child(agent_metadata(format!("pending-agent-{pane}"), model, None)),
+                            .child(agent_metadata(scale, format!("pending-agent-{pane}"), model, None)),
                     )
                     .child(
                         div()
                             .min_w_0()
                             .truncate()
-                            .text_size(px(11.0))
-                            .line_height(px(16.0))
+                            .text_size(scale.px(11.0))
+                            .line_height(scale.px(16.0))
                             .text_color(rgb(theme::MUTED_FOREGROUND))
                             .child(format!("{project}, {status}")),
                     ),
@@ -609,15 +613,15 @@ fn age(since: u64, now: u64) -> String {
     }
 }
 
-fn agent_metadata(name: String, model: Option<String>, since: Option<u64>) -> Div {
+fn agent_metadata(scale: Scale, name: String, model: Option<String>, since: Option<u64>) -> Div {
     div().flex_none().flex().items_center().gap(px(4.0))
-        .text_size(px(11.0)).line_height(px(16.0))
+        .text_size(scale.px(11.0)).line_height(scale.px(16.0))
         .font_family("Menlo").font_weight(FontWeight::NORMAL)
         .text_color(rgb(theme::MUTED_FOREGROUND))
-        .children(model.map(|model| crate::ui::behaviors::cut_text("model", model).max_w(px(58.0))))
+        .children(model.map(|model| crate::ui::behaviors::cut_text("model", model).max_w(scale.px(58.0))))
         .children(since.map(|since| {
             let said = move || -> SharedString { age(since, now_ms()).into() };
-            div().relative().w(px(28.0)).h(px(16.0))
+            div().relative().w(scale.px(28.0)).h(scale.px(16.0))
                 .child(div().text_color(gpui::transparent_black()).child(said()))
                 .child(crate::ui::count_slot(name, said))
         }))

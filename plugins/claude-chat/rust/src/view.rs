@@ -118,14 +118,33 @@ fn chat_page(c: &Chat) -> Node {
         // Where the panel covers the conversation, in a narrow tab, the message box is under the split, not in it: the
         // panel ends above the box and scrolls when it is taller than that, so it never covers what you type, nor the
         // box's buttons. In a wide tab, or set in beside it, the panel sits beside the column and reaches down beside the box.
-        let (start, under) = match c.narrow == Some(true) && !(set_in && c.inset) {
+        // Until the page hears the width (after its first draw) the box is drawn where a narrow tab has it, as most tabs are
+        // narrow: the app keeps what you type by the box's place in the tree, so one that moved when the width came lost the
+        // text typed before.
+        let (start, under) = match c.narrow != Some(false) && !(set_in && c.inset) {
             true => (vec![conversation], Some(composer(c))),
             false => (vec![conversation, composer(c)], None),
         };
         let split = split
             .child(Node::new("Slot").prop("name", "start").children(start))
             .child(Node::new("Slot").prop("name", "end").children(if side_shown(c) { side(c) } else { Vec::new() }));
-        std::iter::once(split).chain(under).collect()
+        // The terminals Claude opened dock beside all of it: the conversation, the panel and the message box. The place of what
+        // is in the outer split's start slot never changes with the terminals, so the message box keeps its id: the split is
+        // there with none open, and the one slot after the split is where a narrow tab sets the newest terminal.
+        let (beside, below) = match c.dock_narrow {
+            Some(false) => (dock_terminals(c, true), Vec::new()),
+            _ => (Vec::new(), dock_terminals(c, false).into_iter().take(1).collect()),
+        };
+        let start: Vec<Node> = [split, stack().prop("gap", "none").children(below)].into_iter().chain(under).collect();
+        let dock = Node::new("Split")
+            .prop("defaultSize", DOCK)
+            .prop("side", "end")
+            .prop("dock", true)
+            .prop("collapseBelow", DOCK_BELOW)
+            .on("onNarrow", |payload| chat::set_dock_narrow(payload["narrow"].as_bool().unwrap_or(true)))
+            .child(Node::new("Slot").prop("name", "start").children(start))
+            .child(Node::new("Slot").prop("name", "end").children(beside));
+        vec![dock]
     };
     // No page toolbar: the tab and the project's header over it already name the place, so the card starts with a
     // header as a terminal pane's does. The dialogs, which the app draws over the whole page, and the past
@@ -722,7 +741,7 @@ fn step(tool: &Tool, opened: bool, c: &Chat) -> Node {
     let pictures = thumbs(&tool.images, "Picture from the tool");
     let row_id = tool.id.clone();
     // Opened, the whole call under its line: its input whole, then what it printed. In the same inset as the error's tail.
-    let whole = opened.then(|| inset(row().prop("gap", "s").prop("grow", true).child(stack().prop("width", 16)).child(body(tool, output, crate::diff_view::look(c)).prop("grow", true))));
+    let whole = opened.then(|| inset(row().prop("gap", "s").prop("grow", true).child(stack().prop("width", 16)).child(body(tool, output, c.session.ran_for(&tool.id), crate::diff_view::look(c)).prop("grow", true))));
     // The call's line is what opens and shuts it, as a row of a list does.
     let head = list_button([head.prop("grow", true)], move || chat::toggle_output(&row_id));
     stack().prop("gap", "xs").child(head).maybe(mod_result).maybe(error).maybe(pictures).maybe(whole)
@@ -787,7 +806,7 @@ fn facts(tool: &Tool) -> Vec<Node> {
 
 /// What a call's fold holds: the diff, the start of the file, its input whole where its line cuts it, and what it printed. A long block
 /// shows its first lines with a row that opens the rest (`code_view.rs`), in the file's language where the call names a file.
-fn body(tool: &Tool, output: Option<(&str, bool)>, look: crate::diff_view::Look) -> Node {
+fn body(tool: &Tool, output: Option<(&str, bool)>, ran: Option<u64>, look: crate::diff_view::Look) -> Node {
     let failed = output.is_some_and(|(_, failed)| failed);
     let language = code_view::language_of_path(&tool.summary);
     let mut body = stack().prop("gap", "s");
@@ -811,6 +830,11 @@ fn body(tool: &Tool, output: Option<(&str, bool)>, look: crate::diff_view::Look)
     for (name, value) in &tool.input.fields {
         let field = row().prop("gap", "s").prop("align", "baseline").child(muted(name.as_str()).prop("size", "small")).child(text(value.as_str()).prop("size", "small").prop("mono", true).prop("grow", true));
         body = body.child(field.key(format!("field-{name}")));
+    }
+    // How long it ran, in the same line style as the fields above it; unknown, it says nothing.
+    if let Some(ms) = ran {
+        let field = row().prop("gap", "s").prop("align", "baseline").child(muted("ran").prop("size", "small")).child(text(ran_for(ms)).prop("size", "small").prop("mono", true).prop("grow", true));
+        body = body.child(field.key("field-ran"));
     }
     match output {
         Some((output, _)) if failed || !matches!(tool.detail, Detail::Diff(_) | Detail::Write { .. }) => {
@@ -1312,22 +1336,22 @@ fn rail(c: &Chat, no_sections: bool) -> Option<Node> {
 }
 
 /// The panel on the right, quiet beside the conversation: a header with the button that collapses it, the folder and
-/// branch, and the sections below, in a raised card, with the terminals Claude opened under it. Collapsed, it is a slim
-/// rail with the button that opens it again and how many things run in it, and the terminals are left out. Nothing when
-/// there is nothing to say yet.
+/// branch, and the sections below, in a raised card. Collapsed, it is a slim rail with the button that opens it again and
+/// how many things run in it. Nothing when there is nothing to say yet. The terminals Claude opened are docked beside the
+/// whole page instead (`dock_terminals`).
 fn side(c: &Chat) -> Vec<Node> {
     let sections = side_sections(c, true);
     if side_railed(c) {
         return rail(c, sections.is_empty()).into_iter().collect();
     }
     if sections.is_empty() {
-        return terminals(c);
+        return Vec::new();
     }
     let collapse = icon_button("Collapse the side panel", &icons::CHEVRON_RIGHT, || chat::set_side_rail(true)).tooltip("Collapse the side panel to a rail");
     let top = row().prop("align", "center").child(inset(muted("Session").prop("size", "small")).prop("grow", true)).child(collapse).key("side-collapse");
     // Taller than the room it has, the card keeps its edge and its sections scroll inside it.
     let summary = card().prop("variant", "raised").prop("scroll", true).child(stack().prop("gap", "m").child(top).children(sections));
-    std::iter::once(summary).chain(terminals(c)).collect()
+    vec![summary]
 }
 
 /// The session panel's sections, which the chat draws in its own card and tells Wings' sidebar (`session_side.rs`): the
@@ -1393,20 +1417,31 @@ pub(crate) fn side_sections(c: &Chat, place: bool) -> Vec<Node> {
     sections.into_iter().filter(|section| section.count() > 1).collect()
 }
 
-/// How many of the terminals Claude opened the session panel shows, newest first, and how tall each is.
-pub(crate) const TERMINALS_SHOWN: usize = 3;
-pub(crate) const TERMINAL_HEIGHT: u32 = 220;
+/// The width of the column the terminals Claude opened dock in, beside the conversation and the panel, and the tab width
+/// below which there is no room for it: the conversation would be under 480 points. Narrower, the newest terminal sits under
+/// the conversation, above the message box, `DOCK_BELOW_HEIGHT` tall.
+const DOCK: u32 = 420;
+const DOCK_BELOW: u32 = 480 + DOCK;
+const DOCK_BELOW_HEIGHT: u32 = 200;
 
-/// The terminals Claude opened with Wings' `open_pane`, under the session card: Wings draws each live where its node is,
-/// with what it runs, whether it still does, and buttons that open it as a tab and close it.
-fn terminals(c: &Chat) -> Vec<Node> {
+/// The terminals Claude opened, newest first: in the docked column (`beside`) each takes an equal share of its height, so
+/// up to `TERMINALS_SHOWN` stack there; under the conversation of a narrow tab, one of `DOCK_BELOW_HEIGHT`. Wings draws each
+/// live where its node is, with what it runs, whether it still does, and buttons that open it as a tab and close it.
+fn dock_terminals(c: &Chat, beside: bool) -> Vec<Node> {
     c.terminals
         .iter()
         .rev()
         .take(TERMINALS_SHOWN)
-        .map(|terminal| Node::new("Terminal").prop("pane", terminal.pane.as_str()).prop("height", TERMINAL_HEIGHT).key(format!("terminal-{}", terminal.pane)))
+        .map(|terminal| {
+            let node = Node::new("Terminal").prop("pane", terminal.pane.as_str()).key(format!("terminal-{}", terminal.pane));
+            if beside { node.prop("fill", true) } else { node.prop("height", DOCK_BELOW_HEIGHT) }
+        })
         .collect()
 }
+
+/// How many of the terminals Claude opened the session panel shows, newest first, and how tall each is.
+pub(crate) const TERMINALS_SHOWN: usize = 3;
+pub(crate) const TERMINAL_HEIGHT: u32 = 220;
 
 /// A meter row that is a button: a click opens the dialog with the detail behind it.
 fn meter_button(label: &str, percent: u64, levels: (u64, u64), resets: Option<String>, panel: Panel) -> Node {
@@ -1524,6 +1559,16 @@ fn subagent_row(tool: &Tool, c: &Chat) -> Node {
             line.on("onClick", move |_| crate::tasks_view::open_subagent(&id)).prop("title", "Its conversation, in the sidebar")
         }
         false => line,
+    }
+}
+
+/// How long a call ran, as "0.4 s", "4.2 s", "21 s", "1 m 12 s", "1 h 4 m".
+fn ran_for(ms: u64) -> String {
+    match ms {
+        0..10_000 => format!("{:.1} s", ms as f64 / 1000.0),
+        10_000..60_000 => format!("{} s", ms / 1000),
+        60_000..3_600_000 => format!("{} m {} s", ms / 60_000, ms % 60_000 / 1000),
+        _ => format!("{} h {} m", ms / 3_600_000, ms % 3_600_000 / 60_000),
     }
 }
 
@@ -2254,7 +2299,7 @@ mod tests {
             let page = |c: &Chat| wings_plugin::ui::tree_json(chat_page(c));
             let split = |page: &serde_json::Value| -> serde_json::Value {
                 fn find(node: &serde_json::Value) -> Option<serde_json::Value> {
-                    if node["type"] == "Split" {
+                    if node["type"] == "Split" && node["props"]["dock"].is_null() {
                         return Some(node.clone());
                     }
                     node["children"].as_array()?.iter().find_map(find)
@@ -2313,7 +2358,7 @@ mod tests {
     }
 
     #[test]
-    fn in_the_chat_the_panel_floats_over_the_conversation_with_the_place_and_the_terminals() {
+    fn in_the_chat_the_panel_floats_over_the_conversation_with_the_place_and_the_terminals_dock_apart() {
         chat::with(|c| {
             c.side_in_wings = false;
             c.side_open = true;
@@ -2324,12 +2369,12 @@ mod tests {
             c.terminals = vec![terminal("1")];
             let page = page_text(c);
             assert!(page.contains("\"Split\"") && page.contains("collapseBelow"), "{page}");
-            assert!(page.contains("shop · main") && page.contains("Open Changes") && page.contains("Context") && page.contains("\"Terminal\""));
+            assert!(page.contains("shop · main") && page.contains("Open Changes") && page.contains("Context"));
             assert!(page.contains("raised"), "the card");
-            // Put away, the panel and its terminals leave the page, and the conversation stays in the split.
+            // Put away, the panel leaves the page, and the conversation stays in the split. The terminal is not the panel's.
             c.side_open = false;
             let page = page_text(c);
-            assert!(page.contains("\"Split\"") && !page.contains("Open Changes") && !page.contains("\"Terminal\""));
+            assert!(page.contains("\"Split\"") && !page.contains("Open Changes") && page.contains("\"Terminal\""));
         });
     }
 
@@ -2347,13 +2392,13 @@ mod tests {
             c.session.context = Some((41_000, 200_000));
             c.terminals = vec![terminal("1")];
             let open = page_text(c);
-            assert!(open.contains("Collapse the side panel") && open.contains("Open Changes") && open.contains("\"Terminal\""), "{open}");
+            assert!(open.contains("Collapse the side panel") && open.contains("Open Changes"), "{open}");
             assert!(!open.contains("Expand the side panel"));
         });
         chat::set_side_rail(true);
         chat::with(|c| {
             let rail = page_text(c);
-            assert!(rail.contains("Expand the side panel") && !rail.contains("Open Changes") && !rail.contains("Context") && !rail.contains("\"Terminal\""), "{rail}");
+            assert!(rail.contains("Expand the side panel") && !rail.contains("Open Changes") && !rail.contains("Context"), "{rail}");
             assert!(rail.contains("shop · main") && rail.contains("+12") && rail.contains("−3"), "the pill says the place and the changes: {rail}");
             assert!(rail.contains("1 running"), "what runs shows on the pill");
             assert!(rail.contains("\"Split\"") && !rail.contains("\"defaultSize\":340"), "the pane shrinks to the pill: {rail}");
@@ -2395,12 +2440,12 @@ mod tests {
 
     /// Over a narrow tab the panel floated over the message box once it was taller than the conversation above it: the
     /// box sits under the split there, so the panel ends above it. In a wide tab the box stays in the split, and the panel
-    /// beside the column reaches down beside it, as before.
+    /// beside the column reaches down beside it, as before. Before the width is known the box is where a narrow tab has it.
     #[test]
     fn over_a_narrow_tab_the_panel_ends_above_the_message_box() {
         wings_plugin::host::testing::answer(|_, _| Ok(serde_json::Value::Null));
         fn split_of(tree: &serde_json::Value) -> Option<&serde_json::Value> {
-            if tree["type"] == "Split" {
+            if tree["type"] == "Split" && tree["props"]["dock"].is_null() {
                 return Some(tree);
             }
             tree["children"].as_array()?.iter().find_map(split_of)
@@ -2408,7 +2453,7 @@ mod tests {
         chat::with(|c| {
             c.side_in_wings = false;
             c.side_open = true;
-            for (narrow, in_split) in [(Some(true), false), (Some(false), true), (None, true)] {
+            for (narrow, in_split) in [(Some(true), false), (Some(false), true), (None, false)] {
                 c.narrow = narrow;
                 let page = wings_plugin::ui::tree_json(chat_page(c));
                 let split = split_of(&page).expect("the split").to_string();
@@ -2583,6 +2628,28 @@ mod tests {
             assert!(opened.contains(&said), "{said} in {opened}");
         }
         chat::with(|c| c.open_outputs.clear());
+    }
+
+    /// An opened call says how long it ran after its input, when that is known, and nothing when it is not.
+    #[test]
+    fn an_opened_call_says_how_long_it_ran() {
+        let mut tool = call("r1", "Bash", Detail::Plain, "hi");
+        tool.summary = "sleep 3".into();
+        tool.input = crate::session::Input { whole: String::new(), fields: vec![("timeout".into(), "600000".into())] };
+        let shown = |ran: Option<u64>| {
+            chat::with(|c| {
+                c.session.ran.clear();
+                c.session.ran.extend(ran.map(|ms| ("r1".to_owned(), ms)));
+            });
+            chat::with(|c| wings_plugin::ui::tree_json(step(&tool, true, c))).to_string()
+        };
+        let unknown = shown(None);
+        assert!(!unknown.contains("\"ran\""), "{unknown}");
+        let known = shown(Some(4_200));
+        assert!(known.contains("\"ran\"") && known.contains("4.2 s"), "{known}");
+        assert!(known.find("600000") < known.find("4.2 s") && known.find("4.2 s") < known.find("\"hi\""), "after the timeout, before the output: {known}");
+        chat::with(|c| c.session.ran.clear());
+        assert_eq!([0, 4_200, 21_900, 72_000, 3_840_000].map(ran_for), ["0.0 s", "4.2 s", "21 s", "1 m 12 s", "1 h 4 m"]);
     }
 
     /// A call with nothing to fold (its input fits its line, it printed nothing yet) is a row you click all the same, and
@@ -2949,5 +3016,156 @@ mod choice_mark_tests {
             assert_eq!(mark["props"]["tone"], if picked { "info" } else { "muted" });
             assert_eq!(mark["props"]["shapes"].as_array().unwrap().len(), if picked { 2 } else { 1 });
         }
+    }
+}
+
+#[cfg(test)]
+mod composer_place_tests {
+    use super::*;
+
+    /// The id of the message box in what the page draws.
+    fn message_id(nodes: &[serde_json::Value]) -> Option<u64> {
+        nodes.iter().find_map(|node| {
+            if node["type"] == "Textarea" && node["props"]["label"] == "Message" {
+                return node["id"].as_u64();
+            }
+            node["children"].as_array().and_then(|kids| message_id(kids))
+        })
+    }
+
+    fn drawn_id() -> u64 {
+        let (tree, _) = wings_plugin::ui::export(view());
+        message_id(tree.as_array().unwrap()).expect("a message box")
+    }
+
+    /// The app keeps what you typed in a field by the node's id, so a message box that gets a new id when the conversation
+    /// draws loses the text typed before the page heard it.
+    #[test]
+    fn the_message_box_keeps_its_id_from_the_empty_chat_to_a_resumed_one() {
+        chat::with(|c| {
+            c.session = Session::default();
+            c.state = State::Running;
+        });
+        let empty = drawn_id();
+        chat::with(|c| c.session.items.push(Item::User("Fix the build".into())));
+        let resumed = drawn_id();
+        chat::with(|c| c.session = Session::default());
+        assert_eq!(empty, resumed);
+    }
+
+    /// The page hears that the tab is narrow only after its first draw, and the message box then moves out of the split, so it
+    /// has to keep its id there too (a wide tab, the rarer one, still moves it once).
+    #[test]
+    fn the_message_box_keeps_its_id_when_the_page_hears_the_tab_is_narrow() {
+        chat::with(|c| {
+            c.session = Session::default();
+            c.state = State::Running;
+            c.narrow = None;
+        });
+        let unknown = drawn_id();
+        chat::set_narrow(true, false);
+        let narrow = drawn_id();
+        chat::with(|c| c.narrow = None);
+        assert_eq!(unknown, narrow);
+    }
+}
+
+#[cfg(test)]
+mod dock_tests {
+    use super::*;
+
+    fn terminal(pane: &str) -> crate::chat::Terminal {
+        crate::chat::Terminal { pane: pane.into() }
+    }
+
+    /// The `Split` that docks the terminals, in the page's JSON: the one with `dock`.
+    fn dock_of(node: &serde_json::Value) -> Option<&serde_json::Value> {
+        if node["type"] == "Split" && node["props"]["dock"] == true {
+            return Some(node);
+        }
+        node["children"].as_array()?.iter().find_map(dock_of)
+    }
+
+    fn slot_of<'a>(split: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+        split["children"].as_array().unwrap().iter().find(|slot| slot["props"]["name"] == name).unwrap()
+    }
+
+    fn terminals_in(node: &serde_json::Value) -> Vec<serde_json::Value> {
+        let mut found = Vec::new();
+        if node["type"] == "Terminal" {
+            found.push(node.clone());
+        }
+        for child in node["children"].as_array().into_iter().flatten() {
+            found.extend(terminals_in(child));
+        }
+        found
+    }
+
+    fn page(set: impl FnOnce(&mut Chat)) -> serde_json::Value {
+        chat::with(|c| {
+            c.side_in_wings = false;
+            c.side_open = true;
+            c.session = Session::default();
+            c.terminals = vec![terminal("1"), terminal("2")];
+            set(c);
+            wings_plugin::ui::tree_json(chat_page(c))
+        })
+    }
+
+    #[test]
+    fn in_a_wide_tab_the_terminals_stack_in_a_full_height_column_beside_the_conversation() {
+        let tree = page(|c| c.dock_narrow = Some(false));
+        let dock = dock_of(&tree).expect("the dock");
+        assert_eq!(dock["props"]["side"], "end");
+        let column = terminals_in(slot_of(dock, "end"));
+        // Newest first, each sharing the column's height.
+        let panes: Vec<_> = column.iter().map(|node| node["props"]["pane"].as_str().unwrap()).collect();
+        assert_eq!(panes, ["2", "1"]);
+        assert!(column.iter().all(|node| node["props"]["fill"] == true));
+        assert!(terminals_in(slot_of(dock, "start")).is_empty(), "none under the conversation");
+        assert_eq!(terminals_in(&tree).len(), 2, "and none left in the session panel's card");
+    }
+
+    #[test]
+    fn in_a_narrow_tab_or_before_the_page_has_measured_the_newest_goes_under_the_conversation() {
+        for measured in [None, Some(true)] {
+            let tree = page(|c| c.dock_narrow = measured);
+            let dock = dock_of(&tree).expect("the dock");
+            assert!(terminals_in(slot_of(dock, "end")).is_empty(), "{measured:?}: no column");
+            let below = terminals_in(slot_of(dock, "start"));
+            assert_eq!(below.len(), 1, "{measured:?}");
+            assert_eq!(below[0]["props"]["pane"], "2");
+            assert_eq!(below[0]["props"]["height"], DOCK_BELOW_HEIGHT);
+            assert!(below[0]["props"]["fill"].is_null());
+        }
+    }
+
+    #[test]
+    fn the_dock_is_the_one_split_the_page_keeps_with_or_without_a_terminal() {
+        let none = page(|c| c.terminals.clear());
+        let dock = dock_of(&none).expect("the dock, with nothing in it");
+        assert!(terminals_in(slot_of(dock, "end")).is_empty());
+        assert_eq!(dock["props"]["collapseBelow"], DOCK_BELOW);
+        assert_eq!(dock["props"]["defaultSize"], DOCK);
+    }
+
+    #[test]
+    fn the_message_box_keeps_its_id_when_a_terminal_opens_and_when_the_dock_is_measured() {
+        fn find(node: &serde_json::Value) -> Option<u64> {
+            if node["type"] == "Textarea" && node["props"]["label"] == "Message" {
+                return node["id"].as_u64();
+            }
+            node["children"].as_array()?.iter().find_map(find)
+        }
+        let closed = find(&page(|c| {
+            c.terminals.clear();
+            c.dock_narrow = None;
+            c.narrow = Some(true);
+        }))
+        .expect("a message box");
+        let opened = find(&page(|c| c.dock_narrow = None)).expect("a message box");
+        let measured = find(&page(|c| c.dock_narrow = Some(true))).expect("a message box");
+        assert_eq!(closed, opened);
+        assert_eq!(closed, measured);
     }
 }

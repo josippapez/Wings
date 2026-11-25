@@ -3,8 +3,8 @@
 
 use gpui::{Bounds, Pixels, point, px, size};
 
-/// The draggable gap between two panes.
-pub const DIVIDER: f32 = 8.0;
+/// The line two panes share: they sit flush, with a one point hairline between them to grab.
+pub const SEAM: f32 = 1.0;
 /// A drag keeps each side between 15% and 85%, as in the desktop app.
 const MIN_RATIO: f32 = 0.15;
 const MAX_RATIO: f32 = 0.85;
@@ -183,7 +183,7 @@ impl Layout {
             return;
         }
         placed.splits.push((path.clone(), *dir, bounds));
-        let gap = px(DIVIDER);
+        let gap = px(SEAM);
         let (first, second) = match dir {
             Dir::Row => {
                 let width = bounds.size.width * *ratio;
@@ -274,9 +274,9 @@ mod tests {
     fn placing_matches_the_rendered_flex_sizes_and_finds_neighbours() {
         let placed = three().place(area(), &[]);
         let at = |id| placed.panes.iter().find(|(pane, _)| *pane == id).unwrap().1;
-        assert_eq!((at(1).size.width, at(2).size.width), (px(404.0), px(396.0)));
-        assert_eq!(at(2).origin.x, px(412.0));
-        assert_eq!((at(2).size.height, at(3).origin.y), (px(204.0), px(212.0)));
+        assert_eq!((at(1).size.width, at(2).size.width), (px(404.0), px(403.0)));
+        assert_eq!(at(2).origin.x, px(405.0));
+        assert_eq!((at(2).size.height, at(3).origin.y), (px(204.0), px(205.0)));
         assert_eq!(placed.splits.len(), 2);
         assert_eq!(placed.splits[1].0, vec![true]);
 

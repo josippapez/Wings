@@ -282,6 +282,7 @@ impl Workspace {
     /// The sidebar's Plugins section, which shows only while a plugin waits for a native build. Pages open from the +
     /// menu and the project's sections, as in the desktop.
     pub(super) fn plugin_list(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let scale = super::sidebar::Scale::of(cx);
         // On and approved, but with no native build: the desktop runs it, and here it is listed with what it needs,
         // rather than missing, and opens its entry in Settings → Plugins. More than two take one row, so a dozen
         // desktop-only plugins don't push the projects off the sidebar.
@@ -332,8 +333,8 @@ impl Workspace {
                             .child(
                                 div()
                                     .truncate()
-                                    .text_size(px(13.0))
-                                    .line_height(px(18.0))
+                                    .text_size(scale.px(13.0))
+                                    .line_height(scale.px(18.0))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(rgb(theme::MUTED_FOREGROUND))
                                     .child(name),
@@ -341,8 +342,8 @@ impl Workspace {
                             .child(
                                 div()
                                     .truncate()
-                                    .text_size(px(11.0))
-                                    .line_height(px(15.0))
+                                    .text_size(scale.px(11.0))
+                                    .line_height(scale.px(15.0))
                                     .text_color(rgb(theme::MUTED_FOREGROUND))
                                     .child(needs),
                             ),
@@ -373,8 +374,8 @@ impl Workspace {
                         .items_center()
                         .px(px(8.0))
                         .pb(px(4.0))
-                        .line_height(px(18.0))
-                        .text_size(px(12.0))
+                        .line_height(scale.px(18.0))
+                        .text_size(scale.px(12.0))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(rgb(theme::MUTED_FOREGROUND))
                         .child("Plugins"),

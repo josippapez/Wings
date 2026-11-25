@@ -129,14 +129,57 @@ fn built(plugin: &str, frame: &str) -> String {
     format!("{}{}", wings_native::page::runtime::wasm::MARKER, path.display())
 }
 
-/// Real shells print on their own time, so this waits in real time while the test clock keeps up.
+/// How far the app's clock moves between two frames.
+const STEP: Duration = Duration::from_millis(20);
+/// How long shells, git and plugin pages have been quiet when `settle` takes them as done.
+const QUIET: Duration = Duration::from_millis(300);
+
+/// One frame: the app's tasks run, its clock moves a step, and the window draws.
+fn frame(cx: &mut VisualTestAppContext, window: AnyWindowHandle) {
+    cx.run_until_parked();
+    cx.advance_clock(STEP);
+    cx.run_until_parked();
+    let _ = cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx));
+}
+
+/// Moves the app's clock through `duration` a frame at a time, without waiting in real time: its animations, timers
+/// and debounces are done by then. A wait for what a shell, git or a plugin page does is `settle`.
 fn wait(cx: &mut VisualTestAppContext, window: AnyWindowHandle, duration: Duration) {
+    let mut moved = Duration::ZERO;
+    while moved < duration {
+        frame(cx, window);
+        moved += STEP;
+    }
+}
+
+/// Waits in real time for what shells, git and plugin pages do, a frame at a time: until none of them has woken a task
+/// of the app for `QUIET`, `most` at the longest. Then the app's clock moves on to `most`, as `wait` moves it. A fixed
+/// wait of `most` cost all of it, though they are mostly done in a fraction.
+fn settle(cx: &mut VisualTestAppContext, window: AnyWindowHandle, most: Duration) {
+    let start = Instant::now();
+    let (mut heard, mut moved) = (start, Duration::ZERO);
+    while start.elapsed() < most && heard.elapsed() < QUIET {
+        frame(cx, window);
+        moved += STEP;
+        thread::sleep(STEP);
+        let mut woken = false;
+        while cx.executor().tick() {
+            woken = true;
+        }
+        if woken {
+            heard = Instant::now();
+        }
+    }
+    wait(cx, window, most.saturating_sub(moved));
+}
+
+/// Waits `duration` in real time, a frame at a time, for a screen that measures real time: the performance readout
+/// counts frames a second.
+fn wait_real(cx: &mut VisualTestAppContext, window: AnyWindowHandle, duration: Duration) {
     let until = Instant::now() + duration;
     while Instant::now() < until {
-        cx.run_until_parked();
-        cx.advance_clock(Duration::from_millis(20));
-        let _ = cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx));
-        thread::sleep(Duration::from_millis(20));
+        frame(cx, window);
+        thread::sleep(STEP);
     }
 }
 
@@ -292,7 +335,7 @@ fn scenes() {
                         workspace.sample_plugin_updates(state, window, cx)
                     })
                     .unwrap();
-                wait(&mut cx, window, Duration::from_millis(300));
+                settle(&mut cx, window, Duration::from_millis(300));
                 save(
                     &mut cx,
                     window,
@@ -329,7 +372,7 @@ fn scenes() {
                         workspace.sample_update(state, window, cx)
                     })
                     .unwrap();
-                wait(&mut cx, window, Duration::from_millis(300));
+                settle(&mut cx, window, Duration::from_millis(300));
                 save(
                     &mut cx,
                     window,
@@ -510,7 +553,7 @@ fn scenes() {
             })
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
-        wait(&mut cx, window, Duration::from_millis(500));
+        settle(&mut cx, window, Duration::from_millis(500));
         save(
             &mut cx,
             window,
@@ -548,7 +591,7 @@ fn scenes() {
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
         let name = |state: &str| out.join(format!("{state}-{width}.png"));
-        wait(&mut cx, window, Duration::from_secs(4));
+        settle(&mut cx, window, Duration::from_secs(4));
         cx.simulate_input(
             window,
             "printf '\\033]0;build-server\\007'; seq 1 30 | sed s/^/needle-/",
@@ -556,7 +599,7 @@ fn scenes() {
         cx.simulate_keystrokes(window, "enter");
         wait(&mut cx, window, Duration::from_secs(1));
         cx.simulate_keystrokes(window, "cmd-t cmd-t");
-        wait(&mut cx, window, Duration::from_secs(4));
+        settle(&mut cx, window, Duration::from_secs(4));
         save(&mut cx, window, &name("tabs"));
         // The sidebar's Terminal row, twice: the second fills the pane area, both listed under the nav, the first with
         // the pointer on it. Their close buttons then end both, and the keys go back to the tab.
@@ -567,11 +610,11 @@ fn scenes() {
             )
         };
         click(&mut cx, window, point(px(60.0), px(40.0 + 29.0 + 14.0)));
-        wait(&mut cx, window, Duration::from_millis(500));
+        settle(&mut cx, window, Duration::from_millis(500));
         click(&mut cx, window, point(px(60.0), px(40.0 + 29.0 + 14.0)));
-        wait(&mut cx, window, Duration::from_secs(1));
+        settle(&mut cx, window, Duration::from_secs(1));
         mouse_move(&mut cx, window, terminal_row(0.0), false);
-        wait(&mut cx, window, Duration::from_millis(200));
+        settle(&mut cx, window, Duration::from_millis(200));
         save(&mut cx, window, &name("sidebar-terminals"));
         for _ in 0..2 {
             click(&mut cx, window, point(px(226.0), terminal_row(0.0).y));
@@ -584,7 +627,7 @@ fn scenes() {
             "clear; printf '\\033[1mbold\\033[0m \\033[3mitalic\\033[0m \\033[4munder\\033[0m \\033[9mstrike\\033[0m \\033[7minverse\\033[0m \\033[2mdim\\033[0m \\033[31mred\\033[0m \\033[92mgreen\\033[0m\\n'; for i in $(seq 0 15); do printf \"\\033[48;5;${i}m  \"; done; printf '\\033[0m\\n\\033[38;2;255;120;0mtrue color\\033[0m \\033[38;5;75m256 color\\033[0m 漢字 e\\314\\201 ─┼─\\n'",
         );
         cx.simulate_keystrokes(window, "enter");
-        wait(&mut cx, window, Duration::from_secs(1));
+        settle(&mut cx, window, Duration::from_secs(1));
         cx.simulate_event(
             window,
             MouseDownEvent {
@@ -608,10 +651,10 @@ fn scenes() {
         wait(&mut cx, window, Duration::from_millis(300));
         save(&mut cx, window, &name("terminal"));
         cx.simulate_keystrokes(window, "cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t");
-        wait(&mut cx, window, Duration::from_secs(4));
+        settle(&mut cx, window, Duration::from_secs(4));
         save(&mut cx, window, &name("tabs-overflow"));
         cx.simulate_keystrokes(window, "cmd-d cmd-shift-d");
-        wait(&mut cx, window, Duration::from_secs(4));
+        settle(&mut cx, window, Duration::from_secs(4));
         save(&mut cx, window, &name("splits"));
         // Double-click the focused pane's title (the bottom-right one) to rename it.
         let title = point(
@@ -634,11 +677,11 @@ fn scenes() {
         wait(&mut cx, window, Duration::from_millis(200));
         save(&mut cx, window, &name("rename"));
         cx.simulate_keystrokes(window, "enter");
-        wait(&mut cx, window, Duration::from_millis(200));
+        settle(&mut cx, window, Duration::from_millis(200));
         let _ = cx.update_window(window, |_, window, cx| {
             window.dispatch_action(Box::new(actions::ZoomPane), cx)
         });
-        wait(&mut cx, window, Duration::from_millis(300));
+        settle(&mut cx, window, Duration::from_millis(300));
         save(&mut cx, window, &name("zoom"));
         let _ = cx.update_window(window, |_, window, cx| {
             window.dispatch_action(Box::new(actions::ZoomPane), cx)
@@ -658,7 +701,7 @@ fn scenes() {
         cx.simulate_input(window, "New tab: Fixture");
         wait(&mut cx, window, Duration::from_millis(200));
         cx.simulate_keystrokes(window, "enter");
-        wait(&mut cx, window, Duration::from_millis(800));
+        settle(&mut cx, window, Duration::from_millis(800));
         save(&mut cx, window, &name("plugin-tab"));
         // Right of the 248 wide sidebar, under the title bar, project bar, the page's toolbar and its padding.
         click(
@@ -685,7 +728,7 @@ fn scenes() {
         ];
         for (tab, seconds, _) in sessions {
             cx.simulate_keystrokes(window, tab);
-            wait(&mut cx, window, Duration::from_millis(200));
+            settle(&mut cx, window, Duration::from_millis(200));
             cx.simulate_input(
                 window,
                 &format!("exec '{}' {seconds}", fake_claude.display()),
@@ -703,7 +746,7 @@ fn scenes() {
                     .expect("write a session file");
             }
         }
-        wait(&mut cx, window, Duration::from_secs(2));
+        settle(&mut cx, window, Duration::from_secs(2));
         save(&mut cx, window, &name("agents"));
         cx.simulate_keystrokes(window, "cmd-,");
         wait(&mut cx, window, Duration::from_millis(300));
@@ -726,11 +769,11 @@ fn scenes() {
             window,
             "shift-left shift-left shift-left shift-left shift-left",
         );
-        wait(&mut cx, window, Duration::from_millis(200));
+        settle(&mut cx, window, Duration::from_millis(200));
         save(&mut cx, window, &name("settings-selection"));
         // The Cursor section, third in the list, with its style menu open.
         click(&mut cx, window, point(px(left + 70.0), px(201.0)));
-        wait(&mut cx, window, Duration::from_millis(200));
+        settle(&mut cx, window, Duration::from_millis(200));
         // The description wraps at 640, so the row and its select sit lower.
         let select_y = if width < 800.0 { 155.0 } else { 125.0 };
         click(&mut cx, window, point(px(right - 120.0), px(select_y)));
@@ -759,13 +802,13 @@ fn tab_drag(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
         let name = |state: &str| out.join(format!("tab-{state}-{width}.png"));
-        wait(cx, window, Duration::from_secs(2));
+        settle(cx, window, Duration::from_secs(2));
         cx.simulate_keystrokes(window, "cmd-t cmd-t cmd-t");
-        wait(cx, window, Duration::from_secs(2));
+        settle(cx, window, Duration::from_secs(2));
         let (from, neighbour) = (spot("tab:Terminal(3)"), spot("tab:Terminal(2)"));
         let to = point(neighbour.x - px(24.0), from.y);
         mouse_move(cx, window, from, false);
-        wait(cx, window, Duration::from_millis(100));
+        settle(cx, window, Duration::from_millis(100));
         cx.simulate_event(
             window,
             MouseDownEvent {
@@ -796,7 +839,7 @@ fn tab_drag(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         // A program in the shown terminal: its tab gets the green dot once detection sees it.
         cx.simulate_input(window, "sleep 600");
         cx.simulate_keystrokes(window, "enter");
-        wait(cx, window, Duration::from_secs(2));
+        settle(cx, window, Duration::from_secs(2));
         save(cx, window, &name("running"));
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
     }
@@ -992,10 +1035,10 @@ fn sidebar(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
         let name = |state: &str| out.join(format!("sidebar-{state}-{width}.png"));
-        wait(cx, window, Duration::from_secs(3));
+        settle(cx, window, Duration::from_secs(3));
         if std::env::args().nth(2).as_deref() == Some("sidebar-polish") {
             handle.update(cx, |workspace, window, cx| workspace.sample_sidebar_polish(window, cx)).unwrap();
-            wait(cx, window, Duration::from_millis(300));
+            settle(cx, window, Duration::from_millis(300));
             save(cx, window, &name("unread-card"));
             click(cx, window, spot("sidebar-filter"));
             wait(cx, window, Duration::from_millis(300));
@@ -1108,7 +1151,7 @@ fn sidebar(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             for step in 1..=10 {
                 let x = from + (to - from) * step as f32 / 10.0;
                 mouse_move(cx, window, point(px(x), px(300.0)), true);
-                wait(cx, window, Duration::from_millis(20));
+                settle(cx, window, Duration::from_millis(20));
             }
             cx.simulate_event(
                 window,
@@ -1119,16 +1162,16 @@ fn sidebar(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
                     click_count: 1,
                 },
             );
-            wait(cx, window, Duration::from_millis(300));
+            settle(cx, window, Duration::from_millis(300));
             save(cx, window, &name(state));
         }
         // Closing, halfway through its slide, then closed, and the pointer at the window's edge.
         cx.simulate_keystrokes(window, "cmd-b");
         wait(cx, window, Duration::from_millis(100));
         save(cx, window, &name("sliding"));
-        wait(cx, window, Duration::from_millis(400));
+        settle(cx, window, Duration::from_millis(400));
         mouse_move(cx, window, point(px(3.0), px(300.0)), false);
-        wait(cx, window, Duration::from_millis(500));
+        settle(cx, window, Duration::from_millis(500));
         save(cx, window, &name("peek"));
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
         wait(cx, window, Duration::from_millis(300));
@@ -1189,13 +1232,13 @@ fn readout(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             })
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
-        wait(cx, window, Duration::from_secs(2));
+        settle(cx, window, Duration::from_secs(2));
         cx.simulate_keystrokes(window, "cmd-t cmd-d");
         cx.simulate_keystrokes(window, "cmd-k");
         cx.simulate_input(window, "Performance Readout");
         cx.simulate_keystrokes(window, "enter");
         // Past two updates, so the card shows numbers.
-        wait(cx, window, Duration::from_millis(2500));
+        wait_real(cx, window, Duration::from_millis(2500));
         save(cx, window, &out.join(format!("readout-{width}.png")));
     }
 }
@@ -1219,9 +1262,9 @@ fn chrome(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
         let name = |state: &str| out.join(format!("{state}-{width}.png"));
-        wait(cx, window, Duration::from_secs(2));
+        settle(cx, window, Duration::from_secs(2));
         cx.simulate_keystrokes(window, "cmd-t cmd-d");
-        wait(cx, window, Duration::from_secs(2));
+        settle(cx, window, Duration::from_secs(2));
         // The nav's third row.
         let inbox = point(px(60.0), px(40.0 + 2.0 * 29.0 + 14.0));
         mouse(cx, window, inbox, Some(MouseButton::Left));
@@ -1400,9 +1443,9 @@ fn finder(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
         let name = |state: &str| out.join(format!("{state}-{width}.png"));
-        wait(cx, window, Duration::from_secs(3));
+        settle(cx, window, Duration::from_secs(3));
         cx.simulate_keystrokes(window, "cmd-t");
-        wait(cx, window, Duration::from_secs(1));
+        settle(cx, window, Duration::from_secs(1));
         // The palette with nothing typed, with the highlight moved down, and narrowed to the logins.
         cx.simulate_keystrokes(window, "cmd-k");
         wait(cx, window, Duration::from_millis(600));
@@ -1473,7 +1516,7 @@ fn accounts(cx: &mut VisualTestAppContext, base: &Config, fake_claude: &Path, ou
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
         let name = |state: &str| out.join(format!("accounts-{state}-{width}.png"));
-        wait(cx, window, Duration::from_secs(3));
+        settle(cx, window, Duration::from_secs(3));
         // One agent in the first tab, one in a second; each a made-up `claude` told apart by how long it sleeps.
         let agents = [
             (
@@ -1490,7 +1533,7 @@ fn accounts(cx: &mut VisualTestAppContext, base: &Config, fake_claude: &Path, ou
         for (at, (_, seconds, _)) in agents.iter().enumerate() {
             if at > 0 {
                 cx.simulate_keystrokes(window, "cmd-t");
-                wait(cx, window, Duration::from_secs(2));
+                settle(cx, window, Duration::from_secs(2));
             }
             cx.simulate_input(
                 window,
@@ -1498,7 +1541,7 @@ fn accounts(cx: &mut VisualTestAppContext, base: &Config, fake_claude: &Path, ou
             );
             cx.simulate_keystrokes(window, "enter");
         }
-        wait(cx, window, Duration::from_secs(1));
+        settle(cx, window, Duration::from_secs(1));
         for (account, seconds, session) in agents {
             let pids = std::process::Command::new("pgrep")
                 .args(["-f", &format!("{} {seconds}", fake_claude.display())])
@@ -1509,7 +1552,7 @@ fn accounts(cx: &mut VisualTestAppContext, base: &Config, fake_claude: &Path, ou
                     .expect("write a session file");
             }
         }
-        wait(cx, window, Duration::from_secs(2));
+        settle(cx, window, Duration::from_secs(2));
         save(cx, window, &name("sidebar"));
         // What each agent just did, as the model sums it up, drawn before the next scan clears it.
         handle
@@ -1538,7 +1581,7 @@ fn accounts(cx: &mut VisualTestAppContext, base: &Config, fake_claude: &Path, ou
         for step in 1..=10 {
             let x = 247.0 - (247.0 - 100.0) * step as f32 / 10.0;
             mouse_move(cx, window, point(px(x), px(300.0)), true);
-            wait(cx, window, Duration::from_millis(20));
+            settle(cx, window, Duration::from_millis(20));
         }
         cx.simulate_event(
             window,
@@ -1549,7 +1592,7 @@ fn accounts(cx: &mut VisualTestAppContext, base: &Config, fake_claude: &Path, ou
                 click_count: 1,
             },
         );
-        wait(cx, window, Duration::from_millis(500));
+        settle(cx, window, Duration::from_millis(500));
         save(cx, window, &name("sidebar-narrow"));
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
         let _ = std::process::Command::new("pkill")
@@ -1587,7 +1630,7 @@ fn first_launch(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             })
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
-        wait(cx, window, Duration::from_secs(1));
+        settle(cx, window, Duration::from_secs(1));
         handle
             .update(cx, |w, _, cx| w.official_plugins_listed(list, cx))
             .unwrap();
@@ -1623,7 +1666,7 @@ fn disk_access(cx: &mut VisualTestAppContext, base: &Config, fake: &Path, out: &
             })
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
-        wait(cx, window, Duration::from_secs(2));
+        settle(cx, window, Duration::from_secs(2));
         handle
             .update(cx, |w, _, cx| w.disk_access_checked(Some(false), cx))
             .unwrap();
@@ -1640,7 +1683,7 @@ fn disk_access(cx: &mut VisualTestAppContext, base: &Config, fake: &Path, out: &
         // Settings, General, the first section.
         let left = (width - 820.0f32.min(width * 0.92)) / 2.0;
         click(cx, window, point(px(left + 70.0), px(150.0)));
-        wait(cx, window, Duration::from_millis(300));
+        settle(cx, window, Duration::from_millis(300));
         save(
             cx,
             window,
@@ -1705,7 +1748,7 @@ fn older_servers(cx: &mut VisualTestAppContext, base: &Config, fake: &Path, out:
             })
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
-        wait(cx, window, Duration::from_secs(2));
+        settle(cx, window, Duration::from_secs(2));
         save(
             cx,
             window,
@@ -1735,7 +1778,7 @@ fn older_servers(cx: &mut VisualTestAppContext, base: &Config, fake: &Path, out:
         handle
             .update(cx, |w, window, cx| w.sample_stop_server(window, cx))
             .unwrap();
-        wait(cx, window, Duration::from_millis(400));
+        settle(cx, window, Duration::from_millis(400));
         save(
             cx,
             window,
@@ -1825,13 +1868,13 @@ fn restored(
             })
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
-        wait(cx, window, Duration::from_secs(3));
+        settle(cx, window, Duration::from_secs(3));
         // A live agent in the first tab, for the rows beside it.
         cx.simulate_keystrokes(window, "cmd-1");
-        wait(cx, window, Duration::from_millis(300));
+        settle(cx, window, Duration::from_millis(300));
         cx.simulate_input(window, &format!("exec '{}' 142", fake_claude.display()));
         cx.simulate_keystrokes(window, "enter");
-        wait(cx, window, Duration::from_secs(1));
+        settle(cx, window, Duration::from_secs(1));
         let pids = std::process::Command::new("pgrep")
             .args(["-f", &format!("{} 142", fake_claude.display())])
             .output()
@@ -1843,9 +1886,9 @@ fn restored(
             )
             .expect("write a session file");
         }
-        wait(cx, window, Duration::from_secs(2));
+        settle(cx, window, Duration::from_secs(2));
         cx.simulate_keystrokes(window, "cmd-2");
-        wait(cx, window, Duration::from_millis(500));
+        settle(cx, window, Duration::from_millis(500));
         save(cx, window, &out.join(format!("restored-{width}.png")));
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
         let _ = std::process::Command::new("pkill")
@@ -1908,16 +1951,16 @@ fn icons(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
         let name = |state: &str| out.join(format!("icons-{state}-{width}.png"));
-        wait(cx, window, Duration::from_secs(1));
+        settle(cx, window, Duration::from_secs(1));
         handle
             .update(cx, |w, _, cx| w.shot_sidebar("board", "side", cx))
             .unwrap();
-        wait(cx, window, Duration::from_millis(500));
+        settle(cx, window, Duration::from_millis(500));
         save(cx, window, &name("sidebar"));
         handle
             .update(cx, |w, window, cx| w.show_plugins("board", &[], window, cx))
             .unwrap();
-        wait(cx, window, Duration::from_millis(300));
+        settle(cx, window, Duration::from_millis(300));
         save(cx, window, &name("settings"));
         handle
             .update(cx, |w, window, cx| {
@@ -1966,7 +2009,7 @@ fn plugin_settings(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
         let name = |state: &str| out.join(format!("settings-{state}-{width}.png"));
-        wait(cx, window, Duration::from_secs(1));
+        settle(cx, window, Duration::from_secs(1));
         cx.simulate_keystrokes(window, "cmd-,");
         wait(cx, window, Duration::from_millis(300));
         for (state, row) in [
@@ -1975,7 +2018,7 @@ fn plugin_settings(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         ] {
             click(cx, window, spot(&format!("settings-nav:{row}")));
             // The page's module is compiled the first time it starts, which takes seconds in a debug build.
-            wait(cx, window, Duration::from_millis(5000));
+            settle(cx, window, Duration::from_millis(5000));
             save(cx, window, &name(state));
         }
         // The resize draws a frame every 16ms for its 200ms: the median of what each takes, against frames with nothing
@@ -2030,10 +2073,10 @@ fn agent_terminals(
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
         let name = |state: &str| out.join(format!("agent-terminals-{state}-{width}.png"));
-        wait(cx, window, Duration::from_secs(3));
+        settle(cx, window, Duration::from_secs(3));
         cx.simulate_input(window, &format!("exec '{}' 131", fake_claude.display()));
         cx.simulate_keystrokes(window, "enter");
-        wait(cx, window, Duration::from_secs(1));
+        settle(cx, window, Duration::from_secs(1));
         let pids = std::process::Command::new("pgrep")
             .args(["-f", &format!("{} 131", fake_claude.display())])
             .output()
@@ -2045,7 +2088,7 @@ fn agent_terminals(
             )
             .expect("write a session file");
         }
-        wait(cx, window, Duration::from_secs(2));
+        settle(cx, window, Duration::from_secs(2));
         let open = |cx: &mut VisualTestAppContext, command: &str, run: bool| {
             handle
                 .update(cx, |workspace, window, cx| {
@@ -2059,33 +2102,33 @@ fn agent_terminals(
             true,
         );
         // Long enough for a shell with a slow profile to start and run it, so it's busy.
-        wait(cx, window, Duration::from_secs(8));
+        settle(cx, window, Duration::from_secs(8));
         save(cx, window, &name("below"));
         // The dev server keeps it busy, so the test run gets a terminal of its own, beside it.
         open(cx, "pnpm test --watch", false);
-        wait(cx, window, Duration::from_secs(2));
+        settle(cx, window, Duration::from_secs(2));
         save(cx, window, &name("two"));
         click(cx, window, spot("agent-float:1"));
-        wait(cx, window, Duration::from_secs(1));
+        settle(cx, window, Duration::from_secs(1));
         save(cx, window, &name("floated"));
         click(cx, window, spot("float-picker:0"));
-        wait(cx, window, Duration::from_millis(500));
+        settle(cx, window, Duration::from_millis(500));
         save(cx, window, &name("floated-menu"));
         click(cx, window, spot("float-pick:1"));
-        wait(cx, window, Duration::from_millis(500));
+        settle(cx, window, Duration::from_millis(500));
         save(cx, window, &name("floated-picked"));
         click(cx, window, spot("float-minimise:0"));
-        wait(cx, window, Duration::from_millis(500));
+        settle(cx, window, Duration::from_millis(500));
         save(cx, window, &name("minimised"));
         click(cx, window, spot("float-dock:0"));
-        wait(cx, window, Duration::from_millis(500));
+        settle(cx, window, Duration::from_millis(500));
         click(cx, window, spot("agent-hide:1"));
-        wait(cx, window, Duration::from_millis(500));
+        settle(cx, window, Duration::from_millis(500));
         save(cx, window, &name("hidden"));
         click(cx, window, spot("agent-terminals:0"));
-        wait(cx, window, Duration::from_millis(500));
+        settle(cx, window, Duration::from_millis(500));
         click(cx, window, spot("agent-move:1"));
-        wait(cx, window, Duration::from_secs(1));
+        settle(cx, window, Duration::from_secs(1));
         save(cx, window, &name("right"));
         cx.simulate_keystrokes(window, "cmd-,");
         wait(cx, window, Duration::from_millis(300));
@@ -2100,7 +2143,7 @@ fn agent_terminals(
                 ..Default::default()
             },
         );
-        wait(cx, window, Duration::from_millis(300));
+        settle(cx, window, Duration::from_millis(300));
         save(cx, window, &name("settings"));
         click(cx, window, spot("select:agent-terminals-open"));
         wait(cx, window, Duration::from_millis(300));
@@ -2163,7 +2206,7 @@ fn diff_dock(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
         let name = |state: &str| out.join(format!("diff-{state}-{width}.png"));
-        wait(cx, window, Duration::from_millis(1500));
+        settle(cx, window, Duration::from_millis(1500));
         save(cx, window, &name("docked"));
         click(cx, window, spot("diff-expand"));
         wait(cx, window, Duration::from_millis(300));
@@ -2318,16 +2361,16 @@ fn right_splits(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
         let name = |state: &str| out.join(format!("right-splits-{state}-{width}.png"));
-        wait(cx, window, Duration::from_secs(1));
+        settle(cx, window, Duration::from_secs(1));
         handle
             .update(cx, |w, _, cx| w.shot_sidebar("changes", "side", cx))
             .unwrap();
-        wait(cx, window, Duration::from_millis(500));
+        settle(cx, window, Duration::from_millis(500));
         save(cx, window, &name("one"));
         handle
             .update(cx, |w, _, cx| w.shot_split_sidebar("agents", "agent", cx))
             .unwrap();
-        wait(cx, window, Duration::from_millis(500));
+        settle(cx, window, Duration::from_millis(500));
         save(cx, window, &name("two"));
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
     }
@@ -2364,9 +2407,9 @@ fn right_named(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             })
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
-        wait(cx, window, Duration::from_secs(1));
+        settle(cx, window, Duration::from_secs(1));
         handle.update(cx, |w, _, cx| w.shot_sidebar("claude-chat", "pane", cx)).unwrap();
-        wait(cx, window, Duration::from_millis(800));
+        settle(cx, window, Duration::from_millis(800));
         save(cx, window, &out.join(format!("right-named-{width}.png")));
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
     }
@@ -2395,11 +2438,11 @@ fn diff_sidebar(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
         let name = |state: &str| out.join(format!("diff-sidebar-{state}-{width}.png"));
-        wait(cx, window, Duration::from_secs(1));
+        settle(cx, window, Duration::from_secs(1));
         handle
             .update(cx, |w, _, cx| w.shot_sidebar("changes", "side", cx))
             .unwrap();
-        wait(cx, window, Duration::from_millis(500));
+        settle(cx, window, Duration::from_millis(500));
         save(cx, window, &name("list"));
         let payload = serde_json::json!({
             "patch": patch,
@@ -2414,14 +2457,14 @@ fn diff_sidebar(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             })
             .unwrap();
         // The widening, and the files read for the folds.
-        wait(cx, window, Duration::from_millis(2000));
+        settle(cx, window, Duration::from_millis(2000));
         save(cx, window, &name("open"));
         // The fold between config.rs's hunks opens; README.md's stay closed.
         click(cx, window, spot("diff-fold-0-0"));
-        wait(cx, window, Duration::from_millis(500));
+        settle(cx, window, Duration::from_millis(500));
         save(cx, window, &name("fold"));
         click(cx, window, spot("diff-scope"));
-        wait(cx, window, Duration::from_millis(300));
+        settle(cx, window, Duration::from_millis(300));
         save(cx, window, &name("scopes"));
         cx.simulate_keystrokes(window, "escape");
         wait(cx, window, Duration::from_millis(300));
@@ -2521,7 +2564,7 @@ fn diff_comments(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
         let name = |state: &str| out.join(format!("diff-comments-{state}-{width}.png"));
-        wait(cx, window, Duration::from_millis(1500));
+        settle(cx, window, Duration::from_millis(1500));
         save(cx, window, &name("docked"));
         // At 640 there's no room to dock, so it already fills the window, with no file list toggle.
         let docks = width > 700.0;
@@ -2604,7 +2647,7 @@ fn plugins_install(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
         let name = |state: &str| out.join(format!("{state}-{width}.png"));
-        wait(cx, window, Duration::from_secs(1));
+        settle(cx, window, Duration::from_secs(1));
         let show = |cx: &mut VisualTestAppContext, selected: &'static str| {
             handle
                 .update(cx, |w, window, cx| {
@@ -2612,7 +2655,7 @@ fn plugins_install(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
                     w.show_plugins(selected, &[("tracker", "1.3.0")], window, cx)
                 })
                 .unwrap();
-            wait(cx, window, Duration::from_millis(300));
+            settle(cx, window, Duration::from_millis(300));
         };
         let list = |cx: &mut VisualTestAppContext, tab: &'static str, query: &'static str, menu: Option<&'static str>| {
             let entry = |id: &str, name: &str, description: &str| wings_plugins::store::Available {
@@ -2664,7 +2707,7 @@ fn plugins_install(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
                 w.show_plugin_review("notes", window, cx)
             })
             .unwrap();
-        wait(cx, window, Duration::from_millis(300));
+        settle(cx, window, Duration::from_millis(300));
         save(cx, window, &name("plugins-review"));
         handle
             .update(cx, |w, _, cx| {
@@ -2704,7 +2747,7 @@ fn setup_existing_worktree(cx: &mut VisualTestAppContext, base: &Config, out: &P
             })
             .expect("open worktree setup fixture");
         let window: AnyWindowHandle = handle.into();
-        wait(cx, window, Duration::from_secs(1));
+        settle(cx, window, Duration::from_secs(1));
         handle
             .update(cx, |w, _, cx| {
                 w.show_existing_worktree_setup_approval(
@@ -2858,7 +2901,7 @@ fn plugins_terminals(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
                 workspace.sample_page_terminal(tab, "for step in fetch compile link; do echo $step; done", window, cx);
             })
             .expect("the chat's agent opens a terminal");
-        wait(cx, window, Duration::from_secs(2));
+        settle(cx, window, Duration::from_secs(2));
         save(cx, window, &out.join(format!("plugins-terminals-{width}.png")));
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
     }
@@ -2913,7 +2956,7 @@ fn plugins_modal(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             })
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
-        wait(cx, window, Duration::from_secs(4));
+        settle(cx, window, Duration::from_secs(4));
         save(cx, window, &out.join(format!("plugins-modal-{width}.png")));
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
     }
@@ -2960,7 +3003,7 @@ fn plugins_drop(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
         let name = |state: &str| out.join(format!("{state}-{width}.png"));
-        wait(cx, window, Duration::from_secs(1));
+        settle(cx, window, Duration::from_secs(1));
         let position = point(px(width / 2.0), px(320.0));
         cx.simulate_event(
             window,
@@ -3020,7 +3063,7 @@ fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
         let name = |state: &str| out.join(format!("{state}-{width}.png"));
-        wait(cx, window, Duration::from_secs(2));
+        settle(cx, window, Duration::from_secs(2));
         save(cx, window, &name("editor"));
         // The chevron at the project bar's right end, under the 40px title bar.
         let chevron = point(px(width - 8.0 - 14.0), px(40.0 + 18.0));
@@ -3090,7 +3133,7 @@ fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         for (index, section) in sections.into_iter().enumerate() {
             let row = point(px(left + 70.0), px(133.0 + 34.0 * index as f32));
             click(cx, window, row);
-            wait(cx, window, Duration::from_millis(200));
+            settle(cx, window, Duration::from_millis(200));
             save(cx, window, &name(&format!("settings-{section}")));
             // Agents runs past the first screen: its names, summaries and sleep settings are further down.
             if section == "agents" || section == "tools" {
@@ -3104,7 +3147,7 @@ fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
                         source: gpui::ScrollSource::Pointer,
                     },
                 );
-                wait(cx, window, Duration::from_millis(200));
+                settle(cx, window, Duration::from_millis(200));
                 save(cx, window, &name(&format!("settings-{section}-scrolled")));
                 // The next section starts at its top.
                 cx.simulate_event(
@@ -3168,11 +3211,11 @@ fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             started.elapsed()
         );
         timed(cx, "first show");
-        wait(cx, window, Duration::from_secs(2));
+        settle(cx, window, Duration::from_secs(2));
         save(cx, window, &name("quick"));
         timed(cx, "hide");
         timed(cx, "show again");
-        wait(cx, window, Duration::from_millis(300));
+        settle(cx, window, Duration::from_millis(300));
         // The header's buttons from the right: close, minimise, fill. The panel sits 24px in from the area's corner.
         let top = 640.0 - 24.0 - 380.0;
         let button =
@@ -3184,7 +3227,7 @@ fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         timed(cx, "show again");
         wait(cx, window, Duration::from_millis(300));
         click(cx, window, button(60.0));
-        wait(cx, window, Duration::from_millis(500));
+        settle(cx, window, Duration::from_millis(500));
         save(cx, window, &name("quick-full"));
         timed(cx, "hide");
 
@@ -3195,7 +3238,7 @@ fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         mouse_move(cx, window, point(px(60.0), px(project)), false);
         wait(cx, window, Duration::from_millis(200));
         click(cx, window, point(px(248.0 - 8.0 - 6.0 - 12.0), px(project)));
-        wait(cx, window, Duration::from_millis(200));
+        settle(cx, window, Duration::from_millis(200));
         save(cx, window, &name("welcome-remove"));
         // The dialog's Remove button: 400 x 176 in the middle, buttons at the bottom right inside 20px of padding.
         click(
@@ -3344,10 +3387,10 @@ fn images(cx: &mut VisualTestAppContext, config: &Config, fake: &Path, out: &Pat
             })
             .expect("open an offscreen window");
         let window: AnyWindowHandle = handle.into();
-        wait(cx, window, Duration::from_secs(3));
+        settle(cx, window, Duration::from_secs(3));
         cx.simulate_input(window, &format!("clear; cat {}", fixture.display()));
         cx.simulate_keystrokes(window, "enter");
-        wait(cx, window, Duration::from_secs(2));
+        settle(cx, window, Duration::from_secs(2));
         save(
             cx,
             window,

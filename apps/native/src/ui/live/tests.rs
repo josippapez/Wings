@@ -266,6 +266,7 @@ const OTHER_ENTITIES: &[(&str, &str)] = &[
     ("workspace/project_page/mod.rs", "apply"),
     ("workspace/project_page/mod.rs", "new"),
     ("workspace/project_page/mod.rs", "reload"),
+    ("workspace/project_page/mod.rs", "render"),
     ("workspace/project_page/mod.rs", "search_now"),
     ("workspace/project_page/mod.rs", "set_visible"),
     ("workspace/sidebar/drag.rs", "redraw_sidebar"),

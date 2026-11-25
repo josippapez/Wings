@@ -29,7 +29,7 @@ use crate::{
 
 use super::{
     Active, Workspace,
-    history::{SessionRef, one_line},
+    history::{SessionRef, ago, now_ms, one_line},
     panes::tildify,
     rank::{Item, Kind, group_of, rank},
 };
@@ -131,7 +131,7 @@ pub(super) fn shortcut_label(action: &dyn Action, cx: &App) -> Option<String> {
 }
 
 /// A recent session as a line: its name, and where and when it was.
-fn session_entry(hit: &Hit) -> Option<Entry> {
+pub(super) fn session_entry(hit: &Hit) -> Option<Entry> {
     let cwd = hit.cwd.clone()?;
     let title = one_line(
         hit.title
@@ -152,7 +152,8 @@ fn session_entry(hit: &Hit) -> Option<Entry> {
     );
     let place = cwd.rsplit('/').next().map(str::to_owned);
     line.subtitle = Some(
-        [place, hit.git_branch.clone(), hit.last_active.clone()]
+        // When it was as "5 minutes ago", as the sessions sheet says it, not the raw timestamp.
+        [place, hit.git_branch.clone(), hit.last_active.as_ref().map(|_| ago(now_ms(), hit.last_active_ms))]
             .into_iter()
             .flatten()
             .filter(|part| !part.is_empty())

@@ -246,6 +246,9 @@ impl Default for GlobalHotkey {
 pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_size: Option<f32>,
+    /// The sidebar's text size: the size of a project's name, in points.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidebar_text: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sidebar_open: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

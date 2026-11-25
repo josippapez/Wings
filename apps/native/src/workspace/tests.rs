@@ -6,7 +6,7 @@ use crate::{
         WINGS_VERSION,
         fixture::{Approval::Current, Data},
     },
-    layout::DIVIDER,
+    layout::SEAM,
 };
 use gpui::{
     Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, TestApp, TestAppWindow, point, px,
@@ -509,7 +509,7 @@ fn dragging_a_divider_resizes_the_split_within_its_limits() {
         })
     };
     let drag = |window: &mut TestAppWindow<Workspace>, to: f32| {
-        let on_divider = point(x(ratio(window)) + px(DIVIDER / 2.0), y);
+        let on_divider = point(x(ratio(window)) + px(SEAM / 2.0), y);
         window.simulate_mouse_down(on_divider, MouseButton::Left);
         window.simulate_event(MouseMoveEvent {
             position: point(x(to), y),
@@ -1613,6 +1613,61 @@ fn a_new_notification_plays_the_chosen_sound_as_settings_say_and_once_per_burst(
         });
         assert_eq!(played(), []);
         assert_eq!(w.inbox.events.len(), 4);
+    });
+}
+
+/// An agent whose background commands end, each starting a turn of its own, finishes again and again: it sounds once
+/// until you open the list (or look at it), and keeps one row.
+#[test]
+fn an_agent_that_finishes_again_before_you_look_sounds_once() {
+    use super::sound::{PLAYED, SoundId};
+    use crate::agents::{AgentKind, AgentState};
+    let played = || PLAYED.with(|played| std::mem::take(&mut *played.borrow_mut()));
+    let (_app, mut window) = open();
+    // Pane 1 has focus; pane 0 isn't the one you're looking at.
+    press(&mut window, "d");
+    let agent = |state: AgentState| crate::agents::Agent {
+        pane_id: "0".into(),
+        space_id: String::new(),
+        pid: 1,
+        kind: AgentKind::Claude,
+        session_id: None,
+        name: None,
+        state,
+        waiting_for: None,
+        args: Vec::new(),
+        launcher: None,
+        started_at: 0,
+        state_since: None,
+        direct: true,
+        summary: None,
+        weak_name: false,
+        claude_dir: None,
+    };
+    let turn = |w: &mut Workspace| {
+        for (from, to) in [(AgentState::Done, AgentState::Working), (AgentState::Working, AgentState::Done)] {
+            let before = HashMap::from([(0, agent(from))]);
+            w.agents = HashMap::from([(0, agent(to))]);
+            w.inbox_agents(&before);
+        }
+    };
+    window.update(|w, _, _| {
+        w.window_active = true;
+        w.prefs.notify_sound.sound = SoundId::Drop;
+        played();
+        turn(w);
+        assert_eq!(played(), [SoundId::Drop]);
+    });
+    // Past the second in which notifications share one sound.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    window.update(|w, _, cx| {
+        turn(w);
+        turn(w);
+        assert_eq!(played(), [], "it finished again before you looked");
+        assert_eq!(w.inbox.events.len(), 1);
+        w.open_inbox(cx);
+        turn(w);
+        assert_eq!(played(), [SoundId::Drop], "after you opened the list");
     });
 }
 

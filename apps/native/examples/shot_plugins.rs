@@ -142,6 +142,9 @@ fn main() {
         .iter()
         .find(|scene| args.iter().any(|arg| arg == scene.flag))
         .unwrap_or(&SCENES[SCENES.len() - 1]);
+    // The modules' compiled code is kept for the next run, which then loads it in place of compiling: Claude chat's took
+    // 26 s to compile with the debug build's Cranelift, and 5 s with the optimised one.
+    wings_native::page::runtime::wasm::keep_compiled_in(std::env::temp_dir().join("wings-test-cwasm"));
     (scene.run)(out);
     cutoff::end_run();
 }
@@ -1124,9 +1127,14 @@ esac"##,
     let init = json!({ "type": "system", "subtype": "init", "session_id": "5b7e2c1a-0f3d-4c8e-9a61-2d4f8b3c7e90", "model": "claude-opus-5-5" });
     let user = |text: &str| json!({ "type": "user", "message": { "role": "user", "content": text } });
     let assistant = |content: serde_json::Value| json!({ "type": "assistant", "message": { "role": "assistant", "content": content } });
-    let tool = |id: &str, name: &str, input: serde_json::Value| assistant(json!([{ "type": "tool_use", "id": id, "name": name, "input": input }]));
+    // A call and its result carry the times Claude Code stamps on its lines, 4.2 s apart, which an opened call shows.
+    let tool = |id: &str, name: &str, input: serde_json::Value| {
+        let mut line = assistant(json!([{ "type": "tool_use", "id": id, "name": name, "input": input }]));
+        line["timestamp"] = json!("2026-11-25T06:00:00.000Z");
+        line
+    };
     let output = |id: &str, text: &str, failed: bool| {
-        json!({ "type": "user", "message": { "role": "user", "content": [{ "type": "tool_result", "tool_use_id": id, "content": text, "is_error": failed }] } })
+        json!({ "type": "user", "timestamp": "2026-11-25T06:00:04.200Z", "message": { "role": "user", "content": [{ "type": "tool_result", "tool_use_id": id, "content": text, "is_error": failed }] } })
     };
     let text = |text: &str| assistant(json!([{ "type": "text", "text": text }]));
     let delta = |text: &str| json!({ "type": "stream_event", "event": { "type": "content_block_delta", "index": 0, "delta": { "type": "text_delta", "text": text } } });
@@ -2591,10 +2599,26 @@ esac"##,
                 }
             };
             if let Some(act) = act {
-                // Once Claude Code has answered, the model picker shows.
+                // Once Claude Code has answered, the model picker shows. Typing waits for more: the message box drops what is
+                // typed before the chat has started, and it is a new box once the conversation it resumes has been drawn
+                // (from the middle of the empty chat to the foot), so the page must have sent no new tree for a while.
+                let types = act.contains("type:");
+                let (mut trees, mut drawn) = (0, Instant::now());
                 let deadline = Instant::now() + Duration::from_secs(30);
-                while handle.read_with(&cx, |view, _| view.select_named("Model and effort")).unwrap().is_none() {
-                    assert!(Instant::now() < deadline, "the model picker never showed: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
+                loop {
+                    let (sent, picker, disabled) = handle
+                        .read_with(&cx, |view, cx| {
+                            let disabled = view.input_field("Message").is_some_and(|field| field.read(cx).disabled);
+                            (view.trees_sent(), view.select_named("Model and effort").is_some(), disabled)
+                        })
+                        .unwrap();
+                    if sent != trees {
+                        (trees, drawn) = (sent, Instant::now());
+                    }
+                    if picker && !(types && (disabled || drawn.elapsed() < Duration::from_millis(200))) {
+                        break;
+                    }
+                    assert!(Instant::now() < deadline, "the chat never took typing: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
                     wait(&mut cx, window, Duration::from_millis(20));
                 }
                 for act in act.split(';') {
@@ -3486,8 +3510,6 @@ fn pr_tracker_repo(folder: &std::path::Path, origin: &str, branch: &str) {
 /// pages run the forges themselves and ask the main script, which runs here too, for the lists.
 fn pr_tracker(out: PathBuf) {
     use wings_native::page::plugin::StatePlace::{Block, Tab};
-    // The compiled code of the modules is kept for the next run: compiling them takes minutes in this build.
-    wings_native::page::runtime::wasm::keep_compiled_in(std::env::temp_dir().join("wings-test-cwasm"));
     let bin = out.join("fake-pr-programs");
     pr_tracker_programs(&bin);
     let mode = |mode: &str| std::fs::write(bin.join("mode"), mode).unwrap();

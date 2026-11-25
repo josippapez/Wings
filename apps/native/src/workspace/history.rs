@@ -20,7 +20,10 @@ use wings_agents::{
     ai::{Ai, Made},
     history::{Agent, Filter, History, Hit, Results, Role as Speaker, Snippet, fold, terms},
 };
-use wings_plugins::manifest::View;
+use wings_plugins::{
+    manifest::View,
+    transcript::{account_of, bring_transcript},
+};
 use wings_spaces::claude_accounts;
 
 use crate::{
@@ -171,54 +174,6 @@ fn resuming(views: &[View], agent: Agent) -> impl Iterator<Item = &View> {
     views.iter().filter(move |view| view.resumes.iter().any(|name| name == agent_key(agent)))
 }
 
-/// The account folder a transcript is in: `<account>/projects/<folder>/<id>.jsonl`.
-fn account_of(transcript: &Path) -> Option<&Path> {
-    transcript.parent()?.parent()?.parent()
-}
-
-/// Makes a Claude session resumable under the account in folder `target`. Claude Code looks for a session only in its
-/// own account's `projects/`, so a transcript from another account is copied into the same project folder there, with
-/// the folder beside it that holds its subagents and tool results. A transcript already there is kept: it may hold the
-/// session's continuation.
-pub(super) fn bring_transcript(transcript: &Path, target: &Path) -> std::io::Result<()> {
-    let (Some(account), Some(folder), Some(name), Some(id)) = (
-        account_of(transcript),
-        transcript.parent().and_then(Path::file_name),
-        transcript.file_name(),
-        transcript.file_stem(),
-    ) else {
-        return Ok(());
-    };
-    let into = target.join("projects").join(folder);
-    if account == target || into.join(name).exists() {
-        return Ok(());
-    }
-    std::fs::create_dir_all(&into)?;
-    let extras = transcript.with_file_name(id);
-    if extras.is_dir() {
-        copy_missing(&extras, &into.join(id))?;
-    }
-    // Written aside and renamed, so a copy cut short is never taken for the transcript, which is never overwritten.
-    let partial = into.join(format!(".{}.partial", name.to_string_lossy()));
-    std::fs::copy(transcript, &partial)?;
-    std::fs::rename(&partial, into.join(name))
-}
-
-/// Copies the files of folder `from` that `to` doesn't have yet.
-fn copy_missing(from: &Path, to: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(to)?;
-    for entry in std::fs::read_dir(from)? {
-        let entry = entry?;
-        let into = to.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_missing(&entry.path(), &into)?;
-        } else if !into.exists() {
-            std::fs::copy(entry.path(), &into)?;
-        }
-    }
-    Ok(())
-}
-
 /// The line that continues a session, without its Enter. `None` when `id` isn't one of the agent's: it gets typed into a
 /// shell, so nothing else goes through.
 pub(super) fn resume_command(agent: Agent, id: &str) -> Option<String> {
@@ -325,7 +280,7 @@ pub(super) fn one_line(text: &str) -> String {
 }
 
 /// "5 minutes ago", "yesterday": how `Intl.RelativeTimeFormat` says it in English with `numeric: "auto"`.
-fn ago(now: u64, then: u64) -> String {
+pub(super) fn ago(now: u64, then: u64) -> String {
     let round = |x: f64| (x + 0.5).floor() as i64;
     let minutes = round((then as f64 - now as f64) / 60_000.0);
     if minutes.abs() < 60 {
@@ -387,7 +342,7 @@ fn session_meta(hit: &Hit, now: u64, project: &str, all: bool) -> String {
     )
 }
 
-fn now_ms() -> u64 {
+pub(super) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64)

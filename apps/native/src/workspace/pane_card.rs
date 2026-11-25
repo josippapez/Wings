@@ -1,16 +1,13 @@
 //! A tab's panes as cards: the split layout with its dividers, each pane's header and buttons.
 
-use std::{cell::Cell, rc::Rc};
-
 use gpui::{
-    AnyElement, BorderStyle, Bounds, BoxShadow, Context, Corners, Edges, Hsla, MouseButton,
-    MouseDownEvent, Orientation, Pixels, Role, SharedString, Window, canvas, div, hsla, point,
-    prelude::*, px, quad, relative, rgb, rgba,
+    AnyElement, Context, MouseButton, MouseDownEvent, Orientation, Role, SharedString, Window, div,
+    prelude::*, px, relative, rgb, rgba,
 };
 
 use crate::{
     icons::{Icon, icon},
-    layout::{DIVIDER, Dir, Layout},
+    layout::{Dir, Layout, SEAM},
     theme,
     ui::{self, ButtonSize},
 };
@@ -24,8 +21,10 @@ use super::{
 
 /// A divider's line while the pointer is on it (`bg-white/25`).
 pub(super) const DIVIDER_HOVER: u32 = 0xffffff40;
-/// A pane card's corners.
-const CARD_RADIUS: f32 = 14.0;
+/// How far each side of its line a divider can be grabbed.
+const GRAB: f32 = 3.0;
+/// A pane header's height, and the rule along the top of the focused one's.
+pub(super) const HEADER: f32 = 32.0;
 
 /// The layer of the window that draws the panes' terminals, over their cards (`ui::slot_layer`).
 pub(super) const TERMINALS: &str = "terminals";
@@ -44,30 +43,45 @@ impl Workspace {
         path: &mut Vec<bool>,
         focused: usize,
         hidden: &[usize],
+        width: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let Layout::Split { dir, ratio, a, b } = node else {
             let Layout::Pane(pane) = node else {
                 unreachable!()
             };
-            return self.pane_card(*pane, *pane == focused, false, cx);
+            return self.pane_card(*pane, *pane == focused, false, width, cx);
         };
         if let Some((second, side)) = Layout::only_side(a, b, hidden) {
             path.push(second);
-            let shown = self.layout_element(tab, side, path, focused, hidden, cx);
+            let shown = self.layout_element(tab, side, path, focused, hidden, width, cx);
             path.pop();
             return shown;
         }
         let row = *dir == Dir::Row;
+        // As `Layout::place` sizes them: the first side takes its ratio of a row, then the divider, then the rest.
+        let (first_width, second_width) = if row {
+            let first = width * *ratio;
+            (first, width - first - SEAM)
+        } else {
+            (width, width)
+        };
         path.push(false);
-        let first = self.layout_element(tab, a, path, focused, hidden, cx);
+        let first = self.layout_element(tab, a, path, focused, hidden, first_width, cx);
         path.pop();
         path.push(true);
-        let second = self.layout_element(tab, b, path, focused, hidden, cx);
+        let second = self.layout_element(tab, b, path, focused, hidden, second_width, cx);
         path.pop();
         let at = path.clone();
         let group = SharedString::from(format!("divider-{tab}-{at:?}"));
-        let divider = div()
+        // The panes' shared line, one point wide and in the flow. Its grab area reaches over both panes beside it,
+        // as the last child of the split, so it is over them.
+        let group_name = group.clone();
+        let line = div()
+            .flex_none()
+            .map(|d| if row { d.w(px(SEAM)).h_full() } else { d.h(px(SEAM)).w_full() })
+            .bg(rgba(HAIRLINE));
+        let grab = div()
             .id(group.clone())
             .group(group.clone())
             .role(Role::Splitter)
@@ -77,33 +91,43 @@ impl Workspace {
             } else {
                 Orientation::Horizontal
             })
-            .relative()
-            .flex_none()
+            .absolute()
             .map(|d| {
                 if row {
-                    d.w(px(DIVIDER)).h_full().cursor_col_resize()
+                    d.left(relative(*ratio))
+                        .ml(px(-GRAB))
+                        .top_0()
+                        .h_full()
+                        .w(px(SEAM + 2.0 * GRAB))
+                        .cursor_col_resize()
                 } else {
-                    d.h(px(DIVIDER)).w_full().cursor_row_resize()
+                    d.top(relative(*ratio))
+                        .mt(px(-GRAB))
+                        .left_0()
+                        .w_full()
+                        .h(px(SEAM + 2.0 * GRAB))
+                        .cursor_row_resize()
                 }
             })
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| this.start_drag(tab, at.clone(), cx)),
             )
+            // The line again over the shared one, lit while the pointer is on the grab area.
             .child(
                 div()
                     .absolute()
-                    .rounded_full()
-                    .group_hover(group, |style| style.bg(rgba(DIVIDER_HOVER)))
-                    .map(|line| {
+                    .map(|d| {
                         if row {
-                            line.top(px(24.0)).bottom(px(24.0)).left(px(3.0)).w(px(2.0))
+                            d.top_0().bottom_0().left(px(GRAB)).w(px(SEAM))
                         } else {
-                            line.left(px(24.0)).right(px(24.0)).top(px(3.0)).h(px(2.0))
+                            d.left_0().right_0().top(px(GRAB)).h(px(SEAM))
                         }
-                    }),
+                    })
+                    .group_hover(group_name, |style| style.bg(rgba(DIVIDER_HOVER))),
             );
         div()
+            .relative()
             .flex()
             .size_full()
             .min_w_0()
@@ -118,9 +142,22 @@ impl Workspace {
                     .min_h_0()
                     .child(first),
             )
-            .child(divider)
+            .child(line)
             .child(div().flex().flex_1().min_w_0().min_h_0().child(second))
+            .child(grab)
             .into_any_element()
+    }
+
+    /// Splits `pane` in `dir`: it takes the keys, then the new shell opens beside it.
+    pub(super) fn split_pane(
+        &mut self,
+        pane: usize,
+        dir: Dir,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_pane(pane, window, cx);
+        self.split(dir, window, cx);
     }
 
     /// Like the desktop's pane card: a header with the title and the split and close buttons, which
@@ -130,10 +167,12 @@ impl Workspace {
         pane: usize,
         focused: bool,
         zoomed: bool,
+        width: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let title = self.pane_title(pane, cx);
-        let detail = self.pane_detail(pane);
+        // Left out of a pane too narrow to show more than "…" of it, so the title keeps the room.
+        let detail = self.pane_detail(pane).filter(|_| width >= DETAIL_MIN_WIDTH);
         let state = self.agents.get(&pane).map(|agent| agent.state);
         let renaming = self
             .panes
@@ -141,33 +180,13 @@ impl Workspace {
             .and_then(|pane| pane.renaming.as_ref())
             .map(|(field, _)| field.clone());
         let group = SharedString::from(format!("pane-{pane}"));
-        let border: Hsla = rgba(if focused {
-            theme::HAIRLINE_STRONG
-        } else {
-            HAIRLINE
-        })
-        .into();
-        // Where the card is, for its border over the terminal.
-        let card = Rc::new(Cell::new(None));
         let strip = self.status_strip(pane, cx);
         let body = match self.panes.get(&pane).map(|p| (&p.view, &p.focus)) {
             // The terminal draws in the window's terminal layer at this slot, so its output draws neither the main
-            // column again nor the other terminals in it (`Workspace::render`). As a child of the card would, it has
-            // the card's border over it, where its corners curve over the terminal.
+            // column again nor the other terminals in it (`Workspace::render`).
             Some((Ok(view), _)) => {
-                // Its background follows the card's inside corners, where nothing (the status strip) is under it.
-                view.read(cx)
-                    .round_bottom(if strip.is_none() { CARD_RADIUS - 1.0 } else { 0.0 });
-                let card = card.clone();
-                let terminal = ui::slot(
-                    TERMINALS,
-                    terminal_slot(pane),
-                    Some(Rc::new(move |window: &mut Window| {
-                        if let Some(card) = card.get() {
-                            paint_card_border(card, border, window);
-                        }
-                    })),
-                );
+                view.read(cx).round_bottom(0.0);
+                let terminal = ui::slot(TERMINALS, terminal_slot(pane), None);
                 // The terminals the agent in it opened that float over it draw in a layer over its terminal.
                 let floating = self
                     .terminals
@@ -231,16 +250,20 @@ impl Workspace {
         #[cfg(not(unix))]
         let older_server: Option<AnyElement> = None;
         let opened_terminals = self.agent_terminals_button(pane, zoomed, cx);
-        let opened_buttons = self.opened_buttons(pane, cx);
+        let (shown, more) = header_plan(width, self.opened_by(pane).is_some());
+        let opened_buttons = self.opened_buttons(pane, &shown, cx);
         let header = div()
             .id(SharedString::from(format!("pane-header-{pane}")))
-            .h(px(30.0))
+            .relative()
+            .h(px(HEADER))
             .flex_none()
             .flex()
             .items_center()
             .gap(px(8.0))
-            .pl(px(14.0))
-            .pr(px(4.0))
+            .pl(px(12.0))
+            .pr(px(6.0))
+            .border_b_1()
+            .border_color(rgba(HAIRLINE))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -275,16 +298,23 @@ impl Workspace {
                 // The desktop's `max-w-[50%] truncate`: in a narrow pane the title gives way, not the buttons.
                 None => header.child(
                     div()
+                        .id(SharedString::from(format!("pane-title-{pane}")))
                         .min_w_0()
                         .max_w(relative(0.5))
                         .truncate()
                         .text_size(px(13.0))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .font_weight(if focused {
+                            gpui::FontWeight::SEMIBOLD
+                        } else {
+                            gpui::FontWeight::MEDIUM
+                        })
                         .text_color(rgb(if focused {
                             theme::FOREGROUND
                         } else {
-                            theme::MUTED_FOREGROUND
+                            theme::SECONDARY_FOREGROUND
                         }))
+                        .tooltip(ui::tooltip(title.clone(), None))
+                        .children(ui::spot(|| format!("pane-title:{pane}")))
                         .child(title.clone()),
                 ),
             })
@@ -292,11 +322,13 @@ impl Workspace {
                 header.child(
                     div()
                         .min_w_0()
-                        // Beside the pill naming the agent that opened it, the folder gives way first.
-                        .when(opened_by.is_some(), |detail| detail.flex_shrink(100.0))
+                        // The folder gives way before the title does: shrinking by their widths alone, a long path
+                        // left the title "…" in a narrow pane.
+                        .flex_shrink(100.0)
                         .truncate()
                         .text_size(px(12.0))
                         .text_color(rgb(theme::MUTED_FOREGROUND))
+                        .children(ui::spot(|| format!("pane-detail:{pane}")))
                         .child(detail),
                 )
             })
@@ -314,58 +346,72 @@ impl Workspace {
                     .gap(px(2.0))
                     .opacity(if focused { 0.7 } else { 0.0 })
                     .group_hover(group.clone(), |style| style.opacity(1.0))
-                    .child(pane_button(
-                        pane,
-                        "Split right",
-                        Some(shortcut_label("D", false)),
-                        Icon::Columns,
-                        cx,
-                        |this, pane, window, cx| {
-                            this.focus_pane(pane, window, cx);
-                            this.split(Dir::Row, window, cx);
-                        },
-                    ))
-                    .child(pane_button(
-                        pane,
-                        "Split down",
-                        Some(shortcut_label("D", true)),
-                        Icon::Rows,
-                        cx,
-                        |this, pane, window, cx| {
-                            this.focus_pane(pane, window, cx);
-                            this.split(Dir::Column, window, cx);
-                        },
-                    ))
-                    .child(pane_button(
-                        pane,
-                        if zoomed { "Restore" } else { "Zoom" },
-                        None,
-                        if zoomed {
-                            Icon::Minimize
-                        } else {
-                            Icon::Maximize
-                        },
-                        cx,
-                        |this, pane, window, cx| this.toggle_zoom(pane, window, cx),
-                    ))
-                    .child(pane_button(
-                        pane,
-                        "Close pane",
-                        Some(shortcut_label("W", false)),
-                        Icon::X,
-                        cx,
-                        |this, pane, window, cx| this.close_pane(pane, window, cx),
-                    )),
-            );
-        let place = canvas(
-            // Inside the border, which is a pixel wide.
-            move |inside, _, _| card.set(Some(inside.dilate(px(1.0)))),
-            |_, _, _, _| {},
-        )
-        .absolute()
-        .top_0()
-        .left_0()
-        .size_full();
+                    .when(shown.contains(&PaneAction::SplitRight), |group| {
+                        group.child(pane_button(
+                            pane,
+                            "Split right",
+                            Some(shortcut_label("D", false)),
+                            Icon::Columns,
+                            cx,
+                            |this, pane, window, cx| this.split_pane(pane, Dir::Row, window, cx),
+                        ))
+                    })
+                    .when(shown.contains(&PaneAction::SplitDown), |group| {
+                        group.child(pane_button(
+                            pane,
+                            "Split down",
+                            Some(shortcut_label("D", true)),
+                            Icon::Rows,
+                            cx,
+                            |this, pane, window, cx| this.split_pane(pane, Dir::Column, window, cx),
+                        ))
+                    })
+                    .when(shown.contains(&PaneAction::Zoom), |group| {
+                        group.child(pane_button(
+                            pane,
+                            if zoomed { "Restore" } else { "Zoom" },
+                            None,
+                            if zoomed {
+                                Icon::Minimize
+                            } else {
+                                Icon::Maximize
+                            },
+                            cx,
+                            |this, pane, window, cx| this.toggle_zoom(pane, window, cx),
+                        ))
+                    })
+                    // What a narrow pane has no room for goes behind this, in the pane's menu.
+                    .when(!more.is_empty(), |group| {
+                        let hidden = more.clone();
+                        group.child(
+                            ui::icon_button(
+                                SharedString::from(format!("pane-more-{pane}")),
+                                Icon::Ellipsis,
+                                "More",
+                                ButtonSize::Sm,
+                            )
+                            .children(ui::spot(|| format!("pane-more:{pane}")))
+                            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                                this.open_menu(
+                                    MenuTarget::PaneMore(pane, hidden.clone()),
+                                    event.position(),
+                                    cx,
+                                )
+                            })),
+                        )
+                    })
+                    .when(shown.contains(&PaneAction::Close), |group| {
+                        group.child(pane_button(
+                            pane,
+                            "Close pane",
+                            Some(shortcut_label("W", false)),
+                            Icon::X,
+                            cx,
+                            |this, pane, window, cx| this.close_pane(pane, window, cx),
+                        ))
+                    }),
+            )
+            .children(ui::spot(|| format!("pane-header:{pane}")));
         div()
             .id(SharedString::from(format!("pane-{pane}")))
             .group(group)
@@ -377,29 +423,7 @@ impl Workspace {
             .min_w_0()
             .min_h_0()
             .overflow_hidden()
-            .rounded(px(CARD_RADIUS))
-            .border_1()
-            .border_color(border)
             .bg(rgb(theme::SURFACE))
-            .when(focused, |card| {
-                card.shadow(vec![
-                    BoxShadow {
-                        color: hsla(0.0, 0.0, 0.0, 0.28),
-                        offset: point(px(0.0), px(10.0)),
-                        blur_radius: px(30.0),
-                        spread_radius: px(0.0),
-                        inset: false,
-                    },
-                    BoxShadow {
-                        color: hsla(0.0, 0.0, 1.0, 0.05),
-                        offset: point(px(0.0), px(1.0)),
-                        blur_radius: px(0.0),
-                        spread_radius: px(0.0),
-                        inset: true,
-                    },
-                ])
-            })
-            .child(place)
             .child(header)
             .child(div().flex().flex_1().min_h_0().child(body))
             .children(strip)
@@ -407,18 +431,46 @@ impl Workspace {
     }
 }
 
-/// A card's border as the card draws it (gpui's `Style::paint`), for drawing it again over what a layer draws in it.
-fn paint_card_border(card: Bounds<Pixels>, color: Hsla, window: &mut Window) {
-    let mut background = color;
-    background.a = 0.0;
-    window.paint_quad(quad(
-        card,
-        Corners::all(px(CARD_RADIUS)).clamp_radii_for_quad_size(card.size),
-        background,
-        Edges::all(px(1.0)),
-        color,
-        BorderStyle::default(),
-    ));
+/// A pane header's buttons, and the entries of the menu a narrow pane moves them to. In the order they go in the menu's
+/// priority: the last ones are the first to move behind "…".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PaneAction {
+    Close,
+    /// On a terminal an agent opened: hide it, turn the split, or float it over the agent.
+    Hide,
+    Zoom,
+    SplitRight,
+    SplitDown,
+    Float,
+    Move,
+}
+
+/// The narrowest pane whose header shows the folder or project after the title.
+const DETAIL_MIN_WIDTH: f32 = 300.0;
+
+/// The width a header keeps for its icon, padding, gaps and a few letters of the title.
+const HEADER_FIXED: f32 = 84.0;
+/// A header button's width and the gap between two.
+const HEADER_BUTTON: f32 = 28.0;
+const HEADER_GAP: f32 = 2.0;
+
+/// Which of a header's buttons show in a pane `width` wide, and which move into the "…" menu that takes the place of
+/// the last one shown. `opened` is a terminal an agent opened, with its three buttons more. Each list is in priority
+/// order, Close first.
+pub(super) fn header_plan(width: f32, opened: bool) -> (Vec<PaneAction>, Vec<PaneAction>) {
+    use PaneAction::*;
+    let all: &[PaneAction] = if opened {
+        &[Close, Hide, Zoom, SplitRight, SplitDown, Float, Move]
+    } else {
+        &[Close, Zoom, SplitRight, SplitDown]
+    };
+    let room = width - HEADER_FIXED + HEADER_GAP;
+    let fits = (room / (HEADER_BUTTON + HEADER_GAP)).floor().max(0.0) as usize;
+    if fits >= all.len() {
+        return (all.to_vec(), Vec::new());
+    }
+    let shown = fits.saturating_sub(1);
+    (all[..shown].to_vec(), all[shown..].to_vec())
 }
 
 /// A pane header's button: the desktop's `IconButton`, 28px with a 16px icon, aimed at this pane.

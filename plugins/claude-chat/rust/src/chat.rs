@@ -133,6 +133,9 @@ pub struct Chat {
     /// Whether the tab is narrower than the side panel and the conversation need side by side, as the page's split says: None
     /// until it has measured. Then the panel floats over the conversation, and Escape or a press outside puts it away.
     pub narrow: Option<bool>,
+    /// Whether the tab is too narrow for the terminals Claude opened to dock beside the conversation (`view::DOCK_BELOW`): None
+    /// until the page has measured, which draws them under it as a narrow tab does.
+    pub dock_narrow: Option<bool>,
     /// In a narrow tab, whether the tab has room for the open panel beside a readable column (`view::INSET_BELOW`): the
     /// conversation and the message box then sit left of the panel instead of under it.
     pub inset: bool,
@@ -182,8 +185,15 @@ pub struct Chat {
     /// The Claude Code account you picked for this tab's new chats, by name, `Some(None)` being the default one. None
     /// until you pick one: a new chat then runs under its project's account.
     pub picked: Option<Option<String>>,
+    /// The tab's args said to bring the session it resumes to the picked account (`open_chat`): its transcript is copied
+    /// there, so the session goes on under that account and not the one it ran in.
+    bring: bool,
     /// The message a tab opened with `prompt` in its args sends as its first, taken by the start that sends it.
     pub first_prompt: Option<String>,
+    /// That message is a tool's (`open_chat`), not something you wrote, which Claude Code is told when it is sent.
+    first_relayed: bool,
+    /// The message `take_agent_message` is sending now, which is another agent's and goes to Claude Code as not yours.
+    relaying: bool,
     /// That message has gone to Claude Code, in this run of the tab or an earlier one: kept with the tab so a restart never
     /// sends it again.
     pub prompted: bool,
@@ -240,6 +250,7 @@ thread_local! {
         fork_ask: false,
         forked_from: None,
         narrow: None,
+        dock_narrow: None,
         inset: false,
         diff_split: false,
         panel_closed: Vec::new(),
@@ -263,7 +274,10 @@ thread_local! {
         cwd: String::new(),
         program: "claude".into(),
         picked: None,
+        bring: false,
         first_prompt: None,
+        first_relayed: false,
+        relaying: false,
         prompted: false,
         limit_resume: None,
         accounts: Vec::new(),
@@ -282,6 +296,7 @@ pub fn with<T>(change: impl FnOnce(&mut Chat) -> T) -> T {
 /// for this tab, else its project's.
 pub fn account(c: &Chat, session: Option<&str>) -> host::Account {
     match &c.picked {
+        Some(name) if c.bring => host::Account::picked_bringing(session, name.as_deref()),
         Some(name) => host::Account::picked(session, name.as_deref()),
         None => host::Account::of_session(session),
     }
@@ -408,12 +423,14 @@ async fn open_with(args: Value, saved: Value) {
         c.limit_resume = saved["limitArmed"].as_f64();
         c.review = crate::review::from_json(&saved["reviewComments"]);
         c.first_prompt = prompt;
+        c.first_relayed = args["relayed"] == true;
         c.folder = basename(&cwd).to_owned();
         c.cwd = cwd;
         c.program = program;
         c.dirs = dirs;
         c.agent_type = saved["agent"].as_str().or(args["agent"].as_str()).map(str::to_owned);
         c.picked = picked;
+        c.bring = args["bring"] == true;
         c.forked_from = args["forkedFrom"].as_str().filter(|_| how.fork).map(str::to_owned);
     });
     // After an update or restart of the plugin or of Wings, the Claude Code this tab ran is still going: the chat takes
@@ -490,7 +507,8 @@ pub fn launch_with(resume: Option<String>, how: Launch) {
 /// The line that sends `text` as the chat's first message, which is shown as yours at once.
 fn first_message(c: &mut Chat, text: &str) -> String {
     c.requests += 1;
-    let line = c.session.send(text, &[], host::now() as u64, c.requests);
+    let relayed = std::mem::take(&mut c.first_relayed);
+    let line = c.session.send_as(text, &[], host::now() as u64, c.requests, relayed);
     c.doing = (c.session.activity(), host::now() as u64);
     line
 }
@@ -820,6 +838,7 @@ pub(crate) fn hear(run: u32, line: &Value) {
     // newest entries for any it left, which show once.
     if ended {
         read_handbacks(run);
+        read_title(run);
     }
     // Files change in a turn, as each edit, command or subagent ends, and when the code is rewound.
     let touched = with(|c| c.run == run && std::mem::take(&mut c.session.files_touched));
@@ -849,6 +868,30 @@ fn read_handbacks(run: u32) {
                     c.session.hear_handbacks(entries.as_array().map(Vec::as_slice).unwrap_or_default());
                 }
             });
+        }
+    });
+}
+
+/// The entries `read_title` reads, and how many of the newest.
+const TITLE_KINDS: [&str; 2] = ["ai-title", "custom-title"];
+const TITLE_LAST: u32 = 4;
+
+/// The name Claude Code gave the session in its transcript, read at the end of each turn until the chat has one.
+fn read_title(run: u32) {
+    let Some(id) = with(|c| c.session.id.clone().filter(|_| c.run == run && c.session.title.is_none())) else {
+        return;
+    };
+    task::spawn(async move {
+        if let Ok(entries) = host::transcript_cut(&id, &TITLE_KINDS, TITLE_LAST, HISTORY_CUT).await {
+            let named = with(|c| {
+                c.run == run && {
+                    c.session.hear_titles(entries.as_array().map(Vec::as_slice).unwrap_or_default());
+                    c.session.title.is_some()
+                }
+            });
+            if named {
+                report_agent();
+            }
         }
     });
 }
@@ -1013,14 +1056,15 @@ pub fn send() {
             crate::view::show_latest(c);
         }
         let images = std::mem::take(&mut c.images);
+        let relayed = std::mem::take(&mut c.relaying);
         // The comments left in the diff viewer go with this message, once.
         let text = crate::review::message(&text, &std::mem::take(&mut c.review));
         // A line range goes in the form Claude Code reads, and a mentioned terminal gets its note.
         let text = crate::terminals::attach(&mentions::normalize(&text));
         if c.session.working {
-            return Some(c.session.queue(&text, images, host::now() as u64, n));
+            return Some(c.session.queue_as(&text, images, host::now() as u64, n, relayed));
         }
-        let line = c.session.send(&text, &images, host::now() as u64, n);
+        let line = c.session.send_as(&text, &images, host::now() as u64, n, relayed);
         // The status line's time counts from here, not from the end of the turn before.
         c.doing = (c.session.activity(), host::now() as u64);
         Some(line)
@@ -1054,7 +1098,10 @@ pub(crate) fn take_agent_message(text: &str, submit: bool) -> Result<bool, Strin
         Ok(())
     })?;
     if submit {
+        // Sent as another agent's text, not as yours: Claude Code is told it isn't what you typed.
+        with(|c| c.relaying = true);
         send();
+        with(|c| c.relaying = false);
     }
     Ok(submit)
 }
@@ -1704,6 +1751,12 @@ pub fn set_narrow(narrow: bool, inset: bool) {
     });
 }
 
+/// The outer split says whether the tab is narrower than `view::DOCK_BELOW`, so the terminals have no column beside the
+/// conversation.
+pub fn set_dock_narrow(narrow: bool) {
+    with(|c| c.dock_narrow = Some(narrow));
+}
+
 /// The header's button for the session panel, at any width: in Wings' sidebar it opens it on this chat or closes it
 /// (`session_side::toggle`); in the chat it shows the panel or puts it away in every chat. Either way the choice is kept.
 pub fn toggle_side() {
@@ -1838,6 +1891,34 @@ mod tests {
             c.session.working = working;
             c.run
         })
+    }
+
+    /// Claude Code writes the name it makes up for a session (`ai-title`) to the transcript and doesn't print it: once a turn
+    /// ends the chat reads it there, and its Agents row and tab drop the first message they were named after.
+    #[test]
+    fn a_live_chat_takes_the_name_claude_code_wrote_in_its_transcript() {
+        let told = Rc::new(RefCell::new(Vec::new()));
+        let kept = told.clone();
+        host::testing::answer(move |method, params| match method {
+            "transcript" => Ok(json!([{ "type": "ai-title", "aiTitle": "Rust code optimization", "sessionId": "s1" }])),
+            "setAgent" => {
+                kept.borrow_mut().push(params["agent"]["name"].clone());
+                Ok(Value::Null)
+            }
+            _ => Ok(Value::Null),
+        });
+        let run = running(false);
+        with(|c| {
+            c.session = Default::default();
+            c.session.id = Some("s1".into());
+            c.session.items.push(crate::session::Item::User("(Message from the agent in Wings tab tab-30, sent through Wings.) Handoff".into()));
+        });
+        assert!(with(|c| super::name(c)).is_some_and(|name| name.starts_with("(Message from the agent")), "named after the first message");
+        super::read_title(run);
+        wings_plugin::task::block_on(async {});
+        assert_eq!(with(|c| super::name(c)).as_deref(), Some("Rust code optimization"));
+        assert_eq!(told.borrow().last(), Some(&json!("Rust code optimization")));
+        with(|c| c.session = Default::default());
     }
 
     /// A sidebar running the chat's code is no tab: Wings refuses its save, and that is no failure to show.
@@ -2069,6 +2150,14 @@ mod tests {
         let writes: Vec<String> = calls.borrow().iter().filter(|(method, _)| method == "processWrite").map(|(_, params)| params["text"].as_str().unwrap().to_owned()).collect();
         assert_eq!(writes.len(), 1, "{writes:?}");
         assert!(writes[0].contains("Run the tests."), "{}", writes[0]);
+        let relayed: Value = serde_json::from_str(writes[0].lines().next().unwrap()).unwrap();
+        assert_eq!((relayed["isSynthetic"].clone(), relayed["client_composed"].clone()), (json!(true), json!(true)), "{}", writes[0]);
+        // The flag is for that message only: what you type next is yours.
+        with(|c| (c.session.working, c.draft) = (false, "And now this".into()));
+        super::send();
+        wings_plugin::task::block_on(async {});
+        let typed = calls.borrow().iter().filter(|(method, _)| method == "processWrite").map(|(_, params)| params["text"].as_str().unwrap().to_owned()).last().unwrap();
+        assert!(typed.contains("And now this") && !typed.contains("isSynthetic"), "{typed}");
         assert!(with(|c| c.draft.is_empty() && c.session.working));
     }
 
@@ -2218,6 +2307,17 @@ mod tests {
     }
 
     #[test]
+    fn a_prompt_a_coding_agent_opened_the_chat_with_goes_to_claude_code_as_not_yours() {
+        let calls = wings_with_tab(json!({}));
+        wings_plugin::task::block_on(super::open_with(json!({ "cwd": "/work/shop", "prompt": "Take over the retry work", "relayed": true }), json!({})));
+        let inputs = started_with(&calls);
+        let sent = user_lines(&inputs[0]);
+        assert_eq!(sent.len(), 1, "{}", inputs[0]);
+        assert_eq!((sent[0]["isSynthetic"].clone(), sent[0]["client_composed"].clone()), (json!(true), json!(true)), "{}", inputs[0]);
+        assert!(with(|c| !c.first_relayed), "only that first message is marked");
+    }
+
+    #[test]
     fn a_new_chat_opened_with_a_prompt_sends_it_once_as_the_first_message_and_shows_it_as_yours() {
         let calls = wings_with_tab(json!({}));
         wings_plugin::task::block_on(super::open_with(json!({ "cwd": "/work/shop", "prompt": "Run the tests" }), json!({})));
@@ -2226,11 +2326,26 @@ mod tests {
         let sent = user_lines(&inputs[0]);
         assert_eq!(sent.len(), 1, "{}", inputs[0]);
         assert_eq!(sent[0]["message"]["content"], json!("Run the tests"));
+        assert!(sent[0].get("isSynthetic").is_none(), "a prompt another plugin passes is not marked");
         // The fake Claude Code ends at once, so the turn isn't running any more; the message stays shown as yours.
         assert!(with(|c| c.session.items.contains(&crate::session::Item::User("Run the tests".into())) && c.session.prompts.len() == 1 && c.prompted && c.first_prompt.is_none()));
         // The tab keeps that it was sent, so a restart goes on without it.
         let saved = asked(&calls, "setTabState");
         assert_eq!(saved.last().unwrap()["state"]["prompted"], true);
+    }
+
+    #[test]
+    fn a_session_brought_to_the_picked_account_asks_wings_to_copy_its_transcript_and_a_plain_resume_does_not() {
+        let id = "3c21b0c5-8113-4f55-9493-fa156c3fa369";
+        let account = |args: Value| {
+            let calls = wings_with_tab(json!({}));
+            wings_plugin::task::block_on(super::open_with(args, json!({})));
+            asked(&calls, "spawn")[0]["account"].clone()
+        };
+        let picked = json!({ "name": "personal" });
+        assert_eq!(account(json!({ "cwd": "/work/shop", "resume": id, "fork": true, "account": picked, "bring": true })), json!({ "session": id, "pick": { "name": "personal" }, "bring": true }));
+        // A resume that only names the account still runs where the session's transcript is.
+        assert_eq!(account(json!({ "cwd": "/work/shop", "resume": id, "account": picked })), json!({ "session": id, "pick": { "name": "personal" } }));
     }
 
     #[test]

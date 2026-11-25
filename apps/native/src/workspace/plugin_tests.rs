@@ -226,6 +226,38 @@ fn agent_page() -> String {
     })
 }
 
+/// A main that opens its `chat` view as a new tab when it hears an action, and saves what Wings answered under `opened`.
+fn opens_a_tab_main() -> String {
+    fake::script("main", || {
+        let mut wait = Pending::default();
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+            Hear::Deliver("action", _, _) => wait.call(cx, "openView", json!({ "id": "chat", "newTab": true }), ()),
+            Hear::Deliver(kind, id, text) => {
+                if let Some(((), answer)) = wait.answered(kind, id, text) {
+                    cx.save("opened", &answer.unwrap_or_else(|error| json!({ "error": error })));
+                }
+            }
+            _ => {}
+        }
+    })
+}
+
+/// A plugin that opens a tab hears its id, the one `list_sessions` lists and `send_to_agent` takes, so an agent that had
+/// Claude chat open a chat can message it without looking for it.
+#[test]
+fn opening_a_tab_answers_its_id() {
+    let data = Data::temp();
+    let views = json!([{ "id": "chat", "title": "Chat", "page": "dist/chat.html", "opens": ["tab"] }]);
+    data.install_script("chatty", json!({ "contributes": { "views": views } }), &opens_a_tab_main(),
+        &[("chat", &fake::idle("page"))], "chatty-scope");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let host = window.read(|w, _| w.plugins[0].host.clone());
+    host.send_action("0", "open", |_| {});
+    until(&app, &mut window, "the main heard no answer", |_| data.saved("chatty", "chatty-scope", "opened").is_some());
+    let tab = window.read(|w, _| format!("tab-{}", w.plugin_tabs[0].id));
+    assert_eq!(data.saved("chatty", "chatty-scope", "opened"), Some(json!({ "tabId": tab })));
+}
+
 #[test]
 fn a_tab_whose_page_runs_an_agent_shows_with_the_agents_in_the_sidebar() {
     let data = Data::temp();
@@ -3315,7 +3347,7 @@ fn a_sidebar_shows_the_icon_its_manifest_names_on_its_button_and_over_its_panel(
     // The button is the last thing in the project bar under the 40px title bar.
     let button = glyph_at("clock").expect("the button shows the sidebar's icon");
     assert!(
-        button.center().x > px(950.0)
+        button.center().x > px(900.0)
             && button.center().y > px(40.0)
             && button.center().y < px(76.0),
         "{button:?}"
@@ -3324,12 +3356,12 @@ fn a_sidebar_shows_the_icon_its_manifest_names_on_its_button_and_over_its_panel(
     app.advance_clock(crate::ui::motion::SLIDE * 2);
     app.run_until_parked();
     window.draw();
-    // Then before the sidebar's title over the 360 panel, after its 4, 4 and 8 of padding, level with the project bar's
-    // middle beside it.
+    // Then before the sidebar's title over the 360 panel, after its 1 point line and 12 of padding, in the middle of
+    // its 32 point header less the line under it.
     let title = glyph_at("clock").unwrap();
     assert_eq!(
         (title.left(), title.center().y),
-        (px(1000.0 - 360.0 + 16.0), px(40.0 + 36.0 / 2.0))
+        (px(1000.0 - 360.0 + 13.0), px(40.0 + 31.0 / 2.0))
     );
 }
 
@@ -4429,6 +4461,34 @@ fn a_section_turned_off_in_the_projects_menu_hides_for_that_project_stays_off_af
     click_spot(&mut window, "menu:Issues");
     until(&app, &mut window, "the section never came back", |w| shows(w, &project));
     window.read(|w, _| assert!(w.section_choices(&project)[0].2));
+}
+
+/// A plugin's section rows in the sidebar are drawn outside the sidebar's own files, and follow its text size.
+#[test]
+fn a_plugin_sections_row_follows_the_sidebar_text_size() {
+    let data = Data::temp();
+    data.install_script(
+        "sectioner",
+        json!({ "contributes": {
+            "views": [{ "id": "board", "title": "Board", "page": "dist/board.html", "opens": ["tab"] }],
+            "projectSections": [{ "id": "issues", "title": "Issues", "all": "board" }],
+        } }),
+        &sectioner(),
+        &[("board", &fake::page("page", |_| json!({ "id": 0, "type": "#root", "props": {}, "children": [] })))],
+        "sectioner-scope",
+    );
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    until(&app, &mut window, "the section row never drew", |_| {
+        crate::ui::spot_at("section-row:r1").is_some()
+    });
+    let height_after = |window: &mut TestAppWindow<Workspace>, size: f32| {
+        window.update(|w, _, cx| w.set_sidebar_text(size, cx));
+        window.draw();
+        let height: f32 = crate::ui::spot_at("section-row:r1").expect("the row wasn't drawn").size.height.into();
+        height
+    };
+    let (small, default, large) = (height_after(&mut window, 11.0), height_after(&mut window, 12.0), height_after(&mut window, 13.0));
+    assert!(small < default && default < large, "{small} {default} {large}");
 }
 
 /// A page that saves the terminals Wings tells it of, under `terminals`.

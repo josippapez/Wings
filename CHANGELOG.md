@@ -2,6 +2,16 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.101 · 2026-11-25
+
+- **Flush panes**: panes sit edge to edge and share one thin line instead of floating as separate cards, and the plugin panel on the right matches. "Open in Zed" is one outlined button, and plugin buttons show their names until the bar gets narrow.
+- **Narrow windows fit**: the project bar, pane headers, an agent's terminal columns, the find bar and the project page give up words and buttons in turn (behind a "…" menu) instead of running past their edge. Menus taller than the window scroll. A pane's title shows its shell's name again.
+- **Sidebar text size**: Settings, Text, Sidebar text has Small, Default and Large, and the default is a step smaller than before.
+- **One chime per finished agent**: an agent whose background commands keep ending no longer chimes each time; it chimes once until you look at it or open the inbox.
+- **Palette**: a recent session says when it was ("5 minutes ago") instead of a timestamp.
+- **Claude chat 0.54.0**: terminals Claude opens dock beside the chat. An agent can open a chat on another of your accounts and hand it a session or a task, and message it right away. A chat takes the name Claude gives its session. An opened command says how long it ran, background ones too. Text another agent sends a chat is marked as not yours. What you type as a chat opens isn't lost.
+- **For plugin authors**: opening a tab answers its id (`{ "tabId": "tab-N" }`), the one `send_to_agent` takes.
+
 ## 0.2.100 · 2026-11-24
 
 - **A selection in Claude chat stays while the chat updates**: text you are selecting with the mouse is no longer lost when a new message, a tool call or the status line redraws the chat.

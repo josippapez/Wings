@@ -920,3 +920,25 @@ fn past_sessions_for_a_plugin_find_every_account_and_name_the_one_that_is_not_th
     listed.sort();
     assert_eq!(listed, [(LOGIN.into(), Some("work".into())), (DARK.into(), None)]);
 }
+
+#[test]
+fn a_recent_session_in_the_palette_says_when_it_was_in_words_not_as_a_timestamp() {
+    use wings_agents::history::Hit;
+    let hit = Hit {
+        id: LOGIN.into(),
+        agent: wings_agents::history::Agent::Claude,
+        cwd: Some("/work/acme-web".into()),
+        title: Some("Fix the login redirect".into()),
+        first_prompt: None,
+        git_branch: Some("main".into()),
+        last_active_ms: super::history::now_ms() - 5 * 60_000,
+        last_active: Some("2026-10-01T10:00:00.000Z".into()),
+        messages: 2,
+        matches: 0,
+        snippets: Vec::new(),
+        name: None,
+        transcript: None,
+    };
+    let entry = super::palette::session_entry(&hit).unwrap();
+    assert_eq!(entry.subtitle.as_deref(), Some("acme-web · main · 5 minutes ago"));
+}

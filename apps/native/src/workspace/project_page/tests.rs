@@ -450,3 +450,37 @@ fn a_plugins_block_shows_the_icon_its_manifest_names_over_it_and_in_the_add_menu
     let titled = glyph().unwrap();
     assert_eq!(titled.size, size(px(14.0), px(14.0)));
 }
+
+#[test]
+fn the_project_page_in_a_narrow_column_cuts_nothing_off_and_keeps_its_page_edge_once_it_widens() {
+    let dir = std::env::temp_dir().join(format!("wings-narrow-page-{}", std::process::id()));
+    let project = dir.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let app_data = dir.join("app-data");
+    let (mut app, mut window) = open_sized(Some(size(px(400.0), px(700.0))), |config| {
+        config.project = project.clone();
+        config.project_info = Some(app_data.clone());
+    });
+    window.update(|w, window, cx| w.open_project_page(project.clone(), window, cx));
+    for _ in 0..40 {
+        app.advance_clock(std::time::Duration::from_millis(250));
+        app.run_until_parked();
+        window.draw();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let page = window.read(|w, _| w.project_page.clone().expect("the page opened"));
+    assert!(window.read(|_, cx| page.read(cx).data.is_some()), "the page loaded");
+    assert!(window.read(|_, cx| page.read(cx).compact), "a column this narrow is compact");
+    let cuts = crate::workspace::narrow_tests::cut_off(&mut app, &mut window);
+    assert!(cuts.is_empty(), "{cuts:#?}");
+    window.simulate_resize(size(px(1280.0), px(700.0)));
+    // The test window's resize reaches the window only so (as in `workspace::plugin_tests`).
+    window.update(|_, window, cx| window.bounds_changed(cx));
+    // The first frame draws the wider card, which notes its width; the next draws the page for it.
+    for _ in 0..4 {
+        app.run_until_parked();
+        window.draw();
+    }
+    assert!(!window.read(|_, cx| page.read(cx).compact), "a wide column isn't");
+    let _ = std::fs::remove_dir_all(&dir);
+}

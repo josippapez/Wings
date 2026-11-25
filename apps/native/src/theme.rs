@@ -7,6 +7,10 @@ pub const GLASS: u32 = 0x1a171c94;
 pub const SURFACE: u32 = 0x17151b;
 pub const FOREGROUND: u32 = 0xece9e4;
 pub const MUTED_FOREGROUND: u32 = 0x9d978f;
+/// The redesign's `--fg-2`: a pane's title and the project bar's buttons, between muted and foreground.
+pub const SECONDARY_FOREGROUND: u32 = 0xb9b3aa;
+/// The redesign's `--line-2`: an outlined button's border.
+pub const LINE_STRONG: u32 = 0xffffff24;
 pub const BORDER: u32 = 0xffffff14;
 pub const HOVER: u32 = 0xffffff0f;
 /// `--pressed`, and hover over something already tinted.

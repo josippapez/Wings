@@ -2356,3 +2356,62 @@ fn tasks_board_deletes_an_issue_after_asking() {
     assert!(page.dispatch(&delete[0], None));
     tree(&events, "the board without it", |tree| tree.text().contains("0 to do") && !tree.text().contains("Fix the login redirect"));
 }
+
+/// An agent calls Claude chat's `open_chat`: the tool's schema is the manifest's, the chat tab opens in the project it names,
+/// in the folder the session ran in, with the args the chat page reads, and an unknown account or session opens nothing.
+#[test]
+fn claude_chat_open_chat_opens_a_chat_tab_in_the_named_project_and_refuses_what_it_cannot_find() {
+    let claude = claude_with_session();
+    fs::write(
+        claude.join(format!("projects/-x/{SESSION}.jsonl")),
+        json!({ "type": "user", "uuid": "u1", "timestamp": iso(1000), "cwd": "/work/api/web", "message": { "role": "user", "content": "hi" } }).to_string(),
+    )
+    .unwrap();
+    let rig = Rig::with(load("claude-chat"), false, vec![]);
+    *rig.env.claude.lock().unwrap() = vec![claude.clone()];
+    *rig.env.projects.lock().unwrap() = vec![PathBuf::from("/work/api")];
+    rig.host.publish_projects(vec![Project { id: "/work/api".into(), path: "/work/api".into(), name: "Api".into(), parent_id: None, hidden_sections: Vec::new() }]);
+    let (on_event, main_errors) = errors();
+    rig.host.start_main(&module("claude-chat", "main"), on_event).unwrap();
+    let caller = super::ClaudeCaller { pane_id: Some("p1".into()), project: json!({ "id": "/work/api", "name": "Api", "path": "/work/api" }), session: json!({ "id": SESSION }) };
+    // A call that comes before main has set up its tools gets no answer: ask until it has.
+    let call = |input: serde_json::Value| -> serde_json::Value {
+        for _ in 0..40 {
+            let (reply, answer) = crate::page::runtime::Reply::channel();
+            rig.host.run_for_claude("open_chat", input.clone(), &caller, false, reply);
+            if let Some(said) = answer.wait(std::time::Duration::from_millis(500)) {
+                return serde_json::from_str(&said.expect("an answer")).unwrap();
+            }
+        }
+        panic!("main never answered open_chat");
+    };
+    let opened = |rig: &Rig| rig.env.seen().into_iter().filter_map(|seen| if let Seen::OpenView(open) = seen { Some(open) } else { None }).collect::<Vec<_>>();
+
+    let said = call(json!({ "prompt": "Take over the retry work" }));
+    assert!(said["isError"] != true, "{said}");
+    let open = opened(&rig);
+    assert_eq!(open.len(), 1);
+    assert_eq!((open[0].plugin.as_str(), open[0].id.as_str(), open[0].place.as_str(), open[0].new_tab), ("claude-chat", "chat", "tab", true));
+    assert_eq!(open[0].project, Some(PathBuf::from("/work/api")));
+    // The prompt is the calling agent's, so the chat sends it to Claude Code marked as not the user's.
+    assert_eq!(open[0].args, Some(json!({ "cwd": "/work/api", "prompt": "Take over the retry work", "relayed": true })));
+
+    // The caller's own session goes on in the folder it ran in, as a fork.
+    let said = call(json!({ "resume": "current" }));
+    assert!(said["isError"] != true, "{said}");
+    assert_eq!(opened(&rig)[1].args, Some(json!({ "cwd": "/work/api/web", "resume": SESSION, "fork": true, "bring": false })));
+
+    for (input, part) in [
+        (json!({ "account": "nobody" }), "No Claude Code account \"nobody\""),
+        (json!({ "project": "elsewhere" }), "No project \"elsewhere\" in Wings"),
+        (json!({ "resume": "55555555-2222-4333-8444-555555555555" }), "No session 55555555-2222-4333-8444-555555555555"),
+        (json!({ "resume": SESSION, "prompt": "hi" }), "resume or prompt, not both"),
+        (json!({ "colour": "red" }), "colour"),
+    ] {
+        let said = call(input);
+        assert!(said["isError"] == true && said["text"].as_str().unwrap().contains(part), "{part:?} in {said}");
+    }
+    assert_eq!(opened(&rig).len(), 2);
+    assert!(main_errors.try_recv().is_err());
+    let _ = fs::remove_dir_all(claude);
+}

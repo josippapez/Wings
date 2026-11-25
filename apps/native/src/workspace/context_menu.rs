@@ -16,7 +16,7 @@ use crate::{
     ui,
 };
 
-use super::{Active, TerminalTab, Workspace, history::fork_command};
+use super::{Active, TerminalTab, Workspace, history::fork_command, pane_card::PaneAction};
 
 /// What a menu was opened on.
 #[derive(Clone, Debug, PartialEq)]
@@ -24,6 +24,8 @@ pub(super) enum MenuTarget {
     Tab(Active),
     /// A pane, by its header.
     Pane(usize),
+    /// A pane, by the "…" of a header too narrow for all its buttons: those it moved here come first in the menu.
+    PaneMore(usize, Vec<PaneAction>),
     Project(PathBuf),
     /// An agent in the sidebar, by its pane.
     Agent(usize),
@@ -95,7 +97,8 @@ impl Workspace {
         let mut entries: Vec<(SharedString, Option<Run>)> = Vec::new();
         let mut groups = match &target {
             MenuTarget::Tab(tab) => self.tab_items(*tab),
-            MenuTarget::Pane(pane) => self.pane_items(*pane),
+            MenuTarget::Pane(pane) => self.pane_items(*pane, &[]),
+            MenuTarget::PaneMore(pane, moved) => self.pane_items(*pane, moved),
             MenuTarget::Project(path) => self.project_items(path),
             MenuTarget::Agent(pane) => self.agent_items(*pane),
             MenuTarget::Sidebar(key) => self.sidebar_items(key),
@@ -142,11 +145,12 @@ impl Workspace {
     }
 
     /// The open menu, above everything else, where it was opened.
-    pub(super) fn menu_layer(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn menu_layer(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let menu = self.menu.as_ref()?;
         let groups = match &menu.target {
             MenuTarget::Tab(tab) => self.tab_items(*tab),
-            MenuTarget::Pane(pane) => self.pane_items(*pane),
+            MenuTarget::Pane(pane) => self.pane_items(*pane, &[]),
+            MenuTarget::PaneMore(pane, moved) => self.pane_items(*pane, moved),
             MenuTarget::Project(path) => self.project_items(path),
             MenuTarget::Agent(pane) => self.agent_items(*pane),
             MenuTarget::Sidebar(key) => self.sidebar_items(key),
@@ -174,13 +178,23 @@ impl Workspace {
                 place += 1;
             }
         }
-        if let MenuTarget::Pane(pane) = menu.target {
-            children.push(self.move_to_tab(pane, menu.moving, cx));
+        if let MenuTarget::Pane(pane) | MenuTarget::PaneMore(pane, _) = &menu.target {
+            children.push(self.move_to_tab(*pane, menu.moving, cx));
         }
+        // The most it may be tall: the room under the pointer or over it, where `popup_at` opens it.
+        let at = gpui::Bounds { origin: menu.at, size: gpui::Size::default() };
+        let placement = ui::behaviors::Placement { side_offset: px(0.0), ..Default::default() };
+        let room = ui::behaviors::position::room(at, window.viewport_size(), placement);
         Some(ui::context_menu(
             menu.at,
             ui::menu("context-menu", "Menu")
+                // A menu taller than the window scrolls instead of running off its foot. A pane's is short, and its
+                // "Move to tab" list opens outside its box, which scrolling would clip.
+                .when(!matches!(menu.target, MenuTarget::Pane(_) | MenuTarget::PaneMore(..)), |menu| {
+                    menu.max_h(room.0.max(room.1)).overflow_y_scroll()
+                })
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_menu(cx)))
+                .children(ui::spot(|| "context-menu".into()))
                 .children(children),
         ))
     }
@@ -310,7 +324,7 @@ impl Workspace {
     }
 
     /// A pane header's menu: rename it, or give it back its program's name. "Move to tab" follows, with its list.
-    fn pane_items(&self, pane: usize) -> Vec<Vec<Item>> {
+    fn pane_items(&self, pane: usize, moved: &[PaneAction]) -> Vec<Vec<Item>> {
         let named = self.panes.get(&pane).is_some_and(|p| p.name.is_some());
         let mut items = vec![Item(
             Icon::Pencil,
@@ -331,7 +345,78 @@ impl Workspace {
             ));
         }
         // The empty group puts the hairline above "Move to tab", which `menu_layer` adds after.
-        vec![items, Vec::new()]
+        let mut groups = vec![items, Vec::new()];
+        if !moved.is_empty() {
+            groups.insert(0, self.moved_items(pane, moved));
+        }
+        groups
+    }
+
+    /// The buttons a narrow pane's header moved into its menu, as menu items.
+    fn moved_items(&self, pane: usize, moved: &[PaneAction]) -> Vec<Item> {
+        let owner = self.opened_by(pane);
+        let zoomed = self.terminals.iter().any(|tab| tab.zoomed == Some(pane));
+        moved
+            .iter()
+            .filter_map(|action| {
+                Some(match action {
+                    PaneAction::SplitRight => Item(
+                        Icon::Columns,
+                        "Split right".into(),
+                        false,
+                        run(move |this, window, cx| this.split_pane(pane, Dir::Row, window, cx)),
+                    ),
+                    PaneAction::SplitDown => Item(
+                        Icon::Rows,
+                        "Split down".into(),
+                        false,
+                        run(move |this, window, cx| this.split_pane(pane, Dir::Column, window, cx)),
+                    ),
+                    PaneAction::Zoom => Item(
+                        if zoomed { Icon::Minimize } else { Icon::Maximize },
+                        if zoomed { "Restore" } else { "Zoom" }.into(),
+                        false,
+                        run(move |this, window, cx| this.toggle_zoom(pane, window, cx)),
+                    ),
+                    PaneAction::Close => Item(
+                        Icon::X,
+                        "Close pane".into(),
+                        true,
+                        run(move |this, window, cx| this.close_pane(pane, window, cx)),
+                    ),
+                    PaneAction::Hide => {
+                        let owner = owner?;
+                        Item(
+                            Icon::EyeOff,
+                            "Hide".into(),
+                            false,
+                            run(move |this, window, cx| this.toggle_zoom(owner, window, cx)),
+                        )
+                    }
+                    PaneAction::Move => {
+                        let owner = owner?;
+                        let (glyph, label, to) = self.opened_move(owner);
+                        Item(
+                            glyph,
+                            label.into(),
+                            false,
+                            run(move |this, window, cx| this.agent_view(owner, to, window, cx)),
+                        )
+                    }
+                    PaneAction::Float => {
+                        let owner = owner?;
+                        Item(
+                            Icon::PictureInPicture,
+                            "Float over the agent".into(),
+                            false,
+                            run(move |this, window, cx| {
+                                this.agent_view(owner, super::agent_terminals::View::Float, window, cx)
+                            }),
+                        )
+                    }
+                })
+            })
+            .collect()
     }
 
     /// "Move to tab" and, while it's pointed at, the project's other terminal tabs and a new one beside it.
