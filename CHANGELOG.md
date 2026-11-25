@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.111 · 2026-11-25
+
+- **Plugins look more like the app**: a plugin page with a header draws it edge to edge, as Changes and Worktrees now do; section headings line up with the card under them; a badge with no style of its own is a quiet pill.
+- **Plugin updates**: Issues 0.31.5 no longer crashes on a long link with accented letters; Changes 0.17.4's View all is a button; Work item 0.13.1's type dots use the app's colours; Claude accounts 0.6.1's project title is page sized.
+
 ## 0.2.110 · 2026-11-25
 
 - **Tabs shrink before they scroll**: tabs get narrower, down to 100 points, before the strip scrolls, so five tabs fit a 1000 point window instead of cutting the first to a letter.
