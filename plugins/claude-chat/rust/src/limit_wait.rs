@@ -131,6 +131,12 @@ impl LimitWait {
         })
     }
 
+    /// The reset (ms) the tab keeps for when the chat starts again, armed or not: Claude Code's transcript has no line that
+    /// says a limit was hit, so a restarted chat knows of it only from this.
+    pub fn kept(&self, limits: &[(&'static str, u64, Option<f64>)]) -> Option<f64> {
+        self.armed.or_else(|| self.resets_at(limits))
+    }
+
     /// Arms the continue at the reset `resets` (ms), at `now`: the number of this arm and how long to sleep (ms). None
     /// when there is no limit hit, the reset has passed, or it is more than a day away.
     pub fn arm(&mut self, resets: f64, now: f64) -> Option<(u32, u32)> {

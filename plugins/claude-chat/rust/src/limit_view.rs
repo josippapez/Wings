@@ -259,6 +259,28 @@ mod tests {
         assert_eq!(saved, Some(Value::Null));
     }
 
+    /// A hit limit is kept with the tab as soon as it's heard, not only once armed: a chat that starts again (a plugin
+    /// update, Wings restarting) reads Claude Code's transcript, which says nothing of the limit.
+    #[test]
+    fn a_hit_limit_is_kept_with_the_tab_so_a_restarted_chat_shows_the_card_again() {
+        let calls = wings();
+        let saved = || calls.borrow().iter().rev().find(|(method, _)| method == "setTabState").map(|(_, params)| params["state"]["limitArmed"].clone());
+        let run = with(|c| {
+            c.session = crate::session::Session::default();
+            c.run
+        });
+        chat::hear(run, &json!({ "type": "rate_limit_event", "rate_limit_info": { "status": "rejected", "resetsAt": RESET / 1000.0, "rateLimitType": "five_hour" } }));
+        chat::hear(run, &json!({ "type": "result", "subtype": "success", "is_error": true, "result": "You've hit your 5-hour limit · resets 4:00pm" }));
+        assert_eq!(saved(), Some(json!(RESET)));
+        let kept = saved().and_then(|kept| kept.as_f64());
+        with(|c| {
+            c.session = crate::session::Session::default();
+            c.limit_resume = kept;
+            chat::begin(c);
+            assert!(card(c).is_some());
+        });
+    }
+
     /// The click arms the message with Wings, which lets it go at the reset without another click; Cancel takes it back.
     #[test]
     fn the_click_arms_the_continue_with_wings_and_cancel_takes_it_back() {

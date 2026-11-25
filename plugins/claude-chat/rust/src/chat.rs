@@ -588,8 +588,8 @@ pub(crate) fn save_tab() {
     let mut state = json!({ "sessionId": id, "dirs": dirs, "account": picked, "prompted": prompted });
     state["dockWidth"] = with(|c| c.dock_width).into();
     state["agent"] = with(|c| c.agent_type.clone()).into();
-    // A wait for a usage limit's reset goes on after Wings restarts.
-    state["limitArmed"] = with(|c| c.session.limit.armed).into();
+    // A hit usage limit's reset, armed or not, so its card comes back after Wings or the chat restarts.
+    state["limitArmed"] = with(|c| c.session.limit.kept(&c.session.limits)).into();
     // Comments left in the diff viewer and not sent yet stay across a restart.
     state["reviewComments"] = with(|c| crate::review::to_json(&c.review));
     // The chat opens again in its own folder, not in the project on screen then: a session is found by its folder, and a
@@ -717,14 +717,16 @@ fn why(exit: &Value) -> String {
 
 /// One line Claude Code printed, from the start `run`. The tab keeps the session's id once Claude Code names it.
 pub(crate) fn hear(run: u32, line: &Value) {
-    let (named, alerts, ended) = with(|c| {
+    let (named, alerts, ended, limit_changed) = with(|c| {
         if c.run != run {
-            return (None, Vec::new(), false);
+            return (None, Vec::new(), false, false);
         }
         let before = c.session.id.clone();
         let was_working = c.session.working;
+        let limit_before = c.session.limit.kept(&c.session.limits);
         c.session.now = host::now() as u64;
         c.session.hear(line);
+        let limit_changed = c.session.limit.kept(&c.session.limits) != limit_before;
         // A rewound conversation gives the message it went back before to the message box, to edit and send again.
         if let Some(said) = c.session.restored.take() {
             c.draft = said;
@@ -749,8 +751,11 @@ pub(crate) fn hear(run: u32, line: &Value) {
             }
         }
         let named = c.session.id.clone().filter(|id| Some(id) != before.as_ref());
-        (named, std::mem::take(&mut c.session.alerts), was_working && !c.session.working)
+        (named, std::mem::take(&mut c.session.alerts), was_working && !c.session.working, limit_changed)
     });
+    if limit_changed {
+        save_tab();
+    }
     // Pictures in what was heard go to Wings once, as the page names them by id.
     images::flush();
     crate::subagent_relay::heard(line);
