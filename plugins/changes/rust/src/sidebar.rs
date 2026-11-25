@@ -12,7 +12,7 @@ use crate::{
 use serde_json::{Value, json};
 use std::{cell::RefCell, collections::BTreeSet, future::Future, pin::Pin, rc::Rc};
 use wings_plugin::{
-    format::{ago, basename, plural},
+    format::{ago_now, basename, plural},
     git::{branch_label, ok, on_change, repo_root},
     host, messages, poll,
     task::{join, join_all, spawn},
@@ -410,7 +410,7 @@ fn commit_row(c: &Commit, key: String, root: &str) -> Node {
             row()
                 .child(tiny(muted(c.hash.chars().take(7).collect::<String>())).prop("mono", true))
                 .child(tiny(muted(c.author.chars().take(80).collect::<String>())).prop("grow", true).prop("truncate", true))
-                .child(tiny(muted(ago(c.at * 1000.0, host::now())))),
+                .child(tiny(muted(ago_now(c.at * 1000.0)))),
         ],
         move || ask(COMMIT, asked.clone()),
     )
