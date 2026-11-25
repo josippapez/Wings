@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.108 · 2026-11-25
+
+- **Faster past session search**: a search no longer lists every session folder first, only the ones where a session came or went, and it scores past sessions about 8 times faster. A busy disk no longer stalls a search for seconds.
+- **Segmented switches fade**: choosing Files or Graph, Changes, Branch or History, and the like moves the highlight with a short fade instead of a jump.
+- **Changes 0.17.3**: the totals sit in a plain line with a small View all, so the files start higher.
+
 ## 0.2.107 · 2026-11-25
 
 - **Live tooltips**: the Settings button's tooltip counts on while indexing, instead of keeping the number it showed first.
