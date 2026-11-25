@@ -1683,6 +1683,10 @@ esac"##,
     // /add-dir checks the folder with `test -d`, so the scene adds one that is there.
     let add_dir = format!("type:/add-dir {}/api;keys:enter", root.canonicalize().unwrap().display());
     // A draft of 30 lines: the message box stops at 12 and scrolls inside itself, with the caret on the last line.
+    let huge_paste = (1..=300).map(|n| format!("pasted line {n} of a big log with some words to fill the line")).collect::<Vec<_>>().join("\\n");
+    let huge_line = "one very long line without any break ".repeat(60);
+    let huge_queue = format!("pastetext:{huge_paste};keys:enter;pastetext:{huge_line};keys:enter");
+    let huge_queue_open = format!("{huge_queue};more:");
     let long_draft = format!("type:{}", (1..=30).map(|n| format!("draft line {n} of a long message")).collect::<Vec<_>>().join("\n"));
     // /mcp with a server that wants a sign-in in a browser, next to the one that failed and the one that is connected.
     let mut signed_out: Vec<serde_json::Value> = vec![init.clone()];
@@ -2089,6 +2093,9 @@ esac"##,
         ("queue", working.clone(), None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter"), "Claude reads them"),
         // The same two, each opened to its whole message by its More button, which reads Less once it is open.
         ("queue-open", working.clone(), None, Some("type:also bump the version in apps/native/Cargo.toml, the plugin's manifest and the changelog, then run the whole suite again and tell me what failed;keys:enter;type:and add a changelog line, mention the new queue buttons in it, and check that the screenshots of the chat still match the design;keys:enter;more:"), "Claude reads them"),
+        // A big paste queued: 300 lines, then one long line. Cut short it takes a few lines, opened it scrolls inside the card.
+        ("queue-huge", working.clone(), None, Some(&huge_queue), "Claude reads them"),
+        ("queue-huge-open", working.clone(), None, Some(&huge_queue_open), "Claude reads them"),
         // A plugin's own command typed while Claude works is held until the turn ends: it says so, next to a message that Claude reads at its next step.
         ("queue-plugin-command", plugin_command, None, Some("type:/toolbox:lint src/discount.ts;keys:enter;type:and add a changelog line;keys:enter"), "Runs when Claude finishes"),
         ("ask-bash", ask_bash, None, None, "Allow Bash?"),
@@ -2675,6 +2682,11 @@ esac"##,
                         Some(("paste", _)) => {
                             let picture = gpui::Image::from_bytes(gpui::ImageFormat::Png, vec![0x89, b'P', b'N', b'G']);
                             cx.update(|cx| cx.write_to_clipboard(gpui::ClipboardItem::new_image(&picture)));
+                            cx.simulate_keystrokes(window, "cmd-v");
+                        }
+                        // The clipboard holds this text, which Cmd-V gives the message box in one go: `type` sends a key a character.
+                        Some(("pastetext", pasted)) => {
+                            cx.update(|cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string(pasted.replace("\\n", "\n"))));
                             cx.simulate_keystrokes(window, "cmd-v");
                         }
                         Some(("wait", ms)) => wait(&mut cx, window, Duration::from_millis(ms.parse().unwrap())),

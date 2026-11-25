@@ -47,6 +47,30 @@ pub(in crate::workspace) fn nav_row_with(
     look: Look,
 ) -> Stateful<Div> {
     let label = label.into();
+    styled(id, glyph, label.clone(), crate::ui::behaviors::cut_text("label", label).flex_1(), look)
+}
+
+/// `nav_row_with` that shows `tooltip` wherever the pointer is on it. Its label has no tooltip of its own: the one
+/// `cut_text` gives a label, empty while the text fits, is the one shown over the text, so the row's showed only
+/// beside it.
+pub(in crate::workspace) fn nav_row_tipped(
+    id: impl Into<ElementId>,
+    glyph: impl IntoElement,
+    label: impl Into<SharedString>,
+    look: Look,
+    tooltip: impl Fn(&mut gpui::Window, &mut gpui::App) -> gpui::AnyView + 'static,
+) -> Stateful<Div> {
+    let label = label.into();
+    styled(id, glyph, label.clone(), div().min_w_0().flex_1().truncate().child(label), look).tooltip(tooltip)
+}
+
+fn styled(
+    id: impl Into<ElementId>,
+    glyph: impl IntoElement,
+    label: SharedString,
+    text: impl IntoElement,
+    look: Look,
+) -> Stateful<Div> {
     let row = div()
         .id(id)
         .role(Role::Button)
@@ -63,7 +87,7 @@ pub(in crate::workspace) fn nav_row_with(
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(theme::MUTED_FOREGROUND))
         .child(glyph)
-        .child(crate::ui::behaviors::cut_text("label", label).flex_1());
+        .child(text);
     match look {
         Look::Plain => row.cursor_pointer().hover(|style| {
             style

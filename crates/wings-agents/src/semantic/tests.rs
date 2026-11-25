@@ -147,6 +147,24 @@ fn another_model_builds_the_index_again() {
 }
 
 #[test]
+fn a_transcript_still_being_written_waits_until_it_settles() {
+    let (claude, dir) = (temp("settle-claude"), temp("settle-dir"));
+    sessions(&claude);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let make: MakeEmbedder = Box::new(move |_| Ok(Box::new(Fake(counted.clone())) as Box<dyn Embed>));
+    let semantic = Semantic::build(dir, 1, make, QUIET);
+    semantic.round(std::slice::from_ref(&claude), &|| {});
+    assert_eq!(calls.load(Ordering::Relaxed), 0, "just written: nothing embedded yet");
+    let settled = std::time::SystemTime::now() - QUIET - Duration::from_secs(1);
+    for file in on_disk(std::slice::from_ref(&claude)) {
+        fs::File::options().append(true).open(&file.path).unwrap().set_modified(settled).unwrap();
+    }
+    semantic.round(std::slice::from_ref(&claude), &|| {});
+    assert_eq!(calls.load(Ordering::Relaxed), 6, "settled: embedded");
+}
+
+#[test]
 fn a_key_pressed_pauses_the_indexing_until_a_few_quiet_seconds() {
     let (claude, dir) = (temp("typing-claude"), temp("typing-dir"));
     sessions(&claude);

@@ -1915,8 +1915,15 @@ impl PageView {
     fn expandable_text(&self, text: &tree::Text, drop: Option<f32>, cx: &mut Context<Self>) -> AnyElement {
         let id = text.id;
         let open = self.text_open.contains(&id);
-        let shown = tree::Text { truncate: !open, expandable: false, grow: false, ..text.clone() };
         let said = plain_text(&text.children);
+        // GPUI breaks a line at every newline even in a text that doesn't wrap, so a cut text of many lines showed them all: a
+        // pasted log queued over Claude chat's message box ran down the page. Cut short, it is its first line.
+        let first = said.trim_end().contains('\n').then(|| said.lines().next().unwrap_or_default().to_owned());
+        let children = match (&first, open) {
+            (Some(first), false) => vec![Node::Str { id: text.id, text: first.clone() }],
+            _ => text.children.clone(),
+        };
+        let shown = tree::Text { truncate: !open, expandable: false, grow: false, children, ..text.clone() };
         let (size, weight) = text_font(text);
         let whole = line_width(&said, size, weight, text.mono, cx);
         let lines = said.trim_end().contains('\n');
@@ -1971,7 +1978,16 @@ impl PageView {
                     .flex_1()
                     .min_w_0()
                     .pt(px(top))
-                    .child(self.text_element(&shown, drop, cx))
+                    // Opened, a long message scrolls in a box of its own, so it never pushes the page off the screen.
+                    .child(match open {
+                        true => div()
+                            .id(ElementId::NamedInteger("page-text-open".into(), id))
+                            .max_h(px(OPEN_TEXT_HEIGHT))
+                            .overflow_y_scroll()
+                            .child(self.text_element(&shown, drop, cx))
+                            .into_any_element(),
+                        false => self.text_element(&shown, drop, cx),
+                    })
                     .child(measure),
             )
             .when(cut || open, |el| {
@@ -3442,6 +3458,8 @@ const GESTURE_TAKES_KEYBOARD: Duration = Duration::from_secs(2);
 
 /// How near its end, in points, a following `Scroll` still counts as there: a line's worth of a pointer's drift.
 const FOLLOW_SLACK: f32 = 24.0;
+/// How tall an opened `expandable` text grows before it scrolls inside its own box.
+const OPEN_TEXT_HEIGHT: f32 = 240.0;
 const PAGE_CONTEXT: &str = "plugin-page";
 /// The group a list item with actions names itself, for its actions to show while it is pointed at.
 const LIST_ITEM_GROUP: &str = "page-list-item";

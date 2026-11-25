@@ -260,12 +260,14 @@ pub struct Plan {
 }
 
 /// The rules: a new transcript is embedded whole; one that grew from its last message on, as that message may have
-/// grown; one that is shorter or was rewritten in place whole again; one that is gone is dropped.
-pub fn plan(index: &Index, disk: &[OnDisk]) -> Plan {
+/// grown; one that is shorter or was rewritten in place whole again; one that is gone is dropped. One written to after
+/// `settled_before` (ms since the epoch) waits: an agent at work adds to it every few seconds, and each look embedded its
+/// last message again.
+pub fn plan(index: &Index, disk: &[OnDisk], settled_before: u64) -> Plan {
     let known: std::collections::HashMap<&std::path::Path, &Transcript> =
         index.transcripts.iter().map(|t| (t.path.as_path(), t)).collect();
     let mut plan = Plan::default();
-    for file in disk {
+    for file in disk.iter().filter(|f| f.modified <= settled_before) {
         match known.get(file.path.as_path()) {
             None => plan.embed.push((file.clone(), 0)),
             Some(t) if t.len == file.len && t.modified == file.modified => {}
@@ -371,16 +373,21 @@ mod tests {
                 disk("/b/subagents/x.jsonl", "b", 50, 2), // unchanged
                 disk("/c.jsonl", "c", 10, 1),             // new
             ],
+            u64::MAX,
         );
         assert_eq!(plan.embed, vec![(disk("/a.jsonl", "a", 160, 3), 1), (disk("/c.jsonl", "c", 10, 1), 0)]);
         assert!(plan.gone.is_empty());
 
-        let plan = super::plan(&index, &[disk("/a.jsonl", "a", 90, 3)]);
+        let plan = super::plan(&index, &[disk("/a.jsonl", "a", 90, 3)], u64::MAX);
         assert_eq!(plan.embed, vec![(disk("/a.jsonl", "a", 90, 3), 0)], "shorter: whole again");
         assert_eq!(plan.gone, vec![PathBuf::from("/b/subagents/x.jsonl")], "gone");
 
-        let plan = super::plan(&index, &[disk("/a.jsonl", "a", 100, 9), disk("/b/subagents/x.jsonl", "b", 50, 2)]);
+        let plan = super::plan(&index, &[disk("/a.jsonl", "a", 100, 9), disk("/b/subagents/x.jsonl", "b", 50, 2)], u64::MAX);
         assert_eq!(plan.embed, vec![(disk("/a.jsonl", "a", 100, 9), 0)], "same size, written again: whole again");
+
+        let plan = super::plan(&index, &[disk("/a.jsonl", "a", 160, 11), disk("/c.jsonl", "c", 10, 12)], 10);
+        assert!(plan.embed.is_empty(), "still being written: both wait");
+        assert_eq!(super::plan(&index, &[disk("/c.jsonl", "c", 10, 12)], 12).embed, vec![(disk("/c.jsonl", "c", 10, 12), 0)]);
     }
 
     #[test]

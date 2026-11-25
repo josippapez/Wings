@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.105 · 2026-11-25
+
+- **Indexing shows on the Settings button**: while past sessions are indexed, the sidebar's Settings button fills up from left to right, and pointing anywhere on it shows how many are done. The update button's hover text now shows anywhere on it too.
+- **Less indexing while you work**: a session that is still being written is indexed once it has been quiet for five minutes, not again every minute.
+- **Huge queued messages stay small**: a long paste waiting for Claude shows its first line with More, opens in a box that scrolls inside the card, and its hover text is cut short. Claude chat 0.55.3.
+
 ## 0.2.104 · 2026-11-25
 
 - **Search past sessions by meaning**: Past sessions and the agents' history search now also find a session by what it was about, not only by its words, with a small model that runs on this Mac. Wings indexes your past Claude Code and OpenCode sessions in the background, subagents included, and pauses while you type. A thin line under Settings in the sidebar shows how far it has got, with the count on hover, and Settings, Agents has its status and an off switch. The model (34 MB) downloads once, the first time.

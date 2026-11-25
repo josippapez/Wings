@@ -2852,6 +2852,74 @@ fn only_a_text_cut_short_offers_more() {
     assert_eq!(window.read(|view, _| view.text_cut(21)), (Some(true), true));
 }
 
+/// A pasted log of 300 lines queued over Claude chat's message box ran down the page: GPUI breaks a line at each newline
+/// even in a text that doesn't wrap. Cut short it is one line, and opened it scrolls in a box of its own, so what comes
+/// after it stays on the page.
+#[test]
+fn a_cut_text_of_many_lines_is_one_line_and_opened_scrolls_inside_its_box() {
+    let paste = (1..=300).map(|n| format!("pasted line {n}")).collect::<Vec<_>>().join("\n");
+    let source = fake::page("page", {
+        let mut pressed = "none";
+        move |event| {
+            if event.is_some() {
+                pressed = "after";
+            }
+            json!({ "id": 0, "type": "#root", "children": [{ "id": 1, "type": "Stack", "children": [
+                { "id": 10, "type": "Row", "children": [
+                    { "id": 11, "type": "Text", "props": { "truncate": true, "expandable": true, "grow": true }, "children": [text_node(12, &paste)] }] },
+                { "id": 20, "type": "Button", "props": { "onClick": "20:onClick" }, "children": [text_node(21, &format!("After {pressed}"))] }] }] })
+        }
+    });
+    let (app, mut window) = open_narrow(source, 500.0);
+    settle(&app, &mut window, shows("After none"));
+    window.draw();
+    window.draw();
+    // Where a click reaches the button after the text, from the top down.
+    let button_at = |app: &TestApp, window: &mut View| {
+        (40..390).step_by(6).find(|y| {
+            click(window, (60.0, *y as f32));
+            nothing_happens(app);
+            window.draw();
+            window.read(|view, _| view.text().contains("After after"))
+        })
+    };
+    let collapsed = button_at(&app, &mut window).expect("the button after the cut text can be pressed");
+    assert!(collapsed < 110, "the button after the cut text is {collapsed} points down");
+}
+
+/// Opened, the same paste stays in a box of its own height, so the button after it is still on the page.
+#[test]
+fn an_opened_text_of_many_lines_leaves_what_follows_it_on_the_page() {
+    let paste = (1..=300).map(|n| format!("pasted line {n}")).collect::<Vec<_>>().join("\n");
+    let source = fake::page("page", {
+        let mut pressed = "none";
+        move |event| {
+            if event.is_some() {
+                pressed = "after";
+            }
+            json!({ "id": 0, "type": "#root", "children": [{ "id": 1, "type": "Stack", "children": [
+                { "id": 10, "type": "Row", "children": [
+                    { "id": 11, "type": "Text", "props": { "truncate": true, "expandable": true, "grow": true }, "children": [text_node(12, &paste)] }] },
+                { "id": 20, "type": "Button", "props": { "onClick": "20:onClick" }, "children": [text_node(21, &format!("After {pressed}"))] }] }] })
+        }
+    });
+    let (app, mut window) = open_narrow(source, 500.0);
+    settle(&app, &mut window, shows("After none"));
+    window.draw();
+    window.draw();
+    assert!(window.update(|view, _, cx| view.press_more(cx)));
+    window.draw();
+    window.draw();
+    assert_eq!(window.read(|view, _| view.text_cut(11)), (Some(true), true));
+    let reached = (40..390).step_by(6).any(|y| {
+        click(&mut window, (60.0, y as f32));
+        nothing_happens(&app);
+        window.draw();
+        window.read(|view, _| view.text().contains("After after"))
+    });
+    assert!(reached, "the button after the opened text is off the page");
+}
+
 /// A floating pane taller than its page scrolls under the pointer, and its last row can then be pressed: the chat's side
 /// panel with a mod's long Feedback pane wouldn't scroll at all.
 #[test]

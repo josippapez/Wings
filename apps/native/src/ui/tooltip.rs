@@ -150,6 +150,12 @@ fn shown_at(window: &Window, origin: Point<Pixels>, duration: Duration, card: Rc
     });
 }
 
+/// Whether the window `id` drew a tooltip in its last draw, for tests.
+#[cfg(all(test, feature = "test-support"))]
+pub(crate) fn shown_in(id: WindowId) -> bool {
+    EXITS.with_borrow(|exits| exits.get(&id).is_some_and(|exit| exit.shown.is_some() && exit.seen == exit.frame))
+}
+
 /// Draws the window's last tooltip fading and shrinking out where it was, from the frame GPUI drops it, as the
 /// desktop's `animate-out fade-out-0 zoom-out-95`. Put it in a window's root, `deferred` over everything else.
 pub fn tooltip_exit() -> TooltipExit {

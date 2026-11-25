@@ -410,9 +410,8 @@ fn scenes() {
         }
         return;
     }
-    // `-- <out-dir> semantic` renders the sidebar's line while past sessions are indexed, and the index's switch in
-    // Settings, Agents. (Its tooltip is checked in `workspace::semantic`'s tests: no tooltip on the sidebar's last row
-    // shows in an offscreen window, a plain one neither.)
+    // `-- <out-dir> semantic` renders the Settings row filling while past sessions are indexed (a third in, nearly done,
+    // pointed at with its tooltip), and the index's switch in Settings, Agents.
     if std::env::args().nth(2).as_deref() == Some("semantic") {
         for width in [1000.0, 640.0] {
             let config = config.clone();
@@ -423,13 +422,24 @@ fn scenes() {
                 .expect("open semantic fixture");
             let window: AnyWindowHandle = handle.into();
             settle(&mut cx, window, Duration::from_millis(300));
-            handle
-                .update(&mut cx, |workspace, _, cx| {
-                    workspace.show_semantic_progress(412, 929, cx)
-                })
-                .unwrap();
-            wait(&mut cx, window, Duration::from_millis(300));
-            save(&mut cx, window, &out.join(format!("semantic-sidebar-{width}.png")));
+            for (state, done) in [("third", 310), ("nearly-done", 900)] {
+                handle
+                    .update(&mut cx, |workspace, _, cx| workspace.show_semantic_progress(done, 929, cx))
+                    .unwrap();
+                wait(&mut cx, window, Duration::from_millis(300));
+                save(&mut cx, window, &out.join(format!("semantic-sidebar-{state}-{width}.png")));
+            }
+            // From elsewhere: the first move only finds what's under the pointer, on the next frame; the second starts
+            // the tooltip's wait. On the label, which used to show nothing.
+            let at = spot("open-settings");
+            for to in [point(px(700.0), px(400.0)), at, point(at.x + px(1.0), at.y)] {
+                mouse_move(&mut cx, window, to, false);
+                wait(&mut cx, window, Duration::from_millis(100));
+            }
+            wait(&mut cx, window, Duration::from_millis(700));
+            wait_fake(&mut cx, window, Duration::from_millis(200));
+            save(&mut cx, window, &out.join(format!("semantic-sidebar-hover-{width}.png")));
+            mouse_move(&mut cx, window, point(px(700.0), px(400.0)), false);
             handle
                 .update(&mut cx, |workspace, window, cx| {
                     workspace.sample_semantic_settings(window, cx)

@@ -37,6 +37,9 @@ const RETRY: Duration = Duration::from_secs(600);
 const SAVE_EVERY: Duration = Duration::from_secs(60);
 /// Fewer sessions to go than this is a catch-up: it shows no progress.
 pub const SHOW_AT: u32 = 10;
+/// A transcript is embedded once it has gone this long without a change: while an agent works, it changes every few
+/// seconds, and each look re-read it and embedded its last message again.
+const QUIET: Duration = Duration::from_secs(300);
 /// A message's text the helper is given at most, in bytes: a chunk is cut well under it.
 const MAX_TEXT: usize = 4 * index::CHUNK_BYTES;
 
@@ -133,6 +136,8 @@ pub struct Semantic {
     signalled: Mutex<(State, bool)>,
     /// The helper is starting for a search that didn't wait for it (`rank`).
     warming: AtomicBool,
+    /// How long a transcript goes unchanged before it is embedded (`QUIET`).
+    quiet: Duration,
 }
 
 impl Semantic {
@@ -148,11 +153,15 @@ impl Semantic {
             };
             Ok(Box::new(model::Helper::spawn(&helper, &model, &tokenizer)?) as Box<dyn Embed>)
         });
-        Self::with(dir, model::model_id(), make)
+        Self::build(dir, model::model_id(), make, QUIET)
     }
 
-    /// `open` with an embedder of the caller's: for tests.
+    /// `open` with an embedder of the caller's, taking transcripts as soon as they change: for tests.
     pub fn with(dir: PathBuf, model: u64, make: MakeEmbedder) -> Arc<Self> {
+        Self::build(dir, model, make, Duration::ZERO)
+    }
+
+    fn build(dir: PathBuf, model: u64, make: MakeEmbedder, quiet: Duration) -> Arc<Self> {
         let enabled = fs::read(dir.join(SETTINGS))
             .ok()
             .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
@@ -175,6 +184,7 @@ impl Semantic {
             wake: (Mutex::new(false), Condvar::new()),
             signalled: Mutex::new((State::Ready, false)),
             warming: AtomicBool::new(false),
+            quiet,
         })
     }
 
@@ -378,7 +388,8 @@ impl Semantic {
             return Duration::from_secs(3600);
         }
         let disk = on_disk(dirs);
-        let plan = index::plan(&self.index.lock().unwrap(), &disk);
+        let now = std::time::SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+        let plan = index::plan(&self.index.lock().unwrap(), &disk, now.saturating_sub(self.quiet.as_millis() as u64));
         if !plan.gone.is_empty() {
             let mut index = self.index.lock().unwrap();
             for path in &plan.gone {

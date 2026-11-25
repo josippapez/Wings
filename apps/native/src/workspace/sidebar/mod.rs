@@ -7,7 +7,7 @@ mod filters;
 pub(in crate::workspace) use activity::AgentKey;
 mod git;
 mod nav_rows;
-pub(super) use nav_rows::{Look, NAV_GAP, NAV_ROW, nav_row, nav_row_with, row_hint};
+pub(super) use nav_rows::{Look, NAV_GAP, NAV_ROW, nav_row, nav_row_tipped, row_hint};
 pub(super) use text::{Scale, SidebarText, TEXT_SIZES, snap_text, text_size};
 mod text;
 mod order;

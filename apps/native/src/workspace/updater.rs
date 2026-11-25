@@ -739,7 +739,7 @@ impl Workspace {
     pub(in crate::workspace) fn update_row(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let update = self.updates.pending()?;
         Some(
-            super::sidebar::nav_row_with(
+            super::sidebar::nav_row_tipped(
                 "update-app",
                 icon(Icon::CircleArrowUp, 16.0, theme::DONE),
                 format!(
@@ -748,9 +748,9 @@ impl Workspace {
                     update.release.version
                 ),
                 super::sidebar::Look::Plain,
+                ui::tooltip("See what's new and install it", None),
             )
             .text_color(rgb(theme::FOREGROUND))
-            .tooltip(ui::tooltip("See what's new and install it", None))
             .children(ui::spot(|| "update-app".into()))
             .on_click(cx.listener(|this, _, window, cx| this.show_updates(window, cx)))
             .into_any_element(),
