@@ -20,6 +20,25 @@ pub fn clock(ms: f64) -> String {
     format!("{:02}:{:02}", minutes.div_euclid(60).rem_euclid(24), minutes.rem_euclid(60))
 }
 
+/// Days since 1970-01-01 of a civil date (Hinnant's algorithm); `day` may run past the month.
+pub fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let y = if month <= 2 { year - 1 } else { year };
+    let (era, yoe) = (y.div_euclid(400), y.rem_euclid(400));
+    let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468
+}
+
+/// The civil date `(year, month 1 to 12, day)` of `days` since 1970-01-01 (Hinnant's algorithm).
+pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let (era, doe) = (z.div_euclid(146_097), z.rem_euclid(146_097));
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let (d, m) = (doy - (153 * mp + 2) / 5 + 1, if mp < 10 { mp + 3 } else { mp - 9 });
+    (yoe + era * 400 + i64::from(m <= 2), m as u32, d as u32)
+}
+
 /// The instant of an ISO 8601 time with `Z` or an offset, like `2026-11-11T10:00:00.000Z`, in ms since the epoch.
 /// None for anything else.
 pub fn parse_time(iso: &str) -> Option<f64> {
@@ -38,12 +57,7 @@ pub fn parse_time(iso: &str) -> Option<f64> {
         }
         None => 0.0,
     };
-    // Days from 1970 to a civil date (Hinnant's algorithm).
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = y.div_euclid(400);
-    let yoe = y.rem_euclid(400);
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-    let days = era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468;
+    let days = days_from_civil(y, m, d);
     Some((days as f64 * 86_400.0 + hh * 3600.0 + mm * 60.0 + ss - ahead * 60.0) * 1000.0)
 }
 
@@ -75,20 +89,18 @@ pub fn basename(path: &str) -> &str {
     path.split('/').rfind(|part| !part.is_empty()).unwrap_or(path)
 }
 
-const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+pub const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /// The day of `ms` on this Mac, as `Nov 12, 2026`.
 pub fn day(ms: f64) -> String {
     let days = ((ms + f64::from(host::utc_offset(ms)) * 60_000.0) / 86_400_000.0).floor() as i64;
-    // A civil date from days since 1970 (Hinnant's algorithm).
-    let z = days + 719_468;
-    let (era, doe) = (z.div_euclid(146_097), z.rem_euclid(146_097));
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let (d, m) = (doy - (153 * mp + 2) / 5 + 1, if mp < 10 { mp + 3 } else { mp - 9 });
-    let y = yoe + era * 400 + i64::from(m <= 2);
+    let (y, m, d) = civil_from_days(days);
     format!("{} {d}, {y}", MONTHS[(m - 1) as usize])
+}
+
+/// `ago` as of this moment.
+pub fn ago_now(ms: f64) -> String {
+    ago(ms, host::now())
 }
 
 /// How long ago `ms` was at `now`: "just now", "5 min ago", "3 h ago", "2 d ago", and its day once a month has passed.
@@ -123,6 +135,8 @@ mod tests {
         assert_eq!(day(1_794_477_600_000.0), "Nov 12, 2026");
         assert_eq!(ago(1_794_477_600_000.0 - 86_400_000.0 * 400.0, 1_794_477_600_000.0), "Oct 8, 2025");
         assert_eq!(day(951_782_400_000.0), "Feb 29, 2000");
+        // The clock stands at 0 outside Wings.
+        assert_eq!(ago_now(0.0), "just now");
     }
 }
 
@@ -130,28 +144,46 @@ mod tests {
 pub fn iso_of(ms: f64) -> String {
     let total = ms.floor() as i64;
     let (days, in_day) = (total.div_euclid(86_400_000), total.rem_euclid(86_400_000));
-    // Days since the epoch to a calendar date: the days-to-civil algorithm.
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
+    let (year, month, day) = civil_from_days(days);
     let (h, m, s, milli) = (in_day / 3_600_000, in_day / 60_000 % 60, in_day / 1000 % 60, in_day % 1000);
     format!("{year:04}-{month:02}-{day:02}T{h:02}:{m:02}:{s:02}.{milli:03}Z")
 }
 
 #[cfg(test)]
 mod iso_tests {
-    use super::iso_of;
+    use super::{iso_of, parse_time};
 
     #[test]
     fn a_time_is_written_as_to_iso_string_writes_it() {
         assert_eq!(iso_of(0.0), "1970-01-01T00:00:00.000Z");
         assert_eq!(iso_of(1_700_000_000_123.0), "2023-11-14T22:13:20.123Z");
         assert_eq!(iso_of(951_782_400_000.0), "2000-02-29T00:00:00.000Z");
+        // Before the epoch, and a fraction of a millisecond rounds down.
+        assert_eq!(iso_of(-1.0), "1969-12-31T23:59:59.999Z");
+        assert_eq!(iso_of(-0.5), "1969-12-31T23:59:59.999Z");
+        assert_eq!(iso_of(-86_400_000.0 * 365.0), "1969-01-01T00:00:00.000Z");
+        // 1900 is no leap year, 2100 neither, 2400 is.
+        assert_eq!(iso_of(-2_208_988_800_000.0 + 86_400_000.0 * 59.0), "1900-03-01T00:00:00.000Z");
+    }
+
+    #[test]
+    fn civil_dates_and_days_convert_both_ways() {
+        use super::{civil_from_days, days_from_civil};
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        assert_eq!(days_from_civil(1969, 12, 31), -1);
+        assert_eq!(days_from_civil(2000, 2, 29), 11_016);
+        assert_eq!(days_from_civil(2000, 3, 1), 11_017);
+        assert_eq!(days_from_civil(2100, 3, 1) - days_from_civil(2100, 2, 28), 1);
+        assert_eq!(days_from_civil(2024, 3, 1) - days_from_civil(2024, 2, 28), 2);
+        // A day past the month's end counts on into the next.
+        assert_eq!(days_from_civil(2026, 3, 32), days_from_civil(2026, 4, 1));
+        for days in [-800_000, -719_468, -1, 0, 59, 11_016, 20_000, 2_932_896] {
+            let (y, m, d) = civil_from_days(days);
+            assert_eq!(days_from_civil(y, i64::from(m), i64::from(d)), days);
+        }
+        assert_eq!(civil_from_days(11_016), (2000, 2, 29));
+        assert_eq!(civil_from_days(-1), (1969, 12, 31));
+        assert_eq!(parse_time("2000-02-29T00:00:00Z"), Some(951_782_400_000.0));
+        assert_eq!(parse_time("1969-12-31T23:59:59+01:00"), Some(-3_601_000.0));
     }
 }

@@ -4,7 +4,7 @@
 //! has for the tool, of the kinds `s` builds: `object`, `string` (with `minLength`, `maxLength`, `format` and `enum`),
 //! `integer`, `number`, `boolean` and `array`.
 
-use crate::{host, task};
+use crate::{format::grouped, host, task};
 use serde_json::{Value, json};
 use std::{cell::RefCell, collections::HashMap, future::Future, pin::Pin, rc::Rc};
 
@@ -85,14 +85,7 @@ fn num(n: f64) -> String {
     if n.fract() != 0.0 || n.abs() >= 1e15 {
         return n.to_string();
     }
-    let digits = (n.abs() as u64).to_string();
-    let mut out = String::new();
-    for (at, digit) in digits.chars().enumerate() {
-        if at > 0 && (digits.len() - at).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(digit);
-    }
+    let out = grouped(n.abs() as u64);
     if n < 0.0 { format!("-{out}") } else { out }
 }
 
@@ -255,4 +248,15 @@ pub fn check(schema: &Value, value: &Value, path: &str, owner: &str) -> Result<(
         _ => {}
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod num_tests {
+    use super::num;
+
+    #[test]
+    fn a_whole_number_gets_commas_and_anything_else_is_written_plain() {
+        assert_eq!([num(0.0), num(999.0), num(1000.0), num(-1234567.0)], ["0", "999", "1,000", "-1,234,567"]);
+        assert_eq!([num(1.5), num(1e15)], ["1.5", "1000000000000000"]);
+    }
 }

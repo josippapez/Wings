@@ -337,6 +337,10 @@ pub fn text(text: impl Into<String>) -> Node {
 pub fn muted(text: impl Into<String>) -> Node {
     self::text(text).prop("tone", "muted")
 }
+/// Small text.
+pub fn small(text: impl Into<String>) -> Node {
+    self::text(text).prop("size", "small")
+}
 pub fn title(text: impl Into<String>) -> Node {
     self::text(text).prop("weight", "strong")
 }

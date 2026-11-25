@@ -1,7 +1,7 @@
 //! The wall clock of this Mac, as JS `Date`'s local getters and `new Date(y, m, d, h, min)` have it: a time of day that
 //! follows the clock on the wall through a change to or from summer time. The zone comes from `host::utc_offset`.
 
-use crate::host;
+use crate::{format, host};
 
 const DAY_MS: i64 = 86_400_000;
 
@@ -40,24 +40,8 @@ pub struct Local {
     pub minute: u32,
 }
 
-/// Days since 1970-01-01 of a civil date (Hinnant's algorithm); `day` may run past the month.
 fn days_from_civil(year: i64, month: u32, day: i64) -> i64 {
-    let y = if month <= 2 { year - 1 } else { year };
-    let (era, yoe) = (y.div_euclid(400), y.rem_euclid(400));
-    let mp = i64::from((month + 9) % 12);
-    let doy = (153 * mp + 2) / 5;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468 + (day - 1)
-}
-
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let z = days + 719_468;
-    let (era, doe) = (z.div_euclid(146_097), z.rem_euclid(146_097));
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let (d, m) = (doy - (153 * mp + 2) / 5 + 1, if mp < 10 { mp + 3 } else { mp - 9 });
-    (yoe + era * 400 + i64::from(m <= 2), m as u32, d as u32)
+    format::days_from_civil(year, i64::from(month), day)
 }
 
 /// What the wall clock shows at `ms`.
@@ -65,7 +49,7 @@ pub fn local(ms: i64) -> Local {
     let wall = ms + offset(ms) * 60_000;
     let days = wall.div_euclid(DAY_MS);
     let minutes = wall.rem_euclid(DAY_MS) / 60_000;
-    let (year, month, day) = civil_from_days(days);
+    let (year, month, day) = format::civil_from_days(days);
     Local { year, month, day, weekday: (days + 4).rem_euclid(7) as u32, hour: (minutes / 60) as u32, minute: (minutes % 60) as u32 }
 }
 
