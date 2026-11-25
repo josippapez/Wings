@@ -14,6 +14,9 @@ pub mod proto;
 #[cfg(target_os = "macos")]
 pub mod responsibility;
 
+#[cfg(all(test, unix))]
+mod abuse_tests;
+
 /// The server's own version, apart from the app's, in its `welcome`. Bump it when what the server runs changes (`host`,
 /// `output`, `proto`), so an app can tell an older server that still runs from before an update, and leave it to finish
 /// its panes: a server that keeps its version keeps running its old code through every update.

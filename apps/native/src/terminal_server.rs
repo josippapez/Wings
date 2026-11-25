@@ -973,3 +973,6 @@ pub fn kill(socket: &Path, pane: u32) {
 pub fn read(socket: &Path, pane: u32) -> io::Result<Vec<u8>> {
     Control::connect(socket)?.read(pane)
 }
+
+#[cfg(test)]
+mod tests;
