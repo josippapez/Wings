@@ -206,6 +206,18 @@ pub(super) trait Frame {
     fn fire(&mut self, id: u32) -> wasmtime::Result<()>;
 }
 
+/// The frame's thread by its plugin and module, `page-wasm tasks/board` for `<plugins>/tasks/dist/native/board.wasm`,
+/// so a profile of the app tells which plugin a busy thread runs.
+fn thread_name(path: &str) -> String {
+    let path = std::path::Path::new(path);
+    let plugin = path.ancestors().nth(3).and_then(|dir| dir.file_name()).map(|name| name.to_string_lossy());
+    let module = path.file_stem().map(|name| name.to_string_lossy());
+    match (plugin, module) {
+        (Some(plugin), Some(module)) => format!("page-wasm {plugin}/{module}"),
+        _ => "page-wasm".into(),
+    }
+}
+
 /// Starts the frame whose module is the file at `path`. `on_event` is called from the frame's thread.
 pub(super) fn open(
     path: &str,
@@ -220,7 +232,7 @@ pub(super) fn open(
     let queue = Queue::new(jobs.clone());
     let path = path.to_owned();
     let spawned = thread::Builder::new()
-        .name("page-wasm".into())
+        .name(thread_name(&path))
         .stack_size(THREAD_STACK_BYTES)
         .spawn({
             let (closed, stopped) = (closed.clone(), stopped.clone());
@@ -651,6 +663,12 @@ fn imports(engine: &wasmtime::Engine) -> wasmtime::Result<Linker<Host>> {
 #[cfg(test)]
 mod tests {
     use super::{cache::tests::kept_in, *};
+
+    #[test]
+    fn a_frames_thread_is_named_by_its_plugin_and_module() {
+        assert_eq!(thread_name("/data/plugins/tasks/dist/native/board.wasm"), "page-wasm tasks/board");
+        assert_eq!(thread_name("board.wasm"), "page-wasm");
+    }
 
     /// A module with nothing in it: the header alone.
     const EMPTY: &[u8] = b"\0asm\x01\0\0\0";
