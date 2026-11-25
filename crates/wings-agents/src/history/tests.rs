@@ -140,6 +140,24 @@ fn sorted_ids(results: &Results) -> Vec<String> {
 }
 
 #[test]
+fn a_search_lists_a_folder_again_only_when_a_transcript_comes_or_goes() {
+    let dir = temp_claude_dir("listings");
+    transcript(&dir, "/tmp/proj", "s1", &[user("/tmp/proj", "main", "first prompt")]);
+    let history = History::default();
+    let search = |q: &str| sorted_ids(&history.search(std::slice::from_ref(&dir), q, &Filter::default(), 10));
+    let listed = || LISTED.with(std::cell::Cell::get);
+    assert_eq!(search("first"), ["s1"]);
+    let once = listed();
+    assert_eq!(search("first"), ["s1"]);
+    assert_eq!(listed(), once, "nothing came or went, so no folder is listed again");
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    transcript(&dir, "/tmp/proj", "s2", &[user("/tmp/proj", "main", "second prompt")]);
+    assert_eq!(search("prompt"), ["s1", "s2"], "a new session is found");
+    assert!(listed() > once, "its folder was listed again");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn search_matches_every_term_and_filters() {
     let dir = temp_claude_dir("search");
     let edit = json!({ "type": "assistant", "message": { "content": [{ "type": "tool_use", "name": "Write", "input": { "file_path": "/w/app/src/history-sheet.tsx" } }] } }).to_string();

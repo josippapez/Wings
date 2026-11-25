@@ -185,14 +185,31 @@ impl Index {
     /// Each session's best chunk for the unit vector `query`, best first: its score, less a little for each e-fold of its
     /// chunks.
     pub fn rank(&self, query: &[f32]) -> Vec<(String, Best)> {
-        let mut best: std::collections::HashMap<&str, (Best, usize)> = std::collections::HashMap::new();
+        // The query as int8 too, so a chunk's score is a sum of integer products, which runs in vector instructions; a
+        // float sum has to go in order. With a hash of the session's name for every chunk, a search took 9 ms here.
+        let (q_scale, q) = quantize(query);
+        let mut per_transcript: Vec<Option<(Best, usize)>> = vec![None; self.transcripts.len()];
         for r in &self.rows {
-            let dot: f32 = r.vector.iter().zip(query).map(|(&a, &b)| a as f32 * b).sum::<f32>() * r.scale;
-            let session = self.transcripts[r.transcript as usize].session.as_str();
-            let hit = Best { transcript: r.transcript, message: r.message, start: r.start, len: r.len, score: dot };
-            let entry = best.entry(session).or_insert((hit, 0));
-            entry.1 += 1;
-            if dot > entry.0.score {
+            let dot: i32 = r.vector.iter().zip(&q).map(|(&a, &b)| a as i32 * b as i32).sum();
+            let score = dot as f32 * r.scale * q_scale;
+            let hit = Best { transcript: r.transcript, message: r.message, start: r.start, len: r.len, score };
+            match &mut per_transcript[r.transcript as usize] {
+                Some((best, chunks)) => {
+                    *chunks += 1;
+                    if score > best.score {
+                        *best = hit;
+                    }
+                }
+                slot => *slot = Some((hit, 1)),
+            }
+        }
+        // A subagent's transcript counts toward its parent's session.
+        let mut best: std::collections::HashMap<&str, (Best, usize)> = std::collections::HashMap::new();
+        for (t, found) in per_transcript.into_iter().enumerate() {
+            let Some((hit, chunks)) = found else { continue };
+            let entry = best.entry(self.transcripts[t].session.as_str()).or_insert((hit, 0));
+            entry.1 += chunks;
+            if hit.score > entry.0.score {
                 entry.0 = hit;
             }
         }
@@ -401,6 +418,25 @@ mod tests {
         assert_eq!(index.transcripts.len(), 1);
         assert!(index.rows.iter().all(|r| r.transcript == 0), "the subagent's row now points at its new place");
         assert_eq!(index.transcripts[0].session, "b");
+    }
+
+    /// Times a search over an index the size of this Mac's (30,000 chunks in 1,000 sessions):
+    /// `cargo test -p wings-agents --release ranking_30k -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn ranking_30k_chunks_takes() {
+        let mut index = Index::empty(Header::current(7));
+        for t in 0..1000u32 {
+            let rows = (0..30).map(|m| row(m, ((t * 31 + m) % 97) as f32 / 97.0)).collect();
+            index.update(&disk(&format!("/{t}.jsonl"), &format!("session-{t}"), 100, 1), 0, 30, rows);
+        }
+        let mut q = [0f32; DIM];
+        q[0] = 1.0;
+        let started = std::time::Instant::now();
+        for _ in 0..20 {
+            assert_eq!(index.rank(&q).len(), 1000);
+        }
+        println!("ranking {} chunks: {:.1} ms each", index.rows.len(), started.elapsed().as_secs_f64() * 1000.0 / 20.0);
     }
 
     #[test]

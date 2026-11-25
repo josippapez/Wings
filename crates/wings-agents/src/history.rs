@@ -84,6 +84,8 @@ const OPENCODE_MAX_PAGES: usize = 200;
 #[derive(Default)]
 pub struct History {
     index: Mutex<HashMap<PathBuf, Transcript>>,
+    /// The transcript folders as last listed (`Listings`).
+    listings: Mutex<Listings>,
     opencode: Mutex<OpenCode>,
     /// The index of what the sessions say (`semantic`), whose matches a search fuses with its own.
     semantic: std::sync::OnceLock<std::sync::Arc<crate::semantic::Semantic>>,
@@ -577,19 +579,54 @@ fn modified_ms(meta: &fs::Metadata) -> u64 {
     meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as u64)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many folders `Listings` has read, for a test.
+    static LISTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Each transcript folder as last listed, with its modified time, which an added, removed or renamed file moves: a
+/// folder is listed again only then. Listing all of them on every search, as each keystroke in Past sessions makes one,
+/// took up to seconds while the disk was busy; a stat of each folder tells that nothing came or went.
+#[derive(Default)]
+struct Listings(HashMap<PathBuf, (std::time::SystemTime, Vec<PathBuf>)>);
+
+impl Listings {
+    fn list(&mut self, folder: &Path) -> Vec<PathBuf> {
+        let modified = fs::metadata(folder).and_then(|m| m.modified()).ok();
+        if let (Some(at), Some((seen, entries))) = (modified, self.0.get(folder)) {
+            if *seen == at {
+                return entries.clone();
+            }
+        }
+        #[cfg(test)]
+        LISTED.with(|listed| listed.set(listed.get() + 1));
+        let entries: Vec<PathBuf> = fs::read_dir(folder).into_iter().flatten().flatten().map(|entry| entry.path()).collect();
+        match modified {
+            Some(at) => {
+                self.0.insert(folder.to_owned(), (at, entries.clone()));
+            }
+            None => {
+                self.0.remove(folder);
+            }
+        }
+        entries
+    }
+}
+
 /// Brings the index up to date with the transcripts on disk, in every account's folder: new files are parsed, grown
 /// ones read from where they ended, and deleted ones dropped. Files are parsed on every core.
-fn refresh(index: &mut HashMap<PathBuf, Transcript>, claude_dirs: &[PathBuf]) {
+fn refresh(index: &mut HashMap<PathBuf, Transcript>, listings: &mut Listings, claude_dirs: &[PathBuf]) {
     let mut kept = HashMap::with_capacity(index.len());
     let mut work = Vec::new();
-    for folder in claude_dirs.iter().flat_map(|dir| fs::read_dir(dir.join("projects")).into_iter().flatten().flatten()) {
-        let folder_name = folder.file_name().to_string_lossy().into_owned();
-        for file in fs::read_dir(folder.path()).into_iter().flatten().flatten() {
-            let path = file.path();
+    let folders: Vec<PathBuf> = claude_dirs.iter().flat_map(|dir| listings.list(&dir.join("projects"))).collect();
+    for folder in folders {
+        let folder_name = folder.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        for path in listings.list(&folder) {
             if path.extension().is_none_or(|x| x != "jsonl") {
                 continue;
             }
-            let Ok(meta) = file.metadata() else { continue };
+            let Ok(meta) = fs::symlink_metadata(&path) else { continue };
             let (modified, len) = (modified_ms(&meta), meta.len());
             match index.remove(&path) {
                 Some(old) if old.modified == modified && old.len == len => {
@@ -603,6 +640,10 @@ fn refresh(index: &mut HashMap<PathBuf, Transcript>, claude_dirs: &[PathBuf]) {
                 }
             }
         }
+    }
+    if work.is_empty() {
+        *index = kept;
+        return;
     }
     // Biggest last, since workers pop from the end: the longest files start first.
     work.sort_by_key(|(_, t)| t.len.saturating_sub(t.offset));
@@ -812,7 +853,7 @@ impl History {
         let ranked = semantic.and_then(|s| s.rank(query, wait));
         let semantic_loading = semantic.is_some_and(|s| s.warming());
         let mut index = self.index.lock().unwrap();
-        refresh(&mut index, claude_dirs);
+        refresh(&mut index, &mut self.listings.lock().unwrap(), claude_dirs);
         let opencode = self.opencode.lock().unwrap();
         let project = filter.project.as_deref().map(|p| p.trim_end_matches('/')).filter(|p| !p.is_empty());
         // Each session with the time it was last active, and its transcript if it has one.
@@ -973,7 +1014,7 @@ impl History {
     /// the next prompts join it up to `OPENING_CHARS`. None when the session isn't loaded or has no prompt yet.
     pub fn excerpt(&self, claude_dirs: &[PathBuf], id: &str) -> Option<Excerpt> {
         let mut index = self.index.lock().unwrap();
-        refresh(&mut index, claude_dirs);
+        refresh(&mut index, &mut self.listings.lock().unwrap(), claude_dirs);
         let opencode = self.opencode.lock().unwrap();
         let s = index.values().map(|t| &t.session).find(|s| s.id == id).or_else(|| opencode.sessions.get(id).map(|c| &c.session))?;
         let text = |i: usize| {
@@ -1004,7 +1045,7 @@ impl History {
     /// match all of it and the one before and after each.
     pub fn read_session(&self, claude_dirs: &[PathBuf], id: &str, offset: usize, limit: usize, query: Option<&str>) -> Result<Value, String> {
         let mut index = self.index.lock().unwrap();
-        refresh(&mut index, claude_dirs);
+        refresh(&mut index, &mut self.listings.lock().unwrap(), claude_dirs);
         let opencode = self.opencode.lock().unwrap();
         let s = index
             .values()
