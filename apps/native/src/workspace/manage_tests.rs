@@ -1006,6 +1006,113 @@ fn an_update_reloads_a_tab_in_place_and_its_new_page_takes_over_the_program_the_
     }
 }
 
+/// A `.wings-plugin` of the repo's Worktrees at `version`, its sidebar's module `sidebar` in place of the shipped one
+/// when given.
+fn worktrees_package(version: &str, sidebar: Option<&str>) -> Vec<u8> {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/worktrees");
+    let mut manifest: Value = serde_json::from_slice(&std::fs::read(dir.join("wings-plugin.json")).unwrap()).unwrap();
+    manifest["version"] = json!(version);
+    let read = |name: &str| std::fs::read(dir.join(name)).unwrap_or_else(|_| panic!("build it: sh plugins/build-rust.sh worktrees"));
+    let sidebar = sidebar.map_or_else(|| read("dist/native/sidebar.wasm"), |source| std::fs::read(source.strip_prefix(MARKER).unwrap()).unwrap());
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, body) in [
+        ("wings-plugin.json", manifest.to_string().into_bytes()),
+        ("icon.svg", read("icon.svg")),
+        ("dist/native/main.wasm", read("dist/native/main.wasm")),
+        ("dist/native/sidebar.wasm", sidebar),
+    ] {
+        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(&body).unwrap();
+    }
+    zip.finish().unwrap().into_inner()
+}
+
+/// A sidebar page that draws, then runs too long and is stopped, as Worktrees 0.7.0's did.
+fn overruns() -> String {
+    struct Overruns;
+    impl fake::Guest for Overruns {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            cx.render(&json!({ "id": 0, "type": "#root", "children": [
+                { "id": 1, "type": "Text", "children": [{ "id": 2, "type": "#text", "text": "Old" }] }] }));
+            cx.later(100);
+        }
+        fn timer(&mut self, cx: &mut Cx<'_>, _id: u32) {
+            cx.stop("the page ran for too long and was stopped");
+        }
+    }
+    fake::source("sidebar", || Box::new(Overruns))
+}
+
+/// Worktrees 0.7.0's sidebar stopped with "ran for too long"; after the update to 0.7.1 and its Reload, it showed
+/// "Loading…" until Wings restarted. The updated sidebar loads, by itself and after its Reload, with many projects that
+/// are repos, whether it showed or not as the update came.
+#[test]
+fn a_stopped_sidebar_loads_after_its_plugin_is_updated() {
+    for hidden in [false, true] {
+        stopped_sidebar_updated(hidden);
+    }
+}
+
+fn stopped_sidebar_updated(hidden: bool) {
+    crate::page::runtime::wasm::keep_compiled_in(std::env::temp_dir().join("wings-test-cwasm"));
+    let data = Data::temp();
+    let dir = crate::projects::test_dir("stopped-sidebar");
+    let repos: Vec<_> = (0..17)
+        .map(|n| {
+            let parent = dir.join(format!("p{n}"));
+            std::fs::create_dir_all(&parent).unwrap();
+            crate::projects::test_repo(&parent)
+        })
+        .collect();
+    let list = dir.join("spaces.json");
+    let spaces: Vec<Value> = repos.iter().enumerate().map(|(n, repo)| json!({ "id": repo, "name": format!("p{n}"), "path": repo })).collect();
+    std::fs::write(&list, Value::from(spaces).to_string()).unwrap();
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |config| {
+        config.project = repos[0].clone();
+        config.projects = Some(list.clone());
+    });
+    install(&mut window, worktrees_package("0.7.0", Some(&overruns())), github(), None).unwrap();
+    approve(&mut window, "worktrees");
+    let key = ("worktrees".to_owned(), "worktrees".to_owned());
+    window.update(|w, _, cx| w.show_sidebar("worktrees", "worktrees", cx));
+    let page = |w: &Workspace, cx: &gpui::App| {
+        let page = w.sidebar_pages[&key].read(cx);
+        (page.text(), page.stopped())
+    };
+    let wait = |window: &mut TestAppWindow<Workspace>, what: &str, done: &dyn Fn(&(String, bool)) -> bool| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        while !window.read(|w, cx| done(&page(w, cx))) {
+            assert!(std::time::Instant::now() < deadline, "{what}: {:?}", window.read(|w, cx| page(w, cx)));
+            app.run_until_parked();
+            window.draw();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    wait(&mut window, "the old sidebar never stopped", &|(_, stopped)| *stopped);
+    if hidden {
+        window.update(|w, _, cx| w.close_right(cx));
+    }
+    install(&mut window, worktrees_package("0.7.1", None), github(), Some("worktrees")).unwrap();
+    if hidden {
+        // Shown again only once the new run has been told the panes and projects, so its page hears them as it starts
+        // rather than after.
+        for _ in 0..20 {
+            app.run_until_parked();
+            window.draw();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        window.update(|w, _, cx| w.show_sidebar("worktrees", "worktrees", cx));
+    }
+    let loaded = |(text, stopped): &(String, bool)| {
+        !stopped && text.contains("Worktrees") && !text.contains("Loading") && !text.contains("None of your projects")
+    };
+    wait(&mut window, "the updated sidebar never loaded", &loaded);
+    // Its Reload, as you would press it, loads it again too.
+    window.update(|w, _, cx| w.sidebar_pages[&key].update(cx, |page, cx| page.reload(cx)));
+    wait(&mut window, "the reloaded sidebar never loaded", &loaded);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 fn agent(pane: usize, state: crate::agents::AgentState) -> crate::agents::Agent {
     crate::agents::Agent {
         pane_id: pane.to_string(),
