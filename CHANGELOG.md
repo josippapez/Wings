@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.109 · 2026-11-25
+
+- **Past sessions without automated runs**: sessions a program started through the Agent SDK, like automated security reviews, no longer fill Past sessions and its search. Your chats and terminal sessions stay.
+- **Issues 0.31.2**: a commit or pull request command with a character like "…" or "é" no longer crashes Issues, and a line of em dashes in an issue no longer crashes its page.
+
 ## 0.2.108 · 2026-11-25
 
 - **Faster past session search**: a search no longer lists every session folder first, only the ones where a session came or went, and it scores past sessions about 8 times faster. A busy disk no longer stalls a search for seconds.
