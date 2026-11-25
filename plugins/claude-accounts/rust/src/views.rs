@@ -89,7 +89,7 @@ pub fn sidebar() -> Vec<Node> {
     if let (true, Some(project)) = (s.adding, project) {
         out.push(add_account(project, data, &s).key("add"));
     }
-    out.push(account_list(data, project, &s).key("accounts"));
+    out.push(account_list(data, &s).key("accounts"));
     out
 }
 
@@ -108,6 +108,12 @@ pub fn popover() -> Vec<Node> {
     match s.project.as_ref().and_then(|p| p.as_ref()) {
         Some(project) => out.push(project_account(project, data, &s, true).key("project")),
         None => out.push(muted(OPEN_A_PROJECT).key("none")),
+    }
+    // The project's own account says so in its card; any other signed-out account is named here, so none goes unseen.
+    let shown = s.project.as_ref().and_then(|p| p.as_ref()).map(|p| data.account_of(&p.id));
+    for account in data.accounts.iter().filter(|a| !a.signed_in && Some(a.name.as_deref()) != shown) {
+        let message = format!("{} is not signed in.", account_label(account));
+        out.push(not_signed_in(account, sign_in_dir(data, &s), "popover", message, &s).key(format!("signed-out-{}", account.name.as_deref().unwrap_or(DEFAULT))));
     }
     out
 }
@@ -195,8 +201,14 @@ fn start_claude(project: &Project, data: &Loaded, s: &State) -> Option<Node> {
     )
 }
 
-/// A warning that `account` has no sign-in, with a button that opens a terminal as the account to sign in. `cwd` is the
-/// project to open it in, if there is one. `place` tells this one from the same account's elsewhere on the page.
+/// The folder `claude auth login` runs in: the project on screen, else the first project there is. Wings runs programs
+/// only in a project's folder.
+fn sign_in_dir<'a>(data: &'a Loaded, s: &'a State) -> Option<&'a str> {
+    s.project.as_ref().and_then(|p| p.as_ref()).or_else(|| data.projects.first()).map(|p| p.path.as_str())
+}
+
+/// A warning that `account` has no sign-in, with a button that signs in as the account in the browser. `cwd` is the
+/// project folder to run it in, if there is one. `place` tells this one from the same account's elsewhere on the page.
 fn not_signed_in(account: &Account, cwd: Option<&str>, place: &str, message: String, s: &State) -> Node {
     let key = format!("signin:{place}:{}", account.name.as_deref().unwrap_or(DEFAULT));
     let action = s.action(&key);
@@ -207,7 +219,7 @@ fn not_signed_in(account: &Account, cwd: Option<&str>, place: &str, message: Str
         }
     })
     .prop("size", "xs")
-    .prop("title", if cwd.is_none() { "Open a project first" } else { "Opens a terminal as this account running claude auth login" });
+    .prop("title", if cwd.is_none() { "Add a project first" } else { "Opens your browser to sign in to this account" });
     if cwd.is_none() {
         sign_in = sign_in.prop("disabled", true);
     }
@@ -218,7 +230,8 @@ fn not_signed_in(account: &Account, cwd: Option<&str>, place: &str, message: Str
 }
 
 /// Each account with who it is, or that it needs signing in, and the projects that use it. `project` is the one on screen, if any.
-fn account_list(data: &Loaded, project: Option<&Project>, s: &State) -> Node {
+fn account_list(data: &Loaded, s: &State) -> Node {
+    let project = s.project.as_ref().and_then(|p| p.as_ref());
     let now = project.map(|p| data.account_of(&p.id));
     Node::new("List").children(data.accounts.iter().map(|account| {
         let users = data.projects_using(account);
@@ -227,7 +240,7 @@ fn account_list(data: &Loaded, project: Option<&Project>, s: &State) -> Node {
         let who = if account.signed_in {
             small(muted(sign_in_label(account))).prop("truncate", true).prop("title", account.dir.as_str())
         } else {
-            not_signed_in(account, project.map(|p| p.path.as_str()), "list", sign_in_label(account), s)
+            not_signed_in(account, sign_in_dir(data, s), "list", sign_in_label(account), s)
         };
         let used = if users.is_empty() { "No projects use it".to_owned() } else { format!("Used by {}", users.join(", ")) };
         Node::new("ListItem").key(name.unwrap_or(DEFAULT)).child(

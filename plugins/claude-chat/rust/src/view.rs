@@ -89,7 +89,7 @@ pub fn view() -> Vec<Node> {
     page
 }
 
-fn chat_page(c: &Chat) -> Node {
+pub(crate) fn chat_page(c: &Chat) -> Node {
     let (body, built, last) = conversation(c);
     // The conversation, the checklist and the message box. Flush, so the conversation scrolls on its own and the checklist
     // and the message box stay at the foot.
@@ -131,16 +131,23 @@ fn chat_page(c: &Chat) -> Node {
         // The terminals Claude opened dock beside all of it: the conversation, the panel and the message box. The place of what
         // is in the outer split's start slot never changes with the terminals, so the message box keeps its id: the split is
         // there with none open, and the one slot after the split is where a narrow tab sets the newest terminal.
+        let width = dock_width_of(c.dock_width);
         let (beside, below) = match c.dock_narrow {
             Some(false) => (dock_terminals(c, true), Vec::new()),
             _ => (Vec::new(), dock_terminals(c, false).into_iter().take(1).collect()),
         };
         let start: Vec<Node> = [split, stack().prop("gap", "none").children(below)].into_iter().chain(under).collect();
         let dock = Node::new("Split")
-            .prop("defaultSize", DOCK)
+            .prop("defaultSize", width)
             .prop("side", "end")
             .prop("dock", true)
-            .prop("collapseBelow", DOCK_BELOW)
+            .prop("collapseBelow", DOCK_REST + width)
+            // The edge is dragged by the app, which tells the page once, when it is let go; the column keeps at least
+            // `DOCK_MIN` and the conversation `DOCK_REST` while it moves, and a double press brings back `DOCK`.
+            .prop("minSize", DOCK_MIN)
+            .prop("minRest", DOCK_REST)
+            .prop("resetSize", DOCK)
+            .on("onResize", |payload| chat::set_dock_width(payload["size"].as_f64().unwrap_or(f64::from(DOCK)) as u32))
             .on("onNarrow", |payload| chat::set_dock_narrow(payload["narrow"].as_bool().unwrap_or(true)))
             .child(Node::new("Slot").prop("name", "start").children(start))
             .child(Node::new("Slot").prop("name", "end").children(beside));
@@ -285,7 +292,7 @@ fn conversation(c: &Chat) -> (Node, Vec<(usize, usize)>, usize) {
     if c.session.items.is_empty() && c.session.live.is_empty() {
         let body = match &c.state {
             State::Starting => loading(),
-            State::Failed(why) => notice("danger", why.as_str()),
+            State::Failed(why) => crate::signin::failed_line(why, c),
             // A new chat's prompt sits in the middle of the conversation, over a soft glow. Needs Wings 0.2.58. Over the drift
             // of pixels or a gradient it goes without, so one backdrop moves behind it, not two.
             _ => {
@@ -352,6 +359,7 @@ fn newest_end(c: &Chat, nodes: &mut Vec<Node>) {
     nodes.extend(crate::elicitation_view::cards(c));
     // A hit usage limit, once the turn that hit it is over.
     nodes.extend(crate::limit_view::card(c));
+    nodes.extend(crate::signin::status(c));
     if !c.session.live.is_empty() {
         let live = crate::edits_view::prose_in("live", &c.session.live, c);
         let live = if live.count() > BUDGET / 4 { text(truncate(&c.session.live, 20_000)) } else { live };
@@ -394,7 +402,7 @@ fn newest_end(c: &Chat, nodes: &mut Vec<Node>) {
         });
     }
     match &c.state {
-        State::Failed(why) => nodes.push(notice("danger", why.as_str()).key("ended")),
+        State::Failed(why) => nodes.push(crate::signin::failed_line(why, c).key("ended")),
         State::Ended => nodes.push(muted("Claude Code ended. Start a new chat, or pick a past session, to go on.").key("ended")),
         _ => {}
     }
@@ -598,7 +606,7 @@ pub(crate) fn item_node(at: usize, item: &Item, c: &Chat, own: bool) -> Option<N
         Item::Allowed(what, said) => crate::blocked::allowed_row(what, said),
         Item::Thought(said, ms) => thought(at, said, *ms, crate::folds::is_open(c, Kind::Thought, c.open_outputs.contains(&format!("thought-{at}")))),
         Item::Ask(ask) if ask.answer.is_none() => ask_node(ask, c),
-        Item::Error(said) => notice("danger", said.as_str()),
+        Item::Error(said) => crate::signin::error_line(said, at + 1 == c.session.items.len(), c),
         Item::Shell(tool) => step(tool, c.open_outputs.contains(&tool.id), c),
         Item::Stopped => muted("Stopped"),
         Item::Worked(ms, spend) => {
@@ -1421,7 +1429,18 @@ pub(crate) fn side_sections(c: &Chat, place: bool) -> Vec<Node> {
 /// below which there is no room for it: the conversation would be under 480 points. Narrower, the newest terminal sits under
 /// the conversation, above the message box, `DOCK_BELOW_HEIGHT` tall.
 const DOCK: u32 = 420;
-const DOCK_BELOW: u32 = 480 + DOCK;
+/// What you can drag it to: the column keeps at least this much (a terminal's prompt and a few words still fit) and the
+/// conversation at least `DOCK_REST` (its column of text and the message box are readable at 480; a tab under
+/// `DOCK_REST` plus the column draws the newest terminal under the conversation instead). The width is also never over
+/// `DOCK_MAX`, the widest the app sizes a split to.
+const DOCK_MIN: u32 = 280;
+const DOCK_REST: u32 = 480;
+const DOCK_MAX: u32 = 1000;
+
+/// The width the column is drawn at: the one you dragged it to, kept in the tab, within its bounds.
+pub(crate) fn dock_width_of(kept: Option<u32>) -> u32 {
+    kept.map_or(DOCK, |width| width.clamp(DOCK_MIN, DOCK_MAX))
+}
 const DOCK_BELOW_HEIGHT: u32 = 200;
 
 /// The terminals Claude opened, newest first: in the docked column (`beside`) each takes an equal share of its height, so
@@ -3145,7 +3164,7 @@ mod dock_tests {
         let none = page(|c| c.terminals.clear());
         let dock = dock_of(&none).expect("the dock, with nothing in it");
         assert!(terminals_in(slot_of(dock, "end")).is_empty());
-        assert_eq!(dock["props"]["collapseBelow"], DOCK_BELOW);
+        assert_eq!(dock["props"]["collapseBelow"], DOCK_REST + DOCK);
         assert_eq!(dock["props"]["defaultSize"], DOCK);
     }
 
@@ -3167,5 +3186,7 @@ mod dock_tests {
         let measured = find(&page(|c| c.dock_narrow = Some(true))).expect("a message box");
         assert_eq!(closed, opened);
         assert_eq!(closed, measured);
+        let dragged = find(&page(|c| c.dock_width = Some(600))).expect("a message box");
+        assert_eq!(closed, dragged);
     }
 }

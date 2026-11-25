@@ -312,6 +312,10 @@ pub struct Plugins {
     pub unapplied: bool,
     /// A server was turned on since the servers were last read, so its status isn't known.
     pub stale: bool,
+    /// The servers are being read again by themselves, until none is connecting or the tries run out.
+    pub watching: bool,
+    /// Counts the watches, so an older one that outlived its watch knows.
+    watch: u32,
     /// The plugins this session's flag settings turn on or off. A toggle sends them all: a second `enabledPlugins` there
     /// replaces the first.
     set: BTreeMap<String, bool>,
@@ -358,6 +362,31 @@ impl Plugins {
         self.pending.push((request_id.clone(), Undo::Server { name: name.to_owned(), status: server.status.clone() }));
         server.status = "pending".to_owned();
         Some(request(&request_id, json!({ "subtype": "mcp_reconnect", "serverName": name })))
+    }
+
+    /// Starts watching the servers after a reconnect or a turn on: Claude Code answers those before the server has
+    /// connected, and its answer holds no status. The number of this watch.
+    pub fn watch(&mut self) -> u32 {
+        self.watch += 1;
+        self.watching = true;
+        self.watch
+    }
+
+    /// Whether watch `generation` still has a server that is connecting to wait for.
+    pub fn wants(&self, generation: u32) -> bool {
+        generation == self.watch && self.servers.iter().flatten().any(|server| server.status == "pending")
+    }
+
+    /// The request that reads the servers again for watch `generation`. None when that watch is over.
+    pub fn recheck(&self, generation: u32) -> Option<String> {
+        self.wants(generation).then(|| request(SERVERS, json!({ "subtype": "mcp_status" })))
+    }
+
+    /// Watch `generation` ends, with the servers read or not: what is still connecting keeps the "Refresh" hint.
+    pub fn unwatch(&mut self, generation: u32) {
+        if generation == self.watch {
+            self.watching = false;
+        }
     }
 
     /// The one request that has Claude Code start the sign-in to the server `name`, which wants one, the `n`th write. It
@@ -684,6 +713,41 @@ mod tests {
         // Claude Code reconnects, and only a new read says how it went.
         plugins.answered("server-reconnect-7", &json!({ "subtype": "success", "request_id": "server-reconnect-7", "response": {} }));
         assert!(plugins.stale);
+    }
+
+    #[test]
+    fn a_reconnect_is_read_again_until_the_server_is_up() {
+        let mut plugins = with_servers();
+        plugins.reconnect("broken", 7);
+        let watch = plugins.watch();
+        plugins.answered("server-reconnect-7", &json!({ "subtype": "success", "request_id": "server-reconnect-7", "response": {} }));
+        // The answer came before the server did: the row says it is connecting, and the next read is asked for.
+        assert_eq!(status(&plugins, "broken"), "pending");
+        let line = sent(&plugins.recheck(watch).expect("a read"));
+        assert_eq!(line["request_id"], SERVERS);
+        assert_eq!(line["request"], json!({ "subtype": "mcp_status" }));
+        // Still connecting at the first read: asked again. Then it is up, and the watch ends.
+        let read = |plugins: &mut Plugins, status: &str| {
+            let servers = json!([{ "name": "broken", "status": status, "scope": "project", "transport": "stdio" }]);
+            plugins.answered(SERVERS, &json!({ "subtype": "success", "request_id": SERVERS, "response": { "mcpServers": servers } }));
+        };
+        read(&mut plugins, "pending");
+        assert!(plugins.recheck(watch).is_some());
+        read(&mut plugins, "connected");
+        assert_eq!((status(&plugins, "broken").as_str(), plugins.stale, plugins.recheck(watch)), ("connected", false, None));
+    }
+
+    #[test]
+    fn an_older_watch_asks_for_nothing() {
+        let mut plugins = with_servers();
+        plugins.reconnect("broken", 7);
+        let old = plugins.watch();
+        let new = plugins.watch();
+        assert_eq!((plugins.recheck(old), plugins.recheck(new).is_some()), (None, true));
+        plugins.unwatch(old);
+        assert!(plugins.watching);
+        plugins.unwatch(new);
+        assert!(!plugins.watching);
     }
 
     #[test]

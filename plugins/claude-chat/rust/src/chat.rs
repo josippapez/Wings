@@ -133,9 +133,12 @@ pub struct Chat {
     /// Whether the tab is narrower than the side panel and the conversation need side by side, as the page's split says: None
     /// until it has measured. Then the panel floats over the conversation, and Escape or a press outside puts it away.
     pub narrow: Option<bool>,
-    /// Whether the tab is too narrow for the terminals Claude opened to dock beside the conversation (`view::DOCK_BELOW`): None
+    /// Whether the tab is too narrow for the terminals Claude opened to dock beside the conversation (`view::DOCK_REST` plus the column's width): None
     /// until the page has measured, which draws them under it as a narrow tab does.
     pub dock_narrow: Option<bool>,
+    /// How wide the terminals' docked column is, in points, once you dragged its edge: the tab keeps it (`save_tab`). None
+    /// is `view::DOCK`.
+    pub dock_width: Option<u32>,
     /// In a narrow tab, whether the tab has room for the open panel beside a readable column (`view::INSET_BELOW`): the
     /// conversation and the message box then sit left of the panel instead of under it.
     pub inset: bool,
@@ -190,6 +193,8 @@ pub struct Chat {
     bring: bool,
     /// The message a tab opened with `prompt` in its args sends as its first, taken by the start that sends it.
     pub first_prompt: Option<String>,
+    /// The sign-in `/login` or the Sign in button started (`signin.rs`).
+    pub signin: crate::signin::SignIn,
     /// That message is a tool's (`open_chat`), not something you wrote, which Claude Code is told when it is sent.
     first_relayed: bool,
     /// The message `take_agent_message` is sending now, which is another agent's and goes to Claude Code as not yours.
@@ -251,6 +256,7 @@ thread_local! {
         forked_from: None,
         narrow: None,
         dock_narrow: None,
+        dock_width: None,
         inset: false,
         diff_split: false,
         panel_closed: Vec::new(),
@@ -276,6 +282,7 @@ thread_local! {
         picked: None,
         bring: false,
         first_prompt: None,
+        signin: Default::default(),
         first_relayed: false,
         relaying: false,
         prompted: false,
@@ -422,6 +429,7 @@ async fn open_with(args: Value, saved: Value) {
         c.prompted = c.prompted || saved["prompted"] == true || prompt.is_some();
         c.limit_resume = saved["limitArmed"].as_f64();
         c.review = crate::review::from_json(&saved["reviewComments"]);
+        c.dock_width = saved["dockWidth"].as_u64().map(|width| crate::view::dock_width_of(Some(width as u32)));
         c.first_prompt = prompt;
         c.first_relayed = args["relayed"] == true;
         c.folder = basename(&cwd).to_owned();
@@ -578,6 +586,7 @@ pub(crate) async fn follow(run: u32, process: host::Process) {
 pub(crate) fn save_tab() {
     let (id, dirs, picked, prompted) = with(|c| (c.session.id.clone(), c.dirs.clone(), picked_json(&c.picked), c.prompted));
     let mut state = json!({ "sessionId": id, "dirs": dirs, "account": picked, "prompted": prompted });
+    state["dockWidth"] = with(|c| c.dock_width).into();
     state["agent"] = with(|c| c.agent_type.clone()).into();
     // A wait for a usage limit's reset goes on after Wings restarts.
     state["limitArmed"] = with(|c| c.session.limit.armed).into();
@@ -1005,6 +1014,12 @@ pub fn send() {
     if with(|c| c.images.is_empty() && exits(&c.draft)) {
         drop(host::close_tab());
         return;
+    }
+    // /login can't run in Claude Code here (it isn't available in stream-json mode): the chat signs in itself.
+    if with(|c| c.images.is_empty() && crate::signin::is_login(&c.draft)) {
+        with(|c| c.draft.clear());
+        composer::forget();
+        return crate::signin::start();
     }
     // /add-dir starts Claude Code again with the folder, and isn't sent as a message.
     if let Some(path) = with(|c| fork::add_dir_command(&c.draft).filter(|_| c.images.is_empty()).map(str::to_owned)) {
@@ -1751,7 +1766,13 @@ pub fn set_narrow(narrow: bool, inset: bool) {
     });
 }
 
-/// The outer split says whether the tab is narrower than `view::DOCK_BELOW`, so the terminals have no column beside the
+/// The docked column's edge was let go at `width` points: the tab keeps it for its next start.
+pub fn set_dock_width(width: u32) {
+    with(|c| c.dock_width = Some(crate::view::dock_width_of(Some(width))));
+    save_tab();
+}
+
+/// The outer split says whether the tab is narrower than `view::DOCK_REST` plus the column's width, so the terminals have no column beside the
 /// conversation.
 pub fn set_dock_narrow(narrow: bool) {
     with(|c| c.dock_narrow = Some(narrow));
@@ -2284,6 +2305,44 @@ mod tests {
         let calls = wings_with_tab(json!({}));
         wings_plugin::task::block_on(super::open_with(json!({ "cwd": "/work/shop" }), json!({})));
         assert_eq!(asked(&calls, "setTabState").last().unwrap()["state"]["cwd"], "/work/shop");
+    }
+
+    /// The dock `Split` of the chat's page and the handlers it came with.
+    fn dock_export() -> (Value, wings_plugin::ui::Handlers) {
+        fn dock_of(node: &Value) -> Option<Value> {
+            if node["type"] == "Split" && node["props"]["dock"] == true {
+                return Some(node.clone());
+            }
+            node["children"].as_array()?.iter().find_map(dock_of)
+        }
+        let (tree, handlers) = wings_plugin::ui::export(with(|c| {
+            c.side_in_wings = false;
+            vec![crate::view::chat_page(c)]
+        }));
+        (tree.as_array().unwrap().iter().find_map(dock_of).expect("the dock"), handlers)
+    }
+
+    #[test]
+    fn dragging_the_docks_edge_keeps_the_width_in_the_tab_and_the_page_draws_it() {
+        let calls = wings_with_tab(json!({}));
+        with(|c| c.dock_width = None);
+        let (dock, handlers) = dock_export();
+        assert_eq!((dock["props"]["defaultSize"].as_u64(), dock["props"]["minSize"].as_u64(), dock["props"]["minRest"].as_u64()), (Some(420), Some(280), Some(480)));
+        assert!(handlers.call(dock["props"]["onResize"].as_str().unwrap(), &json!({ "size": 560 })));
+        assert_eq!(asked(&calls, "setTabState").last().unwrap()["state"]["dockWidth"], 560);
+        let (dock, _) = dock_export();
+        // The tab folds the column under the conversation where the conversation would have less than its 480.
+        assert_eq!((dock["props"]["defaultSize"].as_u64(), dock["props"]["collapseBelow"].as_u64()), (Some(560), Some(1040)));
+    }
+
+    #[test]
+    fn a_restored_tab_has_its_dock_width_back_within_bounds() {
+        for (saved, wanted) in [(json!(640), Some(640)), (json!(50), Some(280)), (json!(9000), Some(1000)), (Value::Null, None)] {
+            let state = json!({ "dockWidth": saved });
+            wings_with_tab(state.clone());
+            wings_plugin::task::block_on(super::open_with(json!({ "cwd": "/work/shop" }), state));
+            assert_eq!(with(|c| c.dock_width), wanted, "{saved}");
+        }
     }
 
     #[test]

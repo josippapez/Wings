@@ -633,6 +633,15 @@ pub struct Split {
     /// With `fixed_end`, and not `float`: the fixed pane is a column docked beside `start`, full height, flush, with a hairline
     /// between them, in place of a padded pane.
     pub dock: bool,
+    /// With `dock`: the column's inner edge can be dragged. The page owns nothing of the drag: the app sets the width while
+    /// the pointer moves and sends this once, with `{ "size": points }`, when it is let go (and with `reset_size` on a
+    /// double press). The page keeps the number and gives it back as `defaultSize`.
+    pub on_resize: Option<String>,
+    /// With `onResize`: the narrowest the column is dragged to, and the least the other pane keeps.
+    pub min_size: f32,
+    pub min_rest: f32,
+    /// With `onResize`: the width a double press on the edge sends back.
+    pub reset_size: Option<f32>,
     /// Heard, with `{ "narrow": bool }`, when the split's width crosses `collapse_below`, and once it first has a width.
     pub on_narrow: Option<String>,
     /// A floating pane with this handler hears Escape in it and a press outside it.
@@ -1669,6 +1678,10 @@ impl Walk {
                     pinned: on("pinned"),
                     float: on("float"),
                     dock: on("dock"),
+                    on_resize: handler("onResize"),
+                    min_size: number(&props, "minSize").unwrap_or(120.0).clamp(16.0, 1_000.0) as f32,
+                    min_rest: number(&props, "minRest").unwrap_or(0.0).clamp(0.0, 10_000.0) as f32,
+                    reset_size: number(&props, "resetSize").filter(|size| *size > 0.0).map(|size| size.min(1_000.0) as f32),
                     on_narrow: handler("onNarrow"),
                     on_close: handler("onClose"),
                     inset_below: number(&props, "insetBelow")

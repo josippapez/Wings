@@ -17,6 +17,8 @@ use crate::{
     plugins::{Auth, Available, Dialog, Discover, Plugin, Server, Show, Tab, Tool, install_outcome, skills},
 };
 
+/// How long to wait before each new read of the servers after a reconnect (ms): about 21 seconds in all.
+const WATCH_PAUSES: [u32; 5] = [700, 1_500, 3_000, 6_000, 10_000];
 const WIDTH: u32 = 640;
 /// An install clones the plugin's repository, which the usual 30 seconds may not do.
 const INSTALL_MS: u32 = 120_000;
@@ -57,7 +59,7 @@ pub fn dialog(c: &Chat) -> Option<Node> {
     } else {
         small("A plugin turns on or off for this chat only, and your settings stay as they are. An MCP server turns on or off for this project.")
     };
-    let stale = (plugins.stale && !discovering).then(|| small("Refresh to see how the servers you turned on connected."));
+    let stale = (plugins.stale && !plugins.watching && !discovering).then(|| small("Refresh to see how the servers you turned on connected."));
     let error = plugins.error.as_deref().map(|why| notice("danger", why));
     let auth = plugins.auth.as_ref().map(auth_row);
     let body = if discovering {
@@ -416,11 +418,30 @@ fn set_plugin(id: &str, on: bool) {
 fn set_server(name: &str, on: bool) {
     let name = name.to_owned();
     chat::write(move |c, n| c.session.plugins.set_server(&name, on, n));
+    watch_servers();
 }
 
 fn reconnect(name: &str) {
     let name = name.to_owned();
     chat::write(move |c, n| c.session.plugins.reconnect(&name, n));
+    watch_servers();
+}
+
+/// Claude Code answers a reconnect or a turn on before the server has connected, and the answer holds no status. So the
+/// servers are read again after a pause, a few times with longer ones, while one is still connecting and the dialog is
+/// open: the host's timer, not a poll.
+fn watch_servers() {
+    let generation = chat::with(|c| c.session.plugins.watch());
+    task::spawn(async move {
+        for pause in WATCH_PAUSES {
+            host::sleep(pause).await;
+            if !chat::with(|c| c.plugins.is_some() && c.session.plugins.wants(generation)) {
+                break;
+            }
+            chat::write(|c, _| c.session.plugins.recheck(generation));
+        }
+        chat::with(|c| c.session.plugins.unwatch(generation));
+    });
 }
 
 fn sign_in(name: &str) {

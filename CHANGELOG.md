@@ -2,6 +2,13 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.102 · 2026-11-25
+
+- **Pinned plugins**: pinning a plugin to the top bar works again, and every pinned one shows. When their names would take more than half the bar or don't fit, they switch to icons, and the ones that still don't fit go in the "…" menu. The right panel's header is as tall as the project bar beside it.
+- **Agents don't move you**: a terminal an agent opens no longer takes you to it, also when the agent runs in a Claude chat tab or opens it in a project you haven't opened yet.
+- **Claude chat 0.55.0**: drag the edge of the terminal column beside a chat to resize it, double-click it to reset. `/login` and the "Not logged in" line start the sign-in for the chat's account, then the chat picks up again and resends your message. After Reconnect in the MCP dialog, a server shows "Connecting" and then its real status. An idle chat with terminals beside it no longer redraws every frame.
+- **Claude accounts 0.6.0**: a signed-out account says "Not signed in" with a Sign in button, and the inbox tells you when an account gets signed out.
+
 ## 0.2.101 · 2026-11-25
 
 - **Flush panes**: panes sit edge to edge and share one thin line instead of floating as separate cards, and the plugin panel on the right matches. "Open in Zed" is one outlined button, and plugin buttons show their names until the bar gets narrow.

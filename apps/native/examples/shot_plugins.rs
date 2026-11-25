@@ -116,6 +116,7 @@ const SCENES: &[Scene] = &[
     Scene { flag: "--share-missing", help: "Share's modal when `opentunnel` isn't installed: it offers Install", run: share_missing },
     Scene { flag: "--share", help: "Share's modal: a port asked about, what is shared, nothing shared", run: share },
     Scene { flag: "--pr-tracker", help: "PR tracker's list, a pull request and its tabs on GitHub and Azure DevOps, settings, host states", run: pr_tracker },
+    Scene { flag: "--claude-accounts", help: "Claude accounts' sidebar and popover with one account signed out", run: claude_accounts },
     Scene { flag: "--hud", help: "the HUD's sidebar: two sessions on two accounts, then none", run: hud },
     Scene { flag: "--disk", help: "Disk usage's overview and the map of a folder of made-up files", run: disk },
     Scene { flag: "--work-item", help: "Work item's tab and Sprint block over a fake `az`", run: work_item },
@@ -179,7 +180,9 @@ impl Env for FixtureEnv {
     // Two Claude accounts, personal and work, so Claude chat shows its account menu.
     fn claude_accounts(&self) -> Result<wings_spaces::claude_accounts::Accounts, String> {
         use wings_spaces::claude_accounts::{Account, Accounts};
-        let account = |name: Option<&str>, email: &str| Account { name: name.map(String::from), dir: String::new(), email: Some(email.into()), signed_in: true, auth_method: None, shares_setup: false };
+        // `$SHOT_SIGNED_OUT` names the account the Claude accounts scene shows as signed out.
+        let signed_out = std::env::var("SHOT_SIGNED_OUT").ok();
+        let account = |name: Option<&str>, email: &str| Account { name: name.map(String::from), dir: String::new(), email: Some(email.into()), signed_in: signed_out.as_deref() != name, auth_method: None, shares_setup: false };
         Ok(Accounts { accounts: vec![account(None, "me@example.com"), account(Some("work"), "me@work.example.com")], projects: Default::default() })
     }
     fn ports(&self) -> Result<Vec<PanePort>, String> {
@@ -864,6 +867,40 @@ fn worktrees(out: PathBuf) {
 
 /// The HUD's sidebar, which is written in Rust (`plugins/hud/rust`): two Claude sessions on two accounts, with the
 /// second one's pane selected, then no session at all.
+/// Claude accounts' sidebar and popover over two accounts, the second signed out.
+fn claude_accounts(out: PathBuf) {
+    unsafe { std::env::set_var("SHOT_SIGNED_OUT", "work") };
+    let manifest = serde_json::from_str(include_str!("../../../plugins/claude-accounts/wings-plugin.json")).unwrap();
+    let root = out.join("fixture-claude-accounts");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let host = PluginHost::with_access(
+        PluginConfig { id: "claude-accounts".into(), root: out.join("fixture-storage-claude-accounts"), scope: "shot".into() },
+        Access { plugin: wings_plugins::manifest::Plugin { manifest, dir: root.clone(), icon_svg: None }, builtin: false, env: std::sync::Arc::new(FixtureEnv(root.clone())) },
+    );
+    let project = root.to_string_lossy().into_owned();
+    host.publish_projects(vec![wings_native::page::plugin::Project { hidden_sections: Vec::new(), id: project.clone(), name: "shop".into(), parent_id: None, path: project }]);
+    host.publish_project(Some(&root));
+    let mut cx = app();
+    for width in [1000.0, 640.0] {
+        for (frame, expected) in [("sidebar", "Not signed in"), ("popover", "is not signed in")] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../plugins/claude-accounts/dist/native/{frame}.wasm"));
+            let source = format!("{}{}", wings_native::page::runtime::wasm::MARKER, path.canonicalize().expect("build the claude-accounts plugin first").display());
+            let handle = cx.open_offscreen_window(size(px(width), px(700.0)), |_, cx| cx.new(|cx| PageView::in_plugin(&host, &source, cx))).unwrap();
+            let window = handle.into();
+            handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !handle.read_with(&cx, |view, _| view.text().contains(expected)).unwrap() {
+                assert!(Instant::now() < deadline, "page did not show {expected:?}: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
+                wait(&mut cx, window, Duration::from_millis(20));
+            }
+            wait(&mut cx, window, Duration::from_millis(300));
+            save(&mut cx, window, out.join(format!("claude-accounts-{frame}-{width}.png")));
+            let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        }
+    }
+}
+
 fn hud(out: PathBuf) {
     const FIRST: &str = "3c21b0c5-8113-4f55-9493-fa156c3fa369";
     const SECOND: &str = "7d0e4a11-52c6-4b7e-9d57-0c2f6a1b9e44";
@@ -1964,6 +2001,8 @@ esac"##,
         ("handback-folded", handback, None, None, "Report from Audit the discount code"),
         ("allowed", allowed, None, Some("press:Allow and retry"), "You allowed this command"),
         ("limit-card", limit_hit, None, None, "Continue when it resets"),
+        // Claude Code refused the message for want of a sign-in: its error line has a Sign in button, as the banner of a Claude Code that stopped for it does.
+        ("not-logged-in", opened(vec![init.clone(), user("Run the checkout tests."), json!({ "type": "result", "subtype": "success", "is_error": true, "result": "Not logged in · Please run /login", "total_cost_usd": 0.0 })]), None, None, "Please run /login"),
         ("rename", renaming, None, Some("press:Rename"), "Generate a name"),
         // The chat restarted on it: the call shows as interrupted, with no spinner and no Run in background.
         ("interrupted", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": CUT, "model": "claude-opus-5-5" })]), None, Some("disclose:Ran 1 command"), "esav.txt"),
@@ -2135,6 +2174,8 @@ esac"##,
         ("links", linked, None, None, "never filed"),
         // The terminal Claude opened, live in the side panel with what it runs and buttons to open it as a tab and close it.
         ("terminal", built.clone(), None, None, "beside the chat"),
+        // The same, with the column dragged to 600 and kept by the tab (1,280 and 1,000 fold it under the conversation).
+        ("terminal-wide", built.clone(), None, None, "beside the chat"),
         // The call that opened a terminal has an Open that shows it, here among others that name it: a read, and a message.
         ("terminal-open", opened(vec![
             init.clone(),
@@ -2529,7 +2570,7 @@ esac"##,
         // 1,280 just under it.
         let widths: &[f32] = if name == "terminal-open" {
             &[1000.0, 640.0]
-        } else if ["conversation", "work", "ask-bash", "tasks", "terminal", "folder", "long-message", "subagents", "subagent"].contains(&name) {
+        } else if ["conversation", "work", "ask-bash", "tasks", "terminal", "terminal-wide", "folder", "long-message", "subagents", "subagent"].contains(&name) {
             &[1600.0, 1280.0, 1000.0, 640.0]
         } else if name == "prompt-rail" {
             // The rail is drawn only where the tab has room beside the conversation's column, so 640 has none to show.
@@ -2542,7 +2583,7 @@ esac"##,
             let _ = std::fs::remove_file(format!("{}.upgraded", fixture.display()));
             // The shell of the terminal the workspace draws over the page, opened before the page so the fake `claude` the
             // page starts is found under the scene's own shell.
-            let shot_terminal = (name == "terminal").then(|| {
+            let shot_terminal = matches!(name, "terminal" | "terminal-wide").then(|| {
                 // A finished build, in lines that fit the card's columns, so nothing wraps mid-word and the card's Idle badge is true.
                 let printed = b"$ make all\r\n  Compiling shop v0.4.0\r\n  Compiling checkout v0.4.0\r\n  Compiling cart v0.4.0\r\n   Finished build in 2.4s\r\n".to_vec();
                 // SAFETY: nothing else reads the environment while the shell starts.
@@ -2558,10 +2599,11 @@ esac"##,
             let args = matches!(name, "long" | "long-older" | "long-rail" | "long-rail-streaming").then(|| json!({ "resume": LONG, "cwd": root.canonicalize().unwrap() }));
             let args = if name == "interrupted" { Some(json!({ "resume": CUT, "cwd": root.canonicalize().unwrap() })) } else { args };
             // The comments the tab kept, as a restart reads them.
-            let kept = (name == "review-comments").then(|| json!({ "reviewComments": [
+            let kept = (name == "terminal-wide").then(|| json!({ "dockWidth": 600 }));
+            let kept = kept.or((name == "review-comments").then(|| json!({ "reviewComments": [
                 { "id": "1:-1", "path": "src/config.rs", "old": false, "line": 3, "quote": "    let timeout = 30;", "body": "Why 30? The load balancer drops idle connections after 25 s." },
                 { "id": "1:-2", "path": "src/client/retry.rs", "old": false, "line": 2, "quote": "    200 * 2u64.pow(attempt)", "body": "This doubles forever. Cap it at 30 s." },
-            ] }));
+            ] })));
             let handle = cx
                 .open_offscreen_window(size(px(width), px(if name == "read-ts" { 940.0 } else { 760.0 })), |_, cx| cx.new(|cx| match kept {
                     Some(kept) => {

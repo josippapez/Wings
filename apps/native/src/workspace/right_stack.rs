@@ -391,7 +391,7 @@ impl Workspace {
             crate::ui::place_view(page.entity_id(), window);
             let glyph = sidebar_glyph(installed, &key.1, 14.0);
             let focused = shown.focused() == Some(key);
-            let header = self.split_header(key, title.clone(), glyph, many, focused, cx);
+            let header = self.split_header(key, title.clone(), glyph, many, focused, index == 0, cx);
             let card = div()
                 .flex_1()
                 .min_h_0()
@@ -449,6 +449,7 @@ impl Workspace {
         glyph: AnyElement,
         many: bool,
         focused: bool,
+        first: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let (close_id, close_label, close_key) = if many {
@@ -464,7 +465,8 @@ impl Workspace {
         let menu_open = key.clone();
         div()
             .relative()
-            .h(px(HEADER))
+            // The first page's header is as tall as the project bar beside it, so their lines meet.
+            .h(px(if first { super::project::PROJECT_BAR } else { HEADER }))
             .flex_none()
             .flex()
             .items_center()
@@ -473,6 +475,7 @@ impl Workspace {
             .border_b_1()
             .border_color(rgba(HAIRLINE))
             .bg(rgb(theme::SURFACE))
+            .children(first.then(|| crate::ui::spot(|| "right-header".into())).flatten())
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {

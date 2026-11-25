@@ -573,16 +573,16 @@ impl Workspace {
             .collect()
     }
 
-    /// The letters in the titles of the longest plugin buttons the bar can show at once, for the room their titles take.
-    pub(super) fn bar_title_letters(&self) -> usize {
-        let mut letters: Vec<usize> = self.bar_buttons().iter().map(|button| button.title.chars().count()).collect();
-        letters.sort_unstable_by(|a, b| b.cmp(a));
-        letters.iter().take(3).sum()
-    }
-
-    /// How many plugin buttons the project bar has, in the bar and in its menu.
-    pub(super) fn bar_button_count(&self) -> usize {
-        self.bar_buttons().len()
+    /// The plugin buttons the bar wants, for the room they take: the letters in each one's title, in the order the bar
+    /// draws them (every pinned one, then the free places), and whether its menu shows even with all of them in the bar
+    /// (there are more buttons, or one is pinned and the menu is where it's let go).
+    pub(super) fn bar_fit(&self) -> (Vec<usize>, bool) {
+        let all = self.bar_buttons();
+        let keys: Vec<String> = all.iter().map(BarButton::key).collect();
+        let (inline, overflow) = split_buttons(&keys, &self.plugin_ui.pinned, usize::MAX);
+        let pinned_any = inline.iter().any(|at| self.plugin_ui.pinned.contains(&keys[*at]));
+        let letters = inline.iter().map(|at| all[*at].title.chars().count()).collect();
+        (letters, !overflow.is_empty() || pinned_any)
     }
 
     /// The plugins' sidebar buttons, at the project bar's right end: each opens its page in the panel on the right. A
@@ -637,6 +637,7 @@ impl Workspace {
             },
         )
         .when(labels, |button| button_with_title(button, shown))
+        .children(ui::spot(|| format!("bar-button:{plugin}:{id}")))
         .tooltip(ui::tooltip(button.title.clone(), None))
         .on_click(cx.listener(move |this, _, window, cx| {
             this.open_bar_view(&plugin, &id, &opens, window, cx)
@@ -839,7 +840,8 @@ impl Workspace {
                     content,
                 )
                 .when(label.is_some(), |button| button.w_auto().px(px(8.0)))
-                .when(labels, |button| button_with_title(button, open));
+                .when(labels, |button| button_with_title(button, open))
+                .children(ui::spot(|| format!("bar-button:{plugin}:{page}")));
                 // The popover shows more than a tooltip would. Typing in it doesn't take the pointer off its button.
                 let button = if has_popover {
                     let key = key.clone();
@@ -1542,6 +1544,11 @@ impl Render for RowsTip {
 impl Workspace {
     pub fn shot_sidebar(&mut self, plugin: &str, sidebar: &str, cx: &mut Context<Self>) {
         self.show_sidebar(plugin, sidebar, cx);
+    }
+
+    /// Pins a plugin button to the project bar, as "Keep in bar" does.
+    pub fn shot_pin(&mut self, key: &str, cx: &mut Context<Self>) {
+        self.toggle_pin(key, cx);
     }
 
     /// Adds the plugin's sidebar as a split below the open ones, as a Cmd+click on its button does.

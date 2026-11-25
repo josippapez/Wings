@@ -3357,11 +3357,11 @@ fn a_sidebar_shows_the_icon_its_manifest_names_on_its_button_and_over_its_panel(
     app.run_until_parked();
     window.draw();
     // Then before the sidebar's title over the 360 panel, after its 1 point line and 12 of padding, in the middle of
-    // its 32 point header less the line under it.
+    // its 36 point header (as tall as the project bar beside it) less the line under it.
     let title = glyph_at("clock").unwrap();
     assert_eq!(
         (title.left(), title.center().y),
-        (px(1000.0 - 360.0 + 13.0), px(40.0 + 31.0 / 2.0))
+        (px(1000.0 - 360.0 + 13.0), px(40.0 + 35.0 / 2.0))
     );
 }
 
@@ -4552,6 +4552,116 @@ fn a_chat_tabs_agent_opens_its_terminals_in_the_tabs_page() {
         w.close_plugin_tab(index, window, cx);
     });
     window.read(|w, _| assert!(w.panes.contains_key(&terminal) && in_a_tab(w, terminal)));
+}
+
+/// A chat page that shows each terminal Wings tells it of, as Claude chat's does.
+fn terminals_shown_page() -> String {
+    fake::script("page", || {
+        |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            if let Hear::Deliver("terminals", _, text) = hear {
+                let nodes: Vec<Value> = said(text)
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .enumerate()
+                    .map(|(at, pane)| json!({ "id": at + 1, "type": "Terminal", "props": { "pane": pane["paneId"], "height": 200 }, "children": [] }))
+                    .collect();
+                cx.render(&json!({ "id": 0, "type": "#root", "props": {}, "children": nodes }));
+            }
+        }
+    })
+}
+
+/// What the user looks at and types into: the project, the tab and the element with the keys.
+fn looking_at(window: &mut TestAppWindow<Workspace>) -> (PathBuf, Active, Option<gpui::FocusHandle>) {
+    window.update(|w, window, cx| (w.config.project.clone(), w.active, window.focused(cx)))
+}
+
+/// Claude in a chat tab calls `open_pane`, and the user stays where they are: in another tab, in another project, or in
+/// that chat. The terminal opens beside the chat, or in a tab not shown with `new_tab`, and nothing takes the keys.
+#[test]
+fn a_chat_tabs_agent_opens_a_terminal_without_taking_you_from_what_you_look_at() {
+    let data = Data::temp();
+    let views = json!([{ "id": "chat", "title": "Chat", "page": "dist/chat.html", "opens": ["tab"], "multiple": true }]);
+    data.install_script("chatty", json!({ "contributes": { "ui": ["agents", "terminals"], "views": views } }), &fake::idle("main"),
+        &[("chat", &terminals_shown_page())], "chatty-scope");
+    let (home, other_project, never) = (data.root.join("home"), data.root.join("elsewhere"), data.root.join("never-entered"));
+    let spaces: Vec<_> = [&home, &other_project, &never]
+        .iter()
+        .map(|folder| {
+            fs::create_dir_all(folder).unwrap();
+            json!({ "id": folder, "name": folder.file_name().unwrap().to_string_lossy(), "path": folder })
+        })
+        .collect();
+    fs::write(data.root.join("spaces.json"), serde_json::to_vec(&spaces).unwrap()).unwrap();
+    let (app, mut window) = {
+        let (home, root) = (home.clone(), data.root.clone());
+        open_plugins(&data, &Arc::default(), move |config| {
+            config.project = home;
+            config.projects = Some(root.join("spaces.json"));
+        })
+    };
+    let chat = window.update(|w, window, cx| {
+        assert!(w.open_plugin_view("chatty", "chat", None, window, cx));
+        w.plugin_tabs.iter().find(|tab| tab.plugin == "chatty").unwrap().id
+    });
+    let open_from = |app: &TestApp, window: &mut TestAppWindow<Workspace>, new_tab: bool| {
+        window.update(|w, window, cx| {
+            let plan = wings_connect::panes::OpenPlan {
+                space_id: home.to_string_lossy().into_owned(),
+                cwd: None,
+                input: Some("make all".into()),
+                run: false,
+                next_to: (!new_tab).then(|| format!("tab-{chat}")),
+            };
+            w.claude_open_pane(plan, window, cx).unwrap();
+        });
+        for _ in 0..5 {
+            app.run_until_parked();
+            window.draw();
+        }
+    };
+    let panes = |window: &mut TestAppWindow<Workspace>| window.read(|w, _| w.panes.len());
+
+    // You in a terminal tab, the chat behind it.
+    super::tests::press(&mut window, "t");
+    let before = looking_at(&mut window);
+    assert!(matches!(before.1, Active::Terminal(_)));
+    for new_tab in [false, true] {
+        let count = panes(&mut window);
+        open_from(&app, &mut window, new_tab);
+        assert_eq!(panes(&mut window), count + 1);
+        assert_eq!(looking_at(&mut window), before, "new_tab {new_tab}, you in another tab");
+    }
+
+    // You in the chat itself.
+    window.update(|w, window, cx| w.show(Active::Plugin(chat), window, cx));
+    let before = looking_at(&mut window);
+    for new_tab in [false, true] {
+        open_from(&app, &mut window, new_tab);
+        assert_eq!(looking_at(&mut window), before, "new_tab {new_tab}, you in the chat");
+    }
+
+    // You in another project, the chat out of sight.
+    window.update(|w, window, cx| w.switch_project(other_project.clone(), window, cx));
+    let before = looking_at(&mut window);
+    for new_tab in [false, true] {
+        open_from(&app, &mut window, new_tab);
+        assert_eq!(looking_at(&mut window), before, "new_tab {new_tab}, you in another project");
+    }
+
+    // The chat's agent opens a terminal in a project nobody entered yet, by its folder.
+    window.update(|w, window, cx| {
+        let plan = wings_connect::panes::OpenPlan {
+            space_id: never.to_string_lossy().into_owned(),
+            cwd: None,
+            input: None,
+            run: false,
+            next_to: None,
+        };
+        w.claude_open_pane(plan, window, cx).unwrap();
+    });
+    assert_eq!(looking_at(&mut window), before, "a project not entered yet");
 }
 
 /// A page that saves the terminals Wings tells it of, under `key`.

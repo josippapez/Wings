@@ -3090,6 +3090,123 @@ fn a_split_measures_its_width_and_folds_its_side_pane_when_narrow() {
     }
 }
 
+/// A chat's docked column: the split with `dock` and `onResize`, 420 wide until the page hears another, which it keeps and
+/// gives back as `defaultSize`, counting what it heard.
+fn resizable_dock() -> String {
+    let (mut width, mut heard) = (420, 0);
+    fake::page("page", move |event| {
+        if let Some(("1:resize", payload)) = event {
+            width = payload["size"].as_f64().unwrap_or(0.0) as u64;
+            heard += 1;
+        }
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Split",
+            "props": { "defaultSize": width, "side": "end", "dock": true, "collapseBelow": 480 + width, "minSize": 280,
+                "minRest": 480, "resetSize": 420, "onResize": "1:resize" }, "children": [
+            { "id": 2, "type": "Slot", "props": { "name": "start" }, "children": [text(3, 4, format!("Main, heard {heard}, width {width}."))] },
+            { "id": 6, "type": "Slot", "props": { "name": "end" }, "children": [text(7, 8, "Side".into())] }] }] })
+    })
+}
+
+/// The tab's page, kept as last drawn as the workspace keeps it, so the page draws only when it is notified.
+struct DockTab(gpui::Entity<PageView>);
+
+impl gpui::Render for DockTab {
+    fn render(&mut self, _: &mut gpui::Window, _: &mut gpui::Context<Self>) -> impl gpui::IntoElement {
+        use gpui::{Styled, div, prelude::*};
+        div().size_full().child(self.0.clone().cached(gpui::StyleRefinement::default().size_full()))
+    }
+}
+
+/// Dragging the docked column's edge sets its width at once within its bounds (at least `minSize`, and `minRest` left to
+/// the other pane), without the page hearing anything until the button is up, which tells it once; a double press brings
+/// back `resetSize`. A still page isn't drawn again, a step of the drag draws it once. Prints what a drag costs.
+#[test]
+fn dragging_a_docked_columns_edge_resizes_it_live_and_tells_the_page_once() {
+    let mut app = TestApp::new();
+    app.background_executor().allow_parking();
+    let host = hosted(&mut app);
+    let source = resizable_dock();
+    let bounds = gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(1000.0), px(400.0)));
+    let mut window = app.open_window_with_options(
+        gpui::WindowOptions { window_bounds: Some(gpui::WindowBounds::Windowed(bounds)), ..Default::default() },
+        |_, cx| DockTab(gpui::AppContext::new(cx, |cx| PageView::in_plugin(&host, &source, cx))),
+    );
+    let page = |window: &TestAppWindow<DockTab>| window.read(|tab, cx| tab.0.clone().read(cx).renders());
+    let text = |window: &TestAppWindow<DockTab>| window.read(|tab, cx| tab.0.read(cx).text());
+    let until = |app: &TestApp, window: &mut TestAppWindow<DockTab>, wanted: &str| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !text(window).contains(wanted) {
+            assert!(Instant::now() < deadline, "the page shows {:?}", text(window));
+            app.run_until_parked();
+            window.draw();
+            thread::sleep(Duration::from_millis(5));
+        }
+    };
+    until(&app, &mut window, "width 420.");
+    for _ in 0..3 {
+        app.run_until_parked();
+        window.draw();
+    }
+    // Nothing moves, nothing is drawn again.
+    let idle = page(&window);
+    for _ in 0..5 {
+        app.run_until_parked();
+        window.draw();
+    }
+    assert_eq!(page(&window) - idle, 0, "a still page draws again");
+    // The column's left edge is at 1000 - 420; the grab area is the 8 points before it.
+    let mut x = 1000.0 - 420.0 - 4.0;
+    window.simulate_mouse_down(point(px(x), px(200.0)), MouseButton::Left);
+    let (before, mut drawn, mut slowest, mut frames) = (page(&window), Duration::ZERO, Duration::ZERO, 0);
+    let step = |window: &mut TestAppWindow<DockTab>, to: f32, x: &mut f32| {
+        *x = to;
+        window.simulate_event(gpui::MouseMoveEvent {
+            position: point(px(*x), px(200.0)),
+            pressed_button: Some(MouseButton::Left),
+            modifiers: gpui::Modifiers::default(),
+        });
+        app.run_until_parked();
+        let begun = Instant::now();
+        window.draw();
+        begun.elapsed()
+    };
+    let size = |window: &TestAppWindow<DockTab>| window.read(|tab, cx| tab.0.read(cx).split_set(1));
+    // 30 frames, the pointer 2 points further left each: 60 wider.
+    for _ in 0..30 {
+        let took = step(&mut window, x - 2.0, &mut x);
+        (drawn, slowest, frames) = (drawn + took, slowest.max(took), frames + 1);
+    }
+    assert_eq!(size(&window), Some(480.0), "the column follows the pointer");
+    let renders = page(&window) - before;
+    eprintln!(
+        "[measure] docked column drag: {frames} frames, {:.2} ms a frame on average, {:.2} ms at most, the page drawn {renders} times",
+        drawn.as_secs_f64() * 1000.0 / frames as f64,
+        slowest.as_secs_f64() * 1000.0,
+    );
+    assert_eq!(renders, frames, "a step of the drag draws the page once");
+    assert!(text(&window).contains("heard 0,"), "the page hears nothing while it moves");
+    // Past the bounds: 1000 leaves the other pane 480, so 520 at most, and 280 at least.
+    step(&mut window, 0.0, &mut x);
+    assert_eq!(size(&window), Some(520.0));
+    step(&mut window, 990.0, &mut x);
+    assert_eq!(size(&window), Some(280.0));
+    step(&mut window, 496.0, &mut x);
+    window.simulate_mouse_up(point(px(x), px(200.0)), MouseButton::Left);
+    until(&app, &mut window, "heard 1, width 500.");
+    // Another move after the button is up changes nothing.
+    step(&mut window, 100.0, &mut x);
+    assert_eq!(size(&window), Some(500.0));
+    // A double press on the edge (now at 1000 - 500) brings back 420.
+    window.simulate_event(gpui::MouseDownEvent {
+        position: point(px(1000.0 - 500.0 - 4.0), px(200.0)),
+        button: MouseButton::Left,
+        modifiers: gpui::Modifiers::default(),
+        click_count: 2,
+        first_mouse: false,
+    });
+    until(&app, &mut window, "heard 2, width 420.");
+}
+
 /// A page under a sheet that has a search in its header, until the sheet's `onClose` takes it away.
 fn sheet() -> String {
     let (mut closed, mut query) = (0, String::new());

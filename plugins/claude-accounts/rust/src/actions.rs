@@ -5,11 +5,11 @@ use crate::{
     state::{Action, Note, with},
 };
 use serde_json::{Value, json};
-use std::{cell::RefCell, future::Future};
+use std::future::Future;
 use wings_plugin::{
     host::{self, Pending},
     messages,
-    task::{SingleFlight, spawn},
+    task::SingleFlight,
 };
 
 /// A project's account changed, or an account was added: the other page loads the list again.
@@ -113,43 +113,27 @@ pub async fn share_setup(name: String, on: bool) {
     with(|s| s.shares.remove(&name));
 }
 
-/// The terminal a sign-in opened, followed through the panes Wings lists.
-pub struct SignIn {
-    pub pane: String,
-    pub ran: bool,
-    pub over: bool,
+/// How long the browser sign-in may take, the most Wings lets a program wait.
+const SIGN_IN_MS: u32 = 300_000;
+
+/// What `claude auth login` printed last, for why it didn't finish.
+fn why_not_signed_in(out: &Value) -> String {
+    ["stderr", "stdout"]
+        .iter()
+        .find_map(|key| out[key].as_str()?.lines().rev().find(|line| !line.trim().is_empty()).map(|line| line.trim().to_owned()))
+        .unwrap_or_else(|| "Claude Code didn't finish signing in".into())
 }
 
-impl SignIn {
-    /// True once, when the sign-in is over: `claude` has run in the pane and is gone, or the pane is closed.
-    pub fn hear(&mut self, panes: &[Value]) -> bool {
-        if self.over {
-            return false;
-        }
-        let pane = panes.iter().find(|p| p["paneId"] == self.pane.as_str());
-        if pane.is_some_and(|p| p["command"] == "claude") {
-            self.ran = true;
-        } else if pane.is_none() || self.ran {
-            self.over = true;
-        }
-        self.over
-    }
-}
-
-/// Opens a terminal in `cwd` as the account running `claude auth login`, and loads the accounts again once `claude`
-/// has ended in it or the terminal was closed. The shell stays open after login, so the pane's command is what says it
-/// is over; a terminal where `claude` never shows is left to the reload when Wings comes to the front.
+/// Runs `claude auth login` as the account (none: the default) in `cwd`, a project's folder. Claude Code opens the
+/// browser itself and ends once you have signed in; the accounts are loaded again then, so the account shows as signed in.
 pub async fn sign_in(key: String, name: Option<String>, cwd: String) {
     act(&key, async {
-        let opened = open_pane("claude auth login", &cwd, Some(name.as_deref())).await?;
-        let pane_id = opened["paneId"].as_str().unwrap_or_default().to_owned();
-        // There is no way to stop listening to the panes, so the listener goes quiet once it is over.
-        let watch = RefCell::new(SignIn { pane: pane_id, ran: false, over: false });
-        host::on_panes(move |panes| {
-            if watch.borrow_mut().hear(panes) {
-                spawn(changed());
-            }
-        });
+        let account = host::Account::picked(None, name.as_deref());
+        let out = host::exec_as(&account, &cwd, "claude", &["auth", "login"], Some(SIGN_IN_MS)).await?;
+        if out["code"] != 0 {
+            return Err(why_not_signed_in(&out));
+        }
+        changed().await;
         Ok(())
     })
     .await;

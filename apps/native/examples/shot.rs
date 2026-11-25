@@ -500,6 +500,11 @@ fn scenes() {
     if std::env::args().nth(2).as_deref() == Some("right-splits") {
         return right_splits(&mut cx, &config, &out);
     }
+    // `-- <out-dir> pinned-bar` renders only the project bar with plugin buttons pinned: few, and many with long titles,
+    // at 1600, 1000 and 640 points, with the right panel open.
+    if std::env::args().nth(2).as_deref() == Some("pinned-bar") {
+        return pinned_bar(&mut cx, &config, &out);
+    }
     // `-- <out-dir> right-named` renders only a sidebar whose page names its own header (`setTabTitle`), at 1280 and 640.
     if std::env::args().nth(2).as_deref() == Some("right-named") {
         return right_named(&mut cx, &config, &out);
@@ -2373,6 +2378,47 @@ fn right_splits(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         settle(cx, window, Duration::from_millis(500));
         save(cx, window, &name("two"));
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
+    }
+}
+
+fn pinned_bar(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+    let data = Data::temp();
+    let titles = ["Changes", "Subagent", "Cyclops tracker", "Disk usage", "Pull requests", "Sprint board", "Claude chat"];
+    for (n, title) in titles.iter().enumerate() {
+        data.install_script(
+            &format!("p{n}"),
+            serde_json::json!({ "name": title, "contributes": {
+                "sidebars": [{ "id": "s", "title": title, "page": "dist/s.html" }],
+            } }),
+            &fake::idle("main"),
+            &[("s", &words(&format!("{title} page")))],
+            &format!("p{n}-scope"),
+        );
+    }
+    let mut config = base.clone();
+    config.plugins = Some(data.paths());
+    for (label, pins) in [("few", 2), ("many", 7)] {
+        for width in [1600.0, 1000.0, 640.0] {
+            let config = config.clone();
+            let handle = cx
+                .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                    cx.new(|cx| Workspace::new(config, window, cx))
+                })
+                .expect("open an offscreen window");
+            let window: AnyWindowHandle = handle.into();
+            settle(cx, window, Duration::from_secs(1));
+            handle
+                .update(cx, |w, _, cx| {
+                    for n in 0..pins {
+                        w.shot_pin(&format!("p{n}:s"), cx);
+                    }
+                    w.shot_sidebar("p0", "s", cx);
+                })
+                .unwrap();
+            settle(cx, window, Duration::from_millis(800));
+            save(cx, window, &out.join(format!("pinned-{label}-{width}.png")));
+            let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        }
     }
 }
 

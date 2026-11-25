@@ -64,6 +64,8 @@ mod goal;
 mod goal_view;
 mod notices;
 mod scheduled;
+#[cfg(any(feature = "chat", test))]
+mod signin;
 #[cfg(feature = "chat")]
 mod scheduled_view;
 #[cfg(feature = "chat")]

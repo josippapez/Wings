@@ -1,8 +1,8 @@
 use crate::{
     accounts::{Account, Loaded, Project, account_label, load, name_problem, sign_in_label, start_label},
-    actions::{self, SignIn},
+    actions,
     state::{set_project, with},
-    views::{form_problem, start_aria_label, start_title},
+    views::{self, form_problem, start_aria_label, start_title},
 };
 use serde_json::{Value, json};
 use std::{cell::RefCell, rc::Rc};
@@ -30,6 +30,7 @@ fn wings(fail: Option<&'static str>) -> Calls {
             }),
             "projects" => json!([{ "id": "/p/web", "name": "web", "path": "/p/web" }, { "id": "/p/api", "name": "api", "path": "/p/api" }]),
             "openPane" => json!({ "paneId": "7" }),
+            "exec" => json!({ "code": 0, "stdout": "", "stderr": "" }),
             _ => Value::Null,
         })
     });
@@ -197,30 +198,53 @@ fn a_refused_setup_change_says_why() {
 }
 
 #[test]
-fn signing_in_opens_a_terminal_as_the_account_running_claude_auth_login() {
+fn signing_in_runs_claude_auth_login_as_the_account_and_loads_the_accounts_again() {
     let calls = wings(None);
     block_on(actions::sign_in("k".into(), Some("client-a".into()), "/p/web".into()));
-    assert_eq!(
-        made(&calls, "openPane"),
-        [json!({ "command": "claude auth login", "args": [], "cwd": "/p/web", "placement": "tab", "claudeAccount": "client-a" })]
-    );
+    let ran = made(&calls, "exec");
+    assert_eq!((ran.len(), ran[0]["program"].clone(), ran[0]["args"].clone(), ran[0]["cwd"].clone()), (1, json!("claude"), json!(["auth", "login"]), json!("/p/web")), "{ran:?}");
+    assert_eq!(ran[0]["account"]["pick"]["name"], "client-a");
+    assert!(made(&calls, "openPane").is_empty(), "no terminal to type in");
+    assert_eq!(made(&calls, "claudeAccounts").len(), 1, "the list is read again once the sign-in ends");
+    with(|s| assert!(!s.action("k").busy && s.action("k").error.is_none()));
 }
 
 #[test]
-fn a_sign_in_is_over_when_claude_has_run_in_its_terminal_and_gone_or_the_terminal_closed() {
-    let panes = |command: &str| vec![json!({ "paneId": "7", "command": command }), json!({ "paneId": "8", "command": "claude" })];
-    let mut watch = SignIn { pane: "7".into(), ran: false, over: false };
-    // The shell before claude starts, and claude running, aren't the end.
-    assert!(!watch.hear(&panes("zsh")));
-    assert!(!watch.hear(&panes("claude")));
-    // Back to the shell: claude ended.
-    assert!(watch.hear(&panes("zsh")));
-    // It says so once.
-    assert!(!watch.hear(&[]));
+fn a_sign_in_that_does_not_finish_says_why_and_leaves_the_list_alone() {
+    let calls = wings(None);
+    with(|s| s.actions.clear());
+    testing::answer(|method, _| Ok(if method == "exec" { json!({ "code": 1, "stdout": "", "stderr": "Login timed out\n" }) } else { Value::Null }));
+    block_on(actions::sign_in("k".into(), None, "/p/web".into()));
+    with(|s| assert_eq!(s.action("k").error.as_deref(), Some("Login timed out")));
+    assert!(made(&calls, "claudeAccounts").is_empty());
+}
 
-    let mut closed = SignIn { pane: "7".into(), ran: false, over: false };
-    assert!(!closed.hear(&panes("zsh")));
-    assert!(closed.hear(&[json!({ "paneId": "8", "command": "claude" })]));
+/// The buttons of `tree` labelled `label`.
+fn buttons<'a>(tree: &'a Value, label: &str, found: &mut Vec<&'a Value>) {
+    if tree["type"] == "Button" && tree["children"][0]["text"] == label {
+        found.push(tree);
+    }
+    for child in tree["children"].as_array().into_iter().flatten() {
+        buttons(child, label, found);
+    }
+}
+
+/// The sidebar's "Sign in" buttons with the accounts from `wings` loaded and `project` on screen.
+fn sidebar_sign_ins(project: Option<Project>) -> Vec<Value> {
+    wings(None);
+    block_on(actions::reload());
+    with(|s| s.project = Some(project));
+    let tree = json!({ "children": wings_plugin::ui::export(views::sidebar()).0 });
+    let mut found = vec![];
+    buttons(&tree, "Sign in", &mut found);
+    found.into_iter().cloned().collect()
+}
+
+#[test]
+fn a_signed_out_account_has_a_sign_in_button_that_works_with_no_project_open() {
+    let found = sidebar_sign_ins(None);
+    assert_eq!(found.len(), 1, "client-a is the one signed out: {found:?}");
+    assert!(found[0]["props"]["disabled"].is_null(), "a sign-in only needs somewhere to run claude: {found:?}");
 }
 
 #[test]
@@ -281,4 +305,20 @@ fn a_start_button_is_named_as_it_was_for_a_screen_reader() {
 fn a_start_button_says_what_it_does_as_the_screen_before_the_port_did() {
     assert_eq!(start_title("ada@acme.example", false, true), "Start Claude as ada@acme.example in a new terminal. The project keeps the default account.");
     assert_eq!(start_title("client-a", true, false), "Start Claude as client-a in a new terminal. It is not signed in, so Claude won't use its plan. The project keeps its own account.");
+}
+
+#[test]
+fn a_signed_out_account_is_told_once_and_again_after_it_has_signed_in_and_out() {
+    use crate::signed_out::newly_signed_out;
+    use std::collections::HashSet;
+    let mut told = HashSet::new();
+    let (mut default, mut work) = (account(None, None, true), account(Some("work"), None, false));
+    let names = |found: Vec<&Account>| found.iter().map(|a| a.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(newly_signed_out(&mut told, &[default.clone(), work.clone()])), [Some("work".to_owned())]);
+    assert!(newly_signed_out(&mut told, &[default.clone(), work.clone()]).is_empty(), "not again while it stays signed out");
+    work.signed_in = true;
+    assert!(newly_signed_out(&mut told, &[default.clone(), work.clone()]).is_empty());
+    work.signed_in = false;
+    default.signed_in = false;
+    assert_eq!(names(newly_signed_out(&mut told, &[default, work])), [None, Some("work".to_owned())]);
 }

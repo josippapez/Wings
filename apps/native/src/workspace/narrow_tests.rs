@@ -10,7 +10,7 @@ use super::{
     context_menu::MenuTarget,
     editor::EditorForm,
     pane_card::{PaneAction::*, header_plan},
-    project::{BarPlan, bar_plan},
+    project::{BarPlan, Plugins, bar_plan},
     tests::open_sized,
 };
 use crate::ui;
@@ -45,7 +45,7 @@ fn a_header_keeps_all_its_buttons_until_the_pane_is_narrow_and_then_the_least_ne
 #[test]
 fn the_project_bar_gives_up_its_plugin_buttons_then_the_editors_words_then_the_branch_as_its_column_narrows() {
     let editor = Some((3, true));
-    let bar = |width| bar_plan(width, editor, 3, 20);
+    let bar = |width| bar_plan(width, editor, &Plugins { letters: &[7, 7, 6], menu: false });
     assert_eq!(bar(850.0), BarPlan { editor: EditorForm::Full, inline: 3, branch: true, labels: true });
     // The titles go first, with room for the buttons themselves.
     assert_eq!(bar(520.0), BarPlan { editor: EditorForm::Full, inline: 3, branch: true, labels: false });

@@ -49,7 +49,7 @@ pub(super) struct BarPlan {
 
 impl BarPlan {
     /// The least width the bar needs for the parts of this plan, the name and the branch at their shortest.
-    fn needs(&self, editor: Option<(usize, bool)>, plugins: usize, letters: usize) -> f32 {
+    fn needs(&self, editor: Option<(usize, bool)>, plugins: &Plugins) -> f32 {
         let mut parts = 2; // the name, the spacer
         let mut width = BAR_PADDING + NAME_MIN;
         if self.branch {
@@ -66,32 +66,48 @@ impl BarPlan {
                 width += BAR_BUTTON + 2.0;
             }
         }
-        if plugins > 0 {
+        if !plugins.letters.is_empty() {
             parts += 1;
-            let menu = (plugins > self.inline) as usize;
-            let buttons = self.inline + menu;
-            width += buttons as f32 * BAR_BUTTON + buttons.saturating_sub(1) as f32 * PLUGIN_GAP;
-            if self.labels {
-                width += self.inline as f32 * (LABELLED_BUTTON - BAR_BUTTON) + LETTER * letters as f32;
-            }
+            width += plugins.width(self.inline, self.labels);
         }
         width + (parts - 1) as f32 * BAR_GAP
     }
 }
 
+/// The plugin buttons the bar wants: the letters in each one's title, in the order the bar draws them, and whether its
+/// menu shows even with all of them in the bar.
+pub(super) struct Plugins<'a> {
+    pub(super) letters: &'a [usize],
+    pub(super) menu: bool,
+}
+
+impl Plugins<'_> {
+    /// What the first `inline` buttons take, with their titles or as icons, and the menu's button after them when some
+    /// are left out of the bar or it shows anyway.
+    fn width(&self, inline: usize, labels: bool) -> f32 {
+        let menu = self.menu || inline < self.letters.len();
+        let buttons = inline + menu as usize;
+        let mut width = buttons as f32 * BAR_BUTTON + buttons.saturating_sub(1) as f32 * PLUGIN_GAP;
+        if labels {
+            let letters: usize = self.letters[..inline].iter().sum();
+            width += inline as f32 * (LABELLED_BUTTON - BAR_BUTTON) + LETTER * letters as f32;
+        }
+        width
+    }
+}
+
 /// What the bar draws in a column `width` wide, for an `editor` of that many letters, with whether others are installed,
-/// and `plugins` buttons whose titles take `letters` together: the plugin buttons give up their titles first, then go
-/// into the bar's menu, then the editor's words go, then its menu of the other editors joins its button, and the
-/// branch goes last. All of it when it fits.
-pub(super) fn bar_plan(
-    width: f32,
-    editor: Option<(usize, bool)>,
-    plugins: usize,
-    letters: usize,
-) -> BarPlan {
-    let most = plugins.min(3);
+/// and the `plugins` buttons: the buttons show their titles while those fit and take no more than half the bar, then
+/// only their icons, then the ones that don't fit go into the bar's menu, then the editor's words go, then its menu of
+/// the other editors joins its button, and the branch goes last. All of it when it fits.
+pub(super) fn bar_plan(width: f32, editor: Option<(usize, bool)>, plugins: &Plugins) -> BarPlan {
+    let most = plugins.letters.len();
     let last = BarPlan { editor: EditorForm::Merged, inline: 0, branch: false, labels: false };
-    let mut candidates = vec![BarPlan { editor: EditorForm::Full, inline: most, branch: true, labels: plugins > 0 }];
+    let mut candidates = Vec::new();
+    // Titles only while they take no more than half the bar.
+    if most > 0 && plugins.width(most, true) <= width / 2.0 {
+        candidates.push(BarPlan { editor: EditorForm::Full, inline: most, branch: true, labels: true });
+    }
     for form in [EditorForm::Full, EditorForm::Icon, EditorForm::Merged] {
         for inline in (0..=most).rev() {
             candidates.push(BarPlan { editor: form, inline, branch: true, labels: false });
@@ -100,7 +116,7 @@ pub(super) fn bar_plan(
     candidates.push(last);
     candidates
         .iter()
-        .find(|plan| plan.needs(editor, plugins, letters) <= width)
+        .find(|plan| plan.needs(editor, plugins) <= width)
         .copied()
         .unwrap_or(last)
 }
@@ -289,6 +305,12 @@ impl Workspace {
         self.save(cx);
         self.side.touch(&self.config.project);
         self.side.touch(&path);
+        self.take_in(path, window, cx);
+    }
+
+    /// Puts the project on screen away and brings `path` in as it was left: its parked tabs, or the ones it restores or
+    /// opens when it wasn't entered yet.
+    fn take_in(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         self.park_shown();
         self.config.project = path.clone();
         match self.parked.remove(&path) {
@@ -325,7 +347,7 @@ impl Workspace {
 
     /// Runs `work` in the project `path` without showing it, for what the user didn't ask to see: the project, tab and
     /// keys on screen and the sidebar's order stay as they are. A project with no tabs to work in yet, one not entered or
-    /// restored at launch and not shown since, is shown first.
+    /// restored at launch and not shown since, gets them first.
     pub(super) fn in_project<R>(
         &mut self,
         path: PathBuf,
@@ -343,9 +365,21 @@ impl Workspace {
             let result = work(self, window, cx);
             self.unpark(shown);
             result
-        } else {
+        } else if self.welcome || path == self.config.project {
             self.switch_project(path, window, cx);
             work(self, window, cx)
+        } else {
+            // Not entered yet, or restored at launch and not shown since: it gets its tabs now and goes back, without
+            // being shown, the sidebar's order or its agents' "seen" changing, and the keys where they were.
+            let (shown, right, keys) = (self.config.project.clone(), self.right.clone(), window.focused(cx));
+            self.take_in(path, window, cx);
+            let result = work(self, window, cx);
+            self.unpark(shown);
+            self.apply_right(right, cx);
+            if let Some(keys) = keys {
+                keys.focus(window, cx);
+            }
+            result
         };
         self.sync_pane_visibility(cx);
         cx.notify_workspace();
@@ -374,11 +408,13 @@ impl Workspace {
         let editor = self
             .default_editor()
             .map(|editor| (editor.name.chars().count(), self.editors.len() > 1));
-        let plan = bar_plan(width, editor, self.bar_button_count(), self.bar_title_letters());
+        let (letters, menu) = self.bar_fit();
+        let plan = bar_plan(width, editor, &Plugins { letters: &letters, menu });
         let branch = entry.and_then(|p| p.branch.clone()).filter(|_| plan.branch);
         let buttons = self.sidebar_buttons(plan.inline, plan.labels, cx);
         div()
             .id("project-bar")
+            .children(crate::ui::spot(|| "project-bar".into()))
             .role(Role::Toolbar)
             .aria_label("Project")
             .h(px(PROJECT_BAR))

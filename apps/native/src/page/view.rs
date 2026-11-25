@@ -30,6 +30,8 @@ mod rich_view;
 mod selection_view;
 #[path = "sheet_view.rs"]
 mod sheet_view;
+#[path = "split_view.rs"]
+mod split_view;
 #[path = "prompt_rail_view.rs"]
 mod prompt_rail_view;
 #[path = "hover_card_view.rs"]
@@ -215,6 +217,11 @@ pub struct PageView {
     /// Whether each floating `Split` with `insetBelow` was at least that wide when last measured, and how far it sets its
     /// start in then.
     split_inset: HashMap<u64, (bool, f32)>,
+    /// The width of each docked `Split` with `onResize` that was dragged: what it was set to, and the `defaultSize` the page
+    /// had then, which the width is good for until the page gives another. The split's own width, as last measured.
+    split_sizes: HashMap<u64, (f32, f32)>,
+    split_widths: HashMap<u64, f32>,
+    split_drag: Option<split_view::SplitDrag>,
     /// Whether each `expandable` text was cut short when it was last drawn, by node id, and the ones opened.
     text_cut: HashMap<u64, bool>,
     text_open: HashSet<u64>,
@@ -399,6 +406,9 @@ impl PageView {
         self.select_bounds.clear();
         self.split_narrow.clear();
         self.split_inset.clear();
+        self.split_sizes.clear();
+        self.split_widths.clear();
+        self.split_drag = None;
         self.focused = None;
         self.suggestions_closed = false;
         self.highlight = None;
@@ -646,6 +656,9 @@ impl PageView {
             select_bounds: HashMap::new(),
             split_narrow: HashMap::new(),
             split_inset: HashMap::new(),
+            split_sizes: HashMap::new(),
+            split_widths: HashMap::new(),
+            split_drag: None,
             text_cut: HashMap::new(),
             text_open: HashSet::new(),
             focused: None,
@@ -1288,6 +1301,12 @@ impl PageView {
     #[cfg(all(test, feature = "test-support"))]
     pub(super) fn text_cut(&self, id: u64) -> (Option<bool>, bool) {
         (self.text_cut.get(&id).copied(), self.text_open.contains(&id))
+    }
+
+    /// The width the docked split `id` was dragged to, if it was.
+    #[cfg(all(test, feature = "test-support"))]
+    pub(super) fn split_set(&self, id: u64) -> Option<f32> {
+        self.split_sizes.get(&id).map(|(size, _)| *size)
     }
 
     /// Whether the split `id` was narrower than its `collapseBelow` when last drawn, none before it was measured.
@@ -2627,8 +2646,9 @@ impl PageView {
         // the threshold. A drag that crosses it shows or hides the pane a frame late, which nobody sees as wrong, and
         // it saves sizing the split from what it holds.
         let (collapse_below, inset_below) = (split.collapse_below, split.inset_below.filter(|_| split.float));
-        let (inset_column, pane) = (split.inset_column, split.size);
-        let measure = (collapse_below.is_some() || inset_below.is_some()).then(|| {
+        let (inset_column, pane) = (split.inset_column, self.split_size(split));
+        let resizable = split.dock && split.on_resize.is_some();
+        let measure = (collapse_below.is_some() || inset_below.is_some() || resizable).then(|| {
             let entity = cx.entity();
             let on_narrow = split.on_narrow.clone();
             canvas(
@@ -2638,11 +2658,14 @@ impl PageView {
                     let inset = inset_below.is_some_and(|below| width >= below);
                     let by = if inset { inset_by(width, pane, inset_column) } else { 0.0 };
                     entity.update(cx, |view, cx| {
+                        view.split_widths.insert(id, width);
                         let moved = view.split_narrow.insert(id, narrow) != Some(narrow);
                         let was = if inset_below.is_some() { view.split_inset.insert(id, (inset, by)) } else { None };
                         // The page hears when the split crosses a threshold; a step of how far it is set in only draws this view.
                         let crossed = moved || (inset_below.is_some() && was.map(|(was, _)| was) != Some(inset));
-                        if crossed || was.map(|(_, was)| was) != Some(by) {
+                        // Only a split that sets its start in has a step to draw; any other, measured once per frame, drew its page
+                        // again on every frame it was drawn.
+                        if crossed || (inset_below.is_some() && was.map(|(_, was)| was) != Some(by)) {
                             cx.notify();
                         }
                         if crossed {
@@ -2683,17 +2706,20 @@ impl PageView {
         }
         if split.fixed_end && split.dock {
             // A column docked beside `start`: flush, full height, a hairline between, and what it holds shares its height.
+            // With `onResize` its inner edge is dragged: the width is the app's while it moves (`split_size`).
             let column = div()
                 .id(ElementId::NamedInteger("page-split-dock".into(), id))
-                .w(px(split.size))
-                .max_w(relative(0.5))
+                .relative()
+                .w(px(self.split_size(split)))
+                .when(!resizable, |column| column.max_w(relative(0.5)))
                 .flex_none()
                 .min_h_0()
                 .flex()
                 .flex_col()
                 .border_l_1()
                 .border_color(rgba(ui::HAIRLINE))
-                .children(self.nodes(&split.end, cx));
+                .children(self.nodes(&split.end, cx))
+                .when(resizable, |column| column.child(self.split_edge(split, cx)));
             return container
                 .child(div().flex_1().min_w_0().min_h_0().flex().flex_col().overflow_hidden().children(self.nodes(&split.start, cx)))
                 .when(drawn, |el| el.child(column))
@@ -2740,6 +2766,32 @@ impl PageView {
                     .children(self.nodes(&split.end, cx)),
             )
             .into_any_element()
+    }
+
+    /// The inner edge of a docked column with `onResize`: the grab area on the column's left, its hairline lit while the
+    /// pointer is on it or drags it, and a double press that sends the page's `resetSize`.
+    fn split_edge(&self, split: &tree::Split, cx: &mut Context<Self>) -> AnyElement {
+        let (start, reset) = (split.clone(), split.clone());
+        ui::resize_edge(
+            "page-split-dock-edge",
+            "Resize column",
+            ui::Side::Right,
+            self.split_dragging(split.id),
+            cx,
+            move |this, x, _, cx| this.start_split_drag(&start, x, cx),
+            |this, x, _, cx| this.split_drag_to(x, cx),
+            Self::end_split_drag,
+        )
+        .left(px(-ui::RESIZE_EDGE))
+        .on_mouse_down(
+            gpui::MouseButton::Left,
+            cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                if event.click_count == 2 {
+                    this.reset_split(&reset, cx);
+                }
+            }),
+        )
+        .into_any_element()
     }
 
     /// A split with `float: true`: `start` takes the whole width and the fixed `end` pane floats over its right edge,
