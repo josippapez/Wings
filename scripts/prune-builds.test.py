@@ -43,6 +43,11 @@ class PruneBuilds(unittest.TestCase):
     def run_prune(self):
         return prune_builds.prune(self.target, self.root, self.now)
 
+    def test_a_file_the_other_build_removed_counts_as_nothing_freed(self):
+        gone = os.path.join(self.deps, "libgone-0123456789abcdef.rlib")
+        self.assertEqual(prune_builds.size(gone), 0)
+        self.assertEqual(prune_builds.remove(gone), 0)
+
     def test_an_old_build_of_our_own_crate_goes_and_its_newest_stays(self):
         old = self.build("wings_native", "a" * 16, 10, ["lib{}.rlib", "lib{}.rmeta"])
         newest = self.build("wings_native", "b" * 16, 9, ["lib{}.rlib", "lib{}.rmeta"])

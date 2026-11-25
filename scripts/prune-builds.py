@@ -28,9 +28,13 @@ KINDS = {"": "binary", ".rlib": "rlib", ".rmeta": "rmeta", ".dylib": "dylib"}
 
 
 def size(path):
-    if os.path.isdir(path) and not os.path.islink(path):
-        return sum(size(os.path.join(path, name)) for name in os.listdir(path))
-    st = os.lstat(path)
+    # The other build slot may remove what this one is counting.
+    try:
+        if os.path.isdir(path) and not os.path.islink(path):
+            return sum(size(os.path.join(path, name)) for name in os.listdir(path))
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return 0
     return st.st_blocks * 512 if st.st_nlink == 1 else 0
 
 
@@ -128,13 +132,20 @@ def prune(target, root, now, busy=False):
             folder = os.path.join(target, profile, kind)
             if not os.path.isdir(folder):
                 continue
-            for group in old_builds(folder, root, now):
-                freed += sum(remove(path) for path in group["paths"])
-            if profile == "debug" and not busy:
-                freed += sum(remove(path) for path in list(unlinked_objects(folder)))
+            # A file the other build slot removed while this one read the folder: the next build prunes the rest.
+            try:
+                for group in old_builds(folder, root, now):
+                    freed += sum(remove(path) for path in group["paths"])
+                if profile == "debug" and not busy:
+                    freed += sum(remove(path) for path in list(unlinked_objects(folder)))
+            except FileNotFoundError:
+                continue
         caches = os.path.join(target, profile, "incremental")
         if os.path.isdir(caches):
-            freed += sum(remove(path) for path in old_caches(caches, now))
+            try:
+                freed += sum(remove(path) for path in old_caches(caches, now))
+            except FileNotFoundError:
+                pass
     return freed
 
 
