@@ -15,7 +15,7 @@ use crate::{
 };
 use serde_json::{Value, json};
 use std::{cell::RefCell, rc::Rc};
-use wings_plugin::{host, task::map_limit};
+use wings_plugin::{format::iso_of, host, task::map_limit};
 
 /// Up to this many entries go into one answer.
 const NODES: usize = 300;
@@ -110,20 +110,6 @@ fn files_under(entry: &Entry, at: &str, out: &mut Vec<(String, u64)>) {
     }
 }
 
-/// `ms` since the epoch as an ISO 8601 time in UTC, like `JSON.stringify` writes a date.
-fn iso(ms: f64) -> String {
-    let (days, in_day) = ((ms / 86_400_000.0).floor() as i64, ms.rem_euclid(86_400_000.0) as i64);
-    // A civil date from days since 1970 (Hinnant's algorithm).
-    let z = days + 719_468;
-    let (era, doe) = (z.div_euclid(146_097), z.rem_euclid(146_097));
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let (d, m) = (doy - (153 * mp + 2) / 5 + 1, if mp < 10 { mp + 3 } else { mp - 9 });
-    let y = yoe + era * 400 + i64::from(m <= 2);
-    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.{:03}Z", in_day / 3_600_000, in_day / 60_000 % 60, in_day / 1000 % 60, in_day % 1000)
-}
-
 /// A folder or file an answer is about, and the scan it comes from.
 struct Found {
     scan: Done,
@@ -173,7 +159,7 @@ pub async fn folder_usage(input: Value) -> Result<Value, String> {
     let (depth, limit) = (input["depth"].as_u64().unwrap_or(2), input["limit"].as_u64().unwrap_or(15) as usize);
     let Found { scan, level, path: full } = entry_at(path, input["fresh"] == true, depth, LISTED).await?;
     let top = listing(&level.tree, depth, limit);
-    let mut answer = json!({ "path": full, "kind": top["kind"], "size": top["size"], "sizeText": top["sizeText"], "items": top["items"], "scannedAt": iso(scan.at) });
+    let mut answer = json!({ "path": full, "kind": top["kind"], "size": top["size"], "sizeText": top["sizeText"], "items": top["items"], "scannedAt": iso_of(scan.at) });
     for name in ["children", "others", "smaller"] {
         if !top[name].is_null() {
             answer[name] = top[name].clone();
@@ -196,7 +182,7 @@ pub async fn largest_files(input: Value) -> Result<Value, String> {
     files.sort_by(|a, b| b.1.cmp(&a.1));
     Ok(json!({
         "path": full,
-        "scannedAt": iso(scan.at),
+        "scannedAt": iso_of(scan.at),
         "files": files.into_iter().take(limit).map(|(path, size)| with(json!({ "path": path }), sized(size))).collect::<Vec<_>>(),
         "note": format!("Files under {} aren't listed: the scan folded them into their folders.", bytes(level.floor)),
     }))
@@ -336,9 +322,9 @@ mod tests {
 
     #[test]
     fn a_time_is_written_the_way_json_writes_a_date() {
-        assert_eq!(iso(0.0), "1970-01-01T00:00:00.000Z");
-        assert_eq!(iso(1_794_477_600_123.0), "2026-11-12T10:00:00.123Z");
-        assert_eq!(iso(951_782_400_000.0), "2000-02-29T00:00:00.000Z");
+        assert_eq!(iso_of(0.0), "1970-01-01T00:00:00.000Z");
+        assert_eq!(iso_of(1_794_477_600_123.0), "2026-11-12T10:00:00.123Z");
+        assert_eq!(iso_of(951_782_400_000.0), "2000-02-29T00:00:00.000Z");
     }
 
     #[test]

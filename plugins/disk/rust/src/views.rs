@@ -11,7 +11,7 @@ use crate::{
 };
 use serde_json::json;
 use wings_plugin::{
-    format::{ago, basename},
+    format::{ago_now, basename},
     host,
     ui::{Node, badge, error_state, card, empty, gauge, loading, muted, notice, page, row, rows_card, slot, spinner, stack, text, text_input, toolbar},
 };
@@ -132,7 +132,7 @@ fn scan_row(scan: &crate::state::ScanInfo, disks: Option<&Vec<DiskRow>>) -> Node
         .key(scan.root.clone())
         .child(gap(stack(), "none").prop("grow", true).child(text(name.as_str()).prop("weight", "medium").prop("truncate", true)).child(muted(scan.root.as_str()).prop("size", "small").prop("truncate", true)))
         .child(text(size).prop("tone", if matches!(scan.phase, Phase::Failed(_)) { "danger" } else { "muted" }))
-        .child(muted(ago(scan.at(), host::now())).prop("size", "small"))
+        .child(muted(ago_now(scan.at())).prop("size", "small"))
         .child(named_button("Open", &format!("Open the scan of {name}"), "secondary", "sm", move || {
             with(|p| {
                 p.root = Some(open_root.clone());
