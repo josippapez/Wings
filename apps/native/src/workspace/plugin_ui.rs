@@ -753,12 +753,15 @@ impl Workspace {
             .flex_col()
             .items_end()
             .child(
-                ui::icon_button("plugin-buttons", Icon::Ellipsis, label, ButtonSize::Sm).on_click(
-                    cx.listener(|this, _, _, cx| {
-                        this.plugin_ui.buttons_menu = !this.plugin_ui.buttons_menu;
-                        cx.notify_workspace();
-                    }),
-                ),
+                ui::behaviors::note_press(
+                    ui::icon_button("plugin-buttons", Icon::Ellipsis, label, ButtonSize::Sm),
+                    "plugin-buttons",
+                    open,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.plugin_ui.buttons_menu = !ui::behaviors::was_open("plugin-buttons", open, cx);
+                    cx.notify_workspace();
+                })),
             )
             .children(
                 self.popover_phase("plugin-buttons-menu", open, cx)

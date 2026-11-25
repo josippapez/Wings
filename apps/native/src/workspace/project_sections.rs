@@ -553,16 +553,17 @@ impl Workspace {
         let open = self.sections.menu.as_ref() == Some(&at);
         let current = self.sections.sorts.get(&group.key);
         let lower = group.title.to_lowercase();
-        let button = ui::icon_button(
-            SharedString::from(format!("{id}-sort")),
-            Icon::ArrowUpDown,
-            format!("Sort {lower}"),
-            ui::ButtonSize::Xs,
+        let key = SharedString::from(format!("{id}-sort"));
+        let button = ui::behaviors::note_press(
+            ui::icon_button(key.clone(), Icon::ArrowUpDown, format!("Sort {lower}"), ui::ButtonSize::Xs),
+            key.clone(),
+            open,
         )
         .on_click({
             let at = at.clone();
             cx.listener(move |this, _: &ClickEvent, _, cx| {
-                this.sections.menu = (this.sections.menu.as_ref() != Some(&at)).then(|| at.clone());
+                let was_open = ui::behaviors::was_open(key.clone(), open, cx);
+                this.sections.menu = (!was_open).then(|| at.clone());
                 cx.notify_workspace();
             })
         });

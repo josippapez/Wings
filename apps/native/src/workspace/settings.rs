@@ -19,7 +19,7 @@ use crate::{
     },
     text_field::{FieldEvent, TextField},
     theme,
-    ui::{self, behaviors::{EscapeExt, FocusRecovery, TrapTabExt}, ButtonSize, motion},
+    ui::{self, behaviors::{self, EscapeExt, FocusRecovery, TrapTabExt}, ButtonSize, motion},
 };
 
 use super::{
@@ -581,12 +581,13 @@ impl Workspace {
             .flex()
             .flex_col()
             .child(
-                ui::select_trigger(id, label, value)
+                behaviors::note_press(ui::select_trigger(id, label, value), id, open)
                     .w(width)
                     .children(ui::spot(|| format!("select:{id}")))
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        let was_open = behaviors::was_open(id, open, cx);
                         if let Some(dialog) = &mut this.settings {
-                            dialog.menu = (dialog.menu != Some(id)).then_some(id);
+                            dialog.menu = (!was_open).then_some(id);
                             dialog.keys = Default::default();
                         }
                         cx.notify_workspace();

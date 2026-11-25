@@ -316,15 +316,22 @@ impl Workspace {
                             .flex()
                             .flex_col()
                             .child(
-                                ui::icon_button(
+                                ui::behaviors::note_press(
+                                    ui::icon_button(
+                                        "sort-projects",
+                                        Icon::ArrowUpDown,
+                                        "Sort projects",
+                                        ButtonSize::Xs,
+                                    ),
                                     "sort-projects",
-                                    Icon::ArrowUpDown,
-                                    "Sort projects",
-                                    ButtonSize::Xs,
+                                    self.side.sort_menu,
                                 )
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.side.sort_menu = !this.side.sort_menu;
-                                    cx.notify_workspace();
+                                .on_click(cx.listener({
+                                    let open = self.side.sort_menu;
+                                    move |this, _, _, cx| {
+                                        this.side.sort_menu = !ui::behaviors::was_open("sort-projects", open, cx);
+                                        cx.notify_workspace();
+                                    }
                                 }))
                                 .children(ui::spot(|| "sidebar-sort".into())),
                             )

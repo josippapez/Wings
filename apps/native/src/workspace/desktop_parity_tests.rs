@@ -424,3 +424,40 @@ fn a_settings_select_is_chosen_with_the_keys() {
     assert_eq!(window.read(|w, _| w.ai_view_engine()), Some(Engine::Off));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// A click on the button that opened a dropdown while it is open closes it, and a second opens it again: a press on the
+/// trigger is outside the menu, whose press-outside closes it, but the trigger's click doesn't then open it anew.
+#[test]
+fn a_click_on_a_dropdowns_trigger_while_it_is_open_closes_it() {
+    use super::plugin_tests::click_spot;
+    let dir = std::env::temp_dir().join(format!("wings-native-toggle-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("ai.json"), r#"{"engine":"apple"}"#).unwrap();
+    let ai_dir = dir.clone();
+    let (app, mut window) = super::tests::open_sized(
+        Some(gpui::size(gpui::px(1280.0), gpui::px(900.0))),
+        move |config| config.ai = Some(ai_dir),
+    );
+    // Whether `item` is drawn, once a menu going out has gone.
+    let shows = |app: &gpui::TestApp, window: &mut gpui::TestAppWindow<super::Workspace>, item: &str| {
+        app.advance_clock(crate::ui::motion::POPUP_IN * 2);
+        app.run_until_parked();
+        crate::ui::forget_spots();
+        window.draw();
+        crate::ui::spot_at(item).is_some()
+    };
+    // A select in Settings.
+    window.update(|w, window, cx| {
+        w.open_settings(window, cx);
+        w.set_settings_section(settings::Section::Agents, cx);
+    });
+    app.run_until_parked();
+    for _ in 0..2 {
+        click_spot(&mut window, "select:ai-engine");
+        assert!(shows(&app, &mut window, "select-item:ai-engine-0"), "select opened");
+        click_spot(&mut window, "select:ai-engine");
+        assert!(!shows(&app, &mut window, "select-item:ai-engine-0"), "select closed by its own trigger");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}

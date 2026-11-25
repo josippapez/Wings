@@ -582,10 +582,13 @@ impl ProjectPage {
                     .group_hover(group.clone(), |style| style.opacity(1.0))
             })
             .hover(|style| style.text_color(rgb(theme::FOREGROUND)))
+            .map(|pill| ui::behaviors::note_press(pill, format!("add-{index}"), open))
             .on_click({
                 let at = at.clone();
+                let key = format!("add-{index}");
                 cx.listener(move |this, _, _, cx| {
-                    this.menu = (this.menu.as_ref() != Some(&at)).then(|| at.clone());
+                    let was_open = ui::behaviors::was_open(key.clone(), open, cx);
+                    this.menu = (!was_open).then(|| at.clone());
                     cx.notify();
                 })
             })

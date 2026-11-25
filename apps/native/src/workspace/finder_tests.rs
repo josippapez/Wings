@@ -303,6 +303,31 @@ fn a_recent_session_is_found_in_the_palette_and_enter_resumes_it_in_a_new_tab() 
 }
 
 #[test]
+fn a_click_on_the_branch_filter_while_its_menu_is_open_closes_it() {
+    let project = folder("toggle");
+    let claude = made_up_claude(
+        &folder("toggle-claude"),
+        &[(LOGIN, &project, "main", "Fix the login redirect", "I updated the redirect handler")],
+    );
+    let (app, mut window) = open_over(&project, &claude);
+    window.update(|w, window, cx| w.open_history(window, cx));
+    wait_for(&app, &window, |w| w.sheet.as_ref().is_some_and(|s| s.results.is_some()), "no results");
+    let shows = |app: &TestApp, window: &mut TestAppWindow<Workspace>| {
+        app.advance_clock(crate::ui::motion::POPUP_IN * 2);
+        app.run_until_parked();
+        crate::ui::forget_spots();
+        window.draw();
+        crate::ui::spot_at("history-branch-menu").is_some()
+    };
+    for _ in 0..2 {
+        super::plugin_tests::click_spot(&mut window, "history-branch");
+        assert!(shows(&app, &mut window), "the branch menu opened");
+        super::plugin_tests::click_spot(&mut window, "history-branch");
+        assert!(!shows(&app, &mut window), "the branch menu closed by its own button");
+    }
+}
+
+#[test]
 fn the_history_sheet_lists_this_projects_sessions_then_everyones_and_narrows_by_words_and_branch() {
     let project = folder("sheet");
     let elsewhere = folder("elsewhere");

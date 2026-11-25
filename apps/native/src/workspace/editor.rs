@@ -108,6 +108,7 @@ impl Workspace {
             })
             .collect();
         let more = self.editors.len() > 1;
+        let menu_open = more && self.editor_menu;
         let id = main.id.clone();
         // One control in a bar with room for no more: with several editors it opens their menu, else the one editor.
         let merged = form == EditorForm::Merged;
@@ -155,9 +156,10 @@ impl Workspace {
                                 format!("Open in {}", main.name),
                                 ui::ButtonSize::Sm,
                             )
+                            .map(|button| ui::behaviors::note_press(button, "open-in-editor", menu_open))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if merged && more {
-                                    this.editor_menu = !this.editor_menu;
+                                    this.editor_menu = !ui::behaviors::was_open("open-in-editor", menu_open, cx);
                                     cx.notify_workspace();
                                 } else {
                                     this.open_in_editor(&id, cx)
@@ -172,9 +174,10 @@ impl Workspace {
                                     "Open in…",
                                     if full { ui::ButtonSize::Xs } else { ui::ButtonSize::Sm },
                                 )
+                                .map(|button| ui::behaviors::note_press(button, "open-in-menu", menu_open))
                                 .on_click(cx.listener(
-                                    |this, _, _, cx| {
-                                        this.editor_menu = !this.editor_menu;
+                                    move |this, _, _, cx| {
+                                        this.editor_menu = !ui::behaviors::was_open("open-in-menu", menu_open, cx);
                                         cx.notify_workspace();
                                     },
                                 )),

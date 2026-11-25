@@ -185,9 +185,10 @@ impl Workspace {
             }))
             .into_any_element()
         }));
+        let menu_open = self.new_tab_menu;
         let toggle_menu =
-            |this: &mut Self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>| {
-                this.new_tab_menu = !this.new_tab_menu;
+            move |this: &mut Self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>| {
+                this.new_tab_menu = !ui::behaviors::was_open("new-tab-menu", menu_open, cx);
                 cx.notify_workspace();
             };
         div()
@@ -209,7 +210,8 @@ impl Workspace {
                         )
                         .map(|button| {
                             if ask {
-                                button.on_click(cx.listener(toggle_menu))
+                                ui::behaviors::note_press(button, "new-tab-menu", menu_open)
+                                    .on_click(cx.listener(toggle_menu))
                             } else {
                                 button.on_click(cx.listener(|this, _, window, cx| {
                                     this.new_tab_button(window, cx)
@@ -220,13 +222,17 @@ impl Workspace {
                     )
                     // The desktop's `-ml-1 w-4` chevron, a narrow ghost button.
                     .child(
-                        ui::ghost_button(
+                        ui::behaviors::note_press(
+                            ui::ghost_button(
+                                "new-tab-menu",
+                                "New tab menu",
+                                None,
+                                ButtonSize::Sm,
+                                None,
+                                icon(Icon::ChevronDown, 12.0, theme::MUTED_FOREGROUND),
+                            ),
                             "new-tab-menu",
-                            "New tab menu",
-                            None,
-                            ButtonSize::Sm,
-                            None,
-                            icon(Icon::ChevronDown, 12.0, theme::MUTED_FOREGROUND),
+                            menu_open,
                         )
                         .w(px(16.0))
                         .ml(px(-4.0))

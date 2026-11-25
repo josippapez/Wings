@@ -35,7 +35,7 @@ use crate::{
     theme,
     ui::{
         self, ButtonSize, Variant,
-        behaviors::{Align, EscapeExt, TrapTabExt, popup_on_parent},
+        behaviors::{Align, EscapeExt, TrapTabExt, note_press, popup_on_parent, was_open},
         motion,
     },
 };
@@ -1021,12 +1021,15 @@ impl Workspace {
             .as_ref()
             .map(|r| r.branches.as_slice())
             .unwrap_or(&[]);
+        let open = sheet.menu == Some(Menu::Branch);
         div()
             .relative()
             .min_w_0()
-            .child(
+            .child(note_press(
                 div()
                     .id("history-branch")
+                    .relative()
+                    .children(ui::spot(|| "history-branch".into()))
                     .role(Role::ComboBox)
                     .aria_label("Branch")
                     .h(px(28.0))
@@ -1045,9 +1048,10 @@ impl Workspace {
                             .text_color(rgb(theme::FOREGROUND))
                     })
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(|this, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let was_open = was_open("history-branch", open, cx);
                         if let Some(sheet) = &mut this.sheet {
-                            sheet.menu = (sheet.menu != Some(Menu::Branch)).then_some(Menu::Branch);
+                            sheet.menu = (!was_open).then_some(Menu::Branch);
                         }
                         cx.notify_workspace();
                     }))
@@ -1061,8 +1065,10 @@ impl Workspace {
                         ),
                     )
                     .child(icon(Icon::ChevronDown, 14.0, theme::MUTED_FOREGROUND)),
-            )
-            .when(sheet.menu == Some(Menu::Branch), |slot| {
+                "history-branch",
+                open,
+            ))
+            .when(open, |slot| {
                 let choose =
                     |id: SharedString, label: String, chosen: Option<String>, selected: bool| {
                         ui::select_item(id, label, selected).on_click(cx.listener(
@@ -1092,6 +1098,7 @@ impl Workspace {
                 }));
                 slot.child(menu_below(
                     ui::select_menu(items)
+                        .children(ui::spot(|| "history-branch-menu".into()))
                         .mt(px(0.0))
                         .max_h(px(320.0))
                         .overflow_y_hidden()
@@ -1276,19 +1283,22 @@ impl Workspace {
                         }
                     })
                     .child(
-                        ui::icon_button(
+                        note_press(
+                            ui::icon_button(
+                                ("history-more", at),
+                                Icon::Ellipsis,
+                                "More for this session",
+                                ButtonSize::Sm,
+                            ),
                             ("history-more", at),
-                            Icon::Ellipsis,
-                            "More for this session",
-                            ButtonSize::Sm,
+                            menu_open,
                         )
                         .on_click({
                             let id = hit.id.clone();
                             cx.listener(move |this, _, _, cx| {
+                                let was_open = was_open(("history-more", at), menu_open, cx);
                                 if let Some(sheet) = &mut this.sheet {
-                                    let menu = Menu::Session(id.clone());
-                                    sheet.menu =
-                                        (sheet.menu.as_ref() != Some(&menu)).then_some(menu);
+                                    sheet.menu = (!was_open).then_some(Menu::Session(id.clone()));
                                 }
                                 cx.notify_workspace();
                             })

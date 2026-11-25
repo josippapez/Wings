@@ -4,7 +4,7 @@
 
 use std::rc::Rc;
 
-use gpui::{App, InteractiveElement, KeyDownEvent, MouseDownEvent, Pixels, Point, Window};
+use gpui::{App, ElementId, Global, InteractiveElement, KeyDownEvent, MouseDownEvent, Pixels, Point, Window};
 
 /// Why a layer was dismissed.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -78,6 +78,28 @@ pub fn bind_layer<E: InteractiveElement>(
     .on_mouse_down_out(move |event: &MouseDownEvent, window, cx| {
         on_outside(&DismissReason::OutsidePress(event.position), window, cx)
     })
+}
+
+/// The trigger that was pressed while its popup was open.
+#[derive(Default)]
+struct PressedOpen(Option<ElementId>);
+
+impl Global for PressedOpen {}
+
+/// A press on the trigger that opened a popup is outside the popup, whose press-outside closes it before the trigger's
+/// click: the click then finds it closed and opens it again. `trigger` with its press noted, as `key`'s popup being
+/// `open` as drawn now; its click asks `was_open` where it would have asked the state.
+pub fn note_press<E: InteractiveElement>(trigger: E, key: impl Into<ElementId>, open: bool) -> E {
+    let key = key.into();
+    trigger.capture_any_mouse_down(move |_, _, cx| {
+        cx.default_global::<PressedOpen>().0 = open.then(|| key.clone());
+    })
+}
+
+/// Whether `key`'s popup was open when its trigger was pressed (`note_press`), or is `open` now for a click that wasn't
+/// a press, as a key's.
+pub fn was_open(key: impl Into<ElementId>, open: bool, cx: &mut App) -> bool {
+    cx.default_global::<PressedOpen>().0.take() == Some(key.into()) || open
 }
 
 #[cfg(test)]
