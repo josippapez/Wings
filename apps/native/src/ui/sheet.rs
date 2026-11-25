@@ -125,11 +125,39 @@ pub fn segmented(items: impl IntoIterator<Item = Stateful<Div>>) -> Div {
         .children(items)
 }
 
-/// One button of `segmented`, lit while `on`.
+/// How long a segment's light takes to come or go when the choice moves: Tailwind's `transition` time.
+const SEGMENT_FADE: std::time::Duration = std::time::Duration::from_millis(150);
+/// A lit segment's ground, `bg-white/9`.
+const SEGMENT_LIT: u32 = 0x17;
+
+/// How much of its light a segment shows `t` of the way through turning `on` or off.
+fn segment_light(on: bool, t: f32) -> f32 {
+    if on { t } else { 1.0 - t }
+}
+
+/// One button of `segmented`, lit while `on`. When the choice moves, the light fades from the old segment to the new
+/// one rather than jumping, only when it moves, and at once under Reduce motion.
 pub fn segment(id: impl Into<ElementId>, label: impl Into<SharedString>, on: bool) -> Stateful<Div> {
+    use gpui::{Animation, AnimationExt};
+    let id = id.into();
     let label = label.into();
+    let ground = div().absolute().top_0().left_0().size_full().rounded(px(6.0));
+    let ground = match super::motion::flips(&id, on) {
+        0 => ground.when(on, |ground| ground.bg(rgba(0xffffff00 | SEGMENT_LIT))).into_any_element(),
+        flipped => {
+            let ease = super::motion::cubic_bezier(super::motion::EASE);
+            ground
+                .with_animation(("segment-light", flipped), Animation::new(SEGMENT_FADE).with_easing(ease), move |ground, t| {
+                    let alpha = (SEGMENT_LIT as f32 * segment_light(on, t)).round() as u32;
+                    ground.bg(rgba(0xffffff00 | alpha))
+                })
+                .into_any_element()
+        }
+    };
     div()
         .id(id)
+        .relative()
+        .child(ground)
         .role(Role::Button)
         .aria_label(label.clone())
         .aria_toggled(if on { Toggled::True } else { Toggled::False })
@@ -145,10 +173,24 @@ pub fn segment(id: impl Into<ElementId>, label: impl Into<SharedString>, on: boo
         } else {
             theme::palette().muted_foreground
         }))
-        .when(on, |item| item.bg(rgba(0xffffff17)))
         .when(!on, |item| {
             item.hover(|style| style.text_color(rgb(theme::palette().foreground)))
         })
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(label)
+        // Over its light, which is drawn first.
+        .child(div().relative().child(label))
+}
+
+#[cfg(test)]
+mod segment_tests {
+    use super::*;
+
+    #[test]
+    fn a_segments_light_fades_in_as_it_is_chosen_and_out_as_it_is_left() {
+        assert_eq!((segment_light(true, 0.0), segment_light(true, 0.5), segment_light(true, 1.0)), (0.0, 0.5, 1.0));
+        assert_eq!((segment_light(false, 0.0), segment_light(false, 1.0)), (1.0, 0.0));
+        let key = ElementId::Name("segment-test".into());
+        assert_eq!(super::super::motion::flips(&key, true), 0, "shown lit: no fade");
+        assert_eq!(super::super::motion::flips(&key, false), 1, "left: a fade");
+    }
 }
