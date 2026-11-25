@@ -1052,6 +1052,12 @@ fn a_claude_in_a_pane_shows_its_name_and_state_on_the_pane_tab_and_project() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// How long a test waits for work that runs on a thread or in a process of its own (a plugin page's thread, a shell, the
+/// agent scan). The suite runs every test at once, beside whatever else the machine builds, so such work can go a long
+/// while unscheduled; 10 s failed `wait_for_page` and the transcript test's waits now and then, and both passed alone.
+/// It is a ceiling: a wait ends the moment its work is done, and work that never comes still fails after this.
+pub(super) const THREAD_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Runs the app until `done`, while real processes and the detection clock move on.
 pub(super) fn wait_for(
     app: &TestApp,
@@ -1059,12 +1065,34 @@ pub(super) fn wait_for(
     done: impl Fn(&Workspace) -> bool,
     what: &str,
 ) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + THREAD_BOUND;
     while !window.read(|workspace, _| done(workspace)) {
         assert!(std::time::Instant::now() < deadline, "{what}");
         app.run_until_parked();
         app.advance_clock(crate::agents::EVERY);
         std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// Waits until the shell in pane `pane` has drawn its prompt and gone quiet, so what a test types next reaches the line
+/// editor whole. The scan that lists the pane's shell (`pane_info`) is up before the shell reads its input, and a shell
+/// with a slow prompt (starship, under a loaded machine) redraws over text typed meanwhile: a command typed then came out
+/// cut and mixed with the redraw, and was never run.
+pub(super) fn wait_for_prompt(app: &TestApp, window: &TestAppWindow<Workspace>, pane: usize) {
+    let output = || window.read(|w, cx| w.terminal(pane).unwrap().read(cx).recent_output());
+    let quiet = std::time::Duration::from_secs(1);
+    let deadline = std::time::Instant::now() + THREAD_BOUND;
+    let (mut seen, mut since) = (output(), std::time::Instant::now());
+    loop {
+        app.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let now = output();
+        if now != seen {
+            (seen, since) = (now, std::time::Instant::now());
+        } else if !seen.is_empty() && since.elapsed() >= quiet {
+            return;
+        }
+        assert!(std::time::Instant::now() < deadline, "the shell never drew its prompt");
     }
 }
 
@@ -1161,7 +1189,7 @@ fn page_text(window: &TestAppWindow<Workspace>) -> String {
 
 /// The page runs on its own thread, so this waits in real time for it to show `text`.
 fn wait_for_page(app: &TestApp, window: &mut TestAppWindow<Workspace>, text: &str) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + THREAD_BOUND;
     while !page_text(window).contains(text) {
         assert!(
             std::time::Instant::now() < deadline,

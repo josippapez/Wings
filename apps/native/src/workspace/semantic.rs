@@ -193,6 +193,10 @@ mod tests {
             app.advance_clock(STEP);
             app.run_until_parked();
         }
+        // A step the layer's clock did not run in time (a loaded machine) is drawn by the next one: the fill shows the
+        // share as it stands once a step has passed with no change.
+        app.advance_clock(STEP);
+        app.run_until_parked();
         let (drawn, share) = DRAWN.with(|d| d.get());
         assert_eq!(sidebar(&window), before, "the sidebar kept its drawing through ten steps");
         assert!(drawn - fills >= 9, "the layer drew the fill {} times in ten steps", drawn - fills);

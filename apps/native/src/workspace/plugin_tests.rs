@@ -15,7 +15,7 @@ use wings_plugins::transcript::Line;
 use super::{
     Active, Workspace,
     plugin_env::System,
-    tests::{open_sized, press, wait_for},
+    tests::{open_sized, press, wait_for, wait_for_prompt},
 };
 use crate::{
     host::Config,
@@ -3647,6 +3647,7 @@ fn claude_writing_a_transcript_in_a_pane_reaches_only_the_plugins_that_may_read_
         |w| w.pane_info.contains_key(&0),
         "the shell was never detected",
     );
+    wait_for_prompt(&app, &window, 0);
     window.simulate_input(&format!("exec '{}' 60", fake.display()));
     window.simulate_keystroke("enter");
     wait_for(
@@ -3671,7 +3672,7 @@ fn claude_writing_a_transcript_in_a_pane_reaches_only_the_plugins_that_may_read_
 
     // The plugin sees the session in the pane, as `WingsPane` has it.
     let saved = |plugin: &str, key: &str| data.saved(plugin, &format!("{plugin}-scope"), key);
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + super::tests::THREAD_BOUND;
     while saved("reader", "session").is_none_or(|s| s.is_null()) {
         assert!(
             Instant::now() < deadline,
@@ -3824,6 +3825,7 @@ fn dev_servers_from_the_dev_root_badges_a_pane_that_listens_and_its_button_opens
         |w| w.panes[&0].view.as_ref().is_ok_and(|_| true),
         "no pane",
     );
+    wait_for_prompt(&app, &window, 0);
     window.simulate_input(
         "python3 -c \"import socket,time;s=socket.socket();s.bind(('127.0.0.1',0));s.listen(1);print('LISTENING',s.getsockname()[1],flush=True);time.sleep(120)\"",
     );

@@ -595,10 +595,18 @@ fn a_command_is_not_typed_into_a_program_started_since_the_terminal_was_seen_idl
     let held = |window: &TestAppWindow<Workspace>| {
         window.read(|w, cx| {
             let view = w.terminal(1).unwrap().read(cx);
-            view.foreground_pid().is_some() && view.foreground_pid() != view.process_id()
+            // The `true` the pane opened with is a program in front too, for as long as the loaded machine takes to run it,
+            // so it is the `sleep` that has to be in front, not any program.
+            view.foreground_pid().is_some_and(|pid| {
+                Some(pid) != view.process_id()
+                    && std::process::Command::new("ps")
+                        .args(["-o", "command=", "-p", &pid.to_string()])
+                        .output()
+                        .is_ok_and(|out| String::from_utf8_lossy(&out.stdout).contains("sleep 30"))
+            })
         })
     };
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + super::tests::THREAD_BOUND;
     while !held(&window) {
         assert!(Instant::now() < deadline, "sleep never took the terminal");
         app.advance_clock(Duration::from_millis(100));
