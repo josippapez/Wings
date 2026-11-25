@@ -17,7 +17,7 @@ use wings_plugin::{
     markdown::markdown,
     host,
     task::spawn,
-    ui::{Node, card, confirm, empty, icon_button, icons, muted, notice, page, row, section_label, small, stack, text},
+    ui::{Node, card, column_page, confirm, empty, icon_button, icons, muted, notice, page, row, section_label, small, stack, text},
 };
 
 /// The native app draws a page of at most 5,000 nodes, so a long conversation shows in steps.
@@ -242,7 +242,8 @@ pub fn build(p: &Page) -> Vec<Node> {
         );
     }
     body.push(wrap(p, st, run_open, verdict));
-    vec![page(toolbar, body)]
+    // An open run's log is a wide page; the rest is the SDK's reading column.
+    vec![if run_open { page(toolbar, body) } else { column_page(toolbar, body) }]
 }
 
 fn confirm_pending(vote: Option<String>, label: String, sha: String) {
@@ -306,7 +307,7 @@ fn wrap(p: &Page, st: Option<&Status>, run_open: bool, verdict: Option<(bool, St
             col("s").child(Node::new("Spinner").prop("label", "Loading pull request")).children([skeleton(json!("40%"), 14), skeleton(Value::Null, 90), skeleton(Value::Null, 120), skeleton(Value::Null, 70)]),
         ],
     };
-    col("l").prop("maxWidth", if run_open { 1100 } else { 860 }).child(header).children(content)
+    col("l").child(header).children(content)
 }
 
 fn parts_card(content: Vec<Node>) -> Node {

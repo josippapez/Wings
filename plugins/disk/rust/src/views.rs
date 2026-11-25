@@ -13,7 +13,7 @@ use serde_json::json;
 use wings_plugin::{
     format::{ago_now, basename},
     host,
-    ui::{Node, badge, error_state, card, empty, gauge, loading, muted, notice, page, row, rows_card, slot, spinner, stack, text, text_input, toolbar},
+    ui::{Node, badge, error_state, card, column_page, empty, gauge, loading, muted, notice, page, row, rows_card, slot, spinner, stack, text, text_input, toolbar},
 };
 
 /// What a scan of `root` is called: the disk's name for a whole disk, the home folder, or the folder's own name.
@@ -157,12 +157,11 @@ fn overview(p: &Page) -> Vec<Node> {
         section("Scans", vec![rows_card(scans.iter().map(|scan| scan_row(scan, rows)))])
     });
     let content = gap(stack(), "l")
-        .prop("maxWidth", 860)
         .maybe(p.problem.as_ref().map(|problem| dismissible("danger", problem, || with(|p| p.problem = None))))
         .child(section("Disks", disks))
         .child(section("Folders", vec![folders]))
         .maybe(scans);
-    vec![page(toolbar("Disk usage", None), [content])]
+    vec![column_page(toolbar("Disk usage", None), [content])]
 }
 
 // ---------- a scan that isn't a map ----------

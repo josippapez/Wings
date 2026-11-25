@@ -16,7 +16,7 @@ use wings_plugin::{
     format::ago,
     git, host, messages, poll,
     task::spawn,
-    ui::{Choice, Combobox, Entry, Node, card, checkbox, chip, chips, combobox, confirm, disclosure, empty, entry, error_state, icons, list, list_row, loading, muted, notice, page, row, rows_card, section, select, slot, stack, text, text_input, title, toolbar},
+    ui::{Choice, Combobox, Entry, Node, card, column_page, checkbox, chip, chips, combobox, confirm, disclosure, empty, entry, error_state, icons, list, list_row, loading, muted, notice, page, row, rows_card, section, select, slot, stack, text, text_input, title, toolbar},
 };
 
 /// How often "in 2 h" is worked out again.
@@ -760,7 +760,7 @@ fn view() -> Vec<Node> {
                 _ => "New entry".to_owned(),
             };
             let crumb = row().prop("gap", "s").prop("align", "center").child(button("← Schedules", "ghost", None, None, false, go_back)).child(text(name).prop("weight", "strong").prop("truncate", true));
-            return vec![page(Node::new("Toolbar").child(slot("title", crumb)), vec![stack().prop("maxWidth", 720).child(form_view(p))])];
+            return vec![column_page(Node::new("Toolbar").child(slot("title", crumb)), vec![form_view(p)])];
         }
         vec![page(toolbar("Schedules", toolbar_actions(p)), vec![list_view(p, now)])]
     })

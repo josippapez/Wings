@@ -21,7 +21,7 @@ use wings_plugin::{
     format::plural,
     host, messages,
     task::{join_all, spawn},
-    ui::{Node, card, empty, icon_button, icons, joined, muted, page, row, section_label, stack, text},
+    ui::{Node, card, column_page, empty, icon_button, icons, joined, muted, page, row, section_label, stack, text},
 };
 
 /// The pull requests whose titles are asked for, one call each; the rest show by number, behind Show all.
@@ -251,9 +251,8 @@ fn toolbar(id: u64, kind: Option<&str>, actions: Vec<Node>) -> Node {
     if actions.is_empty() { node } else { node.child(Node::new("Slot").prop("name", "actions").child(gap(row(), "xs").prop("align", "center").children(actions))) }
 }
 
-/// A column at most 860 points wide, centred in the room it has.
 fn wrap(content: Vec<Node>) -> Node {
-    gap(stack(), "l").prop("maxWidth", 860).children(content)
+    gap(stack(), "l").children(content)
 }
 
 fn view() -> Vec<Node> {
@@ -266,11 +265,11 @@ fn build(p: &Page) -> Vec<Node> {
     };
     if let Some(error) = &p.error {
         let card = card_of(vec![strong("Couldn't load this work item"), text(error.as_str()).prop("tone", "danger"), row().child(button("Try again", "outline", reload))]);
-        return vec![page(toolbar(args.id, None, vec![]), [wrap(vec![card])])];
+        return vec![column_page(toolbar(args.id, None, vec![]), [wrap(vec![card])])];
     }
     let Some(item) = &p.item else {
         let bones = vec![skeleton(json!("30%"), 14), skeleton(json!("80%"), 26), skeleton(json!("55%"), 14), skeleton(json!(null), 90), skeleton(json!(null), 120)];
-        return vec![page(toolbar(args.id, None, vec![]), [wrap(vec![skeletons("Loading work item", bones)])])];
+        return vec![column_page(toolbar(args.id, None, vec![]), [wrap(vec![skeletons("Loading work item", bones)])])];
     };
     let f = &item.fields;
     let project = f["System.TeamProject"].as_str().unwrap_or_default();
@@ -313,7 +312,6 @@ fn build(p: &Page) -> Vec<Node> {
     };
     let failed = p.move_error.as_ref().or(p.open_error.as_ref());
     let content = gap(stack(), "l")
-        .prop("maxWidth", 860)
         .child(header(p, item, args, links.parent, parent_title))
         .maybe(failed.map(|error| text(error.as_str()).prop("tone", "danger")))
         .child(summary(p, &links))
@@ -323,7 +321,7 @@ fn build(p: &Page) -> Vec<Node> {
         Some(kind),
         vec![icon_button("Refresh", &icons::REFRESH_CW, reload), icon_button("Open in Azure DevOps", &icons::EXTERNAL_LINK, move || open_url(url.clone()))],
     );
-    vec![page(toolbar, [content])]
+    vec![column_page(toolbar, [content])]
 }
 
 // ---------- header ----------
