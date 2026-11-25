@@ -241,7 +241,13 @@ fn a_pane_keeps_its_shell_and_scrollback_while_the_app_is_away_and_is_claimed_on
     read_until(&pane, &mut events, "before-42");
     // The app quits: its connection ends, the shell does not.
     pane.detach();
-    assert_eq!(events.next(&pane), Event::Closed);
+    // The shell's next prompt can still be on its way when the connection ends.
+    loop {
+        match events.next(&pane) {
+            Event::Output(_) => continue,
+            other => break assert_eq!(other, Event::Closed),
+        }
+    }
     assert!(alive(shell));
     pane.write(b"x").expect_err("a detached pane takes no more input");
     drop((pane, events));
