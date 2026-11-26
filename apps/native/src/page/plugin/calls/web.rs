@@ -76,12 +76,15 @@ impl Shared {
                     let installed = wings_web_extensions::detect_installed();
                     // The page gets each by its place in this list, never its folder, which names the person's profiles.
                     FOUND.lock().unwrap().insert(plugin.clone(), installed.iter().map(|found| found.source.clone()).collect());
+                    // Nor its profiles' names, which are often the person's own: "Chrome (2)" tells two copies apart.
+                    let from = copies(installed.iter().map(|found| (found.browser_name.as_str(), found.profile.as_str())));
                     let found: Vec<Value> = installed
                         .into_iter()
+                        .zip(from)
                         .enumerate()
-                        .map(|(at, found)| {
+                        .map(|(at, (found, from))| {
                             json!({
-                                "source": at.to_string(), "browser": found.browser_name, "profile": found.profile,
+                                "source": at.to_string(), "browser": found.browser_name, "from": from,
                                 "name": found.name, "description": found.description, "version": found.version,
                                 "icon": found.icon.as_deref().and_then(|path| icon(&plugin, path)),
                                 "permissions": found.permissions, "hosts": found.host_permissions,
@@ -291,6 +294,21 @@ pub(in crate::page::plugin) fn needs_click(method: &str, params: &Value) -> bool
     )
 }
 
+/// What tells copies of extensions in other browsers apart without their profiles' names: the browser's name, and
+/// "(2)", "(3)" for its second and third profile.
+fn copies<'a>(found: impl Iterator<Item = (&'a str, &'a str)>) -> Vec<String> {
+    let mut profiles: Vec<(&str, &str)> = Vec::new();
+    found
+        .map(|(browser, profile)| {
+            if !profiles.contains(&(browser, profile)) {
+                profiles.push((browser, profile));
+            }
+            let nth = profiles.iter().filter(|(of, _)| *of == browser).position(|(_, name)| *name == profile).unwrap_or(0) + 1;
+            if nth == 1 { browser.to_owned() } else { format!("{browser} ({nth})") }
+        })
+        .collect()
+}
+
 /// Whether WebKit keeps a store for each plugin on this Mac (`web::keeps_refusal`).
 fn per_plugin_stores() -> bool {
     #[cfg(all(feature = "ui", target_os = "macos"))]
@@ -354,6 +372,13 @@ fn download(package: &wings_web_extensions::StorePackage) -> Result<Vec<u8>, Str
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+
+    /// The page tells copies apart by browser and a number, never by the profiles' names, which are often the person's.
+    #[test]
+    fn other_browsers_copies_are_told_apart_without_their_profiles_names() {
+        let found = [("Chrome", "Josip"), ("Chrome", "Josip"), ("Chrome", "Work"), ("Arc", "Default"), ("Chrome", "Josip")];
+        assert_eq!(super::copies(found.into_iter()), ["Chrome", "Chrome", "Chrome (2)", "Arc", "Chrome"]);
+    }
 
     use crate::page::plugin::testing::{Caller, Rig};
 
