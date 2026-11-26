@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.118 · 2026-11-26
+
+- **The right permission for another browser's data**: when macOS blocks Wings from reading a browser's extensions or cookies, the Browser now says to turn that browser on under Wings in System Settings, Privacy & Security, Files & Folders. That one toggle is enough, so Full Disk Access isn't needed.
+
 ## 0.2.117 · 2026-11-26
 
 - **Bitwarden opens in the Browser**: its popup showed only a spinner, because Chrome's copy of Bitwarden couldn't tell which browser it was in. An extension's own pages now say they're Chrome, so its popup and background start. On this macOS, filling a login form from Bitwarden may still not work, because WebKit lacks an API its autofill uses.
