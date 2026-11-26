@@ -25,8 +25,9 @@ pub(crate) struct Page {
     /// Where the view starts, once.
     pub start: String,
     pub state: WebState,
-    /// The last command, which the view runs once per `token`.
-    pub command: Option<Value>,
+    /// The commands sent lately, oldest first, which the view runs once each by `token`: two sent before the next tree
+    /// (an agent's step and a click) both run.
+    pub commands: Vec<Value>,
     token: u64,
     /// What is in the address field while it is being edited, in place of the page's address.
     typed: Option<String>,
@@ -54,6 +55,9 @@ struct Effects {
     check_store: Option<String>,
 }
 
+/// The most commands a page keeps sending: more than a step and a click between two draws.
+const COMMANDS_KEPT: usize = 16;
+
 impl Page {
     pub fn send(&mut self, action: &str, url: Option<&str>) {
         self.run(|token| web_command(action, url, token));
@@ -62,7 +66,10 @@ impl Page {
     /// Sends the view a command made from a new token, which the view runs once, and gives the token.
     pub fn run(&mut self, make: impl FnOnce(u64) -> Value) -> u64 {
         self.token += 1;
-        self.command = Some(make(self.token));
+        self.commands.push(make(self.token));
+        // The view has run all but the newest few by the time the page draws again.
+        let extra = self.commands.len().saturating_sub(COMMANDS_KEPT);
+        self.commands.drain(..extra);
         self.token
     }
 
@@ -268,8 +275,8 @@ fn view() -> Vec<Node> {
             agent_page::handoff_banner(),
         ];
         let mut web = web_view("page").prop("fill", true).prop("url", page.start.as_str()).prop("keepData", keep).on("onState", state_event).on("onResult", agent_page::result);
-        if let Some(command) = &page.command {
-            web = web.prop("command", command.clone());
+        if !page.commands.is_empty() {
+            web = web.prop("command", Value::Array(page.commands.clone()));
         }
         let dialog = page.staged.as_ref().map(|staged| dialog_for(staged, page.busy, page.problem.as_deref(), cancel, add));
         vec![page_with(top.into_iter().flatten(), std::iter::once(web).chain(dialog))]
@@ -304,7 +311,12 @@ mod tests {
         page.send("reload", None);
         page.send("reload", None);
         page.send("load", Some("https://a.com"));
-        assert_eq!(page.command, Some(web_command("load", Some("https://a.com"), 3)));
+        assert_eq!(page.commands.last(), Some(&web_command("load", Some("https://a.com"), 3)));
+        assert_eq!(page.commands.len(), 3, "the earlier two are still sent, so none is dropped before the view runs it");
+        for _ in 0..20 {
+            page.send("reload", None);
+        }
+        assert_eq!(page.commands.len(), COMMANDS_KEPT);
     }
 
     #[test]

@@ -79,7 +79,7 @@ fn status() -> Value {
     let (id, popped, project) = agent(|agent| (agent.id.clone(), agent.popped, agent.project.clone()));
     with(|page| {
         json!({
-            "id": id, "project": project, "popped": popped, "url": page.state.url, "title": page.state.title,
+            "id": id, "project": project, "popped": popped, "url": agent_url(&page.state), "title": if page.state.imported { "" } else { page.state.title.as_str() },
             "loading": page.state.loading, "canGoBack": page.state.can_go_back, "canGoForward": page.state.can_go_forward,
             "dialog": page.state.dialog,
             "focused": host::focused(),
@@ -168,7 +168,7 @@ async fn wait_for(op: &Value) -> Result<Value, String> {
     let limit = op["timeout_ms"].as_f64().unwrap_or(10_000.0);
     let begun = host::now();
     loop {
-        if url.is_some_and(|url| with(|page| page.state.url.contains(url))) {
+        if url.is_some_and(|url| with(|page| agent_url(&page.state).contains(url))) {
             return Ok(status());
         }
         // A page that is loading has no document to ask yet, so a failed ask is "not yet".
@@ -181,6 +181,17 @@ async fn wait_for(op: &Value) -> Result<Value, String> {
         }
         host::sleep(WAIT_POLL_MS).await;
     }
+}
+
+/// The page's address as an agent may hear it: on a site signed in with imported cookies only its origin, as the rest
+/// (an account's name, a code in a redirect) is the person's.
+fn agent_url(state: &wings_plugin::ui::WebState) -> String {
+    if !state.imported {
+        return state.url.clone();
+    }
+    let Some((scheme, rest)) = state.url.split_once("://") else { return String::new() };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    format!("{scheme}://{}", host.rsplit_once('@').map_or(host, |(_, host)| host))
 }
 
 /// Closing the tab or window ends this frame, so the answer to main goes out first.
@@ -255,7 +266,7 @@ pub async fn run(op: Value) -> Result<Value, String> {
         "navigate" => navigate(&op).await,
         "screenshot" => {
             let mut shot = command(|token| wings_plugin::ui::web_snapshot(token)).await?;
-            shot["url"] = json!(with(|page| page.state.url.clone()));
+            shot["url"] = json!(with(|page| agent_url(&page.state)));
             Ok(shot)
         }
         "snapshot" => helper("snapshot", &[json!(SNAPSHOT_MAX)]).await,
@@ -375,10 +386,26 @@ mod tests {
     }
 
     #[test]
+    fn an_agent_hears_only_the_origin_and_no_title_of_a_page_signed_in_with_imported_cookies() {
+        let state = |imported: bool| wings_plugin::ui::WebState {
+            url: "https://me@mail.example.com:8443/u/0/inbox?code=secret".into(),
+            title: "Inbox (3) - ana@example.com".into(),
+            imported,
+            ..Default::default()
+        };
+        assert_eq!(agent_url(&state(true)), "https://mail.example.com:8443");
+        assert_eq!(agent_url(&state(false)), state(false).url);
+        record();
+        with(|page| page.state = state(true));
+        let told = status();
+        assert_eq!((told["url"].as_str(), told["title"].as_str()), (Some("https://mail.example.com:8443"), Some("")));
+    }
+
+    #[test]
     fn a_script_runs_as_a_command_with_a_token_and_its_result_comes_back_by_that_token() {
         record();
         let out = run_op(json!({ "op": "eval", "script": "return 1" }));
-        let command = with(|page| page.command.clone()).unwrap();
+        let command = with(|page| page.commands.last().cloned()).unwrap();
         assert_eq!(command["action"], "eval");
         assert_eq!(command["world"], "page");
         assert!(out.borrow().is_none(), "waiting for the view");
@@ -387,7 +414,7 @@ mod tests {
         assert_eq!(out.borrow().clone(), Some(Ok(json!(1))));
         // The helper's calls run in the isolated world, and a failure is the view's error.
         let out = run_op(json!({ "op": "click", "ref": "e1" }));
-        let command = with(|page| page.command.clone()).unwrap();
+        let command = with(|page| page.commands.last().cloned()).unwrap();
         assert!(command.get("world").is_none() && command["script"].as_str().unwrap().ends_with("return w.click(\"e1\");"));
         result(&json!({ "token": command["token"], "error": "Ref e1 is stale" }));
         testing::settle();

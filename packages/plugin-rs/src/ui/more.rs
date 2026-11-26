@@ -191,6 +191,9 @@ pub struct WebState {
     /// The page's `alert`, `confirm` or `prompt` waiting for an answer: `{ kind, message, defaultText, site }`. Wings shows
     /// it to the person itself; a page only needs it to tell an agent.
     pub dialog: Option<Value>,
+    /// The page is on a site signed in with cookies imported from another browser: show its address, but tell an agent no
+    /// more than its origin (Wings 0.2.114).
+    pub imported: bool,
 }
 
 impl WebState {
@@ -204,6 +207,7 @@ impl WebState {
             can_go_forward: event["canGoForward"].as_bool().unwrap_or_default(),
             error: event["error"].as_str().map(str::to_owned),
             dialog: Some(event["dialog"].clone()).filter(|dialog| dialog.is_object()),
+            imported: event["imported"] == true,
         }
     }
 }
@@ -245,7 +249,7 @@ mod tests {
         let (tree, handlers) = export(vec![web_view("main").on("onState", move |event| *seen.borrow_mut() = WebState::from_event(event))]);
         let event = json!({ "url": "https://a.b/", "title": "A", "loading": true, "canGoBack": true, "canGoForward": false, "error": null });
         assert!(handlers.call(tree[0]["props"]["onState"].as_str().unwrap(), &event));
-        assert_eq!(*heard.borrow(), WebState { url: "https://a.b/".into(), title: "A".into(), loading: true, can_go_back: true, can_go_forward: false, error: None, dialog: None });
+        assert_eq!(*heard.borrow(), WebState { url: "https://a.b/".into(), title: "A".into(), loading: true, can_go_back: true, can_go_forward: false, error: None, dialog: None, imported: false });
     }
 
     #[test]
