@@ -240,6 +240,11 @@ fn shared(profile: &Profile, keep_data: bool, mtm: MainThreadMarker) -> Rc<Share
             WKWebExtensionControllerConfiguration::nonPersistentConfiguration(mtm)
         };
         configuration.setDefaultWebsiteDataStore(Some(&store));
+        // Its extensions' own pages name a browser (`EXTENSION_PAGES_AGENT`). Read after the store is set: WebKit puts that
+        // store in the pages' configuration as it makes it.
+        let pages = configuration.webViewConfiguration();
+        pages.setApplicationNameForUserAgent(Some(&NSString::from_str(EXTENSION_PAGES_AGENT)));
+        configuration.setWebViewConfiguration(Some(&pages));
         WKWebExtensionController::initWithConfiguration(WKWebExtensionController::alloc(mtm), &configuration)
     });
     // Before any extension loads, which asks it for the pages.
@@ -256,6 +261,14 @@ fn shared(profile: &Profile, keep_data: bool, mtm: MainThreadMarker) -> Rc<Share
     }
     shared
 }
+
+/// What an extension's own pages (its background, popup and options) add to WebKit's user agent: Chrome's words, as most
+/// extensions added come from Chromium browsers and are built for Chrome. WebKit's own names no browser, and an extension
+/// that tells the browser by it found none: Bitwarden's background and popup both stopped at `getDevice().toString()`,
+/// which left its popup on a spinner. Safari's words send a Chrome build down the paths meant for its Safari build, where
+/// Bitwarden's background looped for good.
+// debt: Chrome's stable version in November 2026, fixed; an extension that wants a newer Chrome by it needs this moved up.
+const EXTENSION_PAGES_AGENT: &str = "Chrome/159.0.0.0 Safari/537.36";
 
 /// Loads the extensions of `profile` that are on and pass `extensions::verify`, checked off the main thread: hashing
 /// a big one's folder (Bitwarden's 92 MB) takes 60 ms in a release build and a second in a debug one, and the Keychain
@@ -1266,6 +1279,22 @@ mod tests {
         let found = super::gpui_among(&content).expect("GPUI's view");
         assert!(std::ptr::eq(&*found, &*gpui), "{:?}", found.class().name());
         std::mem::forget((content, gpui, found));
+    }
+
+    /// An extension built for Chrome tells the browser by its own pages' user agent, and found none in WebKit's: Bitwarden's
+    /// background and popup failed at `getDevice()`. With the pages' name added it is Chrome, not Safari, whose paths a
+    /// Chrome build can't run. (Setting the name is WebKit's configuration, which WebKit makes only on the main thread: it
+    /// ends a process that makes one off it, as every test runs.)
+    #[test]
+    fn an_extensions_own_pages_are_chrome_to_the_extension_and_not_safari() {
+        // WebKit's own, as Bitwarden's popup read it on macOS 27.2, and as WebKit makes it with the name, after a space.
+        let webkit = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)";
+        let pages = format!("{webkit} {}", super::EXTENSION_PAGES_AGENT);
+        // Bitwarden's tests, `BrowserPlatformUtilsService.isChrome` and `BrowserApi.isSafariApi`.
+        let chrome = |agent: &str| agent.contains(" Chrome/");
+        let safari = |agent: &str| agent.contains(" Safari/") && !agent.contains(" Chrome/") && !agent.contains(" Chromium/");
+        assert!(!chrome(webkit) && !safari(webkit), "WebKit's own names no browser");
+        assert!(chrome(&pages) && !safari(&pages), "{pages}");
     }
 
     #[test]
