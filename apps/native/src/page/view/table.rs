@@ -70,7 +70,7 @@ impl PageView {
                 .into_any_element()
         });
         let grid = div().flex().flex_col().min_w(px(width)).w_full().children(rows);
-        let scroller = div().id(ElementId::NamedInteger("page-table".into(), table.id)).w_full().overflow_x_scroll().child(grid);
+        let scroller = div().id(ElementId::NamedInteger("page-table".into(), table.id)).w_full().overflow_x_scroll().children(ui::cutoff::clips_on_purpose()).child(grid);
         div()
             .min_w_0()
             .w_full()

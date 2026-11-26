@@ -4,7 +4,7 @@
 use std::ops::Range;
 
 use gpui::{
-    AnyElement, Bounds, Context, ElementId, FontWeight, HighlightStyle, InteractiveText, IntoElement, Pixels, Point,
+    AnyElement, Bounds, Context, ElementId, FontStyle, FontWeight, StrikethroughStyle, HighlightStyle, InteractiveText, IntoElement, Pixels, Point,
     SharedString, StyledText, TextLayout, UnderlineStyle, canvas, div, fill, hsla, point, prelude::*, px, relative, rgb,
     rgba,
 };
@@ -28,6 +28,8 @@ struct Style {
     tone: Option<Tone>,
     weight: Weight,
     mono: bool,
+    italic: bool,
+    strike: bool,
     click: Option<String>,
     mark: bool,
     /// One of Wings' links, by its place among the line's.
@@ -74,6 +76,8 @@ fn collect(
                         inner.weight
                     },
                     mono: outer.mono || inner.mono,
+                    italic: outer.italic || inner.italic,
+                    strike: outer.strike || inner.strike,
                     click: inner.on_click.clone().or_else(|| outer.click.clone()),
                     mark: outer.mark || inner.mark,
                     link: None,
@@ -107,6 +111,8 @@ fn highlight(style: &Style) -> HighlightStyle {
             Weight::Medium => Some(FontWeight::MEDIUM),
             Weight::Strong => Some(FontWeight::SEMIBOLD),
         },
+        font_style: style.italic.then_some(FontStyle::Italic),
+        strikethrough: style.strike.then(|| StrikethroughStyle { thickness: px(1.0), color: None }),
         underline: clicks.then(|| UnderlineStyle {
             thickness: px(1.0),
             color: None,
@@ -422,6 +428,15 @@ mod tests {
 
     fn span(range: std::ops::Range<usize>, mono: bool) -> Span {
         Span { range, style: Style { mono, ..Style::default() } }
+    }
+
+    /// Emphasis is slanted and a struck word has a line through it, the two looks `Text`'s `italic` and `strike` ask for.
+    #[test]
+    fn an_italic_run_is_slanted_and_a_struck_run_has_a_line_through_it() {
+        let plain = highlight(&Style::default());
+        assert!(plain.font_style.is_none() && plain.strikethrough.is_none());
+        assert_eq!(highlight(&Style { italic: true, ..Style::default() }).font_style, Some(FontStyle::Italic));
+        assert!(highlight(&Style { strike: true, ..Style::default() }).strikethrough.is_some());
     }
 
     /// "See `ABC-12` and ABC-7": a code span around the first key, and two links.

@@ -293,6 +293,8 @@ pub struct Stack {
     /// `quote: true`: a bar down its left edge and what it holds set in from it, as a Markdown quote is drawn. The bar is
     /// part of the box, so it runs the quote's whole height and a selection never copies it.
     pub quote: bool,
+    /// `pt`: room above it in points, as a heading has in a column of Markdown.
+    pub pt: Option<f32>,
     pub children: Vec<Node>,
 }
 
@@ -314,6 +316,10 @@ pub struct Text {
     pub size: TextSize,
     pub weight: Weight,
     pub mono: bool,
+    /// `italic: true`: slanted, as Markdown's emphasis is. Only a nested `Text` inside a line draws it.
+    pub italic: bool,
+    /// `strike: true`: a line through it, as Markdown's `~~words~~`. Only a nested `Text` inside a line draws it.
+    pub strike: bool,
     pub truncate: bool,
     /// `shrink: "last"`: beside other text in a row, it keeps its width while they have any to give.
     pub shrink_last: bool,
@@ -1606,6 +1612,7 @@ impl Walk {
                 measure: None,
                 min_share: None,
                 quote: on("quote"),
+                pt: number(&props, "pt").filter(|pt| *pt > 0.0).map(|pt| pt.min(200.0) as f32),
                 children: parts(children),
             }),
             "ListRow" => kit::list_row(id, children, handler("onClick"), title(&props)),
@@ -1629,6 +1636,8 @@ impl Walk {
                 size: choice(&props, "size"),
                 weight: choice(&props, "weight"),
                 mono: on("mono"),
+                italic: on("italic"),
+                strike: on("strike"),
                 truncate: on("truncate"),
                 shrink_last: str_prop(&props, "shrink") == Some("last"),
                 expandable: on("expandable"),

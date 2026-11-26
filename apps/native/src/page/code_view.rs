@@ -167,6 +167,18 @@ impl PageView {
             .font_family(DEFAULT_FONT_FAMILY)
             .text_size(size)
             .children(rows);
+        // A block that scrolls keeps each line whole and sets it in a box that scrolls sideways inside the card.
+        let lines = match code.scroll {
+            true => div().min_w_0().child(
+                div()
+                    .id(ElementId::NamedInteger("page-code-scroll".into(), id))
+                    .min_w_0()
+                    .overflow_x_scroll()
+                    .children(crate::ui::cutoff::clips_on_purpose())
+                    .child(lines.whitespace_nowrap().flex_none().min_w_full()),
+            ),
+            false => lines,
+        };
         let card = match code.tone {
             // A run of a diff's lines: a tinted band with a bar in the tone's colour, for the card round the diff to hold.
             Some(tone) => {

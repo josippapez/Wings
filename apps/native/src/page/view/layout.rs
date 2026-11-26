@@ -58,6 +58,7 @@ impl PageView {
             .when_some(stack.width, |el, width| el.w(px(width)).flex_none())
             .when_some(stack.max_width, |el, width| el.w_full().max_w(px(width)).mx_auto())
             .when_some(stack.measure, |el, width| el.max_w(px(width)))
+            .when_some(stack.pt, |el, pt| el.pt(px(pt)))
             .when_some(stack.min_share, |el, share| el.min_w(relative(share)))
             // A quote's bar: a 3pt border in the muted tone, with the text set in from it.
             .when(stack.quote, |el| {

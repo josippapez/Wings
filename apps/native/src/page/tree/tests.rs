@@ -1308,3 +1308,18 @@ fn a_table_keeps_its_rows_and_the_words_of_each_cell() {
     assert_eq!(table.children.len(), 2, "the header row and one row");
     assert_eq!(table.children.iter().map(|row| plain_text(std::slice::from_ref(row))).collect::<Vec<_>>(), ["NameCount", "alpha42"]);
 }
+
+#[test]
+fn a_stack_keeps_its_room_above_and_a_code_block_its_scroll_and_a_text_its_looks() {
+    let parsed = tree(json!([
+        {"id":1,"type":"Stack","props":{"pt":8},"children":[]},
+        {"id":2,"type":"Code","props":{"code":"x","scroll":true}},
+        {"id":3,"type":"Text","props":{"italic":true,"strike":true},"children":[]},
+        {"id":4,"type":"Code","props":{"code":"x"}},
+    ]))
+    .unwrap();
+    assert!(matches!(&parsed.children[0], Node::Stack(stack) if stack.pt == Some(8.0)));
+    assert!(matches!(&parsed.children[1], Node::Code(code) if code.scroll));
+    assert!(matches!(&parsed.children[2], Node::Text(text) if text.italic && text.strike));
+    assert!(matches!(&parsed.children[3], Node::Code(code) if !code.scroll), "a block wraps unless it asks to scroll");
+}

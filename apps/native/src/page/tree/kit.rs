@@ -37,6 +37,7 @@ fn stack(id: u64, gap: Gap, children: Vec<Node>) -> Stack {
         measure: None,
         min_share: None,
         quote: false,
+        pt: None,
         children,
     }
 }
@@ -141,6 +142,8 @@ fn about(id: u64, description: Vec<Node>, inset: bool) -> Node {
         size: TextSize::Small,
         weight: Weight::Normal,
         mono: false,
+        italic: false,
+        strike: false,
         truncate: false,
         shrink_last: false,
         expandable: false,

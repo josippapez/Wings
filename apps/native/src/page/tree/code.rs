@@ -22,6 +22,9 @@ pub struct Code {
     pub tone: Option<Tone>,
     /// `variant: "band"`: a diff's unchanged lines, drawn flush like a tinted band but untinted, for the same card.
     pub band: bool,
+    /// `scroll: true`: a long line stays on one line and the block scrolls sideways, in place of wrapping under its first
+    /// character as the lines of a diff or a tool's output do.
+    pub scroll: bool,
 }
 
 pub(super) fn parse(id: u64, props: &Map<String, Value>, tone: Option<Tone>) -> Code {
@@ -44,6 +47,7 @@ pub(super) fn parse(id: u64, props: &Map<String, Value>, tone: Option<Tone>) -> 
         language,
         tone,
         band: str_prop(props, "variant") == Some("band"),
+        scroll: props.get("scroll").and_then(Value::as_bool).unwrap_or(false),
     }
 }
 
