@@ -179,6 +179,29 @@ pub fn web_snapshot(token: u64) -> Value {
     json!({ "action": "snapshot", "token": token })
 }
 
+/// The `command` prop that clicks the button of the extension `id` (one of `WebState::extensions`) for the page (Wings
+/// 0.2.116): its popup opens under the button you pressed, or the extension hears the click. Send it only from a click
+/// handler: Wings runs it only right after your click or key in the page, which it uses up as `copyText` does, and
+/// answers `onResult` with `{ token, error }` otherwise.
+pub fn web_extension_action(id: &str, token: u64) -> Value {
+    json!({ "action": "extension", "id": id, "token": token })
+}
+
+/// An extension's button for the page a `web_view` shows, which a browser draws in its toolbar (Wings 0.2.116).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ExtensionButton {
+    /// What `web_extension_action` clicks.
+    pub id: String,
+    pub name: String,
+    /// Its hover text, which the extension may set for each page.
+    pub label: String,
+    /// Its icon, an image id for `ui::image`, when it has one.
+    pub icon: Option<String>,
+    /// A few characters over the icon, a count most often; empty for none.
+    pub badge: String,
+    pub enabled: bool,
+}
+
 /// What a `web_view`'s `onState` sends when any of it changes.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct WebState {
@@ -194,6 +217,8 @@ pub struct WebState {
     /// The page is on a site signed in with cookies imported from another browser: show its address, but tell an agent no
     /// more than its origin (Wings 0.2.114).
     pub imported: bool,
+    /// The buttons of the extensions that are on and have one, by name (Wings 0.2.116).
+    pub extensions: Vec<ExtensionButton>,
 }
 
 impl WebState {
@@ -208,6 +233,24 @@ impl WebState {
             error: event["error"].as_str().map(str::to_owned),
             dialog: Some(event["dialog"].clone()).filter(|dialog| dialog.is_object()),
             imported: event["imported"] == true,
+            extensions: event["extensions"]
+                .as_array()
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|button| {
+                            let text = |key: &str| button[key].as_str().unwrap_or_default().to_owned();
+                            Some(ExtensionButton {
+                                id: button["id"].as_str().filter(|id| !id.is_empty())?.to_owned(),
+                                name: text("name"),
+                                label: text("label"),
+                                icon: button["icon"].as_str().map(str::to_owned),
+                                badge: text("badge"),
+                                enabled: button["enabled"] == true,
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
 }
@@ -249,7 +292,26 @@ mod tests {
         let (tree, handlers) = export(vec![web_view("main").on("onState", move |event| *seen.borrow_mut() = WebState::from_event(event))]);
         let event = json!({ "url": "https://a.b/", "title": "A", "loading": true, "canGoBack": true, "canGoForward": false, "error": null });
         assert!(handlers.call(tree[0]["props"]["onState"].as_str().unwrap(), &event));
-        assert_eq!(*heard.borrow(), WebState { url: "https://a.b/".into(), title: "A".into(), loading: true, can_go_back: true, can_go_forward: false, error: None, dialog: None, imported: false });
+        assert_eq!(*heard.borrow(), WebState { url: "https://a.b/".into(), title: "A".into(), loading: true, can_go_back: true, can_go_forward: false, error: None, dialog: None, imported: false, extensions: vec![] });
+    }
+
+    #[test]
+    fn a_state_reads_the_extensions_buttons_and_a_click_is_a_command_naming_one() {
+        let event = json!({ "url": "https://a.b/", "extensions": [
+            { "id": "e1", "name": "Bitwarden", "label": "Bitwarden", "icon": "ext-btn-1", "badge": "3", "enabled": true },
+            { "id": "e2", "name": "React Developer Tools", "label": "React", "icon": null, "badge": "", "enabled": false },
+            { "name": "no id" },
+        ] });
+        let state = WebState::from_event(&event);
+        assert_eq!(
+            state.extensions,
+            [
+                ExtensionButton { id: "e1".into(), name: "Bitwarden".into(), label: "Bitwarden".into(), icon: Some("ext-btn-1".into()), badge: "3".into(), enabled: true },
+                ExtensionButton { id: "e2".into(), name: "React Developer Tools".into(), label: "React".into(), icon: None, badge: String::new(), enabled: false },
+            ]
+        );
+        assert!(WebState::from_event(&json!({ "url": "https://a.b/" })).extensions.is_empty(), "an older Wings sends none");
+        assert_eq!(web_extension_action("e1", 9), json!({ "action": "extension", "id": "e1", "token": 9 }));
     }
 
     #[test]
