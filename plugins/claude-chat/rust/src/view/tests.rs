@@ -1019,26 +1019,39 @@ fn the_header_names_the_account_the_chat_runs_under_and_checks_it_in_its_menu() 
 }
 
 #[test]
-fn the_model_menu_lists_each_model_with_the_efforts_it_takes() {
+fn the_model_menu_lists_each_model_once_and_the_efforts_the_chosen_one_takes_in_their_own_group() {
     let model = |value: &str, name: &str, efforts: &[&str]| crate::session::Model {
         value: value.into(),
         name: name.into(),
         efforts: efforts.iter().map(|effort| effort.to_string()).collect(),
         resolved: format!("claude-{value}-5-5"),
         fast: false,
+        description: if value == "opus" { "Most capable".into() } else { String::new() },
     };
     let mut session = Session::default();
     session.models = vec![model("opus", "Opus 5.5", &["medium", "high", "xhigh"]), model("haiku", "Haiku 5.5", &[])];
     session.model = Some("opus".into());
-    let (options, value) = model_options(&session);
-    let labels: Vec<(&str, &str)> = options.iter().map(|(value, label)| (value.as_str(), label.as_str())).collect();
-    assert_eq!(labels, [("opus@medium", "Opus 5.5 · Medium"), ("opus@high", "Opus 5.5 · High"), ("opus@xhigh", "Opus 5.5 · Extra high"), ("haiku@", "Haiku 5.5")]);
-    // With no effort known yet, High.
-    assert_eq!(value, "opus@high");
+    let (menu, label) = model_menu(&session);
+    let values: Vec<&str> = menu.iter().map(|row| row["value"].as_str().unwrap()).collect();
+    // One row for each model, then one Effort row holding the levels: with no effort known yet, High, which is the
+    // recommended one.
+    assert_eq!(values, ["heading:model", "model:opus", "model:haiku", "effort:open"]);
+    assert_eq!(label, "Opus 5.5 · High");
+    assert_eq!((menu[1]["checked"].clone(), menu[2]["checked"].clone()), (true.into(), false.into()));
+    assert_eq!((menu[1]["detail"].as_str(), menu[2].get("detail")), (Some("Most capable"), None));
+    let effort = &menu[3];
+    assert_eq!((effort["trailing"].as_str(), effort["pill"].as_str()), (Some("High"), Some("Recommended")));
+    let levels: Vec<(&str, &str, bool)> = effort["options"].as_array().unwrap().iter().map(|row| (row["value"].as_str().unwrap(), row["label"].as_str().unwrap(), row["checked"].as_bool().unwrap())).collect();
+    assert_eq!(levels, [("effort:medium", "Medium", false), ("effort:high", "High", true), ("effort:xhigh", "Extra high", false)]);
     session.effort = Some("xhigh".into());
-    assert_eq!(model_options(&session).1, "opus@xhigh");
+    let (menu, label) = model_menu(&session);
+    assert_eq!(label, "Opus 5.5 · Extra high");
+    assert_eq!((menu[3]["trailing"].as_str(), menu[3].get("pill")), (Some("Extra high"), None), "no pill off the recommended level");
+    // The levels follow the model: a model without any has no Effort group.
     session.model = Some("haiku".into());
-    assert_eq!(model_options(&session).1, "haiku@");
+    let (menu, label) = model_menu(&session);
+    assert!(menu.iter().all(|row| row["value"] != "effort:open"));
+    assert_eq!(label, "Haiku 5.5");
 }
 
 #[test]
@@ -1097,7 +1110,7 @@ fn the_model_menu_ends_with_an_ultracode_switch_only_while_claude_code_offers_it
     use wings_plugin::ui::tree_json;
     let menu = |c: &Chat| pickers(c).into_iter().map(|node| tree_json(node)).find(|json| json["props"]["label"] == "Model and effort").unwrap();
     chat::with(|c| {
-        c.session.models = vec![crate::session::Model { value: "opus".into(), name: "Opus 5.5".into(), efforts: vec!["high".into()], resolved: "claude-opus-5-5".into(), fast: false }];
+        c.session.models = vec![crate::session::Model { value: "opus".into(), name: "Opus 5.5".into(), efforts: vec!["high".into()], resolved: "claude-opus-5-5".into(), fast: false, description: String::new() }];
         let none = menu(c);
         assert!(!none.to_string().contains("Ultracode"), "{none}");
         c.session.options.applied(&serde_json::json!({ "ultracode": false, "ultracodeAvailable": true }));

@@ -1171,7 +1171,7 @@ fn the_turn_counts_its_subagents_and_waits_on_them_once_nothing_else_runs() {
 }
 
 #[test]
-fn a_model_and_effort_picked_together_switch_only_what_differs() {
+fn a_model_pick_keeps_the_effort_an_effort_pick_keeps_the_model_and_the_levels_follow_the_model() {
     let answer = |id: &str, response: Value| json!({ "type": "control_response", "response": { "subtype": "success", "request_id": id, "response": response } });
     let mut session = Session::default();
     session.hear(&answer(INITIALIZE, json!({ "models": [
@@ -1180,16 +1180,29 @@ fn a_model_and_effort_picked_together_switch_only_what_differs() {
         { "value": "haiku", "displayName": "Haiku 5.5", "resolvedModel": "claude-haiku-5-5" },
     ] })));
     session.hear(&answer(SETTINGS, json!({ "effective": { "model": "opus", "effortLevel": "high" } })));
-    assert_eq!(session.pick("opus@high", 1), None);
     let requests = |lines: String| parsed(&lines).iter().map(|line| line["request"].clone()).collect::<Vec<_>>();
     let effort = |level: &str| json!({ "subtype": "apply_flag_settings", "settings": { "effortLevel": level } });
-    assert_eq!(requests(session.pick("opus@max", 2).unwrap()), [effort("max")]);
-    // Another model is switched to with the effort picked, even the one in use.
-    session.pick("opus@high", 3);
-    assert_eq!(requests(session.pick("sonnet@high", 4).unwrap()), [json!({ "subtype": "set_model", "model": "sonnet" }), effort("high")]);
-    assert_eq!(requests(session.pick("haiku@", 5).unwrap()), [json!({ "subtype": "set_model", "model": "haiku" })]);
-    assert_eq!(session.current_model().map(|model| model.name.as_str()), Some("Haiku 5.5"));
-    assert_eq!(session.pick("haiku", 6), None, "not a pick");
+    let model = |name: &str| json!({ "subtype": "set_model", "model": name });
+    // The one in use, and one not listed, change nothing.
+    assert_eq!(session.pick_model("opus", 1), None);
+    assert_eq!(session.pick_model("nope", 1), None);
+    // An effort alone leaves the model; one the model doesn't list, or the one shown, sends nothing.
+    assert_eq!(requests(session.pick_effort("max", 2).unwrap()), [effort("max")]);
+    assert_eq!(session.current_model().map(|m| m.value.as_str()), Some("opus"));
+    assert_eq!(session.pick_effort("max", 3), None);
+    assert_eq!(session.pick_effort("low", 3), None, "opus has no low");
+    // A model that takes the effort in use keeps it: only the model is sent.
+    session.pick_effort("high", 4);
+    assert_eq!(requests(session.pick_model("sonnet", 5).unwrap()), [model("sonnet")]);
+    assert_eq!(session.shown_effort().as_deref(), Some("high"));
+    // One that doesn't list it gets High, else its first.
+    session.pick_effort("low", 6);
+    assert_eq!(requests(session.pick_model("opus", 7).unwrap()), [model("opus"), effort("high")]);
+    // A model without effort has no levels, and the effort comes back when another takes it.
+    assert_eq!(requests(session.pick_model("haiku", 8).unwrap()), [model("haiku")]);
+    assert_eq!(session.shown_effort(), None);
+    assert_eq!(session.pick_effort("high", 9), None);
+    assert_eq!(requests(session.pick_model("sonnet", 10).unwrap()), [model("sonnet"), effort("high")]);
 }
 
 /// Claude Code 2.1.327's answers to `get_settings` and `mcp_status`, with made-up plugins and servers.

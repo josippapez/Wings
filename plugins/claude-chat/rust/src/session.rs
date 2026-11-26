@@ -419,6 +419,8 @@ pub struct Model {
     pub resolved: String,
     /// It has a fast mode.
     pub fast: bool,
+    /// Claude Code's line about it, like "Most capable for complex work". Empty when it has none.
+    pub description: String,
 }
 
 /// A slash command, as `initialize` lists it.
@@ -1153,6 +1155,7 @@ impl Session {
                         efforts: model["supportedEffortLevels"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect(),
                         resolved: text(model, "resolvedModel"),
                         fast: model["supportsFastMode"] == true,
+                        description: text(model, "description"),
                     })
                     .collect();
                 self.options.initialized(answer);
@@ -1553,20 +1556,48 @@ impl Session {
         request(&format!("mode-{n}"), json!({ "subtype": "set_permission_mode", "mode": mode }))
     }
 
-    /// The lines that switch to a model and effort picked together, `<model>@<effort>`, the effort left out for a model
-    /// that takes none: only what differs from now. None when nothing does.
-    pub fn pick(&mut self, choice: &str, n: u32) -> Option<String> {
-        let (model, effort) = choice.rsplit_once('@')?;
-        let switch = self.current_model().map(|current| current.value.as_str()) != Some(model);
-        let mut lines = String::new();
-        if switch {
-            lines.push_str(&self.set_model(model, n));
+    /// The lines that switch to the model `model`, from the menu's Model group. The effort stays as it is when the model
+    /// takes it, else it becomes the one the menu shows for that model (High, else its first). None when it is the one in
+    /// use, or none is listed.
+    pub fn pick_model(&mut self, model: &str, n: u32) -> Option<String> {
+        let next = self.models.iter().find(|listed| listed.value == model)?.clone();
+        if self.current_model().map(|current| current.value.as_str()) == Some(model) {
+            return None;
         }
-        // A new model gets the effort picked with it, whatever your settings give that model.
-        if !effort.is_empty() && (switch || self.current_effort().as_deref() != Some(effort)) {
-            lines.push_str(&self.set_effort(effort, n));
+        let before = self.shown_effort();
+        let mut lines = self.set_model(model, n);
+        match before.filter(|effort| next.efforts.contains(effort)) {
+            // The effort you had stays. One only your settings gave the old model is pinned, as they may give the new
+            // model another.
+            Some(_) if self.effort.is_some() => {}
+            Some(effort) => lines.push_str(&self.set_effort(&effort, n)),
+            None => {
+                if let Some(effort) = next.efforts.iter().find(|effort| *effort == "high").or(next.efforts.first()) {
+                    lines.push_str(&self.set_effort(effort, n));
+                }
+            }
         }
-        (!lines.is_empty()).then_some(lines)
+        Some(lines)
+    }
+
+    /// The line that sets the effort `effort`, from the menu's Effort group, for a model that takes it. None when it is
+    /// the one shown, or the model doesn't list it.
+    pub fn pick_effort(&mut self, effort: &str, n: u32) -> Option<String> {
+        let listed = self.current_model().is_some_and(|model| model.efforts.iter().any(|level| level == effort));
+        (listed && self.shown_effort().as_deref() != Some(effort)).then(|| self.set_effort(effort, n))
+    }
+
+    /// The effort a model starts on, which the Effort row says is recommended: High, else the model's first.
+    pub fn recommended_effort(&self) -> Option<String> {
+        let model = self.current_model().or_else(|| self.models.iter().find(|model| model.value == "default"))?;
+        model.efforts.iter().find(|effort| *effort == "high").or(model.efforts.first()).cloned()
+    }
+
+    /// The effort the menu shows as chosen: the one in use when the model lists it, else High, else its first. None for
+    /// a model without effort.
+    pub fn shown_effort(&self) -> Option<String> {
+        let model = self.current_model().or_else(|| self.models.iter().find(|model| model.value == "default"))?;
+        self.current_effort().filter(|effort| model.efforts.contains(effort)).or_else(|| self.recommended_effort())
     }
 
     /// The effort Claude works at: the one picked here, else the one your settings give the model, else theirs for all.

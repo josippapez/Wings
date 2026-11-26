@@ -1668,23 +1668,31 @@ fn queued_note(count: usize) -> &'static str {
 pub(crate) const ULTRACODE: &str = "ultracode:toggle";
 const ULTRACODE_DETAIL: &str = "Runs big tasks as workflows. Costs more.";
 
-/// The model with its effort in one menu, as "Opus 5.5 · High", and the permission mode, once Claude Code has said what
-/// it has.
+/// The model menu, as Claude Code's `/model` and Claude Desktop's picker: a Model group with each model once, and an
+/// Effort group with the levels the chosen model takes, the permission mode after it. The button says both, as
+/// "Opus 5.5 · High".
 pub(crate) fn pickers(c: &Chat) -> Vec<Node> {
     let session = &c.session;
     let mut pickers = Vec::new();
     if !session.models.is_empty() {
-        let (options, value) = model_options(session);
-        let mut menu = select("Model and effort", &options, &value, |picked| match picked {
+        let (options, label) = model_menu(session);
+        let mut menu = select("Model and effort", &[], "", |picked| match picked {
             ULTRACODE => chat::toggle_ultracode(),
-            _ => chat::pick_model_effort(picked),
+            _ => match picked.split_once(':') {
+                Some((MODEL, model)) => chat::pick_model(model),
+                Some((EFFORT, effort)) => chat::pick_effort(effort),
+                _ => {}
+            },
         })
-        .prop("variant", "ghost");
-        // Ultracode, while Claude Code offers it, is a switch at the end of this menu, and the button says so while it is on.
+        .prop("variant", "ghost")
+        .prop("options", options)
+        .prop("display", label);
+        // The Model row in use is the value, so a Wings that doesn't know the groups still checks the model.
+        if let Some(model) = session.current_model().or_else(|| session.models.iter().find(|model| model.value == "default")) {
+            menu = menu.prop("value", format!("{MODEL}:{}", model.value));
+        }
         if session.options.ultracode_available {
-            let mut all: Vec<serde_json::Value> = options.iter().map(|(value, label)| serde_json::json!({ "value": value, "label": label })).collect();
-            all.push(serde_json::json!({ "value": ULTRACODE, "label": "Ultracode", "detail": ULTRACODE_DETAIL, "toggle": session.options.ultracode }));
-            menu = menu.prop("options", all).prop("badge", if session.options.ultracode { "Ultracode" } else { "" });
+            menu = menu.prop("badge", if session.options.ultracode { "Ultracode" } else { "" });
         }
         pickers.push(menu);
     }
@@ -1844,26 +1852,45 @@ fn account_menu(c: &Chat) -> Option<Node> {
     Some(Node::new("Menu").prop("align", "end").child(trigger).children(items.collect::<Vec<_>>()))
 }
 
-/// The model menu's options, as `<model>@<effort>` and its label: each model with each effort it takes, as "Opus 5.5 ·
-/// Extra high", or alone when it takes none. And the one in use, where an effort the model doesn't list, or none known,
-/// shows as High, else its first.
-fn model_options(session: &Session) -> (Vec<(String, String)>, String) {
-    let options = session
-        .models
-        .iter()
-        .flat_map(|model| {
-            let alone = model.efforts.is_empty().then(|| (format!("{}@", model.value), model.name.clone()));
-            let efforts = model.efforts.iter().map(move |effort| (format!("{}@{effort}", model.value), format!("{} · {}", model.name, effort_name(effort))));
-            alone.into_iter().chain(efforts)
-        })
-        .collect();
-    let model = session.current_model().or_else(|| session.models.iter().find(|model| model.value == "default"));
-    let value = model.map_or_else(String::new, |model| {
-        let listed = |effort: &String| model.efforts.contains(effort);
-        let effort = session.current_effort().filter(listed).or_else(|| model.efforts.iter().find(|effort| *effort == "high").or(model.efforts.first()).cloned());
-        format!("{}@{}", model.value, effort.unwrap_or_default())
-    });
-    (options, value)
+/// A model row's value in the menu is `model:<value>`, an effort row's `effort:<level>`, a heading's `heading:<name>`.
+const MODEL: &str = "model";
+const EFFORT: &str = "effort";
+
+/// The model menu's rows and the button's label. A "Select model" heading, then each model once with its description,
+/// the one in use checked. Then one Effort row that says the level and opens the levels that model takes, the one shown
+/// checked; a model with none has no such row. A "Recommended" pill shows on it while the level is the one a model starts
+/// on (High, else its first). Ultracode, while Claude Code offers it, is a switch at the end. The label is the model,
+/// then its effort.
+fn model_menu(session: &Session) -> (Vec<serde_json::Value>, String) {
+    use serde_json::json;
+    let current = session.current_model().or_else(|| session.models.iter().find(|model| model.value == "default"));
+    let mut rows = vec![json!({ "value": "heading:model", "label": "Select model", "heading": true })];
+    for model in &session.models {
+        let checked = current.is_some_and(|current| current.value == model.value);
+        let mut row = json!({ "value": format!("{MODEL}:{}", model.value), "label": model.name, "checked": checked });
+        if !model.description.is_empty() {
+            row["detail"] = json!(model.description);
+        }
+        rows.push(row);
+    }
+    let shown = session.shown_effort();
+    if let (Some(current), Some(level)) = (current.filter(|model| !model.efforts.is_empty()), shown.as_deref()) {
+        let levels: Vec<_> = current.efforts.iter().map(|effort| json!({ "value": format!("{EFFORT}:{effort}"), "label": effort_name(effort), "checked": effort == level })).collect();
+        let mut row = json!({ "value": "effort:open", "label": "Effort", "trailing": effort_name(level), "options": levels });
+        if Some(level) == session.recommended_effort().as_deref() {
+            row["pill"] = json!("Recommended");
+        }
+        rows.push(row);
+    }
+    if session.options.ultracode_available {
+        rows.push(json!({ "value": ULTRACODE, "label": "Ultracode", "detail": ULTRACODE_DETAIL, "toggle": session.options.ultracode }));
+    }
+    let label = match (current, shown) {
+        (Some(model), Some(effort)) => format!("{} · {}", model.name, effort_name(&effort)),
+        (Some(model), None) => model.name.clone(),
+        _ => String::new(),
+    };
+    (rows, label)
 }
 
 /// An effort as the menu says it: "xhigh" is "Extra high".

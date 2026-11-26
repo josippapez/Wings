@@ -467,7 +467,7 @@ fn picking_the_ultracode_row_of_the_model_menu_sends_the_setting_and_shows_it_on
     let process = host::spawn("claude", &[], "/work/shop", "", |_| {});
     with(|c| {
         c.input = Some(process.input());
-        c.session.models = vec![crate::session::Model { value: "opus".into(), name: "Opus 5.5".into(), efforts: vec!["high".into()], resolved: "claude-opus-5-5".into(), fast: false }];
+        c.session.models = vec![crate::session::Model { value: "opus".into(), name: "Opus 5.5".into(), efforts: vec!["high".into()], resolved: "claude-opus-5-5".into(), fast: false, description: String::new() }];
         c.session.options.applied(&json!({ "ultracode": false, "ultracodeAvailable": true }));
     });
     let (tree, handlers) = wings_plugin::ui::export(with(|c| crate::view::pickers(c)));

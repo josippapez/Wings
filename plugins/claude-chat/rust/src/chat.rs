@@ -1302,9 +1302,14 @@ pub fn dismiss_background_hint() {
     drop(prefs::background_hint_seen().set(true));
 }
 
-/// Switches to the model and effort picked together in the message box, as `<model>@<effort>`.
-pub fn pick_model_effort(choice: &str) {
-    write(|c, n| c.session.pick(choice, n));
+/// Switches to a model, from the Model group of the menu in the message box, keeping the effort where it takes it.
+pub fn pick_model(model: &str) {
+    write(|c, n| c.session.pick_model(model, n));
+}
+
+/// Sets how hard Claude thinks, from the Effort group of the model menu.
+pub fn pick_effort(effort: &str) {
+    write(|c, n| c.session.pick_effort(effort, n));
 }
 
 /// Switches the output style for this session, from its menu in the message box.
