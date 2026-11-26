@@ -332,9 +332,10 @@ pub fn markdown(source: &str) -> Node {
         Block::Code { lang, text } => code_block(&lang, &text),
         Block::Quote(text) => wings_plugin::ui::quote([spans(&text).prop("tone", "muted")]),
         Block::Rule => muted("────────────────"),
-        Block::Table { head, rows } => stack("xs")
-            .child(row("m").children(head.into_iter().map(|cell| spans(&cell).prop("weight", "strong"))))
-            .children(rows.into_iter().map(|cells| row("m").prop("align", "start").children(cells.into_iter().map(|cell| spans(&cell))))),
+        Block::Table { head, rows } => wings_plugin::ui::table(
+            std::iter::once(wings_plugin::ui::row().children(head.into_iter().map(|cell| spans(&cell).prop("tone", "muted").prop("size", "small").prop("weight", "strong"))))
+                .chain(rows.into_iter().map(|cells| wings_plugin::ui::row().children(cells.into_iter().map(|cell| spans(&cell))))),
+        ),
         Block::Paragraph(text) => spans(&text),
     });
     stack("m").children(blocks)

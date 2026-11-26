@@ -204,7 +204,7 @@ pub fn prose_in(scope: &str, said: &str, c: &Chat) -> Node {
 fn block_node(block: &Block, cwd: &str, known: &dyn Fn(&str) -> bool, scope: &str, blocks: &Cell<usize>) -> Node {
     let spans = |source: &str| spans_node(source, cwd, known);
     match block {
-        Block::Heading(level, source) => Node::new("Text").prop("weight", "strong").prop("size", if *level <= 2 { "field" } else { "small" }).child(spans(source)),
+        Block::Heading(level, source) => Node::new("Text").prop("weight", "strong").prop("size", match *level { 1 => "large", 2 => "field", 3 => "normal", _ => "small" }).child(spans(source)),
         Block::Paragraph(source) => spans(source),
         Block::List { ordered, start, items } => stack().prop("gap", "xs").children(items.iter().enumerate().map(|(at, item)| {
             let mark = match item.checked {
@@ -222,10 +222,10 @@ fn block_node(block: &Block, cwd: &str, known: &dyn Fn(&str) -> bool, scope: &st
         }
         Block::Quote(source) => wings_plugin::ui::quote([spans(source).prop("tone", "muted")]),
         Block::Rule => text("────────────────").prop("tone", "muted"),
-        Block::Table { head, rows } => stack()
-            .prop("gap", "xs")
-            .child(row().prop("gap", "m").children(head.iter().map(|cell| spans(cell).prop("weight", "strong"))))
-            .children(rows.iter().map(|cells| row().prop("gap", "m").prop("align", "start").children(cells.iter().map(|cell| spans(cell))))),
+        Block::Table { head, rows } => wings_plugin::ui::table(
+            std::iter::once(row().children(head.iter().map(|cell| spans(cell).prop("tone", "muted").prop("size", "small").prop("weight", "strong"))))
+                .chain(rows.iter().map(|cells| row().children(cells.iter().map(|cell| spans(cell))))),
+        ),
         Block::Details { summary, blocks: blocks_in } => {
             let body = stack().prop("gap", "m").children(blocks_in.iter().map(|block| block_node(block, cwd, known, scope, blocks)));
             Node::new("Disclosure").child(Node::new("Slot").prop("name", "summary").child(spans(summary))).child(Node::new("Slot").prop("name", "body").child(body))

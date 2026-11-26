@@ -301,6 +301,11 @@ pub fn unchanged() {
 pub fn row() -> Node {
     Node::new("Row")
 }
+/// A table: the header `row` first, then a `row` for each line, a cell for each child. The app sizes the columns, sets
+/// the header apart and scrolls the table sideways when it is wider than its place.
+pub fn table(rows: impl IntoIterator<Item = Node>) -> Node {
+    Node::new("Table").children(rows)
+}
 pub fn stack() -> Node {
     Node::new("Stack")
 }

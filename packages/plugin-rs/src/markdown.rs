@@ -428,7 +428,7 @@ pub fn highlighted_code(code: &str, language: &str) -> Node {
 
 fn node_of(block: &Block) -> Node {
     match block {
-        Block::Heading(level, t) => Node::new("Text").prop("weight", "strong").prop("size", if *level <= 2 { "field" } else { "small" }).child(spans(t)),
+        Block::Heading(level, t) => Node::new("Text").prop("weight", "strong").prop("size", match *level { 1 => "large", 2 => "field", 3 => "normal", _ => "small" }).child(spans(t)),
         Block::Paragraph(t) => spans(t),
         Block::List { ordered, start, items } => stack().prop("gap", "xs").children(items.iter().enumerate().map(|(j, item)| {
             let mark = match item.checked {
@@ -447,10 +447,10 @@ fn node_of(block: &Block) -> Node {
         Block::Code { text: code, .. } => code_block(code),
         Block::Quote(t) => crate::ui::quote([spans(t).prop("tone", "muted")]),
         Block::Rule => text("────────────────").prop("tone", "muted"),
-        Block::Table { head, rows } => stack()
-            .prop("gap", "xs")
-            .child(row().prop("gap", "m").children(head.iter().map(|c| spans(c).prop("weight", "strong"))))
-            .children(rows.iter().map(|r| row().prop("gap", "m").prop("align", "start").children(r.iter().map(|c| spans(c))))),
+        Block::Table { head, rows } => crate::ui::table(
+            std::iter::once(row().children(head.iter().map(|c| spans(c).prop("tone", "muted").prop("size", "small").prop("weight", "strong"))))
+                .chain(rows.iter().map(|r| row().children(r.iter().map(|c| spans(c))))),
+        ),
         Block::Details { summary, blocks } => {
             let body = stack().prop("gap", "m").children(blocks.iter().map(node_of));
             Node::new("Disclosure").child(Node::new("Slot").prop("name", "summary").child(spans(summary))).child(Node::new("Slot").prop("name", "body").child(body))
