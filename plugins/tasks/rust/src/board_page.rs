@@ -119,7 +119,7 @@ fn card(i: &Issue, issues: &[Issue], hide_parent: bool) -> Node {
     let index = Status::FLOW.iter().position(|s| *s == i.status);
     let target = |by: i32| index.and_then(|at| usize::try_from(at as i32 + by).ok()).and_then(|to| Status::FLOW.get(to)).unwrap_or(&i.status).label();
     let (status, key) = (i.status, i.key.clone());
-    let (for_keys, for_open, for_delete, for_back, for_forward) = (key.clone(), key.clone(), key.clone(), key.clone(), key);
+    let (for_keys, for_open, for_open_key, for_delete, for_back, for_forward) = (key.clone(), key.clone(), key.clone(), key.clone(), key.clone(), key);
     let keys = move |event: &Value| {
         if is_delete_key(event) {
             return ask_to_delete(&for_keys);
@@ -140,7 +140,7 @@ fn card(i: &Issue, issues: &[Issue], hide_parent: bool) -> Node {
     // The parent by name, as the list shows it, and not as a second key beside the issue's own.
     let parent = i.parent.as_ref().filter(|_| !hide_parent).and_then(|p| issues.iter().find(|o| &o.key == p));
     let (done, total) = if i.kind.can_parent() { progress(children_of(issues, &i.key)) } else { (0, 0) };
-    let mut moves = row("s");
+    let mut moves = row("none");
     moves = moves.child(
         Node::new("Button")
             .prop("size", "icon-xs")
@@ -152,19 +152,27 @@ fn card(i: &Issue, issues: &[Issue], hide_parent: bool) -> Node {
     );
     if let Some(at) = index {
         moves = moves
-            .child(Node::new("Button").prop("size", "xs").prop("variant", "ghost").prop("showOnHover", true).prop("disabled", at == 0).prop("label", format!("Move {} to {}", i.key, target(-1))).on("onClick", move |_| move_issue(&for_back, status, -1)).text("←"))
-            .child(Node::new("Button").prop("size", "xs").prop("variant", "ghost").prop("showOnHover", true).prop("disabled", at == Status::FLOW.len() - 1).prop("label", format!("Move {} to {}", i.key, target(1))).on("onClick", move |_| move_issue(&for_forward, status, 1)).text("→"));
+            .maybe((at > 0).then(|| Node::new("Button").prop("size", "icon-xs").prop("variant", "ghost").prop("showOnHover", true).prop("label", format!("Move {} to {}", i.key, target(-1))).on("onClick", move |_| move_issue(&for_back, status, -1)).text("←")))
+            .maybe((at + 1 < Status::FLOW.len()).then(|| Node::new("Button").prop("size", "icon-xs").prop("variant", "ghost").prop("showOnHover", true).prop("label", format!("Move {} to {}", i.key, target(1))).on("onClick", move |_| move_issue(&for_forward, status, 1)).text("→")));
     }
-    // The key line, title and parent are one button, so they share a left edge.
-    let top = stack("xs")
-        .child(row("s").prop("justify", "between").prop("wrap", true).child(key_line).maybe(session_marker(i)))
-        .child(Node::new("Text").prop("clamp", true).text(i.title.as_str()))
-        .maybe(parent.map(|p| row("xs").child(type_icon(p.kind, false, 14)).child(line(p.title.as_str(), Some("muted"), Some("tiny")).prop("truncate", true).prop("grow", true))));
+    // The key line and the title are buttons with the same padding, so they share a left edge. The delete and move buttons,
+    // hidden until the pointer is on the card, sit in the key line's row so they add no band under the card.
+    let open_key = Node::new("ListButton").prop("grow", true).prop("label", format!("Open {}: {}", i.key, i.title)).on("onClick", move |_| open_issue(&for_open_key)).child(key_line);
+    let open_title = Node::new("ListButton")
+        .prop("label", format!("Open {}: {}", i.key, i.title))
+        .on("onClick", move |_| open_issue(&for_open))
+        .on("onKeyDown", keys)
+        .child(
+            stack("xs")
+                .child(Node::new("Text").prop("clamp", true).text(i.title.as_str()))
+                .maybe(session_marker(i))
+                .maybe(parent.map(|p| row("xs").child(type_icon(p.kind, false, 14)).child(line(p.title.as_str(), Some("muted"), Some("tiny")).prop("truncate", true).prop("grow", true)))),
+        );
     Node::new("Card")
         .key(i.key.as_str())
-        .child(Node::new("ListButton").prop("label", format!("Open {}: {}", i.key, i.title)).on("onClick", move |_| open_issue(&for_open)).on("onKeyDown", keys).child(top))
+        .child(row("none").prop("align", "center").child(open_key).child(moves))
+        .child(open_title)
         .maybe((total > 0).then(|| child_progress(done, total)))
-        .child(row("s").prop("justify", "end").child(moves))
 }
 
 fn column_title(status: Status) -> Node {
@@ -571,7 +579,8 @@ mod tests {
         };
         let mut found = Vec::new();
         buttons(&card, &mut found);
-        assert_eq!(found, [("Delete WEB-1".to_owned(), true), ("Move WEB-1 to To do".to_owned(), true), ("Move WEB-1 to In progress".to_owned(), true)]);
+        // A move the card can't make (back from the first column) has no button, so the row stays narrow.
+        assert_eq!(found, [("Delete WEB-1".to_owned(), true), ("Move WEB-1 to In progress".to_owned(), true)]);
     }
 
     /// A column longer than its first 30 cards shows 30 more a click, each column on its own, until all show.
