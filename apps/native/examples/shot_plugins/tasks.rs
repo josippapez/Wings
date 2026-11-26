@@ -192,7 +192,7 @@ pub(super) fn tasks_seed(project: &str) -> String {
                 issue("WEB-4", "Checkout summary card", "in_review", "feature", 52, json!({
                     "parent": "WEB-10",
                     "priority": "urgent",
-                    "description": "## Goal\nShow the buyer what they are about to pay for in one place, right above the pay button.\n\n## Scope\n- One card built from `useCart()`, no new data fetching\n- Rounding happens once, on the sum\n\n## Done when\n- [x] The card shows items, shipping, tax and total\n- [ ] An empty cart hides the card",
+                    "description": "## Goal\nShow the buyer what they are about to pay for in one place, right above the pay button.\n\n## Scope\n- One card built from `useCart()`, no new data fetching\n- Rounding happens once, on the sum\n\n## Cases\n| Cart | Address | Shows |\n| --- | --- | --- |\n| Has items | Saved address in the same country as the shop | The card, with each line and the carrier's name and a date range |\n| Empty | none | Nothing |\n\n## Done when\n- [x] The card shows items, shipping, tax and total\n- [ ] An empty cart hides the card",
                     "related": ["WEB-8"],
                     "blockedBy": ["WEB-3"],
                     "links": { "branch": "feature/checkout-summary", "pr": "https://example.com/acme/web/pull/412", "commits": ["3fa91c2", "8b27de0"] },
