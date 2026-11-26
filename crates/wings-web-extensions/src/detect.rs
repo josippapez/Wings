@@ -57,9 +57,25 @@ impl Detected {
     pub fn refusal_message(&self) -> Option<String> {
         let (last, rest) = self.refused.split_last()?;
         let what = if rest.is_empty() { format!("{last}'s extensions") } else { format!("the extensions of {} and {last}", rest.join(", ")) };
+        // Each is the app's name as Files & Folders lists it under Wings, where turning it on is all Wings needs.
+        let apps: Vec<&str> = self.refused.iter().map(|name| app_name(name)).collect();
+        let (last_app, rest_apps) = apps.split_last()?;
+        let turn_on = if rest_apps.is_empty() { (*last_app).to_owned() } else { format!("{} and {last_app}", rest_apps.join(", ")) };
         Some(format!(
-            "macOS doesn't let Wings read {what}. Turn on Full Disk Access for Wings in System Settings, Privacy & Security, then try again."
+            "macOS doesn't let Wings read {what}. In System Settings, Privacy & Security, Files & Folders, turn on {turn_on} under Wings, then try again."
         ))
+    }
+}
+
+/// The name macOS shows for a browser's app, from the name Wings gives it.
+fn app_name(browser: &str) -> &str {
+    match browser {
+        "Chrome" => "Google Chrome",
+        "Chrome Beta" => "Google Chrome Beta",
+        "Chrome Canary" => "Google Chrome Canary",
+        "Brave" => "Brave Browser",
+        "Edge" => "Microsoft Edge",
+        other => other,
     }
 }
 

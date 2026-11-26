@@ -129,7 +129,7 @@ impl fmt::Display for ReadError {
                 "Keychain access was denied. Allow Wings to use the browser's \"Safe Storage\" key to import its cookies.",
             ),
             ReadError::NeedsFullDiskAccess => f.write_str(
-                "macOS is blocking access to this browser's data. Turn on Full Disk Access for Wings in System Settings > Privacy & Security, then import again.",
+                "macOS is blocking access to this browser's data. In System Settings, Privacy & Security, Files & Folders, turn this browser on under Wings (or give Wings Full Disk Access), then import again.",
             ),
             ReadError::NotFound => f.write_str("This browser's cookies were not found."),
             ReadError::Unreadable(why) => write!(f, "Could not read this browser's cookies: {why}"),

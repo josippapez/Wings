@@ -407,6 +407,8 @@ fn a_refused_folder_is_reported_not_silently_empty() {
     let some = scan(app.path());
     assert_eq!((some.found.len(), some.refused.clone()), (1, vec!["Chrome".to_string()]));
     assert!(some.refusal_message().unwrap().starts_with("macOS doesn't let Wings read Chrome's extensions."));
+    // It names the one toggle that lets Wings in, as Files & Folders lists the app, not Full Disk Access.
+    assert!(some.refusal_message().unwrap().contains("Files & Folders, turn on Google Chrome under Wings"), "{:?}", some.refusal_message());
 
     // Only a profile's Extensions folder refused.
     lock(chrome.clone(), 0o700);
