@@ -1298,3 +1298,13 @@ fn actions_put_the_dismissing_buttons_first_and_ghost_whatever_variant_they_came
         .collect();
     assert_eq!(variants, [("Go".to_owned(), Variant::Ghost), ("Review".to_owned(), Variant::Default)]);
 }
+
+#[test]
+fn a_table_keeps_its_rows_and_the_words_of_each_cell() {
+    let cell = |id: usize, words: &str| json!({"id":id,"type":"Text","props":{},"children":[{"id":id + 1,"type":"#text","text":words}]});
+    let row = |id: usize, a: &str, b: &str| json!({"id":id,"type":"Row","props":{},"children":[cell(id + 10, a), cell(id + 20, b)]});
+    let parsed = tree(json!([{"id":1,"type":"Table","props":{},"children":[row(100, "Name", "Count"), row(200, "alpha", "42")]}])).unwrap();
+    let Node::Table(table) = &parsed.children[0] else { panic!("{:?}", parsed.children) };
+    assert_eq!(table.children.len(), 2, "the header row and one row");
+    assert_eq!(table.children.iter().map(|row| plain_text(std::slice::from_ref(row))).collect::<Vec<_>>(), ["NameCount", "alpha42"]);
+}

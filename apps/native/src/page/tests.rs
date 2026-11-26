@@ -3958,6 +3958,43 @@ fn a_copy_keeps_a_list_item_s_mark_and_a_table_row_s_cells_on_one_line() {
     assert_eq!(copied(&mut window, "Table:", "42"), "Table:\nName Value\nalpha 42");
 }
 
+/// A `Table` of a header and two rows: its cells line up in columns whatever the length of their words, a column of
+/// short words is narrower than one of sentences, and the header sits above the rows, which start at the top of a cell
+/// that wraps. Rows of unaligned `Row`s, as it was drawn before, put "42" and "7" under the words of their own row.
+fn table_page() -> String {
+    fn cell(id: usize, words: &str) -> Value {
+        json!({ "id": id, "type": "Text", "props": {}, "children": [text_node(id + 1, words)] })
+    }
+    fn row(id: usize, cells: [&str; 2]) -> Value {
+        json!({ "id": id, "type": "Row", "props": {}, "children": [cell(id + 10, cells[0]), cell(id + 20, cells[1])] })
+    }
+    fake::page("page", move |_| {
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [
+            { "id": 1, "type": "Table", "props": {}, "children": [
+                row(100, ["Count", "Trail"]),
+                row(200, ["42", "Patient Management then the name of the patient, and the list crumb goes back to the page you left"]),
+                row(300, ["7", "Patient Management"])] }] })
+    })
+}
+
+#[test]
+fn a_table_lines_its_cells_up_in_columns_under_a_header() {
+    let (app, mut window) = open(table_page());
+    settle(&app, &mut window, shows("Patient Management then"));
+    draws(&app, &mut window);
+    let at = |window: &mut View, words: &str| window.read(|view, _| view.line_bounds(words)).unwrap_or_else(|| panic!("{words}"));
+    let (count, trail, long, short, forty_two, seven) =
+        (at(&mut window, "Count"), at(&mut window, "Trail"), at(&mut window, "Patient Management then"), at(&mut window, "Patient Management"), at(&mut window, "42"), at(&mut window, "7"));
+    assert_eq!(forty_two.left(), seven.left(), "the first column lines up");
+    assert_eq!(count.left(), forty_two.left(), "and so does its header");
+    assert_eq!(trail.left(), long.left(), "the second column lines up with its header");
+    assert!(trail.left() - count.left() < px(120.0), "a column of short words is narrow: {:?}", trail.left() - count.left());
+    assert!(count.bottom() < forty_two.top() && forty_two.top() < seven.top(), "the header above the rows");
+    assert_eq!(forty_two.top(), long.top(), "cells start at the top of their row");
+    assert!(seven.top() >= long.bottom(), "a row that wraps pushes the next one down");
+    assert!(short.left() == long.left());
+}
+
 /// A dialog's `Actions` (Cancel and Save) over a clickable `ListRow`, on a page that fills its frame: what each click
 /// reached.
 fn kit() -> String {

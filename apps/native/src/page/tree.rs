@@ -185,6 +185,7 @@ pub enum Node {
     Scroll(Scroll),
     Split(Split),
     Bar(Bar),
+    Table(Table),
     Sunburst(Sunburst),
     PromptRail(PromptRail),
     Dialog(Dialog),
@@ -669,6 +670,15 @@ pub struct Scroll {
     /// filling what is left of its parent: a list in a card that is itself long. It sets no padding of its own, and the
     /// wheel over it scrolls it while it can go that way and its parent when it can't.
     pub max_height: Option<f32>,
+    pub children: Vec<Node>,
+}
+
+/// A table: its first `Row` is the header and each `Row` after it is a body row, a cell for each child. The app sets the
+/// columns' widths from what they hold, draws it as a card with hairlines between rows, and scrolls it sideways when it is
+/// wider than its place.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Table {
+    pub id: u64,
     pub children: Vec<Node>,
 }
 
@@ -1312,6 +1322,7 @@ impl Node {
             Node::Scroll(n) => Some(n.id),
             Node::Split(n) => Some(n.id),
             Node::Bar(n) => Some(n.id),
+            Node::Table(n) => Some(n.id),
             Node::Sunburst(n) => Some(n.id),
             Node::PromptRail(n) => Some(n.id),
             Node::Dialog(n) => Some(n.id),
@@ -1363,6 +1374,7 @@ impl Node {
             Node::Scroll(n) => vec![&n.children],
             Node::Split(n) => vec![&n.start, &n.end],
             Node::Bar(n) => vec![&n.children],
+            Node::Table(n) => vec![&n.children],
             Node::Dialog(n) => vec![&n.children],
             Node::Actions(n) => vec![&n.children],
             Node::Gauge(n) => vec![&n.note],
@@ -1421,6 +1433,7 @@ impl Node {
             Node::Scroll(n) => vec![&mut n.children],
             Node::Split(n) => vec![&mut n.start, &mut n.end],
             Node::Bar(n) => vec![&mut n.children],
+            Node::Table(n) => vec![&mut n.children],
             Node::Dialog(n) => vec![&mut n.children],
             Node::Actions(n) => vec![&mut n.children],
             Node::Gauge(n) => vec![&mut n.note],
@@ -1521,6 +1534,7 @@ impl Walk {
                 | "Scroll"
                 | "Split"
                 | "Bar"
+                | "Table"
                 | "Sunburst"
                 | "PromptRail"
                 | "Menu"
@@ -1782,6 +1796,7 @@ impl Walk {
                 max_height: number(&props, "maxHeight").filter(|height| *height > 0.0).map(|height| height.min(10_000.0) as f32),
                 children: parts(children),
             }),
+            "Table" => Node::Table(Table { id, children }),
             "Bar" => Node::Bar(Bar {
                 id,
                 edge: choice(&props, "edge"),

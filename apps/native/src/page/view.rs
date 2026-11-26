@@ -55,6 +55,7 @@ mod node;
 mod probes;
 mod scroll;
 mod split;
+mod table;
 mod text;
 use helpers::*;
 pub(super) use helpers::{baseline_drops, char_width, level_color, three_lines};

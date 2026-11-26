@@ -334,6 +334,7 @@ impl PageView {
                     None => area.into_any_element(),
                 }
             }
+            Node::Table(table) => self.table(table, cx),
             Node::Bar(bar) => div()
                 .flex_none()
                 .min_w_0()
