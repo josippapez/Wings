@@ -343,6 +343,17 @@ impl Workspace {
         {
             eprintln!("[plugins] couldn't delete {id} storage: {error}");
         }
+        // Its web pages' data: its extensions and the list of sites signed in with imported cookies (Wings' folder), and
+        // what WebKit keeps apart from it (cookies, site data, extensions' storage).
+        if let Some(paths) = &self.config.plugins {
+            let profile = crate::web::Profile::of(id, &old.scope, &paths.storage);
+            #[cfg(target_os = "macos")]
+            crate::web::mac::forget_profile(&profile);
+            match std::fs::remove_dir_all(&profile.dir) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => eprintln!("[plugins] couldn't delete {id} web data: {error}"),
+                _ => {}
+            }
+        }
     }
 
     /// Stops the plugin if it runs, then starts what the store says may run of it now, and tells Claude Code's sessions

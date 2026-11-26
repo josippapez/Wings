@@ -887,6 +887,23 @@ fn turning_a_plugin_off_or_removing_it_stops_its_main_and_closes_its_tabs() {
     assert!(state(&data).get("demo").is_none());
 }
 
+/// Removing a plugin removes its web folder too: its extensions, their list and the sites signed in with imported cookies.
+#[test]
+fn removing_a_plugin_removes_its_web_folder() {
+    let data = Data::temp();
+    data.install("demo", crate::installed::WINGS_VERSION, true, true, crate::installed::fixture::Approval::Current, "scope");
+    let web = crate::web::Profile::of("demo", "scope", &data.paths().storage).dir;
+    std::fs::create_dir_all(web.join("extensions/18eb0000000000001")).unwrap();
+    std::fs::write(web.join("extensions.json"), "[]").unwrap();
+    std::fs::write(web.join("imported-sites.json"), r#"["github.com"]"#).unwrap();
+    let other = crate::web::Profile::of("other", "scope", &data.paths().storage).dir;
+    std::fs::create_dir_all(&other).unwrap();
+    let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.update(|w, window, cx| w.remove_plugin("demo", window, cx).unwrap());
+    assert!(!web.exists(), "its web folder stayed");
+    assert!(other.exists(), "another plugin's went");
+}
+
 /// A `.wings-plugin` of `demo` at `version`, whose tab `chat` runs the page `page`, which may run `cat`.
 fn chat_package(version: &str, page: &str) -> Vec<u8> {
     let manifest = json!({ "id": "demo", "name": "Plugin demo", "version": version, "api": 1, "main": "dist/main.js",

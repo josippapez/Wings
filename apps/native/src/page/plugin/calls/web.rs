@@ -213,10 +213,14 @@ impl Shared {
             }
             ("webExtensions", "remove") => {
                 let Some(ext) = text("id") else { return reply.err("remove takes an id".into()) };
-                if let Err(error) = extensions::remove(&profile, &ext) {
-                    return reply.err(error);
+                if !extensions::list(&profile).iter().any(|added| added.id == ext) {
+                    return reply.err("No extension by that id".into());
                 }
-                access.env.web(Job::Unload { profile, id: ext }, done(reply))
+                // What it stored goes first, while WebKit still knows it, then it unloads, then its folder and record.
+                access.env.web(
+                    Job::Remove { profile: profile.clone(), id: ext.clone() },
+                    Box::new(move |removed| reply.done(removed.and_then(|_| extensions::remove(&profile, &ext).map(|()| "null".into())))),
+                )
             }
             // Asks the Keychain again for the key extensions are checked with, after the person refused it, and loads the
             // extensions that are on. Only on a click: it may show the Keychain's prompt.
