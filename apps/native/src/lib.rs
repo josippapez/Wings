@@ -14,6 +14,7 @@ pub mod terminal_server;
 pub mod theme;
 pub mod tools;
 pub mod updater;
+pub mod web;
 
 #[cfg(feature = "ui")]
 pub mod actions;

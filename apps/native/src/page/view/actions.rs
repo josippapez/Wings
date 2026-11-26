@@ -57,6 +57,75 @@ impl PageView {
         place.child(ui::slot(TERMINALS, terminal_slot(pane), None)).into_any_element()
     }
 
+    /// Where a `WebView` shows: the system's web engine draws the page over this place (`crate::web`), so nothing the web
+    /// page does draws this page again. A plugin whose manifest doesn't ask for `webView` gets a line saying so.
+    pub(super) fn web_view(&self, web: &tree::WebView, cx: &mut Context<Self>) -> AnyElement {
+        if self.web_profile.is_none() || web.name.is_empty() {
+            return div()
+                .text_size(px(12.0))
+                .text_color(rgb(theme::palette().muted_foreground))
+                .child("Web pages show here only for a plugin that asks to show them, with a name for each.")
+                .into_any_element();
+        }
+        let place = match web.fill {
+            true => div().w_full().flex_1().min_h_0(),
+            false => div().w_full().flex_none().h(px(web.height)),
+        };
+        place.child(crate::web::slot(cx.entity_id(), web.name.clone().into())).into_any_element()
+    }
+
+    /// The page sent a new tree: its web views are the `WebView`s in it, and each hears what its node's `onState` is.
+    pub(super) fn sync_web(&mut self, nodes: &[Node], cx: &mut Context<Self>) {
+        let Some(profile) = self.web_profile.clone() else { return };
+        fn webs<'a>(nodes: &'a [Node], into: &mut Vec<&'a tree::WebView>) {
+            for node in nodes {
+                if let Node::WebView(web) = node {
+                    into.push(web);
+                }
+                for part in node.parts() {
+                    webs(part, into);
+                }
+            }
+        }
+        let mut found = Vec::new();
+        webs(nodes, &mut found);
+        found.retain(|web| !web.name.is_empty());
+        if found.is_empty() && self.web_told.is_none() {
+            return;
+        }
+        self.web_handlers = found
+            .iter()
+            .filter_map(|web| Some((SharedString::from(web.name.clone()), web.on_state.clone()?)))
+            .collect();
+        let told = self.web_told.get_or_insert_with(|| {
+            let (told, hear) = async_channel::unbounded::<(SharedString, crate::web::State)>();
+            self._web_events = Some(cx.spawn(async move |view, cx| {
+                while let Ok((name, state)) = hear.recv().await {
+                    let payload = serde_json::to_value(&state).unwrap_or_default();
+                    let sent = view.update(cx, |view, _| {
+                        if let Some(handler) = view.web_handlers.get(&name) {
+                            view.send(handler, Some(&payload));
+                        }
+                    });
+                    if sent.is_err() {
+                        break;
+                    }
+                }
+            }));
+            told
+        });
+        let specs: Vec<crate::web::Spec> = found
+            .iter()
+            .map(|web| crate::web::Spec {
+                name: web.name.clone().into(),
+                url: web.url.clone(),
+                keep_data: web.keep_data,
+                command: web.command.clone(),
+            })
+            .collect();
+        crate::web::update(cx.entity_id(), &profile, &specs, told);
+    }
+
     /// The links in the text of `id`, found once for each text and set of links rather than each time the page draws.
     pub(super) fn found_links(&self, id: u64, text: &str, rules: &[wings_plugins::links::Rule], generation: u64) -> Rc<Vec<wings_plugins::links::Found>> {
         let mut cache = self.found_links.borrow_mut();

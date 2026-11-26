@@ -907,6 +907,16 @@ impl Env for AppEnv {
         }
     }
 
+    fn web(&self, job: crate::web::Job, done: Box<dyn FnOnce(Result<String, String>) + Send>) {
+        // The answer comes back to the call's thread through this, once WebKit's completion handler runs.
+        let (answer, answered) = std::sync::mpsc::channel::<Result<String, String>>();
+        let event = UiEvent::Run(Box::new(move |_, _, cx| run_web(job, answer, cx)));
+        if self.events.try_send(event).is_err() {
+            return done(Err("The Wings window is closed or busy".into()));
+        }
+        std::thread::spawn(move || done(answered.recv().unwrap_or_else(|_| Err("WebKit didn't answer".into()))));
+    }
+
     fn set_badge(&self, plugin: &str, pane: &str, badge: Option<Badge>) {
         self.send(UiEvent::Badge {
             plugin: plugin.to_owned(),
@@ -1165,10 +1175,10 @@ impl Workspace {
                     }
                     reply.done(opened.map(opened_tab).ok_or_else(|| "The view has no native tab page".into()));
                 } else if plan.place == "window" {
-                    reply.done(
-                        self.open_plugin_window(&plan.plugin, &plan.id, cx)
-                            .map(|_| "null".into()),
-                    );
+                    // A size asked for is answered with the size the window got, which the screen may have cut.
+                    reply.done(self.open_plugin_window(&plan.plugin, &plan.id, plan.args.as_ref(), plan.size, cx).map(|got| {
+                        got.map_or("null".into(), |(width, height)| serde_json::json!({ "width": width, "height": height }).to_string())
+                    }));
                 } else if plan.place == "modal" {
                     reply.done(
                         self.open_plugin_modal(&plan.plugin, &plan.id, window, cx)
@@ -1859,4 +1869,84 @@ fn published_projects(
 /// agent that had a plugin open a chat can message it straight away.
 fn opened_tab(id: usize) -> String {
     serde_json::json!({ "tabId": format!("tab-{id}") }).to_string()
+}
+
+/// Does `job` on the window's thread and sends its answer to `answer`: JSON, as the call answers.
+#[cfg(target_os = "macos")]
+fn run_web(job: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, String>>, cx: &mut gpui::Context<Workspace>) {
+    use crate::web::{Job, mac};
+    match job {
+        Job::Supported => {
+            let _ = answer.send(Ok(mac::extensions_supported().to_string()));
+        }
+        Job::Pick => {
+            let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
+                files: true,
+                directories: true,
+                multiple: false,
+                prompt: Some("Add".into()),
+            });
+            cx.background_executor()
+                .spawn(async move {
+                    let path = match picked.await {
+                        Ok(Ok(paths)) => paths.and_then(|paths| paths.into_iter().next()),
+                        _ => None,
+                    };
+                    let _ = answer.send(serde_json::to_string(&path).map_err(|error| error.to_string()));
+                })
+                .detach();
+        }
+        Job::Clear(profile) => {
+            // Both of its stores answer; the second is when it is all gone.
+            let left = std::cell::Cell::new(2);
+            mac::clear_data(&profile, move || {
+                left.set(left.get() - 1);
+                if left.get() == 0 {
+                    let _ = answer.send(Ok("null".into()));
+                }
+            });
+        }
+        Job::Load { profile, id, dir } => {
+            let left = std::rc::Rc::new(std::cell::Cell::new(2));
+            let answer = std::rc::Rc::new(answer);
+            mac::load_everywhere(&profile, &id, &dir, move |loaded| {
+                left.set(left.get() - 1);
+                if left.get() == 0 || loaded.is_err() {
+                    let _ = answer.send(loaded.map(|()| "null".into()));
+                }
+            });
+        }
+        Job::Unload { profile, id } => {
+            mac::unload(&profile, &id);
+            let _ = answer.send(Ok("null".into()));
+        }
+        Job::Cookies { profile, keep_data, cookies } => {
+            let same_site = |cookie: &wings_browser_cookies::Cookie| match cookie.same_site {
+                Some(wings_browser_cookies::SameSite::Lax) => Some("lax"),
+                Some(wings_browser_cookies::SameSite::Strict) => Some("strict"),
+                _ => None,
+            };
+            let made: Vec<mac::Cookie> = cookies
+                .iter()
+                .map(|cookie| mac::Cookie {
+                    domain: &cookie.domain,
+                    name: &cookie.name,
+                    value: &cookie.value,
+                    path: &cookie.path,
+                    expires: cookie.expires,
+                    secure: cookie.secure,
+                    http_only: cookie.http_only,
+                    same_site: same_site(cookie),
+                })
+                .collect();
+            mac::set_cookies(&profile, keep_data, &made, move |count| {
+                let _ = answer.send(Ok(count.to_string()));
+            });
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn run_web(_: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, String>>, _: &mut gpui::Context<Workspace>) {
+    let _ = answer.send(Err("Web pages need macOS".into()));
 }

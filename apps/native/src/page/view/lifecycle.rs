@@ -36,6 +36,8 @@ impl PageView {
     /// Loads the page from `source`, its plugin's next run after an update or restart: it stays where it shows, and
     /// starts over with the new code.
     pub fn reload_from(&mut self, source: PageOpener, cx: &mut Context<Self>) {
+        // An update may ask for `webView` or no longer.
+        self.web_profile = source.web_profile();
         self.source = source;
         self.reload(cx);
     }
@@ -61,6 +63,8 @@ impl PageView {
         (self.runtime, self.error, self._events) = (runtime, error, events);
         self.started = Instant::now();
         self.tree = None;
+        // The page starts over, and so do its web pages.
+        crate::web::forget_page(cx.entity_id());
         self.open.clear();
         self.menu = None;
         self.pressed_open = false;
@@ -166,6 +170,18 @@ impl PageView {
         cx: &mut Context<Self>,
     ) -> Self {
         Self::start(cx, host.page(true, window_id, None, None, source))
+    }
+
+    /// Like `in_plugin_window`, for a window `wings.openView` opened with `args`, whose page may close it (`state`).
+    pub fn in_plugin_window_with(
+        host: &PluginHost,
+        window_id: u64,
+        source: &str,
+        args: Option<&serde_json::Value>,
+        state: crate::page::plugin::FrameState,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::start(cx, host.page(true, window_id, args, Some(state), source))
     }
 
     /// Starts the page's runtime: the runtime, or why it didn't start, and the task that takes what it sends.
@@ -278,6 +294,7 @@ impl PageView {
                                 .borrow_mut()
                                 .retain(|(id, _), _| ids.contains(id));
                             view.keep_selection_in(&tree.children);
+                            view.sync_web(&tree.children, cx);
                             view.tree = Some(tree);
                             view.trees += 1;
                             view.error = None;
@@ -307,6 +324,7 @@ impl PageView {
 
     pub(super) fn start(cx: &mut Context<Self>, source: PageOpener) -> Self {
         let (runtime, error, events) = Self::launch(&source, cx);
+        let web_profile = source.web_profile();
         let mut view = Self {
             stopped: runtime.is_none(),
             runtime,
@@ -381,6 +399,10 @@ impl PageView {
             hovered_card: None,
             drawing_card: Cell::new(None),
             found_links: RefCell::default(),
+            web_profile,
+            web_handlers: HashMap::new(),
+            web_told: None,
+            _web_events: None,
             #[cfg(feature = "test-support")]
             shot_terminals: None,
             #[cfg(feature = "test-support")]
@@ -398,7 +420,11 @@ impl PageView {
         }
         // The places its spinners left in the window's layer go with it.
         let id = cx.entity_id();
-        cx.on_release(move |_, _| ui::forget_view(id)).detach();
+        cx.on_release(move |_, _| {
+            ui::forget_view(id);
+            crate::web::forget_page(id);
+        })
+        .detach();
         view
     }
 }

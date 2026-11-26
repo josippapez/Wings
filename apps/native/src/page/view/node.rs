@@ -422,6 +422,7 @@ impl PageView {
             Node::Dialog(_) => div().into_any_element(),
             Node::Sheet(sheet) => self.sheet(sheet, cx),
             Node::Terminal(terminal) => self.terminal(terminal),
+            Node::WebView(web) => self.web_view(web, cx),
             // At the end of the line whether it is in a column (a dialog) or a row (a confirm's actions).
             Node::Actions(actions) => div()
                 .w_full()

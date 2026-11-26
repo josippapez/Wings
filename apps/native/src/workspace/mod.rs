@@ -56,6 +56,8 @@ mod plugin_tab_place;
 #[cfg(all(test, feature = "test-support"))]
 mod plugin_tests;
 #[cfg(all(test, feature = "test-support"))]
+mod web_tests;
+#[cfg(all(test, feature = "test-support"))]
 mod performance_tests;
 #[cfg(all(test, feature = "test-support"))]
 mod page_keys_tests;
@@ -1105,6 +1107,7 @@ impl Render for Workspace {
                 .size_full()
                 .child(viewer.clone())
                 .child(ui::spinner_sync(window))
+                .child(crate::web::sync(window))
                 .into_any_element();
         }
         // Before anything in this draw puts a page on screen (`ui::place_view`): the main column's tab page and the right
@@ -1398,6 +1401,8 @@ impl Render for Workspace {
             // Last: hands the spinners this draw shows to what turns them over the window's drawing, once every
             // overlay above has its place.
             .child(ui::spinner_sync(window))
+            // The web pages the pages show, over the window's drawing where their places are and nothing covers them.
+            .child(crate::web::sync(window))
             .into_any_element()
     }
 }

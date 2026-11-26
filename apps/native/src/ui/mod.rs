@@ -71,7 +71,7 @@ pub use sheet::{
 pub use shimmer::{count_slot, shimmer, shimmer_slot};
 #[cfg(all(test, feature = "test-support"))]
 pub(crate) use status_dot::SPIN_STEP;
-pub use slots::{Piece, bounds_into, cover, drawing_piece, in_piece, start_draw, forget_piece, forget_view, place_view, slot, slot_layer, under, view_placed};
+pub use slots::{Piece, bounds_into, cover, drawing_piece, passive_cover, in_piece, start_draw, forget_piece, forget_view, place_view, slot, slot_layer, under, view_placed};
 pub use spinner_host::spinner_sync;
 #[cfg(target_os = "macos")]
 pub use spinner_host::turn_spinners_natively;

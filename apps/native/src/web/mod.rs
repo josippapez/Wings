@@ -1,0 +1,104 @@
+//! Web pages in plugin pages: a `WebView` node (`page::tree::WebView`) is a place in the page that the system's web
+//! engine draws over, as a page's `Terminal` is drawn over its place. GPUI can't draw a web page, so the engine's own view
+//! (a `WKWebView` on macOS, `mac.rs`) sits over the window at the place the page left for it in its last draw, and the
+//! page never draws for what the web page does.
+//!
+//! The engine's view is above everything GPUI draws, so it only shows while its place does: while the page is on screen
+//! (`ui::place_view`), nothing of the page's own is over it (a `Dialog` or `Sheet`, `slots::uncovered_piece`) and no
+//! overlay of the window that takes clicks (a menu, a popover, a dialog, `slots::blocking_covers`) lies over it. Otherwise
+//! it is hidden, and it is gone with its node or its page.
+
+pub mod extensions;
+#[cfg(feature = "ui")]
+mod views;
+
+#[cfg(all(feature = "ui", target_os = "macos"))]
+pub mod mac;
+
+#[cfg(feature = "ui")]
+pub use views::{Spec, State, Told, forget_page, slot, sync, update};
+#[cfg(all(test, feature = "test-support"))]
+pub(crate) use views::testing;
+
+#[cfg(all(feature = "ui", target_os = "macos"))]
+pub use mac::host_natively;
+
+/// What a plugin's call asks of WebKit, which only the window's thread may do (`page::plugin::Env::web`).
+pub enum Job {
+    /// Whether this Mac has extensions (macOS 15.4): `true` or `false`.
+    Supported,
+    /// The system's picker, for a folder or a package (ZIP, CRX or XPI): its path, or null.
+    Pick,
+    /// Every cookie and all site data the profile's web views kept go.
+    Clear(Profile),
+    /// The extension `id` in `dir` loads into the profile's web views, or unloads.
+    Load { profile: Profile, id: String, dir: std::path::PathBuf },
+    Unload { profile: Profile, id: String },
+    /// Another browser's cookies go into the profile's store, kept or not: how many it took.
+    Cookies { profile: Profile, keep_data: bool, cookies: Vec<wings_browser_cookies::Cookie> },
+}
+
+/// Why cookies can't go into a kept store on this Mac, if they can't: only a store of the plugin's own may keep them, and
+/// WebKit has those from macOS 14 (`WKWebsiteDataStore(forIdentifier:)`). Before that the only kept store is the app's
+/// default one, which any web view in Wings could read, so an import or a kept cookie never goes there.
+pub fn keeps_refusal(keep_data: bool, per_plugin_stores: bool) -> Option<&'static str> {
+    (keep_data && !per_plugin_stores).then_some(
+        "Keeping cookies for one plugin alone needs macOS 14 or newer. Turn off Keep cookies to import them for this run of Wings only.",
+    )
+}
+
+/// The layer of the window the places of the pages' web views are kept in (`ui::slots`).
+pub const LAYER: &str = "page-webviews";
+
+/// What a plugin's web pages are kept under: its id and install scope, so one removed and added again starts with no
+/// cookies, and the folder its extensions are kept in.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Profile {
+    pub plugin: String,
+    pub scope: String,
+    /// The plugin's web folder: its extensions, apart from its storage.
+    pub dir: std::path::PathBuf,
+}
+
+impl Profile {
+    /// The profile of the plugin `plugin` installed as `scope`, whose storage is kept under `storage_root`.
+    pub fn of(plugin: &str, scope: &str, storage_root: &std::path::Path) -> Self {
+        let base = storage_root.parent().unwrap_or(storage_root);
+        Self { plugin: plugin.into(), scope: scope.into(), dir: base.join("plugin-web").join(format!("{plugin}.{scope}")) }
+    }
+
+    /// The identifier of the profile's kept store: the same for the same plugin and scope in every run, as WebKit asks
+    /// a UUID of a store it finds again (`WKWebsiteDataStore(forIdentifier:)`).
+    pub fn uuid(&self) -> [u8; 16] {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(format!("wings-web\0{}\0{}", self.plugin, self.scope));
+        let mut bytes = [0u8; 16];
+        bytes.copy_from_slice(&digest[..16]);
+        // A version 8 (custom) UUID of RFC 9562, so it is a valid one.
+        bytes[6] = (bytes[6] & 0x0f) | 0x80;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        bytes
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_profile_keeps_its_store_through_runs_and_another_scope_gets_its_own() {
+        let profile = |scope: &str| Profile::of("browser", scope, std::path::Path::new("/data/plugin-storage"));
+        assert_eq!(profile("a").uuid(), profile("a").uuid());
+        assert_ne!(profile("a").uuid(), profile("b").uuid());
+        let uuid = profile("a").uuid();
+        assert_eq!((uuid[6] >> 4, uuid[8] >> 6), (8, 0b10), "a version 8 UUID");
+        assert_eq!(profile("a").dir, std::path::Path::new("/data/plugin-web/browser.a"));
+    }
+
+    #[test]
+    fn cookies_are_kept_only_in_a_store_of_the_plugins_own() {
+        assert!(keeps_refusal(true, false).is_some_and(|why| why.contains("macOS 14")));
+        assert_eq!(keeps_refusal(false, false), None, "a store kept only while Wings runs is the plugin's own");
+        assert_eq!(keeps_refusal(true, true), None);
+    }
+}

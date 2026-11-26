@@ -192,6 +192,7 @@ pub enum Node {
     HoverCard(HoverCard),
     PopupMenu(PopupMenu),
     Terminal(Terminal),
+    WebView(WebView),
     Code(Code),
     Actions(Actions),
 }
@@ -348,6 +349,63 @@ pub struct Terminal {
     pub height: f32,
     /// Takes the height its container leaves (the whole column of a docked split, shared with the others in it), not `height`.
     pub fill: bool,
+}
+
+/// A web page drawn by the system's web engine where the node is, for a plugin whose manifest asks for `webView`. Wings
+/// keeps the engine's view by `name` while the page sends the node, so a new tree never loads the page again: `url` is
+/// only where it starts, and `command` (each new `token` once, as `scrollTo`) loads, goes back or forward, reloads or
+/// stops. `onState` hears where it is: `{ url, title, loading, canGoBack, canGoForward, error }`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WebView {
+    pub id: u64,
+    pub name: String,
+    pub url: Option<String>,
+    pub command: Option<WebCommand>,
+    /// `keepData: false` keeps its cookies and site data only while Wings runs, in a store apart from the kept one.
+    pub keep_data: bool,
+    pub height: f32,
+    pub fill: bool,
+    pub on_state: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WebCommand {
+    pub go: WebGo,
+    pub token: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum WebGo {
+    Load(String),
+    Back,
+    Forward,
+    Reload,
+    Stop,
+}
+
+/// The most characters of a `WebView`'s `name`, which is a key and never shown.
+const WEB_NAME_MAX: usize = 64;
+
+/// An address a `WebView` may load: `http`, `https` or `about:blank`, up to 8 KB. A `file:`, `javascript:` or `data:`
+/// address would read this computer's files or run the plugin's own script in the page, so none of those.
+pub fn web_address(url: &str) -> Option<String> {
+    let url = url.trim();
+    let lower = url.get(..8).unwrap_or(url).to_ascii_lowercase();
+    let allowed = lower.starts_with("https://") || lower.starts_with("http://") || url == "about:blank";
+    (allowed && url.len() <= 8192 && !url.chars().any(char::is_control)).then(|| url.to_owned())
+}
+
+fn web_command(value: &Value) -> Option<WebCommand> {
+    let token = value.get("token")?.as_u64()?;
+    let go = match value.get("action")?.as_str()? {
+        "load" => WebGo::Load(web_address(value.get("url")?.as_str()?)?),
+        "back" => WebGo::Back,
+        "forward" => WebGo::Forward,
+        "reload" => WebGo::Reload,
+        "stop" => WebGo::Stop,
+        _ => return None,
+    };
+    Some(WebCommand { go, token })
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1235,6 +1293,7 @@ impl Node {
             Node::Dialog(n) => Some(n.id),
             Node::Sheet(n) => Some(n.id),
             Node::Terminal(n) => Some(n.id),
+            Node::WebView(n) => Some(n.id),
             Node::Code(n) => Some(n.id),
             Node::Actions(n) => Some(n.id),
         }
@@ -1275,6 +1334,7 @@ impl Node {
             | Node::Sunburst(_)
             | Node::PromptRail(_)
             | Node::Terminal(_)
+            | Node::WebView(_)
             | Node::Code(_) => vec![],
             Node::Scroll(n) => vec![&n.children],
             Node::Split(n) => vec![&n.start, &n.end],
@@ -1332,6 +1392,7 @@ impl Node {
             | Node::Sunburst(_)
             | Node::PromptRail(_)
             | Node::Terminal(_)
+            | Node::WebView(_)
             | Node::Code(_) => vec![],
             Node::Scroll(n) => vec![&mut n.children],
             Node::Split(n) => vec![&mut n.start, &mut n.end],
@@ -1442,6 +1503,7 @@ impl Walk {
                 | "Dialog"
                 | "Sheet"
                 | "Terminal"
+                | "WebView"
                 | "Code"
                 | "ListRow"
                 | "Section"
@@ -1545,6 +1607,16 @@ impl Walk {
                 pane: str_prop(&props, "pane").filter(|pane| pane.len() <= 20).unwrap_or_default().to_owned(),
                 height: number(&props, "height").unwrap_or(220.0).clamp(80.0, 800.0) as f32,
                 fill: on("fill"),
+            }),
+            "WebView" => Node::WebView(WebView {
+                id,
+                name: str_prop(&props, "name").filter(|name| name.len() <= WEB_NAME_MAX).unwrap_or_default().to_owned(),
+                url: str_prop(&props, "url").and_then(web_address),
+                command: props.get("command").and_then(web_command),
+                keep_data: props.get("keepData") != Some(&Value::Bool(false)),
+                height: number(&props, "height").unwrap_or(400.0).clamp(80.0, 4000.0) as f32,
+                fill: on("fill"),
+                on_state: handler("onState"),
             }),
             "Avatar" => Node::Avatar(Avatar {
                 id,

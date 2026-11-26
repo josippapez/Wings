@@ -432,12 +432,24 @@ impl Link for FrameLink {
             };
             return reply.done(state.set_agent(agent).map(|()| "null".into()));
         }
-        // A tab's page closes its own tab, and only that one: `closeView` closes every tab of the view.
+        // A tab's page closes its own tab, and only that one: `closeView` closes every tab of the view. A page in a window
+        // of its own closes its window.
         if method == "closeTab" {
             let Some(state) = self.state.clone() else {
-                return reply.err("Only a page shown as a tab can close its tab".into());
+                return reply.err("Only a page shown as a tab or in a window of its own can close it".into());
             };
             return reply.done(state.close().map(|()| "null".into()));
+        }
+        // A page in a window of its own sizes its window, as a person would drag its edge; Wings keeps it on the screen.
+        if method == "resizeWindow" {
+            let size = |key: &str| params.get(key).and_then(serde_json::Value::as_f64).filter(|points| points.is_finite());
+            let (Some(width), Some(height)) = (size("width"), size("height")) else {
+                return reply.err("resizeWindow takes a width and a height in points".into());
+            };
+            let Some(state) = self.state.clone() else {
+                return reply.err("Only a page in a window of its own can size its window".into());
+            };
+            return state.resize(width, height, reply);
         }
         // A tab's page names its own tab, as a terminal's tab shows what runs in it; a sidebar's page names its header.
         if method == "setTabTitle" {
@@ -470,7 +482,8 @@ impl Link for FrameLink {
             "processArm" => params["text"].is_null() || self.armed_already(&params),
             _ => false,
         };
-        if matches!(method, "copyText" | "processWrite" | "processArm" | "pickFiles" | "openFile" | "openLink") && !unprompted {
+        let web_click = calls::web_needs_click(method, &params);
+        if (web_click || matches!(method, "copyText" | "processWrite" | "processArm" | "pickFiles" | "openFile" | "openLink")) && !unprompted {
             let handed = method == "processWrite" && self.role == Role::Page && self.shared.take_grant(self.id);
             let acted = handed
                 || self
@@ -485,6 +498,8 @@ impl Link for FrameLink {
                     "pickFiles" => "open the file picker",
                     "openFile" => "open a file",
                     "openLink" => "open a link",
+                    "browserCookies" => "import cookies",
+                    "webExtensions" => "add an extension",
                     _ => "write to a program",
                 };
                 return reply.err(format!("A page can {what} only right after you click or type in it"));
@@ -705,6 +720,14 @@ impl PageOpener {
 
     pub fn plugin(&self) -> &str {
         &self.shared.config.id
+    }
+
+    /// Where the page's web views keep their data, while its plugin's manifest lets it show web pages (`webView`).
+    pub fn web_profile(&self) -> Option<crate::web::Profile> {
+        let access = self.shared.access.as_ref()?;
+        let config = &self.shared.config;
+        wings_plugins::permissions::may_show_web_views(&access.plugin)
+            .then(|| crate::web::Profile::of(&config.id, &config.scope, &config.root))
     }
 
     /// The page's file for a module, and "page" for a script, which has no name here.

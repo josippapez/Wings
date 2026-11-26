@@ -147,6 +147,8 @@ fn run() -> Result<(), String> {
                 wings_native::ui::draw_backdrops_under(window);
                 // The spinners turn in Core Animation over GPUI's drawing, never drawing the window.
                 wings_native::ui::turn_spinners_natively(window);
+                // The plugins' web pages are WebKit's views over GPUI's.
+                wings_native::web::host_natively(window);
             });
             if let Some(path) = &restart_ack
                 && let Err(error) = wings_native::updater::acknowledge_startup(path)

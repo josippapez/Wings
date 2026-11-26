@@ -657,7 +657,7 @@ impl Workspace {
         self.plugin_ui.buttons_menu = false;
         match opens {
             Kind::Window => {
-                if let Err(error) = self.open_plugin_window(plugin, id, cx) {
+                if let Err(error) = self.open_plugin_window(plugin, id, None, None, cx) {
                     eprintln!("Couldn't open {plugin}'s {id}: {error}");
                 }
             }

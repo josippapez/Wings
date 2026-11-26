@@ -66,6 +66,8 @@ pub struct OpenView {
     pub id: String,
     pub place: String,
     pub args: Option<serde_json::Value>,
+    /// The width and height in points a window asks for (`as: "window"`).
+    pub size: Option<(f64, f64)>,
     pub new_tab: bool,
     /// The project the tab opens in, which Wings then shows, as `openPane` does (`openView`'s `projectId`). None is the
     /// project on screen.
@@ -539,6 +541,10 @@ pub trait Env: Send + Sync + 'static {
     /// it closes with the pictures among them, as `picked_images` reads them.
     fn pick_files(&self, _multiple: bool, reply: crate::page::runtime::Reply) {
         reply.err("The file picker isn't available in this host".into());
+    }
+    /// Does `job` for the plugin's web views on the window's thread, and hands `done` its answer as JSON.
+    fn web(&self, _job: crate::web::Job, done: Box<dyn FnOnce(Result<String, String>) + Send>) {
+        done(Err("Web pages aren't available in this host".into()));
     }
     /// The plugin set, or with `None` took away, its section `section` under the project in folder `project`. The host
     /// has checked the plugin declares the section and the project is listed.

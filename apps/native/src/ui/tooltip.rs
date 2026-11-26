@@ -112,7 +112,7 @@ pub fn tip(duration: Duration, card: Rc<dyn Fn() -> Div>) -> impl IntoElement {
     // GPUI puts a tooltip's corner at the pointer, so it starts below the cursor's arrow.
     div()
         .pt(px(20.0))
-        .child(super::cover(motion::popup(
+        .child(super::passive_cover(motion::popup(
             "tooltip",
             motion::From::Corner,
             duration,
@@ -234,7 +234,7 @@ impl Element for TooltipExit {
         let frame = motion::exit_frame(t, cx.reduce_motion());
         let mut element = div()
             .pt(px(20.0))
-            .child(super::cover(div().opacity(frame.opacity).child(motion::surface_scaled(
+            .child(super::passive_cover(div().opacity(frame.opacity).child(motion::surface_scaled(
                 card(),
                 (0.0, 0.0),
                 frame.scale,

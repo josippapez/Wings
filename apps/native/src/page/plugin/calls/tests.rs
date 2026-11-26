@@ -1495,6 +1495,7 @@ fn a_frame_that_sends_the_wrong_json_types_is_refused_and_nothing_reaches_the_ap
                 id: "history".into(),
                 place: "tab".into(),
                 args: Some(json!("x")),
+                size: None,
                 new_tab: false,
                 project: None,
                 after: None,

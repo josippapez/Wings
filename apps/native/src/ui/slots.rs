@@ -378,12 +378,26 @@ const COVERS: &str = "covers";
 /// being drawn, so an overlay in a piece that keeps its last drawing counts for as long as the piece keeps it. Laid out,
 /// drawn and placed as `element` alone.
 pub fn cover(element: impl IntoElement) -> Cover {
+    cover_in(COVERS, element)
+}
+
+/// The layer the places of overlays that take no clicks are kept in (`passive_cover`).
+const PASSIVE_COVERS: &str = "passive-covers";
+
+/// `cover`, for an overlay that takes no clicks (a tooltip): what turns over the window gives way to it as to any, but a
+/// web page a page shows (`crate::web`) stays where it is under it, since hiding the page for a tooltip made it blink.
+pub fn passive_cover(element: impl IntoElement) -> Cover {
+    cover_in(PASSIVE_COVERS, element)
+}
+
+fn cover_in(layer: &'static str, element: impl IntoElement) -> Cover {
     let name = NEXT_COVER.with(|next| {
         let name = next.get();
         next.set(name + 1);
         name
     });
     Cover {
+        layer,
         piece: current_piece(),
         name: name.to_string().into(),
         element: element.into_any_element(),
@@ -391,6 +405,7 @@ pub fn cover(element: impl IntoElement) -> Cover {
 }
 
 pub struct Cover {
+    layer: &'static str,
     piece: Piece,
     name: SharedString,
     element: AnyElement,
@@ -428,7 +443,7 @@ impl Element for Cover {
         window: &mut Window,
         cx: &mut App,
     ) {
-        leave(window, self.piece, COVERS, self.name.clone(), bounds, None);
+        leave(window, self.piece, self.layer, self.name.clone(), bounds, None);
         self.element.prepaint(window, cx);
     }
 
@@ -448,7 +463,19 @@ impl Element for Cover {
 
 /// Where the overlays of the window `id` are in its last draw (`cover`), as far as each shows.
 pub(super) fn covers(id: WindowId) -> Vec<Bounds<Pixels>> {
-    shown(id, COVERS)
+    let mut covers = blocking_covers(id);
+    covers.extend(shown_bounds(id, PASSIVE_COVERS));
+    covers
+}
+
+/// `covers` but those that take no clicks (`passive_cover`): where a native view over the window has to give way, since
+/// a click there is the overlay's.
+pub(crate) fn blocking_covers(id: WindowId) -> Vec<Bounds<Pixels>> {
+    shown_bounds(id, COVERS)
+}
+
+fn shown_bounds(id: WindowId, layer: &'static str) -> Vec<Bounds<Pixels>> {
+    shown(id, layer)
         .into_iter()
         .map(|(_, slot)| slot.bounds.intersect(&slot.mask.bounds))
         .filter(|bounds| !bounds.is_empty())

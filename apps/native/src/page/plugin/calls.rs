@@ -326,8 +326,8 @@ impl Shared {
             return Err(format!("{id} opens as {}, not {place}", opens.join(" or ")));
         }
         let args = params.get("args").filter(|v| !v.is_null()).cloned();
-        if args.is_some() && place != "tab" {
-            return Err("openView args only work with as: \"tab\"".into());
+        if args.is_some() && place != "tab" && place != "window" {
+            return Err("openView args only work with as: \"tab\" or \"window\"".into());
         }
         if args
             .as_ref()
@@ -346,6 +346,13 @@ impl Shared {
         if after.is_some() && place != "tab" {
             return Err("openView after only works with as: \"tab\"".into());
         }
+        // A window may ask for its size, an agent checking a page at a phone's or a tablet's width say.
+        let points = |key: &str| params.get(key).filter(|value| !value.is_null()).map(|value| value.as_f64().filter(|points| points.is_finite() && *points > 0.0));
+        let size = match (points("width"), points("height")) {
+            (None, None) => None,
+            (Some(Some(width)), Some(Some(height))) if place == "window" => Some((width, height)),
+            _ => return Err("openView width and height are points, both, with as: \"window\"".into()),
+        };
         // The project the tab opens in is one of Wings' projects, by its id, as `pastSessions`'s.
         let project = match params.get("projectId").filter(|value| !value.is_null()) {
             None => None,
@@ -366,6 +373,7 @@ impl Shared {
                 id,
                 place,
                 args,
+                size,
                 new_tab,
                 project,
                 after,
@@ -591,6 +599,7 @@ impl Shared {
                 let multiple = params.get("multiple") == Some(&Value::Bool(true));
                 access.env.pick_files(multiple, reply)
             }
+            "webData" | "webExtensions" | "browserCookies" => self.web_call(access, method, params, reply),
             _ => reply.err(format!("unknown method {method}")),
         }
     }
@@ -1253,6 +1262,8 @@ mod processes;
 #[cfg(test)]
 mod schedules;
 mod session_detail;
+mod web;
+pub(super) use web::needs_click as web_needs_click;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

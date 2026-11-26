@@ -24,6 +24,8 @@ pub enum StatePlace {
     Block,
     /// A page in a sidebar, which keeps no state; it only names its header (`setTabTitle`).
     Sidebar,
+    /// A page in a window of its own, which keeps no state; it may close its window (`closeTab`).
+    Window,
 }
 
 struct State {
@@ -39,6 +41,8 @@ struct State {
     close: Option<Box<dyn Fn(&FrameState) + Send + Sync>>,
     /// Brings the tab that holds this state to the front, when another page of its plugin asks (`showPage`).
     show: Option<Box<dyn Fn(&FrameState) + Send + Sync>>,
+    /// Sizes the window that holds this state to a width and height in points, and answers with the size it got.
+    resize: Option<Box<dyn Fn(f64, f64, crate::page::runtime::Reply) + Send + Sync>>,
     /// The frame that runs the page now, whose programs are the page's.
     frame: Option<u64>,
     /// The tab's own name, which it keeps when Wings restarts: the programs the terminal server kept running for the tab
@@ -84,6 +88,7 @@ impl FrameState {
                 agent_changed: None,
                 close: None,
                 show: None,
+                resize: None,
                 frame: None,
                 key: new_key(),
                 project: None,
@@ -127,6 +132,19 @@ impl FrameState {
         self
     }
 
+    /// Calls `resize` when the page in the window that holds this state asks for a size (`resizeWindow`).
+    pub fn on_resize(self, resize: impl Fn(f64, f64, crate::page::runtime::Reply) + Send + Sync + 'static) -> Self {
+        self.state.lock().unwrap().resize = Some(Box::new(resize));
+        self
+    }
+
+    pub(super) fn resize(&self, width: f64, height: f64, reply: crate::page::runtime::Reply) {
+        match (&self.state.lock().unwrap().resize, self.place) {
+            (Some(resize), StatePlace::Window) => resize(width, height, reply),
+            _ => reply.err("Only a page in a window of its own can size its window".into()),
+        }
+    }
+
     /// Calls `show` with this state when another page of the plugin asks to bring its tab to the front.
     pub fn on_show(self, show: impl Fn(&FrameState) + Send + Sync + 'static) -> Self {
         self.state.lock().unwrap().show = Some(Box::new(show));
@@ -156,8 +174,8 @@ impl FrameState {
 
     pub(super) fn close(&self) -> Result<(), String> {
         match (&self.state.lock().unwrap().close, self.place) {
-            (Some(close), StatePlace::Tab) => Ok(close(self)),
-            _ => Err("Only a page shown as a tab can close its tab".into()),
+            (Some(close), StatePlace::Tab | StatePlace::Window) => Ok(close(self)),
+            _ => Err("Only a page shown as a tab or in a window of its own can close it".into()),
         }
     }
 

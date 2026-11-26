@@ -1003,6 +1003,45 @@ fn parses_a_dialog_with_its_title_width_and_close_and_bounds_its_width() {
 }
 
 #[test]
+fn a_web_view_loads_only_web_addresses_and_takes_each_command_by_its_token() {
+    let parsed = tree(json!([
+        {"id":1,"type":"WebView","props":{"name":"main","url":"https://example.com/","onState":"1:state","fill":true,
+            "command":{"action":"load","url":"http://localhost:5173/","token":3}}},
+        {"id":2,"type":"WebView","props":{"name":"x".repeat(65),"url":"file:///etc/passwd","keepData":false,"height":9000,
+            "command":{"action":"load","url":"javascript:alert(1)","token":4}}},
+        {"id":3,"type":"WebView","props":{"name":"b","url":"data:text/html,hi","command":{"action":"back","token":1}}},
+        {"id":4,"type":"WebView","props":{"name":"c","url":"about:blank","command":{"action":"reload"}}}
+    ]))
+    .unwrap();
+    let web = |at: usize| match &parsed.children[at] {
+        Node::WebView(web) => web.clone(),
+        other => panic!("not a web view: {other:?}"),
+    };
+    assert_eq!(
+        web(0),
+        WebView {
+            id: 1,
+            name: "main".into(),
+            url: Some("https://example.com/".into()),
+            command: Some(WebCommand { go: WebGo::Load("http://localhost:5173/".into()), token: 3 }),
+            keep_data: true,
+            height: 400.0,
+            fill: true,
+            on_state: Some("1:state".into()),
+        }
+    );
+    // A file or a script never loads, by the start address or a command; a name too long to be a key is none.
+    let refused = web(1);
+    assert_eq!((refused.name.as_str(), refused.url, refused.command, refused.keep_data, refused.height), ("", None, None, false, 4000.0));
+    assert_eq!((web(2).url, web(2).command), (None, Some(WebCommand { go: WebGo::Back, token: 1 })));
+    // A command without a token would run on every tree, so it is none.
+    assert_eq!((web(3).url.as_deref(), web(3).command), (Some("about:blank"), None));
+    assert_eq!(web_address(" HTTPS://Example.com "), Some("HTTPS://Example.com".into()));
+    // A control character would end the address early in some parser along the way.
+    assert_eq!(web_address("https://a.com/\u{7}"), None);
+}
+
+#[test]
 fn parses_a_terminal_and_a_text_that_asks_for_links() {
     let parsed = tree(json!([
         {"id":1,"type":"Terminal","props":{"pane":"12","height":5000}},

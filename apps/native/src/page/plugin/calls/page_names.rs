@@ -124,7 +124,7 @@ fn a_sidebar_page_takes_a_name_hears_the_chat_and_hands_on_one_write_for_each_cl
     // The sidebar opens, with no args: they are for a tab.
     let open = |args: Value| json!({ "id": "subagent", "as": "sidebar", "args": args, "newTab": false });
     assert_eq!(chat.call("openView", open(Value::Null)), Ok(Value::Null));
-    assert_eq!(chat.call("openView", open(json!({ "agent": "a1" }))), Err("openView args only work with as: \"tab\"".into()));
+    assert_eq!(chat.call("openView", open(json!({ "agent": "a1" }))), Err("openView args only work with as: \"tab\" or \"window\"".into()));
     // It names itself, hears the chat, and isn't a tab to bring to the front. Showing a subagent renames it.
     assert_eq!(side.call("namePage", json!({ "name": "subagent-side" })), Ok(Value::Null));
     assert_eq!(chat.call("tellPage", json!({ "name": "subagent-side", "message": { "kind": "show" } })), Ok(Value::Null));

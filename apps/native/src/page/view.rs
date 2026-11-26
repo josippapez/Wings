@@ -344,6 +344,12 @@ pub struct PageView {
     /// While a `Card`'s children are drawn: its id, and whether one of them is a `showOnHover` button.
     drawing_card: Cell<Option<(u64, bool)>>,
     found_links: RefCell<FoundLinks>,
+    /// Where its web views keep their data, none while its plugin may not show web pages; what each `WebView`'s
+    /// `onState` is, by name; and how a web view tells the page where it is.
+    web_profile: Option<crate::web::Profile>,
+    web_handlers: HashMap<SharedString, String>,
+    web_told: Option<crate::web::Told>,
+    _web_events: Option<Task<()>>,
     /// Draws the page's terminals over it, as the workspace does, for the screenshots of a page alone.
     #[cfg(feature = "test-support")]
     shot_terminals: Option<Rc<dyn Fn(&mut gpui::App) -> Vec<(SharedString, AnyElement)>>>,
