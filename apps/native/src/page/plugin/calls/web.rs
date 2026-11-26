@@ -1,4 +1,4 @@
-//! `webData`, `webExtensions` and `browserCookies`: what a plugin that shows web pages (`permissions.webView`) may do
+//! `webData`, `webExtensions`, `webEngine` and `browserCookies`: what a plugin that shows web pages (`permissions.webView`) may do
 //! with them beyond its pages' `WebView` nodes. What reads the disk or the network runs off the frame's thread; what
 //! WebKit does runs on the window's (`Env::web`).
 
@@ -10,7 +10,7 @@ use wings_plugins::permissions::{may_import_browser_cookies, may_show_web_views}
 use super::{Shared, to_json};
 use crate::{
     page::{plugin::env::Access, runtime::Reply},
-    web::{Job, Profile, extensions},
+    web::{Job, Profile, engine, extensions},
 };
 
 /// The folders of the extensions `installed` last found for each plugin, in the order it listed them.
@@ -254,6 +254,47 @@ impl Shared {
                     Ok("null".into())
                 })
             }
+            ("webEngine", "status") => {
+                let (kind, installed, available) = (engine::choice(&profile), engine::bundle().is_some(), engine::available());
+                let engine_name = if kind == engine::Kind::Chromium { "chromium" } else { "webkit" };
+                reply.done(to_json(&json!({
+                    "engine": engine_name, "installed": installed, "version": engine::PINNED.version,
+                    "downloadBytes": engine::PINNED.size, "diskBytes": engine::PINNED.unpacked,
+                    "available": available.is_ok(), "why": available.err(),
+                })))
+            }
+            // Each step off the frame's thread: the page calls them in turn so it can say which it is on.
+            ("webEngine", "download") => self.off_thread(reply, |_| engine::download().map(|()| "null".into())),
+            ("webEngine", "verify") => self.off_thread(reply, |_| engine::verify().map(|()| "null".into())),
+            ("webEngine", "install") => self.off_thread(reply, |_| engine::install().map(|()| "null".into())),
+            ("webEngine", "use") => {
+                let kind = match text("engine").as_deref() {
+                    Some("chromium") => engine::Kind::Chromium,
+                    Some("webkit") => engine::Kind::WebKit,
+                    _ => return reply.err(r#"use takes engine: "chromium" or "webkit""#.into()),
+                };
+                if kind == engine::Kind::Chromium {
+                    if let Err(why) = engine::available() {
+                        return reply.err(why.into());
+                    }
+                    if engine::bundle().is_none() {
+                        return reply.err("Chromium isn't downloaded yet".into());
+                    }
+                }
+                access.env.web(Job::Engine(profile, kind), done(reply))
+            }
+            ("webEngine", "remove") => {
+                // The window switches to WebKit and places its pages again first, so nothing has Chromium's files open
+                // while they go; then the files go, off the window's thread.
+                let this = self.clone();
+                access.env.web(
+                    Job::Engine(profile, engine::Kind::WebKit),
+                    Box::new(move |switched| match switched {
+                        Ok(_) => this.off_thread(reply, |_| engine::remove().map(|()| "null".into())),
+                        Err(error) => reply.err(error),
+                    }),
+                )
+            }
             ("browserCookies", "sources") => self.off_thread(reply, move |_| {
                 let sources: Vec<Value> = wings_browser_cookies::detect()
                     .into_iter()
@@ -299,7 +340,7 @@ impl Shared {
 }
 
 /// Whether the call `method` with `params` waits for your click: picking, staging, adding, turning on or off and removing
-/// an extension, clearing the site data and importing cookies happen only as the answer to one, never by the plugin
+/// an extension, clearing the site data, downloading or removing Chromium and importing cookies happen only as the answer to one, never by the plugin
 /// alone.
 pub(in crate::page::plugin) fn needs_click(method: &str, params: &Value) -> bool {
     let action = params.get("action").and_then(Value::as_str);
@@ -309,6 +350,7 @@ pub(in crate::page::plugin) fn needs_click(method: &str, params: &Value) -> bool
         (method, action),
         ("webExtensions", Some("stage" | "add" | "installed" | "setEnabled" | "remove" | "checkAgain"))
             | ("webData", Some("clear"))
+            | ("webEngine", Some("download" | "remove"))
             | ("browserCookies", Some("import"))
     )
 }
@@ -399,7 +441,40 @@ mod tests {
         assert_eq!(super::copies(found.into_iter()), ["Chrome", "Chrome", "Chrome (2)", "Arc", "Chrome"]);
     }
 
-    use crate::page::plugin::testing::{Caller, Rig};
+    use crate::{
+        page::plugin::testing::{Caller, Rig},
+        web::engine,
+    };
+
+    #[test]
+    fn the_engine_call_needs_the_web_view_permission_and_a_click_to_download_or_remove() {
+        let without = Rig::new(json!({ "permissions": { "openUrl": ["https://"] } }), vec![]);
+        let page = Caller::start(&without.host);
+        assert_eq!(page.call("webEngine", json!({ "action": "status" })), Err("probe may not show web pages".into()));
+        assert_eq!(page.call_after_click("webEngine", json!({ "action": "download" })), Err("probe may not show web pages".into()));
+
+        let web = Rig::new(json!({ "permissions": { "webView": true } }), vec![]);
+        let page = Caller::start(&web.host);
+        for action in ["download", "remove"] {
+            assert_eq!(
+                page.call("webEngine", json!({ "action": action })),
+                Err("A page can download or remove Chromium only right after you click or type in it".into()),
+                "{action}"
+            );
+        }
+        // The rest of the steps need no click: they only work on what a click started, and `use` needs it installed.
+        let status = page.call("webEngine", json!({ "action": "status" })).unwrap();
+        assert_eq!(status["version"], engine::PINNED.version);
+        assert_eq!(status["downloadBytes"], engine::PINNED.size);
+        assert_eq!(status["diskBytes"], engine::PINNED.unpacked);
+        assert_eq!(status["engine"], "webkit");
+        assert_eq!(page.call("webEngine", json!({ "action": "use", "engine": "firefox" })), Err(r#"use takes engine: "chromium" or "webkit""#.into()));
+        assert_eq!(page.call("webEngine", json!({ "action": "nope" })), Err(r#"webEngine has no action "nope""#.into()));
+        assert!(super::needs_click("webEngine", &json!({ "action": "download" })));
+        assert!(super::needs_click("webEngine", &json!({ "action": "remove" })));
+        assert!(!super::needs_click("webEngine", &json!({ "action": "status" })));
+        assert!(!super::needs_click("webEngine", &json!({ "action": "use", "engine": "webkit" })));
+    }
 
     #[test]
     fn web_calls_need_their_permission_and_adding_or_importing_needs_a_click() {

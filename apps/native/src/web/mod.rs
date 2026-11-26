@@ -8,6 +8,7 @@
 //! overlay of the window that takes clicks (a menu, a popover, a dialog, `slots::blocking_covers`) lies over it. Otherwise
 //! it is hidden, and it is gone with its node or its page.
 
+pub mod engine;
 pub mod extensions;
 pub mod snapshot;
 #[cfg(feature = "ui")]
@@ -43,6 +44,9 @@ pub enum Job {
     /// Another browser's cookies go into the profile's store, kept or not: how many it took. Unless `keep_signins`, they
     /// go as session cookies, which no store keeps past the run.
     Cookies { profile: Profile, keep_data: bool, keep_signins: bool, cookies: Vec<wings_browser_cookies::Cookie> },
+    /// The profile's web views use this engine from now on (`engine::set_choice`), then the window redraws so they are
+    /// placed again.
+    Engine(Profile, engine::Kind),
 }
 
 /// The one gate every command a plugin's page sends its web view goes through, here and in WebKit (`views::update`,

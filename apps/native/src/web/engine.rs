@@ -1,0 +1,407 @@
+//! The Chromium engine: whether it is downloaded, which engine each profile's web views use, and the steps that fetch,
+//! check, unpack and remove it. No CEF in here: the engine is a bundle (`Wings Chromium.app`) in a folder of this app's
+//! own, loaded by `crates/wings-chromium` only when a profile chose it.
+//!
+//! ```text
+//! <data folder>/chromium/choice.json        which engine each profile uses
+//! <data folder>/chromium/downloads/         the archive while it downloads and until it is installed
+//! <data folder>/chromium/<version>/         one installed engine: `Wings Chromium.app` and a `finished` marker written last
+//! <data folder>/chromium/profiles/          what Chromium keeps for sites (the backend makes it)
+//! ```
+//!
+//! The choice lives here, not in the plugin's web folder: `plugin-web` is shared with the side-by-side build, which may
+//! not have the engine. The archive is pinned by size and SHA-256, so whoever serves it can't change what is installed.
+
+use std::{
+    collections::{BTreeMap, HashSet},
+    fs,
+    io::{Read, Write},
+    path::{Component, Path, PathBuf},
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
+};
+
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use super::Profile;
+
+/// The engine a profile's web views use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    WebKit,
+    Chromium,
+}
+
+/// The one engine release this build installs.
+pub struct Pinned {
+    pub version: &'static str,
+    pub file: &'static str,
+    pub url: &'static str,
+    /// The archive's size in bytes: the most the download may be.
+    pub size: u64,
+    pub sha256: &'static str,
+    /// The bytes of the files in the archive: the most it may unpack to (plus `MARGIN`).
+    pub unpacked: u64,
+}
+
+pub const PINNED: Pinned = Pinned {
+    version: "156.0.31",
+    file: "wings-chromium-156.0.31-darwin-aarch64.tar.gz",
+    url: "https://github.com/josippapez/Wings/releases/download/chromium-156.0.31/wings-chromium-156.0.31-darwin-aarch64.tar.gz",
+    size: 147_328_901,
+    sha256: "fa275c5921611e274965793715f6f21927e8b01c16bfa9421d457f996fad668a",
+    unpacked: 343_012_256,
+};
+
+/// What the unpacked archive may hold beyond `Pinned::unpacked`: tar's headers and padding.
+const MARGIN: u64 = 8 << 20;
+/// The most entries an archive may hold: the CEF framework has a few hundred.
+const MAX_ENTRIES: usize = 20_000;
+const BUNDLE: &str = "Wings Chromium.app";
+/// Written last: a folder without it is an install that didn't finish.
+const FINISHED: &str = "finished";
+const WRONG_DOWNLOAD: &str = "The download didn't match what Wings expects, so it was deleted. Try again.";
+
+// ---- Where things are ----
+
+/// This build's folder for the engine, beside its workspace file.
+pub fn root() -> Option<PathBuf> {
+    Some(crate::data_dir::state_file()?.parent()?.join("chromium"))
+}
+
+/// The installed engine's bundle: only when an install finished.
+pub fn bundle() -> Option<PathBuf> {
+    installed_in(&root()?, &PINNED)
+}
+
+/// Where Chromium keeps site data.
+pub fn profiles() -> Option<PathBuf> {
+    Some(root()?.join("profiles"))
+}
+
+fn installed_in(root: &Path, pin: &Pinned) -> Option<PathBuf> {
+    let folder = root.join(pin.version);
+    (folder.join(FINISHED).is_file() && folder.join(BUNDLE).is_dir()).then(|| folder.join(BUNDLE))
+}
+
+fn downloads_in(root: &Path) -> PathBuf {
+    root.join("downloads")
+}
+
+// ---- Can this Mac run it ----
+
+/// Why Chromium can't run here, if it can't.
+pub fn available() -> Result<(), &'static str> {
+    if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        return Err("Chromium needs a Mac with Apple silicon");
+    }
+    if macos_major().is_some_and(|major| major < 12) {
+        return Err("Chromium needs macOS 12 or later");
+    }
+    Ok(())
+}
+
+fn macos_major() -> Option<u32> {
+    static MAJOR: OnceLock<Option<u32>> = OnceLock::new();
+    *MAJOR.get_or_init(|| {
+        let out = std::process::Command::new("sw_vers").arg("-productVersion").output().ok()?;
+        String::from_utf8_lossy(&out.stdout).trim().split('.').next()?.parse().ok()
+    })
+}
+
+// ---- The choice ----
+
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Bumps on every choice, install and removal, so a view that placed its pages with one engine knows to place them again.
+pub fn generation() -> u64 {
+    GENERATION.load(Ordering::Relaxed)
+}
+
+fn bump() {
+    GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
+fn key(profile: &Profile) -> String {
+    format!("{}.{}", profile.plugin, profile.scope)
+}
+
+fn read_choices(root: &Path) -> BTreeMap<String, Kind> {
+    fs::read(root.join("choice.json")).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
+}
+
+/// Written whole beside the file and renamed over it, so a crash leaves the old choice or the new, never half.
+fn write_choices(root: &Path, choices: &BTreeMap<String, Kind>) -> Result<(), String> {
+    fs::create_dir_all(root).map_err(|error| format!("Couldn't make {}: {error}", root.display()))?;
+    let part = root.join("choice.json.part");
+    let bytes = serde_json::to_vec_pretty(choices).map_err(|error| error.to_string())?;
+    fs::write(&part, bytes).map_err(|error| format!("Couldn't save the engine choice: {error}"))?;
+    fs::rename(&part, root.join("choice.json")).map_err(|error| {
+        let _ = fs::remove_file(&part);
+        format!("Couldn't save the engine choice: {error}")
+    })
+}
+
+/// The engine `profile` uses in `root`: Chromium only when chosen, installed and runnable here.
+fn choice_in(root: &Path, pin: &Pinned, runnable: bool, profile: &Profile) -> Kind {
+    let chosen = read_choices(root).get(&key(profile)) == Some(&Kind::Chromium);
+    if chosen && runnable && installed_in(root, pin).is_some() { Kind::Chromium } else { Kind::WebKit }
+}
+
+/// What the disk held at the first ask: the choices and whether the engine is installed. `set_choice`, `install` and
+/// `remove` keep it current, so the web views' every frame doesn't read the disk.
+struct Cache {
+    choices: BTreeMap<String, Kind>,
+    installed: bool,
+}
+
+static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
+
+fn with_cache<T>(root: &Path, use_cache: impl FnOnce(&mut Cache) -> T) -> T {
+    let mut guard = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let cache = guard.get_or_insert_with(|| Cache { choices: read_choices(root), installed: installed_in(root, &PINNED).is_some() });
+    use_cache(cache)
+}
+
+/// The engine `profile`'s web views use: Chromium only when it was chosen for that profile, is installed and runs here.
+pub fn choice(profile: &Profile) -> Kind {
+    let Some(root) = root() else { return Kind::WebKit };
+    let chosen = with_cache(&root, |cache| cache.installed && cache.choices.get(&key(profile)) == Some(&Kind::Chromium));
+    if chosen && available().is_ok() { Kind::Chromium } else { Kind::WebKit }
+}
+
+pub fn set_choice(profile: &Profile, kind: Kind) -> Result<(), String> {
+    let root = root().ok_or("Wings has no data folder")?;
+    set_choice_in(&root, profile, kind)?;
+    with_cache(&root, |cache| {
+        cache.choices.insert(key(profile), kind);
+    });
+    bump();
+    Ok(())
+}
+
+fn set_choice_in(root: &Path, profile: &Profile, kind: Kind) -> Result<(), String> {
+    let mut choices = read_choices(root);
+    choices.insert(key(profile), kind);
+    write_choices(root, &choices)
+}
+
+// ---- Download, verify, install, remove ----
+
+/// Where `download` gets the archive from, besides the pinned address: a local file, in a debug build or one made with
+/// `--features chromium-local`. The pin still applies to it.
+fn local_archive() -> Option<PathBuf> {
+    (cfg!(debug_assertions) || cfg!(feature = "chromium-local"))
+        .then(|| std::env::var_os("WINGS_CHROMIUM_ARCHIVE").filter(|path| !path.is_empty()).map(PathBuf::from))
+        .flatten()
+}
+
+/// Fetches the archive into `<root>/downloads`. Run it off the UI thread.
+pub fn download() -> Result<(), String> {
+    let root = root().ok_or("Wings has no data folder")?;
+    if let Some(path) = local_archive() {
+        let file = fs::File::open(&path).map_err(|error| format!("Couldn't read {}: {error}", path.display()))?;
+        return download_from(&root, &PINNED, file);
+    }
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .https_only(true)
+        .timeout_global(Some(std::time::Duration::from_secs(30 * 60)))
+        .build()
+        .into();
+    // GitHub answers with a redirect to its storage, which ureq follows.
+    let mut response = agent.get(PINNED.url).call().map_err(|error| format!("Couldn't download Chromium: {error}"))?;
+    download_from(&root, &PINNED, response.body_mut().as_reader())
+}
+
+/// Streams `source` to `<root>/downloads/<file>.part`, refusing more than the pinned size, and renames it to
+/// `<root>/downloads/<file>` once it is all there.
+fn download_from(root: &Path, pin: &Pinned, mut source: impl Read) -> Result<(), String> {
+    let dir = downloads_in(root);
+    fs::create_dir_all(&dir).map_err(|error| format!("Couldn't make {}: {error}", dir.display()))?;
+    let (part, done) = (dir.join(format!("{}.part", pin.file)), dir.join(pin.file));
+    let _ = fs::remove_file(&done);
+    let streamed = (|| -> Result<(), String> {
+        let mut out = fs::File::create(&part).map_err(|error| error.to_string())?;
+        let (mut buffer, mut total) = (vec![0u8; 1 << 16], 0u64);
+        loop {
+            let read = source.read(&mut buffer).map_err(|error| format!("The download failed: {error}"))?;
+            if read == 0 {
+                break;
+            }
+            total += read as u64;
+            if total > pin.size {
+                return Err(WRONG_DOWNLOAD.into());
+            }
+            out.write_all(&buffer[..read]).map_err(|error| error.to_string())?;
+        }
+        out.sync_all().map_err(|error| error.to_string())
+    })();
+    match streamed.and_then(|()| fs::rename(&part, &done).map_err(|error| error.to_string())) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = fs::remove_file(&part);
+            Err(error)
+        }
+    }
+}
+
+/// Checks the downloaded archive against the pin; one that doesn't match is deleted.
+pub fn verify() -> Result<(), String> {
+    verify_in(&root().ok_or("Wings has no data folder")?, &PINNED)
+}
+
+fn verify_in(root: &Path, pin: &Pinned) -> Result<(), String> {
+    let path = downloads_in(root).join(pin.file);
+    let mut file = fs::File::open(&path).map_err(|_| "There is no download to check. Try again.".to_owned())?;
+    let metadata = file.metadata().map_err(|error| error.to_string())?;
+    let mut hash = Sha256::new();
+    let hashed = if metadata.len() == pin.size { std::io::copy(&mut file, &mut hash).map(drop) } else { Ok(()) };
+    let digest: String = hash.finalize().iter().map(|byte| format!("{byte:02x}")).collect();
+    drop(file);
+    if hashed.is_ok() && metadata.len() == pin.size && digest == pin.sha256 {
+        return Ok(());
+    }
+    let _ = fs::remove_file(&path);
+    Err(WRONG_DOWNLOAD.into())
+}
+
+/// `codesign --verify --deep --strict` on `bundle`: the engine is signed as it was packaged, and nothing in it changed.
+pub fn verify_signature(bundle: &Path) -> Result<(), String> {
+    let out = std::process::Command::new("codesign")
+        .args(["--verify", "--deep", "--strict"])
+        .arg(bundle)
+        .output()
+        .map_err(|error| format!("Couldn't check Chromium's signature: {error}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let why = String::from_utf8_lossy(&out.stderr);
+    let why = why.lines().next().unwrap_or("it didn't verify").trim();
+    Err(format!("Chromium's signature didn't check out: {why}"))
+}
+
+/// Unpacks the verified download and keeps it as the installed engine. Run it off the UI thread.
+pub fn install() -> Result<(), String> {
+    let root = root().ok_or("Wings has no data folder")?;
+    install_in(&root, &PINNED, verify_signature)?;
+    with_cache(&root, |cache| cache.installed = true);
+    bump();
+    Ok(())
+}
+
+/// Verifies again (the file may have changed since), unpacks into a fresh folder in `root` (the same volume), checks the
+/// bundle's signature with `signed`, moves the folder to `<root>/<version>`, writes the finished marker last, then
+/// deletes the download and any other version. Any failure deletes the fresh folder.
+fn install_in(root: &Path, pin: &Pinned, signed: impl FnOnce(&Path) -> Result<(), String>) -> Result<(), String> {
+    verify_in(root, pin)?;
+    let fresh = tempfile::Builder::new().prefix(".installing-").tempdir_in(root).map_err(|error| format!("Couldn't unpack Chromium: {error}"))?;
+    extract(&downloads_in(root).join(pin.file), fresh.path(), pin.unpacked + MARGIN)?;
+    signed(&fresh.path().join(BUNDLE))?;
+    let target = root.join(pin.version);
+    let _ = fs::remove_dir_all(&target);
+    let unpacked = fresh.keep();
+    if let Err(error) = fs::rename(&unpacked, &target) {
+        let _ = fs::remove_dir_all(&unpacked);
+        return Err(format!("Couldn't install Chromium: {error}"));
+    }
+    fs::write(target.join(FINISHED), pin.version).map_err(|error| format!("Couldn't install Chromium: {error}"))?;
+    let _ = fs::remove_dir_all(downloads_in(root));
+    // The install is done; an old version that won't go is only wasted space.
+    let _ = remove_versions(root, Some(pin.version));
+    Ok(())
+}
+
+/// Every version folder in `root` but `keep`.
+fn remove_versions(root: &Path, keep: Option<&str>) -> Result<(), String> {
+    for entry in fs::read_dir(root).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let is_version = name.starts_with(|c: char| c.is_ascii_digit());
+        if is_version && Some(name.as_str()) != keep {
+            fs::remove_dir_all(entry.path()).map_err(|error| format!("Couldn't delete {}: {error}", entry.path().display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// Unpacks `archive` into `into`, as the updater does (`updater::extract`): only files and folders, each under the
+/// bundle's folder, none twice, and no more than `max` bytes in all, which includes what the gzip stream expands to.
+fn extract(archive: &Path, into: &Path, max: u64) -> Result<(), String> {
+    let refused = |what: &str| format!("Chromium's download holds {what}, so it wasn't installed");
+    let decoder = flate2::read::GzDecoder::new(fs::File::open(archive).map_err(|error| error.to_string())?);
+    // The whole decompressed stream, tar headers included.
+    let mut tar = tar::Archive::new(decoder.take(max + 1));
+    let (mut paths, mut total) = (HashSet::new(), 0u64);
+    for entry in tar.entries().map_err(|error| error.to_string())? {
+        let mut entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path().map_err(|error| error.to_string())?.into_owned();
+        let mut components = path.components();
+        if components.next() != Some(Component::Normal(BUNDLE.as_ref())) || components.any(|c| !matches!(c, Component::Normal(_))) {
+            return Err(refused("a path outside the bundle"));
+        }
+        if !paths.insert(path.clone()) || paths.len() > MAX_ENTRIES {
+            return Err(refused("a path twice or too many files"));
+        }
+        let kind = entry.header().entry_type();
+        if !kind.is_file() && !kind.is_dir() {
+            return Err(refused("a link or special file"));
+        }
+        total = total.checked_add(entry.size()).filter(|total| *total <= max).ok_or_else(|| refused("more than it should unpack to"))?;
+        let dest = into.join(&path);
+        if kind.is_dir() {
+            fs::create_dir_all(&dest).map_err(|error| error.to_string())?;
+            continue;
+        }
+        fs::create_dir_all(dest.parent().ok_or("Invalid path in the download")?).map_err(|error| error.to_string())?;
+        let mut file = fs::File::options().write(true).create_new(true).open(&dest).map_err(|error| error.to_string())?;
+        std::io::copy(&mut entry, &mut file).map_err(|error| error.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = entry.header().mode().map_err(|error| error.to_string())? & 0o755;
+            fs::set_permissions(&dest, fs::Permissions::from_mode(mode)).map_err(|error| error.to_string())?;
+        }
+    }
+    if !into.join(BUNDLE).is_dir() {
+        return Err(refused("no bundle"));
+    }
+    Ok(())
+}
+
+/// Deletes the engine, its download and what Chromium kept for sites, and puts every profile back on WebKit.
+pub fn remove() -> Result<(), String> {
+    let root = root().ok_or("Wings has no data folder")?;
+    let result = remove_in(&root);
+    with_cache(&root, |cache| {
+        cache.installed = false;
+        for kind in cache.choices.values_mut() {
+            *kind = Kind::WebKit;
+        }
+    });
+    bump();
+    result
+}
+
+fn remove_in(root: &Path) -> Result<(), String> {
+    // The choice first: whatever fails after it, no profile points at an engine that is gone.
+    let mut choices = read_choices(root);
+    if choices.values().any(|kind| *kind != Kind::WebKit) {
+        choices.values_mut().for_each(|kind| *kind = Kind::WebKit);
+        write_choices(root, &choices)?;
+    }
+    remove_versions(root, None)?;
+    for dir in [downloads_in(root), root.join("profiles")] {
+        match fs::remove_dir_all(&dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("Couldn't delete {}: {error}", dir.display())),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests;

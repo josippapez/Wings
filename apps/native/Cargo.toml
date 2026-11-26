@@ -12,6 +12,9 @@ test-support = ["ui", "gpui/test-support", "gpui_platform/test-support"]
 # The build that replaces the desktop app: `Wings.app` on the desktop's data folder (`src/data_dir.rs`), made by
 # `WINGS_SWITCH=1 sh scripts/build-mac-app.sh`.
 switch = []
+# Lets a release build take the Chromium engine's archive from the file `WINGS_CHROMIUM_ARCHIVE` names instead of
+# downloading it (`web/engine.rs`); a debug build always does. The archive is still checked against the pinned size and hash.
+chromium-local = []
 
 [[bin]]
 name = "wings-native"

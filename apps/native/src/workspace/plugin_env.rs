@@ -1957,6 +1957,12 @@ fn run_web(job: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, 
                 let _ = answer.send(Ok(count.to_string()));
             });
         }
+        Job::Engine(profile, kind) => {
+            let result = crate::web::engine::set_choice(&profile, kind).map(|()| "null".into());
+            // The web views are placed again with the new engine, driven by `engine::generation`.
+            window.refresh();
+            let _ = answer.send(result);
+        }
     }
 }
 

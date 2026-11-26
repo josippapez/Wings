@@ -251,6 +251,43 @@ pub fn web_data_clear() -> Answer {
     call("webData", json!({ "action": "clear" }))
 }
 
+/// `wings.webEngine` `status`: `{ engine: "webkit" | "chromium", installed, version, downloadBytes, diskBytes, available,
+/// why }`. `engine` is the one this plugin's web views use now, `available` is false on a Mac that can't run Chromium
+/// (`why` says why). Needs `permissions.webView`. Wings 0.2.121.
+pub fn web_engine_status() -> Answer {
+    call("webEngine", json!({ "action": "status" }))
+}
+
+/// `wings.webEngine` `download`: fetches the Chromium engine, only right after a click. Answers null when it is all
+/// there. The page calls `download`, `verify`, `install` and `web_engine_use` in turn so it can say which it is on.
+/// Wings 0.2.121.
+pub fn web_engine_download() -> Answer {
+    call("webEngine", json!({ "action": "download" }))
+}
+
+/// `wings.webEngine` `verify`: checks the download against the size and hash this Wings expects, and deletes it when it
+/// doesn't match. Wings 0.2.121.
+pub fn web_engine_verify() -> Answer {
+    call("webEngine", json!({ "action": "verify" }))
+}
+
+/// `wings.webEngine` `install`: unpacks the verified download and checks its signature. Wings 0.2.121.
+pub fn web_engine_install() -> Answer {
+    call("webEngine", json!({ "action": "install" }))
+}
+
+/// `wings.webEngine` `use`: the plugin's web views use `kind` from now on, and its open pages load again in it. Chromium
+/// has to be installed. Sign-ins and site data don't carry over between engines. Wings 0.2.121.
+pub fn web_engine_use(kind: &str) -> Answer {
+    call("webEngine", json!({ "action": "use", "engine": kind }))
+}
+
+/// `wings.webEngine` `remove`: switches back to WebKit and deletes Chromium with what it kept for sites, only right after
+/// a click. Wings 0.2.121.
+pub fn web_engine_remove() -> Answer {
+    call("webEngine", json!({ "action": "remove" }))
+}
+
 /// `wings.webExtensions` `list`: `{ supported, keychain, extensions: [{ id, name, version, description, enabled, icon,
 /// permissions, hosts, error }] }`. `supported` is false before macOS 15.4, `icon` is an image id an `ui::image` draws,
 /// and `error` says why one doesn't load (its files or record changed since it was added, or Wings couldn't read its
@@ -367,6 +404,12 @@ mod tests {
         drop(set_claude_account("/r", None));
         drop(share_claude_setup("work", true));
         drop(web_data_clear());
+        drop(web_engine_status());
+        drop(web_engine_download());
+        drop(web_engine_verify());
+        drop(web_engine_install());
+        drop(web_engine_use("chromium"));
+        drop(web_engine_remove());
         drop(web_extensions());
         drop(web_extensions_installed());
         drop(web_extension_stage(Stage::Pick));
@@ -401,6 +444,12 @@ mod tests {
                 ("setClaudeAccount", json!({ "projectId": "/r", "name": null })),
                 ("shareClaudeSetup", json!({ "name": "work", "on": true })),
                 ("webData", json!({ "action": "clear" })),
+                ("webEngine", json!({ "action": "status" })),
+                ("webEngine", json!({ "action": "download" })),
+                ("webEngine", json!({ "action": "verify" })),
+                ("webEngine", json!({ "action": "install" })),
+                ("webEngine", json!({ "action": "use", "engine": "chromium" })),
+                ("webEngine", json!({ "action": "remove" })),
                 ("webExtensions", json!({ "action": "list" })),
                 ("webExtensions", json!({ "action": "installed" })),
                 ("webExtensions", json!({ "action": "stage", "from": "pick" })),

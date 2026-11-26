@@ -600,7 +600,7 @@ impl Shared {
                 let multiple = params.get("multiple") == Some(&Value::Bool(true));
                 access.env.pick_files(multiple, reply)
             }
-            "webData" | "webExtensions" | "browserCookies" => self.web_call(access, method, params, reply),
+            "webData" | "webExtensions" | "webEngine" | "browserCookies" => self.web_call(access, method, params, reply),
             _ => reply.err(format!("unknown method {method}")),
         }
     }
