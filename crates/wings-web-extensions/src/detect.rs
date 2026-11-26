@@ -143,7 +143,7 @@ fn firefox_profiles(base: &Path, out: &mut Vec<Installed>) {
 }
 
 fn read_xpi(path: &Path) -> Result<(String, crate::Info), Error> {
-    let archive = ZipArchive::new(Cursor::new(fs::read(path)?))?;
+    let archive = ZipArchive::new(Cursor::new(crate::read_package(path)?))?;
     let parsed = parse(&mut ZipFiles(archive), None)?;
     let stem = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
     Ok((parsed.gecko_id.unwrap_or(stem), parsed.info))

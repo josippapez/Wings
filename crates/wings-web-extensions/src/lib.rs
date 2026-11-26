@@ -7,12 +7,14 @@ mod error;
 mod limits;
 mod manifest;
 mod store;
+mod tree;
 mod unpack;
 
 pub use detect::{detect_installed, Installed};
 pub use error::Error;
 pub use manifest::{read_manifest, Info};
 pub use store::{amo_file_url, store_package, Store, StorePackage};
+pub use tree::{read_package, tree_hash};
 pub use unpack::{copy_folder, unpack, MAX_FILES, MAX_TOTAL_BYTES};
 
 #[cfg(test)]

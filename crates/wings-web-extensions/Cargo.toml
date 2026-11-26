@@ -7,6 +7,8 @@ publish = false
 
 [dependencies]
 serde_json = "1"
+# 0.11 finds the CPU's SHA-256 instructions on Apple silicon by itself; 0.10 hashed a 92 MB extension in 300 ms, in software.
+sha2 = "0.11"
 url = "2.5.8"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 

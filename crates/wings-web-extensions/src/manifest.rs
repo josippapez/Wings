@@ -185,9 +185,18 @@ impl Messages {
 
 /// The largest icon up to 128 px from `icons`, else the action's, else the smallest bigger one.
 fn best_icon(m: &serde_json::Map<String, Value>, root: &Path) -> Option<PathBuf> {
+    // A file of the folder's own: no part of the way to it is a symlink, which another browser's folder may hold and
+    // which would point the icon at any file of this Mac.
     let exists = |rel: &str| -> Option<PathBuf> {
-        let p = root.join(safe_relative(rel.trim_start_matches('/'))?);
-        p.is_file().then_some(p)
+        let rel = safe_relative(rel.trim_start_matches('/'))?;
+        let mut p = root.to_path_buf();
+        for part in rel.components() {
+            p.push(part);
+            if fs::symlink_metadata(&p).ok()?.file_type().is_symlink() {
+                return None;
+            }
+        }
+        fs::symlink_metadata(&p).ok()?.is_file().then_some(p)
     };
     let pick = |v: &Value| -> Option<PathBuf> {
         match v {

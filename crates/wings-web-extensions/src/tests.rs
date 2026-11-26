@@ -4,7 +4,8 @@ use tempfile::TempDir;
 use zip::{write::SimpleFileOptions, ZipWriter};
 
 use crate::{
-    amo_file_url, copy_folder, detect::detect_in, read_manifest, store_package, unpack, Error, Store, MAX_FILES,
+    amo_file_url, copy_folder, detect::detect_in, read_manifest, read_package, store_package, tree_hash, unpack, Error, Store,
+    MAX_FILES, MAX_TOTAL_BYTES,
 };
 
 fn write(root: &Path, rel: &str, body: &str) {
@@ -230,6 +231,97 @@ fn copy_folder_copies_and_skips_symlinks() {
     assert_eq!(copy_folder(src.path(), &into).unwrap().name, "Demo");
     assert!(into.join("js/a.js").is_file() && into.join("_metadata").is_dir());
     assert!(!into.join("link").exists());
+}
+
+#[test]
+fn a_trees_hash_changes_with_any_file_and_never_follows_a_symlink() {
+    let d = TempDir::new().unwrap();
+    write(d.path(), "manifest.json", MANIFEST);
+    write(d.path(), "js/a.js", "1");
+    let first = tree_hash(d.path()).unwrap();
+    assert_eq!(tree_hash(d.path()).unwrap(), first, "the same files, the same hash");
+    let copy = TempDir::new().unwrap();
+    copy_folder(d.path(), copy.path()).unwrap();
+    assert_eq!(tree_hash(copy.path()).unwrap(), first, "a copy hashes the same");
+
+    // A file edited, added, renamed or a folder added: each another hash.
+    let changes: [(&str, &dyn Fn(&Path)); 5] = [
+        ("edited", &|root| write(root, "js/a.js", "2")),
+        ("added", &|root| write(root, "js/b.js", "")),
+        ("renamed", &|root| fs::rename(root.join("js/a.js"), root.join("js/c.js")).unwrap()),
+        ("folder", &|root| fs::create_dir(root.join("empty")).unwrap()),
+        ("symlink", &|root| std::os::unix::fs::symlink("a.js", root.join("js/link.js")).unwrap()),
+    ];
+    for (what, change) in changes {
+        let at = TempDir::new().unwrap();
+        copy_folder(d.path(), at.path()).unwrap();
+        change(at.path());
+        assert_ne!(tree_hash(at.path()).unwrap(), first, "{what}");
+    }
+    // Moving a file's bytes into its name doesn't hash the same.
+    let a = TempDir::new().unwrap();
+    write(a.path(), "ab", "");
+    let b = TempDir::new().unwrap();
+    write(b.path(), "a", "b");
+    assert_ne!(tree_hash(a.path()).unwrap(), tree_hash(b.path()).unwrap());
+
+    // A symlink to a folder is hashed by its target's name, not by what is there.
+    let outside = TempDir::new().unwrap();
+    write(outside.path(), "secret.txt", "one");
+    std::os::unix::fs::symlink(outside.path(), d.path().join("out")).unwrap();
+    let linked = tree_hash(d.path()).unwrap();
+    write(outside.path(), "secret.txt", "two");
+    assert_eq!(tree_hash(d.path()).unwrap(), linked);
+    // And the folder itself is never one.
+    let link = TempDir::new().unwrap();
+    std::os::unix::fs::symlink(d.path(), link.path().join("ext")).unwrap();
+    assert!(matches!(tree_hash(&link.path().join("ext")), Err(Error::Unsafe(_))));
+}
+
+#[test]
+fn a_package_bigger_than_the_limit_is_refused_before_it_is_read() {
+    let d = TempDir::new().unwrap();
+    let big = d.path().join("big.zip");
+    // Sparse: as big as it says, without the disk.
+    fs::File::create(&big).unwrap().set_len(MAX_TOTAL_BYTES + 1).unwrap();
+    assert!(matches!(read_package(&big), Err(Error::TooLarge(_))));
+    let small = d.path().join("small.zip");
+    fs::write(&small, make_zip(&[("manifest.json", MANIFEST)])).unwrap();
+    assert_eq!(unpack(&read_package(&small).unwrap(), &d.path().join("e")).unwrap().name, "Demo");
+
+    // Firefox's .xpi files are read the same way.
+    let app = TempDir::new().unwrap();
+    let ext = app.path().join("Firefox/Profiles/abc.default/extensions");
+    fs::create_dir_all(&ext).unwrap();
+    fs::File::create(ext.join("big.xpi")).unwrap().set_len(MAX_TOTAL_BYTES + 1).unwrap();
+    assert!(detect_in(app.path()).is_empty());
+}
+
+#[test]
+fn an_icon_reached_through_a_symlink_is_never_named() {
+    let app = TempDir::new().unwrap();
+    let chrome = app.path().join("Google/Chrome");
+    let outside = TempDir::new().unwrap();
+    write(outside.path(), "private.png", "not an icon");
+    write(outside.path(), "128.png", "not an icon either");
+    let manifest = r#"{"manifest_version":3,"name":"Linked","version":"1","icons":{"48":"icons/48.png","128":"pics/128.png"}}"#;
+    // The icon a symlink to a file, and the folder it's in a symlink to another folder.
+    for (id, link, target) in [("a", "icons/48.png", outside.path().join("private.png")), ("b", "pics", outside.path().to_path_buf())] {
+        let version = chrome.join(format!("Default/Extensions/{}/1_0", id.repeat(32)));
+        write(&version, "manifest.json", manifest);
+        fs::create_dir_all(version.join("icons")).unwrap();
+        std::os::unix::fs::symlink(&target, version.join(link)).unwrap();
+        assert!(version.join(link).exists());
+    }
+    let found = detect_in(app.path());
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert!(found.iter().all(|found| found.icon.is_none()), "{found:?}");
+    // A real file is still found.
+    let real = chrome.join(format!("Default/Extensions/{}/1_0", "c".repeat(32)));
+    write(&real, "manifest.json", manifest);
+    write(&real, "icons/48.png", "png");
+    let found = detect_in(app.path());
+    assert_eq!(found.iter().find(|found| found.name == "Linked" && found.icon.is_some()).and_then(|found| found.icon.clone()), Some(real.join("icons/48.png")));
 }
 
 #[test]
