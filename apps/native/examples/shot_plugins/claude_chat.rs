@@ -1074,7 +1074,7 @@ esac"##,
         // Part way through the wait before the card opens: the cue fills by the pointer, and no card yet.
         ("mentioned-cue", mentioned, None, Some("hovercue:-220,450;wait:1500"), "Mentioned"),
         ("long-draft", opened(vec![init.clone()]), None, Some(long_draft.as_str()), "What should Claude do?"),
-        ("long-older", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, Some(older.as_str()), "Jump to the latest"),
+        ("long-older", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, Some(older.as_str()), "Step 41: run the checkout suite"),
         ("conversation", conversation, None, None, "Allow Edit?"),
         ("streaming", streaming, None, None, "token bucket"),
         ("thinking", thinking, None, None, "Thinking"),

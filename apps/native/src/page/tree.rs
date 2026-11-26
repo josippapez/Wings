@@ -295,6 +295,9 @@ pub struct Stack {
     pub quote: bool,
     /// `pt`: room above it in points, as a heading has in a column of Markdown.
     pub pt: Option<f32>,
+    /// `floatBottom: true`: out of the flow, over the foot of its parent, centred, so a small control (a round "to the latest"
+    /// button) sits over a scroll area without taking a row of its own.
+    pub float_bottom: bool,
     pub children: Vec<Node>,
 }
 
@@ -1613,6 +1616,7 @@ impl Walk {
                 min_share: None,
                 quote: on("quote"),
                 pt: number(&props, "pt").filter(|pt| *pt > 0.0).map(|pt| pt.min(200.0) as f32),
+                float_bottom: on("floatBottom"),
                 children: parts(children),
             }),
             "ListRow" => kit::list_row(id, children, handler("onClick"), title(&props)),

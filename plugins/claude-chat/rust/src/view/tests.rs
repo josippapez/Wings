@@ -193,6 +193,17 @@ fn a_session_too_long_for_the_page_moves_along_as_you_scroll_so_all_of_it_can_be
     assert_eq!(chat::with(|c| (c.until, shows(c).1)), (None, 3_000));
 }
 
+/// "Jump to the latest" is a round arrow floating over the foot of the conversation, shown only while you read an older part.
+#[test]
+fn the_jump_to_latest_arrow_floats_while_reading_an_older_part() {
+    chat::with(|c| c.until = None);
+    assert!(!chat::with(|c| page_text(c)).contains("Jump to the latest"));
+    chat::with(|c| c.until = Some(10));
+    let page = chat::with(|c| page_text(c));
+    assert!(page.contains("\"floatBottom\":true") && page.contains("Jump to the latest"));
+    chat::with(show_latest);
+}
+
 /// A session that ran many subagents lists each in the side panel, which the page sends whole whatever the conversation
 /// shows: the conversation's budget is what the rest of the page leaves under the 5,000 nodes Wings draws.
 #[test]

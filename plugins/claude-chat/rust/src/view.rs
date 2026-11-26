@@ -26,6 +26,8 @@ use crate::{
 
 /// An arrow up, a square and a cross, in a 14-point box.
 pub(crate) const SEND: &str = "M7 12V2M2.5 6.5 7 2l4.5 4.5";
+/// An arrow down, in a 14-point box.
+const DOWN: &str = "M7 2v10M2.5 7.5 7 12l4.5-4.5";
 const STOP: &str = "M3.5 3.5h7v7h-7z";
 const CLOSE: &str = "M3.5 3.5l7 7M10.5 3.5l-7 7";
 /// A paperclip, in the same box.
@@ -99,7 +101,7 @@ pub(crate) fn chat_page(c: &Chat) -> Node {
     // The rail goes down to the checklist and the message box, not past them: it is laid over the conversation alone.
     let marks = crate::rail::marks(c, &rail);
     let inset_below = if marks.is_empty() { INSET_BELOW } else { INSET_BELOW_RAIL };
-    let conversation = stack().prop("fill", true).prop("gap", "none").children(marks).child(body);
+    let conversation = stack().prop("fill", true).prop("gap", "none").children(marks).child(body).maybe(latest(c));
     // The session panel is a card on the right that the app leaves out of a narrow tab and that shows by default; only the
     // header's button puts it away and brings it back, also where it covers the conversation in a narrow tab. A panel left
     // out leaves its terminals out with it. In Wings' sidebar (`session_side.rs`) the conversation has the tab's width.
@@ -1267,7 +1269,6 @@ fn composer(c: &Chat) -> Node {
         stack()
             .prop("gap", if older { "m" } else { "s" })
             .prop("maxWidth", COLUMN)
-            .maybe(latest(c))
             .maybe(todo_card(c))
             .maybe(crate::goal_view::chip(c))
             .maybe(crate::mods_view::above_prompt(c))
@@ -1278,9 +1279,18 @@ fn composer(c: &Chat) -> Node {
     )
 }
 
-/// While you read an older part of a long session, a button over the message box back to the newest.
+/// While you read an older part of a long session, a small round arrow floating over the foot of the conversation, back to
+/// the newest.
 fn latest(c: &Chat) -> Option<Node> {
-    c.until.is_some().then(|| row().prop("justify", "center").child(button("Jump to the latest", "outline", false, || chat::with(show_latest)).prop("size", "sm")))
+    c.until.is_some().then(|| {
+        let arrow = button("", "outline", false, || chat::with(show_latest))
+            .prop("size", "icon")
+            .prop("round", true)
+            .prop("label", "Jump to the latest")
+            .prop("title", "Jump to the latest")
+            .child(icon(14, 1.5, &[DOWN]));
+        stack().prop("floatBottom", true).key("latest").child(arrow)
+    })
 }
 
 /// What went wrong with keeping what the tab holds: a comment that didn't fit, and a save Wings refused.

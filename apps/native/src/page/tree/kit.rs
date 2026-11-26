@@ -38,6 +38,7 @@ fn stack(id: u64, gap: Gap, children: Vec<Node>) -> Stack {
         min_share: None,
         quote: false,
         pt: None,
+        float_bottom: false,
         children,
     }
 }

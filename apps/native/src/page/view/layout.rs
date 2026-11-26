@@ -59,6 +59,8 @@ impl PageView {
             .when_some(stack.max_width, |el, width| el.w_full().max_w(px(width)).mx_auto())
             .when_some(stack.measure, |el, width| el.max_w(px(width)))
             .when_some(stack.pt, |el, pt| el.pt(px(pt)))
+            // Over the foot of its parent, out of the flow; only what it holds takes the pointer.
+            .when(stack.float_bottom, |el| el.absolute().bottom(px(12.0)).left_0().right_0().items_center())
             .when_some(stack.min_share, |el, share| el.min_w(relative(share)))
             // A quote's bar: a 3pt border in the muted tone, with the text set in from it.
             .when(stack.quote, |el| {
