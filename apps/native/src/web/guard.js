@@ -1,7 +1,7 @@
 // The secret fields of a page: a password, a card's number, name, date or code, or a one-time code, as the Browser's
 // agent helper names them (`secret` in plugins/browser/rust/src/agent_js.rs). Run by Wings itself in a world of its own
 // (`wings-guard`), which the page's scripts and the plugin's can't reach: as a check right before an agent's script or a
-// picture (`guard::CHECK`), and in every frame as it loads and while it changes (`guard::WATCH`).
+// picture (`guard::CHECK`), and in every frame as it loads and while it changes (`watch.js`), in WebKit and Chromium.
 
 function wingsSecret(e) {
   return e.type === "password" || /(^|\s)(cc-|one-time-code|current-password|new-password)/.test(e.getAttribute("autocomplete") || "");

@@ -10,6 +10,8 @@
 
 pub mod engine;
 pub mod extensions;
+#[cfg(all(feature = "ui", target_os = "macos"))]
+pub mod guard;
 pub mod snapshot;
 #[cfg(feature = "ui")]
 mod views;
