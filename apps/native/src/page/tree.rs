@@ -404,6 +404,9 @@ pub enum WebGo {
     Dialog { accept: bool, text: Option<String> },
     /// The page's recent console messages and `fetch`/`XMLHttpRequest` calls, for a plugin that may run scripts.
     Logs,
+    /// Clicks the button of the extension of this id for the page: its popup opens next to the button, or it hears the
+    /// click. Only right after your click in the page (`web::needs_click`).
+    Extension(String),
 }
 
 /// The most bytes of a script an `eval` command runs: a page's helper, not a library.
@@ -442,6 +445,10 @@ fn web_command(value: &Value) -> Option<WebCommand> {
             text: value.get("text").and_then(Value::as_str).map(|text| text.chars().take(10_000).collect()),
         },
         "logs" => WebGo::Logs,
+        // An extension's id as Wings named it (`web::extensions`): letters and digits, never a path.
+        "extension" => WebGo::Extension(
+            value.get("id")?.as_str().filter(|id| (1..=64).contains(&id.len()) && id.bytes().all(|byte| byte.is_ascii_alphanumeric()))?.to_owned(),
+        ),
         _ => return None,
     };
     Some(WebCommand { go, token })

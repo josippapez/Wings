@@ -129,7 +129,19 @@ impl PageView {
                 commands: web.commands.clone(),
             })
             .collect();
-        crate::web::update(cx.entity_id(), &profile, &specs, told, self.web_scripts);
+        let runtime = self.runtime.as_ref();
+        crate::web::update(cx.entity_id(), &profile, &specs, told, self.web_scripts, &mut || runtime.is_some_and(|runtime| runtime.take_gesture()));
+    }
+
+    /// Tells the page what its web view `name` says of itself, as WebKit would, for the screenshots, which have no web
+    /// engine. False when the page has no such web view.
+    #[cfg(feature = "test-support")]
+    pub fn tell_web_state(&self, name: &str, state: &serde_json::Value) -> bool {
+        let handler = self.web_handlers.get(name).and_then(|(on_state, _)| on_state.clone());
+        handler.is_some_and(|handler| {
+            self.send(&handler, Some(state));
+            true
+        })
     }
 
     /// The links in the text of `id`, found once for each text and set of links rather than each time the page draws.

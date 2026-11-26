@@ -489,6 +489,12 @@ impl PageRuntime {
         true
     }
 
+    /// Uses up the click or key of yours the page was last handed, if it was just now (`Link::take_user_event`), for
+    /// something the page asks of the app in its tree rather than by a call.
+    pub fn take_gesture(&self) -> bool {
+        self.link.as_ref().is_some_and(|link| link.take_user_event())
+    }
+
     /// `dispatch` for a click, a key press or a pick of yours, which lets the page copy for a moment after, as a
     /// browser's user activation does. Hovers, blurs, typing and scrolling are plain `dispatch`es.
     pub fn dispatch_gesture(&self, handler: &str, payload: Option<&serde_json::Value>) -> bool {

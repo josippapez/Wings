@@ -1059,6 +1059,19 @@ fn a_web_view_loads_only_web_addresses_and_takes_each_command_by_its_token() {
     assert_eq!(go(0), Some(WebGo::Dialog { accept: true, text: Some("Ana".into()) }));
     assert_eq!(go(1), None, "a dialog's answer says OK or Cancel");
     assert_eq!(go(2), Some(WebGo::Logs));
+    // An extension's button by the id Wings gave it: never a path, or more than a key's length.
+    let buttons = tree(json!([
+        {"id":1,"type":"WebView","props":{"name":"a","command":{"action":"extension","id":"18f2a9c0b1","token":1}}},
+        {"id":2,"type":"WebView","props":{"name":"b","command":{"action":"extension","id":"../../etc","token":2}}},
+        {"id":3,"type":"WebView","props":{"name":"c","command":{"action":"extension","id":"e".repeat(65),"token":3}}},
+        {"id":4,"type":"WebView","props":{"name":"d","command":{"action":"extension","token":4}}}
+    ]))
+    .unwrap();
+    let go = |at: usize| match &buttons.children[at] {
+        Node::WebView(web) => web.commands.first().cloned().map(|command| command.go),
+        other => panic!("not a web view: {other:?}"),
+    };
+    assert_eq!((go(0), go(1), go(2), go(3)), (Some(WebGo::Extension("18f2a9c0b1".into())), None, None, None));
     // A file or a script never loads, by the start address or a command; a name too long to be a key is none.
     let refused = web(1);
     assert_eq!((refused.name.as_str(), refused.url, refused.commands, refused.keep_data, refused.height), ("", None, vec![], false, 4000.0));
