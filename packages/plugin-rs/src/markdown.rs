@@ -33,6 +33,8 @@ pub struct Item {
 }
 
 const MAX_DETAILS_DEPTH: usize = 3;
+/// Quotes nest this deep, and a deeper `>` is kept as text, so a long run of them can't overflow the stack.
+const MAX_QUOTE_DEPTH: usize = 8;
 
 /// A heading's text without its closing hashes (`## Title ##`).
 fn heading_text(text: &str) -> &str {
@@ -129,6 +131,10 @@ fn count(haystack: &str, needle: &str) -> usize {
 }
 
 pub fn parse_blocks(src: &str, depth: usize) -> Vec<Block> {
+    parse(src, depth, 0)
+}
+
+fn parse(src: &str, depth: usize, quotes: usize) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut lines: Vec<String> = src.replace("\r\n", "\n").replace('\r', "\n").split('\n').map(str::to_owned).collect();
     let mut paragraph: Vec<String> = Vec::new();
@@ -211,7 +217,7 @@ pub fn parse_blocks(src: &str, depth: usize) -> Vec<Block> {
                     inner.replace_range(start..start + end + "</summary>".len(), "");
                 }
             }
-            blocks.push(Block::Details { summary, blocks: parse_blocks(&inner, depth + 1) });
+            blocks.push(Block::Details { summary, blocks: parse(&inner, depth + 1, quotes) });
             i += 1;
             continue;
         }
@@ -253,7 +259,7 @@ pub fn parse_blocks(src: &str, depth: usize) -> Vec<Block> {
                 Some(Block::List { ordered: o, items, .. }) if *o == ordered || item.depth > 0 => items.push(item),
                 _ => blocks.push(Block::List { ordered, start: number.unwrap_or(1), items: vec![item] }),
             }
-        } else if line.trim_start().starts_with('>') {
+        } else if quotes < MAX_QUOTE_DEPTH && line.trim_start().starts_with('>') {
             flush(&mut paragraph, &mut blocks);
             // The quote's lines without their mark: a `> >` line is a quote inside it.
             let mut inner = Vec::new();
@@ -261,7 +267,7 @@ pub fn parse_blocks(src: &str, depth: usize) -> Vec<Block> {
                 inner.push(quote.strip_prefix(' ').unwrap_or(quote).to_owned());
                 i += 1;
             }
-            blocks.push(Block::Quote(parse_blocks(&inner.join("\n"), depth)));
+            blocks.push(Block::Quote(parse(&inner.join("\n"), depth, quotes + 1)));
             continue;
         } else {
             paragraph.push(line.trim().to_owned());
@@ -520,6 +526,18 @@ mod tests {
             parse_blocks("> outer\n> > inner\n> more", 0),
             [Block::Quote(vec![Block::Paragraph("outer".into()), Block::Quote(vec![Block::Paragraph("inner".into())]), Block::Paragraph("more".into())])]
         );
+    }
+
+    #[test]
+    fn a_long_run_of_quote_marks_stops_nesting_and_keeps_the_rest_as_text() {
+        let parsed = parse_blocks(&format!("{} deep", ">".repeat(100_000)), 0);
+        let mut blocks = parsed.as_slice();
+        for _ in 0..MAX_QUOTE_DEPTH {
+            let [Block::Quote(inner)] = blocks else { panic!("expected a quote: {blocks:?}") };
+            blocks = inner;
+        }
+        assert!(matches!(blocks, [Block::Paragraph(text)] if text.ends_with("> deep")));
+        markdown(&format!("{} deep", ">".repeat(100_000)));
     }
 
     #[test]
