@@ -1367,6 +1367,13 @@ mod tests {
                 "same namespace true, held true", "worlds {\"ISOLATED\":\"ISOLATED\",\"MAIN\":\"MAIN\"}",
             ])
         );
+        // In an extension's worker `new WebSocket` hung its whole process (Bitwarden's, as it signed in): there it is gone,
+        // and anywhere else it stays.
+        let socket = "globalThis.WebSocket = function () {};";
+        let worker = format!("{WEBKIT}\n{socket}\nglobalThis.ServiceWorkerGlobalScope = class {{ static [Symbol.hasInstance]() {{ return true; }} }};");
+        let check = "function run() { return JSON.stringify(typeof WebSocket); }";
+        assert_eq!(compat(&worker, check), serde_json::json!("undefined"), "in a worker");
+        assert_eq!(compat(&format!("{WEBKIT}\n{socket}"), check), serde_json::json!("function"), "in a page");
         // A WebKit that lists the worlds keeps its own.
         let listed = format!("{WEBKIT}\nconst own = {{ ISOLATED: \"isolated\" }};\nscripting.ExecutionWorld = own;");
         assert_eq!(compat(&listed, "function run() { return JSON.stringify(chrome.scripting.ExecutionWorld === own); }"), serde_json::json!(true));

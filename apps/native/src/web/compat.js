@@ -8,6 +8,13 @@
 //   WebKit throws for `permissions.contains` and rejects with for `permissions.request`: Bitwarden asks about `privacy`
 //   before its login page shows, and the error left its popup on loading.
 (() => {
+  // An extension's worker runs on its process's main thread here, and `new WebSocket` there waits on that same thread
+  // for good: the popup, its pages and its content scripts got no answer again (Bitwarden opens one as you sign in, for
+  // its notifications). Without it, code that can do without one does: Bitwarden tries again every few minutes.
+  // debt: while this WebKit's worker hangs on it; let it through again once one that doesn't ships.
+  if (typeof ServiceWorkerGlobalScope === "function" && globalThis instanceof ServiceWorkerGlobalScope) {
+    delete globalThis.WebSocket;
+  }
   const api = globalThis.chrome || globalThis.browser;
   if (!api) return;
   // WebKit makes its objects again once nothing holds them, which drops what was added to them; these hold them. Only
