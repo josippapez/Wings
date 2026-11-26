@@ -33,20 +33,29 @@ pub struct State {
     pub error: Option<String>,
 }
 
-/// A web view's page hears what it does through this: the view's name and its state.
-pub type Told = async_channel::Sender<(SharedString, State)>;
+/// What a web view tells its page: where it is, or what a command came to.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Heard {
+    State(State),
+    /// What the `eval` or `snapshot` command of `token` came to: its value as JSON, or why it failed.
+    Result { token: u64, result: Result<serde_json::Value, String> },
+}
+
+/// A web view's page hears what it does through this: the view's name and what it heard.
+pub type Told = async_channel::Sender<(SharedString, Heard)>;
 
 /// The engine's view of one web view, or a stand-in in tests.
 pub trait Native {
     /// Shows it at `frame`, the window's points from its top left, in `window`, or hides it for `None`.
     fn place(&mut self, window: &Window, frame: Option<Bounds<Pixels>>);
-    fn go(&mut self, go: &WebGo);
+    /// Does `go`, the command of `token`, which `eval` and `snapshot` answer by.
+    fn go(&mut self, go: &WebGo, token: u64);
 }
 
 /// Makes the engine's views of a window (`host_natively`). A window without one (offscreen: tests, `pnpm shot`) draws
 /// only the places.
 pub trait Maker {
-    fn make(&self, profile: &Profile, keep_data: bool, url: Option<&str>, told: Box<dyn Fn(State)>) -> Box<dyn Native>;
+    fn make(&self, profile: &Profile, keep_data: bool, url: Option<&str>, told: Rc<dyn Fn(Heard)>) -> Box<dyn Native>;
 }
 
 struct Entry {
@@ -55,8 +64,8 @@ struct Entry {
     url: Option<String>,
     told: Told,
     native: Option<Box<dyn Native>>,
-    /// What the page asked before the engine's view was made, done once it is.
-    waiting: Vec<WebGo>,
+    /// What the page asked before the engine's view was made, done once it is, with each command's token.
+    waiting: Vec<(WebGo, u64)>,
     /// The token of the last command done, so each runs once.
     token: Option<u64>,
     /// Where it shows now, and in which window.
@@ -110,8 +119,8 @@ pub fn update(page: EntityId, profile: &Profile, specs: &[Spec], told: &Told) {
             {
                 entry.token = Some(command.token);
                 match &mut entry.native {
-                    Some(native) => native.go(&command.go),
-                    None => entry.waiting.push(command.go.clone()),
+                    Some(native) => native.go(&command.go, command.token),
+                    None => entry.waiting.push((command.go.clone(), command.token)),
                 }
             }
         }
@@ -177,12 +186,12 @@ pub fn place(window: &Window, _: &App) {
                 let (Some(maker), Some(_)) = (&maker, at) else { continue };
                 let told = entry.told.clone();
                 let key = name.clone();
-                let tell: Box<dyn Fn(State)> = Box::new(move |state| {
-                    let _ = told.try_send((key.clone(), state));
+                let tell: Rc<dyn Fn(Heard)> = Rc::new(move |heard| {
+                    let _ = told.try_send((key.clone(), heard));
                 });
                 let mut native = maker.make(&entry.profile, entry.keep_data, entry.url.as_deref(), tell);
-                for go in entry.waiting.drain(..) {
-                    native.go(&go);
+                for (go, token) in entry.waiting.drain(..) {
+                    native.go(&go, token);
                 }
                 entry.native = Some(native);
                 entry.window = Some(id);
@@ -209,7 +218,7 @@ pub(crate) mod testing {
     pub enum Did {
         Made { name: Option<String>, keep_data: bool, url: Option<String> },
         Placed(Option<Bounds<Pixels>>),
-        Went(WebGo),
+        Went(WebGo, u64),
         Ended,
     }
 
@@ -217,7 +226,7 @@ pub(crate) mod testing {
     pub struct Record {
         pub did: Rc<RefCell<Vec<Did>>>,
         /// What each view made tells its page, by the order they were made in.
-        pub tells: Rc<RefCell<Vec<Box<dyn Fn(State)>>>>,
+        pub tells: Rc<RefCell<Vec<Rc<dyn Fn(Heard)>>>>,
     }
 
     struct Fake(Rc<RefCell<Vec<Did>>>);
@@ -226,8 +235,8 @@ pub(crate) mod testing {
         fn place(&mut self, _: &Window, frame: Option<Bounds<Pixels>>) {
             self.0.borrow_mut().push(Did::Placed(frame));
         }
-        fn go(&mut self, go: &WebGo) {
-            self.0.borrow_mut().push(Did::Went(go.clone()));
+        fn go(&mut self, go: &WebGo, token: u64) {
+            self.0.borrow_mut().push(Did::Went(go.clone(), token));
         }
     }
 
@@ -238,7 +247,7 @@ pub(crate) mod testing {
     }
 
     impl Maker for Record {
-        fn make(&self, profile: &Profile, keep_data: bool, url: Option<&str>, told: Box<dyn Fn(State)>) -> Box<dyn Native> {
+        fn make(&self, profile: &Profile, keep_data: bool, url: Option<&str>, told: Rc<dyn Fn(Heard)>) -> Box<dyn Native> {
             self.did.borrow_mut().push(Did::Made { name: Some(profile.plugin.clone()), keep_data, url: url.map(str::to_owned) });
             self.tells.borrow_mut().push(told);
             Box::new(Fake(self.did.clone()))
@@ -246,7 +255,7 @@ pub(crate) mod testing {
     }
 
     /// Records the web views of the window `id`: what was done to them, and how to tell their pages.
-    pub fn record(id: WindowId) -> (Rc<RefCell<Vec<Did>>>, Rc<RefCell<Vec<Box<dyn Fn(State)>>>>) {
+    pub fn record(id: WindowId) -> (Rc<RefCell<Vec<Did>>>, Rc<RefCell<Vec<Rc<dyn Fn(Heard)>>>>) {
         let record = Record::default();
         let did = record.did.clone();
         let tells = record.tells.clone();

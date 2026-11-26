@@ -13,6 +13,9 @@ use crate::{
     web::{Job, Profile, extensions},
 };
 
+/// The folders of the extensions `installed` last found for each plugin, in the order it listed them.
+static FOUND: std::sync::Mutex<std::collections::BTreeMap<String, Vec<PathBuf>>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+
 /// The most bytes of a store's package: what `wings_web_extensions::unpack` takes at most, unpacked.
 const PACKAGE_MAX: u64 = wings_web_extensions::MAX_TOTAL_BYTES;
 
@@ -65,11 +68,15 @@ impl Shared {
             ("webExtensions", "installed") => {
                 let plugin = id.clone();
                 self.off_thread(reply, move |_| {
-                    let found: Vec<Value> = wings_web_extensions::detect_installed()
+                    let installed = wings_web_extensions::detect_installed();
+                    // The page gets each by its place in this list, never its folder, which names the person's profiles.
+                    FOUND.lock().unwrap().insert(plugin.clone(), installed.iter().map(|found| found.source.clone()).collect());
+                    let found: Vec<Value> = installed
                         .into_iter()
-                        .map(|found| {
+                        .enumerate()
+                        .map(|(at, found)| {
                             json!({
-                                "source": found.source, "browser": found.browser_name, "profile": found.profile,
+                                "source": at.to_string(), "browser": found.browser_name, "profile": found.profile,
                                 "name": found.name, "description": found.description, "version": found.version,
                                 "icon": found.icon.as_deref().and_then(|path| icon(&plugin, path)),
                                 "permissions": found.permissions, "hosts": found.host_permissions,
@@ -106,16 +113,13 @@ impl Shared {
                             }),
                         )
                     }
-                    // One of the folders `installed` found: only those, never a path the plugin names.
+                    // One of the folders `installed` last found, by its place in that list: never a path the plugin names.
                     Some("browser") => {
-                        let Some(source) = text("source") else { return reply.err("stage from a browser takes its source".into()) };
-                        self.off_thread(reply, move |_| {
-                            let found = wings_web_extensions::detect_installed()
-                                .into_iter()
-                                .find(|found| found.source.to_string_lossy() == source)
-                                .ok_or("That extension isn't in your other browsers any more")?;
-                            staged(&plugin, &profile, extensions::stage_path(&profile, &found.source))
-                        })
+                        let at = text("source").and_then(|source| source.parse::<usize>().ok());
+                        let Some(path) = at.and_then(|at| FOUND.lock().unwrap().get(&plugin)?.get(at).cloned()) else {
+                            return reply.err("That extension isn't one your other browsers have: look again".into());
+                        };
+                        self.off_thread(reply, move |_| staged(&plugin, &profile, extensions::stage_path(&profile, &path)))
                     }
                     Some("store") => {
                         let Some(package) = text("url").and_then(|url| wings_web_extensions::store_package(&url)) else {
@@ -143,14 +147,23 @@ impl Shared {
                         "enabled": true, "permissions": added.permissions, "hosts": added.hosts, "error": null,
                         "icon": extensions::icon_path(&profile, &added).and_then(|path| icon(&plugin, &path)),
                     });
+                    // Wings asks in its own dialog, which no click in the page answers, before it grants anything.
+                    let ask = crate::web::Ask { name: added.name.clone(), permissions: added.permissions.clone(), hosts: added.hosts.clone() };
+                    let id = added.id.clone();
                     env.web(
-                        Job::Load { profile, id: added.id, dir },
-                        Box::new(move |loaded| {
-                            let mut entry = entry;
-                            if let Err(error) = loaded {
-                                entry["error"] = json!(error);
+                        Job::Add { profile: profile.clone(), id: added.id, dir, ask },
+                        Box::new(move |loaded| match loaded {
+                            Err(error) if error == crate::web::NOT_ALLOWED => {
+                                let _ = extensions::remove(&profile, &id);
+                                reply.err(error);
                             }
-                            reply.done(to_json(&entry));
+                            loaded => {
+                                let mut entry = entry;
+                                if let Err(error) = loaded {
+                                    entry["error"] = json!(error);
+                                }
+                                reply.done(to_json(&entry));
+                            }
                         }),
                     );
                 });
@@ -226,7 +239,8 @@ impl Shared {
 /// cookies happen only as the answer to one, never by the plugin alone.
 pub(in crate::page::plugin) fn needs_click(method: &str, params: &Value) -> bool {
     let action = params.get("action").and_then(Value::as_str);
-    matches!((method, action), ("webExtensions", Some("stage" | "add")) | ("browserCookies", Some("import")))
+    // Listing another browser's extensions reads its profiles: only when the person asks, too.
+    matches!((method, action), ("webExtensions", Some("stage" | "add" | "installed")) | ("browserCookies", Some("import")))
 }
 
 /// Whether WebKit keeps a store for each plugin on this Mac (`web::keeps_refusal`).
@@ -316,6 +330,15 @@ mod tests {
         assert_eq!(
             page.call("webExtensions", json!({ "action": "add", "stage": "abc" })),
             Err("A page can add an extension only right after you click or type in it".into())
+        );
+        assert_eq!(
+            page.call("webExtensions", json!({ "action": "installed" })),
+            Err("A page can add an extension only right after you click or type in it".into())
+        );
+        // A path is never a source: only a place in the list `installed` gave.
+        assert_eq!(
+            page.call_after_click("webExtensions", json!({ "action": "stage", "from": "browser", "source": "/Users/me/Library/Application Support/Google/Chrome/Default/Extensions/x" })),
+            Err("That extension isn't one your other browsers have: look again".into())
         );
         assert_eq!(
             page.call("webExtensions", json!({ "action": "storePage", "url": "https://chromewebstore.google.com/detail/x/cjpalhdlnbpafiamejdnhcphjbkeiagm" })),

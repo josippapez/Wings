@@ -366,6 +366,8 @@ pub struct WebView {
     pub height: f32,
     pub fill: bool,
     pub on_state: Option<String>,
+    /// Hears what an `eval` or `snapshot` command came to: `{ token, value }` or `{ token, error }`.
+    pub on_result: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -381,7 +383,15 @@ pub enum WebGo {
     Forward,
     Reload,
     Stop,
+    /// Runs `script`, the body of an async function, in the page's own world (`page`, where its scripts' variables are)
+    /// or one of the plugin's that sees only the page's document, and answers what it returns, as JSON.
+    Eval { script: String, page: bool },
+    /// A picture of what shows of the page, as a PNG.
+    Snapshot,
 }
+
+/// The most bytes of a script an `eval` command runs: a page's helper, not a library.
+const WEB_SCRIPT_MAX: usize = 256 * 1024;
 
 /// The most characters of a `WebView`'s `name`, which is a key and never shown.
 const WEB_NAME_MAX: usize = 64;
@@ -403,6 +413,11 @@ fn web_command(value: &Value) -> Option<WebCommand> {
         "forward" => WebGo::Forward,
         "reload" => WebGo::Reload,
         "stop" => WebGo::Stop,
+        "eval" => WebGo::Eval {
+            script: value.get("script")?.as_str().filter(|script| script.len() <= WEB_SCRIPT_MAX)?.to_owned(),
+            page: value.get("world").and_then(Value::as_str) == Some("page"),
+        },
+        "snapshot" => WebGo::Snapshot,
         _ => return None,
     };
     Some(WebCommand { go, token })
@@ -1617,6 +1632,7 @@ impl Walk {
                 height: number(&props, "height").unwrap_or(400.0).clamp(80.0, 4000.0) as f32,
                 fill: on("fill"),
                 on_state: handler("onState"),
+                on_result: handler("onResult"),
             }),
             "Avatar" => Node::Avatar(Avatar {
                 id,

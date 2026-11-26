@@ -516,7 +516,8 @@ impl Shared {
                 let token = js_string(params.get("token")).parse().unwrap_or(0);
                 let text = params.get("text").and_then(Value::as_str).unwrap_or("");
                 let is_error = params.get("isError") == Some(&Value::Bool(true));
-                self.settle_tool(token, text, is_error);
+                let image = params.get("image").and_then(Value::as_str);
+                self.settle_tool(token, text, is_error, image);
                 reply.ok("null".into());
             }
             "createWorktree" => {

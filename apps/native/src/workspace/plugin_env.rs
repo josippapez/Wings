@@ -910,7 +910,7 @@ impl Env for AppEnv {
     fn web(&self, job: crate::web::Job, done: Box<dyn FnOnce(Result<String, String>) + Send>) {
         // The answer comes back to the call's thread through this, once WebKit's completion handler runs.
         let (answer, answered) = std::sync::mpsc::channel::<Result<String, String>>();
-        let event = UiEvent::Run(Box::new(move |_, _, cx| run_web(job, answer, cx)));
+        let event = UiEvent::Run(Box::new(move |_, window, cx| run_web(job, answer, window, cx)));
         if self.events.try_send(event).is_err() {
             return done(Err("The Wings window is closed or busy".into()));
         }
@@ -1873,7 +1873,7 @@ fn opened_tab(id: usize) -> String {
 
 /// Does `job` on the window's thread and sends its answer to `answer`: JSON, as the call answers.
 #[cfg(target_os = "macos")]
-fn run_web(job: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, String>>, cx: &mut gpui::Context<Workspace>) {
+fn run_web(job: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, String>>, window: &mut gpui::Window, cx: &mut gpui::Context<Workspace>) {
     use crate::web::{Job, mac};
     match job {
         Job::Supported => {
@@ -1906,15 +1906,18 @@ fn run_web(job: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, 
                 }
             });
         }
-        Job::Load { profile, id, dir } => {
-            let left = std::rc::Rc::new(std::cell::Cell::new(2));
-            let answer = std::rc::Rc::new(answer);
-            mac::load_everywhere(&profile, &id, &dir, move |loaded| {
-                left.set(left.get() - 1);
-                if left.get() == 0 || loaded.is_err() {
-                    let _ = answer.send(loaded.map(|()| "null".into()));
+        Job::Load { profile, id, dir } => run_web_load(profile, id, dir, answer),
+        Job::Add { profile, id, dir, ask } => {
+            let (question, detail) = ask.words();
+            let allowed = window.prompt(gpui::PromptLevel::Warning, &question, Some(&detail), &["Add", "Cancel"], cx);
+            cx.spawn(async move |_, cx| {
+                if allowed.await != Ok(0) {
+                    let _ = answer.send(Err(crate::web::NOT_ALLOWED.into()));
+                    return;
                 }
-            });
+                let _ = cx.update(|_| run_web_load(profile, id, dir, answer));
+            })
+            .detach();
         }
         Job::Unload { profile, id } => {
             mac::unload(&profile, &id);
@@ -1946,7 +1949,21 @@ fn run_web(job: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, 
     }
 }
 
+/// Loads an extension into every web view of `profile`, granting what it asks for, which the person allowed as they
+/// added it (`Job::Add`).
+#[cfg(target_os = "macos")]
+fn run_web_load(profile: crate::web::Profile, id: String, dir: std::path::PathBuf, answer: std::sync::mpsc::Sender<Result<String, String>>) {
+    let left = std::rc::Rc::new(std::cell::Cell::new(2));
+    let answer = std::rc::Rc::new(answer);
+    crate::web::mac::load_everywhere(&profile, &id, &dir, move |loaded| {
+        left.set(left.get() - 1);
+        if left.get() == 0 || loaded.is_err() {
+            let _ = answer.send(loaded.map(|()| "null".into()));
+        }
+    });
+}
+
 #[cfg(not(target_os = "macos"))]
-fn run_web(_: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, String>>, _: &mut gpui::Context<Workspace>) {
+fn run_web(_: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, String>>, _: &mut gpui::Window, _: &mut gpui::Context<Workspace>) {
     let _ = answer.send(Err("Web pages need macOS".into()));
 }

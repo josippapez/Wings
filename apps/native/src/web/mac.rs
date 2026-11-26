@@ -19,7 +19,7 @@ use objc2::{
     runtime::{AnyClass, AnyObject, NSObject, NSObjectProtocol, ProtocolObject},
     sel,
 };
-use objc2_app_kit::{NSView, NSWindowOrderingMode};
+use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage, NSView, NSWindowOrderingMode};
 use objc2_foundation::{
     NSDate, NSDictionary, NSError, NSHTTPCookie, NSHTTPCookieDomain, NSHTTPCookieExpires, NSHTTPCookieName,
     NSHTTPCookiePath, NSHTTPCookieSameSitePolicy, NSHTTPCookieSameSiteLax, NSHTTPCookieSameSiteStrict,
@@ -27,7 +27,7 @@ use objc2_foundation::{
     NSObjectNSKeyValueObserverRegistration, NSPoint, NSRect, NSSize, NSString, NSURL, NSURLRequest, NSUUID,
 };
 use objc2_web_kit::{
-    WKNavigation, WKNavigationAction, WKNavigationDelegate, WKUIDelegate, WKWebExtension, WKWebExtensionContext,
+    WKContentWorld, WKNavigation, WKNavigationAction, WKNavigationActionPolicy, WKNavigationDelegate, WKUIDelegate, WKWebExtension, WKWebExtensionContext,
     WKWebExtensionContextPermissionStatus, WKWebExtensionController, WKWebExtensionControllerConfiguration, WKWebView,
     WKWebViewConfiguration, WKWebsiteDataStore, WKWindowFeatures,
 };
@@ -35,7 +35,7 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use super::{
     Profile,
-    views::{Maker, Native, State, make_with},
+    views::{Heard, Maker, Native, State, make_with},
 };
 use crate::page::tree::WebGo;
 
@@ -264,7 +264,7 @@ fn cookie(cookie: &Cookie) -> Option<Retained<NSHTTPCookie>> {
 struct WebKit;
 
 impl Maker for WebKit {
-    fn make(&self, profile: &Profile, keep_data: bool, url: Option<&str>, told: Box<dyn Fn(State)>) -> Box<dyn Native> {
+    fn make(&self, profile: &Profile, keep_data: bool, url: Option<&str>, told: Rc<dyn Fn(Heard)>) -> Box<dyn Native> {
         let mtm = MainThreadMarker::new().expect("web views are made on the main thread");
         let shared = shared(profile, keep_data, mtm);
         // SAFETY: WebKit's objects, made and used on the main thread.
@@ -280,7 +280,7 @@ impl Maker for WebKit {
             view.setHidden(true);
             view
         };
-        let observer = Observer::new(told, mtm);
+        let observer = Observer::new(told.clone(), mtm);
         // SAFETY: the observer outlives the observing: `Drop` removes it before either goes.
         unsafe {
             for key in OBSERVED {
@@ -294,9 +294,10 @@ impl Maker for WebKit {
             view.setNavigationDelegate(Some(ProtocolObject::from_ref(&*observer)));
             view.setUIDelegate(Some(ProtocolObject::from_ref(&*observer)));
         }
-        let mut native = WebPage { view, observer };
+        let shots = profile.dir.join("screenshots");
+        let mut native = WebPage { view, observer, told, shots };
         if let Some(url) = url {
-            native.go(&WebGo::Load(url.to_owned()));
+            native.go(&WebGo::Load(url.to_owned()), 0);
         }
         Box::new(native)
     }
@@ -305,6 +306,9 @@ impl Maker for WebKit {
 struct WebPage {
     view: Retained<WKWebView>,
     observer: Retained<Observer>,
+    told: Rc<dyn Fn(Heard)>,
+    /// Where its snapshots are saved, in its plugin's web folder.
+    shots: std::path::PathBuf,
 }
 
 impl Native for WebPage {
@@ -330,7 +334,8 @@ impl Native for WebPage {
         self.view.setHidden(false);
     }
 
-    fn go(&mut self, go: &WebGo) {
+    fn go(&mut self, go: &WebGo, token: u64) {
+        let Some(mtm) = MainThreadMarker::new() else { return };
         // SAFETY: the web view's own calls, on the main thread.
         unsafe {
             match go {
@@ -343,8 +348,49 @@ impl Native for WebPage {
                 WebGo::Forward => drop(self.view.goForward()),
                 WebGo::Reload => drop(self.view.reload()),
                 WebGo::Stop => self.view.stopLoading(),
+                WebGo::Eval { script, page } => {
+                    // The value goes back as JSON text, which crosses from JavaScript as a plain string.
+                    let body = format!("return JSON.stringify(await (async () => {{\n{script}\n}})() ?? null);");
+                    let world = if *page { WKContentWorld::pageWorld(mtm) } else { WKContentWorld::worldWithName(&NSString::from_str("wings-plugin"), mtm) };
+                    let told = self.told.clone();
+                    let done = RcBlock::new(move |value: *mut AnyObject, error: *mut NSError| {
+                        let result = match (value.as_ref().and_then(|value| value.downcast_ref::<NSString>()), error.as_ref()) {
+                            (Some(json), None) => serde_json::from_str(&json.to_string()).map_err(|error| error.to_string()),
+                            (_, Some(error)) => Err(error.localizedDescription().to_string()),
+                            (None, None) => Ok(serde_json::Value::Null),
+                        };
+                        told(Heard::Result { token, result });
+                    });
+                    self.view.callAsyncJavaScript_arguments_inFrame_inContentWorld_completionHandler(&NSString::from_str(&body), None, None, &world, Some(&done));
+                }
+                WebGo::Snapshot => {
+                    let (told, shots) = (self.told.clone(), self.shots.clone());
+                    let done = RcBlock::new(move |image: *mut NSImage, error: *mut NSError| {
+                        let result = match (image.as_ref(), error.as_ref()) {
+                            (Some(image), _) => png_of(image).and_then(|png| super::snapshot::save(&shots, &png)),
+                            (None, Some(error)) => Err(error.localizedDescription().to_string()),
+                            (None, None) => Err("WebKit made no picture".into()),
+                        };
+                        told(Heard::Result { token, result });
+                    });
+                    // The part of the page that shows: WebKit takes no more than the view's bounds.
+                    self.view.takeSnapshotWithConfiguration_completionHandler(None, &done);
+                }
             }
         }
+    }
+}
+
+/// The PNG of `image`, by way of its bitmap.
+fn png_of(image: &NSImage) -> Result<Vec<u8>, String> {
+    // SAFETY: AppKit's conversions of an image WebKit made, on the main thread.
+    unsafe {
+        let tiff = image.TIFFRepresentation().ok_or("The picture has no bitmap")?;
+        let bitmap = NSBitmapImageRep::imageRepWithData(&tiff).ok_or("The picture has no bitmap")?;
+        let png = bitmap
+            .representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
+            .ok_or("The picture couldn't be made a PNG")?;
+        Ok(png.to_vec())
     }
 }
 
@@ -373,7 +419,7 @@ fn gpui_view(window: &Window) -> Option<Retained<NSView>> {
 }
 
 struct Ivars {
-    told: Box<dyn Fn(State)>,
+    told: Rc<dyn Fn(Heard)>,
     told_last: RefCell<Option<State>>,
     /// Why the last page failed, until another starts.
     error: RefCell<Option<String>>,
@@ -413,6 +459,19 @@ define_class!(
             self.failed(view, error);
         }
 
+        /// Only to addresses a web view may go to (`may_navigate`): a link to `file:` or another app's scheme is dropped.
+        #[unsafe(method(webView:decidePolicyForNavigationAction:decisionHandler:))]
+        fn decide(&self, _view: &WKWebView, action: &WKNavigationAction, decide: &block2::DynBlock<dyn Fn(WKNavigationActionPolicy)>) {
+            // SAFETY: the action's request and frame, on the main thread.
+            let (url, main_frame) = unsafe {
+                let url = action.request().URL().and_then(|url| url.absoluteString()).map(|url| url.to_string()).unwrap_or_default();
+                // A new window's navigation has no target frame: it loads in this view's page (`new_window`).
+                (url, action.targetFrame().is_none_or(|frame| frame.isMainFrame()))
+            };
+            let policy = if super::may_navigate(&url, main_frame) { WKNavigationActionPolicy::Allow } else { WKNavigationActionPolicy::Cancel };
+            decide.call((policy,));
+        }
+
         #[unsafe(method(webView:didFailNavigation:withError:))]
         fn failed_to_finish(&self, view: &WKWebView, _navigation: Option<&WKNavigation>, error: &NSError) {
             self.failed(view, error);
@@ -429,15 +488,22 @@ define_class!(
             action: &WKNavigationAction,
             _features: &WKWindowFeatures,
         ) -> Option<Retained<WKWebView>> {
-            // SAFETY: the action's request, loaded in the view that asked, on the main thread.
-            unsafe { view.loadRequest(&action.request()) };
+            // SAFETY: the action's request, loaded in the view that asked, on the main thread; only to an address a web view
+            // may load, as `decide` checks the navigation that follows too.
+            unsafe {
+                let request = action.request();
+                let url = request.URL().and_then(|url| url.absoluteString()).map(|url| url.to_string()).unwrap_or_default();
+                if super::may_navigate(&url, true) {
+                    view.loadRequest(&request);
+                }
+            }
             None
         }
     }
 );
 
 impl Observer {
-    fn new(told: Box<dyn Fn(State)>, mtm: MainThreadMarker) -> Retained<Self> {
+    fn new(told: Rc<dyn Fn(Heard)>, mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(Ivars { told, told_last: RefCell::new(None), error: RefCell::new(None) });
         // SAFETY: NSObject's `init`.
         unsafe { msg_send![super(this), init] }
@@ -468,7 +534,7 @@ impl Observer {
         };
         if self.ivars().told_last.borrow().as_ref() != Some(&state) {
             self.ivars().told_last.replace(Some(state.clone()));
-            (self.ivars().told)(state);
+            (self.ivars().told)(Heard::State(state));
         }
     }
 }

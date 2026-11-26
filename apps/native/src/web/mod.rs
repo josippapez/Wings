@@ -9,6 +9,7 @@
 //! it is hidden, and it is gone with its node or its page.
 
 pub mod extensions;
+pub mod snapshot;
 #[cfg(feature = "ui")]
 mod views;
 
@@ -16,7 +17,7 @@ mod views;
 pub mod mac;
 
 #[cfg(feature = "ui")]
-pub use views::{Spec, State, Told, forget_page, slot, sync, update};
+pub use views::{Heard, Spec, State, Told, forget_page, slot, sync, update};
 #[cfg(all(test, feature = "test-support"))]
 pub(crate) use views::testing;
 
@@ -33,9 +34,52 @@ pub enum Job {
     Clear(Profile),
     /// The extension `id` in `dir` loads into the profile's web views, or unloads.
     Load { profile: Profile, id: String, dir: std::path::PathBuf },
+    /// `Load`, for an extension being added: Wings asks the person first, in its own dialog, with what it can do.
+    Add { profile: Profile, id: String, dir: std::path::PathBuf, ask: Ask },
     Unload { profile: Profile, id: String },
     /// Another browser's cookies go into the profile's store, kept or not: how many it took.
     Cookies { profile: Profile, keep_data: bool, cookies: Vec<wings_browser_cookies::Cookie> },
+}
+
+/// What an extension's add answers when the person didn't allow it.
+pub const NOT_ALLOWED: &str = "The extension wasn't added: you didn't allow it";
+
+/// What Wings' dialog asks before an extension is added: it is granted what it lists, and only once it is allowed.
+pub struct Ask {
+    pub name: String,
+    pub permissions: Vec<String>,
+    pub hosts: Vec<String>,
+}
+
+impl Ask {
+    /// The dialog's question and what it says under it.
+    pub fn words(&self) -> (String, String) {
+        let everywhere = self.hosts.iter().any(|host| matches!(host.as_str(), "<all_urls>" | "*://*/*" | "http://*/*" | "https://*/*"));
+        let mut detail = Vec::new();
+        if everywhere {
+            detail.push("It can read and change everything on every website you open in the Browser.".to_owned());
+        } else if !self.hosts.is_empty() {
+            detail.push(format!("It can read and change your data on: {}.", self.hosts.join(", ")));
+        }
+        if !self.permissions.is_empty() {
+            detail.push(format!("It asks for: {}.", self.permissions.join(", ")));
+        }
+        if detail.is_empty() {
+            detail.push("It asks for no permissions.".into());
+        }
+        (format!("Add the extension \"{}\" to the Browser?", self.name), detail.join("\n\n"))
+    }
+}
+
+/// Whether a web view may go to `url`: the page itself only to an address a `WebView` may load (`web_address`), and a
+/// frame in it also to a picture or a document the page made itself (`data:`, `blob:`). A link to `file:`, `javascript:`
+/// or another app's scheme is dropped, so a page can neither read this Mac's files nor open other apps.
+pub fn may_navigate(url: &str, main_frame: bool) -> bool {
+    if crate::page::tree::web_address(url).is_some() {
+        return true;
+    }
+    let scheme = url.split_once(':').map(|(scheme, _)| scheme.to_ascii_lowercase());
+    !main_frame && matches!(scheme.as_deref(), Some("about" | "data" | "blob"))
 }
 
 /// Why cookies can't go into a kept store on this Mac, if they can't: only a store of the plugin's own may keep them, and
@@ -93,6 +137,33 @@ mod tests {
         let uuid = profile("a").uuid();
         assert_eq!((uuid[6] >> 4, uuid[8] >> 6), (8, 0b10), "a version 8 UUID");
         assert_eq!(profile("a").dir, std::path::Path::new("/data/plugin-web/browser.a"));
+    }
+
+    #[test]
+    fn the_dialog_before_an_extension_says_when_it_reaches_every_website() {
+        let ask = |hosts: &[&str], permissions: &[&str]| Ask {
+            name: "Blocker".into(),
+            hosts: hosts.iter().map(|host| host.to_string()).collect(),
+            permissions: permissions.iter().map(|permission| permission.to_string()).collect(),
+        };
+        let (question, detail) = ask(&["<all_urls>"], &["storage", "tabs"]).words();
+        assert_eq!(question, "Add the extension \"Blocker\" to the Browser?");
+        assert!(detail.contains("every website") && detail.contains("storage, tabs"), "{detail}");
+        let (_, some) = ask(&["https://github.com/*"], &[]).words();
+        assert_eq!(some, "It can read and change your data on: https://github.com/*.");
+        assert_eq!(ask(&[], &[]).words().1, "It asks for no permissions.");
+    }
+
+    #[test]
+    fn a_page_goes_only_to_web_addresses_and_its_frames_also_to_what_it_made() {
+        for url in ["https://example.com/", "http://localhost:3000/", "about:blank"] {
+            assert!(may_navigate(url, true), "{url}");
+        }
+        for url in ["file:///etc/passwd", "javascript:alert(1)", "slack://open", "x-apple.systempreferences:", "data:text/html,hi", "about:srcdoc"] {
+            assert!(!may_navigate(url, true), "{url} as the page");
+        }
+        assert!(may_navigate("data:text/html,hi", false) && may_navigate("blob:https://a.com/1", false) && may_navigate("about:srcdoc", false));
+        assert!(!may_navigate("file:///etc/passwd", false) && !may_navigate("slack://open", false));
     }
 
     #[test]

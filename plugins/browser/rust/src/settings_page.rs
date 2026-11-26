@@ -57,7 +57,8 @@ struct Installed {
 struct Extensions {
     supported: bool,
     added: Vec<Extension>,
-    installed: Vec<Installed>,
+    /// What other browsers have, once the person asked to look (`look_in_browsers`): Wings reads their profiles only then.
+    installed: Option<Vec<Installed>>,
 }
 
 #[derive(Default)]
@@ -154,13 +155,25 @@ fn load_extensions() {
         let extensions = match listed {
             Ok(answer) => {
                 let (supported, added) = parse_added(&answer);
-                // What other browsers have is only worth reading where extensions run.
-                let installed = if supported { host::web_extensions_installed().await.map(|answer| parse_installed(&answer)).unwrap_or_default() } else { Vec::new() };
+                // What other browsers have stays what the last look found.
+                let installed = with(|page| page.extensions.as_ref().and_then(|loaded| loaded.as_ref().ok()?.installed.clone()));
                 Ok(Extensions { supported, added, installed })
             }
             Err(error) => Err(error),
         };
         with(|page| page.extensions = Some(extensions));
+    });
+}
+
+/// Lists the extensions the other browsers on this Mac have, on the person's click, as Wings asks.
+fn look_in_browsers() {
+    spawn(async {
+        let installed = host::web_extensions_installed().await.map(|answer| parse_installed(&answer)).unwrap_or_default();
+        with(|page| {
+            if let Some(Ok(loaded)) = &mut page.extensions {
+                loaded.installed = Some(installed);
+            }
+        });
     });
 }
 
@@ -342,7 +355,11 @@ fn extensions(page: &Page) -> Vec<Node> {
         return vec![section("Extensions", None, []), notice("warn", "Extensions need macOS 15.4 or newer")];
     }
     let mut out = vec![section("Extensions", Some("Chrome and Firefox extensions, which run on the pages you open in the browser."), extension_rows(loaded, page))];
-    let others = not_added(&loaded.installed, &loaded.added);
+    if loaded.installed.is_none() {
+        let look = button("Look", "outline", false, look_in_browsers).size("sm");
+        out.push(section("From your browsers", None, [setting("Extensions you already use", "Lists the extensions of the other browsers on this Mac, to add here.", look)]));
+    }
+    let others = not_added(loaded.installed.as_deref().unwrap_or_default(), &loaded.added);
     if !others.is_empty() {
         let rows = others.into_iter().map(|extension| {
             let source = extension.source.clone();
@@ -461,7 +478,7 @@ mod tests {
     fn the_page_shows_the_extensions_notice_before_macos_15_4_and_the_sources_with_an_import_button() {
         with(|page| {
             page.sources = Some(Ok(vec![source("c", "Chrome", "Josip")]));
-            page.extensions = Some(Ok(Extensions { supported: false, added: Vec::new(), installed: Vec::new() }));
+            page.extensions = Some(Ok(Extensions { supported: false, added: Vec::new(), installed: None }));
         });
         let drawn = wings_plugin::ui::export(view()).0.to_string();
         for shown in ["Chrome, Josip", "Import", "Extensions need macOS 15.4 or newer", "Search engine", "Clear browsing data"] {

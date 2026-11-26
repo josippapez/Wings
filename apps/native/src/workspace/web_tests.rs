@@ -14,7 +14,7 @@ use super::{
 use crate::{
     installed::fixture::Data,
     page::runtime::fake::{self, Cx, Hear, idle},
-    web::{State, testing::{Did, record}},
+    web::{Heard, State, testing::{Did, record}},
 };
 
 /// A page that is a `WebView` filling it, and a `Dialog` over it with `dialog`, which saves what its web view tells it.
@@ -90,7 +90,7 @@ fn a_tabs_web_page_shows_at_its_place_hides_with_the_tab_and_ends_with_it() {
     }
     // Where it is reaches the page's `onState`, as WebKit tells it.
     let state = State { url: "https://example.com/docs".into(), title: "Docs".into(), can_go_back: true, ..State::default() };
-    tells.borrow()[0](state);
+    tells.borrow()[0](Heard::State(state));
     until(&app, &mut window, "the page never heard where its web view is", |_| {
         data.saved("browser", "browser-scope", "state")
             .is_some_and(|state| state["url"] == "https://example.com/docs" && state["canGoBack"] == true)
@@ -192,7 +192,7 @@ fn a_view_opens_in_a_window_of_its_own_with_its_args_shows_its_web_page_there_an
     assert_eq!(did.borrow()[0], Did::Made { name: Some("browser".into()), keep_data: true, url: Some("https://example.com/docs".into()) });
     assert_eq!(last_place(&did.borrow()), Some(true), "shown in its window: {:?}", did.borrow());
     // The page closes its own window (the Browser's Put back, once it has opened the address in a tab).
-    tells.borrow()[0](State::default());
+    tells.borrow()[0](Heard::State(State::default()));
     until(&app, &mut window, "the window stayed open", |w| w.plugin_ui.windows.is_empty());
     until(&app, &mut window, "its web page outlived its window", |_| did.borrow().last() == Some(&Did::Ended));
 }

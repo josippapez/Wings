@@ -240,11 +240,18 @@ impl Shared {
         }
     }
 
-    /// The plugin's main answered a tool call: the caller's promise resolves with `{ text, isError }`.
-    fn settle_tool(&self, token: u32, text: &str, is_error: bool) {
+    /// The plugin's main answered a tool call: the caller's promise resolves with `{ text, isError, images }`, with the
+    /// web view snapshot at `image` as an image Claude sees, when it is one of the plugin's (`web::snapshot::attach`).
+    fn settle_tool(&self, token: u32, text: &str, is_error: bool, image: Option<&str>) {
         let waiting = self.tools.lock().unwrap().waiting.remove(&token);
         if let Some(reply) = waiting {
-            reply.ok(serde_json::json!({ "text": text, "isError": is_error }).to_string());
+            let config = &self.config;
+            let web = crate::web::Profile::of(&config.id, &config.scope, &config.root).dir;
+            let answer = match image.map(|path| crate::web::snapshot::attach(&web, path)).transpose() {
+                Ok(image) => serde_json::json!({ "text": text, "isError": is_error, "images": image.into_iter().collect::<Vec<_>>() }),
+                Err(why) => serde_json::json!({ "text": format!("{text}\n{why}"), "isError": true }),
+            };
+            reply.ok(answer.to_string());
         }
     }
 

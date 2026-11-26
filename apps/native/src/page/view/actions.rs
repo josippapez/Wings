@@ -95,15 +95,21 @@ impl PageView {
         }
         self.web_handlers = found
             .iter()
-            .filter_map(|web| Some((SharedString::from(web.name.clone()), web.on_state.clone()?)))
+            .map(|web| (SharedString::from(web.name.clone()), (web.on_state.clone(), web.on_result.clone())))
             .collect();
         let told = self.web_told.get_or_insert_with(|| {
-            let (told, hear) = async_channel::unbounded::<(SharedString, crate::web::State)>();
+            let (told, hear) = async_channel::unbounded::<(SharedString, crate::web::Heard)>();
             self._web_events = Some(cx.spawn(async move |view, cx| {
-                while let Ok((name, state)) = hear.recv().await {
-                    let payload = serde_json::to_value(&state).unwrap_or_default();
+                while let Ok((name, heard)) = hear.recv().await {
+                    let (payload, result) = match heard {
+                        crate::web::Heard::State(state) => (serde_json::to_value(&state).unwrap_or_default(), false),
+                        crate::web::Heard::Result { token, result: Ok(value) } => (serde_json::json!({ "token": token, "value": value }), true),
+                        crate::web::Heard::Result { token, result: Err(error) } => (serde_json::json!({ "token": token, "error": error }), true),
+                    };
                     let sent = view.update(cx, |view, _| {
-                        if let Some(handler) = view.web_handlers.get(&name) {
+                        let handlers = view.web_handlers.get(&name);
+                        let handler = handlers.and_then(|(state, done)| if result { done.as_ref() } else { state.as_ref() });
+                        if let Some(handler) = handler {
                             view.send(handler, Some(&payload));
                         }
                     });

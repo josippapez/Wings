@@ -265,7 +265,7 @@ mod tests {
             vec!["Echo (echo): says it back.".into()]
         }
         fn call(&self, name: &str, arguments: Value, _: Option<u32>, _: Option<&str>) -> Result<crate::server::ToolResult, String> {
-            Ok(crate::server::ToolResult { text: format!("{name} {arguments}"), is_error: false })
+            Ok(crate::server::ToolResult { text: format!("{name} {arguments}"), is_error: false, images: Vec::new() })
         }
         fn hook(&self, _: &Value, _: Option<u32>) -> Value {
             json!({})

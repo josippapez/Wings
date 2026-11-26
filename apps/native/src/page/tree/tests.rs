@@ -1028,8 +1028,24 @@ fn a_web_view_loads_only_web_addresses_and_takes_each_command_by_its_token() {
             height: 400.0,
             fill: true,
             on_state: Some("1:state".into()),
+            on_result: None,
         }
     );
+    let scripted = tree(json!([
+        {"id":1,"type":"WebView","props":{"name":"a","onResult":"1:result","command":{"action":"eval","script":"return document.title","token":1}}},
+        {"id":2,"type":"WebView","props":{"name":"b","command":{"action":"eval","script":"return 1","world":"page","token":2}}},
+        {"id":3,"type":"WebView","props":{"name":"c","command":{"action":"snapshot","token":3}}},
+        {"id":4,"type":"WebView","props":{"name":"d","command":{"action":"eval","script":"x".repeat(256 * 1024 + 1),"token":4}}}
+    ]))
+    .unwrap();
+    let go = |at: usize| match &scripted.children[at] {
+        Node::WebView(web) => (web.command.clone().map(|command| command.go), web.on_result.clone()),
+        other => panic!("not a web view: {other:?}"),
+    };
+    assert_eq!(go(0), (Some(WebGo::Eval { script: "return document.title".into(), page: false }), Some("1:result".into())), "in a world of the plugin's own unless it asks for the page's");
+    assert_eq!(go(1).0, Some(WebGo::Eval { script: "return 1".into(), page: true }));
+    assert_eq!(go(2).0, Some(WebGo::Snapshot));
+    assert_eq!(go(3).0, None, "a script past 256 KB isn't run");
     // A file or a script never loads, by the start address or a command; a name too long to be a key is none.
     let refused = web(1);
     assert_eq!((refused.name.as_str(), refused.url, refused.command, refused.keep_data, refused.height), ("", None, None, false, 4000.0));

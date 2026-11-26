@@ -31,6 +31,8 @@ pub fn cli_only(mut tool: Value) -> Value {
 pub struct ToolResult {
     pub text: String,
     pub is_error: bool,
+    /// MCP image content blocks after the text, a page's snapshot say.
+    pub images: Vec<Value>,
 }
 
 /// What the app answers on the socket. Every method is called on a thread of the request's own, so the requests of
@@ -122,8 +124,10 @@ fn reply(handler: &dyn Handler, request: &Value) -> Value {
             let name = request.get("name").and_then(Value::as_str).unwrap_or_default();
             let arguments = request.get("arguments").cloned().unwrap_or_else(|| json!({}));
             let session_id = request.get("sessionId").and_then(Value::as_str);
-            let result = handler.call(name, arguments, ppid, session_id).unwrap_or_else(|text| ToolResult { text, is_error: true });
-            json!({ "id": id, "result": { "content": [{ "type": "text", "text": result.text }], "isError": result.is_error } })
+            let result = handler.call(name, arguments, ppid, session_id).unwrap_or_else(|text| ToolResult { text, is_error: true, images: Vec::new() });
+            let mut content = vec![json!({ "type": "text", "text": result.text })];
+            content.extend(result.images);
+            json!({ "id": id, "result": { "content": content, "isError": result.is_error } })
         }
         Some("hook") => {
             let input = request.get("input").cloned().unwrap_or(Value::Null);
@@ -341,7 +345,7 @@ mod tests {
         }
         fn call(&self, name: &str, _: Value, _: Option<u32>, _: Option<&str>) -> Result<ToolResult, String> {
             let _ = self.0.lock().unwrap().recv();
-            Ok(ToolResult { text: format!("{name} done"), is_error: false })
+            Ok(ToolResult { text: format!("{name} done"), is_error: false, images: Vec::new() })
         }
         fn hook(&self, _: &Value, _: Option<u32>) -> Value {
             json!({})

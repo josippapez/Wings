@@ -347,7 +347,7 @@ pub struct PageView {
     /// Where its web views keep their data, none while its plugin may not show web pages; what each `WebView`'s
     /// `onState` is, by name; and how a web view tells the page where it is.
     web_profile: Option<crate::web::Profile>,
-    web_handlers: HashMap<SharedString, String>,
+    web_handlers: HashMap<SharedString, (Option<String>, Option<String>)>,
     web_told: Option<crate::web::Told>,
     _web_events: Option<Task<()>>,
     /// Draws the page's terminals over it, as the workspace does, for the screenshots of a page alone.

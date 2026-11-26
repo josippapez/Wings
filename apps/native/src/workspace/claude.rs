@@ -522,6 +522,7 @@ fn tool_result(answer: Option<Result<String, String>>, plugin: &str) -> Result<T
     Ok(ToolResult {
         text: answer["text"].as_str().unwrap_or_default().to_owned(),
         is_error: answer["isError"] == true,
+        images: answer["images"].as_array().cloned().unwrap_or_default(),
     })
 }
 
@@ -558,10 +559,12 @@ impl Handler for Server {
                 Ok(text) => ToolResult {
                     text,
                     is_error: false,
+                    images: Vec::new(),
                 },
                 Err(text) => ToolResult {
                     text,
                     is_error: true,
+                    images: Vec::new(),
                 },
             });
         }
