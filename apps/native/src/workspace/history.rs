@@ -1254,18 +1254,24 @@ impl Workspace {
             .child(
                 // Over the row's right end instead of beside the text: hidden until hover, it still took 220 points and
                 // cut long titles short with room to spare. The sheet's own fill keeps the title from showing through.
+                // The sheet's fill with the row's hover over it, so the buttons sit on the row's own colour: a rounded
+                // pill of the bare sheet fill read as a dark patch on the hovered row.
                 div()
                     .absolute()
                     .top(px(8.0))
                     .right(px(8.0))
+                    .rounded(px(8.0))
+                    .bg(rgba(theme::palette().popover))
+                    .opacity(if menu_open { 1.0 } else { 0.0 })
+                    .group_hover(group.clone(), |style| style.opacity(1.0))
+                    .child(
+                div()
                     .flex()
                     .items_center()
                     .gap(px(2.0))
                     .pl(px(4.0))
-                    .rounded_full()
-                    .bg(rgba(theme::palette().popover))
-                    .opacity(if menu_open { 1.0 } else { 0.0 })
-                    .group_hover(group, |style| style.opacity(1.0))
+                    .rounded(px(8.0))
+                    .group_hover(group, |style| style.bg(rgba(theme::hover())))
                     .child({
                         let session = session.clone();
                         let disabled = running || !launchable;
@@ -1321,6 +1327,7 @@ impl Workspace {
                     .when(menu_open, |slot| {
                         slot.child(self.session_menu(at, session, copied, self.prompt_pane(), cx))
                     }),
+                    ),
             )
             .into_any_element()
     }
