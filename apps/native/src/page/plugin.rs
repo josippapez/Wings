@@ -729,6 +729,11 @@ impl PageOpener {
         &self.shared.config.id
     }
 
+    /// Whether the page may run scripts in its web pages (`webScripts`).
+    pub fn web_scripts(&self) -> bool {
+        self.shared.access.as_ref().is_some_and(|access| wings_plugins::permissions::may_run_web_scripts(&access.plugin))
+    }
+
     /// Where the page's web views keep their data, while its plugin's manifest lets it show web pages (`webView`).
     pub fn web_profile(&self) -> Option<crate::web::Profile> {
         let access = self.shared.access.as_ref()?;

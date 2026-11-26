@@ -37,7 +37,7 @@ impl PageView {
     /// starts over with the new code.
     pub fn reload_from(&mut self, source: PageOpener, cx: &mut Context<Self>) {
         // An update may ask for `webView` or no longer.
-        self.web_profile = source.web_profile();
+        (self.web_profile, self.web_scripts) = (source.web_profile(), source.web_scripts());
         self.source = source;
         self.reload(cx);
     }
@@ -324,7 +324,7 @@ impl PageView {
 
     pub(super) fn start(cx: &mut Context<Self>, source: PageOpener) -> Self {
         let (runtime, error, events) = Self::launch(&source, cx);
-        let web_profile = source.web_profile();
+        let (web_profile, web_scripts) = (source.web_profile(), source.web_scripts());
         let mut view = Self {
             stopped: runtime.is_none(),
             runtime,
@@ -400,6 +400,7 @@ impl PageView {
             drawing_card: Cell::new(None),
             found_links: RefCell::default(),
             web_profile,
+            web_scripts,
             web_handlers: HashMap::new(),
             web_told: None,
             _web_events: None,

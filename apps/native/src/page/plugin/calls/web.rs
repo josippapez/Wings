@@ -138,7 +138,7 @@ impl Shared {
                 let (env, plugin) = (access.env.clone(), id.clone());
                 // Answered once WebKit has it, with why it didn't load if it didn't, so not by `off_thread`.
                 std::thread::spawn(move || {
-                    let (added, dir) = match extensions::add(&profile, &stage) {
+                    let (added, dir) = match extensions::prepare(&profile, &stage) {
                         Ok(added) => added,
                         Err(error) => return reply.err(error),
                     };
@@ -149,15 +149,20 @@ impl Shared {
                     });
                     // Wings asks in its own dialog, which no click in the page answers, before it grants anything.
                     let ask = crate::web::Ask { name: added.name.clone(), permissions: added.permissions.clone(), hosts: added.hosts.clone() };
-                    let id = added.id.clone();
+                    let (id, unload) = (added.id.clone(), env.clone());
                     env.web(
-                        Job::Add { profile: profile.clone(), id: added.id, dir, ask },
+                        Job::Add { profile: profile.clone(), id: added.id.clone(), dir, ask },
                         Box::new(move |loaded| match loaded {
                             Err(error) if error == crate::web::NOT_ALLOWED => {
-                                let _ = extensions::remove(&profile, &id);
+                                extensions::forget(&profile, &id);
+                                unload.web(Job::Unload { profile, id }, Box::new(|_| {}));
                                 reply.err(error);
                             }
                             loaded => {
+                                // Listed only now that the person allowed it, so only it loads as Wings starts.
+                                if let Err(error) = extensions::keep(&profile, &added) {
+                                    return reply.err(error);
+                                }
                                 let mut entry = entry;
                                 if let Err(error) = loaded {
                                     entry["error"] = json!(error);
@@ -240,7 +245,7 @@ impl Shared {
 pub(in crate::page::plugin) fn needs_click(method: &str, params: &Value) -> bool {
     let action = params.get("action").and_then(Value::as_str);
     // Listing another browser's extensions reads its profiles: only when the person asks, too.
-    matches!((method, action), ("webExtensions", Some("stage" | "add" | "installed")) | ("browserCookies", Some("import")))
+    matches!((method, action), ("webExtensions", Some("stage" | "add" | "installed" | "setEnabled")) | ("browserCookies", Some("import")))
 }
 
 /// Whether WebKit keeps a store for each plugin on this Mac (`web::keeps_refusal`).
@@ -329,6 +334,10 @@ mod tests {
         );
         assert_eq!(
             page.call("webExtensions", json!({ "action": "add", "stage": "abc" })),
+            Err("A page can add an extension only right after you click or type in it".into())
+        );
+        assert_eq!(
+            page.call("webExtensions", json!({ "action": "setEnabled", "id": "abc", "enabled": true })),
             Err("A page can add an extension only right after you click or type in it".into())
         );
         assert_eq!(

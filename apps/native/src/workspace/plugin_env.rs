@@ -1942,6 +1942,7 @@ fn run_web(job: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, 
                     same_site: same_site(cookie),
                 })
                 .collect();
+            crate::web::note_imported(&profile, cookies.iter().map(|cookie| cookie.domain.clone()));
             mac::set_cookies(&profile, keep_data, &made, move |count| {
                 let _ = answer.send(Ok(count.to_string()));
             });

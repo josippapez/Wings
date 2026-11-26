@@ -162,6 +162,7 @@ pub(super) fn access_groups(manifest: &Manifest) -> Vec<(&'static str, Vec<Strin
         ("Open links that start with", list(&p.open_url)),
         (WEB_VIEW, on(p.web_view)),
         (BROWSER_COOKIES, on(p.browser_cookies)),
+        (WEB_SCRIPTS, on(p.web_scripts)),
     ]
     .into_iter()
     .filter_map(|(title, items)| Some((title, items?)))
@@ -175,6 +176,9 @@ const PANE_OUTPUT: &str = "Read what your terminals show, their recent output. T
 const WEB_VIEW: &str = "Show web pages in its tabs, keep their cookies and site data, and add browser extensions you choose";
 /// How the approval names `browserCookies`. An import signs the plugin's pages in wherever that browser is signed in.
 const BROWSER_COOKIES: &str = "Copy the cookies of another browser on this Mac when you start an import, which signs its pages in where that browser is";
+
+/// How the approval names `webScripts`: a script in a page reads and changes what you are signed in to there.
+const WEB_SCRIPTS: &str = "Run its own scripts in the web pages it shows, which can read and change what you are signed in to there";
 
 /// What a plugin built for JavaScript says in its page in Settings.
 pub(super) const BUILT_FOR_JAVASCRIPT: &str = "Wings runs plugins built to WebAssembly. This version is written in JavaScript, so it doesn't run. Install an update if one is offered, or ask its author for a version written in Rust.";
@@ -390,6 +394,7 @@ pub(super) fn access_summary(manifest: &Manifest) -> String {
         ),
         (p.web_view, "show web pages"),
         (p.browser_cookies, "import another browser's sign-ins"),
+        (p.web_scripts, "run scripts in the web pages it shows"),
         (p.notify, "show notifications"),
         (!p.call_tools.is_empty() || !p.open_views.is_empty() || !p.events.is_empty(), "use other plugins"),
     ]
@@ -1205,11 +1210,14 @@ mod tests {
     fn the_review_names_web_pages_and_a_cookie_import_on_lines_of_their_own() {
         let manifest: Manifest = serde_json::from_value(serde_json::json!({
             "id": "browser", "name": "Browser", "version": "1.0.0", "api": 1, "main": "main.js",
-            "permissions": { "webView": true, "browserCookies": true },
+            "permissions": { "webView": true, "browserCookies": true, "webScripts": true },
         }))
         .unwrap();
-        assert_eq!(access_groups(&manifest), [(WEB_VIEW, vec![]), (BROWSER_COOKIES, vec![])]);
-        assert_eq!(access_summary(&manifest), "Turned on, it can show web pages and import another browser's sign-ins.");
+        assert_eq!(access_groups(&manifest), [(WEB_VIEW, vec![]), (BROWSER_COOKIES, vec![]), (WEB_SCRIPTS, vec![])]);
+        assert_eq!(
+            access_summary(&manifest),
+            "Turned on, it can show web pages, import another browser's sign-ins and run scripts in the web pages it shows."
+        );
     }
 
     #[test]

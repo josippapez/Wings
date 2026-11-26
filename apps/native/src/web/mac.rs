@@ -294,8 +294,8 @@ impl Maker for WebKit {
             view.setNavigationDelegate(Some(ProtocolObject::from_ref(&*observer)));
             view.setUIDelegate(Some(ProtocolObject::from_ref(&*observer)));
         }
-        let shots = profile.dir.join("screenshots");
-        let mut native = WebPage { view, observer, told, shots };
+        let (shots, web_dir) = (profile.dir.join("screenshots"), profile.dir.clone());
+        let mut native = WebPage { view, observer, told, shots, web_dir };
         if let Some(url) = url {
             native.go(&WebGo::Load(url.to_owned()), 0);
         }
@@ -307,9 +307,13 @@ struct WebPage {
     view: Retained<WKWebView>,
     observer: Retained<Observer>,
     told: Rc<dyn Fn(Heard)>,
-    /// Where its snapshots are saved, in its plugin's web folder.
+    /// Where its snapshots are saved, in its plugin's web folder, and that folder.
     shots: std::path::PathBuf,
+    web_dir: std::path::PathBuf,
 }
+
+/// Why a script didn't run in a page's own world.
+const IMPORTED: &str = "This page is signed in with cookies you imported, so a plugin's script runs there only in its own world";
 
 impl Native for WebPage {
     fn place(&mut self, window: &Window, frame: Option<Bounds<Pixels>>) {
@@ -348,6 +352,11 @@ impl Native for WebPage {
                 WebGo::Forward => drop(self.view.goForward()),
                 WebGo::Reload => drop(self.view.reload()),
                 WebGo::Stop => self.view.stopLoading(),
+                // A script in the page's own world acts as the page: where the person is signed in with cookies they
+                // imported, only the plugin's world, which sees the document but not the page's scripts or their state.
+                WebGo::Eval { page: true, .. } if self.view.URL().and_then(|url| url.absoluteString()).is_some_and(|url| super::holds_imported(&self.web_dir, &url.to_string())) => {
+                    (self.told)(Heard::Result { token, result: Err(IMPORTED.into()) });
+                }
                 WebGo::Eval { script, page } => {
                     // The value goes back as JSON text, which crosses from JavaScript as a plain string.
                     let body = format!("return JSON.stringify(await (async () => {{\n{script}\n}})() ?? null);");

@@ -17,7 +17,7 @@ mod views;
 pub mod mac;
 
 #[cfg(feature = "ui")]
-pub use views::{Heard, Spec, State, Told, forget_page, slot, sync, update};
+pub use views::{Heard, NO_SCRIPTS, Spec, State, Told, forget_page, slot, sync, update};
 #[cfg(all(test, feature = "test-support"))]
 pub(crate) use views::testing;
 
@@ -41,6 +41,26 @@ pub enum Job {
     Cookies { profile: Profile, keep_data: bool, cookies: Vec<wings_browser_cookies::Cookie> },
 }
 
+/// Notes the sites whose cookies were imported into `profile`, by their domains (never the cookies), so a plugin's
+/// script never runs in the page's own world there (`holds_imported`).
+pub fn note_imported(profile: &Profile, domains: impl IntoIterator<Item = String>) {
+    let file = profile.dir.join("imported-sites.json");
+    let mut known: std::collections::BTreeSet<String> =
+        std::fs::read(&file).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+    known.extend(domains.into_iter().map(|domain| domain.trim_start_matches('.').to_ascii_lowercase()));
+    let _ = std::fs::create_dir_all(&profile.dir);
+    let _ = serde_json::to_vec(&known).map(|json| std::fs::write(file, json));
+}
+
+/// Whether the page at `url` is on a site whose cookies were imported into `profile`: one signed in with them.
+pub fn holds_imported(profile_dir: &std::path::Path, url: &str) -> bool {
+    let Some(host) = url.split_once("://").and_then(|(_, rest)| rest.split(['/', '?', '#']).next()) else { return false };
+    let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
+    let host = host.split(':').next().unwrap_or_default().to_ascii_lowercase();
+    let known: Vec<String> = std::fs::read(profile_dir.join("imported-sites.json")).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+    known.iter().any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+}
+
 /// What an extension's add answers when the person didn't allow it.
 pub const NOT_ALLOWED: &str = "The extension wasn't added: you didn't allow it";
 
@@ -52,23 +72,51 @@ pub struct Ask {
 }
 
 impl Ask {
-    /// The dialog's question and what it says under it.
+    /// The dialog's question and what it says under it: what it reaches first, then what else it asks for. The names come
+    /// from the extension, so each is one line of printable text, cut short: a name with line breaks wrote a list of
+    /// harmless permissions of its own over the real one.
     pub fn words(&self) -> (String, String) {
-        let everywhere = self.hosts.iter().any(|host| matches!(host.as_str(), "<all_urls>" | "*://*/*" | "http://*/*" | "https://*/*"));
+        let everywhere = self.hosts.iter().any(|host| every_website(host));
         let mut detail = Vec::new();
         if everywhere {
             detail.push("It can read and change everything on every website you open in the Browser.".to_owned());
         } else if !self.hosts.is_empty() {
-            detail.push(format!("It can read and change your data on: {}.", self.hosts.join(", ")));
+            let shown: Vec<String> = self.hosts.iter().take(HOSTS_SHOWN).map(|host| one_line(host, 120)).collect();
+            let more = self.hosts.len().saturating_sub(HOSTS_SHOWN);
+            let more = if more > 0 { format!(" and {more} more") } else { String::new() };
+            detail.push(format!("It can read and change your data on: {}{more}.", shown.join(", ")));
         }
         if !self.permissions.is_empty() {
-            detail.push(format!("It asks for: {}.", self.permissions.join(", ")));
+            let permissions: Vec<String> = self.permissions.iter().map(|permission| one_line(permission, 60)).collect();
+            detail.push(format!("It asks for: {}.", permissions.join(", ")));
         }
         if detail.is_empty() {
             detail.push("It asks for no permissions.".into());
         }
-        (format!("Add the extension \"{}\" to the Browser?", self.name), detail.join("\n\n"))
+        (format!("Add the extension \"{}\" to the Browser?", one_line(&self.name, 60)), detail.join("\n\n"))
     }
+}
+
+/// The most host patterns the dialog names; the rest are counted.
+const HOSTS_SHOWN: usize = 8;
+
+/// `text` as one line of printable characters, at most `most` of them.
+fn one_line(text: &str, most: usize) -> String {
+    let line: String = text.chars().map(|c| if c.is_control() || c == '\u{2028}' || c == '\u{2029}' { ' ' } else { c }).collect();
+    let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    match line.char_indices().nth(most) {
+        Some((at, _)) => format!("{}…", &line[..at]),
+        None => line,
+    }
+}
+
+/// Whether a match pattern reaches every website: `<all_urls>`, or a host of `*` whatever the scheme and path.
+fn every_website(pattern: &str) -> bool {
+    if pattern == "<all_urls>" {
+        return true;
+    }
+    let host = pattern.split_once("://").map_or(pattern, |(_, rest)| rest).split('/').next().unwrap_or_default();
+    host == "*" || host.starts_with("*:")
 }
 
 /// Whether a web view may go to `url`: the page itself only to an address a `WebView` may load (`web_address`), and a
@@ -151,6 +199,14 @@ mod tests {
         assert!(detail.contains("every website") && detail.contains("storage, tabs"), "{detail}");
         let (_, some) = ask(&["https://github.com/*"], &[]).words();
         assert_eq!(some, "It can read and change your data on: https://github.com/*.");
+        for everywhere in ["*://*/*", "http://*/x", "https://*:8080/*", "ws://*/", "<all_urls>"] {
+            assert!(ask(&[everywhere], &[]).words().1.contains("every website"), "{everywhere}");
+        }
+        // A name can't write lines of its own into the dialog.
+        let spoof = Ask { name: "Helper\"\n\nIt asks for no permissions.\u{2028}x".repeat(5), hosts: vec!["<all_urls>".into()], permissions: vec![] };
+        let (question, detail) = spoof.words();
+        assert!(!question.contains('\n') && !question.contains('\u{2028}') && question.chars().count() <= 100, "{question}");
+        assert!(detail.starts_with("It can read and change everything on every website"));
         assert_eq!(ask(&[], &[]).words().1, "It asks for no permissions.");
     }
 
@@ -164,6 +220,20 @@ mod tests {
         }
         assert!(may_navigate("data:text/html,hi", false) && may_navigate("blob:https://a.com/1", false) && may_navigate("about:srcdoc", false));
         assert!(!may_navigate("file:///etc/passwd", false) && !may_navigate("slack://open", false));
+    }
+
+    #[test]
+    fn a_site_signed_in_with_imported_cookies_is_known_by_its_domain() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = Profile::of("browser", "s", &dir.path().join("plugin-storage"));
+        assert!(!holds_imported(&profile.dir, "https://github.com/"));
+        note_imported(&profile, [".github.com".to_owned(), "Example.org".to_owned()]);
+        for url in ["https://github.com/", "https://gist.github.com/x", "http://user@example.org:8080/a"] {
+            assert!(holds_imported(&profile.dir, url), "{url}");
+        }
+        for url in ["https://notgithub.com/", "https://github.com.evil.dev/", "about:blank"] {
+            assert!(!holds_imported(&profile.dir, url), "{url}");
+        }
     }
 
     #[test]

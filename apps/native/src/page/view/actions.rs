@@ -129,7 +129,7 @@ impl PageView {
                 command: web.command.clone(),
             })
             .collect();
-        crate::web::update(cx.entity_id(), &profile, &specs, told);
+        crate::web::update(cx.entity_id(), &profile, &specs, told, self.web_scripts);
     }
 
     /// The links in the text of `id`, found once for each text and set of links rather than each time the page draws.

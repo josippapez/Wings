@@ -196,3 +196,37 @@ fn a_view_opens_in_a_window_of_its_own_with_its_args_shows_its_web_page_there_an
     until(&app, &mut window, "the window stayed open", |w| w.plugin_ui.windows.is_empty());
     until(&app, &mut window, "its web page outlived its window", |_| did.borrow().last() == Some(&Did::Ended));
 }
+
+/// A page whose web view runs a script as it opens, which saves what came of it.
+fn scripting_page() -> String {
+    fake::script("web", || {
+        |cx: &mut Cx<'_>, hear: Hear<'_>| match hear {
+            Hear::Start => cx.render(&json!({ "id": 0, "type": "#root", "props": {}, "children": [{ "id": 1, "type": "WebView", "props": {
+                "name": "main", "url": "https://example.com/", "fill": true, "onResult": "1:result",
+                "command": { "action": "eval", "script": "return document.title", "token": 7 },
+            }, "children": [] }] })),
+            Hear::Event("1:result", payload) => cx.save("result", payload),
+            _ => {}
+        }
+    })
+}
+
+#[test]
+fn a_page_runs_scripts_in_its_web_pages_only_with_its_own_permission() {
+    let data = Data::temp();
+    let views = json!([{ "id": "web", "title": "Web", "page": "dist/web.html", "opens": ["tab"], "multiple": true }]);
+    for (id, permissions) in [("viewer", json!({ "webView": true })), ("scripter", json!({ "webView": true, "webScripts": true }))] {
+        data.install_script(id, json!({ "permissions": permissions, "contributes": { "views": views } }), &idle("main"), &[("web", &scripting_page())], &format!("{id}-scope"));
+    }
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let id = window.update(|_, window, _| window.window_handle().window_id());
+    let (did, _) = record(id);
+    window.update(|w, window, cx| assert!(w.open_plugin_view("viewer", "web", None, window, cx)));
+    until(&app, &mut window, "the page never heard its script was refused", |_| {
+        data.saved("viewer", "viewer-scope", "result") == Some(json!({ "token": 7, "error": crate::web::NO_SCRIPTS }))
+    });
+    settle(&app, &mut window);
+    assert!(!did.borrow().iter().any(|did| matches!(did, Did::Went(..))), "nothing ran: {:?}", did.borrow());
+    window.update(|w, window, cx| assert!(w.open_plugin_view("scripter", "web", None, window, cx)));
+    until(&app, &mut window, "the script never ran", |_| did.borrow().iter().any(|did| matches!(did, Did::Went(crate::page::tree::WebGo::Eval { .. }, 7))));
+}

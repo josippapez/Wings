@@ -27,6 +27,9 @@ pub struct Added {
     pub permissions: Vec<String>,
     pub hosts: Vec<String>,
     pub enabled: bool,
+    /// The person allowed it in Wings' own dialog (`web::Ask`). Only one allowed is listed, and only one listed loads.
+    #[serde(default)]
+    pub allowed: bool,
 }
 
 /// An extension to load: its id and folder.
@@ -83,7 +86,7 @@ fn save(profile: &Profile, list: &[Added]) -> Result<(), String> {
 pub fn enabled(profile: &Profile) -> Vec<Loadable> {
     list(profile)
         .into_iter()
-        .filter(|added| added.enabled)
+        .filter(|added| added.enabled && added.allowed)
         .map(|added| Loadable { dir: installed_dir(profile, &added.id), id: added.id })
         .collect()
 }
@@ -115,9 +118,10 @@ pub fn stage_bytes(profile: &Profile, bytes: &[u8]) -> Result<Staged, String> {
     wings_web_extensions::unpack(bytes, &into).map(|info| Staged { stage, info }).map_err(|error| error.to_string())
 }
 
-/// Adds the staged extension `stage`, on: its folder moves in with the others. What it asked for is read again from
-/// that folder, not taken from the page.
-pub fn add(profile: &Profile, stage: &str) -> Result<(Added, PathBuf), String> {
+/// Readies the staged extension `stage` to be asked about: its folder moves in with the others, unlisted, so nothing
+/// loads it until the person allows it (`keep`) or it goes (`forget`). What it asks for is read again from that folder,
+/// not taken from the page.
+pub fn prepare(profile: &Profile, stage: &str) -> Result<(Added, PathBuf), String> {
     if !valid_id(stage) {
         return Err("No extension is waiting to be added by that name".into());
     }
@@ -136,11 +140,23 @@ pub fn add(profile: &Profile, stage: &str) -> Result<(Added, PathBuf), String> {
         permissions: info.permissions,
         hosts: info.host_permissions,
         enabled: true,
+        allowed: false,
     };
-    let mut list = list(profile);
-    list.push(added.clone());
-    save(profile, &list)?;
     Ok((added, dir))
+}
+
+/// Lists `added`, which the person allowed in Wings' dialog, on.
+pub fn keep(profile: &Profile, added: &Added) -> Result<(), String> {
+    let mut list = list(profile);
+    list.push(Added { allowed: true, enabled: true, ..added.clone() });
+    save(profile, &list)
+}
+
+/// Lets go of the folder of `id`, readied (`prepare`) but not allowed.
+pub fn forget(profile: &Profile, id: &str) {
+    if valid_id(id) && !list(profile).iter().any(|added| added.id == id) {
+        let _ = fs::remove_dir_all(installed_dir(profile, id));
+    }
 }
 
 /// Lets go of the staged extension `stage`.
@@ -154,6 +170,10 @@ pub fn discard(profile: &Profile, stage: &str) {
 pub fn set_enabled(profile: &Profile, id: &str, enabled: bool) -> Result<(Added, PathBuf), String> {
     let mut list = list(profile);
     let added = list.iter_mut().find(|added| added.id == id).ok_or("No extension by that id")?;
+    // One the person never allowed is never turned on: only Wings' dialog as it is added allows it.
+    if enabled && !added.allowed {
+        return Err("That extension was never allowed. Add it again to see what it can do".into());
+    }
     added.enabled = enabled;
     let added = added.clone();
     save(profile, &list)?;
@@ -209,7 +229,10 @@ mod tests {
         let staged = stage_path(&profile, &source).unwrap();
         assert_eq!((staged.info.name.as_str(), staged.info.permissions.clone()), ("Blocker", vec!["storage".to_owned()]));
         assert!(list(&profile).is_empty(), "staging adds nothing");
-        let (added, dir) = add(&profile, &staged.stage).unwrap();
+        let (added, dir) = prepare(&profile, &staged.stage).unwrap();
+        assert!(list(&profile).is_empty() && enabled(&profile).is_empty(), "nothing listed or loaded until it is allowed");
+        keep(&profile, &added).unwrap();
+        let added = list(&profile)[0].clone();
         assert!(dir.join("manifest.json").exists() && source.join("manifest.json").exists(), "a copy, the browser's own stays");
         assert_eq!((added.hosts.clone(), added.enabled), (vec!["https://*/*".to_owned()], true));
         assert_eq!(icon_path(&profile, &added), Some(dir.join("icons/48.png")));
@@ -221,16 +244,33 @@ mod tests {
     }
 
     #[test]
+    fn an_extension_never_allowed_is_never_listed_turned_on_or_loaded() {
+        let (profile, temp) = profile();
+        let source = temp.path().join("unpacked");
+        extension(&source, "Grabber");
+        let staged = stage_path(&profile, &source).unwrap();
+        let (added, dir) = prepare(&profile, &staged.stage).unwrap();
+        // Denied in Wings' dialog: its folder goes, and nothing names it.
+        forget(&profile, &added.id);
+        assert!(!dir.exists() && list(&profile).is_empty());
+        // A list written by an older Wings, or by hand, with one never allowed: it stays off.
+        save(&profile, &[Added { allowed: false, enabled: false, ..added.clone() }]).unwrap();
+        assert!(set_enabled(&profile, &added.id, true).unwrap_err().contains("never allowed"));
+        save(&profile, &[Added { allowed: false, enabled: true, ..added }]).unwrap();
+        assert!(enabled(&profile).is_empty());
+    }
+
+    #[test]
     fn a_stage_or_id_that_is_a_path_reaches_no_folder() {
         let (profile, temp) = profile();
         let outside = temp.path().join("outside");
         extension(&outside, "Other");
-        assert!(add(&profile, "../../outside").is_err());
+        assert!(prepare(&profile, "../../outside").is_err());
         discard(&profile, "../../outside");
         assert!(outside.join("manifest.json").exists());
         let mut forged = Added {
             id: "abc".into(), name: "x".into(), version: "1".into(), description: String::new(),
-            icon: Some(PathBuf::from("../../../outside/manifest.json")), permissions: vec![], hosts: vec![], enabled: true,
+            icon: Some(PathBuf::from("../../../outside/manifest.json")), permissions: vec![], hosts: vec![], enabled: true, allowed: true,
         };
         assert_eq!(icon_path(&profile, &forged), None);
         forged.icon = Some(PathBuf::from("/etc/passwd"));

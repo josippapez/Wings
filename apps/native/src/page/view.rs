@@ -347,6 +347,8 @@ pub struct PageView {
     /// Where its web views keep their data, none while its plugin may not show web pages; what each `WebView`'s
     /// `onState` is, by name; and how a web view tells the page where it is.
     web_profile: Option<crate::web::Profile>,
+    /// Its plugin may run scripts in its web pages (`permissions.webScripts`).
+    web_scripts: bool,
     web_handlers: HashMap<SharedString, (Option<String>, Option<String>)>,
     web_told: Option<crate::web::Told>,
     _web_events: Option<Task<()>>,

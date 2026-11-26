@@ -81,6 +81,9 @@ pub struct Permissions {
     /// Lets the plugin copy the cookies of another browser on this Mac into its web views' store when you start an
     /// import, with `wings.browserCookies`. That signs its pages in wherever that browser is, so the approval says so.
     pub browser_cookies: bool,
+    /// Lets the plugin's pages run scripts in the web pages they show (a `WebView`'s `eval` command), which read and
+    /// change what those pages hold, including what you are signed in to.
+    pub web_scripts: bool,
 }
 
 /// What a plugin adds to Wings, shown in the manager. The host refuses UI calls a plugin didn't declare.

@@ -22,6 +22,11 @@ pub fn may_show_web_views(plugin: &Plugin) -> bool {
     plugin.manifest.permissions.web_view
 }
 
+/// Whether the plugin's pages may run scripts in the web pages they show.
+pub fn may_run_web_scripts(plugin: &Plugin) -> bool {
+    plugin.manifest.permissions.web_view && plugin.manifest.permissions.web_scripts
+}
+
 /// Whether the plugin may import another browser's cookies into its web views' store, on the user's click.
 pub fn may_import_browser_cookies(plugin: &Plugin) -> bool {
     plugin.manifest.permissions.browser_cookies
@@ -177,6 +182,9 @@ mod tests {
         let web = manifest(serde_json::json!({ "webView": true }));
         assert!(may_show_web_views(&web) && !may_import_browser_cookies(&web));
         assert!(may_import_browser_cookies(&manifest(serde_json::json!({ "webView": true, "browserCookies": true }))));
+        // Running scripts in those pages is a third thing, and needs pages to run them in.
+        assert!(!may_run_web_scripts(&web) && !may_run_web_scripts(&manifest(serde_json::json!({ "webScripts": true }))));
+        assert!(may_run_web_scripts(&manifest(serde_json::json!({ "webView": true, "webScripts": true }))));
         let _ = fs::remove_dir_all(&dir);
     }
 

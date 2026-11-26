@@ -33,6 +33,9 @@ pub struct State {
     pub error: Option<String>,
 }
 
+/// Why an `eval` didn't run, for a plugin that may not run scripts in its pages.
+pub const NO_SCRIPTS: &str = "This plugin may not run scripts in the web pages it shows (permissions.webScripts)";
+
 /// What a web view tells its page: where it is, or what a command came to.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Heard {
@@ -84,8 +87,9 @@ pub(crate) fn make_with(id: WindowId, maker: Rc<dyn Maker>) {
 }
 
 /// The page `page` of `profile`'s plugin holds these web views now, from its newest tree: new ones are added, gone ones
-/// end, and each command the page sends for the first time is done.
-pub fn update(page: EntityId, profile: &Profile, specs: &[Spec], told: &Told) {
+/// end, and each command the page sends for the first time is done. An `eval` is refused unless the plugin may run
+/// scripts in its pages (`scripts`, `permissions.webScripts`).
+pub fn update(page: EntityId, profile: &Profile, specs: &[Spec], told: &Told, scripts: bool) {
     // Dropped after the borrow, as a view that ends may call back.
     let mut ended = Vec::new();
     VIEWS.with_borrow_mut(|views| {
@@ -118,6 +122,11 @@ pub fn update(page: EntityId, profile: &Profile, specs: &[Spec], told: &Told) {
                 && entry.token != Some(command.token)
             {
                 entry.token = Some(command.token);
+                if matches!(command.go, WebGo::Eval { .. }) && !scripts {
+                    let refused = Err(NO_SCRIPTS.to_owned());
+                    let _ = told.try_send((spec.name.clone(), Heard::Result { token: command.token, result: refused }));
+                    continue;
+                }
                 match &mut entry.native {
                     Some(native) => native.go(&command.go, command.token),
                     None => entry.waiting.push((command.go.clone(), command.token)),
