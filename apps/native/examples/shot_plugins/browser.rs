@@ -76,12 +76,37 @@ pub(super) fn browser(out: PathBuf) {
         session: None,
         focused: false,
     }]);
+    // Two extensions' buttons on a page, as WebKit tells the tab of them: a password manager with a count and one with
+    // no count. Their icons are drawn here, never taken from an extension on this Mac.
+    let icons = [("ext-shot-vault", [23, 93, 220]), ("ext-shot-react", [88, 196, 220])];
+    for (id, colour) in icons {
+        let picture = image::RgbaImage::from_fn(32, 32, |x, y| {
+            let (dx, dy) = (x as f32 - 15.5, y as f32 - 15.5);
+            let inside = if id == "ext-shot-vault" { dx.abs() < 13.0 && dy.abs() < 13.0 } else { dx * dx + dy * dy < 15.0 * 15.0 };
+            let dot = dx * dx + dy * dy < 5.0 * 5.0;
+            match (inside, dot) {
+                (true, true) => image::Rgba([255, 255, 255, 255]),
+                (true, false) => image::Rgba([colour[0], colour[1], colour[2], 255]),
+                _ => image::Rgba([0, 0, 0, 0]),
+            }
+        });
+        let mut png = Vec::new();
+        picture.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        wings_native::page::images::register_bytes("browser", id, png).unwrap();
+    }
+    let page_state = json!({ "url": "https://github.com/acme/web/pull/482", "title": "acme/web · Pull request #482", "extensions": [
+        { "id": "18f2a9c0b1", "name": "Bitwarden Password Manager", "label": "Bitwarden", "icon": "ext-shot-vault", "badge": "3", "enabled": true },
+        { "id": "18f2a9c0b2", "name": "React Developer Tools", "label": "React Developer Tools", "icon": "ext-shot-react", "badge": "", "enabled": true },
+    ] });
+    let page_args = json!({ "url": "https://github.com/acme/web/pull/482" });
     let mut cx = app();
-    let pages: [(&str, String, &str, f32); 2] = [("tab", module("browser"), "", 640.0), ("settings", module("settings"), "Search engine", 1100.0)];
+    let pages: [(&str, String, &str, f32); 3] =
+        [("tab", module("browser"), "", 640.0), ("page", module("browser"), "", 640.0), ("settings", module("settings"), "Search engine", 1100.0)];
     for width in [1000.0, 640.0] {
         for (name, source, expected, height) in &pages {
+            let args = (*name == "page").then_some(&page_args);
             let handle = cx
-                .open_offscreen_window(size(px(width), px(*height)), |_, cx| cx.new(|cx| PageView::in_plugin(&host, source, cx)))
+                .open_offscreen_window(size(px(width), px(*height)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, source, args, cx)))
                 .unwrap();
             let window = handle.into();
             handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
@@ -91,6 +116,13 @@ pub(super) fn browser(out: PathBuf) {
             {
                 assert!(Instant::now() < deadline, "page did not show {expected:?}: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
                 wait(&mut cx, window, Duration::from_millis(20));
+            }
+            // A page's web view tells it where it is and its extensions' buttons.
+            if args.is_some() {
+                while !handle.read_with(&cx, |view, _| view.tell_web_state("page", &page_state)).unwrap() {
+                    assert!(Instant::now() < deadline, "the page has no web view");
+                    wait(&mut cx, window, Duration::from_millis(20));
+                }
             }
             // The settings ask for the other browsers and extensions as they open.
             wait(&mut cx, window, Duration::from_millis(1500));

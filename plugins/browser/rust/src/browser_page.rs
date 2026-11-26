@@ -14,7 +14,10 @@ use std::cell::RefCell;
 use wings_plugin::{
     host::{self, Stage},
     task::spawn,
-    ui::{Choice, Combobox, Node, WebState, button, combobox_submit, icon_button, icons, notice, page_with, row, slot, stack, web_command, web_view},
+    ui::{
+        Choice, Combobox, ExtensionButton, Node, WebState, badge, button, combobox_submit, icon_button, icons, image, notice, page_with, row, slot, stack, text,
+        web_command, web_extension_action, web_view,
+    },
 };
 
 const SUGGESTIONS: usize = 6;
@@ -52,6 +55,8 @@ pub(crate) struct Page {
     /// The page last put in history, and the title last given the tab, so a repeat of either does nothing.
     recorded: (String, String),
     titled: String,
+    /// The token of the last click of an extension's button, whose refusal shows in the red line.
+    opening: Option<u64>,
 }
 
 /// What a change of the view's state asks the tab to do.
@@ -218,6 +223,52 @@ fn cancel() {
     }
 }
 
+/// Clicks an extension's button for the page: its popup opens under the button. From the click, which Wings needs.
+fn open_extension(id: &str) {
+    with(|page| {
+        page.problem = None;
+        page.opening = Some(page.run(|token| web_extension_action(id, token)));
+    });
+}
+
+/// What a command came to: a refused extension button says why in the red line, and the rest are the agent's.
+fn result_event(event: &Value) {
+    let refused = with(|page| {
+        let mine = page.opening.is_some() && event["token"].as_u64() == page.opening;
+        let error = event["error"].as_str().filter(|_| mine).map(str::to_owned);
+        if error.is_some() {
+            page.problem = error;
+        }
+        mine
+    });
+    if !refused {
+        agent_page::result(event);
+    }
+}
+
+/// An extension's button in the toolbar: its icon, with its badge beside it as a count is on a header button, and its
+/// label as the tooltip.
+fn extension_button(extension: &ExtensionButton) -> Node {
+    let label = if extension.label.is_empty() { &extension.name } else { &extension.label };
+    let glyph = match &extension.icon {
+        Some(icon) => image(icon, &extension.name, 16, 16).prop("radius", 0),
+        // An extension with no picture at all: the first letter of its name.
+        None => text(extension.name.chars().next().map(|first| first.to_uppercase().to_string()).unwrap_or_default()).prop("weight", "medium"),
+    };
+    let id = extension.id.clone();
+    let button = Node::new("Button")
+        .prop("variant", "ghost")
+        .prop("label", label.as_str())
+        .prop("title", label.as_str())
+        .on("onClick", move |_| open_extension(&id))
+        .disabled(!extension.enabled)
+        .key(format!("extension-{}", extension.id));
+    match extension.badge.as_str() {
+        "" => button.prop("size", "icon-sm").child(glyph),
+        said => button.prop("size", "sm").child(row().prop("gap", "s").prop("align", "center").child(glyph).child(badge(said, Some("info")))),
+    }
+}
+
 fn address(page: &Page) -> Node {
     let options = page
         .typed
@@ -299,6 +350,7 @@ fn view() -> Vec<Node> {
             .prop("gap", "s")
             .prop("align", "center")
             .maybe(page.store.then(|| button("Add to Wings", "secondary", page.busy, stage_store).size("sm")))
+            .children(state.extensions.iter().map(extension_button))
             .child(if agent_page::popped() {
                 icon_button("Put back in a tab", &icons::MINIMIZE_2, agent_page::pop_button_action)
             } else {
@@ -319,7 +371,7 @@ fn view() -> Vec<Node> {
             let body = start_page::view(&servers, &recent, open_from_start);
             return vec![page_with(top.into_iter().flatten(), [body]).prop("column", START_COLUMN)];
         }
-        let mut web = web_view("page").prop("fill", true).prop("url", page.start.as_str()).prop("keepData", keep).on("onState", state_event).on("onResult", agent_page::result);
+        let mut web = web_view("page").prop("fill", true).prop("url", page.start.as_str()).prop("keepData", keep).on("onState", state_event).on("onResult", result_event);
         if !page.commands.is_empty() {
             web = web.prop("command", Value::Array(page.commands.clone()));
         }
@@ -439,6 +491,46 @@ mod tests {
         let mut page = Page { typed: Some("half".into()), ..Page::default() };
         page.apply(WebState { loading: true, ..loaded("", "") });
         assert_eq!(page.typed.as_deref(), Some("half"));
+    }
+
+    /// The first button in `tree` read out as `label`.
+    fn button_named<'a>(tree: &'a Value, label: &str) -> Option<&'a Value> {
+        if tree["type"] == "Button" && tree["props"]["label"] == label {
+            return Some(tree);
+        }
+        let children = tree.as_array().or_else(|| tree["children"].as_array())?;
+        children.iter().find_map(|child| button_named(child, label))
+    }
+
+    #[test]
+    fn the_toolbar_has_a_button_for_each_extension_with_its_icon_and_badge_and_a_click_names_it() {
+        let extension = |id: &str, name: &str, icon: Option<&str>, badge: &str, enabled: bool| ExtensionButton {
+            id: id.into(), name: name.into(), label: name.into(), icon: icon.map(str::to_owned), badge: badge.into(), enabled,
+        };
+        let state = WebState {
+            extensions: vec![extension("e1", "Bitwarden", Some("ext-btn-1"), "3", true), extension("e2", "React Developer Tools", None, "", false)],
+            ..loaded("https://github.com/", "GitHub")
+        };
+        with(|page| *page = Page { start: "https://github.com/".into(), state, ..Page::default() });
+        let (tree, handlers) = wings_plugin::ui::export(view());
+        let bitwarden = button_named(&tree, "Bitwarden").expect("Bitwarden's button");
+        assert_eq!((bitwarden["props"]["title"].as_str(), bitwarden["props"]["size"].as_str()), (Some("Bitwarden"), Some("sm")));
+        let drawn = bitwarden.to_string();
+        assert!(drawn.contains(r#""src":"ext-btn-1""#) && drawn.contains(r#""type":"Badge""#) && drawn.contains(r#""text":"3""#), "{drawn}");
+        // No picture: the first letter of its name. Off: greyed.
+        let react = button_named(&tree, "React Developer Tools").expect("React's button");
+        assert_eq!((react["props"]["size"].as_str(), react["props"]["disabled"].as_bool()), (Some("icon-sm"), Some(true)));
+        assert!(react.to_string().contains(r#""text":"R""#), "{react}");
+        // A click sends the command that names it, which the view runs once.
+        assert!(handlers.call(bitwarden["props"]["onClick"].as_str().unwrap(), &Value::Null));
+        let sent = with(|page| (page.commands.last().cloned(), page.opening));
+        assert_eq!(sent, (Some(web_extension_action("e1", 1)), Some(1)));
+        // Wings refuses one that came without your click: the page says why.
+        result_event(&serde_json::json!({ "token": 1, "error": "only right after you click" }));
+        assert_eq!(with(|page| page.problem.clone()), Some("only right after you click".into()));
+        // A page with no extensions has no buttons for them.
+        with(|page| page.state.extensions.clear());
+        assert!(button_named(&wings_plugin::ui::export(view()).0, "Bitwarden").is_none());
     }
 
     #[test]
