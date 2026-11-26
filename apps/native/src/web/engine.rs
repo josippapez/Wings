@@ -152,9 +152,11 @@ fn choice_in(root: &Path, pin: &Pinned, runnable: bool, profile: &Profile) -> Ki
     if chosen && runnable && installed_in(root, pin).is_some() { Kind::Chromium } else { Kind::WebKit }
 }
 
-/// What the disk held at the first ask: the choices and whether the engine is installed. `set_choice`, `install` and
-/// `remove` keep it current, so the web views' every frame doesn't read the disk.
+/// What the disk held at the first ask of `root`: the choices and whether the engine is installed. `set_choice`,
+/// `install` and `remove` keep it current, so the web views' every frame doesn't read the disk. It is for one data
+/// folder: another folder (a screenshot's fixture) reads its own.
 struct Cache {
+    root: PathBuf,
     choices: BTreeMap<String, Kind>,
     installed: bool,
 }
@@ -163,8 +165,10 @@ static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
 
 fn with_cache<T>(root: &Path, use_cache: impl FnOnce(&mut Cache) -> T) -> T {
     let mut guard = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let cache = guard.get_or_insert_with(|| Cache { choices: read_choices(root), installed: installed_in(root, &PINNED).is_some() });
-    use_cache(cache)
+    if guard.as_ref().is_none_or(|cache| cache.root != root) {
+        *guard = Some(Cache { root: root.to_owned(), choices: read_choices(root), installed: installed_in(root, &PINNED).is_some() });
+    }
+    use_cache(guard.as_mut().expect("just filled"))
 }
 
 /// The engine `profile`'s web views use: Chromium only when it was chosen for that profile, is installed and runs here.
