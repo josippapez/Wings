@@ -1,8 +1,9 @@
-//! The Browser page in Wings Settings: the search engine, what the web views keep, clearing it, signing in with the
+//! The Browser page in Wings Settings: the engine (WebKit or Chromium), the search engine, what the web views keep, clearing it, signing in with the
 //! cookies of another browser on this Mac, and extensions.
 
 use crate::{
     address::Engine,
+    engine_settings,
     extension::{Staged, dialog_for},
     history, settings,
 };
@@ -491,14 +492,15 @@ fn view() -> Vec<Node> {
             Err(error) => notice("danger", error.as_str()),
         });
         let problem = (page.staged.is_none()).then(|| page.problem.as_deref().map(|problem| notice("danger", problem))).flatten();
-        let column = stack().prop("gap", "l").children([search, privacy]).maybe(ask).maybe(cleared).children(cookies(&page, keep, signins)).children(extensions(&page)).maybe(problem);
+        let column = stack().prop("gap", "l").children(engine_settings::view()).children([search, privacy]).maybe(ask).maybe(cleared).children(cookies(&page, keep, signins)).children(extensions(&page)).maybe(problem);
         let dialog = page.staged.as_ref().map(|staged| dialog_for(staged, page.adding, page.problem.as_deref(), cancel, add));
-        vec![column_page(toolbar("Browser", None), std::iter::once(column).chain(dialog).chain(remove_dialog(&page)))]
+        vec![column_page(toolbar("Browser", None), std::iter::once(column).chain(dialog).chain(remove_dialog(&page)).chain(engine_settings::remove_dialog()))]
     })
 }
 
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
+    engine_settings::load();
     load_sources();
     load_extensions();
     wings_plugin::run(view);

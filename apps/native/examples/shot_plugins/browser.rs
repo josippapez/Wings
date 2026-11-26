@@ -181,4 +181,55 @@ pub(super) fn browser(out: PathBuf) {
             lock(&locked, 0o700);
         }
     }
+    // The Engine section, in each of its states. Each state has a home of its own, which is where this build keeps the
+    // engine (`web::engine::root`), so nothing here reads or writes this Mac's. Wings does the real calls: the download is
+    // a file or a pipe that never opens (it stays on "Downloading"), and what fails is a file that isn't the pinned archive.
+    let engine_root = |home: &std::path::Path| home.join("Library/Application Support/Wings Native/chromium");
+    let fifo = out.join("fixture-engine-pipe");
+    let _ = std::fs::remove_file(&fifo);
+    assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success(), "mkfifo");
+    let garbage = out.join("fixture-engine-garbage.bin");
+    std::fs::write(&garbage, b"not the archive").unwrap();
+    // (state, installed and on, the file Download reads, whether to press Download first)
+    let states: [(&str, bool, Option<&std::path::Path>, bool); 4] =
+        [("webkit", false, None, false), ("downloading", false, Some(fifo.as_path()), true), ("on", true, None, false), ("failed", false, Some(garbage.as_path()), true)];
+    for width in [1000.0, 640.0] {
+        for (name, on, archive, download) in &states {
+            let home = out.join(format!("fixture-home-engine-{name}"));
+            let _ = std::fs::remove_dir_all(&home);
+            if *on {
+                let version = engine_root(&home).join(wings_native::web::engine::PINNED.version);
+                std::fs::create_dir_all(version.join("Wings Chromium.app")).unwrap();
+                std::fs::write(version.join("finished"), b"").unwrap();
+                std::fs::write(engine_root(&home).join("choice.json"), json!({ "browser.shot": "chromium" }).to_string()).unwrap();
+            }
+            std::fs::create_dir_all(&home).unwrap();
+            unsafe { std::env::set_var("HOME", &home) };
+            match archive {
+                Some(archive) => unsafe { std::env::set_var("WINGS_CHROMIUM_ARCHIVE", archive) },
+                None => unsafe { std::env::remove_var("WINGS_CHROMIUM_ARCHIVE") },
+            }
+            let handle = cx
+                .open_offscreen_window(size(px(width), px(1100.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, &module("settings"), None, cx)))
+                .unwrap();
+            let window = handle.into();
+            handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while handle.read_with(&cx, |view, _| view.trees_sent()).unwrap() == 0 || !handle.read_with(&cx, |view, _| view.text().contains("Built in.")).unwrap() {
+                assert!(Instant::now() < deadline, "the engine section did not show: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
+                wait(&mut cx, window, Duration::from_millis(20));
+            }
+            if *download {
+                assert!(handle.read_with(&cx, |view, _| view.press("Download", 0)).unwrap(), "no Download button");
+                wait(&mut cx, window, Duration::from_millis(1500));
+            }
+            save(&mut cx, window, out.join(format!("browser-engine-{name}-{width}.png")));
+            if *on {
+                assert!(handle.read_with(&cx, |view, _| view.press("Remove", 0)).unwrap(), "no Remove button");
+                wait(&mut cx, window, Duration::from_millis(500));
+                save(&mut cx, window, out.join(format!("browser-engine-remove-{width}.png")));
+            }
+            let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        }
+    }
 }

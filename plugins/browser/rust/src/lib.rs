@@ -16,6 +16,8 @@ mod agent_page;
 mod agent_tools;
 #[cfg(feature = "browser")]
 mod browser_page;
+#[cfg(feature = "settings")]
+mod engine_settings;
 mod extension;
 mod history;
 #[cfg(feature = "main")]
