@@ -31,6 +31,18 @@ pub struct State {
     pub can_go_forward: bool,
     /// Why the last page didn't load, until another starts.
     pub error: Option<String>,
+    /// The `alert`, `confirm` or `prompt` the page waits on, which a `dialog` command answers.
+    pub dialog: Option<Dialog>,
+}
+
+/// A page's `alert`, `confirm` or `prompt`, and the site that shows it, which its plugin's page shows as its own.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Dialog {
+    pub kind: String,
+    pub message: String,
+    pub default_text: Option<String>,
+    pub site: String,
 }
 
 /// Why an `eval` didn't run, for a plugin that may not run scripts in its pages.
@@ -58,12 +70,14 @@ pub trait Native {
 /// Makes the engine's views of a window (`host_natively`). A window without one (offscreen: tests, `pnpm shot`) draws
 /// only the places.
 pub trait Maker {
-    fn make(&self, profile: &Profile, keep_data: bool, url: Option<&str>, told: Rc<dyn Fn(Heard)>) -> Box<dyn Native>;
+    /// `scripts`: the plugin may run scripts in its pages, so the page's console and requests are kept for `logs`.
+    fn make(&self, profile: &Profile, keep_data: bool, scripts: bool, url: Option<&str>, told: Rc<dyn Fn(Heard)>) -> Box<dyn Native>;
 }
 
 struct Entry {
     profile: Profile,
     keep_data: bool,
+    scripts: bool,
     url: Option<String>,
     told: Told,
     native: Option<Box<dyn Native>>,
@@ -109,6 +123,7 @@ pub fn update(page: EntityId, profile: &Profile, specs: &[Spec], told: &Told, sc
             let entry = views.entry((page, spec.name.clone())).or_insert_with(|| Entry {
                 profile: profile.clone(),
                 keep_data: spec.keep_data,
+                scripts,
                 url: spec.url.clone(),
                 told: told.clone(),
                 native: None,
@@ -122,7 +137,7 @@ pub fn update(page: EntityId, profile: &Profile, specs: &[Spec], told: &Told, sc
                 && entry.token != Some(command.token)
             {
                 entry.token = Some(command.token);
-                if matches!(command.go, WebGo::Eval { .. }) && !scripts {
+                if matches!(command.go, WebGo::Eval { .. } | WebGo::Logs) && !scripts {
                     let refused = Err(NO_SCRIPTS.to_owned());
                     let _ = told.try_send((spec.name.clone(), Heard::Result { token: command.token, result: refused }));
                     continue;
@@ -198,7 +213,7 @@ pub fn place(window: &Window, _: &App) {
                 let tell: Rc<dyn Fn(Heard)> = Rc::new(move |heard| {
                     let _ = told.try_send((key.clone(), heard));
                 });
-                let mut native = maker.make(&entry.profile, entry.keep_data, entry.url.as_deref(), tell);
+                let mut native = maker.make(&entry.profile, entry.keep_data, entry.scripts, entry.url.as_deref(), tell);
                 for (go, token) in entry.waiting.drain(..) {
                     native.go(&go, token);
                 }
@@ -256,7 +271,7 @@ pub(crate) mod testing {
     }
 
     impl Maker for Record {
-        fn make(&self, profile: &Profile, keep_data: bool, url: Option<&str>, told: Rc<dyn Fn(Heard)>) -> Box<dyn Native> {
+        fn make(&self, profile: &Profile, keep_data: bool, _: bool, url: Option<&str>, told: Rc<dyn Fn(Heard)>) -> Box<dyn Native> {
             self.did.borrow_mut().push(Did::Made { name: Some(profile.plugin.clone()), keep_data, url: url.map(str::to_owned) });
             self.tells.borrow_mut().push(told);
             Box::new(Fake(self.did.clone()))

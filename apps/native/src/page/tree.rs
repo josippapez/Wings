@@ -388,6 +388,10 @@ pub enum WebGo {
     Eval { script: String, page: bool },
     /// A picture of what shows of the page, as a PNG.
     Snapshot,
+    /// Answers the page's open `alert`, `confirm` or `prompt` (`State::dialog`): OK with `text` for a prompt, or Cancel.
+    Dialog { accept: bool, text: Option<String> },
+    /// The page's recent console messages and `fetch`/`XMLHttpRequest` calls, for a plugin that may run scripts.
+    Logs,
 }
 
 /// The most bytes of a script an `eval` command runs: a page's helper, not a library.
@@ -418,6 +422,11 @@ fn web_command(value: &Value) -> Option<WebCommand> {
             page: value.get("world").and_then(Value::as_str) == Some("page"),
         },
         "snapshot" => WebGo::Snapshot,
+        "dialog" => WebGo::Dialog {
+            accept: value.get("accept")?.as_bool()?,
+            text: value.get("text").and_then(Value::as_str).map(|text| text.chars().take(10_000).collect()),
+        },
+        "logs" => WebGo::Logs,
         _ => return None,
     };
     Some(WebCommand { go, token })

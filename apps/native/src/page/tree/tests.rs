@@ -1046,6 +1046,19 @@ fn a_web_view_loads_only_web_addresses_and_takes_each_command_by_its_token() {
     assert_eq!(go(1).0, Some(WebGo::Eval { script: "return 1".into(), page: true }));
     assert_eq!(go(2).0, Some(WebGo::Snapshot));
     assert_eq!(go(3).0, None, "a script past 256 KB isn't run");
+    let answered = tree(json!([
+        {"id":1,"type":"WebView","props":{"name":"a","command":{"action":"dialog","accept":true,"text":"Ana","token":1}}},
+        {"id":2,"type":"WebView","props":{"name":"b","command":{"action":"dialog","token":2}}},
+        {"id":3,"type":"WebView","props":{"name":"c","command":{"action":"logs","token":3}}}
+    ]))
+    .unwrap();
+    let go = |at: usize| match &answered.children[at] {
+        Node::WebView(web) => web.command.clone().map(|command| command.go),
+        other => panic!("not a web view: {other:?}"),
+    };
+    assert_eq!(go(0), Some(WebGo::Dialog { accept: true, text: Some("Ana".into()) }));
+    assert_eq!(go(1), None, "a dialog's answer says OK or Cancel");
+    assert_eq!(go(2), Some(WebGo::Logs));
     // A file or a script never loads, by the start address or a command; a name too long to be a key is none.
     let refused = web(1);
     assert_eq!((refused.name.as_str(), refused.url, refused.command, refused.keep_data, refused.height), ("", None, None, false, 4000.0));

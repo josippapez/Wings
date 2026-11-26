@@ -16,18 +16,19 @@ use gpui::{Bounds, Pixels, Window};
 use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send,
     rc::Retained,
-    runtime::{AnyClass, AnyObject, NSObject, NSObjectProtocol, ProtocolObject},
+    runtime::{AnyClass, AnyObject, Bool, NSObject, NSObjectProtocol, ProtocolObject},
     sel,
 };
-use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage, NSView, NSWindowOrderingMode};
+use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage, NSModalResponse, NSOpenPanel, NSView, NSWindowOrderingMode};
 use objc2_foundation::{
-    NSDate, NSDictionary, NSError, NSHTTPCookie, NSHTTPCookieDomain, NSHTTPCookieExpires, NSHTTPCookieName,
+    NSArray, NSDate, NSDictionary, NSError, NSHTTPCookie, NSHTTPCookieDomain, NSHTTPCookieExpires, NSHTTPCookieName,
     NSHTTPCookiePath, NSHTTPCookieSameSitePolicy, NSHTTPCookieSameSiteLax, NSHTTPCookieSameSiteStrict,
     NSHTTPCookieSecure, NSHTTPCookieValue, NSKeyValueChangeKey, NSKeyValueObservingOptions,
-    NSObjectNSKeyValueObserverRegistration, NSPoint, NSRect, NSSize, NSString, NSURL, NSURLRequest, NSUUID,
+    NSNumber, NSObjectNSKeyValueObserverRegistration, NSPoint, NSRect, NSSize, NSString, NSURL, NSURLRequest, NSUUID,
 };
 use objc2_web_kit::{
-    WKContentWorld, WKNavigation, WKNavigationAction, WKNavigationActionPolicy, WKNavigationDelegate, WKUIDelegate, WKWebExtension, WKWebExtensionContext,
+    WKContentWorld, WKFrameInfo, WKNavigation, WKNavigationAction, WKNavigationActionPolicy, WKOpenPanelParameters, WKScriptMessage,
+    WKScriptMessageHandler, WKUserContentController, WKUserScript, WKUserScriptInjectionTime, WKNavigationDelegate, WKUIDelegate, WKWebExtension, WKWebExtensionContext,
     WKWebExtensionContextPermissionStatus, WKWebExtensionController, WKWebExtensionControllerConfiguration, WKWebView,
     WKWebViewConfiguration, WKWebsiteDataStore, WKWindowFeatures,
 };
@@ -264,7 +265,7 @@ fn cookie(cookie: &Cookie) -> Option<Retained<NSHTTPCookie>> {
 struct WebKit;
 
 impl Maker for WebKit {
-    fn make(&self, profile: &Profile, keep_data: bool, url: Option<&str>, told: Rc<dyn Fn(Heard)>) -> Box<dyn Native> {
+    fn make(&self, profile: &Profile, keep_data: bool, scripts: bool, url: Option<&str>, told: Rc<dyn Fn(Heard)>) -> Box<dyn Native> {
         let mtm = MainThreadMarker::new().expect("web views are made on the main thread");
         let shared = shared(profile, keep_data, mtm);
         // SAFETY: WebKit's objects, made and used on the main thread.
@@ -274,6 +275,17 @@ impl Maker for WebKit {
             if let Some(extensions) = &shared.extensions {
                 configuration.setWebExtensionController(Some(extensions));
             }
+            if scripts {
+                // In the page's own world, the only one that sees its `console` and `fetch`; it posts what it sees.
+                let script = WKUserScript::initWithSource_injectionTime_forMainFrameOnly_inContentWorld(
+                    WKUserScript::alloc(mtm),
+                    &NSString::from_str(LOGS),
+                    WKUserScriptInjectionTime::AtDocumentStart,
+                    true,
+                    &WKContentWorld::pageWorld(mtm),
+                );
+                configuration.userContentController().addUserScript(&script);
+            }
             let view = WKWebView::initWithFrame_configuration(WKWebView::alloc(mtm), NSRect::ZERO, &configuration);
             // So a plugin author can look at a page with Safari's Web Inspector, as in any app with a web view.
             view.setInspectable(true);
@@ -281,6 +293,16 @@ impl Maker for WebKit {
             view
         };
         let observer = Observer::new(told.clone(), mtm);
+        if scripts {
+            // SAFETY: the configuration's controller holds the handler until the view goes (`Drop` takes it away).
+            unsafe {
+                view.configuration().userContentController().addScriptMessageHandler_contentWorld_name(
+                    ProtocolObject::from_ref(&*observer),
+                    &WKContentWorld::pageWorld(mtm),
+                    &NSString::from_str(LOG_HANDLER),
+                )
+            };
+        }
         // SAFETY: the observer outlives the observing: `Drop` removes it before either goes.
         unsafe {
             for key in OBSERVED {
@@ -311,6 +333,35 @@ struct WebPage {
     shots: std::path::PathBuf,
     web_dir: std::path::PathBuf,
 }
+
+/// The name the page's log script posts to.
+const LOG_HANDLER: &str = "wingsLog";
+/// The most console messages and requests kept of each page.
+const LOGS_KEPT: usize = 200;
+
+/// Sees the page's console messages, uncaught errors and `fetch`/`XMLHttpRequest` calls (method, address, status),
+/// never a body or a header, and posts each to Wings. It can't see the page's own loads (navigations, pictures, styles,
+/// scripts), a service worker's requests or web sockets.
+const LOGS: &str = r#"(() => {
+  const post = (m) => { try { webkit.messageHandlers.wingsLog.postMessage(m); } catch (_) {} };
+  const text = (a) => a.map((x) => { try { return typeof x === "string" ? x : JSON.stringify(x); } catch (_) { return String(x); } }).join(" ").slice(0, 2000);
+  for (const level of ["log", "info", "warn", "error", "debug"]) {
+    const f = console[level];
+    console[level] = function (...a) { post({ kind: "console", level, text: text(a) }); return f.apply(this, a); };
+  }
+  addEventListener("error", (e) => post({ kind: "console", level: "error", text: String(e.message).slice(0, 2000) }));
+  addEventListener("unhandledrejection", (e) => post({ kind: "console", level: "error", text: ("Unhandled rejection: " + String(e.reason)).slice(0, 2000) }));
+  const fetch0 = window.fetch;
+  window.fetch = async function (input, init) {
+    const method = String((init && init.method) || (input && input.method) || "GET");
+    const url = String((input && input.url) || input).slice(0, 2000);
+    try { const r = await fetch0.apply(this, arguments); post({ kind: "network", method, url, status: r.status }); return r; }
+    catch (e) { post({ kind: "network", method, url, status: 0, error: String(e) }); throw e; }
+  };
+  const open0 = XMLHttpRequest.prototype.open, send0 = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open = function (m, u) { this.__wings = { method: String(m), url: String(u).slice(0, 2000) }; return open0.apply(this, arguments); };
+  XMLHttpRequest.prototype.send = function () { this.addEventListener("loadend", () => this.__wings && post({ kind: "network", ...this.__wings, status: this.status })); return send0.apply(this, arguments); };
+})();"#;
 
 /// Why a script didn't run in a page's own world.
 const IMPORTED: &str = "This page is signed in with cookies you imported, so a plugin's script runs there only in its own world";
@@ -372,6 +423,18 @@ impl Native for WebPage {
                     });
                     self.view.callAsyncJavaScript_arguments_inFrame_inContentWorld_completionHandler(&NSString::from_str(&body), None, None, &world, Some(&done));
                 }
+                WebGo::Dialog { accept, text } => {
+                    let answered = self.observer.answer(*accept, text.as_deref());
+                    self.observer.tell(&self.view);
+                    let result = if answered { Ok(serde_json::Value::Null) } else { Err("The page shows no dialog".into()) };
+                    (self.told)(Heard::Result { token, result });
+                }
+                WebGo::Logs => {
+                    let logs = self.observer.ivars().logs.borrow();
+                    let of = |kind: &str| logs.iter().filter(|line| line["kind"] == kind).cloned().collect::<Vec<_>>();
+                    let result = Ok(serde_json::json!({ "console": of("console"), "network": of("network") }));
+                    (self.told)(Heard::Result { token, result });
+                }
                 WebGo::Snapshot => {
                     let (told, shots) = (self.told.clone(), self.shots.clone());
                     let done = RcBlock::new(move |image: *mut NSImage, error: *mut NSError| {
@@ -405,8 +468,11 @@ fn png_of(image: &NSImage) -> Result<Vec<u8>, String> {
 
 impl Drop for WebPage {
     fn drop(&mut self) {
+        // WebKit waits on a dialog's answer, so one still open is answered as Cancel.
+        self.observer.answer(false, None);
         // SAFETY: the observer added in `make`, removed once.
         unsafe {
+            self.view.configuration().userContentController().removeAllScriptMessageHandlers();
             for key in OBSERVED {
                 self.view.removeObserver_forKeyPath(&self.observer, &NSString::from_str(key));
             }
@@ -432,6 +498,17 @@ struct Ivars {
     told_last: RefCell<Option<State>>,
     /// Why the last page failed, until another starts.
     error: RefCell<Option<String>>,
+    /// The page's dialog that waits for an answer, and what it shows.
+    pending: RefCell<Option<(Pending, super::views::Dialog)>>,
+    /// The page's recent console messages and requests (`LOGS`), the newest last.
+    logs: RefCell<std::collections::VecDeque<serde_json::Value>>,
+}
+
+/// How a page's dialog is answered.
+enum Pending {
+    Alert(RcBlock<dyn Fn()>),
+    Confirm(RcBlock<dyn Fn(Bool)>),
+    Prompt(RcBlock<dyn Fn(*mut NSString)>),
 }
 
 define_class!(
@@ -487,7 +564,64 @@ define_class!(
         }
     }
 
+    unsafe impl WKScriptMessageHandler for Observer {
+        #[unsafe(method(userContentController:didReceiveScriptMessage:))]
+        fn heard(&self, _controller: &WKUserContentController, message: &WKScriptMessage) {
+            // SAFETY: the message's body, on the main thread: what the page posted, which is the page's word only.
+            let body = unsafe { message.body() };
+            let Some(body) = body.downcast_ref::<NSDictionary>() else { return };
+            let field = |key: &str| body.objectForKey(&NSString::from_str(key));
+            let text = |key: &str| field(key).and_then(|value| value.downcast_ref::<NSString>().map(|text| text.to_string()));
+            let number = |key: &str| field(key).and_then(|value| value.downcast_ref::<NSNumber>().map(|number| number.as_i64()));
+            let line = match text("kind").as_deref() {
+                Some("console") => serde_json::json!({ "kind": "console", "level": text("level"), "text": text("text") }),
+                Some("network") => serde_json::json!({ "kind": "network", "method": text("method"), "url": text("url"), "status": number("status"), "error": text("error") }),
+                _ => return,
+            };
+            let mut logs = self.ivars().logs.borrow_mut();
+            logs.push_back(line);
+            while logs.len() > LOGS_KEPT * 2 {
+                logs.pop_front();
+            }
+        }
+    }
+
     unsafe impl WKUIDelegate for Observer {
+        #[unsafe(method(webView:runJavaScriptAlertPanelWithMessage:initiatedByFrame:completionHandler:))]
+        fn alert(&self, view: &WKWebView, message: &NSString, frame: &WKFrameInfo, done: &block2::DynBlock<dyn Fn()>) {
+            self.wait_on(view, Pending::Alert(done.copy()), "alert", message, None, frame);
+        }
+
+        #[unsafe(method(webView:runJavaScriptConfirmPanelWithMessage:initiatedByFrame:completionHandler:))]
+        fn confirm(&self, view: &WKWebView, message: &NSString, frame: &WKFrameInfo, done: &block2::DynBlock<dyn Fn(Bool)>) {
+            self.wait_on(view, Pending::Confirm(done.copy()), "confirm", message, None, frame);
+        }
+
+        #[unsafe(method(webView:runJavaScriptTextInputPanelWithPrompt:defaultText:initiatedByFrame:completionHandler:))]
+        fn prompt(&self, view: &WKWebView, message: &NSString, default: Option<&NSString>, frame: &WKFrameInfo, done: &block2::DynBlock<dyn Fn(*mut NSString)>) {
+            self.wait_on(view, Pending::Prompt(done.copy()), "prompt", message, default, frame);
+        }
+
+        /// A page's file input: the system's open panel, for the person to pick. Nothing else picks files for a page.
+        #[unsafe(method(webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:))]
+        fn open_panel(&self, _view: &WKWebView, parameters: &WKOpenPanelParameters, _frame: &WKFrameInfo, done: &block2::DynBlock<dyn Fn(*mut NSArray<NSURL>)>) {
+            let Some(mtm) = MainThreadMarker::new() else { return done.call((std::ptr::null_mut(),)) };
+            let panel = NSOpenPanel::openPanel(mtm);
+            // SAFETY: the page's own wishes for the panel, on the main thread.
+            unsafe {
+                panel.setAllowsMultipleSelection(parameters.allowsMultipleSelection());
+                panel.setCanChooseDirectories(parameters.allowsDirectories());
+            }
+            panel.setCanChooseFiles(true);
+            let (done, chosen) = (done.copy(), panel.clone());
+            let picked = RcBlock::new(move |response: NSModalResponse| {
+                // NSModalResponseOK is 1.
+                let urls = (response == 1).then(|| chosen.URLs());
+                done.call((urls.map_or(std::ptr::null_mut(), |urls| Retained::as_ptr(&urls).cast_mut()),));
+            });
+            panel.beginWithCompletionHandler(&picked);
+        }
+
         /// A link that opens a new window (`target="_blank"`, `window.open`) loads in this view: a page has one view.
         #[unsafe(method_id(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:))]
         fn new_window(
@@ -513,9 +647,45 @@ define_class!(
 
 impl Observer {
     fn new(told: Rc<dyn Fn(Heard)>, mtm: MainThreadMarker) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(Ivars { told, told_last: RefCell::new(None), error: RefCell::new(None) });
+        let this = Self::alloc(mtm).set_ivars(Ivars {
+            told,
+            told_last: RefCell::new(None),
+            error: RefCell::new(None),
+            pending: RefCell::new(None),
+            logs: RefCell::default(),
+        });
         // SAFETY: NSObject's `init`.
         unsafe { msg_send![super(this), init] }
+    }
+
+    /// The page waits on a dialog: its plugin's page shows it, from `State::dialog`, and a `dialog` command answers it.
+    fn wait_on(&self, view: &WKWebView, pending: Pending, kind: &str, message: &NSString, default: Option<&NSString>, frame: &WKFrameInfo) {
+        // A page that asks again before the last was answered: the last is cancelled, as WebKit needs each answered.
+        self.answer(false, None);
+        // SAFETY: the frame's request, on the main thread.
+        let site = unsafe { frame.request().URL().and_then(|url| url.host()).map(|host| host.to_string()).unwrap_or_default() };
+        let dialog = super::views::Dialog {
+            kind: kind.into(),
+            message: message.to_string().chars().take(4000).collect(),
+            default_text: default.map(|text| text.to_string()),
+            site,
+        };
+        self.ivars().pending.replace(Some((pending, dialog)));
+        self.tell(view);
+    }
+
+    /// Answers the page's dialog, if it shows one: whether it did.
+    fn answer(&self, accept: bool, text: Option<&str>) -> bool {
+        let Some((pending, dialog)) = self.ivars().pending.take() else { return false };
+        match pending {
+            Pending::Alert(done) => done.call(()),
+            Pending::Confirm(done) => done.call((Bool::new(accept),)),
+            Pending::Prompt(done) => {
+                let answer = accept.then(|| NSString::from_str(text.or(dialog.default_text.as_deref()).unwrap_or_default()));
+                done.call((answer.as_ref().map_or(std::ptr::null_mut(), |answer| Retained::as_ptr(answer).cast_mut()),));
+            }
+        }
+        true
     }
 
     fn failed(&self, view: &WKWebView, error: &NSError) {
@@ -539,6 +709,7 @@ impl Observer {
                 can_go_back: view.canGoBack(),
                 can_go_forward: view.canGoForward(),
                 error: self.ivars().error.borrow().clone(),
+                dialog: self.ivars().pending.borrow().as_ref().map(|(_, dialog)| dialog.clone()),
             }
         };
         if self.ivars().told_last.borrow().as_ref() != Some(&state) {
