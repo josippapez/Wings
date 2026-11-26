@@ -3649,11 +3649,10 @@ fn claude_writing_a_transcript_in_a_pane_reaches_only_the_plugins_that_may_read_
         "the shell was never detected",
     );
     wait_for_prompt(&app, &window, 0);
-    window.simulate_input(&format!("exec '{}' 60", fake.display()));
-    window.simulate_keystroke("enter");
-    wait_for(
+    super::tests::type_until(
         &app,
-        &window,
+        &mut window,
+        &format!("exec '{}' 300", fake.display()),
         |w| w.agents.contains_key(&0),
         "the agent was never detected",
     );
@@ -3726,6 +3725,7 @@ fn claude_writing_a_transcript_in_a_pane_reaches_only_the_plugins_that_may_read_
     // A user entry isn't one the reader may read, and the plugin that may read nothing heard nothing.
     assert!(saved("reader", &format!("heard-{}", n - 1)).is_none());
     assert!(saved("deaf", "deaf").is_none());
+    let _ = std::process::Command::new("kill").arg(pid.to_string()).status();
     let _ = fs::remove_dir_all(&dir);
 }
 

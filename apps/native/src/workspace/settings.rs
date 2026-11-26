@@ -505,7 +505,7 @@ impl Workspace {
     }
 
     /// Follows the theme (`None`) or paints every terminal's background in `color`; open terminals change at once.
-    pub(super) fn set_terminal_background(&mut self, color: Option<u32>, cx: &mut Context<Self>) {
+    pub fn set_terminal_background(&mut self, color: Option<u32>, cx: &mut Context<Self>) {
         if let Some(dialog) = &mut self.settings {
             dialog.background_error = None;
             let text = color.map(crate::terminal_view::hex).unwrap_or_default();

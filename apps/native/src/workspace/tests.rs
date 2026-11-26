@@ -1021,11 +1021,11 @@ fn a_claude_in_a_pane_shows_its_name_and_state_on_the_pane_tab_and_project() {
     );
     window.read(|w, cx| assert_eq!(w.pane_title(0, cx), w.pane_info[&0].command.as_str()));
 
-    window.simulate_input(&format!("exec '{}' 30", fake.display()));
-    window.simulate_keystroke("enter");
-    wait_for(
+    wait_for_prompt(&app, &window, 0);
+    type_until(
         &app,
-        &window,
+        &mut window,
+        &format!("exec '{}' 300", fake.display()),
         |w| w.agents.contains_key(&0),
         "the agent was never detected",
     );
@@ -1068,7 +1068,40 @@ pub(super) fn wait_for(
 ) {
     let deadline = std::time::Instant::now() + THREAD_BOUND;
     while !window.read(|workspace, _| done(workspace)) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{what}; pane 0 shows {:?}, its process {:?}",
+            window.read(|w, cx| w.terminal(0).map(|t| String::from_utf8_lossy(&t.read(cx).recent_output()).into_owned())),
+            window.read(|w, _| w.pane_info.get(&0).map(|info| info.command.clone())),
+        );
+        app.run_until_parked();
+        app.advance_clock(crate::agents::EVERY);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// Types `line` and Enter into the focused pane until `done`. A shell under load redraws its line over what is typed
+/// meanwhile (starship, zle highlighting), and a line it cut or never finished is not run: the test showed `exec … 3`
+/// with no Enter for the whole wait. So every few seconds with no result the line is cleared (Ctrl-U) and typed again;
+/// a line that did run replaced the shell, and its program ignores the second one.
+pub(super) fn type_until(
+    app: &TestApp,
+    window: &mut TestAppWindow<Workspace>,
+    line: &str,
+    done: impl Fn(&Workspace) -> bool,
+    what: &str,
+) {
+    let retry = std::time::Duration::from_secs(8);
+    let mut typed = None::<std::time::Instant>;
+    let deadline = std::time::Instant::now() + THREAD_BOUND;
+    while !window.read(|workspace, _| done(workspace)) {
         assert!(std::time::Instant::now() < deadline, "{what}");
+        if typed.is_none_or(|at| at.elapsed() >= retry) {
+            window.simulate_keystroke("ctrl-u");
+            window.simulate_input(line);
+            window.simulate_keystroke("enter");
+            typed = Some(std::time::Instant::now());
+        }
         app.run_until_parked();
         app.advance_clock(crate::agents::EVERY);
         std::thread::sleep(std::time::Duration::from_millis(20));

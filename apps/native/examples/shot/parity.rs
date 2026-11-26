@@ -34,6 +34,14 @@ pub(super) fn themes(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             click(cx, window, row);
             settle(cx, window, Duration::from_millis(200));
             save(cx, window, &out.join(format!("{state}-settings-{width}.png")));
+            if theme == Theme::Wings && transparent {
+                // Terminal background, Custom colour: the swatches and hex row, and the terminal behind in that colour.
+                handle
+                    .update(cx, |workspace, _, cx| workspace.set_terminal_background(Some(0x1e1e2e), cx))
+                    .expect("choose a custom terminal background");
+                settle(cx, window, Duration::from_millis(300));
+                save(cx, window, &out.join(format!("{state}-settings-custom-bg-{width}.png")));
+            }
             let _ = cx.update_window(window, |_, window, _| window.remove_window());
         }
     }
