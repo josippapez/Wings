@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.117 · 2026-11-26
+
+- **Bitwarden opens in the Browser**: its popup showed only a spinner, because Chrome's copy of Bitwarden couldn't tell which browser it was in. An extension's own pages now say they're Chrome, so its popup and background start. On this macOS, filling a login form from Bitwarden may still not work, because WebKit lacks an API its autofill uses.
+- **Look says when macOS blocks it**: if macOS doesn't let Wings read another browser's extensions, the Browser settings name that browser and say to turn on Full Disk Access, instead of claiming there are none. A blocked browser stays in the sign-in import list too, so importing explains the same.
+- **Removing an extension asks in a dialog** over the page, not in a card below everything (Browser 0.1.3).
+
 ## 0.2.116 · 2026-11-26
 
 - **Extension buttons in the Browser**: each extension you added shows its icon and badge in the toolbar, and a click opens its popup under the button. Typing goes into the popup and comes back to Wings when it closes. A second click closes it (Browser 0.1.2).
