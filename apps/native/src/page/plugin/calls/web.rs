@@ -73,7 +73,15 @@ impl Shared {
             ("webExtensions", "installed") => {
                 let plugin = id.clone();
                 self.off_thread(reply, move |_| {
-                    let installed = wings_web_extensions::detect_installed();
+                    let detected = wings_web_extensions::detect_installed();
+                    let refusal = detected.refusal_message();
+                    // macOS refused every folder there was: say so, rather than answering "none".
+                    if detected.found.is_empty() {
+                        if let Some(why) = refusal {
+                            return Err(why);
+                        }
+                    }
+                    let installed = detected.found;
                     // The page gets each by its place in this list, never its folder, which names the person's profiles.
                     FOUND.lock().unwrap().insert(plugin.clone(), installed.iter().map(|found| found.source.clone()).collect());
                     // Nor its profiles' names, which are often the person's own: "Chrome (2)" tells two copies apart.
@@ -91,7 +99,11 @@ impl Shared {
                             })
                         })
                         .collect();
-                    to_json(&found)
+                    // Some found and some refused: the list, with the words for the page to show beside it.
+                    match refusal {
+                        Some(why) => to_json(&json!({ "extensions": found, "refused": why })),
+                        None => to_json(&found),
+                    }
                 })
             }
             ("webExtensions", "storePage") => {

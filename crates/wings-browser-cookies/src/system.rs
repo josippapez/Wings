@@ -82,8 +82,26 @@ fn profile_names(local_state: &Path) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
+/// Whether macOS refused a look at `path` (EPERM or EACCES, both `PermissionDenied`), which is not the same as it not
+/// being there.
+fn refused(path: &Path) -> bool {
+    matches!(fs::metadata(path), Err(e) if e.kind() == io::ErrorKind::PermissionDenied)
+}
+
+fn chromium_source(browser: Browser, dir: &str, profile: String, store: PathBuf) -> Source {
+    Source { id: format!("{}:{dir}", browser.slug()), browser, browser_name: browser.name().to_owned(), profile, path: store }
+}
+
 fn chromium_profiles(browser: Browser, root: &Path) -> Vec<Source> {
-    let Ok(entries) = fs::read_dir(root) else { return Vec::new() };
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        // The folder is there but macOS hides it: offer the browser so the import can say it needs Full Disk Access,
+        // as it does for Firefox, instead of the browser vanishing.
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
+            return vec![chromium_source(browser, "Default", "Default".to_owned(), root.join("Default/Network/Cookies"))];
+        }
+        Err(_) => return Vec::new(),
+    };
     let names = profile_names(&root.join("Local State"));
     let mut dirs: Vec<String> = entries
         .flatten()
@@ -94,18 +112,16 @@ fn chromium_profiles(browser: Browser, root: &Path) -> Vec<Source> {
     dirs.into_iter()
         .filter_map(|dir| {
             // Newer builds keep the store in Network/, older ones next to the profile; take the fresher.
-            let store = [root.join(&dir).join("Network/Cookies"), root.join(&dir).join("Cookies")]
-                .into_iter()
+            let stores = [root.join(&dir).join("Network/Cookies"), root.join(&dir).join("Cookies")];
+            let store = stores
+                .iter()
                 .filter(|p| p.is_file())
-                .max_by_key(|p| modified(p))?;
+                .max_by_key(|p| modified(p))
+                .cloned()
+                // A store macOS won't let us look at is there, and reading it says why.
+                .or_else(|| stores.iter().any(|p| refused(p)).then(|| stores[0].clone()))?;
             let profile = names.iter().find(|(d, _)| *d == dir).map_or_else(|| dir.clone(), |(_, n)| n.clone());
-            Some(Source {
-                id: format!("{}:{dir}", browser.slug()),
-                browser,
-                browser_name: browser.name().to_owned(),
-                profile,
-                path: store,
-            })
+            Some(chromium_source(browser, &dir, profile, store))
         })
         .collect()
 }
@@ -367,6 +383,28 @@ mod tests {
         }
         assert!(!tmp_dir.exists(), "the private copy must be removed");
         let _ = fs::remove_dir_all(dir);
+    }
+
+    /// A Chromium folder macOS won't open is still offered, so importing says "Full Disk Access" instead of the browser
+    /// being missing. `chmod 000` refuses with EACCES, a protected folder with EPERM: both are `PermissionDenied`.
+    #[test]
+    fn a_refused_chromium_folder_is_offered_not_hidden() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = scratch("refused-chromium");
+        fs::create_dir_all(root.join("Default/Network")).unwrap();
+        fs::write(root.join("Default/Network/Cookies"), b"x").unwrap();
+        assert_eq!(chromium_profiles(Browser::Chrome, &root).len(), 1);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o000)).unwrap();
+        let found = chromium_profiles(Browser::Chrome, &root);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].browser, Browser::Chrome);
+        // Reading it ends in the message that names Full Disk Access.
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o000)).unwrap();
+        let read = read(&found[0]).err();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(read, Some(ReadError::NeedsFullDiskAccess));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

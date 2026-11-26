@@ -4,7 +4,7 @@ use tempfile::TempDir;
 use zip::{write::SimpleFileOptions, ZipWriter};
 
 use crate::{
-    amo_file_url, copy_folder, detect::detect_in, read_manifest, read_package, store_package, tree_hash, unpack, Error, Store,
+    amo_file_url, copy_folder, detect::{detect_in, scan}, read_manifest, read_package, store_package, tree_hash, unpack, Error, Store,
     MAX_FILES, MAX_TOTAL_BYTES,
 };
 
@@ -387,4 +387,43 @@ fn amo_pages_and_api_json() {
     ] {
         assert_eq!(amo_file_url(bad), None, "{bad}");
     }
+}
+
+/// A folder macOS refuses (EACCES from `chmod 000`, EPERM from a privacy rule: both `PermissionDenied`) is reported, not
+/// taken for a browser with no extensions.
+#[test]
+fn a_refused_folder_is_reported_not_silently_empty() {
+    use std::os::unix::fs::PermissionsExt;
+    let app = TempDir::new().unwrap();
+    let id = "a".repeat(32);
+    let chrome = app.path().join("Google/Chrome");
+    write(&chrome, &format!("Default/Extensions/{id}/1_0/manifest.json"), MANIFEST);
+    let brave = app.path().join("BraveSoftware/Brave-Browser");
+    write(&brave, &format!("Default/Extensions/{id}/1_0/manifest.json"), MANIFEST);
+    let lock = |path: std::path::PathBuf, mode: u32| fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+
+    // Chrome's whole folder refused, with Brave readable: Brave's is found, Chrome is named.
+    lock(chrome.clone(), 0o000);
+    let some = scan(app.path());
+    assert_eq!((some.found.len(), some.refused.clone()), (1, vec!["Chrome".to_string()]));
+    assert!(some.refusal_message().unwrap().starts_with("macOS doesn't let Wings read Chrome's extensions."));
+
+    // Only a profile's Extensions folder refused.
+    lock(chrome.clone(), 0o700);
+    lock(chrome.join("Default/Extensions"), 0o000);
+    let profile = scan(app.path());
+    assert_eq!(profile.refused, ["Chrome"]);
+
+    // Both refused, nothing found: the two are named.
+    lock(brave.clone(), 0o000);
+    let none = scan(app.path());
+    lock(chrome.join("Default/Extensions"), 0o700);
+    lock(brave, 0o700);
+    assert!(none.found.is_empty());
+    assert_eq!(none.refused, ["Chrome", "Brave"]);
+    assert!(none.refusal_message().unwrap().starts_with("macOS doesn't let Wings read the extensions of Chrome and Brave."));
+
+    // A browser that isn't there, or readable, is never reported.
+    assert!(scan(app.path()).refused.is_empty());
+    assert!(scan(TempDir::new().unwrap().path()).refused.is_empty());
 }

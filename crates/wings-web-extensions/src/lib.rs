@@ -10,7 +10,7 @@ mod store;
 mod tree;
 mod unpack;
 
-pub use detect::{detect_installed, Installed};
+pub use detect::{detect_installed, Detected, Installed};
 pub use error::Error;
 pub use manifest::{read_manifest, Info};
 pub use store::{amo_file_url, store_package, Store, StorePackage};
