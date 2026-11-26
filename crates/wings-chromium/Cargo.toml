@@ -1,0 +1,23 @@
+[package]
+name = "wings-chromium"
+version = "0.1.0"
+edition = "2021"
+description = "Chromium (CEF, Chrome style) as an engine Wings downloads on demand: load it from a folder outside the app, run its message loop from a host that owns the run loop, and glue a frameless Chrome-style window over a host window"
+publish = false
+
+[dependencies]
+# The version's build metadata (+156.0.31) is the CEF release cef-dll-sys builds its wrapper against; the engine folder
+# has to hold the same release. `CEF_PATH` points the build at an exported copy instead of downloading one per build.
+cef = { version = "=156.7.0", default-features = false, features = ["sandbox"] }
+objc2 = "0.6.5"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSEvent", "NSWindow", "NSRunningApplication", "NSView", "NSTextField", "NSControl", "NSButton", "NSButtonCell", "NSCell", "NSTextFieldCell", "NSActionCell", "NSMenu", "NSMenuItem", "NSGraphics", "NSScreen", "NSText", "NSGraphicsContext"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSGeometry", "NSString", "NSValue", "NSObject", "NSNotification", "NSDictionary", "NSEnumerator", "NSObjCRuntime", "NSThread"] }
+
+# The helper every Chromium child process (renderer, GPU, network, ...) runs. It ships in the engine folder next to the
+# framework, never in the app bundle.
+[[bin]]
+name = "wings-chromium-helper"
+path = "src/bin/helper.rs"
+
+[[example]]
+name = "spike"
