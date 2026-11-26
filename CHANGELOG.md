@@ -2,6 +2,15 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.113 · 2026-11-26
+
+- **Themes**: Settings, Appearance has six dark themes (Wings stays the default), and terminals take the theme's background. A terminal background of your own, from a swatch or a hex code, wins over the theme.
+- **Solid sidebar and title bar**: a switch turns off their see-through glass.
+- **Claude chat model menu**: each model is listed once with what it's for, and Effort is its own row with the levels that model takes (Claude chat 0.55.8).
+- **Plugin pages read like the app's**: reading pages share one centred column with their header lined up to it, lists and boards fill the tab, and plugin menus can show headings, checks and second lines.
+- **Faster Issues**: Issues reads only the issue that changed, not every issue, after each change (Issues 0.31.9).
+- **Fixes**: a plugin page no longer stays on "Loading…" when it asked something as it started on a busy Mac; long Past sessions titles use the whole row; the Issues empty state is centred; the find bar's field sits inside its bar.
+
 ## 0.2.112 · 2026-11-25
 
 - **Plugin settings match the app's**: a plugin's settings put each control in one column on the right, and an on/off setting is a switch, as in Issues 0.31.6's settings.
