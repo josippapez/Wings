@@ -14,11 +14,11 @@ use std::{
 use block2::RcBlock;
 use gpui::{Bounds, Pixels, Window};
 use objc2::{
-    DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send,
+    ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send,
     rc::Retained,
     runtime::{AnyObject, Bool, NSObject, NSObjectProtocol, ProtocolObject},
 };
-use objc2_app_kit::{NSAlert, NSBitmapImageFileType, NSBitmapImageRep, NSImage, NSModalResponse, NSOpenPanel, NSTextField, NSView, NSWindowOrderingMode};
+use objc2_app_kit::{NSAlert, NSBitmapImageFileType, NSEvent, NSEventMask, NSResponder, NSBitmapImageRep, NSImage, NSModalResponse, NSOpenPanel, NSTextField, NSView, NSWindowOrderingMode};
 use objc2_foundation::{
     NSJSONSerialization, NSJSONWritingOptions,
     NSArray, NSDate, NSDictionary, NSError, NSHTTPCookie, NSHTTPCookieDomain, NSHTTPCookieExpires, NSHTTPCookieName,
@@ -46,6 +46,130 @@ const OBSERVED: [&str; 5] = ["URL", "title", "loading", "canGoBack", "canGoForwa
 /// Has WebKit draw the web views of the pages in `window` from now on.
 pub fn host_natively(window: &Window) {
     make_with(window.window_handle().window_id(), Rc::new(WebKit));
+    keys_follow_presses();
+}
+
+/// A press anywhere in a window but a web view gives the keyboard back to what was pressed. A `WKWebView` keeps the
+/// window's first responder after a press in it, and GPUI doesn't take it back, so keys typed into a terminal or a chat
+/// after a press on it went to the web page, or nowhere once the page was hidden.
+fn keys_follow_presses() {
+    thread_local!(static ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
+    if ON.replace(true) {
+        return;
+    }
+    let block = RcBlock::new(|event: std::ptr::NonNull<NSEvent>| -> *mut NSEvent {
+        if let Some(mtm) = MainThreadMarker::new() {
+            // SAFETY: AppKit hands the event it is about to send, alive for this call.
+            give_keys_to_press(unsafe { event.as_ref() }, mtm);
+        }
+        event.as_ptr()
+    });
+    let mask = NSEventMask::LeftMouseDown | NSEventMask::RightMouseDown | NSEventMask::OtherMouseDown;
+    // SAFETY: the block returns the event it was given. The monitor lasts as long as the app, so it is never removed.
+    std::mem::forget(unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask, &block) });
+}
+
+fn give_keys_to_press(event: &NSEvent, mtm: MainThreadMarker) {
+    let Some(window) = event.window(mtm) else { return };
+    let Some(content) = window.contentView() else { return };
+    // SAFETY: AppKit's views, on the main thread.
+    let at = match unsafe { content.superview() } {
+        Some(frame) => frame.convertPoint_fromView(event.locationInWindow(), None),
+        None => event.locationInWindow(),
+    };
+    // Hiding a web view that had the keyboard leaves it with the window, not GPUI's view, so whatever has it now, a
+    // press outside the web views hands it to the view pressed.
+    let pressed = content.hitTest(at);
+    PRESSED_WEB_VIEW.set(pressed.as_deref().and_then(web_view_of).map_or(0, |view| std::ptr::from_ref(&*view).addr()));
+    if let Some(pressed) = pressed
+        && !in_web_view(&pressed)
+        && window.firstResponder().is_none_or(|focused| !std::ptr::eq(&*focused, &**pressed))
+    {
+        window.makeFirstResponder(Some(&pressed));
+    }
+}
+
+/// Whether `view` is a web view or inside one.
+fn in_web_view(view: &NSView) -> bool {
+    web_view_of(view).is_some()
+}
+
+/// The web view `view` is or is inside.
+fn web_view_of(view: &NSView) -> Option<Retained<NSView>> {
+    let mut at = Some(view.retain());
+    while let Some(view) = at {
+        if view.isKindOfClass(WKWebView::class()) {
+            return Some(view);
+        }
+        // SAFETY: AppKit's views, on the main thread.
+        at = unsafe { view.superview() };
+    }
+    None
+}
+
+thread_local! {
+    /// The web view the last press of the mouse was in, by its address, 0 when it was in none.
+    static PRESSED_WEB_VIEW: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+impl WebView {
+    fn may_take_keys(&self) -> bool {
+        !self.isHidden() && PRESSED_WEB_VIEW.get() == std::ptr::from_ref(self).addr()
+    }
+}
+
+/// GPUI's view among the views of the window's `content` view. The vibrancy and the backdrop are views there too, under
+/// it, and handing them the keyboard swallowed every key, so it's picked by its class, not its place.
+fn gpui_among(content: &NSView) -> Option<Retained<NSView>> {
+    let class = objc2::runtime::AnyClass::get(c"GPUIView")?;
+    content.subviews().iter().find(|view| view.isKindOfClass(class))
+}
+
+define_class!(
+    // SAFETY: WKWebView may be subclassed, and this has no ivars and no `Drop`.
+    #[unsafe(super(WKWebView, NSView, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    struct WebView;
+
+    impl WebView {
+        /// A page takes the keyboard only once it was pressed and while it shows. WebKit takes it for a page that
+        /// focuses a field of its own as it loads, so a search page loading in a hidden tab took the keys typed into a
+        /// terminal or a chat, and they went nowhere.
+        #[unsafe(method(acceptsFirstResponder))]
+        fn accepts_first_responder(&self) -> Bool {
+            if !self.may_take_keys() {
+                return Bool::NO;
+            }
+            // SAFETY: NSResponder's own method, on the main thread.
+            unsafe { msg_send![super(self), acceptsFirstResponder] }
+        }
+
+        #[unsafe(method(becomeFirstResponder))]
+        fn become_first_responder(&self) -> Bool {
+            if !self.may_take_keys() {
+                // What had the keyboard has given it up by now, which leaves it with the window: once this call is over,
+                // GPUI's view takes it back.
+                // SAFETY: AppKit's views, on the main thread.
+                if let (Some(window), Some(gpui)) = (self.window(), unsafe { self.superview() }.as_deref().and_then(gpui_among)) {
+                    // SAFETY: `makeFirstResponder:` takes one object, and the window keeps the view alive until then.
+                    let _: () = unsafe { msg_send![&*window, performSelector: objc2::sel!(makeFirstResponder:), withObject: &*gpui, afterDelay: 0.0f64] };
+                }
+                return Bool::NO;
+            }
+            // SAFETY: NSResponder's own method, on the main thread.
+            unsafe { msg_send![super(self), becomeFirstResponder] }
+        }
+    }
+);
+
+/// Hands the keyboard to `to` when `view` has it, before `view` is hidden or taken away, so typing doesn't go nowhere.
+fn give_keys_away(view: &WKWebView, to: &NSView) {
+    let Some(window) = view.window() else { return };
+    if let Some(focused) = window.firstResponder().and_then(|responder| responder.downcast::<NSView>().ok())
+        && focused.isDescendantOf(view)
+    {
+        window.makeFirstResponder(Some(to));
+    }
 }
 
 /// What the plugins' web views share, by profile and whether they keep their data.
@@ -326,7 +450,9 @@ impl Maker for WebKit {
                 );
                 configuration.userContentController().addUserScript(&script);
             }
-            let view = WKWebView::initWithFrame_configuration(WKWebView::alloc(mtm), NSRect::ZERO, &configuration);
+            // `WebView` is a `WKWebView` that adds nothing but a rule for taking the keyboard.
+            let view: Retained<WebView> = msg_send![WebView::alloc(mtm), initWithFrame: NSRect::ZERO, configuration: &*configuration];
+            let view = view.into_super();
             // So a plugin's author can look at a page with Safari's Web Inspector, in a build of their own only: a release
             // build's pages, signed in as they may be, aren't open to it.
             view.setInspectable(cfg!(debug_assertions));
@@ -409,6 +535,9 @@ const LOGS: &str = r#"(() => {
 impl Native for WebPage {
     fn place(&mut self, window: &Window, frame: Option<Bounds<Pixels>>) {
         let Some(frame) = frame else {
+            if let Some(gpui) = gpui_view(window) {
+                give_keys_away(&self.view, &gpui);
+            }
             self.view.setHidden(true);
             return;
         };
@@ -566,6 +695,11 @@ impl Drop for WebPage {
             self.view.setNavigationDelegate(None);
             self.view.setUIDelegate(None);
             self.view.stopLoading();
+        }
+        // GPUI's view is the window's other view, under the web views.
+        // SAFETY: AppKit's views, on the main thread.
+        if let Some(gpui) = unsafe { self.view.superview() }.as_deref().and_then(gpui_among) {
+            give_keys_away(&self.view, &gpui);
         }
         self.view.removeFromSuperview();
     }
@@ -959,6 +1093,26 @@ mod tests {
         let object = NSDictionary::from_slices(&[&*NSString::from_str("title")], &[&*NSString::from_str("Docs")]);
         assert_eq!(super::json_of(&object), Ok(serde_json::json!({ "title": "Docs" })));
         assert!(super::json_of(&NSDate::now()).unwrap_err().contains("isn't JSON"));
+    }
+
+    #[test]
+    fn the_keyboard_goes_back_to_gpuis_view_not_the_vibrancy_or_backdrop_under_it() {
+        use objc2::{ClassType, MainThreadMarker, msg_send, rc::Retained, runtime::{AnyClass, ClassBuilder}};
+        use objc2_app_kit::{NSView, NSVisualEffectView};
+        // SAFETY: plain views that never go in a window. They're never freed either: freeing GPUI's view frees the
+        // window state it was never given.
+        let mtm = unsafe { MainThreadMarker::new_unchecked() };
+        let content = NSView::new(mtm);
+        content.addSubview(&NSVisualEffectView::new(mtm));
+        content.addSubview(&NSView::new(mtm));
+        // The tests run on GPUI's test platform, which makes no `GPUIView` class, so a plain view of that name stands in.
+        let class = AnyClass::get(c"GPUIView")
+            .unwrap_or_else(|| ClassBuilder::new(c"GPUIView", NSView::class()).expect("a new class").register());
+        let gpui: Retained<NSView> = unsafe { msg_send![class, new] };
+        content.addSubview(&gpui);
+        let found = super::gpui_among(&content).expect("GPUI's view");
+        assert!(std::ptr::eq(&*found, &*gpui), "{:?}", found.class().name());
+        std::mem::forget((content, gpui, found));
     }
 
     #[test]
