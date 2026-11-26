@@ -12,7 +12,7 @@ use cef::*;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Bool, Sel};
 use objc2::{msg_send, sel, ClassType};
-use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior, NSWindowOrderingMode};
+use objc2_app_kit::{NSColor, NSWindow, NSWindowCollectionBehavior, NSWindowOrderingMode, NSWindowStyleMask};
 use objc2_foundation::NSRect;
 
 use crate::objc_runtime::{class_getMethodImplementation, class_replaceMethod, objc_getAssociatedObject, objc_setAssociatedObject};
@@ -113,15 +113,16 @@ wrap_window_delegate! {
 }
 
 /// Opens `url` in a new frameless Chrome-style window at `bounds` (screen coordinates in DIPs, top-left origin, as CEF
-/// Views takes them). Call it on CEF's UI thread, the main thread with the external pump.
-pub fn open(url: &str, bounds: Rect, client: Option<Client>, on_created: OnCreated, on_activation: OnActivation) {
-    let mut client = client;
+/// Views takes them), in `context` (the global one for `None`). Call it on CEF's UI thread, the main thread with the
+/// external pump.
+pub fn open(url: &str, bounds: Rect, client: Option<Client>, context: Option<RequestContext>, on_created: OnCreated, on_activation: OnActivation) {
+    let (mut client, mut context) = (client, context);
     let browser_view = browser_view_create(
         client.as_mut(),
         Some(&CefString::from(url)),
         Some(&BrowserSettings::default()),
         None,
-        None,
+        context.as_mut(),
         Some(&mut ChromeStyleBrowser::new()),
     );
     let mut delegate = FramelessWindow::new(RefCell::new(browser_view), bounds, on_created, on_activation);
@@ -144,12 +145,19 @@ pub fn ns_window(window: &Window) -> Option<Retained<NSWindow>> {
     }
 }
 
+/// Marks the windows `never_main` made never main: the host's pages and popups.
+static MARK: u8 = 0;
+
+/// Whether `window` is one of the host's pages or popups (`never_main` marked it).
+pub fn is_marked(window: &NSWindow) -> bool {
+    !unsafe { objc_getAssociatedObject(window as *const NSWindow as *const AnyObject, &MARK) }.is_null()
+}
+
 /// Makes `child` never the main window, so the window it's glued over stays main, and its title bar lit, while the
 /// child has the keyboard. CEF's window class answers `canBecomeMainWindow` with YES. This replaces that method on the
 /// class with one that answers NO for the windows marked here and asks the original for the rest. Changing the
 /// window's class instead broke the KVO observers AppKit keeps on it (an NSRangeException at the next style change).
 pub fn never_main(child: &NSWindow) -> String {
-    static MARK: u8 = 0;
     static PATCHED: AtomicPtr<AnyClass> = AtomicPtr::new(std::ptr::null_mut());
     static ORIGINAL: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
     extern "C-unwind" fn can_become_main(this: &AnyObject, cmd: Sel) -> Bool {
@@ -192,4 +200,79 @@ pub fn attach(child: &NSWindow, parent: &NSWindow, frame: NSRect) {
     );
     child.setExcludedFromWindowsMenu(true);
     unsafe { parent.addChildWindow_ordered(child, NSWindowOrderingMode::Above) };
+}
+
+/// Takes `child` off `parent` and off the screen. The keyboard stays with `parent` if `child` had it: a hidden page
+/// that kept it swallowed what was typed next.
+pub fn detach(child: &NSWindow, parent: &NSWindow) {
+    if child.isKeyWindow() {
+        parent.makeKeyWindow();
+    }
+    parent.removeChildWindow(child);
+    child.orderOut(None);
+}
+
+/// A page: square corners flush with the host's content, no shadow. CEF's frameless window keeps a titled style mask,
+/// which macOS draws with rounded corners.
+pub fn as_page(child: &NSWindow) {
+    let frame = child.frame();
+    child.setStyleMask(NSWindowStyleMask::Borderless);
+    child.setHasShadow(false);
+    child.setFrame_display(frame, true);
+}
+
+/// A popup: rounded like the host's popovers, with a light shadow.
+pub fn as_popup(child: &NSWindow, radius: f64) {
+    let frame = child.frame();
+    child.setStyleMask(NSWindowStyleMask::Borderless);
+    child.setOpaque(false);
+    child.setBackgroundColor(Some(&NSColor::clearColor()));
+    if let Some(content) = child.contentView() {
+        content.setWantsLayer(true);
+        unsafe {
+            let layer: *mut AnyObject = msg_send![&*content, layer];
+            if !layer.is_null() {
+                let _: () = msg_send![layer, setCornerRadius: radius];
+                let _: () = msg_send![layer, setMasksToBounds: true];
+            }
+        }
+    }
+    child.setHasShadow(true);
+    child.setFrame_display(frame, true);
+    child.invalidateShadow();
+}
+
+/// Makes `parent` answer `isKeyWindow` with YES while one of the windows `never_main` marked, glued over it, has the
+/// keyboard. GPUI takes its window as active only while it is the key window (`window_did_change_key_status`), so a
+/// click into a page dimmed Wings as if another app were in front: the terminal's caret went hollow and its title bar
+/// grey. It patches `parent`'s class once, the first time.
+pub fn count_children_as_key(parent: &NSWindow) {
+    static PATCHED: AtomicPtr<AnyClass> = AtomicPtr::new(std::ptr::null_mut());
+    static ORIGINAL: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+    extern "C-unwind" fn is_key_window(this: &AnyObject, cmd: Sel) -> Bool {
+        let original: extern "C-unwind" fn(&AnyObject, Sel) -> Bool = unsafe { std::mem::transmute(ORIGINAL.load(Ordering::Relaxed)) };
+        if original(this, cmd).as_bool() {
+            return Bool::YES;
+        }
+        let Some(mtm) = objc2::MainThreadMarker::new() else { return Bool::NO };
+        let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+        let key = app.keyWindow().filter(|_| app.isActive());
+        let child_has_it = key.is_some_and(|key| {
+            is_marked(&key) && key.parentWindow().is_some_and(|parent| std::ptr::eq(&*parent as *const NSWindow as *const AnyObject, this))
+        });
+        Bool::new(child_has_it)
+    }
+    unsafe {
+        let class: &AnyClass = msg_send![parent, class];
+        let class_ptr = class as *const AnyClass as *mut AnyClass;
+        if !PATCHED.load(Ordering::Relaxed).is_null() {
+            return;
+        }
+        if let Some(original) = class_getMethodImplementation(class, sel!(isKeyWindow)) {
+            ORIGINAL.store(original as *mut (), Ordering::Relaxed);
+            let replacement: extern "C-unwind" fn(&AnyObject, Sel) -> Bool = is_key_window;
+            class_replaceMethod(class, sel!(isKeyWindow), std::mem::transmute(replacement), c"B@:".as_ptr());
+            PATCHED.store(class_ptr, Ordering::Relaxed);
+        }
+    }
 }

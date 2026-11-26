@@ -178,7 +178,8 @@ fn main() {
         }
     }
 
-    pump::start(config.pump_fallback);
+    pump::start();
+    pump::set_fallback(config.pump_fallback.is_some());
     build_host(mtm);
 
     let profile = Profile { root: config.profile.clone(), path: config.profile.join("Default") };
@@ -211,7 +212,7 @@ fn main() {
 
     let (work, scheduled) = pump::counts();
     log("run_loop_returned", format!("pump_work={work} pump_schedule={scheduled}"));
-    pump::drain();
+    pump::drain(10);
     cef::shutdown();
     log("shutdown", "done");
 }
@@ -412,6 +413,7 @@ fn open_child(role: Role) {
         &url,
         cef_rect(frame),
         Some(SpikeClient::new()),
+        None,
         Rc::new(move |window, _view| on_child_created(role, window)),
         Rc::new(move |active| log("cef_window_activation", format!("{role:?} active={active}"))),
     );

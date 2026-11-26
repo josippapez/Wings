@@ -10,7 +10,7 @@ publish = false
 # has to hold the same release. `CEF_PATH` points the build at an exported copy instead of downloading one per build.
 cef = { version = "=156.7.0", default-features = false, features = ["sandbox"] }
 objc2 = "0.6.5"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSEvent", "NSWindow", "NSRunningApplication", "NSView", "NSTextField", "NSControl", "NSButton", "NSButtonCell", "NSCell", "NSTextFieldCell", "NSActionCell", "NSMenu", "NSMenuItem", "NSGraphics", "NSScreen", "NSText", "NSGraphicsContext"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSEvent", "NSWindow", "NSRunningApplication", "NSView", "NSTextField", "NSControl", "NSButton", "NSButtonCell", "NSCell", "NSTextFieldCell", "NSActionCell", "NSMenu", "NSMenuItem", "NSGraphics", "NSScreen", "NSText", "NSGraphicsContext", "NSColor"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSGeometry", "NSString", "NSValue", "NSObject", "NSNotification", "NSDictionary", "NSEnumerator", "NSObjCRuntime", "NSThread"] }
 
 # The helper every Chromium child process (renderer, GPU, network, ...) runs. It ships in the engine folder next to the
