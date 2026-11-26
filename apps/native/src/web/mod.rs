@@ -17,7 +17,7 @@ mod views;
 pub mod mac;
 
 #[cfg(feature = "ui")]
-pub use views::{Heard, NO_SCRIPTS, Spec, State, Told, forget_page, slot, sync, update};
+pub use views::{Heard, Spec, State, Told, forget_page, slot, sync, update};
 #[cfg(all(test, feature = "test-support"))]
 pub(crate) use views::testing;
 
@@ -40,6 +40,28 @@ pub enum Job {
     /// Another browser's cookies go into the profile's store, kept or not: how many it took.
     Cookies { profile: Profile, keep_data: bool, cookies: Vec<wings_browser_cookies::Cookie> },
 }
+
+/// The one gate every command a plugin's page sends its web view goes through, here and in WebKit (`views::update`,
+/// `mac::WebPage::go`): moving about (load, back, forward, reload, stop) always goes; anything that reads or acts on what
+/// the page holds (a script, its picture, its logs, the answer to its dialog) needs the plugin's `webScripts`
+/// (`scripts`) and never touches a page signed in with imported cookies (`imported`). Each command is named here, so a
+/// new one has to say which it is.
+pub fn gate(go: &crate::page::tree::WebGo, scripts: bool, imported: bool) -> Result<(), &'static str> {
+    use crate::page::tree::WebGo;
+    match go {
+        WebGo::Load(_) | WebGo::Back | WebGo::Forward | WebGo::Reload | WebGo::Stop => Ok(()),
+        WebGo::Eval { .. } | WebGo::Snapshot | WebGo::Logs | WebGo::Dialog { .. } => match (scripts, imported) {
+            (false, _) => Err(NO_SCRIPTS),
+            (true, true) => Err(IMPORTED),
+            (true, false) => Ok(()),
+        },
+    }
+}
+
+/// Why a command that reads or acts on a page didn't run, for a plugin that may not run scripts in its pages.
+pub const NO_SCRIPTS: &str = "This plugin may not read or act on the web pages it shows (permissions.webScripts)";
+/// Why one didn't run on a page signed in with imported cookies.
+pub const IMPORTED: &str = "This page is signed in with cookies you imported, so no plugin reads or acts on it";
 
 /// Notes the sites whose cookies are about to be imported into `profile`, by their domains (never the cookies), so a
 /// plugin's script never runs in the page's own world there (`holds_imported`). Written before the cookies go in, and
@@ -66,15 +88,20 @@ pub fn holds_imported(profile_dir: &std::path::Path, url: &str) -> bool {
     let Some(host) = url.split_once("://").and_then(|(_, rest)| rest.split(['/', '?', '#']).next()) else { return false };
     let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
     let host = host.split(':').next().unwrap_or_default().to_ascii_lowercase();
-    let known: Vec<String> = match std::fs::read(profile_dir.join("imported-sites.json")) {
-        Ok(bytes) => match serde_json::from_slice(&bytes) {
-            Ok(known) => known,
-            Err(_) => return true,
-        },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
-        Err(_) => return true,
-    };
-    known.iter().any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+    match imported_sites(profile_dir) {
+        Some(known) => known.iter().any(|domain| host == *domain || host.ends_with(&format!(".{domain}"))),
+        None => true,
+    }
+}
+
+/// The domains of the sites whose cookies were imported into the profile in `profile_dir`: none when nothing was, and
+/// `None` when the list is there but can't be read, which counts as every site.
+pub fn imported_sites(profile_dir: &std::path::Path) -> Option<Vec<String>> {
+    match std::fs::read(profile_dir.join("imported-sites.json")) {
+        Ok(bytes) => serde_json::from_slice(&bytes).ok(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(Vec::new()),
+        Err(_) => None,
+    }
 }
 
 /// What an extension's add answers when the person didn't allow it.
@@ -255,6 +282,27 @@ mod tests {
         assert_eq!(allowed(&Ok(r#"{"allowed":true,"error":"bad manifest"}"#.into())), Some(Some("bad manifest".into())));
         for other in [Ok("null".into()), Ok(r#"{"allowed":"yes"}"#.into()), Err(NOT_ALLOWED.into()), Err("The Wings window is closed or busy".into())] {
             assert_eq!(allowed(&other), None, "{other:?}");
+        }
+    }
+
+    #[test]
+    fn every_command_that_reads_or_acts_on_a_page_needs_scripts_and_a_page_without_imported_cookies() {
+        use crate::page::tree::WebGo;
+        let moves = [WebGo::Load("https://a.com/".into()), WebGo::Back, WebGo::Forward, WebGo::Reload, WebGo::Stop];
+        let reads = [
+            WebGo::Eval { script: "1".into(), page: false },
+            WebGo::Eval { script: "1".into(), page: true },
+            WebGo::Snapshot,
+            WebGo::Logs,
+            WebGo::Dialog { accept: true, text: None },
+        ];
+        for go in &moves {
+            assert_eq!(gate(go, false, true), Ok(()), "{go:?} moves about");
+        }
+        for go in &reads {
+            assert_eq!(gate(go, false, false), Err(NO_SCRIPTS), "{go:?}");
+            assert_eq!(gate(go, true, true), Err(IMPORTED), "{go:?}");
+            assert_eq!(gate(go, true, false), Ok(()), "{go:?}");
         }
     }
 

@@ -45,9 +45,6 @@ pub struct Dialog {
     pub site: String,
 }
 
-/// Why an `eval` didn't run, for a plugin that may not run scripts in its pages.
-pub const NO_SCRIPTS: &str = "This plugin may not run scripts in the web pages it shows (permissions.webScripts)";
-
 /// What a web view tells its page: where it is, or what a command came to.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Heard {
@@ -137,8 +134,9 @@ pub fn update(page: EntityId, profile: &Profile, specs: &[Spec], told: &Told, sc
                 && entry.token != Some(command.token)
             {
                 entry.token = Some(command.token);
-                if matches!(command.go, WebGo::Eval { .. } | WebGo::Logs) && !scripts {
-                    let refused = Err(NO_SCRIPTS.to_owned());
+                // Whether it may at all; WebKit's side checks the page it is on as it runs (`gate`).
+                if let Err(why) = super::gate(&command.go, scripts, false) {
+                    let refused = Err(why.to_owned());
                     let _ = told.try_send((spec.name.clone(), Heard::Result { token: command.token, result: refused }));
                     continue;
                 }

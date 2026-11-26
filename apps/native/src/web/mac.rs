@@ -19,7 +19,7 @@ use objc2::{
     runtime::{AnyClass, AnyObject, Bool, NSObject, NSObjectProtocol, ProtocolObject},
     sel,
 };
-use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage, NSModalResponse, NSOpenPanel, NSView, NSWindowOrderingMode};
+use objc2_app_kit::{NSAlert, NSBitmapImageFileType, NSBitmapImageRep, NSImage, NSModalResponse, NSOpenPanel, NSTextField, NSView, NSWindowOrderingMode};
 use objc2_foundation::{
     NSArray, NSDate, NSDictionary, NSError, NSHTTPCookie, NSHTTPCookieDomain, NSHTTPCookieExpires, NSHTTPCookieName,
     NSHTTPCookiePath, NSHTTPCookieSameSitePolicy, NSHTTPCookieSameSiteLax, NSHTTPCookieSameSiteStrict,
@@ -275,11 +275,13 @@ impl Maker for WebKit {
             if let Some(extensions) = &shared.extensions {
                 configuration.setWebExtensionController(Some(extensions));
             }
-            if scripts {
-                // In the page's own world, the only one that sees its `console` and `fetch`; it posts what it sees.
+            // In the page's own world, the only one that sees its `console` and `fetch`; it posts what it sees, but never
+            // on a site signed in with imported cookies, and not at all while the list of those can't be read.
+            if let (true, Some(imported)) = (scripts, super::imported_sites(&profile.dir)) {
+                let source = format!("const imported = {};\n{LOGS}", serde_json::to_string(&imported).unwrap_or_else(|_| "[]".into()));
                 let script = WKUserScript::initWithSource_injectionTime_forMainFrameOnly_inContentWorld(
                     WKUserScript::alloc(mtm),
-                    &NSString::from_str(LOGS),
+                    &NSString::from_str(&source),
                     WKUserScriptInjectionTime::AtDocumentStart,
                     true,
                     &WKContentWorld::pageWorld(mtm),
@@ -292,7 +294,7 @@ impl Maker for WebKit {
             view.setHidden(true);
             view
         };
-        let observer = Observer::new(told.clone(), mtm);
+        let observer = Observer::new(told.clone(), profile.dir.clone(), mtm);
         if scripts {
             // SAFETY: the configuration's controller holds the handler until the view goes (`Drop` takes it away).
             unsafe {
@@ -317,7 +319,7 @@ impl Maker for WebKit {
             view.setUIDelegate(Some(ProtocolObject::from_ref(&*observer)));
         }
         let (shots, web_dir) = (profile.dir.join("screenshots"), profile.dir.clone());
-        let mut native = WebPage { view, observer, told, shots, web_dir };
+        let mut native = WebPage { view, observer, told, shots, web_dir, scripts };
         if let Some(url) = url {
             native.go(&WebGo::Load(url.to_owned()), 0);
         }
@@ -332,6 +334,8 @@ struct WebPage {
     /// Where its snapshots are saved, in its plugin's web folder, and that folder.
     shots: std::path::PathBuf,
     web_dir: std::path::PathBuf,
+    /// Its plugin may read and act on its pages (`webScripts`).
+    scripts: bool,
 }
 
 /// The name the page's log script posts to.
@@ -343,6 +347,8 @@ const LOGS_KEPT: usize = 200;
 /// never a body or a header, and posts each to Wings. It can't see the page's own loads (navigations, pictures, styles,
 /// scripts), a service worker's requests or web sockets.
 const LOGS: &str = r#"(() => {
+  const host = location.hostname;
+  if (imported.some((domain) => host === domain || host.endsWith("." + domain))) return;
   const post = (m) => { try { webkit.messageHandlers.wingsLog.postMessage(m); } catch (_) {} };
   const text = (a) => a.map((x) => { try { return typeof x === "string" ? x : JSON.stringify(x); } catch (_) { return String(x); } }).join(" ").slice(0, 2000);
   for (const level of ["log", "info", "warn", "error", "debug"]) {
@@ -362,9 +368,6 @@ const LOGS: &str = r#"(() => {
   XMLHttpRequest.prototype.open = function (m, u) { this.__wings = { method: String(m), url: String(u).slice(0, 2000) }; return open0.apply(this, arguments); };
   XMLHttpRequest.prototype.send = function () { this.addEventListener("loadend", () => this.__wings && post({ kind: "network", ...this.__wings, status: this.status })); return send0.apply(this, arguments); };
 })();"#;
-
-/// Why a script didn't run in a page's own world.
-const IMPORTED: &str = "This page is signed in with cookies you imported, so a plugin's script runs there only in its own world";
 
 impl Native for WebPage {
     fn place(&mut self, window: &Window, frame: Option<Bounds<Pixels>>) {
@@ -391,6 +394,12 @@ impl Native for WebPage {
 
     fn go(&mut self, go: &WebGo, token: u64) {
         let Some(mtm) = MainThreadMarker::new() else { return };
+        // The page it is on now decides, as `gate` says for every command.
+        // SAFETY: the web view's address, on the main thread.
+        let url = unsafe { self.view.URL() }.and_then(|url| url.absoluteString()).map(|url| url.to_string()).unwrap_or_default();
+        if let Err(why) = super::gate(go, self.scripts, super::holds_imported(&self.web_dir, &url)) {
+            return (self.told)(Heard::Result { token, result: Err(why.into()) });
+        }
         // SAFETY: the web view's own calls, on the main thread.
         unsafe {
             match go {
@@ -403,11 +412,6 @@ impl Native for WebPage {
                 WebGo::Forward => drop(self.view.goForward()),
                 WebGo::Reload => drop(self.view.reload()),
                 WebGo::Stop => self.view.stopLoading(),
-                // A script in the page's own world acts as the page: where the person is signed in with cookies they
-                // imported, only the plugin's world, which sees the document but not the page's scripts or their state.
-                WebGo::Eval { page: true, .. } if self.view.URL().and_then(|url| url.absoluteString()).is_some_and(|url| super::holds_imported(&self.web_dir, &url.to_string())) => {
-                    (self.told)(Heard::Result { token, result: Err(IMPORTED.into()) });
-                }
                 WebGo::Eval { script, page } => {
                     // The value goes back as JSON text, which crosses from JavaScript as a plain string.
                     let body = format!("return JSON.stringify(await (async () => {{\n{script}\n}})() ?? null);");
@@ -498,6 +502,10 @@ struct Ivars {
     told_last: RefCell<Option<State>>,
     /// Why the last page failed, until another starts.
     error: RefCell<Option<String>>,
+    /// Its plugin's web folder, which names the sites signed in with imported cookies.
+    web_dir: std::path::PathBuf,
+    /// Wings' own sheet showing the page's dialog, and its text field for a prompt.
+    sheet: RefCell<Option<(Retained<NSAlert>, Option<Retained<NSTextField>>)>>,
     /// The page's dialog that waits for an answer, and what it shows.
     pending: RefCell<Option<(Pending, super::views::Dialog)>>,
     /// The page's recent console messages and requests (`LOGS`), the newest last.
@@ -554,7 +562,12 @@ define_class!(
                 // A new window's navigation has no target frame: it loads in this view's page (`new_window`).
                 (url, action.targetFrame().is_none_or(|frame| frame.isMainFrame()))
             };
-            let policy = if super::may_navigate(&url, main_frame) { WKNavigationActionPolicy::Allow } else { WKNavigationActionPolicy::Cancel };
+            let allowed = super::may_navigate(&url, main_frame);
+            // A new page starts with no logs: none of the last page's are read on this one's watch.
+            if allowed && main_frame {
+                self.ivars().logs.borrow_mut().clear();
+            }
+            let policy = if allowed { WKNavigationActionPolicy::Allow } else { WKNavigationActionPolicy::Cancel };
             decide.call((policy,));
         }
 
@@ -567,8 +580,15 @@ define_class!(
     unsafe impl WKScriptMessageHandler for Observer {
         #[unsafe(method(userContentController:didReceiveScriptMessage:))]
         fn heard(&self, _controller: &WKUserContentController, message: &WKScriptMessage) {
-            // SAFETY: the message's body, on the main thread: what the page posted, which is the page's word only.
-            let body = unsafe { message.body() };
+            // SAFETY: the message's frame and body, on the main thread: what the page posted, which is the page's word only.
+            let (frame, body) = unsafe {
+                let frame = message.frameInfo().request().URL().and_then(|url| url.absoluteString()).map(|url| url.to_string());
+                (frame.unwrap_or_default(), message.body())
+            };
+            // Nothing from a site signed in with imported cookies, a frame on one included.
+            if super::holds_imported(&self.ivars().web_dir, &frame) {
+                return;
+            }
             let Some(body) = body.downcast_ref::<NSDictionary>() else { return };
             let field = |key: &str| body.objectForKey(&NSString::from_str(key));
             let text = |key: &str| field(key).and_then(|value| value.downcast_ref::<NSString>().map(|text| text.to_string()));
@@ -646,19 +666,22 @@ define_class!(
 );
 
 impl Observer {
-    fn new(told: Rc<dyn Fn(Heard)>, mtm: MainThreadMarker) -> Retained<Self> {
+    fn new(told: Rc<dyn Fn(Heard)>, web_dir: std::path::PathBuf, mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(Ivars {
             told,
             told_last: RefCell::new(None),
             error: RefCell::new(None),
             pending: RefCell::new(None),
             logs: RefCell::default(),
+            web_dir,
+            sheet: RefCell::new(None),
         });
         // SAFETY: NSObject's `init`.
         unsafe { msg_send![super(this), init] }
     }
 
-    /// The page waits on a dialog: its plugin's page shows it, from `State::dialog`, and a `dialog` command answers it.
+    /// The page waits on a dialog: Wings shows it in a sheet of its own on the window, naming the site, which the person
+    /// answers; its plugin hears of it (`State::dialog`) and, where `gate` lets it, may answer it too (`dialog`).
     fn wait_on(&self, view: &WKWebView, pending: Pending, kind: &str, message: &NSString, default: Option<&NSString>, frame: &WKFrameInfo) {
         // A page that asks again before the last was answered: the last is cancelled, as WebKit needs each answered.
         self.answer(false, None);
@@ -670,13 +693,66 @@ impl Observer {
             default_text: default.map(|text| text.to_string()),
             site,
         };
+        let prompt = matches!(pending, Pending::Prompt(_));
+        let shown = (dialog.site.clone(), dialog.message.clone(), dialog.default_text.clone());
         self.ivars().pending.replace(Some((pending, dialog)));
+        self.show_sheet(view, kind, shown, prompt);
         self.tell(view);
     }
 
-    /// Answers the page's dialog, if it shows one: whether it did.
+    fn show_sheet(&self, view: &WKWebView, kind: &str, (site, message, default): (String, String, Option<String>), prompt: bool) {
+        let (Some(mtm), Some(window)) = (MainThreadMarker::new(), view.window()) else { return };
+        let alert = NSAlert::new(mtm);
+        let site = if site.is_empty() { "This page".to_owned() } else { site };
+        alert.setMessageText(&NSString::from_str(&format!("{site} says")));
+        alert.setInformativeText(&NSString::from_str(&message));
+        alert.addButtonWithTitle(&NSString::from_str("OK"));
+        if kind != "alert" {
+            alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+        }
+        let field = prompt.then(|| {
+            let field = NSTextField::textFieldWithString(&NSString::from_str(default.as_deref().unwrap_or_default()), mtm);
+            field.setFrame(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(260.0, 24.0)));
+            alert.setAccessoryView(Some(&field));
+            field
+        });
+        let (this, typed, page) = (self.retain(), field.clone(), view.retain());
+        let answered = RcBlock::new(move |response: NSModalResponse| {
+            this.ivars().sheet.replace(None);
+            // NSAlertFirstButtonReturn, OK, is 1000.
+            let text = typed.as_ref().map(|field| field.stringValue().to_string());
+            this.resolve(response == 1000, text.as_deref());
+            this.tell(&page);
+        });
+        self.ivars().sheet.replace(Some((alert.clone(), field)));
+        alert.beginSheetModalForWindow_completionHandler(&window, Some(&answered));
+    }
+
+    /// Answers the page's dialog, if it shows one, as OK or Cancel: whether it did. Wings' sheet goes with the same
+    /// answer, which then reaches the page.
     fn answer(&self, accept: bool, text: Option<&str>) -> bool {
-        let Some((pending, dialog)) = self.ivars().pending.take() else { return false };
+        if self.ivars().pending.borrow().is_none() {
+            return false;
+        }
+        let sheet = self.ivars().sheet.borrow().clone();
+        match sheet.and_then(|(alert, field)| Some((alert.window().sheetParent()?, alert, field))) {
+            Some((parent, alert, field)) => {
+                if let (Some(field), Some(text)) = (field, text) {
+                    field.setStringValue(&NSString::from_str(text));
+                }
+                parent.endSheet_returnCode(&alert.window(), if accept { 1000 } else { 1001 });
+            }
+            None => {
+                self.ivars().sheet.replace(None);
+                self.resolve(accept, text);
+            }
+        }
+        true
+    }
+
+    /// Hands WebKit the answer to the page's dialog, and tells the page it has none.
+    fn resolve(&self, accept: bool, text: Option<&str>) {
+        let Some((pending, dialog)) = self.ivars().pending.take() else { return };
         match pending {
             Pending::Alert(done) => done.call(()),
             Pending::Confirm(done) => done.call((Bool::new(accept),)),
@@ -685,7 +761,6 @@ impl Observer {
                 done.call((answer.as_ref().map_or(std::ptr::null_mut(), |answer| Retained::as_ptr(answer).cast_mut()),));
             }
         }
-        true
     }
 
     fn failed(&self, view: &WKWebView, error: &NSError) {
