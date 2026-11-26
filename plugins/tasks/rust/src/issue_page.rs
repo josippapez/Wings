@@ -59,13 +59,17 @@ struct Page {
     narrow: bool,
     /// The relation whose issue picker is open: a field shows only after its button is pressed.
     picking: Option<&'static str>,
+    /// The issue whose commits all show, not only the first few.
+    commits_open: Option<String>,
 }
 
 /// The least width at which the properties sit beside the description. Under it the text and its tables would be left
 /// with less than a table needs, so the properties stack above it.
 const SIDE_BY_SIDE: f32 = 760.0;
 /// How wide one property is, beside the description and in the grid above it.
-const PROPERTY_WIDTH: f32 = 290.0;
+const PROPERTY_WIDTH: f32 = 300.0;
+/// Commits shown before "+N more".
+const COMMITS_SHOWN: usize = 3;
 /// The width of a property's name, so the values line up in a column.
 const NAME_WIDTH: u32 = 76;
 
@@ -197,14 +201,13 @@ fn title_row(issue: &Issue) -> Node {
 // ---------- the properties column ----------
 
 /// One property of the column, quiet: its muted name on the left, its value beside it and one small icon button at the end.
+/// The name lines up with the value's first line, so a value of several lines doesn't float it in the middle.
 fn prop(label: &str, actions: Option<Node>, content: Vec<Node>) -> Node {
-    stack("xs").prop("width", PROPERTY_WIDTH).child(
-        row("s")
-            .prop("align", "center")
-            .child(ui_column(NAME_WIDTH).child(line(label, Some("muted"), Some("small"))))
-            .child(stack("xs").prop("grow", true).children(content))
-            .maybe(actions),
-    )
+    row("s")
+        .prop("align", "start")
+        .child(ui_column(NAME_WIDTH).child(line(label, Some("muted"), Some("small"))))
+        .child(stack("xs").prop("grow", true).children(content))
+        .maybe(actions)
 }
 
 /// A fixed-width cell of a row.
@@ -232,16 +235,20 @@ fn copy_button(label: &str, text: &str, variant: &str, aria: String) -> Node {
 }
 
 /// An icon button that copies `text`, and says "Copied" for a moment after.
+fn small(button: Node) -> Node {
+    button.prop("size", "icon-xs")
+}
+
 fn copy_icon(text: &str, aria: &str) -> Node {
     let copied = with(|p| p.copied.as_deref() == Some(text));
     let text = text.to_owned();
-    icon_button(if copied { "Copied" } else { aria }, &icons::COPY, move || copy(text.clone()))
+    small(icon_button(if copied { "Copied" } else { aria }, &icons::COPY, move || copy(text.clone())))
 }
 
 /// An icon button that starts editing `name`, from `current`.
 fn edit_icon(name: &'static str, aria: &str, current: &str) -> Node {
     let current = current.to_owned();
-    icon_button(aria, &icons::PENCIL, move || begin(name, &current))
+    small(icon_button(aria, &icons::PENCIL, move || begin(name, &current)))
 }
 
 fn branch_prop(issue: &Issue, project: &Project) -> Node {
@@ -268,7 +275,7 @@ fn branch_prop(issue: &Issue, project: &Project) -> Node {
             .text("Use ")
             .child(line(current.as_str(), None, Some("small")).prop("mono", true).prop("truncate", true))
     });
-    prop("Branch", actions, vec![value]).maybe(use_current)
+    stack("xs").child(prop("Branch", actions, vec![value])).maybe(use_current)
 }
 
 /// What a pull request link is called: "PR #12", or its host.
@@ -324,7 +331,7 @@ fn issue_chip(issue: Option<&Issue>, fallback: &str, on_remove: Option<Box<dyn F
         }
         None => line(fallback, Some("muted"), Some("small")).prop("mono", true),
     };
-    row("s").child(chip).maybe(on_remove.map(|remove| Node::new("Button").prop("size", "icon-xs").prop("variant", "ghost").prop("label", format!("Remove {fallback}")).on("onClick", move |_| remove()).text("×")))
+    row("s").child(chip).maybe(on_remove.map(|remove| Node::new("Button").prop("size", "icon-xs").prop("variant", "ghost").prop("label", format!("Remove {fallback}")).prop("title", format!("Remove {fallback}")).on("onClick", move |_| remove()).text("×")))
 }
 
 /// Opens another issue in this tab, with the trail back to this one.
@@ -368,9 +375,9 @@ fn picker(name: &'static str, label: &'static str, placeholder: &'static str, op
 fn relation(name: &'static str, label: &'static str, add: &'static str, chips: Vec<Node>, options: Vec<&Issue>, on_pick: impl Fn(String) + 'static) -> Node {
     let open = with(|p| p.picking == Some(name));
     let icon = if add.starts_with("Change") { &icons::PENCIL[..] } else { &icons::PLUS[..] };
-    let toggle = icon_button(add, icon, move || with(|p| p.picking = if p.picking == Some(name) { None } else { Some(name) }));
+    let toggle = small(icon_button(add, icon, move || with(|p| p.picking = if p.picking == Some(name) { None } else { Some(name) })));
     let content = if chips.is_empty() { vec![muted("None").prop("size", "small")] } else { chips };
-    prop(label, Some(toggle), content).maybe(open.then(|| picker(name, label, "Find an issue", options, on_pick)))
+    stack("xs").child(prop(label, Some(toggle), content)).maybe(open.then(|| picker(name, label, "Find an issue", options, on_pick)))
 }
 
 fn links_props(issue: &Issue, issues: &[Issue]) -> Vec<Node> {
@@ -445,35 +452,51 @@ fn properties(issue: &Issue, issues: &[Issue], project: &Project, narrow: bool) 
         // An unnamed session goes by its agent, so the line under it doesn't name the agent twice.
         let name = s.name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| agent_label(s.kind.as_deref()));
         let (id, kind) = (s.id.clone(), s.kind.clone());
-        let detail = format!("{}{} · seen {}", if s.name.as_ref().is_some_and(|n| !n.is_empty()) { format!("{} · ", agent_label(s.kind.as_deref())) } else { String::new() }, s.id.chars().take(8).collect::<String>(), ago_now(s.seen));
+        let latest = if last.as_deref() == Some(s.id.as_str()) && issue.sessions.len() > 1 { "latest · " } else { "" };
+        let detail = format!("{latest}{} · {}", s.id.chars().take(8).collect::<String>(), ago_now(s.seen));
         stack("s")
             .key(s.id.as_str())
             .child(
                 row("s")
                     .prop("justify", "between")
-                    .child(row("s").child(line(name.as_str(), None, Some("small")).prop("truncate", true)).maybe((last.as_deref() == Some(s.id.as_str())).then(|| Node::new("Badge").prop("variant", "outline").text("Latest"))))
-                    .child(icon_button(&format!("Resume {name}"), &icons::PLAY, move || resume(&id, kind.as_deref()))),
+                    .child(line(name.as_str(), None, Some("small")).prop("truncate", true).prop("grow", true))
+                    .child(small(icon_button(&format!("Resume {name}"), &icons::PLAY, move || resume(&id, kind.as_deref())))),
             )
             .child(line(detail, Some("muted"), Some("tiny")))
     });
-    // Beside the description, one column; above it, as many columns as fit, each property as wide as in the column.
-    let mut column = if narrow { Node::new("Row").prop("gap", "l").prop("wrap", true).prop("align", "start") } else { Node::new("Stack").prop("gap", "l").prop("width", PROPERTY_WIDTH) };
-    column = column
-        .child(picked("Status", status_dot(issue.status), status_options, issue.status.as_str(), Box::new(move |v| send(Update { status: Some(v.to_owned()), ..update(&status_key) }))))
-        .child(picked("Priority", priority_icon(issue.priority, false), priority_options, issue.priority.map_or("none", Priority::as_str), Box::new(move |v| send(Update { priority: Some(v.to_owned()), ..update(&priority_key) }))))
-        .child(picked("Type", type_icon(issue.kind, false, 14), type_options, issue.kind.as_str(), Box::new(move |v| send(Update { rel: Relations { kind: Some(v.to_owned()), ..Relations::default() }, ..update(&type_key) }))))
-        .children(links_props(issue, issues))
-        .child(branch_prop(issue, project))
-        .child(pr_prop(issue))
-        .child(prop(
-            "Commits",
-            None,
-            vec![if commits.is_empty() { muted("None").prop("size", "small") } else { row("s").prop("wrap", true).children(commits.iter().map(|c| copy_button(c, c, "secondary", format!("Copy commit {c}")).key(c.as_str()))) }],
-        ))
-        .child(prop("Sessions", None, vec![if issue.sessions.is_empty() { muted("None yet").prop("size", "small") } else { stack("s").children(session_rows) }]))
-        .child(prop("Created", None, vec![line(ago_now(issue.created_at), None, Some("small"))]))
-        .child(prop("Updated", None, vec![line(ago_now(issue.updated_at), None, Some("small"))]));
-    column
+    let open_commits = with(|p| p.commits_open.as_deref() == Some(issue.key.as_str()));
+    let commits_key = issue.key.clone();
+    let commit_chips = {
+        let shown = if open_commits { commits.len() } else { COMMITS_SHOWN };
+        let more = commits.len().saturating_sub(COMMITS_SHOWN);
+        let toggle = (more > 0).then(|| {
+            let label = if open_commits { "Show fewer".to_owned() } else { format!("+{more} more") };
+            Node::new("Button").prop("variant", "ghost").prop("size", "xs").prop("label", label.as_str()).on("onClick", move |_| with(|p| p.commits_open = if open_commits { None } else { Some(commits_key.clone()) })).text(label)
+        });
+        row("xs").prop("wrap", true).children(commits.iter().take(shown).map(|c| copy_button(c, c, "secondary", format!("Copy commit {c}")).key(c.as_str()))).maybe(toggle)
+    };
+    // Groups split by hairlines, in one card: status, priority and type; the links; what the work produced; the dates.
+    let group = |rows: Vec<Node>| stack("s").children(rows);
+    let card = ui::rows_card([
+        group(vec![
+            picked("Status", status_dot(issue.status), status_options, issue.status.as_str(), Box::new(move |v| send(Update { status: Some(v.to_owned()), ..update(&status_key) }))),
+            picked("Priority", priority_icon(issue.priority, false), priority_options, issue.priority.map_or("none", Priority::as_str), Box::new(move |v| send(Update { priority: Some(v.to_owned()), ..update(&priority_key) }))),
+            picked("Type", type_icon(issue.kind, false, 14), type_options, issue.kind.as_str(), Box::new(move |v| send(Update { rel: Relations { kind: Some(v.to_owned()), ..Relations::default() }, ..update(&type_key) }))),
+        ]),
+        group(links_props(issue, issues)),
+        group(vec![
+            branch_prop(issue, project),
+            pr_prop(issue),
+            prop("Commits", None, vec![if commits.is_empty() { muted("None").prop("size", "small") } else { commit_chips }]),
+            prop("Sessions", None, vec![if issue.sessions.is_empty() { muted("None yet").prop("size", "small") } else { stack("s").children(session_rows) }]),
+        ]),
+        group(vec![
+            prop("Created", None, vec![line(ago_now(issue.created_at), None, Some("small"))]),
+            prop("Updated", None, vec![line(ago_now(issue.updated_at), None, Some("small"))]),
+        ]),
+    ]);
+    // Beside the description a column of its own; above it, the card takes the whole width.
+    if narrow { card } else { stack("none").prop("width", PROPERTY_WIDTH).child(card) }
 }
 
 // ---------- the main column ----------
@@ -582,9 +605,9 @@ fn file_row(file: &crate::domain::FileChange, first_commit: Option<String>) -> N
         Node::new("ListButton")
             .prop("title", format!("Open the diff of {}", file.path))
             .on("onClick", move |_| open_diff(first_commit.clone(), path.clone()))
-            .child(row("s").child(line(name, None, None).prop("mono", true)).maybe(dir.map(|d| line(d, Some("muted"), Some("small")).prop("mono", true).prop("truncate", true))))
+            .child(row("s").prop("grow", true).child(line(name, None, None).prop("mono", true).prop("truncate", true)).maybe(dir.filter(|_| file.what.is_empty()).map(|d| line(d, Some("muted"), Some("small")).prop("mono", true).prop("truncate", true))))
             .maybe(counts.map(|(added, removed)| row("s").child(line(format!("+{added}"), Some("success"), Some("small"))).child(line(format!("−{removed}"), Some("danger"), Some("small")))))
-            .maybe(if counts.is_none() && !file.what.is_empty() { Some(line(file.what.as_str(), Some("muted"), Some("small")).prop("truncate", true)) } else { None })
+            .maybe(if counts.is_none() && !file.what.is_empty() { Some(line(file.what.as_str(), Some("muted"), Some("small")).prop("truncate", true).prop("grow", true)) } else { None })
             .child(line(format!("{who}{}", ago_now(file.at)), Some("muted"), Some("tiny")).prop("truncate", true)),
     )
 }
@@ -866,15 +889,29 @@ mod tests {
         assert!(all.contains("e0") && !all.contains("earlier"), "{all}");
     }
 
-    /// Under `SIDE_BY_SIDE` the properties are a wrapping row of fixed-width cells, above the text; wider they are one column.
+    /// Under `SIDE_BY_SIDE` the properties are a card as wide as the page, above the text; wider they are a column of
+    /// `PROPERTY_WIDTH` beside it.
     #[test]
-    fn the_properties_wrap_in_a_narrow_page_and_stay_a_column_in_a_wide_one() {
+    fn the_properties_fill_a_narrow_page_and_keep_their_column_in_a_wide_one() {
         let issue = make(&fresh(), "A", |_| {}).issues[0].clone();
         let project = Project { id: "p".into(), name: "web".into(), path: "/work/web".into(), branch: None };
         let narrow = wings_plugin::ui::tree_json(properties(&issue, &[issue.clone()], &project, true));
-        assert_eq!((narrow["type"].as_str(), narrow["props"]["wrap"].as_bool()), (Some("Row"), Some(true)), "{narrow}");
-        assert!(narrow["props"]["width"].is_null(), "{narrow}");
+        assert_eq!((narrow["type"].as_str(), narrow["props"]["variant"].as_str(), narrow["props"]["width"].is_null()), (Some("Card"), Some("rows"), true), "{narrow}");
         let wide = wings_plugin::ui::tree_json(properties(&issue, &[issue.clone()], &project, false));
         assert_eq!((wide["type"].as_str(), wide["props"]["width"].as_f64()), (Some("Stack"), Some(f64::from(PROPERTY_WIDTH))), "{wide}");
+    }
+
+    /// Twelve commits show three and a "+9 more" button, which opens them all.
+    #[test]
+    fn a_long_list_of_commits_shows_the_first_three_and_a_button_for_the_rest() {
+        let mut issue = make(&fresh(), "A", |_| {}).issues[0].clone();
+        issue.links = Some(crate::domain::Links { branch: None, pr: None, commits: Some((0..12).map(|n| format!("c{n:07}")).collect()) });
+        let project = Project { id: "p".into(), name: "web".into(), path: "/work/web".into(), branch: None };
+        let shown = |issue: &Issue| wings_plugin::ui::tree_json(properties(issue, std::slice::from_ref(issue), &project, true)).to_string();
+        let first = shown(&issue);
+        assert!(first.contains("c0000002") && !first.contains("c0000003") && first.contains("+9 more"), "{first}");
+        with(|p| p.commits_open = Some(issue.key.clone()));
+        let all = shown(&issue);
+        assert!(all.contains("c0000011") && all.contains("Show fewer"), "{all}");
     }
 }

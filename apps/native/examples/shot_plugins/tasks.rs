@@ -61,6 +61,8 @@ pub(super) fn tasks(out: PathBuf) {
                 &[],
                 "Waiting on the release branch",
             ),
+            // A real issue's weight: 12 commits, 3 related issues, two sessions and a list of long file names.
+            ("issue-real", issue, Some(&json!({ "key": "WEB-12", "projectId": project })), Tab, &[], "Files changed"),
             ("block", block, None, Block, &[], "Open board"),
             (
                 "issue-missing",
@@ -208,13 +210,27 @@ pub(super) fn tasks_seed(project: &str) -> String {
                 issue("WEB-7", "Hide the summary card for an empty cart", "todo", "task", 20, json!({ "parent": "WEB-4", "priority": "low" })),
                 issue("WEB-8", "Order history landing page: tabs, design alignment, page and tab events", "todo", "feature", 18, json!({ "parent": "WEB-10" })),
                 issue("WEB-6", "Upgrade the date picker", "done", "task", 70, json!({ "parent": "WEB-10" })),
+                issue("WEB-12", "186963: rebase PR 6399 on main, align breadcrumb with Figma design system, add drift fixture", "in_progress", "task", 20, json!({
+                    "parent": "WEB-10",
+                    "priority": "medium",
+                    "description": "## Goal\nBring PR 6399 up to date with main, check the Figma design-system breadcrumb changes, and add a figma-component-drift fixture for the breadcrumb.\n\n## Done when\n- [ ] Branch rebased, typecheck/lint/test green for affected projects\n- [ ] Storybook checked in Chrome",
+                    "related": ["WEB-8", "WEB-1", "WEB-3"],
+                    "links": { "commits": ["3c890c6", "b936060", "a09b1a4", "61a763b", "f20539e", "2c0c9a6", "a4acaac", "bdc27ed", "5f02c5f", "b133b44", "1f3980f", "ea1aaca"] },
+                    "sessions": [agent(ago(1)), { "id": "0e4c8d12-7a6b-4f3e-8c15-2b9d6a3e5f77", "name": "Check this PR, it's the older one and it has a very long name", "seen": ago(4) }],
+                    "files": [
+                        { "path": "tools/scripts/figma-component-drift/fixtures/figma-component-drift-handoff.md", "what": "`dprf-field=textarea` height and padding measured against the Figma frame", "at": ago(2), "session": by },
+                        { "path": "tools/scripts/figma-component-drift/component-index.json", "what": "`component-index.json`: Updates the breadcrumb entry", "at": ago(2), "session": by },
+                        { "path": "tools/scripts/figma-component-drift/component-map.json", "what": "`padding-top` and `padding-bottom` for the breadcrumb", "at": ago(3), "session": by },
+                        { "path": "docs/web-reusable-components.md", "what": "Updates `breadcrumb` spacing token notes", "at": ago(3), "session": by },
+                    ],
+                })),
                 issue("WEB-10", "Checkout redesign", "in_progress", "epic", 80, json!({ "description": "The checkout pages on the new design system." })),
             ];
             let slot = slot_of(&self.0);
             for issue in &issues {
                 cx.save(&format!("issues/{slot}/{}", issue["key"].as_str().unwrap()), issue);
             }
-            cx.save(&format!("issues/{slot}"), &json!({ "v": 3, "path": self.0, "prefix": "WEB", "next": 11 }));
+            cx.save(&format!("issues/{slot}"), &json!({ "v": 3, "path": self.0, "prefix": "WEB", "next": 13 }));
             cx.render(&json!({ "id": 0, "type": "#root", "props": {}, "children": [{ "id": 1, "type": "#text", "text": "Seeded" }] }));
         }
     }

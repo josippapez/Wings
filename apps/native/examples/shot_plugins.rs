@@ -338,7 +338,9 @@ type StatePage<'a> = (
 /// Renders each of `pages` of the plugin `host` runs at 1000 and 640 points wide, into `<prefix>-<name>-<width>.png`.
 fn shoot_pages(out: &std::path::Path, host: &PluginHost, prefix: &str, pages: &[StatePage]) {
     let mut cx = app();
-    for width in [1000.0, 640.0] {
+    // SHOT_WIDTH adds one more width, like the user's window, to the usual two.
+    let extra = std::env::var("SHOT_WIDTH").ok().and_then(|w| w.parse::<f32>().ok());
+    for width in [1000.0, 640.0].into_iter().chain(extra) {
         for &(name, source, args, place, presses, expected) in pages {
             let state = wings_native::page::plugin::FrameState::new(place, None, |_| Ok(()));
             let handle = cx
