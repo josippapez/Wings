@@ -461,6 +461,43 @@
             "message"
           ]
         }
+      },
+      {
+        "name": "console",
+        "description": "Lists the Browser page's recent console messages and uncaught errors (up to the last 200 since it loaded), as level and text. Use it to see why a page misbehaves. Refused on sites the person signed in to by importing cookies.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "network",
+        "description": "Lists the Browser page's recent fetch and XMLHttpRequest calls since it loaded: method, URL and status. It can't see bodies or headers, the page's own loads (navigations, images, styles, scripts), service worker requests or web sockets. Refused on sites the person signed in to by importing cookies.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "dialog",
+        "description": "Answers the alert, confirm or prompt the Browser page shows (browser__status says when one is open): accept true for OK, false for Cancel, with text for a prompt. The person sees the same dialog in Wings and may answer it first. Refused on sites the person signed in to by importing cookies.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "accept": {
+              "type": "boolean",
+              "description": "OK (true) or Cancel (false)."
+            },
+            "text": {
+              "type": "string",
+              "description": "What to type into a prompt.",
+              "maxLength": 10000
+            }
+          },
+          "required": [
+            "accept"
+          ]
+        }
       }
     ],
     "mcpInstructions": "Browser (browser__*): a real browser in Wings, signed in like the user. To use a web page: browser__open a url, browser__snapshot to read it and get refs, then click, fill, type, press, wait_for; browser__screenshot to see it. browser__pop_out (width/height or preset phone, tablet, desktop) gives it a window of that size to check layouts. browser__handoff when the person must sign in or solve a captcha. Also: wings browser <tool>."

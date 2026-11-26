@@ -524,7 +524,7 @@ A view with `"newTab": true` also shows in the + menu, a chevron next to the + b
 | `wait_for`, `eval` | Wait for text, a selector or an address part (checks every 250 ms, only while waiting); run JavaScript in the page's own world (refused on a site signed in with imported cookies) |
 | `handoff` | A banner in the page asks the person for a step, like signing in, and the tool waits for their Done |
 
-Not done yet, which need the app: console, network, dialogs (`alert`, `confirm`, `prompt`), file upload, recording, screenshot diff and tabs.
+`console` and `network` list the page's recent console messages and `fetch`/`XMLHttpRequest` calls (method, URL, status; never bodies or headers, and not the page's own loads, service workers or web sockets), and `dialog` answers its `alert`, `confirm` or `prompt`, which Wings also shows the person in a sheet of its own naming the site. Every tool that reads or acts on a page needs `webScripts` and is refused on a site signed in with imported cookies. A file input opens the system's picker for the person; an agent can't pick files. Not done yet: file upload by an agent, recording, screenshot diff and tabs.
 
 The page node and calls it uses, which need `permissions.webView` (and `browserCookies` for the last):
 

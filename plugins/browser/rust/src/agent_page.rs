@@ -81,6 +81,7 @@ fn status() -> Value {
         json!({
             "id": id, "project": project, "popped": popped, "url": page.state.url, "title": page.state.title,
             "loading": page.state.loading, "canGoBack": page.state.can_go_back, "canGoForward": page.state.can_go_forward,
+            "dialog": page.state.dialog,
             "focused": host::focused(),
         })
     })
@@ -266,6 +267,11 @@ pub async fn run(op: Value) -> Result<Value, String> {
         "scroll" => helper("scroll", &[json!({ "ref": op["ref"], "to": op["to"], "x": op["x"], "y": op["y"] })]).await,
         "drag" => helper("drag", &[string("from")?, string("to")?]).await,
         "eval" => command(|token| wings_plugin::ui::web_eval(op["script"].as_str().unwrap_or_default(), true, token)).await,
+        "logs" => command(|token| json!({ "action": "logs", "token": token })).await,
+        "dialog" => {
+            let accept = op["accept"].as_bool().ok_or("dialog takes accept: true for OK or false for Cancel")?;
+            command(|token| json!({ "action": "dialog", "accept": accept, "text": op["text"], "token": token })).await
+        }
         "wait_for" => wait_for(&op).await,
         "pop_out" => pop_out(size_of(&op)).await,
         "pop_in" => pop_in().await,

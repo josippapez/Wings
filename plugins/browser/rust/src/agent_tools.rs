@@ -175,6 +175,9 @@ fn op_for(tool: &str, input: &Value) -> Result<(Value, u32), String> {
         }
         "drag" => (op("drag", &["from", "to"]), OP_MS),
         "eval" => (op("eval", &["script"]), OP_MS),
+        // One command answers both; the tool keeps its half.
+        "console" | "network" => (op("logs", &[]), OP_MS),
+        "dialog" => (op("dialog", &["accept", "text"]), OP_MS),
         "wait_for" => {
             if !has("text") && !has("selector") && !has("url") {
                 return Err("wait_for takes text, selector or url.".into());
@@ -367,6 +370,8 @@ fn present(tool: &str, answer: Value) -> Value {
             describe(&page).into()
         }
         "eval" => cut(serde_json::to_string_pretty(&answer).unwrap_or_default(), EVAL_MAX).into(),
+        "console" | "network" => cut(serde_json::to_string_pretty(&answer[tool]).unwrap_or_default(), EVAL_MAX).into(),
+        "dialog" => "Answered the page's dialog.".into(),
         _ => answer,
     }
 }
@@ -401,7 +406,7 @@ mod tests {
     #[test]
     fn every_tool_in_the_manifest_has_a_schema_and_a_route() {
         let names: Vec<String> = schemas().into_iter().map(|(name, _)| name).collect();
-        for tool in ["open", "pop_out", "pop_in", "resize", "navigate", "status", "screenshot", "snapshot", "click", "fill", "type", "press", "wait_for", "eval", "hover", "select", "scroll", "drag", "handoff", "emulate"] {
+        for tool in ["open", "pop_out", "pop_in", "resize", "navigate", "status", "screenshot", "snapshot", "click", "fill", "type", "press", "wait_for", "eval", "hover", "select", "scroll", "drag", "handoff", "emulate", "console", "network", "dialog"] {
             assert!(names.iter().any(|name| name == tool), "{tool} is in the manifest");
         }
         let manifest: Value = serde_json::from_str(MANIFEST).unwrap();
@@ -410,6 +415,13 @@ mod tests {
         for (tool, input) in [("click", json!({ "ref": "e1" })), ("snapshot", json!({})), ("eval", json!({ "script": "return 1" }))] {
             assert!(op_for(tool, &input).is_ok(), "{tool}");
         }
+        // The console and the requests come from one ask of the page, and each tool answers its own half.
+        assert_eq!(op_for("console", &json!({})).unwrap().0, json!({ "op": "logs" }));
+        assert_eq!(op_for("network", &json!({})).unwrap().0, json!({ "op": "logs" }));
+        let logs = json!({ "console": [{ "level": "error", "text": "boom" }], "network": [{ "method": "GET", "url": "https://a.com/x", "status": 500 }] });
+        assert!(present("console", logs.clone()).as_str().unwrap().contains("boom"));
+        assert!(!present("network", logs).as_str().unwrap().contains("boom"));
+        assert_eq!(op_for("dialog", &json!({ "accept": false })).unwrap().0, json!({ "op": "dialog", "accept": false, "text": null }));
     }
 
     #[test]
