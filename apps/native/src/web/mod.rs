@@ -41,28 +41,51 @@ pub enum Job {
     Cookies { profile: Profile, keep_data: bool, cookies: Vec<wings_browser_cookies::Cookie> },
 }
 
-/// Notes the sites whose cookies were imported into `profile`, by their domains (never the cookies), so a plugin's
-/// script never runs in the page's own world there (`holds_imported`).
-pub fn note_imported(profile: &Profile, domains: impl IntoIterator<Item = String>) {
+/// Notes the sites whose cookies are about to be imported into `profile`, by their domains (never the cookies), so a
+/// plugin's script never runs in the page's own world there (`holds_imported`). Written before the cookies go in, and
+/// an import fails when it can't be: a cookie never goes where the note doesn't name it.
+pub fn note_imported(profile: &Profile, domains: impl IntoIterator<Item = String>) -> Result<(), String> {
     let file = profile.dir.join("imported-sites.json");
-    let mut known: std::collections::BTreeSet<String> =
-        std::fs::read(&file).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+    let mut known = match std::fs::read(&file) {
+        Ok(bytes) => serde_json::from_slice::<std::collections::BTreeSet<String>>(&bytes).map_err(|error| format!("The list of imported sites is unreadable: {error}"))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Default::default(),
+        Err(error) => return Err(format!("The list of imported sites is unreadable: {error}")),
+    };
     known.extend(domains.into_iter().map(|domain| domain.trim_start_matches('.').to_ascii_lowercase()));
-    let _ = std::fs::create_dir_all(&profile.dir);
-    let _ = serde_json::to_vec(&known).map(|json| std::fs::write(file, json));
+    std::fs::create_dir_all(&profile.dir).map_err(|error| error.to_string())?;
+    let json = serde_json::to_vec(&known).map_err(|error| error.to_string())?;
+    // Written whole beside it and moved over, so a crash never leaves half a list.
+    let next = profile.dir.join("imported-sites.json.next");
+    std::fs::write(&next, json).and_then(|()| std::fs::rename(&next, &file)).map_err(|error| format!("Couldn't note the imported sites: {error}"))
 }
 
-/// Whether the page at `url` is on a site whose cookies were imported into `profile`: one signed in with them.
+/// Whether the page at `url` is on a site whose cookies were imported into `profile`: one signed in with them. A list
+/// that is there but can't be read counts as naming every site; none at all means nothing was ever imported, as it is
+/// written before any cookie goes in.
 pub fn holds_imported(profile_dir: &std::path::Path, url: &str) -> bool {
     let Some(host) = url.split_once("://").and_then(|(_, rest)| rest.split(['/', '?', '#']).next()) else { return false };
     let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
     let host = host.split(':').next().unwrap_or_default().to_ascii_lowercase();
-    let known: Vec<String> = std::fs::read(profile_dir.join("imported-sites.json")).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+    let known: Vec<String> = match std::fs::read(profile_dir.join("imported-sites.json")) {
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(known) => known,
+            Err(_) => return true,
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(_) => return true,
+    };
     known.iter().any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
 }
 
 /// What an extension's add answers when the person didn't allow it.
 pub const NOT_ALLOWED: &str = "The extension wasn't added: you didn't allow it";
+
+/// Whether the person allowed an extension in Wings' dialog, from what `Job::Add` answered: only `{ "allowed": true }`,
+/// which only that dialog's Add makes, with why it didn't load if it didn't. Anything else is not allowed.
+pub fn allowed(answer: &Result<String, String>) -> Option<Option<String>> {
+    let answer: serde_json::Value = serde_json::from_str(answer.as_ref().ok()?).ok()?;
+    (answer["allowed"] == true).then(|| answer["error"].as_str().map(str::to_owned))
+}
 
 /// What Wings' dialog asks before an extension is added: it is granted what it lists, and only once it is allowed.
 pub struct Ask {
@@ -81,8 +104,13 @@ impl Ask {
         if everywhere {
             detail.push("It can read and change everything on every website you open in the Browser.".to_owned());
         } else if !self.hosts.is_empty() {
-            let shown: Vec<String> = self.hosts.iter().take(HOSTS_SHOWN).map(|host| one_line(host, 120)).collect();
-            let more = self.hosts.len().saturating_sub(HOSTS_SHOWN);
+            // The ones that reach many sites first, and never counted away under "and N more".
+            let mut hosts: Vec<&String> = self.hosts.iter().collect();
+            hosts.sort_by_key(|host| !broad(host));
+            let broad_ones = hosts.iter().filter(|host| broad(host)).count();
+            let shown_count = if broad_ones > HOSTS_SHOWN { broad_ones } else { HOSTS_SHOWN };
+            let shown: Vec<String> = hosts.iter().take(shown_count).map(|host| one_line(host, 120)).collect();
+            let more = self.hosts.len().saturating_sub(shown.len());
             let more = if more > 0 { format!(" and {more} more") } else { String::new() };
             detail.push(format!("It can read and change your data on: {}{more}.", shown.join(", ")));
         }
@@ -108,6 +136,11 @@ fn one_line(text: &str, most: usize) -> String {
         Some((at, _)) => format!("{}…", &line[..at]),
         None => line,
     }
+}
+
+/// Whether a match pattern reaches more than one site: any wildcard in its host, like `*.example.com`.
+fn broad(pattern: &str) -> bool {
+    every_website(pattern) || pattern.split_once("://").map_or(pattern, |(_, rest)| rest).split('/').next().unwrap_or_default().contains('*')
 }
 
 /// Whether a match pattern reaches every website: `<all_urls>`, or a host of `*` whatever the scheme and path.
@@ -202,12 +235,27 @@ mod tests {
         for everywhere in ["*://*/*", "http://*/x", "https://*:8080/*", "ws://*/", "<all_urls>"] {
             assert!(ask(&[everywhere], &[]).words().1.contains("every website"), "{everywhere}");
         }
+        // Wildcard hosts come first and are never hidden in the count.
+        let many: Vec<String> = (0..12).map(|at| format!("https://site{at}.com/*")).chain(["*://*.bank.example/*".to_owned(), "https://*.mail.example/*".to_owned()]).collect();
+        let many: Vec<&str> = many.iter().map(String::as_str).collect();
+        let (_, listed) = ask(&many, &[]).words();
+        assert!(listed.starts_with("It can read and change your data on: *://*.bank.example/*, https://*.mail.example/*,"), "{listed}");
+        assert!(listed.ends_with("and 6 more."), "{listed}");
         // A name can't write lines of its own into the dialog.
         let spoof = Ask { name: "Helper\"\n\nIt asks for no permissions.\u{2028}x".repeat(5), hosts: vec!["<all_urls>".into()], permissions: vec![] };
         let (question, detail) = spoof.words();
         assert!(!question.contains('\n') && !question.contains('\u{2028}') && question.chars().count() <= 100, "{question}");
         assert!(detail.starts_with("It can read and change everything on every website"));
         assert_eq!(ask(&[], &[]).words().1, "It asks for no permissions.");
+    }
+
+    #[test]
+    fn an_extension_counts_as_allowed_only_on_the_dialogs_add() {
+        assert_eq!(allowed(&Ok(r#"{"allowed":true,"error":null}"#.into())), Some(None));
+        assert_eq!(allowed(&Ok(r#"{"allowed":true,"error":"bad manifest"}"#.into())), Some(Some("bad manifest".into())));
+        for other in [Ok("null".into()), Ok(r#"{"allowed":"yes"}"#.into()), Err(NOT_ALLOWED.into()), Err("The Wings window is closed or busy".into())] {
+            assert_eq!(allowed(&other), None, "{other:?}");
+        }
     }
 
     #[test]
@@ -227,13 +275,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let profile = Profile::of("browser", "s", &dir.path().join("plugin-storage"));
         assert!(!holds_imported(&profile.dir, "https://github.com/"));
-        note_imported(&profile, [".github.com".to_owned(), "Example.org".to_owned()]);
+        note_imported(&profile, [".github.com".to_owned(), "Example.org".to_owned()]).unwrap();
         for url in ["https://github.com/", "https://gist.github.com/x", "http://user@example.org:8080/a"] {
             assert!(holds_imported(&profile.dir, url), "{url}");
         }
         for url in ["https://notgithub.com/", "https://github.com.evil.dev/", "about:blank"] {
             assert!(!holds_imported(&profile.dir, url), "{url}");
         }
+        // A list it can't read names every site, and no import goes in past it.
+        std::fs::write(profile.dir.join("imported-sites.json"), b"{not json").unwrap();
+        assert!(holds_imported(&profile.dir, "https://anything.example/"));
+        assert!(note_imported(&profile, ["a.com".to_owned()]).is_err());
     }
 
     #[test]

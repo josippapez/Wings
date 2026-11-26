@@ -1915,7 +1915,17 @@ fn run_web(job: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, 
                     let _ = answer.send(Err(crate::web::NOT_ALLOWED.into()));
                     return;
                 }
-                let _ = cx.update(|_| run_web_load(profile, id, dir, answer));
+                // Only here, after the dialog's Add, is it allowed: its load's own result rides along.
+                let (loaded, heard) = std::sync::mpsc::channel();
+                let _ = cx.update(|_| run_web_load(profile, id, dir, loaded));
+                std::thread::spawn(move || {
+                    let error = match heard.recv() {
+                        Ok(Ok(_)) => None,
+                        Ok(Err(error)) => Some(error),
+                        Err(_) => Some("WebKit didn't answer".to_owned()),
+                    };
+                    let _ = answer.send(Ok(serde_json::json!({ "allowed": true, "error": error }).to_string()));
+                });
             })
             .detach();
         }
@@ -1942,7 +1952,10 @@ fn run_web(job: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, 
                     same_site: same_site(cookie),
                 })
                 .collect();
-            crate::web::note_imported(&profile, cookies.iter().map(|cookie| cookie.domain.clone()));
+            if let Err(why) = crate::web::note_imported(&profile, cookies.iter().map(|cookie| cookie.domain.clone())) {
+                let _ = answer.send(Err(why));
+                return;
+            }
             mac::set_cookies(&profile, keep_data, &made, move |count| {
                 let _ = answer.send(Ok(count.to_string()));
             });

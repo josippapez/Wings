@@ -152,17 +152,19 @@ impl Shared {
                     let (id, unload) = (added.id.clone(), env.clone());
                     env.web(
                         Job::Add { profile: profile.clone(), id: added.id.clone(), dir, ask },
-                        Box::new(move |loaded| match loaded {
-                            Err(error) if error == crate::web::NOT_ALLOWED => {
+                        Box::new(move |answer| match crate::web::allowed(&answer) {
+                            // Anything but the dialog's Add, an error on the way included, is not allowed.
+                            None => {
                                 extensions::forget(&profile, &id);
                                 unload.web(Job::Unload { profile, id }, Box::new(|_| {}));
-                                reply.err(error);
+                                reply.err(answer.err().unwrap_or_else(|| crate::web::NOT_ALLOWED.into()));
                             }
-                            loaded => {
+                            Some(failed) => {
                                 // Listed only now that the person allowed it, so only it loads as Wings starts.
                                 if let Err(error) = extensions::keep(&profile, &added) {
                                     return reply.err(error);
                                 }
+                                let loaded: Result<(), String> = failed.map_or(Ok(()), Err);
                                 let mut entry = entry;
                                 if let Err(error) = loaded {
                                     entry["error"] = json!(error);
