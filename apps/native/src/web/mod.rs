@@ -245,6 +245,12 @@ impl Profile {
         bytes[8] = (bytes[8] & 0x3f) | 0x80;
         bytes
     }
+    /// `uuid` as text, `8-4-4-4-12` hex digits: `NSUUID` is made from this, as its byte constructor's argument type
+    /// differs between Foundation's classes and a debug build refuses the call.
+    pub fn uuid_text(&self) -> String {
+        let hex: String = self.uuid().iter().map(|byte| format!("{byte:02x}")).collect();
+        format!("{}-{}-{}-{}-{}", &hex[..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..])
+    }
 }
 
 #[cfg(test)]
@@ -259,6 +265,15 @@ mod tests {
         let uuid = profile("a").uuid();
         assert_eq!((uuid[6] >> 4, uuid[8] >> 6), (8, 0b10), "a version 8 UUID");
         assert_eq!(profile("a").dir, std::path::Path::new("/data/plugin-web/browser.a"));
+    }
+
+    /// Opening a Browser tab in a debug build quit the app: `NSUUID::from_bytes` failed objc2's argument type check.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_profiles_uuid_makes_an_nsuuid_of_the_same_bytes() {
+        let profile = Profile::of("browser", "a", std::path::Path::new("/data/plugin-storage"));
+        let made = objc2_foundation::NSUUID::from_string(&objc2_foundation::NSString::from_str(&profile.uuid_text())).expect("a valid UUID");
+        assert_eq!(made.UUIDString().to_string().to_lowercase(), profile.uuid_text());
     }
 
     #[test]

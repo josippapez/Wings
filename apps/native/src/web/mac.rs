@@ -82,7 +82,7 @@ fn shared(profile: &Profile, keep_data: bool, mtm: MainThreadMarker) -> Rc<Share
     if let Some(shared) = SHARED.with_borrow(|all| all.get(&(profile.clone(), keep_data)).cloned()) {
         return shared;
     }
-    let uuid = NSUUID::from_bytes(profile.uuid());
+    let uuid = NSUUID::from_string(&NSString::from_str(&profile.uuid_text())).expect("a profile's UUID is valid");
     // SAFETY: WebKit's constructors, on the main thread; the identifier is a valid UUID (`Profile::uuid`).
     let store = unsafe {
         match keep_data && keeps_per_plugin() {
