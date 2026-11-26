@@ -1003,17 +1003,15 @@ fn the_header_names_the_account_the_chat_runs_under_and_checks_it_in_its_menu() 
     chat::with(|c| {
         let choice = |name: Option<&str>, email: Option<&str>, current: bool| wings_plugin::host::AccountChoice { name: name.map(str::to_owned), email: email.map(str::to_owned), signed_in: true, current };
         c.accounts = vec![choice(None, Some("me@home.example"), false), choice(Some("work"), None, true)];
-        let menu = tree_json(account_menu(c).expect("a menu with two accounts"));
-        let items: Vec<(&serde_json::Value, &serde_json::Value)> = menu["children"].as_array().unwrap()[1..].iter().map(|item| (&item["children"][0]["text"], &item["props"]["pressed"])).collect();
-        assert_eq!(items, [(&serde_json::json!("me@home.example"), &serde_json::json!(false)), (&serde_json::json!("work"), &serde_json::json!(true))]);
-        // The button reads the one in use.
-        assert!(menu["children"][0]["props"]["title"].as_str().unwrap().contains("work"));
-        // Before Wings says which, it is the project's.
-        c.accounts[1].current = false;
-        assert!(tree_json(account_menu(c).unwrap())["children"][0]["props"]["title"].as_str().unwrap().contains("Project's account"));
+        let items = account_items(c);
+        let rows: Vec<(String, serde_json::Value)> = items.into_iter().map(tree_json).map(|item| (item["children"][0]["text"].as_str().unwrap().to_owned(), item["props"]["pressed"].clone())).collect();
+        assert_eq!(rows, [("Account: me@home.example".to_owned(), serde_json::json!(false)), ("Account: work".to_owned(), serde_json::json!(true))]);
+        // They are in the header's "…" menu, whatever the width.
+        let drawn = tree_json(header(c)).to_string();
+        assert!(drawn.contains("Account: work") && drawn.contains("Account: me@home.example"));
         // One account, nothing to pick.
         c.accounts.truncate(1);
-        assert!(account_menu(c).is_none());
+        assert!(account_items(c).is_empty());
         c.accounts.clear();
     });
 }
@@ -1194,4 +1192,35 @@ fn measure_a_rail_click_on_a_far_prompt() {
     println!("[measure] page at the newest: {newest:.1} ms; a click: {clicked:.1} ms to bring the prompt in, {built:.1} ms to the built page ({nodes} nodes)");
     assert!(scroll_to_of(page).is_some(), "the first page after the click scrolls to the prompt");
     chat::with(show_latest);
+}
+
+#[test]
+fn the_header_has_three_groups_and_a_narrow_one_folds_search_and_remote_control_into_its_menu() {
+    use wings_plugin::ui::tree_json;
+    let (wide, tight) = chat::with(|c| {
+        c.state = State::Running;
+        c.session.id = Some("s1".into());
+        c.session.working = false;
+        c.side_in_wings = false;
+        c.narrow = Some(false);
+        let wide = tree_json(header(c)).to_string();
+        c.narrow = Some(true);
+        let tight = tree_json(header(c)).to_string();
+        c.narrow = None;
+        (wide, tight)
+    });
+    for (name, drawn) in [("wide", &wide), ("narrow", &tight)] {
+        for row in ["Rename session", "Fork session", "Past sessions", "Chat settings"] {
+            assert!(drawn.contains(&format!("\"text\":\"{row}\"")), "{name}: {row} is a row of the menu");
+        }
+        assert!(drawn.contains("\"label\":\"New chat\"") && drawn.contains("\"label\":\"Side panel\""), "{name}: new chat and the panel stay buttons");
+        assert!(drawn.contains("\"label\":\"View mode\"") && drawn.contains("\"text\":\"Verbose\""), "{name}: the mode is a menu of three");
+        assert_eq!(drawn.matches("\"shortcut\":\"ctrl-o\"").count(), 1, "{name}: Ctrl+O is on one row");
+        for keys in ["cmd-shift-f", "cmd-y"] {
+            assert_eq!(drawn.matches(&format!("\"shortcut\":\"{keys}\"")).count(), 1, "{name}: {keys} is on one control");
+        }
+        assert!(!drawn.contains("\"label\":\"Rename\"") && !drawn.contains("\"label\":\"Fork\""), "{name}: no icon buttons for them");
+    }
+    assert!(wide.contains("\"label\":\"Search\"") && wide.contains("\"label\":\"Remote Control\"") && !wide.contains("\"text\":\"Search\""));
+    assert!(!tight.contains("\"label\":\"Search\"") && !tight.contains("\"label\":\"Remote Control\"") && tight.contains("\"text\":\"Search\"") && tight.contains("\"text\":\"Remote Control\""));
 }

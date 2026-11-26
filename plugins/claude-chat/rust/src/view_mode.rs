@@ -4,7 +4,7 @@
 //! opens only the thoughts (`folds::is_open`). Both are kept for every chat, so a mode holds across tabs and restarts.
 
 #[cfg(feature = "chat")]
-use wings_plugin::ui::{Node, button};
+use wings_plugin::ui::Node;
 
 use crate::prefs;
 #[cfg(feature = "chat")]
@@ -69,16 +69,24 @@ pub fn set(mode: Mode) {
 }
 
 #[cfg(feature = "chat")]
-fn cycle() {
-    set(Mode::of(prefs::detailed().get(), prefs::thinking().get()).next());
-}
-
-#[cfg(feature = "chat")]
-/// The header's button: the mode in use, which a click or Ctrl+O changes to the next.
-pub fn mode_button(c: &Chat) -> Node {
+/// The header's mode menu: the mode in use with a chevron, and the three to pick. Ctrl+O still goes on to the next, as the
+/// shortcut of that mode's row.
+pub fn mode_menu(c: &Chat) -> Node {
+    use wings_plugin::ui::{icon, icons, menu, text};
     let mode = Mode::of(c.detailed, c.show_thinking);
-    let title = format!("View mode: {}, {}. Click to go on to {}", mode.name(), mode.shows(), mode.next().name());
-    button(mode.name(), "ghost", false, cycle).prop("size", "sm").prop("label", "View mode").prop("title", title.as_str()).shortcut("ctrl-o")
+    let title = format!("View mode: {}, {}. Ctrl+O goes on to {}", mode.name(), mode.shows(), mode.next().name());
+    let trigger = Node::new("Button")
+        .prop("variant", "ghost")
+        .prop("size", "sm")
+        .prop("label", "View mode")
+        .prop("title", title.as_str())
+        .child(text(mode.name()))
+        .child(icon(24, 2.0, &icons::CHEVRON_DOWN).prop("size", 12));
+    let rows = [Mode::Normal, Mode::Thinking, Mode::Verbose].map(|row| {
+        let item = Node::new("Button").key(row.name()).prop("pressed", row == mode).prop("title", row.shows()).on("onClick", move |_| set(row)).text(row.name());
+        if row == mode.next() { item.shortcut("ctrl-o") } else { item }
+    });
+    menu(trigger, rows, false)
 }
 
 #[cfg(test)]

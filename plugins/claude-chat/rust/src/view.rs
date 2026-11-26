@@ -186,15 +186,8 @@ pub(crate) fn chat_page(c: &Chat) -> Node {
     page.child(body)
 }
 
-/// Lucide's icons, as the app draws them in its headers: `square-terminal`, `rotate-ccw-clock` (Past sessions), `plus`
-/// and `settings`, in a 24-point box.
-const HISTORY: [&str; 3] = ["M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8", "M3 3v5h5", "M12 7v5l4 2"];
 /// Lucide's `zap`, on the fast mode button.
 const FAST: [&str; 1] = ["M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"];
-const SETTINGS: [&str; 2] = [
-    "M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915",
-    "M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0",
-];
 
 /// Whether the side panel is on the page while it is in the chat: by default, at any width, beside the conversation in a
 /// wide tab and over it in a narrow one. The header's button turns it off for every chat.
@@ -253,21 +246,59 @@ fn header(c: &Chat) -> Node {
             let place = c.branch.as_ref().map_or_else(|| c.folder.clone(), |branch| format!("{} · {branch}", c.folder));
             muted(place.as_str()).prop("size", "small").prop("truncate", true).prop("title", place.as_str())
         }));
+    let tight = header_tight(c);
+    // Three groups, a hairline between them: how Claude works (the mode), this session (search, Remote Control, the panel),
+    // and the page (a new chat, and a menu of what is rarely needed). Narrow, search and Remote Control fold into the menu too,
+    // so the session's name keeps its room.
     let actions = row()
         .prop("gap", "xs")
         .prop("align", "center")
-        .maybe(crate::claude_version::pill(header_tight(c)))
-        .child(crate::search::header_button(c))
-        .child(crate::view_mode::mode_button(c))
-        .maybe(crate::titles_view::header_button(c))
-        .maybe(crate::fork_view::header_button(c))
-        .maybe(remote_button(c))
+        .maybe(crate::claude_version::pill(tight))
+        .child(crate::view_mode::mode_menu(c))
+        .child(hairline())
+        .maybe((!tight).then(|| crate::search::header_button(c)))
+        .maybe(remote_button(c, tight))
         .maybe(side_button(c))
-        .maybe(account_menu(c))
-        .child(icon_button("Past sessions", &HISTORY, chat::open_past).shortcut("cmd-y"))
+        .child(hairline())
         .child(icon_button("New chat", &icons::PLUS, chat::new_chat).tooltip(if chat::in_use(c) { "New chat in a new tab, this one keeps running" } else { "New chat" }).shortcut("cmd-shift-n"))
-        .child(icon_button("Settings", &SETTINGS, chat::open_settings));
+        .child(more_menu(c, tight));
     Node::new("Bar").prop("variant", "slim").child(row().prop("gap", "m").prop("align", "center").child(title).child(actions))
+}
+
+/// A thin vertical line between two groups of the header's buttons.
+fn hairline() -> Node {
+    Node::new("Svg")
+        .prop("viewBox", "0 0 10 10")
+        .prop("size", 10)
+        .prop("tone", "muted")
+        .prop("fill", "none")
+        .prop("stroke", "currentColor")
+        .prop("strokeWidth", 1)
+        .prop("shapes", vec![serde_json::json!(["line", { "x1": 5, "y1": 0, "x2": 5, "y2": 10, "opacity": 0.5 }])])
+}
+
+/// A row of a menu: a button named by its text.
+pub(crate) fn menu_item(label: &str, on_click: impl Fn() + 'static) -> Node {
+    Node::new("Button").key(label).on("onClick", move |_| on_click()).text(label)
+}
+
+/// The header's "…" menu: what the session and the page rarely need. In a narrow tab it also holds search and Remote Control,
+/// the buttons that would take the title's room.
+fn more_menu(c: &Chat, tight: bool) -> Node {
+    let trigger = Node::new("Button").prop("variant", "ghost").prop("size", "icon-sm").prop("label", "More").prop("title", "More: rename, fork, past sessions, account and settings").child(icon(24, 2.0, &ELLIPSIS).prop("size", 16));
+    let items: Vec<Node> = [
+        tight.then(|| crate::search::menu_item(c)),
+        tight.then(|| remote_item(c)).flatten(),
+        crate::titles_view::menu_item(c),
+        crate::fork_view::menu_item(c),
+        Some(menu_item("Past sessions", chat::open_past).shortcut("cmd-y")),
+    ]
+    .into_iter()
+    .flatten()
+    .chain(account_items(c))
+    .chain([menu_item("Chat settings", chat::open_settings)])
+    .collect();
+    wings_plugin::ui::menu(trigger, items, true)
 }
 
 /// Said once under a new chat's prompt: the moving background can be turned plain in Settings.
@@ -1783,9 +1814,13 @@ const PHONE: [&str; 2] = ["M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-
 /// The header's Remote Control, once Claude Code runs: a quiet button that turns it on, and while it is on a lit one with a
 /// menu to open the chat on claude.ai, copy its link or turn it off, as Claude Code's own indicator does. In the header, not
 /// the message box, whose row ran out of room with it there.
-fn remote_button(c: &Chat) -> Option<Node> {
+fn remote_button(c: &Chat, tight: bool) -> Option<Node> {
     use crate::remote::Remote;
     c.session.id.as_ref()?;
+    // Narrow, off it is a row of the "…" menu; on, or turning on, it shows, as it says the chat is on claude.ai.
+    if tight && c.session.remote == Remote::Off {
+        return None;
+    }
     let glyph = || icon(24, 2.0, &PHONE).prop("size", 16);
     Some(match &c.session.remote {
         Remote::Off => button("", "ghost", false, chat::toggle_remote)
@@ -1814,8 +1849,15 @@ fn remote_button(c: &Chat) -> Option<Node> {
     })
 }
 
-/// Lucide's `circle-user-round`, on the header's account button.
-const ACCOUNT: [&str; 3] = ["M18 20a6 6 0 0 0-12 0", "M8 10a4 4 0 1 0 8 0a4 4 0 1 0-8 0", "M2 12a10 10 0 1 0 20 0a10 10 0 1 0-20 0"];
+/// Lucide's `ellipsis`, on the header's "…" menu.
+const ELLIPSIS: [&str; 3] = ["M11 12a1 1 0 1 0 2 0a1 1 0 1 0-2 0", "M18 12a1 1 0 1 0 2 0a1 1 0 1 0-2 0", "M4 12a1 1 0 1 0 2 0a1 1 0 1 0-2 0"];
+
+/// The "…" menu's row for Remote Control while it is off: turning it on.
+fn remote_item(c: &Chat) -> Option<Node> {
+    use crate::remote::Remote;
+    c.session.id.as_ref()?;
+    (c.session.remote == Remote::Off).then(|| menu_item("Remote Control", chat::toggle_remote).prop("title", "Remote Control: go on with this chat from claude.ai or the Claude app"))
+}
 
 /// An account as the menu names it: by its email, else its name.
 fn account_label(account: &wings_plugin::host::AccountChoice) -> String {
@@ -1826,30 +1868,22 @@ fn account_label(account: &wings_plugin::host::AccountChoice) -> String {
     }
 }
 
-/// The header's account button, with 2 or more accounts: the one the chat runs under by its email, and a menu of them
-/// all with that one checked. Picking another starts a new chat under it.
-fn account_menu(c: &Chat) -> Option<Node> {
+/// The "…" menu's rows for the accounts, with 2 or more: each by its email, else its name, the one the chat runs under checked.
+/// Picking another starts a new chat under it.
+fn account_items(c: &Chat) -> Vec<Node> {
     if c.accounts.len() < 2 {
-        return None;
+        return Vec::new();
     }
-    let current = c.accounts.iter().find(|account| account.current);
-    let shown = current.map_or_else(|| "Project's account".to_owned(), account_label);
-    let title = format!("Claude account: {shown}. Pick another to start a new chat under it");
-    let glyph = icon(24, 2.0, &ACCOUNT).prop("size", 16);
-    let trigger = Node::new("Button").prop("variant", "ghost").prop("label", "Claude account").prop("title", title.as_str());
-    // In a narrow tab only the glyph shows, so the title keeps room beside it; the name is in the tooltip.
-    let trigger = match header_tight(c) {
-        true => trigger.prop("size", "icon-sm").child(glyph),
-        false => trigger.prop("size", "sm").child(glyph).child(text(shown.as_str()).prop("truncate", true)),
-    };
-    let items = c.accounts.iter().map(|account| {
-        let label = account_label(account);
-        let value = account.name.clone().unwrap_or_else(|| chat::DEFAULT_ACCOUNT.to_owned());
-        let picked = account.current;
-        // The one in use closes the menu and changes nothing.
-        Node::new("Button").key(value.clone()).prop("pressed", picked).on("onClick", move |_| if !picked { chat::pick_account(&value) }).text(label)
-    });
-    Some(Node::new("Menu").prop("align", "end").child(trigger).children(items.collect::<Vec<_>>()))
+    c.accounts
+        .iter()
+        .map(|account| {
+            let label = format!("Account: {}", account_label(account));
+            let value = account.name.clone().unwrap_or_else(|| chat::DEFAULT_ACCOUNT.to_owned());
+            let picked = account.current;
+            // The one in use closes the menu and changes nothing.
+            menu_item(&label, move || if !picked { chat::pick_account(&value) }).prop("pressed", picked)
+        })
+        .collect()
 }
 
 /// A model row's value in the menu is `model:<value>`, an effort row's `effort:<level>`, a heading's `heading:<name>`.

@@ -1050,7 +1050,7 @@ esac"##,
         ("limit-card", limit_hit, None, None, "Continue when it resets"),
         // Claude Code refused the message for want of a sign-in: its error line has a Sign in button, as the banner of a Claude Code that stopped for it does.
         ("not-logged-in", opened(vec![init.clone(), user("Run the checkout tests."), json!({ "type": "result", "subtype": "success", "is_error": true, "result": "Not logged in · Please run /login", "total_cost_usd": 0.0 })]), None, None, "Please run /login"),
-        ("rename", renaming, None, Some("press:Rename"), "Generate a name"),
+        ("rename", renaming, None, Some("press:Rename session"), "Generate a name"),
         // The chat restarted on it: the call shows as interrupted, with no spinner and no Run in background.
         ("interrupted", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": CUT, "model": "claude-opus-5-5" })]), None, Some("disclose:Ran 1 command"), "esav.txt"),
         ("long", opened(vec![json!({ "type": "system", "subtype": "init", "session_id": LONG, "model": "claude-opus-5-5" })]), None, None, "Step 99 passes"),
@@ -1080,7 +1080,7 @@ esac"##,
         ("thinking", thinking, None, None, "Thinking"),
         ("new", opened(vec![init.clone()]), None, None, "What should Claude do?"),
         // The header's account button, open: the accounts with the one in use checked.
-        ("accounts", opened(vec![init.clone()]), None, Some("menu:Claude account"), "What should Claude do?"),
+        ("accounts", opened(vec![init.clone()]), None, Some("menu:More"), "What should Claude do?"),
         // Remote Control on: the lit button in the top bar, and its menu open.
         ("remote", opened(vec![init.clone(), answer("remote-control", json!({ "session_url": "https://claude.ai/code/session_01", "bridge_session_id": "b1" }))]), None, None, "What should Claude do?"),
         ("remote-menu", opened(vec![init.clone(), answer("remote-control", json!({ "session_url": "https://claude.ai/code/session_01", "bridge_session_id": "b1" }))]), None, Some("menu:Remote Control"), "Turn off Remote Control"),
@@ -1257,7 +1257,7 @@ esac"##,
         // The button beside your message forks before it, and asks first what that does.
         ("fork-from", rewound_again, None, Some("press:Fork from here"), "Start a new chat from this session"),
         // The header's Fork asks first, and says what a fork is.
-        ("fork-ask", worked_forking, None, Some("press:Fork"), "A fork is a new session"),
+        ("fork-ask", worked_forking, None, Some("press:Fork session"), "A fork is a new session"),
         // A long message that wraps keeps Rewind and Fork from here clear of it, under it at the right.
         ("long-message", wrapped, None, None, "which of the two places"),
         // A turn that changed files ends with a card of them, and the files its reply names are links.

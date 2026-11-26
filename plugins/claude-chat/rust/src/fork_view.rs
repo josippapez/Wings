@@ -26,16 +26,13 @@ const FORK: [&str; 5] = [
 const CLOSE: &str = "M3.5 3.5l7 7M10.5 3.5l-7 7";
 const WIDTH: u32 = 520;
 
-/// The header's Fork button, once there is a session to copy. It waits while Claude works: the copy starts Claude Code
+/// The "…" menu's Fork row, once there is a session to copy. It waits while Claude works: the copy starts Claude Code
 /// again, which would end the turn.
-pub fn header_button(c: &Chat) -> Option<Node> {
+pub fn menu_item(c: &Chat) -> Option<Node> {
     (c.session.id.is_some() && c.state == State::Running).then(|| {
-        ui::button("", "ghost", false, ask_fork)
-            .prop("size", "icon-sm")
-            .prop("label", "Fork")
+        crate::view::menu_item("Fork session", ask_fork)
             .prop("title", "Fork: go on in a copy of this session, and leave this one as it is")
             .prop("disabled", c.session.working)
-            .child(icon(24, 2.0, &FORK).prop("size", 16))
     })
 }
 

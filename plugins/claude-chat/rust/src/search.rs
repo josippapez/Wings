@@ -166,6 +166,12 @@ pub fn header_button(c: &Chat) -> Node {
     icon_button(label, &icons::SEARCH, on).shortcut("cmd-shift-f")
 }
 
+/// The same, as a row of the "…" menu, where a narrow header keeps it.
+pub fn menu_item(c: &Chat) -> Node {
+    let (label, on) = if c.search.open { ("Close search", close as fn()) } else { ("Search", open_bar as fn()) };
+    crate::view::menu_item(label, on).shortcut("cmd-shift-f")
+}
+
 /// The bar under the header while search is open.
 pub fn bar(c: &Chat) -> Option<Node> {
     let search = &c.search;

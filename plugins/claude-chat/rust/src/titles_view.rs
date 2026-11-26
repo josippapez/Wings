@@ -2,7 +2,7 @@
 //! Rename sends `rename_session`, so the name is the one Claude Code's `/resume` shows, and the tab follows it once Claude
 //! Code says the title changed.
 
-use wings_plugin::ui::{self, Node, button, dialog as panel, icon, icons, muted, notice, row, stack, text_input};
+use wings_plugin::ui::{Node, button, dialog as panel, muted, notice, row, stack, text_input};
 
 use crate::{
     chat::{self, Chat, State},
@@ -11,15 +11,9 @@ use crate::{
 
 const WIDTH: u32 = 480;
 
-/// The header's Rename, while Claude Code runs in the chat.
-pub fn header_button(c: &Chat) -> Option<Node> {
-    (c.state == State::Running).then(|| {
-        ui::button("", "ghost", false, open)
-            .prop("size", "icon-sm")
-            .prop("label", "Rename")
-            .prop("title", "Rename this session: the name Claude Code lists it by")
-            .child(icon(24, 2.0, &icons::PENCIL).prop("size", 14))
-    })
+/// The "…" menu's Rename, while Claude Code runs in the chat.
+pub fn menu_item(c: &Chat) -> Option<Node> {
+    (c.state == State::Running).then(|| crate::view::menu_item("Rename session", open).prop("title", "Rename this session: the name Claude Code lists it by"))
 }
 
 /// The dialog, while it is open.
