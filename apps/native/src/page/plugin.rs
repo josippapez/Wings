@@ -248,7 +248,8 @@ impl Shared {
             let config = &self.config;
             let web = crate::web::Profile::of(&config.id, &config.scope, &config.root).dir;
             let answer = match image.map(|path| crate::web::snapshot::attach(&web, path)).transpose() {
-                Ok(image) => serde_json::json!({ "text": text, "isError": is_error, "images": image.into_iter().collect::<Vec<_>>() }),
+                Ok(None) => serde_json::json!({ "text": text, "isError": is_error }),
+                Ok(Some(image)) => serde_json::json!({ "text": text, "isError": is_error, "images": [image] }),
                 Err(why) => serde_json::json!({ "text": format!("{text}\n{why}"), "isError": true }),
             };
             reply.ok(answer.to_string());
