@@ -55,7 +55,15 @@ struct Page {
     copied: Option<String>,
     /// The issue whose activity shows more than its newest entries, and how many more, after Show earlier.
     earlier: Option<(String, usize)>,
+    /// The page is narrower than `SIDE_BY_SIDE`: the properties go above the text instead of beside it.
+    narrow: bool,
 }
+
+/// The least width at which the properties sit beside the description. Under it the text and its tables would be left
+/// with less than a table needs, so the properties stack above it.
+const SIDE_BY_SIDE: f32 = 760.0;
+/// How wide one property is, beside the description and in the grid above it.
+const PROPERTY_WIDTH: f32 = 240.0;
 
 thread_local! {
     static PAGE: RefCell<Page> = RefCell::new(Page::default());
@@ -186,7 +194,7 @@ fn title_row(issue: &Issue) -> Node {
 
 /// One property of the column: a small muted label over its value.
 fn prop(label: &str, actions: Option<Node>, content: Vec<Node>) -> Node {
-    stack("s").child(row("s").prop("justify", "between").child(line(label, Some("muted"), Some("tiny")).prop("weight", "medium")).maybe(actions)).children(content)
+    stack("s").prop("width", PROPERTY_WIDTH).child(row("s").prop("justify", "between").child(line(label, Some("muted"), Some("tiny")).prop("weight", "medium")).maybe(actions)).children(content)
 }
 
 fn copy(text: String) {
@@ -379,7 +387,7 @@ fn options<T: Copy>(names: &[T], name: impl Fn(T) -> &'static str, label: impl F
     names.iter().map(|n| (name(*n).to_owned(), label(*n).to_owned())).collect()
 }
 
-fn properties(issue: &Issue, issues: &[Issue], project: &Project) -> Node {
+fn properties(issue: &Issue, issues: &[Issue], project: &Project, narrow: bool) -> Node {
     let last = last_session(issue).map(|s| s.id.clone());
     let commits = issue.links.as_ref().and_then(|l| l.commits.clone()).unwrap_or_default();
     let key = issue.key.clone();
@@ -407,7 +415,8 @@ fn properties(issue: &Issue, issues: &[Issue], project: &Project) -> Node {
             )
             .child(line(detail, Some("muted"), Some("tiny")))
     });
-    let mut column = Node::new("Stack").prop("gap", "l").prop("width", 240);
+    // Beside the description, one column; above it, as many columns as fit, each property as wide as in the column.
+    let mut column = if narrow { Node::new("Row").prop("gap", "l").prop("wrap", true).prop("align", "start") } else { Node::new("Stack").prop("gap", "l").prop("width", PROPERTY_WIDTH) };
     column = column
         .child(picked("Status", status_dot(issue.status), status_options, issue.status.as_str(), Box::new(move |v| send(Update { status: Some(v.to_owned()), ..update(&status_key) }))))
         .child(picked("Priority", priority_icon(issue.priority, false), priority_options, issue.priority.map_or("none", Priority::as_str), Box::new(move |v| send(Update { priority: Some(v.to_owned()), ..update(&priority_key) }))))
@@ -756,7 +765,21 @@ fn view() -> Vec<Node> {
         .maybe(files_section(issue))
         .child(activity(issue));
     let head = stack("s").child(title_row(issue));
-    let grid = row("l").prop("align", "start").child(stack("l").prop("grow", true).child(head).child(main)).child(Node::new("Stack").prop("width", 16)).child(properties(issue, issues, &project));
+    let narrow = with(|p| p.narrow);
+    let text = stack("l").prop("grow", true).child(head).child(main);
+    // Beside the description the properties are a column of their own; under `SIDE_BY_SIDE` they are above it, so the
+    // text keeps the whole width and a table in it isn't cut off. The split only measures; its end pane stays empty.
+    let grid = if narrow {
+        stack("l").child(properties(issue, issues, &project, true)).child(text)
+    } else {
+        row("l").prop("align", "start").child(text).child(Node::new("Stack").prop("width", 16)).child(properties(issue, issues, &project, false))
+    };
+    let grid = Node::new("Split")
+        .prop("side", "end")
+        .prop("collapseBelow", SIDE_BY_SIDE)
+        .on("onNarrow", |payload| with(|p| p.narrow = payload["narrow"].as_bool().unwrap_or(false)))
+        .child(Node::new("Slot").prop("name", "start").child(grid))
+        .child(Node::new("Slot").prop("name", "end"));
     vec![ui::column_page(toolbar(Some(issue), &key), [stack("l").maybe(notices).child(grid).maybe(confirming)])]
 }
 
@@ -800,5 +823,17 @@ mod tests {
         with(|p| p.earlier = Some((issue.key.clone(), 200)));
         let all = shown();
         assert!(all.contains("e0") && !all.contains("earlier"), "{all}");
+    }
+
+    /// Under `SIDE_BY_SIDE` the properties are a wrapping row of fixed-width cells, above the text; wider they are one column.
+    #[test]
+    fn the_properties_wrap_in_a_narrow_page_and_stay_a_column_in_a_wide_one() {
+        let issue = make(&fresh(), "A", |_| {}).issues[0].clone();
+        let project = Project { id: "p".into(), name: "web".into(), path: "/work/web".into(), branch: None };
+        let narrow = wings_plugin::ui::tree_json(properties(&issue, &[issue.clone()], &project, true));
+        assert_eq!((narrow["type"].as_str(), narrow["props"]["wrap"].as_bool()), (Some("Row"), Some(true)), "{narrow}");
+        assert!(narrow["props"]["width"].is_null(), "{narrow}");
+        let wide = wings_plugin::ui::tree_json(properties(&issue, &[issue.clone()], &project, false));
+        assert_eq!((wide["type"].as_str(), wide["props"]["width"].as_f64()), (Some("Stack"), Some(f64::from(PROPERTY_WIDTH))), "{wide}");
     }
 }
