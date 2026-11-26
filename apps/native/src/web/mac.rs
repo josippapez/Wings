@@ -384,7 +384,7 @@ impl Native for WebPage {
         unsafe {
             let Some(content) = gpui.superview() else { return };
             if self.view.superview().as_deref() != Some(&*content) {
-                content.addSubview_positioned_relativeTo(&self.view, NSWindowOrderingMode::Above, Some(&gpui));
+                attach(&self.view, &content, &gpui);
             }
             // GPUI counts from the window's top; an unflipped view counts from its bottom.
             let height = content.bounds().size.height;
@@ -524,6 +524,11 @@ impl Drop for WebPage {
         }
         self.view.removeFromSuperview();
     }
+}
+
+/// Puts `view` in the window's `content` view, over GPUI's view `gpui`.
+pub unsafe fn attach(view: &WKWebView, content: &NSView, gpui: &NSView) {
+    content.addSubview_positioned_relativeTo(view, NSWindowOrderingMode::Above, Some(gpui));
 }
 
 /// GPUI's view of `window`, which the web views go over.
