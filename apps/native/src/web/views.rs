@@ -36,6 +36,45 @@ pub struct State {
     /// The page is on a site signed in with imported cookies: its plugin shows its address, and tells no agent more than
     /// its origin.
     pub imported: bool,
+    /// The buttons of the extensions that are on and have one, for the page's toolbar.
+    pub extensions: Vec<Extension>,
+}
+
+/// An extension's button for a page (`WKWebExtensionAction`): what its plugin draws in its toolbar, and the `id` its
+/// `extension` command clicks.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Extension {
+    pub id: String,
+    pub name: String,
+    /// What the button says on hover, which the extension may set for each page.
+    pub label: String,
+    /// The id of its icon among the plugin's images.
+    pub icon: Option<String>,
+    /// A few characters over the icon, a count most often; empty for none.
+    pub badge: String,
+    pub enabled: bool,
+}
+
+/// The most characters of a button's name or label, and of its badge, which an extension sets: a toolbar shows a few.
+const LABEL_MOST: usize = 100;
+const BADGE_MOST: usize = 8;
+
+/// The buttons a page's plugin gets, in a steady order (by name), each name and label one line cut short. On a page signed
+/// in with imported cookies (`imported`) none has a badge, which an extension works out from the page, and the caller
+/// reads each extension's default button rather than the page's own: no plugin learns what an extension saw there.
+pub fn shown(mut extensions: Vec<Extension>, imported: bool) -> Vec<Extension> {
+    let line = |text: &str, most: usize| -> String {
+        let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        line.chars().filter(|c| !c.is_control()).take(most).collect()
+    };
+    for extension in &mut extensions {
+        extension.name = line(&extension.name, LABEL_MOST);
+        extension.label = line(&extension.label, LABEL_MOST);
+        extension.badge = if imported { String::new() } else { line(&extension.badge, BADGE_MOST) };
+    }
+    extensions.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.id.cmp(&b.id)));
+    extensions
 }
 
 /// A page's `alert`, `confirm` or `prompt`, and the site that shows it, which its plugin's page shows as its own.
@@ -115,8 +154,9 @@ pub(crate) fn make_with(id: WindowId, maker: Rc<dyn Maker>) {
 
 /// The page `page` of `profile`'s plugin holds these web views now, from its newest tree: new ones are added, gone ones
 /// end, and each command the page sends for the first time is done. An `eval` is refused unless the plugin may run
-/// scripts in its pages (`scripts`, `permissions.webScripts`).
-pub fn update(page: EntityId, profile: &Profile, specs: &[Spec], told: &Told, scripts: bool) {
+/// scripts in its pages (`scripts`, `permissions.webScripts`), and one that needs your click (`needs_click`) unless
+/// `take_click` uses up a click of yours in the page.
+pub fn update(page: EntityId, profile: &Profile, specs: &[Spec], told: &Told, scripts: bool, take_click: &mut dyn FnMut() -> bool) {
     // Dropped after the borrow, as a view that ends may call back.
     let mut ended = Vec::new();
     VIEWS.with_borrow_mut(|views| {
@@ -153,7 +193,10 @@ pub fn update(page: EntityId, profile: &Profile, specs: &[Spec], told: &Told, sc
                 }
                 entry.token = Some(command.token);
                 // Whether it may at all; WebKit's side checks the page it is on as it runs (`gate`).
-                if let Err(why) = super::gate(&command.go, scripts, false, true) {
+                let refused = super::gate(&command.go, scripts, false, true)
+                    .err()
+                    .or_else(|| (super::needs_click(&command.go) && !take_click()).then_some(super::NO_CLICK));
+                if let Some(why) = refused {
                     let refused = Err(why.to_owned());
                     let _ = told.try_send((spec.name.clone(), Heard::Result { token: command.token, result: refused }));
                     continue;
@@ -297,5 +340,38 @@ pub(crate) mod testing {
         let tells = record.tells.clone();
         make_with(id, Rc::new(record));
         (did, tells)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn button(id: &str, name: &str, badge: &str) -> Extension {
+        Extension { id: id.into(), name: name.into(), label: format!("{name}\n  for this page"), badge: badge.into(), enabled: true, ..Extension::default() }
+    }
+
+    #[test]
+    fn a_pages_extension_buttons_come_by_name_on_one_line_each_and_with_no_badge_on_a_signed_in_site() {
+        let found = vec![button("b2", "react Developer Tools", ""), button("a1", "Bitwarden", "3"), button("a0", "Bitwarden", "12345678910")];
+        let buttons = shown(found.clone(), false);
+        let order: Vec<&str> = buttons.iter().map(|button| button.id.as_str()).collect();
+        assert_eq!(order, ["a0", "a1", "b2"], "by name, then by id");
+        assert_eq!(buttons[1].label, "Bitwarden for this page");
+        assert_eq!((buttons[0].badge.as_str(), buttons[1].badge.as_str()), ("12345678", "3"), "a badge is a few characters");
+        let long = shown(vec![button("c", &"x".repeat(500), "")], false);
+        assert_eq!(long[0].name.chars().count(), 100);
+        // What an extension worked out from a page signed in with imported cookies never reaches the plugin.
+        assert!(shown(found, true).iter().all(|button| button.badge.is_empty()));
+    }
+
+    #[test]
+    fn the_page_hears_its_extension_buttons_with_its_state() {
+        let state = State { extensions: vec![Extension { icon: Some("ext-btn-1".into()), ..button("a1", "Bitwarden", "3") }], ..State::default() };
+        let heard = serde_json::to_value(&state).unwrap();
+        assert_eq!(
+            heard["extensions"],
+            serde_json::json!([{ "id": "a1", "name": "Bitwarden", "label": "Bitwarden\n  for this page", "icon": "ext-btn-1", "badge": "3", "enabled": true }])
+        );
     }
 }
