@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.119 · 2026-11-26
+
+- **Bitwarden signs in and fills**: its popup gets past loading to the login screen, and it can fill login forms and show its menu in a page's fields. Extensions get a small compatibility file for what this macOS's WebKit lacks; the add dialog says so. Remove and add Bitwarden again once to get it.
+- **Blocked actions in Claude chat**: the session panel lists actions the safety check refused, this chat's and its helpers', with the reason, and marks the helper that hit one (Claude chat 0.55.11).
+
 ## 0.2.118 · 2026-11-26
 
 - **The right permission for another browser's data**: when macOS blocks Wings from reading a browser's extensions or cookies, the Browser now says to turn that browser on under Wings in System Settings, Privacy & Security, Files & Folders. That one toggle is enough, so Full Disk Access isn't needed.
