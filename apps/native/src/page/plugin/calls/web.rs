@@ -168,7 +168,12 @@ impl Shared {
                         "icon": extensions::icon_path(&profile, &added).and_then(|path| icon(&plugin, &path)),
                     });
                     // Wings asks in its own dialog, which no click in the page answers, before it grants anything.
-                    let ask = crate::web::Ask { name: added.name.clone(), permissions: added.permissions.clone(), hosts: added.hosts.clone() };
+                    let ask = crate::web::Ask {
+                        name: added.name.clone(),
+                        permissions: added.permissions.clone(),
+                        hosts: added.hosts.clone(),
+                        compat: added.compat,
+                    };
                     let loader = env.clone();
                     env.web(
                         Job::Add { ask },

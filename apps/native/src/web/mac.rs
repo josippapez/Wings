@@ -244,16 +244,16 @@ fn shared(profile: &Profile, keep_data: bool, mtm: MainThreadMarker) -> Rc<Share
         // store in the pages' configuration as it makes it.
         let pages = configuration.webViewConfiguration();
         pages.setApplicationNameForUserAgent(Some(&NSString::from_str(EXTENSION_PAGES_AGENT)));
-        // A permission this WebKit doesn't know is "not granted" to them, not an error (`permissions.js`). Only their own
-        // pages: web pages are made with a configuration of Wings' own (`WebKit::make`).
-        let permissions = WKUserScript::initWithSource_injectionTime_forMainFrameOnly_inContentWorld(
+        // What this WebKit lacks that they use, first in each of their pages (`web::COMPAT`). Only their own pages: web
+        // pages are made with a configuration of Wings' own (`WebKit::make`).
+        let compat = WKUserScript::initWithSource_injectionTime_forMainFrameOnly_inContentWorld(
             WKUserScript::alloc(mtm),
-            &NSString::from_str(EXTENSION_PERMISSIONS),
+            &NSString::from_str(super::COMPAT),
             WKUserScriptInjectionTime::AtDocumentStart,
             false,
             &WKContentWorld::pageWorld(mtm),
         );
-        pages.userContentController().addUserScript(&permissions);
+        pages.userContentController().addUserScript(&compat);
         configuration.setWebViewConfiguration(Some(&pages));
         WKWebExtensionController::initWithConfiguration(WKWebExtensionController::alloc(mtm), &configuration)
     });
@@ -279,9 +279,6 @@ fn shared(profile: &Profile, keep_data: bool, mtm: MainThreadMarker) -> Rc<Share
 /// Bitwarden's background looped for good.
 // debt: Chrome's stable version in November 2026, fixed; an extension that wants a newer Chrome by it needs this moved up.
 const EXTENSION_PAGES_AGENT: &str = "Chrome/159.0.0.0 Safari/537.36";
-
-/// Run in an extension's own pages as they start (`permissions.js`).
-const EXTENSION_PERMISSIONS: &str = include_str!("mac/permissions.js");
 
 /// Loads the extensions of `profile` that are on and pass `extensions::verify`, checked off the main thread: hashing
 /// a big one's folder (Bitwarden's 92 MB) takes 60 ms in a release build and a second in a debug one, and the Keychain
@@ -1310,37 +1307,10 @@ mod tests {
         assert!(chrome(&pages) && !safari(&pages), "{pages}");
     }
 
-    /// Bitwarden asks whether it holds `privacy`, which this WebKit doesn't know: `permissions.contains` threw and
-    /// `permissions.request` rejected, and its popup stayed on loading. Through `permissions.js` such a permission is "not
-    /// granted", by callback and by promise, while a known one and any other error stay WebKit's. Run by JavaScriptCore
-    /// (`osascript`), with stand-ins that answer as WebKit did in Bitwarden's popup.
-    #[test]
-    fn a_permission_webkit_doesnt_know_is_not_granted_to_an_extensions_pages() {
-        let fake = r#"
-            const invalid = (method) => new Error(`Invalid call to permissions.${method}(). The 'permissions' value is invalid, because 'privacy' is not a valid permission.`);
-            const runtime = {};
-            const permissions = {
-                contains(query, callback) {
-                    if (query.permissions.includes("privacy")) throw invalid("contains");
-                    if (query.permissions.includes("other")) throw new Error("Something else");
-                    return callback ? callback(true) : Promise.resolve(true);
-                },
-                request: (query) => (query.permissions.includes("privacy") ? Promise.reject(invalid("request")) : Promise.resolve(true)),
-            };
-            globalThis.browser = globalThis.chrome = { runtime, permissions };
-        "#;
-        // `run` answers once the promises have settled.
-        let checks = r#"
-            const out = [];
-            chrome.permissions.contains({ permissions: ["privacy"] }, (granted) => out.push(`callback ${granted}`));
-            browser.permissions.contains({ permissions: ["privacy"] }).then((granted) => out.push(`promise ${granted}`));
-            browser.permissions.request({ permissions: ["privacy"] }).then((granted) => out.push(`request ${granted}`));
-            chrome.permissions.contains({ permissions: ["storage"] }).then((granted) => out.push(`known ${granted}`));
-            try { chrome.permissions.contains({ permissions: ["other"] }); } catch (error) { out.push(error.message); }
-            out.push(`same runtime ${chrome.runtime === runtime}`);
-            function run() { return JSON.stringify(out.sort()); }
-        "#;
-        let script = format!("{fake}\n{}\n{checks}", super::EXTENSION_PERMISSIONS);
+    /// Runs `script` after `web::COMPAT` and the stand-ins `fake` makes, in JavaScriptCore (`osascript`), and answers the
+    /// JSON its `run` makes once the promises have settled.
+    fn compat(fake: &str, script: &str) -> serde_json::Value {
+        let script = format!("{fake}\n{}\n{script}", super::super::COMPAT);
         let mut run = std::process::Command::new("osascript")
             .args(["-l", "JavaScript", "-"])
             .stdin(std::process::Stdio::piped())
@@ -1350,12 +1320,56 @@ mod tests {
             .unwrap();
         std::io::Write::write_all(&mut run.stdin.take().unwrap(), script.as_bytes()).unwrap();
         let out = run.wait_with_output().unwrap();
-        let answers: serde_json::Value = serde_json::from_slice(&out.stdout)
-            .unwrap_or_else(|_| panic!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)));
+        serde_json::from_slice(&out.stdout)
+            .unwrap_or_else(|_| panic!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+    }
+
+    /// Stand-ins for WebKit's `chrome` as it answered in Bitwarden's popup and worker: no `scripting.ExecutionWorld`, and a
+    /// permission it doesn't know is an error, thrown by `contains`, rejected by `request`.
+    const WEBKIT: &str = r#"
+        const invalid = (method) => new Error(`Invalid call to permissions.${method}(). The 'permissions' value is invalid, because 'privacy' is not a valid permission.`);
+        const scripting = { executeScript: () => Promise.resolve([]) };
+        const permissions = {
+            contains(query, callback) {
+                if (query.permissions.includes("privacy")) throw invalid("contains");
+                if (query.permissions.includes("other")) throw new Error("Something else");
+                return callback ? callback(true) : Promise.resolve(true);
+            },
+            request: (query) => (query.permissions.includes("privacy") ? Promise.reject(invalid("request")) : Promise.resolve(true)),
+        };
+        const native = { runtime: {}, scripting, permissions };
+        globalThis.browser = globalThis.chrome = native;
+    "#;
+
+    /// Bitwarden's worker stopped at `chrome.scripting.ExecutionWorld.ISOLATED`, which this WebKit doesn't list, and its
+    /// popup at a `permissions.contains` that threw for `privacy`. Through `web::COMPAT` the worlds are listed by the names
+    /// `executeScript` takes, and such a permission is "not granted", by callback and by promise, while a known one and any
+    /// other error stay WebKit's. WebKit's objects are added to, never swapped (a worker whose `chrome` and `browser` were
+    /// both stand-ins heard no replies), and held, as WebKit drops what is added to one nothing holds.
+    #[test]
+    fn what_webkit_lacks_is_added_to_an_extensions_pages_and_worker() {
+        let checks = r#"
+            const out = [];
+            out.push(`worlds ${JSON.stringify(chrome.scripting.ExecutionWorld)}`);
+            chrome.permissions.contains({ permissions: ["privacy"] }, (granted) => out.push(`callback ${granted}`));
+            browser.permissions.contains({ permissions: ["privacy"] }).then((granted) => out.push(`promise ${granted}`));
+            browser.permissions.request({ permissions: ["privacy"] }).then((granted) => out.push(`request ${granted}`));
+            chrome.permissions.contains({ permissions: ["storage"] }).then((granted) => out.push(`known ${granted}`));
+            try { chrome.permissions.contains({ permissions: ["other"] }); } catch (error) { out.push(error.message); }
+            const held = Object.getOwnPropertySymbols(globalThis).map((symbol) => globalThis[symbol]).find(Array.isArray);
+            out.push(`same namespace ${chrome === native && browser === native}, held ${held.includes(scripting) && held.includes(permissions)}`);
+            function run() { return JSON.stringify(out.sort()); }
+        "#;
         assert_eq!(
-            answers,
-            serde_json::json!(["Something else", "callback false", "known true", "promise false", "request false", "same runtime true"])
+            compat(WEBKIT, checks),
+            serde_json::json!([
+                "Something else", "callback false", "known true", "promise false", "request false",
+                "same namespace true, held true", "worlds {\"ISOLATED\":\"ISOLATED\",\"MAIN\":\"MAIN\"}",
+            ])
         );
+        // A WebKit that lists the worlds keeps its own.
+        let listed = format!("{WEBKIT}\nconst own = {{ ISOLATED: \"isolated\" }};\nscripting.ExecutionWorld = own;");
+        assert_eq!(compat(&listed, "function run() { return JSON.stringify(chrome.scripting.ExecutionWorld === own); }"), serde_json::json!(true));
     }
 
     #[test]

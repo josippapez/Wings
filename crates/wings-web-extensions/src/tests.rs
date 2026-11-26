@@ -429,3 +429,49 @@ fn a_refused_folder_is_reported_not_silently_empty() {
     assert!(scan(app.path()).refused.is_empty());
     assert!(scan(TempDir::new().unwrap().path()).refused.is_empty());
 }
+
+/// A classic background worker gets the app's script in front of it: a worker beside it loads that, then the extension's
+/// own, whose file stays as it was; the manifest names the new worker and keeps everything else.
+#[test]
+fn a_classic_service_worker_gets_the_shim_beside_it_and_its_own_files_stay() {
+    use crate::{shim_service_worker, SHIM_SCRIPT, SHIM_WORKER};
+    let dir = TempDir::new().unwrap();
+    let manifest = r#"{"manifest_version":3,"name":"Demo","version":"1.0","permissions":["storage","scripting"],
+        "host_permissions":["https://*/*"],"background":{"service_worker":"build/bg one#2.js"}}"#;
+    write(dir.path(), "manifest.json", manifest);
+    write(dir.path(), "build/bg one#2.js", "// the extension's own");
+    let before = read_manifest(dir.path()).unwrap();
+    assert!(shim_service_worker(dir.path(), "// shim").unwrap());
+    let read = |rel: &str| fs::read_to_string(dir.path().join(rel)).unwrap();
+    assert_eq!(read("build/bg one#2.js"), "// the extension's own");
+    assert_eq!(read(&format!("build/{SHIM_SCRIPT}")), "// shim");
+    // By address, so a name with `#` or a space loads that file.
+    assert_eq!(read(&format!("build/{SHIM_WORKER}")), format!("importScripts(\"{SHIM_SCRIPT}\", \"bg%20one%232.js\");\n"));
+    let after: serde_json::Value = serde_json::from_str(&read("manifest.json")).unwrap();
+    assert_eq!(after["background"]["service_worker"], format!("build/{SHIM_WORKER}"));
+    assert_eq!(read_manifest(dir.path()).unwrap(), before, "what it asks for is the same");
+}
+
+/// Nothing changes for a module worker, which can't `importScripts`, nor for one with no worker, a worker outside its
+/// folder or missing, or a folder that already has the shim's names.
+#[test]
+fn the_shim_leaves_any_other_background_alone() {
+    use crate::{shim_service_worker, SHIM_WORKER};
+    for (manifest, files) in [
+        (r#"{"name":"A","version":"1","background":{"service_worker":"bg.js","type":"module"}}"#, vec!["bg.js"]),
+        (r#"{"name":"A","version":"1","background":{"scripts":["bg.js"]}}"#, vec!["bg.js"]),
+        (r#"{"name":"A","version":"1"}"#, vec![]),
+        (r#"{"name":"A","version":"1","background":{"service_worker":"../bg.js"}}"#, vec![]),
+        (r#"{"name":"A","version":"1","background":{"service_worker":"gone.js"}}"#, vec![]),
+        (r#"{"name":"A","version":"1","background":{"service_worker":"bg.js"}}"#, vec!["bg.js", SHIM_WORKER]),
+    ] {
+        let dir = TempDir::new().unwrap();
+        write(dir.path(), "manifest.json", manifest);
+        for file in &files {
+            write(dir.path(), file, "//");
+        }
+        assert!(!shim_service_worker(dir.path(), "// shim").unwrap(), "{manifest}");
+        assert_eq!(fs::read_to_string(dir.path().join("manifest.json")).unwrap(), manifest);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), files.len() + 1, "{manifest}");
+    }
+}

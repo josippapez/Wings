@@ -182,6 +182,8 @@ pub struct Ask {
     pub name: String,
     pub permissions: Vec<String>,
     pub hosts: Vec<String>,
+    /// Wings put its compatibility script in front of its background worker (`extensions::Added::compat`).
+    pub compat: bool,
 }
 
 impl Ask {
@@ -226,9 +228,19 @@ impl Ask {
         if detail.is_empty() {
             detail.push("It asks for no permissions.".into());
         }
+        if self.compat {
+            detail.push(COMPAT_ADDED.into());
+        }
         (format!("Add the extension \"{}\" to the Browser?", one_line(&self.name, 60)), detail.join("\n\n"))
     }
 }
+
+/// What the dialog says of an extension Wings put its compatibility script in front of (`COMPAT`).
+const COMPAT_ADDED: &str = "Wings adds a compatibility file so it runs in WebKit.";
+
+/// What Wings runs first in an extension's own pages (`mac.rs`), and in its background worker from a file Wings adds to
+/// its folder as it is added (`extensions::prepare`).
+pub const COMPAT: &str = include_str!("compat.js");
 
 /// The most host patterns the dialog names; the rest are counted.
 const HOSTS_SHOWN: usize = 8;
@@ -270,14 +282,16 @@ fn every_website(pattern: &str) -> bool {
 }
 
 /// Whether a web view may go to `url`: the page itself only to an address a `WebView` may load (`web_address`), and a
-/// frame in it also to a picture or a document the page made itself (`data:`, `blob:`). A link to `file:`, `javascript:`
-/// or another app's scheme is dropped, so a page can neither read this Mac's files nor open other apps.
+/// frame in it also to a picture or a document the page made itself (`data:`, `blob:`), or to a page of an extension
+/// (`webkit-extension:`), which WebKit loads only when the extension lists it for pages to load: Bitwarden's menu by a
+/// password field is one. A link to `file:`, `javascript:` or another app's scheme is dropped, so a page can neither read
+/// this Mac's files nor open other apps.
 pub fn may_navigate(url: &str, main_frame: bool) -> bool {
     if crate::page::tree::web_address(url).is_some() {
         return true;
     }
     let scheme = url.split_once(':').map(|(scheme, _)| scheme.to_ascii_lowercase());
-    !main_frame && matches!(scheme.as_deref(), Some("about" | "data" | "blob"))
+    !main_frame && matches!(scheme.as_deref(), Some("about" | "data" | "blob" | "webkit-extension"))
 }
 
 /// Why cookies can't go into a kept store on this Mac, if they can't: only a store of the plugin's own may keep them, and
@@ -358,6 +372,7 @@ mod tests {
             name: "Blocker".into(),
             hosts: hosts.iter().map(|host| host.to_string()).collect(),
             permissions: permissions.iter().map(|permission| permission.to_string()).collect(),
+            compat: false,
         };
         let (question, detail) = ask(&["<all_urls>"], &["storage", "tabs"]).words();
         assert_eq!(question, "Add the extension \"Blocker\" to the Browser?");
@@ -374,7 +389,7 @@ mod tests {
         assert!(listed.starts_with("It can read and change your data on: *://*.bank.example/*, https://*.mail.example/*,"), "{listed}");
         assert!(listed.split("\n\n").next().unwrap().ends_with("and 6 more."), "{listed}");
         // A name can't write lines of its own into the dialog.
-        let spoof = Ask { name: "Helper\"\n\nIt asks for no permissions.\u{2028}x".repeat(5), hosts: vec!["<all_urls>".into()], permissions: vec![] };
+        let spoof = Ask { name: "Helper\"\n\nIt asks for no permissions.\u{2028}x".repeat(5), hosts: vec!["<all_urls>".into()], permissions: vec![], compat: false };
         let (question, detail) = spoof.words();
         assert!(!question.contains('\n') && !question.contains('\u{2028}') && question.chars().count() <= 100, "{question}");
         assert!(detail.starts_with("It can read and change everything on every website"));
@@ -391,6 +406,7 @@ mod tests {
             name: "Blocker".into(),
             hosts: hosts.iter().map(|host| host.to_string()).collect(),
             permissions: permissions.iter().map(|permission| permission.to_string()).collect(),
+            compat: false,
         };
         for hosts in [&["https://github.com/*"][..], &["<all_urls>"], &["*://*.bank.example/*"]] {
             let (_, detail) = ask(hosts, &["storage"]).words();
@@ -399,10 +415,18 @@ mod tests {
         assert!(!ask(&[], &["storage"]).words().1.contains("sign-ins"));
     }
 
+    /// Only an extension Wings put its compatibility script in front of says so, on a line of its own, last.
+    #[test]
+    fn the_dialog_says_when_wings_adds_its_compatibility_file() {
+        let ask = |compat| Ask { name: "Bitwarden".into(), hosts: vec!["https://*/*".into()], permissions: vec!["storage".into()], compat };
+        assert!(ask(true).words().1.ends_with("\n\nWings adds a compatibility file so it runs in WebKit."), "{}", ask(true).words().1);
+        assert!(!ask(false).words().1.contains("compatibility"));
+    }
+
     /// The raw names that reach the most each say what they do, on a line of their own.
     #[test]
     fn the_dialog_says_what_sensitive_permissions_do() {
-        let ask = Ask { name: "Helper".into(), hosts: vec![], permissions: ["storage", "tabs", "nativeMessaging", "clipboardRead"].map(String::from).to_vec() };
+        let ask = Ask { name: "Helper".into(), hosts: vec![], permissions: ["storage", "tabs", "nativeMessaging", "clipboardRead"].map(String::from).to_vec(), compat: false };
         let (_, detail) = ask.words();
         assert_eq!(
             detail,
@@ -412,7 +436,7 @@ mod tests {
              clipboardRead: it can read what you copy"
         );
         for (name, _) in SENSITIVE {
-            let one = Ask { name: "x".into(), hosts: vec![], permissions: vec![name.into()] };
+            let one = Ask { name: "x".into(), hosts: vec![], permissions: vec![name.into()], compat: false };
             assert!(one.words().1.contains(&format!("\n\n{name}: ")), "{name}");
         }
     }
@@ -471,6 +495,9 @@ mod tests {
         }
         assert!(may_navigate("data:text/html,hi", false) && may_navigate("blob:https://a.com/1", false) && may_navigate("about:srcdoc", false));
         assert!(!may_navigate("file:///etc/passwd", false) && !may_navigate("slack://open", false));
+        // An extension's page in a frame, as Bitwarden's menu by a password field is, but never as the page.
+        let menu = "webkit-extension://0cc71a78-376b-4518-bfa8-2713243fd8e7/overlay/menu-button.html";
+        assert!(may_navigate(menu, false) && !may_navigate(menu, true));
     }
 
     #[test]

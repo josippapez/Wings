@@ -47,6 +47,10 @@ pub struct Added {
     /// program of yours can write, so a record changed there, or one written whole, doesn't load either.
     #[serde(default)]
     pub seal: Option<String>,
+    /// Wings put its compatibility script in front of its background worker as it was readied (`prepare`), which the
+    /// dialog says.
+    #[serde(default)]
+    pub compat: bool,
 }
 
 /// An extension that passed `verify`: only `verify` makes one, and only one loads (`web::mac::load`), granted no more
@@ -279,13 +283,16 @@ pub fn prepare(profile: &Profile, stage: &str) -> Result<(Added, PathBuf), Strin
     let dir = installed_dir(profile, &id);
     fs::create_dir_all(profile.dir.join("extensions")).map_err(|error| error.to_string())?;
     fs::rename(&from, &dir).map_err(|error| error.to_string())?;
+    // Before it is hashed, so the hash and the person's yes cover Wings' script too (`web::COMPAT`).
+    let compat = wings_web_extensions::shim_service_worker(&dir, super::COMPAT).map_err(|error| error.to_string());
     // Hashed before and after it is read, so what the dialog shows is what the hash holds.
     let hashed = || wings_web_extensions::tree_hash(&dir).map_err(|error| error.to_string());
-    let read = hashed().and_then(|before| {
+    let read = compat.and_then(|compat| {
+        let before = hashed()?;
         let info = wings_web_extensions::read_manifest(&dir).map_err(|error| error.to_string())?;
-        (hashed()? == before).then_some((info, before)).ok_or_else(|| "The extension changed while Wings read it".to_owned())
+        (hashed()? == before).then_some((info, before, compat)).ok_or_else(|| "The extension changed while Wings read it".to_owned())
     });
-    let (info, tree) = match read {
+    let (info, tree, compat) = match read {
         Ok(read) => read,
         Err(error) => {
             let _ = fs::remove_dir_all(&dir);
@@ -304,6 +311,7 @@ pub fn prepare(profile: &Profile, stage: &str) -> Result<(Added, PathBuf), Strin
         allowed: false,
         tree: Some(tree),
         seal: None,
+        compat,
     };
     Ok((added, dir))
 }
@@ -461,6 +469,23 @@ mod tests {
         assert_eq!(verified(&profile, &added.id, KEY).unwrap_err(), CHANGED);
     }
 
+    /// One with a background worker gets Wings' compatibility script as it is readied, before its folder is hashed: the
+    /// record says so (the dialog does), its own files stay, it loads, and a change to that script since doesn't load, as a
+    /// change to any of its files doesn't.
+    #[test]
+    fn a_worker_gets_wings_script_before_the_hash_which_covers_it() {
+        let (profile, temp) = profile();
+        let (added, dir) = added(&profile, &temp);
+        assert!(added.compat);
+        let manifest: serde_json::Value = serde_json::from_slice(&fs::read(dir.join("manifest.json")).unwrap()).unwrap();
+        assert_eq!(manifest["background"]["service_worker"], wings_web_extensions::SHIM_WORKER);
+        assert_eq!(fs::read_to_string(dir.join(wings_web_extensions::SHIM_SCRIPT)).unwrap(), crate::web::COMPAT);
+        assert_eq!(fs::read(dir.join("background.js")).unwrap(), b"// blocks");
+        assert_eq!(loadable(&profile, KEY).len(), 1);
+        fs::write(dir.join(wings_web_extensions::SHIM_SCRIPT), b"// something else").unwrap();
+        assert_eq!(verified(&profile, &added.id, KEY).unwrap_err(), CHANGED);
+    }
+
     /// The folder changed after the dialog was built and before Add: the record holds the hash of what the dialog showed,
     /// so the changed folder never counts as allowed.
     #[test]
@@ -532,7 +557,7 @@ mod tests {
         let mut forged = Added {
             id: "abc".into(), name: "x".into(), version: "1".into(), description: String::new(),
             icon: Some(PathBuf::from("../../../outside/manifest.json")), permissions: vec![], hosts: vec![], enabled: true, allowed: true,
-            tree: None, seal: None,
+            tree: None, seal: None, compat: false,
         };
         assert_eq!(icon_path(&profile, &forged), None);
         forged.icon = Some(PathBuf::from("/etc/passwd"));
