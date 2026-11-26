@@ -21,7 +21,7 @@ use wings_plugin::{
     format::ago_now,
     host, messages,
     task::spawn,
-    ui::{self, Choice, Combobox, Node, combobox, empty, loading, page, select, slot},
+    ui::{self, Choice, Combobox, Node, combobox_submit, empty, icon_button, icons, loading, page, select, slot},
 };
 
 /// The log entries the activity shows at first, newest first, and how many more each Show earlier adds.
@@ -57,13 +57,17 @@ struct Page {
     earlier: Option<(String, usize)>,
     /// The page is narrower than `SIDE_BY_SIDE`: the properties go above the text instead of beside it.
     narrow: bool,
+    /// The relation whose issue picker is open: a field shows only after its button is pressed.
+    picking: Option<&'static str>,
 }
 
 /// The least width at which the properties sit beside the description. Under it the text and its tables would be left
 /// with less than a table needs, so the properties stack above it.
 const SIDE_BY_SIDE: f32 = 760.0;
 /// How wide one property is, beside the description and in the grid above it.
-const PROPERTY_WIDTH: f32 = 240.0;
+const PROPERTY_WIDTH: f32 = 290.0;
+/// The width of a property's name, so the values line up in a column.
+const NAME_WIDTH: u32 = 76;
 
 thread_local! {
     static PAGE: RefCell<Page> = RefCell::new(Page::default());
@@ -192,9 +196,20 @@ fn title_row(issue: &Issue) -> Node {
 
 // ---------- the properties column ----------
 
-/// One property of the column: a small muted label over its value.
+/// One property of the column, quiet: its muted name on the left, its value beside it and one small icon button at the end.
 fn prop(label: &str, actions: Option<Node>, content: Vec<Node>) -> Node {
-    stack("s").prop("width", PROPERTY_WIDTH).child(row("s").prop("justify", "between").child(line(label, Some("muted"), Some("tiny")).prop("weight", "medium")).maybe(actions)).children(content)
+    stack("xs").prop("width", PROPERTY_WIDTH).child(
+        row("s")
+            .prop("align", "center")
+            .child(ui_column(NAME_WIDTH).child(line(label, Some("muted"), Some("small"))))
+            .child(stack("xs").prop("grow", true).children(content))
+            .maybe(actions),
+    )
+}
+
+/// A fixed-width cell of a row.
+fn ui_column(width: u32) -> Node {
+    crate::parts::column(width)
 }
 
 fn copy(text: String) {
@@ -216,16 +231,26 @@ fn copy_button(label: &str, text: &str, variant: &str, aria: String) -> Node {
     Node::new("Button").prop("size", "xs").prop("variant", variant).prop("label", aria).on("onClick", move |_| copy(text.clone())).text(if copied { "Copied" } else { label })
 }
 
+/// An icon button that copies `text`, and says "Copied" for a moment after.
+fn copy_icon(text: &str, aria: &str) -> Node {
+    let copied = with(|p| p.copied.as_deref() == Some(text));
+    let text = text.to_owned();
+    icon_button(if copied { "Copied" } else { aria }, &icons::COPY, move || copy(text.clone()))
+}
+
+/// An icon button that starts editing `name`, from `current`.
+fn edit_icon(name: &'static str, aria: &str, current: &str) -> Node {
+    let current = current.to_owned();
+    icon_button(aria, &icons::PENCIL, move || begin(name, &current))
+}
+
 fn branch_prop(issue: &Issue, project: &Project) -> Node {
     let branch = issue.links.as_ref().and_then(|l| l.branch.clone()).unwrap_or_default();
     let editing = with(|p| p.edits.contains_key("branch"));
     let key = issue.key.clone();
     let make: Rc<dyn Fn(String) -> Op> = Rc::new(move |value| Op::Update(Update { branch: Some(value), ..update(&key) }));
     let actions = (!editing).then(|| {
-        let for_edit = branch.clone();
-        row("xs").maybe((!branch.is_empty()).then(|| copy_button("Copy", &branch, "ghost", "Copy the branch name".to_owned()))).child(
-            Node::new("Button").prop("size", "xs").prop("variant", "ghost").prop("label", "Edit the branch").on("onClick", move |_| begin("branch", &for_edit)).text("Edit"),
-        )
+        row("none").maybe((!branch.is_empty()).then(|| copy_icon(&branch, "Copy the branch name"))).child(edit_icon("branch", "Edit the branch", &branch))
     });
     let value = if editing {
         inline_input("branch", "Branch", &branch, limits::BRANCH, "feature/name", false, make)
@@ -270,8 +295,7 @@ fn pr_prop(issue: &Issue) -> Node {
     let pr = issue.links.as_ref().and_then(|l| l.pr.clone()).unwrap_or_default();
     let editing = with(|p| p.edits.contains_key("pr"));
     let key = issue.key.clone();
-    let for_edit = pr.clone();
-    let actions = (!editing).then(|| Node::new("Button").prop("size", "xs").prop("variant", "ghost").prop("label", "Edit the pull request link").on("onClick", move |_| begin("pr", &for_edit)).text("Edit"));
+    let actions = (!editing).then(|| edit_icon("pr", "Edit the pull request link", &pr));
     let value = if editing {
         inline_input("pr", "Pull request URL", &pr, limits::PR, "https://", false, Rc::new(move |value| Op::Update(Update { pr: Some(value), ..update(&key) })))
     } else if pr.is_empty() {
@@ -309,10 +333,10 @@ fn open_other(key: &str) {
     feed::open_issue(key, &project_id(), Some(trail_to(&trail, &current, key)), false);
 }
 
-/// A field that finds an issue by key or title and hands back its key.
+/// A field that finds an issue by key or title and hands back its key. It opens from its button and closes on a pick or Escape.
 fn picker(name: &'static str, label: &'static str, placeholder: &'static str, options: Vec<&Issue>, on_pick: impl Fn(String) + 'static) -> Node {
     let value = with(|p| p.queries.get(name).cloned()).unwrap_or_default();
-    combobox(
+    combobox_submit(
         Combobox {
             label,
             placeholder,
@@ -320,16 +344,33 @@ fn picker(name: &'static str, label: &'static str, placeholder: &'static str, op
             query: None,
             options: options.into_iter().map(|o| Choice { value: o.key.clone(), label: o.key.clone(), detail: Some(o.title.clone()) }).collect(),
             empty: "No issue matches",
-            auto_focus: false,
+            auto_focus: true,
         },
         move |text| {
             with(|p| p.queries.insert(name, text.unwrap_or_default()));
         },
         move |picked| {
-            with(|p| p.queries.insert(name, String::new()));
+            with(|p| {
+                p.queries.insert(name, String::new());
+                p.picking = None;
+            });
             on_pick(picked.to_owned());
         },
+        move |key| {
+            if key == "Escape" {
+                with(|p| p.picking = None);
+            }
+        },
     )
+}
+
+/// A relation: its chips, one small button at the end that opens `picker` under them, and "None" while it has no chips.
+fn relation(name: &'static str, label: &'static str, add: &'static str, chips: Vec<Node>, options: Vec<&Issue>, on_pick: impl Fn(String) + 'static) -> Node {
+    let open = with(|p| p.picking == Some(name));
+    let icon = if add.starts_with("Change") { &icons::PENCIL[..] } else { &icons::PLUS[..] };
+    let toggle = icon_button(add, icon, move || with(|p| p.picking = if p.picking == Some(name) { None } else { Some(name) }));
+    let content = if chips.is_empty() { vec![muted("None").prop("size", "small")] } else { chips };
+    prop(label, Some(toggle), content).maybe(open.then(|| picker(name, label, "Find an issue", options, on_pick)))
 }
 
 fn links_props(issue: &Issue, issues: &[Issue]) -> Vec<Node> {
@@ -349,32 +390,32 @@ fn links_props(issue: &Issue, issues: &[Issue]) -> Vec<Node> {
     let parent_remove = key.clone();
     let parent_chip = issue.parent.as_ref().map(|p| issue_chip(find(p), p, Some(Box::new(move || send(Update { rel: Relations { parent: Some(String::new()), ..Relations::default() }, ..update(&parent_remove) })))));
     let (pick_key, choices) = (key.clone(), parent_choices(issues, issue).into_iter().filter(|p| Some(&p.key) != issue.parent.as_ref()).collect::<Vec<_>>());
-    props.push(prop(
+    props.push(relation(
+        "parent",
         "Parent",
-        None,
-        parent_chip
-            .into_iter()
-            .chain([picker("parent", "Parent", if issue.parent.is_some() { "Change parent" } else { "Choose an epic or feature" }, choices, move |parent| send(Update { rel: Relations { parent: Some(parent), ..Relations::default() }, ..update(&pick_key) }))])
-            .collect(),
+        if issue.parent.is_some() { "Change parent" } else { "Choose an epic or feature" },
+        parent_chip.into_iter().collect(),
+        choices,
+        move |parent| send(Update { rel: Relations { parent: Some(parent), ..Relations::default() }, ..update(&pick_key) }),
     ));
     let related_key = key.clone();
     let related_options = others.iter().copied().filter(|o| !issue.related.as_ref().is_some_and(|r| r.contains(&o.key))).collect();
-    props.push(prop(
+    props.push(relation(
+        "related",
         "Related",
-        None,
-        chips(&issue.related, |k, other| Update { rel: Relations { related_remove: Some(vec![other.to_owned()]), ..Relations::default() }, ..update(k) })
-            .into_iter()
-            .chain([picker("related", "Related", "Add a related issue", related_options, move |k| send(Update { rel: Relations { related_add: Some(vec![k]), ..Relations::default() }, ..update(&related_key) }))])
-            .collect(),
+        "Add a related issue",
+        chips(&issue.related, |k, other| Update { rel: Relations { related_remove: Some(vec![other.to_owned()]), ..Relations::default() }, ..update(k) }),
+        related_options,
+        move |k| send(Update { rel: Relations { related_add: Some(vec![k]), ..Relations::default() }, ..update(&related_key) }),
     ));
     let blocked_options = others.iter().copied().filter(|o| !issue.blocked_by.as_ref().is_some_and(|r| r.contains(&o.key))).collect();
-    props.push(prop(
+    props.push(relation(
+        "blocked",
         "Blocked by",
-        None,
-        chips(&issue.blocked_by, |k, other| Update { rel: Relations { blocked_by_remove: Some(vec![other.to_owned()]), ..Relations::default() }, ..update(k) })
-            .into_iter()
-            .chain([picker("blocked", "Blocked by", "Add a blocking issue", blocked_options, move |k| send(Update { rel: Relations { blocked_by_add: Some(vec![k]), ..Relations::default() }, ..update(&key) }))])
-            .collect(),
+        "Add a blocking issue",
+        chips(&issue.blocked_by, |k, other| Update { rel: Relations { blocked_by_remove: Some(vec![other.to_owned()]), ..Relations::default() }, ..update(k) }),
+        blocked_options,
+        move |k| send(Update { rel: Relations { blocked_by_add: Some(vec![k]), ..Relations::default() }, ..update(&key) }),
     ));
     let blocks = blocks_of(issues, &issue.key);
     if !blocks.is_empty() {
@@ -396,7 +437,7 @@ fn properties(issue: &Issue, issues: &[Issue], project: &Project, narrow: bool) 
     let priority_options: Vec<(String, String)> = Priority::NAMES.iter().map(|n| ((*n).to_owned(), priority_name(Priority::parse(n)).to_owned())).collect();
     let type_options = options(&IssueType::ALL, IssueType::as_str, IssueType::label);
     let picked = |label: &'static str, dot: Node, options: Vec<(String, String)>, value: &str, on_change: Box<dyn Fn(&str)>| {
-        prop(label, None, vec![row("s").child(dot).child(select(label, &options, value, move |v| on_change(v)))])
+        prop(label, None, vec![row("s").child(dot).child(select(label, &options, value, move |v| on_change(v)).prop("variant", "ghost"))])
     };
     let mut sessions: Vec<_> = issue.sessions.iter().collect();
     sessions.sort_by(|a, b| b.seen.total_cmp(&a.seen));
@@ -411,7 +452,7 @@ fn properties(issue: &Issue, issues: &[Issue], project: &Project, narrow: bool) 
                 row("s")
                     .prop("justify", "between")
                     .child(row("s").child(line(name.as_str(), None, Some("small")).prop("truncate", true)).maybe((last.as_deref() == Some(s.id.as_str())).then(|| Node::new("Badge").prop("variant", "outline").text("Latest"))))
-                    .child(Node::new("Button").prop("variant", "ghost").prop("size", "xs").prop("label", format!("Resume {name}")).on("onClick", move |_| resume(&id, kind.as_deref())).text("Resume")),
+                    .child(icon_button(&format!("Resume {name}"), &icons::PLAY, move || resume(&id, kind.as_deref()))),
             )
             .child(line(detail, Some("muted"), Some("tiny")))
     });
@@ -497,7 +538,7 @@ fn description(issue: &Issue) -> Node {
         // In a row, as wide as its text: alone in the column it stretched across and centred its text, adrift.
         return row("none").child(Node::new("Button").prop("variant", "ghost").on("onClick", move |_| begin("description", &template)).text("Add a description…"));
     }
-    row("s").prop("align", "start").prop("justify", "between").child(markdown(&shown)).child(Node::new("Button").prop("size", "xs").prop("variant", "ghost").on("onClick", move |_| begin("description", &template)).text("Edit"))
+    row("s").prop("align", "start").prop("justify", "between").child(markdown(&shown)).child(icon_button("Edit the description", &icons::PENCIL, move || begin("description", &template)))
 }
 
 /// An epic's or feature's children with how many are done.
@@ -600,7 +641,7 @@ fn composer(issue: &Issue) -> Node {
         .child(
             Node::new("Textarea")
                 .prop("label", "Note")
-                .prop("rows", 3)
+                .prop("rows", 1)
                 .prop("maxLength", limits::NOTE)
                 .prop("value", draft.as_str())
                 .prop("placeholder", "What was done, what's next")
