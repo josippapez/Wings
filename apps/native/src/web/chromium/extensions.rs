@@ -449,7 +449,16 @@ const POPUP_SCRIPT_FILE: &str = "wings-popup-tabs.js";
 
 /// Puts `POPUP_SCRIPT` first in the popup page `popup` of the extension copy in `dir`.
 fn with_popup_script(dir: &std::path::Path, popup: &str) -> Result<(), String> {
+    // The manifest is the extension's to write: a `default_popup` of "../.." or a link would have Wings rewrite a file
+    // outside the copy.
+    const OUTSIDE: &str = "The extension's popup isn't inside the extension";
+    if !std::path::Path::new(popup).components().all(|part| matches!(part, std::path::Component::Normal(_))) {
+        return Err(OUTSIDE.into());
+    }
     let page = dir.join(popup);
+    if std::fs::symlink_metadata(&page).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        return Err(OUTSIDE.into());
+    }
     let html = std::fs::read_to_string(&page).map_err(|error| format!("The extension's popup can't be read: {error}"))?;
     std::fs::write(dir.join(POPUP_SCRIPT_FILE), POPUP_SCRIPT).map_err(|error| error.to_string())?;
     std::fs::write(&page, first_script(&html, &format!("/{POPUP_SCRIPT_FILE}"))).map_err(|error| error.to_string())
@@ -588,6 +597,24 @@ mod tests {
             Some("chrome-extension://abc/popup/index.html?wings-page=https%3A%2F%2Fa.com%2Fx%3Fy%3D1")
         );
         assert_eq!(popup_url("abc", "../../etc/x", "https://a.com/"), None);
+    }
+
+    /// A manifest naming a popup outside the extension, by "..", an absolute path or a link, leaves that file as it was.
+    #[test]
+    fn a_popup_outside_the_extension_is_refused_and_left_alone() {
+        let root = tempfile::tempdir().unwrap();
+        let copy = root.path().join("copy");
+        std::fs::create_dir_all(copy.join("popup")).unwrap();
+        let outside = root.path().join("outside.html");
+        std::fs::write(&outside, "<head></head>").unwrap();
+        std::os::unix::fs::symlink(&outside, copy.join("popup/linked.html")).unwrap();
+        for popup in ["../outside.html", outside.to_str().unwrap(), "popup/linked.html"] {
+            assert!(with_popup_script(&copy, popup).is_err(), "{popup}");
+        }
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "<head></head>");
+        std::fs::write(copy.join("popup/index.html"), "<head></head>").unwrap();
+        with_popup_script(&copy, "popup/index.html").unwrap();
+        assert!(std::fs::read_to_string(copy.join("popup/index.html")).unwrap().contains(POPUP_SCRIPT_FILE));
     }
 
     /// The popup's own script goes first, before the extension's, wherever its page's head is.
