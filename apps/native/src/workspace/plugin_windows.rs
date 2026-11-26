@@ -121,6 +121,13 @@ fn places(state: Option<&std::path::Path>) -> std::collections::HashMap<String, 
     })
 }
 
+/// Where the content of a window whose frame is `frame` is: what a window opens at (`WindowBounds::Windowed` is a
+/// content rect), so one kept as its frame came back a title bar taller, and lower, each time.
+fn content_place(frame: Bounds<gpui::Pixels>, content: gpui::Size<gpui::Pixels>) -> Bounds<gpui::Pixels> {
+    let title_bar = frame.size.height - content.height;
+    Bounds::new(gpui::point(frame.origin.x, frame.origin.y + title_bar), content)
+}
+
 /// Keeps where the window of `view` is, and with `save` writes it down: once it closes, not at every step of a drag.
 fn remember(state: Option<&std::path::Path>, view: &str, bounds: Bounds<gpui::Pixels>, save: bool) {
     let mut all = places(state);
@@ -265,7 +272,7 @@ impl Workspace {
                     });
                     let (closing_state, closing_place) = (state.clone(), place.clone());
                     window.on_window_should_close(cx, move |window, _| {
-                        remember(closing_state.as_deref(), &closing_place, window.bounds(), true);
+                        remember(closing_state.as_deref(), &closing_place, content_place(window.bounds(), window.viewport_size()), true);
                         true
                     });
                     cx.new(|cx| {
@@ -284,7 +291,7 @@ impl Workspace {
                             windows,
                             focus,
                             _bounds: cx.observe_window_bounds(window, move |_, window, _| {
-                                remember(moved_state.as_deref(), &moved_place, window.bounds(), false)
+                                remember(moved_state.as_deref(), &moved_place, content_place(window.bounds(), window.viewport_size()), false)
                             }),
                             _resizing: cx.spawn_in(window, async move |_, cx| {
                                 while let Ok((width, height, reply)) = resized.recv().await {
@@ -302,7 +309,7 @@ impl Workspace {
                             _closing: cx.spawn_in(window, async move |_, cx| {
                                 if closed.recv().await.is_ok() {
                                     let _ = cx.update(|window, _| {
-                                        remember(closed_state.as_deref(), &closed_place, window.bounds(), true);
+                                        remember(closed_state.as_deref(), &closed_place, content_place(window.bounds(), window.viewport_size()), true);
                                         window.remove_window();
                                     });
                                 }
@@ -348,6 +355,15 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::fit;
+
+    #[test]
+    fn a_window_is_kept_by_its_content_so_it_opens_again_as_it_was() {
+        use gpui::{point, px, size};
+        // A frame 28 points taller than its content: a title bar above it.
+        let frame = gpui::Bounds::new(point(px(100.0), px(50.0)), size(px(800.0), px(628.0)));
+        let kept = super::content_place(frame, size(px(800.0), px(600.0)));
+        assert_eq!(kept, gpui::Bounds::new(point(px(100.0), px(78.0)), size(px(800.0), px(600.0))));
+    }
 
     #[test]
     fn a_window_asked_for_a_size_keeps_on_the_screen_and_no_smaller_than_a_phone() {
