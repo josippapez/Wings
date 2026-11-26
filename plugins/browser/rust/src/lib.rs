@@ -24,4 +24,5 @@ mod settings;
 #[cfg(feature = "settings")]
 mod settings_page;
 mod protocol;
+mod start_page;
 mod wait;

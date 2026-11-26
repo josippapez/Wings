@@ -224,8 +224,10 @@ impl Env for FixtureEnv {
         let account = |name: Option<&str>, email: &str| Account { name: name.map(String::from), dir: String::new(), email: Some(email.into()), signed_in: signed_out.as_deref() != name, auth_method: None, shares_setup: false };
         Ok(Accounts { accounts: vec![account(None, "me@example.com"), account(Some("work"), "me@work.example.com")], projects: Default::default() })
     }
+    // Two dev servers in the pane the Browser scene publishes, which no other scene has.
     fn ports(&self) -> Result<Vec<PanePort>, String> {
-        Ok(vec![])
+        let server = |name: &str, port| PanePort { pane_id: "shot-web".into(), pid: 1, name: name.into(), port, started_at: 0 };
+        Ok(vec![server("storybook", 6006), server("node", 5173)])
     }
     fn open_url(&self, _: &str) -> Result<(), String> {
         Ok(())

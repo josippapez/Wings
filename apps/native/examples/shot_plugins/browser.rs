@@ -7,6 +7,7 @@ use super::*;
 pub(super) fn browser(out: PathBuf) {
     let project = out.join("fixture-project");
     std::fs::create_dir_all(&project).unwrap();
+    let project_dir = project.clone();
     let home = out.join("fixture-home");
     let chrome = home.join("Library/Application Support/Google/Chrome");
     for profile in ["Default", "Profile 1"] {
@@ -30,6 +31,16 @@ pub(super) fn browser(out: PathBuf) {
     };
     let storage = out.join("fixture-storage-browser");
     let _ = std::fs::remove_dir_all(&storage);
+    // Pages visited, newest first, for the start page.
+    let visited = [
+        ("https://github.com/acme/web/pull/482", "acme/web \u{b7} Pull request #482"),
+        ("https://vite.dev/config/", "Configuring Vite"),
+        ("http://localhost:5173/", "acme web"),
+        ("https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl/NumberFormat", "Intl.NumberFormat - JavaScript | MDN"),
+        ("https://docs.stripe.com/testing", "Test cards"),
+    ];
+    let history: Vec<_> = visited.iter().map(|(url, title)| json!({ "url": url, "title": title, "at": 1.0 })).collect();
+    wings_plugin_storage::Storage::new(storage.clone()).set("browser", "shot", "history", json!(history)).unwrap();
     let host = PluginHost::with_access(
         PluginConfig { id: "browser".into(), root: storage, scope: "shot".into() },
         Access {
@@ -38,6 +49,18 @@ pub(super) fn browser(out: PathBuf) {
             env: std::sync::Arc::new(FixtureEnv(project)),
         },
     );
+    let id = project_dir.display().to_string();
+    host.publish_projects(vec![wings_native::page::plugin::Project { hidden_sections: Vec::new(), id: id.clone(), name: "acme-web".into(), parent_id: None, path: id }]);
+    // The terminal the start page's dev servers listen in, which is the project's own.
+    host.publish_panes(vec![PaneEntry {
+        pane_id: "shot-web".into(),
+        cwd: project_dir.display().to_string(),
+        command: "pnpm".into(),
+        project: "acme-web".into(),
+        project_id: project_dir.display().to_string(),
+        session: None,
+        focused: false,
+    }]);
     let mut cx = app();
     let pages: [(&str, String, &str, f32); 2] = [("tab", module("browser"), "", 640.0), ("settings", module("settings"), "Search engine", 1100.0)];
     for width in [1000.0, 640.0] {

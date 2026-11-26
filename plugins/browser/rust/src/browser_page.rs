@@ -7,6 +7,7 @@ use crate::{
     extension::{Staged, dialog_for},
     history::{self, Entry},
     settings,
+    start_page::{self, RECENT},
 };
 use serde_json::Value;
 use std::cell::RefCell;
@@ -19,11 +20,20 @@ use wings_plugin::{
 const SUGGESTIONS: usize = 6;
 /// `set_tab_title` takes one line of at most 80 characters.
 const TITLE_MAX: usize = 80;
+/// The width of the start page's column, and of the toolbar over it.
+const START_COLUMN: u32 = 720;
 
 #[derive(Default)]
 pub(crate) struct Page {
     /// Where the view starts, once.
     pub start: String,
+    /// A new tab that has no address yet: the start page is shown in place of the view until one is chosen.
+    blank: bool,
+    /// What the start page draws from: the terminals and the ports they listen on, the project, and the pages visited.
+    panes: Vec<Value>,
+    ports: Value,
+    project: Value,
+    visited: Vec<Entry>,
     pub state: WebState,
     /// The commands sent lately, oldest first, which the view runs once each by `token`: two sent before the next tree
     /// (an agent's step and a click) both run.
@@ -60,6 +70,14 @@ const COMMANDS_KEPT: usize = 16;
 
 impl Page {
     pub fn send(&mut self, action: &str, url: Option<&str>) {
+        // The view isn't there yet: an address starts it there, and nothing else has a page to act on.
+        if self.blank {
+            if let ("load", Some(url)) = (action, url) {
+                self.blank = false;
+                self.start = url.to_owned();
+            }
+            return;
+        }
         self.run(|token| web_command(action, url, token));
     }
 
@@ -243,6 +261,26 @@ fn address(page: &Page) -> Node {
     )
 }
 
+/// What the start page shows now, and a look at the ports again: a server started since the tab opened comes in.
+fn look_again() {
+    if !with(|page| page.blank) {
+        return;
+    }
+    spawn(async {
+        let ports = host::ports().await.unwrap_or(Value::Null);
+        let project = host::project().await.unwrap_or(Value::Null);
+        with(|page| {
+            page.ports = ports;
+            page.project = project;
+            page.visited = history::load();
+        });
+    });
+}
+
+fn open_from_start(url: &str) {
+    with(|page| page.send("load", Some(url)));
+}
+
 fn view() -> Vec<Node> {
     let keep = settings::keep_data().get();
     PAGE.with(|page| {
@@ -275,6 +313,12 @@ fn view() -> Vec<Node> {
             page.added.as_deref().map(|added| notice("success", added).key("added")),
             agent_page::handoff_banner(),
         ];
+        if page.blank {
+            let servers = start_page::servers(&page.ports, &page.panes, &page.project);
+            let recent = start_page::recent(&page.visited, &servers, RECENT);
+            let body = start_page::view(&servers, &recent, open_from_start);
+            return vec![page_with(top.into_iter().flatten(), [body]).prop("column", START_COLUMN)];
+        }
         let mut web = web_view("page").prop("fill", true).prop("url", page.start.as_str()).prop("keepData", keep).on("onState", state_event).on("onResult", agent_page::result);
         if !page.commands.is_empty() {
             web = web.prop("command", Value::Array(page.commands.clone()));
@@ -292,8 +336,22 @@ fn state_event(event: &Value) {
 pub fn start() {
     let engine = settings::engine().get();
     let args = host::view_args();
-    let start = args.as_ref().and_then(|args| args["url"].as_str().and_then(|url| resolve(url, engine))).unwrap_or_else(|| engine.home().to_owned());
-    with(|page| page.start.clone_from(&start));
+    let asked = args.as_ref().and_then(|args| args["url"].as_str().and_then(|url| resolve(url, engine)));
+    let blank = asked.is_none();
+    let start = asked.unwrap_or_else(|| engine.home().to_owned());
+    with(|page| {
+        page.start.clone_from(&start);
+        page.blank = blank;
+    });
+    if blank {
+        host::on_panes(|list| with(|page| page.panes = list.to_vec()));
+        host::on_focus(|focused| {
+            if focused {
+                look_again();
+            }
+        });
+        look_again();
+    }
     agent_page::start(args.as_ref(), &start);
     wings_plugin::run_filled(view);
 }
@@ -318,6 +376,19 @@ mod tests {
         assert!(hint(&page), "typing something nothing matches");
         page.typed = None;
         assert!(!hint(&page), "after Enter or Escape");
+    }
+
+    #[test]
+    fn a_new_tab_shows_the_start_page_until_an_address_is_sent_and_then_starts_the_view_there() {
+        with(|page| *page = Page { start: "https://duckduckgo.com/".into(), blank: true, ..Page::default() });
+        let drawn = wings_plugin::ui::export(view()).0.to_string();
+        assert!(!drawn.contains("\"WebView\""), "{drawn}");
+        with(|page| page.send("reload", None));
+        assert!(with(|page| page.blank && page.commands.is_empty()), "nothing to reload yet");
+        with(|page| page.send("load", Some("http://localhost:5173/")));
+        let drawn = wings_plugin::ui::export(view()).0.to_string();
+        assert!(drawn.contains("\"WebView\"") && drawn.contains("\"url\":\"http://localhost:5173/\""), "{drawn}");
+        assert!(with(|page| page.commands.is_empty()), "the view loads its start address itself");
     }
 
     #[test]

@@ -11,7 +11,8 @@
   "permissions": {
     "webView": true,
     "browserCookies": true,
-    "webScripts": true
+    "webScripts": true,
+    "ports": true
   },
   "contributes": {
     "views": [
