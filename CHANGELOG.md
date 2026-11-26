@@ -2,6 +2,15 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.116 · 2026-11-26
+
+- **Extension buttons in the Browser**: each extension you added shows its icon and badge in the toolbar, and a click opens its popup under the button. Typing goes into the popup and comes back to Wings when it closes. A second click closes it (Browser 0.1.2).
+- **Extensions are checked before they load**: Wings loads an extension only if its whole folder is unchanged since you added it, and it seals that record with a key in your Keychain. It grants only the permissions and sites the add dialog showed. Extensions added before this version have to be added again. The add dialog explains the sensitive permissions and says when an extension reaches the sites you imported sign-ins for.
+- **Removing an extension removes its data**, and uninstalling the Browser removes its cookies, site data and extensions.
+- **Imported sign-ins last until Wings quits** unless you turn on "Keep imported sign-ins after Wings quits". While kept, they're stored unencrypted on this Mac, and the setting says so.
+- **Agents can't run scripts on pages with a password, card or one-time-code field**, even after "Show password", and screenshots cover card and one-time-code fields. Agents can still read the page outline, click and type there.
+- **Fixes**: in the Browser settings, the list from Look stays after you add an extension, Look shows an error instead of nothing when it fails, and extension icons no longer touch their names. A plugin can remove an extension or clear site data only right after your click.
+
 ## 0.2.115 · 2026-11-26
 
 - **Typing works again with the Browser on**: once a Browser tab had opened or a web page was clicked, keys typed into a chat or a terminal went nowhere. A page now takes the keyboard only when you click into it, and gives it back when you click elsewhere in Wings or switch tabs.
