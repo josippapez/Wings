@@ -319,6 +319,64 @@ sleep 30"#;
     wait_reaped(&process);
 }
 
+#[test]
+fn an_open_terminal_takes_the_themes_background_and_text_without_a_new_shell() {
+    let mut command = wings_terminal::CommandBuilder::new("/bin/sh");
+    command.args(["-c", "printf ready; sleep 30"]);
+    let process =
+        Arc::new(PtyProcess::spawn_command(command, wings_terminal::PtySize::default()).unwrap());
+    let (runtime, latest, _updates) = start_process(
+        process.clone(),
+        "theme-background".into(),
+        Vec::new(),
+        worker::Options::default(),
+    )
+    .unwrap();
+    let frame = wait_snapshot(&latest, |frame| visible_text(frame).contains("ready"));
+    assert_eq!(frame.background, 0x17151b, "Wings' own terminal ground");
+    let nord = crate::theme::Theme::Nord.colors().surface;
+    runtime
+        .commands
+        .send_blocking(worker::Command::Options(worker::Options {
+            colors: default_colors(None, nord),
+            ..Default::default()
+        }))
+        .unwrap();
+    let frame = wait_snapshot(&latest, |frame| frame.background == nord);
+    assert!(visible_text(&frame).contains("ready"), "the text is still there");
+    assert!(
+        frame.cells.iter().all(|cell| cell.bg == nord),
+        "every cell the program left alone is on the new ground"
+    );
+    drop(runtime);
+    wait_reaped(&process);
+}
+
+#[test]
+fn a_custom_background_wins_over_the_theme_and_its_text_stays_readable() {
+    let contrast = |a: u32, b: u32| paint::contrast(paint::luminance(a), paint::luminance(b));
+    for theme in crate::theme::Theme::ALL {
+        let surface = theme.colors().surface;
+        let (text, ground) = default_colors(None, surface);
+        assert_eq!(ground, surface, "{} follows the theme", theme.label());
+        assert!(contrast(text, ground) >= 7.0, "{} text {:.2}:1", theme.label(), contrast(text, ground));
+        let (text, ground) = default_colors(Some(0xfdf6e3), surface);
+        assert_eq!(ground, 0xfdf6e3, "a custom colour wins");
+        assert!(contrast(text, ground) >= 7.0, "{:.2}:1 on a light ground", contrast(text, ground));
+    }
+    assert_eq!(default_colors(None, 0x17151b), (0xe9e6e1, 0x17151b), "the look Wings always had");
+}
+
+#[test]
+fn only_a_full_hex_colour_with_a_hash_is_taken() {
+    assert_eq!(parse_hex("#1e1e2e"), Some(0x1e1e2e));
+    assert_eq!(parse_hex(" #FDF6E3 "), Some(0xfdf6e3));
+    assert_eq!(hex(0x0d1b2a), "#0d1b2a");
+    for bad in ["", "1e1e2e", "#1e1e2", "#1e1e2e0", "#fff", "#gggggg", "red", "#+1e1e2"] {
+        assert_eq!(parse_hex(bad), None, "{bad:?}");
+    }
+}
+
 pub(super) fn wait_snapshot(
     latest: &Latest,
     predicate: impl Fn(&Snapshot) -> bool,

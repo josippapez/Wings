@@ -3,7 +3,8 @@
 //!
 //! A theme is a set of `Colors`. The one in use is a thread-local, as `PAINTING` is: the colours are read as elements are
 //! built, on the window's thread, so a change applies on the next draw (`cx.refresh_windows()`) and nothing draws per
-//! frame for it. Terminals keep their own palette (`wings_terminal::grid`), which a theme leaves alone.
+//! frame for it. Terminals take the theme's `surface` as their default background (`terminal_view::default_colors`); their ANSI palette
+//! (`wings_terminal::grid`) is left alone.
 
 use std::cell::Cell;
 

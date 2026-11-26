@@ -116,6 +116,8 @@ pub struct TerminalLook {
     pub clipboard_write: bool,
     /// Images programs print are drawn: SIXEL, iTerm2 and Kitty graphics, as the desktop's `images`.
     pub images: bool,
+    /// A background of the user's own; none follows the theme's surface (`default_colors`).
+    pub background: Option<u32>,
 }
 
 impl Default for TerminalLook {
@@ -133,11 +135,42 @@ impl Default for TerminalLook {
             copy_on_select: false,
             clipboard_write: true,
             images: true,
+            background: None,
         }
     }
 }
 
 impl Global for TerminalLook {}
+
+/// The text colour on a dark ground the default (and Wings) terminal uses, and the ink for a light one.
+const LIGHT_INK: u32 = wings_terminal::grid::FOREGROUND;
+const DARK_INK: u32 = wings_terminal::grid::BACKGROUND;
+
+/// The default text and background colours a terminal opens with: the user's own background, else the theme's surface
+/// (Wings' own 0x17151b), and the terminal's text on it. The text stays Wings' light ink while that reads at 7:1 and
+/// goes to the better of the two inks otherwise, so a light custom background doesn't hide it. Colours programs set
+/// themselves, and the ANSI palette, are left alone.
+pub fn default_colors(background: Option<u32>, surface: u32) -> (u32, u32) {
+    let background = background.unwrap_or(surface);
+    let ratio = |ink| paint::contrast(paint::luminance(ink), paint::luminance(background));
+    let ink = if ratio(LIGHT_INK) >= 7.0 || ratio(LIGHT_INK) >= ratio(DARK_INK) {
+        LIGHT_INK
+    } else {
+        DARK_INK
+    };
+    (ink, background)
+}
+
+/// A colour typed as `#rrggbb`; anything else (short forms, names, no `#`) is refused.
+pub fn parse_hex(text: &str) -> Option<u32> {
+    let digits = text.trim().strip_prefix('#')?;
+    (digits.len() == 6 && digits.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| u32::from_str_radix(digits, 16).ok())?
+}
+
+pub fn hex(color: u32) -> String {
+    format!("#{color:06x}")
+}
 
 pub fn look(cx: &App) -> TerminalLook {
     cx.try_global::<TerminalLook>().cloned().unwrap_or_default()

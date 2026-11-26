@@ -95,6 +95,8 @@ pub(super) struct Options {
     pub(super) scrollback: usize,
     pub(super) clipboard_write: bool,
     pub(super) images: bool,
+    /// The default text and background colours, which follow the theme and the user's own background.
+    pub(super) colors: (u32, u32),
 }
 
 impl Default for Options {
@@ -110,6 +112,7 @@ impl Options {
             scrollback: look.scrollback,
             clipboard_write: look.clipboard_write,
             images: look.images,
+            colors: super::default_colors(look.background, crate::theme::surface()),
         }
     }
 }
@@ -450,6 +453,7 @@ fn run_model(
         cell_height: line_height(DEFAULT_FONT_SIZE, 1.2) as u16,
     };
     pane.set_cell_size(geometry.cell_width, geometry.cell_height);
+    pane.set_default_colors(options.colors.0, options.colors.1);
     // The settings apply before the first output is read, so a program can't copy before clipboard writes are off.
     if options != Options::default() {
         pane.set_options(options.cursor, options.scrollback);
@@ -564,6 +568,9 @@ fn run_model(
                 Command::Options(next) => {
                     pane.set_options(next.cursor, next.scrollback);
                     pane.set_images(next.images);
+                    if next.colors != options.colors {
+                        pane.set_default_colors(next.colors.0, next.colors.1);
+                    }
                     options = next;
                     Ok(())
                 }
@@ -583,6 +590,7 @@ fn run_model(
                     pane.set_cell_size(geometry.cell_width, geometry.cell_height);
                     pane.set_options(options.cursor, options.scrollback);
                     pane.set_images(options.images);
+                    pane.set_default_colors(options.colors.0, options.colors.1);
                     // Each piece at the size the pane had while it was printed, then back to the size it has now: so
                     // lines wrap, and are erased, as they were when the program drew them.
                     for (size, piece) in wings_ptyd::output::pieces(&bytes, &sizes) {

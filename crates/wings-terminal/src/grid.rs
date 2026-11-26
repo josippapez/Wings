@@ -701,6 +701,21 @@ impl GridPane {
         }
     }
 
+    /// The default text and background colours, from the next `viewport`. Ghostty keeps them as the terminal's own
+    /// defaults and resolves each cell against them when it is read, so open panes change too; a colour a program set
+    /// with OSC 10 or 11 keeps winning, as does every palette entry.
+    pub fn set_default_colors(&mut self, foreground: u32, background: u32) {
+        for (option, color) in [
+            (GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, rgb(foreground)),
+            (GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, rgb(background)),
+        ] {
+            check(
+                unsafe { ghostty_terminal_set(self.term, option, &color as *const _ as *const c_void) },
+                "set",
+            );
+        }
+    }
+
     fn current_cursor_style(&self) -> GhosttyCursorStyle {
         let mut cursor: GhosttyRenderStateCursor = sized();
         unsafe {
@@ -1955,6 +1970,21 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn default_colours_change_for_a_pane_that_already_has_text_and_a_programs_own_colours_stay() {
+        let mut pane = GridPane::new(20, 4);
+        pane.feed(b"hi\x1b[41mr\x1b[0m");
+        let before = pane.viewport().cells;
+        assert_eq!((before[0].fg, before[0].bg), (FOREGROUND, BACKGROUND));
+        pane.set_default_colors(0x112233, 0x2b303b);
+        assert_eq!(pane.theme_colors().0, 0x112233);
+        assert_eq!(pane.theme_colors().1, 0x2b303b);
+        let after = pane.viewport().cells;
+        assert_eq!((after[0].fg, after[0].bg), (0x112233, 0x2b303b), "text already on screen");
+        assert_eq!(after[10].bg, 0x2b303b, "an empty cell");
+        assert_eq!(after[2].bg, before[2].bg, "a program's red background is its own");
     }
 
     #[test]

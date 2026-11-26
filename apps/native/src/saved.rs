@@ -271,6 +271,9 @@ pub struct Settings {
     pub line_height: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub minimum_contrast_ratio: Option<f32>,
+    /// The terminals' own background as `#rrggbb`; absent follows the theme.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_background: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scrollback: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

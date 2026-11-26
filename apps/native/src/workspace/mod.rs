@@ -10,6 +10,8 @@ pub use claude::AccountStatus;
 mod context_menu;
 #[cfg(all(test, feature = "test-support"))]
 mod desktop_parity_tests;
+#[cfg(all(test, feature = "test-support"))]
+mod terminal_background_tests;
 mod diff;
 mod disk_access;
 mod first_launch_plugins;
@@ -711,6 +713,7 @@ impl Workspace {
             copy_on_select: settings.copy_on_select.unwrap_or(defaults.copy_on_select),
             clipboard_write: settings.clipboard_write.unwrap_or(defaults.clipboard_write),
             images: settings.images.unwrap_or(defaults.images),
+            background: settings.terminal_background.as_deref().and_then(crate::terminal_view::parse_hex),
         });
         this.tools.read = settings.tools_read.clone();
         let prefs = settings::Prefs::default();

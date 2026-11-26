@@ -8,7 +8,7 @@ use gpui::{
     UnderlineStyle, Window, canvas, div, fill, font, outline, point, prelude::*, px, rgb, rgba,
     size,
 };
-use wings_terminal::grid::{BACKGROUND, CursorShape, FOREGROUND, Flags, ImageLayer};
+use wings_terminal::grid::{CursorShape, FOREGROUND, Flags, ImageLayer};
 
 use crate::{
     actions::{self, Copy, Paste},
@@ -29,7 +29,7 @@ const FIND_MATCH: u32 = 0x5b4b1f;
 const FIND_ACTIVE: u32 = 0xe9a23b;
 
 /// WCAG's relative luminance of a 0xRRGGBB colour, as xterm.js works it out.
-fn luminance(color: u32) -> f32 {
+pub(super) fn luminance(color: u32) -> f32 {
     let channel = |shift: u32| {
         let c = ((color >> shift) & 0xff) as f32 / 255.0;
         if c <= 0.03928 {
@@ -41,7 +41,7 @@ fn luminance(color: u32) -> f32 {
     channel(16) * 0.2126 + channel(8) * 0.7152 + channel(0) * 0.0722
 }
 
-fn contrast(a: f32, b: f32) -> f32 {
+pub(super) fn contrast(a: f32, b: f32) -> f32 {
     (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
 
@@ -748,6 +748,9 @@ impl Render for TerminalView {
             .as_ref()
             .or(self.snapshot.status.as_ref())
             .cloned();
+        // The gutter around the cells is the terminal's ground too, whatever the theme or an OSC 11 made it.
+        let ground = self.snapshot.background;
+        let ink = super::default_colors(Some(ground), ground).0;
         div()
             .id("native-terminal")
             .role(Role::Terminal)
@@ -760,7 +763,7 @@ impl Render for TerminalView {
             .pl(px(14.0))
             .pr(px(4.0))
             .pb(px(2.0))
-            .bg(rgb(BACKGROUND))
+            .bg(rgb(ground))
             .overflow_hidden()
             .track_focus(&self.focus)
             .key_context("Terminal")
@@ -788,8 +791,8 @@ impl Render for TerminalView {
                         .left_0()
                         .w_full()
                         .p(px(8.0))
-                        .bg(rgb(BACKGROUND))
-                        .text_color(rgb(FOREGROUND))
+                        .bg(rgb(ground))
+                        .text_color(rgb(ink))
                         .text_size(px(12.0))
                         .child(status),
                 )
@@ -802,6 +805,7 @@ impl Render for TerminalView {
 
 #[cfg(test)]
 mod tests {
+    use wings_terminal::grid::BACKGROUND;
     use super::*;
     use crate::terminal_view::snapshot::snapshot;
     use wings_terminal::grid::{GridPane, SelectionType, Side};

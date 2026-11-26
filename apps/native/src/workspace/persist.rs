@@ -335,6 +335,7 @@ impl Workspace {
                 .map(|(_, name, _)| name.to_string()),
             line_height: Some(look.line_height),
             minimum_contrast_ratio: Some(look.min_contrast),
+            terminal_background: look.background.map(crate::terminal_view::hex),
             scrollback: Some(look.scrollback),
             copy_on_select: Some(look.copy_on_select),
             clipboard_write: Some(look.clipboard_write),

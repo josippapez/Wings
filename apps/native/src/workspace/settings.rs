@@ -29,6 +29,16 @@ use super::{
     sound::{self, SoundId, SoundSettings},
 };
 
+/// Colours offered for a custom terminal background: dark grounds that suit the themes, and one light one.
+const TERMINAL_SWATCHES: [(u32, &str); 6] = [
+    (0x000000, "Black"),
+    (0x17151b, "Plum"),
+    (0x1e1e2e, "Indigo"),
+    (0x0d1b2a, "Navy"),
+    (0x14211a, "Forest"),
+    (0xfdf6e3, "Paper"),
+];
+
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Section {
     General,
@@ -208,6 +218,10 @@ pub(super) struct SettingsDialog {
     pub(super) family: Entity<TextField>,
     pub(super) family_error: Option<SharedString>,
     _family_events: Subscription,
+    /// The custom terminal background as `#rrggbb`, and why a typed one was refused.
+    pub(super) background: Entity<TextField>,
+    pub(super) background_error: Option<SharedString>,
+    _background_events: Subscription,
     /// The select whose menu is open.
     menu: Option<&'static str>,
     /// The open menu's item the keys are on.
@@ -294,6 +308,19 @@ impl Workspace {
             FieldEvent::Cancel => this.close_settings(window, cx),
             FieldEvent::Changed => {}
         });
+        let background = cx.new(|cx| {
+            let mut field = TextField::new(Role::TextInput, "Terminal background colour", "#17151b", px(96.0), cx);
+            if let Some(color) = look(cx).background {
+                field.text = crate::terminal_view::hex(color);
+            }
+            field
+        });
+        let background_events =
+            cx.subscribe_in(&background, window, |this, _, event, window, cx| match event {
+                FieldEvent::Submit { .. } => this.apply_background_text(cx),
+                FieldEvent::Cancel => this.close_settings(window, cx),
+                FieldEvent::Changed => {}
+            });
         let link = cx.new(|cx| {
             let mut field = TextField::new(
                 Role::TextInput,
@@ -340,6 +367,9 @@ impl Workspace {
             family,
             family_error: None,
             _family_events: events,
+            background,
+            background_error: None,
+            _background_events: background_events,
             menu: None,
             keys: Default::default(),
             open_choices: Default::default(),
@@ -456,6 +486,32 @@ impl Workspace {
             self.set_look(|look| look.family = family, cx);
         }
         cx.notify_workspace();
+    }
+
+    /// The typed `#rrggbb` becomes the terminals' background; anything else stays in the field with a note.
+    pub(super) fn apply_background_text(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = &mut self.settings else {
+            return;
+        };
+        let typed = dialog.background.read(cx).text.clone();
+        match crate::terminal_view::parse_hex(&typed) {
+            Some(color) => {
+                dialog.background_error = None;
+                self.set_terminal_background(Some(color), cx);
+            }
+            None => dialog.background_error = Some("Use a colour like #1e1e2e.".into()),
+        }
+        cx.notify_workspace();
+    }
+
+    /// Follows the theme (`None`) or paints every terminal's background in `color`; open terminals change at once.
+    pub(super) fn set_terminal_background(&mut self, color: Option<u32>, cx: &mut Context<Self>) {
+        if let Some(dialog) = &mut self.settings {
+            dialog.background_error = None;
+            let text = color.map(crate::terminal_view::hex).unwrap_or_default();
+            dialog.background.update(cx, |field, _| field.set_text(text));
+        }
+        self.set_look(|look| look.background = color, cx);
     }
 
     /// Changes how every terminal looks or types, saves it, and redraws them.
@@ -875,12 +931,16 @@ impl Workspace {
                 (theme.label().into(), theme == self.prefs.theme, choose)
             })
             .into();
-        vec![vec![
+        let custom = look(cx).background;
+        let follow: Choose = Box::new(|this, cx| this.set_terminal_background(None, cx));
+        // It starts from the colour the terminals have now, so choosing it changes nothing until you pick another.
+        let own: Choose = Box::new(|this, cx| this.set_terminal_background(Some(theme::surface()), cx));
+        let mut card = vec![
             self.select_row(
                 "theme",
                 "Theme",
-                "The colours of the window, its pages and plugin pages that don't bring their own. Terminals keep \
-                 their own colours.",
+                "The colours of the window, its pages and plugin pages that don't bring their own. Terminals take \
+                 its background; their text colours stay their own.",
                 themes,
                 cx,
             ),
@@ -893,7 +953,40 @@ impl Workspace {
                 |this, on, cx| this.set_appearance(this.prefs.theme, on, cx),
                 cx,
             ),
-        ]]
+            self.select_row(
+                "terminal-background",
+                "Terminal background",
+                "Follows the theme, or a colour of your own. Programs that set their own background keep it.",
+                vec![
+                    ("Follow the theme".into(), custom.is_none(), follow),
+                    ("Custom colour".into(), custom.is_some(), own),
+                ],
+                cx,
+            ),
+        ];
+        if let Some(color) = custom {
+            let dialog = self.settings.as_ref().expect("the dialog is open");
+            let swatches = div().flex().items_center().gap(px(6.0)).children(TERMINAL_SWATCHES.map(|(swatch, name)| {
+                div()
+                    .id(name)
+                    .role(Role::Button)
+                    .aria_label(format!("Terminal background {name}, {}", crate::terminal_view::hex(swatch)))
+                    .size(px(20.0))
+                    .rounded_full()
+                    .cursor_pointer()
+                    .bg(rgb(swatch))
+                    .border_1()
+                    .border_color(rgba(if swatch == color { 0xffffffcc } else { theme::line_strong() }))
+                    .on_click(cx.listener(move |this, _, _, cx| this.set_terminal_background(Some(swatch), cx)))
+            }));
+            card.push(ui::setting_row(
+                "Background colour",
+                "Pick a swatch, or type #rrggbb and press Enter. Text turns dark on a light background.",
+                dialog.background_error.clone(),
+                div().flex().items_center().gap(px(12.0)).child(swatches).child(ui::input(dialog.background.clone())),
+            ));
+        }
+        vec![card]
     }
 
     /// Paints in `theme` from now on, with the sidebar and title bar see-through or solid, and saves it. Every window
@@ -901,6 +994,8 @@ impl Workspace {
     pub fn set_appearance(&mut self, theme: theme::Theme, transparent: bool, cx: &mut Context<Self>) {
         theme::set(theme, transparent);
         self.set_prefs(|prefs| (prefs.theme, prefs.transparent) = (theme, transparent), cx);
+        // Terminals read the theme's background through their look, so they hear of it the way they hear of a setting.
+        cx.set_global(look(cx));
         cx.refresh_windows();
     }
 
