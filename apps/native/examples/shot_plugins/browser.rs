@@ -2,11 +2,22 @@
 use super::*;
 
 /// The Browser (`plugins/browser/rust`): its tab, whose web page WebKit draws over the empty place the page leaves for it
-/// (no web page is drawn offscreen), and its settings page. The settings list the other browsers and extensions this Mac
-/// has, read as the page asks, so what they show depends on the Mac.
+/// (no web page is drawn offscreen), and its settings page. The other browsers it lists are made-up profiles in a home
+/// folder of the scene's own, never this Mac's.
 pub(super) fn browser(out: PathBuf) {
     let project = out.join("fixture-project");
     std::fs::create_dir_all(&project).unwrap();
+    let home = out.join("fixture-home");
+    let chrome = home.join("Library/Application Support/Google/Chrome");
+    for profile in ["Default", "Profile 1"] {
+        std::fs::create_dir_all(chrome.join(profile)).unwrap();
+        // Only that it is there: nothing reads it in a screenshot.
+        std::fs::write(chrome.join(profile).join("Cookies"), b"").unwrap();
+    }
+    let names = json!({ "profile": { "info_cache": { "Default": { "name": "Work" }, "Profile 1": { "name": "Personal" } } } });
+    std::fs::write(chrome.join("Local State"), names.to_string()).unwrap();
+    // The scene runs alone in its process, so its home is the browsers' only home there.
+    unsafe { std::env::set_var("HOME", &home) };
     let manifest: wings_plugins::manifest::Manifest =
         serde_json::from_str(include_str!("../../../../plugins/browser/wings-plugin.json")).unwrap();
     let module = |frame: &str| {

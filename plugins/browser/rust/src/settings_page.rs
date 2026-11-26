@@ -295,17 +295,12 @@ fn cookies(page: &Page, keep: bool) -> Vec<Node> {
             .map(|source| {
                 let state = page.imports.get(&source.id);
                 let done = match state {
-                    Some(Import::Done(line)) => Some(muted(line.as_str()).prop("size", "small")),
-                    _ => None,
+                    Some(Import::Done(line)) => line.as_str(),
+                    _ => "Copies its cookies here, so you are signed in where it is.",
                 };
                 let this = source.clone();
-                entry(Entry {
-                    lead: None,
-                    title: text(source.label()),
-                    detail: done,
-                    trailing: Some(button("Import", "outline", state == Some(&Import::Busy), move || import(this.clone())).size("sm")),
-                })
-                .key(source.id.as_str())
+                let import = button("Import", "outline", state == Some(&Import::Busy), move || import(this.clone())).size("sm");
+                setting(&source.label(), done, import).key(source.id.as_str())
             })
             .collect(),
     };
@@ -314,7 +309,7 @@ fn cookies(page: &Page, keep: bool) -> Vec<Node> {
         _ => None,
     });
     let description = if keep { note } else { "Cookies stay on this Mac. They are kept only while Wings runs, as Keep cookies and site data is off. Chrome-based browsers ask for Keychain access." };
-    vec![section("Sign in with another browser", Some(description), rows)].into_iter().chain(failed).collect()
+    vec![section("Sign in with another browser", Some(description), [rows_card(rows)])].into_iter().chain(failed).collect()
 }
 
 fn extension_rows(extensions: &Extensions, page: &Page) -> Vec<Node> {
@@ -351,17 +346,17 @@ fn first_line(description: &str) -> &str {
 
 fn extensions(page: &Page) -> Vec<Node> {
     let loaded = match &page.extensions {
-        None => return vec![section("Extensions", None, [entry(Entry { lead: Some(spinner()), title: muted("Loading extensions"), detail: None, trailing: None })])],
+        None => return vec![section("Extensions", None, [rows_card([entry(Entry { lead: Some(spinner()), title: muted("Loading extensions"), detail: None, trailing: None })])])],
         Some(Err(error)) => return vec![error_state("Couldn't load extensions", error, Some(("Try again", Box::new(load_extensions))))],
         Some(Ok(loaded)) => loaded,
     };
     if !loaded.supported {
         return vec![section("Extensions", None, []), notice("warn", "Extensions need macOS 15.4 or newer")];
     }
-    let mut out = vec![section("Extensions", Some("Chrome and Firefox extensions, which run on the pages you open in the browser."), extension_rows(loaded, page))];
+    let mut out = vec![section("Extensions", Some("Chrome and Firefox extensions, which run on the pages you open in the browser."), [rows_card(extension_rows(loaded, page))])];
     if loaded.installed.is_none() {
         let look = button("Look", "outline", false, look_in_browsers).size("sm");
-        out.push(section("From your browsers", None, [setting("Extensions you already use", "Lists the extensions of the other browsers on this Mac, to add here.", look)]));
+        out.push(section("From your browsers", None, [rows_card([setting("Extensions you already use", "Lists the extensions of the other browsers on this Mac, to add here.", look)])]));
     }
     let others = not_added(loaded.installed.as_deref().unwrap_or_default(), &loaded.added);
     if !others.is_empty() {
@@ -375,7 +370,7 @@ fn extensions(page: &Page) -> Vec<Node> {
             })
             .key(extension.source.as_str())
         });
-        out.push(section("From your browsers", Some("Extensions you already use in another browser on this Mac."), rows));
+        out.push(section("From your browsers", Some("Extensions you already use in another browser on this Mac."), [rows_card(rows)]));
     }
     let removing = page.removing.as_ref().and_then(|id| loaded.added.iter().find(|extension| &extension.id == id));
     if let Some(extension) = removing {
@@ -408,11 +403,16 @@ fn view() -> Vec<Node> {
             "Privacy",
             None,
             [rows_card([
-                setting_toggle("Keep cookies and site data", "Stay signed in to sites after Wings quits. Off keeps them only while Wings runs.", keep, |on| drop(settings::keep_data().set(on))),
+                // Off and fixed on a Mac before 14, which keeps a plugin's cookies only while Wings runs.
+                if page.cookies_not_kept {
+                    let off = ui::checkbox("", false, |_| {}).prop("switch", true).aria_label("Keep cookies and site data").disabled(true);
+                    setting("Keep cookies and site data", "Needs macOS 14. On this Mac cookies are kept only while Wings runs.", off)
+                } else {
+                    setting_toggle("Keep cookies and site data", "Stay signed in to sites after Wings quits. Off keeps them only while Wings runs.", keep, |on| drop(settings::keep_data().set(on)))
+                },
                 setting("Clear browsing data", "Removes your history, cookies and site data.", button("Clear", "outline", page.clearing, || with(|page| page.confirm_clear = true)).size("sm")),
             ])],
         );
-        let not_kept = page.cookies_not_kept.then(|| notice("warn", "Cookies are kept only while Wings runs on this Mac. Keeping them between runs needs macOS 14."));
         let ask = page.confirm_clear.then(|| {
             let buttons = actions(Some(button("Cancel", "ghost", false, || with(|page| page.confirm_clear = false))), [button("Clear", "destructive", false, clear)]);
             confirm("Clear browsing data?", [muted("This signs you out of the sites you are signed in to and empties your history.")], [buttons])
@@ -422,7 +422,7 @@ fn view() -> Vec<Node> {
             Err(error) => notice("danger", error.as_str()),
         });
         let problem = (page.staged.is_none()).then(|| page.problem.as_deref().map(|problem| notice("danger", problem))).flatten();
-        let column = stack().prop("gap", "l").children([search, privacy]).maybe(not_kept).maybe(ask).maybe(cleared).children(cookies(&page, keep)).children(extensions(&page)).maybe(problem);
+        let column = stack().prop("gap", "l").children([search, privacy]).maybe(ask).maybe(cleared).children(cookies(&page, keep)).children(extensions(&page)).maybe(problem);
         let dialog = page.staged.as_ref().map(|staged| dialog_for(staged, page.adding, page.problem.as_deref(), cancel, add));
         vec![column_page(toolbar("Browser", None), std::iter::once(column).chain(dialog))]
     })
@@ -492,11 +492,24 @@ mod tests {
     }
 
     #[test]
-    fn a_mac_that_cant_keep_cookies_gets_a_warning_under_the_privacy_settings_and_others_none() {
-        let warning = "needs macOS 14";
+    fn on_a_mac_that_cant_keep_cookies_the_switch_is_off_and_fixed_and_says_why_and_elsewhere_it_works() {
+        let why = "Needs macOS 14";
         with(|page| page.cookies_not_kept = false);
-        assert!(!wings_plugin::ui::export(view()).0.to_string().contains(warning));
+        let drawn = wings_plugin::ui::export(view()).0.to_string();
+        assert!(!drawn.contains(why) && !drawn.contains("\"disabled\":true"), "{drawn}");
         with(|page| page.cookies_not_kept = true);
-        assert!(wings_plugin::ui::export(view()).0.to_string().contains(warning));
+        let drawn = wings_plugin::ui::export(view()).0.to_string();
+        assert!(drawn.contains(why) && drawn.contains("\"disabled\":true"), "{drawn}");
+    }
+
+    #[test]
+    fn the_sign_in_and_extension_sections_are_cards_of_rows_as_search_and_privacy_are() {
+        with(|page| {
+            page.cookies_not_kept = false;
+            page.sources = Some(Ok(vec![Source { id: "chrome:Default".into(), browser: "Chrome".into(), profile: "Josip".into() }]));
+        });
+        let drawn = wings_plugin::ui::export(view()).0.to_string();
+        // Search, Privacy, Sign in and Extensions each hold a card of rows.
+        assert!(drawn.matches("\"variant\":\"rows\"").count() >= 4, "{drawn}");
     }
 }
