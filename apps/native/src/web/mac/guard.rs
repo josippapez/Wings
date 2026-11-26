@@ -63,11 +63,13 @@ pub(super) struct Seen {
 }
 
 impl Seen {
-    /// A secret field was seen in the document `generation`, in a frame in the page if `foreign`.
+    /// A secret field was seen in the document `generation`, in a frame in the page if `foreign`. Only ever forward: a
+    /// check of an older document that answers late never clears what a newer one showed.
     pub(super) fn note(&self, generation: u64, foreign: bool) {
-        self.secret.set(Some(generation));
+        let later = |cell: &Cell<Option<u64>>| cell.set(Some(cell.get().map_or(generation, |kept| kept.max(generation))));
+        later(&self.secret);
         if foreign {
-            self.foreign.set(Some(generation));
+            later(&self.foreign);
         }
     }
 
@@ -178,6 +180,10 @@ mod tests {
         assert_eq!(may_run(&clean, fast, seen.secret(3)), Err(SECRET_FIELDS), "the same document, the field now plain text");
         assert_eq!(may_run(&clean, fast, seen.secret(4)), Ok(()), "the next document");
         assert!(!seen.foreign(3), "seen in the page's own origin");
+        // The next document shows one too, then a check of the last one answers late: the newer one stays refused.
+        seen.note(4, true);
+        seen.note(3, true);
+        assert!(seen.secret(4) && seen.foreign(4), "a late note of an older document cleared the newer one's");
     }
 
     /// The script carries the check in front of it, so a field that came after the check refuses it too.
@@ -211,29 +217,60 @@ mod tests {
         assert_eq!(masked(&png, &[], 200.0, 1.0).unwrap(), png);
     }
 
-    /// `wingsScan` over a made-up page, run by JavaScriptCore (`osascript`): no DOM, so the elements are plain objects
-    /// with what it reads of them.
-    fn scan(page: &str) -> Value {
-        const FAKE: &str = r#"
-            const all = (node, sel) => { const out = []; const walk = (n) => { for (const c of n.children) { if (sel === "*" || /^(INPUT|TEXTAREA|SELECT)$/.test(c.tagName)) out.push(c); walk(c); } }; walk(node); return out; };
-            const doc = (children) => ({ children, querySelectorAll(sel) { return all(this, sel); } });
-            const el = (tag, o = {}) => ({ tagName: tag, type: o.type || "", nodeType: 1, children: o.children || [], shadowRoot: o.shadow || null,
-                get contentDocument() { if (o.foreign) throw new Error("cross-origin"); return o.doc || null; }, clientLeft: 0, clientTop: 0,
-                getAttribute: (name) => (o.attrs || {})[name] || null, getClientRects: () => [o.rect || { left: 0, top: 0, width: 10, height: 10 }],
-                getBoundingClientRect: () => o.rect || { left: 0, top: 0, width: 10, height: 10 }, querySelectorAll(sel) { return all(this, sel); } });
-        "#;
-        let script = format!("{FAKE}
-{}
-JSON.stringify(wingsScan({page}))", include_str!("guard.js"));
+    /// A made-up page for `guard.js` and `watch.js` run by JavaScriptCore (`osascript`): no DOM, so the elements are plain
+    /// objects with what they read of them, and a `MutationObserver` the test fires by hand.
+    const FAKE: &str = r#"
+        const all = (node, sel) => { const out = []; const walk = (n) => { for (const c of n.children) { if (sel === "*" || /^(INPUT|TEXTAREA|SELECT)$/.test(c.tagName)) out.push(c); walk(c); } }; walk(node); return out; };
+        const doc = (children) => ({ nodeType: 11, children, querySelectorAll(sel) { return all(this, sel); } });
+        const el = (tag, o = {}) => ({ tagName: tag, type: o.type || "", nodeType: 1, children: o.children || [], shadowRoot: o.shadow || null,
+            get contentDocument() { if (o.foreign) throw new Error("cross-origin"); return o.doc || null; }, clientLeft: 0, clientTop: 0,
+            getAttribute: (name) => (o.attrs || {})[name] || null, getClientRects: () => [o.rect || { left: 0, top: 0, width: 10, height: 10 }],
+            getBoundingClientRect: () => o.rect || { left: 0, top: 0, width: 10, height: 10 }, querySelectorAll(sel) { return all(this, sel); } });
+        const observed = [], told = [], listeners = {};
+        class MutationObserver { constructor(heard) { this.heard = heard; } observe(root) { observed.push({ root, observer: this }); } disconnect() {} }
+        const webkit = { messageHandlers: { wingsGuard: { postMessage: (m) => told.push(m) } } };
+        const addEventListener = (kind, listener) => { listeners[kind] = listener; };
+        const removeEventListener = () => {};
+        const fire = (root, records) => observed.filter((o) => o.root === root).forEach((o) => o.observer.heard(records));
+    "#;
+
+    /// Runs `script` after `FAKE` and `guard.js`, and answers the JSON its last line makes.
+    fn js(script: &str) -> Value {
+        let script = format!("{FAKE}\n{}\n{script}", include_str!("guard.js"));
         let mut run = std::process::Command::new("osascript")
             .args(["-l", "JavaScript", "-"])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .spawn()
             .unwrap();
         std::io::Write::write_all(&mut run.stdin.take().unwrap(), script.as_bytes()).unwrap();
         let out = run.wait_with_output().unwrap();
-        serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&out.stdout)))
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+    }
+
+    /// `wingsScan` over the made-up `page`.
+    fn scan(page: &str) -> Value {
+        js(&format!("JSON.stringify(wingsScan({page}))"))
+    }
+
+    /// A field that becomes a secret one inside an open shadow root after the page loaded (one there then, and one that
+    /// came with what was added later) tells Wings, as a field in the document does; so does focusing one whose shadow
+    /// root came with no change to watch.
+    #[test]
+    fn a_secret_field_in_an_open_shadow_root_after_load_tells_wings() {
+        let page = "const box = doc([el('INPUT', { type: 'text' })]); const document = doc([el('X-LOGIN', { shadow: box })]); document.nodeType = 9;";
+        let watch = include_str!("watch.js");
+        let run = |then: &str| js(&format!("{page}\n{watch}\n{then}\nJSON.stringify(told)"));
+        assert_eq!(run(""), json!([]), "a plain page tells nothing");
+        // Turned into a password inside the shadow root that was there as it loaded.
+        assert_eq!(run("fire(box, [{ type: 'attributes', target: el('INPUT', { type: 'password' }), addedNodes: [] }]);"), json!([true]));
+        // A shadow root that came with an element added later, then a card field added inside it.
+        let later = "const inner = doc([]); fire(document, [{ type: 'childList', addedNodes: [el('X-PAY', { shadow: inner })] }]); \
+                     fire(inner, [{ type: 'childList', addedNodes: [el('INPUT', { attrs: { autocomplete: 'cc-number' } })] }]);";
+        assert_eq!(run(later), json!([true]), "a shadow root that came later");
+        // Focus in a secret field no change showed.
+        assert_eq!(run("listeners.focusin({ composedPath: () => [el('INPUT', { type: 'password' }), box] });"), json!([true]), "focus");
     }
 
     /// Past the deepest it looks (nine shadow roots in), the scan says a secret field may be there, and paints over what
