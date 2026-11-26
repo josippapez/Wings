@@ -2,6 +2,17 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.114 · 2026-11-26
+
+- **Browser** (new, off until you turn it on in Plugins): a WebKit browser in a tab, for searching, browsing and previewing your dev servers. A new tab lists the servers running in the project and your recent pages. Pop it out into its own window and put it back. It can bring in your sign-ins from Chrome, Arc, Brave, Edge, Vivaldi, Firefox or Safari when you click to import them, and add extensions from those browsers or the stores (macOS 15.4 or later). Agents can open, read, click, type, resize and screenshot pages through its tools. A page signed in with imported cookies tells an agent only its site.
+- **Readable Markdown**: tables are real tables, and chat and Issues show nested quotes, italic and struck text, task checkboxes, numbered lists with bullets under them, and code blocks that scroll sideways with their language named.
+- **Claude chat header**: three groups, with the mode as a menu and rename, fork, past sessions, account and settings under "…", so a narrow chat keeps more of its name (Claude chat 0.55.9).
+- **Issues**: an issue's details are quiet rows with an icon button for each change, and go above the description in a narrow tab. List groups are plain labels, and board cards fit what they hold (Issues 0.31.10).
+- **PR tracker 0.35.4**: one badge per status, the arrow last on a check's row, and a review comment's code with + and − and both line numbers.
+- **Disk usage 0.4.5**: the map's files are a quiet fill, the folder's size shows once, and Move to Trash appears once something is collected.
+- **Past sessions**: the sheet runs the window's full height, each row's details line up under its title, and Resume sits on the row's own colour. Plugin settings in Settings have a heading and the app's margins.
+- **Fixes**: a chat message with thousands of nested quotes no longer crashes the page reading it. Changes, Claude accounts, HUD, Schedules, Share, Work item and Worktrees are rebuilt on this version's plugin kit.
+
 ## 0.2.113 · 2026-11-26
 
 - **Themes**: Settings, Appearance has six dark themes (Wings stays the default), and terminals take the theme's background. A terminal background of your own, from a swatch or a hex code, wins over the theme.
