@@ -1,7 +1,7 @@
 {
   "id": "share",
   "name": "Share",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "minWingsVersion": "0.2.57",
   "icon": "icon.svg",
   "description": "Puts an app that runs on your computer at a public https link with OpenTunnel, for Claude to send you or someone else: share_port, list_shares and stop_share. You allow each port in Wings first, a badge on the pane of a shared program has Open, Copy link and Stop, and a link comes down when its port closes. Anyone who has a link can open the app. Needs OpenTunnel (brew install anomalyco/tap/opentunnel).",
