@@ -220,7 +220,8 @@ fn address(page: &Page) -> Node {
         value: page.typed.clone().unwrap_or_else(|| page.state.url.clone()),
         query: None,
         options,
-        empty: "Press Enter to search or go",
+        // Only while something is typed: after Enter, or with the page's own address in the field, there is nothing to submit.
+        empty: if page.typed.is_some() { "Press Enter to search or go" } else { "" },
         auto_focus: false,
     };
     combobox_submit(
@@ -303,6 +304,20 @@ mod tests {
 
     fn loaded(url: &str, title: &str) -> WebState {
         WebState { url: url.into(), title: title.into(), ..WebState::default() }
+    }
+
+    /// The hint under the address field is for text being typed: with the loaded page's address in the field, and after
+    /// Enter has submitted what was typed, it isn't there.
+    #[test]
+    fn the_address_hint_shows_while_typing_and_not_once_the_page_is_loaded() {
+        let hint = |page: &Page| wings_plugin::ui::tree_json(address(page)).to_string().contains("Press Enter to search or go");
+        let mut page = Page::default();
+        page.apply(loaded("https://a.com/", "A"));
+        assert!(!hint(&page), "a loaded page's address is not a search");
+        page.typed = Some("zzz-no-history-match".into());
+        assert!(hint(&page), "typing something nothing matches");
+        page.typed = None;
+        assert!(!hint(&page), "after Enter or Escape");
     }
 
     #[test]

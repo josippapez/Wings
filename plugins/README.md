@@ -541,7 +541,7 @@ The page node and calls it uses, which need `permissions.webView` (and `browserC
 | `host::web_extension_set_enabled`, `web_extension_remove`, `web_extension_store_page` | `webExtensions` | Turn an extension on or off, remove it, and ask whether an address is a store page |
 | `host::browser_cookie_sources`, `browser_cookies_import` | `browserCookies` | The other browsers' profiles, and copying one's cookies in (only right after a click; it can take a while) |
 
-`ui::combobox_submit` is `ui::combobox` for a free-text field that is also sent as it stands, like the address bar: `on_key` hears Enter and Escape.
+`ui::combobox_submit` is `ui::combobox` for a free-text field that is also sent as it stands, like the address bar: `on_key` hears Enter and Escape. A `Combobox` with an empty `empty` shows no "nothing matches" line, which a free-text field wants while it is not being typed in.
 
 ## Project sections
 

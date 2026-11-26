@@ -653,7 +653,8 @@ pub struct Combobox {
     /// whose search is its text.
     pub query: Option<Option<String>>,
     pub options: Vec<Choice>,
-    /// Shown when something is searched for and nothing matches.
+    /// Shown when something is searched for and nothing matches. Empty shows nothing, as for a free-text field the
+    /// person isn't typing in, whose value is only what the page holds (an address bar's current URL).
     pub empty: &'static str,
     pub auto_focus: bool,
 }
@@ -712,7 +713,7 @@ fn combobox_with(o: Combobox, on_text: impl Fn(Option<String>) + 'static, on_pic
             }
         }))
     });
-    let nothing = (!done && found.is_empty() && !search.is_empty()).then(|| muted(o.empty).prop("size", "small"));
+    let nothing = (!o.empty.is_empty() && !done && found.is_empty() && !search.is_empty()).then(|| muted(o.empty).prop("size", "small"));
     stack().prop("gap", "s").child(field).maybe(options.or(nothing))
 }
 
