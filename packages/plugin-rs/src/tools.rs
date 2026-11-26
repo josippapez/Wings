@@ -17,7 +17,7 @@ thread_local! {
 
 /// Answers calls of the tool `name` with `run`, which gets the input and `{ paneId, project, session }` of who called.
 /// What it returns goes back as text: a string as it is, null as "Done", anything else as JSON. An error goes back as
-/// a failed call with its message.
+/// a failed call with its message. `with_image` adds a picture to the text.
 ///
 /// A tool whose schema says `pattern` answers every call with an error that says so, and never runs: there is nothing
 /// here to check a pattern with, and a field that looked checked and wasn't would be worse.
@@ -38,13 +38,42 @@ pub(crate) fn listen() {
     host::on("tool", |token, call| {
         let call = call.clone();
         task::spawn(async move {
-            let (text, is_error) = match answer(&call).await {
-                Ok(text) => (text, false),
-                Err(text) => (text, true),
+            let (text, image, is_error) = match answer(&call).await {
+                Ok((text, image)) => (text, image, false),
+                Err(text) => (text, None, true),
             };
-            drop(host::call("toolDone", json!({ "token": token, "text": text, "isError": is_error })));
+            drop(host::call("toolDone", done_params(token, &text, image.as_deref(), is_error)));
         });
     });
+}
+
+/// A tool's answer with a picture: the `path` a `WebView` `snapshot` returned (the app takes only those files), which Claude
+/// gets as an image after `text`. Put the path in `text` too, for `wings <plugin> <tool>` on the command line. Needs
+/// Wings 0.2.114.
+pub fn with_image(text: &str, path: &str) -> Value {
+    json!({ "text": text, "image": path })
+}
+
+/// The `toolDone` params: `image` is sent only when there is one, so a plain answer is as it was.
+fn done_params(token: u32, text: &str, image: Option<&str>, is_error: bool) -> Value {
+    let mut params = json!({ "token": token, "text": text, "isError": is_error });
+    if let Some(image) = image {
+        params["image"] = json!(image);
+    }
+    params
+}
+
+/// The text and picture of what a handler returned: exactly `{ text, image }` of two strings is `with_image`'s.
+fn split(result: Value) -> (String, Option<String>) {
+    match result {
+        Value::String(text) => (text, None),
+        Value::Null => ("Done".into(), None),
+        Value::Object(map) if map.len() == 2 && map.get("text").is_some_and(Value::is_string) && map.get("image").is_some_and(Value::is_string) => {
+            let text = |key: &str| map[key].as_str().unwrap_or_default().to_owned();
+            (text("text"), Some(text("image")))
+        }
+        other => (serde_json::to_string_pretty(&other).unwrap_or_default(), None),
+    }
 }
 
 fn has_pattern(schema: &Value) -> bool {
@@ -55,10 +84,10 @@ fn has_pattern(schema: &Value) -> bool {
     }
 }
 
-async fn answer(call: &Value) -> Result<String, String> {
+async fn answer(call: &Value) -> Result<(String, Option<String>), String> {
     // A Claude Code hook: what the plugin's `hooks::on_hook` says, or nothing when it has none for it.
     if call["hook"] == true {
-        return Ok(crate::hooks::answer(call).await);
+        return Ok((crate::hooks::answer(call).await, None));
     }
     let name = call["name"].as_str().unwrap_or_default();
     let Some((schema, run)) = TOOLS.with(|tools| tools.borrow().get(name).cloned()) else {
@@ -73,11 +102,7 @@ async fn answer(call: &Value) -> Result<String, String> {
     }
     check(&schema, &input, "", name)?;
     let context = json!({ "paneId": call["paneId"], "project": call["project"], "session": call["session"] });
-    Ok(match run(input, context).await? {
-        Value::String(text) => text,
-        Value::Null => "Done".into(),
-        other => serde_json::to_string_pretty(&other).unwrap_or_default(),
-    })
+    Ok(split(run(input, context).await?))
 }
 
 /// A whole number with a comma between its thousands, as the JS SDK's messages write it.
@@ -258,5 +283,22 @@ mod num_tests {
     fn a_whole_number_gets_commas_and_anything_else_is_written_plain() {
         assert_eq!([num(0.0), num(999.0), num(1000.0), num(-1234567.0)], ["0", "999", "1,000", "-1,234,567"]);
         assert_eq!([num(1.5), num(1e15)], ["1.5", "1000000000000000"]);
+    }
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+
+    #[test]
+    fn an_answer_with_an_image_goes_back_with_its_path_and_a_plain_one_is_as_it_was() {
+        assert_eq!(split(with_image("Saved /a.png", "/a.png")), ("Saved /a.png".to_owned(), Some("/a.png".to_owned())));
+        assert_eq!(split(json!("text")), ("text".to_owned(), None));
+        assert_eq!(split(Value::Null), ("Done".to_owned(), None));
+        // An object that only looks like it, with more fields or a non-string, is JSON text as before.
+        assert_eq!(split(json!({ "text": "a", "image": "b", "x": 1 })).1, None);
+        assert_eq!(split(json!({ "text": "a", "image": 3 })).1, None);
+        assert_eq!(done_params(7, "t", None, false), json!({ "token": 7, "text": "t", "isError": false }));
+        assert_eq!(done_params(7, "t", Some("/a.png"), false), json!({ "token": 7, "text": "t", "isError": false, "image": "/a.png" }));
     }
 }

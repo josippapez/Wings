@@ -824,6 +824,18 @@ pub fn open_view_with(id: &str, place: &str, args: &Value) -> Pending<Result<Val
     call("openView", json!({ "id": id, "as": place, "args": args, "newTab": false }))
 }
 
+/// `open_view_with` in a window of its own, `size` points wide and high when given: the app keeps it on the screen and no
+/// smaller than 320 by 240, and answers `{ width, height }` it got (null without a size). The view has to list `window` in
+/// `opens`, and a view with `multiple` gets a new window each time. Needs Wings 0.2.114.
+pub fn open_window(id: &str, args: &Value, size: Option<(f64, f64)>) -> Pending<Result<Value, String>> {
+    let mut params = json!({ "id": id, "as": "window", "args": args, "newTab": false });
+    if let Some((width, height)) = size {
+        params["width"] = json!(width);
+        params["height"] = json!(height);
+    }
+    call("openView", params)
+}
+
 /// `open_view_with` as a tab, which, when it is a new one, goes right after the tab of this page in the tab bar rather than
 /// at its end. Needs Wings 0.2.41.
 pub fn open_tab_beside(id: &str, args: &Value) -> Pending<Result<Value, String>> {
@@ -1171,6 +1183,20 @@ mod tests {
     use crate::task::{block_on, run_ready};
 
     /// Answers every call with `Ok(null)` and keeps what was called, in order. A method in `fail` is refused once.
+    #[test]
+    fn a_window_asks_for_its_size_only_when_given_one() {
+        let calls = record(&[]);
+        drop(open_window("browser", &json!({ "url": "https://a.b" }), Some((390.0, 844.0))));
+        drop(open_window("browser", &json!({}), None));
+        assert_eq!(
+            *calls.borrow(),
+            [
+                ("openView".to_owned(), json!({ "id": "browser", "as": "window", "args": { "url": "https://a.b" }, "newTab": false, "width": 390.0, "height": 844.0 })),
+                ("openView".to_owned(), json!({ "id": "browser", "as": "window", "args": {}, "newTab": false })),
+            ]
+        );
+    }
+
     pub(super) fn record(fail: &'static [&'static str]) -> Rc<RefCell<Vec<(String, Value)>>> {
         let calls = Rc::new(RefCell::new(Vec::new()));
         let kept = calls.clone();

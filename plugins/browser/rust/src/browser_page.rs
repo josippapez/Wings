@@ -3,6 +3,7 @@
 
 use crate::{
     address::resolve,
+    agent_page,
     extension::{Staged, dialog_for},
     history::{self, Entry},
     settings,
@@ -20,12 +21,12 @@ const SUGGESTIONS: usize = 6;
 const TITLE_MAX: usize = 80;
 
 #[derive(Default)]
-struct Page {
+pub(crate) struct Page {
     /// Where the view starts, once.
-    start: String,
-    state: WebState,
+    pub start: String,
+    pub state: WebState,
     /// The last command, which the view runs once per `token`.
-    command: Option<Value>,
+    pub command: Option<Value>,
     token: u64,
     /// What is in the address field while it is being edited, in place of the page's address.
     typed: Option<String>,
@@ -54,9 +55,15 @@ struct Effects {
 }
 
 impl Page {
-    fn send(&mut self, action: &str, url: Option<&str>) {
+    pub fn send(&mut self, action: &str, url: Option<&str>) {
+        self.run(|token| web_command(action, url, token));
+    }
+
+    /// Sends the view a command made from a new token, which the view runs once, and gives the token.
+    pub fn run(&mut self, make: impl FnOnce(u64) -> Value) -> u64 {
         self.token += 1;
-        self.command = Some(web_command(action, url, self.token));
+        self.command = Some(make(self.token));
+        self.token
     }
 
     fn apply(&mut self, new: WebState) -> Effects {
@@ -86,8 +93,13 @@ thread_local! {
     static PAGE: RefCell<Page> = RefCell::new(Page::default());
 }
 
-fn with<R>(change: impl FnOnce(&mut Page) -> R) -> R {
+pub(crate) fn with<R>(change: impl FnOnce(&mut Page) -> R) -> R {
     PAGE.with(|page| change(&mut page.borrow_mut()))
+}
+
+/// Shows `error` in the page's red line, as a failed store add does.
+pub(crate) fn problem(error: String) {
+    with(|page| page.problem = Some(error));
 }
 
 fn command(action: &'static str) {
@@ -116,6 +128,7 @@ fn typed(text: String) {
 
 fn state(new: WebState) {
     let effects = with(|page| page.apply(new));
+    agent_page::changed();
     if let Some(title) = effects.title {
         drop(host::set_tab_title(title.as_deref()));
     }
@@ -240,6 +253,11 @@ fn view() -> Vec<Node> {
             .prop("gap", "s")
             .prop("align", "center")
             .maybe(page.store.then(|| button("Add to Wings", "secondary", page.busy, stage_store).size("sm")))
+            .child(if agent_page::popped() {
+                icon_button("Put back in a tab", &icons::MINIMIZE_2, agent_page::pop_button_action)
+            } else {
+                icon_button("Pop out into a window", &icons::EXTERNAL_LINK, agent_page::pop_button_action)
+            })
             .child(icon_button("Browser settings", &icons::SETTINGS, || drop(host::open_settings())));
         let problem = if page.staged.is_none() { page.problem.as_deref() } else { None };
         let top = [
@@ -247,8 +265,9 @@ fn view() -> Vec<Node> {
             state.error.as_deref().map(|error| notice("danger", error).key("error")),
             problem.map(|problem| notice("danger", problem).key("problem")),
             page.added.as_deref().map(|added| notice("success", added).key("added")),
+            agent_page::handoff_banner(),
         ];
-        let mut web = web_view("page").prop("fill", true).prop("url", page.start.as_str()).prop("keepData", keep).on("onState", state_event);
+        let mut web = web_view("page").prop("fill", true).prop("url", page.start.as_str()).prop("keepData", keep).on("onState", state_event).on("onResult", agent_page::result);
         if let Some(command) = &page.command {
             web = web.prop("command", command.clone());
         }
@@ -264,8 +283,10 @@ fn state_event(event: &Value) {
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     let engine = settings::engine().get();
-    let start = host::view_args().and_then(|args| args["url"].as_str().and_then(|url| resolve(url, engine))).unwrap_or_else(|| engine.home().to_owned());
-    with(|page| page.start = start);
+    let args = host::view_args();
+    let start = args.as_ref().and_then(|args| args["url"].as_str().and_then(|url| resolve(url, engine))).unwrap_or_else(|| engine.home().to_owned());
+    with(|page| page.start.clone_from(&start));
+    agent_page::start(args.as_ref(), &start);
     wings_plugin::run_filled(view);
 }
 

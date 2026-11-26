@@ -9,6 +9,11 @@
 #![allow(dead_code)]
 
 mod address;
+mod agent_js;
+#[cfg(feature = "browser")]
+mod agent_page;
+#[cfg(feature = "main")]
+mod agent_tools;
 #[cfg(feature = "browser")]
 mod browser_page;
 mod extension;
@@ -18,3 +23,5 @@ mod main_frame;
 mod settings;
 #[cfg(feature = "settings")]
 mod settings_page;
+mod protocol;
+mod wait;

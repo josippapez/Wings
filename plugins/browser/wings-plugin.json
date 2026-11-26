@@ -2,7 +2,7 @@
   "id": "browser",
   "name": "Browser",
   "version": "0.1.0",
-  "minWingsVersion": "0.2.113",
+  "minWingsVersion": "0.2.114",
   "icon": "icon.svg",
   "description": "A web browser in a tab, drawn by WebKit: an address bar that searches, history suggestions, cookies kept between runs (or not), sign-in copied from another browser on this Mac, and browser extensions.",
   "api": 1,
@@ -10,7 +10,8 @@
   "main": "dist/native/main.wasm",
   "permissions": {
     "webView": true,
-    "browserCookies": true
+    "browserCookies": true,
+    "webScripts": true
   },
   "contributes": {
     "views": [
@@ -19,7 +20,8 @@
         "title": "Browser",
         "page": "dist/native/browser.wasm",
         "opens": [
-          "tab"
+          "tab",
+          "window"
         ],
         "newTab": true,
         "multiple": true
@@ -27,6 +29,440 @@
     ],
     "settings": {
       "page": "dist/native/settings.wasm"
-    }
+    },
+    "mcpTools": [
+      {
+        "name": "open",
+        "description": "Opens a web page in the Wings Browser, which is a real browser with the user's own sign-ins, and shows it to them. Pass a web address or words to search for. With pop_out, width, height or preset the page gets its own window of that size (to check a layout at phone or tablet width); otherwise it opens as a tab. If a Browser page is open for this project it navigates that one. Then use browser__snapshot to read the page.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "A web address, or words to search for.",
+              "minLength": 1,
+              "maxLength": 2000
+            },
+            "pop_out": {
+              "type": "boolean",
+              "description": "Open in a window of its own instead of a tab."
+            },
+            "width": {
+              "type": "integer",
+              "minimum": 320,
+              "maximum": 4000,
+              "description": "Window width in points; give height too. Wins over preset."
+            },
+            "height": {
+              "type": "integer",
+              "minimum": 240,
+              "maximum": 4000,
+              "description": "Window height in points; give width too."
+            },
+            "preset": {
+              "type": "string",
+              "enum": [
+                "desktop",
+                "tablet",
+                "phone"
+              ],
+              "description": "Window size: desktop 1440x900, tablet 834x1194, phone 390x844."
+            }
+          },
+          "required": [
+            "url"
+          ]
+        }
+      },
+      {
+        "name": "pop_out",
+        "description": "Moves the Browser page from its tab into a window of its own, optionally at a size (width and height, or a preset), opening a page if none is open. On a page that is already in a window it resizes it. The same cookies are used, so sign-ins stay; back and forward history does not carry over. Use it to test responsive layouts.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "width": {
+              "type": "integer",
+              "minimum": 320,
+              "maximum": 4000,
+              "description": "Window width in points; give height too. Wins over preset."
+            },
+            "height": {
+              "type": "integer",
+              "minimum": 240,
+              "maximum": 4000,
+              "description": "Window height in points; give width too."
+            },
+            "preset": {
+              "type": "string",
+              "enum": [
+                "desktop",
+                "tablet",
+                "phone"
+              ],
+              "description": "Window size: desktop 1440x900, tablet 834x1194, phone 390x844."
+            }
+          }
+        }
+      },
+      {
+        "name": "pop_in",
+        "description": "Moves the Browser page from its window back into a tab of the project (the window closes; history does not carry over).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "resize",
+        "description": "Resizes the Browser window to a width and height or a preset. Only works on a page that is popped out: call browser__pop_out first for one in a tab.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "width": {
+              "type": "integer",
+              "minimum": 320,
+              "maximum": 4000,
+              "description": "Window width in points; give height too. Wins over preset."
+            },
+            "height": {
+              "type": "integer",
+              "minimum": 240,
+              "maximum": 4000,
+              "description": "Window height in points; give width too."
+            },
+            "preset": {
+              "type": "string",
+              "enum": [
+                "desktop",
+                "tablet",
+                "phone"
+              ],
+              "description": "Window size: desktop 1440x900, tablet 834x1194, phone 390x844."
+            }
+          }
+        }
+      },
+      {
+        "name": "emulate",
+        "description": "Sets the Browser window to a device size with a preset (desktop 1440x900, tablet 834x1194, phone 390x844). Same as browser__resize with a preset: needs a popped out page.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "preset": {
+              "type": "string",
+              "enum": [
+                "desktop",
+                "tablet",
+                "phone"
+              ],
+              "description": "Window size: desktop 1440x900, tablet 834x1194, phone 390x844."
+            }
+          },
+          "required": [
+            "preset"
+          ]
+        }
+      },
+      {
+        "name": "navigate",
+        "description": "Loads an address in the open Browser page, or goes back, forward or reloads. Give url, or action, not both. Waits until the page has finished loading (up to 20 s) and says where it ended up. With no page open, a url opens one.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "A web address, or words to search for.",
+              "maxLength": 2000
+            },
+            "action": {
+              "type": "string",
+              "enum": [
+                "back",
+                "forward",
+                "reload"
+              ],
+              "description": "History move or reload."
+            }
+          }
+        }
+      },
+      {
+        "name": "status",
+        "description": "Lists the Browser pages open for this project: address, title, whether loading, whether in a tab or a window, and the last size set. Call it to see what is open before acting.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "screenshot",
+        "description": "Takes a picture of what the Browser page shows on screen right now and returns it as an image (and its file path). It captures only the visible area, not the whole page: scroll with browser__scroll to see more. Use browser__snapshot when you need text or refs to act on.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "snapshot",
+        "description": "Reads the Browser page as a compact outline of text, headings, links, buttons and fields. Interactive elements have refs like e12, which browser__click, fill, hover, select and drag take. Refs go stale when the page changes: take a new snapshot after navigating or acting. The outline is cut at 12,000 characters.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "click",
+        "description": "Clicks the element with this ref from browser__snapshot (scrolls it into view first). Use it for links, buttons, checkboxes and radios. Take a new snapshot after to see the result.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ref": {
+              "type": "string",
+              "description": "A ref like e12 from browser__snapshot.",
+              "minLength": 1,
+              "maxLength": 20
+            }
+          },
+          "required": [
+            "ref"
+          ]
+        }
+      },
+      {
+        "name": "fill",
+        "description": "Sets the value of a text field, textarea or select by ref and fires its input and change events, replacing what was there. For checkboxes and buttons use browser__click.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ref": {
+              "type": "string",
+              "description": "A ref like e12 from browser__snapshot.",
+              "minLength": 1,
+              "maxLength": 20
+            },
+            "value": {
+              "type": "string",
+              "description": "The new value.",
+              "maxLength": 20000
+            }
+          },
+          "required": [
+            "ref",
+            "value"
+          ]
+        }
+      },
+      {
+        "name": "type",
+        "description": "Types text into the element that has focus (click or fill a field first), at the cursor. Use browser__fill to replace a whole value.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "description": "Text to type.",
+              "minLength": 1,
+              "maxLength": 20000
+            }
+          },
+          "required": [
+            "text"
+          ]
+        }
+      },
+      {
+        "name": "press",
+        "description": "Sends a key or combination to the focused element as keyboard events, like Enter, Escape, Tab, ArrowDown or Control+a. They are synthetic events for the page's own key handlers: they do not trigger browser shortcuts like Cmd+T or Cmd+L. Enter in a text field submits its form.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "description": "A key, optionally with modifiers joined by +: Enter, Shift+Tab, Control+a.",
+              "minLength": 1,
+              "maxLength": 60
+            }
+          },
+          "required": [
+            "key"
+          ]
+        }
+      },
+      {
+        "name": "wait_for",
+        "description": "Waits until the Browser page shows some text, has an element matching a CSS selector, or its address contains some text, then returns. Checks every 250 ms, and only while waiting. Errors when the timeout passes. Give at least one of text, selector, url.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "description": "Text the page must show.",
+              "maxLength": 500
+            },
+            "selector": {
+              "type": "string",
+              "description": "A CSS selector the page must match.",
+              "maxLength": 500
+            },
+            "url": {
+              "type": "string",
+              "description": "Text the page's address must contain.",
+              "maxLength": 500
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 60000,
+              "description": "How long to wait. Default 10000."
+            }
+          }
+        }
+      },
+      {
+        "name": "eval",
+        "description": "Runs JavaScript in the Browser page's own world, with access to its globals, and returns the result as JSON. The script is the body of an async function, so write `return document.title`, not a bare expression. Refused on sites the person signed in to by importing cookies from another browser. Use browser__snapshot and click for ordinary interaction.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "script": {
+              "type": "string",
+              "description": "The body of an async function.",
+              "minLength": 1,
+              "maxLength": 20000
+            }
+          },
+          "required": [
+            "script"
+          ]
+        }
+      },
+      {
+        "name": "hover",
+        "description": "Moves the pointer over the element with this ref, firing its hover events (menus, tooltips).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ref": {
+              "type": "string",
+              "description": "A ref like e12 from browser__snapshot.",
+              "minLength": 1,
+              "maxLength": 20
+            }
+          },
+          "required": [
+            "ref"
+          ]
+        }
+      },
+      {
+        "name": "select",
+        "description": "Chooses options of a select element by ref, by value or visible label.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ref": {
+              "type": "string",
+              "description": "A ref like e12 from browser__snapshot.",
+              "minLength": 1,
+              "maxLength": 20
+            },
+            "values": {
+              "type": "array",
+              "maxItems": 50,
+              "items": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "description": "Option values or labels to select."
+            }
+          },
+          "required": [
+            "ref",
+            "values"
+          ]
+        }
+      },
+      {
+        "name": "scroll",
+        "description": "Scrolls the Browser page: an element into view by ref, to the top or bottom, or by x and y pixels. Says where it ended up.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ref": {
+              "type": "string",
+              "description": "A ref like e12 from browser__snapshot.",
+              "minLength": 1,
+              "maxLength": 20
+            },
+            "to": {
+              "type": "string",
+              "enum": [
+                "top",
+                "bottom"
+              ],
+              "description": "Jump to the top or the bottom."
+            },
+            "x": {
+              "type": "integer",
+              "description": "Pixels to scroll right."
+            },
+            "y": {
+              "type": "integer",
+              "description": "Pixels to scroll down; negative scrolls up."
+            }
+          }
+        }
+      },
+      {
+        "name": "drag",
+        "description": "Drags the element with ref `from` onto the element with ref `to`, firing mouse and drag events.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "A ref like e12 from browser__snapshot.",
+              "minLength": 1,
+              "maxLength": 20
+            },
+            "to": {
+              "type": "string",
+              "description": "A ref like e12 from browser__snapshot.",
+              "minLength": 1,
+              "maxLength": 20
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      },
+      {
+        "name": "handoff",
+        "description": "Shows a banner in the Browser page asking the person to do a step only they can (sign in, solve a captcha, approve a payment) with a Done button, and waits until they press it. Use it instead of trying to do these yourself.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string",
+              "description": "What the person should do, in one sentence.",
+              "minLength": 1,
+              "maxLength": 500
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 600000,
+              "description": "How long to wait. Default 120000."
+            }
+          },
+          "required": [
+            "message"
+          ]
+        }
+      }
+    ],
+    "mcpInstructions": "Browser (browser__*): a real browser in Wings, signed in like the user. To use a web page: browser__open a url, browser__snapshot to read it and get refs, then click, fill, type, press, wait_for; browser__screenshot to see it. browser__pop_out (width/height or preset phone, tablet, desktop) gives it a window of that size to check layouts. browser__handoff when the person must sign in or solve a captcha. Also: wings browser <tool>."
   }
 }

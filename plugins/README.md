@@ -157,7 +157,7 @@ Reach for these before writing your own. Each is a module of `wings-plugin`. The
 | `settings` | `Setting`: a stored value that every frame reads and hears change | `pr-tracker/rust/src` |
 | `task` | `spawn`, `join_all`: async tasks the page waits on. `Gate` and `oneshot` for one task waking another | `changes/rust/src/sidebar.rs` |
 | `approvals` | `Approvals`: a tool call that waits for the person's Allow or Deny in a page | `share/rust/src`, `schedules/rust/src` |
-| `tools` | `register(name, schema, run)`: Claude's tools, with the input checked against the manifest's schema | `schedules/rust/src` |
+| `tools` | `register(name, schema, run)`: Claude's tools, with the input checked against the manifest's schema. `with_image(text, path)` answers with a picture too (the `path` of a `WebView` snapshot; Wings 0.2.114) | `schedules/rust/src` |
 | `hooks` | `on_hook`: the Claude Code hooks a main answers. Call `tools::register` in the same main | `tasks/rust/src` |
 | `sessions` | `follow`: the Claude sessions in panes, each run's older entries and then its live ones | `hud/rust/src/main_frame.rs` |
 | `cli` | `Cli`: `gh`, `glab` and `az` calls that tell "not installed" and "signed out" from a failure, and the badge with Install, Sign in and Try again | `work-item/rust/src/az.rs` |
@@ -511,12 +511,29 @@ A view with `"newTab": true` also shows in the + menu, a chevron next to the + b
 
 `browser/` is a web browser in a tab, drawn by WebKit. It is built-in and off in a dev build (`startsOff`). Its main does nothing, because a plugin needs one to load. Each tab (`browser.wasm`, a view with `newTab` and `multiple`, started by `host::view_args` with `{ "url": "https://..." }` to open an address, as another plugin would) and the settings page (`settings.wasm`) read what is kept from storage. The tab is `run_filled`: a toolbar with back, forward, reload or stop, an address bar and a settings button, over a `WebView` that fills the rest. The address bar loads an address as typed, adds `https://` to a host (`http://` to `localhost`, `127.0.0.1` and `[::1]`) and searches anything else with the engine from the settings (DuckDuckGo or Google); a `file:` or `javascript:` address is searched for, never loaded. It suggests up to six pages from history, newest first, kept in storage (500 at most, one per address). On a Chrome Web Store or addons.mozilla.org page it shows Add to Wings. The settings page has the search engine, Keep cookies and site data, Clear browsing data, Sign in with another browser (copies cookies from another browser's profile) and Extensions.
 
+**Pop out.** The toolbar's Pop out button opens the same address in a window of its own (the `browser` view lists `window` in `opens`) and closes the tab; in the window the same button reads Put back and does the opposite. The window keeps the cookie store, so a sign-in stays, but back and forward history does not come along, because the address is loaded again. Closing the window just closes it: nothing is put back.
+
+**Tools for Claude.** With the plugin on, Claude drives a Browser page through `browser__<tool>` (or `wings browser <tool>`); each needs `permissions.webScripts` and Wings 0.2.114. Main answers them (`agent_tools.rs`): pages tell main who and where they are (`browser:page`), and a tool goes to the page of the caller's project that had the focus last, which main checks is still there with a `status` ask. Tools open a page when they need one (`open`, `pop_out`, and `navigate` with a url); the others say to call `open` first. The page does the work (`agent_page.rs`), since only a page runs a `WebView`'s commands.
+
+| Tools | Does |
+|---|---|
+| `open`, `navigate`, `status` | Open an address or search (in a tab, or a window with `pop_out`, `width`, `height` or `preset`), load an address or go back, forward or reload and wait for the load, list the pages |
+| `pop_out`, `pop_in`, `resize`, `emulate` | Move the page to a window of a size (presets desktop 1440x900, tablet 834x1194, phone 390x844) and back to a tab; resize and emulate need a popped-out page |
+| `snapshot`, `screenshot` | An outline of the page with refs like `e12` for what can be clicked (cut at 12,000 characters), and a picture of the visible area only (not the whole page) |
+| `click`, `fill`, `type`, `press`, `hover`, `select`, `scroll`, `drag` | Act on a ref, by a small JavaScript helper (`agent_js.rs`) that runs in the web view's isolated world. Keys are synthetic events, so browser shortcuts like Cmd+T don't work; a ref the page dropped says to snapshot again |
+| `wait_for`, `eval` | Wait for text, a selector or an address part (checks every 250 ms, only while waiting); run JavaScript in the page's own world (refused on a site signed in with imported cookies) |
+| `handoff` | A banner in the page asks the person for a step, like signing in, and the tool waits for their Done |
+
+Not done yet, which need the app: console, network, dialogs (`alert`, `confirm`, `prompt`), file upload, recording, screenshot diff and tabs.
+
 The page node and calls it uses, which need `permissions.webView` (and `browserCookies` for the last):
 
 | SDK | Wings | Means |
 |---|---|---|
 | `ui::web_view(name)` | `WebView` | A web page drawn over the page. `name` (up to 64 characters) is its key: Wings keeps the web engine's view while the node stays in the tree, so building the page again never reloads it. Props: `url` (http, https or `about:blank`, used when the view is first made), `command`, `keepData` (default true; false keeps cookies and site data only while Wings runs), `height` in points (default 400) or `fill: true` for the rest of its container's height, and `onState`. It is hidden under a dialog or sheet of the page and under an app menu, and is an empty area in a headless render |
 | `ui::web_command(action, url, token)` | `command` | `action` is `load` (with `url`), `back`, `forward`, `reload` or `stop`. Each new `token` runs once, as `Scroll`'s `scrollTo` does, so the page keeps a counter |
+| `ui::web_eval(script, page_world, token)`, `ui::web_snapshot(token)` | `command` `eval`, `snapshot` | Run an async function body in the page (needs `permissions.webScripts`; its return comes back as JSON) and take a picture of the visible area. The answer comes to `onResult` as `{ token, value }` or `{ token, error }` |
+| `host::open_window(id, args, size)`, `host::resize_window` | `openView` `as: window`, `resizeWindow` | A view in a window of its own at a size in points (kept on the screen, at least 320x240), and a page in a window sizing it |
 | `ui::WebState::from_event` | `onState` | `{ url, title, loading, canGoBack, canGoForward, error }`, sent when any of them change |
 | `host::web_data_clear` | `webData` | Clears the plugin's kept cookies and site data |
 | `host::web_extensions`, `web_extensions_installed` | `webExtensions` `list`, `installed` | The extensions added (`supported` is false before macOS 15.4) and the ones installed in the user's other browsers |

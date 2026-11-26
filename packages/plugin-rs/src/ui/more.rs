@@ -160,6 +160,25 @@ pub fn web_command(action: &str, url: Option<&str>, token: u64) -> Value {
     json!({ "action": action, "url": url, "token": token })
 }
 
+/// The `command` prop that runs `script` in the page (Wings 0.2.114, needs `permissions.webScripts`). `script` is the body of
+/// an async JavaScript function: what it returns comes back as JSON in `onResult` as `{ token, value }`, or `{ token, error }`.
+/// By default it runs in an isolated world that shares the page's DOM but not its globals; `page_world` runs it in the page's
+/// own, which the app refuses on a site whose cookies were imported from another browser.
+pub fn web_eval(script: &str, page_world: bool, token: u64) -> Value {
+    let mut command = json!({ "action": "eval", "script": script, "token": token });
+    if page_world {
+        command["world"] = json!("page");
+    }
+    command
+}
+
+/// The `command` prop that takes a picture of the visible area (Wings 0.2.114): `onResult` gets `{ token, value: { path,
+/// width, height } }`, a PNG saved in the plugin's web folder whose long side is at most 1,600 pixels. `tools::with_image`
+/// sends that path to Claude.
+pub fn web_snapshot(token: u64) -> Value {
+    json!({ "action": "snapshot", "token": token })
+}
+
 /// What a `web_view`'s `onState` sends when any of it changes.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct WebState {
@@ -204,6 +223,13 @@ mod tests {
 
     fn slots(node: Node) -> Vec<String> {
         tree_json(node)["children"].as_array().unwrap().iter().map(|slot| slot["props"]["name"].as_str().unwrap_or("-").to_owned()).collect()
+    }
+
+    #[test]
+    fn an_eval_and_a_snapshot_are_commands_with_a_token_and_the_page_world_only_when_asked() {
+        assert_eq!(web_eval("return 1", false, 4), json!({ "action": "eval", "script": "return 1", "token": 4 }));
+        assert_eq!(web_eval("return 1", true, 5)["world"], "page");
+        assert_eq!(web_snapshot(6), json!({ "action": "snapshot", "token": 6 }));
     }
 
     #[test]

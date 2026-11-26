@@ -1,4 +1,6 @@
-//! The main script. The tabs and the settings page do all the work, but a plugin has to have a main to load.
+//! The main script: it answers the agent tools (`agent_tools.rs`). The tabs and the settings page do the rest.
 
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub fn start() {}
+pub fn start() {
+    crate::agent_tools::start();
+}

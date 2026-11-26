@@ -63,6 +63,8 @@ struct Extensions {
 
 #[derive(Default)]
 struct Page {
+    /// Wings says the cookies can't be kept past this run on this Mac (before macOS 14).
+    cookies_not_kept: bool,
     sources: Option<Result<Vec<Source>, String>>,
     imports: HashMap<String, Import>,
     extensions: Option<Result<Extensions, String>>,
@@ -155,6 +157,8 @@ fn load_extensions() {
         let extensions = match listed {
             Ok(answer) => {
                 let (supported, added) = parse_added(&answer);
+                // Older Wings don't say, and keep them.
+                with(|page| page.cookies_not_kept = answer["keepsCookies"] == false);
                 // What other browsers have stays what the last look found.
                 let installed = with(|page| page.extensions.as_ref().and_then(|loaded| loaded.as_ref().ok()?.installed.clone()));
                 Ok(Extensions { supported, added, installed })
@@ -408,6 +412,7 @@ fn view() -> Vec<Node> {
                 setting("Clear browsing data", "Removes your history, cookies and site data.", button("Clear", "outline", page.clearing, || with(|page| page.confirm_clear = true)).size("sm")),
             ])],
         );
+        let not_kept = page.cookies_not_kept.then(|| notice("warn", "Cookies are kept only while Wings runs on this Mac. Keeping them between runs needs macOS 14."));
         let ask = page.confirm_clear.then(|| {
             let buttons = actions(Some(button("Cancel", "ghost", false, || with(|page| page.confirm_clear = false))), [button("Clear", "destructive", false, clear)]);
             confirm("Clear browsing data?", [muted("This signs you out of the sites you are signed in to and empties your history.")], [buttons])
@@ -417,7 +422,7 @@ fn view() -> Vec<Node> {
             Err(error) => notice("danger", error.as_str()),
         });
         let problem = (page.staged.is_none()).then(|| page.problem.as_deref().map(|problem| notice("danger", problem))).flatten();
-        let column = stack().prop("gap", "l").children([search, privacy]).maybe(ask).maybe(cleared).children(cookies(&page, keep)).children(extensions(&page)).maybe(problem);
+        let column = stack().prop("gap", "l").children([search, privacy]).maybe(not_kept).maybe(ask).maybe(cleared).children(cookies(&page, keep)).children(extensions(&page)).maybe(problem);
         let dialog = page.staged.as_ref().map(|staged| dialog_for(staged, page.adding, page.problem.as_deref(), cancel, add));
         vec![column_page(toolbar("Browser", None), std::iter::once(column).chain(dialog))]
     })
@@ -484,5 +489,14 @@ mod tests {
         for shown in ["Chrome, Josip", "Import", "Extensions need macOS 15.4 or newer", "Search engine", "Clear browsing data"] {
             assert!(drawn.contains(shown), "{shown} is not in {drawn}");
         }
+    }
+
+    #[test]
+    fn a_mac_that_cant_keep_cookies_gets_a_warning_under_the_privacy_settings_and_others_none() {
+        let warning = "needs macOS 14";
+        with(|page| page.cookies_not_kept = false);
+        assert!(!wings_plugin::ui::export(view()).0.to_string().contains(warning));
+        with(|page| page.cookies_not_kept = true);
+        assert!(wings_plugin::ui::export(view()).0.to_string().contains(warning));
     }
 }
