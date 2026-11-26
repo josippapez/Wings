@@ -1,7 +1,7 @@
 {
   "id": "browser",
   "name": "Browser",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "minWingsVersion": "0.2.114",
   "icon": "icon.svg",
   "description": "A web browser in a tab, drawn by WebKit: an address bar that searches, history suggestions, cookies kept between runs (or not), sign-in copied from another browser on this Mac, and browser extensions.",

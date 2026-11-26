@@ -17,6 +17,21 @@ pub(super) fn browser(out: PathBuf) {
     }
     let names = json!({ "profile": { "info_cache": { "Default": { "name": "Work" }, "Profile 1": { "name": "Personal" } } } });
     std::fs::write(chrome.join("Local State"), names.to_string()).unwrap();
+    // Extensions of the Work profile, which Look lists: a folder each with a manifest and a 128 point icon.
+    let extensions = chrome.join("Default/Extensions");
+    let made = [
+        ("Bitwarden Password Manager", "At home, at work, or on the go, Bitwarden easily secures all your passwords.\nSecond line.", [30, 90, 200]),
+        ("uBlock Origin", "Finally, an efficient wide-spectrum content blocker. Easy on CPU and memory.", [170, 40, 40]),
+        ("Dark Reader", "Dark mode for every website. Take care of your eyes, use dark theme for night and daily browsing.", [40, 40, 60]),
+        ("React Developer Tools", "Adds React debugging tools to the Chrome Developer Tools.", [20, 150, 180]),
+    ];
+    for (at, (name, description, colour)) in made.iter().enumerate() {
+        let folder = extensions.join(format!("{}{}", "abcdefghijklmnopabcdefghijklmn", ["ab", "bc", "cd", "de"][at])).join("1.0_0");
+        std::fs::create_dir_all(&folder).unwrap();
+        let manifest = json!({ "manifest_version": 3, "name": name, "version": "1.0", "description": description, "icons": { "128": "icon.png" } });
+        std::fs::write(folder.join("manifest.json"), manifest.to_string()).unwrap();
+        image::RgbaImage::from_pixel(128, 128, image::Rgba([colour[0], colour[1], colour[2], 255])).save(folder.join("icon.png")).unwrap();
+    }
     // The scene runs alone in its process, so its home is the browsers' only home there.
     unsafe { std::env::set_var("HOME", &home) };
     let manifest: wings_plugins::manifest::Manifest =
@@ -80,6 +95,12 @@ pub(super) fn browser(out: PathBuf) {
             // The settings ask for the other browsers and extensions as they open.
             wait(&mut cx, window, Duration::from_millis(1500));
             save(&mut cx, window, out.join(format!("browser-{name}-{width}.png")));
+            if *name == "settings" {
+                // Look, as a click on it does, then Add on the first extension it lists.
+                assert!(handle.read_with(&cx, |view, _| view.press("Look", 0)).unwrap(), "no Look button");
+                wait(&mut cx, window, Duration::from_millis(1500));
+                save(&mut cx, window, out.join(format!("browser-settings-look-{width}.png")));
+            }
             let _ = cx.update_window(window, |_, window, _| window.remove_window());
         }
     }

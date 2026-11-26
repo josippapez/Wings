@@ -57,8 +57,6 @@ struct Installed {
 struct Extensions {
     supported: bool,
     added: Vec<Extension>,
-    /// What other browsers have, once the person asked to look (`look_in_browsers`): Wings reads their profiles only then.
-    installed: Option<Vec<Installed>>,
 }
 
 #[derive(Default)]
@@ -68,6 +66,13 @@ struct Page {
     sources: Option<Result<Vec<Source>, String>>,
     imports: HashMap<String, Import>,
     extensions: Option<Result<Extensions, String>>,
+    /// What other browsers have, once the person asked to look (`look_in_browsers`): Wings reads their profiles only then.
+    /// It is the page's own, so reading the added extensions again (after an add, a remove or a switch) leaves it be.
+    installed: Option<Vec<Installed>>,
+    /// Looking in the other browsers is under way.
+    looking: bool,
+    /// Why the last look found nothing: shown with Try again, never as an empty list.
+    look_failed: Option<String>,
     /// What is being staged, as `PICK` or an installed extension's source, so only its button shows busy.
     staging: Option<String>,
     staged: Option<Staged>,
@@ -159,9 +164,7 @@ fn load_extensions() {
                 let (supported, added) = parse_added(&answer);
                 // Older Wings don't say, and keep them.
                 with(|page| page.cookies_not_kept = answer["keepsCookies"] == false);
-                // What other browsers have stays what the last look found.
-                let installed = with(|page| page.extensions.as_ref().and_then(|loaded| loaded.as_ref().ok()?.installed.clone()));
-                Ok(Extensions { supported, added, installed })
+                Ok(Extensions { supported, added })
             }
             Err(error) => Err(error),
         };
@@ -169,13 +172,20 @@ fn load_extensions() {
     });
 }
 
-/// Lists the extensions the other browsers on this Mac have, on the person's click, as Wings asks.
+/// Lists the extensions the other browsers on this Mac have, on the person's click, as Wings asks. The answer is kept
+/// whatever the added extensions are doing, and a failure is kept to show, not turned into an empty list.
 fn look_in_browsers() {
+    if with(|page| std::mem::replace(&mut page.looking, true)) {
+        return;
+    }
+    with(|page| page.look_failed = None);
     spawn(async {
-        let installed = host::web_extensions_installed().await.map(|answer| parse_installed(&answer)).unwrap_or_default();
+        let listed = host::web_extensions_installed().await.map(|answer| parse_installed(&answer));
         with(|page| {
-            if let Some(Ok(loaded)) = &mut page.extensions {
-                loaded.installed = Some(installed);
+            page.looking = false;
+            match listed {
+                Ok(installed) => page.installed = Some(installed),
+                Err(error) => page.look_failed = Some(error),
             }
         });
     });
@@ -324,7 +334,7 @@ fn extension_rows(extensions: &Extensions, page: &Page) -> Vec<Node> {
                 None => muted(format!("Version {}", extension.version)).prop("size", "small"),
             };
             entry(Entry {
-                lead: extension.icon.as_deref().map(|icon| image(icon, &extension.name, 20, 20)),
+                lead: extension.icon.as_deref().map(|icon| image(icon, &extension.name, 16, 16)),
                 title: text(extension.name.as_str()).prop("weight", "medium"),
                 detail: Some(detail),
                 trailing: Some(ui::row().prop("gap", "s").prop("align", "center").child(toggle).child(icon_button(&format!("Remove {}", extension.name), &icons::TRASH, move || with(|page| page.removing = Some(removing.clone()))))),
@@ -344,6 +354,36 @@ fn first_line(description: &str) -> &str {
     description.lines().find(|line| !line.trim().is_empty()).unwrap_or_default().trim()
 }
 
+/// The "From your browsers" section: the Look row, that it is looking, why it couldn't, or what it found.
+fn from_browsers(page: &Page, loaded: &Extensions) -> Vec<Node> {
+    if page.looking {
+        return vec![section("From your browsers", None, [rows_card([entry(Entry { lead: Some(spinner()), title: muted("Looking in your browsers"), detail: None, trailing: None })])])];
+    }
+    if let Some(error) = &page.look_failed {
+        return vec![error_state("Couldn't look in your browsers", error, Some(("Try again", Box::new(look_in_browsers))))];
+    }
+    let Some(installed) = &page.installed else {
+        let look = button("Look", "outline", false, look_in_browsers).size("sm");
+        return vec![section("From your browsers", None, [rows_card([setting("Extensions you already use", "Lists the extensions of the other browsers on this Mac, to add here.", look)])])];
+    };
+    let others = not_added(installed, &loaded.added);
+    if others.is_empty() {
+        let line = if installed.is_empty() { "No extensions found in your other browsers" } else { "Everything your other browsers have is already added" };
+        return vec![section("From your browsers", None, [rows_card([entry(Entry { lead: None, title: muted(line), detail: None, trailing: None })])])];
+    }
+    let rows = others.into_iter().map(|extension| {
+        let source = extension.source.clone();
+        entry(Entry {
+            lead: extension.icon.as_deref().map(|icon| image(icon, &extension.name, 16, 16)),
+            title: text(extension.name.as_str()).prop("weight", "medium"),
+            detail: (!extension.description.is_empty()).then(|| muted(first_line(&extension.description)).prop("size", "small").prop("truncate", true)),
+            trailing: Some(button("Add", "outline", page.staging.as_deref() == Some(extension.source.as_str()), move || stage(Some(source.clone()))).size("sm")),
+        })
+        .key(extension.source.as_str())
+    });
+    vec![section("From your browsers", Some("Extensions you already use in another browser on this Mac."), [rows_card(rows)])]
+}
+
 fn extensions(page: &Page) -> Vec<Node> {
     let loaded = match &page.extensions {
         None => return vec![section("Extensions", None, [rows_card([entry(Entry { lead: Some(spinner()), title: muted("Loading extensions"), detail: None, trailing: None })])])],
@@ -354,24 +394,7 @@ fn extensions(page: &Page) -> Vec<Node> {
         return vec![section("Extensions", None, []), notice("warn", "Extensions need macOS 15.4 or newer")];
     }
     let mut out = vec![section("Extensions", Some("Chrome and Firefox extensions, which run on the pages you open in the browser."), [rows_card(extension_rows(loaded, page))])];
-    if loaded.installed.is_none() {
-        let look = button("Look", "outline", false, look_in_browsers).size("sm");
-        out.push(section("From your browsers", None, [rows_card([setting("Extensions you already use", "Lists the extensions of the other browsers on this Mac, to add here.", look)])]));
-    }
-    let others = not_added(loaded.installed.as_deref().unwrap_or_default(), &loaded.added);
-    if !others.is_empty() {
-        let rows = others.into_iter().map(|extension| {
-            let source = extension.source.clone();
-            entry(Entry {
-                lead: extension.icon.as_deref().map(|icon| image(icon, &extension.name, 20, 20)),
-                title: text(extension.name.as_str()).prop("weight", "medium"),
-                detail: (!extension.description.is_empty()).then(|| muted(first_line(&extension.description)).prop("size", "small").prop("truncate", true)),
-                trailing: Some(button("Add", "outline", page.staging.as_deref() == Some(extension.source.as_str()), move || stage(Some(source.clone()))).size("sm")),
-            })
-            .key(extension.source.as_str())
-        });
-        out.push(section("From your browsers", Some("Extensions you already use in another browser on this Mac."), [rows_card(rows)]));
-    }
+    out.extend(from_browsers(page, loaded));
     let removing = page.removing.as_ref().and_then(|id| loaded.added.iter().find(|extension| &extension.id == id));
     if let Some(extension) = removing {
         let id = extension.id.clone();
@@ -483,7 +506,7 @@ mod tests {
     fn the_page_shows_the_extensions_notice_before_macos_15_4_and_the_sources_with_an_import_button() {
         with(|page| {
             page.sources = Some(Ok(vec![source("c", "Chrome", "Josip")]));
-            page.extensions = Some(Ok(Extensions { supported: false, added: Vec::new(), installed: None }));
+            page.extensions = Some(Ok(Extensions { supported: false, added: Vec::new() }));
         });
         let drawn = wings_plugin::ui::export(view()).0.to_string();
         for shown in ["Chrome, Josip", "Import", "Extensions need macOS 15.4 or newer", "Search engine", "Clear browsing data"] {
@@ -511,5 +534,85 @@ mod tests {
         let drawn = wings_plugin::ui::export(view()).0.to_string();
         // Search, Privacy, Sign in and Extensions each hold a card of rows.
         assert!(drawn.matches("\"variant\":\"rows\"").count() >= 4, "{drawn}");
+    }
+
+    fn answer_host(installed: Result<Value, String>, added: Vec<&'static str>) {
+        wings_plugin::host::testing::answer(move |method, params| match (method, params["action"].as_str()) {
+            ("webExtensions", Some("list")) => Ok(json!({ "supported": true, "extensions": added.iter().map(|name| json!({ "id": format!("id-{name}"), "name": name, "version": "1", "enabled": true })).collect::<Vec<_>>() })),
+            ("webExtensions", Some("installed")) => installed.clone(),
+            _ => Ok(Value::Null),
+        });
+    }
+
+    fn found(names: &[&str]) -> Value {
+        Value::Array(names.iter().enumerate().map(|(at, name)| json!({ "source": at.to_string(), "name": name, "description": "d" })).collect())
+    }
+
+    fn drawn() -> String {
+        wings_plugin::ui::export(view()).0.to_string()
+    }
+
+    #[test]
+    fn what_a_look_found_stays_when_the_added_extensions_are_read_again() {
+        answer_host(Ok(found(&["Bitwarden", "uBlock"])), vec![]);
+        load_extensions();
+        wings_plugin::host::testing::settle();
+        look_in_browsers();
+        wings_plugin::host::testing::settle();
+        assert!(drawn().contains("uBlock"), "{}", drawn());
+        // Adding one, switching one or removing one reads the added list again.
+        answer_host(Ok(found(&["Bitwarden", "uBlock"])), vec!["Bitwarden"]);
+        load_extensions();
+        wings_plugin::host::testing::settle();
+        let now = drawn();
+        assert!(now.contains("uBlock") && !now.contains("\"Look\""), "{now}");
+    }
+
+    #[test]
+    fn a_look_that_fails_says_so_with_try_again_and_not_an_empty_list() {
+        answer_host(Err("A page can add an extension only right after you click or type in it".into()), vec![]);
+        load_extensions();
+        look_in_browsers();
+        wings_plugin::host::testing::settle();
+        let now = drawn();
+        for shown in ["Couldn't look in your browsers", "only right after you click", "Try again"] {
+            assert!(now.contains(shown), "{shown} is not in {now}");
+        }
+        // Try again asks once more, and the list shows when it answers.
+        answer_host(Ok(found(&["uBlock"])), vec![]);
+        look_in_browsers();
+        wings_plugin::host::testing::settle();
+        let now = drawn();
+        assert!(now.contains("uBlock") && !now.contains("Couldn't look"), "{now}");
+    }
+
+    #[test]
+    fn when_everything_found_is_added_a_line_says_so() {
+        answer_host(Ok(found(&["Bitwarden"])), vec!["bitwarden"]);
+        load_extensions();
+        look_in_browsers();
+        wings_plugin::host::testing::settle();
+        assert!(drawn().contains("already added"), "{}", drawn());
+        answer_host(Ok(found(&[])), vec![]);
+        with(|page| page.installed = None);
+        look_in_browsers();
+        wings_plugin::host::testing::settle();
+        assert!(drawn().contains("No extensions found in your other browsers"), "{}", drawn());
+    }
+
+    #[test]
+    fn while_it_looks_the_page_says_so_and_a_second_press_asks_nothing() {
+        with(|page| page.extensions = Some(Ok(Extensions { supported: true, added: Vec::new() })));
+        let asked = std::rc::Rc::new(std::cell::Cell::new(0));
+        let count = asked.clone();
+        wings_plugin::host::testing::answer(move |_, _| {
+            count.set(count.get() + 1);
+            Ok(Value::Null)
+        });
+        with(|page| page.looking = true);
+        assert!(drawn().contains("Looking in your browsers"));
+        look_in_browsers();
+        wings_plugin::host::testing::settle();
+        assert_eq!(asked.get(), 0);
     }
 }
