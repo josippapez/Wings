@@ -81,9 +81,10 @@ fn folder_color(hue: f64, ring: usize) -> u32 {
     oklch((0.7 + ring as f64 * 0.034).min(0.88), (0.135 - ring as f64 * 0.011).max(0.05), hue)
 }
 
-fn file_color(ring: usize) -> u32 {
-    oklch((0.7 + ring as f64 * 0.015).min(0.84), 0.0, 0.0)
-}
+/// A file is a mid grey at `FILE_ALPHA`, so it is a quiet fill on a dark page and on a light one, and the hover tint lifts it.
+const FILE_GREY: u32 = 0x8a8a8a;
+/// How opaque a file's wedge is. A solid light grey was the brightest thing on the map, brighter than the folders it is about.
+pub const FILE_ALPHA: f64 = 0.2;
 
 /// A folder whose children are about to get their wedges.
 struct Parent<'a> {
@@ -150,7 +151,7 @@ fn place<'a>(out: &mut Layout, parent: &Parent<'a>, ring: usize, deeper: bool, m
         let mid = (a0 + a1) / 2.0;
         let child_path_name = child_path(path, &child.name);
         let (color, child_family, hue) = if child.kind != Kind::Dir {
-            (file_color(ring), *family, 0.0)
+            (FILE_GREY, *family, 0.0)
         } else if let Some((family_hue, family_mid)) = *family {
             // Deeper, a folder keeps its family's hue and moves along the wheel with how far it sits from the family's middle.
             let hue = family_hue + (mid - family_mid) / TAU * HUE_SPAN * HUE_DRIFT;
@@ -160,7 +161,7 @@ fn place<'a>(out: &mut Layout, parent: &Parent<'a>, ring: usize, deeper: bool, m
             let hue = hue_at(mid);
             (folder_color(hue, ring), Some((hue, mid)), hue)
         };
-        let segment = Segment { target: Target::Entry(child_path_name.clone()), name: child.name.clone(), size: child.size, items: child.items, is_dir: child.kind == Kind::Dir, ring, a0, a1, color, alpha: 1.0 };
+        let segment = Segment { target: Target::Entry(child_path_name.clone()), name: child.name.clone(), size: child.size, items: child.items, is_dir: child.kind == Kind::Dir, ring, a0, a1, color, alpha: if child.kind == Kind::Dir { 1.0 } else { FILE_ALPHA } };
         out.by_path.insert(child_path_name.clone(), out.segments.len());
         out.segments.push(segment);
         out.rings = out.rings.max(ring + 1);
@@ -312,6 +313,8 @@ mod tests {
         assert_ne!(code.color, notes.color);
         let (r, g, b) = (notes.color >> 16, notes.color >> 8 & 0xff, notes.color & 0xff);
         assert!(r == g && g == b, "{:06x}", notes.color);
+        // A file is a quiet fill, a folder is solid.
+        assert_eq!((notes.alpha, code.alpha), (FILE_ALPHA, 1.0));
         // A colour is the same however many times it is worked out.
         assert_eq!(layout(&home(), HOME, 2, None, 0.0).segments[0].color, map.segments[0].color);
     }

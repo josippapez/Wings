@@ -36,7 +36,7 @@ fn crumbs(done: &Done, label: &str, focus: &str) -> Vec<(String, String)> {
     out
 }
 
-fn crumb_row(crumbs: &[(String, String)]) -> Node {
+fn crumb_row(crumbs: &[(String, String)], detail: String) -> Node {
     let long = crumbs.len() > MAX_CRUMBS;
     let folded: &[(String, String)] = if long { &crumbs[1..crumbs.len() - 2] } else { &[] };
     let shown: Vec<&(String, String)> = if long { [&crumbs[0]].into_iter().chain(&crumbs[crumbs.len() - 2..]).collect() } else { crumbs.iter().collect() };
@@ -61,7 +61,7 @@ fn crumb_row(crumbs: &[(String, String)]) -> Node {
             menu("…", "Folders in between", "ghost", "sm", false, items)
         });
         gap(row(), "none").key(path.as_str()).maybe((i > 0).then(separator)).maybe(between.is_some().then(separator)).maybe(between).child(item)
-    }))
+    }).chain([muted(detail).prop("size", "small").prop("truncate", true)]))
 }
 
 /// Goes into the folder at `path`: one the map has shown before, or one below the one in the middle.
@@ -81,6 +81,17 @@ fn walk(by: isize) {
     sync_level();
 }
 
+/// The folder in the middle's size and item count, said once, after its name in the toolbar.
+fn detail(p: &Page) -> String {
+    let Some(shown) = &p.shown else { return String::new() };
+    let tree = &shown.level.tree;
+    format!("  {}", folder_detail(tree.size, tree.items))
+}
+
+fn folder_detail(size: u64, items: u64) -> String {
+    if items > 0 { format!("{} · {}", bytes(size), count(items, "item")) } else { bytes(size) }
+}
+
 fn toolbar(p: &Page, done: &Done, name: &str, focus: &str) -> Node {
     let (rescan, reveal) = (p.root.clone().unwrap_or_default(), focus.to_owned());
     let followed = p.trail.root == p.root;
@@ -94,7 +105,7 @@ fn toolbar(p: &Page, done: &Done, name: &str, focus: &str) -> Node {
         .prop("name", "children")
         .child(button("← Disks", "ghost", "sm", || with(|p| p.leave())))
         .child(history)
-        .child(crumb_row(&crumbs(done, name, focus)));
+        .child(crumb_row(&crumbs(done, name, focus), detail(p)));
     Node::new("Toolbar").child(left).child(slot("actions", actions))
 }
 
@@ -267,18 +278,16 @@ fn swatch_of(p: &Page, row: &Row, focus: &str) -> Option<u32> {
     None
 }
 
-fn list_pane(p: &Page, name: &str, focus: &str, done: &Done) -> Node {
+fn list_pane(p: &Page, focus: &str) -> Node {
     let Some(shown) = &p.shown else { return stack() };
     let tree = &shown.level.tree;
-    let folder = if focus == done.name { name.to_owned() } else { basename(focus).to_owned() };
     let open = p.smaller.contains(&tree.name);
     let extras = p.extras.get(&shown.key).filter(|_| open);
     let failed = match extras {
         Some(Extras::Failed(message)) => Some(muted(format!("Couldn't read the folder: {message}")).prop("tone", "danger").prop("size", "small")),
         _ => None,
     };
-    let sub = format!("{}{}", bytes(tree.size), if tree.items > 0 { format!(", {}", count(tree.items, "item")) } else { String::new() });
-    let head = gap(stack(), "xs").child(title(folder).prop("truncate", true)).child(gap(row(), "m").child(muted(sub).prop("size", "small"))).maybe(failed);
+    let head = failed.map(|failed| Node::new("Bar").prop("edge", "bottom").prop("gap", "xs").child(failed));
     let rows = &shown.rows;
     let drawn = rows.len().min(p.more_rows);
     let loading = matches!(extras, Some(Extras::Loading));
@@ -289,7 +298,7 @@ fn list_pane(p: &Page, name: &str, focus: &str, done: &Done) -> Node {
     };
     let more = (rows.len() > drawn).then(|| button(&format!("Show more ({})", rows.len() - drawn), "ghost", "default", || with(|p| p.more_rows += FIRST_ROWS)));
     let hint = rows.iter().any(|r| r.restricted).then(|| muted("Folders marked No access need Full Disk Access for Wings. Allow it in System Settings, under Privacy & Security, to see them.").prop("size", "small"));
-    stack().prop("grow", true).prop("gap", "none").child(Node::new("Bar").prop("edge", "bottom").prop("gap", "xs").child(head)).child(Node::new("Scroll").child(list).maybe(more).maybe(hint))
+    stack().prop("grow", true).prop("gap", "none").maybe(head).child(Node::new("Scroll").child(list).maybe(more).maybe(hint))
 }
 
 // ---------- the hidden space ----------
@@ -370,8 +379,10 @@ fn collector_bar(p: &Page) -> Node {
     let act = match p.countdown {
         Countdown::Counting(_) => button("Cancel", "outline", "sm", cancel_trash),
         Countdown::Moving => Node::new("Button").prop("variant", "destructive").prop("size", "sm").prop("disabled", true).child(spinner()).text("Move to Trash"),
-        Countdown::Idle => button("Move to Trash", "destructive", "sm", start_trash).prop("disabled", empty),
+        // Nothing to move yet, so no button: a disabled red one beside an empty drop target read as an error.
+        Countdown::Idle => button("Move to Trash", "destructive", "sm", start_trash),
     };
+    let act = (!(empty && p.countdown == Countdown::Idle)).then_some(act);
     let list = p.collector_open.then(|| {
         if empty {
             return muted("Nothing yet. Drag folders and files here, or choose Add to Collector in a row's menu.").prop("size", "small");
@@ -388,7 +399,7 @@ fn collector_bar(p: &Page) -> Node {
     });
     Node::new("Bar")
         .prop("edge", "top")
-        .child(gap(row(), "m").child(fold).child(title("Collector")).child(status).child(act))
+        .child(gap(row(), "m").child(fold).child(title("Collector")).child(status).maybe(act))
         .maybe((!p.messages.is_empty()).then(|| gap(stack(), "s").children(p.messages.iter().map(message))))
         .maybe(list)
 }
@@ -401,7 +412,7 @@ fn content(p: &Page, name: &str, focus: &str, done: &Done) -> Node {
     if p.shown.as_ref().is_some_and(|shown| Some(&shown.key) == key.as_ref()) {
         let start = match (p.hidden_open, &done.hidden, &done.disk) {
             (true, Some(hidden), Some(mount)) if focus == done.name => hidden_panel(p, hidden, mount),
-            _ => list_pane(p, name, focus, done),
+            _ => list_pane(p, focus),
         };
         return Node::new("Split").prop("defaultSize", SPLIT).child(slot("start", stack().prop("grow", true).prop("gap", "none").child(start))).child(slot("end", sunburst(p, name, focus, done)));
     }
@@ -422,4 +433,15 @@ pub fn mapped(p: &Page, _scan: &ScanInfo, done: &Done, name: &str) -> Vec<Node> 
     let error = p.action_error.as_ref().map(|error| Node::new("Bar").prop("edge", "bottom").child(dismissible("danger", error, || with(|p| p.action_error = None))));
     let body = error.into_iter().chain([content(p, name, &focus, done), collector_bar(p)]);
     vec![page(toolbar(p, done, name, &focus), body).prop("flush", true)]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::folder_detail;
+
+    #[test]
+    fn the_toolbar_says_a_folders_size_and_how_many_items_it_holds_once() {
+        assert_eq!(folder_detail(52_400_000, 19), "52.4 MB · 19 items");
+        assert_eq!(folder_detail(4_100, 0), "4.1 KB");
+    }
 }
