@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.115 · 2026-11-26
+
+- **Typing works again with the Browser on**: once a Browser tab had opened or a web page was clicked, keys typed into a chat or a terminal went nowhere. A page now takes the keyboard only when you click into it, and gives it back when you click elsewhere in Wings or switch tabs.
+- **Jump to the latest** is a small round arrow floating at the foot of the conversation instead of a row of its own (Claude chat 0.55.10).
+- **Issue details**: one compact card with lines between its groups, commits fold after three, Files changed no longer overlaps, and status, priority and type line up with their labels (Issues 0.31.12).
+
 ## 0.2.114 · 2026-11-26
 
 - **Browser** (new, off until you turn it on in Plugins): a WebKit browser in a tab, for searching, browsing and previewing your dev servers. A new tab lists the servers running in the project and your recent pages. Pop it out into its own window and put it back. It can bring in your sign-ins from Chrome, Arc, Brave, Edge, Vivaldi, Firefox or Safari when you click to import them, and add extensions from those browsers or the stores (macOS 15.4 or later). Agents can open, read, click, type, resize and screenshot pages through its tools. A page signed in with imported cookies tells an agent only its site.
