@@ -10,7 +10,7 @@ use crate::{
     domain::{Issue, Op, Status, Store, Update},
     feed::{self, Project},
     orderings::{Column, Lane, Sort, board_columns, board_lanes, issue_tree},
-    parts::{child_progress, error_text, is_delete_key, line, muted, priority_icon, row, session_marker, stack, status_dot, status_summary, type_icon, when, column},
+    parts::{child_progress, error_text, is_delete_key, line, muted, priority_icon, row, session_marker, stack, status_dot, status_summary, type_icon, column},
     relations::{children_of, progress},
     search::Index,
     settings::{self, Layout},
@@ -136,8 +136,9 @@ fn card(i: &Issue, issues: &[Issue], hide_parent: bool) -> Node {
     let key_line = row("xs")
         .maybe(i.priority.map(|p| priority_icon(Some(p), true)))
         .child(type_icon(i.kind, false, 14))
-        .child(line(i.key.as_str(), Some("muted"), Some("tiny")).prop("mono", true))
-        .maybe(i.parent.as_ref().filter(|_| !hide_parent).map(|p| line(format!("· {p}"), Some("muted"), Some("tiny")).prop("mono", true)));
+        .child(line(i.key.as_str(), Some("muted"), Some("tiny")).prop("mono", true));
+    // The parent by name, as the list shows it, and not as a second key beside the issue's own.
+    let parent = i.parent.as_ref().filter(|_| !hide_parent).and_then(|p| issues.iter().find(|o| &o.key == p));
     let (done, total) = if i.kind.can_parent() { progress(children_of(issues, &i.key)) } else { (0, 0) };
     let mut moves = row("s");
     moves = moves.child(
@@ -154,23 +155,33 @@ fn card(i: &Issue, issues: &[Issue], hide_parent: bool) -> Node {
             .child(Node::new("Button").prop("size", "xs").prop("variant", "ghost").prop("showOnHover", true).prop("disabled", at == 0).prop("label", format!("Move {} to {}", i.key, target(-1))).on("onClick", move |_| move_issue(&for_back, status, -1)).text("←"))
             .child(Node::new("Button").prop("size", "xs").prop("variant", "ghost").prop("showOnHover", true).prop("disabled", at == Status::FLOW.len() - 1).prop("label", format!("Move {} to {}", i.key, target(1))).on("onClick", move |_| move_issue(&for_forward, status, 1)).text("→"));
     }
+    // The key line, title and parent are one button, so they share a left edge.
+    let top = stack("xs")
+        .child(row("s").prop("justify", "between").prop("wrap", true).child(key_line).maybe(session_marker(i)))
+        .child(Node::new("Text").prop("clamp", true).text(i.title.as_str()))
+        .maybe(parent.map(|p| row("xs").child(type_icon(p.kind, false, 14)).child(line(p.title.as_str(), Some("muted"), Some("tiny")).prop("truncate", true).prop("grow", true))));
     Node::new("Card")
         .key(i.key.as_str())
-        .child(row("s").prop("justify", "between").prop("wrap", true).child(key_line).maybe(session_marker(i)))
-        .child(Node::new("ListButton").on("onClick", move |_| open_issue(&for_open)).on("onKeyDown", keys).child(Node::new("Text").prop("clamp", true).text(i.title.as_str())))
+        .child(Node::new("ListButton").prop("label", format!("Open {}: {}", i.key, i.title)).on("onClick", move |_| open_issue(&for_open)).on("onKeyDown", keys).child(top))
         .maybe((total > 0).then(|| child_progress(done, total)))
-        .child(row("s").prop("justify", "between").child(line(when(if i.status == Status::Done { "Done " } else { "Updated " }, i.updated_at), Some("muted"), Some("tiny"))).child(moves))
+        .child(row("s").prop("justify", "end").child(moves))
 }
 
 fn column_title(status: Status) -> Node {
     row("s").child(status_dot(status)).child(Node::new("Text").text(status.label()))
 }
 
+/// A row's priority, in its column; an issue with none leaves the box empty so the keys still line up.
+fn priority_cell(priority: Option<crate::domain::Priority>) -> Node {
+    column(PRIORITY_WIDTH).maybe(priority.map(|p| priority_icon(Some(p), true)))
+}
+
 /// One row's open/close bar and title, for a list group.
 fn list_group(open: bool, group: &str, summary: Node, body: Vec<Node>) -> Node {
     let group = group.to_owned();
+    // A label on the rows' own left edge, as the sidebar's sections are, not a card heavier than the rows under it.
     stack("s")
-        .child(Node::new("Card").child(Node::new("ListButton").prop("aria-expanded", open).on("onClick", move |_| fold(&group, !open)).child(Node::new("Text").prop("weight", "strong").child(summary))))
+        .child(Node::new("ListButton").prop("aria-expanded", open).on("onClick", move |_| fold(&group, !open)).child(Node::new("Text").prop("weight", "strong").prop("size", "small").child(summary)))
         .maybe(open.then(|| stack("s").children(body)))
 }
 
@@ -197,7 +208,7 @@ fn issue_row(i: &Issue, issues: &[Issue], parent: Option<&Issue>, depth: Option<
         button = button.child(muted("└").prop("size", "small"));
     }
     button = button
-        .child(column(PRIORITY_WIDTH).child(priority_icon(i.priority, true)))
+        .child(priority_cell(i.priority))
         .child(column(KEY_WIDTH).child(key_text(&i.key)))
         .child(type_icon(i.kind, false, 14))
         .child(title_text(i, false))
@@ -384,7 +395,7 @@ fn filter_bar(layout: Layout, has_parents: bool, show_canceled: bool, canceled: 
         .child(checkbox(format!("Show canceled ({canceled})"), show_canceled, |on| with(|p| p.show_canceled = on)));
     Node::new("Bar")
         .prop("edge", "bottom")
-        .child(row("m").prop("wrap", true).prop("align", "center").prop("justify", "between").child(choices).child(status_summary(all)))
+        .child(row("m").prop("wrap", true).prop("align", "center").prop("justify", "between").child(choices).maybe((!layout.list || by_parent_list(layout, has_parents)).then(|| status_summary(all))))
 }
 
 fn by_parent_list(layout: Layout, has_parents: bool) -> bool {
@@ -467,7 +478,7 @@ fn issue_list(project: &Project, shown: &[&Issue], all: &[Issue], by_parent: boo
                             .prop("label", format!("Open {}: {}", root.key, root.title))
                             .on("onClick", move |_| open_issue(&for_open))
                             .on("onKeyDown", delete_button(&root.key))
-                            .child(column(PRIORITY_WIDTH).child(priority_icon(root.priority, true)))
+                            .child(priority_cell(root.priority))
                             .child(type_icon(root.kind, true, 14))
                             .child(column(KEY_WIDTH).child(key_text(&root.key)))
                             .child(title_text(root, true))
