@@ -57,6 +57,8 @@ struct Installed {
 struct Extensions {
     supported: bool,
     added: Vec<Extension>,
+    /// Wings couldn't read the Keychain key it checks extensions with, so none loads until it asks again.
+    keychain: bool,
 }
 
 #[derive(Default)]
@@ -164,7 +166,7 @@ fn load_extensions() {
                 let (supported, added) = parse_added(&answer);
                 // Older Wings don't say, and keep them.
                 with(|page| page.cookies_not_kept = answer["keepsCookies"] == false);
-                Ok(Extensions { supported, added })
+                Ok(Extensions { supported, added, keychain: answer["keychain"] == true })
             }
             Err(error) => Err(error),
         };
@@ -195,9 +197,9 @@ fn import(source: Source) {
     if with(|page| page.imports.insert(source.id.clone(), Import::Busy)) == Some(Import::Busy) {
         return;
     }
-    let keep = settings::keep_data().get();
+    let (keep, signins) = (settings::keep_data().get(), settings::keep_signins().get());
     spawn(async move {
-        let result = match host::browser_cookies_import(&source.id, keep).await {
+        let result = match host::browser_cookies_import(&source.id, keep, signins).await {
             Ok(answer) => Import::Done(imported(&source, &answer)),
             Err(error) => Import::Failed(error),
         };
@@ -294,9 +296,13 @@ fn remove(id: &str) {
     change_extension(host::web_extension_remove(id));
 }
 
-fn cookies(page: &Page, keep: bool) -> Vec<Node> {
-    let note = "Cookies stay on this Mac. Chrome-based browsers ask for Keychain access to read theirs.";
-    let rows: Vec<Node> = match &page.sources {
+/// Has Wings ask the Keychain again, on the click that asked: it shows the Keychain's prompt.
+fn check_again() {
+    change_extension(host::web_extensions_check_again());
+}
+
+fn cookies(page: &Page, keep: bool, signins: bool) -> Vec<Node> {
+    let mut rows: Vec<Node> = match &page.sources {
         None => vec![entry(Entry { lead: Some(spinner()), title: muted("Looking for browsers"), detail: None, trailing: None })],
         Some(Err(error)) => return vec![error_state("Couldn't look for your browsers", error, Some(("Try again", Box::new(load_sources))))],
         Some(Ok(sources)) if sources.is_empty() => vec![entry(Entry { lead: None, title: muted("No other browsers found"), detail: None, trailing: None })],
@@ -318,7 +324,20 @@ fn cookies(page: &Page, keep: bool) -> Vec<Node> {
         Some(Import::Failed(error)) => Some(notice("danger", format!("{}: {error}", source.label())).key(format!("failed{}", source.id))),
         _ => None,
     });
-    let description = if keep { note } else { "Cookies stay on this Mac. They are kept only while Wings runs, as Keep cookies and site data is off. Chrome-based browsers ask for Keychain access." };
+    // Kept, they are a file of this Mac's that WebKit doesn't encrypt: the note says so whenever they are.
+    let description = match (keep && !page.cookies_not_kept, signins) {
+        (true, true) => "Imported sign-ins are kept after Wings quits, stored unencrypted on this Mac, where apps running as you can read them, until you clear them. Chrome-based browsers ask for Keychain access to read theirs.",
+        (true, false) => "Imported sign-ins last until Wings quits. Chrome-based browsers ask for Keychain access to read theirs.",
+        (false, _) => "Imported sign-ins last until Wings quits, as Keep cookies and site data is off. Chrome-based browsers ask for Keychain access to read theirs.",
+    };
+    let keeping = "Keep imported sign-ins after Wings quits";
+    // Before the browsers: it decides what an import does.
+    rows.insert(0, if keep && !page.cookies_not_kept {
+        setting_toggle(keeping, "They are stored unencrypted on this Mac while kept.", signins, |on| drop(settings::keep_signins().set(on)))
+    } else {
+        let off = ui::checkbox("", false, |_| {}).prop("switch", true).aria_label(keeping).disabled(true);
+        setting(keeping, "Needs Keep cookies and site data.", off)
+    });
     vec![section("Sign in with another browser", Some(description), [rows_card(rows)])].into_iter().chain(failed).collect()
 }
 
@@ -394,6 +413,14 @@ fn extensions(page: &Page) -> Vec<Node> {
         return vec![section("Extensions", None, []), notice("warn", "Extensions need macOS 15.4 or newer")];
     }
     let mut out = vec![section("Extensions", Some("Chrome and Firefox extensions, which run on the pages you open in the browser."), [rows_card(extension_rows(loaded, page))])];
+    // None loads until Wings can check them, and it asks the Keychain only when the person says so.
+    if loaded.keychain {
+        out.push(error_state(
+            "Wings needs Keychain access to check your extensions",
+            "They stay off until it can. Try again shows the Keychain's prompt: choose Allow or Always Allow.",
+            Some(("Try again", Box::new(check_again))),
+        ));
+    }
     out.extend(from_browsers(page, loaded));
     let removing = page.removing.as_ref().and_then(|id| loaded.added.iter().find(|extension| &extension.id == id));
     if let Some(extension) = removing {
@@ -405,7 +432,7 @@ fn extensions(page: &Page) -> Vec<Node> {
 }
 
 fn view() -> Vec<Node> {
-    let (engine, keep) = (settings::engine().get(), settings::keep_data().get());
+    let (engine, keep, signins) = (settings::engine().get(), settings::keep_data().get(), settings::keep_signins().get());
     PAGE.with(|page| {
         let page = page.borrow();
         let engines: Vec<(String, String)> = Engine::ALL.iter().map(|engine| (engine.id().to_owned(), engine.label().to_owned())).collect();
@@ -445,7 +472,7 @@ fn view() -> Vec<Node> {
             Err(error) => notice("danger", error.as_str()),
         });
         let problem = (page.staged.is_none()).then(|| page.problem.as_deref().map(|problem| notice("danger", problem))).flatten();
-        let column = stack().prop("gap", "l").children([search, privacy]).maybe(ask).maybe(cleared).children(cookies(&page, keep)).children(extensions(&page)).maybe(problem);
+        let column = stack().prop("gap", "l").children([search, privacy]).maybe(ask).maybe(cleared).children(cookies(&page, keep, signins)).children(extensions(&page)).maybe(problem);
         let dialog = page.staged.as_ref().map(|staged| dialog_for(staged, page.adding, page.problem.as_deref(), cancel, add));
         vec![column_page(toolbar("Browser", None), std::iter::once(column).chain(dialog))]
     })
@@ -506,7 +533,7 @@ mod tests {
     fn the_page_shows_the_extensions_notice_before_macos_15_4_and_the_sources_with_an_import_button() {
         with(|page| {
             page.sources = Some(Ok(vec![source("c", "Chrome", "Josip")]));
-            page.extensions = Some(Ok(Extensions { supported: false, added: Vec::new() }));
+            page.extensions = Some(Ok(Extensions { supported: false, added: Vec::new(), keychain: false }));
         });
         let drawn = wings_plugin::ui::export(view()).0.to_string();
         for shown in ["Chrome, Josip", "Import", "Extensions need macOS 15.4 or newer", "Search engine", "Clear browsing data"] {
@@ -600,9 +627,62 @@ mod tests {
         assert!(drawn().contains("No extensions found in your other browsers"), "{}", drawn());
     }
 
+    /// Imported sign-ins go as Wings quits unless the person turned on keeping them (off by default).
+    #[test]
+    fn an_import_keeps_sign_ins_past_the_run_only_when_the_setting_says_so() {
+        let sent = std::rc::Rc::new(RefCell::new(Vec::new()));
+        let seen = sent.clone();
+        wings_plugin::host::testing::answer(move |method, params| {
+            seen.borrow_mut().push((method.to_owned(), params.clone()));
+            Ok(json!({ "imported": 1, "skipped": 0 }))
+        });
+        import(source("c:1", "Chrome", "Josip"));
+        wings_plugin::host::testing::settle();
+        let sent = sent.borrow();
+        let import = sent.iter().find(|(method, _)| method == "browserCookies").expect("an import");
+        assert_eq!((import.1["source"].clone(), import.1["keepSignIns"].clone()), (json!("c:1"), json!(false)));
+    }
+
+    /// Kept, the imported cookies are a file WebKit doesn't encrypt: the note says so then, and only then.
+    #[test]
+    fn the_sign_in_note_says_kept_sign_ins_are_stored_unencrypted() {
+        let page = Page::default();
+        let drawn = |keep: bool, signins: bool| wings_plugin::ui::export(cookies(&page, keep, signins)).0.to_string();
+        assert!(drawn(true, true).contains("kept after Wings quits, stored unencrypted on this Mac, where apps running as you can read them"));
+        for (keep, signins) in [(true, false), (false, true), (false, false)] {
+            let note = drawn(keep, signins);
+            assert!(note.contains("Imported sign-ins last until Wings quits") && note.contains("Keep imported sign-ins after Wings quits"), "{note}");
+        }
+        assert!(drawn(false, true).contains("Needs Keep cookies and site data"));
+    }
+
+    /// Wings couldn't read its Keychain key: the page says so, and Try again asks the host once, on the click.
+    #[test]
+    fn when_wings_cant_read_its_keychain_key_the_page_says_so_and_try_again_asks_again() {
+        let asked = std::rc::Rc::new(RefCell::new(Vec::new()));
+        let seen = asked.clone();
+        wings_plugin::host::testing::answer(move |_, params| {
+            let action = params["action"].as_str().unwrap_or_default().to_owned();
+            seen.borrow_mut().push(action.clone());
+            match action.as_str() {
+                "list" => Ok(json!({ "supported": true, "keychain": true, "extensions": [{ "id": "e1", "name": "Bitwarden", "version": "1", "enabled": true, "error": "Wings needs Keychain access to check your extensions" }] })),
+                _ => Ok(Value::Null),
+            }
+        });
+        load_extensions();
+        wings_plugin::host::testing::settle();
+        let now = drawn();
+        for shown in ["Wings needs Keychain access to check your extensions", "Try again", "Bitwarden"] {
+            assert!(now.contains(shown), "{shown} is not in {now}");
+        }
+        check_again();
+        wings_plugin::host::testing::settle();
+        assert_eq!(asked.borrow().iter().filter(|action| *action == "checkAgain").count(), 1);
+    }
+
     #[test]
     fn while_it_looks_the_page_says_so_and_a_second_press_asks_nothing() {
-        with(|page| page.extensions = Some(Ok(Extensions { supported: true, added: Vec::new() })));
+        with(|page| page.extensions = Some(Ok(Extensions { supported: true, added: Vec::new(), keychain: false })));
         let asked = std::rc::Rc::new(std::cell::Cell::new(0));
         let count = asked.clone();
         wings_plugin::host::testing::answer(move |_, _| {

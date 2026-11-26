@@ -7,7 +7,6 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     ffi::c_void,
-    path::Path,
     rc::Rc,
 };
 
@@ -40,6 +39,14 @@ use super::{
 };
 use crate::page::tree::WebGo;
 
+mod actions;
+mod data;
+mod grant;
+mod guard;
+
+pub use data::{forget_profile, remove_extension};
+use grant::granted;
+
 /// What the web views say they are, which a change of any of them tells the page.
 const OBSERVED: [&str; 5] = ["URL", "title", "loading", "canGoBack", "canGoForward"];
 
@@ -71,6 +78,7 @@ fn keys_follow_presses() {
 
 fn give_keys_to_press(event: &NSEvent, mtm: MainThreadMarker) {
     let Some(window) = event.window(mtm) else { return };
+    LAST_PRESS.set(Some((std::ptr::from_ref(&*window).addr(), event.locationInWindow(), std::time::Instant::now())));
     let Some(content) = window.contentView() else { return };
     // SAFETY: AppKit's views, on the main thread.
     let at = match unsafe { content.superview() } {
@@ -110,6 +118,9 @@ fn web_view_of(view: &NSView) -> Option<Retained<NSView>> {
 thread_local! {
     /// The web view the last press of the mouse was in, by its address, 0 when it was in none.
     static PRESSED_WEB_VIEW: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// The window of the last press, by its address, where in it, and when: an extension's popup opens under the button
+    /// pressed (`actions::anchor`).
+    static LAST_PRESS: std::cell::Cell<Option<(usize, NSPoint, std::time::Instant)>> = const { std::cell::Cell::new(None) };
 }
 
 impl WebView {
@@ -177,6 +188,8 @@ struct Shared {
     store: Retained<WKWebsiteDataStore>,
     /// Its extensions' controller, on a Mac that has them (15.4).
     extensions: Option<Retained<WKWebExtensionController>>,
+    /// The controller's delegate, which the controller holds weakly: its window of the pages, and their buttons' popups.
+    tabs: Option<Retained<actions::Delegate>>,
 }
 
 thread_local! {
@@ -229,20 +242,60 @@ fn shared(profile: &Profile, keep_data: bool, mtm: MainThreadMarker) -> Rc<Share
         configuration.setDefaultWebsiteDataStore(Some(&store));
         WKWebExtensionController::initWithConfiguration(WKWebExtensionController::alloc(mtm), &configuration)
     });
-    let shared = Rc::new(Shared { store, extensions });
+    // Before any extension loads, which asks it for the pages.
+    let tabs = extensions.as_ref().map(|controller| {
+        let delegate = actions::Delegate::new(mtm);
+        // SAFETY: the controller's delegate, kept in `Shared` as long as the controller.
+        unsafe { controller.setDelegate(Some(ProtocolObject::from_ref(&*delegate))) };
+        delegate
+    });
+    let shared = Rc::new(Shared { store, extensions, tabs });
     SHARED.with_borrow_mut(|all| all.insert((profile.clone(), keep_data), shared.clone()));
     if shared.extensions.is_some() {
-        for extension in super::extensions::enabled(profile) {
-            load(profile, keep_data, &extension.id, &extension.dir, |_| {});
-        }
+        load_verified(profile, keep_data);
     }
     shared
 }
 
-/// Loads the extension in `dir` as `id` into `profile`'s controller, granting what its manifest asks for, which the
-/// person saw before adding it; `done` hears whether it loaded. Nothing for a profile no web view has used yet: its
-/// controller loads its extensions as it is made.
-pub fn load(profile: &Profile, keep_data: bool, id: &str, dir: &Path, done: impl Fn(Result<(), String>) + 'static) {
+/// Loads the extensions of `profile` that are on and pass `extensions::verify`, checked off the main thread: hashing
+/// a big one's folder (Bitwarden's 92 MB) takes 60 ms in a release build and a second in a debug one, and the Keychain
+/// may wait for the person. One turned off or removed while it was checked doesn't load.
+fn load_verified(profile: &Profile, keep_data: bool) {
+    let unloads: HashMap<String, u64> = UNLOADS.with_borrow(|unloads| {
+        unloads.iter().filter(|((of, _), _)| of == profile).map(|((_, id), count)| (id.clone(), *count)).collect()
+    });
+    let profile = profile.clone();
+    std::thread::spawn(move || {
+        super::extensions::sweep_staging(&profile);
+        let verified = super::extensions::loadable(&profile, &|| super::extensions::key(&profile));
+        dispatch2::DispatchQueue::main().exec_async(move || {
+            for extension in verified {
+                let count = UNLOADS.with_borrow(|now| now.get(&(profile.clone(), extension.id.clone())).copied().unwrap_or(0));
+                if count == unloads.get(&extension.id).copied().unwrap_or(0) {
+                    let again = profile.clone();
+                    load(&profile, keep_data, &extension, move |_| refresh_buttons(&again));
+                }
+            }
+        });
+    });
+}
+
+/// Tells each page of `profile` its extensions' buttons again: one was loaded or unloaded.
+pub fn refresh_buttons(profile: &Profile) {
+    for keep_data in [true, false] {
+        let delegate = SHARED.with_borrow(|all| all.get(&(profile.clone(), keep_data)).and_then(|shared| shared.tabs.clone()));
+        for tab in delegate.iter().flat_map(|delegate| delegate.tabs()) {
+            actions::refresh(&tab);
+        }
+    }
+}
+
+/// Loads `extension`, which passed `extensions::verify`, into `profile`'s controller, granting of what it asks for only
+/// what Wings' dialog showed the person as they added it; `done` hears whether it loaded. Nothing for a profile no web
+/// view has used yet: its controller loads its extensions as it is made.
+pub fn load(profile: &Profile, keep_data: bool, extension: &super::extensions::Verified, done: impl Fn(Result<(), String>) + 'static) {
+    let (id, dir) = (extension.id.as_str(), extension.dir.as_path());
+    let allowed = (extension.permissions.clone(), extension.hosts.clone());
     let Some(controller) =
         SHARED.with_borrow(|all| all.get(&(profile.clone(), keep_data)).and_then(|shared| shared.extensions.clone()))
     else {
@@ -273,10 +326,11 @@ pub fn load(profile: &Profile, keep_data: bool, id: &str, dir: &Path, done: impl
             let context = WKWebExtensionContext::contextForExtension(extension);
             // Its storage stays its own across runs, by its id here.
             context.setUniqueIdentifier(&NSString::from_str(&id));
-            for permission in extension.requestedPermissions().iter() {
+            let (permissions, hosts) = granted(&extension.requestedPermissions(), &extension.requestedPermissionMatchPatterns(), &allowed, mtm);
+            for permission in permissions {
                 context.setPermissionStatus_forPermission(WKWebExtensionContextPermissionStatus::GrantedExplicitly, &permission);
             }
-            for pattern in extension.requestedPermissionMatchPatterns().iter() {
+            for pattern in hosts {
                 context.setPermissionStatus_forMatchPattern(WKWebExtensionContextPermissionStatus::GrantedExplicitly, &pattern);
             }
             controller.loadExtensionContext_error(&context).map(|()| context)
@@ -307,10 +361,10 @@ pub fn unload(profile: &Profile, id: &str) {
     }
 }
 
-/// Loads the extension in `dir` into each controller `profile` has now.
-pub fn load_everywhere(profile: &Profile, id: &str, dir: &Path, done: impl Fn(Result<(), String>) + Clone + 'static) {
+/// Loads `extension` into each controller `profile` has now.
+pub fn load_everywhere(profile: &Profile, extension: &super::extensions::Verified, done: impl Fn(Result<(), String>) + Clone + 'static) {
     for keep_data in [true, false] {
-        load(profile, keep_data, id, dir, done.clone());
+        load(profile, keep_data, extension, done.clone());
     }
 }
 
@@ -449,6 +503,15 @@ impl Maker for WebKit {
                     &WKContentWorld::pageWorld(mtm),
                 );
                 configuration.userContentController().addUserScript(&script);
+                // Every frame tells Wings, in a world of its own, once it holds a secret field (`guard`).
+                let watch = WKUserScript::initWithSource_injectionTime_forMainFrameOnly_inContentWorld(
+                    WKUserScript::alloc(mtm),
+                    &NSString::from_str(guard::WATCH),
+                    WKUserScriptInjectionTime::AtDocumentEnd,
+                    false,
+                    &WKContentWorld::worldWithName(&NSString::from_str(guard::WORLD), mtm),
+                );
+                configuration.userContentController().addUserScript(&watch);
             }
             // `WebView` is a `WKWebView` that adds nothing but a rule for taking the keyboard.
             let view: Retained<WebView> = msg_send![WebView::alloc(mtm), initWithFrame: NSRect::ZERO, configuration: &*configuration];
@@ -460,14 +523,23 @@ impl Maker for WebKit {
             view
         };
         let observer = Observer::new(told.clone(), profile.dir.clone(), mtm);
+        // A tab to the extensions, whose buttons the page hears.
+        if let (Some(delegate), Some(controller)) = (&shared.tabs, &shared.extensions) {
+            let tab = actions::open(delegate, controller, &view, &observer, &profile.plugin);
+            observer.ivars().tab.replace(Some(tab.clone()));
+            actions::refresh(&tab);
+        }
         if scripts {
             // SAFETY: the configuration's controller holds the handler until the view goes (`Drop` takes it away).
             unsafe {
-                view.configuration().userContentController().addScriptMessageHandler_contentWorld_name(
+                let contents = view.configuration().userContentController();
+                contents.addScriptMessageHandler_contentWorld_name(ProtocolObject::from_ref(&*observer), &WKContentWorld::pageWorld(mtm), &NSString::from_str(LOG_HANDLER));
+                // Only Wings' own world reaches it: the page can't say it holds no secret field, nor reach it at all.
+                contents.addScriptMessageHandler_contentWorld_name(
                     ProtocolObject::from_ref(&*observer),
-                    &WKContentWorld::pageWorld(mtm),
-                    &NSString::from_str(LOG_HANDLER),
-                )
+                    &WKContentWorld::worldWithName(&NSString::from_str(guard::WORLD), mtm),
+                    &NSString::from_str(guard::HANDLER),
+                );
             };
         }
         // SAFETY: the observer outlives the observing: `Drop` removes it before either goes.
@@ -555,6 +627,12 @@ impl Native for WebPage {
             let y = if content.isFlipped() { y } else { height - y - h };
             self.view.setFrame(NSRect::new(NSPoint::new(x, y), NSSize::new(w, h)));
         }
+        // The page that comes on screen is the one in front, to the extensions.
+        if self.view.isHidden()
+            && let Some(tab) = self.observer.ivars().tab.borrow().as_ref()
+        {
+            actions::activate(tab);
+        }
         self.view.setHidden(false);
     }
 
@@ -590,29 +668,38 @@ impl Native for WebPage {
                 WebGo::Forward => drop(self.view.goForward()),
                 WebGo::Reload => drop(self.view.reload()),
                 WebGo::Stop => self.view.stopLoading(),
-                WebGo::Eval { script, page } => {
-                    // The script is the function's whole body, with no wrapper of ours to break out of, and nothing it says
-                    // of where it ran is believed: what it returns is read as WebKit hands it over, and thrown away when a
-                    // new page came on the main frame while it ran (`generation`).
-                    let world = if *page { WKContentWorld::pageWorld(mtm) } else { WKContentWorld::worldWithName(&NSString::from_str("wings-plugin"), mtm) };
-                    let (told, observer) = (self.told.clone(), self.observer.clone());
+                // The plugin's own world: its helper, which reads no secret field's value.
+                WebGo::Eval { script, page: false } => {
+                    let world = WKContentWorld::worldWithName(&NSString::from_str("wings-plugin"), mtm);
+                    eval(&self.view, script, &world, &self.told, &self.observer, token);
+                }
+                // The page's own world, where an agent's script runs: only on a page with no password, card or one-time
+                // code field (`guard`), checked right before, and again by the script itself as it starts.
+                WebGo::Eval { script, page: true } => {
+                    let (view, told, observer, script) = (self.view.clone(), self.told.clone(), self.observer.clone(), guard::checked_again(script));
                     let sent = observer.ivars().generation.get();
-                    let done = RcBlock::new(move |value: *mut AnyObject, error: *mut NSError| {
-                        let result = match (value.as_ref(), error.as_ref()) {
-                            _ if observer.ivars().generation.get() != sent => Err(MOVED_ON.to_owned()),
-                            (_, Some(error)) => Err(error.localizedDescription().to_string()),
-                            (Some(value), None) => json_of(value),
-                            (None, None) => Ok(serde_json::Value::Null),
-                        };
-                        told.tell(Heard::Result { token, result });
+                    guard::check(&self.view, mtm, move |found, took| {
+                        if found.as_ref().is_ok_and(|found| found["secret"] == true) {
+                            observer.ivars().seen.note(sent, false);
+                        }
+                        let seen = observer.ivars().seen.secret(sent);
+                        let allowed = if observer.ivars().generation.get() != sent { Err(MOVED_ON) } else { guard::may_run(&found, took, seen) };
+                        match allowed {
+                            Ok(()) => eval(&view, &script, &WKContentWorld::pageWorld(mtm), &told, &observer, token),
+                            Err(why) => told.tell(Heard::Result { token, result: Err(why.into()) }),
+                        }
                     });
-                    self.view.callAsyncJavaScript_arguments_inFrame_inContentWorld_completionHandler(&NSString::from_str(script), None, None, &world, Some(&done));
                 }
                 WebGo::Dialog { accept, text } => {
                     let answered = self.observer.answer(*accept, text.as_deref());
                     self.observer.tell(&self.view);
                     let result = if answered { Ok(serde_json::Value::Null) } else { Err("The page shows no dialog".into()) };
                     self.told.tell(Heard::Result { token, result });
+                }
+                WebGo::Extension(id) => {
+                    let tab = self.observer.ivars().tab.borrow().clone();
+                    let done = tab.map_or(Err(actions::NOT_ON.to_owned()), |tab| actions::perform(&tab, &self.view, id));
+                    self.told.tell(Heard::Result { token, result: done.map(|()| serde_json::Value::Null) });
                 }
                 WebGo::Logs => {
                     let logs = self.observer.ivars().logs.borrow();
@@ -623,30 +710,67 @@ impl Native for WebPage {
                 WebGo::Snapshot => {
                     let (told, shots, observer, web_dir) = (self.told.clone(), self.shots.clone(), self.observer.clone(), self.web_dir.clone());
                     let sent = observer.ivars().generation.get();
-                    let done = RcBlock::new(move |image: *mut NSImage, error: *mut NSError| {
-                        // As a script's answer: none of a page that came while it was taken, or one signed in with imports.
-                        let moved = observer.ivars().generation.get() != sent;
-                        let imported = super::holds_imported(&web_dir, &observer.ivars().committed.borrow());
-                        let picture = match (image.as_ref(), error.as_ref()) {
-                            _ if moved => Err(MOVED_ON.to_owned()),
-                            _ if imported => Err(super::IMPORTED.to_owned()),
-                            (Some(image), _) => png_of(image),
-                            (None, Some(error)) => Err(error.localizedDescription().to_string()),
-                            (None, None) => Err("WebKit made no picture".into()),
+                    // Its secret fields are painted over where they were just before and just after it was taken.
+                    let (view, wide, zoom) = (self.view.clone(), self.view.bounds().size.width, self.view.pageZoom());
+                    guard::check(&self.view, mtm, move |before, _| {
+                        let before = match guard::rects(&before, observer.ivars().seen.foreign(sent)) {
+                            Ok(before) => before,
+                            Err(why) => return told.tell(Heard::Result { token, result: Err(why.into()) }),
                         };
-                        // Scaled and written off the main thread: a big picture took the window's frames with it.
-                        let (told, shots) = (told.clone(), shots.clone());
-                        std::thread::spawn(move || {
-                            let result = picture.and_then(|png| super::snapshot::save(&shots, &png));
-                            told.tell(Heard::Result { token, result });
+                        let (told, shots, observer, web_dir, again) = (told.clone(), shots.clone(), observer.clone(), web_dir.clone(), view.clone());
+                        let done = RcBlock::new(move |image: *mut NSImage, error: *mut NSError| {
+                            // As a script's answer: none of a page that came while it was taken, or one signed in with imports.
+                            let moved = observer.ivars().generation.get() != sent;
+                            let imported = super::holds_imported(&web_dir, &observer.ivars().committed.borrow());
+                            let picture = match (image.as_ref(), error.as_ref()) {
+                                _ if moved => Err(MOVED_ON.to_owned()),
+                                _ if imported => Err(super::IMPORTED.to_owned()),
+                                (Some(image), _) => png_of(image),
+                                (None, Some(error)) => Err(error.localizedDescription().to_string()),
+                                (None, None) => Err("WebKit made no picture".into()),
+                            };
+                            let (told, shots, before, observer) = (told.clone(), shots.clone(), before.clone(), observer.clone());
+                            guard::check(&again, mtm, move |after, _| {
+                                let foreign = observer.ivars().seen.foreign(sent);
+                                let rects = guard::rects(&after, foreign).map(|after| [before.clone(), after].concat()).map_err(str::to_owned);
+                                // Painted, scaled and written off the main thread: a big picture took the window's frames with it.
+                                let (told, shots, picture) = (told.clone(), shots.clone(), picture.clone());
+                                std::thread::spawn(move || {
+                                    let result = rects
+                                        .and_then(|rects| picture.and_then(|png| guard::masked(&png, &rects, wide, zoom)))
+                                        .and_then(|png| super::snapshot::save(&shots, &png));
+                                    told.tell(Heard::Result { token, result });
+                                });
+                            });
                         });
+                        // The part of the page that shows: WebKit takes no more than the view's bounds.
+                        view.takeSnapshotWithConfiguration_completionHandler(None, &done);
                     });
-                    // The part of the page that shows: WebKit takes no more than the view's bounds.
-                    self.view.takeSnapshotWithConfiguration_completionHandler(None, &done);
                 }
             }
         }
     }
+}
+
+/// Runs `script` in `world` of `view`'s main frame and tells its answer as the command `token`'s. The script is the
+/// function's whole body, with no wrapper of ours to break out of, and nothing it says of where it ran is believed: what
+/// it returns is read as WebKit hands it over, and thrown away when a new page came on the main frame while it ran
+/// (`generation`).
+fn eval(view: &WKWebView, script: &str, world: &WKContentWorld, told: &Tell, observer: &Retained<Observer>, token: u64) {
+    let (told, observer) = (told.clone(), observer.clone());
+    let sent = observer.ivars().generation.get();
+    let done = RcBlock::new(move |value: *mut AnyObject, error: *mut NSError| {
+        // SAFETY: WebKit hands one of the two, alive for the call, on the main thread.
+        let result = match unsafe { (value.as_ref(), error.as_ref()) } {
+            _ if observer.ivars().generation.get() != sent => Err(MOVED_ON.to_owned()),
+            (_, Some(error)) => Err(error.localizedDescription().to_string()),
+            (Some(value), None) => json_of(value),
+            (None, None) => Ok(serde_json::Value::Null),
+        };
+        told.tell(Heard::Result { token, result });
+    });
+    // SAFETY: the web view's own call, on the main thread, with a block WebKit calls once.
+    unsafe { view.callAsyncJavaScript_arguments_inFrame_inContentWorld_completionHandler(&NSString::from_str(script), None, None, world, Some(&done)) };
 }
 
 /// Why a script's answer was thrown away.
@@ -696,6 +820,9 @@ impl Drop for WebPage {
             self.view.setUIDelegate(None);
             self.view.stopLoading();
         }
+        if let Some(tab) = self.observer.ivars().tab.take() {
+            actions::close(&tab);
+        }
         // GPUI's view is the window's other view, under the web views.
         // SAFETY: AppKit's views, on the main thread.
         if let Some(gpui) = unsafe { self.view.superview() }.as_deref().and_then(gpui_among) {
@@ -720,6 +847,8 @@ fn gpui_view(window: &Window) -> Option<Retained<NSView>> {
 }
 
 struct Ivars {
+    /// The secret fields its document showed (`guard`).
+    seen: guard::Seen,
     told: Tell,
     told_last: RefCell<Option<State>>,
     /// Why the last page failed, until another starts.
@@ -742,6 +871,9 @@ struct Ivars {
     pending: RefCell<Option<(Pending, super::views::Dialog)>>,
     /// The page's recent console messages and requests (`LOGS`), the newest last.
     logs: RefCell<std::collections::VecDeque<serde_json::Value>>,
+    /// The page as a tab to its extensions, and their buttons for it (`actions`).
+    tab: RefCell<Option<Retained<actions::Tab>>>,
+    extensions: RefCell<Vec<super::views::Extension>>,
 }
 
 /// How a page's dialog is answered.
@@ -762,11 +894,14 @@ define_class!(
         #[unsafe(method(observeValueForKeyPath:ofObject:change:context:))]
         fn observe(
             &self,
-            _key: Option<&NSString>,
+            key: Option<&NSString>,
             object: Option<&AnyObject>,
             _change: Option<&NSDictionary<NSKeyValueChangeKey, AnyObject>>,
             _context: *mut c_void,
         ) {
+            if let (Some(tab), Some(key)) = (self.ivars().tab.borrow().as_ref(), key) {
+                actions::changed(tab, &key.to_string());
+            }
             if let Some(view) = object.and_then(|object| object.downcast_ref::<WKWebView>()) {
                 // A new load clears the last one's error.
                 if unsafe { view.isLoading() } {
@@ -820,6 +955,11 @@ define_class!(
             // a `#` in the same page is no new page.
             self.ivars().logs.borrow_mut().clear();
             self.ivars().generation.set(self.ivars().generation.get() + 1);
+            // A page on a site signed in with imported cookies, or no longer on one, shows other buttons (`views::shown`).
+            let tab = self.ivars().tab.borrow().clone();
+            if let Some(tab) = tab {
+                actions::refresh(&tab);
+            }
         }
 
         #[unsafe(method(webView:didFailNavigation:withError:))]
@@ -831,6 +971,15 @@ define_class!(
     unsafe impl WKScriptMessageHandler for Observer {
         #[unsafe(method(userContentController:didReceiveScriptMessage:))]
         fn heard(&self, _controller: &WKUserContentController, message: &WKScriptMessage) {
+            // A frame holds a secret field (`guard::WATCH`): kept for the rest of the main frame's document, and apart
+            // when it is a frame in the page, which may be of another origin, so the frames the check can't look into
+            // are painted over in a picture.
+            // SAFETY: the message's name and frame, on the main thread.
+            if unsafe { message.name() }.to_string() == guard::HANDLER {
+                let in_frame = !unsafe { message.frameInfo().isMainFrame() };
+                self.ivars().seen.note(self.ivars().generation.get(), in_frame);
+                return;
+            }
             // SAFETY: the message's frame's origin and body, on the main thread: what the page posted, its word only.
             let (host, body) = unsafe { (message.frameInfo().securityOrigin().host().to_string(), message.body()) };
             // Nothing from a site signed in with imported cookies, or a frame with no host of its own.
@@ -928,6 +1077,9 @@ impl Observer {
             generation: std::cell::Cell::new(0),
             chain_tainted: std::cell::Cell::new(false),
             dialogs: std::cell::Cell::new((0, 0, false)),
+            tab: RefCell::new(None),
+            extensions: RefCell::default(),
+            seen: guard::Seen::default(),
         });
         // SAFETY: NSObject's `init`.
         unsafe { msg_send![super(this), init] }
@@ -1065,6 +1217,7 @@ impl Observer {
                 error: self.ivars().error.borrow().clone(),
                 dialog: self.ivars().pending.borrow().as_ref().map(|(_, dialog)| dialog.clone()),
                 imported: super::holds_imported(&self.ivars().web_dir, &self.ivars().committed.borrow()),
+                extensions: self.ivars().extensions.borrow().clone(),
             }
         };
         if self.ivars().told_last.borrow().as_ref() != Some(&state) {

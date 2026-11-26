@@ -261,3 +261,57 @@ fn two_commands_sent_before_the_next_tree_both_run_in_order() {
     use crate::page::tree::WebGo;
     assert_eq!(went, [(WebGo::Load("https://example.com/a".into()), 1), (WebGo::Reload, 2)]);
 }
+
+/// A page with an extension's button over its web view: the command to click it goes out as the page opens (with no click
+/// of yours), on a press of the button (`token` 2), and again when its web view next tells it where it is (no click).
+fn extension_page() -> String {
+    fake::script("web", || {
+        |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            let token = match hear {
+                Hear::Start => 1,
+                Hear::Event("2:click", _) => 2,
+                Hear::Event("1:state", _) => 3,
+                Hear::Event("1:result", payload) => {
+                    let token = payload["token"].as_u64().unwrap_or_default();
+                    return cx.save(&format!("result{token}"), payload);
+                }
+                _ => return,
+            };
+            cx.render(&json!({ "id": 0, "type": "#root", "props": {}, "children": [
+                { "id": 2, "type": "Button", "props": { "onClick": "2:click" }, "children": [{ "id": 3, "type": "#text", "text": "Bitwarden" }] },
+                { "id": 1, "type": "WebView", "props": {
+                    "name": "main", "url": "https://example.com/", "fill": true, "onState": "1:state", "onResult": "1:result",
+                    "command": { "action": "extension", "id": "e1", "token": token },
+                }, "children": [] },
+            ] }));
+        }
+    })
+}
+
+/// An extension's popup opens only on your click, as `copyText` copies: a plugin or an agent can't open one alone, and one
+/// click opens one.
+#[test]
+fn an_extensions_button_is_clicked_only_right_after_your_click_and_once_for_it() {
+    use crate::page::tree::WebGo;
+    let data = Data::temp();
+    let views = json!([{ "id": "web", "title": "Web", "page": "dist/web.html", "opens": ["tab"], "multiple": true }]);
+    data.install_script("browser", json!({ "permissions": { "webView": true }, "contributes": { "views": views } }), &idle("main"), &[("web", &extension_page())], "browser-scope");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let id = window.update(|_, window, _| window.window_handle().window_id());
+    let (did, tells) = record(id);
+    window.update(|w, window, cx| assert!(w.open_plugin_view("browser", "web", None, window, cx)));
+    let refused = |token: u64| Some(json!({ "token": token, "error": crate::web::NO_CLICK }));
+    until(&app, &mut window, "the page's own click was never refused", |_| data.saved("browser", "browser-scope", "result1") == refused(1));
+    until(&app, &mut window, "the web page was never made", |_| !did.borrow().is_empty());
+    let clicked = |did: &[Did]| did.iter().filter_map(|did| if let Did::Went(go, token) = did { Some((go.clone(), *token)) } else { None }).collect::<Vec<_>>();
+    assert!(clicked(&did.borrow()).is_empty(), "nothing clicked without you: {:?}", did.borrow());
+
+    window.update(|w, _, cx| assert!(w.plugin_tabs.iter().find(|tab| tab.plugin == "browser").unwrap().page.read(cx).press("Bitwarden", 0)));
+    until(&app, &mut window, "your click never reached the extension", |_| !clicked(&did.borrow()).is_empty());
+    assert_eq!(clicked(&did.borrow()), [(WebGo::Extension("e1".into()), 2)]);
+
+    // The click is used up: the next one the page sends alone is refused.
+    tells.borrow()[0].tell(Heard::State(State::default()));
+    until(&app, &mut window, "a second click on one of yours was let through", |_| data.saved("browser", "browser-scope", "result3") == refused(3));
+    assert_eq!(clicked(&did.borrow()).len(), 1);
+}

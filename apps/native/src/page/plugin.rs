@@ -333,6 +333,12 @@ impl Link for FrameLink {
         *self.acted.lock().unwrap() = Some(Instant::now());
     }
 
+    /// The same click `call` lets one call that needs it use (`copyText`, `webExtensions`...): a page's, as no click
+    /// reaches main.
+    fn take_user_event(&self) -> bool {
+        self.role == Role::Page && self.acted.lock().unwrap().take().is_some_and(|at| at.elapsed() < USER_ACTION)
+    }
+
     fn focused(&self) -> bool {
         let (ready, wake) = &*self.ready;
         let mut started = ready.lock().unwrap();
@@ -507,6 +513,8 @@ impl Link for FrameLink {
                     "openFile" => "open a file",
                     "openLink" => "open a link",
                     "browserCookies" => "import cookies",
+                    "webData" => "clear site data",
+                    "webExtensions" if params["action"].as_str() == Some("remove") => "remove an extension",
                     "webExtensions" => "add an extension",
                     _ => "write to a program",
                 };

@@ -1842,6 +1842,7 @@ checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
 dependencies = [
  "bitflags 2.13.2",
  "block2 0.6.2",
+ "libc",
  "objc2 0.6.5",
 ]
 
@@ -8385,6 +8386,7 @@ dependencies = [
  "block2 0.6.2",
  "chrono",
  "diffy",
+ "dispatch2",
  "flate2",
  "global-hotkey",
  "gpui-pre",
@@ -8496,6 +8498,7 @@ name = "wings-web-extensions"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "sha2 0.11.1",
  "url",
  "zip",
 ]

@@ -1,4 +1,4 @@
-//! The two settings the browser tabs and the settings page share. A change reaches every open frame.
+//! The settings the browser tabs and the settings page share. A change reaches every open frame.
 
 use crate::address::Engine;
 use serde_json::json;
@@ -12,4 +12,9 @@ pub fn engine() -> Setting<Engine> {
 /// Whether the web views keep cookies and site data between runs.
 pub fn keep_data() -> Setting<bool> {
     Setting::boolean("keepData", true)
+}
+
+/// Whether sign-ins imported from another browser last past this run (in a kept store): off, they go as Wings quits.
+pub fn keep_signins() -> Setting<bool> {
+    Setting::boolean("keepSignIns", false)
 }

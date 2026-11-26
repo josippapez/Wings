@@ -17,7 +17,7 @@ mod views;
 pub mod mac;
 
 #[cfg(feature = "ui")]
-pub use views::{Heard, Spec, State, Tell, Told, forget_page, slot, sync, update};
+pub use views::{Extension, Heard, Spec, State, Tell, Told, forget_page, shown, slot, sync, update};
 #[cfg(all(test, feature = "test-support"))]
 pub(crate) use views::testing;
 
@@ -32,13 +32,17 @@ pub enum Job {
     Pick,
     /// Every cookie and all site data the profile's web views kept go.
     Clear(Profile),
-    /// The extension `id` in `dir` loads into the profile's web views, or unloads.
-    Load { profile: Profile, id: String, dir: std::path::PathBuf },
-    /// `Load`, for an extension being added: Wings asks the person first, in its own dialog, with what it can do.
-    Add { profile: Profile, id: String, dir: std::path::PathBuf, ask: Ask },
+    /// An extension that passed `extensions::verify` loads into the profile's web views, or one unloads.
+    Load { profile: Profile, extension: extensions::Verified },
     Unload { profile: Profile, id: String },
-    /// Another browser's cookies go into the profile's store, kept or not: how many it took.
-    Cookies { profile: Profile, keep_data: bool, cookies: Vec<wings_browser_cookies::Cookie> },
+    /// Wings asks the person in its own dialog, with what an extension being added can do: `{ "allowed": true }` only on
+    /// its Add (`allowed`).
+    Add { ask: Ask },
+    /// What the extension `id` stored goes (WebKit keeps it apart from its folder), then it unloads.
+    Remove { profile: Profile, id: String },
+    /// Another browser's cookies go into the profile's store, kept or not: how many it took. Unless `keep_signins`, they
+    /// go as session cookies, which no store keeps past the run.
+    Cookies { profile: Profile, keep_data: bool, keep_signins: bool, cookies: Vec<wings_browser_cookies::Cookie> },
 }
 
 /// The one gate every command a plugin's page sends its web view goes through, here and in WebKit (`views::update`,
@@ -57,8 +61,21 @@ pub fn gate(go: &crate::page::tree::WebGo, scripts: bool, imported: bool, settle
             (true, false, false) => Err(LOADING),
             (true, false, true) => Ok(()),
         },
+        // An extension's button opens its own popup, which the plugin never sees, on any page: it needs your click
+        // (`needs_click`) and nothing more.
+        WebGo::Extension(_) => Ok(()),
     }
 }
+
+/// Whether the command `go` runs only right after your click in the page, which it uses up, as `copyText` does: an
+/// extension's button tells the extension you acted on the page (`activeTab`) and opens its popup, which takes the
+/// keyboard, so neither a plugin nor an agent clicks it alone.
+pub fn needs_click(go: &crate::page::tree::WebGo) -> bool {
+    matches!(go, crate::page::tree::WebGo::Extension(_))
+}
+
+/// Why an extension's button didn't open without a click.
+pub const NO_CLICK: &str = "A page can click an extension's button only right after you click or type in it";
 
 /// Why one didn't run while a page loads.
 pub const LOADING: &str = "The page is still loading: wait for it, then try again";
@@ -190,10 +207,21 @@ impl Ask {
         if !self.permissions.is_empty() {
             let permissions: Vec<String> = self.permissions.iter().map(|permission| one_line(permission, 60)).collect();
             detail.push(format!("It asks for: {}.", permissions.join(", ")));
+            // What the raw names that reach the most mean, one line each, in the order it asks for them.
+            let meant: Vec<String> = self
+                .permissions
+                .iter()
+                .filter_map(|permission| SENSITIVE.iter().find(|(name, _)| name == permission))
+                .map(|(name, means)| format!("{name}: {means}"))
+                .collect();
+            if !meant.is_empty() {
+                detail.push(meant.join("\n"));
+            }
         }
-        // With the cookies permission and sites, it reads the sign-ins you imported from another browser on those sites.
-        if self.permissions.iter().any(|permission| permission == "cookies") && !self.hosts.is_empty() {
-            detail.push("With cookies, it can read and use the sign-ins you imported from another browser on those sites.".into());
+        // Any site it reaches is reached signed in: its scripts on those pages, and its requests to them, carry the
+        // cookies there, the ones imported from another browser too.
+        if !self.hosts.is_empty() {
+            detail.push("On those sites it acts as you, with the sign-ins you imported from another browser too.".into());
         }
         if detail.is_empty() {
             detail.push("It asks for no permissions.".into());
@@ -204,6 +232,18 @@ impl Ask {
 
 /// The most host patterns the dialog names; the rest are counted.
 const HOSTS_SHOWN: usize = 8;
+
+/// The permissions whose names don't say what they reach, and what they do, as the dialog says it.
+const SENSITIVE: [(&str, &str); 8] = [
+    ("clipboardRead", "it can read what you copy"),
+    ("webRequest", "it sees the requests the pages you open make"),
+    ("tabs", "it sees the address and title of every page you open"),
+    ("nativeMessaging", "it asks to talk to apps on this Mac, which Wings never allows"),
+    ("scripting", "it can run its code in the pages it reaches"),
+    ("cookies", "it can read and change the cookies of the sites it reaches, sign-ins included"),
+    ("history", "it can read and delete the pages you visited"),
+    ("downloads", "it can download files and see your downloads"),
+];
 
 /// `text` as one line of printable characters, at most `most` of them.
 fn one_line(text: &str, most: usize) -> String {
@@ -323,7 +363,7 @@ mod tests {
         assert_eq!(question, "Add the extension \"Blocker\" to the Browser?");
         assert!(detail.contains("every website") && detail.contains("storage, tabs"), "{detail}");
         let (_, some) = ask(&["https://github.com/*"], &[]).words();
-        assert_eq!(some, "It can read and change your data on: https://github.com/*.");
+        assert_eq!(some.split("\n\n").next(), Some("It can read and change your data on: https://github.com/*."));
         for everywhere in ["*://*/*", "http://*/x", "https://*:8080/*", "ws://*/", "<all_urls>"] {
             assert!(ask(&[everywhere], &[]).words().1.contains("every website"), "{everywhere}");
         }
@@ -332,7 +372,7 @@ mod tests {
         let many: Vec<&str> = many.iter().map(String::as_str).collect();
         let (_, listed) = ask(&many, &[]).words();
         assert!(listed.starts_with("It can read and change your data on: *://*.bank.example/*, https://*.mail.example/*,"), "{listed}");
-        assert!(listed.ends_with("and 6 more."), "{listed}");
+        assert!(listed.split("\n\n").next().unwrap().ends_with("and 6 more."), "{listed}");
         // A name can't write lines of its own into the dialog.
         let spoof = Ask { name: "Helper\"\n\nIt asks for no permissions.\u{2028}x".repeat(5), hosts: vec!["<all_urls>".into()], permissions: vec![] };
         let (question, detail) = spoof.words();
@@ -341,6 +381,40 @@ mod tests {
         assert_eq!(ask(&[], &[]).words().1, "It asks for no permissions.");
         assert!(ask(&["https://github.com/*"], &["cookies"]).words().1.contains("sign-ins you imported"));
         assert!(!ask(&[], &["cookies"]).words().1.contains("sign-ins you imported"));
+    }
+
+    /// Any site it reaches is reached with the imported sign-ins, cookies permission or not: its content scripts and its
+    /// requests carry them.
+    #[test]
+    fn the_dialog_says_the_imported_sign_ins_reach_any_site_it_reaches() {
+        let ask = |hosts: &[&str], permissions: &[&str]| Ask {
+            name: "Blocker".into(),
+            hosts: hosts.iter().map(|host| host.to_string()).collect(),
+            permissions: permissions.iter().map(|permission| permission.to_string()).collect(),
+        };
+        for hosts in [&["https://github.com/*"][..], &["<all_urls>"], &["*://*.bank.example/*"]] {
+            let (_, detail) = ask(hosts, &["storage"]).words();
+            assert!(detail.contains("with the sign-ins you imported"), "{hosts:?}: {detail}");
+        }
+        assert!(!ask(&[], &["storage"]).words().1.contains("sign-ins"));
+    }
+
+    /// The raw names that reach the most each say what they do, on a line of their own.
+    #[test]
+    fn the_dialog_says_what_sensitive_permissions_do() {
+        let ask = Ask { name: "Helper".into(), hosts: vec![], permissions: ["storage", "tabs", "nativeMessaging", "clipboardRead"].map(String::from).to_vec() };
+        let (_, detail) = ask.words();
+        assert_eq!(
+            detail,
+            "It asks for: storage, tabs, nativeMessaging, clipboardRead.\n\n\
+             tabs: it sees the address and title of every page you open\n\
+             nativeMessaging: it asks to talk to apps on this Mac, which Wings never allows\n\
+             clipboardRead: it can read what you copy"
+        );
+        for (name, _) in SENSITIVE {
+            let one = Ask { name: "x".into(), hosts: vec![], permissions: vec![name.into()] };
+            assert!(one.words().1.contains(&format!("\n\n{name}: ")), "{name}");
+        }
     }
 
     #[test]
@@ -372,6 +446,19 @@ mod tests {
             assert_eq!(gate(go, true, false, false), Err(LOADING), "{go:?} while another page is on its way");
             assert_eq!(gate(go, true, false, true), Ok(()), "{go:?}");
         }
+        for go in moves.iter().chain(&reads) {
+            assert!(!needs_click(go), "{go:?}");
+        }
+    }
+
+    /// An extension's button reads nothing of the page for the plugin, so it opens on any page, a signed-in one too, but
+    /// only on a click of yours.
+    #[test]
+    fn an_extensions_button_needs_a_click_and_reads_nothing_of_the_page() {
+        use crate::page::tree::WebGo;
+        let button = WebGo::Extension("e1".into());
+        assert!(needs_click(&button));
+        assert_eq!(gate(&button, false, true, false), Ok(()));
     }
 
     #[test]

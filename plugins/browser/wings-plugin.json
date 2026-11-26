@@ -197,7 +197,7 @@
       },
       {
         "name": "screenshot",
-        "description": "Takes a picture of what the Browser page shows on screen right now and returns it as an image (and its file path). It captures only the visible area, not the whole page: scroll with browser__scroll to see more. Use browser__snapshot when you need text or refs to act on.",
+        "description": "Takes a picture of what the Browser page shows on screen right now and returns it as an image (and its file path). It captures only the visible area, not the whole page: scroll with browser__scroll to see more. Password, card and one-time-code fields are painted over, and so are frames from other sites once one of the page's frames held one. Use browser__snapshot when you need text or refs to act on.",
         "inputSchema": {
           "type": "object",
           "properties": {}
@@ -321,7 +321,7 @@
       },
       {
         "name": "eval",
-        "description": "Runs JavaScript in the Browser page's own world, with access to its globals, and returns the result as JSON. The script is the body of an async function, so write `return document.title`, not a bare expression. Refused on sites the person signed in to by importing cookies from another browser. Use browser__snapshot and click for ordinary interaction.",
+        "description": "Runs JavaScript in the Browser page's own world, with access to its globals, and returns the result as JSON. The script is the body of an async function, so write `return document.title`, not a bare expression. Refused on sites the person signed in to by importing cookies from another browser, and on any page that has shown a password, card or one-time-code field, filled or not, until it goes to a new page: there use browser__snapshot, click, type and fill, and browser__handoff for sign-ins. A field inside a closed shadow root can't be seen, so don't count on a page being clear of them. Use browser__snapshot and click for ordinary interaction.",
         "inputSchema": {
           "type": "object",
           "properties": {

@@ -1906,34 +1906,30 @@ fn run_web(job: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, 
                 }
             });
         }
-        Job::Load { profile, id, dir } => run_web_load(profile, id, dir, answer),
-        Job::Add { profile, id, dir, ask } => {
+        Job::Load { profile, extension } => run_web_load(profile, extension, answer),
+        Job::Add { ask } => {
             let (question, detail) = ask.words();
             let allowed = window.prompt(gpui::PromptLevel::Warning, &question, Some(&detail), &["Add", "Cancel"], cx);
-            cx.spawn(async move |_, cx| {
-                if allowed.await != Ok(0) {
-                    let _ = answer.send(Err(crate::web::NOT_ALLOWED.into()));
-                    return;
-                }
-                // Only here, after the dialog's Add, is it allowed: its load's own result rides along.
-                let (loaded, heard) = std::sync::mpsc::channel();
-                let _ = cx.update(|_| run_web_load(profile, id, dir, loaded));
-                std::thread::spawn(move || {
-                    let error = match heard.recv() {
-                        Ok(Ok(_)) => None,
-                        Ok(Err(error)) => Some(error),
-                        Err(_) => Some("WebKit didn't answer".to_owned()),
-                    };
-                    let _ = answer.send(Ok(serde_json::json!({ "allowed": true, "error": error }).to_string()));
-                });
+            cx.spawn(async move |_, _| {
+                // Only the dialog's Add allows it; the call then seals its record and loads it (`calls::web`).
+                let answer_is = if allowed.await == Ok(0) { Ok(serde_json::json!({ "allowed": true }).to_string()) } else { Err(crate::web::NOT_ALLOWED.into()) };
+                let _ = answer.send(answer_is);
             })
             .detach();
         }
+        Job::Remove { profile, id } => {
+            let again = profile.clone();
+            mac::remove_extension(&profile, &id, move || {
+                mac::refresh_buttons(&again);
+                let _ = answer.send(Ok("null".into()));
+            });
+        }
         Job::Unload { profile, id } => {
             mac::unload(&profile, &id);
+            mac::refresh_buttons(&profile);
             let _ = answer.send(Ok("null".into()));
         }
-        Job::Cookies { profile, keep_data, cookies } => {
+        Job::Cookies { profile, keep_data, keep_signins, cookies } => {
             let same_site = |cookie: &wings_browser_cookies::Cookie| match cookie.same_site {
                 Some(wings_browser_cookies::SameSite::Lax) => Some("lax"),
                 Some(wings_browser_cookies::SameSite::Strict) => Some("strict"),
@@ -1946,7 +1942,8 @@ fn run_web(job: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, 
                     name: &cookie.name,
                     value: &cookie.value,
                     path: &cookie.path,
-                    expires: cookie.expires,
+                    // With no expiry it is a session cookie, which goes as Wings quits, even from a kept store.
+                    expires: cookie.expires.filter(|_| keep_signins),
                     secure: cookie.secure,
                     http_only: cookie.http_only,
                     same_site: same_site(cookie),
@@ -1963,13 +1960,15 @@ fn run_web(job: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, 
     }
 }
 
-/// Loads an extension into every web view of `profile`, granting what it asks for, which the person allowed as they
-/// added it (`Job::Add`).
+/// Loads an extension into every web view of `profile`, granting what the person allowed as they added it (`Job::Add`).
 #[cfg(target_os = "macos")]
-fn run_web_load(profile: crate::web::Profile, id: String, dir: std::path::PathBuf, answer: std::sync::mpsc::Sender<Result<String, String>>) {
+fn run_web_load(profile: crate::web::Profile, extension: crate::web::extensions::Verified, answer: std::sync::mpsc::Sender<Result<String, String>>) {
     let left = std::rc::Rc::new(std::cell::Cell::new(2));
     let answer = std::rc::Rc::new(answer);
-    crate::web::mac::load_everywhere(&profile, &id, &dir, move |loaded| {
+    let again = profile.clone();
+    crate::web::mac::load_everywhere(&profile, &extension, move |loaded| {
+        // Its button shows on the pages open now.
+        crate::web::mac::refresh_buttons(&again);
         left.set(left.get() - 1);
         if left.get() == 0 || loaded.is_err() {
             let _ = answer.send(loaded.map(|()| "null".into()));
