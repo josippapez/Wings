@@ -5,7 +5,7 @@ use crate::{
     pr_page::{self, Page, Snip},
     providers::{info, ref_of},
     pushes::{Entry, day_time, timeline_of},
-    snippet::snippet_span,
+    snippet::{gutter_of, snippet_span},
     threads::{Kind, Thread, focus_of, is_automated, kind_of, one_line, threads_of},
     types::{Comment, Overview, Push, Reviewer, SnippetLine, Status},
     ui::{checks_view, parts, run_view},
@@ -145,24 +145,6 @@ fn skeleton(width: Value, height: u32) -> Node {
     Node::new("Skeleton").prop("width", width).prop("height", height)
 }
 
-fn tone_badge(label: &str, tone: &str) -> Node {
-    match tone {
-        "neutral" => Node::new("Badge").text(label),
-        "warning" => Node::new("Badge").prop("tone", "warn").text(label),
-        "merged" => Node::new("Badge").prop("tone", "info").text(label),
-        tone => Node::new("Badge").prop("tone", tone).text(label),
-    }
-}
-
-fn outline(label: impl Into<String>, tone: Option<&str>) -> Node {
-    let badge = Node::new("Badge").prop("variant", "outline");
-    match tone {
-        Some(tone) => badge.prop("tone", tone),
-        None => badge,
-    }
-    .text(label)
-}
-
 /// "opened 3 days ago".
 fn when(prefix: &str, iso: &str) -> Option<String> {
     parts::time_text(iso).map(|ago| format!("{prefix}{ago}"))
@@ -278,7 +260,7 @@ fn wrap(p: &Page, st: Option<&Status>, run_open: bool, verdict: Option<(bool, St
         .child(
             line("l")
                 .prop("wrap", true)
-                .maybe(st.map(|s| tone_badge(&s.label, &s.tone)))
+                .maybe(st.map(|s| parts::status_badge(s.label.as_str(), &s.tone)))
                 .maybe(st.filter(|s| !s.branch.is_empty()).map(|s| branch(&s.branch)))
                 .maybe(overview.map(|o| {
                     line("s")
@@ -367,7 +349,7 @@ fn review_chip(overview: &Overview) -> Node {
     } else {
         None
     };
-    outline(status.review.as_str(), tone).maybe((!reviewers.is_empty()).then(|| {
+    parts::status_badge(status.review.as_str(), tone.unwrap_or("neutral")).maybe((!reviewers.is_empty()).then(|| {
         line("s").children(reviewers.iter().map(|r: &Reviewer| {
             let label = format!("{} {}", r.name, vote_word(&r.vote));
             line("none").key(r.name.clone()).child(avatar(&r.name, true)).maybe((r.vote != "none").then(|| vote_mark(&r.vote, label)))
@@ -379,7 +361,7 @@ fn checks_chip(st: &Status) -> Node {
     let c = st.checks;
     let parts: Vec<String> = [(c.failed, "failed"), (c.running, "running"), (c.queued, "queued"), (c.passed, "passed")].into_iter().filter(|(n, _)| *n > 0).map(|(n, w)| format!("{n} {w}")).collect();
     let tone = if c.failed > 0 { "danger" } else if c.pending() > 0 { "warn" } else { "success" };
-    outline(format!("{} ›", parts.join(" · ")), Some(tone)).on("onClick", |_| ui(|u| u.tab = Tab::Checks))
+    parts::status_badge(format!("{} ›", parts.join(" · ")), tone).on("onClick", |_| ui(|u| u.tab = Tab::Checks))
 }
 
 fn loaded(p: &Page, overview: &Overview, st: &Status) -> Vec<Node> {
@@ -391,10 +373,10 @@ fn loaded(p: &Page, overview: &Overview, st: &Status) -> Vec<Node> {
     let summary = line("m")
         .prop("wrap", true)
         .child(review_chip(overview).key("review"))
-        .child(if total > 0 { checks_chip(st) } else { outline("No checks", None) }.key("checks"))
-        .maybe((st.label == "Conflicts").then(|| outline("Conflicts", Some("danger"))))
-        .maybe(st.merge.as_ref().map(|m| outline(m.as_str(), None)))
-        .maybe(st.changes.as_ref().map(|c| outline(c.as_str(), None)));
+        .child(if total > 0 { checks_chip(st) } else { small("No checks").prop("tone", "muted") }.key("checks"))
+        .maybe((st.label == "Conflicts").then(|| parts::status_badge("Conflicts", "danger")))
+        .maybe(st.merge.as_ref().map(|m| small(m.as_str()).prop("tone", "muted")))
+        .maybe(st.changes.as_ref().map(|c| small(c.as_str()).prop("tone", "muted")));
     let value = |t: Tab| match t {
         Tab::Overview => "overview",
         Tab::Checks => "checks",
@@ -429,8 +411,7 @@ fn loaded(p: &Page, overview: &Overview, st: &Status) -> Vec<Node> {
         Tab::Checks => parts_card(vec![checks_view::build(st, unresolved)]),
         Tab::Files => parts_card(vec![
             text(st.changes.clone().unwrap_or_else(|| "Changed files".to_owned())).prop("weight", "strong"),
-            muted("The changed files open in Wings' diff viewer, with the review comments on their lines."),
-            row().child(busy_button("Open diff", "default", p.busy == Some("diff"), || pr_page::run("diff", None))),
+            muted("The changed files open in Wings' diff viewer, with the review comments on their lines. Open diff, at the top of the page, opens them."),
         ]),
     };
     vec![summary].into_iter().chain([wrap_tabs(tabs, panel)]).chain(p.error().map(|e| notice("danger", e))).collect()
@@ -656,20 +637,36 @@ fn body(id: i64, source: &str, clamp: bool) -> Node {
 /// Blank lines numbered like the snippet that will replace them, so the card doesn't jump when the code arrives.
 fn placeholder_lines(start: i64, end: i64, below: bool) -> Vec<SnippetLine> {
     let span = snippet_span(start, end);
-    (span.from..=(if below { span.to } else { span.last })).map(|n| SnippetLine { n, text: String::new(), hit: n >= start && n <= span.last, added: None, removed: None }).collect()
+    (span.from..=(if below { span.to } else { span.last })).map(|n| SnippetLine { n, text: String::new(), hit: n >= start && n <= span.last, added: None, removed: None, old: None }).collect()
 }
 
 fn code_lines(lines: &[SnippetLine], busy: bool) -> Node {
+    // Like the diff viewer's unified rows: an old and a new number, shown only when the snippet was read from a diff, and
+    // a sign, so a changed line doesn't rest on its colour alone.
+    let two = lines.iter().any(|l| l.removed == Some(true) || l.old.is_some());
+    let signed = lines.iter().any(|l| l.removed == Some(true) || l.added == Some(true));
+    // Padded with no-break spaces so a blank side keeps its column and the numbers line up.
+    let number = |n: Option<i64>| muted(format!("{:\u{a0}>3}", n.map(|n| n.to_string()).unwrap_or_default())).prop("mono", true).prop("size", "tiny");
     let rows = lines.iter().map(|l| {
+        let g = gutter_of(l);
         let tone = if l.added == Some(true) { Some("success") } else if l.removed == Some(true) { Some("danger") } else { None };
         let mut code = text(if l.text.is_empty() { " " } else { l.text.as_str() }).prop("mono", true).prop("size", "small").prop("grow", true);
+        let mut sign = text(g.sign.to_string()).prop("mono", true).prop("size", "small");
         if let Some(tone) = tone {
             code = code.prop("tone", tone);
+            sign = sign.prop("tone", tone);
         }
         if l.hit {
             code = code.prop("weight", "strong");
         }
-        line("m").prop("align", "baseline").key(l.n.to_string()).child(muted(l.n.to_string()).prop("mono", true).prop("size", "tiny")).child(code)
+        let key = format!("{}{}", g.sign, l.n);
+        line("m")
+            .prop("align", "baseline")
+            .key(key)
+            .maybe(two.then(|| number(g.old)))
+            .child(number(g.new))
+            .maybe(signed.then_some(sign))
+            .child(code)
     });
     card().child(col("none").maybe(busy.then(|| Node::new("Spinner").prop("label", "Loading the code"))).children(rows))
 }

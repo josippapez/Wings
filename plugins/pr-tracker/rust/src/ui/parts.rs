@@ -64,6 +64,17 @@ pub fn tag(label: &str, required: bool) -> Node {
     }
 }
 
+/// How a pull request stands, as a filled badge: the one way every page says a status. `tone` is a status tone
+/// (`neutral`, `success`, `warning`, `danger`, `info`, `merged`) or a badge tone (`warn`).
+pub fn status_badge(label: impl Into<String>, tone: &str) -> Node {
+    match tone {
+        "neutral" => Node::new("Badge").text(label),
+        "warning" => Node::new("Badge").prop("tone", "warn").text(label),
+        "merged" => Node::new("Badge").prop("tone", "info").text(label),
+        tone => Node::new("Badge").prop("tone", tone).text(label),
+    }
+}
+
 /// A column of a row, which takes a fixed `width` in points.
 pub fn column(width: u32) -> Node {
     Node::new("Stack").prop("width", width)

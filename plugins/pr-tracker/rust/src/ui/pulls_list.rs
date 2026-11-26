@@ -6,7 +6,7 @@ use crate::{
     ipc,
     pulls::{Agent, Filter, PullRow, PullsAnswer, Scope, count_pulls, filter_of, filter_pulls, split_title},
     types::PrArgs,
-    ui::parts::{tag, time_text},
+    ui::parts::{status_badge, tag, time_text},
 };
 use serde_json::{Value, json};
 use std::{cell::RefCell, rc::Rc};
@@ -174,32 +174,21 @@ fn skeletons() -> Node {
     stack().prop("gap", "s").child(Node::new("Spinner").prop("label", "Loading pull requests")).children((0..3).map(|i| Node::new("Skeleton").key(i.to_string()).prop("height", 58)))
 }
 
-/// A tone of a row's status, as the names a `Text` takes.
-fn text_tone(tone: &str) -> &'static str {
-    match tone {
-        "info" | "merged" => "info",
-        "warning" => "warn",
-        "danger" => "danger",
-        "success" => "success",
-        _ => "muted",
-    }
-}
-
 /// A row: a lead dot, the title over its identity (number, author, branches) and its status, all muted and split by
 /// " · ", and the flags at the end. Rows sit in one card split by hairlines.
 fn pull_item(r: &PullRow, show_scope: bool) -> Node {
     let (tags, title) = split_title(&r.title);
     let checks = &r.checks;
-    let (checks_text, checks_tone) = if checks.failed > 0 {
-        (Some(format!("{} failing", checks.failed)), "danger")
+    let checks_text = if checks.failed > 0 {
+        Some(format!("{} failing", checks.failed))
     } else if checks.running > 0 {
-        (Some(format!("{} running", checks.running)), "warn")
+        Some(format!("{} running", checks.running))
     } else if checks.queued > 0 {
-        (Some(format!("{} queued", checks.queued)), "warn")
+        Some(format!("{} queued", checks.queued))
     } else if checks.passed > 0 {
-        (Some(format!("{} passed", checks.passed)), "success")
+        Some(format!("{} passed", checks.passed))
     } else {
-        (None, "success")
+        None
     };
     let mut dot = Node::new("Dot").prop("label", r.badge.text.as_str());
     if let Some(tone) = dot_tone(&r.badge.tone) {
@@ -220,16 +209,17 @@ fn pull_item(r: &PullRow, show_scope: bool) -> Node {
     );
     let facts = joined(
         [
-            (!r.badge.text.is_empty()).then(|| text(r.badge.text.as_str()).prop("size", "small").prop("tone", text_tone(&r.badge.tone))),
             (!r.review.is_empty()).then(|| small(r.review.clone())),
-            checks_text.map(|c| text(c).prop("size", "small").prop("tone", checks_tone)),
+            checks_text.map(small),
             time_text(&r.updated).map(small),
         ]
         .into_iter()
         .flatten()
         .collect(),
     );
+    // The status is a filled badge, the same one the pull request page shows; the dot only leads the row.
     let flags: Vec<Node> = [
+        (!r.badge.text.is_empty()).then(|| status_badge(r.badge.text.as_str(), &r.badge.tone).prop("size", "sm")),
         (show_scope && !scope.is_empty()).then(|| Node::new("Badge").prop("size", "sm").prop("variant", "outline").text(scope)),
         r.agent.map(|agent| Node::new("Badge").prop("size", "sm").prop("variant", "outline").prop("tone", "info").text(if agent == Agent::Working { "Agent working" } else { "Agent here" })),
         (r.unread > 0).then(|| Node::new("Badge").prop("size", "sm").prop("variant", "outline").prop("tone", "info").text(format!("{} new", r.unread))),
@@ -422,12 +412,14 @@ mod tests {
         assert_eq!(page.matches(r#""type":"ListButton""#).count(), 2, "{page}");
     }
 
-    /// The facts at a row's end are split by " · " and the status keeps its tone.
+    /// The facts under a row's title are split by " · " and muted: the status is one filled badge, not coloured words.
     #[test]
-    fn a_rows_facts_are_split_by_dots_and_the_status_keeps_its_tone() {
+    fn a_rows_status_is_a_filled_badge_and_its_facts_are_plain_muted_text() {
         let row = json_of(vec![pull_item(&serde_json::from_value(row_json("a", 1)).unwrap(), true)]);
-        assert_eq!(row.matches(r#""text":"·""#).count(), 5, "{row}");
-        assert!(row.contains(r#""tone":"danger""#), "{row}");
+        assert_eq!(row.matches(r#""text":"·""#).count(), 4, "{row}");
+        assert_eq!(row.matches(r#""type":"Badge""#).count(), 3, "{row}");
+        assert!(row.contains(r#""tone":"danger""#) && !row.contains(r#""tone":"success""#), "{row}");
+        assert!(!row.contains(r#""type":"Text","props":{"size":"small","tone":"danger""#), "{row}");
     }
 
     #[test]

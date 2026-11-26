@@ -132,7 +132,6 @@ fn check_row(st: &Status, c: &CheckItem, opens_run: bool) -> Node {
                     .maybe(c.kind.as_ref().filter(|kind| **kind != c.name).map(|kind| muted(kind.as_str()).prop("size", "tiny"))),
             )
             .maybe(c.note.as_ref().map(|note| text(note.as_str()).prop("tone", if c.state == CheckState::Failed { "danger" } else { "muted" }).prop("size", "small"))),
-        if opens_run { go() } else { row() },
     ];
     let line = row().prop("gap", "m").prop("align", "start").prop("grow", true).children(main);
     let id = c.id.clone();
@@ -158,13 +157,14 @@ fn check_row(st: &Status, c: &CheckItem, opens_run: bool) -> Node {
     } else {
         row().prop("gap", "none").prop("grow", true).child(parts::column(7)).child(line).child(parts::column(7))
     };
+    // The chevron closes the row, after the time and Open, where a row that opens something puts it.
     let time = [when, took].into_iter().flatten().collect::<Vec<_>>().join(" · ");
     let open_button = url.map(|url| Node::new("Button").prop("variant", "ghost").prop("size", "sm").prop("label", format!("Open {}", c.name)).on("onClick", move |_| host::open_url(&url)).text("Open"));
     Node::new("Bar")
         .key(c.id.clone())
         .prop("edge", "top")
         .prop("gap", "xs")
-        .child(row().prop("gap", "m").child(lead).maybe((!time.is_empty()).then(|| muted(time).prop("size", "small"))).child(parts::column(52).child(row().prop("justify", "end").maybe(open_button))))
+        .child(row().prop("gap", "m").child(lead).maybe((!time.is_empty()).then(|| muted(time).prop("size", "small"))).child(parts::column(52).child(row().prop("justify", "end").maybe(open_button))).maybe(opens_run.then(go)))
         .maybe(open.then(|| failure_body(&key)))
 }
 

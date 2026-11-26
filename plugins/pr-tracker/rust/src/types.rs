@@ -229,6 +229,9 @@ pub struct SnippetLine {
     /// The PR removed this line, so `n` is its number before the change. Set only on rows read from a diff.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub removed: Option<bool>,
+    /// The line's number before the change, on a diff row that is context (a removed row's is `n`). Set only on rows read from a diff.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old: Option<i64>,
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]

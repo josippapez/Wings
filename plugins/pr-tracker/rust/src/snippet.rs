@@ -63,7 +63,7 @@ pub fn snippet_of(content: &str, start: i64, end: i64, added: Option<&BTreeSet<i
     let span = snippet_span(start, end);
     let to = (lines.len() as i64).min(span.to);
     (span.from..=to)
-        .map(|n| SnippetLine { n, text: lines[(n - 1) as usize].trim_end_matches('\r').to_owned(), hit: n >= start && n <= span.last, added: added.map(|a| a.contains(&n)), removed: None })
+        .map(|n| SnippetLine { n, text: lines[(n - 1) as usize].trim_end_matches('\r').to_owned(), hit: n >= start && n <= span.last, added: added.map(|a| a.contains(&n)), removed: None, old: None })
         .collect()
 }
 
@@ -137,9 +137,29 @@ pub fn diff_window(patch: &str, side: &str, start: i64, end: i64) -> Option<Vec<
                 hit: from + i >= first && on(r),
                 added: (r.kind == Kind::Added).then_some(true),
                 removed: (r.kind == Kind::Removed).then_some(true),
+                old: (r.kind == Kind::Context).then_some(r.old),
             })
             .collect(),
     )
+}
+
+/// A row of a snippet as drawn, like the diff viewer's unified rows: the number before the change (blank on an added row),
+/// the number after it (blank on a removed row), and the sign that says what the change was without colour.
+#[derive(PartialEq, Debug)]
+pub struct Gutter {
+    pub old: Option<i64>,
+    pub new: Option<i64>,
+    pub sign: char,
+}
+
+pub fn gutter_of(l: &SnippetLine) -> Gutter {
+    if l.removed == Some(true) {
+        Gutter { old: Some(l.n), new: None, sign: '-' }
+    } else if l.added == Some(true) {
+        Gutter { old: None, new: Some(l.n), sign: '+' }
+    } else {
+        Gutter { old: l.old, new: Some(l.n), sign: ' ' }
+    }
 }
 
 #[cfg(test)]
@@ -167,6 +187,15 @@ mod tests {
         assert_eq!(view(&diff_window(&hunk(), "additions", 25, 25).unwrap()), ["13- old2", "22+ new1", "23+ new2", "24  c", "25 *d"]);
         assert_eq!(view(&diff_window(&hunk(), "additions", 22, 23).unwrap()), ["20  a", "21  b", "12- old1", "13- old2", "22+*new1", "23+*new2"]);
         assert_eq!(view(&diff_window(&hunk(), "deletions", 13, 13).unwrap()), ["20  a", "21  b", "12- old1", "13-*old2"]);
+    }
+
+    #[test]
+    fn a_row_carries_its_sign_and_the_number_on_each_side_it_exists_on() {
+        let rows: Vec<Gutter> = diff_window(&hunk(), "additions", 25, 25).unwrap().iter().map(gutter_of).collect();
+        let g = |old, new, sign| Gutter { old, new, sign };
+        assert_eq!(rows, [g(Some(13), None, '-'), g(None, Some(22), '+'), g(None, Some(23), '+'), g(Some(14), Some(24), ' '), g(Some(15), Some(25), ' ')]);
+        // A snippet read from a file has no old side.
+        assert_eq!(gutter_of(&snippet_of(&file(), 20, 20, None)[0]), g(None, Some(16), ' '));
     }
 
     #[test]
