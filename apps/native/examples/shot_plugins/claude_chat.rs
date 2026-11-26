@@ -993,6 +993,31 @@ esac"##,
         lines.push(answer("settings", json!({ "effective": { "model": "opus", "effortLevel": "xhigh" }, "applied": { "ultracode": true, "ultracodeAvailable": true } })));
         lines
     };
+    // Every Markdown element the chat draws, a few at a time so each fits the window (the chat stays at its end).
+    let markdown = opened(vec![
+        init.clone(),
+        user("Markdown, part: markdown."),
+        text("# Heading one\n## Heading two\n### Heading three\n#### Heading four\n\nA paragraph with **bold**, *italic*, ~~strikethrough~~, `inline code` and a [link](https://example.com/page) in it, then a long unbroken word: https://example.com/a/very/long/path/that/never/breaks/anywhere/at/all/and/keeps/going/and/going/until/it/is/far/wider/than/the/column?with=query&and=more"),
+        json!({ "type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.01 }),
+    ]);
+    let markdown_lists = opened(vec![
+        init.clone(),
+        user("Markdown, part: markdown-lists."),
+        text("- First bullet\n- A long bullet that wraps over more than one line so the second line shows where the text is set in from the marker, and how far it runs\n  - Nested bullet\n    - Nested twice\n- [x] A finished task\n- [ ] An open task\n\n1. First step\n2. Second step\n   - Bullet under a step\n3. Third step\n\n> A quote that says something worth setting apart.\n> > A quote inside a quote."),
+        json!({ "type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.01 }),
+    ]);
+    let markdown_code = opened(vec![
+        init.clone(),
+        user("Markdown, part: markdown-code."),
+        text("```rust\nfn main() {\n    println!(\"hello\");\n}\n```\n\n```\nplain fenced code without a language, with a very long line that runs past the width of the card: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n```\n\n```diff\n- let a = 1;\n+ let a = 2;\n```"),
+        json!({ "type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.01 }),
+    ]);
+    let markdown_tables = opened(vec![
+        init.clone(),
+        user("Markdown, part: markdown-tables."),
+        text("| How you get there | Trail | Back link |\n| --- | --- | --- |\n| Patient page from the patient list (page 2) | Patient Management > name, and the list crumb goes back to page 2 | none |\n| Patient page from upload history | Patient Management > name | \"Back to Upload History\", returns to the files tab |\n| Prescription or work order from the patient page | Patient Management > name > number. The patient crumb opens the tab you came from | none |\n\n| Id | Name | Status | Owner | Updated | Notes |\n| --- | --- | --- | --- | --- | --- |\n| 1 | Checkout | open | ana | 2026-11-01 | Needs review before the release goes out |\n| 2 | Cart | done | ben | 2026-11-03 | Shipped |\n\n| Left | Centre | Right |\n|:--|:-:|--:|\n| `code` | **bold** | [link](https://example.com) |\n\n---\n\nText after the table and the rule, with an image: ![logo](https://example.com/logo.png) and more words."),
+        json!({ "type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.01 }),
+    ]);
     let shell = {
         let row = |text: &str| json!({ "type": "user", "isReplay": true, "uuid": "u-shell", "message": { "role": "user", "content": text } });
         opened(vec![
@@ -1013,6 +1038,10 @@ esac"##,
         // /skills lists the session's skills, with a menu for each one Claude Code lets you change.
         ("skills", opened(vec![init.clone()]), None, Some("type:/skills;keys:enter"), "Name only"),
         // A successful `!` command and a failed one, each with its output under one row.
+        ("markdown", markdown, None, None, "A paragraph"),
+        ("markdown-lists", markdown_lists, None, None, "Third step"),
+        ("markdown-code", markdown_code, None, None, "let a = 2;"),
+        ("markdown-tables", markdown_tables, None, None, "Text after the table"),
         ("shell", shell, None, Some("row:$ echo hi"), "$ echo hi"),
         ("handback", handback.clone(), None, None, "Report from Audit the discount code"),
         ("handback-note", handback_note, None, None, "SECURITY WARNING"),
