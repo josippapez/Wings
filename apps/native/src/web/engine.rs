@@ -147,6 +147,7 @@ fn write_choices(root: &Path, choices: &BTreeMap<String, Kind>) -> Result<(), St
 }
 
 /// The engine `profile` uses in `root`: Chromium only when chosen, installed and runnable here.
+#[cfg(test)]
 fn choice_in(root: &Path, pin: &Pinned, runnable: bool, profile: &Profile) -> Kind {
     let chosen = read_choices(root).get(&key(profile)) == Some(&Kind::Chromium);
     if chosen && runnable && installed_in(root, pin).is_some() { Kind::Chromium } else { Kind::WebKit }

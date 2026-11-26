@@ -136,6 +136,25 @@ pub fn bind(cx: &mut App) {
             KeyBinding::new("cmd-ctrl-f", ToggleFullScreen, None),
         ]);
     }
+    // A Chromium page's window has the keyboard while you type in it: these still go to Wings from there.
+    #[cfg(target_os = "macos")]
+    crate::web::chromium::keys::remember(
+        bindings
+            .iter()
+            .filter(|binding| binding.predicate().is_none())
+            .filter_map(|binding| match binding.keystrokes() {
+                [one] => Some(one.inner()),
+                _ => None,
+            })
+            .map(|keystroke| crate::web::chromium::keys::Press {
+                key: keystroke.key.clone(),
+                cmd: keystroke.modifiers.platform,
+                ctrl: keystroke.modifiers.control,
+                alt: keystroke.modifiers.alt,
+                shift: keystroke.modifiers.shift,
+            })
+            .collect(),
+    );
     cx.bind_keys(bindings);
     cx.on_action(|_: &Quit, cx| cx.quit());
     cx.on_action(|_: &Hide, cx| cx.hide());

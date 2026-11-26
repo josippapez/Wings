@@ -1,0 +1,6 @@
+# The Browser's Chromium engine (`apps/native/src/web/chromium`, `crates/wings-chromium`) builds CEF's bindings and C++
+# wrapper (`cef-dll-sys`) against CEF's SDK. Unless `CEF_PATH` names one, the first build downloads it here (about
+# 140 MB, 350 MB unpacked) and every build shares it, instead of a copy in each build folder. It also needs cmake and
+# ninja (`brew install cmake ninja`). The app holds none of it: the framework is the download Wings makes on demand.
+[env]
+CEF_PATH = { value = "apps/native/target/cef-sdk", relative = true }

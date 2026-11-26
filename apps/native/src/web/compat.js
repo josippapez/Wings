@@ -12,7 +12,10 @@
   // for good: the popup, its pages and its content scripts got no answer again (Bitwarden opens one as you sign in, for
   // its notifications). Without it, code that can do without one does: Bitwarden tries again every few minutes.
   // debt: while this WebKit's worker hangs on it; let it through again once one that doesn't ships.
-  if (typeof ServiceWorkerGlobalScope === "function" && globalThis instanceof ServiceWorkerGlobalScope) {
+  // Only in WebKit: the same folder runs in Chromium when the Browser uses it, whose worker has WebSockets that work
+  // (Chromium's navigator has userAgentData, WebKit's doesn't).
+  const chromium = typeof navigator === "object" && navigator !== null && navigator.userAgentData !== undefined;
+  if (!chromium && typeof ServiceWorkerGlobalScope === "function" && globalThis instanceof ServiceWorkerGlobalScope) {
     delete globalThis.WebSocket;
   }
   const api = globalThis.chrome || globalThis.browser;

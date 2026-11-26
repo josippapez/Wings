@@ -14,7 +14,7 @@ use super::{
 use crate::{
     installed::fixture::Data,
     page::runtime::fake::{self, Cx, Hear, idle},
-    web::{Heard, State, testing::{Did, record}},
+    web::{Heard, State, testing::{Did, record, record_engines}},
 };
 
 /// A page that is a `WebView` filling it, and a `Dialog` over it with `dialog`, which saves what its web view tells it.
@@ -111,6 +111,35 @@ fn a_tabs_web_page_shows_at_its_place_hides_with_the_tab_and_ends_with_it() {
     });
     settle(&app, &mut window);
     until(&app, &mut window, "the web page outlived its tab", |_| did.borrow().last() == Some(&Did::Ended));
+}
+
+/// Switching the Browser's engine opens its pages again in the other one, at the address each was on, and leaves the
+/// pages of a profile that didn't switch alone.
+#[test]
+fn a_page_whose_profile_switches_engines_is_made_again_by_the_other_where_it_was() {
+    let data = Data::temp();
+    install(&data, "browser", json!({ "webView": true }), false);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let id = window.update(|_, window, _| window.window_handle().window_id());
+    let (did, tells, chromium) = record_engines(id);
+    window.update(|w, window, cx| assert!(w.open_plugin_view("browser", "web", None, window, cx)));
+    until(&app, &mut window, "the web page was never made", |_| !did.borrow().is_empty());
+    settle(&app, &mut window);
+    tells.borrow()[0].tell(Heard::State(State { url: "https://example.com/docs".into(), ..State::default() }));
+    settle(&app, &mut window);
+    let made = |did: &[Did]| did.iter().filter(|did| matches!(did, Did::Made { .. })).count();
+    assert_eq!(made(&did.borrow()), 1, "a redraw with the same engine makes nothing again");
+
+    chromium.set(true);
+    window.update(|_, window, _| window.refresh());
+    settle(&app, &mut window);
+    let did = did.borrow();
+    // The first engine's view ends once the other's is made (it's dropped after the views' borrow).
+    assert_eq!(did.iter().filter(|did| **did == Did::Ended).count(), 1, "{did:?}");
+    assert_eq!(made(&did), 2, "{did:?}");
+    let again = did.iter().rposition(|did| matches!(did, Did::Made { .. })).unwrap();
+    assert_eq!(did[again], Did::Made { name: Some("browser".into()), keep_data: true, url: Some("https://example.com/docs".into()) });
+    assert!(matches!(did.get(again + 1), Some(Did::Placed(Some(_)))), "shown at its place again: {did:?}");
 }
 
 #[test]

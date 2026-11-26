@@ -147,9 +147,23 @@ fn run() -> Result<(), String> {
                 wings_native::ui::draw_backdrops_under(window);
                 // The spinners turn in Core Animation over GPUI's drawing, never drawing the window.
                 wings_native::ui::turn_spinners_natively(window);
-                // The plugins' web pages are WebKit's views over GPUI's.
+                // The plugins' web pages are WebKit's views over GPUI's, or Chromium's windows over them.
                 wings_native::web::host_natively(window);
             });
+            // A debug build checked by a script on a locked Mac, where the window is hidden and never draws, so no web page
+            // is ever placed: asked, it draws every half second without showing what it drew.
+            #[cfg(debug_assertions)]
+            if std::env::var_os("WINGS_DRAW_WHILE_HIDDEN").is_some() {
+                cx.spawn(async move |cx| {
+                    loop {
+                        cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
+                        if cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx)).is_err() {
+                            break;
+                        }
+                    }
+                })
+                .detach();
+            }
             if let Some(path) = &restart_ack
                 && let Err(error) = wings_native::updater::acknowledge_startup(path)
             {
@@ -237,6 +251,9 @@ fn keep_stderr_in(file: &std::path::Path) {
 }
 
 fn main() {
+    // Before anything opens a file and takes them: fd 3 and 4 are the Chromium engine's DevTools pipe, if it starts.
+    #[cfg(target_os = "macos")]
+    wings_chromium::pipe::reserve();
     if let Some(result) = wings_native::updater::installer_entry() {
         if let Err(error) = result {
             eprintln!("{error}");

@@ -16,6 +16,8 @@ mod views;
 
 #[cfg(all(feature = "ui", target_os = "macos"))]
 pub mod mac;
+#[cfg(all(feature = "ui", target_os = "macos"))]
+pub mod chromium;
 
 #[cfg(feature = "ui")]
 pub use views::{Extension, Heard, Spec, State, Tell, Told, forget_page, shown, slot, sync, update};
@@ -287,15 +289,15 @@ fn every_website(pattern: &str) -> bool {
 
 /// Whether a web view may go to `url`: the page itself only to an address a `WebView` may load (`web_address`), and a
 /// frame in it also to a picture or a document the page made itself (`data:`, `blob:`), or to a page of an extension
-/// (`webkit-extension:`), which WebKit loads only when the extension lists it for pages to load: Bitwarden's menu by a
-/// password field is one. A link to `file:`, `javascript:` or another app's scheme is dropped, so a page can neither read
+/// (`webkit-extension:` in WebKit, `chrome-extension:` in Chromium), which the engine loads only when the extension
+/// lists it for pages to load: Bitwarden's menu by a password field is one. A link to `file:`, `javascript:` or another app's scheme is dropped, so a page can neither read
 /// this Mac's files nor open other apps.
 pub fn may_navigate(url: &str, main_frame: bool) -> bool {
     if crate::page::tree::web_address(url).is_some() {
         return true;
     }
     let scheme = url.split_once(':').map(|(scheme, _)| scheme.to_ascii_lowercase());
-    !main_frame && matches!(scheme.as_deref(), Some("about" | "data" | "blob" | "webkit-extension"))
+    !main_frame && matches!(scheme.as_deref(), Some("about" | "data" | "blob" | "webkit-extension" | "chrome-extension"))
 }
 
 /// Why cookies can't go into a kept store on this Mac, if they can't: only a store of the plugin's own may keep them, and
@@ -501,6 +503,9 @@ mod tests {
         assert!(!may_navigate("file:///etc/passwd", false) && !may_navigate("slack://open", false));
         // An extension's page in a frame, as Bitwarden's menu by a password field is, but never as the page.
         let menu = "webkit-extension://0cc71a78-376b-4518-bfa8-2713243fd8e7/overlay/menu-button.html";
+        assert!(may_navigate(menu, false) && !may_navigate(menu, true));
+        // And Chromium's.
+        let menu = "chrome-extension://nngceckbapebfimnlniiiahkandclblb/overlay/menu-button.html";
         assert!(may_navigate(menu, false) && !may_navigate(menu, true));
     }
 

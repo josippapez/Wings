@@ -1897,6 +1897,8 @@ fn run_web(job: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, 
                 .detach();
         }
         Job::Clear(profile) => {
+            // Chromium's data of the profile goes too, whichever engine it uses now.
+            crate::web::chromium::page::clear_data(&profile);
             // Both of its stores answer; the second is when it is all gone.
             let left = std::cell::Cell::new(2);
             mac::clear_data(&profile, move || {
@@ -1904,6 +1906,13 @@ fn run_web(job: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, 
                 if left.get() == 0 {
                     let _ = answer.send(Ok("null".into()));
                 }
+            });
+        }
+        // Under Chromium it answers with whether Chromium loaded it; WebKit loads it too, for a switch back.
+        Job::Load { profile, extension } if crate::web::engine::choice(&profile) == crate::web::engine::Kind::Chromium => {
+            crate::web::mac::load_everywhere(&profile, &extension, |_| {});
+            crate::web::chromium::extensions::load(&profile, &extension, move |loaded| {
+                let _ = answer.send(loaded.map(|()| "null".into()));
             });
         }
         Job::Load { profile, extension } => run_web_load(profile, extension, answer),
@@ -1919,15 +1928,25 @@ fn run_web(job: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, 
         }
         Job::Remove { profile, id } => {
             let again = profile.clone();
-            mac::remove_extension(&profile, &id, move || {
-                mac::refresh_buttons(&again);
-                let _ = answer.send(Ok("null".into()));
+            // Uninstalled from Chromium, which deletes what it stored there, then WebKit's goes.
+            crate::web::chromium::extensions::unload(&profile, &id.clone(), move || {
+                mac::remove_extension(&again.clone(), &id, move || {
+                    mac::refresh_buttons(&again);
+                    let _ = answer.send(Ok("null".into()));
+                });
             });
         }
         Job::Unload { profile, id } => {
             mac::unload(&profile, &id);
             mac::refresh_buttons(&profile);
-            let _ = answer.send(Ok("null".into()));
+            // Chromium can only uninstall one loaded this way, which deletes what it stored: turning it on again starts it
+            // afresh there.
+            crate::web::chromium::extensions::unload(&profile, &id, move || {
+                let _ = answer.send(Ok("null".into()));
+            });
+        }
+        Job::Cookies { profile, .. } if crate::web::engine::choice(&profile) == crate::web::engine::Kind::Chromium => {
+            let _ = answer.send(Err(crate::web::chromium::page::NO_IMPORT.into()));
         }
         Job::Cookies { profile, keep_data, keep_signins, cookies } => {
             let same_site = |cookie: &wings_browser_cookies::Cookie| match cookie.same_site {

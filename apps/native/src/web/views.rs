@@ -1,6 +1,11 @@
 //! Which web views the pages hold, and where each shows in the window's last draw.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    rc::Rc,
+    sync::{Arc, Mutex},
+};
 
 use gpui::{App, Bounds, EntityId, IntoElement, Pixels, SharedString, Styled, Window, WindowId, canvas};
 use serde::Serialize;
@@ -103,10 +108,17 @@ pub type Told = async_channel::Sender<(SharedString, Heard)>;
 pub struct Tell {
     told: Told,
     name: SharedString,
+    /// The last address it told, which the other engine opens it at when the page switches engines.
+    at: Arc<Mutex<Option<String>>>,
 }
 
 impl Tell {
     pub fn tell(&self, heard: Heard) {
+        if let Heard::State(state) = &heard
+            && !state.url.is_empty()
+        {
+            *self.at.lock().unwrap() = Some(state.url.clone());
+        }
         let _ = self.told.try_send((self.name.clone(), heard));
     }
 }
@@ -124,6 +136,11 @@ pub trait Native {
 pub trait Maker {
     /// `scripts`: the plugin may run scripts in its pages, so the page's console and requests are kept for `logs`.
     fn make(&self, profile: &Profile, keep_data: bool, scripts: bool, url: Option<&str>, told: Tell) -> Box<dyn Native>;
+    /// Which engine it makes `profile`'s web views with now (`web::engine::choice`): a view made by another is made
+    /// again by this one, at the address it was on.
+    fn engine(&self, _profile: &Profile) -> super::engine::Kind {
+        super::engine::Kind::WebKit
+    }
 }
 
 struct Entry {
@@ -133,6 +150,9 @@ struct Entry {
     url: Option<String>,
     told: Told,
     native: Option<Box<dyn Native>>,
+    /// The engine that made `native`, and the last address it told its page.
+    engine: super::engine::Kind,
+    at: Arc<Mutex<Option<String>>>,
     /// What the page asked before the engine's view was made, done once it is, with each command's token.
     waiting: Vec<(WebGo, u64)>,
     /// The token of the last command done, so each runs once: a page's tokens only grow.
@@ -180,6 +200,8 @@ pub fn update(page: EntityId, profile: &Profile, specs: &[Spec], told: &Told, sc
                 url: spec.url.clone(),
                 told: told.clone(),
                 native: None,
+                engine: super::engine::Kind::WebKit,
+                at: Arc::default(),
                 waiting: Vec::new(),
                 // A command the page sent before the view was made runs once it is.
                 token: None,
@@ -255,6 +277,8 @@ pub fn place(window: &Window, _: &App) {
     let maker = MAKERS.with_borrow(|makers| makers.get(&id).cloned());
     let places = slots::shown(id, LAYER);
     let covers = slots::blocking_covers(id);
+    // Dropped after the borrow, as a view that ends may call back.
+    let mut ended = Vec::new();
     VIEWS.with_borrow_mut(|views| {
         for ((page, name), entry) in views.iter_mut() {
             if entry.window.is_some_and(|window| window != id) {
@@ -265,9 +289,21 @@ pub fn place(window: &Window, _: &App) {
                 .find(|(slot, _)| *slot == slot_name(*page, name))
                 .map(|(_, slot)| slot.bounds.intersect(&slot.mask.bounds))
                 .filter(|at| !at.is_empty() && !covers.iter().any(|cover| cover.intersects(at)));
+            // The profile switched engines: its page opens again in the other one, where it was.
+            if let Some(maker) = &maker
+                && entry.native.is_some()
+                && maker.engine(&entry.profile) != entry.engine
+            {
+                ended.extend(entry.native.take());
+                entry.shown = None;
+                if let Some(at) = entry.at.lock().unwrap().clone() {
+                    entry.url = Some(at);
+                }
+            }
             if entry.native.is_none() {
                 let (Some(maker), Some(_)) = (&maker, at) else { continue };
-                let tell = Tell { told: entry.told.clone(), name: name.clone() };
+                let tell = Tell { told: entry.told.clone(), name: name.clone(), at: entry.at.clone() };
+                entry.engine = maker.engine(&entry.profile);
                 let mut native = maker.make(&entry.profile, entry.keep_data, entry.scripts, entry.url.as_deref(), tell);
                 for (go, token) in entry.waiting.drain(..) {
                     native.go(&go, token);
@@ -283,6 +319,7 @@ pub fn place(window: &Window, _: &App) {
             }
         }
     });
+    drop(ended);
 }
 
 #[cfg(all(test, feature = "test-support"))]
@@ -306,6 +343,8 @@ pub(crate) mod testing {
         pub did: Rc<RefCell<Vec<Did>>>,
         /// What each view made tells its page, by the order they were made in.
         pub tells: Rc<RefCell<Vec<Tell>>>,
+        /// It says it makes views with Chromium, which a test switches.
+        pub chromium: Rc<std::cell::Cell<bool>>,
     }
 
     struct Fake(Rc<RefCell<Vec<Did>>>);
@@ -331,15 +370,23 @@ pub(crate) mod testing {
             self.tells.borrow_mut().push(told);
             Box::new(Fake(self.did.clone()))
         }
+        fn engine(&self, _: &Profile) -> crate::web::engine::Kind {
+            if self.chromium.get() { crate::web::engine::Kind::Chromium } else { crate::web::engine::Kind::WebKit }
+        }
     }
 
     /// Records the web views of the window `id`: what was done to them, and how to tell their pages.
     pub fn record(id: WindowId) -> (Rc<RefCell<Vec<Did>>>, Rc<RefCell<Vec<Tell>>>) {
-        let record = Record::default();
-        let did = record.did.clone();
-        let tells = record.tells.clone();
-        make_with(id, Rc::new(record));
+        let (did, tells, _) = record_engines(id);
         (did, tells)
+    }
+
+    /// `record`, with whether it says it makes views with Chromium, which the test switches.
+    pub fn record_engines(id: WindowId) -> (Rc<RefCell<Vec<Did>>>, Rc<RefCell<Vec<Tell>>>, Rc<std::cell::Cell<bool>>) {
+        let record = Record::default();
+        let (did, tells, chromium) = (record.did.clone(), record.tells.clone(), record.chromium.clone());
+        make_with(id, Rc::new(record));
+        (did, tells, chromium)
     }
 }
 

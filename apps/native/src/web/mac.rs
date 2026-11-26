@@ -50,10 +50,27 @@ use grant::granted;
 /// What the web views say they are, which a change of any of them tells the page.
 const OBSERVED: [&str; 5] = ["URL", "title", "loading", "canGoBack", "canGoForward"];
 
-/// Has WebKit draw the web views of the pages in `window` from now on.
+/// Has WebKit, or Chromium for a profile that chose it (`web::engine`), draw the web views of the pages in `window` from
+/// now on.
 pub fn host_natively(window: &Window) {
-    make_with(window.window_handle().window_id(), Rc::new(WebKit));
+    make_with(window.window_handle().window_id(), Rc::new(Engines));
     keys_follow_presses();
+}
+
+/// Makes each profile's web views with the engine it chose.
+struct Engines;
+
+impl Maker for Engines {
+    fn make(&self, profile: &Profile, keep_data: bool, scripts: bool, url: Option<&str>, told: Tell) -> Box<dyn Native> {
+        match self.engine(profile) {
+            super::engine::Kind::Chromium => super::chromium::Chromium.make(profile, keep_data, scripts, url, told),
+            super::engine::Kind::WebKit => WebKit.make(profile, keep_data, scripts, url, told),
+        }
+    }
+
+    fn engine(&self, profile: &Profile) -> super::engine::Kind {
+        super::engine::choice(profile)
+    }
 }
 
 /// A press anywhere in a window but a web view gives the keyboard back to what was pressed. A `WKWebView` keeps the
@@ -1373,6 +1390,9 @@ mod tests {
         let worker = format!("{WEBKIT}\n{socket}\nglobalThis.ServiceWorkerGlobalScope = class {{ static [Symbol.hasInstance]() {{ return true; }} }};");
         let check = "function run() { return JSON.stringify(typeof WebSocket); }";
         assert_eq!(compat(&worker, check), serde_json::json!("undefined"), "in a worker");
+        // The same folder in Chromium's worker keeps its WebSocket, which works there.
+        let chromium = format!("{worker}\nglobalThis.navigator = {{ userAgentData: {{ brands: [] }} }};");
+        assert_eq!(compat(&chromium, check), serde_json::json!("function"), "in Chromium's worker");
         assert_eq!(compat(&format!("{WEBKIT}\n{socket}"), check), serde_json::json!("function"), "in a page");
         // A WebKit that lists the worlds keeps its own.
         let listed = format!("{WEBKIT}\nconst own = {{ ISOLATED: \"isolated\" }};\nscripting.ExecutionWorld = own;");

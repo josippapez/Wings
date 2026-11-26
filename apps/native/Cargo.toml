@@ -6,7 +6,7 @@ publish = false
 
 [features]
 default = ["ui"]
-ui = ["dep:gpui", "dep:gpui_platform", "dep:image", "dep:objc2-metal", "dep:objc2-core-video", "dep:objc2-core-foundation", "dep:objc2-quartz-core", "dep:objc2-core-graphics", "dep:wings-terminal", "dep:wings-agents", "dep:async-channel", "dep:sysinfo", "dep:unicode-segmentation", "dep:chrono", "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation", "dep:objc2-web-kit", "dep:block2", "dep:dispatch2", "dep:global-hotkey", "dep:raw-window-handle", "dep:syntect", "dep:two-face"]
+ui = ["dep:gpui", "dep:gpui_platform", "dep:image", "dep:objc2-metal", "dep:objc2-core-video", "dep:objc2-core-foundation", "dep:objc2-quartz-core", "dep:objc2-core-graphics", "dep:wings-terminal", "dep:wings-agents", "dep:async-channel", "dep:sysinfo", "dep:unicode-segmentation", "dep:chrono", "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation", "dep:objc2-web-kit", "dep:block2", "dep:dispatch2", "dep:global-hotkey", "dep:wings-chromium", "dep:cef", "dep:raw-window-handle", "dep:syntect", "dep:two-face"]
 # Headless GPUI windows for tests that send keys and mouse events through the real view.
 test-support = ["ui", "gpui/test-support", "gpui_platform/test-support"]
 # The build that replaces the desktop app: `Wings.app` on the desktop's data folder (`src/data_dir.rs`), made by
@@ -101,7 +101,7 @@ gpui_platform = { package = "gpui-pre-platform", version = "=0.3.13", default-fe
 # gpui-pre-macos already builds these exact versions with these features.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6.5", optional = true }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSSound", "NSApplication", "NSResponder", "NSEvent", "NSWindow", "NSRunningApplication", "NSView", "NSVisualEffectView", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSOpenPanel", "NSSavePanel", "NSPanel", "NSAlert", "NSTextField", "NSControl", "NSButton", "NSCell", "NSTextFieldCell", "NSActionCell", "NSPopover"], optional = true }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSSound", "NSApplication", "NSResponder", "NSEvent", "NSWindow", "NSRunningApplication", "NSView", "NSVisualEffectView", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSOpenPanel", "NSSavePanel", "NSPanel", "NSAlert", "NSTextField", "NSControl", "NSButton", "NSCell", "NSTextFieldCell", "NSActionCell", "NSPopover", "NSScreen"], optional = true }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData", "NSArray", "NSGeometry", "NSBundle", "NSString", "NSError", "NSValue", "NSDate", "NSDictionary", "NSHTTPCookie", "NSKeyValueObserving", "NSSet", "NSURL", "NSURLRequest", "NSUUID", "NSObject", "NSValue", "NSProcessInfo", "NSJSONSerialization", "NSRunLoop", "NSNotification", "block2"], optional = true }
 # Web pages in plugin pages (`web/mac.rs`): WKWebView, its data stores and, on macOS 15.4, its extensions.
 objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKHTTPCookieStore", "WKNavigation", "WKNavigationAction", "WKNavigationDelegate", "WKUIDelegate", "WKWindowFeatures", "WKWebExtension", "WKWebExtensionContext", "WKWebExtensionController", "WKWebExtensionControllerConfiguration", "WKWebExtensionPermission", "WKWebExtensionMatchPattern", "WKWebExtensionAction", "WKWebExtensionTab", "WKWebExtensionWindow", "WKWebExtensionControllerDelegate", "WKContentWorld", "WKFrameInfo", "WKSnapshotConfiguration", "WKUIDelegate", "WKOpenPanelParameters", "WKScriptMessage", "WKScriptMessageHandler", "WKUserContentController", "WKUserScript", "WKSecurityOrigin", "WKWebExtensionDataRecord", "WKWebExtensionDataType"], optional = true }
@@ -122,6 +122,12 @@ objc2-core-foundation = { version = "0.3.2", default-features = false, features 
 raw-window-handle = { version = "0.6.2", optional = true }
 # The global shortcut, the version the desktop's tauri-plugin-global-shortcut uses: Carbon's RegisterEventHotKey.
 global-hotkey = { version = "=0.8.0", optional = true }
+# The Browser's opt-in Chromium engine (`web/chromium/`): CEF's bindings and C++ wrapper, which load the framework
+# Wings downloads (`web/engine.rs`) at run time; the app links no framework and holds no CEF file. Building it needs
+# cmake and ninja, and CEF's SDK: `CEF_PATH` names an exported copy, or cef-dll-sys downloads one (about 130 MB) into
+# its build folder.
+wings-chromium = { path = "../../crates/wings-chromium", optional = true }
+cef = { version = "=156.7.0", default-features = false, features = ["sandbox"], optional = true }
 
 [[example]]
 name = "shot"
