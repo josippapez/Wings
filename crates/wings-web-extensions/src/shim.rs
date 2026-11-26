@@ -41,6 +41,57 @@ pub fn shim_service_worker(dir: &Path, source: &str) -> Result<bool, Error> {
     Ok(true)
 }
 
+/// Undoes `shim_service_worker` in the folder `dir` (a copy for Chromium, whose worker needs no script of Wings' and which
+/// refuses an extension with files whose names start with `_`): the manifest names the extension's own worker again and
+/// the two files go. Says whether it found the shim.
+pub fn unshim_service_worker(dir: &Path) -> Result<bool, Error> {
+    let file = dir.join("manifest.json");
+    let raw = fs::read(&file)?;
+    let mut manifest: Value =
+        serde_json::from_str(String::from_utf8_lossy(&raw).trim_start_matches('\u{feff}')).map_err(|e| Error::Manifest(e.to_string()))?;
+    let Some(background) = manifest.get_mut("background").and_then(Value::as_object_mut) else { return Ok(false) };
+    let Some(worker) = background.get("service_worker").and_then(Value::as_str).and_then(safe_relative) else { return Ok(false) };
+    if worker.file_name().and_then(|name| name.to_str()) != Some(SHIM_WORKER) {
+        return Ok(false);
+    }
+    let folder = worker.parent().unwrap_or(Path::new("")).to_path_buf();
+    let beside = dir.join(&folder);
+    let shim = fs::read_to_string(beside.join(SHIM_WORKER))?;
+    let quoted = shim
+        .trim_end()
+        .strip_prefix(&format!("importScripts(\"{SHIM_SCRIPT}\", "))
+        .and_then(|rest| rest.strip_suffix(");"))
+        .ok_or_else(|| Error::Manifest("Wings' worker for the extension isn't the one it wrote".into()))?;
+    let segment: String = serde_json::from_str(quoted).map_err(|e| Error::Manifest(e.to_string()))?;
+    let name = from_url_segment(&segment).ok_or_else(|| Error::Manifest("Wings' worker names no file".into()))?;
+    let own = folder.join(&name);
+    if safe_relative(&own.to_string_lossy()).is_none() || !dir.join(&own).is_file() || name.contains('/') {
+        return Err(Error::Manifest("Wings' worker names a file outside the extension".into()));
+    }
+    background.insert("service_worker".into(), Value::String(own.to_string_lossy().into_owned()));
+    fs::write(&file, serde_json::to_vec_pretty(&manifest).map_err(|e| Error::Manifest(e.to_string()))?)?;
+    fs::remove_file(beside.join(SHIM_WORKER))?;
+    fs::remove_file(beside.join(SHIM_SCRIPT))?;
+    Ok(true)
+}
+
+/// `url_segment` read back.
+fn from_url_segment(segment: &str) -> Option<String> {
+    let bytes = segment.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'%' {
+            out.push(u8::from_str_radix(segment.get(at + 1..at + 3)?, 16).ok()?);
+            at += 3;
+        } else {
+            out.push(bytes[at]);
+            at += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
 /// `name` as one segment of a URL path, so `importScripts` loads that file whatever characters it has (`#`, `?`, `%`).
 fn url_segment(name: &str) -> String {
     name.bytes()

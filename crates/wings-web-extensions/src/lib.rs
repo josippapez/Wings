@@ -14,7 +14,7 @@ mod unpack;
 pub use detect::{detect_installed, Detected, Installed};
 pub use error::Error;
 pub use manifest::{read_manifest, Info};
-pub use shim::{shim_service_worker, SHIM_SCRIPT, SHIM_WORKER};
+pub use shim::{shim_service_worker, unshim_service_worker, SHIM_SCRIPT, SHIM_WORKER};
 pub use store::{amo_file_url, store_package, Store, StorePackage};
 pub use tree::{read_package, tree_hash};
 pub use unpack::{copy_folder, unpack, MAX_FILES, MAX_TOTAL_BYTES};

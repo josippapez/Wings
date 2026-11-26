@@ -452,6 +452,29 @@ fn a_classic_service_worker_gets_the_shim_beside_it_and_its_own_files_stay() {
     assert_eq!(read_manifest(dir.path()).unwrap(), before, "what it asks for is the same");
 }
 
+/// Chromium refuses a folder with files whose names start with `_`, and needs no script of Wings': a copy for it gets the
+/// extension's own worker back, and the shim's two files go. A worker Wings didn't write is left alone, and one naming a
+/// file outside the folder is refused.
+#[test]
+fn a_shimmed_worker_is_undone_in_a_copy_for_chromium() {
+    use crate::{shim_service_worker, unshim_service_worker, SHIM_SCRIPT, SHIM_WORKER};
+    let dir = TempDir::new().unwrap();
+    write(dir.path(), "manifest.json", r#"{"manifest_version":3,"name":"Demo","version":"1.0","background":{"service_worker":"build/bg one#2.js"}}"#);
+    write(dir.path(), "build/bg one#2.js", "// the extension's own");
+    assert!(shim_service_worker(dir.path(), "// shim").unwrap());
+    assert!(unshim_service_worker(dir.path()).unwrap());
+    let after: serde_json::Value = serde_json::from_str(&fs::read_to_string(dir.path().join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(after["background"]["service_worker"], "build/bg one#2.js");
+    assert!(!dir.path().join("build").join(SHIM_WORKER).exists() && !dir.path().join("build").join(SHIM_SCRIPT).exists());
+    assert!(!unshim_service_worker(dir.path()).unwrap(), "nothing to undo the second time");
+    // A worker by the shim's name that points out of the folder.
+    let bad = TempDir::new().unwrap();
+    write(bad.path(), "manifest.json", &format!(r#"{{"manifest_version":3,"name":"x","version":"1","background":{{"service_worker":"{SHIM_WORKER}"}}}}"#));
+    write(bad.path(), SHIM_WORKER, &format!("importScripts(\"{SHIM_SCRIPT}\", \"..%2Fetc%2Fx.js\");\n"));
+    write(bad.path(), SHIM_SCRIPT, "// shim");
+    assert!(unshim_service_worker(bad.path()).is_err());
+}
+
 /// Nothing changes for a module worker, which can't `importScripts`, nor for one with no worker, a worker outside its
 /// folder or missing, or a folder that already has the shim's names.
 #[test]
