@@ -276,13 +276,19 @@ impl Shared {
     }
 }
 
-/// Whether the call `method` with `params` waits for your click: picking, staging and adding an extension and importing
-/// cookies happen only as the answer to one, never by the plugin alone.
+/// Whether the call `method` with `params` waits for your click: picking, staging, adding, turning on or off and removing
+/// an extension, clearing the site data and importing cookies happen only as the answer to one, never by the plugin
+/// alone.
 pub(in crate::page::plugin) fn needs_click(method: &str, params: &Value) -> bool {
     let action = params.get("action").and_then(Value::as_str);
     // Listing another browser's extensions reads its profiles, and checking again may show the Keychain's prompt: only
     // when the person asks, too.
-    matches!((method, action), ("webExtensions", Some("stage" | "add" | "installed" | "setEnabled" | "checkAgain")) | ("browserCookies", Some("import")))
+    matches!(
+        (method, action),
+        ("webExtensions", Some("stage" | "add" | "installed" | "setEnabled" | "remove" | "checkAgain"))
+            | ("webData", Some("clear"))
+            | ("browserCookies", Some("import"))
+    )
 }
 
 /// Whether WebKit keeps a store for each plugin on this Mac (`web::keeps_refusal`).
@@ -355,7 +361,7 @@ mod tests {
     fn web_calls_need_their_permission_and_adding_or_importing_needs_a_click() {
         let without = Rig::new(json!({ "permissions": { "openUrl": ["https://"] } }), vec![]);
         let page = Caller::start(&without.host);
-        assert_eq!(page.call("webData", json!({ "action": "clear" })), Err("probe may not show web pages".into()));
+        assert_eq!(page.call_after_click("webData", json!({ "action": "clear" })), Err("probe may not show web pages".into()));
         assert_eq!(page.call("webExtensions", json!({ "action": "list" })), Err("probe may not show web pages".into()));
 
         let web = Rig::new(json!({ "permissions": { "webView": true } }), vec![]);
@@ -381,6 +387,17 @@ mod tests {
             page.call("webExtensions", json!({ "action": "installed" })),
             Err("A page can add an extension only right after you click or type in it".into())
         );
+        // Nor does a plugin remove an extension, wipe the site data or ask the Keychain again on its own.
+        assert_eq!(
+            page.call("webExtensions", json!({ "action": "remove", "id": "abc" })),
+            Err("A page can remove an extension only right after you click or type in it".into())
+        );
+        assert_eq!(page.call("webData", json!({ "action": "clear" })), Err("A page can clear site data only right after you click or type in it".into()));
+        assert_eq!(
+            page.call("webExtensions", json!({ "action": "checkAgain" })),
+            Err("A page can add an extension only right after you click or type in it".into())
+        );
+        assert_eq!(page.call_after_click("webExtensions", json!({ "action": "remove", "id": "abc" })), Err("No extension by that id".into()));
         // A path is never a source: only a place in the list `installed` gave.
         assert_eq!(
             page.call_after_click("webExtensions", json!({ "action": "stage", "from": "browser", "source": "/Users/me/Library/Application Support/Google/Chrome/Default/Extensions/x" })),
