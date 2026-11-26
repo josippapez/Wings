@@ -251,6 +251,16 @@ impl TempDb {
     }
 
     fn copy_into(parent: &Path, source: &Path) -> Result<Self, ReadError> {
+        // A copy a crash left behind (its process's guard never ran) goes now: it holds another browser's cookies.
+        let ours = format!("wings-cookies-{}-", std::process::id());
+        if let Ok(entries) = fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with("wings-cookies-") && !name.starts_with("wings-cookies-test-") && !name.starts_with(&ours) {
+                    let _ = fs::remove_dir_all(entry.path());
+                }
+            }
+        }
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.subsec_nanos());
@@ -362,7 +372,12 @@ mod tests {
     #[test]
     fn a_failed_copy_leaves_nothing_behind() {
         let parent = scratch("failed-copy");
+        // A copy a crashed run of another process left is swept away by the next one.
+        let left = parent.join("wings-cookies-1-12-0");
+        fs::create_dir_all(&left).unwrap();
+        fs::write(left.join("cookies.db"), b"secret").unwrap();
         let err = TempDb::copy_into(&parent, Path::new("/nonexistent/Cookies")).err();
+        assert!(!left.exists(), "a crashed run's copy is gone");
         assert_eq!(err, Some(ReadError::NotFound));
         assert_eq!(fs::read_dir(&parent).unwrap().count(), 0);
         let _ = fs::remove_dir_all(parent);
