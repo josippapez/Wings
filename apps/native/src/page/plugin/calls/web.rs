@@ -47,6 +47,8 @@ impl Shared {
                     Job::Supported,
                     Box::new(move |supported| {
                         let supported = supported.as_deref() == Ok("true");
+                        // Each with why it doesn't load, if it doesn't: the check every load goes through (`verify`).
+                        let key = || extensions::key(&profile);
                         let list: Vec<Value> = extensions::list(&profile)
                             .iter()
                             .map(|added| {
@@ -54,14 +56,17 @@ impl Shared {
                                 json!({
                                     "id": added.id, "name": added.name, "version": added.version,
                                     "description": added.description, "enabled": added.enabled, "icon": icon,
-                                    "permissions": added.permissions, "hosts": added.hosts, "error": null,
+                                    "permissions": added.permissions, "hosts": added.hosts,
+                                    "error": extensions::verify(&profile, added, &key).err(),
                                 })
                             })
                             .collect();
                         drop(env);
                         // `keepsCookies`: whether Keep cookies keeps them past this run here (macOS 14, `web::keeps_refusal`).
                         let keeps = per_plugin_stores();
-                        reply.done(to_json(&json!({ "supported": supported, "keepsCookies": keeps, "extensions": list })));
+                        // `keychain`: Wings couldn't read the key its extensions are checked with; `checkAgain` asks again.
+                        let keychain = list.iter().any(|entry| entry["error"] == extensions::NO_KEY);
+                        reply.done(to_json(&json!({ "supported": supported, "keepsCookies": keeps, "keychain": keychain, "extensions": list })));
                     }),
                 )
             }
@@ -138,7 +143,7 @@ impl Shared {
                 let (env, plugin) = (access.env.clone(), id.clone());
                 // Answered once WebKit has it, with why it didn't load if it didn't, so not by `off_thread`.
                 std::thread::spawn(move || {
-                    let (added, dir) = match extensions::prepare(&profile, &stage) {
+                    let (added, _) = match extensions::prepare(&profile, &stage) {
                         Ok(added) => added,
                         Err(error) => return reply.err(error),
                     };
@@ -149,28 +154,36 @@ impl Shared {
                     });
                     // Wings asks in its own dialog, which no click in the page answers, before it grants anything.
                     let ask = crate::web::Ask { name: added.name.clone(), permissions: added.permissions.clone(), hosts: added.hosts.clone() };
-                    let (id, unload) = (added.id.clone(), env.clone());
+                    let loader = env.clone();
                     env.web(
-                        Job::Add { profile: profile.clone(), id: added.id.clone(), dir, ask },
-                        Box::new(move |answer| match crate::web::allowed(&answer) {
+                        Job::Add { ask },
+                        Box::new(move |answer| {
                             // Anything but the dialog's Add, an error on the way included, is not allowed.
-                            None => {
-                                extensions::forget(&profile, &id);
-                                unload.web(Job::Unload { profile, id }, Box::new(|_| {}));
-                                reply.err(answer.err().unwrap_or_else(|| crate::web::NOT_ALLOWED.into()));
+                            if crate::web::allowed(&answer).is_none() {
+                                extensions::forget(&profile, &added.id);
+                                return reply.err(answer.err().unwrap_or_else(|| crate::web::NOT_ALLOWED.into()));
                             }
-                            Some(failed) => {
-                                // Listed only now that the person allowed it, so only it loads as Wings starts.
-                                if let Err(error) = extensions::keep(&profile, &added) {
-                                    return reply.err(error);
-                                }
-                                let loaded: Result<(), String> = failed.map_or(Ok(()), Err);
-                                let mut entry = entry;
-                                if let Err(error) = loaded {
-                                    entry["error"] = json!(error);
-                                }
-                                reply.done(to_json(&entry));
+                            // Listed, sealed, only now that the person allowed it, and before it loads: a list that
+                            // can't be written leaves nothing loaded. It then loads as any other does, checked first.
+                            if let Err(error) = extensions::keep(&profile, &added, &|| extensions::key(&profile)) {
+                                extensions::forget(&profile, &added.id);
+                                return reply.err(error);
                             }
+                            let mut entry = entry;
+                            let verified = extensions::verified(&profile, &added.id, &|| extensions::key(&profile));
+                            let Ok(extension) = verified else {
+                                entry["error"] = json!(verified.err());
+                                return reply.done(to_json(&entry));
+                            };
+                            loader.web(
+                                Job::Load { profile, extension },
+                                Box::new(move |loaded| {
+                                    if let Err(error) = loaded {
+                                        entry["error"] = json!(error);
+                                    }
+                                    reply.done(to_json(&entry));
+                                }),
+                            );
                         }),
                     );
                 });
@@ -186,12 +199,17 @@ impl Shared {
                 let (Some(ext), Some(enabled)) = (text("id"), params.get("enabled").and_then(Value::as_bool)) else {
                     return reply.err("setEnabled takes an id and enabled".into());
                 };
-                let (added, dir) = match extensions::set_enabled(&profile, &ext, enabled) {
-                    Ok(done) => done,
-                    Err(error) => return reply.err(error),
-                };
-                let job = if enabled { Job::Load { profile, id: added.id, dir } } else { Job::Unload { profile, id: added.id } };
-                access.env.web(job, done(reply))
+                let env = access.env.clone();
+                // Off the frame's thread, answered once WebKit has it: turning one on hashes its folder, and may wait on
+                // the Keychain.
+                std::thread::spawn(move || {
+                    let job = match extensions::set_enabled(&profile, &ext, enabled, &|| extensions::key(&profile)) {
+                        Ok(Some(extension)) => Job::Load { profile, extension },
+                        Ok(None) => Job::Unload { profile, id: ext },
+                        Err(error) => return reply.err(error),
+                    };
+                    env.web(job, done(reply))
+                });
             }
             ("webExtensions", "remove") => {
                 let Some(ext) = text("id") else { return reply.err("remove takes an id".into()) };
@@ -199,6 +217,18 @@ impl Shared {
                     return reply.err(error);
                 }
                 access.env.web(Job::Unload { profile, id: ext }, done(reply))
+            }
+            // Asks the Keychain again for the key extensions are checked with, after the person refused it, and loads the
+            // extensions that are on. Only on a click: it may show the Keychain's prompt.
+            ("webExtensions", "checkAgain") => {
+                let env = access.env.clone();
+                self.off_thread(reply, move |_| {
+                    extensions::ask_for_key_again();
+                    for extension in extensions::loadable(&profile, &|| extensions::key(&profile)) {
+                        env.web(Job::Load { profile: profile.clone(), extension }, Box::new(|_| {}));
+                    }
+                    Ok("null".into())
+                })
             }
             ("browserCookies", "sources") => self.off_thread(reply, move |_| {
                 let sources: Vec<Value> = wings_browser_cookies::detect()
@@ -246,8 +276,9 @@ impl Shared {
 /// cookies happen only as the answer to one, never by the plugin alone.
 pub(in crate::page::plugin) fn needs_click(method: &str, params: &Value) -> bool {
     let action = params.get("action").and_then(Value::as_str);
-    // Listing another browser's extensions reads its profiles: only when the person asks, too.
-    matches!((method, action), ("webExtensions", Some("stage" | "add" | "installed" | "setEnabled")) | ("browserCookies", Some("import")))
+    // Listing another browser's extensions reads its profiles, and checking again may show the Keychain's prompt: only
+    // when the person asks, too.
+    matches!((method, action), ("webExtensions", Some("stage" | "add" | "installed" | "setEnabled" | "checkAgain")) | ("browserCookies", Some("import")))
 }
 
 /// Whether WebKit keeps a store for each plugin on this Mac (`web::keeps_refusal`).
