@@ -31,7 +31,6 @@ mod local_only;
 mod log;
 #[cfg(feature = "main")]
 mod main_frame;
-mod markdown;
 mod ops;
 mod orderings;
 mod parts;

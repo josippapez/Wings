@@ -15,17 +15,19 @@ pub type OnLink = Rc<dyn Fn(&str)>;
 
 /// `source` as a column of blocks, its links answered by `on_link`.
 pub fn linked(source: &str, on_link: &OnLink) -> Node {
-    stack().prop("gap", "m").children(parse_blocks(source, 0).iter().map(|block| node_of(block, on_link)))
+    let blocks = parse_blocks(source, 0);
+    stack().prop("gap", "m").children(wings_plugin::markdown::gap_above(&blocks, blocks.iter().map(|block| node_of(block, on_link)).collect()))
 }
 
 fn spans(source: &str, on_link: &OnLink) -> Node {
     let mut line = Node::new("Text").prop("grow", true);
     for span in parse_inline(source) {
         line = match span {
-            Span::Text(t) | Span::Em(t) => line.text(t),
+            Span::Text(t) => line.text(t),
+            Span::Em(t) => line.child(Node::new("Text").prop("italic", true).text(t)),
             Span::Code(t) => line.child(Node::new("Text").prop("mono", true).text(t)),
             Span::Strong(t) => line.child(Node::new("Text").prop("weight", "strong").text(t)),
-            Span::Del(t) => line.child(Node::new("Text").prop("tone", "muted").text(t)),
+            Span::Del(t) => line.child(Node::new("Text").prop("tone", "muted").prop("strike", true).text(t)),
             Span::Link { text, href } => {
                 let (on_link, target) = (on_link.clone(), href.clone());
                 line.child(Node::new("Text").prop("href", href.as_str()).on("onClick", move |_| on_link(&target)).text(text))
@@ -37,19 +39,11 @@ fn spans(source: &str, on_link: &OnLink) -> Node {
 
 fn node_of(block: &Block, on_link: &OnLink) -> Node {
     match block {
-        Block::Heading(level, t) => Node::new("Text").prop("weight", "strong").prop("size", if *level <= 2 { "field" } else { "small" }).child(spans(t, on_link)),
+        Block::Heading(level, t) => wings_plugin::markdown::heading_node(*level, spans(t, on_link)),
         Block::Paragraph(t) => spans(t, on_link),
-        Block::List { ordered, start, items } => stack().prop("gap", "xs").children(items.iter().enumerate().map(|(j, item)| {
-            let mark = match item.checked {
-                None if *ordered => format!("{}.", *start + j as u64),
-                None => "\u{2022}".to_owned(),
-                Some(true) => "\u{2611}".to_owned(),
-                Some(false) => "\u{2610}".to_owned(),
-            };
-            row().prop("gap", "s").prop("align", "start").child(stack().prop("width", item.depth * 16)).child(text(mark).prop("tone", "muted")).child(spans(&item.text, on_link))
-        })),
+        Block::List { start, items, .. } => wings_plugin::markdown::list_node(*start, items, |words| spans(words, on_link)),
         Block::Code { text: code, .. } => code_block(code),
-        Block::Quote(t) => wings_plugin::ui::quote([spans(t, on_link).prop("tone", "muted")]),
+        Block::Quote(inner) => wings_plugin::markdown::quote_node(inner, |block| node_of(block, on_link)),
         Block::Rule => text("────────────────").prop("tone", "muted"),
         Block::Table { head, rows } => stack()
             .prop("gap", "xs")

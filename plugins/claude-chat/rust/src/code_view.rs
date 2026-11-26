@@ -102,8 +102,17 @@ pub fn fence_language(info: &str) -> &str {
 /// `code` as a block in `language` (a fence's name or an extension; empty for none), folded unless it is short or you
 /// opened it. `key` names it among the page's blocks.
 pub fn block(key: &str, code: &str, language: &str) -> Node {
+    block_in(key, code, language, false)
+}
+
+/// `block` for a reply's code, whose long lines stay whole and scroll sideways in place of wrapping.
+pub fn scrolling_block(key: &str, code: &str, language: &str) -> Node {
+    block_in(key, code, language, true)
+}
+
+fn block_in(key: &str, code: &str, language: &str, scroll: bool) -> Node {
     let plan = plan(code, is_open(key));
-    let code = highlighted_code(plan.shown, language);
+    let code = highlighted_code(plan.shown, language).prop("scroll", scroll);
     match plan.row {
         None => code,
         Some(label) => stack().prop("gap", "xs").child(code).child(toggle_row(key, label)).key(key),

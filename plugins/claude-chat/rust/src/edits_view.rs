@@ -198,29 +198,25 @@ pub fn prose_in(scope: &str, said: &str, c: &Chat) -> Node {
     let known = file_links::known(changed, &c.cwd, &c.files);
     let blocks = Cell::new(0);
     // `links` also gives Wings' own links (an issue key) in every text below.
-    stack().prop("gap", "m").prop("links", true).children(parse_blocks(said, 0).iter().map(|block| block_node(block, &c.cwd, &known, scope, &blocks)))
+    stack().prop("gap", "m").prop("links", true).children({
+        let parsed = parse_blocks(said, 0);
+        let nodes = parsed.iter().map(|block| block_node(block, &c.cwd, &known, scope, &blocks)).collect();
+        wings_plugin::markdown::gap_above(&parsed, nodes)
+    })
 }
 
 fn block_node(block: &Block, cwd: &str, known: &dyn Fn(&str) -> bool, scope: &str, blocks: &Cell<usize>) -> Node {
     let spans = |source: &str| spans_node(source, cwd, known);
     match block {
-        Block::Heading(level, source) => Node::new("Text").prop("weight", "strong").prop("size", match *level { 1 => "large", 2 => "field", 3 => "normal", _ => "small" }).child(spans(source)),
+        Block::Heading(level, source) => wings_plugin::markdown::heading_node(*level, spans(source)),
         Block::Paragraph(source) => spans(source),
-        Block::List { ordered, start, items } => stack().prop("gap", "xs").children(items.iter().enumerate().map(|(at, item)| {
-            let mark = match item.checked {
-                None if *ordered => format!("{}.", *start + at as u64),
-                None => "\u{2022}".to_owned(),
-                Some(true) => "\u{2611}".to_owned(),
-                Some(false) => "\u{2610}".to_owned(),
-            };
-            row().prop("gap", "s").prop("align", "start").child(stack().prop("width", item.depth * 16)).child(text(mark).prop("tone", "muted")).child(spans(&item.text))
-        })),
+        Block::List { start, items, .. } => wings_plugin::markdown::list_node(*start, items, spans),
         Block::Code { lang, text: code } => {
             let at = blocks.get();
             blocks.set(at + 1);
-            crate::code_view::block(&format!("{scope}-{at}"), code, crate::code_view::fence_language(lang))
+            crate::code_view::scrolling_block(&format!("{scope}-{at}"), code, crate::code_view::fence_language(lang))
         }
-        Block::Quote(source) => wings_plugin::ui::quote([spans(source).prop("tone", "muted")]),
+        Block::Quote(inner) => wings_plugin::markdown::quote_node(inner, |block| block_node(block, cwd, known, scope, blocks)),
         Block::Rule => text("────────────────").prop("tone", "muted"),
         Block::Table { head, rows } => wings_plugin::ui::table(
             std::iter::once(row().children(head.iter().map(|cell| spans(cell).prop("tone", "muted").prop("size", "small").prop("weight", "strong"))))
@@ -242,7 +238,8 @@ fn spans_node(source: &str, cwd: &str, known: &dyn Fn(&str) -> bool) -> Node {
     let mut line = Node::new("Text").prop("grow", true);
     for span in parse_inline(source) {
         line = match span {
-            Span::Text(words) | Span::Em(words) => pieces(cwd, &words, known).into_iter().fold(line, |line, piece| match piece {
+            Span::Em(words) => line.child(Node::new("Text").prop("italic", true).text(words)),
+            Span::Text(words) => pieces(cwd, &words, known).into_iter().fold(line, |line, piece| match piece {
                 Piece::Text(words) => line.text(words),
                 Piece::File(shown, reference) => line.child(file(&shown, reference, false)),
             }),
@@ -251,7 +248,7 @@ fn spans_node(source: &str, cwd: &str, known: &dyn Fn(&str) -> bool) -> Node {
                 None => line.child(Node::new("Text").prop("mono", true).text(code)),
             },
             Span::Strong(words) => line.child(Node::new("Text").prop("weight", "strong").text(words)),
-            Span::Del(words) => line.child(Node::new("Text").prop("tone", "muted").text(words)),
+            Span::Del(words) => line.child(Node::new("Text").prop("tone", "muted").prop("strike", true).text(words)),
             Span::Link { text: label, href } => line.child(Node::new("Text").prop("href", href.as_str()).on("onClick", move |_| host::open_url(&href)).text(label)),
         };
     }

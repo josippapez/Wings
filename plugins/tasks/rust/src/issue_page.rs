@@ -2,6 +2,7 @@
 //! this tab, for the breadcrumb back. Edit its title, status, description and links, add a note, resume any agent session that
 //! worked on it, or start a new agent on it.
 
+use wings_plugin::markdown::markdown;
 use crate::{
     actor::{actor_name, last_session},
     commands::{AGENTS, agent_command, agent_label},
@@ -9,7 +10,6 @@ use crate::{
     domain::{Issue, IssueType, Op, Priority, Relations, Status, Update, limits, normalize_key, visible_description},
     feed::{self, Project},
     file_diff::line_counts,
-    markdown::markdown,
     ops::description_to_edit,
     orderings::{TRAIL_LENGTH, trail_to},
     parts::{button, child_progress, error_text, line, muted, priority_icon, priority_name, row, stack, status_dot, type_icon},

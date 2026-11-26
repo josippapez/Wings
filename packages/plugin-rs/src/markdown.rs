@@ -15,7 +15,8 @@ pub enum Block {
     /// `start` is the first item's number, which a numbered list counts on from, as CommonMark has it.
     List { ordered: bool, start: u64, items: Vec<Item> },
     Code { lang: String, text: String },
-    Quote(String),
+    /// What the quote holds, which can be a quote of its own.
+    Quote(Vec<Block>),
     Rule,
     Table { head: Vec<String>, rows: Vec<Vec<String>> },
     Details { summary: String, blocks: Vec<Block> },
@@ -26,6 +27,9 @@ pub struct Item {
     pub text: String,
     pub depth: usize,
     pub checked: Option<bool>,
+    /// The number the item was written with, for an item of a numbered list. None for a bullet, so a bullet nested
+    /// under a numbered item stays in the list and keeps its own mark.
+    pub number: Option<u64>,
 }
 
 const MAX_DETAILS_DEPTH: usize = 3;
@@ -243,21 +247,22 @@ pub fn parse_blocks(src: &str, depth: usize) -> Vec<Block> {
                 Some(t) if matches!(t.as_str(), "[ ]" | "[x]" | "[X]") && rest[3..].starts_with(char::is_whitespace) => (Some(t != "[ ]"), rest[3..].trim_start()),
                 _ => (None, rest),
             };
-            let item = Item { text: text.to_owned(), depth: (columns / 2).min(3), checked };
+            let item = Item { text: text.to_owned(), depth: (columns / 2).min(3), checked, number };
             match blocks.last_mut() {
-                Some(Block::List { ordered: o, items, .. }) if *o == ordered => items.push(item),
+                // A nested item of the other kind stays in the list it is under.
+                Some(Block::List { ordered: o, items, .. }) if *o == ordered || item.depth > 0 => items.push(item),
                 _ => blocks.push(Block::List { ordered, start: number.unwrap_or(1), items: vec![item] }),
             }
-        } else if let Some(quote) = line.trim_start().strip_prefix('>') {
+        } else if line.trim_start().starts_with('>') {
             flush(&mut paragraph, &mut blocks);
-            let text = quote.strip_prefix(' ').unwrap_or(quote).to_owned();
-            match blocks.last_mut() {
-                Some(Block::Quote(last)) => {
-                    last.push(' ');
-                    last.push_str(&text);
-                }
-                _ => blocks.push(Block::Quote(text)),
+            // The quote's lines without their mark: a `> >` line is a quote inside it.
+            let mut inner = Vec::new();
+            while i < lines.len() && let Some(quote) = lines[i].trim_start().strip_prefix('>') {
+                inner.push(quote.strip_prefix(' ').unwrap_or(quote).to_owned());
+                i += 1;
             }
+            blocks.push(Block::Quote(parse_blocks(&inner.join("\n"), depth)));
+            continue;
         } else {
             paragraph.push(line.trim().to_owned());
         }
@@ -402,10 +407,11 @@ fn spans(source: &str) -> Node {
     let mut line = Node::new("Text").prop("grow", true);
     for span in parse_inline(source) {
         line = match span {
-            Span::Text(t) | Span::Em(t) => line.text(t),
+            Span::Text(t) => line.text(t),
+            Span::Em(t) => line.child(Node::new("Text").prop("italic", true).text(t)),
             Span::Code(t) => line.child(Node::new("Text").prop("mono", true).text(t)),
             Span::Strong(t) => line.child(Node::new("Text").prop("weight", "strong").text(t)),
-            Span::Del(t) => line.child(Node::new("Text").prop("tone", "muted").text(t)),
+            Span::Del(t) => line.child(Node::new("Text").prop("tone", "muted").prop("strike", true).text(t)),
             // `href` tells Wings the address, for a right-click on it.
             Span::Link { text, href } => line.child(Node::new("Text").prop("href", href.as_str()).on("onClick", open_link(href)).text(text)),
         };
@@ -428,24 +434,11 @@ pub fn highlighted_code(code: &str, language: &str) -> Node {
 
 fn node_of(block: &Block) -> Node {
     match block {
-        Block::Heading(level, t) => Node::new("Text").prop("weight", "strong").prop("size", match *level { 1 => "large", 2 => "field", 3 => "normal", _ => "small" }).child(spans(t)),
+        Block::Heading(level, t) => heading_node(*level, spans(t)),
         Block::Paragraph(t) => spans(t),
-        Block::List { ordered, start, items } => stack().prop("gap", "xs").children(items.iter().enumerate().map(|(j, item)| {
-            let mark = match item.checked {
-                None if *ordered => format!("{}.", *start + j as u64),
-                None => "\u{2022}".to_owned(),
-                Some(true) => "\u{2611}".to_owned(),
-                Some(false) => "\u{2610}".to_owned(),
-            };
-            row()
-                .prop("gap", "s")
-                .prop("align", "start")
-                .child(stack().prop("width", item.depth * 16))
-                .child(text(mark).prop("tone", "muted"))
-                .child(spans(&item.text))
-        })),
-        Block::Code { text: code, .. } => code_block(code),
-        Block::Quote(t) => crate::ui::quote([spans(t).prop("tone", "muted")]),
+        Block::List { start, items, .. } => list_node(*start, items, spans),
+        Block::Code { lang, text: code } => highlighted_code(code, lang).prop("scroll", true),
+        Block::Quote(blocks) => quote_node(blocks, node_of),
         Block::Rule => text("────────────────").prop("tone", "muted"),
         Block::Table { head, rows } => crate::ui::table(
             std::iter::once(row().children(head.iter().map(|c| spans(c).prop("tone", "muted").prop("size", "small").prop("weight", "strong"))))
@@ -458,9 +451,47 @@ fn node_of(block: &Block) -> Node {
     }
 }
 
+/// A heading's line at the size of its level, in a box that holds the space above it (`gap_above`).
+pub fn heading_node(level: usize, line: Node) -> Node {
+    stack().child(line.prop("weight", "strong").prop("size", match level { 1 => "large", 2 => "field", 3 => "normal", _ => "small" }))
+}
+
+/// The blocks of a column, a heading with room above it unless it is the first.
+pub fn gap_above(blocks: &[Block], nodes: Vec<Node>) -> Vec<Node> {
+    nodes.into_iter().enumerate().map(|(at, node)| if at > 0 && matches!(blocks[at], Block::Heading(..)) { node.prop("pt", 8) } else { node }).collect()
+}
+
+/// A quote: a bar down its left edge round what it holds, in the muted tone, a quote inside it with a bar of its own.
+pub fn quote_node(blocks: &[Block], draw: impl Fn(&Block) -> Node) -> Node {
+    crate::ui::quote([stack().prop("gap", "xs").children(blocks.iter().map(|block| draw(block).prop("tone", "muted")))])
+}
+
+/// A list's items, each a row of its mark and its words (`line` draws the words), set in by its depth. A numbered list
+/// counts on from `start`, and a numbered item nested under another counts from the number it was written with.
+pub fn list_node(start: u64, items: &[Item], line: impl Fn(&str) -> Node) -> Node {
+    let mut counts = [0u64; 4];
+    stack().prop("gap", "xs").children(items.iter().map(|item| {
+        counts[item.depth + 1..].iter_mut().for_each(|count| *count = 0);
+        let mark = match (item.checked, item.number) {
+            (Some(done), _) => Node::new("Checkbox").prop("checked", done).prop("disabled", true),
+            (None, Some(number)) => {
+                let at = if counts[item.depth] > 0 { counts[item.depth] + 1 } else if item.depth == 0 { start } else { number };
+                counts[item.depth] = at;
+                text(format!("{at}.")).prop("tone", "muted")
+            }
+            (None, None) => {
+                counts[item.depth] = 0;
+                text("\u{2022}").prop("tone", "muted")
+            }
+        };
+        row().prop("gap", "s").prop("align", "start").child(stack().prop("width", item.depth * 16)).child(mark).child(line(&item.text))
+    }))
+}
+
 /// `source` as a column of blocks.
 pub fn markdown(source: &str) -> Node {
-    stack().prop("gap", "m").children(parse_blocks(source, 0).iter().map(node_of))
+    let blocks = parse_blocks(source, 0);
+    stack().prop("gap", "m").children(gap_above(&blocks, blocks.iter().map(node_of).collect()))
 }
 
 #[cfg(test)]
@@ -484,13 +515,39 @@ mod tests {
     }
 
     #[test]
+    fn a_quote_inside_a_quote_is_a_quote_of_its_own() {
+        assert_eq!(
+            parse_blocks("> outer\n> > inner\n> more", 0),
+            [Block::Quote(vec![Block::Paragraph("outer".into()), Block::Quote(vec![Block::Paragraph("inner".into())]), Block::Paragraph("more".into())])]
+        );
+    }
+
+    #[test]
+    fn a_bullet_nested_under_a_numbered_item_stays_in_its_list_and_the_numbers_go_on() {
+        let blocks = parse_blocks("1. one\n2. two\n   - nested\n3. three", 0);
+        assert_eq!(blocks.len(), 1, "{blocks:?}");
+        let Block::List { items, start, .. } = &blocks[0] else { panic!("{blocks:?}") };
+        assert_eq!(items.iter().map(|item| (item.depth, item.number)).collect::<Vec<_>>(), [(0, Some(1)), (0, Some(2)), (1, None), (0, Some(3))]);
+        let json = crate::ui::tree_json(list_node(*start, items, |words| text(words))).to_string();
+        let at = |mark: &str| json.find(mark).unwrap_or_else(|| panic!("{mark} in {json}"));
+        assert!(at("\"1.\"") < at("\"2.\"") && at("\"2.\"") < at("\u{2022}") && at("\u{2022}") < at("\"3.\""), "{json}");
+    }
+
+    #[test]
+    fn emphasis_is_italic_and_strikethrough_is_struck() {
+        let line = spans("*a* ~~b~~");
+        let json = crate::ui::tree_json(line).to_string();
+        assert!(json.contains("\"italic\":true") && json.contains("\"strike\":true"), "{json}");
+    }
+
+    #[test]
     fn blocks_are_read_as_the_desktop_parser_reads_them() {
         let blocks = parse_blocks("# Title\n\nSome **bold** text\nsecond line\n\n- one\n- [x] two\n\n```rs\nlet a = 1;\n```\n<!-- hidden -->\n> quoted\n[KEY]: tracking\n", 0);
         assert_eq!(blocks[0], Block::Heading(1, "Title".into()));
         assert_eq!(blocks[1], Block::Paragraph("Some **bold** text second line".into()));
         assert!(matches!(&blocks[2], Block::List { ordered: false, items, .. } if items.len() == 2 && items[1].checked == Some(true)));
         assert_eq!(blocks[3], Block::Code { lang: "rs".into(), text: "let a = 1;".into() });
-        assert_eq!(blocks[4], Block::Quote("quoted".into()));
+        assert_eq!(blocks[4], Block::Quote(vec![Block::Paragraph("quoted".into())]));
         assert_eq!(blocks.len(), 5);
     }
 

@@ -172,12 +172,12 @@ pub fn reply(at: usize, said: &str, c: &Chat) -> Node {
                 let head = row()
                     .prop("gap", "s")
                     .prop("align", "center")
-                    .child(stack().prop("grow", true).child(muted(lang.as_str()).prop("size", "small")))
+                    .child(stack().prop("grow", true).child(muted(if lang.is_empty() { "text" } else { lang.as_str() }).prop("size", "small")))
                     .child(copy_button(&format!("code-{at}-{n}"), "Copy this code", c, {
                         let n = n;
                         move || copy_code(at, n)
                     }));
-                nodes.push(stack().prop("gap", "xs").child(head).child(crate::code_view::block(&format!("code-{at}-{n}"), text, lang)).key(format!("code-{at}-{n}")));
+                nodes.push(stack().prop("gap", "xs").child(head).child(crate::code_view::scrolling_block(&format!("code-{at}-{n}"), text, lang)).key(format!("code-{at}-{n}")));
                 n += 1;
             }
         }
@@ -186,7 +186,7 @@ pub fn reply(at: usize, said: &str, c: &Chat) -> Node {
         nodes.push(crate::edits_view::prose(said, c));
     }
     let foot = row().prop("gap", "xs").prop("align", "center").child(copy_button(&format!("reply-{at}"), "Copy this reply", c, move || copy_reply(at))).maybe(crate::bookmarks::toggle_button(at, c));
-    stack().prop("gap", "xs").children(nodes).child(foot)
+    stack().prop("gap", "xs").child(stack().prop("gap", "m").children(nodes)).child(foot)
 }
 
 /// Puts `text` on the clipboard, from your click on a Copy button, and marks that button Copied.
