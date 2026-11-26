@@ -16,15 +16,15 @@ use gpui::{Bounds, Pixels, Window};
 use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send,
     rc::Retained,
-    runtime::{AnyClass, AnyObject, Bool, NSObject, NSObjectProtocol, ProtocolObject},
-    sel,
+    runtime::{AnyObject, Bool, NSObject, NSObjectProtocol, ProtocolObject},
 };
 use objc2_app_kit::{NSAlert, NSBitmapImageFileType, NSBitmapImageRep, NSImage, NSModalResponse, NSOpenPanel, NSTextField, NSView, NSWindowOrderingMode};
 use objc2_foundation::{
+    NSJSONSerialization, NSJSONWritingOptions,
     NSArray, NSDate, NSDictionary, NSError, NSHTTPCookie, NSHTTPCookieDomain, NSHTTPCookieExpires, NSHTTPCookieName,
     NSHTTPCookiePath, NSHTTPCookieSameSitePolicy, NSHTTPCookieSameSiteLax, NSHTTPCookieSameSiteStrict,
     NSHTTPCookieSecure, NSHTTPCookieValue, NSKeyValueChangeKey, NSKeyValueObservingOptions,
-    NSNumber, NSObjectNSKeyValueObserverRegistration, NSPoint, NSRect, NSSize, NSString, NSURL, NSURLRequest, NSUUID,
+    NSNumber, NSObjectNSKeyValueObserverRegistration, NSOperatingSystemVersion, NSPoint, NSProcessInfo, NSRect, NSSize, NSString, NSURL, NSURLRequest, NSUUID,
 };
 use objc2_web_kit::{
     WKContentWorld, WKFrameInfo, WKNavigation, WKNavigationAction, WKNavigationActionPolicy, WKOpenPanelParameters, WKScriptMessage,
@@ -61,14 +61,21 @@ thread_local! {
     static LOADED: RefCell<HashMap<(Profile, bool, String), Retained<WKWebExtensionContext>>> = RefCell::default();
 }
 
+/// Whether this Mac runs macOS `major.minor` or newer. By the system's version, not by WebKit's classes: those are
+/// only there once WebKit is loaded, which a process that hasn't made a web view yet (the screenshots, the tests) said
+/// "no" to on a Mac that has them.
+fn macos_at_least(major: isize, minor: isize) -> bool {
+    NSProcessInfo::processInfo().isOperatingSystemAtLeastVersion(NSOperatingSystemVersion { majorVersion: major, minorVersion: minor, patchVersion: 0 })
+}
+
 /// Whether this Mac has WebKit's extensions, which came with macOS 15.4.
 pub fn extensions_supported() -> bool {
-    AnyClass::get(c"WKWebExtensionController").is_some()
+    macos_at_least(15, 4)
 }
 
 /// Whether WebKit keeps a store for each plugin (`dataStoreForIdentifier:`, macOS 14).
 pub fn keeps_per_plugin() -> bool {
-    AnyClass::get(c"WKWebsiteDataStore").is_some_and(|class| class.responds_to(sel!(dataStoreForIdentifier:)))
+    macos_at_least(14, 0)
 }
 
 fn shared(profile: &Profile, keep_data: bool, mtm: MainThreadMarker) -> Rc<Shared> {
@@ -397,9 +404,11 @@ impl Native for WebPage {
         let (url, loading) = unsafe { (self.view.URL().and_then(|url| url.absoluteString()).map(|url| url.to_string()).unwrap_or_default(), self.view.isLoading()) };
         let committed = self.observer.ivars().committed.borrow().clone();
         let (imported, settled) = match go {
+            // The page's own site and the dialog's frame's origin, either imported or unknown.
             WebGo::Dialog { .. } => {
                 let frame = self.observer.ivars().dialog_frame.borrow().clone();
-                (frame.is_none_or(|frame| super::holds_imported(&self.web_dir, &frame)), true)
+                let frame = frame.is_none_or(|host| super::holds_imported_host(&self.web_dir, &host));
+                (frame || super::holds_imported(&self.web_dir, &committed), true)
             }
             _ => (super::holds_imported(&self.web_dir, &committed), !loading && committed == url),
         };
@@ -419,26 +428,22 @@ impl Native for WebPage {
                 WebGo::Reload => drop(self.view.reload()),
                 WebGo::Stop => self.view.stopLoading(),
                 WebGo::Eval { script, page } => {
-                    // The value goes back as JSON text, which crosses from JavaScript as a plain string, with the address of
-                    // the document it ran in, checked again below: a page may have moved on as it ran.
-                    let body = format!("const value = await (async () => {{\n{script}\n}})();\nreturn JSON.stringify({{ href: location.href, value: value ?? null }});");
-                    let web_dir = self.web_dir.clone();
+                    // The script is the function's whole body, with no wrapper of ours to break out of, and nothing it says
+                    // of where it ran is believed: what it returns is read as WebKit hands it over, and thrown away when a
+                    // new page came on the main frame while it ran (`generation`).
                     let world = if *page { WKContentWorld::pageWorld(mtm) } else { WKContentWorld::worldWithName(&NSString::from_str("wings-plugin"), mtm) };
-                    let told = self.told.clone();
+                    let (told, observer) = (self.told.clone(), self.observer.clone());
+                    let sent = observer.ivars().generation.get();
                     let done = RcBlock::new(move |value: *mut AnyObject, error: *mut NSError| {
-                        let result = match (value.as_ref().and_then(|value| value.downcast_ref::<NSString>()), error.as_ref()) {
-                            (Some(json), None) => serde_json::from_str::<serde_json::Value>(&json.to_string())
-                                .map_err(|error| error.to_string())
-                                .and_then(|ran| match super::holds_imported(&web_dir, ran["href"].as_str().unwrap_or_default()) {
-                                    true => Err(super::IMPORTED.to_owned()),
-                                    false => Ok(ran["value"].clone()),
-                                }),
+                        let result = match (value.as_ref(), error.as_ref()) {
+                            _ if observer.ivars().generation.get() != sent => Err(MOVED_ON.to_owned()),
                             (_, Some(error)) => Err(error.localizedDescription().to_string()),
+                            (Some(value), None) => json_of(value),
                             (None, None) => Ok(serde_json::Value::Null),
                         };
                         told(Heard::Result { token, result });
                     });
-                    self.view.callAsyncJavaScript_arguments_inFrame_inContentWorld_completionHandler(&NSString::from_str(&body), None, None, &world, Some(&done));
+                    self.view.callAsyncJavaScript_arguments_inFrame_inContentWorld_completionHandler(&NSString::from_str(script), None, None, &world, Some(&done));
                 }
                 WebGo::Dialog { accept, text } => {
                     let answered = self.observer.answer(*accept, text.as_deref());
@@ -467,6 +472,26 @@ impl Native for WebPage {
                 }
             }
         }
+    }
+}
+
+/// Why a script's answer was thrown away.
+const MOVED_ON: &str = "The page moved on while the script ran, so its answer was dropped: try again";
+
+/// What a script returned, as JSON, read by Foundation from what WebKit made of it. One that isn't JSON (a date, a node)
+/// is an error rather than an exception, which would end the app: Foundation checks it first, inside an array, so a
+/// single string or number is checked too.
+fn json_of(value: &AnyObject) -> Result<serde_json::Value, String> {
+    let wrapped = NSArray::from_slice(&[value]);
+    // SAFETY: an array of what WebKit returned, checked before it is written.
+    unsafe {
+        if !NSJSONSerialization::isValidJSONObject(&wrapped) {
+            return Err("The script returned something that isn't JSON: return plain values, arrays and objects".into());
+        }
+        let data = NSJSONSerialization::dataWithJSONObject_options_error(&wrapped, NSJSONWritingOptions::empty())
+            .map_err(|error| error.localizedDescription().to_string())?;
+        let array: serde_json::Value = serde_json::from_slice(&data.to_vec()).map_err(|error| error.to_string())?;
+        Ok(array[0].clone())
     }
 }
 
@@ -519,8 +544,10 @@ struct Ivars {
     web_dir: std::path::PathBuf,
     /// The address of the document the view shows, as WebKit committed it, which commands act on.
     committed: RefCell<String>,
-    /// The address of the frame whose dialog waits, none when it isn't known.
+    /// The host of the origin of the frame whose dialog waits, none when it has none.
     dialog_frame: RefCell<Option<String>>,
+    /// Counts the main frame's new pages, so a script's answer that a new page overtook is thrown away.
+    generation: std::cell::Cell<u64>,
     /// Wings' own sheet showing the page's dialog, and its text field for a prompt.
     sheet: RefCell<Option<(Retained<NSAlert>, Option<Retained<NSTextField>>)>>,
     /// The page's dialog that waits for an answer, and what it shows.
@@ -583,6 +610,7 @@ define_class!(
             // A new page starts with no logs: none of the last page's are read on this one's watch.
             if allowed && main_frame {
                 self.ivars().logs.borrow_mut().clear();
+                self.ivars().generation.set(self.ivars().generation.get() + 1);
             }
             let policy = if allowed { WKNavigationActionPolicy::Allow } else { WKNavigationActionPolicy::Cancel };
             decide.call((policy,));
@@ -594,6 +622,7 @@ define_class!(
             // SAFETY: the view's address, on the main thread.
             let url = unsafe { view.URL() }.and_then(|url| url.absoluteString()).map(|url| url.to_string()).unwrap_or_default();
             self.ivars().committed.replace(url);
+            self.ivars().generation.set(self.ivars().generation.get() + 1);
         }
 
         #[unsafe(method(webView:didFailNavigation:withError:))]
@@ -702,6 +731,7 @@ impl Observer {
             sheet: RefCell::new(None),
             committed: RefCell::default(),
             dialog_frame: RefCell::new(None),
+            generation: std::cell::Cell::new(0),
         });
         // SAFETY: NSObject's `init`.
         unsafe { msg_send![super(this), init] }
@@ -712,14 +742,15 @@ impl Observer {
     fn wait_on(&self, view: &WKWebView, pending: Pending, kind: &str, message: &NSString, default: Option<&NSString>, frame: &WKFrameInfo) {
         // A page that asks again before the last was answered: the last is cancelled, as WebKit needs each answered.
         self.answer(false, None);
-        // SAFETY: the frame's request, on the main thread.
-        let (site, frame_url) = unsafe {
-            let url = frame.request().URL();
-            (url.as_ref().and_then(|url| url.host()).map(|host| host.to_string()).unwrap_or_default(), url.and_then(|url| url.absoluteString()).map(|url| url.to_string()))
-        };
+        // The frame's origin, which is where it really is: a frame's request can say `about:blank` for a page on any site.
+        // SAFETY: the frame's security origin, on the main thread.
+        let host = unsafe { frame.securityOrigin().host() }.to_string();
+        let site = host.clone();
+        let frame_url = Some(host).filter(|host| !host.is_empty());
         let shown = (site.clone(), message.to_string().chars().take(4000).collect::<String>(), default.map(|text| text.to_string()));
-        // The plugin hears only that there is one when it comes from a site signed in with imported cookies, or one not known.
-        let private = frame_url.as_ref().is_none_or(|url| super::holds_imported(&self.ivars().web_dir, url));
+        // The plugin hears only that there is one when it comes from a site signed in with imported cookies, or a frame
+        // with no host.
+        let private = frame_url.as_ref().is_none_or(|host| super::holds_imported_host(&self.ivars().web_dir, host));
         let dialog = match private {
             true => super::views::Dialog { kind: kind.into(), ..Default::default() },
             false => super::views::Dialog { kind: kind.into(), message: shown.1.clone(), default_text: shown.2.clone(), site },
@@ -822,5 +853,34 @@ impl Observer {
             self.ivars().told_last.replace(Some(state.clone()));
             (self.ivars().told)(Heard::State(state));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// This Mac's major and minor version, as `sw_vers` says it.
+    fn this_mac() -> (isize, isize) {
+        let out = std::process::Command::new("sw_vers").arg("-productVersion").output().unwrap();
+        let version = String::from_utf8(out.stdout).unwrap();
+        let mut parts = version.trim().split('.').map(|part| part.parse::<isize>().unwrap_or(0));
+        (parts.next().unwrap_or(0), parts.next().unwrap_or(0))
+    }
+
+    #[test]
+    fn a_scripts_answer_is_read_as_json_and_anything_else_is_an_error_not_a_crash() {
+        use objc2_foundation::{NSDate, NSDictionary, NSNumber, NSString};
+        let text = NSString::from_str("Docs");
+        assert_eq!(super::json_of(&text), Ok(serde_json::json!("Docs")));
+        assert_eq!(super::json_of(&NSNumber::new_i64(3)), Ok(serde_json::json!(3)));
+        let object = NSDictionary::from_slices(&[&*NSString::from_str("title")], &[&*NSString::from_str("Docs")]);
+        assert_eq!(super::json_of(&object), Ok(serde_json::json!({ "title": "Docs" })));
+        assert!(super::json_of(&NSDate::now()).unwrap_err().contains("isn't JSON"));
+    }
+
+    #[test]
+    fn kept_cookies_and_extensions_follow_the_macs_version_before_any_web_view_is_made() {
+        let version = this_mac();
+        assert_eq!(super::keeps_per_plugin(), version >= (14, 0), "{version:?}");
+        assert_eq!(super::extensions_supported(), version >= (15, 4), "{version:?}");
     }
 }

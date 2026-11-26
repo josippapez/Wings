@@ -92,7 +92,16 @@ pub fn note_imported(profile: &Profile, domains: impl IntoIterator<Item = String
 pub fn holds_imported(profile_dir: &std::path::Path, url: &str) -> bool {
     let Some(host) = url.split_once("://").and_then(|(_, rest)| rest.split(['/', '?', '#']).next()) else { return false };
     let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
-    let host = host.split(':').next().unwrap_or_default().to_ascii_lowercase();
+    holds_imported_host(profile_dir, host.split(':').next().unwrap_or_default())
+}
+
+/// `holds_imported` for a host. One with no host (a frame of `about:`, `data:`, `blob:` or a `srcdoc`, whose origin
+/// says nothing of the site) counts as imported, as it may be on one.
+pub fn holds_imported_host(profile_dir: &std::path::Path, host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    if host.is_empty() {
+        return true;
+    }
     match imported_sites(profile_dir) {
         Some(known) => known.iter().any(|domain| host == *domain || host.ends_with(&format!(".{domain}"))),
         None => true,
@@ -336,6 +345,9 @@ mod tests {
         for url in ["https://notgithub.com/", "https://github.com.evil.dev/", "about:blank"] {
             assert!(!holds_imported(&profile.dir, url), "{url}");
         }
+        // A frame with no host of its own may be on any site.
+        assert!(holds_imported_host(&profile.dir, "") && holds_imported_host(&profile.dir, "GIST.github.com"));
+        assert!(!holds_imported_host(&profile.dir, "example.com"));
         // A list it can't read names every site, and no import goes in past it.
         std::fs::write(profile.dir.join("imported-sites.json"), b"{not json").unwrap();
         assert!(holds_imported(&profile.dir, "https://anything.example/"));
