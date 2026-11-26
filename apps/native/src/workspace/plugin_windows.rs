@@ -121,11 +121,11 @@ fn places(state: Option<&std::path::Path>) -> std::collections::HashMap<String, 
     })
 }
 
-/// Where the content of a window whose frame is `frame` is: what a window opens at (`WindowBounds::Windowed` is a
-/// content rect), so one kept as its frame came back a title bar taller, and lower, each time.
+/// What a window whose frame is `frame` opens again at: GPUI opens `WindowBounds::Windowed` with its origin as the
+/// frame's top left and its size as the content's, so a window kept by its frame size came back a title bar taller,
+/// and one kept by its content's origin a title bar lower, each time.
 fn content_place(frame: Bounds<gpui::Pixels>, content: gpui::Size<gpui::Pixels>) -> Bounds<gpui::Pixels> {
-    let title_bar = frame.size.height - content.height;
-    Bounds::new(gpui::point(frame.origin.x, frame.origin.y + title_bar), content)
+    Bounds::new(frame.origin, content)
 }
 
 /// Keeps where the window of `view` is, and with `save` writes it down: once it closes, not at every step of a drag.
@@ -357,12 +357,12 @@ mod tests {
     use super::fit;
 
     #[test]
-    fn a_window_is_kept_by_its_content_so_it_opens_again_as_it_was() {
+    fn a_window_is_kept_by_its_frames_corner_and_its_contents_size_so_it_opens_again_as_it_was() {
         use gpui::{point, px, size};
         // A frame 28 points taller than its content: a title bar above it.
         let frame = gpui::Bounds::new(point(px(100.0), px(50.0)), size(px(800.0), px(628.0)));
         let kept = super::content_place(frame, size(px(800.0), px(600.0)));
-        assert_eq!(kept, gpui::Bounds::new(point(px(100.0), px(78.0)), size(px(800.0), px(600.0))));
+        assert_eq!(kept, gpui::Bounds::new(point(px(100.0), px(50.0)), size(px(800.0), px(600.0))));
     }
 
     #[test]
