@@ -144,6 +144,47 @@ pub fn textarea(label: &str, value: &str, rows: u32, on_change: impl Fn(String) 
         .on("onChange", move |event| on_change(event["value"].as_str().unwrap_or_default().to_owned()))
 }
 
+/// A web page drawn by WebKit over this page (Wings 0.2.113). Wings keeps the web engine's view by `name`, the key within
+/// the page, for as long as the node stays in the tree, so building the page again never reloads it. Props, set with
+/// `.prop`: `url` (http, https or `about:blank`, loaded when the view is first made), `command` (`web_command`),
+/// `keepData` (default true; false keeps cookies and site data only while Wings runs), `height` in points (default 400)
+/// or `fill: true` to take the rest of its container's height, and `onState` (`WebState::from_event`). It is drawn
+/// under a dialog or sheet of the page and an app menu, and is an empty area in a headless render.
+pub fn web_view(name: &str) -> Node {
+    Node::new("WebView").prop("name", name)
+}
+
+/// The `command` prop of a `web_view`: `action` is `load` (with `url`), `back`, `forward`, `reload` or `stop`. Each new
+/// `token` runs once, like `Scroll`'s `scrollTo`, so the page keeps a counter and raises it for every command.
+pub fn web_command(action: &str, url: Option<&str>, token: u64) -> Value {
+    json!({ "action": action, "url": url, "token": token })
+}
+
+/// What a `web_view`'s `onState` sends when any of it changes.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WebState {
+    pub url: String,
+    pub title: String,
+    pub loading: bool,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+    pub error: Option<String>,
+}
+
+impl WebState {
+    pub fn from_event(event: &Value) -> Self {
+        let text = |key: &str| event[key].as_str().unwrap_or_default().to_owned();
+        Self {
+            url: text("url"),
+            title: text("title"),
+            loading: event["loading"].as_bool().unwrap_or_default(),
+            can_go_back: event["canGoBack"].as_bool().unwrap_or_default(),
+            can_go_forward: event["canGoForward"].as_bool().unwrap_or_default(),
+            error: event["error"].as_str().map(str::to_owned),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,6 +204,18 @@ mod tests {
 
     fn slots(node: Node) -> Vec<String> {
         tree_json(node)["children"].as_array().unwrap().iter().map(|slot| slot["props"]["name"].as_str().unwrap_or("-").to_owned()).collect()
+    }
+
+    #[test]
+    fn a_web_view_sends_its_name_and_a_state_reads_what_the_app_sends() {
+        assert_eq!(props(web_view("main").prop("fill", true)), json!(["WebView", { "name": "main", "fill": true }]));
+        assert_eq!(web_command("load", Some("https://a.b"), 3), json!({ "action": "load", "url": "https://a.b", "token": 3 }));
+        let heard = Rc::new(RefCell::new(WebState::default()));
+        let seen = heard.clone();
+        let (tree, handlers) = export(vec![web_view("main").on("onState", move |event| *seen.borrow_mut() = WebState::from_event(event))]);
+        let event = json!({ "url": "https://a.b/", "title": "A", "loading": true, "canGoBack": true, "canGoForward": false, "error": null });
+        assert!(handlers.call(tree[0]["props"]["onState"].as_str().unwrap(), &event));
+        assert_eq!(*heard.borrow(), WebState { url: "https://a.b/".into(), title: "A".into(), loading: true, can_go_back: true, can_go_forward: false, error: None });
     }
 
     #[test]

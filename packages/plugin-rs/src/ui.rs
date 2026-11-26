@@ -657,6 +657,17 @@ pub struct Combobox {
 /// `wings-plugin-ui/native`'s `Combobox` renders. `on_text` hears a free-text field's text, or a picker's search (and
 /// `None` when it loses the keyboard, which ends the search); `on_pick` the value picked.
 pub fn combobox(o: Combobox, on_text: impl Fn(Option<String>) + 'static, on_pick: impl Fn(&str) + 'static) -> Node {
+    combobox_with(o, on_text, on_pick, None)
+}
+
+/// `combobox` for a free-text field that is also submitted as it stands, like an address bar. `on_key` hears the name of
+/// each key the field gets that no option took (`"Enter"`, `"Escape"`): no option is highlighted until an arrow key, so
+/// Enter reaches it unless the person moved to a suggestion, and then `on_pick` hears that one.
+pub fn combobox_submit(o: Combobox, on_text: impl Fn(Option<String>) + 'static, on_pick: impl Fn(&str) + 'static, on_key: impl Fn(&str) + 'static) -> Node {
+    combobox_with(o, on_text, on_pick, Some(Rc::new(on_key)))
+}
+
+fn combobox_with(o: Combobox, on_text: impl Fn(Option<String>) + 'static, on_pick: impl Fn(&str) + 'static, on_key: Option<Rc<dyn Fn(&str)>>) -> Node {
     let free_text = o.query.is_none();
     let search = match &o.query {
         None => o.value.clone(),
@@ -678,6 +689,9 @@ pub fn combobox(o: Combobox, on_text: impl Fn(Option<String>) + 'static, on_pick
     let mut field = text_input(o.label, &shown, move |text| typed(Some(text))).prop("placeholder", o.placeholder).prop("maxLength", 2000);
     if o.auto_focus {
         field = field.prop("autoFocus", true);
+    }
+    if let Some(on_key) = on_key {
+        field = field.prop("submitOnEnter", true).prop("autoHighlight", false).on("onKeyDown", move |event| on_key(event["key"].as_str().unwrap_or_default()));
     }
     if !free_text {
         let left = on_text.clone();

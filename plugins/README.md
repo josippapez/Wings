@@ -251,10 +251,14 @@ pnpm --dir plugins shot <out-dir> --changes
 | `agentActivity` | `true` to read what an OpenCode session is doing with `wings.agentActivity` and hear when it changes with `wings.onAgentActivity`: its newest prompts and tool calls, model, context and token totals. OpenCode keeps no transcript, so Wings asks its background service; the plugin never sees the service's address or password. Needs Wings 0.1.63 |
 | `diskUsage` | `true` to read the names and sizes of the files and folders on your disks with `wings.diskUsage`, look for files and folders by name with `wings.diskFind`, and list the mounted disks with `wings.disks`. Needs Wings 0.1.70 |
 | `statusline` | `true` to read what Claude Code tells its status line with `wings.statusline`: your usage limits and each session's context and cache. See [Status line](#status-line) |
+| `webView` | `true` to draw web pages with the page's `WebView` node and to use `wings.webData` and `wings.webExtensions`. The pages run in WebKit with the cookies and site data of the plugin, apart from every other plugin's. Needs Wings 0.2.113 |
+| `browserCookies` | `true` to list the other browsers on this Mac with `wings.browserCookies` and copy a profile's cookies into the plugin's web views. Chrome-based browsers ask for Keychain access, and macOS may need Full Disk Access for Wings. Needs Wings 0.2.113 |
 
 `icon`, optional, is an SVG file in the plugin folder, like `"icon.svg"`. The Plugins list shows it instead of the puzzle piece, and a sidebar, view or panel that leaves out its own `icon` uses it on its title bar button, in the overflow menu and on its tab. Wings draws it as a one-colour mask in the current text colour, so use shapes (`fill` or `stroke`, `currentColor` is fine) and expect colours and gradients to come out as a plain silhouette. It must be a relative path to an `.svg` file inside the plugin folder (no `..`, no absolute path, no link out of it), up to 32 KB, with `svg` as its root element, or Wings refuses to load the plugin. It is only ever drawn as an image, never inserted into a page, so scripts, `on*` attributes and links to other files in it do nothing. A sidebar's, view's or panel's `icon` is still one of the built-in names; it can't point to a file. Older Wings ignores the top-level `icon` and keeps the puzzle piece, so it needs no `minWingsVersion`. A sidebar or view that leaves out `icon` is refused by Wings 0.1.19 and older, so set `"minWingsVersion": "0.1.20"` when you do that. `cargo wings-plugin pack` ships every file except `src/`, `preview/`, `node_modules`, package and lock files, `tsconfig*.json`, `HANDOVER*`, dotfiles and other `.wings-plugin` files, `icon.svg` included. Several pages of one plugin show the same icon: give all but one a built-in `icon`.
 
 `minWingsVersion`, optional, is the oldest Wings that can run the plugin, like `"0.1.13"`. Set it when the plugin uses something an older Wings doesn't have. An older Wings refuses to install it and doesn't offer it as an update.
+
+`startsOff`, optional, `true` to keep the plugin off in a dev build until the user turns it on in Plugins. Use it for a plugin that isn't ready for everyone. Needs Wings 0.2.113.
 
 `native`, optional, is a leftover of the JavaScript build, which wrote `dist/native/*.js` for the app. A Rust plugin leaves it out: its `main` and pages are `.wasm` files.
 
@@ -502,6 +506,25 @@ With `tab` in `opens`, the view opens as a tab in the project on screen, next to
 Wings 0.1.14 and older refuse a plugin with `tab` in `opens`, so set `"minWingsVersion": "0.1.15"` to use it.
 
 A view with `"newTab": true` also shows in the + menu, a chevron next to the + button, with the plugin's icon, and in the command palette as "New tab: <title>". Under Settings, General, "New tab button opens" picks what the + button itself opens: a terminal (the default) or one of these pages. `"multiple": true` makes an open of the view, from + or `openView`, a new tab instead of showing the project's existing one, except that an open with `args` equal to those of a tab of it already in the project shows that tab. Give each tab its own `wings.setTabState` so they don't share. `newTab`, `multiple`, `args`, `project`, `placement` and tab state need Wings 0.1.22, so set `"minWingsVersion": "0.1.22"` when you use them.
+
+## Browser
+
+`browser/` is a web browser in a tab, drawn by WebKit. It is built-in and off in a dev build (`startsOff`). Its main does nothing, because a plugin needs one to load. Each tab (`browser.wasm`, a view with `newTab` and `multiple`, started by `host::view_args` with `{ "url": "https://..." }` to open an address, as another plugin would) and the settings page (`settings.wasm`) read what is kept from storage. The tab is `run_filled`: a toolbar with back, forward, reload or stop, an address bar and a settings button, over a `WebView` that fills the rest. The address bar loads an address as typed, adds `https://` to a host (`http://` to `localhost`, `127.0.0.1` and `[::1]`) and searches anything else with the engine from the settings (DuckDuckGo or Google); a `file:` or `javascript:` address is searched for, never loaded. It suggests up to six pages from history, newest first, kept in storage (500 at most, one per address). On a Chrome Web Store or addons.mozilla.org page it shows Add to Wings. The settings page has the search engine, Keep cookies and site data, Clear browsing data, Sign in with another browser (copies cookies from another browser's profile) and Extensions.
+
+The page node and calls it uses, which need `permissions.webView` (and `browserCookies` for the last):
+
+| SDK | Wings | Means |
+|---|---|---|
+| `ui::web_view(name)` | `WebView` | A web page drawn over the page. `name` (up to 64 characters) is its key: Wings keeps the web engine's view while the node stays in the tree, so building the page again never reloads it. Props: `url` (http, https or `about:blank`, used when the view is first made), `command`, `keepData` (default true; false keeps cookies and site data only while Wings runs), `height` in points (default 400) or `fill: true` for the rest of its container's height, and `onState`. It is hidden under a dialog or sheet of the page and under an app menu, and is an empty area in a headless render |
+| `ui::web_command(action, url, token)` | `command` | `action` is `load` (with `url`), `back`, `forward`, `reload` or `stop`. Each new `token` runs once, as `Scroll`'s `scrollTo` does, so the page keeps a counter |
+| `ui::WebState::from_event` | `onState` | `{ url, title, loading, canGoBack, canGoForward, error }`, sent when any of them change |
+| `host::web_data_clear` | `webData` | Clears the plugin's kept cookies and site data |
+| `host::web_extensions`, `web_extensions_installed` | `webExtensions` `list`, `installed` | The extensions added (`supported` is false before macOS 15.4) and the ones installed in the user's other browsers |
+| `host::web_extension_stage` | `webExtensions` `stage` | Copies, downloads or unpacks an extension from a picked folder or ZIP (only right after a click), another browser or a store page, without installing it. Show its name and what it asks for, then `web_extension_add` (after a click) or `web_extension_discard` |
+| `host::web_extension_set_enabled`, `web_extension_remove`, `web_extension_store_page` | `webExtensions` | Turn an extension on or off, remove it, and ask whether an address is a store page |
+| `host::browser_cookie_sources`, `browser_cookies_import` | `browserCookies` | The other browsers' profiles, and copying one's cookies in (only right after a click; it can take a while) |
+
+`ui::combobox_submit` is `ui::combobox` for a free-text field that is also sent as it stands, like the address bar: `on_key` hears Enter and Escape.
 
 ## Project sections
 

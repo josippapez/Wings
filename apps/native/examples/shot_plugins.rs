@@ -43,6 +43,8 @@ use wings_native::{
 mod external;
 #[path = "shot_plugins/typing.rs"]
 mod typing;
+#[path = "shot_plugins/browser.rs"]
+mod browser;
 #[path = "shot_plugins/claude_chat.rs"]
 mod claude_chat;
 #[path = "shot_plugins/disk.rs"]
@@ -137,6 +139,7 @@ struct Scene {
 }
 
 const SCENES: &[Scene] = &[
+    Scene { flag: "--browser", help: "the Browser's tab (its web page is WebKit's, an empty place here) and its settings", run: browser::browser },
     Scene { flag: "--changes", help: "Changes' built pages", run: changes },
     Scene { flag: "--stopped", help: "a page that stopped, with its error and Reload, in a tab and a popover", run: stopped },
     Scene { flag: "--schedules", help: "Schedules' list and forms, empty too, and the modals that ask to allow a schedule", run: schedules },
@@ -196,6 +199,11 @@ static STATUSLINE: std::sync::Mutex<Option<serde_json::Value>> = std::sync::Mute
 
 struct FixtureEnv(PathBuf);
 impl Env for FixtureEnv {
+    // This Mac has WebKit's extensions, and nothing else WebKit does reaches a screenshot.
+    fn web(&self, job: wings_native::web::Job, done: Box<dyn FnOnce(Result<String, String>) + Send>) {
+        let supported = matches!(job, wings_native::web::Job::Supported);
+        done(Ok(if supported { "true" } else { "null" }.into()))
+    }
     fn statusline(&self) -> serde_json::Value {
         STATUSLINE.lock().unwrap().clone().unwrap_or_else(|| json!({ "rateLimits": [], "sessions": {} }))
     }

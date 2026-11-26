@@ -1,0 +1,334 @@
+//! A browser tab: back, forward and reload, an address bar with suggestions from history, and the page under them, which
+//! Wings draws with WebKit. Everything the tab keeps (history, settings) is in storage, so each tab reads it itself.
+
+use crate::{
+    address::resolve,
+    extension::{Staged, dialog_for},
+    history::{self, Entry},
+    settings,
+};
+use serde_json::Value;
+use std::cell::RefCell;
+use wings_plugin::{
+    host::{self, Stage},
+    task::spawn,
+    ui::{Choice, Combobox, Node, WebState, button, combobox_submit, icon_button, icons, notice, page_with, row, slot, stack, web_command, web_view},
+};
+
+const SUGGESTIONS: usize = 6;
+/// `set_tab_title` takes one line of at most 80 characters.
+const TITLE_MAX: usize = 80;
+
+#[derive(Default)]
+struct Page {
+    /// Where the view starts, once.
+    start: String,
+    state: WebState,
+    /// The last command, which the view runs once per `token`.
+    command: Option<Value>,
+    token: u64,
+    /// What is in the address field while it is being edited, in place of the page's address.
+    typed: Option<String>,
+    /// History as of when typing began, for the suggestions.
+    history: Vec<Entry>,
+    /// The page is a Chrome Web Store or Firefox add-ons page, so its extension can be added.
+    store: bool,
+    staged: Option<Staged>,
+    busy: bool,
+    problem: Option<String>,
+    added: Option<String>,
+    /// The page last put in history, and the title last given the tab, so a repeat of either does nothing.
+    recorded: (String, String),
+    titled: String,
+}
+
+/// What a change of the view's state asks the tab to do.
+#[derive(Debug, Default, PartialEq)]
+struct Effects {
+    /// A new title for the tab: none for the view's own.
+    title: Option<Option<String>>,
+    /// A finished page for history.
+    record: Option<(String, String)>,
+    /// A new address to ask whether it is a store page.
+    check_store: Option<String>,
+}
+
+impl Page {
+    fn send(&mut self, action: &str, url: Option<&str>) {
+        self.token += 1;
+        self.command = Some(web_command(action, url, self.token));
+    }
+
+    fn apply(&mut self, new: WebState) -> Effects {
+        let mut effects = Effects::default();
+        let moved = self.state.url != new.url;
+        if moved {
+            self.typed = None;
+            self.store = false;
+            self.added = None;
+            effects.check_store = (new.url.starts_with("http://") || new.url.starts_with("https://")).then(|| new.url.clone());
+        }
+        if new.title != self.titled {
+            self.titled.clone_from(&new.title);
+            effects.title = Some((!new.title.is_empty()).then(|| new.title.chars().take(TITLE_MAX).collect()));
+        }
+        let finished = !new.loading && new.error.is_none() && !new.url.is_empty();
+        if finished && self.recorded != (new.url.clone(), new.title.clone()) {
+            self.recorded = (new.url.clone(), new.title.clone());
+            effects.record = Some(self.recorded.clone());
+        }
+        self.state = new;
+        effects
+    }
+}
+
+thread_local! {
+    static PAGE: RefCell<Page> = RefCell::new(Page::default());
+}
+
+fn with<R>(change: impl FnOnce(&mut Page) -> R) -> R {
+    PAGE.with(|page| change(&mut page.borrow_mut()))
+}
+
+fn command(action: &'static str) {
+    with(|page| page.send(action, None));
+}
+
+/// Loads what is typed, or reloads the page when nothing was changed.
+fn go() {
+    let engine = settings::engine().get();
+    with(|page| {
+        let typed = page.typed.take().unwrap_or_else(|| page.state.url.clone());
+        if let Some(url) = resolve(&typed, engine) {
+            page.send("load", Some(&url));
+        }
+    });
+}
+
+fn typed(text: String) {
+    with(|page| {
+        if page.typed.is_none() {
+            page.history = history::load();
+        }
+        page.typed = Some(text);
+    });
+}
+
+fn state(new: WebState) {
+    let effects = with(|page| page.apply(new));
+    if let Some(title) = effects.title {
+        drop(host::set_tab_title(title.as_deref()));
+    }
+    if let Some((url, title)) = effects.record {
+        drop(history::add(&url, &title, host::now()));
+    }
+    if let Some(url) = effects.check_store {
+        spawn(async move {
+            let found = host::web_extension_store_page(&url).await.is_ok_and(|answer| !answer.is_null());
+            with(|page| page.store = found && page.state.url == url);
+        });
+    }
+}
+
+/// Stages the extension of the store page the tab shows. Called from the click, since the host only starts one right after.
+fn stage_store() {
+    let Some(url) = with(|page| (!page.busy).then(|| page.state.url.clone())) else {
+        return;
+    };
+    with(|page| {
+        page.busy = true;
+        page.problem = None;
+    });
+    spawn(async move {
+        let answer = host::web_extension_stage(Stage::Store(&url)).await;
+        with(|page| {
+            page.busy = false;
+            match answer {
+                Ok(staged) => page.staged = Staged::from_json(&staged),
+                Err(error) => page.problem = Some(error),
+            }
+        });
+    });
+}
+
+fn add() {
+    let Some(stage) = with(|page| if page.busy { None } else { page.staged.as_ref().map(|staged| staged.stage.clone()) }) else {
+        return;
+    };
+    with(|page| {
+        page.busy = true;
+        page.problem = None;
+    });
+    spawn(async move {
+        let answer = host::web_extension_add(&stage).await;
+        with(|page| {
+            page.busy = false;
+            match answer {
+                Ok(_) => page.added = page.staged.take().map(|staged| format!("Added {}. It is on for the pages you open now.", staged.name)),
+                Err(error) => page.problem = Some(error),
+            }
+        });
+    });
+}
+
+fn cancel() {
+    if let Some(staged) = with(|page| {
+        page.problem = None;
+        page.staged.take()
+    }) {
+        drop(host::web_extension_discard(&staged.stage));
+    }
+}
+
+fn address(page: &Page) -> Node {
+    let options = page
+        .typed
+        .as_deref()
+        .map(|typed| {
+            history::suggest(&page.history, typed, SUGGESTIONS)
+                .into_iter()
+                .map(|entry| match entry.title.is_empty() {
+                    true => Choice { value: entry.url.clone(), label: entry.url.clone(), detail: None },
+                    false => Choice { value: entry.url.clone(), label: entry.title.clone(), detail: Some(entry.url.clone()) },
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let field = Combobox {
+        label: "Address",
+        placeholder: "Search or enter an address",
+        value: page.typed.clone().unwrap_or_else(|| page.state.url.clone()),
+        query: None,
+        options,
+        empty: "Press Enter to search or go",
+        auto_focus: false,
+    };
+    combobox_submit(
+        field,
+        |text| {
+            if let Some(text) = text {
+                typed(text);
+            }
+        },
+        |url| with(|page| {
+            page.typed = None;
+            page.send("load", Some(url));
+        }),
+        |key| match key {
+            "Enter" => go(),
+            "Escape" => with(|page| page.typed = None),
+            _ => {}
+        },
+    )
+}
+
+fn view() -> Vec<Node> {
+    let keep = settings::keep_data().get();
+    PAGE.with(|page| {
+        let page = page.borrow();
+        let state = &page.state;
+        // In the toolbar's children, which take the width the title would leave, so the address field grows with the tab.
+        let nav = row()
+            .prop("grow", true)
+            .prop("gap", "xs")
+            .prop("align", "center")
+            .child(icon_button("Back", &icons::CHEVRON_LEFT, || command("back")).disabled(!state.can_go_back))
+            .child(icon_button("Forward", &icons::CHEVRON_RIGHT, || command("forward")).disabled(!state.can_go_forward))
+            .child(if state.loading { icon_button("Stop", &icons::CLOSE, || command("stop")) } else { icon_button("Reload", &icons::REFRESH_CW, || command("reload")) })
+            .child(stack().prop("grow", true).child(address(&page)));
+        let actions = row()
+            .prop("gap", "s")
+            .prop("align", "center")
+            .maybe(page.store.then(|| button("Add to Wings", "secondary", page.busy, stage_store).size("sm")))
+            .child(icon_button("Browser settings", &icons::SETTINGS, || drop(host::open_settings())));
+        let problem = if page.staged.is_none() { page.problem.as_deref() } else { None };
+        let top = [
+            Some(Node::new("Toolbar").child(slot("children", nav)).child(slot("actions", actions))),
+            state.error.as_deref().map(|error| notice("danger", error).key("error")),
+            problem.map(|problem| notice("danger", problem).key("problem")),
+            page.added.as_deref().map(|added| notice("success", added).key("added")),
+        ];
+        let mut web = web_view("page").prop("fill", true).prop("url", page.start.as_str()).prop("keepData", keep).on("onState", state_event);
+        if let Some(command) = &page.command {
+            web = web.prop("command", command.clone());
+        }
+        let dialog = page.staged.as_ref().map(|staged| dialog_for(staged, page.busy, page.problem.as_deref(), cancel, add));
+        vec![page_with(top.into_iter().flatten(), std::iter::once(web).chain(dialog))]
+    })
+}
+
+fn state_event(event: &Value) {
+    state(WebState::from_event(event));
+}
+
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub fn start() {
+    let engine = settings::engine().get();
+    let start = host::view_args().and_then(|args| args["url"].as_str().and_then(|url| resolve(url, engine))).unwrap_or_else(|| engine.home().to_owned());
+    with(|page| page.start = start);
+    wings_plugin::run_filled(view);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn loaded(url: &str, title: &str) -> WebState {
+        WebState { url: url.into(), title: title.into(), ..WebState::default() }
+    }
+
+    #[test]
+    fn each_command_gets_a_new_token_so_the_view_runs_it_again() {
+        let mut page = Page::default();
+        page.send("reload", None);
+        page.send("reload", None);
+        page.send("load", Some("https://a.com"));
+        assert_eq!(page.command, Some(web_command("load", Some("https://a.com"), 3)));
+    }
+
+    #[test]
+    fn a_page_is_recorded_once_when_it_has_finished_without_an_error() {
+        let mut page = Page::default();
+        let loading = WebState { loading: true, ..loaded("https://a.com/", "") };
+        assert_eq!(page.apply(loading.clone()).record, None);
+        assert_eq!(page.apply(loaded("https://a.com/", "A")).record, Some(("https://a.com/".into(), "A".into())));
+        assert_eq!(page.apply(WebState { can_go_back: true, ..loaded("https://a.com/", "A") }).record, None, "the same page again");
+        let failed = WebState { error: Some("offline".into()), ..loaded("https://b.com/", "B") };
+        assert_eq!(page.apply(failed).record, None);
+    }
+
+    #[test]
+    fn the_tab_title_follows_the_page_title_and_is_cut_to_80_characters() {
+        let mut page = Page::default();
+        assert_eq!(page.apply(loaded("https://a.com/", "A")).title, Some(Some("A".into())));
+        assert_eq!(page.apply(loaded("https://a.com/", "A")).title, None);
+        assert_eq!(page.apply(loaded("https://a.com/", &"x".repeat(100))).title, Some(Some("x".repeat(80))));
+        assert_eq!(page.apply(loaded("https://a.com/", "")).title, Some(None), "back to the view's own title");
+    }
+
+    #[test]
+    fn going_to_another_address_ends_an_edit_and_asks_about_the_store_for_web_pages_only() {
+        let mut page = Page { typed: Some("half".into()), store: true, ..Page::default() };
+        let effects = page.apply(loaded("https://chromewebstore.google.com/detail/x/y", ""));
+        assert_eq!((page.typed.clone(), page.store, effects.check_store), (None, false, Some("https://chromewebstore.google.com/detail/x/y".into())));
+        assert_eq!(page.apply(loaded("about:blank", "")).check_store, None);
+        assert_eq!(page.apply(loaded("about:blank", "")).check_store, None);
+    }
+
+    #[test]
+    fn typing_is_kept_until_the_address_changes() {
+        let mut page = Page { typed: Some("half".into()), ..Page::default() };
+        page.apply(WebState { loading: true, ..loaded("", "") });
+        assert_eq!(page.typed.as_deref(), Some("half"));
+    }
+
+    #[test]
+    fn the_page_is_a_toolbar_over_a_web_view_that_fills_and_offers_the_store_button_only_on_a_store_page() {
+        with(|page| *page = Page { start: "https://duckduckgo.com/".into(), ..Page::default() });
+        let drawn = wings_plugin::ui::export(view()).0.to_string();
+        assert!(drawn.contains("\"WebView\"") && drawn.contains("\"fill\":true") && drawn.contains("\"url\":\"https://duckduckgo.com/\""), "{drawn}");
+        assert!(!drawn.contains("Add to Wings"));
+        with(|page| page.store = true);
+        assert!(wings_plugin::ui::export(view()).0.to_string().contains("Add to Wings"));
+    }
+}

@@ -239,6 +239,93 @@ pub fn share_claude_setup(name: &str, on: bool) -> Answer {
     call("shareClaudeSetup", json!({ "name": name, "on": on }))
 }
 
+/// `wings.resizeWindow`: sizes the window of a page that `open_view` opened `as: "window"` to `width` by `height`
+/// points, kept on the screen and no smaller than 320 by 240; answers `{ width, height }`, the size it got. Wings 0.2.113.
+pub fn resize_window(width: f64, height: f64) -> Answer {
+    call("resizeWindow", json!({ "width": width, "height": height }))
+}
+
+/// `wings.webData`: clears the cookies and site data the plugin's web views kept. Needs `permissions.webView`.
+pub fn web_data_clear() -> Answer {
+    call("webData", json!({ "action": "clear" }))
+}
+
+/// `wings.webExtensions` `list`: `{ supported, extensions: [{ id, name, version, description, enabled, icon, permissions,
+/// hosts, error }] }`. `supported` is false before macOS 15.4, and `icon` is an image id an `ui::image` draws. Needs
+/// `permissions.webView`.
+pub fn web_extensions() -> Answer {
+    call("webExtensions", json!({ "action": "list" }))
+}
+
+/// `wings.webExtensions` `installed`: the extensions already installed in the user's other browsers, as `[{ source,
+/// browser, profile, name, description, version, icon, permissions, hosts }]`.
+pub fn web_extensions_installed() -> Answer {
+    call("webExtensions", json!({ "action": "installed" }))
+}
+
+/// Where `web_extension_stage` gets an extension from.
+pub enum Stage<'a> {
+    /// A folder or ZIP the user picks: only right after a click, and the answer is null when they cancel.
+    Pick,
+    /// One of `web_extensions_installed`'s `source`s.
+    Browser(&'a str),
+    /// A Chrome Web Store or addons.mozilla.org page.
+    Store(&'a str),
+}
+
+/// `wings.webExtensions` `stage`: copies, downloads and unpacks an extension without installing it, and answers `{ stage,
+/// name, version, description, icon, permissions, hosts }` (null when a picker was cancelled). Show the name and what it
+/// asks for, then `web_extension_add` or `web_extension_discard` the `stage`.
+pub fn web_extension_stage(from: Stage) -> Answer {
+    call(
+        "webExtensions",
+        match from {
+            Stage::Pick => json!({ "action": "stage", "from": "pick" }),
+            Stage::Browser(source) => json!({ "action": "stage", "from": "browser", "source": source }),
+            Stage::Store(url) => json!({ "action": "stage", "from": "store", "url": url }),
+        },
+    )
+}
+
+/// `wings.webExtensions` `add`: installs a staged extension, only right after a click. Answers the new entry.
+pub fn web_extension_add(stage: &str) -> Answer {
+    call("webExtensions", json!({ "action": "add", "stage": stage }))
+}
+
+/// `wings.webExtensions` `discard`: drops a staged extension.
+pub fn web_extension_discard(stage: &str) -> Answer {
+    call("webExtensions", json!({ "action": "discard", "stage": stage }))
+}
+
+/// `wings.webExtensions` `setEnabled`: turns the extension `id` on or off.
+pub fn web_extension_set_enabled(id: &str, enabled: bool) -> Answer {
+    call("webExtensions", json!({ "action": "setEnabled", "id": id, "enabled": enabled }))
+}
+
+/// `wings.webExtensions` `remove`: removes the extension `id`.
+pub fn web_extension_remove(id: &str) -> Answer {
+    call("webExtensions", json!({ "action": "remove", "id": id }))
+}
+
+/// `wings.webExtensions` `storePage`: whether an address is a Chrome Web Store or addons.mozilla.org extension page,
+/// as `{ store: "chrome" | "firefox", id }`, or null.
+pub fn web_extension_store_page(url: &str) -> Answer {
+    call("webExtensions", json!({ "action": "storePage", "url": url }))
+}
+
+/// `wings.browserCookies` `sources`: the other browsers' profiles whose cookies can be imported, `[{ id, browser,
+/// profile }]`, with no prompt. Needs `permissions.browserCookies`.
+pub fn browser_cookie_sources() -> Answer {
+    call("browserCookies", json!({ "action": "sources" }))
+}
+
+/// `wings.browserCookies` `import`: copies a source's cookies into the plugin's web views, as `{ imported, skipped }`.
+/// Only right after a click. It can take a while and may show a Keychain prompt; an error is a message for the user
+/// (like needing Full Disk Access). `keep_data` is whether the cookies are kept after Wings quits.
+pub fn browser_cookies_import(source: &str, keep_data: bool) -> Answer {
+    call("browserCookies", json!({ "action": "import", "source": source, "keepData": keep_data }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{testing, tests::record};
@@ -268,6 +355,19 @@ mod tests {
         drop(claude_accounts());
         drop(set_claude_account("/r", None));
         drop(share_claude_setup("work", true));
+        drop(web_data_clear());
+        drop(web_extensions());
+        drop(web_extensions_installed());
+        drop(web_extension_stage(Stage::Pick));
+        drop(web_extension_stage(Stage::Browser("chrome:Default")));
+        drop(web_extension_stage(Stage::Store("https://x")));
+        drop(web_extension_add("s1"));
+        drop(web_extension_discard("s1"));
+        drop(web_extension_set_enabled("e", false));
+        drop(web_extension_remove("e"));
+        drop(web_extension_store_page("https://x"));
+        drop(browser_cookie_sources());
+        drop(browser_cookies_import("c", true));
         assert_eq!(
             *calls.borrow(),
             [
@@ -288,6 +388,19 @@ mod tests {
                 ("claudeAccounts", json!({})),
                 ("setClaudeAccount", json!({ "projectId": "/r", "name": null })),
                 ("shareClaudeSetup", json!({ "name": "work", "on": true })),
+                ("webData", json!({ "action": "clear" })),
+                ("webExtensions", json!({ "action": "list" })),
+                ("webExtensions", json!({ "action": "installed" })),
+                ("webExtensions", json!({ "action": "stage", "from": "pick" })),
+                ("webExtensions", json!({ "action": "stage", "from": "browser", "source": "chrome:Default" })),
+                ("webExtensions", json!({ "action": "stage", "from": "store", "url": "https://x" })),
+                ("webExtensions", json!({ "action": "add", "stage": "s1" })),
+                ("webExtensions", json!({ "action": "discard", "stage": "s1" })),
+                ("webExtensions", json!({ "action": "setEnabled", "id": "e", "enabled": false })),
+                ("webExtensions", json!({ "action": "remove", "id": "e" })),
+                ("webExtensions", json!({ "action": "storePage", "url": "https://x" })),
+                ("browserCookies", json!({ "action": "sources" })),
+                ("browserCookies", json!({ "action": "import", "source": "c", "keepData": true })),
             ]
             .map(|(method, params)| (method.to_owned(), params))
         );

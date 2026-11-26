@@ -1,0 +1,32 @@
+{
+  "id": "browser",
+  "name": "Browser",
+  "version": "0.1.0",
+  "minWingsVersion": "0.2.113",
+  "icon": "icon.svg",
+  "description": "A web browser in a tab, drawn by WebKit: an address bar that searches, history suggestions, cookies kept between runs (or not), sign-in copied from another browser on this Mac, and browser extensions.",
+  "api": 1,
+  "startsOff": true,
+  "main": "dist/native/main.wasm",
+  "permissions": {
+    "webView": true,
+    "browserCookies": true
+  },
+  "contributes": {
+    "views": [
+      {
+        "id": "browser",
+        "title": "Browser",
+        "page": "dist/native/browser.wasm",
+        "opens": [
+          "tab"
+        ],
+        "newTab": true,
+        "multiple": true
+      }
+    ],
+    "settings": {
+      "page": "dist/native/settings.wasm"
+    }
+  }
+}
