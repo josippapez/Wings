@@ -245,20 +245,23 @@ pub fn resize_window(width: f64, height: f64) -> Answer {
     call("resizeWindow", json!({ "width": width, "height": height }))
 }
 
-/// `wings.webData`: clears the cookies and site data the plugin's web views kept. Needs `permissions.webView`.
+/// `wings.webData`: clears the cookies and site data the plugin's web views kept, only right after a click. Needs
+/// `permissions.webView`.
 pub fn web_data_clear() -> Answer {
     call("webData", json!({ "action": "clear" }))
 }
 
-/// `wings.webExtensions` `list`: `{ supported, extensions: [{ id, name, version, description, enabled, icon, permissions,
-/// hosts, error }] }`. `supported` is false before macOS 15.4, and `icon` is an image id an `ui::image` draws. Needs
-/// `permissions.webView`.
+/// `wings.webExtensions` `list`: `{ supported, keychain, extensions: [{ id, name, version, description, enabled, icon,
+/// permissions, hosts, error }] }`. `supported` is false before macOS 15.4, `icon` is an image id an `ui::image` draws,
+/// and `error` says why one doesn't load (its files or record changed since it was added, or Wings couldn't read its
+/// key, when `keychain` is true: `web_extensions_check_again` asks again). Needs `permissions.webView`.
 pub fn web_extensions() -> Answer {
     call("webExtensions", json!({ "action": "list" }))
 }
 
 /// `wings.webExtensions` `installed`: the extensions already installed in the user's other browsers, as `[{ source,
-/// browser, profile, name, description, version, icon, permissions, hosts }]`.
+/// browser, from, name, description, version, icon, permissions, hosts }]`, only right after a click. `from` tells copies
+/// apart without the profiles' names: "Chrome", "Chrome (2)".
 pub fn web_extensions_installed() -> Answer {
     call("webExtensions", json!({ "action": "installed" }))
 }
@@ -302,9 +305,15 @@ pub fn web_extension_set_enabled(id: &str, enabled: bool) -> Answer {
     call("webExtensions", json!({ "action": "setEnabled", "id": id, "enabled": enabled }))
 }
 
-/// `wings.webExtensions` `remove`: removes the extension `id`.
+/// `wings.webExtensions` `remove`: removes the extension `id` and what it stored, only right after a click.
 pub fn web_extension_remove(id: &str) -> Answer {
     call("webExtensions", json!({ "action": "remove", "id": id }))
+}
+
+/// `wings.webExtensions` `checkAgain`: asks the Keychain again for the key the extensions are checked with, after the
+/// user refused it, and loads those that pass. Only right after a click: it may show the Keychain's prompt. Wings 0.2.116.
+pub fn web_extensions_check_again() -> Answer {
+    call("webExtensions", json!({ "action": "checkAgain" }))
 }
 
 /// `wings.webExtensions` `storePage`: whether an address is a Chrome Web Store or addons.mozilla.org extension page,
@@ -321,9 +330,11 @@ pub fn browser_cookie_sources() -> Answer {
 
 /// `wings.browserCookies` `import`: copies a source's cookies into the plugin's web views, as `{ imported, skipped }`.
 /// Only right after a click. It can take a while and may show a Keychain prompt; an error is a message for the user
-/// (like needing Full Disk Access). `keep_data` is whether the cookies are kept after Wings quits.
-pub fn browser_cookies_import(source: &str, keep_data: bool) -> Answer {
-    call("browserCookies", json!({ "action": "import", "source": source, "keepData": keep_data }))
+/// (like needing Full Disk Access). `keep_data` is the store they go to (kept, or only while Wings runs), and
+/// `keep_signins` whether they last past this run in a kept one: otherwise they go as Wings quits (Wings 0.2.116; older
+/// ones keep them with the store).
+pub fn browser_cookies_import(source: &str, keep_data: bool, keep_signins: bool) -> Answer {
+    call("browserCookies", json!({ "action": "import", "source": source, "keepData": keep_data, "keepSignIns": keep_signins }))
 }
 
 #[cfg(test)]
@@ -366,8 +377,9 @@ mod tests {
         drop(web_extension_set_enabled("e", false));
         drop(web_extension_remove("e"));
         drop(web_extension_store_page("https://x"));
+        drop(web_extensions_check_again());
         drop(browser_cookie_sources());
-        drop(browser_cookies_import("c", true));
+        drop(browser_cookies_import("c", true, false));
         assert_eq!(
             *calls.borrow(),
             [
@@ -399,8 +411,9 @@ mod tests {
                 ("webExtensions", json!({ "action": "setEnabled", "id": "e", "enabled": false })),
                 ("webExtensions", json!({ "action": "remove", "id": "e" })),
                 ("webExtensions", json!({ "action": "storePage", "url": "https://x" })),
+                ("webExtensions", json!({ "action": "checkAgain" })),
                 ("browserCookies", json!({ "action": "sources" })),
-                ("browserCookies", json!({ "action": "import", "source": "c", "keepData": true })),
+                ("browserCookies", json!({ "action": "import", "source": "c", "keepData": true, "keepSignIns": false })),
             ]
             .map(|(method, params)| (method.to_owned(), params))
         );

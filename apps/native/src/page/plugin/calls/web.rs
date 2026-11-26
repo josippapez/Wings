@@ -247,6 +247,8 @@ impl Shared {
             ("browserCookies", "import") => {
                 let Some(source) = text("source") else { return reply.err("import takes the source".into()) };
                 let keep_data = params.get("keepData") != Some(&Value::Bool(false));
+                // Imported sign-ins last until Wings quits unless the person keeps them, kept cookies or not.
+                let keep_signins = params.get("keepSignIns") == Some(&Value::Bool(true));
                 // Before anything is read, so no Keychain prompt asks for cookies that would have nowhere safe to go.
                 if let Some(why) = crate::web::keeps_refusal(keep_data, per_plugin_stores()) {
                     return reply.err(why.into());
@@ -264,7 +266,7 @@ impl Shared {
                     };
                     let skipped = read.skipped;
                     env.web(
-                        Job::Cookies { profile, keep_data, cookies: read.cookies },
+                        Job::Cookies { profile, keep_data, keep_signins, cookies: read.cookies },
                         Box::new(move |imported| {
                             reply.done(imported.map(|imported| {
                                 let imported: u64 = imported.parse().unwrap_or(0);
