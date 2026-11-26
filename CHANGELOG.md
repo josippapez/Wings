@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.120 · 2026-11-26
+
+- **Bitwarden no longer freezes after you sign in**: an extension's background opening a live connection froze the whole extension in this macOS's WebKit, so sign-in, the popup and autofill all stopped. Extensions' backgrounds can no longer open one; Bitwarden then picks up changes on its regular sync instead of live. Remove and add Bitwarden again once to get the fix.
+
 ## 0.2.119 · 2026-11-26
 
 - **Bitwarden signs in and fills**: its popup gets past loading to the login screen, and it can fill login forms and show its menu in a page's fields. Extensions get a small compatibility file for what this macOS's WebKit lacks; the add dialog says so. Remove and add Bitwarden again once to get it.
