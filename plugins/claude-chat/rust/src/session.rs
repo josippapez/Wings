@@ -466,6 +466,8 @@ pub const TASK_STOP: &str = "task-stop-";
 pub struct Session {
     /// What auto mode blocked in this chat, for "Allow and retry" (`blocked.rs`).
     pub blocked: Vec<crate::blocked::Blocked>,
+    /// Set when a block was kept, so the chat redraws once its time in Recently blocked is up (`chat.rs`).
+    pub blocked_fresh: bool,
     /// Every call Claude Code refused on this session, for the side panel's Blocked (`refused.rs`).
     pub refusals: Vec<crate::refused::Refusal>,
     /// Whether this chat is on claude.ai and in the Claude app too.
@@ -651,11 +653,40 @@ impl Session {
                 let extra = sub.items.len().saturating_sub(SUBAGENT_KEPT);
                 sub.items.drain(..extra);
             }
+            self.list_subagent_blocks(line["parent_tool_use_id"].as_str());
             return;
         }
         self.hear_own(line);
         // The rows a mod places follow a message by its uuid.
         self.mods.note_message(line, self.items.len());
+    }
+
+    /// Lists the blocks the subagent that call `parent` started hit, read from its failed results, in Recently blocked
+    /// (`blocked.rs`). The block's own `permission_denied` line does it first when Claude Code prints one; the same call is
+    /// kept once.
+    fn list_subagent_blocks(&mut self, parent: Option<&str>) {
+        let Some((parent, sub)) = parent.and_then(|parent| Some((parent, self.subagents.get(parent)?))) else {
+            return;
+        };
+        let name = self.items.iter().find_map(|item| match item {
+            Item::Tool(tool) if tool.id == parent => Some(tool.summary.as_str()),
+            _ => None,
+        });
+        let found: Vec<_> = sub
+            .refusals
+            .iter()
+            .filter(|refusal| refusal.kind == crate::refused::Kind::Blocked && !self.blocked.iter().any(|kept| kept.tool_id == refusal.tool_id))
+            .filter_map(|refusal| {
+                let tool = sub.items.iter().find_map(|item| match item {
+                    Item::Tool(tool) if tool.id == refusal.tool_id => Some(tool),
+                    _ => None,
+                })?;
+                Some(crate::blocked::of_subagent(&format!("Auto mode blocked {}: {}", refusal.tool, refusal.reason), tool, name.unwrap_or_default(), self.now))
+            })
+            .collect();
+        for blocked in found {
+            crate::blocked::keep(self, blocked);
+        }
     }
 
     fn hear_own(&mut self, line: &Value) {

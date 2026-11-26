@@ -908,7 +908,7 @@ esac"##,
         json!({ "type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.01 }),
     ]);
     // A subagent's command and this chat's own push, both refused: the subagent's row in the side panel says it hit one
-    // (hover shows it), and the chat's own is in Recently blocked.
+    // (hover shows it), and both are in Recently blocked, the subagent's with its name.
     let refused_lines = vec![
         init.clone(),
         user("Probe whether Vaultwarden starts, then push the fix."),

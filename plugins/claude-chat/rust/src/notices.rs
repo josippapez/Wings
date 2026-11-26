@@ -104,6 +104,25 @@ pub fn hear(session: &mut Session, line: &Value) -> bool {
                 None => who,
             };
             // Under the tool's row, where the call was.
+            // A subagent's call is not among this chat's rows: its block is kept for Recently blocked, with its subagent.
+            if let (Some(agent), Some("classifier"), Some(id)) = (text("agent_id"), text("decision_reason_type"), text("tool_use_id")) {
+                if let Some(call) = session.agents.call_of(agent).map(str::to_owned) {
+                    let name = session.items.iter().find_map(|item| match item {
+                        Item::Tool(tool) if tool.id == call => Some(tool.summary.clone()),
+                        _ => None,
+                    });
+                    let name = name.as_deref().unwrap_or_default();
+                    let blocked = session.subagents.get(&call).and_then(|sub| {
+                        sub.items.iter().find_map(|item| match item {
+                            Item::Tool(tool) if tool.id == id => Some(crate::blocked::of_subagent(&said, tool, name, session.now)),
+                            _ => None,
+                        })
+                    });
+                    if let Some(blocked) = blocked {
+                        crate::blocked::keep(session, blocked);
+                    }
+                }
+            }
             let at = text("tool_use_id").and_then(|id| session.items.iter().position(|item| matches!(item, Item::Tool(tool) if tool.id == id)));
             if let (Some(at), Some("classifier")) = (at, text("decision_reason_type")) {
                 if let Item::Tool(tool) = &session.items[at] {

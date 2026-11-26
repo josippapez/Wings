@@ -1,6 +1,7 @@
 //! What Claude Code refused, kept on the session that made the call so a subagent's refusal, which shows only in its own
-//! transcript, can be counted on its row in the side panel's Subagents. A subagent's can't be approved from here; the
-//! chat's own auto mode blocks are approved from `blocked.rs`' Recently blocked.
+//! transcript, can be counted on its row in the side panel's Subagents, with the latest on hover. Only the classifier's
+//! blocks can be approved, so `Session::hear` also lists a subagent's `Kind::Blocked` ones in `blocked.rs`' Recently
+//! blocked (when its `permission_denied` line didn't already); not-reviewed and declined ones stay on the badge.
 //!
 //! Three kinds, matched on the start of an error result's text:
 //! - auto mode's classifier said no: "Permission for this action was denied by the Claude Code auto mode classifier.

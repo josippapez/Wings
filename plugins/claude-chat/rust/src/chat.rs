@@ -805,7 +805,7 @@ pub(crate) fn hear(run: u32, line: &Value) {
         });
     }
     // A block auto mode made leaves the side panel's Recently blocked once its time is up: one redraw then.
-    if line["type"] == "system" && line["subtype"] == "permission_denied" && line["decision_reason_type"] == "classifier" {
+    if with(|c| std::mem::take(&mut c.session.blocked_fresh)) {
         task::spawn(async move {
             host::sleep(crate::blocked::LISTED_FOR as u32 + 50).await;
             with(|_| ());
