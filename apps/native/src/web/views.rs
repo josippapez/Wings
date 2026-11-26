@@ -135,7 +135,7 @@ pub fn update(page: EntityId, profile: &Profile, specs: &[Spec], told: &Told, sc
             {
                 entry.token = Some(command.token);
                 // Whether it may at all; WebKit's side checks the page it is on as it runs (`gate`).
-                if let Err(why) = super::gate(&command.go, scripts, false) {
+                if let Err(why) = super::gate(&command.go, scripts, false, true) {
                     let refused = Err(why.to_owned());
                     let _ = told.try_send((spec.name.clone(), Heard::Result { token: command.token, result: refused }));
                     continue;

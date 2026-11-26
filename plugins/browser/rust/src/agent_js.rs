@@ -19,6 +19,7 @@ const HELPER: &str = r#"var w = window.__wingsAgent || (window.__wingsAgent = (f
     if (!e || !e.isConnected) throw new Error('Ref ' + id + ' is stale or unknown because the page changed. Take a new snapshot and use its refs.');
     return e;
   }
+  function secret(e) { return e.type === 'password' || /(^|\s)(cc-|one-time-code|current-password|new-password)/.test(e.getAttribute('autocomplete') || ''); }
   function role(e) {
     var r = e.getAttribute('role'), t = e.tagName.toLowerCase(), y = e.type;
     if (r) return r;
@@ -43,7 +44,7 @@ const HELPER: &str = r#"var w = window.__wingsAgent || (window.__wingsAgent = (f
       if (e.matches(HIT)) {
         var r = role(e), n = name(e), s = '- ' + r + ' [' + ref(e) + ']' + (n ? ' "' + n + '"' : '');
         if (e.href) s += ' -> ' + e.getAttribute('href').slice(0, 100);
-        if (/^(textbox|combobox)$/.test(r) && e.value) s += ' value="' + String(e.value).slice(0, 60) + '"';
+        if (/^(textbox|combobox)$/.test(r) && e.value) s += secret(e) ? ' value=(hidden)' : ' value="' + String(e.value).slice(0, 60) + '"';
         if (e.checked) s += ' checked';
         if (e.disabled) s += ' disabled';
         return line(d, s);
@@ -156,6 +157,18 @@ mod tests {
         // It runs in an isolated world and leaves one global, and nothing in it loads or sends anything.
         assert_eq!(HELPER.matches("window.__wingsAgent").count(), 2);
         assert!(!HELPER.contains("fetch(") && !HELPER.contains("XMLHttpRequest") && !HELPER.contains("eval("));
+    }
+
+    #[test]
+    fn the_outline_never_prints_a_password_a_card_or_a_one_time_code() {
+        // What the outline prints of a field's value goes through `secret` first.
+        assert!(HELPER.contains("secret(e) ? ' value=(hidden)'"));
+        let secret = &HELPER[HELPER.find("function secret").unwrap()..];
+        let secret = &secret[..secret.find('}').unwrap()];
+        for kind in ["'password'", "cc-", "one-time-code", "current-password", "new-password"] {
+            assert!(secret.contains(kind), "{kind} is hidden");
+        }
+        assert_eq!(HELPER.matches("String(e.value)").count(), 1, "no other place prints a field's value");
     }
 
     #[test]

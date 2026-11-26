@@ -44,19 +44,24 @@ pub enum Job {
 /// The one gate every command a plugin's page sends its web view goes through, here and in WebKit (`views::update`,
 /// `mac::WebPage::go`): moving about (load, back, forward, reload, stop) always goes; anything that reads or acts on what
 /// the page holds (a script, its picture, its logs, the answer to its dialog) needs the plugin's `webScripts`
-/// (`scripts`) and never touches a page signed in with imported cookies (`imported`). Each command is named here, so a
-/// new one has to say which it is.
-pub fn gate(go: &crate::page::tree::WebGo, scripts: bool, imported: bool) -> Result<(), &'static str> {
+/// (`scripts`), never touches a page signed in with imported cookies (`imported`, of the document it would act on: the
+/// one committed, or the dialog's own frame), and waits while a new page is on its way (`settled`), as it would act on
+/// whichever page is there when it runs. Each command is named here, so a new one has to say which it is.
+pub fn gate(go: &crate::page::tree::WebGo, scripts: bool, imported: bool, settled: bool) -> Result<(), &'static str> {
     use crate::page::tree::WebGo;
     match go {
         WebGo::Load(_) | WebGo::Back | WebGo::Forward | WebGo::Reload | WebGo::Stop => Ok(()),
-        WebGo::Eval { .. } | WebGo::Snapshot | WebGo::Logs | WebGo::Dialog { .. } => match (scripts, imported) {
-            (false, _) => Err(NO_SCRIPTS),
-            (true, true) => Err(IMPORTED),
-            (true, false) => Ok(()),
+        WebGo::Eval { .. } | WebGo::Snapshot | WebGo::Logs | WebGo::Dialog { .. } => match (scripts, imported, settled) {
+            (false, _, _) => Err(NO_SCRIPTS),
+            (true, true, _) => Err(IMPORTED),
+            (true, false, false) => Err(LOADING),
+            (true, false, true) => Ok(()),
         },
     }
 }
+
+/// Why one didn't run while a page loads.
+pub const LOADING: &str = "The page is still loading: wait for it, then try again";
 
 /// Why a command that reads or acts on a page didn't run, for a plugin that may not run scripts in its pages.
 pub const NO_SCRIPTS: &str = "This plugin may not read or act on the web pages it shows (permissions.webScripts)";
@@ -96,7 +101,7 @@ pub fn holds_imported(profile_dir: &std::path::Path, url: &str) -> bool {
 
 /// The domains of the sites whose cookies were imported into the profile in `profile_dir`: none when nothing was, and
 /// `None` when the list is there but can't be read, which counts as every site.
-pub fn imported_sites(profile_dir: &std::path::Path) -> Option<Vec<String>> {
+fn imported_sites(profile_dir: &std::path::Path) -> Option<Vec<String>> {
     match std::fs::read(profile_dir.join("imported-sites.json")) {
         Ok(bytes) => serde_json::from_slice(&bytes).ok(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(Vec::new()),
@@ -297,12 +302,13 @@ mod tests {
             WebGo::Dialog { accept: true, text: None },
         ];
         for go in &moves {
-            assert_eq!(gate(go, false, true), Ok(()), "{go:?} moves about");
+            assert_eq!(gate(go, false, true, false), Ok(()), "{go:?} moves about");
         }
         for go in &reads {
-            assert_eq!(gate(go, false, false), Err(NO_SCRIPTS), "{go:?}");
-            assert_eq!(gate(go, true, true), Err(IMPORTED), "{go:?}");
-            assert_eq!(gate(go, true, false), Ok(()), "{go:?}");
+            assert_eq!(gate(go, false, false, true), Err(NO_SCRIPTS), "{go:?}");
+            assert_eq!(gate(go, true, true, true), Err(IMPORTED), "{go:?}");
+            assert_eq!(gate(go, true, false, false), Err(LOADING), "{go:?} while another page is on its way");
+            assert_eq!(gate(go, true, false, true), Ok(()), "{go:?}");
         }
     }
 

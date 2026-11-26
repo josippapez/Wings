@@ -275,13 +275,12 @@ impl Maker for WebKit {
             if let Some(extensions) = &shared.extensions {
                 configuration.setWebExtensionController(Some(extensions));
             }
-            // In the page's own world, the only one that sees its `console` and `fetch`; it posts what it sees, but never
-            // on a site signed in with imported cookies, and not at all while the list of those can't be read.
-            if let (true, Some(imported)) = (scripts, super::imported_sites(&profile.dir)) {
-                let source = format!("const imported = {};\n{LOGS}", serde_json::to_string(&imported).unwrap_or_else(|_| "[]".into()));
+            // In the page's own world, the only one that sees its `console` and `fetch`; it posts what it sees, and what
+            // comes from a site signed in with imported cookies is dropped as it arrives (`heard`). It names no such site.
+            if scripts {
                 let script = WKUserScript::initWithSource_injectionTime_forMainFrameOnly_inContentWorld(
                     WKUserScript::alloc(mtm),
-                    &NSString::from_str(&source),
+                    &NSString::from_str(LOGS),
                     WKUserScriptInjectionTime::AtDocumentStart,
                     true,
                     &WKContentWorld::pageWorld(mtm),
@@ -347,8 +346,6 @@ const LOGS_KEPT: usize = 200;
 /// never a body or a header, and posts each to Wings. It can't see the page's own loads (navigations, pictures, styles,
 /// scripts), a service worker's requests or web sockets.
 const LOGS: &str = r#"(() => {
-  const host = location.hostname;
-  if (imported.some((domain) => host === domain || host.endsWith("." + domain))) return;
   const post = (m) => { try { webkit.messageHandlers.wingsLog.postMessage(m); } catch (_) {} };
   const text = (a) => a.map((x) => { try { return typeof x === "string" ? x : JSON.stringify(x); } catch (_) { return String(x); } }).join(" ").slice(0, 2000);
   for (const level of ["log", "info", "warn", "error", "debug"]) {
@@ -394,10 +391,19 @@ impl Native for WebPage {
 
     fn go(&mut self, go: &WebGo, token: u64) {
         let Some(mtm) = MainThreadMarker::new() else { return };
-        // The page it is on now decides, as `gate` says for every command.
-        // SAFETY: the web view's address, on the main thread.
-        let url = unsafe { self.view.URL() }.and_then(|url| url.absoluteString()).map(|url| url.to_string()).unwrap_or_default();
-        if let Err(why) = super::gate(go, self.scripts, super::holds_imported(&self.web_dir, &url)) {
+        // The document it would act on decides, as `gate` says for every command: the page committed, while no other is
+        // on its way, or for a dialog its own frame, which counts as imported when it isn't known.
+        // SAFETY: the web view's address and state, on the main thread.
+        let (url, loading) = unsafe { (self.view.URL().and_then(|url| url.absoluteString()).map(|url| url.to_string()).unwrap_or_default(), self.view.isLoading()) };
+        let committed = self.observer.ivars().committed.borrow().clone();
+        let (imported, settled) = match go {
+            WebGo::Dialog { .. } => {
+                let frame = self.observer.ivars().dialog_frame.borrow().clone();
+                (frame.is_none_or(|frame| super::holds_imported(&self.web_dir, &frame)), true)
+            }
+            _ => (super::holds_imported(&self.web_dir, &committed), !loading && committed == url),
+        };
+        if let Err(why) = super::gate(go, self.scripts, imported, settled) {
             return (self.told)(Heard::Result { token, result: Err(why.into()) });
         }
         // SAFETY: the web view's own calls, on the main thread.
@@ -413,13 +419,20 @@ impl Native for WebPage {
                 WebGo::Reload => drop(self.view.reload()),
                 WebGo::Stop => self.view.stopLoading(),
                 WebGo::Eval { script, page } => {
-                    // The value goes back as JSON text, which crosses from JavaScript as a plain string.
-                    let body = format!("return JSON.stringify(await (async () => {{\n{script}\n}})() ?? null);");
+                    // The value goes back as JSON text, which crosses from JavaScript as a plain string, with the address of
+                    // the document it ran in, checked again below: a page may have moved on as it ran.
+                    let body = format!("const value = await (async () => {{\n{script}\n}})();\nreturn JSON.stringify({{ href: location.href, value: value ?? null }});");
+                    let web_dir = self.web_dir.clone();
                     let world = if *page { WKContentWorld::pageWorld(mtm) } else { WKContentWorld::worldWithName(&NSString::from_str("wings-plugin"), mtm) };
                     let told = self.told.clone();
                     let done = RcBlock::new(move |value: *mut AnyObject, error: *mut NSError| {
                         let result = match (value.as_ref().and_then(|value| value.downcast_ref::<NSString>()), error.as_ref()) {
-                            (Some(json), None) => serde_json::from_str(&json.to_string()).map_err(|error| error.to_string()),
+                            (Some(json), None) => serde_json::from_str::<serde_json::Value>(&json.to_string())
+                                .map_err(|error| error.to_string())
+                                .and_then(|ran| match super::holds_imported(&web_dir, ran["href"].as_str().unwrap_or_default()) {
+                                    true => Err(super::IMPORTED.to_owned()),
+                                    false => Ok(ran["value"].clone()),
+                                }),
                             (_, Some(error)) => Err(error.localizedDescription().to_string()),
                             (None, None) => Ok(serde_json::Value::Null),
                         };
@@ -504,6 +517,10 @@ struct Ivars {
     error: RefCell<Option<String>>,
     /// Its plugin's web folder, which names the sites signed in with imported cookies.
     web_dir: std::path::PathBuf,
+    /// The address of the document the view shows, as WebKit committed it, which commands act on.
+    committed: RefCell<String>,
+    /// The address of the frame whose dialog waits, none when it isn't known.
+    dialog_frame: RefCell<Option<String>>,
     /// Wings' own sheet showing the page's dialog, and its text field for a prompt.
     sheet: RefCell<Option<(Retained<NSAlert>, Option<Retained<NSTextField>>)>>,
     /// The page's dialog that waits for an answer, and what it shows.
@@ -569,6 +586,14 @@ define_class!(
             }
             let policy = if allowed { WKNavigationActionPolicy::Allow } else { WKNavigationActionPolicy::Cancel };
             decide.call((policy,));
+        }
+
+        /// The view shows a new document: commands act on it from now.
+        #[unsafe(method(webView:didCommitNavigation:))]
+        fn committed(&self, view: &WKWebView, _navigation: Option<&WKNavigation>) {
+            // SAFETY: the view's address, on the main thread.
+            let url = unsafe { view.URL() }.and_then(|url| url.absoluteString()).map(|url| url.to_string()).unwrap_or_default();
+            self.ivars().committed.replace(url);
         }
 
         #[unsafe(method(webView:didFailNavigation:withError:))]
@@ -675,6 +700,8 @@ impl Observer {
             logs: RefCell::default(),
             web_dir,
             sheet: RefCell::new(None),
+            committed: RefCell::default(),
+            dialog_frame: RefCell::new(None),
         });
         // SAFETY: NSObject's `init`.
         unsafe { msg_send![super(this), init] }
@@ -686,15 +713,19 @@ impl Observer {
         // A page that asks again before the last was answered: the last is cancelled, as WebKit needs each answered.
         self.answer(false, None);
         // SAFETY: the frame's request, on the main thread.
-        let site = unsafe { frame.request().URL().and_then(|url| url.host()).map(|host| host.to_string()).unwrap_or_default() };
-        let dialog = super::views::Dialog {
-            kind: kind.into(),
-            message: message.to_string().chars().take(4000).collect(),
-            default_text: default.map(|text| text.to_string()),
-            site,
+        let (site, frame_url) = unsafe {
+            let url = frame.request().URL();
+            (url.as_ref().and_then(|url| url.host()).map(|host| host.to_string()).unwrap_or_default(), url.and_then(|url| url.absoluteString()).map(|url| url.to_string()))
         };
+        let shown = (site.clone(), message.to_string().chars().take(4000).collect::<String>(), default.map(|text| text.to_string()));
+        // The plugin hears only that there is one when it comes from a site signed in with imported cookies, or one not known.
+        let private = frame_url.as_ref().is_none_or(|url| super::holds_imported(&self.ivars().web_dir, url));
+        let dialog = match private {
+            true => super::views::Dialog { kind: kind.into(), ..Default::default() },
+            false => super::views::Dialog { kind: kind.into(), message: shown.1.clone(), default_text: shown.2.clone(), site },
+        };
+        self.ivars().dialog_frame.replace(frame_url);
         let prompt = matches!(pending, Pending::Prompt(_));
-        let shown = (dialog.site.clone(), dialog.message.clone(), dialog.default_text.clone());
         self.ivars().pending.replace(Some((pending, dialog)));
         self.show_sheet(view, kind, shown, prompt);
         self.tell(view);
