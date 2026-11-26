@@ -97,6 +97,7 @@ mod mod_pane;
 #[cfg(feature = "pane")]
 mod pane_sidebar;
 mod refs;
+mod refused;
 mod remote;
 #[cfg(feature = "chat")]
 mod pull;

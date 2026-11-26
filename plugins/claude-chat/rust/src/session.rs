@@ -466,6 +466,8 @@ pub const TASK_STOP: &str = "task-stop-";
 pub struct Session {
     /// What auto mode blocked in this chat, for "Allow and retry" (`blocked.rs`).
     pub blocked: Vec<crate::blocked::Blocked>,
+    /// Every call Claude Code refused on this session, for the side panel's Blocked (`refused.rs`).
+    pub refusals: Vec<crate::refused::Refusal>,
     /// Whether this chat is on claude.ai and in the Claude app too.
     pub remote: crate::remote::Remote,
     pub items: Vec<Item>,
@@ -966,6 +968,7 @@ impl Session {
         self.todos.clear();
         self.creating.clear();
         self.subagents.clear();
+        self.refusals.clear();
         self.agents.clear();
         self.tasks.clear();
         self.goal = None;
@@ -1307,13 +1310,18 @@ impl Session {
                         Item::Tool(tool) if tool.id == id => Some(tool),
                         _ => None,
                     });
+                    let mut refusal = None;
                     if let Some(tool) = tool {
                         tool.output = Some((cut(&output, OUTPUT_KEPT), block["is_error"] == true));
+                        refusal = (block["is_error"] == true).then(|| crate::refused::of(tool, &output)).flatten();
                         if let (Some(end), Some(start)) = (at, self.called.remove(id)) {
                             self.ran.insert(id.to_owned(), (end - start).max(0.0) as u64);
                         }
                         tool.images = shots;
                         self.files_touched |= matches!(tool.name.as_str(), "Edit" | "MultiEdit" | "Write" | "NotebookEdit" | "Bash" | "Task" | "Agent");
+                    }
+                    if let Some(refusal) = refusal {
+                        crate::refused::keep(self, refusal);
                     }
                     if let Some(at) = self.creating.iter().position(|(call, ..)| call == id) {
                         let (_, text, active) = self.creating.remove(at);

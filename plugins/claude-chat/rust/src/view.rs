@@ -1435,6 +1435,7 @@ pub(crate) fn side_sections(c: &Chat, place: bool) -> Vec<Node> {
     sections.push(head);
     sections.extend(crate::pull_view::section(c));
     sections.extend(crate::blocked::section(c));
+    sections.extend(crate::refused::section(c));
     let mut limits = stack().prop("gap", "s");
     if let Some((used, most)) = c.session.context {
         limits = limits.child(meter_button("Context", used * 100 / most.max(1), (70, 90), None, Panel::Context));
@@ -1612,7 +1613,7 @@ fn subagent_row(tool: &Tool, c: &Chat) -> Node {
         (None, None) => None,
     }
     .map(|facts| facts.prop("size", "small"));
-    let line = entry(Entry { lead: Some(mark), title: text(name).prop("size", "small").prop("clamp", true).prop("title", name), detail: facts, trailing: None }).key(tool.id.as_str());
+    let line = entry(Entry { lead: Some(mark), title: text(name).prop("size", "small").prop("clamp", true).prop("title", name), detail: facts, trailing: crate::refused::badge_for(c, &tool.id) }).key(tool.id.as_str());
     match crate::subagent_relay::can_open(c, &tool.id) {
         true => {
             let id = tool.id.clone();
