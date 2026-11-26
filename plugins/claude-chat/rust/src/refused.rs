@@ -1,7 +1,6 @@
-//! The side panel's Blocked: every action Claude Code refused in this chat, the chat's own and each subagent's. A subagent's
-//! refusal shows only in its own transcript, so the chat reads it where it lands, in the tool's result, and keeps it on
-//! the session that made the call (a subagent is a `Session` of its own). It only lists: the "Allow and
-//! retry" button for the chat's own auto mode blocks stays in `blocked.rs`.
+//! What Claude Code refused, kept on the session that made the call so a subagent's refusal, which shows only in its own
+//! transcript, can be counted on its row in the side panel's Subagents. A subagent's can't be approved from here; the
+//! chat's own auto mode blocks are approved from `blocked.rs`' Recently blocked.
 //!
 //! Three kinds, matched on the start of an error result's text:
 //! - auto mode's classifier said no: "Permission for this action was denied by the Claude Code auto mode classifier.
@@ -11,10 +10,10 @@
 //! - you answered no at a permission prompt ("The user doesn't want to proceed with this tool use. ...").
 
 #[cfg(feature = "chat")]
-use wings_plugin::ui::{Entry, Node, badge, entry, muted, stack, text};
+use wings_plugin::ui::{Node, badge};
 
 #[cfg(feature = "chat")]
-use crate::chat::{self, Chat};
+use crate::chat::Chat;
 use crate::session::{Detail, Session, Tool};
 
 /// Who said no, and so how the row labels it.
@@ -80,84 +79,24 @@ pub fn keep(session: &mut Session, refusal: Refusal) {
     }
 }
 
-/// A refusal with who made the call: `helper` is the subagent's description, None for this chat.
-pub struct Listed<'a> {
-    pub helper: Option<String>,
-    pub refusal: &'a Refusal,
-}
-
-/// Every refusal of the chat and its subagents, this chat's first, then each subagent's in the order they started.
-pub fn all(session: &Session) -> Vec<Listed<'_>> {
-    let mut listed: Vec<Listed> = session.refusals.iter().map(|refusal| Listed { helper: None, refusal }).collect();
-    for item in &session.items {
-        let crate::session::Item::Tool(tool) = item else { continue };
-        let Some(sub) = session.subagents.get(&tool.id) else { continue };
-        let name = if tool.summary.is_empty() { "Subagent" } else { tool.summary.as_str() };
-        listed.extend(sub.refusals.iter().map(|refusal| Listed { helper: Some(name.to_owned()), refusal }));
-    }
-    listed
-}
-
 /// How many refusals the subagent that `call` started hit.
 pub fn of_subagent(session: &Session, call: &str) -> usize {
     session.subagents.get(call).map_or(0, |sub| sub.refusals.len())
 }
 
-fn label(kind: Kind) -> &'static str {
-    match kind {
-        Kind::Blocked => "Blocked",
-        Kind::NotReviewed => "Not reviewed",
-        Kind::Declined => "Declined",
-    }
+/// What the badge says on hover: the latest refused call and why.
+fn latest(session: &Session, call: &str) -> Option<String> {
+    let refusal = session.subagents.get(call)?.refusals.last()?;
+    let what = format!("{} {}", refusal.tool, refusal.command).trim().to_owned();
+    Some(format!("{what}\n{}", refusal.reason))
 }
 
 #[cfg(feature = "chat")]
-/// The row's key, which the open set holds it by.
-fn id(refusal: &Refusal) -> String {
-    format!("refused-{}", refusal.tool_id)
-}
-
-#[cfg(feature = "chat")]
-/// The side panel's Blocked, while anything was refused: a row for each, with what was refused, who asked and why; a click
-/// shows the whole command and the whole reason under it.
-pub fn section(c: &Chat) -> Option<Node> {
-    let listed = all(&c.session);
-    if listed.is_empty() {
-        return None;
-    }
-    let count = listed.len();
-    let rows = listed.into_iter().map(|Listed { helper, refusal }| {
-        let key = id(refusal);
-        let opened = c.open_outputs.contains(&key);
-        let line = format!("{} {}", refusal.tool, refusal.summary).trim().to_owned();
-        let who = helper.as_deref().unwrap_or("This chat");
-        let reason = if refusal.kind == Kind::Blocked { refusal.reason.clone() } else { format!("{} · {}", label(refusal.kind), refusal.reason) };
-        let detail = muted(format!("{who} · {reason}")).prop("size", "small").prop("truncate", true).prop("title", format!("{who}: {reason}"));
-        let toggle = key.clone();
-        let head = entry(Entry {
-            lead: Some(text("⚠").prop("tone", "warn")),
-            title: text(line.clone()).prop("size", "small").prop("truncate", true).prop("title", line),
-            detail: Some(detail),
-            trailing: None,
-        })
-        .on("onClick", move |_| chat::toggle_output(&toggle))
-        .prop("title", if opened { "Hide the whole command and reason" } else { "Show the whole command and reason" })
-        .key(key.clone());
-        let whole = opened.then(|| {
-            let command = (!refusal.command.is_empty()).then(|| text(refusal.command.clone()).prop("mono", true).prop("size", "small"));
-            let said = text(refusal.reason.clone()).prop("size", "small").prop("tone", "muted");
-            crate::view::inset(stack().prop("gap", "xs").maybe(command).child(said)).key(format!("{key}-whole"))
-        });
-        stack().child(head).maybe(whole).key(format!("{key}-row"))
-    });
-    Some(crate::view::fold_list(c, "refused", format!("Blocked · {count}"), rows))
-}
-
-#[cfg(feature = "chat")]
-/// The warning a subagent's row carries when it hit refusals: "1 blocked".
+/// The warning a subagent's row carries when it hit refusals: "1 blocked", with the latest one on hover.
 pub fn badge_for(c: &Chat, call: &str) -> Option<Node> {
     let count = of_subagent(&c.session, call);
-    (count > 0).then(|| badge(format!("{count} blocked"), Some("warn")))
+    let tip = latest(&c.session, call)?;
+    Some(badge(format!("{count} blocked"), Some("warn")).prop("title", tip))
 }
 
 #[cfg(test)]
@@ -191,47 +130,44 @@ mod tests {
     }
 
     #[test]
-    fn a_refusal_in_this_chat_is_listed_as_this_chat() {
+    fn a_refusal_in_this_chat_is_kept_with_its_reason_and_whole_command() {
         let mut session = Session::default();
         call(&mut session, None, "t1", "git push origin main", AUTO, true);
-        let listed = all(&session);
-        assert_eq!(listed.len(), 1);
-        assert_eq!((listed[0].helper.clone(), listed[0].refusal.reason.as_str(), listed[0].refusal.command.as_str()), (None, "Undermining Oversight", "git push origin main"));
-        assert_eq!(listed[0].refusal.tool, "Bash");
+        assert_eq!(session.refusals.len(), 1);
+        assert_eq!((session.refusals[0].reason.as_str(), session.refusals[0].command.as_str(), session.refusals[0].tool.as_str()), ("Undermining Oversight", "git push origin main", "Bash"));
     }
 
     #[test]
-    fn a_subagents_refusal_is_listed_under_its_description_and_counted_on_its_row() {
+    fn a_subagents_refusal_is_counted_for_its_row_and_its_latest_is_the_hover() {
         let mut session = Session::default();
         agent(&mut session);
         call(&mut session, Some("agent1"), "s1", "container run -d --rm --name bw-probe-vw x", AUTO, true);
-        let listed = all(&session);
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].helper.as_deref(), Some("Probe Vaultwarden"));
-        assert_eq!(listed[0].refusal.reason, "Undermining Oversight");
         assert_eq!(of_subagent(&session, "agent1"), 1);
+        assert_eq!(latest(&session, "agent1").as_deref(), Some("Bash container run -d --rm --name bw-probe-vw x\nUndermining Oversight"));
         // The same result heard again is one refusal.
         call(&mut session, Some("agent1"), "s1", "container run -d --rm --name bw-probe-vw x", AUTO, true);
-        assert_eq!(all(&session).len(), 1);
+        assert_eq!(of_subagent(&session, "agent1"), 1);
+        assert!(session.refusals.is_empty());
+        assert_eq!(latest(&session, "other"), None);
     }
 
     #[test]
-    fn a_call_that_failed_for_any_other_reason_is_not_listed() {
+    fn a_call_that_failed_for_any_other_reason_is_not_counted() {
         let mut session = Session::default();
         agent(&mut session);
         call(&mut session, None, "t1", "false", "Exit code 1", true);
         call(&mut session, Some("agent1"), "s1", "ls nope", "ls: nope: No such file or directory", true);
-        call(&mut session, None, "t2", "echo hi", AUTO, false);
-        assert!(all(&session).is_empty());
+        call(&mut session, Some("agent1"), "s2", "echo hi", AUTO, false);
+        assert!(session.refusals.is_empty());
         assert_eq!(of_subagent(&session, "agent1"), 0);
     }
 
     #[test]
-    fn no_verdict_and_declined_are_listed_with_their_label() {
+    fn no_verdict_and_declined_are_kept_with_their_kind() {
         let mut session = Session::default();
         call(&mut session, None, "t1", "rtk git status", "The server-side auto mode classifier gave no verdict for Bash: a hook changed this call's input after auto mode reviewed it. This is not a judgment that the action is unsafe.", true);
         call(&mut session, None, "t2", "rm -r x", "The user doesn't want to proceed with this tool use. The tool use was rejected", true);
-        let kinds: Vec<Kind> = all(&session).iter().map(|listed| listed.refusal.kind).collect();
+        let kinds: Vec<Kind> = session.refusals.iter().map(|refusal| refusal.kind).collect();
         assert_eq!(kinds, [Kind::NotReviewed, Kind::Declined]);
     }
 }

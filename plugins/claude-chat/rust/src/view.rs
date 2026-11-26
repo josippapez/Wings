@@ -1435,7 +1435,6 @@ pub(crate) fn side_sections(c: &Chat, place: bool) -> Vec<Node> {
     sections.push(head);
     sections.extend(crate::pull_view::section(c));
     sections.extend(crate::blocked::section(c));
-    sections.extend(crate::refused::section(c));
     let mut limits = stack().prop("gap", "s");
     if let Some((used, most)) = c.session.context {
         limits = limits.child(meter_button("Context", used * 100 / most.max(1), (70, 90), None, Panel::Context));

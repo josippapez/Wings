@@ -907,8 +907,8 @@ esac"##,
         text("Auto mode blocked the push. Allow it to go on."),
         json!({ "type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.01 }),
     ]);
-    // A subagent's command and this chat's own push, both refused: the side panel's Blocked lists them with who asked and why,
-    // and the subagent's row says it hit one.
+    // A subagent's command and this chat's own push, both refused: the subagent's row in the side panel says it hit one
+    // (hover shows it), and the chat's own is in Recently blocked.
     let refused_lines = vec![
         init.clone(),
         user("Probe whether Vaultwarden starts, then push the fix."),
@@ -918,9 +918,9 @@ esac"##,
         within("b1", output("bc1", "Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Undermining Oversight]. If you have other tasks that don't depend on this action, continue working on those. IMPORTANT: You *may* attempt to accomplish this action using other tools", true)),
         tool("bp1", "Bash", json!({ "command": "git push origin main", "description": "Push main" })),
         output("bp1", "Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Create Public Surface]. If you have other tasks that don't depend on this action, continue working on those.", true),
+        json!({ "type": "system", "subtype": "permission_denied", "tool_name": "Bash", "tool_use_id": "bp1", "decision_reason_type": "classifier", "decision_reason": "Create Public Surface" }),
     ];
-    let refused = opened(refused_lines.clone());
-    let refused_open = opened(refused_lines);
+    let refused = opened(refused_lines);
     // A background agent that ended by handing its report back with SubagentHandback: the report reaches the chat as a message
     // Claude Code adds (`isMeta`), `origin.handback` holding the report as it wrote it, and a note when it flagged one.
     let handed = |note: Option<&str>| {
@@ -1061,8 +1061,7 @@ esac"##,
         ("handback-note", handback_note, None, None, "SECURITY WARNING"),
         ("handback-folded", handback, None, None, "Report from Audit the discount code"),
         ("allowed", allowed, None, Some("press:Allow and retry"), "You allowed this command"),
-        ("blocked", refused, None, None, "Blocked · 2"),
-        ("blocked-open", refused_open, None, Some("row:Bash container run"), "Probe Vaultwarden"),
+        ("blocked", refused, None, None, "1 blocked"),
         ("limit-card", limit_hit, None, None, "Continue when it resets"),
         // Claude Code refused the message for want of a sign-in: its error line has a Sign in button, as the banner of a Claude Code that stopped for it does.
         ("not-logged-in", opened(vec![init.clone(), user("Run the checkout tests."), json!({ "type": "result", "subtype": "success", "is_error": true, "result": "Not logged in · Please run /login", "total_cost_usd": 0.0 })]), None, None, "Please run /login"),
