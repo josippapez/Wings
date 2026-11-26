@@ -32,6 +32,18 @@ pub(super) fn browser(out: PathBuf) {
         std::fs::write(folder.join("manifest.json"), manifest.to_string()).unwrap();
         image::RgbaImage::from_pixel(128, 128, image::Rgba([colour[0], colour[1], colour[2], 255])).save(folder.join("icon.png")).unwrap();
     }
+    // Brave, readable when Chrome's folder is locked in the refused-access states.
+    let brave = home.join("Library/Application Support/BraveSoftware/Brave-Browser");
+    let folder = brave.join("Default/Extensions/abcdefghijklmnopabcdefghijklmnef/1.0_0");
+    std::fs::create_dir_all(&folder).unwrap();
+    let manifest = json!({ "manifest_version": 3, "name": "Privacy Badger", "version": "1.0", "description": "Automatically learns to block invisible trackers." });
+    std::fs::write(folder.join("manifest.json"), manifest.to_string()).unwrap();
+    // An extension already added, to ask before removing it. Unsealed, as nothing here loads it.
+    let profile = out.join("plugin-web/browser.shot");
+    std::fs::create_dir_all(&profile).unwrap();
+    let added = json!([{ "id": "shotvault", "name": "Bitwarden Password Manager", "version": "1.0", "description": "A password manager", "icon": null,
+        "permissions": [], "hosts": [], "enabled": true }]);
+    std::fs::write(profile.join("extensions.json"), added.to_string()).unwrap();
     // The scene runs alone in its process, so its home is the browsers' only home there.
     unsafe { std::env::set_var("HOME", &home) };
     let manifest: wings_plugins::manifest::Manifest =
@@ -132,8 +144,41 @@ pub(super) fn browser(out: PathBuf) {
                 assert!(handle.read_with(&cx, |view, _| view.press("Look", 0)).unwrap(), "no Look button");
                 wait(&mut cx, window, Duration::from_millis(1500));
                 save(&mut cx, window, out.join(format!("browser-settings-look-{width}.png")));
+                // The trash icon of the added extension asks in a dialog over the page.
+                assert!(handle.read_with(&cx, |view, _| view.press("Remove Bitwarden Password Manager", 0)).unwrap(), "no Remove button");
+                wait(&mut cx, window, Duration::from_millis(500));
+                save(&mut cx, window, out.join(format!("browser-settings-remove-{width}.png")));
             }
             let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        }
+    }
+    // macOS refusing a browser's folder (what a missing Full Disk Access does), as `chmod 000` does: Chrome alone, so
+    // Brave's extension is listed with a notice, then both, so there is nothing to list.
+    use std::os::unix::fs::PermissionsExt;
+    let lock = |paths: &[&std::path::Path], mode: u32| {
+        for path in paths {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+    };
+    for width in [1000.0, 640.0] {
+        for (name, locked) in [("partial", vec![chrome.as_path()]), ("refused", vec![chrome.as_path(), brave.as_path()])] {
+            lock(&locked, 0o000);
+            let handle = cx
+                .open_offscreen_window(size(px(width), px(1700.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, &module("settings"), None, cx)))
+                .unwrap();
+            let window = handle.into();
+            handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while handle.read_with(&cx, |view, _| view.trees_sent()).unwrap() == 0 || !handle.read_with(&cx, |view, _| view.text().contains("Search engine")).unwrap() {
+                assert!(Instant::now() < deadline, "the settings did not show");
+                wait(&mut cx, window, Duration::from_millis(20));
+            }
+            wait(&mut cx, window, Duration::from_millis(1500));
+            assert!(handle.read_with(&cx, |view, _| view.press("Look", 0)).unwrap(), "no Look button");
+            wait(&mut cx, window, Duration::from_millis(1500));
+            save(&mut cx, window, out.join(format!("browser-settings-{name}-{width}.png")));
+            let _ = cx.update_window(window, |_, window, _| window.remove_window());
+            lock(&locked, 0o700);
         }
     }
 }

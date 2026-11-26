@@ -11,7 +11,7 @@ use std::{cell::RefCell, collections::HashMap};
 use wings_plugin::{
     host::{self, Stage},
     task::spawn,
-    ui::{self, Entry, Node, actions, button, column_page, confirm, entry, error_state, icon_button, icons, image, muted, notice, rows_card, section, select, setting, setting_field, setting_toggle, spinner, stack, text, toolbar},
+    ui::{self, Entry, Node, actions, button, column_page, confirm, dialog, entry, error_state, icon_button, icons, image, muted, notice, rows_card, section, select, setting, setting_field, setting_toggle, spinner, stack, text, toolbar},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -71,6 +71,8 @@ struct Page {
     /// What other browsers have, once the person asked to look (`look_in_browsers`): Wings reads their profiles only then.
     /// It is the page's own, so reading the added extensions again (after an add, a remove or a switch) leaves it be.
     installed: Option<Vec<Installed>>,
+    /// Beside the list: what macOS wouldn't let Wings read of the other browsers (a newer Wings sends it with what it did find).
+    refused: Option<String>,
     /// Looking in the other browsers is under way.
     looking: bool,
     /// Why the last look found nothing: shown with Try again, never as an empty list.
@@ -110,8 +112,14 @@ fn parse_added(answer: &Value) -> (bool, Vec<Extension>) {
     (answer["supported"].as_bool().unwrap_or_default(), added)
 }
 
+/// The host answers a list, or `{ extensions, refused }` when some browser's folder was refused.
+fn parse_refused(answer: &Value) -> Option<String> {
+    answer["refused"].as_str().map(str::to_owned)
+}
+
 fn parse_installed(answer: &Value) -> Vec<Installed> {
-    answer
+    let list = if answer.is_array() { answer } else { &answer["extensions"] };
+    list
         .as_array()
         .map(Vec::as_slice)
         .unwrap_or_default()
@@ -182,11 +190,14 @@ fn look_in_browsers() {
     }
     with(|page| page.look_failed = None);
     spawn(async {
-        let listed = host::web_extensions_installed().await.map(|answer| parse_installed(&answer));
+        let listed = host::web_extensions_installed().await.map(|answer| (parse_installed(&answer), parse_refused(&answer)));
         with(|page| {
             page.looking = false;
             match listed {
-                Ok(installed) => page.installed = Some(installed),
+                Ok((installed, refused)) => {
+                    page.installed = Some(installed);
+                    page.refused = refused;
+                }
                 Err(error) => page.look_failed = Some(error),
             }
         });
@@ -388,7 +399,8 @@ fn from_browsers(page: &Page, loaded: &Extensions) -> Vec<Node> {
     let others = not_added(installed, &loaded.added);
     if others.is_empty() {
         let line = if installed.is_empty() { "No extensions found in your other browsers" } else { "Everything your other browsers have is already added" };
-        return vec![section("From your browsers", None, [rows_card([entry(Entry { lead: None, title: muted(line), detail: None, trailing: None })])])];
+        let card = section("From your browsers", None, [rows_card([entry(Entry { lead: None, title: muted(line), detail: None, trailing: None })])]);
+        return std::iter::once(card).chain(page.refused.as_deref().map(|why| notice("warn", why))).collect();
     }
     let rows = others.into_iter().map(|extension| {
         let source = extension.source.clone();
@@ -400,7 +412,20 @@ fn from_browsers(page: &Page, loaded: &Extensions) -> Vec<Node> {
         })
         .key(extension.source.as_str())
     });
-    vec![section("From your browsers", Some("Extensions you already use in another browser on this Mac."), [rows_card(rows)])]
+    let list = section("From your browsers", Some("Extensions you already use in another browser on this Mac."), [rows_card(rows)]);
+    std::iter::once(list).chain(page.refused.as_deref().map(|why| notice("warn", why))).collect()
+}
+
+/// Asks before an added extension goes, as a dialog over the page wherever the page is scrolled to.
+fn remove_dialog(page: &Page) -> Option<Node> {
+    let extension = page.removing.as_ref().and_then(|id| page.extensions.as_ref()?.as_ref().ok()?.added.iter().find(|extension| &extension.id == id))?;
+    let id = extension.id.clone();
+    let cancel = || with(|page| page.removing = None);
+    Some(
+        dialog(&format!("Remove {}?", extension.name), 420, cancel)
+            .child(muted("Its settings and data go with it."))
+            .child(actions(Some(button("Cancel", "ghost", false, cancel)), [button("Remove", "destructive", false, move || remove(&id))])),
+    )
 }
 
 fn extensions(page: &Page) -> Vec<Node> {
@@ -422,12 +447,6 @@ fn extensions(page: &Page) -> Vec<Node> {
         ));
     }
     out.extend(from_browsers(page, loaded));
-    let removing = page.removing.as_ref().and_then(|id| loaded.added.iter().find(|extension| &extension.id == id));
-    if let Some(extension) = removing {
-        let id = extension.id.clone();
-        let buttons = actions(Some(button("Cancel", "ghost", false, || with(|page| page.removing = None))), [button("Remove", "destructive", false, move || remove(&id))]);
-        out.push(confirm(format!("Remove {}?", extension.name), [muted("Its settings and data go with it.")], [buttons]));
-    }
     out
 }
 
@@ -474,7 +493,7 @@ fn view() -> Vec<Node> {
         let problem = (page.staged.is_none()).then(|| page.problem.as_deref().map(|problem| notice("danger", problem))).flatten();
         let column = stack().prop("gap", "l").children([search, privacy]).maybe(ask).maybe(cleared).children(cookies(&page, keep, signins)).children(extensions(&page)).maybe(problem);
         let dialog = page.staged.as_ref().map(|staged| dialog_for(staged, page.adding, page.problem.as_deref(), cancel, add));
-        vec![column_page(toolbar("Browser", None), std::iter::once(column).chain(dialog))]
+        vec![column_page(toolbar("Browser", None), std::iter::once(column).chain(dialog).chain(remove_dialog(&page)))]
     })
 }
 
@@ -678,6 +697,44 @@ mod tests {
         check_again();
         wings_plugin::host::testing::settle();
         assert_eq!(asked.borrow().iter().filter(|action| *action == "checkAgain").count(), 1);
+    }
+
+    /// macOS refusing Chrome's folder was shown as "No extensions found": now it says what to turn on, with Try again.
+    #[test]
+    fn a_refused_browser_is_named_with_what_to_turn_on_not_shown_as_no_extensions() {
+        let why = "macOS doesn't let Wings read Chrome's extensions. Turn on Full Disk Access for Wings in System Settings, Privacy & Security, then try again.";
+        answer_host(Err(why.into()), vec![]);
+        load_extensions();
+        look_in_browsers();
+        wings_plugin::host::testing::settle();
+        let now = drawn();
+        for shown in ["Chrome's extensions", "Full Disk Access", "Try again"] {
+            assert!(now.contains(shown), "{shown} is not in {now}");
+        }
+        assert!(!now.contains("No extensions found"), "{now}");
+        // Some found and one refused: the list and a notice naming it.
+        answer_host(Ok(json!({ "extensions": found(&["uBlock"]), "refused": why })), vec![]);
+        look_in_browsers();
+        wings_plugin::host::testing::settle();
+        let now = drawn();
+        assert!(now.contains("uBlock") && now.contains("Chrome's extensions") && !now.contains("Couldn't look"), "{now}");
+    }
+
+    /// The question showed at the foot of the extensions, off screen on a long page: it is a dialog over the page.
+    #[test]
+    fn removing_an_extension_asks_in_a_dialog_with_cancel_and_remove() {
+        with(|page| {
+            page.extensions = Some(Ok(Extensions { supported: true, added: vec![Extension { id: "e1".into(), name: "Dark".into(), version: "1".into(), enabled: true, icon: None, error: None }], keychain: false }));
+            page.removing = None;
+        });
+        assert!(!drawn().contains("Remove Dark?"));
+        with(|page| page.removing = Some("e1".into()));
+        let now = drawn();
+        for shown in ["\"Dialog\"", "Remove Dark?", "Its settings and data go with it.", "\"Cancel\"", "\"destructive\""] {
+            assert!(now.contains(shown), "{shown} is not in {now}");
+        }
+        assert!(!now.contains("\"Confirm\""), "{now}");
+        with(|page| page.removing = None);
     }
 
     #[test]
