@@ -1952,7 +1952,7 @@ fn run_web(job: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, 
                     same_site: same_site(cookie),
                 })
                 .collect();
-            if let Err(why) = crate::web::note_imported(&profile, cookies.iter().map(|cookie| cookie.domain.clone())) {
+            if let Err(why) = crate::web::note_imported(&profile.dir, cookies.iter().map(|cookie| cookie.domain.clone())) {
                 let _ = answer.send(Err(why));
                 return;
             }

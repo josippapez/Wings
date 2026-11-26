@@ -90,7 +90,7 @@ fn a_tabs_web_page_shows_at_its_place_hides_with_the_tab_and_ends_with_it() {
     }
     // Where it is reaches the page's `onState`, as WebKit tells it.
     let state = State { url: "https://example.com/docs".into(), title: "Docs".into(), can_go_back: true, ..State::default() };
-    tells.borrow()[0](Heard::State(state));
+    tells.borrow()[0].tell(Heard::State(state));
     until(&app, &mut window, "the page never heard where its web view is", |_| {
         data.saved("browser", "browser-scope", "state")
             .is_some_and(|state| state["url"] == "https://example.com/docs" && state["canGoBack"] == true)
@@ -192,7 +192,7 @@ fn a_view_opens_in_a_window_of_its_own_with_its_args_shows_its_web_page_there_an
     assert_eq!(did.borrow()[0], Did::Made { name: Some("browser".into()), keep_data: true, url: Some("https://example.com/docs".into()) });
     assert_eq!(last_place(&did.borrow()), Some(true), "shown in its window: {:?}", did.borrow());
     // The page closes its own window (the Browser's Put back, once it has opened the address in a tab).
-    tells.borrow()[0](Heard::State(State::default()));
+    tells.borrow()[0].tell(Heard::State(State::default()));
     until(&app, &mut window, "the window stayed open", |w| w.plugin_ui.windows.is_empty());
     until(&app, &mut window, "its web page outlived its window", |_| did.borrow().last() == Some(&Did::Ended));
 }
@@ -229,4 +229,35 @@ fn a_page_runs_scripts_in_its_web_pages_only_with_its_own_permission() {
     assert!(!did.borrow().iter().any(|did| matches!(did, Did::Went(..))), "nothing ran: {:?}", did.borrow());
     window.update(|w, window, cx| assert!(w.open_plugin_view("scripter", "web", None, window, cx)));
     until(&app, &mut window, "the script never ran", |_| did.borrow().iter().any(|did| matches!(did, Did::Went(crate::page::tree::WebGo::Eval { .. }, 7))));
+}
+
+#[test]
+fn two_commands_sent_before_the_next_tree_both_run_in_order() {
+    let data = Data::temp();
+    let views = json!([{ "id": "web", "title": "Web", "page": "dist/web.html", "opens": ["tab"], "multiple": true }]);
+    let page = fake::script("web", || {
+        |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            if let Hear::Start = hear {
+                cx.render(&json!({ "id": 0, "type": "#root", "props": {}, "children": [{ "id": 1, "type": "WebView", "props": {
+                    "name": "main", "url": "https://example.com/", "fill": true,
+                    "command": [
+                        { "action": "load", "url": "https://example.com/a", "token": 1 },
+                        { "action": "reload", "token": 2 },
+                    ],
+                }, "children": [] }] }));
+            }
+        }
+    });
+    data.install_script("browser", json!({ "permissions": { "webView": true }, "contributes": { "views": views } }), &idle("main"), &[("web", &page)], "browser-scope");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let id = window.update(|_, window, _| window.window_handle().window_id());
+    let (did, _) = record(id);
+    window.update(|w, window, cx| assert!(w.open_plugin_view("browser", "web", None, window, cx)));
+    until(&app, &mut window, "the commands never ran", |_| did.borrow().iter().filter(|did| matches!(did, Did::Went(..))).count() == 2);
+    let went: Vec<_> = did.borrow().iter().filter_map(|did| match did {
+        Did::Went(go, token) => Some((go.clone(), *token)),
+        _ => None,
+    }).collect();
+    use crate::page::tree::WebGo;
+    assert_eq!(went, [(WebGo::Load("https://example.com/a".into()), 1), (WebGo::Reload, 2)]);
 }

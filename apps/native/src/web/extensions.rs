@@ -30,6 +30,10 @@ pub struct Added {
     /// The person allowed it in Wings' own dialog (`web::Ask`). Only one allowed is listed, and only one listed loads.
     #[serde(default)]
     pub allowed: bool,
+    /// The SHA-256 of its manifest as the person allowed it: one changed since (a folder edited behind Wings' back) asks
+    /// for what it asks now, which nobody allowed, so it doesn't load.
+    #[serde(default)]
+    pub manifest: Option<String>,
 }
 
 /// An extension to load: its id and folder.
@@ -86,7 +90,7 @@ fn save(profile: &Profile, list: &[Added]) -> Result<(), String> {
 pub fn enabled(profile: &Profile) -> Vec<Loadable> {
     list(profile)
         .into_iter()
-        .filter(|added| added.enabled && added.allowed)
+        .filter(|added| added.enabled && added.allowed && added.manifest.is_some() && added.manifest == manifest_hash(&installed_dir(profile, &added.id)))
         .map(|added| Loadable { dir: installed_dir(profile, &added.id), id: added.id })
         .collect()
 }
@@ -141,6 +145,7 @@ pub fn prepare(profile: &Profile, stage: &str) -> Result<(Added, PathBuf), Strin
         hosts: info.host_permissions,
         enabled: true,
         allowed: false,
+        manifest: None,
     };
     Ok((added, dir))
 }
@@ -148,8 +153,16 @@ pub fn prepare(profile: &Profile, stage: &str) -> Result<(Added, PathBuf), Strin
 /// Lists `added`, which the person allowed in Wings' dialog, on.
 pub fn keep(profile: &Profile, added: &Added) -> Result<(), String> {
     let mut list = list(profile);
-    list.push(Added { allowed: true, enabled: true, ..added.clone() });
+    let manifest = manifest_hash(&installed_dir(profile, &added.id));
+    list.push(Added { allowed: true, enabled: true, manifest, ..added.clone() });
     save(profile, &list)
+}
+
+/// The SHA-256 of the manifest in `dir`, as hex.
+fn manifest_hash(dir: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let bytes = fs::read(dir.join("manifest.json")).ok()?;
+    Some(Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 /// Lets go of the folder of `id`, readied (`prepare`) but not allowed.
@@ -254,9 +267,24 @@ mod tests {
         forget(&profile, &added.id);
         assert!(!dir.exists() && list(&profile).is_empty());
         // A list written by an older Wings, or by hand, with one never allowed: it stays off.
-        save(&profile, &[Added { allowed: false, enabled: false, ..added.clone() }]).unwrap();
+        save(&profile, &[Added { allowed: false, enabled: false, manifest: None, ..added.clone() }]).unwrap();
         assert!(set_enabled(&profile, &added.id, true).unwrap_err().contains("never allowed"));
         save(&profile, &[Added { allowed: false, enabled: true, ..added }]).unwrap();
+        assert!(enabled(&profile).is_empty());
+    }
+
+    #[test]
+    fn an_extension_whose_manifest_changed_since_it_was_allowed_doesnt_load() {
+        let (profile, temp) = profile();
+        let source = temp.path().join("unpacked");
+        extension(&source, "Blocker");
+        let staged = stage_path(&profile, &source).unwrap();
+        let (added, dir) = prepare(&profile, &staged.stage).unwrap();
+        keep(&profile, &added).unwrap();
+        assert_eq!(enabled(&profile).len(), 1);
+        // It now asks for every site, which nobody allowed.
+        let manifest = serde_json::json!({ "manifest_version": 3, "name": "Blocker", "version": "1.2", "host_permissions": ["<all_urls>"] });
+        fs::write(dir.join("manifest.json"), manifest.to_string()).unwrap();
         assert!(enabled(&profile).is_empty());
     }
 
@@ -271,6 +299,7 @@ mod tests {
         let mut forged = Added {
             id: "abc".into(), name: "x".into(), version: "1".into(), description: String::new(),
             icon: Some(PathBuf::from("../../../outside/manifest.json")), permissions: vec![], hosts: vec![], enabled: true, allowed: true,
+            manifest: None,
         };
         assert_eq!(icon_path(&profile, &forged), None);
         forged.icon = Some(PathBuf::from("/etc/passwd"));

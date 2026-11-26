@@ -17,7 +17,7 @@ mod views;
 pub mod mac;
 
 #[cfg(feature = "ui")]
-pub use views::{Heard, Spec, State, Told, forget_page, slot, sync, update};
+pub use views::{Heard, Spec, State, Tell, Told, forget_page, slot, sync, update};
 #[cfg(all(test, feature = "test-support"))]
 pub(crate) use views::testing;
 
@@ -68,22 +68,34 @@ pub const NO_SCRIPTS: &str = "This plugin may not read or act on the web pages i
 /// Why one didn't run on a page signed in with imported cookies.
 pub const IMPORTED: &str = "This page is signed in with cookies you imported, so no plugin reads or acts on it";
 
-/// Notes the sites whose cookies are about to be imported into `profile`, by their domains (never the cookies), so a
-/// plugin's script never runs in the page's own world there (`holds_imported`). Written before the cookies go in, and
-/// an import fails when it can't be: a cookie never goes where the note doesn't name it.
-pub fn note_imported(profile: &Profile, domains: impl IntoIterator<Item = String>) -> Result<(), String> {
-    let file = profile.dir.join("imported-sites.json");
-    let mut known = match std::fs::read(&file) {
-        Ok(bytes) => serde_json::from_slice::<std::collections::BTreeSet<String>>(&bytes).map_err(|error| format!("The list of imported sites is unreadable: {error}"))?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Default::default(),
-        Err(error) => return Err(format!("The list of imported sites is unreadable: {error}")),
+/// Notes the sites whose cookies are about to be imported into the profile in `profile_dir`, or that a sign-in carried
+/// over from one (`taint`), by their domains (never the cookies), so nothing of the plugin's reads or acts on them
+/// (`holds_imported`). Written before the cookies go in, and an import fails when it can't be: a cookie never goes where
+/// the note doesn't name it. What this run knows is kept even when the file can't be written.
+pub fn note_imported(profile_dir: &std::path::Path, domains: impl IntoIterator<Item = String>) -> Result<(), String> {
+    let mut known = match imported_sites(profile_dir) {
+        Some(known) => known,
+        None => return Err("The list of imported sites is unreadable".into()),
     };
-    known.extend(domains.into_iter().map(|domain| domain.trim_start_matches('.').to_ascii_lowercase()));
-    std::fs::create_dir_all(&profile.dir).map_err(|error| error.to_string())?;
+    known.extend(domains.into_iter().map(|domain| site(&domain)).filter(|domain| !domain.is_empty()));
+    IMPORTED_SITES.with_borrow_mut(|cache| cache.insert(profile_dir.to_path_buf(), Some(known.clone())));
+    std::fs::create_dir_all(profile_dir).map_err(|error| error.to_string())?;
     let json = serde_json::to_vec(&known).map_err(|error| error.to_string())?;
     // Written whole beside it and moved over, so a crash never leaves half a list.
-    let next = profile.dir.join("imported-sites.json.next");
+    let (file, next) = (profile_dir.join("imported-sites.json"), profile_dir.join("imported-sites.json.next"));
     std::fs::write(&next, json).and_then(|()| std::fs::rename(&next, &file)).map_err(|error| format!("Couldn't note the imported sites: {error}"))
+}
+
+/// Whether a main-frame navigation from the page at `from` to `to` (or a redirect's hop to it) starts from or passes
+/// through a site signed in with imported cookies, so where it ends may be signed in by it (a "Continue with" sign-in
+/// coming back).
+pub fn carries_imported(profile_dir: &std::path::Path, from: &str, to: &str) -> bool {
+    holds_imported(profile_dir, from) || holds_imported(profile_dir, to)
+}
+
+/// A domain or host as the list keeps it: lower case, with no leading dot (a cookie's) or trailing one (`github.com.`).
+fn site(domain: &str) -> String {
+    domain.trim_start_matches('.').trim_end_matches('.').to_ascii_lowercase()
 }
 
 /// Whether the page at `url` is on a site whose cookies were imported into `profile`: one signed in with them. A list
@@ -98,7 +110,7 @@ pub fn holds_imported(profile_dir: &std::path::Path, url: &str) -> bool {
 /// `holds_imported` for a host. One with no host (a frame of `about:`, `data:`, `blob:` or a `srcdoc`, whose origin
 /// says nothing of the site) counts as imported, as it may be on one.
 pub fn holds_imported_host(profile_dir: &std::path::Path, host: &str) -> bool {
-    let host = host.to_ascii_lowercase();
+    let host = site(host);
     if host.is_empty() {
         return true;
     }
@@ -108,14 +120,34 @@ pub fn holds_imported_host(profile_dir: &std::path::Path, host: &str) -> bool {
     }
 }
 
+thread_local! {
+    /// Each profile's list of imported sites, read once: a page's every console line asks, on the main thread.
+    static IMPORTED_SITES: std::cell::RefCell<std::collections::HashMap<std::path::PathBuf, Option<std::collections::BTreeSet<String>>>> =
+        std::cell::RefCell::default();
+}
+
 /// The domains of the sites whose cookies were imported into the profile in `profile_dir`: none when nothing was, and
 /// `None` when the list is there but can't be read, which counts as every site.
-fn imported_sites(profile_dir: &std::path::Path) -> Option<Vec<String>> {
-    match std::fs::read(profile_dir.join("imported-sites.json")) {
-        Ok(bytes) => serde_json::from_slice(&bytes).ok(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(Vec::new()),
-        Err(_) => None,
-    }
+fn imported_sites(profile_dir: &std::path::Path) -> Option<std::collections::BTreeSet<String>> {
+    IMPORTED_SITES.with_borrow_mut(|cache| {
+        cache
+            .entry(profile_dir.to_path_buf())
+            .or_insert_with(|| match std::fs::read(profile_dir.join("imported-sites.json")) {
+                Ok(bytes) => serde_json::from_slice(&bytes).ok(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(Default::default()),
+                Err(_) => None,
+            })
+            .clone()
+    })
+}
+
+/// The origin of `url` (`https://host:port`), which a page keeps as it moves about within itself (`pushState`, a
+/// `#`), or none.
+pub fn origin(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let authority = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    Some(format!("{}://{}", scheme.to_ascii_lowercase(), authority.to_ascii_lowercase()))
 }
 
 /// What an extension's add answers when the person didn't allow it.
@@ -158,6 +190,10 @@ impl Ask {
         if !self.permissions.is_empty() {
             let permissions: Vec<String> = self.permissions.iter().map(|permission| one_line(permission, 60)).collect();
             detail.push(format!("It asks for: {}.", permissions.join(", ")));
+        }
+        // With the cookies permission and sites, it reads the sign-ins you imported from another browser on those sites.
+        if self.permissions.iter().any(|permission| permission == "cookies") && !self.hosts.is_empty() {
+            detail.push("With cookies, it can read and use the sign-ins you imported from another browser on those sites.".into());
         }
         if detail.is_empty() {
             detail.push("It asks for no permissions.".into());
@@ -303,6 +339,8 @@ mod tests {
         assert!(!question.contains('\n') && !question.contains('\u{2028}') && question.chars().count() <= 100, "{question}");
         assert!(detail.starts_with("It can read and change everything on every website"));
         assert_eq!(ask(&[], &[]).words().1, "It asks for no permissions.");
+        assert!(ask(&["https://github.com/*"], &["cookies"]).words().1.contains("sign-ins you imported"));
+        assert!(!ask(&[], &["cookies"]).words().1.contains("sign-ins you imported"));
     }
 
     #[test]
@@ -353,7 +391,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let profile = Profile::of("browser", "s", &dir.path().join("plugin-storage"));
         assert!(!holds_imported(&profile.dir, "https://github.com/"));
-        note_imported(&profile, [".github.com".to_owned(), "Example.org".to_owned()]).unwrap();
+        note_imported(&profile.dir, [".github.com".to_owned(), "Example.org".to_owned()]).unwrap();
         for url in ["https://github.com/", "https://gist.github.com/x", "http://user@example.org:8080/a"] {
             assert!(holds_imported(&profile.dir, url), "{url}");
         }
@@ -363,10 +401,35 @@ mod tests {
         // A frame with no host of its own may be on any site.
         assert!(holds_imported_host(&profile.dir, "") && holds_imported_host(&profile.dir, "GIST.github.com"));
         assert!(!holds_imported_host(&profile.dir, "example.com"));
+        // A trailing dot is the same site.
+        assert!(holds_imported(&profile.dir, "https://github.com./x") && holds_imported_host(&profile.dir, "Example.org."));
         // A list it can't read names every site, and no import goes in past it.
         std::fs::write(profile.dir.join("imported-sites.json"), b"{not json").unwrap();
+        IMPORTED_SITES.with_borrow_mut(|cache| cache.clear());
         assert!(holds_imported(&profile.dir, "https://anything.example/"));
-        assert!(note_imported(&profile, ["a.com".to_owned()]).is_err());
+        assert!(note_imported(&profile.dir, ["a.com".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn a_sign_in_that_passes_through_an_imported_site_taints_where_it_lands() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = Profile::of("browser", "s", &dir.path().join("plugin-storage"));
+        note_imported(&profile.dir, ["github.com".to_owned()]).unwrap();
+        // From a plain site to GitHub's sign-in, and from there back: both carry it.
+        assert!(carries_imported(&profile.dir, "https://app.example/", "https://github.com/login/oauth"));
+        assert!(carries_imported(&profile.dir, "https://github.com/login/oauth", "https://app.example/callback?code=1"));
+        assert!(!carries_imported(&profile.dir, "https://app.example/", "https://app.example/next"));
+        // Where it landed counts from then on.
+        note_imported(&profile.dir, ["app.example".to_owned()]).unwrap();
+        assert!(holds_imported(&profile.dir, "https://app.example/inbox"));
+    }
+
+    #[test]
+    fn a_page_moving_within_itself_keeps_its_origin() {
+        assert_eq!(origin("https://App.example.com:8443/a?b#c"), Some("https://app.example.com:8443".into()));
+        assert_eq!(origin("https://app.example.com/inbox"), origin("https://app.example.com/inbox/42"));
+        assert_ne!(origin("https://app.example.com/"), origin("https://evil.example/"));
+        assert_eq!(origin("about:blank"), None);
     }
 
     #[test]

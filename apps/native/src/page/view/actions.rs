@@ -126,7 +126,7 @@ impl PageView {
                 name: web.name.clone().into(),
                 url: web.url.clone(),
                 keep_data: web.keep_data,
-                command: web.command.clone(),
+                commands: web.commands.clone(),
             })
             .collect();
         crate::web::update(cx.entity_id(), &profile, &specs, told, self.web_scripts);

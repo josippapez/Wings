@@ -36,7 +36,7 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use super::{
     Profile,
-    views::{Heard, Maker, Native, State, make_with},
+    views::{Heard, Maker, Native, State, Tell, make_with},
 };
 use crate::page::tree::WebGo;
 
@@ -59,6 +59,10 @@ thread_local! {
     static SHARED: RefCell<HashMap<(Profile, bool), Rc<Shared>>> = RefCell::default();
     /// Each profile's extensions loaded now, by their id, to unload one turned off or removed.
     static LOADED: RefCell<HashMap<(Profile, bool, String), Retained<WKWebExtensionContext>>> = RefCell::default();
+    /// The extensions WebKit is reading now, and how many times each was unloaded, so a read that ends after an unload
+    /// loads nothing.
+    static LOADING: RefCell<std::collections::HashSet<(Profile, bool, String)>> = RefCell::default();
+    static UNLOADS: RefCell<HashMap<(Profile, String), u64>> = RefCell::default();
 }
 
 /// Whether this Mac runs macOS `major.minor` or newer. By the system's version, not by WebKit's classes: those are
@@ -121,9 +125,20 @@ pub fn load(profile: &Profile, keep_data: bool, id: &str, dir: &Path, done: impl
         return done(Ok(()));
     };
     let Some(mtm) = MainThreadMarker::new() else { return };
+    let key = (profile.clone(), keep_data, id.to_owned());
+    // Once: a second load ran a second copy of it, which turning it off left running.
+    if LOADED.with_borrow(|loaded| loaded.contains_key(&key)) || !LOADING.with_borrow_mut(|loading| loading.insert(key.clone())) {
+        return done(Ok(()));
+    }
+    let unloads = UNLOADS.with_borrow(|unloads| unloads.get(&(profile.clone(), id.to_owned())).copied().unwrap_or(0));
     let url = NSURL::fileURLWithPath(&NSString::from_str(&dir.to_string_lossy()));
     let (profile, id) = (profile.clone(), id.to_owned());
     let loaded = RcBlock::new(move |extension: *mut WKWebExtension, error: *mut NSError| {
+        LOADING.with_borrow_mut(|loading| loading.remove(&(profile.clone(), keep_data, id.clone())));
+        // Turned off or removed while WebKit read it: it doesn't load after all.
+        if UNLOADS.with_borrow(|unloads| unloads.get(&(profile.clone(), id.clone())).copied().unwrap_or(0)) != unloads {
+            return done(Err("It was turned off before it loaded".into()));
+        }
         // SAFETY: WebKit hands one of the two, alive for the call.
         let Some(extension) = (unsafe { extension.as_ref() }) else {
             let why = unsafe { error.as_ref() }.map(|error| error.localizedDescription().to_string());
@@ -132,6 +147,8 @@ pub fn load(profile: &Profile, keep_data: bool, id: &str, dir: &Path, done: impl
         // SAFETY: WebKit's own objects on the main thread, where its completion handlers run.
         let result = unsafe {
             let context = WKWebExtensionContext::contextForExtension(extension);
+            // Its storage stays its own across runs, by its id here.
+            context.setUniqueIdentifier(&NSString::from_str(&id));
             for permission in extension.requestedPermissions().iter() {
                 context.setPermissionStatus_forPermission(WKWebExtensionContextPermissionStatus::GrantedExplicitly, &permission);
             }
@@ -154,6 +171,7 @@ pub fn load(profile: &Profile, keep_data: bool, id: &str, dir: &Path, done: impl
 
 /// Unloads the extension `id` from every web view of `profile`.
 pub fn unload(profile: &Profile, id: &str) {
+    UNLOADS.with_borrow_mut(|unloads| *unloads.entry((profile.clone(), id.to_owned())).or_default() += 1);
     for keep_data in [true, false] {
         let Some(context) = LOADED.with_borrow_mut(|loaded| loaded.remove(&(profile.clone(), keep_data, id.to_owned()))) else {
             continue;
@@ -212,21 +230,35 @@ pub fn set_cookies(profile: &Profile, keep_data: bool, cookies: &[Cookie], done:
     let jar = unsafe { shared(profile, keep_data, mtm).store.httpCookieStore() };
     let made: Vec<Retained<NSHTTPCookie>> = cookies.iter().filter_map(cookie).collect();
     let left = Rc::new(std::cell::Cell::new(made.len()));
-    let (count, done) = (made.len(), Rc::new(done));
-    if count == 0 {
+    let done = Rc::new(done);
+    if made.is_empty() {
         return done(0);
     }
+    // What the store holds after, not what was handed to it: it may refuse one (a domain it won't take).
+    let wanted: Rc<std::collections::HashSet<(String, String, String)>> = Rc::new(made.iter().map(|made| key_of(made)).collect());
     for made in made {
-        let (left, done) = (left.clone(), done.clone());
+        let (left, done, store, wanted) = (left.clone(), done.clone(), jar.clone(), wanted.clone());
         let block = RcBlock::new(move || {
             left.set(left.get() - 1);
             if left.get() == 0 {
-                done(count);
+                let (done, wanted) = (done.clone(), wanted.clone());
+                let counted = RcBlock::new(move |all: std::ptr::NonNull<NSArray<NSHTTPCookie>>| {
+                    // SAFETY: the store's cookies, which WebKit hands over for the call.
+                    let all = unsafe { all.as_ref() };
+                    done(all.iter().filter(|kept| wanted.contains(&key_of(kept))).count());
+                });
+                // SAFETY: a block WebKit calls once on the main thread.
+                unsafe { store.getAllCookies(&counted) };
             }
         });
         // SAFETY: a cookie made just now, and a block WebKit calls once on the main thread.
         unsafe { jar.setCookie_completionHandler(&made, Some(&block)) };
     }
+}
+
+/// A cookie by its domain, name and path, which is what makes one cookie in a store.
+fn key_of(cookie: &NSHTTPCookie) -> (String, String, String) {
+    (cookie.domain().to_string(), cookie.name().to_string(), cookie.path().to_string())
 }
 
 fn cookie(cookie: &Cookie) -> Option<Retained<NSHTTPCookie>> {
@@ -272,7 +304,7 @@ fn cookie(cookie: &Cookie) -> Option<Retained<NSHTTPCookie>> {
 struct WebKit;
 
 impl Maker for WebKit {
-    fn make(&self, profile: &Profile, keep_data: bool, scripts: bool, url: Option<&str>, told: Rc<dyn Fn(Heard)>) -> Box<dyn Native> {
+    fn make(&self, profile: &Profile, keep_data: bool, scripts: bool, url: Option<&str>, told: Tell) -> Box<dyn Native> {
         let mtm = MainThreadMarker::new().expect("web views are made on the main thread");
         let shared = shared(profile, keep_data, mtm);
         // SAFETY: WebKit's objects, made and used on the main thread.
@@ -295,8 +327,9 @@ impl Maker for WebKit {
                 configuration.userContentController().addUserScript(&script);
             }
             let view = WKWebView::initWithFrame_configuration(WKWebView::alloc(mtm), NSRect::ZERO, &configuration);
-            // So a plugin author can look at a page with Safari's Web Inspector, as in any app with a web view.
-            view.setInspectable(true);
+            // So a plugin's author can look at a page with Safari's Web Inspector, in a build of their own only: a release
+            // build's pages, signed in as they may be, aren't open to it.
+            view.setInspectable(cfg!(debug_assertions));
             view.setHidden(true);
             view
         };
@@ -336,7 +369,7 @@ impl Maker for WebKit {
 struct WebPage {
     view: Retained<WKWebView>,
     observer: Retained<Observer>,
-    told: Rc<dyn Fn(Heard)>,
+    told: Tell,
     /// Where its snapshots are saved, in its plugin's web folder, and that folder.
     shots: std::path::PathBuf,
     web_dir: std::path::PathBuf,
@@ -410,10 +443,11 @@ impl Native for WebPage {
                 let frame = frame.is_none_or(|host| super::holds_imported_host(&self.web_dir, &host));
                 (frame || super::holds_imported(&self.web_dir, &committed), true)
             }
-            _ => (super::holds_imported(&self.web_dir, &committed), !loading && committed == url),
+            // A page moving about within itself (`pushState`, a `#`) keeps its origin, and is the same page to act on.
+            _ => (super::holds_imported(&self.web_dir, &committed), !loading && super::origin(&committed) == super::origin(&url)),
         };
         if let Err(why) = super::gate(go, self.scripts, imported, settled) {
-            return (self.told)(Heard::Result { token, result: Err(why.into()) });
+            return self.told.tell(Heard::Result { token, result: Err(why.into()) });
         }
         // SAFETY: the web view's own calls, on the main thread.
         unsafe {
@@ -441,7 +475,7 @@ impl Native for WebPage {
                             (Some(value), None) => json_of(value),
                             (None, None) => Ok(serde_json::Value::Null),
                         };
-                        told(Heard::Result { token, result });
+                        told.tell(Heard::Result { token, result });
                     });
                     self.view.callAsyncJavaScript_arguments_inFrame_inContentWorld_completionHandler(&NSString::from_str(script), None, None, &world, Some(&done));
                 }
@@ -449,23 +483,34 @@ impl Native for WebPage {
                     let answered = self.observer.answer(*accept, text.as_deref());
                     self.observer.tell(&self.view);
                     let result = if answered { Ok(serde_json::Value::Null) } else { Err("The page shows no dialog".into()) };
-                    (self.told)(Heard::Result { token, result });
+                    self.told.tell(Heard::Result { token, result });
                 }
                 WebGo::Logs => {
                     let logs = self.observer.ivars().logs.borrow();
                     let of = |kind: &str| logs.iter().filter(|line| line["kind"] == kind).cloned().collect::<Vec<_>>();
                     let result = Ok(serde_json::json!({ "console": of("console"), "network": of("network") }));
-                    (self.told)(Heard::Result { token, result });
+                    self.told.tell(Heard::Result { token, result });
                 }
                 WebGo::Snapshot => {
-                    let (told, shots) = (self.told.clone(), self.shots.clone());
+                    let (told, shots, observer, web_dir) = (self.told.clone(), self.shots.clone(), self.observer.clone(), self.web_dir.clone());
+                    let sent = observer.ivars().generation.get();
                     let done = RcBlock::new(move |image: *mut NSImage, error: *mut NSError| {
-                        let result = match (image.as_ref(), error.as_ref()) {
-                            (Some(image), _) => png_of(image).and_then(|png| super::snapshot::save(&shots, &png)),
+                        // As a script's answer: none of a page that came while it was taken, or one signed in with imports.
+                        let moved = observer.ivars().generation.get() != sent;
+                        let imported = super::holds_imported(&web_dir, &observer.ivars().committed.borrow());
+                        let picture = match (image.as_ref(), error.as_ref()) {
+                            _ if moved => Err(MOVED_ON.to_owned()),
+                            _ if imported => Err(super::IMPORTED.to_owned()),
+                            (Some(image), _) => png_of(image),
                             (None, Some(error)) => Err(error.localizedDescription().to_string()),
                             (None, None) => Err("WebKit made no picture".into()),
                         };
-                        told(Heard::Result { token, result });
+                        // Scaled and written off the main thread: a big picture took the window's frames with it.
+                        let (told, shots) = (told.clone(), shots.clone());
+                        std::thread::spawn(move || {
+                            let result = picture.and_then(|png| super::snapshot::save(&shots, &png));
+                            told.tell(Heard::Result { token, result });
+                        });
                     });
                     // The part of the page that shows: WebKit takes no more than the view's bounds.
                     self.view.takeSnapshotWithConfiguration_completionHandler(None, &done);
@@ -541,7 +586,7 @@ fn gpui_view(window: &Window) -> Option<Retained<NSView>> {
 }
 
 struct Ivars {
-    told: Rc<dyn Fn(Heard)>,
+    told: Tell,
     told_last: RefCell<Option<State>>,
     /// Why the last page failed, until another starts.
     error: RefCell<Option<String>>,
@@ -553,6 +598,10 @@ struct Ivars {
     dialog_frame: RefCell<Option<String>>,
     /// Counts the main frame's new pages, so a script's answer that a new page overtook is thrown away.
     generation: std::cell::Cell<u64>,
+    /// The main frame's navigation under way started from or passed through a site signed in with imported cookies.
+    chain_tainted: std::cell::Cell<bool>,
+    /// The dialogs of the page now: its generation, how many it showed, and whether the person stopped them.
+    dialogs: std::cell::Cell<(u64, u32, bool)>,
     /// Wings' own sheet showing the page's dialog, and its text field for a prompt.
     sheet: RefCell<Option<(Retained<NSAlert>, Option<Retained<NSTextField>>)>>,
     /// The page's dialog that waits for an answer, and what it shows.
@@ -612,10 +661,10 @@ define_class!(
                 (url, action.targetFrame().is_none_or(|frame| frame.isMainFrame()))
             };
             let allowed = super::may_navigate(&url, main_frame);
-            // A new page starts with no logs: none of the last page's are read on this one's watch.
-            if allowed && main_frame {
-                self.ivars().logs.borrow_mut().clear();
-                self.ivars().generation.set(self.ivars().generation.get() + 1);
+            // A page reached from a site signed in with imported cookies, or through one (a sign-in's redirects), may be
+            // signed in by it: it counts as imported once it commits (`committed`).
+            if allowed && main_frame && super::carries_imported(&self.ivars().web_dir, &self.ivars().committed.borrow(), &url) {
+                self.ivars().chain_tainted.set(true);
             }
             let policy = if allowed { WKNavigationActionPolicy::Allow } else { WKNavigationActionPolicy::Cancel };
             decide.call((policy,));
@@ -626,7 +675,16 @@ define_class!(
         fn committed(&self, view: &WKWebView, _navigation: Option<&WKNavigation>) {
             // SAFETY: the view's address, on the main thread.
             let url = unsafe { view.URL() }.and_then(|url| url.absoluteString()).map(|url| url.to_string()).unwrap_or_default();
+            if self.ivars().chain_tainted.replace(false)
+                && let Some(host) = super::origin(&url).and_then(|origin| origin.split_once("://").map(|(_, host)| host.split(':').next().unwrap_or_default().to_owned()))
+            {
+                // Kept for this run even when it can't be written down (`note_imported`).
+                let _ = super::note_imported(&self.ivars().web_dir, [host]);
+            }
             self.ivars().committed.replace(url);
+            // A new page starts with no logs, and a script or a picture of the last one is thrown away. Only here: a jump to
+            // a `#` in the same page is no new page.
+            self.ivars().logs.borrow_mut().clear();
             self.ivars().generation.set(self.ivars().generation.get() + 1);
         }
 
@@ -639,13 +697,10 @@ define_class!(
     unsafe impl WKScriptMessageHandler for Observer {
         #[unsafe(method(userContentController:didReceiveScriptMessage:))]
         fn heard(&self, _controller: &WKUserContentController, message: &WKScriptMessage) {
-            // SAFETY: the message's frame and body, on the main thread: what the page posted, which is the page's word only.
-            let (frame, body) = unsafe {
-                let frame = message.frameInfo().request().URL().and_then(|url| url.absoluteString()).map(|url| url.to_string());
-                (frame.unwrap_or_default(), message.body())
-            };
-            // Nothing from a site signed in with imported cookies, a frame on one included.
-            if super::holds_imported(&self.ivars().web_dir, &frame) {
+            // SAFETY: the message's frame's origin and body, on the main thread: what the page posted, its word only.
+            let (host, body) = unsafe { (message.frameInfo().securityOrigin().host().to_string(), message.body()) };
+            // Nothing from a site signed in with imported cookies, or a frame with no host of its own.
+            if super::holds_imported_host(&self.ivars().web_dir, &host) {
                 return;
             }
             let Some(body) = body.downcast_ref::<NSDictionary>() else { return };
@@ -725,7 +780,7 @@ define_class!(
 );
 
 impl Observer {
-    fn new(told: Rc<dyn Fn(Heard)>, web_dir: std::path::PathBuf, mtm: MainThreadMarker) -> Retained<Self> {
+    fn new(told: Tell, web_dir: std::path::PathBuf, mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(Ivars {
             told,
             told_last: RefCell::new(None),
@@ -737,6 +792,8 @@ impl Observer {
             committed: RefCell::default(),
             dialog_frame: RefCell::new(None),
             generation: std::cell::Cell::new(0),
+            chain_tainted: std::cell::Cell::new(false),
+            dialogs: std::cell::Cell::new((0, 0, false)),
         });
         // SAFETY: NSObject's `init`.
         unsafe { msg_send![super(this), init] }
@@ -763,11 +820,21 @@ impl Observer {
         self.ivars().dialog_frame.replace(frame_url);
         let prompt = matches!(pending, Pending::Prompt(_));
         self.ivars().pending.replace(Some((pending, dialog)));
-        self.show_sheet(view, kind, shown, prompt);
+        // A page whose dialogs the person stopped, or one not on screen (a tab behind another), gets Cancel at once:
+        // a sheet would hold the whole window for a page nobody looks at, and `while (true) alert()` would never end.
+        let (generation, count, stopped) = self.ivars().dialogs.get();
+        let count = if generation == self.ivars().generation.get() { count + 1 } else { 1 };
+        let stopped = stopped && generation == self.ivars().generation.get();
+        self.ivars().dialogs.set((self.ivars().generation.get(), count, stopped));
+        if stopped || view.isHidden() || view.window().is_none() {
+            self.resolve(false, None);
+        } else {
+            self.show_sheet(view, kind, shown, prompt, count > 1);
+        }
         self.tell(view);
     }
 
-    fn show_sheet(&self, view: &WKWebView, kind: &str, (site, message, default): (String, String, Option<String>), prompt: bool) {
+    fn show_sheet(&self, view: &WKWebView, kind: &str, (site, message, default): (String, String, Option<String>), prompt: bool, offer_stop: bool) {
         let (Some(mtm), Some(window)) = (MainThreadMarker::new(), view.window()) else { return };
         let alert = NSAlert::new(mtm);
         let site = if site.is_empty() { "This page".to_owned() } else { site };
@@ -783,9 +850,20 @@ impl Observer {
             alert.setAccessoryView(Some(&field));
             field
         });
-        let (this, typed, page) = (self.retain(), field.clone(), view.retain());
+        // From a page's second dialog on, the person can stop its dialogs for as long as it stays.
+        if offer_stop {
+            alert.setShowsSuppressionButton(true);
+            if let Some(stop) = alert.suppressionButton() {
+                stop.setTitle(&NSString::from_str("Stop dialogs from this page"));
+            }
+        }
+        let (this, typed, page, asked) = (self.retain(), field.clone(), view.retain(), alert.clone());
         let answered = RcBlock::new(move |response: NSModalResponse| {
             this.ivars().sheet.replace(None);
+            if asked.suppressionButton().is_some_and(|stop| stop.state() == 1) {
+                let (generation, count, _) = this.ivars().dialogs.get();
+                this.ivars().dialogs.set((generation, count, true));
+            }
             // NSAlertFirstButtonReturn, OK, is 1000.
             let text = typed.as_ref().map(|field| field.stringValue().to_string());
             this.resolve(response == 1000, text.as_deref());
@@ -852,11 +930,12 @@ impl Observer {
                 can_go_forward: view.canGoForward(),
                 error: self.ivars().error.borrow().clone(),
                 dialog: self.ivars().pending.borrow().as_ref().map(|(_, dialog)| dialog.clone()),
+                imported: super::holds_imported(&self.ivars().web_dir, &self.ivars().committed.borrow()),
             }
         };
         if self.ivars().told_last.borrow().as_ref() != Some(&state) {
             self.ivars().told_last.replace(Some(state.clone()));
-            (self.ivars().told)(Heard::State(state));
+            self.ivars().told.tell(Heard::State(state));
         }
     }
 }

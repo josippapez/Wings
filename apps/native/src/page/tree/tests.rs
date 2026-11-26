@@ -1023,7 +1023,7 @@ fn a_web_view_loads_only_web_addresses_and_takes_each_command_by_its_token() {
             id: 1,
             name: "main".into(),
             url: Some("https://example.com/".into()),
-            command: Some(WebCommand { go: WebGo::Load("http://localhost:5173/".into()), token: 3 }),
+            commands: vec![WebCommand { go: WebGo::Load("http://localhost:5173/".into()), token: 3 }],
             keep_data: true,
             height: 400.0,
             fill: true,
@@ -1039,7 +1039,7 @@ fn a_web_view_loads_only_web_addresses_and_takes_each_command_by_its_token() {
     ]))
     .unwrap();
     let go = |at: usize| match &scripted.children[at] {
-        Node::WebView(web) => (web.command.clone().map(|command| command.go), web.on_result.clone()),
+        Node::WebView(web) => (web.commands.first().cloned().map(|command| command.go), web.on_result.clone()),
         other => panic!("not a web view: {other:?}"),
     };
     assert_eq!(go(0), (Some(WebGo::Eval { script: "return document.title".into(), page: false }), Some("1:result".into())), "in a world of the plugin's own unless it asks for the page's");
@@ -1053,7 +1053,7 @@ fn a_web_view_loads_only_web_addresses_and_takes_each_command_by_its_token() {
     ]))
     .unwrap();
     let go = |at: usize| match &answered.children[at] {
-        Node::WebView(web) => web.command.clone().map(|command| command.go),
+        Node::WebView(web) => web.commands.first().cloned().map(|command| command.go),
         other => panic!("not a web view: {other:?}"),
     };
     assert_eq!(go(0), Some(WebGo::Dialog { accept: true, text: Some("Ana".into()) }));
@@ -1061,10 +1061,10 @@ fn a_web_view_loads_only_web_addresses_and_takes_each_command_by_its_token() {
     assert_eq!(go(2), Some(WebGo::Logs));
     // A file or a script never loads, by the start address or a command; a name too long to be a key is none.
     let refused = web(1);
-    assert_eq!((refused.name.as_str(), refused.url, refused.command, refused.keep_data, refused.height), ("", None, None, false, 4000.0));
-    assert_eq!((web(2).url, web(2).command), (None, Some(WebCommand { go: WebGo::Back, token: 1 })));
+    assert_eq!((refused.name.as_str(), refused.url, refused.commands, refused.keep_data, refused.height), ("", None, vec![], false, 4000.0));
+    assert_eq!((web(2).url, web(2).commands), (None, vec![WebCommand { go: WebGo::Back, token: 1 }]));
     // A command without a token would run on every tree, so it is none.
-    assert_eq!((web(3).url.as_deref(), web(3).command), (Some("about:blank"), None));
+    assert_eq!((web(3).url.as_deref(), web(3).commands), (Some("about:blank"), vec![]));
     assert_eq!(web_address(" HTTPS://Example.com "), Some("HTTPS://Example.com".into()));
     // A control character would end the address early in some parser along the way.
     assert_eq!(web_address("https://a.com/\u{7}"), None);

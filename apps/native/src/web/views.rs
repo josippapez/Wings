@@ -17,7 +17,7 @@ pub struct Spec {
     pub name: SharedString,
     pub url: Option<String>,
     pub keep_data: bool,
-    pub command: Option<WebCommand>,
+    pub commands: Vec<WebCommand>,
 }
 
 /// Where a web view is, which its page hears with `onState`.
@@ -33,6 +33,9 @@ pub struct State {
     pub error: Option<String>,
     /// The `alert`, `confirm` or `prompt` the page waits on, which a `dialog` command answers.
     pub dialog: Option<Dialog>,
+    /// The page is on a site signed in with imported cookies: its plugin shows its address, and tells no agent more than
+    /// its origin.
+    pub imported: bool,
 }
 
 /// A page's `alert`, `confirm` or `prompt`, and the site that shows it, which its plugin's page shows as its own.
@@ -56,6 +59,19 @@ pub enum Heard {
 /// A web view's page hears what it does through this: the view's name and what it heard.
 pub type Told = async_channel::Sender<(SharedString, Heard)>;
 
+/// How one web view tells its page, from any thread (a snapshot is encoded off the main one).
+#[derive(Clone)]
+pub struct Tell {
+    told: Told,
+    name: SharedString,
+}
+
+impl Tell {
+    pub fn tell(&self, heard: Heard) {
+        let _ = self.told.try_send((self.name.clone(), heard));
+    }
+}
+
 /// The engine's view of one web view, or a stand-in in tests.
 pub trait Native {
     /// Shows it at `frame`, the window's points from its top left, in `window`, or hides it for `None`.
@@ -68,7 +84,7 @@ pub trait Native {
 /// only the places.
 pub trait Maker {
     /// `scripts`: the plugin may run scripts in its pages, so the page's console and requests are kept for `logs`.
-    fn make(&self, profile: &Profile, keep_data: bool, scripts: bool, url: Option<&str>, told: Rc<dyn Fn(Heard)>) -> Box<dyn Native>;
+    fn make(&self, profile: &Profile, keep_data: bool, scripts: bool, url: Option<&str>, told: Tell) -> Box<dyn Native>;
 }
 
 struct Entry {
@@ -80,7 +96,7 @@ struct Entry {
     native: Option<Box<dyn Native>>,
     /// What the page asked before the engine's view was made, done once it is, with each command's token.
     waiting: Vec<(WebGo, u64)>,
-    /// The token of the last command done, so each runs once.
+    /// The token of the last command done, so each runs once: a page's tokens only grow.
     token: Option<u64>,
     /// Where it shows now, and in which window.
     shown: Option<Bounds<Pixels>>,
@@ -130,9 +146,11 @@ pub fn update(page: EntityId, profile: &Profile, specs: &[Spec], told: &Told, sc
                 shown: None,
                 window: None,
             });
-            if let Some(command) = &spec.command
-                && entry.token != Some(command.token)
-            {
+            // In the order sent, each past the last one run.
+            for command in &spec.commands {
+                if entry.token.is_some_and(|done| command.token <= done) {
+                    continue;
+                }
                 entry.token = Some(command.token);
                 // Whether it may at all; WebKit's side checks the page it is on as it runs (`gate`).
                 if let Err(why) = super::gate(&command.go, scripts, false, true) {
@@ -206,11 +224,7 @@ pub fn place(window: &Window, _: &App) {
                 .filter(|at| !at.is_empty() && !covers.iter().any(|cover| cover.intersects(at)));
             if entry.native.is_none() {
                 let (Some(maker), Some(_)) = (&maker, at) else { continue };
-                let told = entry.told.clone();
-                let key = name.clone();
-                let tell: Rc<dyn Fn(Heard)> = Rc::new(move |heard| {
-                    let _ = told.try_send((key.clone(), heard));
-                });
+                let tell = Tell { told: entry.told.clone(), name: name.clone() };
                 let mut native = maker.make(&entry.profile, entry.keep_data, entry.scripts, entry.url.as_deref(), tell);
                 for (go, token) in entry.waiting.drain(..) {
                     native.go(&go, token);
@@ -248,7 +262,7 @@ pub(crate) mod testing {
     pub struct Record {
         pub did: Rc<RefCell<Vec<Did>>>,
         /// What each view made tells its page, by the order they were made in.
-        pub tells: Rc<RefCell<Vec<Rc<dyn Fn(Heard)>>>>,
+        pub tells: Rc<RefCell<Vec<Tell>>>,
     }
 
     struct Fake(Rc<RefCell<Vec<Did>>>);
@@ -269,7 +283,7 @@ pub(crate) mod testing {
     }
 
     impl Maker for Record {
-        fn make(&self, profile: &Profile, keep_data: bool, _: bool, url: Option<&str>, told: Rc<dyn Fn(Heard)>) -> Box<dyn Native> {
+        fn make(&self, profile: &Profile, keep_data: bool, _: bool, url: Option<&str>, told: Tell) -> Box<dyn Native> {
             self.did.borrow_mut().push(Did::Made { name: Some(profile.plugin.clone()), keep_data, url: url.map(str::to_owned) });
             self.tells.borrow_mut().push(told);
             Box::new(Fake(self.did.clone()))
@@ -277,7 +291,7 @@ pub(crate) mod testing {
     }
 
     /// Records the web views of the window `id`: what was done to them, and how to tell their pages.
-    pub fn record(id: WindowId) -> (Rc<RefCell<Vec<Did>>>, Rc<RefCell<Vec<Rc<dyn Fn(Heard)>>>>) {
+    pub fn record(id: WindowId) -> (Rc<RefCell<Vec<Did>>>, Rc<RefCell<Vec<Tell>>>) {
         let record = Record::default();
         let did = record.did.clone();
         let tells = record.tells.clone();

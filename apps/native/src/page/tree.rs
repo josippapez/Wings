@@ -354,14 +354,16 @@ pub struct Terminal {
 
 /// A web page drawn by the system's web engine where the node is, for a plugin whose manifest asks for `webView`. Wings
 /// keeps the engine's view by `name` while the page sends the node, so a new tree never loads the page again: `url` is
-/// only where it starts, and `command` (each new `token` once, as `scrollTo`) loads, goes back or forward, reloads or
-/// stops. `onState` hears where it is: `{ url, title, loading, canGoBack, canGoForward, error }`.
+/// only where it starts, and `command` (one, or a list of them in the order sent, each run once: those whose `token` is
+/// past the last one run) loads, goes back or forward, reloads or stops. A list lets a page send two before its next
+/// tree goes out (an agent's step and a click) without dropping one. `onState` hears where it is: `{ url, title,
+/// loading, canGoBack, canGoForward, error }`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WebView {
     pub id: u64,
     pub name: String,
     pub url: Option<String>,
-    pub command: Option<WebCommand>,
+    pub commands: Vec<WebCommand>,
     /// `keepData: false` keeps its cookies and site data only while Wings runs, in a store apart from the kept one.
     pub keep_data: bool,
     pub height: f32,
@@ -397,6 +399,9 @@ pub enum WebGo {
 
 /// The most bytes of a script an `eval` command runs: a page's helper, not a library.
 const WEB_SCRIPT_MAX: usize = 256 * 1024;
+
+/// The most commands a `WebView` takes in one tree.
+const WEB_COMMANDS_MAX: usize = 32;
 
 /// The most characters of a `WebView`'s `name`, which is a key and never shown.
 const WEB_NAME_MAX: usize = 64;
@@ -1650,7 +1655,11 @@ impl Walk {
                 id,
                 name: str_prop(&props, "name").filter(|name| name.len() <= WEB_NAME_MAX).unwrap_or_default().to_owned(),
                 url: str_prop(&props, "url").and_then(web_address),
-                command: props.get("command").and_then(web_command),
+                commands: match props.get("command") {
+                    Some(Value::Array(list)) => list.iter().take(WEB_COMMANDS_MAX).filter_map(web_command).collect(),
+                    Some(one) => web_command(one).into_iter().collect(),
+                    None => Vec::new(),
+                },
                 keep_data: props.get("keepData") != Some(&Value::Bool(false)),
                 height: number(&props, "height").unwrap_or(400.0).clamp(80.0, 4000.0) as f32,
                 fill: on("fill"),

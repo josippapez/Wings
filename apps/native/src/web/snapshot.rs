@@ -23,7 +23,10 @@ pub fn save(dir: &Path, png: &[u8]) -> Result<Value, String> {
     };
     std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis();
-    let path = dir.join(format!("{now}.png"));
+    // Two in the same millisecond (two pages at once) each keep their own.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let next = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = dir.join(format!("{now}x{next}.png"));
     image.save_with_format(&path, image::ImageFormat::Png).map_err(|error| error.to_string())?;
     prune(dir);
     Ok(json!({ "path": path, "width": image.width(), "height": image.height() }))
@@ -73,6 +76,7 @@ mod tests {
         let saved = save(&shots, &png(3200, 1000)).unwrap();
         assert_eq!((saved["width"].as_u64(), saved["height"].as_u64()), (Some(1600), Some(500)), "the long side at 1600");
         let small = save(&shots, &png(390, 844)).unwrap();
+        assert_ne!(small["path"], saved["path"], "each its own file");
         assert_eq!((small["width"].as_u64(), small["height"].as_u64()), (Some(390), Some(844)), "never scaled up");
         let path = saved["path"].as_str().unwrap();
         assert_eq!(attach(&web, path).unwrap()["mimeType"], "image/png");
