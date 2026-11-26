@@ -15,16 +15,16 @@ const IN_PLACE: &str = "motion in place";
 /// The places that step in place, by file under `src`, the function they are in and what they are, and why each may.
 const ALLOWED: &[(&str, &str, &str, &str)] = &[
     (
-        "page/view.rs",
+        "page/view/text.rs",
         "text_element",
         REPEATING,
         "a `since` in a page no piece puts on screen with the layers (in a window of its own, under its own dialog) counts in place, once a second",
     ),
-    ("page/view.rs", "text_element", IN_PLACE, "the same page's shimmer pulses in place"),
-    ("page/view.rs", "node", REPEATING, "the same page's spinner turns in place"),
-    ("page/view.rs", "node", IN_PLACE, "the same page's working dot turns in place"),
+    ("page/view/text.rs", "text_element", IN_PLACE, "the same page's shimmer pulses in place"),
+    ("page/view/node.rs", "node", REPEATING, "the same page's spinner turns in place"),
+    ("page/view/node.rs", "node", IN_PLACE, "the same page's working dot turns in place"),
     (
-        "page/view.rs",
+        "page/view/layout.rs",
         "empty",
         IN_PLACE,
         "known: the empty chat's glow steps its page 10 times a second; next, it moves to a layer",
