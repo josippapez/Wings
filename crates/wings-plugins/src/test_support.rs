@@ -26,6 +26,7 @@ pub(crate) fn plugin(dir: &Path, exec: &[&str], transcript: &[&str]) -> Plugin {
                 ..Default::default()
             },
             contributes: Contributes::default(),
+            starts_off: false,
         },
         dir: dir.to_path_buf(),
         icon_svg: None,

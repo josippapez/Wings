@@ -166,8 +166,9 @@ impl Store {
         let dev = self.dev.contains(id);
         Some(PluginView {
             manifest: plugin.manifest.clone(),
-            // Dev plugins start on; everything else starts off until you approve it.
-            enabled: entry.map_or(dev, |e| e.enabled),
+            // Dev plugins start on, unless their manifest says they start off; everything else starts off until you
+            // approve it.
+            enabled: entry.map_or(dev && !plugin.manifest.starts_off, |e| e.enabled),
             approved: dev || entry.and_then(|e| e.approved.as_ref()) == Some(&Grant::of(&plugin.manifest)),
             source: entry.map(|e| e.source.clone()),
             icon_svg: plugin.icon_svg.clone(),
@@ -796,6 +797,28 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("wings-store-{}-{}", std::process::id(), new_scope()));
         fs::create_dir_all(&dir).unwrap();
         (Store::load(dir.join("plugins"), dir.join("plugins.json"), None), dir)
+    }
+
+    #[test]
+    fn a_dev_plugin_whose_manifest_says_it_starts_off_waits_to_be_turned_on() {
+        let dir = std::env::temp_dir().join(format!("wings-store-dev-{}-{}", std::process::id(), new_scope()));
+        for (id, starts_off) in [("browser", true), ("hud", false)] {
+            let folder = dir.join("dev").join(id);
+            fs::create_dir_all(&folder).unwrap();
+            let mut m = serde_json::json!({ "id": id, "name": id, "version": "1.0.0", "api": 1, "main": "main.js" });
+            if starts_off {
+                m["startsOff"] = serde_json::json!(true);
+            }
+            fs::write(folder.join("wings-plugin.json"), m.to_string()).unwrap();
+            fs::write(folder.join("main.js"), "").unwrap();
+        }
+        let mut s = Store::load(dir.join("plugins"), dir.join("plugins.json"), Some(&dir.join("dev")));
+        assert!(s.active("hud").is_some(), "Wings' own plugins start on in a dev build");
+        assert!(s.active("browser").is_none(), "but not one that says it starts off");
+        let shown = Grant::of(&s.plugins["browser"].manifest);
+        s.set_enabled("browser", true, Some(shown)).unwrap();
+        assert!(s.active("browser").is_some());
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

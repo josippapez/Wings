@@ -17,6 +17,16 @@ pub fn may_read_pane_output(plugin: &Plugin) -> bool {
     plugin.manifest.permissions.pane_output
 }
 
+/// Whether the plugin's pages may show web pages, keep their site data and add browser extensions.
+pub fn may_show_web_views(plugin: &Plugin) -> bool {
+    plugin.manifest.permissions.web_view
+}
+
+/// Whether the plugin may import another browser's cookies into its web views' store, on the user's click.
+pub fn may_import_browser_cookies(plugin: &Plugin) -> bool {
+    plugin.manifest.permissions.browser_cookies
+}
+
 /// Whether the plugin may read what an OpenCode session is doing.
 /// Whether the plugin's `callTools` names this tool, or every tool of its plugin.
 pub fn may_call_tool(plugin: &Plugin, target: &str, tool: &str) -> bool {
@@ -148,6 +158,25 @@ mod tests {
         assert!(!may_read_statusline(&manifest(serde_json::json!({}))));
         assert!(!may_read_statusline(&manifest(serde_json::json!({ "transcript": ["assistant"] }))));
         assert!(may_read_statusline(&manifest(serde_json::json!({ "statusline": true }))));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn web_views_and_cookie_imports_each_need_their_permission() {
+        let dir = std::env::temp_dir().join(format!("wings-web-view-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("main.js"), "").unwrap();
+        let manifest = |permissions: Value| {
+            let m = serde_json::json!({ "id": "t", "name": "T", "version": "1", "api": 1, "main": "main.js", "permissions": permissions });
+            fs::write(dir.join("wings-plugin.json"), m.to_string()).unwrap();
+            load(&dir).unwrap()
+        };
+        let none = manifest(serde_json::json!({ "openUrl": ["https://"], "fetch": ["https://example.com/"] }));
+        assert!(!may_show_web_views(&none) && !may_import_browser_cookies(&none));
+        // Showing pages is not reading another browser's cookies: each is its own line in the approval.
+        let web = manifest(serde_json::json!({ "webView": true }));
+        assert!(may_show_web_views(&web) && !may_import_browser_cookies(&web));
+        assert!(may_import_browser_cookies(&manifest(serde_json::json!({ "webView": true, "browserCookies": true }))));
         let _ = fs::remove_dir_all(&dir);
     }
 

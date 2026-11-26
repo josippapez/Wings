@@ -74,6 +74,13 @@ pub struct Permissions {
     pub open_views: Vec<String>,
     /// Events from other plugins the plugin hears with `wings.onEvent`: `<plugin> <event>`, like `pr-tracker pr-state`.
     pub events: Vec<String>,
+    /// Lets the plugin's pages show web pages (a `WebView` node, drawn by WebKit over the page), keep their cookies and
+    /// site data in a store of the plugin's own, and add browser extensions you pick, with `wings.webData` and
+    /// `wings.webExtensions`.
+    pub web_view: bool,
+    /// Lets the plugin copy the cookies of another browser on this Mac into its web views' store when you start an
+    /// import, with `wings.browserCookies`. That signs its pages in wherever that browser is, so the approval says so.
+    pub browser_cookies: bool,
 }
 
 /// What a plugin adds to Wings, shown in the manager. The host refuses UI calls a plugin didn't declare.
@@ -332,6 +339,10 @@ pub struct Manifest {
     pub permissions: Permissions,
     #[serde(default)]
     pub contributes: Contributes,
+    /// Starts off even where Wings' own plugins start on (a dev build's `plugins/`), for one that only some people want,
+    /// like the Browser: it waits for you to turn it on in Settings, Plugins.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub starts_off: bool,
 }
 
 #[derive(Clone)]
