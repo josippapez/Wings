@@ -202,6 +202,9 @@ fn title_row(issue: &Issue) -> Node {
 
 /// One property of the column, quiet: its muted name on the left, its value beside it and one small icon button at the end.
 /// The name lines up with the value's first line, so a value of several lines doesn't float it in the middle.
+/// Width of the slot a status dot or an icon is centred in, so the values beside them line up.
+const MARK_SLOT: u32 = 16;
+
 fn prop(label: &str, actions: Option<Node>, content: Vec<Node>) -> Node {
     row("s")
         .prop("align", "start")
@@ -444,7 +447,11 @@ fn properties(issue: &Issue, issues: &[Issue], project: &Project, narrow: bool) 
     let priority_options: Vec<(String, String)> = Priority::NAMES.iter().map(|n| ((*n).to_owned(), priority_name(Priority::parse(n)).to_owned())).collect();
     let type_options = options(&IssueType::ALL, IssueType::as_str, IssueType::label);
     let picked = |label: &'static str, dot: Node, options: Vec<(String, String)>, value: &str, on_change: Box<dyn Fn(&str)>| {
-        prop(label, None, vec![row("s").child(dot).child(select(label, &options, value, move |v| on_change(v)).prop("variant", "ghost"))])
+        // The mark sits centred in a slot of one width so the three values start at the same x; the label centres on the select, whose own padding lifts its text.
+        row("s")
+            .prop("align", "center")
+            .child(ui_column(NAME_WIDTH).child(line(label, Some("muted"), Some("small"))))
+            .child(row("s").prop("align", "center").prop("grow", true).child(ui_column(MARK_SLOT).child(row("none").prop("justify", "center").child(dot))).child(select(label, &options, value, move |v| on_change(v)).prop("variant", "ghost")))
     };
     let mut sessions: Vec<_> = issue.sessions.iter().collect();
     sessions.sort_by(|a, b| b.seen.total_cmp(&a.seen));
