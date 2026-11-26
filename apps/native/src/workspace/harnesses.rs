@@ -31,30 +31,30 @@ pub(super) struct Checks {
 /// What a row says under the name, and its dot's color, as the desktop's `state`.
 fn state(h: &HarnessStatus) -> (String, u32) {
     if !h.installed {
-        return ("Not installed".into(), theme::IDLE);
+        return ("Not installed".into(), theme::idle());
     }
     match h.auth {
         Auth::SignedIn => (
             h.account
                 .as_ref()
                 .map_or("Signed in".into(), |a| format!("Signed in · {a}")),
-            theme::DONE,
+            theme::done(),
         ),
-        Auth::SignedOut => ("Not signed in".into(), theme::WORKING),
+        Auth::SignedOut => ("Not signed in".into(), theme::working()),
         Auth::Unknown => (
             h.note.clone().unwrap_or_else(|| "Installed".into()),
-            theme::IDLE,
+            theme::idle(),
         ),
     }
 }
 
 fn glyph(h: &HarnessStatus) -> AnyElement {
     let mark = match h.id.as_str() {
-        "claude" => Some((Icon::Claude, theme::CLAUDE)),
-        "opencode" => Some((Icon::Opencode, theme::FOREGROUND)),
-        "codex" => Some((Icon::Codex, theme::FOREGROUND)),
-        "cursor" => Some((Icon::Cursor, theme::FOREGROUND)),
-        "grok" => Some((Icon::Grok, theme::FOREGROUND)),
+        "claude" => Some((Icon::Claude, theme::claude())),
+        "opencode" => Some((Icon::Opencode, theme::foreground())),
+        "codex" => Some((Icon::Codex, theme::foreground())),
+        "cursor" => Some((Icon::Cursor, theme::foreground())),
+        "grok" => Some((Icon::Grok, theme::foreground())),
         _ => None,
     };
     match mark {
@@ -132,7 +132,7 @@ impl Workspace {
                 .flex()
                 .items_center()
                 .gap(px(6.0))
-                .child(icon(Icon::RefreshCw, 14.0, theme::MUTED_FOREGROUND))
+                .child(icon(Icon::RefreshCw, 14.0, theme::muted_foreground()))
                 .child(if checks.checking {
                     "Checking…"
                 } else {
@@ -240,7 +240,7 @@ impl Workspace {
                                         .truncate()
                                         .font_family(crate::terminal_view::DEFAULT_FONT_FAMILY)
                                         .text_size(px(11.0))
-                                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                                        .text_color(rgb(theme::muted_foreground()))
                                         .child(version),
                                 )
                             }),
@@ -251,7 +251,7 @@ impl Workspace {
                             .items_center()
                             .gap(px(6.0))
                             .text_size(px(12.0))
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .text_color(rgb(theme::muted_foreground()))
                             .child(ui::dot(tone))
                             .child(div().min_w_0().truncate().child(text)),
                     ),
@@ -316,11 +316,11 @@ mod tests {
     fn each_row_says_what_the_desktop_says() {
         assert_eq!(
             state(&status(false, Auth::Unknown, None, None)),
-            ("Not installed".into(), theme::IDLE)
+            ("Not installed".into(), theme::idle())
         );
         assert_eq!(
             state(&status(true, Auth::SignedIn, Some("ChatGPT"), None)),
-            ("Signed in · ChatGPT".into(), theme::DONE)
+            ("Signed in · ChatGPT".into(), theme::done())
         );
         assert_eq!(
             state(&status(true, Auth::SignedIn, None, None)).0,
@@ -328,7 +328,7 @@ mod tests {
         );
         assert_eq!(
             state(&status(true, Auth::SignedOut, None, None)),
-            ("Not signed in".into(), theme::WORKING)
+            ("Not signed in".into(), theme::working())
         );
         assert_eq!(
             state(&status(

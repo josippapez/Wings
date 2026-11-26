@@ -23,8 +23,12 @@ use crate::{
 use super::{Active, HAIRLINE, Workspace, context_menu::MenuTarget, project::SIDEBAR_ACCENT, sidebar::{AgentKey, Scale}};
 
 /// The desktop's `bg-blocked/10` behind an agent that needs you, and `/15` on hover.
-const BLOCKED_ROW: u32 = theme::BLOCKED << 8 | 0x1a;
-const BLOCKED_ROW_HOVER: u32 = theme::BLOCKED << 8 | 0x26;
+fn blocked_row() -> u32 {
+    theme::blocked() << 8 | 0x1a
+}
+fn blocked_row_hover() -> u32 {
+    theme::blocked() << 8 | 0x26
+}
 
 impl Workspace {
     /// The agents in the order they were made (terminals', then tabs', then those coming back), or nothing
@@ -83,7 +87,7 @@ impl Workspace {
                         .line_height(scale.px(18.0))
                         .text_size(scale.px(12.0))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                        .text_color(rgb(theme::muted_foreground()))
                         .child("Agents")
                         .child(count.to_string()),
                 )
@@ -156,11 +160,11 @@ impl Workspace {
             .cursor_pointer()
             .when(focused, |row| row.bg(rgba(SIDEBAR_ACCENT)))
             .when(!focused && !blocked, |row| {
-                row.hover(|style| style.bg(rgba(theme::HOVER)))
+                row.hover(|style| style.bg(rgba(theme::hover())))
             })
             .when(blocked, |row| {
-                row.bg(rgba(BLOCKED_ROW))
-                    .hover(|style| style.bg(rgba(BLOCKED_ROW_HOVER)))
+                row.bg(rgba(blocked_row()))
+                    .hover(|style| style.bg(rgba(blocked_row_hover())))
             })
             .on_click(cx.listener(move |this, _, window, cx| match at {
                 At::Pane(pane) => this.go_to_pane(path.clone(), pane, window, cx),
@@ -215,7 +219,7 @@ impl Workspace {
                             .min_w_0()
                             .text_size(scale.px(11.0))
                             .line_height(scale.px(16.0))
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .text_color(rgb(theme::muted_foreground()))
                             .child(div().min_w_0().truncate().child(format!("{project},")))
                             .child(crate::ui::status_dot_slot(agent.state, slot))
                             .child(div().min_w_0().truncate().child(status(agent))),
@@ -227,7 +231,7 @@ impl Workspace {
                             .truncate()
                             .text_size(scale.px(11.0))
                             .line_height(scale.px(16.0))
-                            .text_color(rgba(theme::MUTED_FOREGROUND << 8 | 0xb3))
+                            .text_color(rgba(theme::muted_foreground() << 8 | 0xb3))
                             .children(crate::ui::spot(|| summary_spot))
                             .child(summary)
                     })),
@@ -292,8 +296,8 @@ impl Workspace {
             .rounded(px(theme::RADIUS))
             .cursor_pointer()
             .when(shown, |row| row.bg(rgba(SIDEBAR_ACCENT)))
-            .when(!shown && !blocked, |row| row.hover(|style| style.bg(rgba(theme::HOVER))))
-            .when(blocked, |row| row.bg(rgba(BLOCKED_ROW)).hover(|style| style.bg(rgba(BLOCKED_ROW_HOVER))))
+            .when(!shown && !blocked, |row| row.hover(|style| style.bg(rgba(theme::hover()))))
+            .when(blocked, |row| row.bg(rgba(blocked_row())).hover(|style| style.bg(rgba(blocked_row_hover()))))
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.switch_project(path.clone(), window, cx);
                 this.reveal_project(&path);
@@ -329,7 +333,7 @@ impl Workspace {
                             .min_w_0()
                             .text_size(scale.px(11.0))
                             .line_height(scale.px(16.0))
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .text_color(rgb(theme::muted_foreground()))
                             .child(div().min_w_0().truncate().child(format!("{project},")))
                             .child(crate::ui::status_dot_slot(state, format!("tab-agent-{tab}")))
                             .child(div().min_w_0().truncate().child(status)),
@@ -340,7 +344,7 @@ impl Workspace {
                             .truncate()
                             .text_size(scale.px(11.0))
                             .line_height(scale.px(16.0))
-                            .text_color(rgba(theme::MUTED_FOREGROUND << 8 | 0xb3))
+                            .text_color(rgba(theme::muted_foreground() << 8 | 0xb3))
                             .child(summary)
                     })),
             )
@@ -466,10 +470,10 @@ impl Workspace {
             .map_or_else(|| path.to_string_lossy().into_owned(), |p| p.name.clone());
         let status = phase.label();
         let (glyph, color) = match phase {
-            Phase::Resuming => (Icon::RotateCcwClock, theme::WORKING),
-            Phase::Failed => (Icon::CircleX, theme::BLOCKED),
+            Phase::Resuming => (Icon::RotateCcwClock, theme::working()),
+            Phase::Failed => (Icon::CircleX, theme::blocked()),
             Phase::Restored | Phase::Sleeping | Phase::Mounting(_) => {
-                (Icon::CircleDotDashed, theme::MUTED_FOREGROUND)
+                (Icon::CircleDotDashed, theme::muted_foreground())
             }
         };
         let resuming = phase == Phase::Resuming;
@@ -488,7 +492,7 @@ impl Workspace {
             .cursor_pointer()
             .when(focused == Some(pane), |row| row.bg(rgba(SIDEBAR_ACCENT)))
             .when(focused != Some(pane), |row| {
-                row.hover(|style| style.bg(rgba(theme::HOVER)))
+                row.hover(|style| style.bg(rgba(theme::hover())))
             })
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.go_to_pane(path.clone(), pane, window, cx)
@@ -514,7 +518,7 @@ impl Workspace {
                                 .min_w_0().flex_1()
                                 .text_size(scale.px(13.0))
                                 .font_weight(FontWeight::MEDIUM)
-                                .when(!resuming, |name| name.text_color(rgb(theme::MUTED_FOREGROUND))))
+                                .when(!resuming, |name| name.text_color(rgb(theme::muted_foreground()))))
                             .child(agent_metadata(scale, format!("pending-agent-{pane}"), model, None)),
                     )
                     .child(
@@ -523,7 +527,7 @@ impl Workspace {
                             .truncate()
                             .text_size(scale.px(11.0))
                             .line_height(scale.px(16.0))
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .text_color(rgb(theme::muted_foreground()))
                             .child(format!("{project}, {status}")),
                     ),
             )
@@ -576,7 +580,7 @@ pub(super) fn account_badge(name: SharedString) -> Div {
         div().min_w_0().truncate().child(name),
     )
     .max_w(relative(0.5))
-    .text_color(rgb(theme::MUTED_FOREGROUND))
+    .text_color(rgb(theme::muted_foreground()))
 }
 
 /// The state stays still. Elapsed time has its own live slot at the row's right.
@@ -617,7 +621,7 @@ fn agent_metadata(scale: Scale, name: String, model: Option<String>, since: Opti
     div().flex_none().flex().items_center().gap(px(4.0))
         .text_size(scale.px(11.0)).line_height(scale.px(16.0))
         .font_family("Menlo").font_weight(FontWeight::NORMAL)
-        .text_color(rgb(theme::MUTED_FOREGROUND))
+        .text_color(rgb(theme::muted_foreground()))
         .children(model.map(|model| crate::ui::behaviors::cut_text("model", model).max_w(scale.px(58.0))))
         .children(since.map(|since| {
             let said = move || -> SharedString { age(since, now_ms()).into() };
@@ -644,9 +648,9 @@ pub(super) fn tab_state(state: &str) -> AgentState {
 /// An agent's icon and its color, as the desktop's `PaneIcon` draws it.
 fn glyph(kind: AgentKind) -> (Icon, u32) {
     match kind {
-        AgentKind::Claude => (Icon::Claude, theme::CLAUDE),
-        AgentKind::Opencode => (Icon::Opencode, theme::FOREGROUND),
-        _ => (Icon::Terminal, theme::FOREGROUND),
+        AgentKind::Claude => (Icon::Claude, theme::claude()),
+        AgentKind::Opencode => (Icon::Opencode, theme::foreground()),
+        _ => (Icon::Terminal, theme::foreground()),
     }
 }
 

@@ -221,12 +221,12 @@ impl Workspace {
                                 .to_string_lossy()
                         ),
                         "It starts in its folder once the drive is mounted.".into(),
-                        theme::MUTED_FOREGROUND,
+                        theme::muted_foreground(),
                     ),
                     None => (
                         "Couldn't start the terminal".to_owned(),
                         error.to_string(),
-                        theme::DANGER,
+                        theme::danger(),
                     ),
                 };
                 div()
@@ -282,7 +282,7 @@ impl Workspace {
             )
             .child(match state {
                 Some(state) => crate::ui::status_dot_slot(state, format!("pane-{pane}")),
-                None => icon(Icon::Terminal, 14.0, theme::MUTED_FOREGROUND).into_any_element(),
+                None => icon(Icon::Terminal, 14.0, theme::muted_foreground()).into_any_element(),
             })
             .map(|header| match renaming {
                 // Bordered like the desktop's InlineName, with its text where the title was.
@@ -291,7 +291,7 @@ impl Workspace {
                         .ml(px(-9.0))
                         .rounded(px(6.0))
                         .border_1()
-                        .border_color(rgba(theme::HAIRLINE_STRONG))
+                        .border_color(rgba(theme::hairline_strong()))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(field),
                 ),
@@ -309,9 +309,9 @@ impl Workspace {
                             gpui::FontWeight::MEDIUM
                         })
                         .text_color(rgb(if focused {
-                            theme::FOREGROUND
+                            theme::foreground()
                         } else {
-                            theme::SECONDARY_FOREGROUND
+                            theme::secondary_foreground()
                         }))
                         .tooltip(ui::tooltip(title.clone(), None))
                         .children(ui::spot(|| format!("pane-title:{pane}")))
@@ -327,7 +327,7 @@ impl Workspace {
                         .flex_shrink(100.0)
                         .truncate()
                         .text_size(px(12.0))
-                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                        .text_color(rgb(theme::muted_foreground()))
                         .children(ui::spot(|| format!("pane-detail:{pane}")))
                         .child(detail),
                 )
@@ -423,7 +423,7 @@ impl Workspace {
             .min_w_0()
             .min_h_0()
             .overflow_hidden()
-            .bg(rgb(theme::SURFACE))
+            .bg(rgb(theme::surface()))
             .child(header)
             .child(div().flex().flex_1().min_h_0().child(body))
             .children(strip)

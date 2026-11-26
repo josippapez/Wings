@@ -470,11 +470,11 @@ fn inline_with(id: impl Into<SharedString>, content: &Inline, open: Option<&Open
                 Style::Code => {
                     style.background_color = Some(rgba(CODE_BACKGROUND).into());
                 }
-                Style::Muted => style.color = Some(rgb(theme::MUTED_FOREGROUND).into()),
+                Style::Muted => style.color = Some(rgb(theme::muted_foreground()).into()),
             }
         }
         if content.links.iter().any(|(r, _)| covers(r)) {
-            style.color = Some(rgb(theme::INFO).into());
+            style.color = Some(rgb(theme::info()).into());
             style.underline = Some(UnderlineStyle {
                 thickness: px(1.0),
                 color: Some(hsla(0.0, 0.0, 0.0, 0.0)),
@@ -522,7 +522,7 @@ pub fn render_with(id: &str, blocks: &[Block], open: Option<&Opener>) -> AnyElem
         .gap(px(8.0))
         .text_size(px(13.0))
         .line_height(px(20.0))
-        .text_color(rgb(theme::FOREGROUND))
+        .text_color(rgb(theme::foreground()))
         .children(
             blocks
                 .iter()
@@ -558,7 +558,7 @@ fn block(id: &str, b: &Block, open: Option<&Opener>) -> AnyElement {
             .rounded(px(8.0))
             .bg(rgba(0xffffff0d))
             .border_1()
-            .border_color(rgba(theme::BORDER))
+            .border_color(rgba(theme::border()))
             .font_family(DEFAULT_FONT_FAMILY)
             .text_size(px(12.0))
             .line_height(px(18.0))
@@ -567,14 +567,14 @@ fn block(id: &str, b: &Block, open: Option<&Opener>) -> AnyElement {
         Block::Quote(inner) => div()
             .pl(px(12.0))
             .border_l_2()
-            .border_color(rgba(theme::HAIRLINE_STRONG))
-            .text_color(rgb(theme::MUTED_FOREGROUND))
+            .border_color(rgba(theme::hairline_strong()))
+            .text_color(rgb(theme::muted_foreground()))
             .child(render_with(id, inner, open))
             .into_any_element(),
         Block::Rule => div()
             .h(px(1.0))
             .my(px(4.0))
-            .bg(rgba(theme::HAIRLINE_STRONG))
+            .bg(rgba(theme::hairline_strong()))
             .into_any_element(),
         Block::List { start, items } => div()
             .flex()
@@ -594,7 +594,7 @@ fn block(id: &str, b: &Block, open: Option<&Opener>) -> AnyElement {
                             .flex_none()
                             .flex()
                             .justify_end()
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .text_color(rgb(theme::muted_foreground()))
                             .child(mark),
                     )
                     .child(div().min_w_0().flex_1().child(render_with(
@@ -609,11 +609,11 @@ fn block(id: &str, b: &Block, open: Option<&Opener>) -> AnyElement {
                 div()
                     .flex()
                     .border_t_1()
-                    .border_color(rgba(theme::BORDER))
+                    .border_color(rgba(theme::border()))
                     .when(header, |row| {
                         row.border_t_0()
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .text_color(rgb(theme::muted_foreground()))
                     })
                     .children(cells.iter().enumerate().map(|(c, cell)| {
                         div()
@@ -627,7 +627,7 @@ fn block(id: &str, b: &Block, open: Option<&Opener>) -> AnyElement {
             div()
                 .rounded(px(8.0))
                 .border_1()
-                .border_color(rgba(theme::BORDER))
+                .border_color(rgba(theme::border()))
                 .overflow_hidden()
                 .text_size(px(12.5))
                 .child(row(head, true, 0))

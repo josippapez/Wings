@@ -143,6 +143,10 @@ fn main() {
         .iter()
         .find(|scene| args.iter().any(|arg| arg == scene.flag))
         .unwrap_or(&SCENES[SCENES.len() - 1]);
+    // `--theme <name>` paints every scene in that colour theme, as Settings, Appearance would.
+    if let Some(name) = args.iter().skip_while(|arg| *arg != "--theme").nth(1) {
+        wings_native::theme::set(wings_native::theme::Theme::from_key(Some(name)), true);
+    }
     // The modules' compiled code is kept for the next run, which then loads it in place of compiling: Claude chat's took
     // 26 s to compile with the debug build's Cranelift, and 5 s with the optimised one.
     wings_native::page::runtime::wasm::keep_compiled_in(std::env::temp_dir().join("wings-test-cwasm"));
@@ -1086,7 +1090,7 @@ impl gpui::Render for ShotTab {
         gpui::div()
             .relative()
             .size_full()
-            .bg(gpui::rgb(wings_native::theme::BACKGROUND))
+            .bg(gpui::rgb(wings_native::theme::background()))
             // It starts each draw of the slots, as the workspace's does.
             .child(wings_native::ui::spinner_layer(window))
             .child(self.layer.clone())
@@ -1100,7 +1104,7 @@ impl gpui::Render for ShotTab {
                     .rounded(px(14.0))
                     .border_1()
                     .border_color(gpui::rgba(wings_native::ui::HAIRLINE))
-                    .when(slot.is_none(), |card| card.bg(gpui::rgb(wings_native::theme::SURFACE)))
+                    .when(slot.is_none(), |card| card.bg(gpui::rgb(wings_native::theme::surface())))
                     .children(slot)
                     .child(self.page.clone().cached(gpui::StyleRefinement::default().size_full())),
             )
@@ -1185,10 +1189,10 @@ esac"##,
     let ready = [
         answer("initialize", json!({
             "models": [
-                { "value": "default", "displayName": "Default (recommended)", "supportedEffortLevels": efforts },
-                { "value": "opus", "displayName": "Opus 5.5", "supportedEffortLevels": efforts, "resolvedModel": "claude-opus-5-5" },
-                { "value": "sonnet", "displayName": "Sonnet 5.5", "supportedEffortLevels": efforts },
-                { "value": "haiku", "displayName": "Haiku 5.5", "supportedEffortLevels": efforts },
+                { "value": "default", "displayName": "Default (recommended)", "description": "Use the default model (currently Opus 5.5)", "supportedEffortLevels": efforts },
+                { "value": "opus", "displayName": "Opus 5.5", "description": "Most capable for complex work", "supportedEffortLevels": efforts, "resolvedModel": "claude-opus-5-5" },
+                { "value": "sonnet", "displayName": "Sonnet 5.5", "description": "Best for everyday tasks", "supportedEffortLevels": efforts },
+                { "value": "haiku", "displayName": "Haiku 5.5", "description": "Fastest for quick answers", "supportedEffortLevels": efforts },
             ],
             "commands": [
                 { "name": "review", "description": "Review the changes on this branch", "argumentHint": "" },
@@ -2065,6 +2069,8 @@ esac"##,
         ("remote-menu", opened(vec![init.clone(), answer("remote-control", json!({ "session_url": "https://claude.ai/code/session_01", "bridge_session_id": "b1" }))]), None, Some("menu:Remote Control"), "Turn off Remote Control"),
         // The model and effort menu open over the message box.
         ("models", opened(vec![init.clone()]), None, Some("select:Model and effort"), "What should Claude do?"),
+        // The Effort row of that menu, opened: the levels the model takes, the one in use checked.
+        ("models-effort", opened(vec![init.clone()]), None, Some("select:Model and effort;click:170,686"), "What should Claude do?"),
         // A model with fast mode has its button by the model menu, and the output styles have a menu of their own.
         ("models-fast", fast, None, None, "What should Claude do?"),
         // Up twice from the empty box recalls the second newest of the prompts sent.
@@ -2729,6 +2735,16 @@ esac"##,
                             save(&mut cx, window, out.join(format!("claude-chat-{name}-midway-{width}.png")));
                         }
                         // The right button at a point of the page, after the pointer moved there.
+                        // A left click at a point of the window, like a menu row.
+                        Some(("click", at)) => {
+                            let (x, y) = at.split_once(',').unwrap();
+                            let position = point(px(x.parse().unwrap()), px(y.parse().unwrap()));
+                            cx.simulate_event(window, gpui::MouseMoveEvent { position, pressed_button: None, modifiers: gpui::Modifiers::default() });
+                            wait(&mut cx, window, Duration::from_millis(100));
+                            cx.simulate_event(window, gpui::MouseDownEvent { button: gpui::MouseButton::Left, position, modifiers: gpui::Modifiers::default(), click_count: 1, first_mouse: false });
+                            cx.simulate_event(window, gpui::MouseUpEvent { button: gpui::MouseButton::Left, position, modifiers: gpui::Modifiers::default(), click_count: 1 });
+                            wait(&mut cx, window, Duration::from_millis(100));
+                        }
                         Some(("rightclick", at)) => {
                             let (x, y) = at.split_once(',').unwrap();
                             let position = point(px(x.parse().unwrap()), px(y.parse().unwrap()));

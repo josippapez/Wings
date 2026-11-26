@@ -298,8 +298,8 @@ impl Workspace {
             })
             .aria_expanded(open)
             .when(open, |row| {
-                row.bg(rgba(theme::HOVER))
-                    .text_color(rgb(theme::FOREGROUND))
+                row.bg(rgba(theme::hover()))
+                    .text_color(rgb(theme::foreground()))
             })
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             // While the list is open, a click here lands on the layer that closes it.
@@ -318,7 +318,7 @@ impl Workspace {
                     } else {
                         0xffffff1a
                     }))
-                    .text_color(rgb(if accent { 0x17151a } else { theme::FOREGROUND }))
+                    .text_color(rgb(if accent { 0x17151a } else { theme::foreground() }))
                     .child(if unread > 99 {
                         "99+".to_string()
                     } else {
@@ -399,7 +399,7 @@ impl Workspace {
                 .child(
                     div()
                         .text_size(px(13.0))
-                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                        .text_color(rgb(theme::muted_foreground()))
                         .child("When an agent needs you or finishes, it shows up here."),
                 )
                 .into_any_element()
@@ -448,7 +448,7 @@ impl Workspace {
                         .border_1()
                         .border_color(rgba(0xece9e41a))
                         .bg(rgb(0x201d23))
-                        .text_color(rgb(theme::FOREGROUND))
+                        .text_color(rgb(theme::foreground()))
                         .shadow(vec![BoxShadow {
                             color: hsla(0.0, 0.0, 0.0, 0.3),
                             offset: point(px(0.0), px(4.0)),
@@ -475,7 +475,7 @@ impl Workspace {
     ) -> AnyElement {
         let id = event.id;
         let glyph = match event.kind {
-            Kind::Plugin => icon(Icon::Puzzle, 14.0, theme::MUTED_FOREGROUND).into_any_element(),
+            Kind::Plugin => icon(Icon::Puzzle, 14.0, theme::muted_foreground()).into_any_element(),
             Kind::Blocked => ui::status_dot(AgentState::Blocked).into_any_element(),
             Kind::Done => ui::status_dot(AgentState::Done).into_any_element(),
         };
@@ -537,7 +537,7 @@ impl Workspace {
                                 div()
                                     .flex_none()
                                     .text_size(px(11.0))
-                                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                                    .text_color(rgb(theme::muted_foreground()))
                                     .child(ago(now, event.at)),
                             ),
                     )
@@ -545,7 +545,7 @@ impl Workspace {
                         div()
                             .line_clamp(2)
                             .text_size(px(12.0))
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .text_color(rgb(theme::muted_foreground()))
                             .child(detail),
                     )
                     .when_some(event.pane, |entry, pane| {
@@ -646,7 +646,7 @@ fn xs_button(
         .rounded(px(6.0))
         .text_size(px(12.0))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(theme::MUTED_FOREGROUND))
+        .text_color(rgb(theme::muted_foreground()))
         .when(disabled, |button| {
             button.opacity(0.5).a11y_synthetic_children(|builder| {
                 builder.parent_node().set_disabled();
@@ -656,7 +656,7 @@ fn xs_button(
             button.cursor_pointer().hover(|style| {
                 style
                     .bg(rgba(0xffffff0f))
-                    .text_color(rgb(theme::FOREGROUND))
+                    .text_color(rgb(theme::foreground()))
             })
         })
         .child(label)

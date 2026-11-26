@@ -168,6 +168,6 @@ pub fn menu_separator() -> AnyElement {
         .mx(px(-4.0))
         .my(px(4.0))
         .h(px(1.0))
-        .bg(rgba(theme::BORDER))
+        .bg(rgba(theme::border()))
         .into_any_element()
 }

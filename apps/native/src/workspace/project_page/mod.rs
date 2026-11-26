@@ -446,8 +446,8 @@ impl ProjectPage {
                 .px(px(6.0))
                 .py(px(2.0))
                 .rounded(px(6.0))
-                .bg(rgba(theme::HOVER))
-                .child(icon(glyph, 14.0, theme::MUTED_FOREGROUND))
+                .bg(rgba(theme::hover()))
+                .child(icon(glyph, 14.0, theme::muted_foreground()))
                 .child(div().truncate().child(text))
         };
         let matches = self.matches();
@@ -495,7 +495,7 @@ impl ProjectPage {
                             .gap_x(px(6.0))
                             .gap_y(px(4.0))
                             .text_size(px(12.0))
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .text_color(rgb(theme::muted_foreground()))
                             .child(chip(Icon::Folder, self.path.clone()))
                             .children(self.branch.clone().map(|b| chip(Icon::GitBranch, b)))
                             .child(
@@ -526,14 +526,14 @@ impl ProjectPage {
                             .items_center()
                             .pl(px(8.0))
                             .rounded(px(8.0))
-                            .bg(rgba(theme::HOVER))
-                            .child(icon(Icon::Search, 14.0, theme::MUTED_FOREGROUND))
+                            .bg(rgba(theme::hover()))
+                            .child(icon(Icon::Search, 14.0, theme::muted_foreground()))
                             .child(self.search.clone()),
                     )
                     .children(status.map(|text| {
                         div()
                             .text_size(px(11.0))
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .text_color(rgb(theme::muted_foreground()))
                             .whitespace_nowrap()
                             .child(text)
                     })),
@@ -568,20 +568,20 @@ impl ProjectPage {
             .rounded_full()
             .border_1()
             .border_color(rgba(if always {
-                theme::HAIRLINE_STRONG
+                theme::hairline_strong()
             } else {
                 ui::HAIRLINE
             }))
-            .bg(rgb(theme::SURFACE))
+            .bg(rgb(theme::surface()))
             .text_size(px(11.0))
-            .text_color(rgb(theme::MUTED_FOREGROUND))
+            .text_color(rgb(theme::muted_foreground()))
             .cursor_pointer()
             .focusable()
             .when(!always && !open, |pill| {
                 pill.opacity(0.0)
                     .group_hover(group.clone(), |style| style.opacity(1.0))
             })
-            .hover(|style| style.text_color(rgb(theme::FOREGROUND)))
+            .hover(|style| style.text_color(rgb(theme::foreground())))
             .map(|pill| ui::behaviors::note_press(pill, format!("add-{index}"), open))
             .on_click({
                 let at = at.clone();
@@ -592,7 +592,7 @@ impl ProjectPage {
                     cx.notify();
                 })
             })
-            .child(icon(Icon::Plus, 12.0, theme::MUTED_FOREGROUND))
+            .child(icon(Icon::Plus, 12.0, theme::muted_foreground()))
             .child("Add");
         let can_block = blocks < MAX_BLOCKS;
         let mut items: Vec<AnyElement> = vec![
@@ -627,7 +627,7 @@ impl ProjectPage {
                     &block.icon,
                     block.icon_svg.as_deref(),
                     16.0,
-                    theme::MUTED_FOREGROUND,
+                    theme::muted_foreground(),
                 )),
                 &block.title,
                 can_block,
@@ -723,7 +723,7 @@ impl Render for ProjectPage {
             .rounded(px(14.0))
             .border_1()
             .border_color(rgba(ui::HAIRLINE))
-            .bg(rgb(theme::SURFACE))
+            .bg(rgb(theme::surface()))
             .overflow_hidden();
         let outer = div().size_full().px(px(8.0)).pb(px(8.0));
         let Some(data) = self.data.clone() else {
@@ -736,7 +736,7 @@ impl Render for ProjectPage {
                     panel
                         .p(px(24.0))
                         .text_size(px(13.0))
-                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                        .text_color(rgb(theme::muted_foreground()))
                         .child(note),
                 )
                 .into_any_element();
@@ -790,7 +790,7 @@ impl Render for ProjectPage {
                     .rounded(px(12.0))
                     .border_1()
                     .border_color(rgba(ui::HAIRLINE))
-                    .child(icon(Icon::StickyNote, 20.0, theme::MUTED_FOREGROUND))
+                    .child(icon(Icon::StickyNote, 20.0, theme::muted_foreground()))
                     .child(
                         div()
                             .text_size(px(14.0))
@@ -800,7 +800,7 @@ impl Render for ProjectPage {
                     .child(
                         div()
                             .text_size(px(12.5))
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .text_color(rgb(theme::muted_foreground()))
                             .child("Add a section or a plugin's block below, or ask Claude to keep what it learns here."),
                     )
                     .into_any_element(),
@@ -868,7 +868,7 @@ impl Render for ProjectPage {
                     .w_full()
                     .max_w(px(768.0))
                     .text_size(px(12.0))
-                    .text_color(rgb(theme::DANGER))
+                    .text_color(rgb(theme::danger()))
                     .child(error)
                     .into_any_element(),
             );

@@ -237,9 +237,9 @@ impl PageView {
             .overflow_hidden()
             .when(
                 (focused && index == cursor) || index as i64 == graph.selected,
-                |el| el.bg(rgba(theme::HOVER_STRONG)),
+                |el| el.bg(rgba(theme::hover_strong())),
             )
-            .hover(|s| s.bg(rgba(theme::HOVER)));
+            .hover(|s| s.bg(rgba(theme::hover())));
         let Some(row) = row else {
             return element.child("Loading…").into_any_element();
         };

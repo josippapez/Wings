@@ -363,7 +363,7 @@ impl PageView {
             Node::Page(page) => page.backdrop,
             _ => None,
         })?;
-        Some((kind, drawn.palette.unwrap_or(theme::Palette::APP)))
+        Some((kind, drawn.palette.unwrap_or(theme::Palette::app())))
     }
 
     pub fn set_visible(&self, visible: bool) {
@@ -910,6 +910,8 @@ impl PageView {
     fn toggle_menu(&mut self, id: u64, cx: &mut Context<Self>) {
         let was_open = std::mem::take(&mut self.pressed_open) || self.menu == Some(id);
         self.menu = (!was_open).then_some(id);
+        // A row of the menu that opened its levels starts shut.
+        self.open.remove(&id);
         cx.notify();
     }
 
@@ -2316,7 +2318,7 @@ impl PageView {
                     .focusable()
                     .tab_stop(true)
                     .cursor_pointer()
-                    .hover(|style| style.bg(rgba(theme::HOVER)))
+                    .hover(|style| style.bg(rgba(theme::hover())))
                     .focus_visible(|style| style.border_color(rgb(theme::palette().foreground)))
                     .on_click(cx.listener(move |view, _, _, cx| {
                         cx.stop_propagation();
@@ -2356,7 +2358,7 @@ impl PageView {
                         .px(px(12.0))
                         .py(px(10.0))
                         .rounded(px(14.0))
-                        .border_color(rgba(theme::HAIRLINE_STRONG))
+                        .border_color(rgba(theme::hairline_strong()))
                         .shadow(vec![gpui::BoxShadow {
                             color: gpui::hsla(0.0, 0.0, 0.0, 0.28),
                             offset: gpui::point(px(0.0), px(6.0)),
@@ -2375,7 +2377,7 @@ impl PageView {
                 .px(px(12.0))
                 .py(px(10.0))
                 .rounded(px(14.0))
-                .border_color(rgba(theme::HAIRLINE_STRONG))
+                .border_color(rgba(theme::hairline_strong()))
                 .shadow(vec![gpui::BoxShadow {
                     color: gpui::hsla(0.0, 0.0, 0.0, 0.28),
                     offset: gpui::point(px(0.0), px(6.0)),
@@ -2551,7 +2553,7 @@ impl PageView {
                 icon.size,
                 // The Claude spark is drawn in its own orange, as Wings draws it beside a Claude session.
                 match icon.name {
-                    tree::IconName::Claude => theme::CLAUDE,
+                    tree::IconName::Claude => theme::claude(),
                     _ => theme::palette().foreground,
                 },
             )

@@ -137,8 +137,8 @@ impl TerminalView {
             .p(px(6.0))
             .rounded(px(14.0))
             .border_1()
-            .border_color(rgba(theme::HAIRLINE_STRONG))
-            .bg(rgba(theme::POPOVER))
+            .border_color(rgba(theme::hairline_strong()))
+            .bg(rgba(theme::popover()))
             .shadow(vec![BoxShadow {
                 color: hsla(0.0, 0.0, 0.0, 0.35),
                 offset: point(px(0.0), px(8.0)),
@@ -166,7 +166,7 @@ impl TerminalView {
                     .min_w(px(56.0))
                     .text_right()
                     .text_size(px(12.0))
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                    .text_color(rgb(theme::muted_foreground()))
                     .child(label),
             )
             .child(find_button(
@@ -233,8 +233,8 @@ fn find_button(
         _ => None,
     };
     let glyph = match toggled {
-        Some(_) => icon(glyph, 14.0, theme::FOREGROUND),
-        None => icon(glyph, 16.0, theme::MUTED_FOREGROUND),
+        Some(_) => icon(glyph, 14.0, theme::foreground()),
+        None => icon(glyph, 16.0, theme::muted_foreground()),
     };
     ui::ghost_button(label, label, shortcut, ButtonSize::Sm, toggled, glyph)
         .track_focus(focus)

@@ -32,7 +32,7 @@ impl Workspace {
                         .rounded(px(12.0))
                         .border_1()
                         .border_color(rgba(HAIRLINE))
-                        .bg(rgba(theme::POPOVER))
+                        .bg(rgba(theme::popover()))
                         .flex()
                         .flex_col()
                         .gap(px(8.0))
@@ -46,7 +46,7 @@ impl Workspace {
                             card.child(
                                 div()
                                     .text_size(px(12.0))
-                                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                                    .text_color(rgb(theme::muted_foreground()))
                                     .child(notice.body.clone()),
                             )
                         })

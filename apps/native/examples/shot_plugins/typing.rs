@@ -39,7 +39,7 @@ impl gpui::Render for Root {
         gpui::div()
             .relative()
             .size_full()
-            .bg(gpui::rgb(wings_native::theme::BACKGROUND))
+            .bg(gpui::rgb(wings_native::theme::background()))
             // It starts each draw of the slots, as the workspace's does.
             .child(wings_native::ui::spinner_layer(window))
             .child(self.main.clone().cached(gpui::StyleRefinement::default().size_full()))
@@ -68,7 +68,7 @@ impl gpui::Render for Main {
                     .rounded(px(14.0))
                     .border_1()
                     .border_color(gpui::rgba(wings_native::ui::HAIRLINE))
-                    .bg(gpui::rgb(wings_native::theme::SURFACE))
+                    .bg(gpui::rgb(wings_native::theme::surface()))
                     .child(self.page.clone().cached(gpui::StyleRefinement::default().size_full())),
             )
         });

@@ -25,7 +25,7 @@ fn a_page_paints_in_the_colours_of_its_palette_and_the_apps_for_the_rest() {
     .unwrap();
     assert_eq!((palette.surface, palette.foreground), (0x1f1a15, 0xf0e7d7));
     assert_eq!(palette.popover, 0x3a3229f2, "see-through as the app's popover");
-    let app = crate::theme::Palette::APP;
+    let app = crate::theme::Palette::app();
     assert_eq!((palette.muted_foreground, palette.info, palette.danger), (app.muted_foreground, app.info, app.danger));
     assert_eq!(palette.ground, Some((0x1f1a15, 0x312a22, 270.0)));
     // Nothing it can paint is no palette at all.
@@ -607,6 +607,11 @@ fn a_select_has_options_a_value_and_a_handler() {
                 disabled: false,
                 detail: None,
                 toggle: None,
+                heading: false,
+                checked: None,
+                trailing: None,
+                pill: None,
+                children: Vec::new(),
             },
             SelectOption {
                 value: "b".into(),
@@ -614,6 +619,11 @@ fn a_select_has_options_a_value_and_a_handler() {
                 disabled: true,
                 detail: None,
                 toggle: None,
+                heading: false,
+                checked: None,
+                trailing: None,
+                pill: None,
+                children: Vec::new(),
             },
             // No label is the value, so the option still shows something.
             SelectOption {
@@ -622,6 +632,11 @@ fn a_select_has_options_a_value_and_a_handler() {
                 disabled: false,
                 detail: None,
                 toggle: None,
+                heading: false,
+                checked: None,
+                trailing: None,
+                pill: None,
+                children: Vec::new(),
             },
         ]
     );
@@ -639,6 +654,29 @@ fn a_select_option_can_be_a_toggle_with_a_detail_and_a_select_can_carry_a_badge(
     assert_eq!((chosen.options[1].toggle, chosen.options[1].detail.as_deref()), (Some(true), Some("Plans bigger work")));
     assert_eq!(chosen.options[2].toggle, None);
     assert_eq!(select(json!({"badge":""})).badge, None);
+}
+
+#[test]
+fn a_select_menu_can_have_headings_rows_that_say_whether_they_are_checked_and_its_own_trigger_text() {
+    let grouped = select(json!({"label":"Model","display":"Opus 5.5 · High","value":"model:opus","options":[
+        {"value":"h:model","label":"Model","heading":true},
+        {"value":"model:opus","label":"Opus 5.5","detail":"Most capable","checked":true},
+        {"value":"effort:low","label":"Low","checked":false},
+        {"value":"x"}]}));
+    assert_eq!(grouped.shown(), "Opus 5.5 · High");
+    let [heading, opus, low, plain] = &grouped.options[..] else { panic!("four options") };
+    assert_eq!((heading.heading, opus.heading), (true, false));
+    assert_eq!((opus.checked, opus.detail.as_deref(), low.checked, plain.checked), (Some(true), Some("Most capable"), Some(false), None));
+    // A row can open levels of its own, one level deep, and say where it is and with what pill.
+    let effort = select(json!({"options":[
+        {"value":"e","label":"Effort","trailing":"High","pill":"Recommended","options":[
+            {"value":"effort:low","label":"Low","checked":false,"options":[{"value":"deeper"}]},
+            {"value":"effort:high","label":"High","checked":true}]}]}));
+    let row = &effort.options[0];
+    assert_eq!((row.trailing.as_deref(), row.pill.as_deref(), row.children.len()), (Some("High"), Some("Recommended"), 2));
+    assert_eq!((row.children[1].checked, row.children[0].children.len()), (Some(true), 0));
+    // An empty display is none: the select shows its option.
+    assert_eq!(select(json!({"display":"","value":"a","options":[{"value":"a","label":"Alpha"}]})).shown(), "Alpha");
 }
 
 /// Tabs of the "line" variant are chips the app underlines; a select has no such look.

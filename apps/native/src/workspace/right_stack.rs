@@ -396,7 +396,7 @@ impl Workspace {
                 .flex_1()
                 .min_h_0()
                 .overflow_hidden()
-                .bg(rgb(theme::SURFACE))
+                .bg(rgb(theme::surface()))
                 // The page pads itself, as the desktop's `.w-shell` does, 14px in from the card's edge. It keeps its
                 // last drawing until it changes, so a busy terminal doesn't rebuild it every frame.
                 .child(page.clone().cached(gpui::StyleRefinement::default().size_full()));
@@ -474,7 +474,7 @@ impl Workspace {
             .pr(px(6.0))
             .border_b_1()
             .border_color(rgba(HAIRLINE))
-            .bg(rgb(theme::SURFACE))
+            .bg(rgb(theme::surface()))
             .children(first.then(|| crate::ui::spot(|| "right-header".into())).flatten())
             .on_mouse_down(
                 MouseButton::Right,
@@ -494,9 +494,9 @@ impl Workspace {
                     .text_size(px(13.0))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(rgb(if !many || focused {
-                        theme::FOREGROUND
+                        theme::foreground()
                     } else {
-                        theme::SECONDARY_FOREGROUND
+                        theme::secondary_foreground()
                     }))
                     .child(glyph)
                     .child(div().min_w_0().truncate().child(title)),

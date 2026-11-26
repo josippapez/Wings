@@ -314,7 +314,7 @@ impl Workspace {
                     .px(px(8.0))
                     .rounded(px(theme::RADIUS))
                     .cursor_pointer()
-                    .hover(|style| style.bg(rgba(theme::HOVER)))
+                    .hover(|style| style.bg(rgba(theme::hover())))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_settings(window, cx);
                         if let Some(dialog) = &mut this.settings {
@@ -323,7 +323,7 @@ impl Workspace {
                         this.manage.selected = Some(id.clone());
                         cx.notify_workspace();
                     }))
-                    .child(icon(Icon::Puzzle, 16.0, theme::MUTED_FOREGROUND))
+                    .child(icon(Icon::Puzzle, 16.0, theme::muted_foreground()))
                     .child(
                         div()
                             .min_w_0()
@@ -336,7 +336,7 @@ impl Workspace {
                                     .text_size(scale.px(13.0))
                                     .line_height(scale.px(18.0))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                                    .text_color(rgb(theme::muted_foreground()))
                                     .child(name),
                             )
                             .child(
@@ -344,7 +344,7 @@ impl Workspace {
                                     .truncate()
                                     .text_size(scale.px(11.0))
                                     .line_height(scale.px(15.0))
-                                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                                    .text_color(rgb(theme::muted_foreground()))
                                     .child(needs),
                             ),
                     )
@@ -377,7 +377,7 @@ impl Workspace {
                         .line_height(scale.px(18.0))
                         .text_size(scale.px(12.0))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                        .text_color(rgb(theme::muted_foreground()))
                         .child("Plugins"),
                 )
                 .children(waiting)

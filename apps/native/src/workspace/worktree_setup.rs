@@ -166,7 +166,7 @@ impl Workspace {
         let hint = |text: String| {
             div()
                 .text_size(px(12.0))
-                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .text_color(rgb(theme::muted_foreground()))
                 .child(text)
         };
         let file = if dialog.has_file {
@@ -248,9 +248,9 @@ impl Workspace {
                                             .px(px(12.0))
                                             .py(px(8.0))
                                             .rounded(px(8.0))
-                                            .bg(rgba(theme::DANGER << 8 | 0x1a))
+                                            .bg(rgba(theme::danger() << 8 | 0x1a))
                                             .text_size(px(12.0))
-                                            .text_color(rgb(theme::DANGER))
+                                            .text_color(rgb(theme::danger()))
                                             .child(error),
                                     )
                                 })

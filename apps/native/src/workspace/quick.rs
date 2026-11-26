@@ -334,7 +334,7 @@ impl Workspace {
         let collapsed = quick.minimised && !full;
         let title = quick.title(cx);
         let mut header = vec![
-            icon(Icon::SquareTerminal, 14.0, theme::MUTED_FOREGROUND).into_any_element(),
+            icon(Icon::SquareTerminal, 14.0, theme::muted_foreground()).into_any_element(),
             div()
                 .min_w_0()
                 .truncate()
@@ -347,7 +347,7 @@ impl Workspace {
                 div()
                     .min_w_0()
                     .truncate()
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                    .text_color(rgb(theme::muted_foreground()))
                     .child(SHORTCUT)
                     .into_any_element(),
             );

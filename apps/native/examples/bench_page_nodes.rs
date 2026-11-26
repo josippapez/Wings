@@ -27,7 +27,7 @@ struct Root {
 
 impl Render for Root {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().size_full().bg(gpui::rgb(wings_native::theme::SURFACE)).child(self.page.clone())
+        div().size_full().bg(gpui::rgb(wings_native::theme::surface())).child(self.page.clone())
     }
 }
 

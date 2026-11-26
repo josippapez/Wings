@@ -813,6 +813,18 @@ pub struct SelectOption {
     /// A setting rather than a choice: the row is set apart at the end of the menu with a switch showing this state, and
     /// picking it sends its value as any option does.
     pub toggle: Option<bool>,
+    /// A section label over the rows after it: not a choice, so nothing picks it. A Wings before this draws it as a row.
+    pub heading: bool,
+    /// Whether the row is drawn with a check, for a menu with several groups that each have a choice. None leaves it to
+    /// the select's `value`.
+    pub checked: Option<bool>,
+    /// Beside the label at the row's end, like the level an Effort row is on.
+    pub trailing: Option<String>,
+    /// A small pill before `trailing`, like "Recommended".
+    pub pill: Option<String>,
+    /// Rows that open under this one when it is clicked, which then is no choice of its own: an Effort row's levels.
+    /// One level deep.
+    pub children: Vec<SelectOption>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -833,6 +845,8 @@ pub struct Select {
     pub quiet: bool,
     /// A word in an accent colour after what the select shows, like a chat's "Ultracode" when it is on.
     pub badge: Option<String>,
+    /// What the trigger shows instead of the current option's label, like a chat's model with its effort.
+    pub display: Option<String>,
 }
 
 /// wings-plugin-ui's `Menu`: a button that opens a list of actions over the page, under it. The page sends the button
@@ -1040,6 +1054,9 @@ impl Select {
 
     /// What the select shows: its current option's label, or the page's value itself when no option has it.
     pub fn shown(&self) -> &str {
+        if let Some(display) = &self.display {
+            return display;
+        }
         let current = self.current().unwrap_or_default();
         self.options
             .iter()
@@ -1110,7 +1127,7 @@ fn palette(props: &Value) -> Option<crate::theme::Palette> {
         let hex = value.as_str()?.strip_prefix('#')?;
         (hex.len() == 6 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())).then(|| u32::from_str_radix(hex, 16).ok())?
     };
-    let mut palette = crate::theme::Palette::APP;
+    let mut palette = crate::theme::Palette::app();
     let mut named = false;
     for (role, slot) in [
         ("base", &mut palette.background),
@@ -1130,7 +1147,7 @@ fn palette(props: &Value) -> Option<crate::theme::Palette> {
     }
     // A popover is see-through by as much as the app's.
     if let Some(found) = props.get("popover").and_then(color) {
-        palette.popover = found << 8 | (crate::theme::POPOVER & 0xff);
+        palette.popover = found << 8 | (crate::theme::popover() & 0xff);
         named = true;
     }
     let ground = props.get("ground").filter(|ground| ground.is_object());
@@ -1924,6 +1941,9 @@ impl Walk {
                     badge: str_prop(&props, "badge")
                         .filter(|badge| !badge.is_empty())
                         .map(|badge| cut(badge.to_owned())),
+                    display: str_prop(&props, "display")
+                        .filter(|display| !display.is_empty())
+                        .map(|display| cut(display.to_owned())),
                 };
                 if kind == "Chips" {
                     Node::Chips(select)
@@ -1982,9 +2002,14 @@ fn levels(props: &Map<String, Value>) -> Option<(f64, f64)> {
     }
 }
 
-/// `[{value, label, disabled?}]`: an entry with no string `value` isn't one, and a missing label is the value.
+/// `[{value, label, disabled?, detail?, toggle?, heading?, checked?}]`: an entry with no string `value` isn't one, and a missing label is the value.
 fn options(props: &Map<String, Value>) -> Vec<SelectOption> {
-    let Some(Value::Array(all)) = props.get("options") else {
+    option_list(props.get("options"), true)
+}
+
+/// `options`' rows, with those of a row's own `options` too when `nested` allows.
+fn option_list(all: Option<&Value>, nested: bool) -> Vec<SelectOption> {
+    let Some(Value::Array(all)) = all else {
         return Vec::new();
     };
     all.iter()
@@ -1997,6 +2022,11 @@ fn options(props: &Map<String, Value>) -> Vec<SelectOption> {
                 disabled: option.get("disabled") == Some(&Value::Bool(true)),
                 detail: str_prop(option, "detail").map(|detail| cut(detail.to_owned())),
                 toggle: option.get("toggle").and_then(Value::as_bool),
+                heading: option.get("heading") == Some(&Value::Bool(true)),
+                checked: option.get("checked").and_then(Value::as_bool),
+                trailing: str_prop(option, "trailing").map(|text| cut(text.to_owned())),
+                pill: str_prop(option, "pill").map(|text| cut(text.to_owned())),
+                children: option_list(option.get("options").filter(|_| nested), false),
                 value,
             })
         })

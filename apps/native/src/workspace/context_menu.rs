@@ -216,7 +216,7 @@ impl Workspace {
                 let project = project.to_path_buf();
                 // The check stands where the other items have their icon, so all the labels line up.
                 let glyph = match on {
-                    true => crate::icons::icon(Icon::Check, 16.0, crate::theme::MUTED_FOREGROUND).into_any_element(),
+                    true => crate::icons::icon(Icon::Check, 16.0, crate::theme::muted_foreground()).into_any_element(),
                     false => div().size(px(16.0)).flex_none().into_any_element(),
                 };
                 ui::menu_highlight(
@@ -471,7 +471,7 @@ impl Workspace {
                 .child(crate::icons::icon(
                     Icon::ChevronRight,
                     16.0,
-                    crate::theme::MUTED_FOREGROUND,
+                    crate::theme::muted_foreground(),
                 ))
                 .on_hover(cx.listener(|this, over: &bool, _, cx| {
                     if let Some(menu) = this.menu.as_mut().filter(|_| *over) {

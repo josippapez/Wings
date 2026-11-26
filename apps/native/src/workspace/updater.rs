@@ -109,7 +109,7 @@ impl Render for Busy {
                 .flex()
                 .items_center()
                 .gap(px(8.0))
-                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .text_color(rgb(theme::muted_foreground()))
                 .child(
                     div()
                         .id("update-busy")
@@ -147,7 +147,7 @@ impl Render for Busy {
                     .child(
                         div()
                             .ml_auto()
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .text_color(rgb(theme::muted_foreground()))
                             .child(progress_value(received, total)),
                     )
                     .child(
@@ -165,7 +165,7 @@ impl Render for Busy {
                                     } else {
                                         received.min(total) as f32 / total as f32
                                     }))
-                                    .bg(rgb(theme::FOREGROUND)),
+                                    .bg(rgb(theme::foreground())),
                             ),
                     )
                     .into_any_element()
@@ -741,7 +741,7 @@ impl Workspace {
         Some(
             super::sidebar::nav_row_tipped(
                 "update-app",
-                icon(Icon::CircleArrowUp, 16.0, theme::DONE),
+                icon(Icon::CircleArrowUp, 16.0, theme::done()),
                 format!(
                     "Update to {} {}",
                     crate::data_dir::APP_NAME,
@@ -750,7 +750,7 @@ impl Workspace {
                 super::sidebar::Look::Plain,
                 ui::tooltip("See what's new and install it", None),
             )
-            .text_color(rgb(theme::FOREGROUND))
+            .text_color(rgb(theme::foreground()))
             .children(ui::spot(|| "update-app".into()))
             .on_click(cx.listener(|this, _, window, cx| this.show_updates(window, cx)))
             .into_any_element(),
@@ -785,7 +785,7 @@ impl Workspace {
                 .rounded(px(12.0))
                 .border_1()
                 .border_color(rgba(ui::HAIRLINE))
-                .bg(rgba(theme::POPOVER))
+                .bg(rgba(theme::popover()))
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
@@ -804,7 +804,7 @@ impl Workspace {
                     card.child(
                         div()
                             .text_size(px(12.0))
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .text_color(rgb(theme::muted_foreground()))
                             .child(notes),
                     )
                 })
@@ -975,13 +975,13 @@ impl Workspace {
             div()
                 .flex()
                 .flex_wrap()
-                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .text_color(rgb(theme::muted_foreground()))
                 .child("No release notes for this version.\u{a0}")
                 .child(
                     div()
                         .id("update-release-page")
                         .role(gpui::Role::Link)
-                        .text_color(rgb(theme::FOREGROUND))
+                        .text_color(rgb(theme::foreground()))
                         .underline()
                         .cursor_pointer()
                         .child("See it on GitHub")
@@ -1029,7 +1029,7 @@ impl Workspace {
                         .child(
                             div()
                                 .text_size(px(12.0))
-                                .text_color(rgb(theme::MUTED_FOREGROUND))
+                                .text_color(rgb(theme::muted_foreground()))
                                 .child(restart_warning(
                                     server_configured,
                                     self.updates.server.is_some_and(|(_, direct)| direct),
@@ -1039,7 +1039,7 @@ impl Workspace {
                             body.child(
                                 div()
                                     .text_size(px(12.0))
-                                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                                    .text_color(rgb(theme::muted_foreground()))
                                     .child(note),
                             )
                         })
@@ -1063,7 +1063,7 @@ impl Workspace {
             ui::dialog_footer()
                 .p(px(16.0))
                 .border_t_1()
-                .border_color(rgba(theme::BORDER))
+                .border_color(rgba(theme::border()))
                 .bg(rgba(FOOTER))
                 // GPUI clips the panel square, so the strip rounds itself inside the panel's 14px corners.
                 .rounded_b(px(13.0))
@@ -1119,7 +1119,7 @@ impl Workspace {
                                                 .id("update-description")
                                                 .max_h(px(180.0))
                                                 .overflow_y_scroll()
-                                                .text_color(rgb(theme::MUTED_FOREGROUND))
+                                                .text_color(rgb(theme::muted_foreground()))
                                                 .child(content.description),
                                         ),
                                 )

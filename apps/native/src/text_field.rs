@@ -17,7 +17,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
     actions::{self, Paste},
-    theme::{FOREGROUND, HOVER, MUTED_FOREGROUND},
+    theme,
     ui::{motion, readout, slots},
 };
 
@@ -820,8 +820,8 @@ impl Render for TextField {
                     .rounded(px(8.0))
                     .border_1()
                     .border_color(rgba(FRAME))
-                    .bg(rgba(HOVER))
-                    .focus(|style| style.border_color(rgb(FOREGROUND)))
+                    .bg(rgba(theme::hover()))
+                    .focus(|style| style.border_color(rgb(theme::foreground())))
             })
             .when(self.fill && self.bare, |field| field.w_full().min_w_0())
             .when(!self.fill, |field| field.w(self.width))
@@ -881,9 +881,9 @@ impl TextField {
         // nearer the text's colour, so it isn't the same grey as the placeholder of a field with none.
         let suggestion = placeholder && self.takes_tab;
         let color: gpui::Hsla = if suggestion {
-            gpui::Hsla::from(rgb(FOREGROUND)).opacity(0.62)
+            gpui::Hsla::from(rgb(theme::foreground())).opacity(0.62)
         } else {
-            rgb(if placeholder { MUTED_FOREGROUND } else { FOREGROUND }).into()
+            rgb(if placeholder { theme::muted_foreground() } else { theme::foreground() }).into()
         };
         let (range, selecting) = if !self.marked.is_empty() {
             (self.head()..self.head() + self.marked.len(), false)
@@ -979,7 +979,7 @@ fn paint_text(layout: &Layout, caret: Option<Point<Pixels>>, bounds: Bounds<Pixe
             let top = (layout.line_height - height) / 2.0;
             window.paint_quad(fill(
                 Bounds::new(layout.origin + at + point(px(0.0), top), size(px(1.0), height)),
-                rgb(FOREGROUND),
+                rgb(theme::foreground()),
             ));
         }
     });

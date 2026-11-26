@@ -317,8 +317,8 @@ impl Render for Readout {
             div()
                 .flex()
                 .justify_between()
-                .child(div().text_color(rgb(theme::MUTED_FOREGROUND)).child(label))
-                .child(div().text_color(rgb(theme::FOREGROUND)).child(value))
+                .child(div().text_color(rgb(theme::muted_foreground())).child(label))
+                .child(div().text_color(rgb(theme::foreground())).child(value))
         };
         let shown = &self.shown;
         div()
@@ -330,8 +330,8 @@ impl Render for Readout {
             .gap(px(1.0))
             .rounded(px(theme::RADIUS))
             .border_1()
-            .border_color(rgba(theme::BORDER))
-            .bg(rgba(theme::POPOVER))
+            .border_color(rgba(theme::border()))
+            .bg(rgba(theme::popover()))
             .text_size(px(11.0))
             .line_height(px(14.0))
             .font_family(crate::terminal_view::DEFAULT_FONT_FAMILY)
@@ -341,7 +341,7 @@ impl Render for Readout {
                 div()
                     .mt(px(3.0))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                    .text_color(rgb(theme::muted_foreground()))
                     .child("Renders/s"),
             )
             .children(shown.views.iter().map(|(name, count)| line((*name).into(), count.to_string())))

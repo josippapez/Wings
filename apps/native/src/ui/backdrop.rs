@@ -58,7 +58,7 @@ fn halfway(a: u32, b: u32) -> u32 {
 /// The colours of the warm and the cool shades of a `tone` in `palette`.
 fn accents(palette: &Palette, tone: Tone) -> (u32, u32) {
     match tone {
-        Tone::Claude => (theme::CLAUDE, palette.info),
+        Tone::Claude => (theme::claude(), palette.info),
         Tone::Mono => (palette.foreground, palette.foreground),
         Tone::Ocean => (palette.info, palette.done),
         Tone::Meadow => (palette.done, palette.working),
@@ -711,6 +711,12 @@ pub fn set_screenshot_ground(rgb: u32) {
     SCREENSHOT_GROUND.set(Some(rgb));
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The colour the window's glass last painted, for tests of what the sidebar and title bar lie on.
+    pub static PAINTED_GLASS: std::cell::Cell<Option<Hsla>> = const { std::cell::Cell::new(None) };
+}
+
 /// The window's glass, which everything in the window lies on, in `color`: all over the window but for a hole where a
 /// backdrop shows in the layer under the window. First in the window's root, which paints no ground of its own.
 pub fn window_glass(color: impl Into<Hsla>) -> impl IntoElement {
@@ -722,6 +728,8 @@ pub fn window_glass(color: impl Into<Hsla>) -> impl IntoElement {
             if let Some(ground) = SCREENSHOT_GROUND.get() {
                 window.paint_quad(gpui::fill(bounds, gpui::rgb(ground)));
             }
+            #[cfg(test)]
+            PAINTED_GLASS.set(Some(color));
             // Painted once every piece has been laid out in this draw, so the hole is where the slot is now.
             let id = window.window_handle().window_id();
             window.paint_quad(match hole(id) {
@@ -941,7 +949,7 @@ mod tests {
     fn the_glass_covers_the_window_but_for_a_hole_as_round_as_the_card() {
         let window = Bounds::new(point(px(0.0), px(0.0)), size(px(1000.0), px(640.0)));
         let hole = Bounds::new(point(px(240.0), px(38.0)), size(px(752.0), px(594.0)));
-        let glass = holed(window, hole, 13.0, rgba(theme::GLASS).into());
+        let glass = holed(window, hole, 13.0, rgba(theme::glass()).into());
         let reach = f32::from(glass.border_widths.left);
         assert!(
             [glass.border_widths.top, glass.border_widths.right, glass.border_widths.bottom].iter().all(|side| f32::from(*side) == reach),
@@ -957,7 +965,7 @@ mod tests {
         // The border reaches past every corner of the window from anywhere in the hole.
         assert!(reach >= f32::from(window.size.width).hypot(f32::from(window.size.height)));
         assert_eq!(glass.background, gpui::Background::from(transparent_black()), "nothing in the hole");
-        assert_eq!(glass.border_color, Hsla::from(rgba(theme::GLASS)));
+        assert_eq!(glass.border_color, Hsla::from(rgba(theme::glass())));
         // A hole narrower than its corners is as round as it can be.
         let thin = holed(window, Bounds::new(point(px(10.0), px(10.0)), size(px(20.0), px(400.0))), 13.0, glass.border_color);
         assert_eq!(f32::from(thin.corner_radii.top_left) - f32::from(thin.border_widths.left), 10.0);
@@ -967,9 +975,9 @@ mod tests {
     fn a_layers_cells_are_the_colours_the_window_blends_over_the_ground() {
         // What GPUI makes of each shade's colour (`colors`) painted over the ground: source over, on sRGB values as they
         // are (`SourceAlpha`, `OneMinusSourceAlpha` in gpui-pre-apple's pipelines).
-        let ground = Hsla::from(rgba(Palette::APP.surface << 8 | 0xff)).to_rgb();
+        let ground = Hsla::from(rgba(Palette::app().surface << 8 | 0xff)).to_rgb();
         for (tone, (shade, (opaque, painted))) in [Tone::Claude, Tone::Mono, Tone::Ocean, Tone::Meadow, Tone::Dusk, Tone::Aurora, Tone::Lagoon].into_iter().flat_map(|tone| {
-            opaque_colors(&Palette::APP, tone).into_iter().zip(colors(&Palette::APP, tone)).enumerate().map(move |pair| (tone, pair))
+            opaque_colors(&Palette::app(), tone).into_iter().zip(colors(&Palette::app(), tone)).enumerate().map(move |pair| (tone, pair))
         }) {
             let opaque = &opaque;
             let painted = painted.to_rgb();
@@ -988,8 +996,8 @@ mod tests {
     fn muted_text_keeps_its_contrast_on_every_step_of_a_colour_ramp() {
         let rgb = |color: [f32; 4]| [0, 1, 2].map(|i| (color[i] * 255.0).round() as u32);
         for tone in [Tone::Aurora, Tone::Lagoon] {
-            let muted = gradients::luminance(Palette::APP.muted_foreground);
-            let steps = opaque_colors(&Palette::APP, tone);
+            let muted = gradients::luminance(Palette::app().muted_foreground);
+            let steps = opaque_colors(&Palette::app(), tone);
             for shade in RAMP {
                 let [r, g, b] = rgb(steps[shade as usize]);
                 let ratio = gradients::contrast(muted, gradients::luminance(r << 16 | g << 8 | b));
@@ -1035,7 +1043,7 @@ mod drawing {
                 div()
                     .relative()
                     .size_full()
-                    .when(slot, |piece| piece.child(backdrop_slot("tab", kind, Palette::APP, 13.0)))
+                    .when(slot, |piece| piece.child(backdrop_slot("tab", kind, Palette::app(), 13.0)))
             })
         }
     }

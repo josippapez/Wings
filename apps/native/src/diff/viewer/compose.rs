@@ -305,7 +305,7 @@ impl Viewer {
                 inset: false,
             }])
             .text_size(px(13.0))
-            .text_color(rgb(theme::FOREGROUND))
+            .text_color(rgb(theme::foreground()))
             .capture_escape(move |_, window, cx| {
                 weak.update(cx, |this, cx| this.close_compose(window, cx))
                     .is_ok()
@@ -321,7 +321,7 @@ impl Viewer {
                 div()
                     .truncate()
                     .text_size(px(11.0))
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                    .text_color(rgb(theme::muted_foreground()))
                     .child(format!(
                         "Comment on {} line {}",
                         if compose.old { "removed" } else { "added or unchanged" },
@@ -379,7 +379,7 @@ impl Viewer {
                         .flex_1()
                         .min_w_0()
                         .text_size(px(12.0))
-                        .text_color(rgb(theme::BLOCKED))
+                        .text_color(rgb(theme::blocked()))
                         .child(error),
                 )
             })

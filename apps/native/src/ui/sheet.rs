@@ -17,7 +17,9 @@ pub const SHEET_WIDTH: f32 = 480.0;
 /// The room `search_box` leaves its field in a sheet's header: the sheet less its padding, the box's own and its icons.
 pub const SHEET_SEARCH_WIDTH: f32 = 388.0;
 /// Behind a searched word where it is found, as Past sessions marks it.
-pub const SEARCH_MARK: u32 = theme::WORKING << 8 | 0x40;
+pub fn search_mark() -> u32 {
+    theme::working() << 8 | 0x40
+}
 
 /// The sheet's backdrop, over what `id`'s sheet covers, and its panel against the right edge, as `dialog` makes them:
 /// add the close handlers to the backdrop, and the header and the list to the panel.
@@ -34,7 +36,7 @@ pub fn sheet(
         .rounded(px(0.0))
         .border_0()
         .border_l_1()
-        .border_color(rgba(theme::HAIRLINE_STRONG))
+        .border_color(rgba(theme::hairline_strong()))
         .shadow(vec![BoxShadow {
             color: hsla(0.0, 0.0, 0.0, 0.5),
             offset: point(px(0.0), px(24.0)),
@@ -99,7 +101,7 @@ pub fn search_box(field: impl IntoElement, status: Option<AnyElement>) -> Div {
         .rounded(px(8.0))
         .border_1()
         .border_color(rgba(INPUT_BORDER))
-        .bg(rgba(theme::HOVER))
+        .bg(rgba(theme::hover()))
         .child(icon(Icon::Search, 16.0, theme::palette().muted_foreground))
         .child(div().min_w_0().flex_1().overflow_hidden().child(field))
         .child(

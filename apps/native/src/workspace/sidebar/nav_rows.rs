@@ -36,7 +36,7 @@ pub(in crate::workspace) fn nav_row(
     label: impl Into<SharedString>,
     look: Look,
 ) -> Stateful<Div> {
-    nav_row_with(id, icon(glyph, 16.0, theme::MUTED_FOREGROUND), label, look)
+    nav_row_with(id, icon(glyph, 16.0, theme::muted_foreground()), label, look)
 }
 
 /// `nav_row` with an icon of its own colour, as the desktop's update row passes its `CircleArrowUpIcon`.
@@ -85,20 +85,20 @@ fn styled(
         .rounded(px(theme::RADIUS))
         // The text size comes from the sidebar column, which sets it from the sidebar text setting.
         .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(theme::MUTED_FOREGROUND))
+        .text_color(rgb(theme::muted_foreground()))
         .child(glyph)
         .child(text);
     match look {
         Look::Plain => row.cursor_pointer().hover(|style| {
             style
-                .bg(rgba(theme::HOVER))
-                .text_color(rgb(theme::FOREGROUND))
+                .bg(rgba(theme::hover()))
+                .text_color(rgb(theme::foreground()))
         }),
         Look::Current => row
             .cursor_pointer()
             .bg(rgba(SIDEBAR_ACCENT))
             .font_weight(FontWeight::SEMIBOLD)
-            .text_color(rgb(theme::FOREGROUND)),
+            .text_color(rgb(theme::foreground())),
         Look::Disabled => row.opacity(0.5).a11y_synthetic_children(|builder| {
             builder.parent_node().set_disabled();
         }),
@@ -111,7 +111,7 @@ pub(in crate::workspace) fn row_hint(text: impl Into<SharedString>, scale: super
         .flex_none()
         .text_size(scale.px(11.0))
         .font_weight(FontWeight::NORMAL)
-        .text_color(rgb(theme::MUTED_FOREGROUND))
+        .text_color(rgb(theme::muted_foreground()))
         .opacity(0.6)
         .child(text.into())
 }
@@ -142,7 +142,7 @@ impl Workspace {
                     "Terminal",
                     Look::Plain,
                 )
-                .child(icon(Icon::Plus, 14.0, theme::MUTED_FOREGROUND).opacity(0.6))
+                .child(icon(Icon::Plus, 14.0, theme::muted_foreground()).opacity(0.6))
                 .on_click(
                     cx.listener(|this, _, window, cx| this.open_loose(Place::Full, window, cx)),
                 ),
@@ -214,8 +214,8 @@ impl Workspace {
                         .tab_stop(true)
                         .focus_visible(|style| {
                             style
-                                .bg(rgba(theme::HOVER))
-                                .text_color(rgb(theme::FOREGROUND))
+                                .bg(rgba(theme::hover()))
+                                .text_color(rgb(theme::foreground()))
                         })
                         .tooltip(ui::tooltip(tip, None))
                         .on_click(cx.listener(

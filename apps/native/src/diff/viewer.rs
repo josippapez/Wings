@@ -903,8 +903,8 @@ impl Viewer {
             CodeRow::Hunk(h) => {
                 let hunk = &file.hunks[h];
                 row.items_center()
-                    .bg(rgba(theme::INFO << 8 | 0x16))
-                    .text_color(rgb(theme::INFO))
+                    .bg(rgba(theme::info() << 8 | 0x16))
+                    .text_color(rgb(theme::info()))
                     .px(px(12.0))
                     .child(format!(
                         "@@ -{},{} +{},{} @@ {}",
@@ -1043,7 +1043,7 @@ impl Viewer {
                     .border_color(rgba(0xffffff1a))
                     .bg(rgba(0xffffff08))
                     .text_size(px(12.0))
-                    .child(icon(Icon::Search, 14.0, theme::MUTED_FOREGROUND))
+                    .child(icon(Icon::Search, 14.0, theme::muted_foreground()))
                     .child(
                         div()
                             .flex_1()
@@ -1093,11 +1093,11 @@ impl Viewer {
                     .role(Role::Button)
                     .aria_label(SharedString::from(path.clone()))
                     .aria_expanded(*open)
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                    .text_color(rgb(theme::muted_foreground()))
                     .hover(|style| {
                         style
-                            .bg(rgba(theme::HOVER))
-                            .text_color(rgb(theme::FOREGROUND))
+                            .bg(rgba(theme::hover()))
+                            .text_color(rgb(theme::foreground()))
                     })
                     .child(icon(
                         if *open {
@@ -1106,7 +1106,7 @@ impl Viewer {
                             Icon::ChevronRight
                         },
                         12.0,
-                        theme::MUTED_FOREGROUND,
+                        theme::muted_foreground(),
                     ))
                     .child(div().min_w_0().truncate().child(label.clone()))
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle_folder(&path, cx)))
@@ -1117,11 +1117,11 @@ impl Viewer {
                 let path = file_path(file).to_owned();
                 // The desktop's `changeMark`: a coloured letter for how the file changed.
                 let (mark, color) = match file.status {
-                    DiffStatus::Added => ("A", theme::DONE),
-                    DiffStatus::Deleted => ("D", theme::BLOCKED),
-                    DiffStatus::Modified => ("M", theme::WORKING),
-                    DiffStatus::Renamed => ("R", theme::INFO),
-                    DiffStatus::Copied => ("C", theme::INFO),
+                    DiffStatus::Added => ("A", theme::done()),
+                    DiffStatus::Deleted => ("D", theme::blocked()),
+                    DiffStatus::Modified => ("M", theme::working()),
+                    DiffStatus::Renamed => ("R", theme::info()),
+                    DiffStatus::Copied => ("C", theme::info()),
                 };
                 let (added, removed) = self.counts.get(index).copied().unwrap_or_default();
                 let comments = self.file_comments.get(index).copied().unwrap_or_default();
@@ -1140,7 +1140,7 @@ impl Viewer {
                     .aria_label(SharedString::from(path))
                     .aria_selected(selected)
                     .when(!selected, |row| {
-                        row.hover(|style| style.bg(rgba(theme::HOVER)))
+                        row.hover(|style| style.bg(rgba(theme::hover())))
                     })
                     .child(
                         div()
@@ -1161,7 +1161,7 @@ impl Viewer {
                             .when_some(folder.filter(|_| depth.is_none()), |text, folder| {
                                 text.child(
                                     ui::behaviors::cut_text("folder", folder)
-                                        .text_color(rgb(theme::MUTED_FOREGROUND)),
+                                        .text_color(rgb(theme::muted_foreground())),
                                 )
                             }),
                     )
@@ -1171,13 +1171,13 @@ impl Viewer {
                     .child(
                         div()
                             .flex_none()
-                            .text_color(rgb(theme::DONE))
+                            .text_color(rgb(theme::done()))
                             .child(format!("+{added}")),
                     )
                     .child(
                         div()
                             .flex_none()
-                            .text_color(rgb(theme::BLOCKED))
+                            .text_color(rgb(theme::blocked()))
                             .child(format!("−{removed}")),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -1293,7 +1293,7 @@ impl Viewer {
                         .flex()
                         .flex_col()
                         .border_r_1()
-                        .border_color(rgba(theme::BORDER))
+                        .border_color(rgba(theme::border()))
                         .child(self.list_header(cx))
                         .child(
                             div()
@@ -1307,7 +1307,7 @@ impl Viewer {
                                 .track_focus(&self.files_focus)
                                 .role(Role::ListBox)
                                 .aria_label("Changed files")
-                                .focus_visible(|style| style.border_color(rgb(theme::INFO)))
+                                .focus_visible(|style| style.border_color(rgb(theme::info())))
                                 .when(!self.discussion.is_empty(), |list| {
                                     list.child(self.discussion_row(cx))
                                 })
@@ -1325,7 +1325,7 @@ impl Viewer {
                     .track_focus(&self.code_focus)
                     .role(Role::Region)
                     .aria_label("Diff code")
-                    .focus_visible(|style| style.border_1().border_color(rgb(theme::INFO)))
+                    .focus_visible(|style| style.border_1().border_color(rgb(theme::info())))
                     .on_mouse_down(
                         gpui::MouseButton::Left,
                         cx.listener(|this, _, window, cx| this.code_focus.focus(window, cx)),
@@ -1339,7 +1339,7 @@ impl Viewer {
                             .flex()
                             .items_center()
                             .text_size(px(12.0))
-                            .bg(rgb(theme::SURFACE))
+                            .bg(rgb(theme::surface()))
                             .child(renamed),
                     )
                     .child(code),
@@ -1379,9 +1379,9 @@ impl Viewer {
             .p(px(24.0))
             .role(if error { Role::Alert } else { Role::Status })
             .text_color(rgb(if error {
-                theme::DANGER
+                theme::danger()
             } else {
-                theme::MUTED_FOREGROUND
+                theme::muted_foreground()
             }))
             .child(text.to_owned())
             .into_any_element()
@@ -1408,9 +1408,9 @@ fn no_lines(file: &super::patch::DiffFile) -> &'static str {
 /// A line's mark, the mark's colour and the line's background.
 fn colors(kind: DiffLineKind) -> (&'static str, u32, u32) {
     match kind {
-        DiffLineKind::Added => ("+", theme::DONE, 0x7dd3a712),
-        DiffLineKind::Deleted => ("-", theme::DANGER, 0xf2786a12),
-        DiffLineKind::Context => (" ", theme::FOREGROUND, 0),
+        DiffLineKind::Added => ("+", theme::done(), 0x7dd3a712),
+        DiffLineKind::Deleted => ("-", theme::danger(), 0xf2786a12),
+        DiffLineKind::Context => (" ", theme::foreground(), 0),
     }
 }
 
@@ -1422,11 +1422,11 @@ fn comment_count(count: impl std::fmt::Display, size: f32) -> Div {
         .flex()
         .items_center()
         .gap(px(if size < 14.0 { 2.0 } else { 4.0 }))
-        .text_color(rgb(theme::MUTED_FOREGROUND))
+        .text_color(rgb(theme::muted_foreground()))
         .child(
             div()
                 .flex_none()
-                .child(icon(Icon::MessageSquare, size, theme::MUTED_FOREGROUND)),
+                .child(icon(Icon::MessageSquare, size, theme::muted_foreground())),
         )
         .child(div().min_w_0().truncate().child(count.to_string()))
 }
@@ -1438,7 +1438,7 @@ fn number(line: Option<usize>) -> Div {
         .flex_none()
         .text_right()
         .pr(px(8.0))
-        .text_color(rgb(theme::MUTED_FOREGROUND))
+        .text_color(rgb(theme::muted_foreground()))
         .child(line.map(|n| n.to_string()).unwrap_or_default())
 }
 
@@ -1473,9 +1473,9 @@ fn toggle(
         .cursor_pointer()
         .bg(rgba(if pressed { 0xffffff17 } else { 0 }))
         .when(!pressed, |item| {
-            item.hover(|style| style.bg(rgba(theme::HOVER)))
+            item.hover(|style| style.bg(rgba(theme::hover())))
         })
-        .child(icon(which, 16.0, theme::FOREGROUND))
+        .child(icon(which, 16.0, theme::foreground()))
         .children(text)
 }
 
@@ -1510,8 +1510,8 @@ impl Render for Viewer {
             .flex()
             .flex_col()
             // Docked, the dock's card is the background.
-            .when(!docked, |viewer| viewer.bg(rgb(theme::BACKGROUND)))
-            .text_color(rgb(theme::FOREGROUND))
+            .when(!docked, |viewer| viewer.bg(rgb(theme::background())))
+            .text_color(rgb(theme::foreground()))
             .text_size(px(13.0))
             // Only filling the window is it a dialog; in the dock it's a part of the window beside the tab.
             .role(if docked { Role::Region } else { Role::Dialog })
@@ -1594,7 +1594,7 @@ impl Render for Viewer {
                                     .min_w_0()
                                     .whitespace_nowrap()
                                     .text_size(px(12.0))
-                                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                                    .text_color(rgb(theme::muted_foreground()))
                                     .when(!self.view.subtitle.is_empty(), |line| {
                                         line.child(
                                             div()
@@ -1611,12 +1611,12 @@ impl Render for Viewer {
                                         line.child(format!("{} files", patch.files.len()))
                                             .child(
                                                 div()
-                                                    .text_color(rgb(theme::DONE))
+                                                    .text_color(rgb(theme::done()))
                                                     .child(format!("+{added}")),
                                             )
                                             .child(
                                                 div()
-                                                    .text_color(rgb(theme::BLOCKED))
+                                                    .text_color(rgb(theme::blocked()))
                                                     .child(format!("−{removed}")),
                                             )
                                     })
@@ -1714,7 +1714,7 @@ impl Render for Viewer {
                                 "Expand",
                                 ui::ButtonSize::Sm,
                                 None,
-                                icon(Icon::Maximize, 16.0, theme::MUTED_FOREGROUND),
+                                icon(Icon::Maximize, 16.0, theme::muted_foreground()),
                             )
                             .tooltip(ui::tooltip("Fill the window", None))
                             .children(ui::spot(|| "diff-expand".into()))
@@ -1754,7 +1754,7 @@ impl Render for Viewer {
                         .px(px(16.0))
                         .py(px(8.0))
                         .role(Role::Alert)
-                        .text_color(rgb(theme::DANGER))
+                        .text_color(rgb(theme::danger()))
                         .child(error),
                 )
             })
@@ -1765,7 +1765,7 @@ impl Render for Viewer {
                         .px(px(16.0))
                         .py(px(8.0))
                         .role(Role::Alert)
-                        .text_color(rgb(theme::DANGER))
+                        .text_color(rgb(theme::danger()))
                         .child(error),
                 )
             })

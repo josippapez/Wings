@@ -78,7 +78,7 @@ pub fn list_item(
         .px(px(6.0))
         .py(px(4.0))
         .rounded(px(6.0))
-        .hover(|style| style.bg(rgba(theme::HOVER)))
+        .hover(|style| style.bg(rgba(theme::hover())))
         .children(parts)
 }
 
@@ -172,7 +172,7 @@ pub fn disclosure_trigger(
         .hover(|style| style.text_color(rgb(theme::palette().foreground)))
         .focusable()
         .tab_stop(true)
-        .focus_visible(|style| style.bg(rgba(theme::HOVER)))
+        .focus_visible(|style| style.bg(rgba(theme::hover())))
         .child(
             div().flex_none().h(px(12.0 * 1.45)).flex().items_center().child(crate::icons::disclosure(
                 id,

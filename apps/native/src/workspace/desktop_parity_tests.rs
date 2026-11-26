@@ -69,6 +69,7 @@ fn the_new_settings_are_saved_and_come_back() {
                 },
                 cx,
             );
+            w.set_appearance(crate::theme::Theme::Nord, false, cx);
         });
     }
     let (_app, window) = open_with(Some(file));
@@ -115,9 +116,14 @@ fn the_new_settings_are_saved_and_come_back() {
                 terminal_server: Some(false),
                 app_data_asked: false,
                 official_plugins_asked: false,
+                theme: crate::theme::Theme::Nord,
+                transparent: false,
             }
         );
+        // What was drawn in is what was saved, not only what the prefs say.
+        assert_eq!((crate::theme::current(), crate::theme::transparent()), (crate::theme::Theme::Nord, false));
     });
+    crate::theme::set(Default::default(), true);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -460,4 +466,23 @@ fn a_click_on_a_dropdowns_trigger_while_it_is_open_closes_it() {
         assert!(!shows(&app, &mut window, "select-item:ai-engine-0"), "select closed by its own trigger");
     }
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Settings, Appearance: the sidebar and title bar lie on the window's glass, and on a solid ground of the theme's when
+/// "Transparent sidebar and title bar" is off. The window draws again with the change, without a restart.
+#[test]
+fn turning_transparency_off_paints_the_sidebar_and_title_bar_on_a_solid_ground() {
+    use crate::{theme, ui::PAINTED_GLASS};
+    let painted = || PAINTED_GLASS.get().map(|color| color.a).expect("the glass was painted");
+    let (_app, mut window) = open_with(None);
+    window.draw();
+    assert!(painted() < 1.0, "see-through by default, so the vibrancy shows");
+    window.update(|w, _, cx| w.set_appearance(theme::Theme::Nord, false, cx));
+    window.draw();
+    assert_eq!(painted(), 1.0, "nothing of the window shows through");
+    assert_eq!(PAINTED_GLASS.get(), Some(gpui::Hsla::from(gpui::rgba(theme::Theme::Nord.colors().solid << 8 | 0xff))));
+    window.update(|w, _, cx| w.set_appearance(theme::Theme::Nord, true, cx));
+    window.draw();
+    assert!(painted() < 1.0);
+    theme::set(Default::default(), true);
 }

@@ -174,7 +174,7 @@ impl Workspace {
             } = page;
             ui::menu_item_with(
                 SharedString::from(format!("new-tab-{plugin}-{view}")),
-                plugin_glyph(&icon, own.as_deref(), 16.0, theme::MUTED_FOREGROUND),
+                plugin_glyph(&icon, own.as_deref(), 16.0, theme::muted_foreground()),
                 title,
                 false,
                 false,
@@ -229,7 +229,7 @@ impl Workspace {
                                 None,
                                 ButtonSize::Sm,
                                 None,
-                                icon(Icon::ChevronDown, 12.0, theme::MUTED_FOREGROUND),
+                                icon(Icon::ChevronDown, 12.0, theme::muted_foreground()),
                             ),
                             "new-tab-menu",
                             menu_open,
@@ -288,7 +288,7 @@ fn nav_button(
             .a11y_synthetic_children(|builder| {
                 builder.parent_node().set_disabled();
             })
-            .child(icon(glyph, 16.0, theme::MUTED_FOREGROUND))
+            .child(icon(glyph, 16.0, theme::muted_foreground()))
             .into_any_element();
     }
     let action: Box<dyn gpui::Action> = if id == "go-back" {

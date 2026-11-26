@@ -297,7 +297,7 @@ impl PageView {
                 .focusable()
                 .tab_stop(true)
                 .cursor_pointer()
-                .hover(|s| s.bg(rgba(theme::HOVER)))
+                .hover(|s| s.bg(rgba(theme::hover())))
                 .focus_visible(|s| s.border_color(rgb(theme::palette().foreground)))
                 .on_key_down(cx.listener(move |view, event: &KeyDownEvent, window, cx| {
                     if let Some(handler) = &key_handler
@@ -687,17 +687,72 @@ impl PageView {
                         .mt(px(4.0))
                         .pt(px(4.0))
                         .border_t_1()
-                        .border_color(rgba(theme::HAIRLINE_STRONG))
+                        .border_color(rgba(theme::hairline_strong()))
                         .flex()
                         .flex_col()
                         .child(item)
                         .into_any_element();
                 }
-                let item = ui::select_item(
-                    item_id,
-                    option.label.clone(),
-                    current == Some(option.value.as_str()),
-                );
+                if !option.children.is_empty() {
+                    let open = self.open.contains(&id);
+                    let head = ui::select_expander(
+                        item_id,
+                        option.label.clone(),
+                        option.pill.clone().map(Into::into),
+                        option.trailing.clone().map(Into::into),
+                        open,
+                    )
+                    .on_click(cx.listener(move |view, _, _, cx| view.toggle_disclosure(id, cx)));
+                    let levels = open
+                        .then(|| {
+                            option.children.iter().enumerate().map(|(n, level)| {
+                                let level_id = ElementId::NamedInteger(
+                                    format!("page-select-{id}-item-{at}").into(),
+                                    n as u64,
+                                );
+                                let (on_change, value) =
+                                    (select.on_change.clone(), level.value.clone());
+                                ui::select_item(
+                                    level_id,
+                                    level.label.clone(),
+                                    level.checked.unwrap_or(false),
+                                )
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.pick(on_change.as_deref(), &value, cx)
+                                }))
+                            })
+                        })
+                        .into_iter()
+                        .flatten()
+                        .collect::<Vec<_>>();
+                    return div()
+                        .mt(px(4.0))
+                        .pt(px(4.0))
+                        .border_t_1()
+                        .border_color(rgba(theme::hairline_strong()))
+                        .flex()
+                        .flex_col()
+                        .child(head)
+                        .children(levels)
+                        .into_any_element();
+                }
+                if option.heading {
+                    return ui::select_heading(option.label.clone(), at == 0).into_any_element();
+                }
+                let selected = option
+                    .checked
+                    .unwrap_or(current == Some(option.value.as_str()));
+                let item = match &option.detail {
+                    Some(detail) => ui::select_item_detail(
+                        item_id,
+                        option.label.clone(),
+                        detail.clone(),
+                        selected,
+                        // Under another row with a detail: the models, as a card's rows.
+                        at > 0 && select.options[at - 1].detail.is_some() && !select.options[at - 1].heading,
+                    ),
+                    None => ui::select_item(item_id, option.label.clone(), selected),
+                };
                 if option.disabled {
                     return item.opacity(0.5).cursor_default().into_any_element();
                 }
@@ -810,7 +865,7 @@ impl PageView {
                     )
                     .children(ui::spot(|| format!("combobox-option:{label}")))
                     .when(highlight == Some(at), |row| {
-                        row.bg(rgba(theme::HOVER_STRONG))
+                        row.bg(rgba(theme::hover_strong()))
                     })
                     .on_click(cx.listener(move |view, _, _, cx| view.pick_suggestion(&handler, cx)))
                     .into_any_element()
@@ -1077,7 +1132,9 @@ fn widest_option(select: &tree::Select, cx: &gpui::App) -> Pixels {
         .fold(0.0, f32::max);
     // A toggle row also holds a sparkle, a switch and a line of detail.
     let toggles = select.options.iter().any(|option| option.toggle.is_some());
-    px((widest.ceil() + 48.0).max(if toggles { 320.0 } else { 0.0 }).min(360.0))
+    let detailed = select.options.iter().any(|option| option.detail.is_some());
+    let least = if toggles { 320.0 } else if detailed { 260.0 } else { 0.0 };
+    px((widest.ceil() + 48.0).max(least).min(360.0))
 }
 
 /// How tall a select's or combobox's menu may be: as the desktop's, no taller than the room under `anchor`, or over it

@@ -1441,7 +1441,7 @@ fn a_sidebar_shows_its_label_and_its_popover_page_while_you_point_at_its_button(
         assert_eq!(label.text, "1:05:00");
         assert_eq!(
             super::plugin_ui::tone_dot(label.tone),
-            crate::theme::WORKING
+            crate::theme::working()
         );
     });
     // Pointing at the button shows the popover after its delay, with the popover's own page.

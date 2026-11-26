@@ -82,8 +82,8 @@ pub fn resize_edge<T: 'static>(
                     Side::Right => div.right_0(),
                 })
                 .w(px(1.0))
-                .when(dragging, |line| line.bg(rgba(theme::HAIRLINE_STRONG)))
-                .group_hover(id, |style| style.bg(rgba(theme::HAIRLINE_STRONG))),
+                .when(dragging, |line| line.bg(rgba(theme::hairline_strong())))
+                .group_hover(id, |style| style.bg(rgba(theme::hairline_strong()))),
         )
         .when(dragging, |edge| {
             edge.child(

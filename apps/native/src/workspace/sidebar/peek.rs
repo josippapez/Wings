@@ -82,8 +82,8 @@ impl Workspace {
                 .rounded_r(px(12.0))
                 .border_1()
                 .border_l_0()
-                .border_color(rgba(theme::HAIRLINE_STRONG))
-                .bg(rgb(theme::POPOVER >> 8))
+                .border_color(rgba(theme::hairline_strong()))
+                .bg(rgb(theme::popover() >> 8))
                 .shadow(vec![BoxShadow {
                     color: hsla(0.0, 0.0, 0.0, 0.5),
                     offset: point(px(0.0), px(24.0)),

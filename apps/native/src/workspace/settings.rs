@@ -32,6 +32,7 @@ use super::{
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Section {
     General,
+    Appearance,
     Text,
     Cursor,
     History,
@@ -69,8 +70,9 @@ pub(super) const RESIZE: Duration = Duration::from_millis(200);
 const EASE_OUT: (f32, f32, f32, f32) = (0.0, 0.0, 0.2, 1.0);
 
 impl Section {
-    const ALL: [Section; 10] = [
+    const ALL: [Section; 11] = [
         Section::General,
+        Section::Appearance,
         Section::Text,
         Section::Cursor,
         Section::History,
@@ -85,6 +87,7 @@ impl Section {
     fn label(&self) -> &'static str {
         match self {
             Section::General => "General",
+            Section::Appearance => "Appearance",
             Section::Text => "Text",
             Section::Cursor => "Cursor",
             Section::History => "History and selection",
@@ -101,6 +104,7 @@ impl Section {
     fn icon(&self) -> Icon {
         match self {
             Section::General => Icon::SlidersHorizontal,
+            Section::Appearance => Icon::Palette,
             Section::Text => Icon::Type,
             Section::Cursor => Icon::TextCursor,
             Section::History => Icon::ScrollText,
@@ -166,6 +170,9 @@ pub(super) struct Prefs {
     pub(super) app_data_asked: bool,
     /// Wings asked once whether to install the official plugins (`first_launch_plugins`).
     pub(super) official_plugins_asked: bool,
+    /// Settings, Appearance: the colour theme, and whether the sidebar and title bar are on the window's glass.
+    pub(super) theme: theme::Theme,
+    pub(super) transparent: bool,
 }
 
 impl Default for Prefs {
@@ -188,6 +195,8 @@ impl Default for Prefs {
             terminal_server: None,
             app_data_asked: false,
             official_plugins_asked: false,
+            theme: theme::Theme::Wings,
+            transparent: true,
         }
     }
 }
@@ -667,7 +676,7 @@ impl Workspace {
             .rounded(px(6.0))
             .border_1()
             .border_color(rgba(if recording {
-                theme::HAIRLINE_STRONG
+                theme::hairline_strong()
             } else {
                 HAIRLINE
             }))
@@ -767,6 +776,7 @@ impl Workspace {
     fn section_cards(&self, section: &Section, cx: &mut Context<Self>) -> Vec<Vec<AnyElement>> {
         match section {
             Section::General => self.general_cards(cx),
+            Section::Appearance => self.appearance_cards(cx),
             Section::Text => self.text_cards(cx),
             Section::Cursor => self.cursor_cards(cx),
             Section::History => self.history_cards(cx),
@@ -855,6 +865,43 @@ impl Workspace {
             cards.push(card);
         }
         cards
+    }
+
+    /// The colour theme and the glass behind the sidebar and title bar.
+    fn appearance_cards(&self, cx: &mut Context<Self>) -> Vec<Vec<AnyElement>> {
+        let themes = theme::Theme::ALL
+            .map(|theme| {
+                let choose: Choose = Box::new(move |this, cx| this.set_appearance(theme, this.prefs.transparent, cx));
+                (theme.label().into(), theme == self.prefs.theme, choose)
+            })
+            .into();
+        vec![vec![
+            self.select_row(
+                "theme",
+                "Theme",
+                "The colours of the window, its pages and plugin pages that don't bring their own. Terminals keep \
+                 their own colours.",
+                themes,
+                cx,
+            ),
+            self.switch_row(
+                "transparent",
+                "Transparent sidebar and title bar",
+                "Lets what is behind the window show through them, blurred. Turned off, they have a solid \
+                 background from the theme.",
+                self.prefs.transparent,
+                |this, on, cx| this.set_appearance(this.prefs.theme, on, cx),
+                cx,
+            ),
+        ]]
+    }
+
+    /// Paints in `theme` from now on, with the sidebar and title bar see-through or solid, and saves it. Every window
+    /// draws again once, cached pieces included (`refresh_windows`); nothing draws again per frame for it.
+    pub fn set_appearance(&mut self, theme: theme::Theme, transparent: bool, cx: &mut Context<Self>) {
+        theme::set(theme, transparent);
+        self.set_prefs(|prefs| (prefs.theme, prefs.transparent) = (theme, transparent), cx);
+        cx.refresh_windows();
     }
 
     /// The terminals' font, line height and contrast.
@@ -1240,7 +1287,7 @@ impl Workspace {
                     None,
                     div()
                         .text_size(px(12.0))
-                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                        .text_color(rgb(theme::muted_foreground()))
                         .child(state),
                 )
             })
@@ -1430,7 +1477,7 @@ impl Workspace {
             // Tools says how many programs have an update.
             .when(item == Section::Tools && updates > 0 && !compact, |row| {
                 row.child(
-                    ui::badge(ui::Variant::Secondary, Some(theme::WORKING), true, updates.to_string())
+                    ui::badge(ui::Variant::Secondary, Some(theme::working()), true, updates.to_string())
                         .ml_auto(),
                 )
             })
@@ -1530,7 +1577,7 @@ impl Workspace {
                             div()
                                 .mt(px(4.0))
                                 .text_size(px(12.0))
-                                .text_color(rgb(theme::MUTED_FOREGROUND))
+                                .text_color(rgb(theme::muted_foreground()))
                                 .child("These apply to every terminal right away."),
                         ),
                 )
@@ -1546,7 +1593,7 @@ impl Workspace {
                                 .pb(px(4.0))
                                 .text_size(px(12.0))
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(theme::MUTED_FOREGROUND))
+                                .text_color(rgb(theme::muted_foreground()))
                                 .child("Plugin settings"),
                         )
                     })
@@ -1559,7 +1606,7 @@ impl Workspace {
                         .mt_auto()
                         .px(px(8.0))
                         .text_size(px(12.0))
-                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                        .text_color(rgb(theme::muted_foreground()))
                         .child(format!("Wings {WINGS_VERSION}")),
                 )
             });
@@ -1621,7 +1668,7 @@ impl Workspace {
         let look = super::sidebar::Look::Plain;
         let row = match self.indexing_fill() {
             Some((fill, tooltip)) => {
-                let glyph = crate::icons::icon(Icon::Settings, 16.0, theme::MUTED_FOREGROUND);
+                let glyph = crate::icons::icon(Icon::Settings, 16.0, theme::muted_foreground());
                 super::sidebar::nav_row_tipped("open-settings", glyph, "Settings", look, tooltip).child(fill)
             }
             None => super::sidebar::nav_row("open-settings", Icon::Settings, "Settings", look),
@@ -1699,13 +1746,13 @@ fn nav_item(
         .font_weight(FontWeight::MEDIUM)
         // The desktop's section trigger: muted, and bright on `bg-white/[0.07]` when chosen.
         .when(selected, |item| {
-            item.bg(rgba(0xffffff12)).text_color(rgb(theme::FOREGROUND))
+            item.bg(rgba(0xffffff12)).text_color(rgb(theme::foreground()))
         })
         .when(!selected, |item| {
-            item.text_color(rgb(theme::MUTED_FOREGROUND))
-                .hover(|style| style.text_color(rgb(theme::FOREGROUND)))
+            item.text_color(rgb(theme::muted_foreground()))
+                .hover(|style| style.text_color(rgb(theme::foreground())))
         })
-        .child(icon(glyph, 16.0, theme::MUTED_FOREGROUND))
+        .child(icon(glyph, 16.0, theme::muted_foreground()))
         .children(ui::spot(|| format!("settings-nav:{label}")))
         .relative()
         // Only the icon in a narrow window, named by a tooltip.

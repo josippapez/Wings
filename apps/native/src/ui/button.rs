@@ -29,7 +29,7 @@ fn colors(variant: Variant) -> (u32, u32, u32) {
     match variant {
         Variant::Default => (PRIMARY_FG, theme::palette().foreground << 8 | 0xff, 0xece9e4cc),
         Variant::Secondary => (theme::palette().foreground, 0xffffff14, 0xffffff1d),
-        Variant::Outline => (theme::palette().foreground, theme::HOVER, theme::HOVER_STRONG),
+        Variant::Outline => (theme::palette().foreground, theme::hover(), theme::hover_strong()),
         Variant::Ghost => (theme::palette().foreground, 0, 0xffffff08),
         Variant::Destructive => (
             theme::palette().danger,
@@ -127,7 +127,7 @@ pub fn chip(
         .rounded(px(8.0))
         .border_1()
         .border_color(rgba(0))
-        .when(pressed, |chip| chip.bg(rgba(theme::HOVER)))
+        .when(pressed, |chip| chip.bg(rgba(theme::hover())))
         .text_color(rgb(theme::palette().foreground))
         .text_size(px(12.8))
         .font_weight(gpui::FontWeight::MEDIUM)
@@ -143,7 +143,7 @@ pub fn chip(
             chip.focusable()
                 .tab_stop(true)
                 .cursor_pointer()
-                .hover(|style| style.bg(rgba(theme::HOVER)))
+                .hover(|style| style.bg(rgba(theme::hover())))
         })
         .child(div().min_w_0().truncate().child(content))
 }

@@ -166,7 +166,7 @@ impl live::Draw for IndexingFill {
             .w(relative(share))
             .overflow_hidden()
             .children(crate::ui::cutoff::clips_on_purpose())
-            .child(div().h_full().w(relative(1.0 / share.max(0.001))).rounded(px(theme::RADIUS)).bg(rgba(theme::HOVER)))
+            .child(div().h_full().w(relative(1.0 / share.max(0.001))).rounded(px(theme::RADIUS)).bg(rgba(theme::hover())))
             .into_any_element()
     }
 }

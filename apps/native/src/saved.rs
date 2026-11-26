@@ -368,6 +368,12 @@ pub struct Settings {
     /// Wings asked once whether to install the official plugins, on the first launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub official_plugins_asked: Option<bool>,
+    /// The colour theme, by `theme::Theme::key`. Absent is Wings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+    /// The sidebar and title bar are see-through, on the window's glass. Absent is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transparent: Option<bool>,
     /// The Claude Code version whose changelog Settings, Tools has shown as read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools_read: Option<String>,

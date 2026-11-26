@@ -128,7 +128,7 @@ impl Workspace {
                             row.h(px(26.0))
                                 .rounded(px(6.0))
                                 .border_1()
-                                .border_color(rgba(theme::LINE_STRONG))
+                                .border_color(rgba(theme::line_strong()))
                         })
                         .child(match form {
                             EditorForm::Full => ui::button(
@@ -141,8 +141,8 @@ impl Workspace {
                                     .items_center()
                                     .gap(px(6.0))
                                     .text_size(px(12.5))
-                                    .text_color(rgb(theme::SECONDARY_FOREGROUND))
-                                    .child(icon(Icon::Code, 14.0, theme::MUTED_FOREGROUND))
+                                    .text_color(rgb(theme::secondary_foreground()))
+                                    .child(icon(Icon::Code, 14.0, theme::muted_foreground()))
                                     .child(format!("Open in {}", main.name)),
                             )
                             .h(px(24.0))

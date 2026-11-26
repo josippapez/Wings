@@ -297,7 +297,7 @@ impl ProjectPage {
             .bg(rgba(0xffffff05))
             .px(px(20.0))
             .py(px(16.0))
-            .hover(|style| style.border_color(rgba(theme::HAIRLINE_STRONG)));
+            .hover(|style| style.border_color(rgba(theme::hairline_strong())));
         if self.editors.contains_key(id) {
             return mark_style(card, mark)
                 .child(self.section_editor(id, cx))
@@ -323,8 +323,8 @@ impl ProjectPage {
                 .role(Role::Button)
                 .cursor_pointer()
                 .text_size(px(13.0))
-                .text_color(rgb(theme::MUTED_FOREGROUND))
-                .hover(|style| style.text_color(rgb(theme::FOREGROUND)))
+                .text_color(rgb(theme::muted_foreground()))
+                .hover(|style| style.text_color(rgb(theme::foreground())))
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                     this.edit_section(&edit_id, window, cx)
                 }))
@@ -374,7 +374,7 @@ impl ProjectPage {
                     .items_center()
                     .gap(px(6.0))
                     .text_size(px(11.0))
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                    .text_color(rgb(theme::muted_foreground()))
                     .child(icon(
                         if *by == Who::Agent {
                             Icon::Sparkles
@@ -382,7 +382,7 @@ impl ProjectPage {
                             Icon::User
                         },
                         12.0,
-                        theme::MUTED_FOREGROUND,
+                        theme::muted_foreground(),
                     ))
                     .child(if *by == Who::Agent {
                         "Written by an agent"
@@ -540,9 +540,9 @@ impl ProjectPage {
                 div()
                     .text_size(px(12.0))
                     .text_color(rgb(if failed {
-                        theme::DANGER
+                        theme::danger()
                     } else {
-                        theme::MUTED_FOREGROUND
+                        theme::muted_foreground()
                     }))
                     .child(text),
             )
@@ -584,7 +584,7 @@ impl ProjectPage {
                 &b.icon,
                 b.icon_svg.as_deref(),
                 14.0,
-                theme::MUTED_FOREGROUND,
+                theme::muted_foreground(),
             )
         });
         let group = SharedString::from(format!("block-{id}"));
@@ -630,18 +630,18 @@ impl ProjectPage {
                     .rounded(px(14.0))
                     .border_1()
                     .border_color(rgba(ui::HAIRLINE))
-                    .bg(rgb(theme::SURFACE))
+                    .bg(rgb(theme::surface()))
                     .child(view)
                     .into_any_element()
             }
             None => div()
                 .rounded(px(12.0))
                 .border_1()
-                .border_color(rgba(theme::HAIRLINE_STRONG))
+                .border_color(rgba(theme::hairline_strong()))
                 .px(px(20.0))
                 .py(px(16.0))
                 .text_size(px(13.0))
-                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .text_color(rgb(theme::muted_foreground()))
                 .child(format!(
                     "The plugin for this block ({plugin_id}) is off, has no native build of it, or no longer offers it. Turn it on in the desktop app's Settings, or remove the block."
                 ))
@@ -678,7 +678,7 @@ impl ProjectPage {
                         .truncate()
                         .text_size(px(13.0))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                        .text_color(rgb(theme::muted_foreground()))
                         .child(title),
                 )
                 .child(

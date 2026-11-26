@@ -82,7 +82,7 @@ fn pill(label: SharedString, shortcut: Option<SharedString>) -> Div {
         .rounded(px(6.0))
         .bg(rgb(theme::palette().foreground))
         .text_size(px(12.0))
-        .text_color(rgb(theme::BACKGROUND))
+        .text_color(rgb(theme::background()))
         // GPUI measures a text leaf at its full one-line width when it asks how small it can get, so a bare label
         // never shrinks to the pill's `max_w` and its text runs out of the box. In a box of its own that may shrink
         // (`min_w_0`), the label gets the pill's width and wraps in it.
@@ -97,7 +97,7 @@ fn pill(label: SharedString, shortcut: Option<SharedString>) -> Div {
                     .justify_center()
                     .px(px(4.0))
                     .rounded(px(4.0))
-                    .bg(rgba(theme::BACKGROUND << 8 | 0x1a))
+                    .bg(rgba(theme::background() << 8 | 0x1a))
                     .font_weight(FontWeight::MEDIUM)
                     .child(keys),
             )

@@ -96,7 +96,7 @@ impl PageView {
             .py(px(10.0))
             .rounded(px(14.0))
             .border_1()
-            .border_color(rgba(theme::HAIRLINE_STRONG))
+            .border_color(rgba(theme::hairline_strong()))
             .bg(rgba(theme::palette().popover))
             .shadow(vec![gpui::BoxShadow {
                 color: gpui::hsla(0.0, 0.0, 0.0, 0.28),

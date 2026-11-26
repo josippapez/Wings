@@ -494,9 +494,9 @@ impl Workspace {
                 .gap(px(4.0))
                 .px(px(8.0))
                 .rounded_full()
-                .bg(rgba(theme::HOVER))
+                .bg(rgba(theme::hover()))
                 .text_size(px(11.0))
-                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .text_color(rgb(theme::muted_foreground()))
                 .whitespace_nowrap()
                 .tooltip(ui::tooltip(
                     format!("This terminal was opened by {title}"),
@@ -641,13 +641,13 @@ impl Workspace {
                 .rounded_full()
                 .bg(rgba(SECONDARY))
                 .text_size(px(12.0))
-                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .text_color(rgb(theme::muted_foreground()))
                 .whitespace_nowrap()
                 .cursor_pointer()
                 .hover(|style| {
                     style
                         .bg(rgba(SECONDARY_HOVER))
-                        .text_color(rgb(theme::FOREGROUND))
+                        .text_color(rgb(theme::foreground()))
                 })
                 .tooltip(ui::tooltip(label, None))
                 .children(ui::spot(|| format!("agent-terminals:{owner}")))
@@ -655,7 +655,7 @@ impl Workspace {
                 .on_click(
                     cx.listener(move |this, _, window, cx| this.toggle_zoom(owner, window, cx)),
                 )
-                .child(icon(Icon::SquareTerminal, 14.0, theme::MUTED_FOREGROUND))
+                .child(icon(Icon::SquareTerminal, 14.0, theme::muted_foreground()))
                 .child(text)
                 .into_any_element(),
         )
@@ -694,7 +694,7 @@ impl Workspace {
         let collapsed = panel.collapsed;
         let owner_title = self.pane_title(owner, cx);
         let mut header =
-            vec![icon(Icon::SquareTerminal, 14.0, theme::MUTED_FOREGROUND).into_any_element()];
+            vec![icon(Icon::SquareTerminal, 14.0, theme::muted_foreground()).into_any_element()];
         if here.len() > 1 && !collapsed {
             header.push(self.float_picker(owner, &here, active, panel.menu, cx));
         } else {
@@ -721,7 +721,7 @@ impl Workspace {
                 // The folder and the agent give way before the tabs and the title.
                 .flex_shrink(100.0)
                 .truncate()
-                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .text_color(rgb(theme::muted_foreground()))
                 .child(format!("{more}{detail}by {owner_title}"))
                 .into_any_element(),
         );
@@ -904,8 +904,8 @@ impl Workspace {
             .rounded(px(6.0))
             .font_weight(gpui::FontWeight::MEDIUM)
             .cursor_pointer()
-            .hover(|style| style.bg(rgba(theme::HOVER)))
-            .when(open, |trigger| trigger.bg(rgba(theme::HOVER)))
+            .hover(|style| style.bg(rgba(theme::hover())))
+            .when(open, |trigger| trigger.bg(rgba(theme::hover())))
             .children(ui::spot(|| format!("float-picker:{owner}")))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -920,7 +920,7 @@ impl Workspace {
                     .truncate()
                     .child(self.pane_title(active, cx)),
             )
-            .child(icon(Icon::ChevronDown, 14.0, theme::MUTED_FOREGROUND));
+            .child(icon(Icon::ChevronDown, 14.0, theme::muted_foreground()));
         let menu = self
             .popover_phase(format!("float-menu-{owner}"), open, cx)
             .map(|phase| {

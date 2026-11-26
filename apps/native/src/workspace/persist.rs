@@ -366,6 +366,8 @@ impl Workspace {
             terminal_server: self.prefs.terminal_server,
             app_data_asked: self.prefs.app_data_asked.then_some(true),
             official_plugins_asked: self.prefs.official_plugins_asked.then_some(true),
+            theme: Some(self.prefs.theme.key().into()),
+            transparent: Some(self.prefs.transparent),
             tools_read: self.tools.read.clone(),
             right_width: Some(self.plugin_ui.right_size.width),
             window_bounds: self.window_bounds.clone(),

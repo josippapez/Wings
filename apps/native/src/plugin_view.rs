@@ -74,7 +74,7 @@ impl Render for IssuesView {
                     .max_w(px(384.0))
                     .text_center()
                     .text_size(px(14.0))
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                    .text_color(rgb(theme::muted_foreground()))
                     .child(description),
             )
             .child(

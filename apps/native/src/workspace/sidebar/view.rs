@@ -215,11 +215,11 @@ impl Workspace {
                         .rounded(px(6.0))
                         .cursor_pointer()
                         .text_size(scale.px(11.0))
-                        .text_color(rgb(theme::MUTED_FOREGROUND))
-                        .hover(|style| style.bg(rgba(theme::HOVER)))
+                        .text_color(rgb(theme::muted_foreground()))
+                        .hover(|style| style.bg(rgba(theme::hover())))
                         .on_click(cx.listener(|this, _, _, cx| this.toggle_older(cx)))
                         .children(ui::spot(|| "older".into()))
-                        .child(crate::icons::disclosure("older", open, 12.0, theme::MUTED_FOREGROUND))
+                        .child(crate::icons::disclosure("older", open, 12.0, theme::muted_foreground()))
                         .child("Older")
                         .child(tops.to_string()),
                 )
@@ -278,7 +278,7 @@ impl Workspace {
             .pr(px(8.0))
             .text_size(Scale::of(cx).px(12.0))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(rgb(theme::MUTED_FOREGROUND))
+            .text_color(rgb(theme::muted_foreground()))
             .child("Projects")
             .child(
                 div()
@@ -415,7 +415,7 @@ impl Workspace {
             .rounded(px(theme::RADIUS))
             .cursor_pointer()
             .when(!active, |row| {
-                row.hover(|style| style.bg(rgba(theme::HOVER)))
+                row.hover(|style| style.bg(rgba(theme::hover())))
             })
             .on_hover(cx.listener(move |this, over: &bool, _, cx| {
                 let next = if *over {
@@ -505,7 +505,7 @@ impl Workspace {
                                                 .truncate()
                                                 .text_size(scale.px(11.0))
                                                 .line_height(scale.px(16.0))
-                                                .text_color(rgb(theme::MUTED_FOREGROUND))
+                                                .text_color(rgb(theme::muted_foreground()))
                                                 .child(branch),
                                         )
                                         .children(beside_branch),
@@ -527,12 +527,12 @@ impl Workspace {
                                 .when(agents > 0, |slot| {
                                     slot.px(px(4.0))
                                         .text_size(scale.px(11.0))
-                                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                                        .text_color(rgb(theme::muted_foreground()))
                                         .child(agents.to_string())
                                 })
                                 .when(agents == 0 && pinned, |slot| {
                                     slot.child(
-                                        icon(Icon::Pin, 12.0, theme::MUTED_FOREGROUND)
+                                        icon(Icon::Pin, 12.0, theme::muted_foreground())
                                             .opacity(0.7)
                                             .mx(px(4.0)),
                                     )
@@ -657,7 +657,7 @@ impl Workspace {
                                     div()
                                         .flex_1()
                                         .text_size(px(13.0))
-                                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                                        .text_color(rgb(theme::muted_foreground()))
                                         .child(format!(
                                             "Its {tabs} open tab{} will close, running agents included. The folder stays where it is.",
                                             if tabs == 1 { "" } else { "s" }
@@ -705,7 +705,7 @@ fn project_icon(worktree: bool) -> AnyElement {
             Icon::Folder
         },
         16.0,
-        theme::MUTED_FOREGROUND,
+        theme::muted_foreground(),
     )
     .into_any_element()
 }
@@ -726,19 +726,19 @@ fn git_counts(index: usize, status: &GitStatus, scale: Scale) -> Option<AnyEleme
         (
             Icon::Pencil,
             status.changed,
-            theme::MUTED_FOREGROUND,
+            theme::muted_foreground(),
             plural(status.changed, "changed file"),
         ),
         (
             Icon::ArrowUp,
             status.ahead,
-            theme::INFO,
+            theme::info(),
             format!("{} to push", plural(status.ahead, "commit")),
         ),
         (
             Icon::ArrowDown,
             status.behind,
-            theme::WORKING,
+            theme::working(),
             format!(
                 "{} to pull, as of the last fetch",
                 plural(status.behind, "commit")

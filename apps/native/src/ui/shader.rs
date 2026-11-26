@@ -255,7 +255,7 @@ mod tests {
         for preset in Preset::ALL {
             let mut times = Vec::new();
             for step in 0..90 {
-                let uniforms = crate::gradients::uniforms(preset, &Palette::APP, step as f64 / 15.0, (width, height), 0.0);
+                let uniforms = crate::gradients::uniforms(preset, &Palette::app(), step as f64 / 15.0, (width, height), 0.0);
                 let work = queue.commandBuffer().unwrap();
                 let descriptor = MTLRenderPassDescriptor::new();
                 // SAFETY: Index zero is within the pass's colour attachments.

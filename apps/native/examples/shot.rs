@@ -464,6 +464,10 @@ fn scenes() {
     if std::env::args().nth(2).as_deref() == Some("tab-drag") {
         return tab_drag(&mut cx, &config, &out);
     }
+    // `-- <out-dir> themes` renders the window and Settings, Appearance in each theme, and with the glass off.
+    if std::env::args().nth(2).as_deref() == Some("themes") {
+        return themes(&mut cx, &config, &out);
+    }
     // `-- <out-dir> parity` renders only Settings' sections, Open in editor, the welcome and the quick terminal.
     if std::env::args().nth(2).as_deref() == Some("parity") {
         return parity(&mut cx, &config, &out);
@@ -3136,6 +3140,43 @@ fn plugins_drop(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
 
 /// Settings' sections, the project bar's Open in editor with its menu, the quick terminal floating, minimised and filling
 /// the window, and the welcome once the last project is removed. Made-up editors and the fixture plugin only.
+fn themes(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+    use wings_native::theme::Theme;
+    let mut config = base.clone();
+    config.projects = None;
+    let cases = Theme::ALL
+        .into_iter()
+        .map(|theme| (theme, true))
+        .chain([(Theme::Wings, false), (Theme::Nord, false)]);
+    for (theme, transparent) in cases {
+        for width in [1000.0, 640.0] {
+            let config = config.clone();
+            let handle = cx
+                .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
+                    cx.new(|cx| Workspace::new(config, window, cx))
+                })
+                .expect("open an offscreen window");
+            let window: AnyWindowHandle = handle.into();
+            handle
+                .update(cx, |workspace, _, cx| workspace.set_appearance(theme, transparent, cx))
+                .expect("choose the theme");
+            let state = format!("{}{}", theme.key(), if transparent { "" } else { "-solid" });
+            settle(cx, window, Duration::from_secs(2));
+            save(cx, window, &out.join(format!("{state}-{width}.png")));
+            cx.simulate_keystrokes(window, "cmd-,");
+            wait(cx, window, Duration::from_millis(300));
+            let left = (width - 820.0f32.min(width - 64.0)) / 2.0;
+            // The second section, Appearance: in the list of icons below 800 points, a row 68 apart.
+            let row = if width < 800.0 { point(px(left + 28.0), px(98.0)) } else { point(px(left + 70.0), px(133.0 + 34.0)) };
+            click(cx, window, row);
+            settle(cx, window, Duration::from_millis(200));
+            save(cx, window, &out.join(format!("{state}-settings-{width}.png")));
+            let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        }
+    }
+    wings_native::theme::set(Default::default(), true);
+}
+
 fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     let mut config = base.clone();
     config.projects = None;
@@ -3213,6 +3254,7 @@ fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         let left = (width - 820.0f32.min(width - 64.0)) / 2.0;
         let sections = [
             "general",
+            "appearance",
             "text",
             "cursor",
             "history",

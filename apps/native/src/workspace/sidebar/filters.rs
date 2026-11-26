@@ -54,7 +54,7 @@ impl Workspace {
         let choices = [("Show idle projects", self.side.filters.idle), ("Show worktrees", self.side.filters.worktrees)];
         let items = choices.into_iter().enumerate().map(|(at, (label, on))| {
             let check = if on {
-                icon(Icon::Check, 16.0, theme::MUTED_FOREGROUND).into_any_element()
+                icon(Icon::Check, 16.0, theme::muted_foreground()).into_any_element()
             } else {
                 div().size(px(16.0)).into_any_element()
             };

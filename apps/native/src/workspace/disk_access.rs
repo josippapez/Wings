@@ -113,7 +113,7 @@ impl Workspace {
         let muted = |text: SharedString| {
             div()
                 .text_size(px(13.0))
-                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .text_color(rgb(theme::muted_foreground()))
                 .child(text)
         };
         Some(
@@ -191,7 +191,7 @@ impl Workspace {
         let control = match self.disk_access.allowed {
             Some(true) => div()
                 .text_size(px(13.0))
-                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .text_color(rgb(theme::muted_foreground()))
                 .child("Allowed")
                 .into_any_element(),
             _ => ui::button(

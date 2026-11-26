@@ -132,7 +132,7 @@ impl Workspace {
         let muted = |text: SharedString| {
             div()
                 .text_size(px(13.0))
-                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .text_color(rgb(theme::muted_foreground()))
                 .child(text)
         };
         Some(
@@ -180,7 +180,7 @@ impl Workspace {
                                                 .child(
                                                     div()
                                                         .text_size(px(12.0))
-                                                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                                                        .text_color(rgb(theme::muted_foreground()))
                                                         .child(plugin.description.clone()),
                                                 )
                                         })),

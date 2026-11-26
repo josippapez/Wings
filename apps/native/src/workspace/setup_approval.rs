@@ -199,13 +199,13 @@ impl Workspace {
                 .bg(rgba(0xffffff0f))
                 .font_family("Menlo")
                 .text_size(px(12.0))
-                .when(dim, |code| code.text_color(rgb(theme::MUTED_FOREGROUND)))
+                .when(dim, |code| code.text_color(rgb(theme::muted_foreground())))
                 .child(text)
         };
         let label = |text: &'static str| {
             div()
                 .text_size(px(12.0))
-                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .text_color(rgb(theme::muted_foreground()))
                 .child(text)
         };
         let existing = ask.existing_folder.is_some();
@@ -261,7 +261,7 @@ impl Workspace {
                                     title,
                                     div()
                                         .text_size(px(13.0))
-                                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                                        .text_color(rgb(theme::muted_foreground()))
                                         .child(format!(
                                             "{}{}",
                                             description,

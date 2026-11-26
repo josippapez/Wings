@@ -230,7 +230,7 @@ impl ProjectPage {
             .gap(px(8.0))
             .text_size(px(12.0))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(rgb(theme::MUTED_FOREGROUND))
+            .text_color(rgb(theme::muted_foreground()))
             .child("Facts")
             .when(!data.facts.is_empty(), |h| {
                 h.child(
@@ -268,7 +268,7 @@ impl ProjectPage {
         } else {
             div()
                 .text_size(px(12.0))
-                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .text_color(rgb(theme::muted_foreground()))
                 .child(format!("A project holds at most {MAX_FACTS} facts."))
                 .into_any_element()
         };
@@ -285,7 +285,7 @@ impl ProjectPage {
             .children(self.facts.error.clone().map(|error| {
                 div()
                     .text_size(px(12.0))
-                    .text_color(rgb(theme::DANGER))
+                    .text_color(rgb(theme::danger()))
                     .child(error)
             }))
             .into_any_element()
@@ -345,7 +345,7 @@ impl ProjectPage {
                 div()
                     .mr(px(4.0))
                     .text_size(px(11.0))
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                    .text_color(rgb(theme::muted_foreground()))
                     .child(by),
             )
             .child(
@@ -424,7 +424,7 @@ impl ProjectPage {
                     .px(px(8.0))
                     .py(px(6.0))
                     .text_size(px(12.5))
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                    .text_color(rgb(theme::muted_foreground()))
                     .child(fact.key.clone()),
             )
             .child(

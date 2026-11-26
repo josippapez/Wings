@@ -349,7 +349,7 @@ impl Workspace {
                 .flex()
                 .items_center()
                 .gap(px(6.0))
-                .child(icon(Icon::RefreshCw, 14.0, theme::MUTED_FOREGROUND))
+                .child(icon(Icon::RefreshCw, 14.0, theme::muted_foreground()))
                 .child(if tools.checking {
                     "Checking…"
                 } else {
@@ -367,7 +367,7 @@ impl Workspace {
             check,
         )];
         match &tools.list {
-            None => rows.push(div().px(px(16.0)).py(px(12.0)).text_size(px(12.0)).text_color(rgb(theme::MUTED_FOREGROUND)).child(if tools.checking { "Looking for your tools…" } else { "Not checked yet." }).into_any_element()),
+            None => rows.push(div().px(px(16.0)).py(px(12.0)).text_size(px(12.0)).text_color(rgb(theme::muted_foreground())).child(if tools.checking { "Looking for your tools…" } else { "Not checked yet." }).into_any_element()),
             Some(list) => rows.extend(
                 list.iter()
                     .map(|tool| tool_row(tool, tools.runs.get(&tool.program), tools.is_updating(), cx)),
@@ -397,7 +397,7 @@ impl Workspace {
             div()
                 .text_size(px(12.0))
                 .line_height(px(16.5))
-                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .text_color(rgb(theme::muted_foreground()))
                 .child(text)
         };
         let full = ui::button(
@@ -456,7 +456,7 @@ impl Workspace {
                             div()
                                 .text_size(px(12.0))
                                 .line_height(px(16.5))
-                                .text_color(rgb(theme::MUTED_FOREGROUND))
+                                .text_color(rgb(theme::muted_foreground()))
                                 .child(markdown::inline_element(
                                     format!("tools-note-{}-{at}", entry.version),
                                     &markdown::inline(&format!("• {note}")),
@@ -507,13 +507,13 @@ impl Workspace {
 fn tool_row(tool: &ToolStatus, run: Option<&Run>, busy: bool, cx: &mut Context<Workspace>) -> AnyElement {
     let going = matches!(run, Some(Run::Going(_)));
     let status = if going {
-        Some((theme::WORKING, "Updating…"))
+        Some((theme::working(), "Updating…"))
     } else if !tool.found {
-        Some((theme::IDLE, "Not installed"))
+        Some((theme::idle(), "Not installed"))
     } else if tool.has_update() {
-        Some((theme::WORKING, "Update available"))
+        Some((theme::working(), "Update available"))
     } else if tool.latest.is_some() {
-        Some((theme::DONE, "Up to date"))
+        Some((theme::done(), "Up to date"))
     } else {
         None
     };
@@ -521,7 +521,7 @@ fn tool_row(tool: &ToolStatus, run: Option<&Run>, busy: bool, cx: &mut Context<W
         div()
             .text_size(px(12.0))
             .line_height(px(16.5))
-            .text_color(rgb(theme::MUTED_FOREGROUND))
+            .text_color(rgb(theme::muted_foreground()))
             .child(text)
     };
     let details = if !tool.found {
@@ -636,7 +636,7 @@ fn tool_row(tool: &ToolStatus, run: Option<&Run>, busy: bool, cx: &mut Context<W
                     div()
                         .text_size(px(12.0))
                         .line_height(px(16.5))
-                        .text_color(rgb(theme::DANGER))
+                        .text_color(rgb(theme::danger()))
                         .child(format!("Update failed.\n{error}"))
                 }))
                 .children(retry)

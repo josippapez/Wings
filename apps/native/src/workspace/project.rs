@@ -443,13 +443,13 @@ impl Workspace {
                     .child(name),
             )
             .when_some(branch, |bar, branch| {
-                bar.child(icon(Icon::ChevronRight, 12.0, theme::MUTED_FOREGROUND).opacity(0.6))
+                bar.child(icon(Icon::ChevronRight, 12.0, theme::muted_foreground()).opacity(0.6))
                     .child(
                         div()
                             .min_w_0()
                             .truncate()
                             .text_size(px(12.0))
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .text_color(rgb(theme::muted_foreground()))
                             .child(branch),
                     )
             })

@@ -59,7 +59,7 @@ impl Workspace {
                 .flex()
                 .items_center()
                 .gap(px(6.0))
-                .child(icon(Icon::ArrowLeft, 14.0, theme::MUTED_FOREGROUND))
+                .child(icon(Icon::ArrowLeft, 14.0, theme::muted_foreground()))
                 .child("Plugins")
                 .children(ui::spot(|| "plugin-back".into())),
         )
@@ -211,7 +211,7 @@ impl Workspace {
                         .gap(px(8.0))
                         .pt(px(16.0))
                         .border_t_1()
-                        .border_color(rgba(theme::BORDER))
+                        .border_color(rgba(theme::border()))
                         .child(heading("README"))
                         .child(crate::markdown::render("plugin-readme", &blocks))
                         .children(ui::spot(|| "plugin-readme".into())),
@@ -226,7 +226,7 @@ impl Workspace {
             .child(head)
             .children(remove)
             .when_some(error, |page, error| {
-                page.child(div().text_size(px(12.0)).text_color(rgb(theme::DANGER)).child(error))
+                page.child(div().text_size(px(12.0)).text_color(rgb(theme::danger())).child(error))
             })
             .when(!view.approved, |page| {
                 page.child(notice(if view.enabled {

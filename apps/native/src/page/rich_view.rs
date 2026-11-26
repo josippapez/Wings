@@ -96,7 +96,7 @@ fn highlight(style: &Style) -> HighlightStyle {
     if style.mark {
         return HighlightStyle {
             color: Some(rgb(theme::palette().foreground).into()),
-            background_color: Some(rgba(crate::ui::SEARCH_MARK).into()),
+            background_color: Some(rgba(crate::ui::search_mark()).into()),
             ..Default::default()
         };
     }

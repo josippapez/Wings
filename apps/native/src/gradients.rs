@@ -153,7 +153,7 @@ impl Preset {
                 name: "topo",
                 label: "Topography",
                 shape: Shape::Topo,
-                colors: [theme::INFO, theme::CLAUDE, FOREGROUND_INK],
+                colors: [theme::info(), theme::claude(), FOREGROUND_INK],
                 speed: 0.5,
                 density: 1.0,
                 strength: 0.9,
@@ -164,7 +164,7 @@ impl Preset {
                 name: "flow",
                 label: "Flow lines",
                 shape: Shape::Flow,
-                colors: [theme::INFO, theme::CLAUDE, FOREGROUND_INK],
+                colors: [theme::info(), theme::claude(), FOREGROUND_INK],
                 speed: 0.6,
                 density: 1.0,
                 strength: 0.9,
@@ -175,7 +175,7 @@ impl Preset {
                 name: "grid",
                 label: "Grid",
                 shape: Shape::Grid,
-                colors: [theme::INFO, theme::CLAUDE, FOREGROUND_INK],
+                colors: [theme::info(), theme::claude(), FOREGROUND_INK],
                 speed: 1.5,
                 density: 1.0,
                 strength: 0.9,
@@ -186,7 +186,7 @@ impl Preset {
                 name: "dots",
                 label: "Dot matrix",
                 shape: Shape::Dots,
-                colors: [theme::INFO, theme::CLAUDE, FOREGROUND_INK],
+                colors: [theme::info(), theme::claude(), FOREGROUND_INK],
                 speed: 0.8,
                 density: 1.0,
                 strength: 0.9,
@@ -197,7 +197,7 @@ impl Preset {
                 name: "silk",
                 label: "Silk",
                 shape: Shape::Silk,
-                colors: [theme::INFO, theme::CLAUDE, FOREGROUND_INK],
+                colors: [theme::info(), theme::claude(), FOREGROUND_INK],
                 speed: 0.8,
                 density: 1.0,
                 strength: 0.9,
@@ -208,7 +208,7 @@ impl Preset {
                 name: "cells",
                 label: "Cells",
                 shape: Shape::Cells,
-                colors: [theme::INFO, theme::CLAUDE, FOREGROUND_INK],
+                colors: [theme::info(), theme::claude(), FOREGROUND_INK],
                 speed: 0.8,
                 density: 1.0,
                 strength: 0.9,
@@ -406,7 +406,7 @@ mod tests {
     #[test]
     fn the_uniforms_are_laid_out_as_the_shader_reads_them() {
         assert_eq!(std::mem::size_of::<Uniforms>(), 128);
-        let u = uniforms(Preset::Halo, &Palette::APP, 0.0, (500, 380), 6.5);
+        let u = uniforms(Preset::Halo, &Palette::app(), 0.0, (500, 380), 6.5);
         let base = &u as *const Uniforms as usize;
         let offset = |field: &f32| field as *const f32 as usize - base;
         assert_eq!(offset(&u.size[0]), 64);
@@ -417,19 +417,19 @@ mod tests {
 
     #[test]
     fn a_frame_is_the_same_each_time_it_is_asked_and_moves_on_with_time() {
-        let at = |seconds| uniforms(Preset::Pensive, &Palette::APP, seconds, (500, 380), 6.5);
+        let at = |seconds| uniforms(Preset::Pensive, &Palette::app(), seconds, (500, 380), 6.5);
         assert_eq!(at(12.5), at(12.5));
         assert_ne!(at(12.5).time, at(12.5 + 1.0 / 15.0).time);
         // Hours in, the time is still within the loop, so the shader's noise keeps its precision.
         let late = at(36.0 * 3600.0).time;
         assert!((0.0..LOOP as f32).contains(&late), "{late}");
         // Each preset's mesh.
-        assert_eq!(uniforms(Preset::Halo, &Palette::APP, 0.0, (2, 2), 0.0).shape, 0.0);
-        assert_eq!(uniforms(Preset::Interstella, &Palette::APP, 0.0, (2, 2), 0.0).shape, 1.0);
-        assert_eq!(uniforms(Preset::Mint, &Palette::APP, 0.0, (2, 2), 0.0).shape, 2.0);
-        assert_eq!(uniforms(Preset::Mint, &Palette::APP, 0.0, (2, 2), 0.0).grain, 0.0);
+        assert_eq!(uniforms(Preset::Halo, &Palette::app(), 0.0, (2, 2), 0.0).shape, 0.0);
+        assert_eq!(uniforms(Preset::Interstella, &Palette::app(), 0.0, (2, 2), 0.0).shape, 1.0);
+        assert_eq!(uniforms(Preset::Mint, &Palette::app(), 0.0, (2, 2), 0.0).shape, 2.0);
+        assert_eq!(uniforms(Preset::Mint, &Palette::app(), 0.0, (2, 2), 0.0).grain, 0.0);
         for (at, preset) in Preset::ALL[5..].iter().enumerate() {
-            assert_eq!(uniforms(*preset, &Palette::APP, 0.0, (2, 2), 0.0).shape, at as f32 + 3.0);
+            assert_eq!(uniforms(*preset, &Palette::app(), 0.0, (2, 2), 0.0).shape, at as f32 + 3.0);
         }
     }
 
@@ -437,8 +437,8 @@ mod tests {
     /// keeps at least `CONTRAST` on all of them, on the app's dark page and on a light one.
     #[test]
     fn muted_text_stays_readable_on_every_colour_and_the_bound_the_shader_holds_pixels_to() {
-        let light = Palette { surface: 0xf7f5f2, muted_foreground: 0x6b665f, ..Palette::APP };
-        for palette in [Palette::APP, light] {
+        let light = Palette { surface: 0xf7f5f2, muted_foreground: 0x6b665f, ..Palette::app() };
+        for palette in [Palette::app(), light] {
             let muted = luminance(palette.muted_foreground);
             let (low, high) = luma_bounds(&palette);
             assert!(contrast(muted, high) >= CONTRAST - 0.001 || high >= 1.0);
@@ -451,7 +451,7 @@ mod tests {
                     assert!(luma <= high + 1e-4 && luma >= low - 1e-4, "{preset:?} {ink:?} at {luma}");
                     assert!(contrast(muted, luma) >= CONTRAST - 0.01, "{preset:?}: {}", contrast(muted, luma));
                 }
-                if palette == Palette::APP {
+                if palette == Palette::app() {
                     // Not the flat ground: each preset tints it.
                     let tint = |ink: &[f32; 4]| (0..3).map(|i| (ink[i] - u.ground[i]).abs()).sum::<f32>();
                     assert!(u.inks.iter().any(|ink| tint(ink) > 0.04), "{preset:?} {:?}", u.inks);

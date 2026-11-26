@@ -117,7 +117,7 @@ impl Workspace {
                 .flex_none()
                 .whitespace_nowrap()
                 .text_size(px(11.0))
-                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .text_color(rgb(theme::muted_foreground()))
                 .tooltip(ui::tooltip(
                     "Runs on the terminal server from before Wings updated, with that server's permissions, until \
                      you close and reopen it.",
@@ -487,7 +487,7 @@ impl Workspace {
                                     div()
                                         .flex_1()
                                         .text_size(px(13.0))
-                                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                                        .text_color(rgb(theme::muted_foreground()))
                                         .child(detail),
                                 )
                                 .child(

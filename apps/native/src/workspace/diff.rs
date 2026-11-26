@@ -369,7 +369,7 @@ impl Workspace {
                         .rounded(px(14.0))
                         .border_1()
                         .border_color(rgba(HAIRLINE))
-                        .bg(rgb(theme::SURFACE))
+                        .bg(rgb(theme::surface()))
                         // Kept as last drawn until it changes, so a busy terminal beside it doesn't rebuild it.
                         .child(
                             viewer
@@ -402,7 +402,7 @@ impl Workspace {
             .rounded(px(14.0))
             .border_1()
             .border_color(rgba(HAIRLINE))
-            .bg(rgb(theme::SURFACE))
+            .bg(rgb(theme::surface()))
             .shadow(vec![BoxShadow {
                 color: hsla(0.0, 0.0, 0.0, 0.5),
                 offset: point(px(0.0), px(24.0)),

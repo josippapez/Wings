@@ -136,7 +136,7 @@ impl gpui::Render for Look {
         let spinners = wings_native::ui::spinner_layer(window);
         gpui::div()
             .size_full()
-            .bg(gpui::rgb(wings_native::theme::SURFACE))
+            .bg(gpui::rgb(wings_native::theme::surface()))
             .child(self.piece.clone().cached(gpui::StyleRefinement::default().size_full()))
             .children(self.fields.clone())
             .child(spinners)

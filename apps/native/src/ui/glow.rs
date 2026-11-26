@@ -23,12 +23,15 @@ struct Disc {
     phase: f32,
 }
 
-const DISCS: [Disc; 4] = [
-    Disc { color: theme::CLAUDE, alpha: 0.34, size: 0.30, at: (-0.07, -0.03), reach: (0.07, 0.05), period: 23.0, phase: 0.0 },
-    Disc { color: theme::CLAUDE, alpha: 0.22, size: 0.22, at: (0.10, 0.05), reach: (0.06, 0.05), period: 31.0, phase: 0.4 },
-    Disc { color: theme::INFO, alpha: 0.20, size: 0.24, at: (0.07, -0.07), reach: (0.07, 0.04), period: 37.0, phase: 0.7 },
+/// A function, as the colours follow the theme.
+fn discs() -> [Disc; 4] {
+    [
+    Disc { color: theme::claude(), alpha: 0.34, size: 0.30, at: (-0.07, -0.03), reach: (0.07, 0.05), period: 23.0, phase: 0.0 },
+    Disc { color: theme::claude(), alpha: 0.22, size: 0.22, at: (0.10, 0.05), reach: (0.06, 0.05), period: 31.0, phase: 0.4 },
+    Disc { color: theme::info(), alpha: 0.20, size: 0.24, at: (0.07, -0.07), reach: (0.07, 0.04), period: 37.0, phase: 0.7 },
     Disc { color: 0xc06a8a, alpha: 0.16, size: 0.20, at: (-0.11, 0.07), reach: (0.05, 0.04), period: 29.0, phase: 0.2 },
-];
+    ]
+}
 
 /// How often the glow steps. Its discs take 23 to 37 seconds to go round, so 10 steps a second look as smooth as the
 /// spinners' 30, and each step draws the page it is in again.
@@ -57,7 +60,7 @@ fn paint(bounds: Bounds<Pixels>, seconds: f32, window: &mut Window, _: &mut App)
     // Sized by the smaller side, so a short pane keeps the glow inside it rather than cut flat at its edges.
     let side = width.min(height * 1.2);
     window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
-        for disc in &DISCS {
+        for disc in &discs() {
             let turn = (seconds / disc.period + disc.phase) * TAU;
             // A Lissajous loop, so no two discs line up the same way twice.
             let x = disc.at.0 + disc.reach.0 * turn.sin();

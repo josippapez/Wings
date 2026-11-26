@@ -329,20 +329,20 @@ impl Workspace {
         let glyph = match (state, active) {
             (Some(state), _) => crate::ui::status_dot_slot(state, id.clone()),
             (None, Active::Terminal(_)) => {
-                icon(Icon::Terminal, 14.0, theme::MUTED_FOREGROUND).into_any_element()
+                icon(Icon::Terminal, 14.0, theme::muted_foreground()).into_any_element()
             }
             (None, Active::Plugin(tab)) => self.plugin_tab_glyph(tab),
             (None, Active::Project) => {
-                icon(Icon::FileText, 14.0, theme::MUTED_FOREGROUND).into_any_element()
+                icon(Icon::FileText, 14.0, theme::muted_foreground()).into_any_element()
             }
             (None, Active::Issues) => {
-                icon(Icon::List, 14.0, theme::MUTED_FOREGROUND).into_any_element()
+                icon(Icon::List, 14.0, theme::muted_foreground()).into_any_element()
             }
         };
         let color = if selected {
-            theme::FOREGROUND
+            theme::foreground()
         } else {
-            theme::MUTED_FOREGROUND
+            theme::muted_foreground()
         };
         let splits = match active {
             Active::Terminal(id) => self
@@ -366,7 +366,7 @@ impl Workspace {
                 .size(px(6.0))
                 .flex_none()
                 .rounded_full()
-                .bg(rgb(theme::DONE))
+                .bg(rgb(theme::done()))
                 .children(ui::spot(|| format!("running:{active:?}")))
         });
         let tooltip_label: SharedString = if running.is_empty() {
@@ -427,13 +427,13 @@ impl Workspace {
             .text_size(px(12.0))
             .font_weight(FontWeight::MEDIUM)
             .text_color(rgb(if selected {
-                theme::FOREGROUND
+                theme::foreground()
             } else {
-                theme::MUTED_FOREGROUND
+                theme::muted_foreground()
             }))
             .when(selected, |tab| {
                 tab.bg(rgba(SELECTED_TAB))
-                    .border_color(rgba(theme::HAIRLINE_STRONG))
+                    .border_color(rgba(theme::hairline_strong()))
                     .shadow(vec![
                         BoxShadow {
                             color: hsla(0.0, 0.0, 1.0, 0.06),
@@ -454,11 +454,11 @@ impl Workspace {
             .when(!selected, |tab| {
                 tab.hover(|style| {
                     style
-                        .bg(rgba(theme::HOVER))
-                        .text_color(rgb(theme::FOREGROUND))
+                        .bg(rgba(theme::hover()))
+                        .text_color(rgb(theme::foreground()))
                 })
             })
-            .focus_visible(|style| style.border_color(rgb(theme::FOREGROUND)))
+            .focus_visible(|style| style.border_color(rgb(theme::foreground())))
             // Over the tabs it passes, which don't take the pointer from it, as the sidebar's dragged row.
             .when(self.dragged_left(active).is_some(), |tab| {
                 tab.cursor_grabbing().block_mouse_except_scroll()
@@ -498,7 +498,7 @@ impl Workspace {
             })
             .map_or("", |view| view.icon.as_str());
         let own = installed.and_then(|installed| installed.plugin.icon_svg.as_deref());
-        plugin_glyph(name, own, 14.0, theme::MUTED_FOREGROUND)
+        plugin_glyph(name, own, 14.0, theme::muted_foreground())
     }
 }
 

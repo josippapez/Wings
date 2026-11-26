@@ -254,7 +254,7 @@ impl PageView {
             .py(px(10.0))
             .rounded(px(14.0))
             .border_1()
-            .border_color(rgba(theme::HAIRLINE_STRONG))
+            .border_color(rgba(theme::hairline_strong()))
             // Opaque: the popover colour is 95% opaque, and the page's words showed through the card.
             .bg(rgba(theme::palette().popover | 0xff))
             .shadow(vec![gpui::BoxShadow {

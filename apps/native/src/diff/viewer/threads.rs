@@ -95,9 +95,9 @@ impl Viewer {
                     .aria_label(SharedString::from(format!("Discussion, {count} comments")))
                     .aria_selected(open)
                     .bg(rgba(if open { 0xffffff14 } else { 0 }))
-                    .when(!open, |row| row.hover(|style| style.bg(rgba(theme::HOVER))))
+                    .when(!open, |row| row.hover(|style| style.bg(rgba(theme::hover()))))
                     .children(ui::spot(|| "diff-discussion".into()))
-                    .child(icon(Icon::MessageSquare, 12.0, theme::MUTED_FOREGROUND))
+                    .child(icon(Icon::MessageSquare, 12.0, theme::muted_foreground()))
                     .child(
                         div()
                             .flex_1()
@@ -106,7 +106,7 @@ impl Viewer {
                     )
                     .child(
                         div()
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .text_color(rgb(theme::muted_foreground()))
                             .child(count.to_string()),
                     )
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -158,14 +158,14 @@ impl Viewer {
                 inset: false,
             }])
             .text_size(px(13.0))
-            .text_color(rgb(theme::FOREGROUND))
+            .text_color(rgb(theme::foreground()))
             .when_some(root.path.clone().filter(|_| !inline), |card, path| {
                 card.child(
                     div()
                         .mb(px(10.0))
                         .truncate()
                         .text_size(px(11.0))
-                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                        .text_color(rgb(theme::muted_foreground()))
                         .child(path),
                 )
             })
@@ -179,7 +179,7 @@ impl Viewer {
                         .flex_col()
                         .gap(px(12.0))
                         .border_l_1()
-                        .border_color(rgba(theme::HAIRLINE_STRONG))
+                        .border_color(rgba(theme::hairline_strong()))
                         .children(thread.replies.iter().map(|&at| self.comment_body(at, cx))),
                 )
             })
@@ -218,11 +218,11 @@ impl Viewer {
                     .justify_center()
                     .rounded_full()
                     .border_1()
-                    .border_color(rgba(theme::BORDER))
-                    .bg(rgba(theme::HOVER))
+                    .border_color(rgba(theme::border()))
+                    .bg(rgba(theme::hover()))
                     .text_size(px(11.0))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                    .text_color(rgb(theme::muted_foreground()))
                     .child(initial),
             )
             .child(
@@ -246,7 +246,7 @@ impl Viewer {
                                 div()
                                     .min_w_0()
                                     .truncate()
-                                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                                    .text_color(rgb(theme::muted_foreground()))
                                     .child(when)
                             }))
                             .when(!url.is_empty(), |line| {
@@ -303,17 +303,17 @@ impl Viewer {
                         .border_color(rgba(0))
                         .text_size(px(12.0))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                        .text_color(rgb(theme::muted_foreground()))
                         .cursor_pointer()
                         .focusable()
                         .tab_stop(true)
                         .hover(|style| {
                             style
-                                .bg(rgba(theme::HOVER))
-                                .text_color(rgb(theme::FOREGROUND))
+                                .bg(rgba(theme::hover()))
+                                .text_color(rgb(theme::foreground()))
                         })
-                        .focus_visible(|style| style.border_color(rgb(theme::FOREGROUND)))
-                        .child(icon(Icon::Reply, 12.0, theme::MUTED_FOREGROUND))
+                        .focus_visible(|style| style.border_color(rgb(theme::foreground())))
+                        .child(icon(Icon::Reply, 12.0, theme::muted_foreground()))
                         .child("Reply")
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.open_reply(root, window, cx)
@@ -342,7 +342,7 @@ impl Viewer {
                         .id(SharedString::from(format!("diff-reply-error-{root}")))
                         .role(Role::Alert)
                         .text_size(px(12.0))
-                        .text_color(rgb(theme::BLOCKED))
+                        .text_color(rgb(theme::blocked()))
                         .child(error),
                 )
             })

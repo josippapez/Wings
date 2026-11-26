@@ -53,11 +53,11 @@ pub(super) struct Palette {
 
 pub(super) fn palette(tone: Tone) -> Palette {
     let (pill, text, ring, dot) = match tone {
-        Tone::Neutral => (0xffffff0f, theme::MUTED_FOREGROUND, 0xffffff1a, theme::IDLE),
+        Tone::Neutral => (0xffffff0f, theme::muted_foreground(), 0xffffff1a, theme::idle()),
         Tone::Info => (0x7aa7f21f, 0x9cc0ff, 0x7aa7f240, 0x7aa7f2),
-        Tone::Success => (0x7dd3a71f, theme::DONE, 0x7dd3a740, theme::DONE),
-        Tone::Warning => (0xe9b65f1f, theme::WORKING, 0xe9b65f40, theme::WORKING),
-        Tone::Danger => (0xf2786a1f, theme::BLOCKED, 0xf2786a4d, theme::BLOCKED),
+        Tone::Success => (0x7dd3a71f, theme::done(), 0x7dd3a740, theme::done()),
+        Tone::Warning => (0xe9b65f1f, theme::working(), 0xe9b65f40, theme::working()),
+        Tone::Danger => (0xf2786a1f, theme::blocked(), 0xf2786a4d, theme::blocked()),
         Tone::Merged => (0xb392f024, 0xc9b2f7, 0xb392f04d, 0xb392f0),
     };
     Palette {
@@ -83,7 +83,7 @@ pub(super) fn sidebar_glyph(installed: &Installed, sidebar: &str, size: f32) -> 
         named,
         installed.plugin.icon_svg.as_deref(),
         size,
-        theme::MUTED_FOREGROUND,
+        theme::muted_foreground(),
     )
 }
 
@@ -151,7 +151,7 @@ impl Workspace {
             .cursor_pointer()
             .focusable()
             .tab_stop(true)
-            .focus_visible(|style| style.border_color(rgb(theme::FOREGROUND)))
+            .focus_visible(|style| style.border_color(rgb(theme::foreground())))
             .hover(|style| style.bg(rgba(colors.pill + 0x10)))
             .when(open, |pill| pill.bg(rgba(colors.pill + 0x10)))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -284,13 +284,13 @@ impl Workspace {
                             div()
                                 .text_size(px(13.0))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(theme::FOREGROUND))
+                                .text_color(rgb(theme::foreground()))
                                 .child(title)
                         }))
                         .children(badge.subtitle.clone().map(|subtitle| {
                             div()
                                 .truncate()
-                                .text_color(rgb(theme::MUTED_FOREGROUND))
+                                .text_color(rgb(theme::muted_foreground()))
                                 .child(subtitle)
                         })),
                 )
@@ -302,7 +302,7 @@ impl Workspace {
                 div()
                     .id(("badge-error", pane))
                     .role(Role::Alert)
-                    .text_color(rgb(theme::BLOCKED))
+                    .text_color(rgb(theme::blocked()))
                     .child(error)
             }))
             .when(!badge.actions.is_empty(), |card| {
@@ -692,7 +692,7 @@ impl Workspace {
                             .gap(px(6.0))
                             .max_w(px(200.0))
                             .text_size(px(12.0))
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .text_color(rgb(theme::muted_foreground()))
                             .child(ui::dot(tone_dot(label.tone)))
                             .child(div().min_w_0().truncate().child(label.text.clone()))
                     });
@@ -726,7 +726,7 @@ impl Workspace {
                 .py(px(6.0))
                 .text_size(px(12.0))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .text_color(rgb(theme::muted_foreground()))
                 .child("Keep in bar")
                 .into_any_element(),
         );
@@ -904,7 +904,7 @@ impl Workspace {
             .rounded(px(theme::RADIUS))
             .border_1()
             .border_color(rgba(0xece9e41a))
-            .bg(rgb(ui::DIALOG))
+            .bg(rgb(theme::dialog()))
             // shadcn's `shadow-md`.
             .shadow(vec![
                 BoxShadow {
@@ -1255,8 +1255,8 @@ impl Workspace {
                         .gap(px(2.0))
                         .rounded(px(12.0))
                         .border_1()
-                        .border_color(rgba(theme::HAIRLINE_STRONG))
-                        .bg(rgba(theme::POPOVER))
+                        .border_color(rgba(theme::hairline_strong()))
+                        .bg(rgba(theme::popover()))
                         .cursor_pointer()
                         .on_click(cx.listener(move |this, _, _, cx| this.dismiss_notice(id, cx)))
                         .child(
@@ -1269,7 +1269,7 @@ impl Workspace {
                             card.child(
                                 div()
                                     .text_size(px(12.0))
-                                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                                    .text_color(rgb(theme::muted_foreground()))
                                     .child(notice.body.clone()),
                             )
                         })
@@ -1293,7 +1293,7 @@ fn status_item(item: &StatusItem) -> AnyElement {
         .children(
             item.label
                 .clone()
-                .map(|label| div().text_color(rgb(theme::MUTED_FOREGROUND)).child(label)),
+                .map(|label| div().text_color(rgb(theme::muted_foreground())).child(label)),
         )
         .children(item.percent.map(|percent| {
             div()
@@ -1315,7 +1315,7 @@ fn status_item(item: &StatusItem) -> AnyElement {
             div()
                 .text_color(rgb(match item.tone {
                     Some(tone) if tone != Tone::Neutral => colors.text,
-                    _ => theme::FOREGROUND,
+                    _ => theme::foreground(),
                 }))
                 .child(item.value.clone()),
         )
@@ -1339,7 +1339,7 @@ fn rows_grid(rows: &[Row], tinted: bool) -> AnyElement {
                 .child(
                     div()
                         .flex_none()
-                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                        .text_color(rgb(theme::muted_foreground()))
                         .child(row.label.clone()),
                 )
                 .child(
@@ -1356,7 +1356,7 @@ fn rows_grid(rows: &[Row], tinted: bool) -> AnyElement {
                                 .rounded_full()
                                 .bg(rgb(colors.dot))
                         }))
-                        .text_color(rgb(colors.as_ref().map_or(theme::FOREGROUND, |c| c.text)))
+                        .text_color(rgb(colors.as_ref().map_or(theme::foreground(), |c| c.text)))
                         .child(div().truncate().child(row.value.clone())),
                 )
         }))
@@ -1438,7 +1438,7 @@ fn button_with_title(button: gpui::Stateful<gpui::Div>, on: bool) -> gpui::State
         .h(px(26.0))
         .px(px(10.0))
         .rounded(px(6.0))
-        .when(!on, |button| button.text_color(rgb(theme::SECONDARY_FOREGROUND)))
+        .when(!on, |button| button.text_color(rgb(theme::secondary_foreground())))
 }
 
 /// The label a plugin set when it is a count: digits only.
@@ -1457,8 +1457,8 @@ fn count_badge(count: &str) -> AnyElement {
         .h(px(18.0))
         .px(px(5.0))
         .rounded(px(9.0))
-        .bg(rgba(theme::INFO << 8 | 0x24))
-        .text_color(rgb(theme::INFO))
+        .bg(rgba(theme::info() << 8 | 0x24))
+        .text_color(rgb(theme::info()))
         .text_size(px(11.0))
         .font_weight(FontWeight::SEMIBOLD)
         .child(count.to_owned())
@@ -1467,9 +1467,9 @@ fn count_badge(count: &str) -> AnyElement {
 
 pub(super) fn tone_dot(tone: Option<Tone>) -> u32 {
     match tone {
-        Some(Tone::Warning) => theme::WORKING,
-        Some(Tone::Danger) => theme::BLOCKED,
-        _ => theme::DONE,
+        Some(Tone::Warning) => theme::working(),
+        Some(Tone::Danger) => theme::blocked(),
+        _ => theme::done(),
     }
 }
 
@@ -1494,7 +1494,7 @@ impl Render for LabelTip {
                         .child(
                             div()
                                 .flex_none()
-                                .text_color(rgba(theme::BACKGROUND << 8 | 0x99))
+                                .text_color(rgba(theme::background() << 8 | 0x99))
                                 .child(label.clone()),
                         )
                         .child(div().min_w_0().truncate().child(value.clone()))
@@ -1507,9 +1507,9 @@ impl Render for LabelTip {
                     .flex_col()
                     .gap(px(6.0))
                     .rounded(px(6.0))
-                    .bg(rgb(theme::FOREGROUND))
+                    .bg(rgb(theme::foreground()))
                     .text_size(px(12.0))
-                    .text_color(rgb(theme::BACKGROUND))
+                    .text_color(rgb(theme::background()))
                     .child(div().font_weight(FontWeight::MEDIUM).child(title.clone()))
                     .child(div().flex().flex_col().gap(px(2.0)).children(grid))
             }),
@@ -1535,7 +1535,7 @@ impl Render for RowsTip {
                     .border_color(rgba(HAIRLINE))
                     .bg(rgb(CARD))
                     .text_size(px(12.0))
-                    .text_color(rgb(theme::FOREGROUND))
+                    .text_color(rgb(theme::foreground()))
                     .child(rows_grid(&rows, false))
             }),
         )
@@ -1659,7 +1659,7 @@ impl BarButton<'_> {
                     named,
                     self.installed.plugin.icon_svg.as_deref(),
                     size,
-                    theme::MUTED_FOREGROUND,
+                    theme::muted_foreground(),
                 )
             }
         }

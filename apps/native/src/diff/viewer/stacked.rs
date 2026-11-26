@@ -519,7 +519,7 @@ impl Viewer {
             .track_focus(&self.code_focus)
             .role(Role::Region)
             .aria_label("Diff code")
-            .focus_visible(|style| style.border_1().border_color(rgb(theme::INFO)))
+            .focus_visible(|style| style.border_1().border_color(rgb(theme::info())))
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(|this, _, window, cx| this.code_focus.focus(window, cx)),
@@ -620,7 +620,7 @@ impl Viewer {
             .h(px(HEADER))
             .w_full()
             .flex_none()
-            .bg(rgb(theme::SURFACE))
+            .bg(rgb(theme::surface()))
             .child(
                 div()
                     .size_full()
@@ -647,7 +647,7 @@ impl Viewer {
                                     div()
                                         .min_w_0()
                                         .truncate()
-                                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                                        .text_color(rgb(theme::muted_foreground()))
                                         .child(folder),
                                 )
                             })
@@ -664,13 +664,13 @@ impl Viewer {
                                         .min_w_0()
                                         .truncate()
                                         .text_size(px(12.0))
-                                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                                        .text_color(rgb(theme::muted_foreground()))
                                         .child(renamed),
                                 )
                             }),
                     )
-                    .child(count(format!("+{added}"), theme::DONE))
-                    .child(count(format!("−{removed}"), theme::BLOCKED))
+                    .child(count(format!("+{added}"), theme::done()))
+                    .child(count(format!("−{removed}"), theme::blocked()))
                     .when_some(editor, |row, editor| {
                         let path = path.clone();
                         row.child(
@@ -716,7 +716,7 @@ impl Viewer {
             .items_center()
             .pl(px(16.0))
             .text_size(px(12.0))
-            .text_color(rgb(theme::MUTED_FOREGROUND))
+            .text_color(rgb(theme::muted_foreground()))
             .child(text)
             .into_any_element()
     }
@@ -754,7 +754,7 @@ impl Viewer {
             .items_center()
             .bg(rgba(0xffffff06))
             .text_size(px(12.0))
-            .text_color(rgb(theme::MUTED_FOREGROUND))
+            .text_color(rgb(theme::muted_foreground()))
             .children(ui::spot(move || format!("diff-fold-{file}-{fold}")))
             // Under the line numbers, past the changed lines' edge.
             .child(
@@ -763,7 +763,7 @@ impl Viewer {
                     .flex_none()
                     .flex()
                     .justify_center()
-                    .child(icon(glyph, 12.0, theme::MUTED_FOREGROUND)),
+                    .child(icon(glyph, 12.0, theme::muted_foreground())),
             )
             .child(label.clone())
             .when(opens, |row| {
@@ -772,8 +772,8 @@ impl Viewer {
                     .aria_label(SharedString::from(format!("Show {label}")))
                     .hover(|style| {
                         style
-                            .bg(rgba(theme::HOVER))
-                            .text_color(rgb(theme::FOREGROUND))
+                            .bg(rgba(theme::hover()))
+                            .text_color(rgb(theme::foreground()))
                     })
                     .on_click(cx.listener(move |this, _, _, cx| this.open_fold(file, fold, cx)))
             })
@@ -852,8 +852,8 @@ impl Viewer {
     ) -> AnyElement {
         let (mark, color, bg) = colors(kind);
         let edge = match kind {
-            DiffLineKind::Added => Some(theme::DONE),
-            DiffLineKind::Deleted => Some(theme::DANGER),
+            DiffLineKind::Added => Some(theme::done()),
+            DiffLineKind::Deleted => Some(theme::danger()),
             DiffLineKind::Context => None,
         };
         let shift = if self.wrap { px(0.0) } else { self.split_x };
@@ -946,8 +946,8 @@ impl Viewer {
                     .into_any_element(),
             })
             .when(files.is_some(), |bar| {
-                bar.child(count(format!("+{added}"), theme::DONE))
-                    .child(count(format!("−{removed}"), theme::BLOCKED))
+                bar.child(count(format!("+{added}"), theme::done()))
+                    .child(count(format!("−{removed}"), theme::blocked()))
             })
             .child(
                 div()
@@ -956,7 +956,7 @@ impl Viewer {
                     .min_w_0()
                     .truncate()
                     .text_size(px(12.0))
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                    .text_color(rgb(theme::muted_foreground()))
                     .child(subtitle),
             )
             .when(self.view.refresh, |bar| {
@@ -1023,8 +1023,8 @@ impl Viewer {
             .cursor_pointer()
             .text_size(px(13.0))
             .font_weight(FontWeight::SEMIBOLD)
-            .when(self.stack.scopes_open, |picker| picker.bg(rgba(theme::HOVER)))
-            .hover(|style| style.bg(rgba(theme::HOVER)))
+            .when(self.stack.scopes_open, |picker| picker.bg(rgba(theme::hover())))
+            .hover(|style| style.bg(rgba(theme::hover())))
             .child(
                 canvas(move |at, _, _| bounds.set(at), |_, _, _, _| {})
                     .absolute()
@@ -1034,7 +1034,7 @@ impl Viewer {
             )
             .children(ui::spot(|| "diff-scope".into()))
             .child(label)
-            .child(icon(Icon::ChevronDown, 14.0, theme::MUTED_FOREGROUND))
+            .child(icon(Icon::ChevronDown, 14.0, theme::muted_foreground()))
             .on_click(cx.listener(|this, _, _, cx| {
                 this.stack.scopes_open = !this.stack.scopes_open;
                 this.stack.menu = None;

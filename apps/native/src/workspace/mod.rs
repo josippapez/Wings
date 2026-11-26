@@ -376,7 +376,7 @@ fn page_card_over(page: impl IntoElement, backdrop: Option<AnyElement>) -> AnyEl
                 .rounded(px(14.0))
                 .border_1()
                 .border_color(rgba(HAIRLINE))
-                .when(backdrop.is_none(), |card| card.bg(rgb(theme::SURFACE)))
+                .when(backdrop.is_none(), |card| card.bg(rgb(theme::surface())))
                 .children(backdrop)
                 .child(page),
         )
@@ -735,7 +735,10 @@ impl Workspace {
             terminal_server: settings.terminal_server,
             app_data_asked: settings.app_data_asked == Some(true),
             official_plugins_asked: settings.official_plugins_asked == Some(true),
+            theme: theme::Theme::from_key(settings.theme.as_deref()),
+            transparent: settings.transparent != Some(false),
         };
+        theme::set(this.prefs.theme, this.prefs.transparent);
         this.find_editors(cx);
         this.start_global_hotkey(window, cx);
         this.listen_for_notification_clicks(window, cx);
@@ -1189,7 +1192,7 @@ impl Render for Workspace {
                     this.check_updates(true, window, cx)
                 }),
             )
-            .text_color(rgb(theme::FOREGROUND))
+            .text_color(rgb(theme::foreground()))
             .text_size(px(13.0))
             .on_action(cx.listener(|this, _: &NewTab, window, cx| this.new_terminal(window, cx)))
             .on_action(
@@ -1331,7 +1334,7 @@ impl Render for Workspace {
                 },
             )
             // The glass everything lies on, with a hole where a tab's backdrop shows in the layer under the window.
-            .child(ui::window_glass(rgba(theme::GLASS)))
+            .child(ui::window_glass(rgba(theme::glass())))
             .child(title_bar)
             .child(
                 div()

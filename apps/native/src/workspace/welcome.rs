@@ -60,10 +60,10 @@ impl Workspace {
                         .items_center()
                         .justify_center()
                         .rounded_full()
-                        .bg(rgba(theme::HOVER_STRONG))
+                        .bg(rgba(theme::hover_strong()))
                         .text_size(px(11.0))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(theme::FOREGROUND))
+                        .text_color(rgb(theme::foreground()))
                         .child((index + 1).to_string()),
                 )
                 .child(div().flex_1().min_w_0().child(text))
@@ -94,7 +94,7 @@ impl Workspace {
                     .child(
                         div()
                             .text_size(px(14.0))
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .text_color(rgb(theme::muted_foreground()))
                             .child("A terminal workspace for coding agents."),
                     ),
             )
@@ -106,7 +106,7 @@ impl Workspace {
                     .flex_col()
                     .gap(px(10.0))
                     .text_size(px(13.0))
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                    .text_color(rgb(theme::muted_foreground()))
                     .children(steps),
             )
             .children(self.prefs.global_hotkey.enabled.then(|| {
@@ -118,7 +118,7 @@ impl Workspace {
                     .max_w(px(448.0))
                     .text_center()
                     .text_size(px(12.0))
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                    .text_color(rgb(theme::muted_foreground()))
                     .child(format!(
                         "From any app, {hotkey} brings Wings forward and goes to that agent. Change it in \
                          Settings, Keyboard."
@@ -152,9 +152,9 @@ fn kbd(keys: String) -> AnyElement {
         .flex()
         .items_center()
         .rounded(px(4.0))
-        .bg(rgba(theme::HOVER_STRONG))
+        .bg(rgba(theme::hover_strong()))
         .text_size(px(12.0))
-        .text_color(rgb(theme::FOREGROUND))
+        .text_color(rgb(theme::foreground()))
         .child(keys)
         .into_any_element()
 }

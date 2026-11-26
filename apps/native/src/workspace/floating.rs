@@ -172,7 +172,7 @@ impl Panel {
             .flex_col()
             .overflow_hidden()
             .border_1()
-            .bg(rgb(theme::SURFACE))
+            .bg(rgb(theme::surface()))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(header)
             .when(!collapsed, |panel| {
@@ -199,7 +199,7 @@ impl Panel {
                     .absolute()
                     .right(px(rect.right))
                     .bottom(px(rect.bottom))
-                    .border_color(rgba(theme::HAIRLINE_STRONG))
+                    .border_color(rgba(theme::hairline_strong()))
                     .shadow(vec![BoxShadow {
                         color: hsla(0.0, 0.0, 0.0, 0.35),
                         offset: point(px(0.0), px(10.0)),
@@ -217,7 +217,7 @@ impl Panel {
                                     panel.max_w(px(area.size.width.as_f32() - rect.right))
                                 })
                                 .rounded_full()
-                                .bg(rgba(theme::POPOVER))
+                                .bg(rgba(theme::popover()))
                         } else {
                             panel.w(px(w)).h(px(h)).rounded(px(12.0))
                         }

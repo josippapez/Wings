@@ -421,7 +421,7 @@ impl Workspace {
                     Icon::ChevronRight
                 },
                 12.0,
-                theme::MUTED_FOREGROUND,
+                theme::muted_foreground(),
             ));
         let header = div()
             .flex()
@@ -442,10 +442,10 @@ impl Workspace {
                     .rounded(px(6.0))
                     .cursor_pointer()
                     .text_size(scale.px(11.0))
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
-                    .hover(|style| style.bg(rgba(theme::HOVER)))
+                    .text_color(rgb(theme::muted_foreground()))
+                    .hover(|style| style.bg(rgba(theme::hover())))
                     .focusable()
-                    .focus_visible(|style| style.bg(rgba(theme::HOVER)))
+                    .focus_visible(|style| style.bg(rgba(theme::hover())))
                     .on_click(toggle)
                     .child(div().truncate().child(group.title.clone()))
                     .child(chevron),
@@ -472,11 +472,11 @@ impl Workspace {
                         .rounded(px(6.0))
                         .cursor_pointer()
                         .text_size(scale.px(11.0))
-                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                        .text_color(rgb(theme::muted_foreground()))
                         .hover(|style| {
                             style
-                                .bg(rgba(theme::HOVER))
-                                .text_color(rgb(theme::FOREGROUND))
+                                .bg(rgba(theme::hover()))
+                                .text_color(rgb(theme::foreground()))
                         })
                         .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                             let new_tab = event.modifiers().secondary(cx);
@@ -512,11 +512,11 @@ impl Workspace {
                         .rounded(px(6.0))
                         .cursor_pointer()
                         .text_size(scale.px(12.5))
-                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                        .text_color(rgb(theme::muted_foreground()))
                         .hover(|style| {
                             style
-                                .bg(rgba(theme::HOVER))
-                                .text_color(rgb(theme::FOREGROUND))
+                                .bg(rgba(theme::hover()))
+                                .text_color(rgb(theme::foreground()))
                         })
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             if !this.sections.expanded.remove(&at) {
@@ -652,7 +652,7 @@ impl Workspace {
                     .bottom_0()
                     .left(px(ROW_PAD + level as f32 * INDENT + ICON_CENTER))
                     .w(px(1.0))
-                    .bg(rgba(theme::HAIRLINE_STRONG))
+                    .bg(rgba(theme::hairline_strong()))
             }))
             .child(
                 div()
@@ -671,9 +671,9 @@ impl Workspace {
                     .when(depth > 0, |row| row.pl(px(guide)))
                     .rounded(px(6.0))
                     .cursor_pointer()
-                    .hover(|style| style.bg(rgba(theme::HOVER)))
+                    .hover(|style| style.bg(rgba(theme::hover())))
                     .focusable()
-                    .focus_visible(|style| style.bg(rgba(theme::HOVER)))
+                    .focus_visible(|style| style.bg(rgba(theme::hover())))
                     .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                         let new_tab = event.modifiers().secondary(cx);
                         this.open_section_view(
@@ -693,7 +693,7 @@ impl Workspace {
                             .flex_1()
                             .truncate()
                             .text_size(scale.px(12.5))
-                            .text_color(rgb(theme::FOREGROUND))
+                            .text_color(rgb(theme::foreground()))
                             .child(title(&row.label).to_owned()),
                     )
                     .when_some(reference, |line, reference| {
@@ -704,7 +704,7 @@ impl Workspace {
                                 .group_hover(hover, |style| style.opacity(1.0))
                                 .text_size(scale.px(10.0))
                                 .font_weight(FontWeight::NORMAL)
-                                .text_color(rgb(theme::MUTED_FOREGROUND))
+                                .text_color(rgb(theme::muted_foreground()))
                                 .child(reference),
                         )
                     }),

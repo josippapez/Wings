@@ -182,11 +182,11 @@ pub fn status_dot(state: AgentState) -> impl IntoElement {
     let dot = |size: f32| div().size(px(size)).rounded_full();
     let shape = match state {
         AgentState::Working => div().size(px(10.0)).child(spinning()).into_any_element(),
-        AgentState::Blocked => dot(10.0).bg(rgb(theme::BLOCKED)).into_any_element(),
+        AgentState::Blocked => dot(10.0).bg(rgb(theme::blocked())).into_any_element(),
         AgentState::Done => dot(8.0).bg(rgb(theme::palette().done)).into_any_element(),
         AgentState::Idle => dot(8.0)
             .border(px(1.5))
-            .border_color(rgb(theme::IDLE))
+            .border_color(rgb(theme::idle()))
             .into_any_element(),
     };
     div()

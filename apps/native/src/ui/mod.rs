@@ -48,6 +48,8 @@ mod switch;
 mod tooltip;
 
 pub use backdrop::{BackdropLayer, backdrop_slot, window_glass};
+#[cfg(test)]
+pub use backdrop::PAINTED_GLASS;
 #[cfg(feature = "test-support")]
 pub use backdrop::set_screenshot_ground;
 #[cfg(target_os = "macos")]
@@ -63,7 +65,7 @@ pub use menu::{
 };
 pub use parts::{board_box, disclosure_trigger, dot, gauge, heading, list, list_item, plain_card};
 pub use sheet::{
-    SEARCH_MARK, SHEET_SEARCH_WIDTH, SHEET_WIDTH, search_box, segment, segmented, sheet, sheet_corner,
+    search_mark, SHEET_SEARCH_WIDTH, SHEET_WIDTH, search_box, segment, segmented, sheet, sheet_corner,
     sheet_header, sheet_list,
 };
 pub use shimmer::{count_slot, shimmer, shimmer_slot};
@@ -102,7 +104,6 @@ pub const TRAFFIC_LIGHTS: f32 = 84.0;
 /// The desktop's `--input` border around a field.
 const INPUT_BORDER: u32 = 0xffffff1a;
 /// The desktop dialog's `--popover`.
-pub const DIALOG: u32 = 0x201d23;
 /// Behind a dialog. The desktop's is `bg-black/10` with `backdrop-blur-xs`, and the blur is what sets the dialog apart;
 /// GPUI can't blur what's behind an element, so at 10% the window behind read as not dimmed at all. 40% stands in.
 const BACKDROP: u32 = 0x00000066;
@@ -110,7 +111,9 @@ const BACKDROP: u32 = 0x00000066;
 pub(crate) const INPUT_FILL: u32 = 0xffffff08;
 const INPUT_FILL_HOVER: u32 = 0xffffff0d;
 /// The dialog's `ring-1 ring-foreground/10`.
-const DIALOG_RING: u32 = theme::FOREGROUND << 8 | 0x1a;
+fn dialog_ring() -> u32 {
+    theme::foreground() << 8 | 0x1a
+}
 
 /// shadcn's square button sizes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -193,10 +196,10 @@ pub fn untipped_ghost_button(
         } else {
             theme::palette().muted_foreground
         }))
-        .when(pressed, |button| button.bg(rgba(theme::HOVER)))
+        .when(pressed, |button| button.bg(rgba(theme::hover())))
         .hover(|style| {
             style
-                .bg(rgba(theme::HOVER))
+                .bg(rgba(theme::hover()))
                 .text_color(rgb(theme::palette().foreground))
         })
         .focus_visible(|style| style.border_color(rgb(theme::palette().foreground)))
@@ -361,7 +364,7 @@ pub fn dialog(
         .overflow_hidden()
         .rounded(px(14.0))
         .border_1()
-        .border_color(rgba(DIALOG_RING))
+        .border_color(rgba(dialog_ring()))
         .bg(rgb(theme::palette().dialog))
         .text_color(rgb(theme::palette().foreground));
     (backdrop, panel)
@@ -536,6 +539,91 @@ pub fn toggle_item(
         .child(switch("toggle-item-switch", on))
 }
 
+/// A section label in a select's menu: muted small text over the rows after it, not a choice. `first` is the menu's top
+/// one, which needs no room above it.
+pub fn select_heading(label: impl Into<SharedString>, first: bool) -> Div {
+    div()
+        .flex_none()
+        .px(px(8.0))
+        .pt(px(if first { 4.0 } else { 10.0 }))
+        .pb(px(2.0))
+        .text_size(px(11.0))
+        .text_color(rgb(theme::palette().muted_foreground))
+        .child(label.into())
+}
+
+/// A row of a select's menu that opens more rows under it, like a chat's Effort: its label, then at the end an optional
+/// `pill`, the `trailing` text and a chevron that turns down while it is `open`. Set apart from the choices above by a
+/// line.
+pub fn select_expander(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    pill: Option<SharedString>,
+    trailing: Option<SharedString>,
+    open: bool,
+) -> Stateful<Div> {
+    let label = label.into();
+    let muted = theme::palette().muted_foreground;
+    div()
+        .id(id)
+        .role(Role::MenuItem)
+        .aria_label(label.clone())
+        .aria_expanded(open)
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .h(px(36.0))
+        .px(px(8.0))
+        .rounded(px(6.0))
+        .cursor_pointer()
+        .text_size(px(13.0))
+        .hover(|style| style.bg(rgba(theme::hover_strong())))
+        .child(div().flex_1().min_w_0().truncate().child(label))
+        .children(pill.map(|pill| {
+            div()
+                .flex_none()
+                .px(px(8.0))
+                .py(px(1.0))
+                .rounded_full()
+                .bg(rgba(theme::hover_strong()))
+                .text_size(px(11.0))
+                .text_color(rgb(muted))
+                .child(pill)
+        }))
+        .children(trailing.map(|text| div().flex_none().child(text)))
+        .child(icon(
+            if open { Icon::ChevronDown } else { Icon::ChevronRight },
+            14.0,
+            muted,
+        ))
+}
+
+/// A choice in a select's menu with a muted `detail` under its label, and a check on the chosen one.
+pub fn select_item_detail(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    detail: impl Into<SharedString>,
+    selected: bool,
+    rule: bool,
+) -> Stateful<Div> {
+    let label = label.into();
+    let content = div().flex().flex_col().child(label.clone()).child(
+        div()
+            .text_size(px(11.0))
+            .text_color(rgb(theme::palette().muted_foreground))
+            .child(detail.into()),
+    );
+    // Two lines: the row is as tall as they are instead of 32pt.
+    let row = select_row(id.into(), label, content.into_any_element(), selected).h_auto().py(px(5.0));
+    // A hairline between rows, which the row's own hover fill rounds past.
+    if rule {
+        row.border_t_1().border_color(rgba(HAIRLINE))
+    } else {
+        row
+    }
+}
+
 /// One choice in a select's menu, with a check on the chosen one.
 pub fn select_item(
     id: impl Into<ElementId>,
@@ -612,7 +700,7 @@ fn select_row(
         .rounded(px(6.0))
         .cursor_pointer()
         .text_size(px(13.0))
-        .hover(|style| style.bg(rgba(theme::HOVER_STRONG)))
+        .hover(|style| style.bg(rgba(theme::hover_strong())))
         // A label wider than the menu, like a Cyclops project's name and client, ends in an ellipsis inside it.
         .child(div().flex_1().min_w_0().truncate().child(content))
         .when(selected, |item| {
@@ -632,7 +720,7 @@ pub fn select_menu(items: impl IntoIterator<Item = AnyElement>) -> Div {
         .flex_col()
         .rounded(px(10.0))
         .border_1()
-        .border_color(rgba(theme::HAIRLINE_STRONG))
+        .border_color(rgba(theme::hairline_strong()))
         .bg(rgb(theme::palette().dialog))
         .shadow(vec![BoxShadow {
             color: hsla(0.0, 0.0, 0.0, 0.4),

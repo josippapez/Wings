@@ -92,6 +92,7 @@ icons!(
     PanelBottom = "panel-bottom",
     PanelLeft = "panel-left",
     PanelRight = "panel-right",
+    Palette = "palette",
     Pencil = "pencil",
     PictureInPicture = "picture-in-picture-2",
     Pin = "pin",

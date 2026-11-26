@@ -57,7 +57,7 @@ fn header_button(
             )
             .into_any_element()
     } else {
-        icon(glyph, 12.0, theme::FOREGROUND).into_any_element()
+        icon(glyph, 12.0, theme::foreground()).into_any_element()
     };
     ui::button(
         id,
@@ -175,7 +175,7 @@ pub(super) const BUILT_FOR_JAVASCRIPT: &str = "Wings runs plugins built to WebAs
 pub(super) fn muted(text: impl Into<SharedString>) -> gpui::Div {
     div()
         .text_size(px(12.0))
-        .text_color(rgb(theme::MUTED_FOREGROUND))
+        .text_color(rgb(theme::muted_foreground()))
         .child(text.into())
 }
 
@@ -232,9 +232,9 @@ pub(super) fn plugin_icon(on: bool, own: Option<&str>, side: f32) -> gpui::Div {
             own,
             side / 2.0,
             if on {
-                theme::FOREGROUND
+                theme::foreground()
             } else {
-                theme::MUTED_FOREGROUND
+                theme::muted_foreground()
             },
         ))
 }
@@ -269,15 +269,15 @@ pub(super) fn status_word(
     update: Option<&str>,
 ) -> (String, u32) {
     if !approved {
-        ("Needs approval".into(), theme::WORKING)
+        ("Needs approval".into(), theme::working())
     } else if enabled && !runs {
-        ("Couldn't start".into(), theme::DANGER)
+        ("Couldn't start".into(), theme::danger())
     } else if let Some(version) = update {
-        (format!("Update {version}"), theme::INFO)
+        (format!("Update {version}"), theme::info())
     } else if enabled {
-        ("On".into(), theme::DONE)
+        ("On".into(), theme::done())
     } else {
-        ("Off".into(), theme::MUTED_FOREGROUND)
+        ("Off".into(), theme::muted_foreground())
     }
 }
 
@@ -504,7 +504,7 @@ impl Workspace {
                 .flex()
                 .items_center()
                 .gap(px(6.0))
-                .child(icon(Icon::Plus, 14.0, theme::FOREGROUND))
+                .child(icon(Icon::Plus, 14.0, theme::foreground()))
                 .child(match manage.installing {
                     Some(_) => "Installing…",
                     None => "Add plugin",
@@ -564,7 +564,7 @@ impl Workspace {
                 .into_any_element()])
         });
         let error = manage.error.clone().map(|error| {
-            div().text_size(px(12.0)).text_color(rgb(theme::DANGER)).child(error)
+            div().text_size(px(12.0)).text_color(rgb(theme::danger())).child(error)
         });
 
         let tab_button = |id: &'static str, label: String, to: PluginsTab, cx: &mut Context<Self>| {
@@ -736,7 +736,7 @@ impl Workspace {
                     format!("Review access for {}", view.manifest.name),
                     Variant::Outline,
                     false,
-                    div().text_color(rgb(theme::WORKING)).child("Review"),
+                    div().text_color(rgb(theme::working())).child("Review"),
                 ))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.queue_reviews([review.clone()], cx);
@@ -816,11 +816,11 @@ impl Workspace {
         };
         // What went wrong with its switch shows in place of the description, where the row doesn't change height.
         let about = match manage.row_error.get(&id).cloned() {
-            Some(error) => Self::clamped(error, theme::DANGER)
+            Some(error) => Self::clamped(error, theme::danger())
                 .relative()
                 .children(ui::spot(move || format!("plugin-row-error-{index}")))
                 .into_any_element(),
-            None => Self::clamped(about, theme::MUTED_FOREGROUND).into_any_element(),
+            None => Self::clamped(about, theme::muted_foreground()).into_any_element(),
         };
         let select = id.clone();
         div()
@@ -833,7 +833,7 @@ impl Workspace {
             .px(px(16.0))
             .h(px(ROW_H))
             .cursor_pointer()
-            .hover(|style| style.bg(rgba(theme::HOVER)))
+            .hover(|style| style.bg(rgba(theme::hover())))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.manage.selected = Some(select.clone());
                 this.manage.removing = None;
@@ -870,7 +870,7 @@ impl Workspace {
                 plugin.name.clone(),
                 plugin.version,
                 None,
-                Self::clamped(plugin.description, theme::MUTED_FOREGROUND),
+                Self::clamped(plugin.description, theme::muted_foreground()),
             ))
             .child(div().w(px(ACTION_W)).flex_none().flex().justify_end().child(
                 small(ui::button(
@@ -1014,8 +1014,8 @@ impl Workspace {
                     .rounded(px(10.0))
                     .text_size(px(13.0))
                     .font_weight(FontWeight::MEDIUM)
-                    .bg(rgba(theme::POPOVER))
-                    .text_color(rgb(theme::FOREGROUND))
+                    .bg(rgba(theme::popover()))
+                    .text_color(rgb(theme::foreground()))
                     // A drag over only refines what paints, not the text's color, so the label fades in whole.
                     .opacity(0.0)
                     .drag_over::<ExternalPaths>(move |style, paths, _, _| {
@@ -1238,9 +1238,9 @@ mod tests {
         assert_eq!(word(true, true, true, Some("2.0.0")), "Update 2.0.0");
         assert_eq!(word(true, true, true, None), "On");
         assert_eq!(word(true, false, false, None), "Off");
-        assert_eq!(status_word(true, true, true, None).1, theme::DONE);
-        assert_eq!(status_word(false, false, false, None).1, theme::WORKING);
-        assert_eq!(status_word(true, true, false, None).1, theme::DANGER);
+        assert_eq!(status_word(true, true, true, None).1, theme::done());
+        assert_eq!(status_word(false, false, false, None).1, theme::working());
+        assert_eq!(status_word(true, true, false, None).1, theme::danger());
     }
 
     #[test]

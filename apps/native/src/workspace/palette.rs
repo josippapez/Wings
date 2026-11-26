@@ -555,7 +555,7 @@ impl Workspace {
                         div()
                             .flex_none()
                             .text_size(px(11.0))
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .text_color(rgb(theme::muted_foreground()))
                             .child(heading)
                             .into_any_element(),
                     ),
@@ -569,7 +569,7 @@ impl Workspace {
                             .pb(px(4.0))
                             .text_size(px(11.0))
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .text_color(rgb(theme::muted_foreground()))
                             .child(heading)
                     }))
                     .child(
@@ -585,7 +585,7 @@ impl Workspace {
                             .px(px(10.0))
                             .rounded(px(6.0))
                             .text_size(px(13.0))
-                            .when(at == active, |row| row.bg(rgba(theme::HOVER_STRONG)))
+                            .when(at == active, |row| row.bg(rgba(theme::hover_strong())))
                             .when(item.disabled, |row| row.opacity(0.5))
                             .when(!item.disabled, |row| row.cursor_pointer())
                             .on_mouse_move(cx.listener(move |this, _, _, cx| {
@@ -616,7 +616,7 @@ impl Workspace {
                                     .flex_1()
                                     .truncate()
                                     .text_size(px(12.0))
-                                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                                    .text_color(rgb(theme::muted_foreground()))
                                     .child(subtitle.clone()),
                                 None => div().flex_1(),
                             })
@@ -640,7 +640,7 @@ impl Workspace {
                         .py(px(24.0))
                         .flex()
                         .justify_center()
-                        .text_color(rgb(theme::MUTED_FOREGROUND))
+                        .text_color(rgb(theme::muted_foreground()))
                         .child(format!("Nothing matches “{}”", query.trim())),
                 )
             })
@@ -653,8 +653,8 @@ impl Workspace {
             .gap(px(8.0))
             .px(px(12.0))
             .border_b_1()
-            .border_color(rgba(theme::BORDER))
-            .child(icon(Icon::Search, 16.0, theme::MUTED_FOREGROUND))
+            .border_color(rgba(theme::border()))
+            .child(icon(Icon::Search, 16.0, theme::muted_foreground()))
             .child(
                 div()
                     .min_w_0()
@@ -670,9 +670,9 @@ impl Workspace {
             .h(px(HINTS_HEIGHT))
             .px(px(12.0))
             .border_t_1()
-            .border_color(rgba(theme::BORDER))
+            .border_color(rgba(theme::border()))
             .text_size(px(11.0))
-            .text_color(rgb(theme::MUTED_FOREGROUND))
+            .text_color(rgb(theme::muted_foreground()))
             .children(
                 [("↑↓", "move"), ("↵", "run"), ("esc", "close")].map(|(key, what)| {
                     div()
@@ -734,6 +734,6 @@ fn kbd(text: impl Into<SharedString>, small: bool) -> impl IntoElement {
         .rounded(px(4.0))
         .bg(rgba(0xffffff14))
         .text_size(px(if small { 10.0 } else { 11.0 }))
-        .text_color(rgb(theme::MUTED_FOREGROUND))
+        .text_color(rgb(theme::muted_foreground()))
         .child(text.into())
 }

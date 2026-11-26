@@ -1041,11 +1041,11 @@ impl Workspace {
                     .rounded(px(8.0))
                     .cursor_pointer()
                     .text_size(px(12.0))
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                    .text_color(rgb(theme::muted_foreground()))
                     .hover(|style| {
                         style
-                            .bg(rgba(theme::HOVER))
-                            .text_color(rgb(theme::FOREGROUND))
+                            .bg(rgba(theme::hover()))
+                            .text_color(rgb(theme::foreground()))
                     })
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -1055,7 +1055,7 @@ impl Workspace {
                         }
                         cx.notify_workspace();
                     }))
-                    .child(icon(Icon::GitBranch, 14.0, theme::MUTED_FOREGROUND))
+                    .child(icon(Icon::GitBranch, 14.0, theme::muted_foreground()))
                     .child(
                         div().min_w_0().max_w(px(200.0)).truncate().child(
                             sheet
@@ -1064,7 +1064,7 @@ impl Workspace {
                                 .unwrap_or_else(|| "All branches".into()),
                         ),
                     )
-                    .child(icon(Icon::ChevronDown, 14.0, theme::MUTED_FOREGROUND)),
+                    .child(icon(Icon::ChevronDown, 14.0, theme::muted_foreground())),
                 "history-branch",
                 open,
             ))
@@ -1146,7 +1146,7 @@ impl Workspace {
                     .px(px(10.0))
                     .py(px(8.0))
                     .text_size(px(12.0))
-                    .text_color(rgb(theme::MUTED_FOREGROUND))
+                    .text_color(rgb(theme::muted_foreground()))
                     .child(format!(
                         "Showing {} of {}",
                         results.sessions.len(),
@@ -1216,7 +1216,7 @@ impl Workspace {
             .gap(px(8.0))
             .p(px(10.0))
             .rounded(px(10.0))
-            .hover(|style| style.bg(rgba(theme::HOVER)))
+            .hover(|style| style.bg(rgba(theme::hover())))
             .child(
                 div()
                     .min_w_0()
@@ -1247,7 +1247,7 @@ impl Workspace {
                             .mt(px(2.0))
                             .truncate()
                             .text_size(px(12.0))
-                            .text_color(rgb(theme::MUTED_FOREGROUND))
+                            .text_color(rgb(theme::muted_foreground()))
                             .child(meta),
                     ),
             )
@@ -1457,10 +1457,10 @@ fn menu_item(
         .when(disabled, |item| item.opacity(0.5))
         .when(!disabled, |item| {
             item.cursor_pointer()
-                .hover(|style| style.bg(rgba(theme::HOVER_STRONG)))
+                .hover(|style| style.bg(rgba(theme::hover_strong())))
         })
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(icon(glyph, 16.0, theme::MUTED_FOREGROUND))
+        .child(icon(glyph, 16.0, theme::muted_foreground()))
         .child(div().flex_none().child(label))
         .children(note.map(|note| {
             div()
@@ -1468,7 +1468,7 @@ fn menu_item(
                 .flex_1()
                 .truncate()
                 .text_size(px(11.0))
-                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .text_color(rgb(theme::muted_foreground()))
                 .child(note)
         }))
 }
@@ -1476,15 +1476,15 @@ fn menu_item(
 /// The agent's mark beside a session's name: Claude's spark in its orange, OpenCode's frame.
 fn agent_mark(agent: Agent) -> impl IntoElement {
     match agent {
-        Agent::Claude => icon(Icon::Claude, 12.0, theme::CLAUDE),
-        Agent::OpenCode => icon(Icon::Opencode, 12.0, theme::FOREGROUND),
+        Agent::Claude => icon(Icon::Claude, 12.0, theme::claude()),
+        Agent::OpenCode => icon(Icon::Opencode, 12.0, theme::foreground()),
     }
 }
 
 fn muted_lines(content: impl IntoElement) -> Div {
     div()
         .text_size(px(12.0))
-        .text_color(rgb(theme::MUTED_FOREGROUND))
+        .text_color(rgb(theme::muted_foreground()))
         .line_clamp(2)
         .child(content)
 }
@@ -1501,12 +1501,12 @@ fn snippet_text(snippet: &Snippet, agent: Agent, words: &[String]) -> AnyElement
     let body = one_line(&snippet.text);
     let text = format!("{prefix}{body}");
     let fade = HighlightStyle {
-        color: Some(rgba(theme::FOREGROUND << 8 | 0xb3).into()),
+        color: Some(rgba(theme::foreground() << 8 | 0xb3).into()),
         ..Default::default()
     };
     let mark = HighlightStyle {
-        color: Some(rgb(theme::FOREGROUND).into()),
-        background_color: Some(rgba(ui::SEARCH_MARK).into()),
+        color: Some(rgb(theme::foreground()).into()),
+        background_color: Some(rgba(ui::search_mark()).into()),
         ..Default::default()
     };
     let marks = highlights(&body, words)
@@ -1534,7 +1534,7 @@ fn empty(title: &'static str, description: String) -> AnyElement {
                 .justify_center()
                 .rounded(px(10.0))
                 .bg(rgba(0xffffff0d))
-                .child(icon(Icon::SearchX, 18.0, theme::FOREGROUND)),
+                .child(icon(Icon::SearchX, 18.0, theme::foreground())),
         )
         .child(
             div()
@@ -1546,7 +1546,7 @@ fn empty(title: &'static str, description: String) -> AnyElement {
         .child(
             div()
                 .text_size(px(12.0))
-                .text_color(rgb(theme::MUTED_FOREGROUND))
+                .text_color(rgb(theme::muted_foreground()))
                 .child(description),
         )
         .into_any_element()
