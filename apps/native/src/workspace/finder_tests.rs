@@ -997,3 +997,28 @@ fn a_long_session_title_runs_to_the_end_of_its_row_not_to_where_the_hidden_butto
         row.right() - title.right()
     );
 }
+
+#[test]
+fn the_history_sheet_is_full_height_its_meta_lines_up_with_the_title_and_its_scope_toggle_hugs_its_buttons() {
+    let project = folder("layout");
+    let claude = made_up_claude(
+        &folder("layout-claude"),
+        &[(LOGIN, &project.join("g/s"), "main", "Fix the login redirect", "I updated the redirect handler")],
+    );
+    let (app, mut window) = open_over(&project, &claude);
+    window.update(|w, window, cx| w.open_history(window, cx));
+    wait_for(&app, &window, |w| w.sheet.as_ref().is_some_and(|s| s.results.is_some()), "no results");
+    app.advance_clock(crate::ui::motion::POPUP_IN * 2);
+    app.run_until_parked();
+    crate::ui::forget_spots();
+    window.draw();
+    let title = crate::ui::spot_at("history-title-0").expect("the title is drawn");
+    let meta = crate::ui::spot_at("history-meta-0").expect("the meta line is drawn");
+    // The meta box starts under the agent mark and pads past it: its text starts where the title's does.
+    assert_eq!(meta.left() + gpui::px(18.0), title.left());
+    let scope = crate::ui::spot_at("history-scope").expect("the scope toggle is drawn");
+    assert!(scope.size.width < gpui::px(300.0), "the toggle is {:?} wide, as wide as the sheet", scope.size.width);
+    let sheet = crate::ui::spot_at("history-sheet").expect("the sheet is drawn");
+    let height = window.update(|_, window, _| window.viewport_size().height);
+    assert_eq!((sheet.origin.y, sheet.size.height), (gpui::px(0.0), height), "the sheet covers the window's height");
+}

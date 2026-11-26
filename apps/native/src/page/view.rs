@@ -283,6 +283,9 @@ pub struct PageView {
     /// Whether a rounded card holds the page (`in_card`): its ground follows the card's inner corners, which a clip
     /// doesn't (gpui clips to a rectangle), so a square ground shows past the curve against the window.
     in_card: bool,
+    /// Whether the page is a section of the Settings dialog (`in_dialog`): padded as its built-in sections are, and
+    /// round at the dialog's bottom right, which its square ground would otherwise show past.
+    in_dialog: bool,
     /// Where the page's shell is scrolled, so a field that takes the keyboard can be brought into view.
     shell_scroll: gpui::ScrollHandle,
     /// Where the open combobox's list is scrolled, so the option the arrow keys reach is brought into view.
@@ -569,6 +572,7 @@ impl Render for PageView {
             .overflow_hidden()
             // The card's radius less its border: the ground is as round as the card's inside.
             .when(self.in_card, |page| page.rounded(px(13.0)))
+            .when(self.in_dialog, |page| page.rounded_br(px(13.0)))
             // The desktop's page is transparent on the `bg-surface` of the card, panel or window that holds it, or on the
             // `bg-popover` of a popover. Over a backdrop, the card draws the ground.
             .when(!over_backdrop, |page| {
@@ -599,8 +603,12 @@ impl Render for PageView {
                         shell.gap(px(10.0)).p(px(14.0))
                     })
                     // `.w-shell[data-place="popover"]`.
-                    .when(!fill && self.popover, |shell| {
+                    .when(!fill && self.popover && !self.in_dialog, |shell| {
                         shell.gap(px(12.0)).pt(px(12.0)).px(px(14.0)).pb(px(14.0))
+                    })
+                    // Under the dialog's heading, in the 24 points and 12 between parts of its built-in sections.
+                    .when(!fill && self.in_dialog, |shell| {
+                        shell.gap(px(12.0)).pt(px(12.0)).px(px(24.0)).pb(px(24.0))
                     })
                     // A desktop page longer than its frame scrolls in it.
                     .when(!fill, |shell| {

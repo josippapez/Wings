@@ -134,6 +134,15 @@ impl PageView {
         }
     }
 
+    /// A popover page that is a section of the Settings dialog: under the dialog's heading, with the gutter of its
+    /// built-in sections.
+    pub fn in_dialog(self) -> Self {
+        Self {
+            in_dialog: true,
+            ..self
+        }
+    }
+
     /// Like `in_plugin`, for a page shown in the popover under its sidebar's title bar button.
     pub fn in_plugin_popover(host: &PluginHost, source: &str, cx: &mut Context<Self>) -> Self {
         Self {
@@ -362,6 +371,7 @@ impl PageView {
             _restart: None,
             popover: false,
             in_card: false,
+            in_dialog: false,
             shell_scroll: gpui::ScrollHandle::new(),
             combobox_scroll: gpui::ScrollHandle::new(),
             follow_scrolls: RefCell::default(),

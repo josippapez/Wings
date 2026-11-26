@@ -10,7 +10,7 @@ use gpui::{
 };
 
 use crate::{
-    icons::{Icon, icon},
+    icons::{Icon, icon, plugin_glyph},
     installed::WINGS_VERSION,
     page::PageView,
     terminal_view::{
@@ -445,7 +445,7 @@ impl Workspace {
         let (source, title) = (settings.source.clone(), settings.title.clone());
         let host = installed.host.clone();
         // On the dialog's own ground, as the desktop's frame is transparent there.
-        let page = cx.new(|cx| PageView::in_plugin_popover(&host, &source, cx));
+        let page = cx.new(|cx| PageView::in_plugin_popover(&host, &source, cx).in_dialog());
         page.read(cx).set_visible(true);
         Some(Section::Plugin(PluginSettings {
             plugin: plugin.to_owned(),
@@ -1565,7 +1565,7 @@ impl Workspace {
             nav_item(
                 SharedString::from(format!("settings-{}", item.label())),
                 item.label(),
-                item.icon(),
+                icon(item.icon(), 16.0, theme::muted_foreground()),
                 *section == item,
                 compact,
             )
@@ -1585,14 +1585,15 @@ impl Workspace {
             .plugins
             .iter()
             .filter(|installed| installed.settings.is_some())
-            .map(|installed| (installed.id.clone(), installed.name.clone()))
+            .map(|installed| (installed.id.clone(), installed.name.clone(), installed.plugin.icon_svg.clone()))
             .collect();
         plugin_settings.sort_by(|a, b| a.1.cmp(&b.1));
-        let plugin_nav = plugin_settings.into_iter().map(|(id, name)| {
+        let plugin_nav = plugin_settings.into_iter().map(|(id, name, own)| {
             nav_item(
                 SharedString::from(format!("plugin-settings-{id}")),
                 name,
-                Icon::Puzzle,
+                // The plugin's own icon, as the plugin manager and its tabs show it, else the puzzle piece.
+                plugin_glyph("", own.as_deref(), 16.0, theme::muted_foreground()),
                 section.plugin() == Some(id.as_str()),
                 compact,
             )
@@ -1616,6 +1617,21 @@ impl Workspace {
                     .min_h_0()
                     .role(Role::Group)
                     .aria_label(settings.title.clone())
+                    // The heading of every section, with the plugin's name: the page under it is padded to match.
+                    .child(
+                        div()
+                            .flex_none()
+                            .px(px(24.0))
+                            .pt(px(24.0))
+                            .text_size(px(15.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(
+                                self.plugins
+                                    .iter()
+                                    .find(|installed| installed.id == settings.plugin)
+                                    .map_or_else(|| settings.title.to_string(), |installed| installed.name.to_string()),
+                            ),
+                    )
                     .child(
                         settings
                             .page
@@ -1817,7 +1833,7 @@ impl SettingsDialog {
 fn nav_item(
     id: SharedString,
     label: impl Into<SharedString>,
-    glyph: Icon,
+    glyph: impl IntoElement,
     selected: bool,
     compact: bool,
 ) -> gpui::Stateful<gpui::Div> {
@@ -1847,7 +1863,7 @@ fn nav_item(
             item.text_color(rgb(theme::muted_foreground()))
                 .hover(|style| style.text_color(rgb(theme::foreground())))
         })
-        .child(icon(glyph, 16.0, theme::muted_foreground()))
+        .child(glyph)
         .children(ui::spot(|| format!("settings-nav:{label}")))
         .relative()
         // Only the icon in a narrow window, named by a tooltip.

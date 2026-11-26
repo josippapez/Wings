@@ -14,7 +14,7 @@ use std::{
 use gpui::{
     AnyElement, ClipboardItem, Context, Div, Entity, FocusHandle, FontWeight,
     HighlightStyle, KeyDownEvent, MouseButton, Role, SharedString, Stateful, StyledText,
-    Subscription, Task, Window, div, prelude::*, px, relative, rgb, rgba,
+    Pixels, Subscription, Task, Window, div, prelude::*, px, relative, rgb, rgba,
 };
 use wings_agents::{
     ai::{Ai, Made},
@@ -934,6 +934,7 @@ impl Workspace {
                 )
                 .child(sheet_panel(
                     panel
+                        .children(ui::spot(|| "history-sheet".into()))
                         .trap_tab(&sheet.focus)
                         // Escape from a button the sheet's field doesn't have the keys for.
                         .on_escape(cx.listener(|this, _: &KeyDownEvent, window, cx| {
@@ -984,7 +985,8 @@ impl Workspace {
                     this.refine_history(|sheet| (sheet.all, sheet.branch) = (true, None), cx)
                 },
             )),
-        ]);
+        ])
+        .children(ui::spot(|| "history-scope".into()));
         let searching = (sheet.searching || loading) && sheet.results.is_some();
         let search = ui::search_box(
             sheet.field.clone(),
@@ -1001,7 +1003,7 @@ impl Workspace {
             }))
         }));
         ui::sheet_header("Past sessions", description)
-            .child(scope)
+            .child(scope.self_start())
             .child(search)
             .child(
                 div()
@@ -1228,7 +1230,7 @@ impl Workspace {
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(6.0))
+                            .gap(AGENT_MARK_GAP)
                             .text_size(px(13.0))
                             .font_weight(FontWeight::MEDIUM)
                             .child(agent_mark(hit.agent))
@@ -1241,11 +1243,13 @@ impl Workspace {
                             )
                             .children(account.map(super::agent_list::account_badge)),
                     )
-                    .children(detail)
+                    .children(detail.map(|detail| div().pl(AGENT_MARK_INDENT).child(detail)))
                     .child(
                         div()
                             .mt(px(2.0))
+                            .pl(AGENT_MARK_INDENT)
                             .truncate()
+                            .children(ui::spot(|| format!("history-meta-{at}")))
                             .text_size(px(12.0))
                             .text_color(rgb(theme::muted_foreground()))
                             .child(meta),
@@ -1481,10 +1485,16 @@ fn menu_item(
 }
 
 /// The agent's mark beside a session's name: Claude's spark in its orange, OpenCode's frame.
+/// The agent mark's size and the gap after it in a row's title line: what the detail and meta lines are set in by, so
+/// they start under the title's text rather than under the mark.
+const AGENT_MARK_SIZE: f32 = 12.0;
+const AGENT_MARK_GAP: Pixels = px(6.0);
+const AGENT_MARK_INDENT: Pixels = px(AGENT_MARK_SIZE + 6.0);
+
 fn agent_mark(agent: Agent) -> impl IntoElement {
     match agent {
-        Agent::Claude => icon(Icon::Claude, 12.0, theme::claude()),
-        Agent::OpenCode => icon(Icon::Opencode, 12.0, theme::foreground()),
+        Agent::Claude => icon(Icon::Claude, AGENT_MARK_SIZE, theme::claude()),
+        Agent::OpenCode => icon(Icon::Opencode, AGENT_MARK_SIZE, theme::foreground()),
     }
 }
 

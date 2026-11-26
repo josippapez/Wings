@@ -33,7 +33,7 @@ pub fn sheet(
         .h_full()
         .max_h(relative(1.0))
         .max_w(relative(0.92))
-        .rounded(px(0.0))
+        .rounded_l(px(14.0))
         .border_0()
         .border_l_1()
         .border_color(rgba(theme::hairline_strong()))
@@ -46,7 +46,9 @@ pub fn sheet(
         }])
         .flex_col()
         .bg(rgba(theme::palette().popover));
-    (backdrop.items_stretch().justify_end(), panel)
+    // `dialog`'s backdrop keeps 32 points off the window's top and foot so a panel doesn't reach the composer; a sheet is
+    // the height of what it covers.
+    (backdrop.py_0().items_stretch().justify_end(), panel)
 }
 
 /// The sheet's top: its title over a line saying what it lists, then what the caller adds (a search, filters), 12

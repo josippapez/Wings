@@ -579,6 +579,26 @@ fn a_popover_page_has_the_desktops_popover_shell() {
     assert!(at(true).contains("Pressed 1 0."));
 }
 
+#[test]
+fn a_settings_section_page_has_the_dialogs_gutter() {
+    // The dialog's built-in sections pad 24 points; the popover shell's 14 left a plugin's page a button's width off.
+    let at = |x: f32| {
+        let mut app = TestApp::new();
+        app.background_executor().allow_parking();
+        let host = hosted(&mut app);
+        let source = corners(json!({}));
+        let mut window = app.open_window(move |_, cx| PageView::in_plugin_popover(&host, &source, cx).in_dialog());
+        settle(&app, &mut window, shows("Pressed 0 0."));
+        window.simulate_click(point(px(x), px(13.0)), MouseButton::Left);
+        thread::sleep(Duration::from_millis(100));
+        app.run_until_parked();
+        window.draw();
+        window.read(|view, _| view.text())
+    };
+    assert!(at(16.0).contains("Pressed 0 0."), "inside the 24 point gutter nothing is a button");
+    assert!(at(30.0).contains("Pressed 1 0."), "the first button starts at 24");
+}
+
 /// Thirty lines, then a field that takes the keyboard: Cyclops' entry edit form, opened below the fold.
 fn focus_below() -> String {
     fake::page("page", |_| {
