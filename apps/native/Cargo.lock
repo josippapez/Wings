@@ -8679,7 +8679,7 @@ dependencies = [
 
 [[package]]
 name = "wings-native"
-version = "0.2.130"
+version = "0.2.131"
 dependencies = [
  "async-channel",
  "base64 0.22.1",

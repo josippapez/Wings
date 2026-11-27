@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.131 · 2026-11-28
+
+- **Chromium 158 for the Browser** (Browser 0.4.2): the Chromium engine moves to Chromium 158.0.8127.89, which fixes a critical Chrome security issue (CVE-2026-134401). If you use Chromium, Browser settings shows Update: it downloads 154 MB once, and the Browser uses WebKit until then.
+
 ## 0.2.130 · 2026-11-28
 
 - **No more crash soon after launch with the Chromium engine**: when Chromium started while Wings was busy, as it is reading your past Claude sessions right after launch, Wings could crash. Chromium now takes over memory handling the way Chrome itself sets it up.
