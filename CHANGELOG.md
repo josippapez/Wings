@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.130 · 2026-11-28
+
+- **No more crash soon after launch with the Chromium engine**: when Chromium started while Wings was busy, as it is reading your past Claude sessions right after launch, Wings could crash. Chromium now takes over memory handling the way Chrome itself sets it up.
+- **Agent tools that wait for you aren't cut off after 2 minutes** (Browser 0.4.1): an agent asking you to show it something or to sign in got told the Browser didn't answer after 2 minutes, while you were still at it. They now wait as long as they asked, up to an hour.
+
 ## 0.2.129 · 2026-11-27
 
 - **Quitting no longer crashes with a stuck page**: when a Browser page on the Chromium engine was busy and didn't let itself close, Wings crashed as it quit, also when it restarted for an update. It now quits cleanly.

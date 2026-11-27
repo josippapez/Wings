@@ -251,6 +251,9 @@ fn keep_stderr_in(file: &std::path::Path) {
 }
 
 fn main() {
+    // Before any thread starts: loading the Chromium engine later then can't crash a thread that frees memory.
+    #[cfg(target_os = "macos")]
+    wings_chromium::early_zone::register();
     // Before anything opens a file and takes them: fd 3 and 4 are the Chromium engine's DevTools pipe, if it starts.
     #[cfg(target_os = "macos")]
     wings_chromium::pipe::reserve();
