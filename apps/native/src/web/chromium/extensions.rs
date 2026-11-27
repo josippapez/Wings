@@ -464,7 +464,7 @@ pub fn click(page: &Shared, id: &str) -> Result<(), String> {
     frameless::open(
         &url,
         cef_rect(frame),
-        Some(PopupClient::new()),
+        Some(PopupClient::new(loaded.chrome.clone())),
         None,
         Rc::new(move |window, _view| popup_created(window, frame)),
         Rc::new(move |active| {
@@ -630,8 +630,12 @@ fn cef_rect(frame: NSRect) -> Rect {
     }
 }
 
+// The popup of the extension `chrome`: it refuses what a page refuses (permissions, downloads), and shows only its own
+// extension's pages.
 wrap_client! {
-    struct PopupClient {}
+    struct PopupClient {
+        chrome: String,
+    }
 
     impl Client {
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
@@ -639,6 +643,44 @@ wrap_client! {
         }
         fn keyboard_handler(&self) -> Option<KeyboardHandler> {
             Some(PopupKeys::new())
+        }
+        fn request_handler(&self) -> Option<RequestHandler> {
+            Some(PopupRequests::new(self.chrome.clone()))
+        }
+        fn permission_handler(&self) -> Option<PermissionHandler> {
+            Some(super::page::Refuse::new())
+        }
+        fn download_handler(&self) -> Option<DownloadHandler> {
+            Some(super::page::NoDownloads::new())
+        }
+    }
+}
+
+/// Whether the popup of the extension `chrome` may go to `url`: the popup itself only to a page of that extension, a
+/// frame in it where a page's frame may go (`may_navigate`). A popup that went anywhere else would be a page of any
+/// site in a window with no address, over Wings.
+fn popup_may_go(chrome: &str, url: &str, main_frame: bool) -> bool {
+    if !main_frame {
+        return crate::web::may_navigate(url, false);
+    }
+    url.strip_prefix("chrome-extension://").and_then(|rest| rest.split_once('/')).is_some_and(|(id, _)| id == chrome)
+}
+
+wrap_request_handler! {
+    struct PopupRequests {
+        chrome: String,
+    }
+
+    impl RequestHandler {
+        fn on_before_browse(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, request: Option<&mut Request>, _user_gesture: ::std::os::raw::c_int, _is_redirect: ::std::os::raw::c_int) -> ::std::os::raw::c_int {
+            let url = request.map(|request| CefString::from(&request.url()).to_string()).unwrap_or_default();
+            let main_frame = frame.is_none_or(|frame| frame.is_main() != 0);
+            i32::from(!popup_may_go(&self.chrome, &url, main_frame))
+        }
+
+        /// A link it opens in a new tab goes nowhere, as one in a new window does (`on_before_popup`).
+        fn on_open_urlfrom_tab(&self, _browser: Option<&mut Browser>, _frame: Option<&mut Frame>, _target_url: Option<&CefString>, _target_disposition: WindowOpenDisposition, _user_gesture: ::std::os::raw::c_int) -> ::std::os::raw::c_int {
+            1
         }
     }
 }
@@ -755,6 +797,18 @@ mod tests {
         assert_eq!(seen_page(&hosts, "https://bank.example/account"), None);
         assert_eq!(seen_page(&[], "http://127.0.0.1:8765/login"), None);
         assert_eq!(popup_url("abc", "popup/index.html", None).as_deref(), Some("chrome-extension://abc/popup/index.html"));
+    }
+
+    /// The popup shows only its own extension's pages; a frame in it goes where a page's frame may.
+    #[test]
+    fn a_popup_shows_only_its_own_extensions_pages() {
+        let own = "nngceckbapebfimnlniiiahkandclblb";
+        assert!(popup_may_go(own, &format!("chrome-extension://{own}/popup/index.html#/login"), true));
+        for elsewhere in ["https://evil.example/", "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/popup.html", "file:///etc/passwd", "data:text/html,hi", "about:blank"] {
+            assert!(!popup_may_go(own, elsewhere, true), "{elsewhere}");
+        }
+        assert!(popup_may_go(own, "https://vault.bitwarden.com/connector.html", false), "a frame of a site");
+        assert!(!popup_may_go(own, "file:///etc/passwd", false));
     }
 
     #[test]

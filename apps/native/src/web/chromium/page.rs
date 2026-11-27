@@ -846,7 +846,7 @@ wrap_jsdialog_handler! {
 // The camera, microphone, location and notifications: WebKit in Wings has none of them (the app declares no use of the
 // camera, microphone or location, and WebKit has no web notifications in an app), so Chromium refuses them too.
 wrap_permission_handler! {
-    struct Refuse {}
+    pub(super) struct Refuse {}
 
     impl PermissionHandler {
         fn on_request_media_access_permission(&self, _browser: Option<&mut Browser>, _frame: Option<&mut Frame>, _requesting_origin: Option<&CefString>, _requested_permissions: u32, callback: Option<&mut MediaAccessCallback>) -> ::std::os::raw::c_int {
@@ -867,7 +867,7 @@ wrap_permission_handler! {
 
 // WebKit in Wings downloads nothing (its navigation delegate takes no download), and neither does Chromium.
 wrap_download_handler! {
-    struct NoDownloads {}
+    pub(super) struct NoDownloads {}
 
     impl DownloadHandler {
         fn can_download(&self, _browser: Option<&mut Browser>, _url: Option<&CefString>, _request_method: Option<&CefString>) -> ::std::os::raw::c_int {
