@@ -43,8 +43,8 @@ pub(crate) fn next_turn(then: impl FnOnce() + 'static) {
 #[cfg(test)]
 mod check {
     /// Readies a test copy of Wings, whose `HOME` this test runs with, by the same code the Browser's settings run: the
-    /// engine from `WINGS_CHROMIUM_ARCHIVE` (copied, checked against the pinned size and hash, unpacked, its signature
-    /// checked), Chromium chosen for the profile `WINGS_CHECK_PROFILE` (`<plugin>.<scope>`, its web folder
+    /// engine from `WINGS_CHROMIUM_ARCHIVE` (copied, checked against the pinned size and hash, unpacked, its files
+    /// checked against the pinned tree), Chromium chosen for the profile `WINGS_CHECK_PROFILE` (`<plugin>.<scope>`, its web folder
     /// `WINGS_CHECK_WEB`), and the extension folder `WINGS_CHECK_EXTENSION` added to it as if allowed. Run with
     /// `--ignored ready_a_test_copy`.
     #[test]
@@ -57,7 +57,7 @@ mod check {
         engine::verify().unwrap();
         engine::install().unwrap();
         let bundle = engine::bundle().expect("installed");
-        engine::verify_signature(&bundle).unwrap();
+        engine::verify_bundle(&bundle).unwrap();
         let named = var("WINGS_CHECK_PROFILE");
         let (plugin, scope) = named.split_once('.').unwrap();
         let profile = Profile { plugin: plugin.into(), scope: scope.into(), dir: std::path::PathBuf::from(var("WINGS_CHECK_WEB")) };

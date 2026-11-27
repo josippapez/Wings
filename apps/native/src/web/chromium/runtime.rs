@@ -17,11 +17,25 @@ use crate::web::{Profile, engine};
 /// Why a Chromium page didn't open.
 pub const NOT_INSTALLED: &str = "Chromium isn't installed: choose it again in Settings, Browser";
 
+#[derive(Debug)]
 enum Phase {
     Off,
     Starting,
     Ready,
-    Failed(String),
+    /// Why it didn't start, and, when that was its files' check (nothing of CEF loaded yet), the engine's
+    /// `engine::generation` then: a removal and a new install since let the next page try again in this run.
+    Failed(String, Option<u64>),
+}
+
+impl Phase {
+    /// What a page asking for CEF now finds, with the engine at `generation`: a check that failed for an engine since
+    /// removed or installed again counts as never tried, as CEF never loaded.
+    fn now(&self, generation: u64) -> &Self {
+        match self {
+            Phase::Failed(_, Some(then)) if *then != generation => &Phase::Off,
+            phase => phase,
+        }
+    }
 }
 
 type Then = Box<dyn FnOnce(Result<(), String>)>;
@@ -69,9 +83,10 @@ pub fn global() -> Option<Profile> {
 
 /// Runs `then` once CEF is up, starting it for `profile`'s page if nothing did yet, or with why it can't start.
 pub fn ensure(profile: &Profile, then: impl FnOnce(Result<(), String>) + 'static) {
-    let now = RUNTIME.with_borrow(|runtime| match &runtime.phase {
+    let generation = engine::generation();
+    let now = RUNTIME.with_borrow(|runtime| match runtime.phase.now(generation) {
         Phase::Ready => Some(Ok(())),
-        Phase::Failed(why) => Some(Err(why.clone())),
+        Phase::Failed(why, _) => Some(Err(why.clone())),
         Phase::Starting | Phase::Off => None,
     });
     if let Some(ready) = now {
@@ -79,7 +94,7 @@ pub fn ensure(profile: &Profile, then: impl FnOnce(Result<(), String>) + 'static
     }
     let first = RUNTIME.with_borrow_mut(|runtime| {
         runtime.waiting.push(Box::new(then));
-        let first = matches!(runtime.phase, Phase::Off);
+        let first = matches!(runtime.phase.now(generation), Phase::Off);
         if first {
             runtime.phase = Phase::Starting;
             runtime.global = Some(profile.clone());
@@ -90,15 +105,20 @@ pub fn ensure(profile: &Profile, then: impl FnOnce(Result<(), String>) + 'static
         return;
     }
     // Checked off the main thread, then started on it: the page's loading state draws first.
-    std::thread::spawn(|| {
+    std::thread::spawn(move || {
         let checked = engine::bundle().ok_or_else(|| NOT_INSTALLED.to_owned()).and_then(|bundle| {
             engine::available().map_err(str::to_owned)?;
-            engine::verify_signature(&bundle).map(|()| bundle)
+            engine::verify_bundle(&bundle).map(|()| bundle)
         });
         dispatch2::DispatchQueue::main().exec_async(move || {
-            if let Err(why) = checked.and_then(|bundle| start(&bundle)) {
+            let started = match checked {
+                // Nothing of CEF loaded: another install may start it in this run.
+                Err(why) => Err((why, Some(generation))),
+                Ok(bundle) => start(&bundle).map_err(|why| (why, None)),
+            };
+            if let Err((why, retry)) = started {
                 eprintln!("[chromium] couldn't start: {why}");
-                finish(Err(why));
+                finish(Err(why), retry);
             }
         });
     });
@@ -169,12 +189,13 @@ pub fn dir_name(profile: &Profile) -> String {
     format!("{}.{}", profile.plugin, profile.scope)
 }
 
-/// CEF is up or couldn't start: the pages waiting hear which.
-fn finish(ready: Result<(), String>) {
+/// CEF is up or couldn't start: the pages waiting hear which. `retry`: the engine's generation when its files failed
+/// their check before CEF loaded.
+fn finish(ready: Result<(), String>, retry: Option<u64>) {
     let waiting = RUNTIME.with_borrow_mut(|runtime| {
         runtime.phase = match &ready {
             Ok(()) => Phase::Ready,
-            Err(why) => Phase::Failed(why.clone()),
+            Err(why) => Phase::Failed(why.clone(), retry),
         };
         std::mem::take(&mut runtime.waiting)
     });
@@ -357,7 +378,7 @@ wrap_browser_process_handler! {
 
     impl BrowserProcessHandler {
         fn on_context_initialized(&self) {
-            finish(Ok(()));
+            finish(Ok(()), None);
             super::extensions::started();
         }
 
@@ -432,5 +453,18 @@ mod tests {
         }
         assert!(!super::switches(false).iter().any(|switch| switch == "remote-debugging-pipe"));
         assert!(!switches.iter().any(|switch| switch.contains("no-sandbox")), "the sandbox stays on");
+    }
+
+    /// Files that failed their check before CEF loaded keep Chromium off only until the engine is removed or installed
+    /// again: the next page then starts it, in the same run. A start that failed once CEF loaded stays failed.
+    #[test]
+    fn a_failed_check_lasts_only_until_the_engine_changes() {
+        use super::Phase;
+        let checked = Phase::Failed("changed".into(), Some(4));
+        assert!(matches!(checked.now(4), Phase::Failed(..)), "the same engine");
+        assert!(matches!(checked.now(5), Phase::Off), "removed and downloaded again");
+        let started = Phase::Failed("Chromium didn't start".into(), None);
+        assert!(matches!(started.now(5), Phase::Failed(..)));
+        assert!(matches!(Phase::Ready.now(5), Phase::Ready));
     }
 }

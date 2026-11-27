@@ -312,9 +312,6 @@ fn verify_against(bundle: &Path, pin: &Pinned) -> Result<(), String> {
     checked
 }
 
-/// The name `web::chromium::runtime` calls `verify_bundle` by, from when the engine's signature was all it checked.
-pub use self::verify_bundle as verify_signature;
-
 fn matches_pin(bundle: &Path, pin: &Pinned) -> bool {
     tree_hash(bundle, pin.unpacked).is_ok_and(|tree| tree.hash == pin.tree)
 }
