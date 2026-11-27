@@ -2,6 +2,13 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.122 · 2026-11-27
+
+- **Chromium extensions after an update**: when Wings restarted itself to update, Chromium loaded no extensions in that run, so Bitwarden had no button and adding it again failed. They load now.
+- **Errors you can see**: Browser settings shows an error as a small card floating at the foot of the page, wherever you've scrolled, with a close button, instead of at the bottom of a long page. Any plugin page can show one now (Browser 0.1.5).
+- **Changes on a big branch**: the Changes sidebar compares a branch with where it most likely started, develop as well as the default branch, so a branch off develop no longer lists thousands of files it never touched. Its list stops at 400 rows with a "Showing N of M" line, and switching repos no longer leaves the old repo's files under the new name (Changes 0.17.9).
+- **Account switch back in Claude chat's top bar**: the account you're using shows as a pill with its email, and two accounts with one email say which is which (Claude chat 0.55.14).
+
 ## 0.2.121 · 2026-11-27
 
 - **Chromium for the Browser**: in Browser settings, Engine, pick Chromium to run Chrome extensions like Bitwarden the way Chrome does, sign-in, popup and autofill included. It downloads once (147 MB, 343 MB on disk), isn't part of the app, and Wings checks every file before each start. Remove takes it off again. WebKit stays the default, and sign-ins and site data don't carry over between the two (Browser 0.1.4).
