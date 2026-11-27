@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.123 · 2026-11-27
+
+- **Passkeys through Bitwarden**: "Sign in with a passkey" on a site opens Bitwarden's passkey window again instead of Chromium's own dialog. Wings closed every window an extension opened, so Bitwarden's window vanished as it opened. An extension's own pages now open in a window of their own, for any extension, and a website an extension tries to open still closes.
+- **Shift in a Chromium page**: pressing Shift, Cmd or another modifier key on its own in a Chromium page quit Wings. It doesn't any more.
+
 ## 0.2.122 · 2026-11-27
 
 - **Chromium extensions after an update**: when Wings restarted itself to update, Chromium loaded no extensions in that run, so Bitwarden had no button and adding it again failed. They load now.

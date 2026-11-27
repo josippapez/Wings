@@ -106,8 +106,12 @@ pub fn follow_mouse() {
     std::mem::forget(unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask, &block) });
 }
 
-/// A key press as `keys` reads it.
+/// A key press as `keys` reads it. A modifier pressed alone is none: CEF hands it as a key down too, and AppKit throws
+/// when asked for its characters.
 pub fn press_of(event: &NSEvent) -> Option<Press> {
+    if !matches!(event.r#type(), NSEventType::KeyDown | NSEventType::KeyUp) {
+        return None;
+    }
     let flags = event.modifierFlags();
     let key = match named_key(event.keyCode()) {
         Some(named) => named.to_owned(),
@@ -149,7 +153,23 @@ pub fn to_wings(event: &NSEvent, parent: &NSWindow) {
 
 #[cfg(test)]
 mod tests {
-    use super::takes_keys_on_press;
+    use super::{press_of, takes_keys_on_press};
+
+    /// Shift or Cmd pressed alone in a page reads as no press: CEF hands it as a key down, and asking AppKit for the
+    /// characters of a modifier's event threw, which ended Wings.
+    #[test]
+    fn a_modifier_pressed_alone_is_no_press() {
+        use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
+        use objc2_foundation::{NSPoint, NSString};
+        let event = |kind, flags, characters: &str, key_code| {
+            let characters = NSString::from_str(characters);
+            NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(kind, NSPoint::new(0.0, 0.0), flags, 0.0, 0, None, &characters, &characters, false, key_code).unwrap()
+        };
+        let shift = event(NSEventType::FlagsChanged, NSEventModifierFlags::Shift, "", 56);
+        assert!(press_of(&shift).is_none());
+        let cmd_t = event(NSEventType::KeyDown, NSEventModifierFlags::Command, "t", 17);
+        assert!(press_of(&cmd_t).is_some_and(|press| press.key == "t" && press.cmd));
+    }
 
     /// A press gives the keyboard first only when it moves between Wings' window and a page's or a popup's: a press in
     /// the window that has it, or between two windows that are neither, is AppKit's as ever.

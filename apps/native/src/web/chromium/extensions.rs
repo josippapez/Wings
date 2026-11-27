@@ -955,6 +955,20 @@ fn popup_may_go(chrome: &str, url: &str, main_frame: bool) -> bool {
     url.strip_prefix("chrome-extension://").and_then(|rest| rest.split_once('/')).is_some_and(|(id, _)| id == chrome)
 }
 
+/// Whether a window Chromium opened by itself (an extension's `windows.create` or `tabs.create`) may go to `url`: its
+/// main frame only to a page of an extension Wings loaded, as Bitwarden's passkey window is, a frame in it where a page's
+/// frame may go. A web page an extension opens closes, as WebKit refuses an extension's new tabs.
+pub fn opened_window_may_go(url: &str, main_frame: bool) -> bool {
+    LOADED.with_borrow(|loaded| window_may_go(loaded.iter().map(|loaded| loaded.chrome.as_str()), url, main_frame))
+}
+
+fn window_may_go<'a>(mut loaded: impl Iterator<Item = &'a str>, url: &str, main_frame: bool) -> bool {
+    if !main_frame {
+        return crate::web::may_navigate(url, false);
+    }
+    loaded.any(|chrome| popup_may_go(chrome, url, true))
+}
+
 wrap_request_handler! {
     struct PopupRequests {
         chrome: String,
@@ -1188,6 +1202,21 @@ mod tests {
         }
         assert!(popup_may_go(own, "https://vault.bitwarden.com/connector.html", false), "a frame of a site");
         assert!(!popup_may_go(own, "file:///etc/passwd", false));
+    }
+
+    /// A window an extension opens shows a page of an extension Wings loaded, as Bitwarden's passkey window is; a web
+    /// page, Chrome's own pages and an extension Wings didn't load close it.
+    #[test]
+    fn a_window_an_extension_opens_shows_only_a_loaded_extensions_page() {
+        let loaded = ["nngceckbapebfimnlniiiahkandclblb", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"];
+        let passkey = "chrome-extension://nngceckbapebfimnlniiiahkandclblb/popup/index.html?uilocation=popout#/fido2?sessionId=1";
+        assert!(window_may_go(loaded.into_iter(), passkey, true));
+        for elsewhere in ["https://evil.example/", "chrome://newtab/", "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/page.html", "file:///etc/passwd", "about:blank", ""] {
+            assert!(!window_may_go(loaded.into_iter(), elsewhere, true), "{elsewhere}");
+        }
+        assert!(!window_may_go(std::iter::empty(), passkey, true), "none loaded");
+        assert!(window_may_go(loaded.into_iter(), "https://vault.bitwarden.com/connector.html", false), "a frame of a site");
+        assert!(!window_may_go(loaded.into_iter(), "file:///etc/passwd", false));
     }
 
     #[test]

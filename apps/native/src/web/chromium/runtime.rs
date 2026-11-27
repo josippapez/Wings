@@ -502,8 +502,8 @@ wrap_browser_process_handler! {
             pump::schedule(delay_ms);
         }
 
-        // What a browser Chrome opens itself gets (an extension's `tabs.create`): it closes as it opens, as WebKit
-        // refuses an extension's new tabs.
+        // What a browser Chrome opens itself gets (an extension's `windows.create` or `tabs.create`): a page of an
+        // extension Wings loaded shows (`extensions::opened_window_may_go`), anything else closes as it goes there.
         fn default_client(&self) -> Option<Client> {
             Some(StrayClient::new())
         }
@@ -522,12 +522,48 @@ wrap_request_context_handler! {
     }
 }
 
+// A window Chrome opened by itself: it refuses what a page refuses (permissions, downloads), and opens nothing more.
 wrap_client! {
     struct StrayClient {}
 
     impl Client {
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
             Some(StrayLifeSpan::new())
+        }
+        fn request_handler(&self) -> Option<RequestHandler> {
+            Some(StrayRequests::new())
+        }
+        fn permission_handler(&self) -> Option<PermissionHandler> {
+            Some(super::page::Refuse::new())
+        }
+        fn download_handler(&self) -> Option<DownloadHandler> {
+            Some(super::page::NoDownloads::new())
+        }
+    }
+}
+
+wrap_request_handler! {
+    struct StrayRequests {}
+
+    impl RequestHandler {
+        /// Its address isn't known as it opens, so it closes as it goes where it may not.
+        fn on_before_browse(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, request: Option<&mut Request>, _user_gesture: ::std::os::raw::c_int, _is_redirect: ::std::os::raw::c_int) -> ::std::os::raw::c_int {
+            let url = request.map(|request| CefString::from(&request.url()).to_string()).unwrap_or_default();
+            let main_frame = frame.is_none_or(|frame| frame.is_main() != 0);
+            if super::extensions::opened_window_may_go(&url, main_frame) {
+                return 0;
+            }
+            if main_frame && let Some(host) = browser.and_then(|browser| browser.host()) {
+                eprintln!("[chromium] closed a window Chrome opened by itself: {}", crate::web::origin(&url).unwrap_or_default());
+                hide_window_of(&host);
+                host.close_browser(1);
+            }
+            1
+        }
+
+        /// A link it opens in a new tab goes nowhere.
+        fn on_open_urlfrom_tab(&self, _browser: Option<&mut Browser>, _frame: Option<&mut Frame>, _target_url: Option<&CefString>, _target_disposition: WindowOpenDisposition, _user_gesture: ::std::os::raw::c_int) -> ::std::os::raw::c_int {
+            1
         }
     }
 }
@@ -537,19 +573,36 @@ wrap_life_span_handler! {
 
     impl LifeSpanHandler {
         fn on_after_created(&self, browser: Option<&mut Browser>) {
-            let Some(browser) = browser else { return };
-            created(browser);
-            let url = browser.main_frame().map(|frame| CefString::from(&frame.url()).to_string()).unwrap_or_default();
-            eprintln!("[chromium] closed a window Chrome opened by itself: {}", crate::web::origin(&url).unwrap_or_default());
-            if let Some(host) = browser.host() {
-                hide_window_of(&host);
-                host.close_browser(1);
+            if let Some(browser) = browser {
+                created(browser);
+                opened();
             }
+        }
+
+        /// A link it opens in a new window goes nowhere.
+        fn on_before_popup(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            _popup_id: ::std::os::raw::c_int,
+            _target_url: Option<&CefString>,
+            _target_frame_name: Option<&CefString>,
+            _target_disposition: WindowOpenDisposition,
+            _user_gesture: ::std::os::raw::c_int,
+            _popup_features: Option<&PopupFeatures>,
+            _window_info: Option<&mut WindowInfo>,
+            _client: Option<&mut Option<Client>>,
+            _settings: Option<&mut BrowserSettings>,
+            _extra_info: Option<&mut Option<DictionaryValue>>,
+            _no_javascript_access: Option<&mut ::std::os::raw::c_int>,
+        ) -> ::std::os::raw::c_int {
+            1
         }
 
         fn on_before_close(&self, browser: Option<&mut Browser>) {
             if let Some(browser) = browser {
                 closed(browser);
+                gone();
             }
         }
     }
