@@ -245,6 +245,7 @@ impl Shared {
         }
         let Some(ns) = frameless::ns_window(window) else { return };
         frameless::never_main(&ns);
+        focus::follow_mouse();
         let parent = self.parent.borrow().clone();
         if let Some(parent) = &parent {
             frameless::count_children_as_key(parent);

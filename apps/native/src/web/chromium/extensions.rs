@@ -567,7 +567,8 @@ pub fn click(page: &Shared, id: &str) -> Result<(), String> {
     let page_url = page.url_now();
     let url = loaded.popup.as_deref().and_then(|popup| popup_url(&loaded.chrome, popup, seen_page(&loaded.hosts, &page_url))).ok_or(NO_POPUP)?;
     let (Some(parent), Some(page_ns)) = (page.parent.borrow().clone(), page.ns.borrow().clone()) else { return Err("The page isn't on screen".into()) };
-    let frame = anchor(page_ns.frame(), NSEvent::mouseLocation());
+    let visible = page_ns.screen().map_or_else(|| page_ns.frame(), |screen| screen.visibleFrame());
+    let frame = anchor(page_ns.frame(), NSEvent::mouseLocation(), visible);
     POPUP_OPEN.with_borrow_mut(|popup| {
         *popup = Some(Popup { id: id.to_owned(), page: super::page::weak_of(page), window: None, ns: None, parent: parent.clone() })
     });
@@ -590,14 +591,43 @@ pub fn click(page: &Shared, id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Escape pressed while a popup has the keyboard closes it, whatever its page does with the key, as Chrome's does: the
+/// popup's own key handler (`PopupKeys`) didn't hear Escape typed in Bitwarden's email field. Installed once, the
+/// first time a popup opens.
+fn escape_closes_popup() {
+    thread_local!(static ON: Cell<bool> = const { Cell::new(false) });
+    if ON.replace(true) {
+        return;
+    }
+    let block = block2::RcBlock::new(|event: std::ptr::NonNull<NSEvent>| -> *mut NSEvent {
+        // SAFETY: AppKit hands the event it is about to send, alive for this call, on the main thread.
+        let event_ref = unsafe { event.as_ref() };
+        let in_popup = objc2::MainThreadMarker::new().and_then(|mtm| event_ref.window(mtm)).is_some_and(|window| {
+            POPUP_OPEN.with_borrow(|popup| popup.as_ref().and_then(|popup| popup.ns.as_ref()).is_some_and(|ns| std::ptr::eq(&**ns, &*window)))
+        });
+        if in_popup && event_ref.keyCode() == ESCAPE {
+            super::next_turn(close_popup);
+            return std::ptr::null_mut();
+        }
+        event.as_ptr()
+    });
+    // SAFETY: the block returns the event it was given, or none for the one it took. The monitor lasts as long as the
+    // app, so it is never removed.
+    std::mem::forget(unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(objc2_app_kit::NSEventMask::KeyDown, &block) });
+}
+
+/// The key code of Escape.
+const ESCAPE: u16 = 53;
+
 /// Where a popup goes: its top just under the page's top edge (the toolbar's foot), centred under the pointer that
-/// pressed the button and kept inside the page, in screen points.
-fn anchor(page: NSRect, pointer: NSPoint) -> NSRect {
+/// pressed the button and kept inside the page's sides, in screen points. It may reach below the page, down to the
+/// bottom of the screen's visible area (`visible`), as Chrome's does: a short window cut Bitwarden's buttons off.
+fn anchor(page: NSRect, pointer: NSPoint, visible: NSRect) -> NSRect {
     let top = page.origin.y + page.size.height - 4.0;
     let low = page.origin.x + 8.0;
     let high = (page.origin.x + page.size.width - POPUP.width - 8.0).max(low);
     let x = (pointer.x - POPUP.width / 2.0).clamp(low, high);
-    let height = POPUP.height.min(page.size.height - 12.0).max(120.0);
+    let height = POPUP.height.min(top - visible.origin.y - 8.0).max(120.0);
     NSRect::new(NSPoint::new(x, top - height), NSSize::new(POPUP.width, height))
 }
 
@@ -613,6 +643,9 @@ fn popup_created(window: &mut cef::Window, frame: NSRect) {
     window.show();
     frameless::as_popup(&ns, 10.0);
     frameless::attach(&ns, &parent, frame);
+    // It opens under the pointer, which then never moves in Wings' window: the button's tooltip went with it.
+    super::focus::pointer_left(&parent);
+    escape_closes_popup();
     // What you type goes into it at once, as its field asks for the keyboard as it opens.
     ns.makeKeyWindow();
     if let Some(view) = window.child_view_at(0) {
@@ -842,7 +875,7 @@ wrap_keyboard_handler! {
         /// Escape closes it, as in Chrome.
         fn on_pre_key_event(&self, _browser: Option<&mut Browser>, event: Option<&KeyEvent>, _os_event: *mut u8, _is_keyboard_shortcut: Option<&mut ::std::os::raw::c_int>) -> ::std::os::raw::c_int {
             let Some(event) = event else { return 0 };
-            if event.type_ == KeyEventType::RAWKEYDOWN && event.native_key_code == 53 {
+            if event.type_ == KeyEventType::RAWKEYDOWN && event.native_key_code == i32::from(ESCAPE) {
                 super::next_turn(close_popup);
                 return 1;
             }
@@ -1118,12 +1151,24 @@ mod tests {
     /// The popup opens under the pointer that pressed its button, at the page's top, and never past the page's sides.
     #[test]
     fn a_popup_opens_under_the_button_inside_the_page() {
+        let screen = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1512.0, 944.0));
         let page = NSRect::new(NSPoint::new(100.0, 100.0), NSSize::new(1000.0, 700.0));
-        let under = anchor(page, NSPoint::new(900.0, 820.0));
-        assert_eq!((under.origin.x, under.origin.y + under.size.height), (710.0, 796.0));
-        let at_edge = anchor(page, NSPoint::new(1095.0, 820.0));
+        let under = anchor(page, NSPoint::new(900.0, 820.0), screen);
+        assert_eq!((under.origin.x, under.origin.y + under.size.height, under.size.height), (710.0, 796.0, 600.0));
+        let at_edge = anchor(page, NSPoint::new(1095.0, 820.0), screen);
         assert_eq!(at_edge.origin.x + at_edge.size.width, 1092.0, "kept inside the page's right edge");
-        let small = anchor(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(500.0, 300.0)), NSPoint::new(250.0, 300.0));
-        assert!(small.size.height <= 288.0 && small.origin.y >= 0.0, "{small:?}");
+    }
+
+    /// In a short window the popup reaches below the page, whole, down to the screen's visible bottom: Bitwarden's
+    /// buttons were cut off at the page's foot. Only a screen too short for it cuts it.
+    #[test]
+    fn a_popup_in_a_short_window_reaches_below_the_page_but_not_off_the_screen() {
+        let visible = NSRect::new(NSPoint::new(0.0, 40.0), NSSize::new(1512.0, 880.0));
+        let short = NSRect::new(NSPoint::new(200.0, 500.0), NSSize::new(900.0, 300.0));
+        let popup = anchor(short, NSPoint::new(600.0, 820.0), visible);
+        assert_eq!((popup.size.height, popup.origin.y + popup.size.height), (600.0, 796.0), "whole, below the page's foot at 500");
+        let low = NSRect::new(NSPoint::new(200.0, 60.0), NSSize::new(900.0, 300.0));
+        let popup = anchor(low, NSPoint::new(600.0, 380.0), visible);
+        assert_eq!(popup.origin.y, 48.0, "stops at the visible bottom");
     }
 }

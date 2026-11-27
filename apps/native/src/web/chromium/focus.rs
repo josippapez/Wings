@@ -4,7 +4,8 @@
 //! again, which AppKit does by itself.
 
 use objc2::{Message, msg_send, runtime::AnyObject};
-use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSWindow};
+use objc2_app_kit::{NSApplication, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSWindow};
+use objc2_foundation::NSPoint;
 use wings_chromium::window as frameless;
 
 use super::{keys::{Press, named_key}, page::Shared};
@@ -35,6 +36,74 @@ pub fn resync(parent: &NSWindow) {
             }
         }
     });
+}
+
+/// The pointer went from Wings' window `parent` into a page's or a popup's window over it: GPUI's view hears it moved
+/// out of the window, as it hears nothing while the pointer is over another window, so what it showed for where the
+/// pointer was goes. A button's tooltip stayed over the popup the button opened for as long as the popup showed.
+pub fn pointer_left(parent: &NSWindow) {
+    let Some(gpui) = parent.contentView().as_deref().and_then(crate::web::mac::gpui_among) else { return };
+    let outside = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+        NSEventType::MouseMoved,
+        NSPoint::new(-10_000.0, -10_000.0),
+        NSEventModifierFlags::empty(),
+        0.0,
+        parent.windowNumber(),
+        None,
+        0,
+        0,
+        0.0,
+    );
+    if let Some(outside) = outside {
+        gpui.mouseMoved(&outside);
+    }
+}
+
+/// Which window a press of the mouse gives the keyboard to first, before AppKit hands it out, if any: the window
+/// pressed (`pressed`, of the app's active windows) when it isn't the key window (`key`) and one of the two is a page's
+/// or a popup's (`is_page`). AppKit takes a press in a window that isn't key as the one that makes it key, and the
+/// press didn't act: after typing in a page, the first click on a Wings tab only hovered it, and the first on a popup's
+/// button did nothing, as a page's window and Wings' are two windows where WebKit's view and Wings' are one.
+pub(super) fn takes_keys_on_press<W: PartialEq>(pressed: &W, key: Option<&W>, is_page: impl Fn(&W) -> bool) -> bool {
+    key != Some(pressed) && (is_page(pressed) || key.is_some_and(&is_page))
+}
+
+/// Follows the mouse over the pages' and popups' windows, from the mouse events the app hands out: a press gives the
+/// keyboard to the window pressed first (`takes_keys_on_press`), and the pointer going from another window into one of
+/// theirs tells GPUI it left (`pointer_left`), once each time. Installed once.
+pub fn follow_mouse() {
+    thread_local!(static ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
+    thread_local!(static IN_PAGE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
+    if ON.replace(true) {
+        return;
+    }
+    let block = block2::RcBlock::new(|event: std::ptr::NonNull<NSEvent>| -> *mut NSEvent {
+        let Some(mtm) = objc2::MainThreadMarker::new() else { return event.as_ptr() };
+        // SAFETY: AppKit hands the event it is about to send, alive for this call, on the main thread.
+        let event_ref = unsafe { event.as_ref() };
+        let Some(window) = event_ref.window(mtm) else { return event.as_ptr() };
+        let in_page = frameless::is_marked(&window);
+        if matches!(event_ref.r#type(), NSEventType::LeftMouseDown | NSEventType::RightMouseDown) {
+            let app = NSApplication::sharedApplication(mtm);
+            let key = app.keyWindow();
+            if app.isActive() && takes_keys_on_press(&*window, key.as_deref(), |window| frameless::is_marked(window)) {
+                window.makeKeyWindow();
+            }
+            return event.as_ptr();
+        }
+        if in_page && !IN_PAGE.replace(true)
+            && let Some(parent) = window.parentWindow()
+        {
+            pointer_left(&parent);
+        }
+        if !in_page {
+            IN_PAGE.set(false);
+        }
+        event.as_ptr()
+    });
+    let mask = NSEventMask::MouseMoved | NSEventMask::MouseEntered | NSEventMask::LeftMouseDragged | NSEventMask::LeftMouseDown | NSEventMask::RightMouseDown;
+    // SAFETY: the block returns the event it was given. The monitor lasts as long as the app, so it is never removed.
+    std::mem::forget(unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask, &block) });
 }
 
 /// A key press as `keys` reads it.
@@ -75,5 +144,24 @@ pub fn to_wings(event: &NSEvent, parent: &NSWindow) {
     if let Some(copy) = copy {
         let parent = parent.retain();
         super::next_turn(move || parent.sendEvent(&copy));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::takes_keys_on_press;
+
+    /// A press gives the keyboard first only when it moves between Wings' window and a page's or a popup's: a press in
+    /// the window that has it, or between two windows that are neither, is AppKit's as ever.
+    #[test]
+    fn a_press_moving_the_keyboard_between_wings_and_a_page_gives_it_first() {
+        let page = |window: &&str| *window == "page" || *window == "popup";
+        assert!(takes_keys_on_press(&"wings", Some(&"page"), page), "a Wings tab after typing in the page");
+        assert!(takes_keys_on_press(&"popup", Some(&"wings"), page), "a popup's button while Wings has the keyboard");
+        assert!(takes_keys_on_press(&"page", Some(&"popup"), page));
+        assert!(takes_keys_on_press(&"page", None, page));
+        for (pressed, key) in [("wings", Some("wings")), ("page", Some("page")), ("wings", Some("settings")), ("wings", None)] {
+            assert!(!takes_keys_on_press(&pressed, key.as_ref(), page), "{pressed} with {key:?} key");
+        }
     }
 }

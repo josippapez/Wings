@@ -148,7 +148,7 @@ impl WebView {
 
 /// GPUI's view among the views of the window's `content` view. The vibrancy and the backdrop are views there too, under
 /// it, and handing them the keyboard swallowed every key, so it's picked by its class, not its place.
-fn gpui_among(content: &NSView) -> Option<Retained<NSView>> {
+pub(crate) fn gpui_among(content: &NSView) -> Option<Retained<NSView>> {
     let class = objc2::runtime::AnyClass::get(c"GPUIView")?;
     content.subviews().iter().find(|view| view.isKindOfClass(class))
 }
