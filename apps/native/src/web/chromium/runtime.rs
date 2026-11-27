@@ -405,6 +405,12 @@ pub fn switches(piped: bool) -> Vec<String> {
     {
         switches.push(format!("remote-debugging-port={port}"));
     }
+    // And records every request Chromium makes, its own included, to the file named, for a check of what it reaches.
+    if cfg!(debug_assertions)
+        && let Some(file) = std::env::var("WINGS_CHROMIUM_NETLOG").ok().filter(|file| file.starts_with("/tmp/"))
+    {
+        switches.push(format!("log-net-log={file}"));
+    }
     // And on a locked Mac, where every window is hidden, it keeps drawing and running its pages for the script.
     if cfg!(debug_assertions) && std::env::var_os("WINGS_DRAW_WHILE_HIDDEN").is_some() {
         switches.extend(["disable-backgrounding-occluded-windows", "disable-renderer-backgrounding"].map(String::from));
