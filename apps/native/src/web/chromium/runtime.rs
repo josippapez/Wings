@@ -151,7 +151,9 @@ fn start(bundle: &std::path::Path) -> Result<(), String> {
     };
     let global = RUNTIME.with_borrow(|runtime| runtime.global.clone()).ok_or("no profile")?;
     let root = profiles_root().ok_or("no data folder")?;
-    let profile = wings_chromium::engine::Profile { root: root.clone(), path: root.join(dir_name(&global)) };
+    // Its global context is `Default`, whatever the settings name: the starting profile's own data goes there first.
+    super::homes::make_global(&root, &dir_name(&global))?;
+    let profile = wings_chromium::engine::Profile { root: root.clone(), path: root.join("Default") };
     let mut settings = engine.settings(&profile);
     // Wings' own arguments aren't Chromium's.
     settings.command_line_args_disabled = 1;
@@ -271,6 +273,16 @@ pub fn context(profile: &Profile, keep_data: bool) -> Option<RequestContext> {
             })
             .clone()
             .into()
+    })
+}
+
+/// The request contexts of `profile` CEF holds now, each with whether it keeps its data: the global one for the profile
+/// that started Chromium, and those its pages made (`context`). None is made here.
+pub fn live(profile: &Profile) -> Vec<(bool, RequestContext)> {
+    RUNTIME.with_borrow(|runtime| {
+        let global = (matches!(runtime.phase, Phase::Ready) && runtime.global.as_ref() == Some(profile)).then(request_context_get_global_context).flatten();
+        let made = runtime.contexts.iter().filter(|((of, _), _)| of == profile).map(|((_, keep_data), context)| (*keep_data, context.clone()));
+        global.map(|global| (true, global)).into_iter().chain(made).collect()
     })
 }
 

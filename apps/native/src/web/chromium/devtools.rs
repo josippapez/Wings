@@ -55,6 +55,30 @@ impl Channel {
     }
 }
 
+thread_local! {
+    /// The one-off requests (`once`) waiting for their answer, with the observer that hears it.
+    static ONCE: RefCell<HashMap<u64, (Registration, Answered)>> = RefCell::default();
+    /// Their ids, far above any a page's channel reaches, as every observer of a browser hears every answer, and below
+    /// 2^31: the protocol reads an id as a 32-bit int, and answers none above.
+    static NEXT_ONCE: Cell<u64> = const { Cell::new(1 << 30) };
+}
+
+/// Asks `method` with `params` of `browser`'s page once, on its own observer, whether or not its page has a channel
+/// (`Channel`): `done` hears the answer, on a turn of its own.
+pub fn once(browser: &Browser, method: &str, params: Value, done: impl FnOnce(Result<Value, String>) + 'static) {
+    let Some(host) = browser.host() else { return done(Err("The page has no browser".into())) };
+    let id = NEXT_ONCE.replace(NEXT_ONCE.get() + 1);
+    let Some(registration) = host.add_dev_tools_message_observer(Some(&mut Once::new(id))) else {
+        return done(Err("Chromium's DevTools can't be heard".into()));
+    };
+    ONCE.with_borrow_mut(|once| once.insert(id, (registration, Box::new(done))));
+    if host.send_dev_tools_message(Some(request(id, method, params, None).as_bytes())) == 0
+        && let Some((_, done)) = ONCE.with_borrow_mut(|once| once.remove(&id))
+    {
+        done(Err("Chromium's DevTools didn't take the request".into()));
+    }
+}
+
 /// A request as the protocol writes it, sent to the target of `session` (the page's own for none).
 pub fn request(id: u64, method: &str, params: Value, session: Option<&str>) -> String {
     let mut message = json!({ "id": id, "method": method, "params": params });
@@ -123,6 +147,27 @@ wrap_dev_tools_message_observer! {
         fn on_dev_tools_message(&self, _browser: Option<&mut Browser>, message: Option<&[u8]>) -> ::std::os::raw::c_int {
             if let (Some(page), Some(incoming)) = (self.page.upgrade(), message.and_then(parse)) {
                 page.devtools(incoming);
+            }
+            1
+        }
+    }
+}
+
+wrap_dev_tools_message_observer! {
+    struct Once {
+        id: u64,
+    }
+
+    impl DevToolsMessageObserver {
+        fn on_dev_tools_message(&self, _browser: Option<&mut Browser>, message: Option<&[u8]>) -> ::std::os::raw::c_int {
+            if let Some(Incoming::Answer { id, result }) = message.and_then(parse).filter(|incoming| matches!(incoming, Incoming::Answer { id, .. } if *id == self.id))
+                && let Some((registration, done)) = ONCE.with_borrow_mut(|once| once.remove(&id))
+            {
+                // Its observer goes after CEF is done calling it.
+                super::next_turn(move || {
+                    drop(registration);
+                    done(result);
+                });
             }
             1
         }

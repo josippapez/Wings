@@ -4,7 +4,8 @@
 //!
 //! - [`page`]: one web view, its browser and what it tells its page.
 //! - [`devtools`] and [`agent`]: the page's own DevTools channel, and a plugin's scripts, pictures and logs over it.
-//! - [`runtime`]: starting CEF for the first page, its work, and closing it as Wings quits.
+//! - [`runtime`]: starting CEF for the first page, its work, and closing it as Wings quits; [`homes`]: each profile's data
+//!   in a folder of its own.
 //! - [`extensions`]: the profile's extensions, their buttons and popups.
 //! - [`cookies`]: another browser's sign-ins imported into the profile.
 //! - [`focus`] and [`keys`]: the keyboard between Wings and a page.
@@ -16,6 +17,7 @@ mod debug;
 mod devtools;
 pub mod extensions;
 mod focus;
+mod homes;
 pub mod keys;
 pub mod page;
 pub mod runtime;
@@ -71,5 +73,26 @@ mod check {
             eprintln!("added {} as {}", added.name, added.id);
         }
         eprintln!("installed {}", bundle.display());
+    }
+
+    /// In a test copy whose `HOME` this test runs with, with Wings closed: Clear data of the profile `WINGS_CHECK_PROFILE`
+    /// (web folder `WINGS_CHECK_WEB`) as the Browser's settings run it, Chromium's part, and, with `WINGS_CHECK_REMOVE`
+    /// naming an extension's id in Wings, that extension taken out of Chromium as turning it off does. Run with
+    /// `--ignored change_a_test_copy`.
+    #[test]
+    #[ignore]
+    fn change_a_test_copy() {
+        use crate::web::Profile;
+        let var = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("set {name}"));
+        assert!(var("HOME").starts_with("/tmp/"), "a test copy's own HOME, never yours");
+        let named = var("WINGS_CHECK_PROFILE");
+        let (plugin, scope) = named.split_once('.').unwrap();
+        let profile = Profile { plugin: plugin.into(), scope: scope.into(), dir: std::path::PathBuf::from(var("WINGS_CHECK_WEB")) };
+        if let Ok(id) = std::env::var("WINGS_CHECK_REMOVE") {
+            super::extensions::unload(&profile, &id, || eprintln!("taken out"));
+        }
+        if std::env::var_os("WINGS_CHECK_CLEAR").is_some() {
+            super::page::clear_data(&profile, || eprintln!("cleared"));
+        }
     }
 }

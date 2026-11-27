@@ -1897,16 +1897,18 @@ fn run_web(job: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, 
                 .detach();
         }
         Job::Clear(profile) => {
-            // Chromium's data of the profile goes too, whichever engine it uses now.
-            crate::web::chromium::page::clear_data(&profile);
-            // Both of its stores answer; the second is when it is all gone.
-            let left = std::cell::Cell::new(2);
-            mac::clear_data(&profile, move || {
+            // Chromium's data of the profile goes too, whichever engine it uses now. Chromium and both of WebKit's
+            // stores answer; the third is when it is all gone.
+            let left = std::cell::Cell::new(3);
+            let one_gone = std::rc::Rc::new(move || {
                 left.set(left.get() - 1);
                 if left.get() == 0 {
                     let _ = answer.send(Ok("null".into()));
                 }
             });
+            let chromium = one_gone.clone();
+            crate::web::chromium::page::clear_data(&profile, move || chromium());
+            mac::clear_data(&profile, move || one_gone());
         }
         // Under Chromium it answers with whether Chromium loaded it; WebKit loads it too, for a switch back.
         Job::Load { profile, extension } if crate::web::engine::choice(&profile) == crate::web::engine::Kind::Chromium => {

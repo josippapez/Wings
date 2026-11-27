@@ -47,6 +47,7 @@ impl Maker for Chromium {
             chain_tainted: Cell::new(false),
             agent: agent::Agent::default(),
             ready: Cell::new(false),
+            clear_first: Cell::new(false),
             browser: RefCell::new(None),
             window: RefCell::new(None),
             ns: RefCell::new(None),
@@ -83,6 +84,16 @@ impl Maker for Chromium {
 thread_local! {
     /// Every page alive, to close them all as Wings quits.
     static PAGES: RefCell<Vec<Weak<Shared>>> = RefCell::default();
+    /// The contexts, by profile and whether they keep their data, whose sites' storage a Clear data couldn't reach as
+    /// no page of theirs was open: their next page clears it before it loads (`clear_first`).
+    static CLEAR_NEXT: RefCell<Vec<(Profile, bool)>> = RefCell::default();
+}
+
+/// What `Storage.clearDataForOrigin` takes to clear every site's storage of a page's context: no origin, all kinds
+/// (cookies, local and session storage, IndexedDB, service workers, cache storage, file systems), as Chromium 156's
+/// `StoragePartitionImpl::ClearData` reads an opaque origin as every one.
+fn clear_all() -> serde_json::Value {
+    serde_json::json!({ "origin": "", "storageTypes": "all" })
 }
 
 /// Closes every page's window, as Wings quits.
@@ -93,26 +104,59 @@ pub fn close_all() {
     }
 }
 
-/// Removes every cookie and the cache Chromium keeps for `profile`: in the contexts open now while CEF runs, else its
-/// folder on disk, which holds the rest of its site data too.
-pub fn clear_data(profile: &Profile) {
-    if !runtime::running() {
-        if let Some(root) = crate::web::engine::profiles() {
-            let _ = std::fs::remove_dir_all(root.join(runtime::dir_name(profile)));
-        }
-        return;
+/// Removes everything Chromium keeps for `profile`, as WebKit's Clear data does of its stores: cookies, the cache, every
+/// site's storage and service workers, and its extensions' data. Its folder goes while no context of Chromium's holds it
+/// open (Chromium isn't running, or not for it); the contexts CEF holds are cleared through Chromium, their sites'
+/// storage over one of their pages' DevTools, or before their next page loads when none is open. `done` hears when it
+/// is all gone.
+pub fn clear_data(profile: &Profile, done: impl FnOnce() + 'static) {
+    let live = if runtime::running() { runtime::live(profile) } else { Vec::new() };
+    if !live.iter().any(|(keep_data, _)| *keep_data)
+        && let Some(root) = runtime::profiles_root()
+    {
+        let _ = std::fs::remove_dir_all(super::homes::home(&root, &runtime::dir_name(profile)));
     }
-    // debt: while CEF runs, a profile's local storage and IndexedDB stay until it quits; they'd need the DevTools
-    // protocol's `Storage.clearDataForOrigin` for each origin it holds.
-    for keep_data in [true, false] {
-        let context = runtime::context(profile, keep_data).or_else(request_context_get_global_context);
-        if let Some(context) = context {
-            if let Some(cookies) = context.cookie_manager(None) {
-                cookies.delete_cookies(None, None, None);
+    let left = Rc::new(Cell::new(1));
+    let done: Rc<RefCell<Option<Box<dyn FnOnce()>>>> = Rc::new(RefCell::new(Some(Box::new(done))));
+    let counted = left.clone();
+    let one_done = move || {
+        counted.set(counted.get() - 1);
+        if counted.get() == 0
+            && let Some(done) = done.borrow_mut().take()
+        {
+            done();
+        }
+    };
+    let one_done: Rc<dyn Fn()> = Rc::new(one_done);
+    let pages = pages_of(profile);
+    for (keep_data, context) in live {
+        if let Some(cookies) = context.cookie_manager(None) {
+            cookies.delete_cookies(None, None, None);
+        }
+        // With a callback: CEF 156 runs it unasked (`ClearHttpCacheInternal` binds `OnComplete` on it), and Wings
+        // crashed as the cache was cleared with none.
+        left.set(left.get() + 1);
+        context.clear_http_cache(Some(&mut CacheCleared::new(one_done.clone())));
+        match pages.iter().find(|page| page.keep_data == keep_data).and_then(|page| page.browser.borrow().clone()) {
+            Some(browser) => {
+                left.set(left.get() + 1);
+                let one_done = one_done.clone();
+                super::devtools::once(&browser, "Storage.clearDataForOrigin", clear_all(), move |cleared| {
+                    if let Err(why) = cleared {
+                        eprintln!("[chromium] a page's sites' storage wasn't cleared: {why}");
+                    }
+                    one_done();
+                });
             }
-            context.clear_http_cache(None);
+            None => CLEAR_NEXT.with_borrow_mut(|next| next.push((profile.clone(), keep_data))),
         }
     }
+    if runtime::global().as_ref() == Some(profile) {
+        left.set(left.get() + 1);
+        let one_done = one_done.clone();
+        super::extensions::forget_data(profile, move || one_done());
+    }
+    one_done();
 }
 
 /// The first page alive, for a debug build's checks (`debug`).
@@ -166,6 +210,8 @@ pub struct Shared {
     /// Its browser exists and, for a plugin that may run scripts in its pages, its DevTools channel is readied: until
     /// then it shows a blank page and keeps the commands sent, so nothing loads before the guard watches it.
     ready: Cell<bool>,
+    /// It opened blank, as its context's sites' storage is cleared first (`CLEAR_NEXT`).
+    clear_first: Cell<bool>,
     pub(super) browser: RefCell<Option<Browser>>,
     window: RefCell<Option<cef::Window>>,
     pub(super) ns: RefCell<Option<Retained<NSWindow>>>,
@@ -212,8 +258,14 @@ impl Drop for Page {
 impl Shared {
     /// Opens its window, once CEF is up.
     fn open(self: &Rc<Self>) {
-        // A plugin that may run scripts in its pages gets the address once its channel is readied (`ready`).
-        let url = if self.scripts { "about:blank".to_owned() } else { self.start.borrow().clone() };
+        // A plugin that may run scripts in its pages gets the address once its channel is readied (`ready`), and a page
+        // whose context's storage a Clear data left to it once that's cleared.
+        let waiting = CLEAR_NEXT.with_borrow_mut(|next| {
+            let at = next.iter().position(|(profile, keep_data)| *profile == self.profile && *keep_data == self.keep_data);
+            at.map(|at| next.remove(at)).is_some()
+        });
+        self.clear_first.set(waiting);
+        let url = if self.scripts || waiting { "about:blank".to_owned() } else { self.start.borrow().clone() };
         let client = PageClient::new(Rc::downgrade(self));
         let context = runtime::context(&self.profile, self.keep_data);
         let bounds = self.screen_rect().map_or(Rect { x: -10_000, y: -10_000, width: 800, height: 600 }, cef_rect);
@@ -397,6 +449,22 @@ impl Shared {
     /// ready (`readied`).
     fn browser_created(&self, browser: &Browser) {
         self.browser.replace(Some(browser.clone()));
+        if self.clear_first.get() {
+            let (page, again) = (weak_of(self), browser.clone());
+            return super::devtools::once(browser, "Storage.clearDataForOrigin", clear_all(), move |cleared| {
+                if let Err(why) = cleared {
+                    eprintln!("[chromium] a page's sites' storage wasn't cleared: {why}");
+                }
+                if let Some(page) = page.upgrade() {
+                    page.go_on(&again);
+                }
+            });
+        }
+        self.go_on(browser);
+    }
+
+    /// Its browser is ready to go on: to its channel first, for a plugin that may run scripts in its pages.
+    fn go_on(&self, browser: &Browser) {
         if !self.scripts {
             return self.readied(Ok(()));
         }
@@ -420,7 +488,7 @@ impl Shared {
         if let Err(why) = result {
             eprintln!("[chromium] a page's DevTools channel isn't readied, so nothing reads or acts on it: {why}");
         }
-        if self.scripts {
+        if self.scripts || self.clear_first.get() {
             let start = self.start.borrow().clone();
             match self.browser.borrow().as_ref().and_then(Browser::main_frame) {
                 Some(frame) if start != "about:blank" => frame.load_url(Some(&CefString::from(start.as_str()))),
@@ -581,6 +649,18 @@ fn cef_rect(frame: NSRect) -> Rect {
 
 fn text(value: Option<&CefString>) -> String {
     value.map(CefString::to_string).unwrap_or_default()
+}
+
+wrap_completion_callback! {
+    struct CacheCleared {
+        done: Rc<dyn Fn()>,
+    }
+
+    impl CompletionCallback {
+        fn on_complete(&self) {
+            (self.done)();
+        }
+    }
 }
 
 wrap_client! {

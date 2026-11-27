@@ -325,6 +325,32 @@ pub fn unload(profile: &Profile, id: &str, done: impl FnOnce() + 'static) {
     });
 }
 
+/// Clear data of the profile Chromium's extensions load into, while Chromium runs: each extension loaded is uninstalled,
+/// which deletes all it stored (`unload`), then they load again, as new. `done` hears once they're out.
+pub fn forget_data(profile: &Profile, done: impl FnOnce() + 'static) {
+    let ids: Vec<String> = LOADED.with_borrow(|loaded| loaded.iter().map(|loaded| loaded.id.clone()).collect());
+    let left = Rc::new(Cell::new(ids.len()));
+    let done: Rc<RefCell<Option<Box<dyn FnOnce()>>>> = Rc::new(RefCell::new(Some(Box::new(done))));
+    let out = Rc::new(move || {
+        if let Some(done) = done.borrow_mut().take() {
+            load_checked();
+            done();
+        }
+    });
+    if ids.is_empty() {
+        return out();
+    }
+    for id in ids {
+        let (left, out) = (left.clone(), out.clone());
+        unload(profile, &id, move || {
+            left.set(left.get() - 1);
+            if left.get() == 0 {
+                out();
+            }
+        });
+    }
+}
+
 /// The folders of its own Chromium 156 keeps an extension's storage in, in a profile: `chrome.storage`'s three areas,
 /// its rules for `declarativeNetRequest` (`extensions/common/constants.h`,
 /// `declarative_net_request/file_backed_ruleset_source.cc`), by its id, and its IndexedDB, by its origin

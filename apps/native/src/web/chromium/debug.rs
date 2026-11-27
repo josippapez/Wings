@@ -8,6 +8,7 @@
 //! - `click <wings|page|popup> <x> <y>`: posts a left click at `x`, `y` points from the top left of that window's
 //!   content to the app's event queue, so AppKit handles it as a click of the mouse, a window that isn't key included.
 //! - `unload`: takes the first extension out of Chromium as turning it off does (`extensions::unload`).
+//! - `clear`: clears the first page's profile's Chromium data as Clear data does (`page::clear_data`).
 //! - `windows`: every window of the app, with its frame, level and whether it shows and has the keyboard.
 //! - `focus page` / `focus wings`: makes the first page's window, or Wings', the key window.
 //! - `state`: which window has the keyboard, whether Wings counts as active, and whether a popup shows.
@@ -134,6 +135,13 @@ fn run(command: &str) -> String {
                 "unloading".into()
             }
             _ => "no page or no extension".into(),
+        },
+        (Some("clear"), _) => match &first {
+            Some(page) => {
+                page::clear_data(&page.profile, || eprintln!("[chromium-check] cleared"));
+                "clearing".into()
+            }
+            None => "no page".into(),
         },
         (Some("windows"), _) => NSApplication::sharedApplication(mtm)
             .windows()
