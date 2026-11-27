@@ -33,13 +33,28 @@ struct Ends {
     host_reads: RawFd,
 }
 
-/// Makes the pipe on fd 3 and 4, when nothing has them yet: call it first thing in `main`, while the process has one
-/// thread. A process started with either already open (by whoever started it) gets no pipe.
+/// Makes the pipe on fd 3 and 4: call it first thing in `main`, while the process has one thread.
 pub fn reserve() -> bool {
-    let ends = reserve_on(READ_FD, WRITE_FD);
+    let ends = reserve_at(READ_FD, WRITE_FD);
     let reserved = ends.is_some();
     *RESERVED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = ends;
     reserved
+}
+
+/// [`reserve_on`], after moving whatever the process was started with on `read_fd` or `write_fd` to a higher fd. Wings
+/// restarted by its updater starts with the old copy's sockets there (no code here knows them by number), and with those
+/// in the way Chromium got no pipe, so no extension loaded in that run.
+fn reserve_at(read_fd: RawFd, write_fd: RawFd) -> Option<Ends> {
+    for fd in [read_fd, write_fd] {
+        if unsafe { libc_fcntl(fd, F_GETFD) } != -1 {
+            let moved = unsafe { libc_fcntl_set(fd, F_DUPFD_CLOEXEC, read_fd.max(write_fd) + 1) };
+            if moved == -1 {
+                return None;
+            }
+            unsafe { libc_close(fd) };
+        }
+    }
+    reserve_on(read_fd, write_fd)
 }
 
 /// Both pipes, with Chromium's ends on `read_fd` and `write_fd` and every end close-on-exec from the call after it was
@@ -209,6 +224,31 @@ mod tests {
         chromium_writes.write_all(b"{\"id\":1,\"result\":{}}\0").unwrap();
         let wait = std::time::Duration::from_secs(5);
         assert_eq!(messages.recv_timeout(wait).unwrap(), b"{\"id\":1,\"result\":{}}");
+    }
+
+    /// A process started with something already on the pipe's fds (Wings after its updater restarts it) still gets the
+    /// pipe: what was there moves to a higher fd, open and close-on-exec.
+    #[test]
+    fn what_the_process_started_with_on_the_pipes_fds_moves_aside() {
+        use std::os::unix::fs::MetadataExt;
+        let (read_fd, write_fd) = (960, 961);
+        let path = std::env::temp_dir().join(format!("wings-pipe-test-{}", std::process::id()));
+        let file = std::fs::File::create(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let inode = file.metadata().unwrap().ino();
+        let inherited = std::os::fd::AsRawFd::as_raw_fd(&file);
+        assert_eq!(unsafe { libc_dup2(inherited, read_fd) }, read_fd);
+        assert_eq!(unsafe { libc_dup2(inherited, write_fd) }, write_fd);
+        let ends = reserve_at(read_fd, write_fd).expect("the inherited fds move aside");
+        for fd in [read_fd, write_fd, ends.host_writes, ends.host_reads] {
+            assert!(close_on_exec(fd), "fd {fd} isn't close-on-exec");
+        }
+        // Both inherited copies stay open above the pipe's fds, close-on-exec.
+        let moved: Vec<RawFd> = (write_fd + 1..write_fd + 200)
+            .filter(|fd| std::fs::metadata(format!("/dev/fd/{fd}")).is_ok_and(|meta| meta.ino() == inode))
+            .collect();
+        assert_eq!(moved.len(), 2, "{moved:?}");
+        assert!(moved.iter().all(|fd| close_on_exec(*fd)));
     }
 
     /// Chromium's messages come in chunks of any size, each ended by a NUL.
