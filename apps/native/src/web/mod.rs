@@ -3,10 +3,11 @@
 //! (a `WKWebView` on macOS, `mac.rs`) sits over the window at the place the page left for it in its last draw, and the
 //! page never draws for what the web page does.
 //!
-//! The engine's view is above everything GPUI draws, so it only shows while its place does: while the page is on screen
-//! (`ui::place_view`), nothing of the page's own is over it (a `Dialog` or `Sheet`, `slots::uncovered_piece`) and no
-//! overlay of the window that takes clicks (a menu, a popover, a dialog, `slots::blocking_covers`) lies over it. Otherwise
-//! it is hidden, and it is gone with its node or its page.
+//! The engine's view is above everything GPUI draws, so it only shows while its place does, while the page is on screen
+//! (`ui::place_view`). A Chromium page shows what lies over it through holes cut in it (a menu, a popover, a tooltip,
+//! `slots::overlays`) and is dimmed under a dialog's backdrop (`slots::backdrops`), the page's own or the window's
+//! (`views::overlaid`). A WebKit page can't, so it hides while an overlay that takes clicks or a backdrop lies over it.
+//! It is gone with its node or its page.
 
 pub mod engine;
 pub mod extensions;

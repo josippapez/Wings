@@ -13,7 +13,7 @@ use serde::Serialize;
 use super::{LAYER, Profile};
 use crate::{
     page::tree::{WebCommand, WebGo},
-    ui::slots::{self, Piece},
+    ui::slots,
 };
 
 /// What a page says of one of its web views, from its `WebView` node.
@@ -127,9 +127,9 @@ impl Tell {
 pub trait Native {
     /// Shows it at `frame`, the window's points from its top left, in `window`, or hides it for `None`.
     fn place(&mut self, window: &Window, frame: Option<Bounds<Pixels>>);
-    /// Lets what lies over the page at `holes` show through it and take the clicks there, none for an empty list: true
-    /// when it can, and false for one that is hidden instead while anything does.
-    fn holes(&mut self, _holes: &[Hole]) -> bool {
+    /// Lets what lies over the page show through it and take the clicks there, and dims it under a dialog's backdrop, which
+    /// then takes every click: true when it can, and false for one that is hidden instead while anything does.
+    fn overlaid(&mut self, _over: &Overlaid) -> bool {
         false
     }
     /// Does `go`, the command of `token`, which `eval` and `snapshot` answer by.
@@ -144,46 +144,60 @@ pub struct Hole {
     pub corners: [f32; 4],
 }
 
-/// How round an overlay's corners are, as a menu's (`ui::menu`). A tooltip's are a little less, and the page covers
-/// the difference, which can't be seen.
+/// What lies over a web view: the overlays it shows through, and whether a dialog's backdrop dims all of it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Overlaid {
+    pub holes: Vec<Hole>,
+    pub dimmed: bool,
+}
+
+/// How round an overlay's corners are when it doesn't say, as a menu's (`ui::menu`).
 const ROUND: f32 = 8.0;
 
-/// What of a web view at `at` the overlays `covers` (menus, popovers, dialogs, tooltips) lie over: none when nothing does,
-/// and `None` when one lies over all of it, as a dialog's backdrop does. An overlay's own corners are round in its hole,
-/// so the page doesn't show dark corners around a menu, and a corner the page's edge cuts off is square. Overlays that
-/// overlap are cut as rectangles that don't, all square.
-fn holes_in(at: Bounds<Pixels>, covers: &[Bounds<Pixels>]) -> Option<Vec<Hole>> {
-    let mut over: Vec<Bounds<Pixels>> = Vec::new();
-    for cover in covers.iter().filter(|cover| cover.intersects(&at)) {
-        if cover.intersect(&at) == at {
+/// What of a web view at `at` the overlays `covers` (menus, popovers, dialogs, tooltips, each with its corners' radius
+/// when it says) lie over, under the dialogs' `backdrops`: `None` when one lies over all of it but a dialog's backdrop,
+/// which dims it. An overlay's own corners are round in its hole, so the page doesn't show dark corners around a menu, and
+/// a corner the page's edge cuts off is square. Overlays that overlap are cut as rectangles that don't, all square.
+fn overlaid(at: Bounds<Pixels>, covers: &[(Bounds<Pixels>, Option<f32>)], backdrops: &[Bounds<Pixels>]) -> Option<Overlaid> {
+    let whole = |over: &Bounds<Pixels>, of: &Bounds<Pixels>| over.intersect(of) == *of;
+    let dim: Vec<_> = backdrops.iter().filter(|backdrop| whole(backdrop, &at)).collect();
+    let mut over: Vec<(Bounds<Pixels>, f32)> = Vec::new();
+    for (cover, round) in covers.iter().filter(|(cover, _)| cover.intersects(&at)) {
+        // The layer a window's dialog is drawn in, as large as its backdrop.
+        if dim.iter().any(|backdrop| whole(cover, backdrop)) {
+            continue;
+        }
+        if whole(cover, &at) {
             return None;
         }
         // A tooltip draws twice as it comes in.
-        if !over.contains(cover) {
-            over.push(*cover);
+        if !over.iter().any(|(seen, _)| seen == cover) {
+            over.push((*cover, round.unwrap_or(ROUND)));
         }
     }
+    let dimmed = !dim.is_empty();
     let in_page = |cut: Bounds<Pixels>| Bounds::new(cut.origin - at.origin, cut.size);
-    let apart = over.iter().enumerate().all(|(index, one)| over[index + 1..].iter().all(|other| !one.intersects(other)));
+    let apart = over.iter().enumerate().all(|(index, (one, _))| over[index + 1..].iter().all(|(other, _)| !one.intersects(other)));
     if !apart {
-        let cuts: Vec<_> = over.iter().map(|cover| in_page(cover.intersect(&at))).collect();
-        return Some(disjoint(&cuts).into_iter().map(|at| Hole { at, corners: [0.0; 4] }).collect());
+        let cuts: Vec<_> = over.iter().map(|(cover, _)| in_page(cover.intersect(&at))).collect();
+        let holes = disjoint(&cuts).into_iter().map(|at| Hole { at, corners: [0.0; 4] }).collect();
+        return Some(Overlaid { holes, dimmed });
     }
-    Some(
-        over.iter()
-            .map(|cover| {
-                let cut = cover.intersect(&at);
-                let round = ROUND.min(f32::from(cut.size.width) / 2.0).min(f32::from(cut.size.height) / 2.0);
-                let (top, bottom) = (cut.top() == cover.top(), cut.bottom() == cover.bottom());
-                let (left, right) = (cut.left() == cover.left(), cut.right() == cover.right());
-                let corner = |own: bool| if own { round } else { 0.0 };
-                Hole {
-                    at: in_page(cut),
-                    corners: [corner(top && left), corner(top && right), corner(bottom && right), corner(bottom && left)],
-                }
-            })
-            .collect(),
-    )
+    let holes = over
+        .iter()
+        .map(|(cover, round)| {
+            let cut = cover.intersect(&at);
+            let round = round.min(f32::from(cut.size.width) / 2.0).min(f32::from(cut.size.height) / 2.0);
+            let (top, bottom) = (cut.top() == cover.top(), cut.bottom() == cover.bottom());
+            let (left, right) = (cut.left() == cover.left(), cut.right() == cover.right());
+            let corner = |own: bool| if own { round } else { 0.0 };
+            Hole {
+                at: in_page(cut),
+                corners: [corner(top && left), corner(top && right), corner(bottom && right), corner(bottom && left)],
+            }
+        })
+        .collect();
+    Some(Overlaid { holes, dimmed })
 }
 
 /// The area `rects` cover, as rectangles that don't overlap: the cells of the grid their edges make that one of them
@@ -239,8 +253,8 @@ struct Entry {
     /// Where it shows now, and in which window.
     shown: Option<Bounds<Pixels>>,
     window: Option<WindowId>,
-    /// What lies over it now, and whether that shows through it (`Native::holes`).
-    holes: Vec<Hole>,
+    /// What lies over it now, and whether that shows through it (`Native::overlaid`).
+    over: Overlaid,
     cuts: bool,
 }
 
@@ -289,7 +303,7 @@ pub fn update(page: EntityId, profile: &Profile, specs: &[Spec], told: &Told, sc
                 token: None,
                 shown: None,
                 window: None,
-                holes: Vec::new(),
+                over: Overlaid::default(),
                 cuts: false,
             });
             // In the order sent, each past the last one run.
@@ -331,11 +345,12 @@ fn slot_name(page: EntityId, name: &str) -> SharedString {
 }
 
 /// The place of the page `page`'s web view `name`, filling what holds it. It is left for the window's draw only while the
-/// page is drawn as a view a piece puts on screen with nothing of its own over it.
+/// page is drawn as a view a piece puts on screen. A dialog of the page's own over it says where it is, as the window's
+/// do, so the page shows dimmed under it.
 pub fn slot(page: EntityId, name: SharedString) -> impl IntoElement {
     canvas(
         move |bounds, window, _| {
-            if let Some(piece @ Piece::View(_)) = slots::uncovered_piece() {
+            if let Some(piece) = slots::view_piece() {
                 slots::leave_slot(window, piece, LAYER, slot_name(page, &name), bounds);
             }
         },
@@ -360,10 +375,13 @@ pub fn place(window: &Window, _: &App) {
     let id = window.window_handle().window_id();
     let maker = MAKERS.with_borrow(|makers| makers.get(&id).cloned());
     let places = slots::shown(id, LAYER);
-    // Every overlay is a hole in a page whose engine can show through it; one that takes clicks hides a page whose
-    // engine can't, and a tooltip leaves that one as it is, as hiding it for a tooltip made it blink.
-    let covers = slots::covers(id);
-    let blocking = slots::blocking_covers(id);
+    // Every overlay is a hole in a page whose engine can show through it, and a dialog's backdrop dims it; one that takes
+    // clicks hides a page whose engine can't, and a tooltip leaves that one as it is, as hiding it for a tooltip made it
+    // blink.
+    let covers = slots::overlays(id);
+    let backdrops = slots::backdrops(id);
+    let mut blocking = slots::blocking_covers(id);
+    blocking.extend(backdrops.iter().copied());
     // Dropped after the borrow, as a view that ends may call back.
     let mut ended = Vec::new();
     VIEWS.with_borrow_mut(|views| {
@@ -378,7 +396,7 @@ pub fn place(window: &Window, _: &App) {
                 .filter(|at| !at.is_empty());
             // What lies over part of it shows through it where its engine can, and else hides it, as an overlay over all
             // of it does: hiding the page for a menu left it black under the menu.
-            let over = slot.and_then(|at| holes_in(at, &covers));
+            let over = slot.and_then(|at| overlaid(at, &covers, &backdrops));
             let at = slot.filter(|_| over.is_some());
             // The profile switched engines: its page opens again in the other one, where it was.
             if let Some(maker) = &maker
@@ -387,7 +405,7 @@ pub fn place(window: &Window, _: &App) {
             {
                 ended.extend(entry.native.take());
                 entry.shown = None;
-                entry.holes.clear();
+                entry.over = Overlaid::default();
                 entry.cuts = false;
                 if let Some(at) = entry.at.lock().unwrap().clone() {
                     entry.url = Some(at);
@@ -404,12 +422,12 @@ pub fn place(window: &Window, _: &App) {
                 entry.native = Some(native);
                 entry.window = Some(id);
             }
-            let holes = over.unwrap_or_default();
+            let over = over.unwrap_or_default();
             if let Some(native) = &mut entry.native
-                && holes != entry.holes
+                && over != entry.over
             {
-                entry.cuts = native.holes(&holes);
-                entry.holes = holes;
+                entry.cuts = native.overlaid(&over);
+                entry.over = over;
             }
             let at = at.filter(|at| entry.cuts || !blocking.iter().any(|cover| cover.intersects(at)));
             if entry.shown != at
@@ -435,6 +453,8 @@ pub(crate) mod testing {
     pub enum Did {
         Made { name: Option<String>, keep_data: bool, url: Option<String> },
         Placed(Option<Bounds<Pixels>>),
+        /// What lies over it, told to an engine that shows through it.
+        Over(Overlaid),
         Went(WebGo, u64),
         Ended,
     }
@@ -448,11 +468,18 @@ pub(crate) mod testing {
         pub chromium: Rc<std::cell::Cell<bool>>,
     }
 
-    struct Fake(Rc<RefCell<Vec<Did>>>);
+    /// What it did, and whether it shows through what lies over it, as Chromium's pages do.
+    struct Fake(Rc<RefCell<Vec<Did>>>, bool);
 
     impl Native for Fake {
         fn place(&mut self, _: &Window, frame: Option<Bounds<Pixels>>) {
             self.0.borrow_mut().push(Did::Placed(frame));
+        }
+        fn overlaid(&mut self, over: &Overlaid) -> bool {
+            if self.1 {
+                self.0.borrow_mut().push(Did::Over(over.clone()));
+            }
+            self.1
         }
         fn go(&mut self, go: &WebGo, token: u64) {
             self.0.borrow_mut().push(Did::Went(go.clone(), token));
@@ -469,7 +496,7 @@ pub(crate) mod testing {
         fn make(&self, profile: &Profile, keep_data: bool, _: bool, url: Option<&str>, told: Tell) -> Box<dyn Native> {
             self.did.borrow_mut().push(Did::Made { name: Some(profile.plugin.clone()), keep_data, url: url.map(str::to_owned) });
             self.tells.borrow_mut().push(told);
-            Box::new(Fake(self.did.clone()))
+            Box::new(Fake(self.did.clone(), self.chromium.get()))
         }
         fn engine(&self, _: &Profile) -> crate::web::engine::Kind {
             if self.chromium.get() { crate::web::engine::Kind::Chromium } else { crate::web::engine::Kind::WebKit }
@@ -530,33 +557,44 @@ mod holes_tests {
 
     use super::*;
 
-    /// A menu over part of a web page is a hole in it, which the page shows through; a dialog's backdrop over all of it
-    /// hides it.
+    /// A menu over part of a web page is a hole in it, which the page shows through; an overlay over all of it hides it,
+    /// but a dialog's backdrop, which dims it around the dialog.
     #[test]
-    fn an_overlay_over_part_of_a_web_page_is_a_hole_in_it_and_one_over_all_of_it_hides_it() {
+    fn an_overlay_over_part_of_a_web_page_is_a_hole_in_it_and_a_dialog_dims_it() {
         let at = |x: f32, y: f32, w: f32, h: f32| Bounds::new(point(px(x), px(y)), size(px(w), px(h)));
         let hole = |at, corners| Hole { at, corners };
-        let page = at(100.0, 50.0, 800.0, 600.0);
-        assert_eq!(holes_in(page, &[]), Some(vec![]));
-        assert_eq!(holes_in(page, &[at(0.0, 0.0, 50.0, 40.0)]), Some(vec![]), "an overlay beside it");
+        let holes = |holes: Vec<Hole>| Some(Overlaid { holes, dimmed: false });
+        let over = |covers: &[Bounds<Pixels>]| {
+            let covers: Vec<_> = covers.iter().map(|cover| (*cover, None)).collect();
+            overlaid(at(100.0, 50.0, 800.0, 600.0), &covers, &[])
+        };
+        assert_eq!(over(&[]), holes(vec![]));
+        assert_eq!(over(&[at(0.0, 0.0, 50.0, 40.0)]), holes(vec![]), "an overlay beside it");
         assert_eq!(
-            holes_in(page, &[at(300.0, 100.0, 200.0, 150.0)]),
-            Some(vec![hole(at(200.0, 50.0, 200.0, 150.0), [ROUND; 4])]),
+            over(&[at(300.0, 100.0, 200.0, 150.0)]),
+            holes(vec![hole(at(200.0, 50.0, 200.0, 150.0), [ROUND; 4])]),
             "a menu inside it, with its round corners"
         );
         // Only the corner the page's edges don't cut off is round.
         let menu = at(700.0, 40.0, 250.0, 60.0);
-        assert_eq!(holes_in(page, &[menu]), Some(vec![hole(at(600.0, 0.0, 200.0, 50.0), [0.0, 0.0, 0.0, ROUND])]));
-        assert_eq!(holes_in(page, &[menu, at(0.0, 0.0, 1200.0, 900.0)]), None, "a dialog's backdrop");
+        assert_eq!(over(&[menu]), holes(vec![hole(at(600.0, 0.0, 200.0, 50.0), [0.0, 0.0, 0.0, ROUND])]));
+        assert_eq!(over(&[menu, at(0.0, 0.0, 1200.0, 900.0)]), None, "an overlay over all of it");
         // A tooltip drawn twice as it comes in is one hole, which the mask cuts once.
         let tooltip = at(800.0, 40.0, 150.0, 30.0);
-        assert_eq!(holes_in(page, &[tooltip, tooltip]), Some(vec![hole(at(700.0, 0.0, 100.0, 20.0), [0.0, 0.0, 0.0, ROUND])]));
+        assert_eq!(over(&[tooltip, tooltip]), holes(vec![hole(at(700.0, 0.0, 100.0, 20.0), [0.0, 0.0, 0.0, ROUND])]));
         // Two that overlap cover what both do, once each part.
-        let holes = holes_in(page, &[at(200.0, 100.0, 100.0, 100.0), at(250.0, 150.0, 100.0, 100.0)]).unwrap();
-        let area: f32 = holes.iter().map(|hole| f32::from(hole.at.size.width) * f32::from(hole.at.size.height)).sum();
+        let cut = over(&[at(200.0, 100.0, 100.0, 100.0), at(250.0, 150.0, 100.0, 100.0)]).unwrap().holes;
+        let area: f32 = cut.iter().map(|hole| f32::from(hole.at.size.width) * f32::from(hole.at.size.height)).sum();
         assert_eq!(area, 100.0 * 100.0 * 2.0 - 50.0 * 50.0);
-        for (index, one) in holes.iter().enumerate() {
-            assert!(holes[index + 1..].iter().all(|other| !other.at.intersects(&one.at)), "{holes:?}");
+        for (index, one) in cut.iter().enumerate() {
+            assert!(cut[index + 1..].iter().all(|other| !other.at.intersects(&one.at)), "{cut:?}");
         }
+        // A dialog: its layer and backdrop over the whole window, and its panel, as round as it says.
+        let window = at(0.0, 0.0, 1200.0, 900.0);
+        let dialog = [(window, None), (at(400.0, 250.0, 400.0, 300.0), Some(14.0))];
+        assert_eq!(
+            overlaid(at(100.0, 50.0, 800.0, 600.0), &dialog, &[window]),
+            Some(Overlaid { holes: vec![hole(at(300.0, 200.0, 400.0, 300.0), [14.0; 4])], dimmed: true })
+        );
     }
 }

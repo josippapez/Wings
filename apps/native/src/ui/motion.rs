@@ -770,7 +770,10 @@ impl Element for Inert {
         let nowhere = ContentMask {
             bounds: Bounds::default(),
         };
-        window.with_content_mask(Some(nowhere), |window| self.0.prepaint(window, cx));
+        let shown = window.content_mask();
+        super::slots::clipped_as(shown, || {
+            window.with_content_mask(Some(nowhere), |window| self.0.prepaint(window, cx))
+        });
     }
 
     fn paint(

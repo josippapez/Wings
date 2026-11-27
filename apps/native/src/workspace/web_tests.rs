@@ -142,30 +142,62 @@ fn a_page_whose_profile_switches_engines_is_made_again_by_the_other_where_it_was
     assert!(matches!(did.get(again + 1), Some(Did::Placed(Some(_)))), "shown at its place again: {did:?}");
 }
 
+/// Opens `plugin`'s web page in a tab, and waits until its page has drawn.
+fn open_web(app: &TestApp, window: &mut TestAppWindow<Workspace>, plugin: &str) {
+    window.update(|w, window, cx| assert!(w.open_plugin_view(plugin, "web", None, window, cx)));
+    let sent = |window: &mut TestAppWindow<Workspace>| {
+        window.read(|w, cx| w.plugin_tabs.iter().any(|tab| tab.plugin == plugin && tab.page.read(cx).trees_sent() > 0))
+    };
+    for _ in 0..100 {
+        if sent(window) {
+            break;
+        }
+        settle(app, window);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(sent(window), "{plugin}'s page never sent its tree");
+    settle(app, window);
+}
+
 #[test]
-fn a_web_page_is_never_made_without_the_permission_or_under_the_pages_own_dialog() {
+fn a_web_page_is_never_made_without_the_permission() {
     let data = Data::temp();
     install(&data, "nope", json!({ "openUrl": ["https://"] }), false);
-    install(&data, "covered", json!({ "webView": true }), true);
     let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
     let id = window.update(|_, window, _| window.window_handle().window_id());
     let (did, _) = record(id);
-    for plugin in ["nope", "covered"] {
-        window.update(|w, window, cx| assert!(w.open_plugin_view(plugin, "web", None, window, cx)));
-        let sent = |window: &mut TestAppWindow<Workspace>| {
-            window.read(|w, cx| w.plugin_tabs.iter().any(|tab| tab.plugin == plugin && tab.page.read(cx).trees_sent() > 0))
-        };
-        for _ in 0..100 {
-            if sent(&mut window) {
-                break;
-            }
-            settle(&app, &mut window);
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        assert!(sent(&mut window), "{plugin}'s page never sent its tree");
-        settle(&app, &mut window);
-    }
+    open_web(&app, &mut window, "nope");
     assert!(did.borrow().is_empty(), "nothing made: {:?}", did.borrow());
+}
+
+/// Under its page's own dialog a web page shows dimmed, with the dialog's panel cut out of it, where its engine can, as
+/// under Wings' own dialogs; it hid there, and stays hidden where its engine can't.
+#[test]
+fn a_web_page_under_its_pages_own_dialog_shows_dimmed_around_the_dialog() {
+    for chromium in [true, false] {
+        let data = Data::temp();
+        install(&data, "covered", json!({ "webView": true }), true);
+        let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+        let id = window.update(|_, window, _| window.window_handle().window_id());
+        let (did, _, engine) = record_engines(id);
+        engine.set(chromium);
+        open_web(&app, &mut window, "covered");
+        let did = did.borrow();
+        assert!(did.iter().any(|did| matches!(did, Did::Made { .. })), "{did:?}");
+        let over = did.iter().rev().find_map(|did| match did {
+            Did::Over(over) => Some(over.clone()),
+            _ => None,
+        });
+        if chromium {
+            let over = over.expect("told what lies over it");
+            assert!(over.dimmed, "{over:?}");
+            assert_eq!(over.holes.len(), 1, "the dialog's panel: {over:?}");
+            assert_eq!(last_place(&did), Some(true), "shown: {did:?}");
+        } else {
+            assert_eq!(over, None);
+            assert_ne!(last_place(&did), Some(true), "never shown over the dialog: {did:?}");
+        }
+    }
 }
 
 /// A page that opens as a window with `args`, saves them, shows a web view at their `url`, and closes its own window when

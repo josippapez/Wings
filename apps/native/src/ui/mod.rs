@@ -345,7 +345,8 @@ pub fn dialog(
         // A margin to the window's edges, so the panel never reaches what is under its end (the composer).
         .py(px(32.0))
         .bg(rgba(BACKDROP))
-        .occlude();
+        .occlude()
+        .child(slots::backdrop_mark());
     let panel = div()
         .id(id)
         .role(Role::Dialog)
@@ -366,7 +367,9 @@ pub fn dialog(
         .border_1()
         .border_color(rgba(dialog_ring()))
         .bg(rgb(theme::palette().dialog))
-        .text_color(rgb(theme::palette().foreground));
+        .text_color(rgb(theme::palette().foreground))
+        // Where it is, so a web page under the backdrop shows dimmed around it.
+        .child(slots::cover(div().absolute().top_0().left_0().size_full()).rounded(14.0));
     (backdrop, panel)
 }
 

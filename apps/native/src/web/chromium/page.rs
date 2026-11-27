@@ -22,7 +22,7 @@ use crate::{
     page::tree::WebGo,
     web::{
         Profile,
-        views::{Dialog, Heard, Hole, Maker, Native, State, Tell},
+        views::{Dialog, Heard, Maker, Native, Overlaid, State, Tell},
     },
 };
 
@@ -53,7 +53,8 @@ impl Maker for Chromium {
             ns: RefCell::new(None),
             parent: RefCell::new(None),
             want: Cell::new(None),
-            holes: RefCell::default(),
+            over: RefCell::default(),
+            dim: RefCell::new(None),
             attached: Cell::new(false),
             closed: Cell::new(false),
             pending: RefCell::default(),
@@ -254,9 +255,11 @@ pub struct Shared {
     pub(super) parent: RefCell<Option<Retained<NSWindow>>>,
     /// Where it shows, in the Wings window's points from its top left, or hidden.
     want: Cell<Option<Bounds<Pixels>>>,
-    /// What of the Wings window lies over it (a menu, a popover), in its own points from its top left, which shows
-    /// through it (`Native::holes`).
-    holes: RefCell<Vec<Hole>>,
+    /// What of the Wings window lies over it (a menu, a popover, a dialog's backdrop), which shows through it or dims it
+    /// (`Native::overlaid`).
+    over: RefCell<Overlaid>,
+    /// What dims it under a dialog's backdrop, once one has.
+    dim: RefCell<Option<Retained<NSView>>>,
     attached: Cell<bool>,
     closed: Cell<bool>,
     /// Commands sent before it was ready.
@@ -281,9 +284,9 @@ impl Native for Page {
         self.0.apply_place();
     }
 
-    fn holes(&mut self, holes: &[Hole]) -> bool {
-        self.0.holes.replace(holes.to_vec());
-        self.0.apply_holes();
+    fn overlaid(&mut self, over: &Overlaid) -> bool {
+        self.0.over.replace(over.clone());
+        self.0.apply_over();
         true
     }
 
@@ -373,20 +376,29 @@ impl Shared {
             None if self.attached.replace(false) => frameless::detach(&ns, &parent),
             None => ns.orderOut(None),
         }
-        self.apply_holes();
+        self.apply_over();
     }
 
-    /// Cuts what lies over it (`holes`) out of its window, which is clear there: the menu or popover the Wings window
-    /// draws under it shows, and a click there goes to it, as a press on a window's clear part goes to the one under it.
-    /// Hiding the whole page for a menu left it black under the menu.
-    fn apply_holes(&self) {
+    /// Cuts what lies over it out of its window, which is clear there: the menu or popover the Wings window draws under it
+    /// shows, and a click there goes to it, as a press on a window's clear part goes to the one under it. Hiding the whole
+    /// page for a menu left it black under the menu. Under a dialog's backdrop it is dimmed as the window is, and the
+    /// clicks and keys go to the dialog.
+    fn apply_over(&self) {
         use objc2_core_foundation::{CGPoint, CGRect, CGSize};
         use objc2_core_graphics::CGMutablePath;
         use objc2_quartz_core::{CAShapeLayer, kCAFillRuleEvenOdd};
 
         let Some(ns) = self.ns.borrow().clone() else { return };
         let Some(content) = ns.contentView() else { return };
-        let holes = self.holes.borrow();
+        let over = self.over.borrow();
+        ns.setIgnoresMouseEvents(over.dimmed);
+        if over.dimmed
+            && ns.isKeyWindow()
+            && let Some(parent) = self.parent.borrow().as_ref()
+        {
+            parent.makeKeyWindow();
+        }
+        self.apply_dim(&content, over.dimmed);
         let size = content.bounds().size;
         let rect = |x: f64, y: f64, w: f64, h: f64| CGRect::new(CGPoint::new(x, y), CGSize::new(w, h));
         // SAFETY: AppKit's and Core Animation's objects, on the main thread; no transform for the path.
@@ -395,7 +407,7 @@ impl Shared {
             if layer.is_null() {
                 return;
             }
-            if holes.is_empty() {
+            if over.holes.is_empty() {
                 let _: () = objc2::msg_send![layer, setMask: std::ptr::null::<objc2::runtime::AnyObject>()];
                 return;
             }
@@ -404,7 +416,7 @@ impl Shared {
             let path = CGMutablePath::new();
             CGMutablePath::add_rect(Some(&path), std::ptr::null(), rect(0.0, 0.0, size.width, size.height));
             let flipped = content.isFlipped();
-            for hole in holes.iter() {
+            for hole in over.holes.iter() {
                 let (x, y) = (f64::from(f32::from(hole.at.origin.x)), f64::from(f32::from(hole.at.origin.y)));
                 let (w, h) = (f64::from(f32::from(hole.at.size.width)), f64::from(f32::from(hole.at.size.height)));
                 // From the top left, as the hole is given, to the layer's own.
@@ -432,6 +444,43 @@ impl Shared {
             mask.setPath(Some(&path));
             let _: () = objc2::msg_send![layer, setMask: &*mask];
         }
+    }
+
+    /// Dims the page under a dialog's backdrop as the backdrop dims the rest of the window, or stops.
+    fn apply_dim(&self, content: &NSView, dimmed: bool) {
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        let mut dim = self.dim.borrow_mut();
+        if !dimmed {
+            if let Some(view) = dim.as_ref() {
+                view.setHidden(true);
+            }
+            return;
+        }
+        let view = dim.get_or_insert_with(|| {
+            let view = NSView::initWithFrame(<NSView as objc2::MainThreadOnly>::alloc(mtm), content.bounds());
+            view.setWantsLayer(true);
+            view.setAutoresizingMask(
+                objc2_app_kit::NSAutoresizingMaskOptions::ViewWidthSizable
+                    | objc2_app_kit::NSAutoresizingMaskOptions::ViewHeightSizable,
+            );
+            let backdrop = gpui::Rgba::from(crate::ui::backdrop_color());
+            let color = objc2_core_graphics::CGColor::new_srgb(
+                f64::from(backdrop.r),
+                f64::from(backdrop.g),
+                f64::from(backdrop.b),
+                f64::from(backdrop.a),
+            );
+            // SAFETY: the view's own layer, made by `setWantsLayer`, on the main thread.
+            let layer: Option<Retained<objc2_quartz_core::CALayer>> = unsafe { objc2::msg_send![&*view, layer] };
+            if let Some(layer) = layer {
+                layer.setBackgroundColor(Some(&color));
+            }
+            view
+        });
+        view.setFrame(content.bounds());
+        view.setHidden(false);
+        // Over the page's own views, which Chromium may have added since.
+        content.addSubview_positioned_relativeTo(view, objc2_app_kit::NSWindowOrderingMode::Above, None);
     }
 
     /// Where it shows on screen, from its place in the Wings window.

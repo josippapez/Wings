@@ -2,6 +2,10 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.126 · 2026-11-27
+
+- **Dialogs over a Chromium page**: Settings, the add-extension dialog or a page's own dialog no longer blank the Browser page under them. The page stays in view, dimmed like the rest of the window, and a click on it closes the dialog as a click on the backdrop does.
+
 ## 0.2.125 · 2026-11-27
 
 - **Menus and tooltips over a Chromium page**: a menu or tooltip that opens over a page in the Chromium Browser no longer turns the page black. The page stays in view around it, and clicks on the menu reach it.

@@ -12,7 +12,7 @@ use std::{
 
 use gpui::{
     AnyElement, App, Bounds, ContentMask, Element, EntityId, GlobalElementId, InspectorElementId,
-    IntoElement, LayoutId, Pixels, Position, SharedString, Style, Window, WindowId, canvas,
+    IntoElement, LayoutId, Pixels, Position, SharedString, Style, Window, WindowId, canvas, div,
     prelude::*,
 };
 
@@ -43,6 +43,8 @@ pub struct Slot {
     /// The piece that left it, whose slots' names are its own.
     pub piece: Piece,
     over: Option<Over>,
+    /// How round an overlay's corners are, when it says (`Cover::rounded`).
+    pub round: Option<f32>,
     /// The draw that left it there.
     drawn: u64,
 }
@@ -83,6 +85,8 @@ thread_local! {
     static NEXT_COVER: Cell<u64> = const { Cell::new(0) };
     /// What is being laid out, prepainted or painted is under something its own piece draws over it (`in_piece`).
     static COVERED: Cell<bool> = const { Cell::new(false) };
+    /// What clips the slots left now, when not the content mask (`clipped_as`).
+    static CLIP: RefCell<Option<ContentMask<Pixels>>> = const { RefCell::new(None) };
     /// Where its own piece draws something over part of what is being painted (`under`).
     static OVER: RefCell<Vec<Rc<Cell<Bounds<Pixels>>>>> = RefCell::default();
 }
@@ -182,6 +186,22 @@ impl Element for InPiece {
     }
 }
 
+/// Runs `run`, a prepaint under a content mask that keeps the pointer off what it holds (a dialog on its way out), with
+/// the slots it leaves clipped by `mask`, as what is painted there is: the dialog's backdrop, gone from the slots, left a
+/// web page under it black while it faded.
+pub(crate) fn clipped_as<R>(mask: ContentMask<Pixels>, run: impl FnOnce() -> R) -> R {
+    let outer = CLIP.replace(Some(mask));
+    let done = run();
+    CLIP.set(outer);
+    done
+}
+
+/// The view being painted, when it is one a piece puts on screen, whether or not it draws something of its own over all
+/// of it (a page's dialog, which says where it is with `cover` and `backdrop_mark`).
+pub(crate) fn view_piece() -> Option<Piece> {
+    Some(current_piece()).filter(|piece| matches!(piece, Piece::View(_)))
+}
+
 /// The piece being painted, when it is one that keeps its last drawing and draws nothing of its own over all of what is
 /// painted now (`in_piece`): that may draw in a layer over the window's pieces instead, where nothing the piece draws
 /// over part of it is (`over`).
@@ -274,7 +294,7 @@ pub(crate) fn draws(id: WindowId) -> u64 {
 /// Leaves the slot `name` of `layer` at `bounds`, as the piece `piece` does in this draw (`uncovered_piece`), for what
 /// draws in that layer later in the draw.
 pub(crate) fn leave_slot(window: &Window, piece: Piece, layer: &'static str, name: SharedString, bounds: Bounds<Pixels>) {
-    leave(window, piece, layer, name, bounds, None);
+    leave(window, piece, layer, name, bounds, None, None);
 }
 
 /// Says that the piece being drawn puts `view` on screen in the window `id`, in this draw of it: the slots `view` leaves
@@ -334,7 +354,7 @@ pub fn slot(
     let piece = current_piece();
     let name = name.into();
     canvas(
-        move |bounds, window, _| leave(window, piece, layer, name, bounds, over),
+        move |bounds, window, _| leave(window, piece, layer, name, bounds, over, None),
         |_, _, _, _| {},
     )
     .size_full()
@@ -354,9 +374,10 @@ fn leave(
     name: SharedString,
     bounds: Bounds<Pixels>,
     over: Option<Over>,
+    round: Option<f32>,
 ) {
     let id = window.window_handle().window_id();
-    let mask = window.content_mask();
+    let mask = CLIP.with_borrow(Clone::clone).unwrap_or_else(|| window.content_mask());
     SLOTS.with_borrow_mut(|slots| {
         let drawn = slots.frame.get(&id).copied().unwrap_or_default();
         let slot = Slot {
@@ -364,6 +385,7 @@ fn leave(
             mask,
             piece,
             over,
+            round,
             drawn,
         };
         slots.slots.insert((id, piece, layer, name), slot);
@@ -390,6 +412,30 @@ pub fn passive_cover(element: impl IntoElement) -> Cover {
     cover_in(PASSIVE_COVERS, element)
 }
 
+/// The layer the places of dialogs' backdrops are kept in (`backdrop_mark`).
+const BACKDROPS: &str = "backdrops";
+
+/// Notes that what it fills is a dialog's dimmed backdrop, which takes the clicks over all of it: a web page under it
+/// stays in view, dimmed as the rest of the window is, rather than hiding. Put it in the backdrop.
+pub fn backdrop_mark() -> Cover {
+    cover_in(BACKDROPS, div().absolute().top_0().left_0().size_full())
+}
+
+/// Where the backdrops of the window `id` are in its last draw (`backdrop_mark`).
+pub(crate) fn backdrops(id: WindowId) -> Vec<Bounds<Pixels>> {
+    shown_bounds(id, BACKDROPS)
+}
+
+/// `covers`, each with how round its corners are when it says.
+pub(crate) fn overlays(id: WindowId) -> Vec<(Bounds<Pixels>, Option<f32>)> {
+    [COVERS, PASSIVE_COVERS]
+        .into_iter()
+        .flat_map(|layer| shown(id, layer))
+        .map(|(_, slot)| (slot.bounds.intersect(&slot.mask.bounds), slot.round))
+        .filter(|(bounds, _)| !bounds.is_empty())
+        .collect()
+}
+
 fn cover_in(layer: &'static str, element: impl IntoElement) -> Cover {
     let name = NEXT_COVER.with(|next| {
         let name = next.get();
@@ -401,6 +447,7 @@ fn cover_in(layer: &'static str, element: impl IntoElement) -> Cover {
         piece: current_piece(),
         name: name.to_string().into(),
         element: element.into_any_element(),
+        round: None,
     }
 }
 
@@ -409,6 +456,15 @@ pub struct Cover {
     piece: Piece,
     name: SharedString,
     element: AnyElement,
+    round: Option<f32>,
+}
+
+impl Cover {
+    /// Its corners are `radius` round, as what it covers draws them: a web page under it shows around them.
+    pub fn rounded(mut self, radius: f32) -> Self {
+        self.round = Some(radius);
+        self
+    }
 }
 
 impl Element for Cover {
@@ -443,7 +499,7 @@ impl Element for Cover {
         window: &mut Window,
         cx: &mut App,
     ) {
-        leave(window, self.piece, self.layer, self.name.clone(), bounds, None);
+        leave(window, self.piece, self.layer, self.name.clone(), bounds, None, self.round);
         self.element.prepaint(window, cx);
     }
 
@@ -585,6 +641,38 @@ impl Element for SlotLayer {
                     );
                 }
             });
+        }
+    }
+}
+
+#[cfg(all(test, feature = "test-support"))]
+mod dialog_tests {
+    use gpui::{Context, FocusHandle, Render, TestApp};
+
+    use super::*;
+    use crate::ui::motion::{self, Phase};
+
+    /// A dialog over the window, coming in or on its way out.
+    struct Dialog(Phase, FocusHandle);
+
+    impl Render for Dialog {
+        fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            start_draw(window.window_handle().window_id());
+            let (backdrop, panel) = crate::ui::dialog("test", "Test", &self.1, 300.0, 200.0);
+            div().size_full().child(cover(motion::dialog_layer("test", self.0, backdrop.child(panel))))
+        }
+    }
+
+    /// A dialog's backdrop and panel say where they are while it fades out too: a web page under it went black then.
+    #[test]
+    fn a_dialog_on_its_way_out_still_says_where_its_backdrop_and_panel_are() {
+        for phase in [Phase::In, Phase::Out(1)] {
+            let mut app = TestApp::new();
+            let mut window = app.open_window(move |_, cx| Dialog(phase, cx.focus_handle()));
+            let id = window.update(|_, window, _| window.window_handle().window_id());
+            window.draw();
+            assert_eq!(backdrops(id).len(), 1, "{phase:?}");
+            assert!(overlays(id).iter().any(|(_, round)| *round == Some(14.0)), "the panel, {phase:?}");
         }
     }
 }
