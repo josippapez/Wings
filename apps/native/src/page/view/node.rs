@@ -48,6 +48,7 @@ impl PageView {
                     .flex_1()
                     .min_h_0()
                     .min_w_0()
+                    .relative()
                     .flex()
                     .flex_col()
                     .children(page.toolbar.iter().map(|node| match node {
@@ -55,6 +56,23 @@ impl PageView {
                         node => self.node(node, cx),
                     }))
                     .child(body)
+                    // Over the body's foot and outside its scroll, so it stays where the person is looking.
+                    .when(!page.toasts.is_empty(), |outer| {
+                        outer.child(
+                            div()
+                                .id(ElementId::NamedInteger("page-toasts".into(), page.id))
+                                .absolute()
+                                .bottom(px(20.0))
+                                .left_0()
+                                .right_0()
+                                .px(px(16.0))
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .gap(px(8.0))
+                                .children(self.nodes(&page.toasts, cx)),
+                        )
+                    })
                     .into_any_element()
             }
             Node::Toolbar(toolbar) => self.toolbar(toolbar, None, cx),
@@ -82,6 +100,7 @@ impl PageView {
                 .text_color(rgb(notice.tone.map_or(theme::palette().info, tone_color)))
                 .child(self.inline(&notice.children, cx))
                 .into_any_element(),
+            Node::Toast(toast) => self.toast(toast, cx),
             Node::Spinner(spinner) => div()
                 .id(ElementId::NamedInteger("page-spinner".into(), spinner.id))
                 .role(Role::Status)

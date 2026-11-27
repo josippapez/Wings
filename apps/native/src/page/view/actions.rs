@@ -296,6 +296,12 @@ impl PageView {
                 {
                     found.push(handler);
                 }
+                if let Node::Toast(toast) = node
+                    && label == "Dismiss"
+                    && let Some(handler) = &toast.on_dismiss
+                {
+                    found.push(handler);
+                }
                 for part in node.parts() {
                     find(part, label, found);
                 }

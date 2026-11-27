@@ -186,6 +186,20 @@ fn unknown_components_are_dropped_with_what_is_in_them() {
     assert_eq!(parsed.text(), "kept");
 }
 
+/// A page's `toasts` slot holds `Toast`s, which keep their tone, text and dismiss handler.
+#[test]
+fn a_page_takes_toasts_in_a_slot_of_their_own() {
+    let parsed = tree(json!([{"id":1,"type":"Page","props":{},"children":[
+        slot("body", json!([text(2, "Body")])),
+        slot("toasts", json!([
+            {"id":3,"type":"Toast","props":{"tone":"danger","onDismiss":"3:onDismiss"},"children":[text(4, "Could not add it")]}]))]}]))
+    .unwrap();
+    let Node::Page(page) = &parsed.children[0] else { panic!("a page") };
+    assert_eq!(plain_text(&page.body), "Body");
+    let [Node::Toast(toast)] = &page.toasts[..] else { panic!("a toast") };
+    assert_eq!((toast.tone, plain_text(&toast.children), toast.on_dismiss.as_deref()), (Some(Tone::Danger), "Could not add it".to_owned(), Some("3:onDismiss")));
+}
+
 #[test]
 fn unknown_values_are_the_defaults_and_a_bad_handler_is_none() {
     let parsed = tree(json!([

@@ -4838,3 +4838,50 @@ fn a_long_column_keeps_the_row_at_its_top_through_a_change_of_text_size() {
     let (after, moved) = at_top(&window);
     assert!(after == row && (moved - top).abs() < 1.0, "row {row} was {top} below the view's top, now row {after} is, {moved}");
 }
+
+/// A page with a tall body (a button "Top" over 60 lines) and a danger toast in its `toasts` slot whose close button
+/// the page counts.
+fn toasting() -> String {
+    let (mut top, mut dismissed) = (0, 0);
+    fake::page("page", move |event| {
+        match event {
+            Some(("5:dismiss", _)) => dismissed += 1,
+            Some(_) => top += 1,
+            None => {}
+        }
+        let lines: Vec<Value> = (0..60).map(|row| text(100 + row * 2, 101 + row * 2, format!("Line {row}"))).collect();
+        json!({ "id": 0, "type": "#root", "props": { "fill": true }, "children": [{ "id": 1, "type": "Page", "children": [
+            { "id": 2, "type": "Slot", "props": { "name": "toolbar" }, "children": [{ "id": 10, "type": "Toolbar", "children": [
+                { "id": 11, "type": "Slot", "props": { "name": "title" }, "children": [text_node(12, "Title")] }] }] },
+            { "id": 3, "type": "Slot", "props": { "name": "body" }, "children": std::iter::once(
+                json!({ "id": 6, "type": "Button", "props": { "onClick": "6:click" }, "children": [text_node(7, &format!("Top {top}"))] })).chain(lines).collect::<Vec<_>>() },
+            { "id": 4, "type": "Slot", "props": { "name": "toasts" }, "children": [
+                { "id": 5, "type": "Toast", "props": { "tone": "danger", "onDismiss": "5:dismiss" }, "children": [text_node(8, &format!("Could not add it. Dismissed {dismissed}."))] }] }] }] })
+    })
+}
+
+#[test]
+fn a_toast_floats_over_the_foot_of_a_page_whatever_its_body_has_scrolled_to_and_its_close_button_reaches_the_page() {
+    let (app, mut window) = open(toasting());
+    settle(&app, &mut window, shows("Top 0"));
+    let size = window.update(|_, window, _| window.viewport_size());
+    let (width, height) = (size.width.as_f32(), size.height.as_f32());
+    assert!(width > 800.0, "the window is narrower than the toast's 480pt cap");
+    // The close button: 480pt card centred, 12pt of padding and a 28pt button inside the card's right edge, and its
+    // foot 20pt above the page's.
+    let close = ((width + 480.0) / 2.0 - 27.0, height - 20.0 - 27.0);
+    assert!(window.read(|view, _| view.text().contains("Could not add it. Dismissed 0.")));
+    click(&mut window, close);
+    settle(&app, &mut window, shows("Dismissed 1."));
+    // The body scrolls away; the toast stays where it was, so its button is still there to press.
+    scroll_by(&mut window, -400.0);
+    draws(&app, &mut window);
+    click(&mut window, (60.0, 66.0));
+    nothing_happens(&app);
+    draws(&app, &mut window);
+    assert!(window.read(|view, _| view.text().contains("Top 0")), "the body's first button was still under the pointer: it hadn't scrolled");
+    click(&mut window, close);
+    settle(&app, &mut window, shows("Dismissed 2."));
+    assert!(window.read(|view, _| view.press("Dismiss", 0)));
+    settle(&app, &mut window, shows("Dismissed 3."));
+}

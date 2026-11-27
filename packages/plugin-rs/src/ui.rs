@@ -717,6 +717,22 @@ fn combobox_with(o: Combobox, on_text: impl Fn(Option<String>) + 'static, on_pic
     stack().prop("gap", "s").child(field).maybe(options.or(nothing))
 }
 
+impl Node {
+    /// The `toast`s a page floats over its body, in a place of its own whether or not there are any. For a `page`,
+    /// `column_page` or `page_with`.
+    pub fn toasts(self, toasts: impl IntoIterator<Item = Node>) -> Self {
+        self.child(Node::new("Slot").prop("name", "toasts").children(toasts))
+    }
+}
+
+/// A small card that floats over the foot of the page it is in (`Node::toasts`), clear of the toolbar and the edges, and
+/// stays there however far the body is scrolled: for what an action did, an error or a result, that the person may not
+/// see where they are. `tone` is `success`, `warn`, `danger` or `info`; `on_dismiss` runs when they press its close
+/// button. A lasting state of one section is a `notice` in that section. A Wings before 0.2.122 draws no toast.
+pub fn toast(tone: &str, text: impl Into<String>, on_dismiss: impl Fn() + 'static) -> Node {
+    Node::new("Toast").prop("tone", tone).on("onDismiss", move |_| on_dismiss()).text(text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -755,6 +771,18 @@ mod tests {
     /// The names of the slots `node` sends, in order.
     fn slots(node: Node) -> Vec<String> {
         tree_json(node)["children"].as_array().unwrap().iter().filter(|child| child["type"] == "Slot").map(|slot| slot["props"]["name"].as_str().unwrap().to_owned()).collect()
+    }
+
+    #[test]
+    fn a_page_sends_its_toasts_as_a_slot_after_its_body_and_a_toast_names_its_dismiss_handler() {
+        let page = || column_page(toolbar("Browser", None), [text("Body")]).toasts([toast("danger", "Could not add it", || {})]);
+        assert_eq!(slots(page()), ["toolbar", "body", "toasts"]);
+        let json = tree_json(page());
+        let toast = &json["children"][2]["children"][0];
+        assert_eq!(toast["type"], "Toast");
+        assert_eq!(toast["props"]["tone"], "danger");
+        assert!(toast["props"]["onDismiss"].is_string(), "{toast}");
+        assert_eq!(slots(page_with([], []).toasts([])), ["toolbar", "body", "toasts"]);
     }
 
     #[test]

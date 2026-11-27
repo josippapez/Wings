@@ -88,6 +88,14 @@ As Settings:
 - Reading content is a column of at most 760 to 860 points, centred; lists fill the width.
 - Floating things (the chat's message box, its session panel, popovers) are raised cards with the app's radius.
 
+## Toasts and notices
+
+An action's error or result that the person may not see where they have scrolled (a failed Add, Remove or Look) is a
+`toast(tone, text, on_dismiss)` in the page's `.toasts([..])`: a small card floating at the bottom centre over the body,
+never scrolling with it, with a close button; leave it out of the tree on `on_dismiss` and on the next action. A
+lasting state of one section (a note under its heading, a cleared-history line) is a `notice` in that section. Never
+pin a notice under the toolbar: it ran edge to edge. Wings before 0.2.122 draws no toast.
+
 ## Panes and the right panel
 
 A tab's panes sit flush: no rounded card, no gutter, no inset from the window. Two panes share one 1 point hairline

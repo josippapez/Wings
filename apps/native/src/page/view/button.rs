@@ -124,3 +124,67 @@ impl PageView {
         }))
     }
 }
+
+impl PageView {
+    /// A `Toast`: a popover-coloured card like the update toast, a tone's icon, the message in the normal colour and a
+    /// close button that sends the page's `onDismiss`. It draws no motion and sets no timer: it is there while the page
+    /// says so. Where it floats, over the foot of the body, is the `Page`'s.
+    pub(super) fn toast(&self, toast: &tree::Toast, cx: &mut Context<Self>) -> AnyElement {
+        use crate::icons::Icon;
+        let tone = toast.tone.unwrap_or(Tone::Info);
+        let color = tone_color(tone);
+        let glyph = match tone {
+            Tone::Danger => Icon::CircleX,
+            Tone::Success => Icon::CircleCheck,
+            Tone::Warn | Tone::Info | Tone::Muted => Icon::CircleDot,
+        };
+        let close = toast.on_dismiss.clone().map(|handler| {
+            ui::icon_button(
+                ElementId::NamedInteger("page-toast-close".into(), toast.id),
+                Icon::X,
+                "Dismiss",
+                ui::ButtonSize::Sm,
+            )
+            .on_click(cx.listener(move |view, _, _, cx| {
+                cx.stop_propagation();
+                view.act(&handler, None);
+            }))
+        });
+        // The popover colour is a little see-through (the update toast sits over a dim backdrop), so the card has the
+        // page's own ground under it: the body's text would show through it otherwise.
+        div()
+            .id(ElementId::NamedInteger("page-toast".into(), toast.id))
+            .role(if matches!(tone, Tone::Warn | Tone::Danger) { Role::Alert } else { Role::Status })
+            // Clicks on the card don't fall through to the page under it.
+            .occlude()
+            .w_full()
+            .max_w(px(480.0))
+            .min_w_0()
+            .rounded(px(12.0))
+            .bg(rgb(theme::palette().surface))
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .flex()
+                    .items_start()
+                    .gap(px(8.0))
+                    .p(px(12.0))
+                    .rounded(px(12.0))
+                    .border_1()
+                    .border_color(rgba(ui::HAIRLINE))
+                    .bg(rgba(theme::popover()))
+                    .child(div().flex_none().h(px(18.0)).flex().items_center().child(crate::icons::icon(glyph, 16.0, color)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .py(px(1.0))
+                            .text_size(px(13.0))
+                            .child(self.inline(&toast.children, cx)),
+                    )
+                    .children(close.map(|close| div().flex_none().child(close))),
+            )
+            .into_any_element()
+    }
+}

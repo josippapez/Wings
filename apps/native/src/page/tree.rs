@@ -152,6 +152,7 @@ pub enum Node {
     Text(Text),
     Button(Button),
     Notice(Notice),
+    Toast(Toast),
     Spinner(Spinner),
     Checkbox(Checkbox),
     Confirm(Confirm),
@@ -227,6 +228,8 @@ pub struct Page {
     /// `column`: the width in points of the one centred column the body is set in and the toolbar's content lines up
     /// with. A reading page (a detail view, a form) has one; a wide page (a list, a board) doesn't.
     pub column: Option<f32>,
+    /// The `toasts` slot: small cards floating over the body's foot, which don't scroll with it.
+    pub toasts: Vec<Node>,
 }
 
 /// A page's `backdrop`.
@@ -569,6 +572,17 @@ impl Shortcut {
 pub struct Notice {
     pub id: u64,
     pub tone: Option<Tone>,
+    pub children: Vec<Node>,
+}
+
+/// A `Toast`: a small card with a tone's icon, a message and a close button, for an action's result the person may not
+/// see where they've scrolled to. A page puts it in its `toasts` slot, which floats over the foot of the body.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Toast {
+    pub id: u64,
+    pub tone: Option<Tone>,
+    /// What the close button sends back to the page.
+    pub on_dismiss: Option<String>,
     pub children: Vec<Node>,
 }
 
@@ -1308,6 +1322,7 @@ impl Node {
             Node::Text(n) => Some(n.id),
             Node::Button(n) => Some(n.id),
             Node::Notice(n) => Some(n.id),
+            Node::Toast(n) => Some(n.id),
             Node::Spinner(n) => Some(n.id),
             Node::Checkbox(n) => Some(n.id),
             Node::Confirm(n) => Some(n.id),
@@ -1360,7 +1375,7 @@ impl Node {
         match self {
             Node::Str { .. } => vec![],
             Node::Slot(n) => vec![&n.children],
-            Node::Page(n) => vec![&n.toolbar, &n.body],
+            Node::Page(n) => vec![&n.toolbar, &n.body, &n.toasts],
             Node::Toolbar(n) => vec![&n.title, &n.filters, &n.actions],
             Node::Stack(n) => vec![&n.children],
             Node::Row(n) => vec![&n.children],
@@ -1368,6 +1383,7 @@ impl Node {
             Node::Button(n) => vec![&n.children],
             Node::ListButton(n) => vec![&n.button.children],
             Node::Notice(n) => vec![&n.children],
+            Node::Toast(n) => vec![&n.children],
             Node::Spinner(_) => vec![],
             Node::Checkbox(n) => vec![&n.children],
             Node::Confirm(n) => vec![&n.title, &n.body, &n.actions],
@@ -1419,7 +1435,7 @@ impl Node {
         match self {
             Node::Str { .. } => vec![],
             Node::Slot(n) => vec![&mut n.children],
-            Node::Page(n) => vec![&mut n.toolbar, &mut n.body],
+            Node::Page(n) => vec![&mut n.toolbar, &mut n.body, &mut n.toasts],
             Node::Toolbar(n) => vec![&mut n.title, &mut n.filters, &mut n.actions],
             Node::Stack(n) => vec![&mut n.children],
             Node::Row(n) => vec![&mut n.children],
@@ -1427,6 +1443,7 @@ impl Node {
             Node::Button(n) => vec![&mut n.children],
             Node::ListButton(n) => vec![&mut n.button.children],
             Node::Notice(n) => vec![&mut n.children],
+            Node::Toast(n) => vec![&mut n.children],
             Node::Spinner(_) => vec![],
             Node::Checkbox(n) => vec![&mut n.children],
             Node::Confirm(n) => vec![&mut n.title, &mut n.body, &mut n.actions],
@@ -1521,6 +1538,7 @@ impl Walk {
                 | "Text"
                 | "Button"
                 | "Notice"
+                | "Toast"
                 | "Spinner"
                 | "Checkbox"
                 | "Confirm"
@@ -1593,6 +1611,7 @@ impl Walk {
                     on_text_scale: handler("onTextScale"),
                     backdrop: str_prop(&props, "backdrop").and_then(Backdrop::named),
                     column: number(&props, "column").filter(|width| *width > 0.0).map(|width| width as f32),
+                    toasts: slots.take("toasts"),
                 })
             }
             "Toolbar" => {
@@ -1730,6 +1749,12 @@ impl Walk {
             "Notice" => Node::Notice(Notice {
                 id,
                 tone,
+                children: parts(children),
+            }),
+            "Toast" => Node::Toast(Toast {
+                id,
+                tone,
+                on_dismiss: handler("onDismiss"),
                 children: parts(children),
             }),
             "Spinner" => Node::Spinner(Spinner {
