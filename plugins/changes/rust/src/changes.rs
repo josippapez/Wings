@@ -26,6 +26,7 @@ pub fn args<'a>(fixed: &[&'a str], more: &'a [String]) -> Vec<&'a str> {
 pub fn forget_repos() {
     forget_repo_roots();
     forget_default_branch(None);
+    CLOSEST.with(|kept| kept.borrow_mut().clear());
 }
 
 /// A result this fresh is reused, so the badge poll and a tool don't run git twice.
@@ -130,7 +131,43 @@ async fn line_counts(root: &str, paths: &[String]) -> Result<HashMap<String, u64
     Ok(counts)
 }
 
-/// The changed files of a repo: against HEAD, or against where this branch left `base`, the default branch when none.
+/// Long-lived branches a feature branch may start from instead of the default one, the default's rivals for `closest_base`.
+const BASES: [&str; 4] = ["origin/develop", "origin/dev", "develop", "dev"];
+/// How long `closest_base`'s answer for a repo and branch is reused (ms): it asks git up to ten times.
+const BASE_MS: f64 = 60_000.0;
+
+thread_local! {
+    static CLOSEST: RefCell<HashMap<(String, Option<String>), (f64, Option<String>)>> = RefCell::new(HashMap::new());
+}
+
+/// The branch this one most likely left: of the default branch and `BASES`, the one the fewest of HEAD's commits are past
+/// (the default on a tie). A git-flow repo branches from develop while origin/HEAD names main, and against main a branch
+/// listed thousands of files it never touched.
+async fn closest_base(root: &str, current: Option<&str>) -> Option<String> {
+    let key = (root.to_owned(), current.map(str::to_owned));
+    if let Some(kept) = CLOSEST.with(|kept| kept.borrow().get(&key).filter(|(at, _)| host::now() - at < BASE_MS).map(|(_, name)| name.clone())) {
+        return kept;
+    }
+    let default = default_branch(root).await;
+    let mut best: Option<(usize, String)> = None;
+    for name in default.iter().map(String::as_str).chain(BASES.into_iter().filter(|name| Some(*name) != default.as_deref())) {
+        // The branch itself, or its own copy on the remote, isn't where it started.
+        if current.is_some_and(|current| name == current || name.strip_prefix("origin/") == Some(current)) {
+            continue;
+        }
+        let Some(start) = ok(root, &["merge-base", "HEAD", name]).await.filter(|start| !start.is_empty()) else { continue };
+        let Some(log) = ok(root, &["log", "--format=%h", &format!("{start}..HEAD")]).await else { continue };
+        let past = log.lines().filter(|line| !line.is_empty()).count();
+        if best.as_ref().is_none_or(|(fewest, _)| past < *fewest) {
+            best = Some((past, name.to_owned()));
+        }
+    }
+    let found = best.map(|(_, name)| name).or(default);
+    CLOSEST.with(|kept| kept.borrow_mut().insert(key, (host::now(), found.clone())));
+    found
+}
+
+/// The changed files of a repo: against HEAD, or against where this branch left `base`, `closest_base` when none.
 async fn load(root: &str, mode: Mode, picked: Option<&str>) -> Result<Changes, String> {
     let (branch, head) = join(ok(root, &["branch", "--show-current"]), ok(root, &["rev-parse", "--verify", "--quiet", "HEAD"])).await;
     let head = head.filter(|head| !head.is_empty());
@@ -139,7 +176,7 @@ async fn load(root: &str, mode: Mode, picked: Option<&str>) -> Result<Changes, S
     if mode == Mode::Branch {
         let name = match picked {
             Some(name) => name.to_owned(),
-            None => default_branch(root).await.ok_or("No default branch found (origin/HEAD, main or master).")?,
+            None => closest_base(root, branch.as_deref()).await.ok_or("No default branch found (origin/HEAD, main or master).")?,
         };
         if head.is_none() {
             return Err("This repo has no commits yet.".into());
@@ -262,6 +299,39 @@ pub(crate) mod tests {
         assert!(calls.borrow().len() > asked);
         fake_git(&[("branch --show-current", 0, "main\n")]);
         assert_eq!(block_on(async { changes("/new", Mode::Branch, true).await }).unwrap_err(), "No default branch found (origin/HEAD, main or master).");
+    }
+
+    /// A branch that left develop, in a repo whose origin/HEAD is main, is compared with develop: fewer of its commits
+    /// are past develop's merge-base. Its own copy on the remote is never a candidate.
+    #[test]
+    fn a_branch_is_compared_with_the_closest_of_the_default_branch_and_develop() {
+        fake_git(&[
+            ("branch --show-current", 0, "feature\n"),
+            ("rev-parse --verify --quiet HEAD", 0, "abc\n"),
+            ("rev-parse --abbrev-ref origin/HEAD", 0, "origin/main\n"),
+            ("merge-base HEAD origin/main", 0, "1111111111\n"),
+            ("merge-base HEAD origin/develop", 0, "2222222222\n"),
+            ("log --format=%h 1111111111..HEAD", 0, "a1\na2\na3\na4\na5\n"),
+            ("log --format=%h 2222222222..HEAD", 0, "a1\na2\n"),
+            ("diff 2222222222", 0, ""),
+            ("ls-files", 0, ""),
+        ]);
+        let c = block_on(async { changes("/r", Mode::Branch, true).await }).unwrap();
+        assert_eq!(c.against, "Since origin/develop at 2222222");
+        // On develop itself, develop isn't where it started: main is.
+        fake_git(&[
+            ("branch --show-current", 0, "develop\n"),
+            ("rev-parse --verify --quiet HEAD", 0, "abc\n"),
+            ("rev-parse --abbrev-ref origin/HEAD", 0, "origin/main\n"),
+            ("merge-base HEAD origin/main", 0, "1111111111\n"),
+            ("merge-base HEAD origin/develop", 0, "abc\n"),
+            ("log --format=%h 1111111111..HEAD", 0, "a1\n"),
+            ("log --format=%h abc..HEAD", 0, ""),
+            ("diff 1111111111", 0, ""),
+            ("ls-files", 0, ""),
+        ]);
+        let c = block_on(async { changes("/r", Mode::Branch, true).await }).unwrap();
+        assert_eq!(c.against, "Since origin/main at 1111111");
     }
 
     /// A branch picked in the viewer is what the changes are since this branch left, not the default branch.
