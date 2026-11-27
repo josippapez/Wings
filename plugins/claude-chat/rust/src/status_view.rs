@@ -7,7 +7,7 @@ use wings_plugin::{
     format::plural,
     host,
     markdown::{code_block, markdown},
-    ui::{Node, button, dialog as panel, heading, icon, icons, loading, muted, notice, row, stack, text},
+    ui::{Node, button, dialog as panel, heading, icon, icons, loading, muted, notice, row, stack, text, text_input},
 };
 
 use crate::{
@@ -26,6 +26,9 @@ pub fn dialog(c: &Chat) -> Option<Node> {
     let cmds = &c.session.cmds;
     if let Some(side) = &cmds.side {
         return Some(side_dialog(side));
+    }
+    if let Some(dialog) = crate::screens::copy_dialog(c) {
+        return Some(dialog);
     }
     if let Some(export) = &cmds.export {
         return Some(match export {
@@ -87,7 +90,8 @@ fn label_of(label: &str) -> &str {
     if label.eq_ignore_ascii_case("cwd") { "Folder" } else { label }
 }
 
-/// The side question and its answer, as Claude Code's own `/btw` shows them: apart from the conversation.
+/// The side question and its answer, as Claude Code's own `/btw` shows them: apart from the conversation. The panel's
+/// earlier exchanges are above, and under the last answer a field asks a follow-up that goes on from them.
 fn side_dialog(side: &Side) -> Node {
     let answer = match &side.answer {
         None => loading(),
@@ -95,8 +99,54 @@ fn side_dialog(side: &Side) -> Node {
         Some(Ok(reply)) if reply.text.trim().is_empty() => muted("Claude had nothing to add."),
         Some(Ok(reply)) => markdown(&reply.text),
     };
-    panel("Side question", WIDTH, close_side)
-        .child(stack().prop("gap", "m").child(text(side.question.as_str()).prop("weight", "medium")).child(answer).child(muted("This isn't added to the conversation.").prop("size", "small")))
+    let earlier = side.history.iter().enumerate().map(|(at, (question, said))| {
+        stack()
+            .prop("gap", "s")
+            .key(format!("earlier-{at}"))
+            .child(text(question.as_str()).prop("weight", "medium"))
+            .child(if said.trim().is_empty() { muted("Claude had nothing to add.") } else { markdown(said) })
+    });
+    let ready = matches!(side.answer, Some(Ok(_)));
+    let follow = ready.then(|| {
+        row()
+            .prop("gap", "s")
+            .prop("align", "center")
+            .child(
+                stack().prop("grow", true).child(
+                    text_input("Follow up", &side.follow, edit_follow)
+                        .prop("placeholder", "Ask a follow-up")
+                        .prop("autoFocus", true)
+                        .on("onKeyDown", |event| {
+                            if event["key"] == "Enter" {
+                                ask_follow();
+                            }
+                        }),
+                ),
+            )
+            .child(button("Ask", "default", false, ask_follow).prop("disabled", side.follow.trim().is_empty()))
+    });
+    panel("Side question", WIDTH, close_side).child(
+        stack()
+            .prop("gap", "m")
+            .children(earlier)
+            .child(text(side.question.as_str()).prop("weight", "medium"))
+            .child(answer)
+            .maybe(follow)
+            .child(muted("This isn't added to the conversation.").prop("size", "small")),
+    )
+}
+
+fn edit_follow(said: String) {
+    chat::with(|c| {
+        if let Some(side) = &mut c.session.cmds.side {
+            side.follow = said;
+        }
+    });
+}
+
+/// Asks the follow-up in the panel's field, from Enter or the Ask button.
+fn ask_follow() {
+    chat::write(|c, n| c.session.side_follow_up(n));
 }
 
 fn export_dialog(export: &Export) -> Node {
@@ -228,7 +278,7 @@ fn said_at(at: usize) -> Option<String> {
     })
 }
 
-fn copy_reply(at: usize) {
+pub(crate) fn copy_reply(at: usize) {
     if let Some(said) = said_at(at) {
         copy(format!("reply-{at}"), &said);
     }

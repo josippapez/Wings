@@ -26,8 +26,9 @@ pub fn section(c: &Chat) -> Option<Node> {
     }
     let failed = done.iter().filter(|task| task.ended.as_deref() == Some("failed")).count();
     let mut parts = vec![String::from("Background tasks")];
-    if !running.is_empty() {
-        parts.push(format!("{} running", running.len()));
+    let busy = running.iter().filter(|task| task.active()).count();
+    if busy > 0 {
+        parts.push(format!("{busy} running"));
     }
     if done.len() > failed {
         parts.push(format!("{} done", done.len() - failed));
@@ -156,7 +157,7 @@ mod tests {
     use super::*;
 
     fn task(id: &str, ended: Option<&str>) -> Task {
-        Task { id: id.into(), kind: "local_bash".into(), description: format!("build {id}"), call: String::new(), started: 1000, ended: ended.map(str::to_owned), ended_at: 8000, stopping: false, output: None, error: None }
+        Task { id: id.into(), kind: "local_bash".into(), description: format!("build {id}"), call: String::new(), started: 1000, ended: ended.map(str::to_owned), ended_at: 8000, stopping: false, output: None, error: None, ambient: false }
     }
 
     #[test]

@@ -20,7 +20,7 @@ use crate::{
     folds::Kind,
     pictures_view::thumbs,
     prefs,
-    session::{Ask, Detail, Diff, Draft, Finished, Item, MODES, Progress, Report, Session, Task, Todo, Tool, exit_code, files_found, model_name},
+    session::{Ask, Detail, Diff, Draft, Finished, Item, MODES, PLAN_APPROVALS, Progress, Report, Session, Task, Todo, Tool, exit_code, files_found, model_name},
     usage::Panel,
 };
 
@@ -176,6 +176,7 @@ pub(crate) fn chat_page(c: &Chat) -> Node {
         .maybe(crate::usage_view::dialog(c))
         .maybe(crate::pictures_view::dialog_of(c))
         .maybe(crate::status_view::dialog(c))
+        .maybe(crate::screens::model_dialog(c))
         .maybe(crate::pull_view::dialog(c))
         .maybe(crate::mods_view::menu(c));
     let page = Node::new("Page").prop("flush", true).on_text_scale(crate::prefs::step_text_size);
@@ -206,7 +207,7 @@ pub(crate) fn side_railed(c: &Chat) -> bool {
 /// What is alive in the session panel: a terminal Claude opened, a background task and a subagent that run.
 pub fn live_in_side(c: &Chat) -> usize {
     let subagents = c.session.items.iter().filter(|item| matches!(item, Item::Tool(tool) if matches!(tool.name.as_str(), "Task" | "Agent") && c.session.runs(tool))).count();
-    c.terminals.len() + c.session.tasks.iter().filter(|task| task.ended.is_none()).count() + subagents
+    c.terminals.len() + c.session.tasks.iter().filter(|task| task.active()).count() + subagents
 }
 
 /// The header's button for the session panel, at any width: lit while the panel shows (in the chat, or in the sidebar
@@ -1158,14 +1159,17 @@ fn plan_node(ask: &Ask, draft: &Draft, c: &Chat) -> Node {
     let plan = ask.input["plan"].as_str().unwrap_or_default();
     let shown = markdown(plan);
     let shown = if shown.count() > BUDGET / 4 { text(truncate(plan, 20_000)) } else { shown };
-    let (auto, approve, keep) = (ask.request.clone(), ask.request.clone(), ask.request.clone());
+    let keep = ask.request.clone();
+    let approvals = PLAN_APPROVALS.iter().map(|(label, mode, variant)| {
+        let request = ask.request.clone();
+        button(*label, variant, false, move || chat::approve_plan(&request, mode)).key(*mode)
+    });
     let actions = row()
         .prop("gap", "s")
         .prop("wrap", true)
         .prop("justify", "end")
         .child(button(crate::plan_doc_view::revise_label(c), "outline", false, move || chat::keep_planning(&keep)))
-        .child(button("Approve", "secondary", false, move || chat::approve_plan(&approve, "default")))
-        .child(button("Approve and auto-accept edits", "default", false, move || chat::approve_plan(&auto, "acceptEdits")));
+        .children(approvals);
     card().prop("variant", "raised").child(
         stack()
             .prop("gap", "m")
@@ -1956,7 +1960,7 @@ fn model_menu(session: &Session) -> (Vec<serde_json::Value>, String) {
 }
 
 /// An effort as the menu says it: "xhigh" is "Extra high".
-fn effort_name(effort: &str) -> String {
+pub(crate) fn effort_name(effort: &str) -> String {
     if effort == "xhigh" { "Extra high".into() } else { capital(effort) }
 }
 

@@ -15,10 +15,10 @@ use crate::{
 
 const WIDTH: u32 = 520;
 
-/// Run in background on a command Claude is waiting for. Not before it is allowed, when nothing runs yet.
+/// Run in background on a command or subagent Claude is waiting for. Not before it is allowed, when nothing runs yet.
 pub fn background_button(tool: &Tool, c: &Chat) -> Option<Node> {
     let waiting = c.session.items.iter().any(|item| matches!(item, Item::Ask(ask) if ask.answer.is_none()));
-    (tool.name == "Bash" && c.session.runs(tool) && c.session.working && c.state == State::Running && !waiting).then(|| {
+    (actions::can_background(&tool.name) && c.session.runs(tool) && c.session.working && c.state == State::Running && !waiting).then(|| {
         let id = tool.id.clone();
         let moving = c.session.ops.moving.contains(&tool.id);
         ui::button("Run in background", "outline", moving, move || move_to_background(&id))

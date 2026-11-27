@@ -129,6 +129,8 @@ pub struct Chat {
     pub fork_from: Option<String>,
     /// The header's Fork is asking before it forks.
     pub fork_ask: bool,
+    /// The model and effort dialog of `/model` is open (`screens.rs`).
+    pub model_dialog: bool,
     /// Where this chat was forked from, as the note at its top says: the name of the original session.
     pub forked_from: Option<String>,
     /// Whether the tab is narrower than the side panel and the conversation need side by side, as the page's split says: None
@@ -254,6 +256,7 @@ thread_local! {
         agent_type: None,
         fork_from: None,
         fork_ask: false,
+        model_dialog: false,
         forked_from: None,
         narrow: None,
         dock_narrow: None,
@@ -543,6 +546,7 @@ pub(crate) fn begin(c: &mut Chat) -> u32 {
     c.task = None;
     c.fork_from = None;
     c.fork_ask = false;
+    c.model_dialog = false;
     c.message_to = None;
     // A wait for a usage limit that the tab kept across a restart of Wings goes on.
     crate::limit_view::resume(c);
@@ -1021,6 +1025,11 @@ pub fn send() {
         composer::forget();
         return crate::signin::start();
     }
+    // A bare /model, /rewind, /tasks and the rest open the chat's own screen for it (`screens.rs`), which asks nothing of Claude Code.
+    if let Some(screen) = with(|c| c.images.is_empty().then(|| crate::screens::find(&c.draft, &c.session.commands)).flatten()) {
+        with(|c| c.draft.clear());
+        return crate::screens::open(screen);
+    }
     // /add-dir starts Claude Code again with the folder, and isn't sent as a message.
     if let Some(path) = with(|c| fork::add_dir_command(&c.draft).filter(|_| c.images.is_empty()).map(str::to_owned)) {
         return fork_view::add_dir(path);
@@ -1436,7 +1445,7 @@ pub fn recall_newer() {
 pub fn insert_command(name: &str) {
     let opens = with(|c| {
         let whole = format!("/{name}");
-        let opens = crate::builtin::find(&whole, &c.session.commands).is_some();
+        let opens = crate::builtin::find(&whole, &c.session.commands).is_some() || crate::screens::find(&whole, &c.session.commands).is_some();
         c.draft = if opens { whole } else { format!("/{name} ") };
         opens
     });
@@ -1452,7 +1461,7 @@ pub fn command_matches(c: &Chat) -> Vec<Command> {
         return Vec::new();
     };
     // Typed out in full, the command is ready: a list over it would take the Enter that opens its view.
-    if crate::builtin::find(&c.draft, &c.session.commands).is_some() || exits(&c.draft) || commands::is_whole(&c.draft) {
+    if crate::builtin::find(&c.draft, &c.session.commands).is_some() || crate::screens::find(&c.draft, &c.session.commands).is_some() || exits(&c.draft) || commands::is_whole(&c.draft) {
         return Vec::new();
     }
     commands::menu(&c.session.commands, typed)
@@ -1553,7 +1562,7 @@ pub fn insert_mention(path: &str) {
 pub fn in_use(c: &Chat) -> bool {
     let subagent = |item: &Item| matches!(item, Item::Tool(tool) if matches!(tool.name.as_str(), "Task" | "Agent") && c.session.runs(tool));
     c.state == State::Running
-        && (c.session.working || !c.session.queued.is_empty() || c.session.tasks.iter().any(|task| task.ended.is_none()) || c.session.items.iter().any(subagent))
+        && (c.session.working || !c.session.queued.is_empty() || c.session.tasks.iter().any(crate::session::Task::active) || c.session.items.iter().any(subagent))
 }
 
 /// The args of a chat opened beside this one, in its folder and with its program, and `more`.
@@ -1856,6 +1865,20 @@ pub fn close_rewind() {
 
 pub fn toggle_todos() {
     with(|c| c.todos_folded = !c.todos_folded);
+}
+
+/// Shows the session panel, in the chat or in Wings' sidebar, as the header's button does when it is hidden, and open
+/// rather than a rail.
+pub fn show_side() {
+    if with(|c| c.side_in_wings) {
+        if !crate::session_side::shown() {
+            crate::session_side::toggle();
+        }
+        return;
+    }
+    with(|c| c.side_open = true);
+    drop(prefs::side_panel().set(true));
+    set_side_rail(false);
 }
 
 /// The panel's own button: collapses the whole panel to its rail or opens it again, kept for every chat and every restart.

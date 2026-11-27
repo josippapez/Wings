@@ -1243,3 +1243,23 @@ fn the_header_has_three_groups_and_a_narrow_one_folds_search_and_remote_control_
     assert!(wide.contains("\"label\":\"Search\"") && wide.contains("\"label\":\"Remote Control\"") && !wide.contains("\"text\":\"Search\""));
     assert!(!tight.contains("\"label\":\"Search\"") && !tight.contains("\"label\":\"Remote Control\"") && tight.contains("\"text\":\"Search\"") && tight.contains("\"text\":\"Remote Control\""));
 }
+
+#[test]
+fn an_ambient_task_is_not_counted_as_running_in_the_side_panel_or_for_a_new_chat() {
+    chat::with(|c| {
+        c.state = chat::State::Running;
+        c.session = Session::default();
+        c.session.hear(&serde_json::json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": [
+            { "task_id": "w1", "task_type": "local_bash", "description": "Watch the dev server", "ambient": true },
+        ] }));
+        assert_eq!(live_in_side(c), 0);
+        assert!(!chat::in_use(c));
+        c.session.hear(&serde_json::json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": [
+            { "task_id": "w1", "task_type": "local_bash", "description": "Watch the dev server", "ambient": true },
+            { "task_id": "b1", "task_type": "local_bash", "description": "Build" },
+        ] }));
+        assert_eq!(live_in_side(c), 1);
+        assert!(chat::in_use(c));
+        c.session = Session::default();
+    });
+}

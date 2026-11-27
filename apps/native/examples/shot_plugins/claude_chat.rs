@@ -739,6 +739,21 @@ esac"##,
         user("Run the whole test suite."),
         tool("rb1", "Bash", json!({ "command": "pnpm test --run", "description": "Run the whole test suite" })),
     ]);
+    // A subagent Claude waits on, which the same button moves to the background.
+    let running_agent = opened(vec![
+        init.clone(),
+        json!({ "type": "system", "subtype": "session_state_changed", "state": "running" }),
+        user("Have an agent audit the discount code."),
+        tool("rb2", "Agent", json!({ "description": "Audit the discount code", "subagent_type": "general-purpose", "prompt": "Audit the discount code." })),
+    ]);
+    // A live-update watcher Claude Code marks `ambient`, which the panel's button doesn't count as something running.
+    let ambient = opened(vec![
+        init.clone(),
+        user("Keep the preview fresh while we work."),
+        json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": [{ "task_id": "w7c1d2e3f", "run_id": "run-9", "task_type": "local_bash", "description": "Watch the preview", "ambient": true }] }),
+        text("The preview reloads on every save."),
+        json!({ "type": "result", "subtype": "success", "is_error": false, "duration_ms": 3_400, "num_turns": 1, "result": "", "total_cost_usd": 0.01 }),
+    ]);
     // A background agent that runs, which a Message button reaches through Claude.
     let agent = opened(vec![
         init.clone(),
@@ -1231,9 +1246,14 @@ esac"##,
         // /status, /btw and /export open a dialog over the chat that the conversation never gets.
         ("status", opened(vec![init.clone()]), None, Some("type:/status;keys:enter"), "Setting sources"),
         ("btw", work.clone(), None, Some("type:/btw what does the rounding fix change?;keys:enter"), "It rounds once, at the end"),
+        ("btw-follow", work.clone(), None, Some("type:/btw what does the rounding fix change?;keys:enter;type:and what about negative prices?;keys:enter"), "negative prices"),
         ("export", work, None, Some("type:/export;keys:enter"), "Copy to clipboard"),
+        // A bare /model, /copy and /tasks open the chat's own screen.
+        ("model-dialog", opened(vec![init.clone()]), None, Some("type:/model;keys:enter"), "Most capable for complex work"),
+        ("copy-dialog", copyable.clone(), None, Some("type:/copy;keys:enter"), "Copy to clipboard"),
+        ("slash-tasks", tasks_open.clone(), None, Some("press:Side panel;type:/tasks;keys:enter"), "Background tasks"),
         // Each reply and each code block has a Copy button.
-        ("copy", copyable, None, None, "at exactly 90"),
+        ("copy", copyable.clone(), None, None, "at exactly 90"),
         // A block of more than 20 lines shows its first 20, coloured as Rust, with a row that opens the other 35.
         ("code-fold", long_block, None, None, "Show 35 more lines"),
         // A Read in Detailed shows its file coloured as TypeScript, folded after 20 lines.
@@ -1290,6 +1310,8 @@ esac"##,
         ("folder", worked_again, None, Some(add_dir.as_str()), "Folders"),
         ("elicitation", elicited, None, None, "Pick a flavour and how many scoops"),
         ("run-background", running, None, None, "Run in background"),
+        ("run-background-agent", running_agent, None, Some("disclose:Running 1 subagent"), "Run in background"),
+        ("tasks-ambient", ambient, None, Some("press:Side panel"), "The preview reloads"),
         ("agent-message", agent, None, Some("press:Message"), "passes your message on"),
         // The agent and the command that ended each leave a line, the agent's report folded under its own.
         ("tasks-finished", finished, None, None, "Command “Run the tests” failed"),
@@ -1585,6 +1607,12 @@ esac"##,
         if name == "btw" {
             let side = answer("side-question-1", json!({ "response": "It rounds once, at the end, in cents, so `100 * 0.9` is exactly 90 instead of 89.99999999999999.", "synthetic": false }));
             std::fs::write(answers.join("side_question"), format!("{side}\n")).unwrap();
+        }
+        if name == "btw-follow" {
+            // The follow-up is the chat's second write, but the line for each id that might be its own is printed with every answer.
+            let said = ["It rounds once, at the end, in cents, so `100 * 0.9` is exactly 90 instead of 89.99999999999999.", "A negative price rounds the same way: toward zero, so -0.005 stays -0.01 only if you ask for it.", "Same rule for negative prices.", "Same rule for negative prices."];
+            let lines: String = said.iter().enumerate().map(|(at, said)| format!("{}\n", answer(&format!("side-question-{}", at + 1), json!({ "response": said, "synthetic": false })))).collect();
+            std::fs::write(answers.join("side_question"), lines).unwrap();
         }
         if name == "export" {
             let export = answer("export-dialog", json!({ "text": "User: Move the discount maths into its own module and test it.\n\nClaude: The discount maths is in src/discount.ts now, and checkout.ts re-exports it.\n", "default_filename": "conversation-2026-11-18-101500.txt" }));

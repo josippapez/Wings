@@ -156,6 +156,11 @@ impl Flows {
         }
     }
 
+    /// Whether a workflow has run in this session.
+    pub fn any(&self) -> bool {
+        !self.runs.is_empty()
+    }
+
     pub fn flow(&self, task: &str) -> Option<&Flow> {
         self.runs.iter().find(|(id, _)| id == task).map(|(_, flow)| flow)
     }

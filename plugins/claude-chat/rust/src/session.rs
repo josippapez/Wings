@@ -300,9 +300,17 @@ pub struct Task {
     pub output: Option<Output>,
     /// Why the last stop or read failed.
     pub error: Option<String>,
+    /// Claude Code's `ambient`: not part of the session's work (its own housekeeping, live-update watchers), so it stays
+    /// out of the counts that say something is running.
+    pub ambient: bool,
 }
 
 impl Task {
+    /// Whether it counts as something running in this chat: still going, and part of the session's work.
+    pub fn active(&self) -> bool {
+        self.ended.is_none() && !self.ambient
+    }
+
     /// Claude Code reads what a shell or a monitor printed, not a subagent.
     pub fn has_output(&self) -> bool {
         self.kind == "local_bash" || self.kind.starts_with("monitor")
@@ -437,6 +445,9 @@ pub struct Command {
 
 /// The permission modes Claude Code runs in, as `set_permission_mode` takes them, with what the chat calls them.
 pub const MODES: [(&str, &str); 4] = [("default", "Ask first"), ("acceptEdits", "Accept edits"), ("plan", "Plan"), ("auto", "Auto")];
+
+/// What approving a plan offers, as (button, mode, variant): Claude Code's own list starts with "Yes, and use auto mode"; the shorter label keeps the plan page's four buttons inside 640 points.
+pub const PLAN_APPROVALS: [(&str, &str, &str); 3] = [("Approve with auto mode", "auto", "secondary"), ("Approve", "default", "secondary"), ("Approve and auto-accept edits", "acceptEdits", "default")];
 
 /// The ids of the requests the chat makes as Claude Code starts, which its answers come back under.
 pub const INITIALIZE: &str = "initialize";
@@ -1055,7 +1066,12 @@ impl Session {
     fn tasks_now(&mut self, live: &Value) {
         let live: Vec<&Value> = live.as_array().into_iter().flatten().collect();
         for task in &mut self.tasks {
-            let listed = live.iter().any(|entry| entry["task_id"] == task.id.as_str());
+            let entry = live.iter().find(|entry| entry["task_id"] == task.id.as_str());
+            let listed = entry.is_some();
+            // `ambient` can change while the task lives.
+            if let Some(entry) = entry {
+                task.ambient = entry["ambient"] == true;
+            }
             match (listed, task.ended.is_some()) {
                 (false, false) => (task.ended, task.ended_at) = (Some("ended".into()), self.now),
                 (true, true) => (task.ended, task.ended_at, task.started, task.output) = (None, 0, self.now, None),
@@ -1068,7 +1084,7 @@ impl Session {
                 continue;
             };
             let text = |key: &str| entry[key].as_str().unwrap_or_default().to_owned();
-            self.tasks.push(Task { id: id.to_owned(), kind: text("task_type"), description: text("description"), call: String::new(), started: self.now, ended: None, ended_at: 0, stopping: false, output: None, error: None });
+            self.tasks.push(Task { id: id.to_owned(), kind: text("task_type"), description: text("description"), call: String::new(), started: self.now, ended: None, ended_at: 0, stopping: false, output: None, error: None, ambient: entry["ambient"] == true });
         }
     }
 
@@ -1559,7 +1575,8 @@ impl Session {
     pub fn opening(mode: Option<&str>) -> String {
         let mode = mode.map(|mode| request(START_MODE, json!({ "subtype": "set_permission_mode", "mode": mode })));
         [
-            request(INITIALIZE, json!({ "subtype": "initialize" })),
+            // Without `forwardSubagentText`, Claude Code prints a subagent's calls and results but not what it says or thinks.
+            request(INITIALIZE, json!({ "subtype": "initialize", "forwardSubagentText": true })),
             request(CONTEXT, json!({ "subtype": "get_context_usage" })),
             request(SETTINGS, json!({ "subtype": "get_settings" })),
             usage(),

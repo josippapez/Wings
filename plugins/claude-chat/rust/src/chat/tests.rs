@@ -578,3 +578,44 @@ fn a_shortstat_gives_the_lines_added_and_removed() {
     assert_eq!(shortstat(" 2 files changed, 4 deletions(-)"), (0, 4));
     assert_eq!(shortstat(""), (0, 0));
 }
+
+/// A bare /model, /tasks, /copy and the rest open the chat's own screen and send nothing to Claude Code; with words after the
+/// name they are sent as before.
+#[test]
+fn a_bare_slash_command_opens_the_chats_screen_and_sends_nothing() {
+    use super::send;
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let kept = calls.clone();
+    host::testing::answer(move |method, params| {
+        kept.borrow_mut().push((method.to_owned(), params.clone()));
+        Ok(Value::Null)
+    });
+    running(false);
+    let process = host::spawn("claude", &[], "/work/shop", "", |_| {});
+    with(|c| {
+        c.input = Some(process.input());
+        c.model_dialog = false;
+        c.session.items = vec![crate::session::Item::User("hi".into()), crate::session::Item::Text("Hello there".into())];
+    });
+    let writes = || calls.borrow().iter().filter(|(method, _)| method == "processWrite").count();
+    for typed in ["/model", "/effort", "/fork", "/copy", "/copy 1", "/tasks", "/bookmarks"] {
+        with(|c| c.draft = typed.into());
+        send();
+        wings_plugin::task::block_on(async {});
+        assert!(with(|c| c.draft.is_empty()), "{typed}");
+    }
+    assert_eq!(writes(), 0, "none of them went to Claude Code");
+    assert!(with(|c| c.model_dialog && c.fork_ask && c.session.cmds.copy == Some(1)));
+    // Nothing is running or bookmarked: the panel groups say so in the conversation.
+    let notices = with(|c| c.session.items.iter().filter(|item| matches!(item, crate::session::Item::Notice(_))).count());
+    assert_eq!(notices, 2);
+    let shown = with(|c| wings_plugin::ui::tree_json(crate::screens::model_dialog(c).unwrap()).to_string());
+    assert!(shown.contains("Model and effort"));
+    with(|c| (c.model_dialog, c.fork_ask, c.session.cmds.copy) = (false, false, None));
+    // With words after it, a command is a message.
+    with(|c| c.draft = "/model opus".into());
+    send();
+    wings_plugin::task::block_on(async {});
+    assert_eq!(writes(), 1);
+    assert!(!with(|c| c.model_dialog));
+}

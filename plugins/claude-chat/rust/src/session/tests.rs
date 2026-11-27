@@ -740,6 +740,18 @@ fn approving_a_plan_allows_it_and_switches_the_mode_in_one_write() {
 }
 
 #[test]
+fn a_plan_can_be_approved_into_auto_mode_first() {
+    assert_eq!(PLAN_APPROVALS[0].1, "auto", "Claude Code lists \"Yes, and use auto mode\" first");
+    assert!(PLAN_APPROVALS.iter().all(|(_, mode, _)| MODES.iter().any(|(known, _)| known == mode)));
+    let mut session = heard(r##"{"type":"control_request","request_id":"p1","request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","input":{"plan":"# Plan"}}}"##);
+    let written = session.approve_plan("p1", PLAN_APPROVALS[0].1, 3).unwrap();
+    let lines: Vec<Value> = written.lines().map(sent).collect();
+    assert_eq!(lines[0]["response"]["response"]["behavior"], "allow");
+    assert_eq!(lines[1]["request"], json!({ "subtype": "set_permission_mode", "mode": "auto" }));
+    assert_eq!(session.mode.as_deref(), Some("auto"));
+}
+
+#[test]
 fn a_cancel_request_withdraws_the_card() {
     let mut session = asked(json!({}));
     session.hear(&json!({ "type": "control_cancel_request", "request_id": "other" }));
@@ -2022,4 +2034,36 @@ fn a_call_the_transcript_holds_without_a_result_is_interrupted_once_the_chat_res
     assert_eq!(session.activity(), "Running ls", "the live call is what Claude does, not the cut one");
     assert_eq!(session.turn_subagents(), (0, 0));
     assert!(session.background("b1").is_none());
+}
+
+#[test]
+fn a_task_is_ambient_from_its_entry_and_can_change_while_it_runs() {
+    let mut session = Session::default();
+    session.hear(&json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": [{ "task_id": "w1", "task_type": "local_bash", "description": "Watch", "ambient": true }, { "task_id": "b1", "task_type": "local_bash", "description": "Build" }] }));
+    assert_eq!(session.tasks.iter().map(|task| (task.ambient, task.active())).collect::<Vec<_>>(), [(true, false), (false, true)]);
+    session.hear(&json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": [{ "task_id": "w1", "task_type": "local_bash", "description": "Watch" }, { "task_id": "b1", "task_type": "local_bash", "description": "Build", "ambient": true }] }));
+    assert_eq!(session.tasks.iter().map(|task| task.active()).collect::<Vec<_>>(), [true, false]);
+}
+
+#[test]
+fn a_chat_asks_claude_code_to_forward_what_subagents_say() {
+    // `apply_flag_settings` with the env variable has no effect once Claude Code runs (measured on 2.1.332): `initialize` takes it.
+    let first: Value = sent(Session::opening(None).lines().next().unwrap());
+    assert_eq!(first["request"], json!({ "subtype": "initialize", "forwardSubagentText": true }));
+}
+
+#[test]
+fn a_subagents_forwarded_text_and_thinking_are_kept_with_its_tool_calls() {
+    let mut session = Session::default();
+    for line in [
+        json!({ "type": "assistant", "parent_tool_use_id": "toolu_1", "agent_id": "a1", "uuid": "u1", "message": { "role": "assistant", "content": [{ "type": "thinking", "thinking": "Count first", "signature": "" }] } }),
+        json!({ "type": "assistant", "parent_tool_use_id": "toolu_1", "agent_id": "a1", "uuid": "u2", "message": { "role": "assistant", "content": [{ "type": "text", "text": "Counting the lines" }] } }),
+    ] {
+        session.hear(&line);
+        assert!(crate::subagents::passed_line(&line).is_some(), "the tab gets the line as it is");
+    }
+    let sub = &session.subagents["toolu_1"];
+    assert!(sub.items.iter().any(|item| matches!(item, Item::Text(said) if said == "Counting the lines")), "{:?}", sub.items);
+    assert!(sub.items.iter().any(|item| matches!(item, Item::Thought(..))), "{:?}", sub.items);
+    assert!(session.items.is_empty(), "and out of the conversation");
 }

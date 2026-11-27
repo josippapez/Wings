@@ -66,11 +66,18 @@ pub struct Reply {
     pub text: String,
 }
 
+/// The most earlier exchanges a side question sends back with a follow-up, as VS Code keeps.
+pub const SIDE_HISTORY: usize = 20;
+
 #[derive(Debug, PartialEq)]
 pub struct Side {
     pub id: String,
     pub question: String,
     pub answer: Answer<Reply>,
+    /// The exchanges before this question in the open panel, oldest first, as (question, answer).
+    pub history: Vec<(String, String)>,
+    /// What is typed in the panel's follow-up field.
+    pub follow: String,
 }
 
 /// The dialogs of these commands, each open while it is `Some`.
@@ -79,6 +86,8 @@ pub struct Commands {
     pub status: Option<Answer<Vec<Section>>>,
     pub export: Option<Answer<Export>>,
     pub side: Option<Side>,
+    /// The reply the copy dialog holds, as how many replies back from the latest (`screens.rs`).
+    pub copy: Option<usize>,
     /// The Copy button last used, by its key, which says Copied.
     pub copied: Option<String>,
 }
@@ -122,6 +131,28 @@ fn export(answer: &Value) -> Export {
 }
 
 impl Session {
+    /// The line that asks what the open side panel's follow-up field holds, with the panel's exchanges so far as `history`,
+    /// which the question goes on from. None until the last question is answered, and for an empty field.
+    pub fn side_follow_up(&mut self, n: u32) -> Option<String> {
+        let side = self.cmds.side.as_mut()?;
+        let Some(Ok(reply)) = &side.answer else {
+            return None;
+        };
+        let asked = side.follow.trim().to_owned();
+        if asked.is_empty() {
+            return None;
+        }
+        let said = reply.text.clone();
+        side.history.push((std::mem::replace(&mut side.question, asked.clone()), said));
+        let extra = side.history.len().saturating_sub(SIDE_HISTORY);
+        side.history.drain(..extra);
+        side.follow.clear();
+        side.answer = None;
+        side.id = format!("{SIDE}{n}");
+        let history: Vec<Value> = side.history.iter().map(|(question, response)| json!({ "question": question, "response": response })).collect();
+        Some(request(&side.id, json!({ "subtype": "side_question", "question": asked, "history": history })))
+    }
+
     /// The line that makes the command `text` is, from the Enter that sent it, and its dialog opened. None for a draft
     /// that is none of them. `/plan` sets the mode and sends the task in the same write, queued while Claude works as
     /// any message is. `stamp` and `n` are the time and the write's number, as `send` takes them.
@@ -138,7 +169,7 @@ impl Session {
             Typed::Btw(question) => {
                 let id = format!("{SIDE}{n}");
                 let line = request(&id, json!({ "subtype": "side_question", "question": question }));
-                self.cmds.side = Some(Side { id, question: question.to_owned(), answer: None });
+                self.cmds.side = Some(Side { id, question: question.to_owned(), answer: None, history: Vec::new(), follow: String::new() });
                 line
             }
             Typed::Plan(task) => {
@@ -309,6 +340,34 @@ mod tests {
         session.hear(&success("side-question-4", json!({ "response": "Four", "synthetic": false })));
         assert_eq!(session.cmds.side.as_ref().unwrap().answer, Some(Ok(Reply { text: "Four".into() })));
         assert!(session.items.is_empty() && session.working && session.queued.is_empty());
+    }
+
+    #[test]
+    fn a_follow_up_sends_the_panels_exchanges_as_history_up_to_twenty() {
+        let mut session = Session::default();
+        session.typed_command("/btw first?", 1, 1).unwrap();
+        assert_eq!(session.side_follow_up(2), None, "nothing to follow while the first is unanswered");
+        session.hear(&success("side-question-1", json!({ "response": "one", "synthetic": false })));
+        session.cmds.side.as_mut().unwrap().follow = "  and then?  ".into();
+        let asked = sent(&session.side_follow_up(2).unwrap());
+        assert_eq!(asked[0]["request_id"], "side-question-2");
+        assert_eq!(asked[0]["request"], json!({ "subtype": "side_question", "question": "and then?", "history": [{ "question": "first?", "response": "one" }] }));
+        let side = session.cmds.side.as_ref().unwrap();
+        assert_eq!((side.question.as_str(), side.answer.as_ref(), side.follow.as_str()), ("and then?", None, ""));
+        // A late answer to the first is dropped, and the field is empty until typed in.
+        session.hear(&success("side-question-1", json!({ "response": "late" })));
+        assert_eq!(session.cmds.side.as_ref().unwrap().answer, None);
+        for n in 3..30 {
+            session.hear(&success(&format!("side-question-{}", n - 1), json!({ "response": format!("a{n}") })));
+            session.cmds.side.as_mut().unwrap().follow = format!("q{n}");
+            session.side_follow_up(n).unwrap();
+        }
+        let side = session.cmds.side.as_ref().unwrap();
+        assert_eq!(side.history.len(), SIDE_HISTORY);
+        assert_eq!(side.history.last().unwrap(), &("q28".to_owned(), "a29".to_owned()));
+        // A new /btw starts the panel over.
+        session.typed_command("/btw fresh", 1, 40).unwrap();
+        assert!(session.cmds.side.as_ref().unwrap().history.is_empty());
     }
 
     #[test]

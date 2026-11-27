@@ -60,6 +60,11 @@ fn starts(item: &Item, text: &str) -> bool {
 }
 
 impl Bookmarks {
+    /// Whether nothing is bookmarked.
+    pub fn is_empty(&self) -> bool {
+        self.listed().is_empty()
+    }
+
     pub fn has(&self, at: usize) -> bool {
         self.marks.iter().any(|mark| mark.found && mark.at == at)
     }

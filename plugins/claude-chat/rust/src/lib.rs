@@ -25,6 +25,8 @@ mod bookmarks;
 mod branch;
 #[cfg(feature = "chat")]
 mod chat;
+#[cfg(feature = "chat")]
+mod screens;
 #[cfg(any(feature = "chat", test))]
 mod code_view;
 mod composer;

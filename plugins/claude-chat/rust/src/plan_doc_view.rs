@@ -13,6 +13,7 @@ use wings_plugin::{
 use crate::{
     chat::{self, Chat},
     plan_doc::{self, Block, Plan, Status},
+    session::PLAN_APPROVALS,
 };
 
 /// The reading column's width.
@@ -188,14 +189,13 @@ pub fn page_of(c: &Chat) -> Option<Node> {
     let trail = back();
     let actions = match waiting {
         Some(request) => {
-            let (revise_request, approve_request, auto_request) = (request.clone(), request.clone(), request);
+            let revise_request = request.clone();
             let label = if pending > 0 { format!("Revise with {}", plural(pending, "comment")) } else { "Keep planning".to_owned() };
-            row()
-                .prop("gap", "s")
-                .prop("wrap", true)
-                .child(button(label, "outline", false, move || revise(&revise_request)))
-                .child(button("Approve", "secondary", false, move || approve(&approve_request, "default")))
-                .child(button("Approve and auto-accept edits", "default", false, move || approve(&auto_request, "acceptEdits")))
+            let approvals = PLAN_APPROVALS.iter().map(|(label, mode, variant)| {
+                let request = request.clone();
+                button(*label, variant, false, move || approve(&request, mode)).key(*mode)
+            });
+            row().prop("gap", "s").prop("wrap", true).child(button(label, "outline", false, move || revise(&revise_request))).children(approvals)
         }
         None => {
             let all = plan_doc::count(&c.review);

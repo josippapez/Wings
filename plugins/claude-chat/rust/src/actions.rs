@@ -38,7 +38,7 @@ impl Ops {
         self.moving.remove(call);
         let failed = match (response["subtype"].as_str(), response["response"]["backgrounded"] == true) {
             (Some("error"), _) => Some(format!("Couldn't move it to the background: {}", response["error"].as_str().unwrap_or("Claude Code didn't say why."))),
-            (_, false) => Some("That command isn't running, so there was nothing to move to the background.".to_owned()),
+            (_, false) => Some("That isn't running any more, so there was nothing to move to the background.".to_owned()),
             _ => None,
         };
         items.extend(failed.map(Item::Error));
@@ -48,15 +48,20 @@ impl Ops {
 
 impl Session {
     /// The request that moves the command of the tool call `id` to the background, from your click: Claude Code then goes
-    /// on without waiting for it, and lists it with the background tasks. None for a call that isn't a command that runs
+    /// on without waiting for it, and lists it with the background tasks. None for a call that isn't a command or subagent that runs
     /// now, and while the last click on it waits for its answer.
     pub fn background(&mut self, id: &str) -> Option<String> {
-        let running = self.items.iter().any(|item| matches!(item, Item::Tool(tool) if tool.id == id && tool.name == "Bash" && self.runs(tool)));
+        let running = self.items.iter().any(|item| matches!(item, Item::Tool(tool) if tool.id == id && can_background(&tool.name) && self.runs(tool)));
         if !running || !self.ops.moving.insert(id.to_owned()) {
             return None;
         }
         Some(request(&format!("{BACKGROUND}{id}"), json!({ "subtype": "background_tasks", "tool_use_id": id })))
     }
+}
+
+/// Whether a tool call of this name can be moved to the background: a command, or a subagent that Claude waits for.
+pub fn can_background(tool_name: &str) -> bool {
+    matches!(tool_name, "Bash" | "Task" | "Agent")
 }
 
 /// A background agent that still runs, which a message can go to.
@@ -104,7 +109,7 @@ mod tests {
     }
 
     fn agent(id: &str, description: &str, ended: Option<&str>) -> Task {
-        Task { id: id.into(), kind: "local_agent".into(), description: description.into(), call: String::new(), started: 0, ended: ended.map(str::to_owned), ended_at: 0, stopping: false, output: None, error: None }
+        Task { id: id.into(), kind: "local_agent".into(), description: description.into(), call: String::new(), started: 0, ended: ended.map(str::to_owned), ended_at: 0, stopping: false, output: None, error: None, ambient: false }
     }
 
     #[test]
@@ -115,6 +120,16 @@ mod tests {
         assert_eq!(sent["request"], json!({ "subtype": "background_tasks", "tool_use_id": "t1" }));
         // The click waits for its answer: a second one sends nothing.
         assert_eq!(session.background("t1"), None);
+    }
+
+    #[test]
+    fn a_running_subagent_moves_with_its_calls_id_too() {
+        for name in ["Agent", "Task"] {
+            let mut session = session_running(name, None);
+            let sent: Value = serde_json::from_str(session.background("t1").expect("a request").trim()).unwrap();
+            assert_eq!(sent["request"], json!({ "subtype": "background_tasks", "tool_use_id": "t1" }), "{name}");
+        }
+        assert_eq!(session_running("Agent", Some(("done".into(), false))).background("t1"), None);
     }
 
     #[test]
@@ -137,7 +152,7 @@ mod tests {
         assert_eq!(
             items,
             [
-                Item::Error("That command isn't running, so there was nothing to move to the background.".into()),
+                Item::Error("That isn't running any more, so there was nothing to move to the background.".into()),
                 Item::Error("Couldn't move it to the background: No such task".into()),
             ]
         );
