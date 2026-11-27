@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.121 · 2026-11-27
+
+- **Chromium for the Browser**: in Browser settings, Engine, pick Chromium to run Chrome extensions like Bitwarden the way Chrome does, sign-in, popup and autofill included. It downloads once (147 MB, 343 MB on disk), isn't part of the app, and Wings checks every file before each start. Remove takes it off again. WebKit stays the default, and sign-ins and site data don't carry over between the two (Browser 0.1.4).
+- **Under Chromium**: extensions get only the permissions you allowed when you added them, and their popups open under their button and close on Escape or a click elsewhere. Agent tools and the password guard work as with WebKit, Wings' shortcuts work while a page has the keyboard, and Chromium makes no calls to Google and saves no passwords of its own.
+- **Approve a helper's blocked action**: Recently blocked in Claude chat also lists a helper's blocked actions, named after the helper, with Allow and retry (Claude chat 0.55.13).
+
 ## 0.2.120 · 2026-11-26
 
 - **Bitwarden no longer freezes after you sign in**: an extension's background opening a live connection froze the whole extension in this macOS's WebKit, so sign-in, the popup and autofill all stopped. Extensions' backgrounds can no longer open one; Bitwarden then picks up changes on its regular sync instead of live. Remove and add Bitwarden again once to get the fix.
