@@ -276,6 +276,7 @@ impl Shared {
             bounds,
             Some(client),
             context,
+            Some(frameless::PAGE_BACKGROUND),
             Rc::new(move |window, _view| {
                 if let Some(page) = weak.upgrade() {
                     page.created(window);

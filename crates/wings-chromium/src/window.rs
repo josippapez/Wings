@@ -22,10 +22,29 @@ pub type OnCreated = Rc<dyn Fn(&mut Window, &BrowserView)>;
 /// Called when the window becomes or stops being CEF's active window.
 pub type OnActivation = Rc<dyn Fn(bool)>;
 
-wrap_browser_view_delegate! {
-    struct ChromeStyleBrowser {}
+/// White: what Chromium paints behind a page that sets no background of its own (Blink's default page base colour).
+// debt: where a page's base is transparent (see `on_theme_changed`), a page that relies on Chrome's dark canvas
+// (`color-scheme: dark` and no background of its own, a plain text file on a dark Mac) shows white under light text.
+// Blink paints that canvas only over an opaque base; keeping it opaque needs CEF patched to leave ContentsWebView's
+// background visible (chromiumembedded/cef#3891), as no CEF call reaches it.
+pub const PAGE_BACKGROUND: u32 = 0xFFFF_FFFF;
 
-    impl ViewDelegate {}
+wrap_browser_view_delegate! {
+    struct ChromeStyleBrowser {
+        background: Option<u32>,
+    }
+
+    impl ViewDelegate {
+        /// CEF's Chrome style hides Chrome's own page background (`ContentsWebView::SetBackgroundVisible(false)`), so a
+        /// page's base background can turn transparent (in the test copy, mostly on the first new document after the page
+        /// opened), and where the page paints nothing this view's background shows. CEF sets that to the theme's primary background
+        /// (#1f1f1f on a dark Mac) at every theme change unless the delegate sets one here.
+        fn on_theme_changed(&self, view: Option<&mut View>) {
+            if let (Some(view), Some(color)) = (view, self.background) {
+                view.set_background_color(color);
+            }
+        }
+    }
 
     impl BrowserViewDelegate {
         fn browser_runtime_style(&self) -> RuntimeStyle {
@@ -113,9 +132,9 @@ wrap_window_delegate! {
 }
 
 /// Opens `url` in a new frameless Chrome-style window at `bounds` (screen coordinates in DIPs, top-left origin, as CEF
-/// Views takes them), in `context` (the global one for `None`). Call it on CEF's UI thread, the main thread with the
-/// external pump.
-pub fn open(url: &str, bounds: Rect, client: Option<Client>, context: Option<RequestContext>, on_created: OnCreated, on_activation: OnActivation) {
+/// Views takes them), in `context` (the global one for `None`), with `background` behind the page wherever it paints
+/// nothing (the theme's for `None`). Call it on CEF's UI thread, the main thread with the external pump.
+pub fn open(url: &str, bounds: Rect, client: Option<Client>, context: Option<RequestContext>, background: Option<u32>, on_created: OnCreated, on_activation: OnActivation) {
     let (mut client, mut context) = (client, context);
     let browser_view = browser_view_create(
         client.as_mut(),
@@ -123,7 +142,7 @@ pub fn open(url: &str, bounds: Rect, client: Option<Client>, context: Option<Req
         Some(&BrowserSettings::default()),
         None,
         context.as_mut(),
-        Some(&mut ChromeStyleBrowser::new()),
+        Some(&mut ChromeStyleBrowser::new(background)),
     );
     let mut delegate = FramelessWindow::new(RefCell::new(browser_view), bounds, on_created, on_activation);
     window_create_top_level(Some(&mut delegate));
@@ -386,5 +405,44 @@ pub fn count_children_as_key(parent: &NSWindow) {
             class_replaceMethod(class, sel!(isKeyWindow), std::mem::transmute(replacement), c"B@:".as_ptr());
             PATCHED.store(class_ptr, Ordering::Relaxed);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use cef::rc::ConvertReturnValue;
+    use cef::sys::_cef_view_t;
+
+    use super::*;
+
+    /// The colours a stand-in view was given, in order.
+    static GIVEN: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+    extern "C" fn given(_view: *mut _cef_view_t, color: u32) {
+        GIVEN.lock().unwrap().push(color);
+    }
+
+    /// The colours `on_theme_changed` gives a view across two theme changes, for a page with `background`. A stand-in
+    /// for CEF's view that only takes a background colour: its struct of calls with just that one set.
+    fn given_across_two_theme_changes(background: Option<u32>) -> Vec<u32> {
+        GIVEN.lock().unwrap().clear();
+        // SAFETY: an all-null struct of optional calls and plain numbers is a valid one; the view never frees it.
+        let raw: &'static mut _cef_view_t = Box::leak(Box::new(unsafe { std::mem::zeroed() }));
+        raw.set_background_color = Some(given);
+        let mut view: View = (raw as *mut _cef_view_t).wrap_result();
+        let delegate = ChromeStyleBrowser { background, cef_object: std::ptr::null_mut() };
+        delegate.on_theme_changed(Some(&mut view));
+        delegate.on_theme_changed(Some(&mut view));
+        std::mem::take(&mut *GIVEN.lock().unwrap())
+    }
+
+    /// CEF sets a view's background to the theme's at every theme change (#1f1f1f on a dark Mac), which showed behind a
+    /// page that paints none; a page's view gets its own back every time, and a popup's keeps the theme's.
+    #[test]
+    fn a_pages_view_gets_its_background_back_at_every_theme_change_and_a_popups_keeps_the_themes() {
+        assert_eq!(given_across_two_theme_changes(Some(PAGE_BACKGROUND)), [0xFFFF_FFFF, 0xFFFF_FFFF]);
+        assert_eq!(given_across_two_theme_changes(None), Vec::<u32>::new());
     }
 }

@@ -713,6 +713,8 @@ pub fn click(page: &Shared, id: &str) -> Result<(), String> {
         cef_rect(frame),
         Some(PopupClient::new(loaded.chrome.clone())),
         None,
+        // The theme's colour behind it while the extension's page loads, as before: only pages get white.
+        None,
         Rc::new(move |window, _view| popup_created(window, frame)),
         Rc::new(move |active| {
             // A click anywhere else takes the keyboard from it: it closes, as in Chrome.
