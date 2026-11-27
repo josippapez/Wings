@@ -102,6 +102,43 @@ pub fn popup_menu(x: f64, y: f64, items: impl IntoIterator<Item = Node>, on_clos
     Node::new("PopupMenu").prop("x", x).prop("y", y).on("onClose", move |_| on_close()).children(items)
 }
 
+/// A browser-style strip of tabs on one line, drawn as Wings' own tabs are: `children` are `tab`s and `tab_group` labels in
+/// display order. `on_select` and `on_close` hear a tab's id (a click, its close button, a middle click), `on_new` the "+"
+/// at the end, `on_group` a group's id when its label is clicked. `label` is the strip's accessible name.
+pub fn tab_strip(
+    label: &str,
+    children: impl IntoIterator<Item = Node>,
+    on_select: impl Fn(&str) + 'static,
+    on_close: impl Fn(&str) + 'static,
+    on_new: impl Fn() + 'static,
+    on_group: impl Fn(&str) + 'static,
+) -> Node {
+    let id = |event: &Value| event["id"].as_str().unwrap_or_default().to_owned();
+    Node::new("TabStrip")
+        .prop("label", label)
+        .on("onSelect", move |event| on_select(&id(event)))
+        .on("onClose", move |event| on_close(&id(event)))
+        .on("onNew", move |_| on_new())
+        .on("onGroup", move |event| on_group(&id(event)))
+        .children(children)
+}
+
+/// A tab of a `tab_strip`. `group` is the id of the `tab_group` it belongs to; `loading` shows a spinner. The full `title`
+/// and the `url` show as its tooltip.
+pub fn tab(id: &str, title: &str, url: &str, active: bool, loading: bool, group: Option<&str>) -> Node {
+    let tab = Node::new("Tab").prop("id", id).prop("title", title).prop("url", url).prop("active", active).prop("loading", loading);
+    match group {
+        Some(group) => tab.prop("group", group),
+        None => tab,
+    }
+}
+
+/// A group's label in a `tab_strip`, before its tabs. `tone` is `info`, `success`, `warning`, `danger`, `neutral` or
+/// `accent`; `count` is how many tabs it holds, which a collapsed group's label shows.
+pub fn tab_group(id: &str, name: &str, tone: &str, collapsed: bool, count: usize) -> Node {
+    Node::new("TabGroup").prop("id", id).prop("name", name).prop("tone", tone).prop("collapsed", collapsed).prop("count", count)
+}
+
 /// A wedge of a `sunburst`: from `from` to `to` radians (0 to 2π) in ring `ring` (0 is the innermost), in the colour
 /// `color` (0xRRGGBB) at `alpha` (0 to 1).
 pub struct Wedge {
@@ -277,6 +314,35 @@ mod tests {
     }
 
     #[test]
+    fn a_tab_strip_sends_its_tabs_and_groups_and_hands_each_event_its_id() {
+        let heard = Rc::new(RefCell::new(Vec::<String>::new()));
+        let (a, b, c, d) = (heard.clone(), heard.clone(), heard.clone(), heard.clone());
+        let strip = tab_strip(
+            "Tabs",
+            [tab_group("g1", "Fix login", "info", false, 2), tab("t1", "Sign in", "https://a.b", true, false, Some("g1")), tab("t2", "Docs", "", false, true, None)],
+            move |id| a.borrow_mut().push(format!("select {id}")),
+            move |id| b.borrow_mut().push(format!("close {id}")),
+            move || c.borrow_mut().push("new".into()),
+            move |id| d.borrow_mut().push(format!("group {id}")),
+        );
+        let (tree, handlers) = export(vec![strip]);
+        let strip = &tree[0];
+        assert_eq!((strip["type"].clone(), strip["props"]["label"].clone()), (json!("TabStrip"), json!("Tabs")));
+        let kinds: Vec<&Value> = strip["children"].as_array().unwrap().iter().map(|child| &child["type"]).collect();
+        assert_eq!(kinds, ["TabGroup", "Tab", "Tab"]);
+        assert_eq!(strip["children"][0]["props"], json!({ "id": "g1", "name": "Fix login", "tone": "info", "collapsed": false, "count": 2 }));
+        assert_eq!(
+            strip["children"][1]["props"],
+            json!({ "id": "t1", "title": "Sign in", "url": "https://a.b", "active": true, "loading": false, "group": "g1" })
+        );
+        assert!(strip["children"][2]["props"].get("group").is_none(), "a tab with no group sends none");
+        for (name, payload) in [("onSelect", json!({ "id": "t1" })), ("onClose", json!({ "id": "t2" })), ("onNew", json!({})), ("onGroup", json!({ "id": "g1" }))] {
+            assert!(handlers.call(strip["props"][name].as_str().unwrap(), &payload), "{name}");
+        }
+        assert_eq!(*heard.borrow(), ["select t1", "close t2", "new", "group g1"]);
+    }
+
+    #[test]
     fn an_eval_and_a_snapshot_are_commands_with_a_token_and_the_page_world_only_when_asked() {
         assert_eq!(web_eval("return 1", false, 4), json!({ "action": "eval", "script": "return 1", "token": 4 }));
         assert_eq!(web_eval("return 1", true, 5)["world"], "page");
@@ -423,8 +489,28 @@ mod tests {
                 320.0,
             )],
         );
+        let strip = |label: &str, children: Vec<Node>| tab_strip(label, children, |_| {}, |_| {}, || {}, |_| {});
+        let work = [("g1", "Fix login bug", "info"), ("g2", "Release 0.2", "success"), ("g3", "Flaky CI", "warning"), ("g4", "Outage", "danger")];
+        let mut few = vec![tab("t1", "Start page", "", false, false, None), tab_group("g1", "Fix login bug", "info", false, 2)];
+        few.extend([tab("t2", "Sign in \u{b7} acme web", "http://localhost:5173/login", true, false, Some("g1")), tab("t3", "Loading the report", "https://acme.test/report", false, true, Some("g1"))]);
+        few.extend([tab_group("g2", "Release 0.2", "success", true, 3), tab("t4", "Changelog", "https://acme.test/changelog", false, false, Some("g2"))]);
+        few.push(tab("t5", "Intl.NumberFormat - JavaScript | MDN", "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl/NumberFormat", false, false, None));
+        let mut many = Vec::new();
+        for (at, (id, name, tone)) in work.iter().enumerate() {
+            many.push(tab_group(id, name, tone, false, 3));
+            for n in 0..3 {
+                many.push(tab(&format!("m{at}{n}"), &format!("{name} \u{b7} page {}", n + 1), "https://acme.test/", at == 1 && n == 1, false, Some(id)));
+            }
+        }
+        let tabs = page(
+            toolbar("Tabs", None),
+            [stack().prop("gap", "l").children([
+                titled("A few tabs, two groups, one folded and one tab loading", strip("A few tabs", few)),
+                titled("More tabs than fit: they stop shrinking and the strip scrolls", strip("Many tabs", many)),
+            ])],
+        );
         let root = |nodes: Vec<Node>| json!({ "id": 0, "type": "#root", "children": crate::ui::export(nodes).0 });
-        json!({ "widgets": root(vec![widgets]), "panes": root(vec![panes]) })
+        json!({ "widgets": root(vec![widgets]), "panes": root(vec![panes]), "tabs": root(vec![tabs]) })
     }
 
     #[test]

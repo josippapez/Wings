@@ -15,11 +15,13 @@ mod picture;
 pub mod prompt_rail;
 mod sunburst;
 mod svg;
+mod tab_strip;
 pub use code::Code;
 pub use picture::{Picture, room_in as picture_room, valid_id as valid_image_id};
 pub use prompt_rail::PromptRail;
 pub use sunburst::{Geometry, Hit, Sunburst, Wedge};
 pub use svg::Svg;
+pub use tab_strip::{GroupTone, Tab, TabGroup, TabItem, TabStrip};
 
 /// The largest tree JSON the host parses.
 pub const MAX_JSON_BYTES: usize = 2 * 1024 * 1024;
@@ -172,6 +174,7 @@ pub enum Node {
     Disclosure(Disclosure),
     Select(Select),
     Chips(Select),
+    TabStrip(TabStrip),
     Combobox(Combobox),
     Menu(Menu),
     ListButton(ListButton),
@@ -383,6 +386,11 @@ pub struct WebView {
     pub on_state: Option<String>,
     /// Hears what an `eval` or `snapshot` command came to: `{ token, value }` or `{ token, error }`.
     pub on_result: Option<String>,
+    /// Draws no place and takes no room, yet its view is made and keeps its commands and tellings: a tab in the
+    /// background.
+    pub hidden: bool,
+    /// With `hidden`: the engine keeps it rendering, so screenshots and scripts work on it.
+    pub live: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1297,6 +1305,16 @@ pub fn plain_text(nodes: &[Node]) -> String {
             Node::Str { text, .. } => text.clone(),
             // Its text is a prop, not a child, and a reader still sees it.
             Node::Code(code) => code.text.clone(),
+            // Its tabs are items, not children, and a reader still sees their titles.
+            Node::TabStrip(strip) => strip
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    TabItem::Tab(tab) => Some(tab.title.as_str()),
+                    TabItem::Group(group) => Some(group.name.as_str()),
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
             other => other
                 .parts()
                 .into_iter()
@@ -1344,6 +1362,7 @@ impl Node {
             Node::PopupMenu(n) => Some(n.id),
             Node::Select(n) => Some(n.id),
             Node::Chips(n) => Some(n.id),
+            Node::TabStrip(n) => Some(n.id),
             Node::Combobox(n) => Some(n.id),
             Node::Menu(n) => Some(n.id),
             Node::ListButton(n) => Some(n.button.id),
@@ -1395,6 +1414,7 @@ impl Node {
             Node::Dot(_)
             | Node::Select(_)
             | Node::Chips(_)
+            | Node::TabStrip(_)
             | Node::SearchField(_)
             | Node::Input(_)
             | Node::Icon(_)
@@ -1455,6 +1475,7 @@ impl Node {
             Node::Dot(_)
             | Node::Select(_)
             | Node::Chips(_)
+            | Node::TabStrip(_)
             | Node::SearchField(_)
             | Node::Input(_)
             | Node::Icon(_)
@@ -1560,6 +1581,9 @@ impl Walk {
                 | "PopupMenu"
                 | "Select"
                 | "Chips"
+                | "TabStrip"
+                | "Tab"
+                | "TabGroup"
                 | "ListButton"
                 | "SearchField"
                 | "TextInput"
@@ -1587,6 +1611,12 @@ impl Walk {
                 | "Actions"
         ) {
             return Ok(None);
+        }
+        // A strip reads its own tabs and groups; one anywhere else has nothing to be in.
+        match kind.as_str() {
+            "TabStrip" => return tab_strip::parse(self, id, &props, children).map(Some),
+            "Tab" | "TabGroup" => return Ok(None),
+            _ => {}
         }
         let children = self.children(children, depth)?;
         let on = |name: &str| props.get(name) == Some(&Value::Bool(true));
@@ -1704,6 +1734,8 @@ impl Walk {
                 fill: on("fill"),
                 on_state: handler("onState"),
                 on_result: handler("onResult"),
+                hidden: on("hidden"),
+                live: on("live"),
             }),
             "Avatar" => Node::Avatar(Avatar {
                 id,

@@ -61,6 +61,12 @@ fn moving() -> Vec<(&'static str, Kind, Value)> {
     vec![
         ("a spinner", Kind::ViewSpinners, json!({ "id": 3, "type": "Spinner", "props": { "label": "Running" } })),
         ("a large spinner", Kind::ViewSpinners, json!({ "id": 3, "type": "Spinner", "props": { "size": "large" } })),
+        (
+            "a loading tab",
+            Kind::ViewSpinners,
+            json!({ "id": 3, "type": "TabStrip", "props": { "label": "Tabs" }, "children": [
+                { "id": 5, "type": "Tab", "props": { "id": "t1", "title": "Sign in", "active": true, "loading": true } }] }),
+        ),
         ("a working dot", Kind::ViewSpinners, json!({ "id": 3, "type": "Dot", "props": { "state": "working" } })),
         ("a pulsing line", Kind::Pulses, line(json!({ "tone": "muted", "shimmer": true }))),
         ("a pulsing line that counts", Kind::Pulses, line(json!({ "tone": "muted", "shimmer": true, "since": since }))),

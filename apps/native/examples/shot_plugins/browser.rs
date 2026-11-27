@@ -111,14 +111,44 @@ pub(super) fn browser(out: PathBuf) {
         { "id": "18f2a9c0b2", "name": "React Developer Tools", "label": "React Developer Tools", "icon": "ext-shot-react", "badge": "", "enabled": true },
     ] });
     let page_args = json!({ "url": "https://github.com/acme/web/pull/482" });
+    // What a tab kept: the person's own tabs, an agent's group of two, and another agent's, folded.
+    let tabs_kept = json!({
+        "tabs": [
+            { "id": "t1", "url": "https://github.com/acme/web/pull/482", "title": "acme/web \u{b7} Pull request #482", "group": null },
+            { "id": "t2", "url": "https://vite.dev/config/", "title": "Configuring Vite", "group": null },
+            { "id": "t3", "url": "", "title": "", "group": null },
+            { "id": "t4", "url": "http://localhost:5173/login", "title": "Sign in \u{b7} acme web", "group": "ses-login" },
+            { "id": "t5", "url": "https://docs.stripe.com/testing", "title": "Test cards", "group": "ses-login" },
+            { "id": "t6", "url": "https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API", "title": "Fetch API - Web APIs | MDN", "group": "ses-docs" },
+            { "id": "t7", "url": "https://vite.dev/guide/", "title": "Getting Started | Vite", "group": "ses-docs" },
+        ],
+        "groups": [
+            { "key": "ses-login", "name": "Fix login bug", "collapsed": false, "active": "t4" },
+            { "key": "ses-docs", "name": "Write the API docs", "collapsed": true, "active": "t6" },
+        ],
+        "active": "t1", "own": "t1", "next": 8, "args": "",
+    });
     let mut cx = app();
-    let pages: [(&str, String, &str, f32); 3] =
-        [("tab", module("browser"), "", 640.0), ("page", module("browser"), "", 640.0), ("settings", module("settings"), "Search engine", 1100.0)];
+    let pages: [(&str, String, &str, f32); 4] = [
+        ("tab", module("browser"), "", 640.0),
+        ("page", module("browser"), "", 640.0),
+        ("tabs", module("browser"), "", 640.0),
+        ("settings", module("settings"), "Search engine", 1100.0),
+    ];
     for width in [1000.0, 640.0] {
         for (name, source, expected, height) in &pages {
             let args = (*name == "page").then_some(&page_args);
+            let kept = (*name == "tabs").then(|| tabs_kept.clone());
             let handle = cx
-                .open_offscreen_window(size(px(width), px(*height)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, source, args, cx)))
+                .open_offscreen_window(size(px(width), px(*height)), |_, cx| {
+                    cx.new(|cx| match kept {
+                        Some(kept) => {
+                            let state = wings_native::page::plugin::FrameState::new(wings_native::page::plugin::StatePlace::Tab, Some(kept), |_| Ok(()));
+                            PageView::in_plugin_with_state(&host, source, args, state, cx)
+                        }
+                        None => PageView::in_plugin_with_args(&host, source, args, cx),
+                    })
+                })
                 .unwrap();
             let window = handle.into();
             handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
@@ -131,7 +161,7 @@ pub(super) fn browser(out: PathBuf) {
             }
             // A page's web view tells it where it is and its extensions' buttons.
             if args.is_some() {
-                while !handle.read_with(&cx, |view, _| view.tell_web_state("page", &page_state)).unwrap() {
+                while !handle.read_with(&cx, |view, _| view.tell_web_state("tab-t1", &page_state)).unwrap() {
                     assert!(Instant::now() < deadline, "the page has no web view");
                     wait(&mut cx, window, Duration::from_millis(20));
                 }

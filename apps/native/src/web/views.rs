@@ -23,6 +23,10 @@ pub struct Spec {
     pub url: Option<String>,
     pub keep_data: bool,
     pub commands: Vec<WebCommand>,
+    /// The page draws no place for it (a tab in the background), yet its view is made and keeps its commands and tellings.
+    pub hidden: bool,
+    /// With `hidden`: the engine keeps it rendering, so its screenshots and scripts work.
+    pub live: bool,
 }
 
 /// Where a web view is, which its page hears with `onState`.
@@ -127,6 +131,11 @@ impl Tell {
 pub trait Native {
     /// Shows it at `frame`, the window's points from its top left, in `window`, or hides it for `None`.
     fn place(&mut self, window: &Window, frame: Option<Bounds<Pixels>>);
+    /// Hides it at `frame` while it keeps rendering and takes no click, for an engine that stops drawing what it hides.
+    /// Hidden as `place(None)` does for one that keeps drawing.
+    fn keep_live(&mut self, window: &Window, _frame: Bounds<Pixels>) {
+        self.place(window, None);
+    }
     /// Lets what lies over the page show through it and take the clicks there, and dims it under a dialog's backdrop, which
     /// then takes every click: true when it can, and false for one that is hidden instead while anything does.
     fn overlaid(&mut self, _over: &Overlaid) -> bool {
@@ -252,6 +261,12 @@ struct Entry {
     token: Option<u64>,
     /// Where it shows now, and in which window.
     shown: Option<Bounds<Pixels>>,
+    /// The last place it had while the page drew one, which its size stays while it is hidden.
+    last: Option<Bounds<Pixels>>,
+    hidden: bool,
+    live: bool,
+    /// Where it is kept rendering while hidden (`Native::keep_live`).
+    kept: Option<Bounds<Pixels>>,
     window: Option<WindowId>,
     /// What lies over it now, and whether that shows through it (`Native::overlaid`).
     over: Overlaid,
@@ -302,10 +317,16 @@ pub fn update(page: EntityId, profile: &Profile, specs: &[Spec], told: &Told, sc
                 // A command the page sent before the view was made runs once it is.
                 token: None,
                 shown: None,
+                last: None,
+                hidden: spec.hidden,
+                live: spec.live,
+                kept: None,
                 window: None,
                 over: Overlaid::default(),
                 cuts: false,
             });
+            entry.hidden = spec.hidden;
+            entry.live = spec.live;
             // In the order sent, each past the last one run.
             for command in &spec.commands {
                 if entry.token.is_some_and(|done| command.token <= done) {
@@ -385,8 +406,55 @@ pub fn place(window: &Window, _: &App) {
     // Dropped after the borrow, as a view that ends may call back.
     let mut ended = Vec::new();
     VIEWS.with_borrow_mut(|views| {
+        // Where each page's shown web view is, or was last while its Wings tab is in the background: a hidden one of its
+        // page has that size.
+        let mut sibling: HashMap<EntityId, Bounds<Pixels>> = HashMap::new();
+        for ((page, name), entry) in views.iter().filter(|(_, entry)| !entry.hidden) {
+            let shown = places
+                .iter()
+                .find(|(slot, _)| *slot == slot_name(*page, name))
+                .map(|(_, slot)| slot.bounds.intersect(&slot.mask.bounds))
+                .filter(|at| !at.is_empty());
+            match (shown, entry.last) {
+                (Some(at), _) => drop(sibling.insert(*page, at)),
+                (None, Some(last)) => drop(sibling.entry(*page).or_insert(last)),
+                (None, None) => {}
+            }
+        }
+        // A page never shown yet (an agent opened it while the person looked elsewhere) has the window's size.
+        let window_frame = Bounds::new(gpui::point(gpui::px(0.0), gpui::px(0.0)), window.viewport_size());
         for ((page, name), entry) in views.iter_mut() {
             if entry.window.is_some_and(|window| window != id) {
+                continue;
+            }
+            if entry.hidden {
+                // Its own frame is the page's shown view's, else the last it had or is kept at (a tab the person never
+                // looked at stays live while its Wings tab is in the background), else the window's.
+                let frame = sibling.get(page).copied().or(entry.last).or(entry.kept).unwrap_or(window_frame);
+                let mut fresh = false;
+                if entry.native.is_none() {
+                    let Some(maker) = &maker else { continue };
+                    let tell = Tell { told: entry.told.clone(), name: name.clone(), at: entry.at.clone() };
+                    entry.engine = maker.engine(&entry.profile);
+                    let mut native = maker.make(&entry.profile, entry.keep_data, entry.scripts, entry.url.as_deref(), tell);
+                    for (go, token) in entry.waiting.drain(..) {
+                        native.go(&go, token);
+                    }
+                    entry.native = Some(native);
+                    entry.window = Some(id);
+                    fresh = true;
+                }
+                let Some(native) = &mut entry.native else { continue };
+                let kept = entry.live.then_some(frame);
+                if let Some(frame) = kept {
+                    if entry.kept != kept {
+                        native.keep_live(window, frame);
+                    }
+                } else if fresh || entry.shown.is_some() || entry.kept.is_some() {
+                    native.place(window, None);
+                }
+                entry.kept = kept;
+                entry.shown = None;
                 continue;
             }
             let slot = places
@@ -396,6 +464,7 @@ pub fn place(window: &Window, _: &App) {
                 .filter(|at| !at.is_empty());
             // What lies over part of it shows through it where its engine can, and else hides it, as an overlay over all
             // of it does: hiding the page for a menu left it black under the menu.
+            entry.last = slot.or(entry.last);
             let over = slot.and_then(|at| overlaid(at, &covers, &backdrops));
             let at = slot.filter(|_| over.is_some());
             // The profile switched engines: its page opens again in the other one, where it was.
@@ -405,6 +474,7 @@ pub fn place(window: &Window, _: &App) {
             {
                 ended.extend(entry.native.take());
                 entry.shown = None;
+                entry.kept = None;
                 entry.over = Overlaid::default();
                 entry.cuts = false;
                 if let Some(at) = entry.at.lock().unwrap().clone() {
@@ -430,11 +500,12 @@ pub fn place(window: &Window, _: &App) {
                 entry.over = over;
             }
             let at = at.filter(|at| entry.cuts || !blocking.iter().any(|cover| cover.intersects(at)));
-            if entry.shown != at
+            if (entry.shown != at || entry.kept.is_some())
                 && let Some(native) = &mut entry.native
             {
                 native.place(window, at);
                 entry.shown = at;
+                entry.kept = None;
             }
         }
     });
@@ -453,6 +524,8 @@ pub(crate) mod testing {
     pub enum Did {
         Made { name: Option<String>, keep_data: bool, url: Option<String> },
         Placed(Option<Bounds<Pixels>>),
+        /// Hidden at the frame while it keeps rendering.
+        Live(Bounds<Pixels>),
         /// What lies over it, told to an engine that shows through it.
         Over(Overlaid),
         Went(WebGo, u64),
@@ -474,6 +547,9 @@ pub(crate) mod testing {
     impl Native for Fake {
         fn place(&mut self, _: &Window, frame: Option<Bounds<Pixels>>) {
             self.0.borrow_mut().push(Did::Placed(frame));
+        }
+        fn keep_live(&mut self, _: &Window, frame: Bounds<Pixels>) {
+            self.0.borrow_mut().push(Did::Live(frame));
         }
         fn overlaid(&mut self, over: &Overlaid) -> bool {
             if self.1 {

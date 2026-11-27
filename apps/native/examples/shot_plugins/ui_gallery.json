@@ -268,6 +268,430 @@
     "id": 0,
     "type": "#root"
   },
+  "tabs": {
+    "children": [
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "id": 1574414024788957,
+                        "text": "Tabs",
+                        "type": "#text"
+                      }
+                    ],
+                    "id": 5037958321225183,
+                    "props": {
+                      "name": "title"
+                    },
+                    "type": "Slot"
+                  }
+                ],
+                "id": 8538953204824747,
+                "props": {},
+                "type": "Toolbar"
+              }
+            ],
+            "id": 3043621953619199,
+            "props": {
+              "name": "toolbar"
+            },
+            "type": "Slot"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "id": 5534238210091487,
+                            "text": "A few tabs, two groups, one folded and one tab loading",
+                            "type": "#text"
+                          }
+                        ],
+                        "id": 5965759217221235,
+                        "props": {
+                          "level": 3
+                        },
+                        "type": "Heading"
+                      },
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "id": 4032061799036911,
+                            "props": {
+                              "active": false,
+                              "id": "t1",
+                              "loading": false,
+                              "title": "Start page",
+                              "url": ""
+                            },
+                            "type": "Tab"
+                          },
+                          {
+                            "children": [],
+                            "id": 4798120447141731,
+                            "props": {
+                              "collapsed": false,
+                              "count": 2,
+                              "id": "g1",
+                              "name": "Fix login bug",
+                              "tone": "info"
+                            },
+                            "type": "TabGroup"
+                          },
+                          {
+                            "children": [],
+                            "id": 3296458881525053,
+                            "props": {
+                              "active": true,
+                              "group": "g1",
+                              "id": "t2",
+                              "loading": false,
+                              "title": "Sign in · acme web",
+                              "url": "http://localhost:5173/login"
+                            },
+                            "type": "Tab"
+                          },
+                          {
+                            "children": [],
+                            "id": 6807234512461071,
+                            "props": {
+                              "active": false,
+                              "group": "g1",
+                              "id": "t3",
+                              "loading": true,
+                              "title": "Loading the report",
+                              "url": "https://acme.test/report"
+                            },
+                            "type": "Tab"
+                          },
+                          {
+                            "children": [],
+                            "id": 8504739821855419,
+                            "props": {
+                              "collapsed": true,
+                              "count": 3,
+                              "id": "g2",
+                              "name": "Release 0.2",
+                              "tone": "success"
+                            },
+                            "type": "TabGroup"
+                          },
+                          {
+                            "children": [],
+                            "id": 4334485450554709,
+                            "props": {
+                              "active": false,
+                              "group": "g2",
+                              "id": "t4",
+                              "loading": false,
+                              "title": "Changelog",
+                              "url": "https://acme.test/changelog"
+                            },
+                            "type": "Tab"
+                          },
+                          {
+                            "children": [],
+                            "id": 1124917252943457,
+                            "props": {
+                              "active": false,
+                              "id": "t5",
+                              "loading": false,
+                              "title": "Intl.NumberFormat - JavaScript | MDN",
+                              "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl/NumberFormat"
+                            },
+                            "type": "Tab"
+                          }
+                        ],
+                        "id": 8312449583861635,
+                        "props": {
+                          "label": "A few tabs",
+                          "onClose": "8312449583861635:onClose",
+                          "onGroup": "8312449583861635:onGroup",
+                          "onNew": "8312449583861635:onNew",
+                          "onSelect": "8312449583861635:onSelect"
+                        },
+                        "type": "TabStrip"
+                      }
+                    ],
+                    "id": 8318978827121959,
+                    "props": {
+                      "gap": "s"
+                    },
+                    "type": "Stack"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "id": 1839440672093575,
+                            "text": "More tabs than fit: they stop shrinking and the strip scrolls",
+                            "type": "#text"
+                          }
+                        ],
+                        "id": 1323899004013281,
+                        "props": {
+                          "level": 3
+                        },
+                        "type": "Heading"
+                      },
+                      {
+                        "children": [
+                          {
+                            "children": [],
+                            "id": 5506518246695819,
+                            "props": {
+                              "collapsed": false,
+                              "count": 3,
+                              "id": "g1",
+                              "name": "Fix login bug",
+                              "tone": "info"
+                            },
+                            "type": "TabGroup"
+                          },
+                          {
+                            "children": [],
+                            "id": 7650404124758309,
+                            "props": {
+                              "active": false,
+                              "group": "g1",
+                              "id": "m00",
+                              "loading": false,
+                              "title": "Fix login bug · page 1",
+                              "url": "https://acme.test/"
+                            },
+                            "type": "Tab"
+                          },
+                          {
+                            "children": [],
+                            "id": 3383007954459697,
+                            "props": {
+                              "active": false,
+                              "group": "g1",
+                              "id": "m01",
+                              "loading": false,
+                              "title": "Fix login bug · page 2",
+                              "url": "https://acme.test/"
+                            },
+                            "type": "Tab"
+                          },
+                          {
+                            "children": [],
+                            "id": 947622019957347,
+                            "props": {
+                              "active": false,
+                              "group": "g1",
+                              "id": "m02",
+                              "loading": false,
+                              "title": "Fix login bug · page 3",
+                              "url": "https://acme.test/"
+                            },
+                            "type": "Tab"
+                          },
+                          {
+                            "children": [],
+                            "id": 4885282238754535,
+                            "props": {
+                              "collapsed": false,
+                              "count": 3,
+                              "id": "g2",
+                              "name": "Release 0.2",
+                              "tone": "success"
+                            },
+                            "type": "TabGroup"
+                          },
+                          {
+                            "children": [],
+                            "id": 8991690122713073,
+                            "props": {
+                              "active": false,
+                              "group": "g2",
+                              "id": "m10",
+                              "loading": false,
+                              "title": "Release 0.2 · page 1",
+                              "url": "https://acme.test/"
+                            },
+                            "type": "Tab"
+                          },
+                          {
+                            "children": [],
+                            "id": 3159736482494477,
+                            "props": {
+                              "active": true,
+                              "group": "g2",
+                              "id": "m11",
+                              "loading": false,
+                              "title": "Release 0.2 · page 2",
+                              "url": "https://acme.test/"
+                            },
+                            "type": "Tab"
+                          },
+                          {
+                            "children": [],
+                            "id": 7376475305271775,
+                            "props": {
+                              "active": false,
+                              "group": "g2",
+                              "id": "m12",
+                              "loading": false,
+                              "title": "Release 0.2 · page 3",
+                              "url": "https://acme.test/"
+                            },
+                            "type": "Tab"
+                          },
+                          {
+                            "children": [],
+                            "id": 6849784626928083,
+                            "props": {
+                              "collapsed": false,
+                              "count": 3,
+                              "id": "g3",
+                              "name": "Flaky CI",
+                              "tone": "warning"
+                            },
+                            "type": "TabGroup"
+                          },
+                          {
+                            "children": [],
+                            "id": 1905161393477613,
+                            "props": {
+                              "active": false,
+                              "group": "g3",
+                              "id": "m20",
+                              "loading": false,
+                              "title": "Flaky CI · page 1",
+                              "url": "https://acme.test/"
+                            },
+                            "type": "Tab"
+                          },
+                          {
+                            "children": [],
+                            "id": 6496874938141397,
+                            "props": {
+                              "active": false,
+                              "group": "g3",
+                              "id": "m21",
+                              "loading": false,
+                              "title": "Flaky CI · page 2",
+                              "url": "https://acme.test/"
+                            },
+                            "type": "Tab"
+                          },
+                          {
+                            "children": [],
+                            "id": 5838338231038051,
+                            "props": {
+                              "active": false,
+                              "group": "g3",
+                              "id": "m22",
+                              "loading": false,
+                              "title": "Flaky CI · page 3",
+                              "url": "https://acme.test/"
+                            },
+                            "type": "Tab"
+                          },
+                          {
+                            "children": [],
+                            "id": 2380372757799557,
+                            "props": {
+                              "collapsed": false,
+                              "count": 3,
+                              "id": "g4",
+                              "name": "Outage",
+                              "tone": "danger"
+                            },
+                            "type": "TabGroup"
+                          },
+                          {
+                            "children": [],
+                            "id": 3287306740530145,
+                            "props": {
+                              "active": false,
+                              "group": "g4",
+                              "id": "m30",
+                              "loading": false,
+                              "title": "Outage · page 1",
+                              "url": "https://acme.test/"
+                            },
+                            "type": "Tab"
+                          },
+                          {
+                            "children": [],
+                            "id": 6782619249521441,
+                            "props": {
+                              "active": false,
+                              "group": "g4",
+                              "id": "m31",
+                              "loading": false,
+                              "title": "Outage · page 2",
+                              "url": "https://acme.test/"
+                            },
+                            "type": "Tab"
+                          },
+                          {
+                            "children": [],
+                            "id": 6194451286623599,
+                            "props": {
+                              "active": false,
+                              "group": "g4",
+                              "id": "m32",
+                              "loading": false,
+                              "title": "Outage · page 3",
+                              "url": "https://acme.test/"
+                            },
+                            "type": "Tab"
+                          }
+                        ],
+                        "id": 5469153777964617,
+                        "props": {
+                          "label": "Many tabs",
+                          "onClose": "5469153777964617:onClose",
+                          "onGroup": "5469153777964617:onGroup",
+                          "onNew": "5469153777964617:onNew",
+                          "onSelect": "5469153777964617:onSelect"
+                        },
+                        "type": "TabStrip"
+                      }
+                    ],
+                    "id": 1900396904732333,
+                    "props": {
+                      "gap": "s"
+                    },
+                    "type": "Stack"
+                  }
+                ],
+                "id": 4786586064782419,
+                "props": {
+                  "gap": "l"
+                },
+                "type": "Stack"
+              }
+            ],
+            "id": 2782278921151599,
+            "props": {
+              "name": "body"
+            },
+            "type": "Slot"
+          }
+        ],
+        "id": 2405033114205451,
+        "props": {},
+        "type": "Page"
+      }
+    ],
+    "id": 0,
+    "type": "#root"
+  },
   "widgets": {
     "children": [
       {

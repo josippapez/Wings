@@ -42,6 +42,8 @@ mod column_window_view;
 mod popup_menu_view;
 #[path = "sunburst_view.rs"]
 mod sunburst_view;
+#[path = "tab_strip_view.rs"]
+mod tab_strip_view;
 #[cfg(feature = "test-support")]
 #[path = "bench_view.rs"]
 mod bench_view;
@@ -265,6 +267,8 @@ pub struct PageView {
     dialog_area: Cell<Option<(f32, f32)>>,
     images_waiting: RefCell<HashSet<u64>>,
     chip_focus: RefCell<HashMap<(u64, String), gpui::FocusHandle>>,
+    /// Where each `TabStrip` is scrolled, by node id.
+    tab_strips: RefCell<HashMap<u64, tab_strip_view::TabStripState>>,
     /// What the page last threw, shown under it until it renders again.
     error: Option<SharedString>,
     /// The page has stopped: nothing in it answers a click until it is started again, which happens by itself

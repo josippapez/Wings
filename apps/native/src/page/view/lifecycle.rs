@@ -84,6 +84,7 @@ impl PageView {
         self.prompt_rails.borrow_mut().clear();
         self.hover_cards.borrow_mut().clear();
         self.chip_focus.borrow_mut().clear();
+        self.tab_strips.borrow_mut().clear();
         self.actions_focus.borrow_mut().clear();
         self.actions_within.clear();
         self.reveal = None;
@@ -274,6 +275,9 @@ impl PageView {
                                         Node::Chips(chips) => {
                                             ids.insert(chips.id);
                                         }
+                                        Node::TabStrip(strip) => {
+                                            ids.insert(strip.id);
+                                        }
                                         _ => {}
                                     }
                                     for part in node.parts() {
@@ -302,6 +306,7 @@ impl PageView {
                             view.chip_focus
                                 .borrow_mut()
                                 .retain(|(id, _), _| ids.contains(id));
+                            view.tab_strips.borrow_mut().retain(|id, _| ids.contains(id));
                             view.keep_selection_in(&tree.children);
                             view.sync_web(&tree.children, cx);
                             view.tree = Some(tree);
@@ -363,6 +368,7 @@ impl PageView {
             dialog_area: Cell::new(None),
             images_waiting: RefCell::default(),
             chip_focus: RefCell::new(HashMap::new()),
+            tab_strips: RefCell::new(HashMap::new()),
             error,
             source,
             shown: Cell::new(None),

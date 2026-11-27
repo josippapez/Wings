@@ -71,6 +71,42 @@ thread_local! {
     static WORKERS: RefCell<HashMap<String, String>> = RefCell::default();
     /// The extension whose popup lost the keyboard last, when, and where the pointer was then.
     static CLOSED: RefCell<Option<Closed>> = const { RefCell::new(None) };
+    /// A page or a popup is open, so the added extensions' workers are followed (`pages_open`).
+    static AWAKE: Cell<bool> = const { Cell::new(true) };
+}
+
+/// Every target Chromium runs, its kind, address and whether DevTools is attached: for the debug control.
+pub(super) fn print_targets() {
+    ask("Target.getTargets", json!({}), |answer| {
+        let targets: Vec<String> = answer
+            .ok()
+            .and_then(|answer| answer["targetInfos"].as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .map(|target| format!("{} {} attached={}", target["type"].as_str().unwrap_or_default(), target["url"].as_str().unwrap_or_default(), target["attached"]))
+            .collect();
+        eprintln!("[chromium-check] targets: {}", targets.join("; "));
+    });
+}
+
+/// Whether any page or popup is open. With none, the added extensions' workers are let go, since a followed worker never
+/// stops: Chromium then stops one once it is idle, as it does any extension's (one that keeps itself running, as
+/// Bitwarden does, runs on), and what they stored stays. Once a page opens again, those running are followed again.
+pub fn pages_open(open: bool) {
+    if AWAKE.replace(open) == open {
+        return;
+    }
+    if open {
+        let chromes: Vec<String> = LOADED.with_borrow(|loaded| loaded.iter().map(|loaded| loaded.chrome.clone()).collect());
+        for chrome in chromes {
+            follow_running(&chrome);
+        }
+        return;
+    }
+    let sessions: Vec<String> = WORKERS.with_borrow_mut(|workers| workers.drain().map(|(session, _)| session).collect());
+    for session in sessions {
+        ask("Target.detachFromTarget", json!({ "sessionId": session }), |_| {});
+    }
 }
 
 /// Asks the browser target `method` with `params`, and `done` hears its answer.
@@ -190,7 +226,8 @@ fn worker_started(params: &Value) {
     let Some(session) = params["sessionId"].as_str() else { return };
     let url = params["targetInfo"]["url"].as_str().unwrap_or_default();
     let chrome = url.strip_prefix("chrome-extension://").and_then(|rest| rest.split('/').next()).unwrap_or_default();
-    let added = !chrome.is_empty() && LOADED.with_borrow(|loaded| loaded.iter().any(|loaded| loaded.chrome == chrome));
+    // One that wakes while no page is open (an alarm) runs on alone, so it can stop again.
+    let added = AWAKE.get() && !chrome.is_empty() && LOADED.with_borrow(|loaded| loaded.iter().any(|loaded| loaded.chrome == chrome));
     ask_in(Some(session), "Runtime.runIfWaitingForDebugger", json!({}), |_| {});
     if !added {
         return ask("Target.detachFromTarget", json!({ "sessionId": session }), |_| {});

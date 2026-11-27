@@ -1,6 +1,7 @@
 //! The tools Claude uses to drive a Browser page (`browser__open`, `browser__click`...). Main answers them: it knows the pages
-//! because each one tells it who and where it is (`agent_page.rs`), picks the page of the caller's project that had the
-//! focus last, and asks it to do the work, since only a page can run a `WebView`'s commands.
+//! because each one tells it who and where it is (`agent_page.rs`), picks the page of the caller's project that has the
+//! caller's tab group, or else the one that had the focus last, and asks it to do the work, since only a page can run a
+//! `WebView`'s commands. Every ask carries who is calling, so the page works in that agent's group of tabs.
 
 use crate::{
     protocol::{ANNOUNCE, WAIT_POLL_MS, WHO, cmd_name},
@@ -26,6 +27,46 @@ const OPEN_MS: f64 = 10_000.0;
 const EVAL_MAX: usize = 20_000;
 
 const NO_PAGE: &str = "No Browser page is open for this project. Call browser__open with an address first.";
+const NO_TAB: &str = "You have no Browser tab yet. Call browser__open with an address first.";
+
+/// Who calls a tool: the key of its tab group (the agent's session, else its pane, else none for the CLI) and its name.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Caller {
+    key: String,
+    name: String,
+}
+
+impl Caller {
+    fn of(context: &Value) -> Self {
+        let session = &context["session"];
+        let pane = match &context["paneId"] {
+            Value::String(pane) => pane.clone(),
+            Value::Number(pane) => pane.to_string(),
+            _ => String::new(),
+        };
+        let key = match session["id"].as_str().filter(|id| !id.is_empty()) {
+            Some(id) => id.to_owned(),
+            None if pane.is_empty() => String::new(),
+            None => format!("pane:{pane}"),
+        };
+        // Two agents without a session name each get a group of their own, named apart by their pane.
+        let name = match session["name"].as_str().filter(|name| !name.is_empty()) {
+            Some(name) => name.to_owned(),
+            None if !pane.is_empty() => format!("Agent {pane}"),
+            None => "Agent".to_owned(),
+        };
+        Self { key, name }
+    }
+
+    fn json(&self) -> Value {
+        json!({ "key": self.key, "name": self.name })
+    }
+
+    /// What a call says when nothing of the caller's is open: a caller with a tab group of its own hears about its tab.
+    fn nothing(&self) -> &'static str {
+        if self.key.is_empty() { NO_PAGE } else { NO_TAB }
+    }
+}
 
 /// What the agent can ask a window to be. Wings keeps it on the screen and no smaller than 320 by 240.
 const PRESETS: [(&str, (f64, f64)); 3] = [("desktop", (1440.0, 900.0)), ("tablet", (834.0, 1194.0)), ("phone", (390.0, 844.0))];
@@ -35,6 +76,11 @@ struct Info {
     id: String,
     project: String,
     popped: bool,
+    /// The tab told of (the person's own, or the caller's) and the name of its group, empty for the person's own.
+    tab: String,
+    group: String,
+    /// The keys of the tab groups the page has.
+    groups: Vec<String>,
     url: String,
     title: String,
     loading: bool,
@@ -69,6 +115,9 @@ fn hear(page: &Value) {
             id,
             project: text(page, "project"),
             popped: page["popped"] == true,
+            tab: text(page, "tab"),
+            group: text(page, "group"),
+            groups: page["groups"].as_array().into_iter().flatten().filter_map(|key| key.as_str().map(str::to_owned)).collect(),
             url: text(page, "url"),
             title: text(page, "title"),
             loading: page["loading"] == true,
@@ -134,14 +183,38 @@ fn sized(size: (f64, f64)) -> String {
     format!("{}x{}", size.0, size.1)
 }
 
-fn describe(page: &Info) -> String {
+/// A tab as the tool says it: `mine` for the caller's own, named by its group.
+fn describe(page: &Info, mine: bool) -> String {
     let place = match (page.popped, page.size) {
-        (true, Some(size)) => format!("in a window (set to {})", sized(size)),
-        (true, None) => "in a window".to_owned(),
-        (false, _) => "in a tab".to_owned(),
+        (true, Some(size)) => format!(", in a window (set to {})", sized(size)),
+        (true, None) => ", in a window".to_owned(),
+        (false, _) => String::new(),
     };
     let title = if page.title.is_empty() { String::new() } else { format!(" \"{}\"", page.title) };
-    format!("Browser page {} {place}: {}{title}{}", page.id, if page.url.is_empty() { "(no address yet)" } else { &page.url }, if page.loading { " (still loading)" } else { "" })
+    let whose = match (page.group.is_empty(), mine) {
+        (true, _) => String::new(),
+        (false, true) => format!(" in your group \"{}\"", page.group),
+        (false, false) => format!(" in the group \"{}\"", page.group),
+    };
+    let what = if page.tab.is_empty() { "Browser page".to_owned() } else { format!("Browser tab {}{whose}", page.tab) };
+    format!("{what} (page {}{place}): {}{title}{}", page.id, if page.url.is_empty() { "(no address yet)" } else { &page.url }, if page.loading { " (still loading)" } else { "" })
+}
+
+/// A tab as its page answered about it.
+fn info_of(answer: &Value) -> Info {
+    Info {
+        id: text(answer, "id"),
+        project: String::new(),
+        popped: answer["popped"] == true,
+        tab: text(answer, "tab"),
+        group: text(answer, "group"),
+        groups: Vec::new(),
+        url: text(answer, "url"),
+        title: text(answer, "title"),
+        loading: answer["loading"] == true,
+        focused_at: 0.0,
+        size: get(&text(answer, "id")).and_then(|page| page.size),
+    }
 }
 
 /// What a tool that takes a ref or text sends the page, and how long the page may take: nothing for the tools main does itself.
@@ -174,6 +247,7 @@ fn op_for(tool: &str, input: &Value) -> Result<(Value, u32), String> {
             (op("scroll", &["ref", "to", "x", "y"]), OP_MS)
         }
         "drag" => (op("drag", &["from", "to"]), OP_MS),
+        "tabs" => (op("tabs", &["action", "tab"]), OP_MS),
         "eval" => (op("eval", &["script"]), OP_MS),
         // One command answers both; the tool keeps its half.
         "console" | "network" => (op("logs", &[]), OP_MS),
@@ -216,6 +290,25 @@ async fn live_page(project: &str) -> Option<Info> {
     None
 }
 
+/// The page of the project that has the caller's tab group, if there is one, else the one that had the focus last. A caller with
+/// no key (the CLI) has no group: it gets the latter.
+async fn route(project: &str, caller: &Caller) -> Option<Info> {
+    if !caller.key.is_empty() {
+        for page in candidates(project).into_iter().filter(|page| page.groups.contains(&caller.key)) {
+            match ask(&page.id, json!({ "op": "status" }), PING_MS).await {
+                Ok(status) => {
+                    hear(&status);
+                    if let Some(page) = get(&page.id).filter(|page| page.groups.contains(&caller.key)) {
+                        return Some(page);
+                    }
+                }
+                Err(_) => forget(&page.id),
+            }
+        }
+    }
+    live_page(project).await
+}
+
 /// The first page that wasn't in `known`, once it has told main about itself.
 async fn new_page(known: &[String], limit_ms: f64) -> Option<Info> {
     let begun = host::now();
@@ -235,25 +328,29 @@ fn project_of(context: &Value) -> String {
 }
 
 async fn run(tool: String, input: Value, context: Value) -> Result<Value, String> {
-    let project = project_of(&context);
+    let (project, caller) = (project_of(&context), Caller::of(&context));
     match tool.as_str() {
-        "open" => open(&project, &input).await,
-        "pop_out" | "resize" | "emulate" => sizing(&tool, &project, &input).await,
-        "pop_in" => pop_in(&project).await,
-        "status" => status(&project).await,
+        "open" => open(&project, &caller, &input).await,
+        "pop_out" | "resize" | "emulate" => sizing(&tool, &project, &caller, &input).await,
+        "pop_in" => pop_in(&project, &caller).await,
+        "status" => status(&project, &caller).await,
         // With no page, a navigation is an open.
-        "navigate" if input["url"].is_string() && live_page(&project).await.is_none() => open(&project, &input).await,
-        _ => forward(&tool, &project, &input).await,
+        "navigate" if input["url"].is_string() && route(&project, &caller).await.is_none() => open(&project, &caller, &input).await,
+        _ => forward(&tool, &project, &caller, &input).await,
     }
 }
 
-/// Opens a page, in a window when asked, at `url` (or the engine's home for none), and gives it once it is there.
-async fn open_new(url: Option<&str>, size: Option<(f64, f64)>, window: bool) -> Result<Info, String> {
+/// Opens a page, in a window when asked, at `url` (or the engine's home for none), and gives it once it is there. An agent's page
+/// starts with its tab group.
+async fn open_new(url: Option<&str>, size: Option<(f64, f64)>, window: bool, caller: &Caller) -> Result<Info, String> {
     let known = ids();
-    let args = match url {
-        Some(url) => json!({ "url": url, "window": window }),
-        None => json!({ "window": window }),
-    };
+    let mut args = json!({ "window": window });
+    if let Some(url) = url {
+        args["url"] = json!(url);
+    }
+    if !caller.key.is_empty() {
+        args["group"] = caller.json();
+    }
     let answer = if window { host::open_window("browser", &args, size).await? } else { host::open_view_with("browser", "tab", &args).await? };
     let page = new_page(&known, OPEN_MS).await.ok_or("The Browser page didn't open. Is the Browser plugin on?")?;
     set_size(&page.id, window.then(|| size_answered(&answer).or(size)).flatten());
@@ -265,79 +362,92 @@ fn size_answered(answer: &Value) -> Option<(f64, f64)> {
     Some((answer["width"].as_f64()?, answer["height"].as_f64()?))
 }
 
-async fn open(project: &str, input: &Value) -> Result<Value, String> {
+async fn open(project: &str, caller: &Caller, input: &Value) -> Result<Value, String> {
     let url = text(input, "url");
     let size = size_of(input)?;
     let pop = input["pop_out"] == true || size.is_some();
-    let Some(page) = live_page(project).await else {
-        return Ok(describe(&open_new(Some(&url), size, pop).await?).into());
+    let Some(page) = route(project, caller).await else {
+        return Ok(describe(&open_new(Some(&url), size, pop, caller).await?, true).into());
     };
-    ask(&page.id, json!({ "op": "navigate", "url": url }), OP_MS).await?;
-    let id = if pop && !page.popped { move_out(&page, size).await?.id } else { page.id.clone() };
-    if pop && page.popped && size.is_some() {
-        resize_window(&page.id, size).await?;
+    let answer = ask(&page.id, json!({ "op": "navigate", "url": url, "new_tab": input["new_tab"] == true, "caller": caller.json() }), OP_MS).await?;
+    let mut tab = info_of(&answer);
+    if pop && !page.popped {
+        tab = move_out(&page, caller, size).await?;
+    } else if pop && size.is_some() {
+        resize_window(&page.id, caller, size).await?;
+        tab.size = get(&page.id).and_then(|page| page.size);
     }
-    Ok(describe(&get(&id).ok_or(NO_PAGE)?).into())
+    Ok(describe(&tab, true).into())
 }
 
-async fn resize_window(id: &str, size: Option<(f64, f64)>) -> Result<(), String> {
+async fn resize_window(id: &str, caller: &Caller, size: Option<(f64, f64)>) -> Result<(), String> {
     let (width, height) = size.ok_or("A width and a height, or a preset, is needed.")?;
-    let answer = ask(id, json!({ "op": "resize", "width": width, "height": height }), OP_MS).await?;
+    let answer = ask(id, json!({ "op": "resize", "width": width, "height": height, "caller": caller.json() }), OP_MS).await?;
     set_size(id, size_answered(&answer).or(size));
     Ok(())
 }
 
-/// A page from a tab to a window: the page opens it and closes its tab, and the window's page is the one that tells main next.
-async fn move_out(page: &Info, size: Option<(f64, f64)>) -> Result<Info, String> {
+/// The caller's tab from its page to a window: the page opens it and takes the tab out (and closes its own tab when it was the
+/// last), and the window's page is the one that tells main next.
+async fn move_out(page: &Info, caller: &Caller, size: Option<(f64, f64)>) -> Result<Info, String> {
     let known = ids();
-    let op = match size {
-        Some((width, height)) => json!({ "op": "pop_out", "width": width, "height": height }),
-        None => json!({ "op": "pop_out" }),
-    };
+    let mut op = json!({ "op": "pop_out", "caller": caller.json() });
+    if let Some((width, height)) = size {
+        op["width"] = json!(width);
+        op["height"] = json!(height);
+    }
     let answer = ask(&page.id, op, OP_MS).await?;
-    forget(&page.id);
+    // A page that had other tabs stays.
+    if answer["closed"] != false {
+        forget(&page.id);
+    }
     let window = new_page(&known, OPEN_MS).await.ok_or("The window didn't open.")?;
     set_size(&window.id, size_answered(&answer).or(size));
     Ok(get(&window.id).unwrap_or(window))
 }
 
-async fn sizing(tool: &str, project: &str, input: &Value) -> Result<Value, String> {
+async fn sizing(tool: &str, project: &str, caller: &Caller, input: &Value) -> Result<Value, String> {
     let size = size_of(input)?;
     if tool != "pop_out" && size.is_none() {
         return Err(format!("{tool} takes a width and a height, or a preset of desktop, tablet or phone."));
     }
-    let Some(page) = live_page(project).await else {
+    let Some(page) = route(project, caller).await else {
         if tool == "pop_out" {
-            return Ok(describe(&open_new(None, size, true).await?).into());
+            return Ok(describe(&open_new(None, size, true, caller).await?, true).into());
         }
-        return Err(NO_PAGE.into());
+        return Err(caller.nothing().into());
     };
     if page.popped {
         if size.is_some() {
-            resize_window(&page.id, size).await?;
+            resize_window(&page.id, caller, size).await?;
         }
-        return Ok(describe(&get(&page.id).unwrap_or(page)).into());
+        return Ok(describe(&get(&page.id).unwrap_or(page), true).into());
     }
     if tool != "pop_out" {
         return Err("This page is in a tab, so it has no window to resize. Call pop_out first (it takes a width and height or a preset), then resize.".into());
     }
-    Ok(describe(&move_out(&page, size).await?).into())
+    Ok(describe(&move_out(&page, caller, size).await?, true).into())
 }
 
-async fn pop_in(project: &str) -> Result<Value, String> {
-    let page = live_page(project).await.ok_or(NO_PAGE)?;
+async fn pop_in(project: &str, caller: &Caller) -> Result<Value, String> {
+    let page = route(project, caller).await.ok_or(caller.nothing())?;
     if !page.popped {
-        return Ok(format!("Already in a tab. {}", describe(&page)).into());
+        return Ok(format!("Already in a tab. {}", describe(&page, true)).into());
     }
     let known = ids();
-    ask(&page.id, json!({ "op": "pop_in" }), OP_MS).await?;
+    ask(&page.id, json!({ "op": "pop_in", "caller": caller.json() }), OP_MS).await?;
     forget(&page.id);
     // A tab with the same address that is open already is shown instead of a new one, so no new page may come.
     let tab = new_page(&known, 3000.0).await;
-    Ok(tab.map_or_else(|| "Put back in a tab.".to_owned(), |tab| describe(&tab)).into())
+    Ok(tab.map_or_else(|| "Put back in a tab.".to_owned(), |tab| describe(&tab, true)).into())
 }
 
-async fn status(project: &str) -> Result<Value, String> {
+async fn status(project: &str, caller: &Caller) -> Result<Value, String> {
+    if !caller.key.is_empty() {
+        let page = route(project, caller).await.ok_or(NO_TAB)?;
+        let answer = ask(&page.id, json!({ "op": "status", "caller": caller.json() }), PING_MS).await?;
+        return Ok(describe(&info_of(&answer), true).into());
+    }
     let pages = candidates(project);
     let asks: Vec<_> = pages.iter().map(|page| { let id = page.id.clone(); Box::pin(async move { ask(&id, json!({ "op": "status" }), PING_MS).await }) } as std::pin::Pin<Box<dyn std::future::Future<Output = _>>>).collect();
     for (page, answer) in pages.iter().zip(join_all(asks).await) {
@@ -346,7 +456,7 @@ async fn status(project: &str) -> Result<Value, String> {
             Err(_) => forget(&page.id),
         }
     }
-    let lines: Vec<String> = candidates(project).iter().map(describe).collect();
+    let lines: Vec<String> = candidates(project).iter().map(|page| describe(page, false)).collect();
     Ok(if lines.is_empty() { "No Browser page is open for this project. browser__open opens one.".into() } else { lines.join("\n") }.into())
 }
 
@@ -365,9 +475,10 @@ fn present(tool: &str, answer: Value) -> Value {
             let note = format!("Screenshot of the visible area of {} ({width}x{height} px), saved to {path}. It shows only what is on screen: scroll to see more.", text(&answer, "url"));
             with_image(&note, &path)
         }
-        "navigate" | "wait_for" | "handoff" => {
-            let page = Info { id: text(&answer, "id"), project: String::new(), popped: answer["popped"] == true, url: text(&answer, "url"), title: text(&answer, "title"), loading: answer["loading"] == true, focused_at: 0.0, size: get(&text(&answer, "id")).and_then(|page| page.size) };
-            describe(&page).into()
+        "navigate" | "wait_for" | "handoff" => describe(&info_of(&answer), true).into(),
+        "tabs" => {
+            let lines: Vec<String> = answer.as_array().into_iter().flatten().map(|tab| format!("{}{} {}{}", text(tab, "id"), if tab["active"] == true { " (active)" } else { "" }, text(tab, "url"), if text(tab, "title").is_empty() { String::new() } else { format!(" \"{}\"", text(tab, "title")) })).collect();
+            if lines.is_empty() { "You have no tabs.".into() } else { lines.join("\n").into() }
         }
         "eval" => cut(serde_json::to_string_pretty(&answer).unwrap_or_default(), EVAL_MAX).into(),
         "console" | "network" => cut(serde_json::to_string_pretty(&answer[tool]).unwrap_or_default(), EVAL_MAX).into(),
@@ -376,9 +487,10 @@ fn present(tool: &str, answer: Value) -> Value {
     }
 }
 
-async fn forward(tool: &str, project: &str, input: &Value) -> Result<Value, String> {
-    let (op, ms) = op_for(tool, input)?;
-    let page = live_page(project).await.ok_or(NO_PAGE)?;
+async fn forward(tool: &str, project: &str, caller: &Caller, input: &Value) -> Result<Value, String> {
+    let (mut op, ms) = op_for(tool, input)?;
+    op["caller"] = caller.json();
+    let page = route(project, caller).await.ok_or(caller.nothing())?;
     // A wait that outlasts the ask's own limit is the page's to end, so a hung page still answers.
     let answer = within(ms + 1000, ask(&page.id, op, ms)).await.ok_or("The page took too long to answer.")??;
     Ok(present(tool, answer))
@@ -406,7 +518,7 @@ mod tests {
     #[test]
     fn every_tool_in_the_manifest_has_a_schema_and_a_route() {
         let names: Vec<String> = schemas().into_iter().map(|(name, _)| name).collect();
-        for tool in ["open", "pop_out", "pop_in", "resize", "navigate", "status", "screenshot", "snapshot", "click", "fill", "type", "press", "wait_for", "eval", "hover", "select", "scroll", "drag", "handoff", "emulate", "console", "network", "dialog"] {
+        for tool in ["open", "tabs", "pop_out", "pop_in", "resize", "navigate", "status", "screenshot", "snapshot", "click", "fill", "type", "press", "wait_for", "eval", "hover", "select", "scroll", "drag", "handoff", "emulate", "console", "network", "dialog"] {
             assert!(names.iter().any(|name| name == tool), "{tool} is in the manifest");
         }
         let manifest: Value = serde_json::from_str(MANIFEST).unwrap();
@@ -444,7 +556,7 @@ mod tests {
         hear(&json!({ "id": "a", "project": "/p", "url": "https://a", "focused": true }));
         testing::set_now(200.0);
         hear(&json!({ "id": "b", "project": "/p", "url": "https://b", "focused": true }));
-        hear(&json!({ "id": "c", "project": "/other", "url": "https://c", "focused": true }));
+        hear(&json!({ "id": "c", "project": "/other", "tab": "t1", "url": "https://c", "focused": true }));
         testing::set_now(300.0);
         // An announcement without focus keeps its time.
         hear(&json!({ "id": "a", "project": "/p", "url": "https://a2", "focused": false }));
@@ -452,14 +564,19 @@ mod tests {
         assert_eq!(order, ["b", "a"]);
         hear(&json!({ "id": "a", "project": "/p", "focused": true }));
         assert_eq!(candidates("/p")[0].id, "a");
-        assert_eq!(describe(&get("c").unwrap()), "Browser page c in a tab: https://c");
+        assert_eq!(describe(&get("c").unwrap(), true), "Browser tab t1 (page c): https://c");
     }
 
     /// A page that answers main's asks as the page frame would, with `reply` for all but status, and records them.
     fn fake_page(id: &str, popped: bool, reply: impl Fn(&Value) -> Result<Value, String> + 'static) -> Rc<RefCell<Vec<Value>>> {
+        fake_grouped(id, popped, &[], reply)
+    }
+
+    /// A page that has the tab groups of `groups`, which it tells main in each status answer.
+    fn fake_grouped(id: &str, popped: bool, groups: &[&str], reply: impl Fn(&Value) -> Result<Value, String> + 'static) -> Rc<RefCell<Vec<Value>>> {
         let seen = Rc::new(RefCell::new(Vec::new()));
         let log = seen.clone();
-        let status = json!({ "id": id, "project": "/p", "popped": popped, "url": "https://a.com/", "title": "A", "loading": false, "focused": true });
+        let status = json!({ "id": id, "project": "/p", "popped": popped, "tab": "t1", "groups": groups, "url": "https://a.com/", "title": "A", "loading": false, "focused": false });
         messages::answer(&cmd_name(id), move |op| {
             log.borrow_mut().push(op.clone());
             let answer = if op["op"] == "status" { Ok(status.clone()) } else { reply(&op) };
@@ -467,16 +584,32 @@ mod tests {
         });
         // Each page that comes is the one that had the focus last.
         testing::set_now(host::now() + 1.0);
-        hear(&json!({ "id": id, "project": "/p", "popped": popped, "focused": true }));
+        hear(&json!({ "id": id, "project": "/p", "popped": popped, "groups": groups, "focused": true }));
         seen
     }
 
     fn call(tool: &str, input: Value) -> Result<Value, String> {
+        call_as(tool, input, json!({ "project": { "id": "/p" } }))
+    }
+
+    fn call_as(tool: &str, input: Value, context: Value) -> Result<Value, String> {
         let out = Rc::new(RefCell::new(None));
         let slot = out.clone();
         let tool = tool.to_owned();
-        let context = json!({ "project": { "id": "/p" } });
         wings_plugin::task::spawn(async move { *slot.borrow_mut() = Some(run(tool, input, context).await) });
+        testing::settle();
+        let done = out.borrow_mut().take();
+        done.expect("the call finished")
+    }
+
+    /// Like `call_as`, for a call that waits for a page to open: its wait is ended by the clock.
+    fn call_opening(tool: &str, input: Value, context: Value) -> Result<Value, String> {
+        let out = Rc::new(RefCell::new(None));
+        let slot = out.clone();
+        let tool = tool.to_owned();
+        wings_plugin::task::spawn(async move { *slot.borrow_mut() = Some(run(tool, input, context).await) });
+        testing::settle();
+        testing::fire_timers();
         testing::settle();
         let done = out.borrow_mut().take();
         done.expect("the call finished")
@@ -492,7 +625,7 @@ mod tests {
         fresh();
         let seen = fake_page("a", false, |op| Ok(json!(format!("did {}", op["op"].as_str().unwrap()))));
         assert_eq!(call("click", json!({ "ref": "e1" })), Ok(json!("did click")));
-        assert_eq!(seen.borrow().last(), Some(&json!({ "op": "click", "ref": "e1" })));
+        assert_eq!(seen.borrow().last(), Some(&json!({ "op": "click", "ref": "e1", "caller": { "key": "", "name": "Agent" } })));
         assert_eq!(call("fill", json!({ "ref": "e1", "value": "x" })), Ok(json!("did fill")));
         // The page's own error is the tool's.
         let _ = fake_page("b", false, |_| Err("Ref e9 is stale".into()));
@@ -529,7 +662,7 @@ mod tests {
         fresh();
         let seen = fake_page("w", true, |_| Ok(json!({ "width": 390, "height": 844 })));
         let answer = call("resize", json!({ "preset": "phone" })).unwrap();
-        assert_eq!(seen.borrow().last(), Some(&json!({ "op": "resize", "width": 390.0, "height": 844.0 })));
+        assert_eq!(seen.borrow().last(), Some(&json!({ "op": "resize", "width": 390.0, "height": 844.0, "caller": { "key": "", "name": "Agent" } })));
         assert!(answer.as_str().unwrap().contains("in a window (set to 390x844)"), "{answer}");
     }
 
@@ -539,13 +672,13 @@ mod tests {
         // The tab's page opens the window, and the window's page tells main once it has started.
         messages::on(ANNOUNCE, hear);
         let seen = fake_page("tab", false, |_| {
-            messages::tell(ANNOUNCE, &json!({ "id": "win", "project": "/p", "popped": true, "url": "https://a.com/", "focused": true }));
+            messages::tell(ANNOUNCE, &json!({ "id": "win", "project": "/p", "popped": true, "tab": "t1", "url": "https://a.com/", "focused": true }));
             Ok(json!({ "width": 390, "height": 844 }))
         });
         let answer = call("pop_out", json!({ "preset": "phone" })).unwrap();
-        assert_eq!(seen.borrow().last(), Some(&json!({ "op": "pop_out", "width": 390.0, "height": 844.0 })));
+        assert_eq!(seen.borrow().last(), Some(&json!({ "op": "pop_out", "width": 390.0, "height": 844.0, "caller": { "key": "", "name": "Agent" } })));
         assert!(get("tab").is_none() && get("win").is_some(), "the tab's page is forgotten, the window's is known");
-        assert!(answer.as_str().unwrap().contains("Browser page win in a window (set to 390x844)"), "{answer}");
+        assert!(answer.as_str().unwrap().contains("Browser tab t1 (page win, in a window (set to 390x844)): https://a.com/"), "{answer}");
     }
 
     #[test]
@@ -572,5 +705,99 @@ mod tests {
         testing::settle();
         assert_eq!(out.borrow().clone().flatten().map(|page| page.id), Some("alive".to_owned()));
         assert!(get("gone").is_none());
+    }
+
+    fn agent(id: &str, name: &str) -> Value {
+        json!({ "project": { "id": "/p" }, "session": { "id": id, "name": name, "kind": "claude" }, "paneId": 4 })
+    }
+
+    #[test]
+    fn a_caller_is_keyed_by_its_session_else_its_pane_else_none_and_named_by_its_session() {
+        let key = |context: Value| Caller::of(&context);
+        assert_eq!(key(agent("ses-1", "Fix login bug")), Caller { key: "ses-1".into(), name: "Fix login bug".into() });
+        assert_eq!(key(json!({ "paneId": 7, "session": null })), Caller { key: "pane:7".into(), name: "Agent 7".into() }, "named apart by its pane");
+        assert_eq!(key(json!({ "paneId": "tab-3", "session": { "id": null, "name": "" } })), Caller { key: "pane:tab-3".into(), name: "Agent tab-3".into() });
+        assert_eq!(key(json!({ "project": { "id": "/p" } })), Caller { key: String::new(), name: "Agent".into() }, "the CLI has no group");
+        assert_eq!(Caller::of(&json!({})).nothing(), NO_PAGE);
+        assert_eq!(Caller { key: "k".into(), name: "n".into() }.nothing(), NO_TAB);
+    }
+
+    #[test]
+    fn a_call_goes_to_the_page_that_has_the_callers_group_even_when_another_had_the_focus_last() {
+        fresh();
+        let with_a = fake_grouped("one", false, &["ses-a"], |_| Ok(json!("one")));
+        let with_b = fake_grouped("two", false, &["ses-b"], |_| Ok(json!("two")));
+        // `two` has the focus last. A's call still goes to `one`; B's to `two`; a caller with no group yet, and the CLI, to the latest.
+        assert_eq!(call_as("click", json!({ "ref": "e1" }), agent("ses-a", "A")), Ok(json!("one")));
+        assert_eq!(call_as("click", json!({ "ref": "e1" }), agent("ses-b", "B")), Ok(json!("two")));
+        assert_eq!(call_as("click", json!({ "ref": "e1" }), agent("ses-new", "C")), Ok(json!("two")));
+        assert_eq!(call("click", json!({ "ref": "e1" })), Ok(json!("two")));
+        assert_eq!(with_a.borrow().last().unwrap()["caller"], json!({ "key": "ses-a", "name": "A" }));
+        assert_eq!(with_b.borrow().last().unwrap()["caller"], json!({ "key": "", "name": "Agent" }));
+    }
+
+    #[test]
+    fn open_asks_the_page_for_a_tab_of_the_callers_and_says_which_tab_and_group() {
+        fresh();
+        let seen = fake_grouped("a", false, &["ses-a"], |op| Ok(json!({ "id": "a", "tab": "t2", "group": "Fix login bug", "url": op["url"], "title": "Hi", "loading": false })));
+        let said = call_as("open", json!({ "url": "https://x.com/", "new_tab": true }), agent("ses-a", "Fix login bug")).unwrap();
+        assert_eq!(said, json!("Browser tab t2 in your group \"Fix login bug\" (page a): https://x.com/ \"Hi\""));
+        assert_eq!(seen.borrow().last(), Some(&json!({ "op": "navigate", "url": "https://x.com/", "new_tab": true, "caller": { "key": "ses-a", "name": "Fix login bug" } })));
+    }
+
+    #[test]
+    fn open_with_no_page_opens_a_browser_tab_that_starts_with_the_agents_group_and_the_cli_gets_none() {
+        fresh();
+        messages::on(ANNOUNCE, hear);
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let kept = opened.clone();
+        testing::answer(move |method, params| {
+            if method == "openView" {
+                kept.borrow_mut().push(params.clone());
+                messages::tell(ANNOUNCE, &json!({ "id": format!("new{}", kept.borrow().len()), "project": "/p", "tab": "t1", "group": "Fix login bug", "groups": ["ses-a"], "url": "https://x.com/", "focused": true }));
+            }
+            Ok(Value::Null)
+        });
+        let said = call_opening("open", json!({ "url": "https://x.com/" }), agent("ses-a", "Fix login bug")).unwrap();
+        assert_eq!(opened.borrow()[0]["args"], json!({ "url": "https://x.com/", "window": false, "group": { "key": "ses-a", "name": "Fix login bug" } }));
+        assert!(said.as_str().unwrap().starts_with("Browser tab t1 in your group \"Fix login bug\" (page new1)"), "{said}");
+        fresh();
+        let kept = opened.clone();
+        opened.borrow_mut().clear();
+        testing::answer(move |method, params| {
+            if method == "openView" {
+                kept.borrow_mut().push(params.clone());
+                messages::tell(ANNOUNCE, &json!({ "id": "cli", "project": "/p", "tab": "t1", "url": "https://x.com/", "focused": true }));
+            }
+            Ok(Value::Null)
+        });
+        call_opening("open", json!({ "url": "https://x.com/" }), json!({ "project": { "id": "/p" } })).unwrap();
+        assert_eq!(opened.borrow()[0]["args"], json!({ "url": "https://x.com/", "window": false }));
+    }
+
+    #[test]
+    fn tabs_answers_one_line_a_tab_and_status_for_a_caller_with_no_group_is_the_no_tab_answer() {
+        fresh();
+        fake_grouped("a", false, &["ses-a"], |_| Ok(json!([{ "id": "t2", "url": "https://x.com/", "title": "X", "active": true }, { "id": "t3", "url": "", "title": "", "active": false }])));
+        let said = call_as("tabs", json!({ "action": "list" }), agent("ses-a", "A")).unwrap();
+        assert_eq!(said, json!("t2 (active) https://x.com/ \"X\"\nt3 "));
+        // A page with no group for the caller answers it itself; with no page at all main says the same.
+        fresh();
+        fake_page("b", false, |_| Err(NO_TAB.into()));
+        assert_eq!(call_as("click", json!({ "ref": "e1" }), agent("ses-z", "Z")), Err(NO_TAB.into()));
+        fresh();
+        assert_eq!(call_as("click", json!({ "ref": "e1" }), agent("ses-z", "Z")), Err(NO_TAB.into()));
+        assert_eq!(call_as("status", json!({}), agent("ses-z", "Z")), Err(NO_TAB.into()));
+    }
+
+    #[test]
+    fn the_manifest_offers_new_tab_on_open_and_a_tabs_tool_and_says_so_in_the_instructions() {
+        let manifest: Value = serde_json::from_str(MANIFEST).unwrap();
+        let tools = manifest["contributes"]["mcpTools"].as_array().unwrap();
+        let find = |name: &str| tools.iter().find(|tool| tool["name"] == name).unwrap();
+        assert_eq!(find("open")["inputSchema"]["properties"]["new_tab"]["type"], "boolean");
+        assert_eq!(find("tabs")["inputSchema"]["properties"]["action"]["enum"], json!(["list", "select", "close"]));
+        let instructions = manifest["contributes"]["mcpInstructions"].as_str().unwrap();
+        assert!(instructions.contains("own tab group") && instructions.contains("new_tab") && instructions.contains("browser__tabs"), "{instructions}");
     }
 }

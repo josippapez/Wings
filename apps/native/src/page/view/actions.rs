@@ -60,6 +60,10 @@ impl PageView {
     /// Where a `WebView` shows: the system's web engine draws the page over this place (`crate::web`), so nothing the web
     /// page does draws this page again. A plugin whose manifest doesn't ask for `webView` gets a line saying so.
     pub(super) fn web_view(&self, web: &tree::WebView, cx: &mut Context<Self>) -> AnyElement {
+        if web.hidden && self.web_profile.is_some() && !web.name.is_empty() {
+            // Out of the flow, so it takes no room, not even a gap, and leaves no place for the window's draw.
+            return div().absolute().size_0().into_any_element();
+        }
         if self.web_profile.is_none() || web.name.is_empty() {
             return div()
                 .text_size(px(12.0))
@@ -127,6 +131,8 @@ impl PageView {
                 url: web.url.clone(),
                 keep_data: web.keep_data,
                 commands: web.commands.clone(),
+                hidden: web.hidden,
+                live: web.live,
             })
             .collect();
         let runtime = self.runtime.as_ref();

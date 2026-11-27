@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.127 · 2026-11-27
+
+- **Browser tabs, and a tab group for each agent**: the Browser page has tabs on one line, with New tab, and each agent that uses the Browser gets a group of its own, named after its session, for its tabs. An agent never takes over your tabs or another agent's, and only brings its tab forward when the Browser shows nothing else, when you're already watching its group, or when it needs you to sign in. Agents can open a new tab in their group and list, switch and close their own tabs. Tabs and groups come back after a restart (Browser 0.2.0).
+- **Agents work in background tabs**: an agent's tab keeps working while another tab or another Wings tab is on screen, so its screenshots and page reads no longer time out.
+- **Less memory once the Browser is closed**: closing the last Browser tab now ends its page's process too, Chromium no longer keeps a spare page process ready, and Wings stops keeping extensions' background workers awake. Chromium itself stays loaded until Wings quits, since it can't be started again in the same run.
+
 ## 0.2.126 · 2026-11-27
 
 - **Dialogs over a Chromium page**: Settings, the add-extension dialog or a page's own dialog no longer blank the Browser page under them. The page stays in view, dimmed like the rest of the window, and a click on it closes the dialog as a click on the backdrop does.

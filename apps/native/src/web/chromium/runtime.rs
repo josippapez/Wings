@@ -51,6 +51,8 @@ struct Runtime {
     browsers: Vec<Browser>,
     /// Pages and popups open now.
     open: usize,
+    /// Counts the times the last page or popup closed, so only the latest wind-down stops CEF's own work (`gone`).
+    wind_down: u64,
     quitting: bool,
     /// The browser target's DevTools pipe, once CEF started with it.
     pipe: Option<pipe::Pipe>,
@@ -68,6 +70,7 @@ thread_local! {
         contexts: HashMap::new(),
         browsers: Vec::new(),
         open: 0,
+        wind_down: 0,
         quitting: false,
         pipe: None,
         quieted: None,
@@ -293,15 +296,38 @@ pub fn opened() {
         runtime.open
     });
     pump::set_fallback(open > 0);
+    super::extensions::pages_open(true);
 }
 
-/// A page or a popup closed.
+/// How many pages and popups are open, and how many browsers CEF holds, Chrome's own included: for the debug control.
+pub(super) fn counts() -> (usize, usize) {
+    RUNTIME.with_borrow(|runtime| (runtime.open, runtime.browsers.len()))
+}
+
+/// How long CEF's work goes on running on its own once the last page or popup closed. Chromium ends a closed page's
+/// process and lets the extensions' workers go idle and stop only while its work runs: stopped at once, the closed page's
+/// process (194 MB) and Bitwarden's (109 MB) stayed with every Browser tab closed.
+const WIND_DOWN: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// A page or a popup closed. After the last, CEF's work runs on its own for `WIND_DOWN`, then only when CEF asks.
 pub fn gone() {
-    let open = RUNTIME.with_borrow_mut(|runtime| {
+    let (open, round) = RUNTIME.with_borrow_mut(|runtime| {
         runtime.open = runtime.open.saturating_sub(1);
-        runtime.open
+        if runtime.open == 0 {
+            runtime.wind_down += 1;
+        }
+        (runtime.open, runtime.wind_down)
     });
-    pump::set_fallback(open > 0);
+    super::extensions::pages_open(open > 0);
+    if open > 0 {
+        return;
+    }
+    let when = dispatch2::DispatchTime::try_from(WIND_DOWN).unwrap_or(dispatch2::DispatchTime::NOW);
+    let _ = dispatch2::DispatchQueue::main().after(when, move || {
+        if RUNTIME.with_borrow(|runtime| runtime.open == 0 && runtime.wind_down == round) {
+            pump::set_fallback(false);
+        }
+    });
 }
 
 /// A browser exists now (`CefLifeSpanHandler::OnAfterCreated`).
@@ -406,8 +432,10 @@ pub fn switches(piped: bool) -> Vec<String> {
         "disable-chrome-login-prompt",
         // Nor do two features the switches above leave on: the omnibox's AI Mode asking Google whether this Chromium
         // may use it (`aim_eligibility_fetch`, www.google.com/async/folae), and connecting ahead of time to the default
-        // search engine, Google (`SearchEnginePreconnector`). Chromium 156's names; CEF's own list is kept (`merged`).
-        "disable-features=AimEnabled,PreconnectToSearch",
+        // search engine, Google (`SearchEnginePreconnector`). Nor a spare page process started ahead of the next page
+        // (`kSpareRendererForSitePerProcess`), which stayed, 74 MB, with every Browser tab closed. Chromium 156's names;
+        // CEF's own list is kept (`merged`).
+        "disable-features=AimEnabled,PreconnectToSearch,SpareRendererForSitePerProcess",
         // Nor Chrome's on-device AI model asking update.googleapis.com for its manifest (`update_client`, component
         // ceofaddefefcbblgcgnibnonglccbfja), which it does on demand past disable-component-update: an override that
         // names no manifest leaves it none to fetch (`CreateManifestDelegate` in Chromium 156).
@@ -648,7 +676,7 @@ mod tests {
             "disable-breakpad",
             "disable-blink-features=DocumentPictureInPictureAPI",
             "disable-chrome-login-prompt",
-            "disable-features=AimEnabled,PreconnectToSearch",
+            "disable-features=AimEnabled,PreconnectToSearch,SpareRendererForSitePerProcess",
             "optimization-guide-manifest-override=/dev/null",
         ] {
             assert!(switches.iter().any(|switch| switch == wanted), "{wanted}");

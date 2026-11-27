@@ -4885,3 +4885,6 @@ fn a_toast_floats_over_the_foot_of_a_page_whatever_its_body_has_scrolled_to_and_
     assert!(window.read(|view, _| view.press("Dismiss", 0)));
     settle(&app, &mut window, shows("Dismissed 3."));
 }
+
+#[path = "tab_strip_tests.rs"]
+mod tab_strip;

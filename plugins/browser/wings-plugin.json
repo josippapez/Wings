@@ -1,8 +1,8 @@
 {
   "id": "browser",
   "name": "Browser",
-  "version": "0.1.6",
-  "minWingsVersion": "0.2.124",
+  "version": "0.2.0",
+  "minWingsVersion": "0.2.127",
   "icon": "icon.svg",
   "description": "A web browser in a tab, drawn by WebKit: an address bar that searches, history suggestions, cookies kept between runs (or not), sign-in copied from another browser on this Mac, and browser extensions, with Chromium as an engine you can download for Chrome extensions.",
   "api": 1,
@@ -34,7 +34,7 @@
     "mcpTools": [
       {
         "name": "open",
-        "description": "Opens a web page in the Wings Browser, which is a real browser with the user's own sign-ins, and shows it to them. Pass a web address or words to search for. With pop_out, width, height or preset the page gets its own window of that size (to check a layout at phone or tablet width); otherwise it opens as a tab. If a Browser page is open for this project it navigates that one. Then use browser__snapshot to read the page.",
+        "description": "Opens a web page in the Wings Browser, which is a real browser with the user's own sign-ins, and shows it to them. Pass a web address or words to search for. Each agent works in its own tab group in the project's Browser page: open loads the address in your current tab (making the group and a tab the first time), or in a new tab of your group with new_tab. Your tabs are never the user's and never another agent's. With pop_out, width, height or preset your tab gets a window of its own of that size (to check a layout at phone or tablet width). Then use browser__snapshot to read the page.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -46,7 +46,7 @@
             },
             "pop_out": {
               "type": "boolean",
-              "description": "Open in a window of its own instead of a tab."
+              "description": "Open your tab in a window of its own instead of a tab."
             },
             "width": {
               "type": "integer",
@@ -68,11 +68,38 @@
                 "phone"
               ],
               "description": "Window size: desktop 1440x900, tablet 834x1194, phone 390x844."
+            },
+            "new_tab": {
+              "type": "boolean",
+              "description": "Open the address in a new tab of your group instead of your current tab."
             }
           },
           "required": [
             "url"
           ]
+        }
+      },
+      {
+        "name": "tabs",
+        "description": "Lists, selects or closes the tabs of your own group in the project's Browser page (never the user's or another agent's). list gives each tab's id, address and title and marks the active one, which every other browser tool acts on; select makes a tab the active one; close closes it.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "list",
+                "select",
+                "close"
+              ],
+              "description": "What to do. Defaults to list."
+            },
+            "tab": {
+              "type": "string",
+              "description": "The tab's id from list, for select and close.",
+              "maxLength": 40
+            }
+          }
         }
       },
       {
@@ -501,6 +528,6 @@
         }
       }
     ],
-    "mcpInstructions": "Browser (browser__*): a real browser in Wings, signed in like the user. To use a web page: browser__open a url, browser__snapshot to read it and get refs, then click, fill, type, press, wait_for; browser__screenshot to see it. browser__pop_out (width/height or preset phone, tablet, desktop) gives it a window of that size to check layouts. browser__handoff when the person must sign in or solve a captcha. Also: wings browser <tool>."
+    "mcpInstructions": "Browser (browser__*): a real browser in Wings, signed in like the user. Each agent gets its own tab group in the project's Browser page, never the user's tabs. browser__open a url (new_tab for another tab of yours; browser__tabs lists, selects, closes them), browser__snapshot to read it and get refs, then click, fill, type, press, wait_for; browser__screenshot to see it. browser__pop_out for a window. browser__handoff when the person must sign in. Also: wings browser <tool>."
   }
 }

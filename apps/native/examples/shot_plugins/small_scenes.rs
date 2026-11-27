@@ -211,7 +211,7 @@ pub(super) fn ui_gallery(out: PathBuf) {
     let gallery: serde_json::Value = serde_json::from_str(include_str!("ui_gallery.json")).expect("the gallery is JSON");
     let host = PluginHost::new(PluginConfig { id: "ui-gallery".into(), root: out.join("fixture-storage-ui-gallery"), scope: "shot".into() });
     let mut cx = app();
-    for (name, height) in [("widgets", 1500.0), ("panes", 560.0)] {
+    for (name, height) in [("widgets", 1500.0), ("panes", 560.0), ("tabs", 300.0)] {
         let tree = gallery[name].clone();
         let source = fake::page("page", move |_| tree.clone());
         for width in [1000.0, 640.0] {

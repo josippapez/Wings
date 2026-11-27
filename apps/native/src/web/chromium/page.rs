@@ -56,6 +56,7 @@ impl Maker for Chromium {
             over: RefCell::default(),
             dim: RefCell::new(None),
             attached: Cell::new(false),
+            live: Cell::new(false),
             closed: Cell::new(false),
             pending: RefCell::default(),
             dialog: RefCell::new(None),
@@ -261,6 +262,8 @@ pub struct Shared {
     /// What dims it under a dialog's backdrop, once one has.
     dim: RefCell<Option<Retained<NSView>>>,
     attached: Cell<bool>,
+    /// It is hidden but kept rendering: attached at its frame, clear and deaf to the mouse (`Native::keep_live`).
+    live: Cell<bool>,
     closed: Cell<bool>,
     /// Commands sent before it was ready.
     pending: RefCell<Vec<(WebGo, u64)>>,
@@ -281,6 +284,16 @@ impl Native for Page {
             self.0.parent.replace(Some(parent));
         }
         self.0.want.set(frame);
+        self.0.live.set(false);
+        self.0.apply_place();
+    }
+
+    fn keep_live(&mut self, window: &Window, frame: Bounds<Pixels>) {
+        if let Some(parent) = ns_window_of(window) {
+            self.0.parent.replace(Some(parent));
+        }
+        self.0.want.set(Some(frame));
+        self.0.live.set(true);
         self.0.apply_place();
     }
 
@@ -391,14 +404,17 @@ impl Shared {
         let Some(ns) = self.ns.borrow().clone() else { return };
         let Some(content) = ns.contentView() else { return };
         let over = self.over.borrow();
-        ns.setIgnoresMouseEvents(over.dimmed);
-        if over.dimmed
+        // Chromium stops rendering a window that is ordered out, so a live one stays attached and wholly masked instead:
+        // Chromium sets the window's own opacity as it shows it, which showed a live page whole over Wings at launch.
+        let live = self.live.get();
+        ns.setIgnoresMouseEvents(over.dimmed || live);
+        if (over.dimmed || live)
             && ns.isKeyWindow()
             && let Some(parent) = self.parent.borrow().as_ref()
         {
             parent.makeKeyWindow();
         }
-        self.apply_dim(&content, over.dimmed);
+        self.apply_dim(&content, over.dimmed && !live);
         let size = content.bounds().size;
         let rect = |x: f64, y: f64, w: f64, h: f64| CGRect::new(CGPoint::new(x, y), CGSize::new(w, h));
         // SAFETY: AppKit's and Core Animation's objects, on the main thread; no transform for the path.
@@ -407,12 +423,17 @@ impl Shared {
             if layer.is_null() {
                 return;
             }
-            if over.holes.is_empty() {
+            if over.holes.is_empty() && !live {
                 let _: () = objc2::msg_send![layer, setMask: std::ptr::null::<objc2::runtime::AnyObject>()];
                 return;
             }
             ns.setOpaque(false);
             ns.setBackgroundColor(Some(&objc2_app_kit::NSColor::clearColor()));
+            if live {
+                // An empty mask shows nothing of it.
+                let _: () = objc2::msg_send![layer, setMask: &*objc2_quartz_core::CALayer::new()];
+                return;
+            }
             let path = CGMutablePath::new();
             CGMutablePath::add_rect(Some(&path), std::ptr::null(), rect(0.0, 0.0, size.width, size.height));
             let flipped = content.isFlipped();

@@ -27,4 +27,6 @@ mod settings;
 mod settings_page;
 mod protocol;
 mod start_page;
+#[cfg(feature = "browser")]
+mod tabs;
 mod wait;

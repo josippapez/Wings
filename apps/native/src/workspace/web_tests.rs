@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use gpui::{TestApp, TestAppWindow};
+use gpui::{Bounds, Pixels, TestApp, TestAppWindow};
 use serde_json::{Value, json};
 
 use super::{
@@ -375,4 +375,186 @@ fn an_extensions_button_is_clicked_only_right_after_your_click_and_once_for_it()
     tells.borrow()[0].tell(Heard::State(State::default()));
     until(&app, &mut window, "a second click on one of yours was let through", |_| data.saved("browser", "browser-scope", "result3") == refused(3));
     assert_eq!(clicked(&did.borrow()).len(), 1);
+}
+
+/// A page with two web views, "a" and "b", one of them hidden (a tab in the background): "b" is the hidden one until either
+/// tells its state, which swaps them. `live` asks for the hidden one to keep rendering; "b" has a command to run.
+fn tabs_page(live: bool) -> String {
+    fake::script("web", move || {
+        let mut swapped = false;
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            match hear {
+                Hear::Start => {}
+                Hear::Event("a:state" | "b:state", _) => swapped = !swapped,
+                _ => return,
+            }
+            let view = |id: u64, name: &str, hidden: bool| json!({ "id": id, "type": "WebView", "props": {
+                "name": name, "url": "https://example.com/", "fill": true, "hidden": hidden, "live": live,
+                "onState": format!("{name}:state"), "command": { "action": "reload", "token": 1 },
+            }, "children": [] });
+            cx.render(&json!({ "id": 0, "type": "#root", "props": {}, "children": [view(1, "a", swapped), view(2, "b", !swapped)] }));
+        }
+    })
+}
+
+fn install_tabs(data: &Data, live: bool) {
+    let views = json!([{ "id": "web", "title": "Web", "page": "dist/web.html", "opens": ["tab"], "multiple": true }]);
+    data.install_script("browser", json!({ "permissions": { "webView": true }, "contributes": { "views": views } }), &idle("main"), &[("web", &tabs_page(live))], "browser-scope");
+}
+
+fn made(did: &[Did]) -> usize {
+    did.iter().filter(|did| matches!(did, Did::Made { .. })).count()
+}
+
+/// A hidden web view draws no place and takes no room, so the page's other one fills it; its view is made anyway, once the
+/// page's shown one has a size, runs the command sent to it, and is never put at a place.
+#[test]
+fn a_hidden_web_view_leaves_no_place_yet_is_made_and_runs_its_commands() {
+    let data = Data::temp();
+    install_tabs(&data, false);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let id = window.update(|_, window, _| window.window_handle().window_id());
+    let (did, _) = record(id);
+    open_web(&app, &mut window, "browser");
+    until(&app, &mut window, "the hidden view never ran its command", |_| {
+        made(&did.borrow()) == 2 && did.borrow().iter().filter(|did| matches!(did, Did::Went(..))).count() == 2
+    });
+    settle(&app, &mut window);
+    let places = crate::ui::slots::shown(id, crate::web::LAYER);
+    assert_eq!(places.len(), 1, "only the shown view leaves a place");
+    let did = did.borrow();
+    let shown: Vec<_> = did.iter().filter(|did| matches!(did, Did::Placed(Some(_)))).collect();
+    assert_eq!(shown.len(), 1, "{did:?}");
+    assert!(did.iter().all(|did| !matches!(did, Did::Live(_))), "not live: {did:?}");
+    assert!(did.contains(&Did::Placed(None)), "the hidden one is put away, not shown: {did:?}");
+}
+
+/// What a page's hidden web view is asked to do once the page's shown one has a frame: the frame it was kept live at, and
+/// whether it was put away.
+fn hidden_view_after_settling(live: bool) -> (Option<Bounds<Pixels>>, Vec<Did>) {
+    let data = Data::temp();
+    install_tabs(&data, live);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let id = window.update(|_, window, _| window.window_handle().window_id());
+    let (did, _) = record(id);
+    open_web(&app, &mut window, "browser");
+    until(&app, &mut window, "the hidden view was never made", |_| made(&did.borrow()) == 2);
+    settle(&app, &mut window);
+    let did = did.borrow().clone();
+    let frame = did.iter().find_map(|did| match did {
+        Did::Placed(Some(at)) => Some(*at),
+        _ => None,
+    });
+    (frame, did)
+}
+
+/// A hidden web view the page asks to keep live is kept rendering at the frame of the page's shown one.
+#[test]
+fn a_live_hidden_web_view_is_kept_at_the_shown_ones_frame() {
+    let (frame, did) = hidden_view_after_settling(true);
+    assert_eq!(did.iter().filter(|did| matches!(did, Did::Live(_))).collect::<Vec<_>>(), [&Did::Live(frame.unwrap())], "{did:?}");
+}
+
+/// Without `live`, a hidden web view is hidden as an off-screen one is.
+#[test]
+fn a_hidden_web_view_that_is_not_live_is_put_away() {
+    let (_, did) = hidden_view_after_settling(false);
+    assert!(did.iter().all(|did| !matches!(did, Did::Live(_))) && did.contains(&Did::Placed(None)), "{did:?}");
+}
+
+/// Swapping which of two web views is hidden shows the other at the place and puts the first away, without making either
+/// again.
+#[test]
+fn swapping_which_web_view_is_hidden_shows_the_other_without_making_it_again() {
+    let data = Data::temp();
+    install_tabs(&data, true);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let id = window.update(|_, window, _| window.window_handle().window_id());
+    let (did, tells) = record(id);
+    open_web(&app, &mut window, "browser");
+    until(&app, &mut window, "the hidden view was never made", |_| made(&did.borrow()) == 2);
+    settle(&app, &mut window);
+    let before = did.borrow().len();
+    // A view tells its state, and the page swaps them.
+    tells.borrow()[0].tell(Heard::State(State { url: "https://example.com/a".into(), ..State::default() }));
+    until(&app, &mut window, "the page never swapped its web views", |_| did.borrow().len() > before);
+    settle(&app, &mut window);
+    let did = did.borrow();
+    let after = &did[before..];
+    assert_eq!(made(&did), 2, "neither is made again: {did:?}");
+    let frame = did.iter().find_map(|did| match did {
+        Did::Placed(Some(at)) => Some(*at),
+        _ => None,
+    });
+    assert!(after.contains(&Did::Placed(Some(frame.unwrap()))), "the other is shown at the place: {after:?}");
+    assert!(after.iter().any(|did| matches!(did, Did::Live(_))), "the first is kept live: {after:?}");
+    assert_eq!(crate::ui::slots::shown(id, crate::web::LAYER).len(), 1);
+}
+
+/// A live hidden web view stays live while its page's Wings tab is in the background, where the page's shown view is put
+/// away: an agent's tab the person never looked at went on working.
+#[test]
+fn a_live_hidden_web_view_stays_live_while_its_tab_is_in_the_background() {
+    let data = Data::temp();
+    install_tabs(&data, true);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let id = window.update(|_, window, _| window.window_handle().window_id());
+    let (did, _) = record(id);
+    open_web(&app, &mut window, "browser");
+    until(&app, &mut window, "the hidden view was never made", |_| made(&did.borrow()) == 2);
+    settle(&app, &mut window);
+    let before = did.borrow().len();
+    window.update(|w, window, cx| w.new_terminal(window, cx));
+    until(&app, &mut window, "the shown view was never put away", |_| did.borrow()[before..].contains(&Did::Placed(None)));
+    settle(&app, &mut window);
+    let did = did.borrow();
+    let put_away = did[before..].iter().filter(|did| **did == Did::Placed(None)).count();
+    assert_eq!(put_away, 1, "only the shown one: {:?}", &did[before..]);
+}
+
+/// A page with a shown web view "a", which adds a hidden live one, "c", once "a" tells its state: an agent's new tab.
+fn growing_page() -> String {
+    fake::script("web", move || {
+        let mut grown = false;
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            match hear {
+                Hear::Start => {}
+                Hear::Event("a:state", _) => grown = true,
+                _ => return,
+            }
+            let view = |id: u64, name: &str, hidden: bool| json!({ "id": id, "type": "WebView", "props": {
+                "name": name, "url": "https://example.com/", "fill": true, "hidden": hidden, "live": hidden,
+                "onState": format!("{name}:state"),
+            }, "children": [] });
+            let mut children = vec![view(1, "a", false)];
+            if grown {
+                children.push(view(2, "c", true));
+            }
+            cx.render(&json!({ "id": 0, "type": "#root", "props": {}, "children": children }));
+        }
+    })
+}
+
+/// A tab an agent opens while the person looks at another Wings tab is made, and kept live at the size its page's web
+/// view had: it waited for one, and the agent's calls to it never came back.
+#[test]
+fn a_new_hidden_tab_of_a_page_in_the_background_is_made_at_the_pages_last_size() {
+    let data = Data::temp();
+    let views = json!([{ "id": "web", "title": "Web", "page": "dist/web.html", "opens": ["tab"], "multiple": true }]);
+    data.install_script("browser", json!({ "permissions": { "webView": true }, "contributes": { "views": views } }), &idle("main"), &[("web", &growing_page())], "browser-scope");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let id = window.update(|_, window, _| window.window_handle().window_id());
+    let (did, tells) = record(id);
+    open_web(&app, &mut window, "browser");
+    until(&app, &mut window, "the page's web view was never shown", |_| did.borrow().iter().any(|did| matches!(did, Did::Placed(Some(_)))));
+    let frame = did.borrow().iter().find_map(|did| match did {
+        Did::Placed(Some(at)) => Some(*at),
+        _ => None,
+    });
+    window.update(|w, window, cx| w.new_terminal(window, cx));
+    settle(&app, &mut window);
+    tells.borrow()[0].tell(Heard::State(State { url: "https://example.com/a".into(), ..State::default() }));
+    until(&app, &mut window, "the new tab was never made", |_| made(&did.borrow()) == 2);
+    settle(&app, &mut window);
+    assert!(did.borrow().contains(&Did::Live(frame.unwrap())), "{:?}", did.borrow());
 }

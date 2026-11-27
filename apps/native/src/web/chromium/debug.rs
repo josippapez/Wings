@@ -143,6 +143,14 @@ fn run(command: &str) -> String {
             }
             None => "no page".into(),
         },
+        (Some("targets"), _) => {
+            extensions::print_targets();
+            "asked".into()
+        }
+        (Some("counts"), _) => {
+            let (open, browsers) = super::runtime::counts();
+            format!("open {open}, browsers {browsers}, work every 1/30 s: {}", wings_chromium::pump::fallback())
+        }
         (Some("windows"), _) => NSApplication::sharedApplication(mtm)
             .windows()
             .iter()

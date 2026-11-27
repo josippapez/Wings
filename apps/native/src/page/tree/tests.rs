@@ -1043,6 +1043,8 @@ fn a_web_view_loads_only_web_addresses_and_takes_each_command_by_its_token() {
             fill: true,
             on_state: Some("1:state".into()),
             on_result: None,
+            hidden: false,
+            live: false,
         }
     );
     let scripted = tree(json!([
@@ -1350,3 +1352,29 @@ fn a_stack_keeps_its_room_above_and_a_code_block_its_scroll_and_a_text_its_looks
     assert!(matches!(&parsed.children[2], Node::Text(text) if text.italic && text.strike));
     assert!(matches!(&parsed.children[3], Node::Code(code) if !code.scroll), "a block wraps unless it asks to scroll");
 }
+
+/// A strip reads its tabs and group labels in order, with the handlers and tones it knows; a tab with no id, a stray
+/// child and a tone it doesn't have are dropped or neutral, and a `Tab` outside a strip is nothing.
+#[test]
+fn a_tab_strip_reads_its_tabs_and_groups_in_order_with_its_handlers() {
+    let strip = json!({"id":1,"type":"TabStrip","props":{"label":"Tabs","onSelect":"1:onSelect","onClose":"1:onClose","onNew":"1:onNew","onGroup":"nope"},"children":[
+        {"id":2,"type":"TabGroup","props":{"id":"g","name":"Fix","tone":"warning","collapsed":true,"count":2}},
+        {"id":3,"type":"Tab","props":{"id":"t1","title":"Sign in","url":"https://a.b","active":true,"loading":true,"group":"g"}},
+        {"id":4,"type":"Tab","props":{"title":"no id"}},
+        {"id":5,"type":"Text","props":{}},
+        {"id":6,"type":"TabGroup","props":{"id":"h","name":"Other","tone":"pink"}}]});
+    let Node::TabStrip(strip) = parse_one(strip) else { panic!("a strip") };
+    assert_eq!((strip.label.as_str(), strip.on_select.as_deref(), strip.on_new.as_deref()), ("Tabs", Some("1:onSelect"), Some("1:onNew")));
+    assert_eq!(strip.on_group, None, "a handler that isn't an id the page made is none");
+    assert_eq!(
+        strip.items,
+        [
+            TabItem::Group(TabGroup { id: "g".into(), name: "Fix".into(), tone: GroupTone::Warning, collapsed: true, count: 2 }),
+            TabItem::Tab(Tab { id: "t1".into(), title: "Sign in".into(), url: "https://a.b".into(), active: true, loading: true, group: Some("g".into()) }),
+            TabItem::Group(TabGroup { id: "h".into(), name: "Other".into(), tone: GroupTone::Neutral, collapsed: false, count: 0 }),
+        ]
+    );
+    assert_eq!(strip.shown().count(), 2, "the collapsed group's tab is not shown");
+    assert!(tree(json!([{"id":9,"type":"Tab","props":{"id":"t"}}])).unwrap().children.is_empty());
+}
+

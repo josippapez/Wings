@@ -394,6 +394,7 @@ impl PageView {
             Node::Combobox(combobox) => self.combobox(combobox, cx),
             Node::Menu(menu) => self.menu(menu, cx),
             Node::Chips(select) => self.chips(select, cx),
+            Node::TabStrip(strip) => self.tab_strip(strip, cx),
             Node::ListButton(item) => self.list_button(item, None, cx),
             Node::SearchField(field) => self.search_field(field, cx),
             Node::Input(input) => self.input(input, cx),
