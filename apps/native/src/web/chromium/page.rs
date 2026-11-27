@@ -28,8 +28,6 @@ use crate::{
 
 /// What a page that crashed says until it reloads.
 pub const CRASHED: &str = "This page crashed. Reload to open it again.";
-/// Why another browser's sign-ins weren't imported.
-pub const NO_IMPORT: &str = "Importing sign-ins from another browser doesn't work with the Chromium engine yet";
 
 pub struct Chromium;
 
@@ -150,7 +148,7 @@ struct Now {
 pub struct Shared {
     pub(super) told: Tell,
     pub(super) profile: Profile,
-    keep_data: bool,
+    pub(super) keep_data: bool,
     scripts: bool,
     pub(super) web_dir: PathBuf,
     /// Where it opens once CEF is up, which a `load` before that changes.

@@ -8,6 +8,9 @@
 //! - `focus page` / `focus wings`: makes the first page's window, or Wings', the key window.
 //! - `state`: which window has the keyboard, whether Wings counts as active, and whether a popup shows.
 //! - `quit`: quits Wings as Cmd-Q does (`-[NSApplication terminate:]`).
+//! - `cookies <domain> <keep|session>`: imports a made-up cookie `wings_check` of `domain` into the first page's
+//!   profile, kept past this run or not, by the same code an import from another browser runs (`cookies::import`), so
+//!   no real browser's cookies are read; what it took shows in Wings' log later.
 //! - `page`: where the first page is, as the gate reads it, and what its DevTools channel knows.
 
 use std::ffi::c_void;
@@ -101,6 +104,22 @@ fn run(command: &str) -> String {
             }
             None => "no page".into(),
         },
+        (Some("cookies"), Some(domain)) => {
+            let Some(page) = &first else { return "no page".into() };
+            let keep_signins = words.next() == Some("keep");
+            let made = wings_browser_cookies::Cookie {
+                domain: domain.into(),
+                name: "wings_check".into(),
+                value: format!("{}", std::process::id()),
+                path: "/".into(),
+                expires: Some(4_102_444_800.0),
+                secure: false,
+                http_only: false,
+                same_site: None,
+            };
+            super::cookies::import(&page.profile, page.keep_data, keep_signins, &[made], |took| eprintln!("[chromium-check] cookies took: {took:?}"));
+            "importing".into()
+        }
         (Some("page"), _) => first.as_ref().map_or_else(|| "no page".into(), |page| page.describe()),
         (Some("quit"), _) => {
             NSApplication::sharedApplication(mtm).terminate(None);

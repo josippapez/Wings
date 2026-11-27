@@ -1945,8 +1945,10 @@ fn run_web(job: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, 
                 let _ = answer.send(Ok("null".into()));
             });
         }
-        Job::Cookies { profile, .. } if crate::web::engine::choice(&profile) == crate::web::engine::Kind::Chromium => {
-            let _ = answer.send(Err(crate::web::chromium::page::NO_IMPORT.into()));
+        Job::Cookies { profile, keep_data, keep_signins, cookies } if crate::web::engine::choice(&profile) == crate::web::engine::Kind::Chromium => {
+            crate::web::chromium::cookies::import(&profile, keep_data, keep_signins, &cookies, move |count| {
+                let _ = answer.send(count.map(|count| count.to_string()));
+            });
         }
         Job::Cookies { profile, keep_data, keep_signins, cookies } => {
             let same_site = |cookie: &wings_browser_cookies::Cookie| match cookie.same_site {

@@ -6,9 +6,11 @@
 //! - [`devtools`] and [`agent`]: the page's own DevTools channel, and a plugin's scripts, pictures and logs over it.
 //! - [`runtime`]: starting CEF for the first page, its work, and closing it as Wings quits.
 //! - [`extensions`]: the profile's extensions, their buttons and popups.
+//! - [`cookies`]: another browser's sign-ins imported into the profile.
 //! - [`focus`] and [`keys`]: the keyboard between Wings and a page.
 
 mod agent;
+pub mod cookies;
 #[cfg(debug_assertions)]
 mod debug;
 mod devtools;
