@@ -4,8 +4,9 @@
 //! nothing written straight into a shared temporary folder, folders made 0700 and files written 0600 through a
 //! temporary file renamed into place.
 //!
-//! The roots are the app's to decide, never a command's or a plugin's: the temporary folders and the ones
-//! `WINGS_BROWSER_FILE_ROOTS` (or browse's `OPENCODE_BROWSER_FILE_ROOTS`) names (`Files::of`, the one place to add more). The plugin's own web folder is a root only for the `screenshots`, `recordings` and
+//! The roots are the app's to decide, never a command's or a plugin's: the temporary folders, the ones
+//! `WINGS_BROWSER_FILE_ROOTS` (or browse's `OPENCODE_BROWSER_FILE_ROOTS`) names and the ones the person added in the
+//! Browser's settings (`folders`), each profile's own (`Files::of`, the one place to add more). The plugin's own web folder is a root only for the `screenshots`, `recordings` and
 //! `uploads` folders the app keeps in it: where a relative path goes, and where a picture Wings took, or a file passed
 //! inline, is written.
 
@@ -27,7 +28,7 @@ pub const UPLOAD_MAX_BYTES: u64 = 50 * 1024 * 1024;
 pub const INLINE_MAX_BYTES: u64 = 10 * 1024 * 1024;
 
 /// What a refusal tells about the way out.
-const ADD: &str = "add folders with WINGS_BROWSER_FILE_ROOTS";
+const ADD: &str = "add folders in the Browser's settings under Agent tools, or with WINGS_BROWSER_FILE_ROOTS";
 
 /// The folders of the plugin's web folder the app keeps files in.
 pub const SCREENSHOTS: &str = "screenshots";
@@ -121,11 +122,52 @@ fn from_env() -> Vec<PathBuf> {
     ENV.iter().filter_map(std::env::var_os).flat_map(|list| std::env::split_paths(&list).collect::<Vec<_>>()).filter(|path| path.is_absolute()).collect()
 }
 
+/// A folder the person may add as a root (`folders::add`), by what a root has to be: a real folder, not reached through
+/// another user's link, owned by this user, nobody else able to write it, and neither `/` nor the home folder itself.
+/// Its real location.
+pub fn check_folder(path: &Path) -> Result<PathBuf, String> {
+    if !path.is_absolute() {
+        return Err(format!("{} isn't a full path", path.display()));
+    }
+    let mut spelling = path.to_path_buf();
+    loop {
+        if let Some(meta) = lstat(&spelling)?
+            && meta.file_type().is_symlink()
+            && meta.uid() != 0
+        {
+            return Err(format!("{} is or is inside a link; choose the real folder", path.display()));
+        }
+        if !spelling.pop() {
+            break;
+        }
+    }
+    let real = std::fs::canonicalize(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let meta = std::fs::metadata(&real).map_err(|error| format!("{}: {error}", real.display()))?;
+    if !meta.is_dir() {
+        return Err(format!("{} isn't a folder", real.display()));
+    }
+    if real == Path::new("/") {
+        return Err("The whole disk can't be a folder for agents' files".into());
+    }
+    if std::env::var_os("HOME").and_then(|home| std::fs::canonicalize(home).ok()).is_some_and(|home| home == real) {
+        return Err("Your home folder can't be a folder for agents' files; choose one inside it".into());
+    }
+    if meta.uid() != uid() {
+        return Err(format!("{} belongs to another user", real.display()));
+    }
+    if meta.mode() & 0o022 != 0 {
+        return Err(format!("{} can be written by its group or others; remove that access first (chmod go-w)", real.display()));
+    }
+    Ok(real)
+}
+
 impl Files {
-    /// The roots of the profile whose web folder is `web`: the temporary folders and the environment's.
+    /// The roots of the profile whose web folder is `web`: the temporary folders, the environment's and the ones added in
+    /// the Browser's settings that still pass `check_folder`.
     pub fn of(web: &Path) -> Self {
+        let added = super::folders::listed(web).into_iter().filter(|path| check_folder(path).is_ok());
         let mut listed: Vec<PathBuf> = Vec::new();
-        for path in [std::env::temp_dir(), PathBuf::from("/tmp")].into_iter().chain(from_env()) {
+        for path in [std::env::temp_dir(), PathBuf::from("/tmp")].into_iter().chain(from_env()).chain(added) {
             if let Ok(real) = std::fs::canonicalize(&path)
                 && !listed.contains(&real)
             {
@@ -512,6 +554,81 @@ mod tests {
         // The web folder itself and its other folders are no root.
         std::fs::write(rig.web.join("other.txt"), b"x").unwrap();
         assert!(files.input(&rig.web.join("other.txt").to_string_lossy(), SCREENSHOTS).unwrap_err().contains("outside the file roots"));
+    }
+
+    /// A profile whose web folder sits where the app keeps them (`<data>/plugin-web/<plugin>.<scope>`), so the folders it
+    /// was given are read from the data folder's record.
+    fn profile_in(rig: &Rig) -> super::super::Profile {
+        super::super::Profile::of("browser", "s", &rig.web.parent().unwrap().join("plugin-storage"))
+    }
+
+    #[test]
+    fn a_folder_added_in_settings_is_a_root_until_it_is_removed() {
+        let rig = rig();
+        let profile = profile_in(&rig);
+        let added = rig.web.parent().unwrap().join("added");
+        std::fs::create_dir_all(&added).unwrap();
+        std::fs::set_permissions(&added, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(added.join("a.txt"), b"x").unwrap();
+        let file = added.join("a.txt").to_string_lossy().into_owned();
+        let roots = |profile: &super::super::Profile| {
+            let mut files = Files::of(&profile.dir);
+            // The rig is in a temporary folder, which would allow everything in it.
+            let base = rig.web.parent().unwrap().to_path_buf();
+            files.roots.retain(|root| !base.starts_with(root));
+            files
+        };
+        assert!(roots(&profile).input(&file, UPLOADS).unwrap_err().contains("outside the file roots"));
+        super::super::folders::add(&profile, &added).unwrap();
+        assert_eq!(roots(&profile).input(&file, UPLOADS).unwrap(), added.join("a.txt"));
+        // Another profile's agents don't get it.
+        let other = super::super::Profile::of("browser", "t", &rig.web.parent().unwrap().join("plugin-storage"));
+        assert!(roots(&other).input(&file, UPLOADS).is_err());
+        let refusal = roots(&other).input("/etc/passwd", UPLOADS).unwrap_err();
+        assert!(refusal.contains("Agent tools"), "{refusal}");
+        super::super::folders::remove(&profile, &added).unwrap();
+        assert!(roots(&profile).input(&file, UPLOADS).unwrap_err().contains("outside the file roots"));
+    }
+
+    #[test]
+    fn a_folder_that_fails_the_checks_of_a_root_is_not_added() {
+        let rig = rig();
+        let profile = profile_in(&rig);
+        let base = rig.web.parent().unwrap().to_path_buf();
+        let loose = base.join("loose");
+        std::fs::create_dir_all(&loose).unwrap();
+        std::fs::set_permissions(&loose, std::fs::Permissions::from_mode(0o775)).unwrap();
+        let link = base.join("link");
+        std::os::unix::fs::symlink(&rig.root, &link).unwrap();
+        let file = base.join("file");
+        std::fs::write(&file, b"x").unwrap();
+        for (path, why) in [
+            (loose.clone(), "group or others"),
+            (link.clone(), "link"),
+            (PathBuf::from("/"), "whole disk"),
+            (file.clone(), "isn't a folder"),
+            (base.join("nope"), "nope"),
+            (PathBuf::from("relative"), "full path"),
+        ] {
+            let error = super::super::folders::add(&profile, &path).unwrap_err();
+            assert!(error.contains(why), "{}: {error}", path.display());
+        }
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
+        assert!(super::super::folders::add(&profile, &home).unwrap_err().contains("home folder"));
+        assert_eq!(super::super::folders::list(&profile), Vec::<PathBuf>::new());
+    }
+
+    #[test]
+    fn a_listed_folder_that_stopped_passing_is_not_a_root() {
+        let rig = rig();
+        let profile = profile_in(&rig);
+        let added = rig.web.parent().unwrap().join("added");
+        std::fs::create_dir_all(&added).unwrap();
+        std::fs::set_permissions(&added, std::fs::Permissions::from_mode(0o700)).unwrap();
+        super::super::folders::add(&profile, &added).unwrap();
+        assert!(Files::of(&profile.dir).describe().contains(&added.display().to_string()));
+        std::fs::set_permissions(&added, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(!Files::of(&profile.dir).describe().contains(&added.display().to_string()));
     }
 
     #[test]

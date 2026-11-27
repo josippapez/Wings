@@ -1921,6 +1921,23 @@ fn run_web(job: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, 
                 })
                 .detach();
         }
+        Job::PickFolder => {
+            let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
+                files: false,
+                directories: true,
+                multiple: false,
+                prompt: Some("Allow".into()),
+            });
+            cx.background_executor()
+                .spawn(async move {
+                    let path = match picked.await {
+                        Ok(Ok(paths)) => paths.and_then(|paths| paths.into_iter().next()),
+                        _ => None,
+                    };
+                    let _ = answer.send(serde_json::to_string(&path).map_err(|error| error.to_string()));
+                })
+                .detach();
+        }
         Job::Clear(profile) => {
             // Chromium's data of the profile goes too, whichever engine it uses now. Chromium and both of WebKit's
             // stores answer; the third is when it is all gone.

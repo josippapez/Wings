@@ -332,6 +332,56 @@ pub(super) fn browser(out: PathBuf) {
             let _ = cx.update_window(window, |_, window, _| window.remove_window());
         }
     }
+    // The Agent tools section: no folders added, two, and an add that Wings refuses. The folders are real ones in the
+    // scene's own folder, as Wings checks them; the picker answers with the folder the state names (`PICKED_FOLDER`).
+    let allowed = out.join("fixture-agent-folders");
+    let _ = std::fs::remove_dir_all(&allowed);
+    let loose = allowed.join("shared-drop");
+    let two = [allowed.join("design-refs"), allowed.join("Downloads")];
+    for folder in two.iter().chain([&loose]) {
+        std::fs::create_dir_all(folder).unwrap();
+        std::fs::set_permissions(folder, std::fs::Permissions::from_mode(if *folder == loose { 0o777 } else { 0o700 })).unwrap();
+    }
+    let record = out.join("web-file-folders.json");
+    let listed = json!({ "browser.shot": two.iter().map(|folder| std::fs::canonicalize(folder).unwrap()).collect::<Vec<_>>() });
+    for (name, folders, refused) in [("none", false, false), ("two", true, false), ("refused", true, true)] {
+        for width in [1000.0, 640.0] {
+            if folders {
+                std::fs::write(&record, listed.to_string()).unwrap();
+            } else {
+                let _ = std::fs::remove_file(&record);
+            }
+            *super::PICKED_FOLDER.lock().unwrap() = refused.then(|| loose.clone());
+            let handle = cx
+                .open_offscreen_window(size(px(width), px(1100.0)), |_, cx| cx.new(|cx| PageView::in_plugin_with_args(&host, &module("settings"), None, cx)))
+                .unwrap();
+            let window = handle.into();
+            handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let shows = if folders { "design-refs" } else { "No folders added" };
+            while handle.read_with(&cx, |view, _| view.trees_sent()).unwrap() == 0 || !handle.read_with(&cx, |view, _| view.text().contains(shows)).unwrap() {
+                assert!(Instant::now() < deadline, "the agent tools did not show: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
+                wait(&mut cx, window, Duration::from_millis(20));
+            }
+            // The section is the page's last: scroll to it.
+            cx.simulate_event(window, gpui::ScrollEvent {
+                position: point(px(width / 2.0), px(300.0)),
+                delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-100_000.0))),
+                modifiers: gpui::Modifiers::default(),
+                touch_phase: gpui::TouchPhase::Moved,
+                source: Default::default(),
+            });
+            wait(&mut cx, window, Duration::from_millis(300));
+            if refused {
+                assert!(handle.read_with(&cx, |view, _| view.press("Add folder\u{2026}", 0)).unwrap(), "no Add folder button");
+                wait(&mut cx, window, Duration::from_millis(1500));
+            }
+            save(&mut cx, window, out.join(format!("browser-agent-tools-{name}-{width}.png")));
+            let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        }
+    }
+    let _ = std::fs::remove_file(&record);
+    *super::PICKED_FOLDER.lock().unwrap() = None;
 }
 
 /// Main's part for an agent's banner: it hears the pages say who they are (`browser:page`) and asks the newest of them

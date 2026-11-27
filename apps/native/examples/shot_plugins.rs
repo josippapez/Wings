@@ -197,12 +197,18 @@ fn external_plugins(out: PathBuf) {
 /// What Claude Code told `wings statusline`, for the HUD.
 static STATUSLINE: std::sync::Mutex<Option<serde_json::Value>> = std::sync::Mutex::new(None);
 
+/// The folder the Browser's folder picker answers with, if a scene sets one: none is a cancelled picker.
+static PICKED_FOLDER: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
 struct FixtureEnv(PathBuf);
 impl Env for FixtureEnv {
     // This Mac has WebKit's extensions, and nothing else WebKit does reaches a screenshot.
     fn web(&self, job: wings_native::web::Job, done: Box<dyn FnOnce(Result<String, String>) + Send>) {
-        let supported = matches!(job, wings_native::web::Job::Supported);
-        done(Ok(if supported { "true" } else { "null" }.into()))
+        match job {
+            wings_native::web::Job::Supported => done(Ok("true".into())),
+            wings_native::web::Job::PickFolder => done(Ok(serde_json::to_string(&*PICKED_FOLDER.lock().unwrap()).unwrap())),
+            _ => done(Ok("null".into())),
+        }
     }
     fn statusline(&self) -> serde_json::Value {
         STATUSLINE.lock().unwrap().clone().unwrap_or_else(|| json!({ "rateLimits": [], "sessions": {} }))

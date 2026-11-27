@@ -1011,8 +1011,8 @@ mod tests {
             }
         }
         assert_eq!(find("recording")["inputSchema"]["properties"]["action"]["enum"], json!(["start", "status", "stop", "cancel"]));
-        assert_eq!(manifest["version"], "0.3.0");
-        assert_eq!(manifest["minWingsVersion"], "0.2.128");
+        assert_eq!(manifest["version"], "0.4.0");
+        assert_eq!(manifest["minWingsVersion"], "0.2.129");
         let instructions = manifest["contributes"]["mcpInstructions"].as_str().unwrap();
         assert!(instructions.chars().count() <= 500 && instructions.contains("upload") && instructions.contains("recording") && instructions.contains("/tmp") && instructions.contains("demonstrate"), "{instructions}");
         // The tools are checked against their schema before they run, so the schema's own limits match the ones main checks.

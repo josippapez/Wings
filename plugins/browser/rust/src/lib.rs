@@ -11,6 +11,8 @@
 mod address;
 mod agent_demo;
 mod agent_js;
+#[cfg(feature = "settings")]
+mod agent_settings;
 #[cfg(feature = "browser")]
 mod agent_page;
 mod agent_webmcp;

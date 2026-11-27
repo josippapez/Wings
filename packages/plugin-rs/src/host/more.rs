@@ -295,6 +295,26 @@ pub fn web_engine_remove() -> Answer {
     call("webEngine", json!({ "action": "remove" }))
 }
 
+/// `wings.webFolders` `list`: the full paths of the folders the person let this plugin's agents use for files (upload,
+/// screenshot_diff, recording), besides the temporary folders. Wings keeps the list, never the plugin. Needs
+/// `permissions.webView`. Wings 0.2.129.
+pub fn web_folders() -> Answer {
+    call("webFolders", json!({ "action": "list" }))
+}
+
+/// `wings.webFolders` `add`: opens the system's folder picker, only right after a click, and lists the folder picked
+/// when it passes what a file root has to (a real folder you own that nobody else can write, not `/` or your home
+/// folder). Answers the list now, or null when the picker was cancelled. Wings 0.2.129.
+pub fn web_folders_add() -> Answer {
+    call("webFolders", json!({ "action": "add" }))
+}
+
+/// `wings.webFolders` `remove`: takes the folder `path` (one `web_folders` gave) off the list. Answers the list now.
+/// Wings 0.2.129.
+pub fn web_folders_remove(path: &str) -> Answer {
+    call("webFolders", json!({ "action": "remove", "path": path }))
+}
+
 /// `wings.webExtensions` `list`: `{ supported, keychain, extensions: [{ id, name, version, description, enabled, icon,
 /// permissions, hosts, error }] }`. `supported` is false before macOS 15.4, `icon` is an image id an `ui::image` draws,
 /// and `error` says why one doesn't load (its files or record changed since it was added, or Wings couldn't read its

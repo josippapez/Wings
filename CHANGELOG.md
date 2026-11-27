@@ -2,6 +2,12 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.129 · 2026-11-27
+
+- **Quitting no longer crashes with a stuck page**: when a Browser page on the Chromium engine was busy and didn't let itself close, Wings crashed as it quit, also when it restarted for an update. It now quits cleanly.
+- **Settings for the agent tools** (Browser 0.4.0): Browser settings has an Agent tools section, with when agents' unused tabs close (10, 30 or 60 minutes, or never) and the folders agents may use for files, added with a folder picker. A folder others can write to, your home folder or the whole disk is refused.
+- **A clearer banner when an agent asks you to show it something** (Browser 0.3.1): it says it's recording your steps and for which agent, counts them, and has Done and Cancel. An agent waiting for you to sign in shows "Your turn" with its name.
+
 ## 0.2.128 · 2026-11-27
 
 - **The Browser does what the browse MCP does for agents** (Browser 0.3.0, Chromium engine):

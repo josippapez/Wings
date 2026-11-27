@@ -3,7 +3,7 @@
 
 use crate::{
     address::Engine,
-    engine_settings,
+    agent_settings, engine_settings,
     extension::{Staged, dialog_for},
     history, settings,
 };
@@ -498,15 +498,16 @@ fn view() -> Vec<Node> {
         });
         // A toast floats over the page's foot wherever it is scrolled to: below a long list of extensions a notice went unseen.
         let problem = (page.staged.is_none()).then(|| page.problem.as_deref().map(|problem| toast("danger", problem, dismiss).key("problem"))).flatten();
-        let column = stack().prop("gap", "l").children(engine_settings::view()).children([search, privacy]).maybe(ask).maybe(cleared).children(cookies(&page, keep, signins)).children(extensions(&page));
+        let column = stack().prop("gap", "l").children(engine_settings::view()).children([search, privacy]).maybe(ask).maybe(cleared).children(cookies(&page, keep, signins)).children(extensions(&page)).children(agent_settings::view());
         let dialog = page.staged.as_ref().map(|staged| dialog_for(staged, page.adding, page.problem.as_deref(), cancel, add));
-        vec![column_page(toolbar("Browser", None), std::iter::once(column).chain(dialog).chain(remove_dialog(&page))).toasts(problem)]
+        vec![column_page(toolbar("Browser", None), std::iter::once(column).chain(dialog).chain(remove_dialog(&page))).toasts(problem.into_iter().chain(agent_settings::problem()))]
     })
 }
 
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub fn start() {
     engine_settings::load();
+    agent_settings::load();
     load_sources();
     load_extensions();
     wings_plugin::run(view);

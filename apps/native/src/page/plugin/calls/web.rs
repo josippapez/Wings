@@ -1,4 +1,4 @@
-//! `webData`, `webExtensions`, `webEngine` and `browserCookies`: what a plugin that shows web pages (`permissions.webView`) may do
+//! `webData`, `webExtensions`, `webEngine`, `webFolders` and `browserCookies`: what a plugin that shows web pages (`permissions.webView`) may do
 //! with them beyond its pages' `WebView` nodes. What reads the disk or the network runs off the frame's thread; what
 //! WebKit does runs on the window's (`Env::web`).
 
@@ -10,7 +10,7 @@ use wings_plugins::permissions::{may_import_browser_cookies, may_show_web_views}
 use super::{Shared, to_json};
 use crate::{
     page::{plugin::env::Access, runtime::Reply},
-    web::{Job, Profile, engine, extensions},
+    web::{Job, Profile, engine, extensions, folders},
 };
 
 /// The folders of the extensions `installed` last found for each plugin, in the order it listed them.
@@ -272,6 +272,27 @@ impl Shared {
                     Ok("null".into())
                 })
             }
+            ("webFolders", "list") => reply.done(to_json(&folder_names(&folders::list(&profile)))),
+            // The person picks it, in the system's picker that opens only right after their click; the plugin never names one.
+            ("webFolders", "add") => {
+                let this = self.clone();
+                access.env.web(
+                    Job::PickFolder,
+                    Box::new(move |picked| {
+                        let path = picked.and_then(|picked| serde_json::from_str::<Option<PathBuf>>(&picked).map_err(|e| e.to_string()));
+                        match path {
+                            Ok(Some(path)) => this.off_thread(reply, move |_| to_json(&folder_names(&folders::add(&profile, &path)?))),
+                            Ok(None) => reply.ok("null".into()),
+                            Err(error) => reply.err(error),
+                        }
+                    }),
+                )
+            }
+            // Taking one off only narrows what agents may reach, so it needs no click.
+            ("webFolders", "remove") => match text("path") {
+                Some(path) => self.off_thread(reply, move |_| to_json(&folder_names(&folders::remove(&profile, std::path::Path::new(&path))?))),
+                None => reply.err("remove takes the path".into()),
+            },
             ("webEngine", "status") => {
                 let (kind, installed, available) = (engine::choice(&profile), engine::bundle().is_some(), engine::available());
                 let engine_name = if kind == engine::Kind::Chromium { "chromium" } else { "webkit" };
@@ -402,10 +423,16 @@ pub(in crate::page::plugin) fn needs_click(method: &str, params: &Value) -> bool
     matches!(
         (method, action),
         ("webExtensions", Some("stage" | "add" | "installed" | "setEnabled" | "remove" | "checkAgain"))
+            | ("webFolders", Some("add"))
             | ("webData", Some("clear" | "clearSite"))
             | ("webEngine", Some("download" | "use" | "remove"))
             | ("browserCookies", Some("import"))
     )
+}
+
+/// The folders as the page lists them: their full paths.
+fn folder_names(folders: &[PathBuf]) -> Vec<String> {
+    folders.iter().map(|folder| folder.to_string_lossy().into_owned()).collect()
 }
 
 /// What tells copies of extensions in other browsers apart without their profiles' names: the browser's name, and
@@ -667,5 +694,46 @@ mod tests {
             true => assert_eq!(kept, Err("That browser profile isn't on this Mac any more".into())),
             false => assert_eq!(kept, Err(crate::web::keeps_refusal(true, false).unwrap().into())),
         }
+    }
+
+    /// The folders agents may use are the person's to add: the plugin needs `webView`, adding waits for a click and opens
+    /// the picker, a folder that fails the checks of a root is refused, and listing and removing need no click.
+    #[test]
+    fn a_plugin_lists_adds_after_a_click_and_removes_folders_for_agents() {
+        let without = Rig::new(json!({ "permissions": { "openUrl": ["https://"] } }), vec![]);
+        assert_eq!(Caller::start(&without.host).call("webFolders", json!({ "action": "list" })), Err("probe may not show web pages".into()));
+
+        let web = Rig::new(json!({ "permissions": { "webView": true } }), vec![]);
+        let page = Caller::start(&web.host);
+        assert_eq!(page.call("webFolders", json!({ "action": "list" })), Ok(json!([])));
+        // No click, no picker: nothing was asked and nothing added.
+        assert_eq!(
+            page.call("webFolders", json!({ "action": "add" })),
+            Err("A page can add a folder for agents' files only right after you click or type in it".into())
+        );
+        assert!(web.env.picks.lock().unwrap().is_empty());
+
+        let dir = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(dir.path()).unwrap();
+        let (good, loose) = (base.join("good"), base.join("loose"));
+        for (folder, mode) in [(&good, 0o700), (&loose, 0o777)] {
+            std::fs::create_dir_all(folder).unwrap();
+            std::fs::set_permissions(folder, std::os::unix::fs::PermissionsExt::from_mode(mode)).unwrap();
+        }
+        web.env.picks.lock().unwrap().push(loose.clone());
+        let refused = page.call_after_click("webFolders", json!({ "action": "add" })).unwrap_err();
+        assert!(refused.contains("group or others"), "{refused}");
+        assert_eq!(page.call("webFolders", json!({ "action": "list" })), Ok(json!([])));
+
+        // Cancelling the picker adds nothing.
+        assert_eq!(page.call_after_click("webFolders", json!({ "action": "add" })), Ok(json!(null)));
+        web.env.picks.lock().unwrap().push(good.clone());
+        let listed = json!([good.to_string_lossy()]);
+        assert_eq!(page.call_after_click("webFolders", json!({ "action": "add" })), Ok(listed.clone()));
+        assert_eq!(page.call("webFolders", json!({ "action": "list" })), Ok(listed));
+        assert_eq!(page.call("webFolders", json!({ "action": "remove", "path": good.to_string_lossy() })), Ok(json!([])));
+        assert_eq!(page.call("webFolders", json!({ "action": "list" })), Ok(json!([])));
+        assert!(super::needs_click("webFolders", &json!({ "action": "add" })));
+        assert!(!super::needs_click("webFolders", &json!({ "action": "remove" })));
     }
 }

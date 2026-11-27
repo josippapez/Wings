@@ -408,6 +408,11 @@ impl Env for FakeEnv {
                 self.record(Seen::Confirm(confirm.question.into(), confirm.detail.into()));
                 done(Ok("false".into()))
             }
+            crate::web::Job::PickFolder => {
+                let mut picks = self.picks.lock().unwrap();
+                let picked = (!picks.is_empty()).then(|| picks.remove(0));
+                done(serde_json::to_string(&picked).map_err(|error| error.to_string()))
+            }
             _ => done(Err("Web pages aren't available in this host".into())),
         }
     }

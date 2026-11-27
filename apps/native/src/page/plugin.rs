@@ -516,6 +516,7 @@ impl Link for FrameLink {
                     "webData" => "clear site data",
                     "webEngine" if params["action"].as_str() == Some("use") => "change the browser engine",
                     "webEngine" => "download or remove Chromium",
+                    "webFolders" => "add a folder for agents' files",
                     "webExtensions" if params["action"].as_str() == Some("remove") => "remove an extension",
                     "webExtensions" => "add an extension",
                     _ => "write to a program",

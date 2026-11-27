@@ -11,6 +11,7 @@
 
 pub mod engine;
 pub mod extensions;
+pub mod folders;
 #[cfg(all(feature = "ui", target_os = "macos"))]
 pub mod diff;
 #[cfg(all(feature = "ui", target_os = "macos"))]
@@ -41,6 +42,8 @@ pub enum Job {
     Supported,
     /// The system's picker, for a folder or a package (ZIP, CRX or XPI): its path, or null.
     Pick,
+    /// The system's picker, for a folder only: its path, or null.
+    PickFolder,
     /// Every cookie and all site data the profile's web views kept go.
     Clear(Profile),
     /// An extension that passed `extensions::verify` loads into the profile's web views, or one unloads.

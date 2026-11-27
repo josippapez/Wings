@@ -346,8 +346,8 @@ pub fn send(message: &[u8]) -> bool {
     RUNTIME.with_borrow_mut(|runtime| runtime.pipe.as_mut().is_some_and(|pipe| pipe.send(message).is_ok()))
 }
 
-/// Closes every browser, Chrome's own included, waits up to 3 s for them to go, runs CEF's last work and shuts it
-/// down, on the main thread as AppKit ends the app.
+/// Closes every browser, Chrome's own included, waits up to 3 s for them to go, then, if they all went, runs CEF's last
+/// work and shuts it down (`end`), on the main thread as AppKit ends the app.
 fn shutdown() {
     let browsers = RUNTIME.with_borrow_mut(|runtime| {
         runtime.quitting = true;
@@ -366,21 +366,30 @@ fn shutdown() {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     let left = RUNTIME.with_borrow(|runtime| runtime.browsers.len());
-    if left > 0 {
-        eprintln!("[chromium] {left} browsers didn't close in time");
-    }
     RUNTIME.with_borrow_mut(|runtime| {
         runtime.contexts.clear();
         runtime.quieted = None;
     });
-    pump::drain(10);
-    cef::shutdown();
+    end(left, || pump::drain(10), cef::shutdown);
     // Removed in Settings while it ran, it wrote to its profiles until now: they go too.
     if engine::bundle().is_none()
         && let Some(profiles) = engine::profiles()
     {
         let _ = std::fs::remove_dir_all(profiles);
     }
+}
+
+/// Runs CEF's last work (`drain`) and shuts it down, once every browser closed. With `left` still open it doesn't: in
+/// Chrome's style a browser whose page's script doesn't answer (busy, or slow in its `beforeunload`) stays open however
+/// it is closed, and `CefShutdown` then destroys its Chrome window during the profile's teardown, which crashed (a null
+/// `ProfileManager` with one left, a freed `BrowserWindowFeatures` with two). CEF ends with the process instead.
+fn end(left: usize, drain: impl FnOnce(), shut_down: impl FnOnce()) {
+    if left > 0 {
+        eprintln!("[chromium] {left} browsers didn't close in time, so Chromium ends with Wings without shutting down");
+        return;
+    }
+    drain();
+    shut_down();
 }
 
 define_class!(
@@ -696,6 +705,18 @@ mod tests {
         assert_eq!(super::merged("", "AimEnabled"), "AimEnabled", "CEF set none");
         assert_eq!(super::merged("AimEnabled,LensOverlay", "AimEnabled"), "AimEnabled,LensOverlay");
         assert_eq!(super::merged("DocumentPictureInPictureAPI", ""), "DocumentPictureInPictureAPI");
+    }
+
+    /// Quitting shuts CEF down only once every browser closed, after its last work: with a browser still open (its page's
+    /// script busy as it was asked to unload) CEF's shutdown destroyed that browser's Chrome window with its profile and
+    /// crashed Wings.
+    #[test]
+    fn chromium_shuts_down_only_once_every_browser_closed() {
+        let steps = std::cell::RefCell::new(Vec::new());
+        super::end(1, || steps.borrow_mut().push("work"), || steps.borrow_mut().push("shutdown"));
+        assert!(steps.borrow().is_empty(), "a browser left open: {:?}", steps.borrow());
+        super::end(0, || steps.borrow_mut().push("work"), || steps.borrow_mut().push("shutdown"));
+        assert_eq!(*steps.borrow(), ["work", "shutdown"]);
     }
 
     /// Files that failed their check before CEF loaded keep Chromium off only until the engine is removed or installed
