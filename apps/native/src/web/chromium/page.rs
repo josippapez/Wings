@@ -764,6 +764,15 @@ wrap_request_handler! {
             i32::from(!allowed)
         }
 
+        /// A site asking for a client certificate gets none, with no Chrome dialog to pick one, as WebKit in Wings sends
+        /// none (it has no handler for the challenge).
+        fn on_select_client_certificate(&self, _browser: Option<&mut Browser>, _is_proxy: ::std::os::raw::c_int, _host: Option<&CefString>, _port: ::std::os::raw::c_int, _certificates: Option<&[Option<X509Certificate>]>, callback: Option<&mut SelectClientCertificateCallback>) -> ::std::os::raw::c_int {
+            if let Some(callback) = callback {
+                callback.select(None);
+            }
+            1
+        }
+
         /// A link opened in a new tab (Cmd-click, a middle click) loads in this page, as in WebKit.
         fn on_open_urlfrom_tab(&self, browser: Option<&mut Browser>, _frame: Option<&mut Frame>, target_url: Option<&CefString>, _target_disposition: WindowOpenDisposition, _user_gesture: ::std::os::raw::c_int) -> ::std::os::raw::c_int {
             let url = text(target_url);

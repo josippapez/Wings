@@ -54,6 +54,9 @@ struct Runtime {
     quitting: bool,
     /// The browser target's DevTools pipe, once CEF started with it.
     pipe: Option<pipe::Pipe>,
+    /// A context sharing the global one's profile, kept until CEF shuts down, which turned Chrome's password manager off
+    /// in it once it was ready (`quiet`).
+    quieted: Option<RequestContext>,
     observer: Option<Retained<Quitting>>,
 }
 
@@ -67,6 +70,7 @@ thread_local! {
         open: 0,
         quitting: false,
         pipe: None,
+        quieted: None,
         observer: None,
     });
 }
@@ -151,8 +155,11 @@ fn start(bundle: &std::path::Path) -> Result<(), String> {
     let mut settings = engine.settings(&profile);
     // Wings' own arguments aren't Chromium's.
     settings.command_line_args_disabled = 1;
-    settings.log_severity = LogSeverity::ERROR;
-    settings.log_file = CefString::from(root.join("chromium.log").to_string_lossy().as_ref());
+    let (severity, log_file) = logging(&root, cfg!(debug_assertions));
+    settings.log_severity = severity;
+    if let Some(file) = log_file {
+        settings.log_file = CefString::from(file.to_string_lossy().as_ref());
+    }
     let piped = pipe.is_some();
     RUNTIME.with_borrow_mut(|runtime| runtime.pipe = pipe);
     let args = cef::args::Args::new();
@@ -174,6 +181,48 @@ fn start(bundle: &std::path::Path) -> Result<(), String> {
     #[cfg(debug_assertions)]
     super::debug::listen();
     Ok(())
+}
+
+/// How much Chromium writes of its own log, and where: its errors in `chromium.log` in a debug build, nothing in a release
+/// one, whose log a person never reads and which would keep the addresses of the pages that failed.
+fn logging(root: &std::path::Path, debug: bool) -> (LogSeverity, Option<std::path::PathBuf>) {
+    match debug {
+        true => (LogSeverity::ERROR, Some(root.join("chromium.log"))),
+        false => (LogSeverity::DISABLE, None),
+    }
+}
+
+/// Chrome's own password manager and autofill, off in every profile: they'd offer to save what is typed in a page, and
+/// with the mock keychain (`switches`) what Chrome saved would be kept as good as unencrypted. Wings has its own
+/// extensions for passwords. (`password_manager_pref_names.h`, `autofill_prefs.h` at 156.)
+pub const OFF: [&str; 4] = ["credentials_enable_service", "credentials_enable_autosignin", "autofill.profile_enabled", "autofill.credit_card_enabled"];
+
+/// The choosers of devices a page may ask for, blocked by default, so a page's request is refused at once: Chrome's own
+/// chooser would be a window over Wings that Wings doesn't place, and WebKit in Wings has none of them.
+const CHOOSERS: [ContentSettingTypes; 5] = [
+    ContentSettingTypes::USB_GUARD,
+    ContentSettingTypes::HID_GUARD,
+    ContentSettingTypes::SERIAL_GUARD,
+    ContentSettingTypes::BLUETOOTH_GUARD,
+    ContentSettingTypes::BLUETOOTH_SCANNING,
+];
+
+/// Turns Chrome's password manager and autofill off in `context` (`OFF`) and blocks its device choosers (`CHOOSERS`),
+/// once its profile is ready (`Quiet`): CEF refuses preferences of a context whose profile isn't, as the global one's
+/// isn't yet in `OnContextInitialized`. On CEF's UI thread.
+fn quiet(context: &RequestContext) {
+    for name in OFF {
+        let Some(mut off) = value_create() else { continue };
+        off.set_bool(0);
+        // CEF refuses the call, saying nothing, for an error string with no storage of its own (`CefString::default`).
+        let mut error = CefString::from(" ");
+        if context.set_preference(Some(&CefString::from(name)), Some(&mut off), Some(&mut error)) == 0 {
+            eprintln!("[chromium] couldn't turn off {name}: {}", error.to_string().trim());
+        }
+    }
+    for kind in CHOOSERS {
+        context.set_content_setting(None, None, kind, ContentSettingValues::BLOCK);
+    }
 }
 
 /// The folder Chromium keeps its profiles in, as CEF reads it: with every link resolved, as CEF refuses a profile that
@@ -218,7 +267,7 @@ pub fn context(profile: &Profile, keep_data: bool) -> Option<RequestContext> {
             .or_insert_with(|| {
                 let cache_path = if keep_data { root.join(dir_name(profile)).to_string_lossy().into_owned() } else { String::new() };
                 let settings = RequestContextSettings { cache_path: CefString::from(cache_path.as_str()), ..Default::default() };
-                request_context_create_context(Some(&settings), None).expect("CEF makes a request context")
+                request_context_create_context(Some(&settings), Some(&mut Quiet::new())).expect("CEF makes a request context")
             })
             .clone()
             .into()
@@ -282,7 +331,10 @@ fn shutdown() {
     if left > 0 {
         eprintln!("[chromium] {left} browsers didn't close in time");
     }
-    RUNTIME.with_borrow_mut(|runtime| runtime.contexts.clear());
+    RUNTIME.with_borrow_mut(|runtime| {
+        runtime.contexts.clear();
+        runtime.quieted = None;
+    });
     pump::drain(10);
     cef::shutdown();
     // Removed in Settings while it ran, it wrote to its profiles until now: they go too.
@@ -329,6 +381,17 @@ pub fn switches(piped: bool) -> Vec<String> {
         "disable-gpu-process-crash-limit",
         "no-first-run",
         "no-default-browser-check",
+        // Nothing of Chromium's own phones home: no component downloads (Safe Browsing lists, models, hints), no
+        // background requests (variations, translate, update checks), no reliability reports, no crash reports.
+        "disable-component-update",
+        "disable-background-networking",
+        "disable-domain-reliability",
+        "disable-breakpad",
+        // No window Wings doesn't place: no Document Picture-in-Picture window over everything, and a site's HTTP
+        // sign-in asks CEF (`GetAuthCredentials`, which refuses it, as WebKit in Wings shows no such prompt) rather
+        // than showing Chrome's own login dialog.
+        "disable-blink-features=DocumentPictureInPictureAPI",
+        "disable-chrome-login-prompt",
     ]
     .map(String::from)
     .to_vec();
@@ -378,6 +441,10 @@ wrap_browser_process_handler! {
 
     impl BrowserProcessHandler {
         fn on_context_initialized(&self) {
+            // A context sharing the global one's profile, which hears when that profile is ready (`Quiet`).
+            let mut global = request_context_get_global_context();
+            let shared = request_context_cef_create_context_shared(global.as_mut(), Some(&mut Quiet::new()));
+            RUNTIME.with_borrow_mut(|runtime| runtime.quieted = shared);
             finish(Ok(()), None);
             super::extensions::started();
         }
@@ -390,6 +457,18 @@ wrap_browser_process_handler! {
         // refuses an extension's new tabs.
         fn default_client(&self) -> Option<Client> {
             Some(StrayClient::new())
+        }
+    }
+}
+
+wrap_request_context_handler! {
+    struct Quiet {}
+
+    impl RequestContextHandler {
+        fn on_request_context_initialized(&self, request_context: Option<&mut RequestContext>) {
+            if let Some(context) = request_context {
+                quiet(context);
+            }
         }
     }
 }
@@ -453,6 +532,27 @@ mod tests {
         }
         assert!(!super::switches(false).iter().any(|switch| switch == "remote-debugging-pipe"));
         assert!(!switches.iter().any(|switch| switch.contains("no-sandbox")), "the sandbox stays on");
+    }
+
+    /// Nothing of Chromium's own phones home, no window it opens by itself draws over Wings, and only a debug build
+    /// keeps Chromium's log.
+    #[test]
+    fn chromium_starts_quiet_and_with_no_windows_of_its_own() {
+        let switches = super::switches(false);
+        for wanted in [
+            "disable-component-update",
+            "disable-background-networking",
+            "disable-domain-reliability",
+            "disable-breakpad",
+            "disable-blink-features=DocumentPictureInPictureAPI",
+            "disable-chrome-login-prompt",
+        ] {
+            assert!(switches.iter().any(|switch| switch == wanted), "{wanted}");
+        }
+        let root = std::path::Path::new("/profiles");
+        assert_eq!(super::logging(root, false), (cef::LogSeverity::DISABLE, None), "a release build");
+        assert_eq!(super::logging(root, true), (cef::LogSeverity::ERROR, Some(root.join("chromium.log"))));
+        assert_eq!(super::OFF, ["credentials_enable_service", "credentials_enable_autosignin", "autofill.profile_enabled", "autofill.credit_card_enabled"]);
     }
 
     /// Files that failed their check before CEF loaded keep Chromium off only until the engine is removed or installed
