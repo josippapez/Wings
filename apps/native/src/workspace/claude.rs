@@ -51,8 +51,10 @@ use super::{
     plugin_env::{AppEnv, UiEvent},
 };
 
-/// How long a plugin's tool has to answer Claude, as on the desktop.
+/// How long a plugin's tool has to answer Claude, as on the desktop, unless its manifest gives it longer (`maxSeconds`,
+/// for a tool that waits on the person), up to `CALL_TIMEOUT_MAX`.
 const CALL_TIMEOUT: Duration = Duration::from_secs(120);
+const CALL_TIMEOUT_MAX: Duration = Duration::from_secs(2 * 60 * 60);
 /// How long a plugin has to answer a Claude Code hook. `wings hook` gives up on Wings after 2 s.
 const HOOK_TIMEOUT: Duration = Duration::from_millis(1500);
 /// How long a request waits for the window. Opening a pane or reading one is quick; a window that is stuck says so.
@@ -514,6 +516,11 @@ impl Server {
     }
 }
 
+/// How long a plugin's tool that may take `max_seconds` has to answer.
+fn call_timeout(max_seconds: Option<u32>) -> Duration {
+    max_seconds.map_or(CALL_TIMEOUT, |seconds| Duration::from_secs(seconds.into()).clamp(CALL_TIMEOUT, CALL_TIMEOUT_MAX))
+}
+
 /// A plugin's answer `{ text, isError }`, as Claude gets it.
 fn tool_result(answer: Option<Result<String, String>>, plugin: &str) -> Result<ToolResult, String> {
     let answer: Value =
@@ -580,7 +587,8 @@ impl Handler for Server {
             false,
             reply,
         );
-        tool_result(answer.wait(CALL_TIMEOUT), plugin)
+        let wait = call_timeout(self.env.running.tool_max_seconds(plugin, tool));
+        tool_result(answer.wait(wait), plugin)
     }
 
     /// What the plugins that answer the hook say, asked together, each within `HOOK_TIMEOUT`; one that is slow,
@@ -1241,6 +1249,17 @@ impl Workspace {
         self.claude.accounts = Some(accounts);
         cx.notify_workspace();
     }
+}
+
+/// A tool that waits on the person (the Browser's demonstrate, up to an hour) gets the time its manifest gives it, not
+/// the 120 s every other tool has, which ended a demonstration after two minutes while the person was still showing it.
+#[cfg(test)]
+#[test]
+fn a_plugin_tool_waits_as_long_as_its_manifest_says_within_bounds() {
+    assert_eq!(call_timeout(None), CALL_TIMEOUT);
+    assert_eq!(call_timeout(Some(3615)), Duration::from_secs(3615));
+    assert_eq!(call_timeout(Some(10)), CALL_TIMEOUT, "never shorter than any tool gets");
+    assert_eq!(call_timeout(Some(u32::MAX)), CALL_TIMEOUT_MAX);
 }
 
 /// Claude in a chat tab runs as a program the tab's page started, under no pane's shell: a call from it comes from the tab,

@@ -300,6 +300,10 @@ pub struct McpTool {
     /// Bash, and still what other plugins reach with `callTool`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cli_only: bool,
+    /// How long a call may run before Wings answers Claude that the plugin didn't answer in time, for a tool that waits
+    /// on the person (Wings waits two hours at most): 120 seconds when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_seconds: Option<u32>,
 }
 
 /// Whether `cli_only` is set doesn't make a tool another one: the plugin offers the same access either way, so a

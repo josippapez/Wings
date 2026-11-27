@@ -48,6 +48,8 @@ struct Bridge {
     initialized: AtomicBool,
     /// The Wings version the server reports.
     version: &'static str,
+    /// How long each tool that may take longer than `TOOL_WAIT` may take, from the last tool list (`maxSeconds`).
+    waits: Mutex<HashMap<String, Duration>>,
 }
 
 impl Bridge {
@@ -90,11 +92,35 @@ fn instructions(plugin_lines: &[&str]) -> String {
     text
 }
 
-/// The tools Claude Code is told of: the app's list without the ones it marks `cliOnly`, which stay `wings` commands.
-/// A `tools/call` of one still runs it.
+/// The tools Claude Code is told of: the app's list without the ones it marks `cliOnly`, which stay `wings` commands, and
+/// without what only Wings reads (`maxSeconds`). A `tools/call` of one still runs it.
 fn listed(tools: Option<Value>) -> Value {
     let Some(Value::Array(tools)) = tools else { return json!([]) };
-    Value::Array(tools.into_iter().filter(|t| t["cliOnly"] != true).collect())
+    let shown = tools.into_iter().filter(|t| t["cliOnly"] != true).map(|mut tool| {
+        if let Some(fields) = tool.as_object_mut() {
+            fields.remove("maxSeconds");
+        }
+        tool
+    });
+    Value::Array(shown.collect())
+}
+
+/// How long a call of each tool in `tools` that waits on the person (`maxSeconds`) may take, a little over what Wings
+/// gives it, so Wings' own answer that it ran out of time comes through.
+fn waits(tools: &Option<Value>) -> HashMap<String, Duration> {
+    let listed = tools.as_ref().and_then(Value::as_array).into_iter().flatten();
+    listed
+        .filter_map(|tool| Some((tool["name"].as_str()?.to_owned(), Duration::from_secs(tool["maxSeconds"].as_u64()? + 10))))
+        .collect()
+}
+
+/// How long `bridge` waits for Wings to answer a call of `name`.
+fn call_wait(waits: &HashMap<String, Duration>, name: Option<&str>) -> Duration {
+    match name {
+        Some("setup_worktree") => SETUP_WORKTREE_WAIT,
+        Some(name) => waits.get(name).copied().map_or(TOOL_WAIT, |wait| wait.max(TOOL_WAIT)),
+        None => TOOL_WAIT,
+    }
 }
 
 /// `version` is the Wings version the server reports to Claude Code.
@@ -110,6 +136,7 @@ pub fn run(socket: Option<String>, version: &'static str) -> i32 {
         next: AtomicU64::new(1),
         initialized: AtomicBool::new(false),
         version,
+        waits: Mutex::new(HashMap::new()),
     });
     link(&bridge, socket);
     for line in std::io::stdin().lock().lines() {
@@ -179,6 +206,7 @@ fn handle(bridge: &Bridge, message: Value) {
         "ping" => Ok(json!({})),
         "tools/list" => {
             let tools = bridge.ask(json!({ "op": "list" }), Duration::from_secs(5)).and_then(|r| r.get("tools").cloned());
+            *bridge.waits.lock().unwrap() = waits(&tools);
             Ok(json!({ "tools": listed(tools) }))
         }
         "tools/call" => {
@@ -189,11 +217,7 @@ fn handle(bridge: &Bridge, message: Value) {
                 "ppid": std::os::unix::process::parent_id(),
                 "sessionId": message["params"]["_meta"]["ai.opencode/sessionID"],
             });
-            let timeout = if message["params"]["name"].as_str() == Some("setup_worktree") {
-                SETUP_WORKTREE_WAIT
-            } else {
-                TOOL_WAIT
-            };
+            let timeout = call_wait(&bridge.waits.lock().unwrap(), message["params"]["name"].as_str());
             Ok(match bridge.ask(request, timeout) {
                 Some(reply) => reply.get("result").cloned().unwrap_or_else(|| {
                     let error = reply.get("error").and_then(Value::as_str).unwrap_or("Wings couldn't run the tool");
@@ -225,6 +249,7 @@ mod tests {
             next: AtomicU64::new(1),
             initialized: AtomicBool::new(false),
             version: "0.0.0",
+            waits: Mutex::new(HashMap::new()),
         };
         let sessions = [Some("ses_wings"), Some("ses_setup"), None];
         thread::scope(|scope| {
@@ -302,6 +327,7 @@ mod tests {
             next: AtomicU64::new(1),
             initialized: AtomicBool::new(false),
             version: "1.2.3",
+            waits: Mutex::new(HashMap::new()),
         });
         link(&bridge, socket);
         let replies = |count: usize| -> Vec<Value> {
@@ -322,6 +348,23 @@ mod tests {
         handle(&bridge, json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "echo", "arguments": { "a": 1 } } }));
         assert_eq!(replies(4)[3], json!({ "jsonrpc": "2.0", "id": 3, "result": { "content": [{ "type": "text", "text": "echo {\"a\":1}" }], "isError": false } }));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A tool that waits on the person (the Browser's demonstrate, up to an hour) is waited for as long as Wings gives it,
+    /// where every call waited 310 s and then said Wings wasn't running; Claude Code isn't told of `maxSeconds`.
+    #[test]
+    fn a_tool_with_max_seconds_is_waited_for_that_long_and_claude_isnt_told_the_field() {
+        let tools = Some(json!([
+            { "name": "browser__demonstrate", "description": "d", "maxSeconds": 3615 },
+            { "name": "tasks__list", "description": "l" },
+            { "name": "browser__quick", "description": "q", "maxSeconds": 30 },
+        ]));
+        let waits = waits(&tools);
+        assert_eq!(call_wait(&waits, Some("browser__demonstrate")), Duration::from_secs(3625));
+        assert_eq!(call_wait(&waits, Some("tasks__list")), TOOL_WAIT);
+        assert_eq!(call_wait(&waits, Some("browser__quick")), TOOL_WAIT, "never shorter than every tool gets");
+        assert_eq!(call_wait(&waits, Some("setup_worktree")), SETUP_WORKTREE_WAIT);
+        assert!(listed(tools).as_array().unwrap().iter().all(|tool| tool.get("maxSeconds").is_none()));
     }
 
     #[test]

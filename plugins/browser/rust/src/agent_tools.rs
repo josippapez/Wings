@@ -976,6 +976,22 @@ mod tests {
     }
 
     #[test]
+    fn a_tool_that_waits_on_the_person_past_two_minutes_tells_wings_to_wait_as_long() {
+        let manifest: Value = serde_json::from_str(MANIFEST).unwrap();
+        let tools = manifest["contributes"]["mcpTools"].as_array().unwrap();
+        // What Wings gives a tool's call before it answers Claude that the plugin didn't answer: 120 s unless it says.
+        let given = |name: &str| tools.iter().find(|tool| tool["name"] == name).unwrap()["maxSeconds"].as_u64().unwrap_or(120) * 1000;
+        for (tool, longest) in [
+            ("demonstrate", json!({ "message": "x", "timeoutSeconds": 3600 })),
+            ("handoff", json!({ "message": "x", "timeout_ms": 600000 })),
+            ("wait_for", json!({ "text": "x", "timeout_ms": 60000 })),
+        ] {
+            let (_, ms) = op_for(tool, &longest).unwrap();
+            assert!(given(tool) >= u64::from(ms), "{tool} waits up to {ms} ms but Wings gives it {} ms", given(tool));
+        }
+    }
+
+    #[test]
     fn webmcp_lists_or_calls_a_named_tool_and_marks_what_comes_back_as_the_pages() {
         let (op, ms) = op_for("webmcp", &json!({ "action": "call", "name": "addTodo", "input": { "text": "x" }, "timeout": 2000 })).unwrap();
         assert_eq!((op, ms), (json!({ "op": "webmcp", "action": "call", "name": "addTodo", "input": { "text": "x" }, "frame": null, "timeout": 2000 }), 12_000));
@@ -1011,7 +1027,7 @@ mod tests {
             }
         }
         assert_eq!(find("recording")["inputSchema"]["properties"]["action"]["enum"], json!(["start", "status", "stop", "cancel"]));
-        assert_eq!(manifest["version"], "0.4.0");
+        assert_eq!(manifest["version"], "0.4.1");
         assert_eq!(manifest["minWingsVersion"], "0.2.129");
         let instructions = manifest["contributes"]["mcpInstructions"].as_str().unwrap();
         assert!(instructions.chars().count() <= 500 && instructions.contains("upload") && instructions.contains("recording") && instructions.contains("/tmp") && instructions.contains("demonstrate"), "{instructions}");

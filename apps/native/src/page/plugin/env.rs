@@ -214,6 +214,13 @@ impl Running {
             .collect()
     }
 
+    /// How long the running plugin `plugin`'s tool `tool` may take, as its manifest says (`maxSeconds`).
+    pub fn tool_max_seconds(&self, plugin: &str, tool: &str) -> Option<u32> {
+        let running = self.0.lock().unwrap();
+        let tools = &running.get(plugin)?.plugin.manifest.contributes.mcp_tools;
+        tools.iter().find(|declared| declared.name == tool)?.max_seconds
+    }
+
     /// The running plugins that answer the Claude Code hook `event`.
     pub fn hooked(&self, event: &str) -> Vec<String> {
         let running = self.0.lock().unwrap();
