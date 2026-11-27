@@ -4,7 +4,7 @@
 use std::{fs, path::Path};
 
 /// The `wings-plugin` requirement a new plugin's `rust/Cargo.toml` gets: the series this tool was made for.
-pub const SDK_REQUIREMENT: &str = "0.1";
+pub const SDK_REQUIREMENT: &str = "0.2";
 
 /// The template's files, by where they go in the new folder. `gitignore` and `github/` are written with their dot, and
 /// the crate's manifest is `Cargo.toml.tmpl`, which cargo would otherwise take for a package of its own and leave out.
@@ -118,7 +118,7 @@ mod tests {
         assert!(dir.join(".github/workflows/release.yml").exists());
         assert!(!read(&dir, "README.md").contains("hello-wings"));
         // The SDK comes from crates.io.
-        assert!(read(&dir, "rust/Cargo.toml").lines().any(|l| l == "wings-plugin = \"0.1\""));
+        assert!(read(&dir, "rust/Cargo.toml").lines().any(|l| l == "wings-plugin = \"0.2\""));
         // A main, a sidebar page and a tool, with a Cargo feature each frame.
         assert_eq!(frames_of(&manifest), ["dist/native/main.wasm", "dist/native/sidebar.wasm"]);
         assert_eq!(manifest_problems(&dir).unwrap(), Vec::<String>::new());

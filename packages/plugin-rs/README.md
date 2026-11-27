@@ -33,7 +33,7 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-wings-plugin = "0.1"
+wings-plugin = "0.2"
 
 [features]
 # One Cargo feature per frame: dist/native/sidebar.wasm is built with `--features sidebar`.
