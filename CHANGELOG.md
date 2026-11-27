@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.125 · 2026-11-27
+
+- **Menus and tooltips over a Chromium page**: a menu or tooltip that opens over a page in the Chromium Browser no longer turns the page black. The page stays in view around it, and clicks on the menu reach it.
+- **No tooltip over its own menu**: a menu's button, like the Browser's … or "Open in…", no longer shows its tooltip over the menu it opened.
+
 ## 0.2.124 · 2026-11-27
 
 - **Bitwarden as your default password manager**: when an extension may ask to change the Browser's privacy settings, as Bitwarden does to become the default password manager, Wings' add dialog now has an "Add with privacy settings" button. With it, Bitwarden's Continue works under Chromium. Plain Add still leaves those settings alone. An extension added before this needs removing and adding again to get the button.

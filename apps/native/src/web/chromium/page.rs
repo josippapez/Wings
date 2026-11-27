@@ -22,7 +22,7 @@ use crate::{
     page::tree::WebGo,
     web::{
         Profile,
-        views::{Dialog, Heard, Maker, Native, State, Tell},
+        views::{Dialog, Heard, Hole, Maker, Native, State, Tell},
     },
 };
 
@@ -53,6 +53,7 @@ impl Maker for Chromium {
             ns: RefCell::new(None),
             parent: RefCell::new(None),
             want: Cell::new(None),
+            holes: RefCell::default(),
             attached: Cell::new(false),
             closed: Cell::new(false),
             pending: RefCell::default(),
@@ -253,6 +254,9 @@ pub struct Shared {
     pub(super) parent: RefCell<Option<Retained<NSWindow>>>,
     /// Where it shows, in the Wings window's points from its top left, or hidden.
     want: Cell<Option<Bounds<Pixels>>>,
+    /// What of the Wings window lies over it (a menu, a popover), in its own points from its top left, which shows
+    /// through it (`Native::holes`).
+    holes: RefCell<Vec<Hole>>,
     attached: Cell<bool>,
     closed: Cell<bool>,
     /// Commands sent before it was ready.
@@ -275,6 +279,12 @@ impl Native for Page {
         }
         self.0.want.set(frame);
         self.0.apply_place();
+    }
+
+    fn holes(&mut self, holes: &[Hole]) -> bool {
+        self.0.holes.replace(holes.to_vec());
+        self.0.apply_holes();
+        true
     }
 
     fn go(&mut self, go: &WebGo, token: u64) {
@@ -362,6 +372,65 @@ impl Shared {
             }
             None if self.attached.replace(false) => frameless::detach(&ns, &parent),
             None => ns.orderOut(None),
+        }
+        self.apply_holes();
+    }
+
+    /// Cuts what lies over it (`holes`) out of its window, which is clear there: the menu or popover the Wings window
+    /// draws under it shows, and a click there goes to it, as a press on a window's clear part goes to the one under it.
+    /// Hiding the whole page for a menu left it black under the menu.
+    fn apply_holes(&self) {
+        use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+        use objc2_core_graphics::CGMutablePath;
+        use objc2_quartz_core::{CAShapeLayer, kCAFillRuleEvenOdd};
+
+        let Some(ns) = self.ns.borrow().clone() else { return };
+        let Some(content) = ns.contentView() else { return };
+        let holes = self.holes.borrow();
+        let size = content.bounds().size;
+        let rect = |x: f64, y: f64, w: f64, h: f64| CGRect::new(CGPoint::new(x, y), CGSize::new(w, h));
+        // SAFETY: AppKit's and Core Animation's objects, on the main thread; no transform for the path.
+        unsafe {
+            let layer: *mut objc2::runtime::AnyObject = objc2::msg_send![&*content, layer];
+            if layer.is_null() {
+                return;
+            }
+            if holes.is_empty() {
+                let _: () = objc2::msg_send![layer, setMask: std::ptr::null::<objc2::runtime::AnyObject>()];
+                return;
+            }
+            ns.setOpaque(false);
+            ns.setBackgroundColor(Some(&objc2_app_kit::NSColor::clearColor()));
+            let path = CGMutablePath::new();
+            CGMutablePath::add_rect(Some(&path), std::ptr::null(), rect(0.0, 0.0, size.width, size.height));
+            let flipped = content.isFlipped();
+            for hole in holes.iter() {
+                let (x, y) = (f64::from(f32::from(hole.at.origin.x)), f64::from(f32::from(hole.at.origin.y)));
+                let (w, h) = (f64::from(f32::from(hole.at.size.width)), f64::from(f32::from(hole.at.size.height)));
+                // From the top left, as the hole is given, to the layer's own.
+                let at = |x: f64, y: f64| (x, if flipped { y } else { size.height - y });
+                let corners = [(x + w, y), (x + w, y + h), (x, y + h), (x, y)];
+                let round = |corner: usize| f64::from(hole.corners[(corner + 1) % 4]);
+                let (start_x, start_y) = at(x + f64::from(hole.corners[0]), y);
+                CGMutablePath::move_to_point(Some(&path), std::ptr::null(), start_x, start_y);
+                // Round each corner toward the next one, top right first.
+                for (index, &(corner_x, corner_y)) in corners.iter().enumerate() {
+                    let (cx, cy) = at(corner_x, corner_y);
+                    if round(index) > 0.0 {
+                        let (next_x, next_y) = corners[(index + 1) % 4];
+                        let (nx, ny) = at(next_x, next_y);
+                        CGMutablePath::add_arc_to_point(Some(&path), std::ptr::null(), cx, cy, nx, ny, round(index));
+                    } else {
+                        CGMutablePath::add_line_to_point(Some(&path), std::ptr::null(), cx, cy);
+                    }
+                }
+                CGMutablePath::close_subpath(Some(&path));
+            }
+            let mask = CAShapeLayer::new();
+            mask.setFrame(rect(0.0, 0.0, size.width, size.height));
+            mask.setFillRule(kCAFillRuleEvenOdd);
+            mask.setPath(Some(&path));
+            let _: () = objc2::msg_send![layer, setMask: &*mask];
         }
     }
 

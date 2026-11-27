@@ -1002,8 +1002,9 @@ impl PageView {
             .clone()
             .unwrap_or_else(|| plain_text(&trigger.children));
         let spot = ui::spot(|| format!("page-menu:{name}"));
+        let trigger = menu_trigger(trigger, self.menu == Some(id));
         let trigger = self
-            .button_element(trigger, 0.0, cx)
+            .button_element(&trigger, 0.0, cx)
             .aria_expanded(self.menu == Some(id))
             .capture_any_mouse_down(cx.listener(move |view, _, _, _| {
                 view.pressed_open = view.menu == Some(id);
@@ -1196,4 +1197,29 @@ fn line_tab(
                 .cursor_pointer()
                 .hover(|style| style.text_color(rgb(theme::palette().foreground)))
         })
+}
+
+/// A menu's button as it is drawn: while its menu is open it keeps its tooltip to itself, which the Browser's "More"
+/// showed over the menu's item.
+fn menu_trigger(trigger: &tree::Button, open: bool) -> std::borrow::Cow<'_, tree::Button> {
+    if open && trigger.title.is_some() {
+        std::borrow::Cow::Owned(tree::Button { title: None, ..trigger.clone() })
+    } else {
+        std::borrow::Cow::Borrowed(trigger)
+    }
+}
+
+#[cfg(test)]
+mod menu_trigger_tests {
+    use super::*;
+
+    #[test]
+    fn a_menu_s_button_has_no_tooltip_while_its_menu_is_open() {
+        let json = r##"{ "id": 0, "type": "#root", "children": [{ "id": 4, "type": "Button", "props": { "label": "More", "title": "More" }, "children": [] }] }"##;
+        let tree = tree::Tree::parse(json).unwrap();
+        let Some(Node::Button(button)) = tree.children.first() else { panic!("a button") };
+        assert_eq!(menu_trigger(&button, false).title.as_deref(), Some("More"));
+        assert_eq!(menu_trigger(&button, true).title, None);
+        assert_eq!(menu_trigger(&button, true).label.as_deref(), Some("More"), "it keeps its name");
+    }
 }

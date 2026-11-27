@@ -63,9 +63,31 @@ pub fn hold_tooltips(held: bool) {
     HELD.set(held);
 }
 
+thread_local! {
+    /// Where the buttons whose menus are open are, by window and menu (`behaviors::note_press`).
+    static OPEN_TRIGGERS: RefCell<HashMap<(WindowId, ElementId), Bounds<Pixels>>> = RefCell::default();
+}
+
+/// The button at `bounds` in `window` has its menu `menu` open: its tooltip doesn't show over the menu until it closes.
+pub(crate) fn menu_open_at(window: WindowId, menu: ElementId, bounds: Bounds<Pixels>) {
+    OPEN_TRIGGERS.with_borrow_mut(|open| open.insert((window, menu), bounds));
+}
+
+/// The menu `menu` is closed: its button shows its tooltip again.
+pub(crate) fn menu_closed(menu: &ElementId) {
+    OPEN_TRIGGERS.with_borrow_mut(|open| open.retain(|(_, of), _| of != menu));
+}
+
+/// Whether the pointer is on a button whose menu is open (`menu_open_at`).
+fn on_open_menus_button(window: &Window) -> bool {
+    let id = window.window_handle().window_id();
+    let pointer = window.mouse_position();
+    OPEN_TRIGGERS.with_borrow(|open| open.iter().any(|((of, _), at)| *of == id && at.contains(&pointer)))
+}
+
 impl Render for Tooltip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        if HELD.get() {
+    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        if HELD.get() || on_open_menus_button(window) {
             return div().into_any_element();
         }
         let shortcut = self.shortcut.clone();
@@ -373,6 +395,45 @@ mod tests {
         app.run_until_parked();
         window.draw();
         assert!(shown_in(id), "let go");
+    }
+
+    /// A menu's button, its menu open or not.
+    struct MenuButton(bool);
+
+    impl Render for MenuButton {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(gpui::deferred(tooltip_exit())).child(crate::ui::behaviors::note_press(
+                div().id("open-in").size(px(28.0)).tooltip(tooltip("Open in…", None)),
+                "open-in-menu",
+                self.0,
+            ))
+        }
+    }
+
+    /// A menu's button shows no tooltip over its open menu, and its own again once the menu closes.
+    #[test]
+    fn a_menus_button_shows_no_tooltip_while_its_menu_is_open() {
+        let mut app = TestApp::new();
+        let mut window = app.open_window(|_, _| MenuButton(true));
+        let id = window.update(|_, window, _| window.window_handle().window_id());
+        window.draw();
+        window.simulate_mouse_move(point(px(10.0), px(10.0)));
+        app.advance_clock(Duration::from_millis(600));
+        app.run_until_parked();
+        window.draw();
+        assert!(!shown_in(id), "open");
+        window.update(|button, _, cx| {
+            button.0 = false;
+            cx.notify();
+        });
+        window.draw();
+        window.simulate_mouse_move(point(px(40.0), px(40.0)));
+        window.draw();
+        window.simulate_mouse_move(point(px(11.0), px(11.0)));
+        app.advance_clock(Duration::from_millis(600));
+        app.run_until_parked();
+        window.draw();
+        assert!(shown_in(id), "closed");
     }
 
     /// GPUI drops the tooltip as the pointer leaves; the window goes on drawing it, fading and shrinking, for the

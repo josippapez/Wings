@@ -462,7 +462,7 @@ impl Element for Cover {
 }
 
 /// Where the overlays of the window `id` are in its last draw (`cover`), as far as each shows.
-pub(super) fn covers(id: WindowId) -> Vec<Bounds<Pixels>> {
+pub(crate) fn covers(id: WindowId) -> Vec<Bounds<Pixels>> {
     let mut covers = blocking_covers(id);
     covers.extend(shown_bounds(id, PASSIVE_COVERS));
     covers
