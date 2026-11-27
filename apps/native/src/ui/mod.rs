@@ -80,7 +80,7 @@ pub use status_dot::{
     view_status_dot_slot,
 };
 pub use switch::switch;
-pub use tooltip::{tip, tooltip, tooltip_exit, tooltip_with};
+pub use tooltip::{hold_tooltips, tip, tooltip, tooltip_exit, tooltip_with};
 #[cfg(all(test, feature = "test-support"))]
 pub(crate) use tooltip::shown_in as tooltip_shown_in;
 

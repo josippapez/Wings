@@ -5,7 +5,7 @@
 //! one where it was, fading and shrinking out as the desktop's `data-closed:animate-out` (`tooltip_exit`).
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     rc::Rc,
     time::{Duration, Instant},
@@ -52,8 +52,22 @@ pub fn tooltip_with(label: impl Fn() -> SharedString + 'static) -> impl Fn(&mut 
     }
 }
 
+thread_local! {
+    static HELD: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Holds every tooltip back while `held`, one showing included, which fades out: for a window of another kind open
+/// over Wings' own under the pointer, a Chromium extension's popup under its button, which Wings' tooltip of the
+/// button drew over while the pointer stayed on it.
+pub fn hold_tooltips(held: bool) {
+    HELD.set(held);
+}
+
 impl Render for Tooltip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        if HELD.get() {
+            return div().into_any_element();
+        }
         let shortcut = self.shortcut.clone();
         let card: Rc<dyn Fn() -> Div> = match &self.label {
             Label::Fixed(label) => {
@@ -66,7 +80,7 @@ impl Render for Tooltip {
             }
         };
         // tw-animate-css's default 150ms, as the desktop's tooltip sets no duration.
-        tip(motion::TOOLTIP_IN, card)
+        tip(motion::TOOLTIP_IN, card).into_any_element()
     }
 }
 
@@ -335,6 +349,30 @@ mod tests {
         // It fades and slides in over 150ms, and stays.
         wait(&mut window, motion::TOOLTIP_IN.as_millis() as u64);
         assert!(made.get() > 0);
+    }
+
+    /// While tooltips are held (an extension's popup shows under its button), the pointer resting on a button shows
+    /// none; once they aren't, it shows its own again.
+    #[test]
+    fn no_tooltip_shows_while_tooltips_are_held() {
+        let mut app = TestApp::new();
+        let mut window = app.open_window(|_, _| Trigger(Rc::new(Cell::new(0))));
+        let id = window.update(|_, window, _| window.window_handle().window_id());
+        window.draw();
+        hold_tooltips(true);
+        window.simulate_mouse_move(point(px(10.0), px(10.0)));
+        app.advance_clock(Duration::from_millis(600));
+        app.run_until_parked();
+        window.draw();
+        assert!(!shown_in(id), "held");
+        hold_tooltips(false);
+        window.simulate_mouse_move(point(px(40.0), px(40.0)));
+        window.draw();
+        window.simulate_mouse_move(point(px(11.0), px(11.0)));
+        app.advance_clock(Duration::from_millis(600));
+        app.run_until_parked();
+        window.draw();
+        assert!(shown_in(id), "let go");
     }
 
     /// GPUI drops the tooltip as the pointer leaves; the window goes on drawing it, fading and shrinking, for the

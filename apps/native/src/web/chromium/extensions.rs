@@ -36,6 +36,9 @@ const POPUP: NSSize = NSSize { width: 380.0, height: 600.0 };
 /// How long after its popup lost the keyboard a click on the same button closes it rather than opening it again: the
 /// press on the button is what took the keyboard away.
 const TOGGLE_WITHIN: Duration = Duration::from_millis(800);
+/// How far from where the pointer was as the popup lost the keyboard that click may be, in points: a press elsewhere
+/// (a Wings tab) took it, and the click on the button that follows opens the popup.
+const TOGGLE_NEAR: f64 = 4.0;
 
 /// An extension loaded into Chromium.
 #[derive(Clone, Debug)]
@@ -66,8 +69,8 @@ thread_local! {
     static BADGES: RefCell<HashMap<String, Badges>> = RefCell::default();
     /// The extension workers followed, by their session on the browser target, with their extension's Chromium id.
     static WORKERS: RefCell<HashMap<String, String>> = RefCell::default();
-    /// The extension whose popup lost the keyboard last, and when.
-    static CLOSED: RefCell<Option<(String, Instant)>> = const { RefCell::new(None) };
+    /// The extension whose popup lost the keyboard last, when, and where the pointer was then.
+    static CLOSED: RefCell<Option<Closed>> = const { RefCell::new(None) };
 }
 
 /// Asks the browser target `method` with `params`, and `done` hears its answer.
@@ -543,10 +546,23 @@ struct Popup {
     parent: Retained<NSWindow>,
 }
 
-/// Whether a click of the button of `id` comes right after its own popup lost the keyboard (`closed`), as a press on
-/// the button while the popup shows does: the click closes it, as in Chrome, rather than opening it again.
-fn toggles_off(closed: Option<&(String, Instant)>, id: &str, now: Instant) -> bool {
-    closed.is_some_and(|(closed, at)| closed == id && now.saturating_duration_since(*at) < TOGGLE_WITHIN)
+/// A popup that lost the keyboard: whose, when, and where the pointer was.
+#[derive(Clone)]
+struct Closed {
+    id: String,
+    at: Instant,
+    pointer: NSPoint,
+}
+
+/// Whether a click of the button of `id` with the pointer at `pointer` comes right after its own popup lost the
+/// keyboard (`closed`), where it was then, as a press on the button while the popup shows does: the click closes it, as
+/// in Chrome, rather than opening it again. A popup closed by a press elsewhere (a Wings tab, then the Browser's tab
+/// again) left the next click on its button to do nothing.
+fn toggles_off(closed: Option<&Closed>, id: &str, now: Instant, pointer: NSPoint) -> bool {
+    closed.is_some_and(|closed| {
+        let near = (closed.pointer.x - pointer.x).abs() <= TOGGLE_NEAR && (closed.pointer.y - pointer.y).abs() <= TOGGLE_NEAR;
+        closed.id == id && now.saturating_duration_since(closed.at) < TOGGLE_WITHIN && near
+    })
 }
 
 /// A click of your own on the button of the extension `id` in `page`'s toolbar: its popup opens under the button, or
@@ -559,7 +575,7 @@ pub fn click(page: &Shared, id: &str) -> Result<(), String> {
             return Ok(());
         }
     }
-    if toggles_off(CLOSED.with_borrow(|closed| closed.clone()).as_ref(), id, Instant::now()) {
+    if toggles_off(CLOSED.with_borrow(|closed| closed.clone()).as_ref(), id, Instant::now(), NSEvent::mouseLocation()) {
         CLOSED.with_borrow_mut(|closed| *closed = None);
         return Ok(());
     }
@@ -573,6 +589,8 @@ pub fn click(page: &Shared, id: &str) -> Result<(), String> {
         *popup = Some(Popup { id: id.to_owned(), page: super::page::weak_of(page), window: None, ns: None, parent: parent.clone() })
     });
     runtime::opened();
+    // It opens under the pointer, left on its button: the button's tooltip would show over it.
+    crate::ui::hold_tooltips(true);
     let id = id.to_owned();
     frameless::open(
         &url,
@@ -583,7 +601,7 @@ pub fn click(page: &Shared, id: &str) -> Result<(), String> {
         Rc::new(move |active| {
             // A click anywhere else takes the keyboard from it: it closes, as in Chrome.
             if !active && POPUP_OPEN.with_borrow(|popup| popup.as_ref().is_some_and(|popup| popup.id == id && popup.window.is_some())) {
-                CLOSED.with_borrow_mut(|closed| *closed = Some((id.clone(), Instant::now())));
+                CLOSED.with_borrow_mut(|closed| *closed = Some(Closed { id: id.clone(), at: Instant::now(), pointer: NSEvent::mouseLocation() }));
                 close_popup();
             }
         }),
@@ -693,6 +711,7 @@ pub fn close_popup() {
         popup.parent.makeKeyWindow();
     }
     super::focus::resync(&popup.parent);
+    crate::ui::hold_tooltips(false);
     runtime::gone();
 }
 
@@ -905,11 +924,15 @@ mod tests {
     #[test]
     fn a_click_right_after_its_popup_lost_the_keyboard_closes_it_and_nothing_else_does() {
         let now = Instant::now();
-        let closed = ("bitwarden".to_owned(), now - Duration::from_millis(150));
-        assert!(toggles_off(Some(&closed), "bitwarden", now));
-        assert!(!toggles_off(Some(&closed), "ublock", now), "another extension's button");
-        assert!(!toggles_off(Some(&closed), "bitwarden", now + Duration::from_secs(2)), "long after");
-        assert!(!toggles_off(None, "bitwarden", now));
+        let button = NSPoint::new(900.0, 820.0);
+        let closed = Closed { id: "bitwarden".to_owned(), at: now - Duration::from_millis(150), pointer: button };
+        assert!(toggles_off(Some(&closed), "bitwarden", now, NSPoint::new(901.0, 819.0)), "the press on the button, a point off");
+        assert!(!toggles_off(Some(&closed), "ublock", now, button), "another extension's button");
+        assert!(!toggles_off(Some(&closed), "bitwarden", now + Duration::from_secs(2), button), "long after");
+        assert!(!toggles_off(None, "bitwarden", now, button));
+        // A press on a Wings tab closed it; the click on its button right after opens it.
+        let by_a_tab = Closed { pointer: NSPoint::new(300.0, 870.0), ..closed };
+        assert!(!toggles_off(Some(&by_a_tab), "bitwarden", now, button), "closed by a press elsewhere");
     }
 
     /// Chromium's copy asks for what the person allowed in Wings' dialog: of Bitwarden's manifest, the permissions the
