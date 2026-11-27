@@ -10,7 +10,9 @@
 //! ```
 //!
 //! The choice lives here, not in the plugin's web folder: `plugin-web` is shared with the side-by-side build, which may
-//! not have the engine. The archive is pinned by size and SHA-256, so whoever serves it can't change what is installed.
+//! not have the engine. The archive is pinned by size and SHA-256, so whoever serves it can't change what is installed,
+//! and the bundle it unpacks to by its tree hash (`tree_hash`), which every start of Chromium checks again
+//! (`verify_bundle`): the engine runs inside Wings' own process, so a file changed in it would run as Wings.
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -24,7 +26,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2_0_11::{Digest, Sha256};
 
 use super::Profile;
 
@@ -46,6 +48,8 @@ pub struct Pinned {
     pub sha256: &'static str,
     /// The bytes of the files in the archive: the most it may unpack to (plus `MARGIN`).
     pub unpacked: u64,
+    /// The `tree_hash` of the bundle the archive unpacks to, as `install` unpacks it: what `verify_bundle` checks.
+    pub tree: &'static str,
 }
 
 pub const PINNED: Pinned = Pinned {
@@ -55,16 +59,22 @@ pub const PINNED: Pinned = Pinned {
     size: 147_328_901,
     sha256: "fa275c5921611e274965793715f6f21927e8b01c16bfa9421d457f996fad668a",
     unpacked: 343_012_256,
+    tree: "38d65af53edd49714bac7895e364d25a5b9c8a2c87dbea0706a2cc867787aaca",
 };
 
 /// What the unpacked archive may hold beyond `Pinned::unpacked`: tar's headers and padding.
 const MARGIN: u64 = 8 << 20;
 /// The most entries an archive may hold: the CEF framework has a few hundred.
 const MAX_ENTRIES: usize = 20_000;
+/// The deepest a folder in the bundle may be: the framework's resources are about ten down.
+const MAX_DEPTH: usize = 32;
 const BUNDLE: &str = "Wings Chromium.app";
 /// Written last: a folder without it is an install that didn't finish.
 const FINISHED: &str = "finished";
 const WRONG_DOWNLOAD: &str = "The download didn't match what Wings expects, so it was deleted. Try again.";
+/// Why Chromium doesn't start when its bundle isn't, file for file, the one Wings installed.
+pub const CHANGED: &str = "Chromium's files were changed after install. Remove and download it again.";
+const UNPACKED_WRONG: &str = "Chromium didn't unpack to the files Wings expects, so it wasn't installed. Try again.";
 
 // ---- Where things are ----
 
@@ -108,7 +118,7 @@ pub fn available() -> Result<(), &'static str> {
 fn macos_major() -> Option<u32> {
     static MAJOR: OnceLock<Option<u32>> = OnceLock::new();
     *MAJOR.get_or_init(|| {
-        let out = std::process::Command::new("sw_vers").arg("-productVersion").output().ok()?;
+        let out = std::process::Command::new("/usr/bin/sw_vers").arg("-productVersion").output().ok()?;
         String::from_utf8_lossy(&out.stdout).trim().split('.').next()?.parse().ok()
     })
 }
@@ -261,12 +271,12 @@ pub fn verify() -> Result<(), String> {
 
 fn verify_in(root: &Path, pin: &Pinned) -> Result<(), String> {
     let path = downloads_in(root).join(pin.file);
-    let mut file = fs::File::open(&path).map_err(|_| "There is no download to check. Try again.".to_owned())?;
+    let file = fs::File::open(&path).map_err(|_| "There is no download to check. Try again.".to_owned())?;
     let metadata = file.metadata().map_err(|error| error.to_string())?;
-    let mut hash = Sha256::new();
-    let hashed = if metadata.len() == pin.size { std::io::copy(&mut file, &mut hash).map(drop) } else { Ok(()) };
-    let digest: String = hash.finalize().iter().map(|byte| format!("{byte:02x}")).collect();
-    drop(file);
+    let mut source = Hashing { inner: file, hash: Sha256::new(), read: 0 };
+    let hashed = if metadata.len() == pin.size { std::io::copy(&mut source, &mut std::io::sink()).map(drop) } else { Ok(()) };
+    let digest: String = source.hash.finalize().iter().map(|byte| format!("{byte:02x}")).collect();
+    drop(source.inner);
     if hashed.is_ok() && metadata.len() == pin.size && digest == pin.sha256 {
         return Ok(());
     }
@@ -274,38 +284,186 @@ fn verify_in(root: &Path, pin: &Pinned) -> Result<(), String> {
     Err(WRONG_DOWNLOAD.into())
 }
 
-/// `codesign --verify --deep --strict` on `bundle`: the engine is signed as it was packaged, and nothing in it changed.
-pub fn verify_signature(bundle: &Path) -> Result<(), String> {
-    let out = std::process::Command::new("codesign")
-        .args(["--verify", "--deep", "--strict"])
-        .arg(bundle)
-        .output()
-        .map_err(|error| format!("Couldn't check Chromium's signature: {error}"))?;
-    if out.status.success() {
-        return Ok(());
+/// What the last `verify_bundle` of this run found wrong, for the Engine section to say (`failed_check`).
+static FAILED_CHECK: Mutex<Option<String>> = Mutex::new(None);
+
+/// Why Chromium didn't start this run, if its files failed their check.
+pub fn failed_check() -> Option<String> {
+    FAILED_CHECK.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
+}
+
+fn note_check(failed: Option<String>) {
+    *FAILED_CHECK.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = failed;
+}
+
+/// Whether the engine at `bundle` is, file for file, the one this build pins (`Pinned::tree`): what Wings unpacked from
+/// the archive it checked, with nothing changed, added or taken away since. Run it off the main thread before every
+/// start of Chromium: it reads every byte of the bundle (343 MB, 0.22 s in a release build on an M-series Mac).
+///
+/// It proves the files were right as it read them. A program running as you can still change one between this check and
+/// CEF loading it; only an engine signed with a Developer ID, the hardened runtime and library validation closes that.
+pub fn verify_bundle(bundle: &Path) -> Result<(), String> {
+    verify_against(bundle, &PINNED)
+}
+
+fn verify_against(bundle: &Path, pin: &Pinned) -> Result<(), String> {
+    let checked = if matches_pin(bundle, pin) { Ok(()) } else { Err(CHANGED.to_owned()) };
+    note_check(checked.clone().err());
+    checked
+}
+
+/// The name `web::chromium::runtime` calls `verify_bundle` by, from when the engine's signature was all it checked.
+pub use self::verify_bundle as verify_signature;
+
+fn matches_pin(bundle: &Path, pin: &Pinned) -> bool {
+    tree_hash(bundle, pin.unpacked).is_ok_and(|tree| tree.hash == pin.tree)
+}
+
+/// What `tree_hash` read.
+pub struct Tree {
+    /// The SHA-256, as hex.
+    pub hash: String,
+    /// The bytes of its files, and how many files and folders it holds.
+    pub bytes: u64,
+    pub entries: usize,
+}
+
+/// The SHA-256 of the bundle folder `bundle`: each entry's kind and path in it, and for a file its mode, size and bytes,
+/// in the order of their names, so the same files give the same hash on any Mac and a file edited, added, removed,
+/// renamed or made executable gives another. A folder's mode is left out, as `extract` makes folders with the umask of
+/// whoever installs. Only files and folders: a link or anything else is refused, as `extract` never makes one. Stops at
+/// more than `max` bytes of files, `MAX_ENTRIES` entries or `MAX_DEPTH` folders down, which no bundle that matches has.
+pub fn tree_hash(bundle: &Path, max: u64) -> Result<Tree, String> {
+    let is_folder = fs::symlink_metadata(bundle).map_err(|error| format!("Couldn't read {}: {error}", bundle.display()))?.is_dir();
+    if !is_folder {
+        return Err(format!("{} is not a folder", bundle.display()));
     }
-    let why = String::from_utf8_lossy(&out.stderr);
-    let why = why.lines().next().unwrap_or("it didn't verify").trim();
-    Err(format!("Chromium's signature didn't check out: {why}"))
+    let mut walk = Walk { hash: Sha256::new(), bytes: 0, entries: 0, max, buffer: vec![0; 1 << 20] };
+    walk.folder(bundle, Path::new(""), 0)?;
+    let hash = walk.hash.finalize().iter().map(|byte| format!("{byte:02x}")).collect();
+    Ok(Tree { hash, bytes: walk.bytes, entries: walk.entries })
+}
+
+struct Walk {
+    hash: Sha256,
+    bytes: u64,
+    entries: usize,
+    max: u64,
+    buffer: Vec<u8>,
+}
+
+impl Walk {
+    /// Each entry goes in as its kind, its path's length and the path, then for a file its mode, its length and its
+    /// bytes, so no two trees hash the same stream.
+    fn folder(&mut self, dir: &Path, rel: &Path, depth: usize) -> Result<(), String> {
+        if depth > MAX_DEPTH {
+            return Err("folders nested too deep".into());
+        }
+        let failed = |path: &Path, error: std::io::Error| format!("Couldn't read {}: {error}", path.display());
+        let mut entries: Vec<fs::DirEntry> = fs::read_dir(dir).and_then(|entries| entries.collect()).map_err(|error| failed(dir, error))?;
+        entries.sort_by_key(fs::DirEntry::file_name);
+        for entry in entries {
+            self.entries += 1;
+            if self.entries > MAX_ENTRIES {
+                return Err("too many files".into());
+            }
+            let path = rel.join(entry.file_name());
+            let kind = entry.file_type().map_err(|error| failed(&path, error))?;
+            let tag = if kind.is_dir() {
+                b'd'
+            } else if kind.is_file() {
+                b'f'
+            } else {
+                return Err(format!("{} is a link or a special file", path.display()));
+            };
+            let name = path.as_os_str().as_encoded_bytes();
+            self.hash.update([tag]);
+            self.hash.update((name.len() as u64).to_le_bytes());
+            self.hash.update(name);
+            if kind.is_dir() {
+                self.folder(&entry.path(), &path, depth + 1)?;
+                continue;
+            }
+            // Its mode, size and bytes are what this one open found.
+            let mut file = fs::File::open(entry.path()).map_err(|error| failed(&path, error))?;
+            let meta = file.metadata().map_err(|error| failed(&path, error))?;
+            if !meta.is_file() {
+                return Err(format!("{} is a link or a special file", path.display()));
+            }
+            #[cfg(unix)]
+            let mode = std::os::unix::fs::MetadataExt::mode(&meta) & 0o7777;
+            #[cfg(not(unix))]
+            let mode = 0u32;
+            self.bytes = self.bytes.saturating_add(meta.len());
+            if self.bytes > self.max {
+                return Err("more bytes than the engine has".into());
+            }
+            self.hash.update(mode.to_le_bytes());
+            self.hash.update(meta.len().to_le_bytes());
+            let mut left = meta.len();
+            while left > 0 {
+                let want = self.buffer.len().min(usize::try_from(left).unwrap_or(usize::MAX));
+                let read = file.read(&mut self.buffer[..want]).map_err(|error| failed(&path, error))?;
+                if read == 0 {
+                    return Err(format!("{} changed while it was read", path.display()));
+                }
+                self.hash.update(&self.buffer[..read]);
+                left -= read as u64;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// What `archive` installs as, unpacked by `install`'s own steps into the empty folder `scratch` with nothing to check it
+/// against, and its bundle's `tree_hash`: the package script prints it for `Pinned::tree`
+/// (`examples/chromium_engine_pin.rs`). Only for an archive Wings' own script made.
+pub fn tree_of(archive: &Path, scratch: &Path) -> Result<(PathBuf, Tree), String> {
+    let file = fs::File::open(archive).map_err(|error| format!("Couldn't read {}: {error}", archive.display()))?;
+    extract(file, scratch, 4 << 30)?;
+    let bundle = scratch.join(BUNDLE);
+    let tree = tree_hash(&bundle, u64::MAX)?;
+    Ok((bundle, tree))
 }
 
 /// Unpacks the verified download and keeps it as the installed engine. Run it off the UI thread.
 pub fn install() -> Result<(), String> {
     let root = root().ok_or("Wings has no data folder")?;
-    install_in(&root, &PINNED, verify_signature)?;
+    install_in(&root, &PINNED, |bundle| if matches_pin(bundle, &PINNED) { Ok(()) } else { Err(UNPACKED_WRONG.into()) })?;
+    note_check(None);
     with_cache(&root, |cache| cache.installed = true);
     bump();
     Ok(())
 }
 
-/// Verifies again (the file may have changed since), unpacks into a fresh folder in `root` (the same volume), checks the
-/// bundle's signature with `signed`, moves the folder to `<root>/<version>`, writes the finished marker last, then
-/// deletes the download and any other version. Any failure deletes the fresh folder.
-fn install_in(root: &Path, pin: &Pinned, signed: impl FnOnce(&Path) -> Result<(), String>) -> Result<(), String> {
-    verify_in(root, pin)?;
+/// Installs the download in `root` (`install_from`). One that isn't the pinned archive is deleted, as `verify` deletes it.
+fn install_in(root: &Path, pin: &Pinned, check: impl FnOnce(&Path) -> Result<(), String>) -> Result<(), String> {
+    let path = downloads_in(root).join(pin.file);
+    let file = fs::File::open(&path).map_err(|_| "There is no download to check. Try again.".to_owned())?;
+    let installed = install_from(root, pin, file, check);
+    if matches!(&installed, Err(error) if error == WRONG_DOWNLOAD) {
+        let _ = fs::remove_file(&path);
+    }
+    installed
+}
+
+/// Unpacks `archive` into a fresh folder in `root` (the same volume), hashing every byte as it reads it, and keeps what
+/// it unpacked only when those bytes were the pinned archive's: what is installed is what was hashed, even if the file
+/// changes while it is read. Then checks the bundle with `check`, moves the folder to `<root>/<version>`, writes the
+/// finished marker last, and deletes the download and any other version. Any failure deletes the fresh folder.
+fn install_from(root: &Path, pin: &Pinned, archive: impl Read, check: impl FnOnce(&Path) -> Result<(), String>) -> Result<(), String> {
     let fresh = tempfile::Builder::new().prefix(".installing-").tempdir_in(root).map_err(|error| format!("Couldn't unpack Chromium: {error}"))?;
-    extract(&downloads_in(root).join(pin.file), fresh.path(), pin.unpacked + MARGIN)?;
-    signed(&fresh.path().join(BUNDLE))?;
+    // A byte past the pinned size is enough to tell a longer file.
+    let mut source = Hashing { inner: archive.take(pin.size + 1), hash: Sha256::new(), read: 0 };
+    let unpacked = extract(&mut source, fresh.path(), pin.unpacked + MARGIN);
+    // The pin covers the whole file, past the end of the archive in it too.
+    let rest = std::io::copy(&mut source, &mut std::io::sink());
+    let digest: String = source.hash.finalize().iter().map(|byte| format!("{byte:02x}")).collect();
+    if rest.is_err() || source.read != pin.size || digest != pin.sha256 {
+        return Err(WRONG_DOWNLOAD.into());
+    }
+    unpacked?;
+    check(&fresh.path().join(BUNDLE))?;
     let target = root.join(pin.version);
     let _ = fs::remove_dir_all(&target);
     let unpacked = fresh.keep();
@@ -320,6 +478,22 @@ fn install_in(root: &Path, pin: &Pinned, signed: impl FnOnce(&Path) -> Result<()
     Ok(())
 }
 
+/// A reader that hashes and counts what it reads from `inner`.
+struct Hashing<R> {
+    inner: R,
+    hash: Sha256,
+    read: u64,
+}
+
+impl<R: Read> Read for Hashing<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.inner.read(buffer)?;
+        self.hash.update(&buffer[..read]);
+        self.read += read as u64;
+        Ok(read)
+    }
+}
+
 /// Every version folder in `root` but `keep`.
 fn remove_versions(root: &Path, keep: Option<&str>) -> Result<(), String> {
     for entry in fs::read_dir(root).into_iter().flatten().flatten() {
@@ -332,11 +506,11 @@ fn remove_versions(root: &Path, keep: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// Unpacks `archive` into `into`, as the updater does (`updater::extract`): only files and folders, each under the
-/// bundle's folder, none twice, and no more than `max` bytes in all, which includes what the gzip stream expands to.
-fn extract(archive: &Path, into: &Path, max: u64) -> Result<(), String> {
+/// Unpacks the archive `source` into `into`, as the updater does (`updater::extract`): only files and folders, each under
+/// the bundle's folder, none twice, and no more than `max` bytes in all, which includes what the gzip stream expands to.
+fn extract(source: impl Read, into: &Path, max: u64) -> Result<(), String> {
     let refused = |what: &str| format!("Chromium's download holds {what}, so it wasn't installed");
-    let decoder = flate2::read::GzDecoder::new(fs::File::open(archive).map_err(|error| error.to_string())?);
+    let decoder = flate2::read::GzDecoder::new(source);
     // The whole decompressed stream, tar headers included.
     let mut tar = tar::Archive::new(decoder.take(max + 1));
     let (mut paths, mut total) = (HashSet::new(), 0u64);
@@ -380,6 +554,7 @@ fn extract(archive: &Path, into: &Path, max: u64) -> Result<(), String> {
 pub fn remove() -> Result<(), String> {
     let root = root().ok_or("Wings has no data folder")?;
     let result = remove_in(&root);
+    note_check(None);
     with_cache(&root, |cache| {
         cache.installed = false;
         for kind in cache.choices.values_mut() {

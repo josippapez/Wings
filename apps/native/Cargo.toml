@@ -70,6 +70,10 @@ ureq = "3.4.2"
 base64 = "0.22.1"
 minisign-verify = "=0.2.5"
 sha2 = "0.10.9"
+# The Chromium engine's checks (`web/engine.rs`), which read all 343 MB of it before every start of Chromium: 0.11 uses
+# Apple silicon's SHA-256 instructions, which 0.10 uses only with its `asm` feature and another crate. The version the
+# extensions' crate already builds.
+sha2-0-11 = { package = "sha2", version = "0.11.1" }
 semver = "1.0.28"
 tar = "0.4.46"
 flate2 = "1.1.10"
@@ -185,6 +189,10 @@ opt-level = 3
 [profile.dev.package.simd-adler32]
 opt-level = 3
 [profile.dev.package.adler2]
+opt-level = 3
+# And check the Chromium engine's 343 MB before it starts (`web/engine.rs`) with an optimised SHA-256: unoptimised, a debug
+# build's Chromium pages waited 3.4 s for it.
+[profile.dev.package.sha2]
 opt-level = 3
 
 [[example]]

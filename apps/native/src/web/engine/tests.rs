@@ -52,6 +52,7 @@ fn pin_for(bytes: &[u8], unpacked: u64) -> Pinned {
         size: bytes.len() as u64,
         sha256: Box::leak(sha.into_boxed_str()),
         unpacked,
+        tree: "",
     }
 }
 
@@ -168,13 +169,112 @@ fn an_archive_that_unpacks_to_more_than_pinned_is_refused() {
 }
 
 #[test]
-fn a_bundle_whose_signature_fails_is_not_installed() {
+fn a_bundle_that_fails_its_check_is_not_installed() {
     let bytes = good();
     let root = tempfile::tempdir().unwrap();
     let pin = pin_for(&bytes, 5);
     download_from(root.path(), &pin, &bytes[..]).unwrap();
     assert_eq!(install_in(root.path(), &pin, |_| Err("bad".into())), Err("bad".into()));
     assert_eq!(leftovers(root.path()), ["downloads"]);
+}
+
+/// What is installed is what was hashed: the archive is hashed as it is unpacked, from the one reader, so another archive
+/// read in its place (the file swapped or rewritten after `verify` checked it) is refused even when it unpacks cleanly.
+#[test]
+fn an_install_keeps_only_what_it_hashed_as_it_unpacked() {
+    let pinned = good();
+    let pin = pin_for(&pinned, 100);
+    let swapped = archive(&[("Wings Chromium.app/", b'5', b"", ""), ("Wings Chromium.app/evil", b'0', b"evil", "")]);
+    let root = tempfile::tempdir().unwrap();
+    assert_eq!(install_from(root.path(), &pin, &swapped[..], |_| Ok(())), Err(WRONG_DOWNLOAD.into()));
+    assert_eq!(leftovers(root.path()), Vec::<String>::new());
+    // Changed part way through.
+    let half = pinned.len() / 2;
+    let changed = pinned[..half].iter().copied().chain(swapped[half..].iter().copied()).collect::<Vec<u8>>();
+    assert_eq!(install_from(root.path(), &pin, &changed[..], |_| Ok(())), Err(WRONG_DOWNLOAD.into()));
+    // Longer than pinned: the end of the file counts too.
+    let longer = [&pinned[..], b"x"].concat();
+    assert_eq!(install_from(root.path(), &pin, &longer[..], |_| Ok(())), Err(WRONG_DOWNLOAD.into()));
+    assert_eq!(leftovers(root.path()), Vec::<String>::new());
+    install_from(root.path(), &pin, &pinned[..], |_| Ok(())).unwrap();
+    assert_eq!(fs::read(root.path().join("1.2.3/Wings Chromium.app/Contents/Info.plist")).unwrap(), b"plist");
+}
+
+/// An installed engine with `pin` holding its tree hash, unpacked from an archive with an executable in it.
+fn installed() -> (tempfile::TempDir, PathBuf, Pinned) {
+    let bytes = archive(&[
+        ("Wings Chromium.app/", b'5', b"", ""),
+        ("Wings Chromium.app/Contents/", b'5', b"", ""),
+        ("Wings Chromium.app/Contents/Info.plist", b'0', b"plist", ""),
+        ("Wings Chromium.app/Contents/Frameworks/", b'5', b"", ""),
+        ("Wings Chromium.app/Contents/Frameworks/helper", b'0', b"\xcf\xfa\xed\xfe code", ""),
+    ]);
+    let mut pin = pin_for(&bytes, 100);
+    let (root, result) = install(&bytes, &pin);
+    result.unwrap();
+    let bundle = installed_in(root.path(), &pin).unwrap();
+    pin.tree = Box::leak(tree_hash(&bundle, pin.unpacked).unwrap().hash.into_boxed_str());
+    (root, bundle, pin)
+}
+
+#[test]
+fn an_installed_engine_matches_its_tree_hash_and_any_change_to_its_files_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_root, bundle, pin) = installed();
+    assert_eq!(verify_against(&bundle, &pin), Ok(()));
+    assert_eq!(failed_check(), None);
+    let changes: [(&str, fn(&Path)); 8] = [
+        ("a file's bytes", |bundle| fs::write(bundle.join("Contents/Frameworks/helper"), b"\xcf\xfa\xed\xfe evil").unwrap()),
+        ("a byte added", |bundle| fs::write(bundle.join("Contents/Info.plist"), b"plist ").unwrap()),
+        ("a file made executable", |bundle| fs::set_permissions(bundle.join("Contents/Info.plist"), fs::Permissions::from_mode(0o755)).unwrap()),
+        ("a file added", |bundle| fs::write(bundle.join("Contents/Frameworks/libevil.dylib"), b"").unwrap()),
+        ("a folder added", |bundle| fs::create_dir(bundle.join("Contents/Plugins")).unwrap()),
+        ("a file removed", |bundle| fs::remove_file(bundle.join("Contents/Info.plist")).unwrap()),
+        ("a file renamed", |bundle| fs::rename(bundle.join("Contents/Info.plist"), bundle.join("Contents/Info.plisu")).unwrap()),
+        ("a file moved", |bundle| fs::rename(bundle.join("Contents/Frameworks/helper"), bundle.join("Contents/helper")).unwrap()),
+    ];
+    for (what, change) in changes {
+        let (_root, bundle, pin) = installed();
+        change(&bundle);
+        assert_eq!(verify_against(&bundle, &pin), Err(CHANGED.into()), "{what}");
+        // The Engine section says so.
+        assert_eq!(failed_check().as_deref(), Some(CHANGED), "{what}");
+    }
+    // A second install starts afresh, on the same files.
+    let (_root, again, _) = installed();
+    assert_eq!(tree_hash(&again, 100).unwrap().hash, pin.tree);
+}
+
+/// The bundle holds only files and folders: a link (to a changed copy elsewhere, or to the same bytes) or a pipe in it is
+/// refused, as is the bundle being a link itself.
+#[test]
+fn a_link_or_a_special_file_in_an_installed_engine_is_refused() {
+    let (_root, bundle, pin) = installed();
+    let elsewhere = tempfile::tempdir().unwrap();
+    fs::copy(bundle.join("Contents/Info.plist"), elsewhere.path().join("Info.plist")).unwrap();
+    let swaps: [(&str, Box<dyn Fn(&Path)>); 4] = [
+        ("a link to the same bytes", Box::new(|bundle: &Path| {
+            fs::remove_file(bundle.join("Contents/Info.plist")).unwrap();
+            std::os::unix::fs::symlink(elsewhere.path().join("Info.plist"), bundle.join("Contents/Info.plist")).unwrap();
+        })),
+        ("a link to a folder", Box::new(|bundle: &Path| std::os::unix::fs::symlink(elsewhere.path(), bundle.join("Contents/Resources")).unwrap())),
+        ("a named pipe", Box::new(|bundle: &Path| {
+            let path = std::ffi::CString::new(bundle.join("Contents/fifo").as_os_str().as_encoded_bytes()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o644) }, 0);
+        })),
+        ("the bundle itself a link", Box::new(|bundle: &Path| {
+            let moved = bundle.with_file_name("moved.app");
+            fs::rename(bundle, &moved).unwrap();
+            std::os::unix::fs::symlink(&moved, bundle).unwrap();
+        })),
+    ];
+    assert!(matches_pin(&bundle, &pin));
+    for (what, swap) in swaps {
+        let (_root, bundle, pin) = installed();
+        swap(&bundle);
+        assert!(tree_hash(&bundle, pin.unpacked).is_err(), "{what}");
+        assert!(!matches_pin(&bundle, &pin), "{what}");
+    }
 }
 
 #[test]

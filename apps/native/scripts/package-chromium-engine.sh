@@ -4,7 +4,8 @@
 # Run it from the main checkout, through the build queue:
 #   sh scripts/build.sh sh apps/native/scripts/package-chromium-engine.sh
 # `CEF_PATH` is the exported CEF SDK (default: the spike's, ~/Library/Caches/wings-chromium-spike/sdk). It prints the
-# archive's size, unpacked size and SHA-256, which `PINNED` in engine.rs holds. Nothing is published.
+# archive's size, unpacked size and SHA-256, and the tree hash of the bundle Wings unpacks it to, which `PINNED` in
+# engine.rs holds. Nothing is published.
 set -eu
 repo=$(cd "$(dirname "$0")/../../.." && pwd -P)
 version=156.0.31
@@ -97,3 +98,5 @@ echo "size:     $size"
 echo "unpacked: $unpacked"
 echo "sha256:   $sha"
 echo "identity: $IDENTITY"
+# Unpacked by Wings' own install code, so it is the hash of the files as they are on disk after an install.
+cargo run --release --quiet --manifest-path "$repo/apps/native/Cargo.toml" --example chromium_engine_pin -- "$archive"
