@@ -392,6 +392,14 @@ pub fn switches(piped: bool) -> Vec<String> {
         // than showing Chrome's own login dialog.
         "disable-blink-features=DocumentPictureInPictureAPI",
         "disable-chrome-login-prompt",
+        // Nor do two features the switches above leave on: the omnibox's AI Mode asking Google whether this Chromium
+        // may use it (`aim_eligibility_fetch`, www.google.com/async/folae), and connecting ahead of time to the default
+        // search engine, Google (`SearchEnginePreconnector`). Chromium 156's names; CEF's own list is kept (`merged`).
+        "disable-features=AimEnabled,PreconnectToSearch",
+        // Nor Chrome's on-device AI model asking update.googleapis.com for its manifest (`update_client`, component
+        // ceofaddefefcbblgcgnibnonglccbfja), which it does on demand past disable-component-update: an override that
+        // names no manifest leaves it none to fetch (`CreateManifestDelegate` in Chromium 156).
+        "optimization-guide-manifest-override=/dev/null",
     ]
     .map(String::from)
     .to_vec();
@@ -418,6 +426,21 @@ pub fn switches(piped: bool) -> Vec<String> {
     switches
 }
 
+/// The switches whose value is a list Wings adds to.
+const LISTS: [&str; 2] = ["disable-features", "disable-blink-features"];
+
+/// A switch's value `had` with the items of `ours` it lacks added after its own, comma-separated: Chromium reads the last
+/// switch of a name only, so a list Wings adds to (`disable-features`) has to carry the one CEF set.
+fn merged(had: &str, ours: &str) -> String {
+    let mut items: Vec<&str> = had.split(',').filter(|item| !item.is_empty()).collect();
+    for item in ours.split(',').filter(|item| !item.is_empty()) {
+        if !items.contains(&item) {
+            items.push(item);
+        }
+    }
+    items.join(",")
+}
+
 wrap_app! {
     struct WingsApp {
         piped: bool,
@@ -429,7 +452,15 @@ wrap_app! {
             if let (true, Some(command_line)) = (browser, command_line) {
                 for switch in switches(self.piped) {
                     match switch.split_once('=') {
-                        Some((name, value)) => command_line.append_switch_with_value(Some(&CefString::from(name)), Some(&CefString::from(value))),
+                        Some((name, value)) => {
+                            let named = CefString::from(name);
+                            // CEF wrote its own list of features to turn off before this; a second switch would replace it.
+                            let value = match LISTS.contains(&name) {
+                                true => merged(&CefString::from(&command_line.switch_value(Some(&named))).to_string(), value),
+                                false => value.to_owned(),
+                            };
+                            command_line.append_switch_with_value(Some(&named), Some(&CefString::from(value.as_str())));
+                        }
                         None => command_line.append_switch(Some(&CefString::from(switch.as_str()))),
                     }
                 }
@@ -552,6 +583,8 @@ mod tests {
             "disable-breakpad",
             "disable-blink-features=DocumentPictureInPictureAPI",
             "disable-chrome-login-prompt",
+            "disable-features=AimEnabled,PreconnectToSearch",
+            "optimization-guide-manifest-override=/dev/null",
         ] {
             assert!(switches.iter().any(|switch| switch == wanted), "{wanted}");
         }
@@ -559,6 +592,17 @@ mod tests {
         assert_eq!(super::logging(root, false), (cef::LogSeverity::DISABLE, None), "a release build");
         assert_eq!(super::logging(root, true), (cef::LogSeverity::ERROR, Some(root.join("chromium.log"))));
         assert_eq!(super::OFF, ["credentials_enable_service", "credentials_enable_autosignin", "autofill.profile_enabled", "autofill.credit_card_enabled"]);
+    }
+
+    /// The features Wings turns off join those CEF turned off on the same switch, which Chromium reads once: none of
+    /// CEF's is lost, and none is named twice.
+    #[test]
+    fn wings_features_to_turn_off_join_cefs_own() {
+        let cef = "AutofillActorMode,BackForwardCache,GlicActorUi";
+        assert_eq!(super::merged(cef, "AimEnabled,PreconnectToSearch"), "AutofillActorMode,BackForwardCache,GlicActorUi,AimEnabled,PreconnectToSearch");
+        assert_eq!(super::merged("", "AimEnabled"), "AimEnabled", "CEF set none");
+        assert_eq!(super::merged("AimEnabled,LensOverlay", "AimEnabled"), "AimEnabled,LensOverlay");
+        assert_eq!(super::merged("DocumentPictureInPictureAPI", ""), "DocumentPictureInPictureAPI");
     }
 
     /// Files that failed their check before CEF loaded keep Chromium off only until the engine is removed or installed
