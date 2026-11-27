@@ -373,7 +373,7 @@ impl Shared {
     pub(super) fn tell(&self) {
         let now = self.now.borrow().clone();
         let imported = crate::web::holds_imported(&self.web_dir, &self.committed.borrow());
-        let extensions = if self.keep_data { super::extensions::buttons(&self.profile, imported) } else { Vec::new() };
+        let extensions = if self.keep_data { super::extensions::buttons(&self.profile, imported, &now.url) } else { Vec::new() };
         let state = State {
             url: now.url,
             title: now.title,

@@ -114,7 +114,11 @@ fn start(bundle: &std::path::Path) -> Result<(), String> {
     // Wings with it ("GPU process isn't usable").
     sandbox_bundle::install(&engine)?;
     pump::start();
-    let pipe = match pipe::open(|message| dispatch2::DispatchQueue::main().exec_async(move || super::extensions::heard(&message))) {
+    let pipe = match pipe::open(|message| {
+        if super::extensions::follows(&message) {
+            dispatch2::DispatchQueue::main().exec_async(move || super::extensions::heard(&message));
+        }
+    }) {
         Ok(pipe) => Some(pipe),
         Err(why) => {
             eprintln!("[chromium] no DevTools pipe, so no extensions: {why}");

@@ -3,6 +3,11 @@
 //! uninstalled the same way when turned off or removed (Chromium deletes what it stored then), shown as buttons in the
 //! page's toolbar, and a button's popup opened in a small frameless window under it.
 //!
+//! The DevTools protocol has no badges, so each loaded extension's worker is followed over the pipe as it starts
+//! (`Target.setAutoAttach`), and Wings' hook in it (`BADGE_HOOK`) reads its badges once, then again after every
+//! `action.setBadgeText`, and tells them to a binding only that session has: no polling. A followed worker stays running
+//! while Chromium does, as one with DevTools open does; workers of sites and of other extensions run on untouched.
+//!
 //! Chromium forgets an extension loaded this way at its next start (`ExtensionPrefs::CleanUpCdpInstalledExtensions`),
 //! so each run loads only what passes Wings' check that run.
 
@@ -54,14 +59,23 @@ thread_local! {
     static ASKED: RefCell<HashMap<u64, Answered>> = RefCell::default();
     static NEXT: Cell<u64> = const { Cell::new(1) };
     static POPUP_OPEN: RefCell<Option<Popup>> = const { RefCell::new(None) };
+    /// The badges each extension set, by its Chromium id (`BADGE_HOOK`).
+    static BADGES: RefCell<HashMap<String, Badges>> = RefCell::default();
+    /// The extension workers followed, by their session on the browser target, with their extension's Chromium id.
+    static WORKERS: RefCell<HashMap<String, String>> = RefCell::default();
     /// The extension whose popup lost the keyboard last, and when.
     static CLOSED: RefCell<Option<(String, Instant)>> = const { RefCell::new(None) };
 }
 
 /// Asks the browser target `method` with `params`, and `done` hears its answer.
 fn ask(method: &str, params: Value, done: impl FnOnce(Result<Value, String>) + 'static) {
+    ask_in(None, method, params, done);
+}
+
+/// `ask`, of the target attached as `session` (an extension's worker), or of the browser target for none.
+fn ask_in(session: Option<&str>, method: &str, params: Value, done: impl FnOnce(Result<Value, String>) + 'static) {
     let id = NEXT.replace(NEXT.get() + 1);
-    let message = json!({ "id": id, "method": method, "params": params }).to_string();
+    let message = super::devtools::request(id, method, params, session);
     ASKED.with_borrow_mut(|asked| asked.insert(id, Box::new(done)));
     if !runtime::send(message.as_bytes()) {
         if let Some(done) = ASKED.with_borrow_mut(|asked| asked.remove(&id)) {
@@ -70,10 +84,37 @@ fn ask(method: &str, params: Value, done: impl FnOnce(Result<Value, String>) + '
     }
 }
 
-/// A message from the browser target: the answer to a request of `ask`'s, or an event, which nothing here follows.
+/// The events of the browser target and its workers that `heard` follows.
+const FOLLOWED: [&str; 3] = ["Target.attachedToTarget", "Target.detachedFromTarget", "Runtime.bindingCalled"];
+
+/// Whether `heard` reads `message`, by its first bytes, on the pipe's own thread: a followed worker's console sends an
+/// event for each line, which never needs the main thread.
+pub fn follows(message: &[u8]) -> bool {
+    super::devtools::event_name(message).is_none_or(|name| FOLLOWED.iter().any(|followed| followed.as_bytes() == name))
+}
+
+/// A message from the browser target: the answer to a request of `ask`'s, or an event: a worker starting or gone, or
+/// what a followed worker's badges are now.
 pub fn heard(message: &[u8]) {
     let Ok(message) = serde_json::from_slice::<Value>(message) else { return };
-    let Some(id) = message["id"].as_u64() else { return };
+    let Some(id) = message["id"].as_u64() else {
+        let params = &message["params"];
+        match message["method"].as_str() {
+            Some("Target.attachedToTarget") => worker_started(params),
+            Some("Target.detachedFromTarget") => {
+                if let Some(chrome) = params["sessionId"].as_str().and_then(|session| WORKERS.with_borrow_mut(|workers| workers.remove(session))) {
+                    eprintln!("[chromium] no longer following an extension's worker: {chrome}");
+                }
+            }
+            Some("Runtime.bindingCalled") if params["name"] == BADGE_BINDING => {
+                if let (Some(session), Some(payload)) = (message["sessionId"].as_str(), params["payload"].as_str()) {
+                    badges_heard(session, payload);
+                }
+            }
+            _ => {}
+        }
+        return;
+    };
     let Some(done) = ASKED.with_borrow_mut(|asked| asked.remove(&id)) else { return };
     done(match message.get("error") {
         Some(error) => Err(error["message"].as_str().unwrap_or("Chromium refused").to_owned()),
@@ -81,9 +122,108 @@ pub fn heard(message: &[u8]) {
     });
 }
 
-/// CEF's global context is up: its profile's extensions load, each checked first.
+/// CEF's global context is up: its profile's extensions load, each checked first, and every worker that starts waits
+/// to be looked at (`worker_started`).
 pub fn started() {
     load_checked();
+    let workers = json!({ "autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true, "filter": [{ "type": "service_worker" }, { "exclude": true }] });
+    ask("Target.setAutoAttach", workers, |answer| {
+        if let Err(why) = answer {
+            eprintln!("[chromium] extensions' workers aren't followed, so their buttons show no badges: {why}");
+        }
+    });
+}
+
+/// The binding the badge hook tells, only in the sessions of followed workers.
+const BADGE_BINDING: &str = "wingsBadge";
+
+/// Run in a followed extension's worker: reads its badges, for every page and for each tab whose address it can see, and
+/// again after each `setBadgeText` it calls, and tells them to the binding.
+pub const BADGE_HOOK: &str = r#"(() => {
+  const action = globalThis.chrome && chrome.action;
+  const tell = globalThis.wingsBadge;
+  if (!action || typeof action.setBadgeText !== "function" || typeof tell !== "function" || action.setBadgeText.wings) return;
+  const read = () =>
+    Promise.all([action.getBadgeText({}), chrome.tabs.query({})])
+      .then(([all, tabs]) => Promise.all(tabs.filter((tab) => tab.url).map((tab) => action.getBadgeText({ tabId: tab.id }).then((text) => [tab.url, text])))
+        .then((pages) => tell(JSON.stringify({ all, pages }))))
+      .catch(() => {});
+  const set = action.setBadgeText;
+  const wrapped = function (...args) { const done = set.apply(this, args); read(); return done; };
+  wrapped.wings = true;
+  action.setBadgeText = wrapped;
+  read();
+})();"#;
+
+/// The badges of one extension: for every page, and for each page's address that has one of its own.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Badges {
+    pub all: String,
+    pub pages: HashMap<String, String>,
+}
+
+/// The most pages' badges kept of one extension: what it tells is its own, not Wings'.
+const BADGED_PAGES_MOST: usize = 200;
+
+impl Badges {
+    /// What the hook told, or none for what isn't that.
+    pub fn read(payload: &str) -> Option<Self> {
+        let told: Value = serde_json::from_str(payload).ok()?;
+        let pages = told["pages"].as_array()?.iter().take(BADGED_PAGES_MOST).filter_map(|page| Some((page[0].as_str()?.to_owned(), page[1].as_str()?.to_owned()))).collect();
+        Some(Self { all: told["all"].as_str().unwrap_or_default().to_owned(), pages })
+    }
+
+    /// The badge on the button of the page at `url`.
+    pub fn of(&self, url: &str) -> &str {
+        self.pages.get(url).unwrap_or(&self.all)
+    }
+}
+
+/// A worker started, waiting: one of an extension the person added is followed, any other runs on alone.
+fn worker_started(params: &Value) {
+    let Some(session) = params["sessionId"].as_str() else { return };
+    let url = params["targetInfo"]["url"].as_str().unwrap_or_default();
+    let chrome = url.strip_prefix("chrome-extension://").and_then(|rest| rest.split('/').next()).unwrap_or_default();
+    let added = !chrome.is_empty() && LOADED.with_borrow(|loaded| loaded.iter().any(|loaded| loaded.chrome == chrome));
+    ask_in(Some(session), "Runtime.runIfWaitingForDebugger", json!({}), |_| {});
+    if !added {
+        return ask("Target.detachFromTarget", json!({ "sessionId": session }), |_| {});
+    }
+    if WORKERS.with_borrow_mut(|workers| workers.insert(session.to_owned(), chrome.to_owned())).is_some() {
+        return;
+    }
+    // After it runs, so its `chrome.action` is there.
+    ask_in(Some(session), "Runtime.enable", json!({}), |_| {});
+    ask_in(Some(session), "Runtime.addBinding", json!({ "name": BADGE_BINDING }), |_| {});
+    ask_in(Some(session), "Runtime.evaluate", json!({ "expression": BADGE_HOOK }), |answer| {
+        if let Err(why) = answer {
+            eprintln!("[chromium] an extension's badges can't be read: {why}");
+        }
+    });
+}
+
+/// A worker that started as its extension loaded, before Chromium said which it was, is followed now.
+fn follow_running(chrome: &str) {
+    let prefix = format!("chrome-extension://{chrome}/");
+    ask("Target.getTargets", json!({}), move |answer| {
+        let Ok(answer) = answer else { return };
+        for target in answer["targetInfos"].as_array().into_iter().flatten() {
+            let running = target["type"] == "service_worker" && target["url"].as_str().is_some_and(|url| url.starts_with(&prefix)) && target["attached"] != true;
+            if let (true, Some(id)) = (running, target["targetId"].as_str()) {
+                // Its `Target.attachedToTarget` follows it.
+                ask("Target.attachToTarget", json!({ "targetId": id, "flatten": true }), |_| {});
+            }
+        }
+    });
+}
+
+/// A followed worker told its extension's badges: the pages show them.
+fn badges_heard(session: &str, payload: &str) {
+    let (Some(chrome), Some(badges)) = (WORKERS.with_borrow(|workers| workers.get(session).cloned()), Badges::read(payload)) else { return };
+    let changed = BADGES.with_borrow_mut(|all| all.insert(chrome, badges.clone()).is_none_or(|was| was != badges));
+    if let (true, Some(profile)) = (changed, runtime::global()) {
+        refresh(&profile.plugin);
+    }
 }
 
 /// Loads the global profile's extensions that are on and pass `extensions::verify`, checked off the main thread (hashing
@@ -126,6 +266,7 @@ pub fn load(profile: &Profile, extension: &extensions::Verified, done: impl FnOn
         Ok(result) => {
             let Some(chrome) = result["id"].as_str().map(str::to_owned) else { return done(Err("Chromium didn't say which extension it loaded".into())) };
             let (button, popup) = action_of(&manifest);
+            follow_running(&chrome);
             LOADED.with_borrow_mut(|loaded| loaded.push(Loaded { id, chrome, name, popup, button, icon }));
             refresh(&plugin);
             done(Ok(()))
@@ -149,6 +290,7 @@ pub fn unload(profile: &Profile, id: &str, done: impl FnOnce() + 'static) {
     if let Some(copy) = copy_of(id) {
         let _ = std::fs::remove_dir_all(copy);
     }
+    BADGES.with_borrow_mut(|badges| badges.remove(&loaded.chrome));
     ask("Extensions.uninstall", json!({ "id": loaded.chrome }), move |answer| {
         if let Err(why) = answer {
             eprintln!("[chromium] couldn't uninstall an extension: {why}");
@@ -158,8 +300,8 @@ pub fn unload(profile: &Profile, id: &str, done: impl FnOnce() + 'static) {
     });
 }
 
-/// The buttons of `profile`'s extensions for its pages, by name (`views::shown`).
-pub fn buttons(profile: &Profile, imported: bool) -> Vec<views::Extension> {
+/// The buttons of `profile`'s extensions for its page at `url`, by name (`views::shown`).
+pub fn buttons(profile: &Profile, imported: bool, url: &str) -> Vec<views::Extension> {
     if runtime::global().as_ref() != Some(profile) {
         return Vec::new();
     }
@@ -172,9 +314,7 @@ pub fn buttons(profile: &Profile, imported: bool) -> Vec<views::Extension> {
                 name: loaded.name.clone(),
                 label: loaded.name.clone(),
                 icon: loaded.icon.clone(),
-                // debt: Chromium's badge text (`action.setBadgeText`) has no event to follow; reading it needs the
-                // extension's worker over the DevTools pipe on every change, so the buttons show none yet.
-                badge: String::new(),
+                badge: BADGES.with_borrow(|badges| badges.get(&loaded.chrome).map(|badges| badges.of(url).to_owned())).unwrap_or_default(),
                 enabled: true,
             })
             .collect()
@@ -656,6 +796,39 @@ mod tests {
         assert_eq!(out["out"], json!(["http://127.0.0.1:8765/login", 1]), "{out}");
         assert!(out["asked"].as_array().unwrap().iter().any(|asked| asked == r#"{"active":true,"windowId":7}"#), "{out}");
         assert!(out["asked"].as_array().unwrap().iter().any(|asked| asked == r#"{"url":"https://*/*"}"#), "another query is the extension's own: {out}");
+    }
+
+    /// What the hook tells is the extension's badge for every page and for each page it set one on, read by the page's
+    /// address, at most `BADGED_PAGES_MOST` of them; anything else is no badge.
+    #[test]
+    fn an_extensions_badges_are_read_for_each_page_by_its_address() {
+        let badges = Badges::read(r#"{"all":"","pages":[["http://127.0.0.1:8765/login","3"],["https://a.com/",""],[1,"x"]]}"#).unwrap();
+        assert_eq!((badges.of("http://127.0.0.1:8765/login"), badges.of("https://a.com/"), badges.of("https://b.com/")), ("3", "", ""));
+        let everywhere = Badges::read(r#"{"all":"!","pages":[]}"#).unwrap();
+        assert_eq!(everywhere.of("https://b.com/"), "!");
+        let many: Vec<Value> = (0..500).map(|at| json!([format!("https://s{at}.com/"), "1"])).collect();
+        assert_eq!(Badges::read(&json!({ "all": "", "pages": many }).to_string()).unwrap().pages.len(), BADGED_PAGES_MOST);
+        assert_eq!(Badges::read("not json"), None);
+        assert_eq!(Badges::read(r#"{"all":"1"}"#), None);
+    }
+
+    /// The hook wraps `setBadgeText` once, reads badges and nothing else, and sends nothing anywhere but its binding.
+    #[test]
+    fn the_badge_hook_reads_badges_and_tells_only_its_binding() {
+        assert!(BADGE_HOOK.contains("action.setBadgeText.wings") && BADGE_HOOK.contains(&format!("globalThis.{BADGE_BINDING}")));
+        for sends in ["fetch(", "XMLHttpRequest", "WebSocket", "sendMessage", "eval(", "storage"] {
+            assert!(!BADGE_HOOK.contains(sends), "{sends}");
+        }
+    }
+
+    /// Only answers and the events `heard` follows cross to the main thread: a followed worker's console lines don't.
+    #[test]
+    fn only_answers_and_followed_events_leave_the_pipes_thread() {
+        assert!(follows(br#"{"id":3,"result":{}}"#));
+        assert!(follows(br#"{"method":"Target.attachedToTarget","params":{}}"#));
+        assert!(follows(br#"{"method":"Runtime.bindingCalled","params":{},"sessionId":"S"}"#));
+        assert!(!follows(br#"{"method":"Runtime.consoleAPICalled","params":{},"sessionId":"S"}"#));
+        assert!(!follows(br#"{"method":"Runtime.executionContextCreated","params":{},"sessionId":"S"}"#));
     }
 
     /// The popup opens under the pointer that pressed its button, at the page's top, and never past the page's sides.

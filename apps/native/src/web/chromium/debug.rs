@@ -11,6 +11,7 @@
 //! - `cookies <domain> <keep|session>`: imports a made-up cookie `wings_check` of `domain` into the first page's
 //!   profile, kept past this run or not, by the same code an import from another browser runs (`cookies::import`), so
 //!   no real browser's cookies are read; what it took shows in Wings' log later.
+//! - `buttons`: the extensions' buttons the first page's toolbar gets, with their badges.
 //! - `page`: where the first page is, as the gate reads it, and what its DevTools channel knows.
 
 use std::ffi::c_void;
@@ -121,6 +122,13 @@ fn run(command: &str) -> String {
             "importing".into()
         }
         (Some("page"), _) => first.as_ref().map_or_else(|| "no page".into(), |page| page.describe()),
+        (Some("buttons"), _) => match &first {
+            Some(page) => {
+                let buttons = extensions::buttons(&page.profile, false, &page.url_now());
+                buttons.iter().map(|button| format!("{}={:?}", button.name, button.badge)).collect::<Vec<_>>().join(", ")
+            }
+            None => "no page".into(),
+        },
         (Some("quit"), _) => {
             NSApplication::sharedApplication(mtm).terminate(None);
             "quitting".into()
