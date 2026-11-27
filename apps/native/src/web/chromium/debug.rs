@@ -8,6 +8,7 @@
 //! - `focus page` / `focus wings`: makes the first page's window, or Wings', the key window.
 //! - `state`: which window has the keyboard, whether Wings counts as active, and whether a popup shows.
 //! - `quit`: quits Wings as Cmd-Q does (`-[NSApplication terminate:]`).
+//! - `page`: where the first page is, as the gate reads it, and what its DevTools channel knows.
 
 use std::ffi::c_void;
 
@@ -100,6 +101,7 @@ fn run(command: &str) -> String {
             }
             None => "no page".into(),
         },
+        (Some("page"), _) => first.as_ref().map_or_else(|| "no page".into(), |page| page.describe()),
         (Some("quit"), _) => {
             NSApplication::sharedApplication(mtm).terminate(None);
             "quitting".into()

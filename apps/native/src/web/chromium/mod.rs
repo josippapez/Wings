@@ -3,12 +3,15 @@
 //! Chrome extensions only run in Chrome style, which CEF can't put inside another view on macOS.
 //!
 //! - [`page`]: one web view, its browser and what it tells its page.
+//! - [`devtools`] and [`agent`]: the page's own DevTools channel, and a plugin's scripts, pictures and logs over it.
 //! - [`runtime`]: starting CEF for the first page, its work, and closing it as Wings quits.
 //! - [`extensions`]: the profile's extensions, their buttons and popups.
 //! - [`focus`] and [`keys`]: the keyboard between Wings and a page.
 
+mod agent;
 #[cfg(debug_assertions)]
 mod debug;
+mod devtools;
 pub mod extensions;
 mod focus;
 pub mod keys;

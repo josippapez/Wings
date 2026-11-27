@@ -1,10 +1,10 @@
 //! One Chromium web view: a frameless Chrome-style window over the page's place in the Wings window (a child window
 //! of it, `wings_chromium::window`), its browser, and what it tells its page. It is made, placed and hidden by the same
-//! code as a WebKit view (`views::place`), and every command goes through the same gate (`web::gate`).
+//! code as a WebKit view (`views::place`), and every command goes through the same gate (`web::gate`); a plugin's
+//! scripts, pictures and logs then run over the page's own DevTools channel (`agent`).
 
 use std::{
     cell::{Cell, RefCell},
-    collections::VecDeque,
     path::PathBuf,
     rc::{Rc, Weak},
 };
@@ -17,7 +17,7 @@ use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use wings_chromium::window as frameless;
 
-use super::{focus, keys, runtime};
+use super::{agent, devtools::Incoming, focus, keys, runtime};
 use crate::{
     page::tree::WebGo,
     web::{
@@ -26,14 +26,10 @@ use crate::{
     },
 };
 
-/// Why an agent's command didn't run on a Chromium page.
-pub const NOT_YET: &str = "Agent tools don't work with the Chromium engine yet";
 /// What a page that crashed says until it reloads.
 pub const CRASHED: &str = "This page crashed. Reload to open it again.";
 /// Why another browser's sign-ins weren't imported.
 pub const NO_IMPORT: &str = "Importing sign-ins from another browser doesn't work with the Chromium engine yet";
-/// The most console messages kept of each page.
-const LOGS_KEPT: usize = 200;
 
 pub struct Chromium;
 
@@ -51,7 +47,8 @@ impl Maker for Chromium {
             committed: RefCell::default(),
             generation: Cell::new(0),
             chain_tainted: Cell::new(false),
-            logs: RefCell::default(),
+            agent: agent::Agent::default(),
+            ready: Cell::new(false),
             browser: RefCell::new(None),
             window: RefCell::new(None),
             ns: RefCell::new(None),
@@ -151,22 +148,26 @@ struct Now {
 }
 
 pub struct Shared {
-    told: Tell,
+    pub(super) told: Tell,
     pub(super) profile: Profile,
     keep_data: bool,
     scripts: bool,
-    web_dir: PathBuf,
+    pub(super) web_dir: PathBuf,
     /// Where it opens once CEF is up, which a `load` before that changes.
     start: RefCell<String>,
     now: RefCell<Now>,
     told_last: RefCell<Option<State>>,
     /// The address of the main frame's document, as CEF committed it, which commands act on.
-    committed: RefCell<String>,
+    pub(super) committed: RefCell<String>,
     /// Counts the main frame's new documents.
-    generation: Cell<u64>,
+    pub(super) generation: Cell<u64>,
     /// The main frame's navigation under way started from or passed through a site signed in with imported cookies.
     chain_tainted: Cell<bool>,
-    logs: RefCell<VecDeque<serde_json::Value>>,
+    /// Its plugin's scripts, pictures and logs.
+    pub(super) agent: agent::Agent,
+    /// Its browser exists and, for a plugin that may run scripts in its pages, its DevTools channel is readied: until
+    /// then it shows a blank page and keeps the commands sent, so nothing loads before the guard watches it.
+    ready: Cell<bool>,
     pub(super) browser: RefCell<Option<Browser>>,
     window: RefCell<Option<cef::Window>>,
     pub(super) ns: RefCell<Option<Retained<NSWindow>>>,
@@ -176,7 +177,7 @@ pub struct Shared {
     want: Cell<Option<Bounds<Pixels>>>,
     attached: Cell<bool>,
     closed: Cell<bool>,
-    /// Commands sent before its browser existed.
+    /// Commands sent before it was ready.
     pending: RefCell<Vec<(WebGo, u64)>>,
     /// The page's `alert`, `confirm` or `prompt` waiting for an answer, what it shows, and Wings' sheet showing it.
     dialog: RefCell<Option<(JsdialogCallback, JsdialogType, Dialog)>>,
@@ -213,7 +214,8 @@ impl Drop for Page {
 impl Shared {
     /// Opens its window, once CEF is up.
     fn open(self: &Rc<Self>) {
-        let url = self.start.borrow().clone();
+        // A plugin that may run scripts in its pages gets the address once its channel is readied (`ready`).
+        let url = if self.scripts { "about:blank".to_owned() } else { self.start.borrow().clone() };
         let client = PageClient::new(Rc::downgrade(self));
         let context = runtime::context(&self.profile, self.keep_data);
         let bounds = self.screen_rect().map_or(Rect { x: -10_000, y: -10_000, width: 800, height: 600 }, cef_rect);
@@ -305,8 +307,8 @@ impl Shared {
     }
 
     fn go(&self, go: &WebGo, token: u64) {
-        if self.browser.borrow().is_none() {
-            // Before CEF is up a load only changes where it opens.
+        if !self.ready.get() {
+            // Before it is ready a load only changes where it opens.
             if let WebGo::Load(url) = go {
                 self.start.replace(url.clone());
                 return;
@@ -342,10 +344,7 @@ impl Shared {
                 browser.reload()
             }
             WebGo::Stop => browser.stop_load(),
-            WebGo::Logs => {
-                let console: Vec<serde_json::Value> = self.logs.borrow().iter().cloned().collect();
-                self.told.tell(Heard::Result { token, result: Ok(serde_json::json!({ "console": console, "network": [] })) });
-            }
+            WebGo::Logs => self.told.tell(Heard::Result { token, result: agent::logs(self) }),
             WebGo::Dialog { accept, text } => {
                 let answered = self.answer(*accept, text.as_deref());
                 let result = if answered { Ok(serde_json::Value::Null) } else { Err("The page shows no dialog".into()) };
@@ -355,9 +354,8 @@ impl Shared {
                 let result = super::extensions::click(self, id);
                 self.told.tell(Heard::Result { token, result: result.map(|()| serde_json::Value::Null) });
             }
-            // debt: Chromium pages run no agent script or picture yet; they need the DevTools protocol's
-            // `Runtime.evaluate` in Wings' worlds and `Page.captureScreenshot`, behind the same guard as WebKit's.
-            WebGo::Eval { .. } | WebGo::Snapshot => self.told.tell(Heard::Result { token, result: Err(NOT_YET.into()) }),
+            WebGo::Eval { script, page } => agent::eval(self, script, *page, token),
+            WebGo::Snapshot => agent::screenshot(self, token),
         }
     }
 
@@ -366,10 +364,18 @@ impl Shared {
         self.now.borrow().url.clone()
     }
 
+    /// What a debug build's checks read of where it is (`debug`).
+    #[cfg(debug_assertions)]
+    pub(super) fn describe(&self) -> String {
+        let now = self.now.borrow();
+        format!("ready {}, loading {}, at {}, committed {}, generation {}; {}", self.ready.get(), now.loading, now.url, self.committed.borrow(), self.generation.get(), self.agent.describe())
+    }
+
     /// Tells the page where it is, if that changed since it last heard.
     pub(super) fn tell(&self) {
         let now = self.now.borrow().clone();
         let imported = crate::web::holds_imported(&self.web_dir, &self.committed.borrow());
+        let extensions = if self.keep_data { super::extensions::buttons(&self.profile, imported) } else { Vec::new() };
         let state = State {
             url: now.url,
             title: now.title,
@@ -379,7 +385,7 @@ impl Shared {
             error: now.error,
             dialog: self.dialog.borrow().as_ref().map(|(_, _, dialog)| dialog.clone()),
             imported,
-            extensions: if self.keep_data { super::extensions::buttons(&self.profile, imported) } else { Vec::new() },
+            extensions,
         };
         if self.told_last.borrow().as_ref() != Some(&state) {
             self.told_last.replace(Some(state.clone()));
@@ -387,13 +393,50 @@ impl Shared {
         }
     }
 
-    /// Its browser exists: commands sent before run now.
+    /// Its browser exists: for a plugin that may run scripts in its pages its DevTools channel is readied, then it is
+    /// ready (`readied`).
     fn browser_created(&self, browser: &Browser) {
         self.browser.replace(Some(browser.clone()));
+        if !self.scripts {
+            return self.readied(Ok(()));
+        }
+        let page = weak_of(self);
+        agent::open(self, browser, move |result| {
+            // On a turn of its own: Chromium may answer the last step while it is being sent.
+            super::next_turn(move || {
+                if let Some(page) = page.upgrade() {
+                    page.readied(result);
+                }
+            });
+        });
+    }
+
+    /// It is ready: it goes where it was asked to, and the commands sent before run now. A channel that couldn't be
+    /// readied leaves the page to show, and nothing reads or acts on it (`agent::Agent::guarded`).
+    fn readied(&self, result: Result<(), String>) {
+        if self.closed.get() || self.ready.replace(true) {
+            return;
+        }
+        if let Err(why) = result {
+            eprintln!("[chromium] a page's DevTools channel isn't readied, so nothing reads or acts on it: {why}");
+        }
+        if self.scripts {
+            let start = self.start.borrow().clone();
+            match self.browser.borrow().as_ref().and_then(Browser::main_frame) {
+                Some(frame) if start != "about:blank" => frame.load_url(Some(&CefString::from(start.as_str()))),
+                _ => self.now.borrow_mut().loading = false,
+            }
+            self.tell();
+        }
         let pending = std::mem::take(&mut *self.pending.borrow_mut());
         for (go, token) in pending {
             self.go(&go, token);
         }
+    }
+
+    /// What its DevTools channel heard.
+    pub(super) fn devtools(&self, incoming: Incoming) {
+        agent::heard(self, incoming);
     }
 
     /// The main frame committed a new document at `url`.
@@ -404,7 +447,7 @@ impl Shared {
             let _ = crate::web::note_imported(&self.web_dir, [host]);
         }
         self.committed.replace(url);
-        self.logs.borrow_mut().clear();
+        self.agent.clear_logs();
         self.generation.set(self.generation.get() + 1);
     }
 
@@ -629,7 +672,8 @@ wrap_load_handler! {
 
     impl LoadHandler {
         fn on_loading_state_change(&self, browser: Option<&mut Browser>, is_loading: ::std::os::raw::c_int, can_go_back: ::std::os::raw::c_int, can_go_forward: ::std::os::raw::c_int) {
-            let Some(page) = self.page.upgrade().filter(|page| page.browser_is(browser)) else { return };
+            // The blank page it shows until it is ready says nothing.
+            let Some(page) = self.page.upgrade().filter(|page| page.browser_is(browser) && page.ready.get()) else { return };
             {
                 let mut now = page.now.borrow_mut();
                 now.loading = is_loading != 0;
@@ -653,7 +697,7 @@ wrap_load_handler! {
         }
 
         fn on_load_error(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, error_code: Errorcode, error_text: Option<&CefString>, _failed_url: Option<&CefString>) {
-            let Some(page) = self.page.upgrade().filter(|page| page.browser_is(browser)) else { return };
+            let Some(page) = self.page.upgrade().filter(|page| page.browser_is(browser) && page.ready.get()) else { return };
             // A load stopped by another (a click before the page finished) isn't a failure the person needs to see.
             if frame.is_none_or(|frame| frame.is_main() == 0) || error_code == Errorcode::ABORTED {
                 return;
@@ -685,7 +729,7 @@ wrap_display_handler! {
 
     impl DisplayHandler {
         fn on_address_change(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, url: Option<&CefString>) {
-            let Some(page) = self.page.upgrade().filter(|page| page.browser_is(browser)) else { return };
+            let Some(page) = self.page.upgrade().filter(|page| page.browser_is(browser) && page.ready.get()) else { return };
             if frame.is_some_and(|frame| frame.is_main() != 0) {
                 page.now.borrow_mut().url = text(url);
                 page.tell();
@@ -694,32 +738,9 @@ wrap_display_handler! {
         }
 
         fn on_title_change(&self, browser: Option<&mut Browser>, title: Option<&CefString>) {
-            let Some(page) = self.page.upgrade().filter(|page| page.browser_is(browser)) else { return };
+            let Some(page) = self.page.upgrade().filter(|page| page.browser_is(browser) && page.ready.get()) else { return };
             page.now.borrow_mut().title = text(title);
             page.tell();
-        }
-
-        /// Kept for `logs` while the plugin may read its pages, and never from a site signed in with imported cookies.
-        fn on_console_message(&self, browser: Option<&mut Browser>, level: LogSeverity, message: Option<&CefString>, source: Option<&CefString>, _line: ::std::os::raw::c_int) -> ::std::os::raw::c_int {
-            let Some(page) = self.page.upgrade().filter(|page| page.browser_is(browser) && page.scripts) else { return 0 };
-            let source = text(source);
-            let host = crate::web::origin(&source).and_then(|origin| origin.split_once("://").map(|(_, host)| host.split(':').next().unwrap_or_default().to_owned())).unwrap_or_default();
-            if crate::web::holds_imported_host(&page.web_dir, &host) || crate::web::holds_imported(&page.web_dir, &page.committed.borrow()) {
-                return 0;
-            }
-            let level = match level {
-                LogSeverity::ERROR | LogSeverity::FATAL => "error",
-                LogSeverity::WARNING => "warn",
-                LogSeverity::VERBOSE => "debug",
-                _ => "log",
-            };
-            let line: String = text(message).chars().take(2000).collect();
-            let mut logs = page.logs.borrow_mut();
-            logs.push_back(serde_json::json!({ "kind": "console", "level": level, "text": line }));
-            while logs.len() > LOGS_KEPT {
-                logs.pop_front();
-            }
-            0
         }
     }
 }

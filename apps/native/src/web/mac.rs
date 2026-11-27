@@ -618,12 +618,12 @@ struct WebPage {
 /// The name the page's log script posts to.
 const LOG_HANDLER: &str = "wingsLog";
 /// The most console messages and requests kept of each page.
-const LOGS_KEPT: usize = 200;
+pub(in crate::web) const LOGS_KEPT: usize = 200;
 
 /// Sees the page's console messages, uncaught errors and `fetch`/`XMLHttpRequest` calls (method, address, status),
 /// never a body or a header, and posts each to Wings. It can't see the page's own loads (navigations, pictures, styles,
 /// scripts), a service worker's requests or web sockets.
-const LOGS: &str = r#"(() => {
+pub(in crate::web) const LOGS: &str = r#"(() => {
   const post = (m) => { try { webkit.messageHandlers.wingsLog.postMessage(m); } catch (_) {} };
   const text = (a) => a.map((x) => { try { return typeof x === "string" ? x : JSON.stringify(x); } catch (_) { return String(x); } }).join(" ").slice(0, 2000);
   for (const level of ["log", "info", "warn", "error", "debug"]) {
@@ -814,7 +814,7 @@ fn eval(view: &WKWebView, script: &str, world: &WKContentWorld, told: &Tell, obs
 }
 
 /// Why a script's answer was thrown away.
-const MOVED_ON: &str = "The page moved on while the script ran, so its answer was dropped: try again";
+pub(in crate::web) const MOVED_ON: &str = "The page moved on while the script ran, so its answer was dropped: try again";
 
 /// What a script returned, as JSON, read by Foundation from what WebKit made of it. One that isn't JSON (a date, a node)
 /// is an error rather than an exception, which would end the app: Foundation checks it first, inside an array, so a
