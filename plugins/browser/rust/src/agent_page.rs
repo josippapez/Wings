@@ -21,7 +21,7 @@ use std::{cell::RefCell, collections::HashMap};
 use wings_plugin::{
     host, messages,
     task::{Sender, oneshot, spawn},
-    ui::{button, notice, row},
+    ui::{Node, bar, button, card, dot, row, small, stack, title_with_context},
 };
 
 /// How long a page waits for what the web view answers to a script or a picture.
@@ -44,10 +44,20 @@ struct Agent {
     sent: Option<Value>,
     /// The scripts and pictures the views are asked for, by token (one count for all the tabs).
     waiting: HashMap<u64, Sender<Result<Value, String>>>,
-    /// The step the person was asked to do, and who waits for them to say it is done.
-    handoff: Option<(String, Option<Sender<()>>)>,
-    /// What the person was asked to show, and whether they pressed Continue.
-    demo: Option<(String, bool)>,
+    /// The step the person was asked to do, the agent that asked, and who waits for them to say it is done.
+    handoff: Option<(String, String, Option<Sender<()>>)>,
+    demo: Option<Demo>,
+}
+
+/// What the person was asked to show, while they show it.
+struct Demo {
+    message: String,
+    /// The name of the agent that asked, which the banner gives.
+    agent: String,
+    /// The steps recorded so far, which the banner counts.
+    steps: usize,
+    /// Done (true) or Cancel (false) pressed.
+    ended: Option<bool>,
 }
 
 thread_local! {
@@ -323,12 +333,12 @@ async fn resize(size: Option<(f64, f64)>) -> Result<Value, String> {
 
 /// Asks the person for a step (a sign-in, a captcha) in a banner on the page, and waits for them to press Done. It needs the
 /// person, so the agent's tab comes forward.
-async fn handoff(tab: &str, op: &Value) -> Result<Value, String> {
+async fn handoff(tab: &str, op: &Value, name: &str) -> Result<Value, String> {
     let message = text(op, "message")?.to_owned();
     let (sender, receiver) = oneshot();
     with(|page| page.tabs.activate(tab));
     tabs_changed();
-    agent(|agent| agent.handoff = Some((message, Some(sender))));
+    agent(|agent| agent.handoff = Some((message, name.to_owned(), Some(sender))));
     let done = within(op["timeout_ms"].as_f64().unwrap_or(120_000.0) as u32, receiver).await;
     agent(|agent| agent.handoff = None);
     match done {
@@ -410,11 +420,11 @@ pub async fn run(op: Value) -> Result<Value, String> {
         "pop_out" => pop_out(&tab, size_of(&op)).await,
         "pop_in" => pop_in(&tab).await,
         "resize" => resize(size_of(&op)).await,
-        "handoff" => handoff(&tab, &op).await,
+        "handoff" => handoff(&tab, &op, &name).await,
         "upload" => command(&tab, |token| json!({ "action": "upload", "ref": op["ref"], "selector": op["selector"], "files": op["files"], "token": token })).await,
         "screenshot_diff" => command(&tab, |token| json!({ "action": "screenshotDiff", "baseline": op["baseline"], "threshold": op["threshold"], "clip": op["clip"], "current": op["current"], "diff": op["diff"], "token": token })).await,
         "recording" => command(&tab, |token| json!({ "action": "record", "do": op["do"], "path": op["path"], "fps": op["fps"], "maxMs": op["maxMs"], "token": token })).await,
-        "demonstrate" => demonstrate(&tab, &op).await,
+        "demonstrate" => demonstrate(&tab, &op, &name).await,
         "webmcp" => webmcp(&tab, &op).await,
         other => Err(format!("The page doesn't know {other}")),
     }
@@ -422,33 +432,33 @@ pub async fn run(op: Value) -> Result<Value, String> {
 
 /// Done pressed on the banner.
 fn done() {
-    if let Some(sender) = agent(|agent| agent.handoff.as_mut().and_then(|(_, sender)| sender.take())) {
+    if let Some(sender) = agent(|agent| agent.handoff.as_mut().and_then(|(_, _, sender)| sender.take())) {
         sender.send(());
     }
 }
 
-/// Continue pressed on the banner of a demonstration.
-fn demo_done() {
+/// Done (`send` true) or Cancel pressed on the banner of a demonstration.
+fn demo_end(send: bool) {
     agent(|agent| {
-        if let Some((_, finished)) = agent.demo.as_mut() {
-            *finished = true;
+        if let Some(demo) = agent.demo.as_mut() {
+            demo.ended.get_or_insert(send);
         }
     });
 }
 
-/// The person shows the agent a flow in the tab, which comes forward with a banner and a Continue button. What they do is
-/// recorded (`agent_demo.rs`) by asking the tab's page for it twice a second, until they press Continue or the time is out.
-async fn demonstrate(tab: &str, op: &Value) -> Result<Value, String> {
+/// The person shows the agent a flow in the tab, which comes forward with a banner and Done and Cancel buttons. What they do
+/// is recorded (`agent_demo.rs`) by asking the tab's page for it twice a second, until they press one or the time is out.
+async fn demonstrate(tab: &str, op: &Value, name: &str) -> Result<Value, String> {
     let message = text(op, "message")?.to_owned();
     if agent(|agent| agent.demo.is_some()) {
-        return Err("The person is already showing something in this page: try again once they have pressed Continue.".into());
+        return Err("The person is already showing something in this page: try again once they have pressed Done.".into());
     }
     let limit = op["timeout_ms"].as_f64().unwrap_or(600_000.0);
     let url_of = || with(|page| page.tabs.get(tab).map(|tab| agent_url(&tab.state)));
     let mut recorder = Recorder::new(&url_of().unwrap_or_default());
     with(|page| page.tabs.activate(tab));
     tabs_changed();
-    agent(|agent| agent.demo = Some((message, false)));
+    agent(|agent| agent.demo = Some(Demo { message, agent: name.to_owned(), steps: 0, ended: None }));
     let begun = host::now();
     let (mut ended, mut refused) = (None, None);
     loop {
@@ -457,7 +467,7 @@ async fn demonstrate(tab: &str, op: &Value) -> Result<Value, String> {
             ended = Some("the tab was closed");
             break;
         };
-        let pressed = agent(|agent| agent.demo.as_ref().is_none_or(|(_, finished)| *finished));
+        let pressed = agent(|agent| agent.demo.as_ref().is_none_or(|demo| demo.ended.is_some()));
         let late = host::now() - begun >= limit;
         // The last ask also ends the recorder, so it stops listening in the page.
         let last = pressed || late;
@@ -469,6 +479,7 @@ async fn demonstrate(tab: &str, op: &Value) -> Result<Value, String> {
             None => {}
         }
         recorder.navigated(&url);
+        agent(|agent| agent.demo.iter_mut().for_each(|demo| demo.steps = recorder.steps().len()));
         with(|page| page.tabs.touch(tab, host::now()));
         if last {
             if !pressed {
@@ -477,7 +488,9 @@ async fn demonstrate(tab: &str, op: &Value) -> Result<Value, String> {
             break;
         }
     }
-    agent(|agent| agent.demo = None);
+    if agent(|agent| agent.demo.take().is_some_and(|demo| demo.ended == Some(false))) {
+        return Err("The person pressed Cancel: they didn't show you this. Ask them what they'd like, or carry on another way.".into());
+    }
     let mut answer = recorder.answer();
     if let Some(why) = ended {
         answer["endedBecause"] = json!(why);
@@ -516,17 +529,29 @@ fn webmcp_wants_page_world(action: &str, answer: &Value) -> bool {
     if action == "call" { answer["found"] != true } else { answer["tools"].as_array().is_none_or(|tools| tools.is_empty()) }
 }
 
-/// The banner that asks the person for a step, when an agent did, or to show a flow.
-pub fn handoff_banner() -> Option<wings_plugin::ui::Node> {
+/// The banner over an agent's tab while it waits on the person: to show it a flow (`demonstrate`), which is recorded until
+/// they press Done, or to do a step only they can (`handoff`). It says which agent asks, as its tab group is named.
+pub fn handoff_banner() -> Option<Node> {
     // In a bar, which sets it in from the page's sides as the toolbar is: a row alone met the page's edge.
-    let banner = |key: &'static str, message: String, label: &'static str, on: fn()| {
-        wings_plugin::ui::bar("bottom", [row().prop("gap", "s").prop("align", "center").child(notice("warn", message).prop("grow", true)).child(button(label, "default", false, on))]).key(key)
+    let banner = |key: &'static str, tone: &str, title: &str, context: String, message: String, note: String, buttons: Vec<Node>| {
+        let heading = row().prop("gap", "s").prop("align", "center").child(dot().prop("tone", tone)).child(title_with_context(title, &context));
+        let words = stack().prop("grow", true).prop("gap", "xs").child(heading).child(wings_plugin::ui::text(message)).child(small(note).prop("tone", "muted"));
+        bar("bottom", [card().child(row().prop("gap", "m").prop("align", "center").child(words).children(buttons))]).key(key)
     };
-    if let Some(message) = agent(|agent| agent.demo.as_ref().map(|(message, _)| message.clone())) {
-        return Some(banner("demo", message, "Continue", demo_done));
+    let demo = agent(|agent| agent.demo.as_ref().filter(|demo| demo.ended.is_none()).map(|demo| (demo.message.clone(), demo.agent.clone(), demo.steps)));
+    if let Some((message, name, steps)) = demo {
+        let count = match steps {
+            0 => "Nothing recorded yet.".to_owned(),
+            1 => "1 step recorded.".to_owned(),
+            n => format!("{n} steps recorded."),
+        };
+        let note = format!("{count} Do it in the page below, then press Done. Passwords are never recorded.");
+        let buttons = vec![button("Cancel", "ghost", false, || demo_end(false)), button("Done", "default", false, || demo_end(true))];
+        return Some(banner("demo", "danger", "Recording your steps", format!("for {name}"), message, note, buttons));
     }
-    let message = agent(|agent| agent.handoff.as_ref().map(|(message, _)| message.clone()))?;
-    Some(banner("handoff", message, "Done", done))
+    let (message, name) = agent(|agent| agent.handoff.as_ref().map(|(message, name, _)| (message.clone(), name.clone())))?;
+    let note = "Do it in the page below, then press Done.".to_owned();
+    Some(banner("handoff", "warn", "Your turn", format!("{name} is waiting"), message, note, vec![button("Done", "default", false, done)]))
 }
 
 /// Pop out, or put back when this page is a window: its toolbar button, for the tab shown.
@@ -905,7 +930,7 @@ mod tests {
     }
 
     #[test]
-    fn a_demonstration_shows_a_banner_on_the_agents_tab_records_until_continue_and_answers_steps_and_a_summary() {
+    fn a_demonstration_shows_a_banner_on_the_agents_tab_records_until_done_and_answers_steps_and_a_summary() {
         record();
         person_at("https://mine.com/");
         navigate_as("ses-a", "A", "https://a.com/login", false).unwrap();
@@ -919,7 +944,13 @@ mod tests {
         let ask = answer_last("t2", json!([{ "t": "fill", "selector": "#pw", "role": "textbox", "name": "Password", "value": "hunter2", "inputType": "password" }]));
         assert!(ask["script"].as_str().unwrap().ends_with("return d.drain(false);"), "recording goes on");
         with(|page| page.tabs.get_mut("t2").unwrap().state.url = "https://a.com/home".into());
-        demo_done();
+        // The banner says it records, for which agent, what it asked and how much it has.
+        let banner = wings_plugin::ui::tree_json(handoff_banner().unwrap()).to_string();
+        for words in ["Recording your steps", "for A", "Show me how to sign in", "1 step recorded.", "Cancel", "Done"] {
+            assert!(banner.contains(words), "{words}: {banner}");
+        }
+        demo_end(true);
+        assert!(handoff_banner().is_none(), "Done takes the banner away at once");
         testing::fire_timers();
         testing::settle();
         let last = answer_last("t2", json!([{ "t": "click", "selector": "#go", "role": "button", "name": "Sign in" }]));
@@ -928,6 +959,39 @@ mod tests {
         assert_eq!(answer["summary"], "1. fill textbox \"Password\" (#pw) with \"(hidden)\"\n2. click button \"Sign in\" (#go)\n3. go to https://a.com/home");
         assert!(!answer.to_string().contains("hunter2") && answer.get("endedBecause").is_none());
         assert!(handoff_banner().is_none());
+    }
+
+    #[test]
+    fn cancel_on_a_demonstration_ends_the_recorder_and_tells_the_agent_nothing_was_shown() {
+        record();
+        person_at("https://mine.com/");
+        navigate_as("ses-a", "A", "https://a.com/", false).unwrap();
+        let out = run_op(json!({ "op": "demonstrate", "message": "Show me", "caller": caller_for("ses-a", "A") }));
+        demo_end(false);
+        assert!(handoff_banner().is_none(), "Cancel takes the banner away at once");
+        testing::fire_timers();
+        testing::settle();
+        let last = answer_last("t2", json!([{ "t": "click", "selector": "#go", "role": "button", "name": "Go" }]));
+        assert!(last["script"].as_str().unwrap().ends_with("return d.drain(true);"), "the recorder stops");
+        let said = out.borrow().clone().unwrap().unwrap_err();
+        assert!(said.contains("Cancel") && !said.contains("#go"), "{said}");
+        // The next demonstration may start.
+        assert!(agent(|agent| agent.demo.is_none()));
+    }
+
+    #[test]
+    fn a_handoff_banner_names_the_agent_waiting_and_done_ends_it() {
+        record();
+        person_at("https://mine.com/");
+        navigate_as("ses-a", "Fix login", "https://a.com/", false).unwrap();
+        let out = run_op(json!({ "op": "handoff", "message": "Sign in, then press Done.", "caller": caller_for("ses-a", "Fix login") }));
+        let banner = wings_plugin::ui::tree_json(handoff_banner().unwrap()).to_string();
+        for words in ["Your turn", "Fix login is waiting", "Sign in, then press Done.", "Done"] {
+            assert!(banner.contains(words), "{words}: {banner}");
+        }
+        done();
+        testing::settle();
+        assert!(out.borrow().clone().unwrap().is_ok() && handoff_banner().is_none());
     }
 
     #[test]

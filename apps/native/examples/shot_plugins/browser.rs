@@ -129,6 +129,8 @@ pub(super) fn browser(out: PathBuf) {
         "active": "t1", "own": "t1", "next": 8, "args": "",
     });
     let mut cx = app();
+    let asks = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    host.start_main(&agent_main(asks.clone()), fail_on_error).unwrap();
     let pages: [(&str, String, &str, f32); 4] = [
         ("tab", module("browser"), "", 640.0),
         ("page", module("browser"), "", 640.0),
@@ -181,6 +183,32 @@ pub(super) fn browser(out: PathBuf) {
                 assert!(handle.read_with(&cx, |view, _| view.press("Clear", 0)).unwrap(), "no Clear button");
                 wait(&mut cx, window, Duration::from_millis(1000));
                 save(&mut cx, window, out.join(format!("browser-page-cleared-{width}.png")));
+            }
+            if *name == "tabs" {
+                // An agent asking the person to show it a flow in its tab, then to do a step only they can, as its tool
+                // calls reach the page: the banner over the agent's tab, each pressed away.
+                let ask = |op: serde_json::Value| asks.lock().unwrap().push(op);
+                let caller = json!({ "key": "ses-login", "name": "Fix login bug" });
+                ask(json!({ "op": "demonstrate", "message": "Show me how you reset a password on the staging site.", "caller": caller }));
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while !handle.read_with(&cx, |view, _| view.text().contains("reset a password")).unwrap() {
+                    assert!(Instant::now() < deadline, "no demonstrate banner: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
+                    wait(&mut cx, window, Duration::from_millis(20));
+                }
+                wait(&mut cx, window, Duration::from_millis(500));
+                save(&mut cx, window, out.join(format!("browser-demonstrate-{width}.png")));
+                let finish = ["Done", "Continue"].into_iter().find(|label| handle.read_with(&cx, |view, _| view.press(label, 0)).unwrap());
+                assert!(finish.is_some(), "no button ends the demonstration");
+                wait(&mut cx, window, Duration::from_millis(4000));
+                ask(json!({ "op": "handoff", "message": "Sign in with the staging test account, then press Done.", "caller": caller }));
+                while !handle.read_with(&cx, |view, _| view.text().contains("staging test account")).unwrap() {
+                    assert!(Instant::now() < deadline + Duration::from_secs(10), "no handoff banner");
+                    wait(&mut cx, window, Duration::from_millis(20));
+                }
+                wait(&mut cx, window, Duration::from_millis(500));
+                save(&mut cx, window, out.join(format!("browser-handoff-{width}.png")));
+                assert!(handle.read_with(&cx, |view, _| view.press("Done", 0)).unwrap(), "no Done button");
+                wait(&mut cx, window, Duration::from_millis(500));
             }
             if *name == "settings" {
                 // Look, as a click on it does, then Add on the first extension it lists.
@@ -304,4 +332,36 @@ pub(super) fn browser(out: PathBuf) {
             let _ = cx.update_window(window, |_, window, _| window.remove_window());
         }
     }
+}
+
+/// Main's part for an agent's banner: it hears the pages say who they are (`browser:page`) and asks the newest of them
+/// what the scene queued, as `agent_tools.rs` asks for an agent's tool call (the SDK's `messages::ask`).
+fn agent_main(asks: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>) -> String {
+    struct Main {
+        asks: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+        page: Option<String>,
+        sent: u32,
+    }
+    impl Guest for Main {
+        fn start(&mut self, cx: &mut Cx<'_>) {
+            cx.later(50);
+        }
+        fn deliver(&mut self, _cx: &mut Cx<'_>, kind: &str, _id: u32, text: &str) {
+            let message: serde_json::Value = serde_json::from_str(text).unwrap_or_default();
+            if kind == "broadcast" && message["name"] == "browser:page" {
+                self.page = message["payload"]["id"].as_str().map(str::to_owned).or(self.page.take());
+            }
+        }
+        fn timer(&mut self, cx: &mut Cx<'_>, _id: u32) {
+            if let Some(page) = self.page.clone() {
+                for op in std::mem::take(&mut *self.asks.lock().unwrap()) {
+                    self.sent += 1;
+                    let ask = json!({ "wings:sdk": 1, "kind": "tell", "name": format!("browser:cmd:{page}"), "payload": { "id": format!("shot:{}", self.sent), "payload": op } });
+                    cx.link().broadcast(ask.to_string()).unwrap();
+                }
+            }
+            cx.later(50);
+        }
+    }
+    fake::source("main", move || Box::new(Main { asks: asks.clone(), page: None, sent: 0 }))
 }

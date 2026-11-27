@@ -1,7 +1,7 @@
 {
   "id": "browser",
   "name": "Browser",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "minWingsVersion": "0.2.128",
   "icon": "icon.svg",
   "description": "A web browser in a tab, drawn by WebKit: an address bar that searches, history suggestions, cookies kept between runs (or not), sign-in copied from another browser on this Mac, and browser extensions, with Chromium as an engine you can download for Chrome extensions.",
@@ -684,7 +684,7 @@
       },
       {
         "name": "demonstrate",
-        "description": "Asks the user to show you a flow in your tab, recording what they do until they click Continue: clicks (with a CSS selector, role and name), fills (password values are never recorded), checkbox and select changes, and navigations. Use it when you can't find how to do something and the user can show you. Returns steps (structured) and summary (one line each).",
+        "description": "Asks the user to show you a flow in your tab, recording what they do until they press Done (Cancel returns an error and no steps): clicks (with a CSS selector, role and name), fills (password values are never recorded), checkbox and select changes, and navigations. Use it when you can't find how to do something and the user can show you. Returns steps (structured) and summary (one line each).",
         "inputSchema": {
           "type": "object",
           "properties": {
