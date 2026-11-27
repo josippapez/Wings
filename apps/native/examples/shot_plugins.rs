@@ -372,6 +372,18 @@ fn shoot_pages(out: &std::path::Path, host: &PluginHost, prefix: &str, pages: &[
                 let deadline = Instant::now() + Duration::from_secs(10);
                 while !match label.strip_prefix("menu:") {
                     Some(menu) => handle.update(&mut cx, |view, _, cx| view.open_menu(menu, 0, cx)).unwrap(),
+                    // `scroll:down` scrolls the page's left side to its end with the pointer over it.
+                    None if *label == "scroll:down" => {
+                        wait(&mut cx, window, Duration::from_millis(1500));
+                        cx.simulate_event(window, gpui::ScrollEvent {
+                            position: point(px(width * 0.3), px(400.0)),
+                            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-100_000.0))),
+                            modifiers: gpui::Modifiers::default(),
+                            touch_phase: gpui::TouchPhase::Moved,
+                            source: Default::default(),
+                        });
+                        true
+                    }
                     None => handle
                         .read_with(&cx, |view, _| {
                             view.press_chip(label) || view.turn_on_chip(label) || view.press(label, 0)

@@ -115,6 +115,8 @@ pub(super) fn tasks(out: PathBuf) {
         &[
             ("board", board, None, Tab, &["Board"], "Show 10 more"),
             ("issue", issue, Some(&long_args), Tab, &[], "Show 30 earlier"),
+            // Scrolled to the end of the activity: the properties stay at the top, in view.
+            ("issue-scrolled", issue, Some(&long_args), Tab, &["scroll:down"], "Created"),
         ],
     );
     // On its own, after the others: Group by parent stays on for every Issues tab once it's turned on.

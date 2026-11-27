@@ -68,6 +68,8 @@ struct Page {
 const SIDE_BY_SIDE: f32 = 760.0;
 /// How wide one property is, beside the description and in the grid above it.
 const PROPERTY_WIDTH: f32 = 300.0;
+/// The widest the text column is, centred in what the properties leave.
+const TEXT_WIDTH: f32 = 700.0;
 /// Commits shown before "+N more".
 const COMMITS_SHOWN: usize = 3;
 /// The width of a property's name, so the values line up in a column.
@@ -838,20 +840,21 @@ fn view() -> Vec<Node> {
     let head = stack("s").child(title_row(issue));
     let narrow = with(|p| p.narrow);
     let text = stack("l").prop("grow", true).child(head).child(main);
-    // Beside the description the properties are a column of their own; under `SIDE_BY_SIDE` they are above it, so the
-    // text keeps the whole width and a table in it isn't cut off. The split only measures; its end pane stays empty.
-    let grid = if narrow {
-        stack("l").child(properties(issue, issues, &project, true)).child(text)
-    } else {
-        row("l").prop("align", "start").child(text).child(Node::new("Stack").prop("width", 16)).child(properties(issue, issues, &project, false))
-    };
-    let grid = Node::new("Split")
+    // Beside the description the properties are a column of their own that stays in view: it is the split's fixed pane,
+    // which scrolls on its own, while the text scrolls in the pane beside it. Under `SIDE_BY_SIDE` the split leaves the
+    // pane out and the properties are above the text, in the same scroll, so the text keeps the whole width and a table
+    // in it isn't cut off.
+    let read = if narrow { stack("l").child(properties(issue, issues, &project, true)).child(text) } else { text };
+    let read = stack("l").prop("maxWidth", TEXT_WIDTH).prop("pt", 14).maybe(notices).child(read).maybe(confirming);
+    let side = if narrow { Vec::new() } else { vec![properties(issue, issues, &project, false)] };
+    let split = Node::new("Split")
         .prop("side", "end")
+        .prop("defaultSize", PROPERTY_WIDTH + 24.0)
         .prop("collapseBelow", SIDE_BY_SIDE)
         .on("onNarrow", |payload| with(|p| p.narrow = payload["narrow"].as_bool().unwrap_or(false)))
-        .child(Node::new("Slot").prop("name", "start").child(grid))
-        .child(Node::new("Slot").prop("name", "end"));
-    vec![ui::column_page(toolbar(Some(issue), &key), [stack("l").maybe(notices).child(grid).maybe(confirming)])]
+        .child(Node::new("Slot").prop("name", "start").child(Node::new("Scroll").child(read)))
+        .child(Node::new("Slot").prop("name", "end").children(side));
+    vec![page(toolbar(Some(issue), &key), [split]).prop("flush", true)]
 }
 
 /// The args the tab was opened with.
