@@ -12,7 +12,7 @@ use crate::{
 use serde_json::{Value, json};
 use std::{cell::RefCell, collections::BTreeSet, future::Future, pin::Pin, rc::Rc};
 use wings_plugin::{
-    format::{ago_now, basename, plural},
+    format::{ago_now, basename, grouped, plural},
     git::{branch_label, ok, on_change, repo_root},
     host, messages, poll,
     task::{join, join_all, spawn},
@@ -107,6 +107,21 @@ thread_local! {
     });
 }
 
+impl Page {
+    /// Drops what the sidebar shows when it is of another repo than `root`, so the new repo's header never sits over the
+    /// old repo's files: the loading state shows until the new answer (or its error) arrives.
+    fn leave_other_repo(&mut self, root: &str) {
+        let shown = self.repo.as_ref().map(|repo| repo.root.as_str()).or(self.changes.as_ref().map(|c| c.root.as_str()));
+        if shown.is_some_and(|shown| shown != root) {
+            (self.repo, self.changes, self.answered, self.error, self.open_error) = (None, None, false, None, None);
+            self.history = Shown::default();
+            self.pending = true;
+            self.loading_more = false;
+            self.collapsed.clear();
+        }
+    }
+}
+
 fn with<T>(change: impl FnOnce(&mut Page) -> T) -> T {
     PAGE.with(|page| change(&mut page.borrow_mut()))
 }
@@ -180,7 +195,10 @@ async fn reload() {
         });
     };
     let section = mode::saved(&root);
-    with(|page| page.section = section);
+    with(|page| {
+        page.leave_other_repo(&root);
+        page.section = section;
+    });
     if section == Section::Graph {
         let (branch, head) = join(ok(&root, &["branch", "--show-current"]), ok(&root, &["rev-parse", "--verify", "--quiet", "HEAD"])).await;
         let (name, polled) = (basename(&root).to_owned(), !watched(&root).await);
@@ -327,9 +345,22 @@ fn tree(files: &[FileChange]) -> Folder<'_> {
     root
 }
 
-/// Folder and file rows, a folder with only one folder in it shown as `a/b`.
-fn tree_rows(folder: &Folder, depth: u32, root: &str, mode: Mode, collapsed: &BTreeSet<String>, out: &mut Vec<Node>) {
+/// The most folder and file rows the tree sends. The app refuses a page's tree over 2 MiB, and a row is about 400
+/// bytes (see `a_five_thousand_file_change_...`), so this leaves most of that room to the rest of the page.
+const MAX_ROWS: usize = 400;
+
+/// What is left of the row budget, and how many file rows were drawn within it.
+struct Budget {
+    left: usize,
+    files: usize,
+}
+
+/// Folder and file rows, a folder with only one folder in it shown as `a/b`. Stops when `budget` is used up.
+fn tree_rows(folder: &Folder, depth: u32, root: &str, mode: Mode, collapsed: &BTreeSet<String>, budget: &mut Budget, out: &mut Vec<Node>) {
     for sub in &folder.folders {
+        if budget.left == 0 {
+            return;
+        }
         let (mut f, mut label) = (sub, sub.name.to_owned());
         while f.files.is_empty() && f.folders.len() == 1 {
             f = &f.folders[0];
@@ -341,11 +372,17 @@ fn tree_rows(folder: &Folder, depth: u32, root: &str, mode: Mode, collapsed: &BT
             with(|page| if open { page.collapsed.insert(path.clone()) } else { page.collapsed.remove(&path) });
         });
         out.push(list_row(format!("d:{}", f.path), toggle.prop("indent", depth * 12).prop("aria-expanded", open)));
+        budget.left -= 1;
         if open {
-            tree_rows(f, depth + 1, root, mode, collapsed, out);
+            tree_rows(f, depth + 1, root, mode, collapsed, budget, out);
         }
     }
     for file in &folder.files {
+        if budget.left == 0 {
+            return;
+        }
+        budget.left -= 1;
+        budget.files += 1;
         let tone = match file.status.as_str() {
             "D" | "U" => "danger",
             "A" | "?" => "success",
@@ -376,7 +413,20 @@ fn changes_body(c: &Changes, mode: Mode, collapsed: &BTreeSet<String>) -> Vec<No
     let root = c.root.clone();
     let all = button("View all", "secondary", false, move || ask(OPEN, json!({ "root": root, "mode": mode.name(), "path": null }))).prop("size", "sm");
     let mut rows = Vec::new();
-    tree_rows(&tree(&c.files), 0, &c.root, mode, collapsed, &mut rows);
+    let mut budget = Budget { left: MAX_ROWS, files: 0 };
+    tree_rows(&tree(&c.files), 0, &c.root, mode, collapsed, &mut budget, &mut rows);
+    // Past the cap the list ends in what it left out, with the way to the full diff.
+    let more = (budget.files < c.files.len() && budget.left == 0).then(|| {
+        let root = c.root.clone();
+        list_row(
+            "more",
+            row()
+                .prop("align", "center")
+                .child(muted(format!("Showing {} of {} files", grouped(budget.files as u64), grouped(c.files.len() as u64))).prop("grow", true).prop("truncate", true))
+                .child(button("View all", "secondary", false, move || ask(OPEN, json!({ "root": root, "mode": mode.name(), "path": null }))).prop("size", "sm")),
+        )
+    });
+    rows.extend(more);
     vec![
         // The totals over what they're against, with no card around them, as Orca's git panel has its branch: a card and a
         // large button took a narrow sidebar's room from the files.
@@ -601,6 +651,67 @@ mod tests {
         let at = tree.find("View all").expect(&tree);
         let button = &tree[at..at + tree[at..].find(r#""type":"Button""#).expect(&tree)];
         assert!(button.contains(r#""variant":"secondary""#) && button.contains(r#""size":"sm""#) && !button.contains("ghost"), "{tree}");
+    }
+
+    fn big(count: usize, dirs: usize) -> crate::changes::Changes {
+        let files = (0..count)
+            .map(|i| crate::changes::FileChange {
+                path: format!("src/BoundedContext/Module{}/Application/Handlers/Prescriptions/Tracker{i:05}Handler.cs", i % dirs),
+                old_path: None,
+                status: "M".into(),
+                added: Some(12),
+                removed: Some(3),
+                untracked: false,
+            })
+            .collect();
+        crate::changes::Changes {
+            root: "/be".into(),
+            name: "be".into(),
+            branch: "feature/196116".into(),
+            mode: crate::changes::Mode::Branch,
+            base: String::new(),
+            against: "Since origin/main at 1234567".into(),
+            files,
+            added: 1,
+            removed: 0,
+            partial: false,
+        }
+    }
+
+    /// The app refuses a page's tree over 2 MiB, so the sidebar sends a bounded number of rows, however many files changed
+    /// and however they are spread over folders, and ends the list with what it left out.
+    #[test]
+    fn a_five_thousand_file_change_renders_a_tree_under_the_limit_with_a_showing_row() {
+        for dirs in [1, 400] {
+            let c = big(5_000, dirs);
+            let nodes = super::changes_body(&c, crate::changes::Mode::Branch, &Default::default());
+            let json: usize = nodes.into_iter().map(|node| wings_plugin::ui::tree_json(node).to_string().len()).sum();
+            eprintln!("dirs {dirs}: {json} bytes for the sidebar body");
+            assert!(json < 400_000, "{json}");
+            let tree = wings_plugin::ui::tree_json(super::changes_body(&c, crate::changes::Mode::Branch, &Default::default()).remove(1)).to_string();
+            assert!(tree.contains("of 5,000 files"), "{}", &tree[tree.len().saturating_sub(600)..]);
+        }
+        // Under the cap there is no such row.
+        let small = wings_plugin::ui::tree_json(super::changes_body(&big(50, 1), crate::changes::Mode::Branch, &Default::default()).remove(1)).to_string();
+        assert!(!small.contains("files\""), "{small}");
+        assert!(!small.contains("Showing"), "{small}");
+    }
+
+    /// Switching to another repo drops the old one's files, history and error, so they never show under the new header.
+    #[test]
+    fn switching_repos_clears_the_previous_repos_files() {
+        with(|page| {
+            page.repo = Some(Repo { root: "/fe".into(), name: "fe".into(), branch: "main".into() });
+            page.changes = Some(std::rc::Rc::new(crate::changes::Changes { root: "/fe".into(), ..big(3, 1) }));
+            page.answered = true;
+            page.error = Some("old".into());
+            page.leave_other_repo("/fe");
+            assert!(page.changes.is_some() && page.repo.is_some());
+            page.leave_other_repo("/be");
+            assert!(page.changes.is_none() && page.repo.is_none() && !page.answered && page.error.is_none());
+        });
+        let tree = wings_plugin::ui::tree_json(view().remove(0)).to_string();
+        assert!(!tree.contains("fe"), "{tree}");
     }
 
     #[test]

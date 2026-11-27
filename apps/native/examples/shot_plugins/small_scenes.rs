@@ -106,6 +106,40 @@ pub(super) fn changes(out: PathBuf) {
         }
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
     }
+    // A branch of thousands of files against main, as a big feature branch is: the Branch list stops at its cap and
+    // ends in "Showing N of M files" with View all.
+    git(0, &["add", "-A"]);
+    git(0, &["commit", "-qm", "Save the shop's changes"]);
+    git(0, &["checkout", "-q", "-b", "feature/196116-be-prescription-tracker-list-add-the-patient-referral-and-prescription-columns"]);
+    for (area, folders) in [("BoundedContext", 5), ("DHP", 3), ("Framework", 2)] {
+        for folder in 0..folders {
+            let dir = root.join(format!("src/{area}/Module{folder}/Application/Handlers"));
+            std::fs::create_dir_all(&dir).unwrap();
+            for file in 0..(if area == "BoundedContext" { 300 } else { 200 }) {
+                std::fs::write(dir.join(format!("Prescription{file:04}Handler.cs")), format!("class Handler{file} {{}}\n")).unwrap();
+            }
+        }
+    }
+    git(0, &["add", "-A"]);
+    git(0, &["commit", "-qm", "Add the prescription handlers"]);
+    for (width, height) in [(1000.0, 760.0), (640.0, 760.0), (250.0, 760.0)] {
+        let source = module("sidebar");
+        let handle = cx
+            .open_offscreen_window(size(px(width), px(height)), |_, cx| cx.new(|cx| PageView::in_plugin(&host, &source, cx)))
+            .unwrap();
+        let window = handle.into();
+        handle.read_with(&cx, |view, _| view.set_visible(true)).unwrap();
+        wait(&mut cx, window, Duration::from_millis(500));
+        assert!(handle.read_with(&cx, |view, _| view.press_chip("Branch")).unwrap());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !handle.read_with(&cx, |view, _| view.text().contains("Showing")).unwrap() {
+            assert!(Instant::now() < deadline, "page did not show the cap: {}", handle.read_with(&cx, |view, _| view.text()).unwrap());
+            wait(&mut cx, window, Duration::from_millis(20));
+        }
+        wait(&mut cx, window, Duration::from_millis(300));
+        save(&mut cx, window, out.join(format!("changes-big-branch-{width}-{height}.png")));
+        let _ = cx.update_window(window, |_, window, _| window.remove_window());
+    }
 }
 
 /// A page with a titled Button and a titled Text, each pointed at until its tooltip shows.
