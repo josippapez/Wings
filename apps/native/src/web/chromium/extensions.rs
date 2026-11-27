@@ -128,10 +128,10 @@ pub fn heard(message: &[u8]) {
     });
 }
 
-/// CEF's global context is up: its profile's extensions load, each checked first, and every worker that starts waits
-/// to be looked at (`worker_started`).
+/// CEF's global context is up: what extensions taken out of its profile left goes (`forget_noted`), then its profile's
+/// extensions load, each checked first, and every worker that starts waits to be looked at (`worker_started`).
 pub fn started() {
-    load_checked();
+    forget_noted(load_checked);
     let workers = json!({ "autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true, "filter": [{ "type": "service_worker" }, { "exclude": true }] });
     ask("Target.setAutoAttach", workers, |answer| {
         if let Err(why) = answer {
@@ -287,7 +287,8 @@ pub fn load(profile: &Profile, extension: &extensions::Verified, done: impl FnOn
 /// now is uninstalled over the pipe, which deletes what it stored in its profile; whether it is or not (Chromium not
 /// running, or running for another profile), its own folders of storage go from every profile Chromium keeps
 /// (`forget_storage`): Chromium forgets an extension loaded this way at its next start, its preferences only, and left
-/// Bitwarden's vault and session there.
+/// Bitwarden's vault and session there. What one not loaded kept in the databases all extensions share, only Chromium
+/// takes out: it does at its next start for this profile (`note_forget`, `forget_noted`).
 pub fn unload(profile: &Profile, id: &str, done: impl FnOnce() + 'static) {
     let loaded = LOADED.with_borrow_mut(|loaded| {
         let at = loaded.iter().position(|loaded| loaded.id == id)?;
@@ -297,17 +298,19 @@ pub fn unload(profile: &Profile, id: &str, done: impl FnOnce() + 'static) {
         close_popup();
     }
     let copy = copy_of(id);
-    let chrome = loaded.as_ref().map(|loaded| loaded.chrome.clone()).or_else(|| {
+    // Chromium's id of one not loaded now, and its manifest's key, which a stand-in of it takes (`forget_noted`).
+    let unloaded = loaded.is_none().then(|| {
         let copy = copy.as_deref()?;
         let manifest = Some(manifest_of(copy)).filter(|manifest| manifest.get("key").is_some()).or_else(|| Some(manifest_of(&extensions::folder(profile, id)?)))?;
-        chromium_id(&manifest, copy)
+        Some((chromium_id(&manifest, copy)?, manifest["key"].as_str().map(str::to_owned)))
     });
     if let Some(copy) = &copy {
         let _ = std::fs::remove_dir_all(copy);
     }
     let Some(loaded) = loaded else {
-        if let (Some(chrome), Some(root)) = (chrome, runtime::profiles_root()) {
+        if let (Some(Some((chrome, key))), Some(root)) = (unloaded, runtime::profiles_root()) {
             forget_storage(&root, &chrome);
+            note_forget(&root, Forget { profile: runtime::dir_name(profile), chrome, key, copy: id.to_owned() });
         }
         return done();
     };
@@ -349,6 +352,93 @@ pub fn forget_data(profile: &Profile, done: impl FnOnce() + 'static) {
             }
         });
     }
+}
+
+/// An extension of the profile `profile` (`runtime::dir_name`) taken out while Chromium wasn't running for it: Chromium's
+/// id of it, its manifest's key, and Wings' id, which names the folder of its copy.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+struct Forget {
+    profile: String,
+    chrome: String,
+    key: Option<String>,
+    copy: String,
+}
+
+/// The file under Chromium's profiles' root noting the extensions to forget (`Forget`).
+const FORGET: &str = "forget.json";
+
+fn noted(root: &std::path::Path) -> Vec<Forget> {
+    std::fs::read(root.join(FORGET)).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
+}
+
+fn write_noted(root: &std::path::Path, all: &[Forget]) {
+    let _ = match all.is_empty() {
+        true => std::fs::remove_file(root.join(FORGET)),
+        false => serde_json::to_vec(all).map_err(std::io::Error::other).and_then(|bytes| std::fs::write(root.join(FORGET), bytes)),
+    };
+}
+
+/// Notes `forget` for its profile's next start of Chromium.
+fn note_forget(root: &std::path::Path, forget: Forget) {
+    let mut all = noted(root);
+    if !all.contains(&forget) {
+        all.push(forget);
+    }
+    write_noted(root, &all);
+}
+
+/// Takes the extensions noted for the profile `name` off the list.
+fn take_noted(root: &std::path::Path, name: &str) -> Vec<Forget> {
+    let (mine, rest): (Vec<_>, Vec<_>) = noted(root).into_iter().partition(|forget| forget.profile == name);
+    write_noted(root, &rest);
+    mine
+}
+
+/// What a stand-in of an extension to forget is: nothing but its manifest, with the extension's key when it had one, so
+/// Chromium gives it the same id (or, without one, the same folder does).
+fn stand_in_manifest(key: Option<&str>) -> Value {
+    let mut manifest = json!({ "manifest_version": 3, "name": "Wings", "version": "1" });
+    if let Some(key) = key {
+        manifest["key"] = json!(key);
+    }
+    manifest
+}
+
+/// Chromium's own uninstall of each extension of the global profile taken out while Chromium didn't run for it
+/// (`note_forget`), before any extension loads, then `then`: a stand-in with its id loads and is uninstalled, which
+/// takes out what it kept in the databases all extensions share (`Extension State`, `Local Storage`, `Service Worker`),
+/// as uninstalling one loaded does.
+fn forget_noted(then: impl FnOnce() + 'static) {
+    let (Some(profile), Some(root)) = (runtime::global(), runtime::profiles_root()) else { return then() };
+    forget_each(take_noted(&root, &runtime::dir_name(&profile)), Box::new(then));
+}
+
+fn forget_each(mut left: Vec<Forget>, then: Box<dyn FnOnce()>) {
+    let Some(forget) = left.pop() else { return then() };
+    let Some(stand_in) = copy_of(&forget.copy) else { return forget_each(left, then) };
+    let _ = std::fs::remove_dir_all(&stand_in);
+    let made = std::fs::create_dir_all(&stand_in).and_then(|()| std::fs::write(stand_in.join("manifest.json"), stand_in_manifest(forget.key.as_deref()).to_string()));
+    if let Err(error) = made {
+        eprintln!("[chromium] no stand-in for an extension taken out: {error}");
+        return forget_each(left, then);
+    }
+    ask("Extensions.loadUnpacked", json!({ "path": stand_in.to_string_lossy() }), move |answer| {
+        let Some(chrome) = answer.ok().and_then(|result| result["id"].as_str().map(str::to_owned)) else {
+            let _ = std::fs::remove_dir_all(&stand_in);
+            eprintln!("[chromium] a stand-in for an extension taken out didn't load");
+            return forget_each(left, then);
+        };
+        if chrome != forget.chrome {
+            eprintln!("[chromium] a stand-in for an extension taken out loaded as another: {chrome}");
+        }
+        ask("Extensions.uninstall", json!({ "id": chrome }), move |answer| {
+            if let Err(why) = answer {
+                eprintln!("[chromium] couldn't uninstall a stand-in for an extension taken out: {why}");
+            }
+            let _ = std::fs::remove_dir_all(&stand_in);
+            forget_each(left, then)
+        });
+    });
 }
 
 /// The folders of its own Chromium 156 keeps an extension's storage in, in a profile: `chrome.storage`'s three areas,
@@ -1053,6 +1143,27 @@ mod tests {
         }
         forget_storage(root.path(), "../../Default");
         assert!(root.path().join("Default/Local Storage/leveldb").exists());
+    }
+
+    /// An extension taken out while Chromium didn't run for its profile is noted for that profile's next start, once,
+    /// and only that profile's start takes it; its stand-in has its key, so Chromium gives it the same id.
+    #[test]
+    fn an_extension_taken_out_while_chromium_was_off_is_forgotten_at_its_profiles_next_start() {
+        let root = tempfile::tempdir().unwrap();
+        let bitwarden = Forget { profile: "browser.a".into(), chrome: "nngceckbapebfimnlniiiahkandclblb".into(), key: Some("MIIB".into()), copy: "e1".into() };
+        let other = Forget { profile: "notes.b".into(), chrome: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(), key: None, copy: "e2".into() };
+        note_forget(root.path(), bitwarden.clone());
+        note_forget(root.path(), bitwarden.clone());
+        note_forget(root.path(), other.clone());
+        assert_eq!(take_noted(root.path(), "browser.a"), [bitwarden], "once, for its own profile");
+        assert_eq!(take_noted(root.path(), "browser.a"), []);
+        assert_eq!(noted(root.path()), [other.clone()], "another profile's waits for its own start");
+        assert_eq!(take_noted(root.path(), "notes.b"), [other]);
+        assert!(!root.path().join(FORGET).exists());
+        let stand_in = stand_in_manifest(Some("MIIB"));
+        assert_eq!((stand_in["key"].as_str(), stand_in["manifest_version"].as_u64()), (Some("MIIB"), Some(3)));
+        assert!(stand_in.get("background").is_none() && stand_in.get("content_scripts").is_none(), "it runs nothing");
+        assert!(stand_in_manifest(None).get("key").is_none());
     }
 
     /// Its popup hears the page's address only on a page the extension may reach; on any other it opens without it.
