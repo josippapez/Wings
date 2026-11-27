@@ -640,6 +640,7 @@ fn popup_created(window: &mut cef::Window, frame: NSRect) {
         return;
     };
     frameless::never_main(&ns);
+    frameless::never_fullscreen(&ns);
     window.show();
     frameless::as_popup(&ns, 10.0);
     frameless::attach(&ns, &parent, frame);

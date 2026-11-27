@@ -188,6 +188,76 @@ pub fn never_main(child: &NSWindow) -> String {
     }
 }
 
+/// Marks the windows `never_fullscreen` keeps windowed.
+static WINDOWED: u8 = 0;
+
+/// Keeps `child`, a page or a popup glued over the host, out of macOS fullscreen, and tells Chrome so at once.
+///
+/// A page's `requestFullscreen` has Chrome ask AppKit for fullscreen (`-[NSWindow toggleFullScreen:]`) and wait in a
+/// transition for AppKit's answer. AppKit ignored the request for a page's window (glued over the host's, borderless,
+/// and `FullScreenAuxiliary` from `attach`, which Chrome leaves as it is) and never answered, so Chrome waited for
+/// ever, and it puts off closing a window until its transition ends: the window never closed, the Chrome browser
+/// behind it outlived its page, and `cef::shutdown` crashed destroying it with the profile. Chrome now hears that the window stays windowed,
+/// as AppKit's `windowDidExitFullScreen:` says, so it leaves the page's fullscreen and closes the window when asked.
+/// Like `never_main`, it replaces the method on the window's class once, for the windows marked here.
+pub fn never_fullscreen(child: &NSWindow) -> String {
+    keep_windowed(child)
+}
+
+/// `never_fullscreen` for any object of a class with `toggleFullScreen:` and `delegate`, as a test's stand-in for a
+/// window is: AppKit makes windows only on the main thread.
+#[doc(hidden)]
+pub fn keep_windowed(object: &AnyObject) -> String {
+    static PATCHED: AtomicPtr<AnyClass> = AtomicPtr::new(std::ptr::null_mut());
+    static ORIGINAL: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+    extern "C-unwind" fn toggle(this: &AnyObject, cmd: Sel, sender: *mut AnyObject) {
+        if unsafe { objc_getAssociatedObject(this, &WINDOWED) }.is_null() {
+            let original: extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject) = unsafe { std::mem::transmute(ORIGINAL.load(Ordering::Relaxed)) };
+            return original(this, cmd, sender);
+        }
+        stayed_windowed(this);
+    }
+    unsafe {
+        // `class`, not the runtime class: KVO may have moved the window to a subclass of its own.
+        let class: &AnyClass = msg_send![object, class];
+        let class_ptr = class as *const AnyClass as *mut AnyClass;
+        let patched = PATCHED.load(Ordering::Relaxed);
+        if patched.is_null() {
+            if let Some(original) = class_getMethodImplementation(class, sel!(toggleFullScreen:)) {
+                ORIGINAL.store(original as *mut (), Ordering::Relaxed);
+                let replacement: extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject) = toggle;
+                class_replaceMethod(class, sel!(toggleFullScreen:), std::mem::transmute(replacement), c"v@:@".as_ptr());
+                PATCHED.store(class_ptr, Ordering::Relaxed);
+            }
+        } else if patched != class_ptr {
+            return format!("not kept windowed: {} isn't the class patched before", class.name().to_string_lossy());
+        }
+        // Any non-nil object marks it; the class object lives forever, and ASSIGN (0) keeps no reference.
+        objc_setAssociatedObject(object, &WINDOWED, class as *const AnyClass as *const AnyObject, 0);
+        format!("{} kept windowed", class.name().to_string_lossy())
+    }
+}
+
+/// Tells `window`'s delegate, Chrome's, that it is windowed, as AppKit does after a transition out of fullscreen: Chrome
+/// ends the transition it began, leaves the page's fullscreen, and closes the window if it was asked to meanwhile.
+fn stayed_windowed(window: &AnyObject) {
+    unsafe {
+        let delegate: *mut AnyObject = msg_send![window, delegate];
+        if delegate.is_null() {
+            return;
+        }
+        let hears: bool = msg_send![delegate, respondsToSelector: sel!(windowDidExitFullScreen:)];
+        if !hears {
+            return;
+        }
+        let notification = objc2_foundation::NSNotification::notificationWithName_object(
+            objc2_app_kit::NSWindowDidExitFullScreenNotification,
+            Some(window),
+        );
+        let _: () = msg_send![delegate, windowDidExitFullScreen: &*notification];
+    }
+}
+
 /// Glues `child` over `parent` at `frame` (screen coordinates, AppKit's bottom-left origin): it then moves with the
 /// parent and stays ordered right above it. It stays out of window cycling and the Window menu, and Mission Control
 /// treats it as part of the parent instead of a window of its own.

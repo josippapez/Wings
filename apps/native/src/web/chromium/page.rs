@@ -245,6 +245,7 @@ impl Shared {
         }
         let Some(ns) = frameless::ns_window(window) else { return };
         frameless::never_main(&ns);
+        frameless::never_fullscreen(&ns);
         focus::follow_mouse();
         let parent = self.parent.borrow().clone();
         if let Some(parent) = &parent {
@@ -893,5 +894,66 @@ mod tests {
         assert_eq!(super::load_error("net::ERR_NAME_NOT_RESOLVED"), "A server with that name couldn't be found (ERR_NAME_NOT_RESOLVED)");
         assert_eq!(super::load_error("net::ERR_CERT_DATE_INVALID"), "The site's certificate isn't valid (ERR_CERT_DATE_INVALID)");
         assert_eq!(super::load_error(""), "The page couldn't be opened");
+    }
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use objc2::{AllocAnyThread, DefinedClass, define_class, msg_send, rc::Retained, runtime::{AnyObject, NSObject}};
+    use objc2_foundation::NSNotification;
+
+    /// What a stand-in window heard: AppKit asked to toggle fullscreen, and its delegate told it stayed windowed.
+    static TOGGLED: AtomicUsize = AtomicUsize::new(0);
+    static WINDOWED: AtomicUsize = AtomicUsize::new(0);
+
+    define_class!(
+        // SAFETY: NSObject has no rules for subclasses, and this has no ivars.
+        #[unsafe(super(NSObject))]
+        struct FakeDelegate;
+
+        impl FakeDelegate {
+            #[unsafe(method(windowDidExitFullScreen:))]
+            fn exited(&self, _notification: &NSNotification) {
+                WINDOWED.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    );
+
+    define_class!(
+        // SAFETY: NSObject has no rules for subclasses; its ivar is its delegate, kept alive with it.
+        #[unsafe(super(NSObject))]
+        #[ivars = Retained<FakeDelegate>]
+        struct FakeWindow;
+
+        impl FakeWindow {
+            /// AppKit's own toggle, which a page's window ignored without a word.
+            #[unsafe(method(toggleFullScreen:))]
+            fn toggle(&self, _sender: *mut AnyObject) {
+                TOGGLED.fetch_add(1, Ordering::SeqCst);
+            }
+
+            #[unsafe(method(delegate))]
+            fn delegate(&self) -> *mut AnyObject {
+                Retained::as_ptr(self.ivars()) as *mut AnyObject
+            }
+        }
+    );
+
+    fn fake_window() -> Retained<FakeWindow> {
+        let delegate: Retained<FakeDelegate> = unsafe { msg_send![super(FakeDelegate::alloc().set_ivars(())), init] };
+        unsafe { msg_send![super(FakeWindow::alloc().set_ivars(delegate)), init] }
+    }
+
+    /// Chrome's request of fullscreen for a page's window never reaches AppKit, which ignored it and so left Chrome in
+    /// its transition for ever, putting off the window's close until Wings crashed quitting: Chrome hears at once that
+    /// the window stays windowed. A window not kept windowed toggles as AppKit does.
+    #[test]
+    fn a_pages_window_never_goes_fullscreen_and_chrome_hears_it_stayed_windowed() {
+        let (page, other) = (fake_window(), fake_window());
+        let kept = wings_chromium::window::keep_windowed(&page);
+        assert!(kept.ends_with("kept windowed"), "{kept}");
+        let _: () = unsafe { msg_send![&*page, toggleFullScreen: std::ptr::null_mut::<AnyObject>()] };
+        assert_eq!((TOGGLED.load(Ordering::SeqCst), WINDOWED.load(Ordering::SeqCst)), (0, 1), "AppKit isn't asked; Chrome hears");
+        let _: () = unsafe { msg_send![&*other, toggleFullScreen: std::ptr::null_mut::<AnyObject>()] };
+        assert_eq!((TOGGLED.load(Ordering::SeqCst), WINDOWED.load(Ordering::SeqCst)), (1, 1), "another window toggles as before");
     }
 }
