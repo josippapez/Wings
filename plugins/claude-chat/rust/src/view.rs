@@ -250,7 +250,7 @@ fn header(c: &Chat) -> Node {
         }));
     let tight = header_tight(c);
     // Three groups, a hairline between them: how Claude works (the mode), this session (search, Remote Control, the panel),
-    // and the page (a new chat, and a menu of what is rarely needed). Narrow, search and Remote Control fold into the menu too,
+    // and the page (past sessions, a new chat, and a menu of what is rarely needed). Narrow, search and Remote Control fold into the menu too,
     // so the session's name keeps its room.
     let actions = row()
         .prop("gap", "xs")
@@ -263,6 +263,7 @@ fn header(c: &Chat) -> Node {
         .maybe(side_button(c))
         .maybe(account_menu(c))
         .child(hairline())
+        .child(icon_button("Past sessions", &HISTORY, chat::open_past).shortcut("cmd-y"))
         .child(icon_button("New chat", &icons::PLUS, chat::new_chat).tooltip(if chat::in_use(c) { "New chat in a new tab, this one keeps running" } else { "New chat" }).shortcut("cmd-shift-n"))
         .child(more_menu(c, tight));
     Node::new("Bar").prop("variant", "slim").child(row().prop("gap", "m").prop("align", "center").child(title).child(actions))
@@ -288,13 +289,12 @@ pub(crate) fn menu_item(label: &str, on_click: impl Fn() + 'static) -> Node {
 /// The header's "…" menu: what the session and the page rarely need. In a narrow tab it also holds search and Remote Control,
 /// the buttons that would take the title's room.
 fn more_menu(c: &Chat, tight: bool) -> Node {
-    let trigger = Node::new("Button").prop("variant", "ghost").prop("size", "icon-sm").prop("label", "More").prop("title", "More: rename, fork, past sessions and settings").child(icon(24, 2.0, &ELLIPSIS).prop("size", 16));
+    let trigger = Node::new("Button").prop("variant", "ghost").prop("size", "icon-sm").prop("label", "More").prop("title", "More: rename, fork and settings").child(icon(24, 2.0, &ELLIPSIS).prop("size", 16));
     let items: Vec<Node> = [
         tight.then(|| crate::search::menu_item(c)),
         tight.then(|| remote_item(c)).flatten(),
         crate::titles_view::menu_item(c),
         crate::fork_view::menu_item(c),
-        Some(menu_item("Past sessions", chat::open_past).shortcut("cmd-y")),
     ]
     .into_iter()
     .flatten()
@@ -1860,6 +1860,9 @@ fn remote_button(c: &Chat, tight: bool) -> Option<Node> {
 }
 
 /// Lucide's `ellipsis`, on the header's "…" menu.
+/// Lucide's `history`, on the Past sessions button.
+const HISTORY: [&str; 3] = ["M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8", "M3 3v5h5", "M12 7v5l4 2"];
+
 const ELLIPSIS: [&str; 3] = ["M11 12a1 1 0 1 0 2 0a1 1 0 1 0-2 0", "M18 12a1 1 0 1 0 2 0a1 1 0 1 0-2 0", "M4 12a1 1 0 1 0 2 0a1 1 0 1 0-2 0"];
 
 /// The "…" menu's row for Remote Control while it is off: turning it on.

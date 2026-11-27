@@ -1226,10 +1226,13 @@ fn the_header_has_three_groups_and_a_narrow_one_folds_search_and_remote_control_
         (wide, tight)
     });
     for (name, drawn) in [("wide", &wide), ("narrow", &tight)] {
-        for row in ["Rename session", "Fork session", "Past sessions", "Chat settings"] {
+        for row in ["Rename session", "Fork session", "Chat settings"] {
             assert!(drawn.contains(&format!("\"text\":\"{row}\"")), "{name}: {row} is a row of the menu");
         }
-        assert!(drawn.contains("\"label\":\"New chat\"") && drawn.contains("\"label\":\"Side panel\""), "{name}: new chat and the panel stay buttons");
+        for button in ["Past sessions", "New chat", "Side panel"] {
+            assert!(drawn.contains(&format!("\"label\":\"{button}\"")), "{name}: {button} is a button in the bar");
+        }
+        assert!(!drawn.contains("\"text\":\"Past sessions\""), "{name}: Past sessions isn't in the menu as well");
         assert!(drawn.contains("\"label\":\"View mode\"") && drawn.contains("\"text\":\"Verbose\""), "{name}: the mode is a menu of three");
         assert_eq!(drawn.matches("\"shortcut\":\"ctrl-o\"").count(), 1, "{name}: Ctrl+O is on one row");
         for keys in ["cmd-shift-f", "cmd-y"] {
