@@ -65,33 +65,6 @@ pub struct Verified {
     _checked: (),
 }
 
-/// The permissions WebKit has for an extension (`WKWebExtensionPermission`), the only ones Wings grants in either engine:
-/// Chromium's copy of an extension asks for no other (`chromium::extensions`).
-pub const GRANTABLE: [&str; 16] = [
-    "activeTab",
-    "alarms",
-    "clipboardWrite",
-    "contextMenus",
-    "cookies",
-    "declarativeNetRequest",
-    "declarativeNetRequestFeedback",
-    "declarativeNetRequestWithHostAccess",
-    "menus",
-    "nativeMessaging",
-    "scripting",
-    "storage",
-    "tabs",
-    "unlimitedStorage",
-    "webNavigation",
-    "webRequest",
-];
-
-/// Whether the permission `name` is granted: one the dialog showed (`allowed`) that WebKit has, and never
-/// `nativeMessaging`, which reaches apps outside Wings, as the dialog says (`web::Ask::words`).
-pub fn permitted(name: &str, allowed: &[String]) -> bool {
-    name != "nativeMessaging" && GRANTABLE.contains(&name) && allowed.iter().any(|allowed| allowed == name)
-}
-
 /// The key extension records are sealed with: 32 bytes, or why Wings can't read it.
 pub type Key = Result<[u8; 32], String>;
 
@@ -571,16 +544,6 @@ mod tests {
         assert!(!left.exists(), "the last run's stage went");
         let second = stage_path(&profile, &source).unwrap();
         assert!(staged_dir(&profile, &first.stage).exists() && staged_dir(&profile, &second.stage).exists(), "this run's stay");
-    }
-
-    /// What the dialog showed is granted only where WebKit has it: a name only Chromium knows (`debugger`, `proxy`) is
-    /// granted in neither engine, and native messaging never is.
-    #[test]
-    fn only_a_permission_the_dialog_showed_and_webkit_has_is_granted() {
-        let shown = ["storage", "debugger", "proxy", "idle", "nativeMessaging", "tabs"].map(String::from);
-        let granted: Vec<&str> = shown.iter().map(String::as_str).filter(|name| permitted(name, &shown)).collect();
-        assert_eq!(granted, ["storage", "tabs"]);
-        assert!(!permitted("cookies", &shown), "not shown");
     }
 
     #[test]

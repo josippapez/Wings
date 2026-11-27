@@ -362,18 +362,54 @@ fn chromium_copy(extension: &extensions::Verified) -> Result<(std::path::PathBuf
 
 /// Readies the copy of an extension in `copy`, which the person allowed `permissions` and `hosts` of: without Wings'
 /// WebKit shim, whose `__wings_` files Chromium refuses ("Filenames starting with "_" are reserved"), without the Web
-/// Store's `_metadata`, and with a manifest that asks for no more than WebKit grants for the same yes
-/// (`extensions::permitted`, `narrow_manifest`): Chromium grants whatever a manifest asks for, with no prompt, names
-/// WebKit has no use of (`debugger`, `proxy`, `downloads`) and `nativeMessaging` too, and a manifest's optional ones on
-/// its `permissions.request`, which Wings' dialog never showed. Answers the sites the copy may reach.
+/// Store's `_metadata`, and with a manifest that asks for no more than the person allowed (`granted`, `narrow_manifest`):
+/// Chromium grants whatever a manifest asks for, with no prompt, and a manifest's optional permissions and sites on its
+/// `permissions.request`, which Wings' dialog never showed. Answers the sites the copy may reach.
 fn ready_copy(copy: &std::path::Path, permissions: &[String], hosts: &[String]) -> Result<Vec<String>, String> {
     wings_web_extensions::unshim_service_worker(copy).map_err(|error| error.to_string())?;
     let _ = std::fs::remove_dir_all(copy.join("_metadata"));
-    let reached = wings_web_extensions::narrow_manifest(copy, &|name| extensions::permitted(name, permissions), hosts).map_err(|error| error.to_string())?;
+    let reached = wings_web_extensions::narrow_manifest(copy, &|name| granted(name, permissions), hosts).map_err(|error| error.to_string())?;
     if let Some(popup) = action_of(&manifest_of(copy)).1 {
         with_popup_script(copy, &popup)?;
     }
     Ok(reached)
+}
+
+/// The permissions Chromium grants that reach past an extension's own sites, which Wings' dialog names but doesn't say
+/// what they do: control of other extensions (`management`), of the browser's network and settings (`proxy`,
+/// `privacy`, `contentSettings`, `browsingData`, `webAuthenticationProxy`), what is on screen, in a tab or under the
+/// debugger (`desktopCapture`, `tabCapture`, `pageCapture`, `debugger`), this Mac's location, disks and apps, downloads,
+/// and code of the extension's own choosing in any page (`userScripts`). Chrome warns of most as "Read and change all
+/// your data on all websites". `nativeMessaging` the dialog says Wings never allows.
+const NOT_GRANTED: [&str; 21] = [
+    "accessibilityFeatures.modify",
+    "browsingData",
+    "contentSettings",
+    "debugger",
+    "desktopCapture",
+    "downloads",
+    "downloads.open",
+    "downloads.ui",
+    "fontSettings",
+    "geolocation",
+    "management",
+    "nativeMessaging",
+    "pageCapture",
+    "privacy",
+    "proxy",
+    "system.storage",
+    "tabCapture",
+    "userScripts",
+    "vpnProvider",
+    "webAuthenticationProxy",
+    "webRequestBlocking",
+];
+
+/// Whether Chromium's copy of an extension keeps the permission `name`: one Wings' dialog showed as the person allowed
+/// it (`allowed`), unless it is one of those it doesn't explain (`NOT_GRANTED`). WebKit grants by its own rule
+/// (`mac::grant`), of the permissions it has.
+fn granted(name: &str, allowed: &[String]) -> bool {
+    !NOT_GRANTED.contains(&name) && allowed.iter().any(|allowed| allowed == name)
 }
 
 /// What the manifest at `dir` says.
@@ -760,9 +796,9 @@ mod tests {
         assert!(!toggles_off(None, "bitwarden", now));
     }
 
-    /// Chromium's copy asks for what WebKit grants for the same yes in Wings' dialog: of Bitwarden's manifest, the
-    /// permissions WebKit has, the sites allowed, its content scripts there, nothing optional, and never native
-    /// messaging, which the dialog says Wings never allows. Its popup still gets Wings' first script.
+    /// Chromium's copy asks for what the person allowed in Wings' dialog: of Bitwarden's manifest, the permissions the
+    /// dialog showed but those it doesn't explain, the sites allowed, its content scripts there, nothing optional, and
+    /// never native messaging. Its popup still gets Wings' first script.
     #[test]
     fn chromiums_copy_of_an_extension_asks_for_only_what_wings_dialog_allowed() {
         let dir = tempfile::tempdir().unwrap();
@@ -770,23 +806,41 @@ mod tests {
         std::fs::write(dir.path().join("popup/index.html"), "<head></head>").unwrap();
         let manifest = json!({
             "manifest_version": 3, "name": "Bitwarden", "version": "1",
-            "permissions": ["activeTab", "alarms", "clipboardRead", "idle", "offscreen", "scripting", "storage", "tabs", "debugger", "nativeMessaging"],
+            "permissions": ["activeTab", "alarms", "clipboardRead", "idle", "offscreen", "scripting", "storage", "tabs", "debugger", "nativeMessaging", "proxy", "cookies"],
             "optional_permissions": ["nativeMessaging", "privacy"], "optional_host_permissions": ["<all_urls>"],
             "host_permissions": ["https://*/*", "http://*/*"],
             "content_scripts": [{ "matches": ["*://*/*", "file:///*"], "js": ["content.js"] }],
             "action": { "default_popup": "popup/index.html" },
         });
         std::fs::write(dir.path().join("manifest.json"), manifest.to_string()).unwrap();
-        let allowed: Vec<String> = ["activeTab", "alarms", "clipboardRead", "idle", "offscreen", "scripting", "storage", "tabs", "nativeMessaging"].map(String::from).to_vec();
+        let allowed: Vec<String> = ["activeTab", "alarms", "clipboardRead", "idle", "offscreen", "scripting", "storage", "tabs", "debugger", "nativeMessaging", "proxy"].map(String::from).to_vec();
         let hosts: Vec<String> = ["https://*/*", "http://*/*", "*://*/*"].map(String::from).to_vec();
         let reached = ready_copy(dir.path(), &allowed, &hosts).unwrap();
         let copy: Value = serde_json::from_slice(&std::fs::read(dir.path().join("manifest.json")).unwrap()).unwrap();
-        assert_eq!(copy["permissions"], json!(["activeTab", "alarms", "scripting", "storage", "tabs"]));
+        assert_eq!(copy["permissions"], json!(["activeTab", "alarms", "clipboardRead", "idle", "offscreen", "scripting", "storage", "tabs"]), "cookies wasn't shown");
         assert_eq!(copy["host_permissions"], json!(["https://*/*", "http://*/*"]));
         assert_eq!(copy["content_scripts"], json!([{ "matches": ["*://*/*"], "js": ["content.js"] }]), "not on this Mac's files, which weren't allowed");
         assert!(copy.get("optional_permissions").is_none() && copy.get("optional_host_permissions").is_none());
         assert_eq!(reached, ["https://*/*", "http://*/*", "*://*/*"]);
         assert!(std::fs::read_to_string(dir.path().join("popup/index.html")).unwrap().contains(POPUP_SCRIPT_FILE));
+    }
+
+    /// What the dialog showed is granted, Bitwarden's whole list included, but a permission that reaches past the
+    /// extension's sites is refused even when it was shown, and one that wasn't shown never is.
+    #[test]
+    fn chromium_keeps_what_the_dialog_showed_but_what_it_doesnt_explain() {
+        let bitwarden = [
+            "activeTab", "alarms", "clipboardRead", "clipboardWrite", "contextMenus", "idle", "offscreen", "scripting", "sidePanel", "storage", "tabs",
+            "unlimitedStorage", "webNavigation", "webRequest", "webRequestAuthProvider", "notifications",
+        ];
+        let shown: Vec<String> = bitwarden.map(String::from).to_vec();
+        assert!(bitwarden.iter().all(|name| granted(name, &shown)));
+        let risky = ["debugger", "proxy", "management", "desktopCapture", "tabCapture", "browsingData", "privacy", "downloads", "nativeMessaging", "webAuthenticationProxy"];
+        let shown: Vec<String> = risky.map(String::from).to_vec();
+        for name in risky {
+            assert!(!granted(name, &shown), "{name}");
+        }
+        assert!(!granted("cookies", &[]), "not shown");
     }
 
     /// Its popup hears the page's address only on a page the extension may reach; on any other it opens without it.
