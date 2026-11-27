@@ -76,8 +76,10 @@ pub fn pattern_reaches(pattern: &str, url: &str) -> bool {
 
 /// Rewrites the manifest of the extension in `dir` so it asks for no more than the person allowed: of its `permissions`,
 /// the names `permitted` grants and the host patterns `hosts` cover; of its `host_permissions`, those `hosts` cover; its
-/// content scripts only on the pages `hosts` cover (a script left on none goes); nothing it may ask for later
-/// (`optional_permissions`, `optional_host_permissions`); no shortcuts (`commands`, which may work in every app on the
+/// content scripts only on the pages `hosts` cover (a script left on none goes); of what it may ask for later
+/// (`optional_permissions`), only the names `permitted` grants, moved into its `permissions` so it has them from the
+/// start and its `permissions.request` answers yes with no prompt, the rest and `optional_host_permissions` gone; no
+/// shortcuts (`commands`, which may work in every app on the
 /// Mac, `"global": true`, or beat Wings' own in its pages); and no address to update itself from (`update_url`): Wings
 /// decides which version runs. Answers the host patterns it kept, those of its content scripts too.
 pub fn narrow_manifest(dir: &Path, permitted: &dyn Fn(&str) -> bool, hosts: &[String]) -> Result<Vec<String>, Error> {
@@ -97,6 +99,24 @@ pub fn narrow_manifest(dir: &Path, permitted: &dyn Fn(&str) -> bool, hosts: &[St
     };
     if let Some(list) = object.get_mut("permissions").and_then(Value::as_array_mut) {
         list.retain(|entry| entry.as_str().is_some_and(|name| if is_host_pattern(name) { keep(name) } else { permitted(name) }));
+    }
+    let later: Vec<Value> = object
+        .get("optional_permissions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|entry| entry.as_str().is_some_and(|name| !is_host_pattern(name) && permitted(name)))
+        .cloned()
+        .collect();
+    if !later.is_empty() {
+        let list = object.entry("permissions").or_insert_with(|| Value::Array(Vec::new()));
+        if let Some(list) = list.as_array_mut() {
+            for entry in later {
+                if !list.contains(&entry) {
+                    list.push(entry);
+                }
+            }
+        }
     }
     if let Some(list) = object.get_mut("host_permissions").and_then(Value::as_array_mut) {
         list.retain(|entry| entry.as_str().is_some_and(&mut keep));

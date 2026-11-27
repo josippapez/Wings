@@ -15,8 +15,8 @@ use wings_plugin::{
     host::{self, Stage},
     task::spawn,
     ui::{
-        Choice, Combobox, ExtensionButton, Node, WebState, badge, button, combobox_submit, icon_button, icons, image, notice, page_with, row, slot, stack, text,
-        web_command, web_extension_action, web_view,
+        Choice, Combobox, ExtensionButton, Node, WebState, actions as dialog_actions, badge, button, combobox_submit, dialog, icon_button, icons, image, menu, muted, notice, page_with, row, slot, stack,
+        text, toast, web_command, web_extension_action, web_view,
     },
 };
 
@@ -57,6 +57,10 @@ pub(crate) struct Page {
     titled: String,
     /// The token of the last click of an extension's button, whose refusal shows in the red line.
     opening: Option<u64>,
+    /// The address "Clear data for" was chosen on, while its dialog asks.
+    clearing_site: Option<String>,
+    /// What clearing a site did, shown over the foot of the page: its tone and words.
+    cleared: Option<(&'static str, String)>,
 }
 
 /// What a change of the view's state asks the tab to do.
@@ -130,6 +134,51 @@ pub(crate) fn with<R>(change: impl FnOnce(&mut Page) -> R) -> R {
 /// Shows `error` in the page's red line, as a failed store add does.
 pub(crate) fn problem(error: String) {
     with(|page| page.problem = Some(error));
+}
+
+/// The part of a web page's address that names its site, as the person reads it (`localhost:4300`): none for the start
+/// page and anything that isn't an `http` or `https` page, which keep nothing to clear.
+fn site_name(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("http://").or_else(|| url.strip_prefix("https://"))?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let name = authority.rsplit_once('@').map_or(authority, |(_, after)| after);
+    (!name.is_empty()).then(|| name.to_ascii_lowercase())
+}
+
+/// Removes the cookies and site data of the site of `url`, then loads the page again, which shows it signed out. The host
+/// only does it right after a click, so this runs in the click of the dialog's button.
+fn clear_site(url: String) {
+    let name = site_name(&url).unwrap_or_default();
+    with(|page| {
+        page.clearing_site = None;
+        page.cleared = None;
+    });
+    spawn(async move {
+        let result = host::web_data_clear_site(&url).await;
+        with(|page| match result {
+            Ok(_) => {
+                page.send("reload", None);
+                page.cleared = Some(("success", format!("Cleared the data of {name}.")));
+            }
+            Err(error) => page.cleared = Some(("danger", error)),
+        });
+    });
+}
+
+fn site_menu(url: &str) -> Option<Node> {
+    let name = site_name(url)?;
+    let asked = url.to_owned();
+    let trigger = Node::new("Button").prop("variant", "ghost").prop("size", "icon-sm").prop("label", "More").prop("title", "More").child(wings_plugin::ui::icon(24, 2.0, &icons::ELLIPSIS).prop("size", 16));
+    let item = Node::new("Button").key("clear-site").on("onClick", move |_| with(|page| page.clearing_site = Some(asked.clone()))).text(format!("Clear data for {name}"));
+    Some(menu(trigger, [item], true))
+}
+
+fn clear_site_dialog(url: &str) -> Node {
+    let name = site_name(url).unwrap_or_default();
+    let go = url.to_owned();
+    dialog(&format!("Clear data for {name}?"), 420, || with(|page| page.clearing_site = None))
+        .child(muted("This signs you out of it and removes what it stored. Other sites keep theirs."))
+        .child(dialog_actions(Some(button("Cancel", "ghost", false, || with(|page| page.clearing_site = None))), [button("Clear", "destructive", false, move || clear_site(go.clone()))]))
 }
 
 fn command(action: &'static str) {
@@ -356,6 +405,7 @@ fn view() -> Vec<Node> {
             } else {
                 icon_button("Pop out into a window", &icons::EXTERNAL_LINK, agent_page::pop_button_action)
             })
+            .maybe(site_menu(&state.url))
             .child(icon_button("Browser settings", &icons::SETTINGS, || drop(host::open_settings())));
         let problem = if page.staged.is_none() { page.problem.as_deref() } else { None };
         let top = [
@@ -365,18 +415,20 @@ fn view() -> Vec<Node> {
             page.added.as_deref().map(|added| notice("success", added).key("added")),
             agent_page::handoff_banner(),
         ];
+        let toasts = page.cleared.as_ref().map(|(tone, words)| toast(tone, words.as_str(), || with(|page| page.cleared = None)).key("cleared"));
+        let ask = page.clearing_site.as_deref().map(clear_site_dialog);
         if page.blank {
             let servers = start_page::servers(&page.ports, &page.panes, &page.project);
             let recent = start_page::recent(&page.visited, &servers, RECENT);
             let body = start_page::view(&servers, &recent, open_from_start);
-            return vec![page_with(top.into_iter().flatten(), [body]).prop("column", START_COLUMN)];
+            return vec![page_with(top.into_iter().flatten(), [body]).prop("column", START_COLUMN).toasts(toasts)];
         }
         let mut web = web_view("page").prop("fill", true).prop("url", page.start.as_str()).prop("keepData", keep).on("onState", state_event).on("onResult", result_event);
         if !page.commands.is_empty() {
             web = web.prop("command", Value::Array(page.commands.clone()));
         }
         let dialog = page.staged.as_ref().map(|staged| dialog_for(staged, page.busy, page.problem.as_deref(), cancel, add));
-        vec![page_with(top.into_iter().flatten(), std::iter::once(web).chain(dialog))]
+        vec![page_with(top.into_iter().flatten(), std::iter::once(web).chain(dialog).chain(ask)).toasts(toasts)]
     })
 }
 
@@ -428,6 +480,65 @@ mod tests {
         assert!(hint(&page), "typing something nothing matches");
         page.typed = None;
         assert!(!hint(&page), "after Enter or Escape");
+    }
+
+    fn drawn() -> String {
+        wings_plugin::ui::export(view()).0.to_string()
+    }
+
+    #[test]
+    fn a_web_page_has_a_clear_data_menu_item_that_asks_first_and_the_start_page_has_none() {
+        with(|page| *page = Page { start: "http://localhost:4300/".into(), ..Page::default() });
+        with(|page| page.state = loaded("http://localhost:4300/app", "App"));
+        let now = drawn();
+        assert!(now.contains("\"Menu\"") && now.contains("Clear data for localhost:4300"), "{now}");
+        assert!(!now.contains("Clear data for localhost:4300?"), "it asks only once chosen: {now}");
+        with(|page| page.clearing_site = Some("http://localhost:4300/app".into()));
+        let now = drawn();
+        for shown in ["\"Dialog\"", "Clear data for localhost:4300?", "This signs you out of it and removes what it stored. Other sites keep theirs.", "\"Cancel\"", "\"destructive\""] {
+            assert!(now.contains(shown), "{shown} is not in {now}");
+        }
+        with(|page| *page = Page { start: "https://duckduckgo.com/".into(), blank: true, ..Page::default() });
+        let now = drawn();
+        assert!(!now.contains("Clear data for") && !now.contains("\"Menu\""), "{now}");
+    }
+
+    #[test]
+    fn confirming_clears_the_page_site_only_then_reloads_and_says_so_in_a_toast() {
+        let asked = std::rc::Rc::new(RefCell::new(Vec::new()));
+        let seen = asked.clone();
+        wings_plugin::host::testing::answer(move |method, params| {
+            seen.borrow_mut().push((method.to_owned(), params.clone()));
+            Ok(Value::Null)
+        });
+        with(|page| *page = Page { start: "https://app.example.com/".into(), ..Page::default() });
+        with(|page| page.state = loaded("https://app.example.com/inbox?x=1", "Inbox"));
+        clear_site("https://app.example.com/inbox?x=1".into());
+        wings_plugin::host::testing::settle();
+        assert_eq!(*asked.borrow(), [("webData".to_owned(), serde_json::json!({ "action": "clearSite", "url": "https://app.example.com/inbox?x=1" }))]);
+        assert!(with(|page| page.commands.iter().any(|command| command["action"] == "reload")));
+        let now = drawn();
+        assert!(now.contains("\"Toast\"") && now.contains("Cleared the data of app.example.com.") && now.contains("success"), "{now}");
+    }
+
+    #[test]
+    fn a_failed_clear_shows_the_error_in_a_toast_and_does_not_reload() {
+        wings_plugin::host::testing::answer(|_, _| Err("WebKit didn't answer".into()));
+        with(|page| *page = Page { start: "https://a.com/".into(), ..Page::default() });
+        clear_site("https://a.com/".into());
+        wings_plugin::host::testing::settle();
+        assert!(with(|page| page.commands.is_empty()));
+        let now = drawn();
+        assert!(now.contains("WebKit didn't answer") && now.contains("danger"), "{now}");
+    }
+
+    #[test]
+    fn only_web_pages_have_a_site_named_as_the_address_bar_shows_it() {
+        assert_eq!(site_name("http://Localhost:4300/a?b#c").as_deref(), Some("localhost:4300"));
+        assert_eq!(site_name("https://me:pw@x.com/").as_deref(), Some("x.com"));
+        for other in ["", "about:blank", "file:///a", "https:///a"] {
+            assert_eq!(site_name(other), None, "{other}");
+        }
     }
 
     #[test]

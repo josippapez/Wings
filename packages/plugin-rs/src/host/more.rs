@@ -251,6 +251,13 @@ pub fn web_data_clear() -> Answer {
     call("webData", json!({ "action": "clear" }))
 }
 
+/// `wings.webData` `clearSite`: clears the cookies and site data (local storage, IndexedDB, service workers, caches) of
+/// the one site `url` is a page of, in both engines, only right after a click. Other sites and the extensions keep
+/// theirs. Fails for an address that isn't a web page. Needs `permissions.webView`. Wings 0.2.124.
+pub fn web_data_clear_site(url: &str) -> Answer {
+    call("webData", json!({ "action": "clearSite", "url": url }))
+}
+
 /// `wings.webEngine` `status`: `{ engine: "webkit" | "chromium", installed, version, downloadBytes, diskBytes, available,
 /// why, problem }`. `engine` is the one this plugin's web views use now, `available` is false on a Mac that can't run
 /// Chromium (`why` says why), `problem` why its files failed Wings' check. Needs `permissions.webView`. Wings 0.2.121.
@@ -404,6 +411,7 @@ mod tests {
         drop(set_claude_account("/r", None));
         drop(share_claude_setup("work", true));
         drop(web_data_clear());
+        drop(web_data_clear_site("https://x"));
         drop(web_engine_status());
         drop(web_engine_download());
         drop(web_engine_verify());
@@ -444,6 +452,7 @@ mod tests {
                 ("setClaudeAccount", json!({ "projectId": "/r", "name": null })),
                 ("shareClaudeSetup", json!({ "name": "work", "on": true })),
                 ("webData", json!({ "action": "clear" })),
+                ("webData", json!({ "action": "clearSite", "url": "https://x" })),
                 ("webEngine", json!({ "action": "status" })),
                 ("webEngine", json!({ "action": "download" })),
                 ("webEngine", json!({ "action": "verify" })),

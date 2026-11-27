@@ -51,6 +51,10 @@ pub struct Added {
     /// dialog says.
     #[serde(default)]
     pub compat: bool,
+    /// What it may ask for later (`optional_permissions`), read with the rest as it was readied: the dialog offers the
+    /// ones Wings allows on a button of their own (`web::Ask::opt_in`), and one allowed goes into `permissions`.
+    #[serde(skip)]
+    pub optional: Vec<String>,
 }
 
 /// An extension that passed `verify`: only `verify` makes one, and only one loads (`web::mac::load`), granted no more
@@ -312,6 +316,7 @@ pub fn prepare(profile: &Profile, stage: &str) -> Result<(Added, PathBuf), Strin
         tree: Some(tree),
         seal: None,
         compat,
+        optional: info.optional_permissions,
     };
     Ok((added, dir))
 }
@@ -562,7 +567,7 @@ mod tests {
         let mut forged = Added {
             id: "abc".into(), name: "x".into(), version: "1".into(), description: String::new(),
             icon: Some(PathBuf::from("../../../outside/manifest.json")), permissions: vec![], hosts: vec![], enabled: true, allowed: true,
-            tree: None, seal: None, compat: false,
+            tree: None, seal: None, compat: false, optional: vec![],
         };
         assert_eq!(icon_path(&profile, &forged), None);
         forged.icon = Some(PathBuf::from("/etc/passwd"));

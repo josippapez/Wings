@@ -159,6 +159,40 @@ pub fn clear_data(profile: &Profile, done: impl FnOnce() + 'static) {
     one_done();
 }
 
+/// Removes the cookies and storage of `site` from every context of `profile` Chromium holds, and nothing of another
+/// site: its cookies through the cookie manager, the rest (local storage, IndexedDB, service workers, caches) over
+/// one of the context's pages' DevTools, as `clear_data` does. `done` hears when they are gone.
+pub fn clear_site(profile: &Profile, site: &super::super::engine::site::Site, done: impl FnOnce() + 'static) {
+    let live = if runtime::running() { runtime::live(profile) } else { Vec::new() };
+    let left = Rc::new(Cell::new(1));
+    let done: Rc<RefCell<Option<Box<dyn FnOnce()>>>> = Rc::new(RefCell::new(Some(Box::new(done))));
+    let counted = left.clone();
+    let one_done: Rc<dyn Fn()> = Rc::new(move || {
+        counted.set(counted.get() - 1);
+        if counted.get() == 0
+            && let Some(done) = done.borrow_mut().take()
+        {
+            done();
+        }
+    });
+    let pages = pages_of(profile);
+    for (keep_data, context) in live {
+        if let Some(cookies) = context.cookie_manager(None) {
+            cookies.delete_cookies(Some(&CefString::from(site.url.as_str())), None, None);
+        }
+        let Some(browser) = pages.iter().find(|page| page.keep_data == keep_data).and_then(|page| page.browser.borrow().clone()) else { continue };
+        left.set(left.get() + 1);
+        let one_done = one_done.clone();
+        super::devtools::once(&browser, "Storage.clearDataForOrigin", serde_json::json!({ "origin": site.origin, "storageTypes": "all" }), move |cleared| {
+            if let Err(why) = cleared {
+                eprintln!("[chromium] a site's storage wasn't cleared: {why}");
+            }
+            one_done();
+        });
+    }
+    one_done();
+}
+
 /// The first page alive, for a debug build's checks (`debug`).
 #[cfg(debug_assertions)]
 pub fn first() -> Option<Rc<Shared>> {

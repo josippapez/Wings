@@ -202,9 +202,45 @@ pub struct Ask {
     pub hosts: Vec<String>,
     /// Wings put its compatibility script in front of its background worker (`extensions::Added::compat`).
     pub compat: bool,
+    /// What it may ask for later (`extensions::Added::optional`).
+    pub optional: Vec<String>,
+}
+
+/// What an extension may ask for later that Wings' dialog offers to allow as it is added: its name, the button that
+/// allows it, and what the dialog says of it. Anything else it may ask for later it never gets.
+const OPT_IN: [(&str, &str, &str); 1] = [(
+    "privacy",
+    "Add with privacy settings",
+    "It may also ask to change the Browser's privacy settings for every site, such as password saving, autofill, \
+     third-party cookies and Safe Browsing. A password manager asks for this to become your default one. Only \
+     \"Add with privacy settings\" allows it.",
+)];
+
+/// The optional permissions the person allowed in the dialog, from what `Job::Add` answered: only names Wings offers
+/// (`OPT_IN`).
+pub fn also_allowed(answer: &Result<String, String>) -> Vec<String> {
+    let Some(answer) = answer.as_ref().ok().and_then(|answer| serde_json::from_str::<serde_json::Value>(answer).ok()) else { return Vec::new() };
+    answer["also"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .filter(|name| OPT_IN.iter().any(|(offered, _, _)| offered == name))
+        .map(str::to_owned)
+        .collect()
 }
 
 impl Ask {
+    /// The optional permission the dialog offers to allow, and its button: one it may ask for later that Wings offers
+    /// (`OPT_IN`) and doesn't ask for from the start.
+    pub fn opt_in(&self) -> Option<(&'static str, &'static str)> {
+        self.offered().map(|(name, button, _)| (name, button))
+    }
+
+    fn offered(&self) -> Option<(&'static str, &'static str, &'static str)> {
+        OPT_IN.into_iter().find(|(name, _, _)| self.optional.iter().any(|optional| optional == name) && !self.permissions.iter().any(|permission| permission == name))
+    }
+
     /// The dialog's question and what it says under it: what it reaches first, then what else it asks for. The names come
     /// from the extension, so each is one line of printable text, cut short: a name with line breaks wrote a list of
     /// harmless permissions of its own over the real one.
@@ -246,6 +282,9 @@ impl Ask {
         if detail.is_empty() {
             detail.push("It asks for no permissions.".into());
         }
+        if let Some((_, _, says)) = self.offered() {
+            detail.push(says.to_owned());
+        }
         if self.compat {
             detail.push(COMPAT_ADDED.into());
         }
@@ -264,7 +303,7 @@ pub const COMPAT: &str = include_str!("compat.js");
 const HOSTS_SHOWN: usize = 8;
 
 /// The permissions whose names don't say what they reach, and what they do, as the dialog says it.
-const SENSITIVE: [(&str, &str); 8] = [
+const SENSITIVE: [(&str, &str); 9] = [
     ("clipboardRead", "it can read what you copy"),
     ("webRequest", "it sees the requests the pages you open make"),
     ("tabs", "it sees the address and title of every page you open"),
@@ -273,6 +312,7 @@ const SENSITIVE: [(&str, &str); 8] = [
     ("cookies", "it can read and change the cookies of the sites it reaches, sign-ins included"),
     ("history", "it can read and delete the pages you visited"),
     ("downloads", "it can download files and see your downloads"),
+    ("privacy", "it can change the Browser's privacy settings for every site, such as password saving, autofill and third-party cookies"),
 ];
 
 /// `text` as one line of printable characters, at most `most` of them.
@@ -391,6 +431,7 @@ mod tests {
             hosts: hosts.iter().map(|host| host.to_string()).collect(),
             permissions: permissions.iter().map(|permission| permission.to_string()).collect(),
             compat: false,
+            optional: vec![],
         };
         let (question, detail) = ask(&["<all_urls>"], &["storage", "tabs"]).words();
         assert_eq!(question, "Add the extension \"Blocker\" to the Browser?");
@@ -407,7 +448,7 @@ mod tests {
         assert!(listed.starts_with("It can read and change your data on: *://*.bank.example/*, https://*.mail.example/*,"), "{listed}");
         assert!(listed.split("\n\n").next().unwrap().ends_with("and 6 more."), "{listed}");
         // A name can't write lines of its own into the dialog.
-        let spoof = Ask { name: "Helper\"\n\nIt asks for no permissions.\u{2028}x".repeat(5), hosts: vec!["<all_urls>".into()], permissions: vec![], compat: false };
+        let spoof = Ask { name: "Helper\"\n\nIt asks for no permissions.\u{2028}x".repeat(5), hosts: vec!["<all_urls>".into()], permissions: vec![], compat: false, optional: vec![] };
         let (question, detail) = spoof.words();
         assert!(!question.contains('\n') && !question.contains('\u{2028}') && question.chars().count() <= 100, "{question}");
         assert!(detail.starts_with("It can read and change everything on every website"));
@@ -425,6 +466,7 @@ mod tests {
             hosts: hosts.iter().map(|host| host.to_string()).collect(),
             permissions: permissions.iter().map(|permission| permission.to_string()).collect(),
             compat: false,
+            optional: vec![],
         };
         for hosts in [&["https://github.com/*"][..], &["<all_urls>"], &["*://*.bank.example/*"]] {
             let (_, detail) = ask(hosts, &["storage"]).words();
@@ -436,7 +478,7 @@ mod tests {
     /// Only an extension Wings put its compatibility script in front of says so, on a line of its own, last.
     #[test]
     fn the_dialog_says_when_wings_adds_its_compatibility_file() {
-        let ask = |compat| Ask { name: "Bitwarden".into(), hosts: vec!["https://*/*".into()], permissions: vec!["storage".into()], compat };
+        let ask = |compat| Ask { name: "Bitwarden".into(), hosts: vec!["https://*/*".into()], permissions: vec!["storage".into()], compat, optional: vec![] };
         assert!(ask(true).words().1.ends_with("\n\nWings adds a compatibility file so it runs in WebKit."), "{}", ask(true).words().1);
         assert!(!ask(false).words().1.contains("compatibility"));
     }
@@ -444,7 +486,7 @@ mod tests {
     /// The raw names that reach the most each say what they do, on a line of their own.
     #[test]
     fn the_dialog_says_what_sensitive_permissions_do() {
-        let ask = Ask { name: "Helper".into(), hosts: vec![], permissions: ["storage", "tabs", "nativeMessaging", "clipboardRead"].map(String::from).to_vec(), compat: false };
+        let ask = Ask { name: "Helper".into(), hosts: vec![], permissions: ["storage", "tabs", "nativeMessaging", "clipboardRead"].map(String::from).to_vec(), compat: false, optional: vec![] };
         let (_, detail) = ask.words();
         assert_eq!(
             detail,
@@ -454,9 +496,40 @@ mod tests {
              clipboardRead: it can read what you copy"
         );
         for (name, _) in SENSITIVE {
-            let one = Ask { name: "x".into(), hosts: vec![], permissions: vec![name.into()], compat: false };
+            let one = Ask { name: "x".into(), hosts: vec![], permissions: vec![name.into()], compat: false, optional: vec![] };
             assert!(one.words().1.contains(&format!("\n\n{name}: ")), "{name}");
         }
+    }
+
+    /// An extension that may ask to change the privacy settings later, as Bitwarden does to become the default password
+    /// manager, is offered them on a button of their own, which the dialog explains; one that asks for them from the
+    /// start lists them with what they do, and nothing else optional is offered.
+    #[test]
+    fn the_dialog_offers_the_privacy_settings_on_a_button_of_their_own() {
+        let ask = |permissions: &[&str], optional: &[&str]| Ask {
+            name: "Bitwarden".into(),
+            hosts: vec![],
+            permissions: permissions.iter().map(|name| name.to_string()).collect(),
+            compat: false,
+            optional: optional.iter().map(|name| name.to_string()).collect(),
+        };
+        let bitwarden = ask(&["storage"], &["nativeMessaging", "privacy"]);
+        assert_eq!(bitwarden.opt_in(), Some(("privacy", "Add with privacy settings")));
+        assert!(bitwarden.words().1.ends_with("Only \"Add with privacy settings\" allows it."), "{}", bitwarden.words().1);
+        assert_eq!(ask(&["storage"], &["nativeMessaging", "proxy"]).opt_in(), None);
+        let from_the_start = ask(&["privacy"], &["privacy"]);
+        assert_eq!(from_the_start.opt_in(), None);
+        assert!(from_the_start.words().1.contains("privacy: it can change the Browser's privacy settings for every site"));
+        assert!(!from_the_start.words().1.contains("Only \"Add with"));
+    }
+
+    /// Only names the dialog offers count as allowed with it, whatever the answer says.
+    #[test]
+    fn only_an_offered_optional_permission_is_allowed_with_the_extension() {
+        assert_eq!(also_allowed(&Ok(r#"{"allowed":true,"also":["privacy"]}"#.into())), ["privacy"]);
+        assert!(also_allowed(&Ok(r#"{"allowed":true,"also":["nativeMessaging","debugger"]}"#.into())).is_empty());
+        assert!(also_allowed(&Ok(r#"{"allowed":true}"#.into())).is_empty());
+        assert!(also_allowed(&Err(NOT_ALLOWED.into())).is_empty());
     }
 
     #[test]

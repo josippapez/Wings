@@ -139,6 +139,19 @@ pub(super) fn browser(out: PathBuf) {
             // The settings ask for the other browsers and extensions as they open.
             wait(&mut cx, window, Duration::from_millis(1500));
             save(&mut cx, window, out.join(format!("browser-{name}-{width}.png")));
+            if *name == "page" {
+                // The More menu of a web page, its item's question, and what the fixture's host (no web engines) answers.
+                // A menu's button has no click of its own for the page: the app opens the menu.
+                assert!(handle.update(&mut cx, |view, _, cx| view.open_menu("More", 0, cx)).unwrap(), "no More menu");
+                wait(&mut cx, window, Duration::from_millis(500));
+                save(&mut cx, window, out.join(format!("browser-page-menu-{width}.png")));
+                assert!(handle.read_with(&cx, |view, _| view.press("Clear data for github.com", 0)).unwrap(), "no Clear data item");
+                wait(&mut cx, window, Duration::from_millis(500));
+                save(&mut cx, window, out.join(format!("browser-page-clear-{width}.png")));
+                assert!(handle.read_with(&cx, |view, _| view.press("Clear", 0)).unwrap(), "no Clear button");
+                wait(&mut cx, window, Duration::from_millis(1000));
+                save(&mut cx, window, out.join(format!("browser-page-cleared-{width}.png")));
+            }
             if *name == "settings" {
                 // Look, as a click on it does, then Add on the first extension it lists.
                 assert!(handle.read_with(&cx, |view, _| view.press("Look", 0)).unwrap(), "no Look button");

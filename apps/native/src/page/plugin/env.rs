@@ -546,6 +546,11 @@ pub trait Env: Send + Sync + 'static {
     fn web(&self, _job: crate::web::Job, done: Box<dyn FnOnce(Result<String, String>) + Send>) {
         done(Err("Web pages aren't available in this host".into()));
     }
+    /// Removes the cookies and storage of `site`, and of no other site, from the plugin's web views in both engines, on
+    /// the window's thread, and hands `done` its answer as JSON.
+    fn clear_site(&self, _profile: crate::web::Profile, _site: crate::web::engine::site::Site, done: Box<dyn FnOnce(Result<String, String>) + Send>) {
+        done(Err("Web pages aren't available in this host".into()));
+    }
     /// The plugin set, or with `None` took away, its section `section` under the project in folder `project`. The host
     /// has checked the plugin declares the section and the project is listed.
     fn set_project_section(

@@ -119,6 +119,8 @@ pub fn setting_tick(tick: Node, detail: &str) -> Node {
 /// Lucide's icons as the paths `icon` and `icon_button` draw on a 24-point grid, by the icon's name.
 pub mod icons {
     pub const PLUS: [&str; 2] = ["M5 12h14", "M12 5v14"];
+    /// `ellipsis`: three dots in a row, as a "More" menu's button.
+    pub const ELLIPSIS: [&str; 3] = ["M11 12a1 1 0 1 0 2 0a1 1 0 1 0-2 0", "M18 12a1 1 0 1 0 2 0a1 1 0 1 0-2 0", "M4 12a1 1 0 1 0 2 0a1 1 0 1 0-2 0"];
     pub const CLOSE: [&str; 2] = ["M18 6 6 18", "m6 6 12 12"];
     pub const CHECK: [&str; 1] = ["M20 6 9 17l-5-5"];
     /// `refresh-cw`: two arrows round, as Reload.

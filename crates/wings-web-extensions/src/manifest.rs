@@ -25,6 +25,8 @@ pub struct Info {
     pub permissions: Vec<String>,
     /// Sites it reaches: `host_permissions`, MV2 host patterns found in `permissions`, and content scripts' `matches`.
     pub host_permissions: Vec<String>,
+    /// API permissions it may ask for later (`optional_permissions`), without host patterns.
+    pub optional_permissions: Vec<String>,
 }
 
 /// `Info` plus what only a Firefox package says.
@@ -98,6 +100,10 @@ pub(crate) fn parse(files: &mut dyn Files, icon_root: Option<&Path>) -> Result<P
     for p in strings("host_permissions") {
         push_unique(&mut host_permissions, p);
     }
+    let mut optional_permissions = Vec::new();
+    for p in strings("optional_permissions").into_iter().filter(|p| !is_host_pattern(p)) {
+        push_unique(&mut optional_permissions, p);
+    }
     for script in m.get("content_scripts").and_then(Value::as_array).into_iter().flatten() {
         for p in script.get("matches").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) {
             push_unique(&mut host_permissions, p.to_string());
@@ -119,6 +125,7 @@ pub(crate) fn parse(files: &mut dyn Files, icon_root: Option<&Path>) -> Result<P
             manifest_version,
             permissions,
             host_permissions,
+            optional_permissions,
         },
         gecko_id,
     })

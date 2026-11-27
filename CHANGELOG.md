@@ -2,6 +2,11 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.124 · 2026-11-27
+
+- **Bitwarden as your default password manager**: when an extension may ask to change the Browser's privacy settings, as Bitwarden does to become the default password manager, Wings' add dialog now has an "Add with privacy settings" button. With it, Bitwarden's Continue works under Chromium. Plain Add still leaves those settings alone. An extension added before this needs removing and adding again to get the button.
+- **Clear one site's data**: the Browser page's … menu has "Clear data for <site>". It removes that site's cookies and storage in both engines and signs you out of it, and other sites and your extensions keep theirs (Browser 0.1.6).
+
 ## 0.2.123 · 2026-11-27
 
 - **Passkeys through Bitwarden**: "Sign in with a passkey" on a site opens Bitwarden's passkey window again instead of Chromium's own dialog. Wings closed every window an extension opened, so Bitwarden's window vanished as it opened. An extension's own pages now open in a window of their own, for any extension, and a website an extension tries to open still closes.

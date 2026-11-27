@@ -574,11 +574,12 @@ fn ready_copy(copy: &std::path::Path, permissions: &[String], hosts: &[String]) 
 }
 
 /// The permissions Chromium's copy of an extension may keep, each reviewed: those WebKit has for an extension (its
-/// `supportedPermissions`, `nativeMessaging` aside, which Wings' dialog says it never allows), and a few of Chromium's
-/// own that stay within what the extension does by itself (`idle`, `offscreen`, `clipboardRead`, `notifications`,
-/// `sidePanel`). Any other, a new one too, isn't granted: Chromium grants whatever a manifest asks for, and some reach
-/// past the extension's sites (the debugger, a proxy, other extensions, capture of the screen).
-const GRANTED: [&str; 20] = [
+/// `supportedPermissions`, `nativeMessaging` aside, which Wings' dialog says it never allows), a few of Chromium's own
+/// that stay within what the extension does by itself (`idle`, `offscreen`, `clipboardRead`, `notifications`,
+/// `sidePanel`), and `privacy`, which the dialog spells out and, when the extension only may ask for it later, allows on
+/// a button of its own (`web::Ask::opt_in`). Any other, a new one too, isn't granted: Chromium grants whatever a manifest
+/// asks for, and some reach past the extension's sites (the debugger, a proxy, other extensions, capture of the screen).
+const GRANTED: [&str; 21] = [
     "activeTab",
     "alarms",
     "clipboardRead",
@@ -592,6 +593,7 @@ const GRANTED: [&str; 20] = [
     "menus",
     "notifications",
     "offscreen",
+    "privacy",
     "scripting",
     "sidePanel",
     "storage",
@@ -1100,6 +1102,24 @@ mod tests {
         assert!(std::fs::read_to_string(dir.path().join("popup/index.html")).unwrap().contains(POPUP_SCRIPT_FILE));
     }
 
+    /// Bitwarden's privacy settings, which it may ask for later to become the default password manager, are had from the
+    /// start in Chromium's copy once the person allowed them on the dialog's own button, so its request answers yes; not
+    /// otherwise.
+    #[test]
+    fn privacy_allowed_on_the_dialogs_button_is_in_chromiums_copy_from_the_start() {
+        let copy_with = |allowed: &[&str]| {
+            let dir = tempfile::tempdir().unwrap();
+            let manifest = json!({ "manifest_version": 3, "name": "Bitwarden", "version": "1", "permissions": ["storage"], "optional_permissions": ["nativeMessaging", "privacy"] });
+            std::fs::write(dir.path().join("manifest.json"), manifest.to_string()).unwrap();
+            let allowed: Vec<String> = allowed.iter().map(|name| name.to_string()).collect();
+            ready_copy(dir.path(), &allowed, &[]).unwrap();
+            serde_json::from_slice::<Value>(&std::fs::read(dir.path().join("manifest.json")).unwrap()).unwrap()["permissions"].clone()
+        };
+        assert_eq!(copy_with(&["storage", "privacy"]), json!(["storage", "privacy"]));
+        assert_eq!(copy_with(&["storage"]), json!(["storage"]));
+        assert_eq!(copy_with(&["storage", "nativeMessaging"]), json!(["storage"]), "never native messaging");
+    }
+
     /// Of what the dialog showed, only a permission on the reviewed list is granted: Bitwarden's set, but not a name
     /// nobody reviewed (a new one too), not one that reaches past the extension's sites, and none the dialog didn't show.
     #[test]
@@ -1112,7 +1132,7 @@ mod tests {
         let kept: Vec<&str> = shown.iter().map(String::as_str).filter(|name| granted(name, &shown)).collect();
         assert_eq!(kept, bitwarden, "a name nobody reviewed isn't granted");
         let risky = [
-            "debugger", "proxy", "management", "desktopCapture", "tabCapture", "pageCapture", "browsingData", "privacy", "contentSettings", "downloads",
+            "debugger", "proxy", "management", "desktopCapture", "tabCapture", "pageCapture", "browsingData", "contentSettings", "downloads",
             "downloads.open", "nativeMessaging", "webAuthenticationProxy", "userScripts", "geolocation", "system.storage", "webRequestBlocking", "vpnProvider",
         ];
         let shown: Vec<String> = risky.map(String::from).to_vec();

@@ -585,3 +585,28 @@ fn a_narrowed_manifest_asks_for_only_what_was_allowed() {
     assert_eq!((manifest["key"].as_str(), manifest["name"].as_str()), (Some("abc"), Some("P")));
     assert_eq!(kept, ["https://old.example/*", "https://a.example/*"]);
 }
+
+/// An optional permission the person allowed moves into `permissions`, so the extension has it from the start: one it
+/// wasn't allowed, and optional sites, still go.
+#[test]
+fn an_allowed_optional_permission_is_had_from_the_start() {
+    let d = TempDir::new().unwrap();
+    write(
+        d.path(),
+        "manifest.json",
+        r#"{"manifest_version":3,"name":"P","version":"1","permissions":["storage"],
+            "optional_permissions":["privacy","nativeMessaging","https://x.example/*"],"optional_host_permissions":["<all_urls>"]}"#,
+    );
+    let permitted = |name: &str| ["storage", "privacy"].contains(&name);
+    crate::narrow_manifest(d.path(), &permitted, &[]).unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&fs::read(d.path().join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["permissions"], serde_json::json!(["storage", "privacy"]));
+    assert!(manifest.get("optional_permissions").is_none() && manifest.get("optional_host_permissions").is_none());
+}
+
+#[test]
+fn the_manifest_says_what_it_may_ask_for_later() {
+    let d = TempDir::new().unwrap();
+    write(d.path(), "manifest.json", r#"{"manifest_version":3,"name":"P","version":"1","optional_permissions":["privacy","nativeMessaging","https://x.example/*","privacy"]}"#);
+    assert_eq!(read_manifest(d.path()).unwrap().optional_permissions, ["privacy", "nativeMessaging"]);
+}

@@ -587,5 +587,7 @@ fn remove_in(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+pub mod site;
+
 #[cfg(test)]
 mod tests;

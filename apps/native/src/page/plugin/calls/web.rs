@@ -45,6 +45,10 @@ impl Shared {
         let done = move |reply: Reply| -> Box<dyn FnOnce(Result<String, String>) + Send> { Box::new(move |result| reply.done(result)) };
         match (method, action.as_str()) {
             ("webData", "clear") => access.env.web(Job::Clear(profile), done(reply)),
+            ("webData", "clearSite") => match text("url").and_then(|url| engine::site::Site::of(&url)) {
+                Some(site) => access.env.clear_site(profile, site, done(reply)),
+                None => reply.err("clearSite needs the address of a web page".into()),
+            },
             ("webExtensions", "list") => {
                 let (env, plugin) = (access.env.clone(), id.clone());
                 access.env.web(
@@ -177,6 +181,7 @@ impl Shared {
                         permissions: added.permissions.clone(),
                         hosts: added.hosts.clone(),
                         compat: added.compat,
+                        optional: added.optional.clone(),
                     };
                     let loader = env.clone();
                     env.web(
@@ -187,13 +192,22 @@ impl Shared {
                                 extensions::forget(&profile, &added.id);
                                 return reply.err(answer.err().unwrap_or_else(|| crate::web::NOT_ALLOWED.into()));
                             }
+                            // What it may ask for later that the person allowed on the dialog's own button is had from
+                            // the start, sealed with the rest.
+                            let mut added = added;
+                            let mut entry = entry;
+                            for name in crate::web::also_allowed(&answer) {
+                                if added.optional.contains(&name) && !added.permissions.contains(&name) {
+                                    added.permissions.push(name);
+                                }
+                            }
+                            entry["permissions"] = json!(added.permissions);
                             // Listed, sealed, only now that the person allowed it, and before it loads: a list that
                             // can't be written leaves nothing loaded. It then loads as any other does, checked first.
                             if let Err(error) = extensions::keep(&profile, &added, &|| extensions::key(&profile)) {
                                 extensions::forget(&profile, &added.id);
                                 return reply.err(error);
                             }
-                            let mut entry = entry;
                             let verified = extensions::verified(&profile, &added.id, &|| extensions::key(&profile));
                             let Ok(extension) = verified else {
                                 entry["error"] = json!(verified.err());
@@ -388,7 +402,7 @@ pub(in crate::page::plugin) fn needs_click(method: &str, params: &Value) -> bool
     matches!(
         (method, action),
         ("webExtensions", Some("stage" | "add" | "installed" | "setEnabled" | "remove" | "checkAgain"))
-            | ("webData", Some("clear"))
+            | ("webData", Some("clear" | "clearSite"))
             | ("webEngine", Some("download" | "use" | "remove"))
             | ("browserCookies", Some("import"))
     )
@@ -567,6 +581,21 @@ mod tests {
         let words = Seen::Confirm(engine::REMOVE.question.into(), engine::REMOVE.detail.into());
         assert!(browser.env.seen().contains(&words), "{:?}", browser.env.seen());
         assert!(engine::REMOVE.detail.contains("deletes Chromium and its sign-ins and site data for every profile"));
+    }
+
+    #[test]
+    fn clearing_one_site_needs_a_click_and_the_address_of_a_web_page() {
+        let web = Rig::new(json!({ "permissions": { "webView": true } }), vec![]);
+        let page = Caller::start(&web.host);
+        let params = json!({ "action": "clearSite", "url": "http://localhost:4300/app" });
+        assert_eq!(page.call("webData", params.clone()), Err("A page can clear site data only right after you click or type in it".into()));
+        // Not a web page: nothing to clear, so nothing reaches the window.
+        assert_eq!(page.call_after_click("webData", json!({ "action": "clearSite", "url": "about:blank" })), Err("clearSite needs the address of a web page".into()));
+        assert_eq!(page.call_after_click("webData", json!({ "action": "clearSite" })), Err("clearSite needs the address of a web page".into()));
+        // A web page goes on to the window, which this host doesn't have.
+        assert_eq!(page.call_after_click("webData", params), Err("Web pages aren't available in this host".into()));
+        let without = Rig::new(json!({ "permissions": { "openUrl": ["https://"] } }), vec![]);
+        assert_eq!(Caller::start(&without.host).call_after_click("webData", json!({ "action": "clearSite", "url": "https://x.com" })), Err("probe may not show web pages".into()));
     }
 
     #[test]

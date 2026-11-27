@@ -1,6 +1,6 @@
 [package]
 name = "wings-native"
-version = "0.2.123"
+version = "0.2.124"
 edition = "2024"
 publish = false
 
@@ -108,7 +108,7 @@ objc2 = { version = "0.6.5", optional = true }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSSound", "NSApplication", "NSResponder", "NSEvent", "NSWindow", "NSRunningApplication", "NSView", "NSVisualEffectView", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSOpenPanel", "NSSavePanel", "NSPanel", "NSAlert", "NSTextField", "NSControl", "NSButton", "NSCell", "NSTextFieldCell", "NSActionCell", "NSPopover", "NSScreen"], optional = true }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData", "NSArray", "NSGeometry", "NSBundle", "NSString", "NSError", "NSValue", "NSDate", "NSDictionary", "NSHTTPCookie", "NSKeyValueObserving", "NSSet", "NSURL", "NSURLRequest", "NSUUID", "NSObject", "NSValue", "NSProcessInfo", "NSJSONSerialization", "NSRunLoop", "NSNotification", "block2"], optional = true }
 # Web pages in plugin pages (`web/mac.rs`): WKWebView, its data stores and, on macOS 15.4, its extensions.
-objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKHTTPCookieStore", "WKNavigation", "WKNavigationAction", "WKNavigationDelegate", "WKUIDelegate", "WKWindowFeatures", "WKWebExtension", "WKWebExtensionContext", "WKWebExtensionController", "WKWebExtensionControllerConfiguration", "WKWebExtensionPermission", "WKWebExtensionMatchPattern", "WKWebExtensionAction", "WKWebExtensionTab", "WKWebExtensionWindow", "WKWebExtensionControllerDelegate", "WKContentWorld", "WKFrameInfo", "WKSnapshotConfiguration", "WKUIDelegate", "WKOpenPanelParameters", "WKScriptMessage", "WKScriptMessageHandler", "WKUserContentController", "WKUserScript", "WKSecurityOrigin", "WKWebExtensionDataRecord", "WKWebExtensionDataType"], optional = true }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKWebsiteDataRecord", "WKHTTPCookieStore", "WKNavigation", "WKNavigationAction", "WKNavigationDelegate", "WKUIDelegate", "WKWindowFeatures", "WKWebExtension", "WKWebExtensionContext", "WKWebExtensionController", "WKWebExtensionControllerConfiguration", "WKWebExtensionPermission", "WKWebExtensionMatchPattern", "WKWebExtensionAction", "WKWebExtensionTab", "WKWebExtensionWindow", "WKWebExtensionControllerDelegate", "WKContentWorld", "WKFrameInfo", "WKSnapshotConfiguration", "WKUIDelegate", "WKOpenPanelParameters", "WKScriptMessage", "WKScriptMessageHandler", "WKUserContentController", "WKUserScript", "WKSecurityOrigin", "WKWebExtensionDataRecord", "WKWebExtensionDataType"], optional = true }
 block2 = { version = "0.6.2", optional = true }
 # Back to the main thread from a check of the extensions off it (`web/mac.rs`); objc2-core-foundation already builds it.
 dispatch2 = { version = "0.3.1", optional = true }

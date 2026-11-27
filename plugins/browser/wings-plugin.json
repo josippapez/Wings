@@ -1,8 +1,8 @@
 {
   "id": "browser",
   "name": "Browser",
-  "version": "0.1.5",
-  "minWingsVersion": "0.2.122",
+  "version": "0.1.6",
+  "minWingsVersion": "0.2.124",
   "icon": "icon.svg",
   "description": "A web browser in a tab, drawn by WebKit: an address bar that searches, history suggestions, cookies kept between runs (or not), sign-in copied from another browser on this Mac, and browser extensions, with Chromium as an engine you can download for Chrome extensions.",
   "api": 1,

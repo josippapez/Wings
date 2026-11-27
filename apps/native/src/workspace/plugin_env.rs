@@ -917,6 +917,15 @@ impl Env for AppEnv {
         std::thread::spawn(move || done(answered.recv().unwrap_or_else(|_| Err("WebKit didn't answer".into()))));
     }
 
+    fn clear_site(&self, profile: crate::web::Profile, site: crate::web::engine::site::Site, done: Box<dyn FnOnce(Result<String, String>) + Send>) {
+        let (answer, answered) = std::sync::mpsc::channel::<Result<String, String>>();
+        let event = UiEvent::Run(Box::new(move |_, _, _| run_clear_site(profile, site, answer)));
+        if self.events.try_send(event).is_err() {
+            return done(Err("The Wings window is closed or busy".into()));
+        }
+        std::thread::spawn(move || done(answered.recv().unwrap_or_else(|_| Err("WebKit didn't answer".into()))));
+    }
+
     fn set_badge(&self, plugin: &str, pane: &str, badge: Option<Badge>) {
         self.send(UiEvent::Badge {
             plugin: plugin.to_owned(),
@@ -1871,6 +1880,22 @@ fn opened_tab(id: usize) -> String {
     serde_json::json!({ "tabId": format!("tab-{id}") }).to_string()
 }
 
+/// Clears `site` from the profile's web views in Chromium and in both of WebKit's stores, then answers `null`.
+#[cfg(target_os = "macos")]
+fn run_clear_site(profile: crate::web::Profile, site: crate::web::engine::site::Site, answer: std::sync::mpsc::Sender<Result<String, String>>) {
+    // Chromium and both stores answer; the third is when it is all gone.
+    let left = std::cell::Cell::new(3);
+    let one_gone = std::rc::Rc::new(move || {
+        left.set(left.get() - 1);
+        if left.get() == 0 {
+            let _ = answer.send(Ok("null".into()));
+        }
+    });
+    let chromium = one_gone.clone();
+    crate::web::chromium::page::clear_site(&profile, &site, move || chromium());
+    crate::web::mac::clear_site(&profile, &site, move || one_gone());
+}
+
 /// Does `job` on the window's thread and sends its answer to `answer`: JSON, as the call answers.
 #[cfg(target_os = "macos")]
 fn run_web(job: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, String>>, window: &mut gpui::Window, cx: &mut gpui::Context<Workspace>) {
@@ -1920,10 +1945,17 @@ fn run_web(job: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, 
         Job::Load { profile, extension } => run_web_load(profile, extension, answer),
         Job::Add { ask } => {
             let (question, detail) = ask.words();
-            let allowed = window.prompt(gpui::PromptLevel::Warning, &question, Some(&detail), &["Add", "Cancel"], cx);
+            let opt_in = ask.opt_in();
+            let buttons: Vec<&str> = std::iter::once("Add").chain(opt_in.map(|(_, button)| button)).chain(["Cancel"]).collect();
+            let allowed = window.prompt(gpui::PromptLevel::Warning, &question, Some(&detail), &buttons, cx);
             cx.spawn(async move |_, _| {
-                // Only the dialog's Add allows it; the call then seals its record and loads it (`calls::web`).
-                let answer_is = if allowed.await == Ok(0) { Ok(serde_json::json!({ "allowed": true }).to_string()) } else { Err(crate::web::NOT_ALLOWED.into()) };
+                // Only the dialog's Add allows it, and only its own button what it may ask for later (`web::Ask::opt_in`);
+                // the call then seals its record and loads it (`calls::web`).
+                let answer_is = match (allowed.await, opt_in) {
+                    (Ok(0), _) => Ok(serde_json::json!({ "allowed": true }).to_string()),
+                    (Ok(1), Some((name, _))) => Ok(serde_json::json!({ "allowed": true, "also": [name] }).to_string()),
+                    _ => Err(crate::web::NOT_ALLOWED.into()),
+                };
                 let _ = answer.send(answer_is);
             })
             .detach();
@@ -2014,5 +2046,10 @@ fn run_web_load(profile: crate::web::Profile, extension: crate::web::extensions:
 
 #[cfg(not(target_os = "macos"))]
 fn run_web(_: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, String>>, _: &mut gpui::Window, _: &mut gpui::Context<Workspace>) {
+    let _ = answer.send(Err("Web pages need macOS".into()));
+}
+
+#[cfg(not(target_os = "macos"))]
+fn run_clear_site(_: crate::web::Profile, _: crate::web::engine::site::Site, answer: std::sync::mpsc::Sender<Result<String, String>>) {
     let _ = answer.send(Err("Web pages need macOS".into()));
 }

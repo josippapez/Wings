@@ -29,7 +29,7 @@ use objc2_web_kit::{
     WKContentWorld, WKFrameInfo, WKNavigation, WKNavigationAction, WKNavigationActionPolicy, WKOpenPanelParameters, WKScriptMessage,
     WKScriptMessageHandler, WKUserContentController, WKUserScript, WKUserScriptInjectionTime, WKNavigationDelegate, WKUIDelegate, WKWebExtension, WKWebExtensionContext,
     WKWebExtensionContextPermissionStatus, WKWebExtensionController, WKWebExtensionControllerConfiguration, WKWebView,
-    WKWebViewConfiguration, WKWebsiteDataStore, WKWindowFeatures,
+    WKWebViewConfiguration, WKWebsiteDataRecord, WKWebsiteDataStore, WKWindowFeatures,
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -424,6 +424,34 @@ pub fn clear_data(profile: &Profile, done: impl Fn() + 'static) {
                 &block,
             )
         };
+    }
+}
+
+/// Removes the cookies and site data of `site` from both of `profile`'s stores, and nothing of another site, then calls
+/// `done` once for each store. WebKit hands out its data by record, one for each registrable domain
+/// (`Site::is_in_record`).
+pub fn clear_site(profile: &Profile, site: &super::engine::site::Site, done: impl Fn() + 'static) {
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let done = Rc::new(done);
+    for keep_data in [true, false] {
+        let store = shared(profile, keep_data, mtm).store.clone();
+        let (done, site, again) = (done.clone(), site.clone(), store.clone());
+        let found = RcBlock::new(move |records: std::ptr::NonNull<NSArray<WKWebsiteDataRecord>>| {
+            // SAFETY: the records WebKit hands over for the call.
+            let records = unsafe { records.as_ref() };
+            let ours: Vec<Retained<WKWebsiteDataRecord>> = records.iter().filter(|record| site.is_in_record(&unsafe { record.displayName() }.to_string())).collect();
+            if ours.is_empty() {
+                return done();
+            }
+            let done = done.clone();
+            let block = RcBlock::new(move || done());
+            // SAFETY: all kinds of data, for the records of this site only; WebKit calls the block on the main thread.
+            unsafe {
+                again.removeDataOfTypes_forDataRecords_completionHandler(&WKWebsiteDataStore::allWebsiteDataTypes(mtm), &NSArray::from_retained_slice(&ours), &block)
+            };
+        });
+        // SAFETY: all of the store's kinds of data; WebKit calls the block on the main thread.
+        unsafe { store.fetchDataRecordsOfTypes_completionHandler(&WKWebsiteDataStore::allWebsiteDataTypes(mtm), &found) };
     }
 }
 
