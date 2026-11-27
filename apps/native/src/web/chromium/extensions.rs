@@ -375,41 +375,38 @@ fn ready_copy(copy: &std::path::Path, permissions: &[String], hosts: &[String]) 
     Ok(reached)
 }
 
-/// The permissions Chromium grants that reach past an extension's own sites, which Wings' dialog names but doesn't say
-/// what they do: control of other extensions (`management`), of the browser's network and settings (`proxy`,
-/// `privacy`, `contentSettings`, `browsingData`, `webAuthenticationProxy`), what is on screen, in a tab or under the
-/// debugger (`desktopCapture`, `tabCapture`, `pageCapture`, `debugger`), this Mac's location, disks and apps, downloads,
-/// and code of the extension's own choosing in any page (`userScripts`). Chrome warns of most as "Read and change all
-/// your data on all websites". `nativeMessaging` the dialog says Wings never allows.
-const NOT_GRANTED: [&str; 21] = [
-    "accessibilityFeatures.modify",
-    "browsingData",
-    "contentSettings",
-    "debugger",
-    "desktopCapture",
-    "downloads",
-    "downloads.open",
-    "downloads.ui",
-    "fontSettings",
-    "geolocation",
-    "management",
-    "nativeMessaging",
-    "pageCapture",
-    "privacy",
-    "proxy",
-    "system.storage",
-    "tabCapture",
-    "userScripts",
-    "vpnProvider",
-    "webAuthenticationProxy",
-    "webRequestBlocking",
+/// The permissions Chromium's copy of an extension may keep, each reviewed: those WebKit has for an extension (its
+/// `supportedPermissions`, `nativeMessaging` aside, which Wings' dialog says it never allows), and a few of Chromium's
+/// own that stay within what the extension does by itself (`idle`, `offscreen`, `clipboardRead`, `notifications`,
+/// `sidePanel`). Any other, a new one too, isn't granted: Chromium grants whatever a manifest asks for, and some reach
+/// past the extension's sites (the debugger, a proxy, other extensions, capture of the screen).
+const GRANTED: [&str; 20] = [
+    "activeTab",
+    "alarms",
+    "clipboardRead",
+    "clipboardWrite",
+    "contextMenus",
+    "cookies",
+    "declarativeNetRequest",
+    "declarativeNetRequestFeedback",
+    "declarativeNetRequestWithHostAccess",
+    "idle",
+    "menus",
+    "notifications",
+    "offscreen",
+    "scripting",
+    "sidePanel",
+    "storage",
+    "tabs",
+    "unlimitedStorage",
+    "webNavigation",
+    "webRequest",
 ];
 
-/// Whether Chromium's copy of an extension keeps the permission `name`: one Wings' dialog showed as the person allowed
-/// it (`allowed`), unless it is one of those it doesn't explain (`NOT_GRANTED`). WebKit grants by its own rule
-/// (`mac::grant`), of the permissions it has.
+/// Whether Chromium's copy of an extension keeps the permission `name`: one on the reviewed list (`GRANTED`) that Wings'
+/// dialog showed as the person allowed it (`allowed`). WebKit grants by its own rule (`mac::grant`).
 fn granted(name: &str, allowed: &[String]) -> bool {
-    !NOT_GRANTED.contains(&name) && allowed.iter().any(|allowed| allowed == name)
+    GRANTED.contains(&name) && allowed.iter().any(|allowed| allowed == name)
 }
 
 /// What the manifest at `dir` says.
@@ -825,20 +822,24 @@ mod tests {
         assert!(std::fs::read_to_string(dir.path().join("popup/index.html")).unwrap().contains(POPUP_SCRIPT_FILE));
     }
 
-    /// What the dialog showed is granted, Bitwarden's whole list included, but a permission that reaches past the
-    /// extension's sites is refused even when it was shown, and one that wasn't shown never is.
+    /// Of what the dialog showed, only a permission on the reviewed list is granted: Bitwarden's set, but not a name
+    /// nobody reviewed (a new one too), not one that reaches past the extension's sites, and none the dialog didn't show.
     #[test]
-    fn chromium_keeps_what_the_dialog_showed_but_what_it_doesnt_explain() {
+    fn chromium_keeps_only_reviewed_permissions_the_dialog_showed() {
         let bitwarden = [
-            "activeTab", "alarms", "clipboardRead", "clipboardWrite", "contextMenus", "idle", "offscreen", "scripting", "sidePanel", "storage", "tabs",
-            "unlimitedStorage", "webNavigation", "webRequest", "webRequestAuthProvider", "notifications",
+            "activeTab", "alarms", "clipboardRead", "clipboardWrite", "contextMenus", "idle", "notifications", "offscreen", "scripting", "sidePanel", "storage",
+            "tabs", "unlimitedStorage", "webNavigation", "webRequest",
         ];
-        let shown: Vec<String> = bitwarden.map(String::from).to_vec();
-        assert!(bitwarden.iter().all(|name| granted(name, &shown)));
-        let risky = ["debugger", "proxy", "management", "desktopCapture", "tabCapture", "browsingData", "privacy", "downloads", "nativeMessaging", "webAuthenticationProxy"];
+        let shown: Vec<String> = bitwarden.iter().map(|name| name.to_string()).chain(["webRequestAuthProvider".into(), "someNewPermission".into()]).collect();
+        let kept: Vec<&str> = shown.iter().map(String::as_str).filter(|name| granted(name, &shown)).collect();
+        assert_eq!(kept, bitwarden, "a name nobody reviewed isn't granted");
+        let risky = [
+            "debugger", "proxy", "management", "desktopCapture", "tabCapture", "pageCapture", "browsingData", "privacy", "contentSettings", "downloads",
+            "downloads.open", "nativeMessaging", "webAuthenticationProxy", "userScripts", "geolocation", "system.storage", "webRequestBlocking", "vpnProvider",
+        ];
         let shown: Vec<String> = risky.map(String::from).to_vec();
         for name in risky {
-            assert!(!granted(name, &shown), "{name}");
+            assert!(!GRANTED.contains(&name) && !granted(name, &shown), "{name}");
         }
         assert!(!granted("cookies", &[]), "not shown");
     }
