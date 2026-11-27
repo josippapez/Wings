@@ -265,9 +265,11 @@ pub fn load(profile: &Profile, extension: &extensions::Verified, done: impl FnOn
         Ok((dir, hosts)) => (dir.to_string_lossy().into_owned(), hosts),
         Err(why) => return done(Err(why)),
     };
-    ask("Extensions.loadUnpacked", json!({ "path": dir }), move |answer| match answer {
+    ask("Extensions.loadUnpacked", json!({ "path": &dir }), move |answer| match answer {
         Ok(result) => {
             let Some(chrome) = result["id"].as_str().map(str::to_owned) else { return done(Err("Chromium didn't say which extension it loaded".into())) };
+            #[cfg(debug_assertions)]
+            eprintln!("[chromium] loaded {chrome}; Wings works out {:?}", chromium_id(&manifest_of(std::path::Path::new(&dir)), std::path::Path::new(&dir)));
             let (button, popup) = action_of(&manifest);
             follow_running(&chrome);
             LOADED.with_borrow_mut(|loaded| loaded.push(Loaded { id, chrome, name, popup, button, icon, hosts }));
@@ -278,29 +280,106 @@ pub fn load(profile: &Profile, extension: &extensions::Verified, done: impl FnOn
     });
 }
 
-/// Uninstalls the extension `id` from Chromium, which deletes what it stored there: turned off or removed.
+/// Takes the extension `id` out of Chromium, turned off or removed: its copy goes, and what it stored there. One loaded
+/// now is uninstalled over the pipe, which deletes what it stored in its profile; whether it is or not (Chromium not
+/// running, or running for another profile), its own folders of storage go from every profile Chromium keeps
+/// (`forget_storage`): Chromium forgets an extension loaded this way at its next start, its preferences only, and left
+/// Bitwarden's vault and session there.
 pub fn unload(profile: &Profile, id: &str, done: impl FnOnce() + 'static) {
-    let Some(loaded) = LOADED.with_borrow_mut(|loaded| {
+    let loaded = LOADED.with_borrow_mut(|loaded| {
         let at = loaded.iter().position(|loaded| loaded.id == id)?;
         Some(loaded.remove(at))
-    }) else {
-        return done();
-    };
+    });
     if POPUP_OPEN.with_borrow(|popup| popup.as_ref().is_some_and(|popup| popup.id == id)) {
         close_popup();
     }
-    let plugin = profile.plugin.clone();
-    if let Some(copy) = copy_of(id) {
+    let copy = copy_of(id);
+    let chrome = loaded.as_ref().map(|loaded| loaded.chrome.clone()).or_else(|| {
+        let copy = copy.as_deref()?;
+        let manifest = Some(manifest_of(copy)).filter(|manifest| manifest.get("key").is_some()).or_else(|| Some(manifest_of(&extensions::folder(profile, id)?)))?;
+        chromium_id(&manifest, copy)
+    });
+    if let Some(copy) = &copy {
         let _ = std::fs::remove_dir_all(copy);
     }
+    let Some(loaded) = loaded else {
+        if let (Some(chrome), Some(root)) = (chrome, runtime::profiles_root()) {
+            forget_storage(&root, &chrome);
+        }
+        return done();
+    };
+    let plugin = profile.plugin.clone();
     BADGES.with_borrow_mut(|badges| badges.remove(&loaded.chrome));
     ask("Extensions.uninstall", json!({ "id": loaded.chrome }), move |answer| {
         if let Err(why) = answer {
             eprintln!("[chromium] couldn't uninstall an extension: {why}");
         }
+        if let Some(root) = runtime::profiles_root() {
+            forget_storage(&root, &loaded.chrome);
+        }
         refresh(&plugin);
         done()
     });
+}
+
+/// The folders of its own Chromium 156 keeps an extension's storage in, in a profile: `chrome.storage`'s three areas,
+/// its rules for `declarativeNetRequest` (`extensions/common/constants.h`,
+/// `declarative_net_request/file_backed_ruleset_source.cc`), by its id, and its IndexedDB, by its origin
+/// (`content/browser/indexed_db/file_path_util.cc`: `chrome-extension_<id>_0`). What it keeps in databases all
+/// extensions and sites share (`Extension State`, `Local Storage`, `Service Worker`) only Chromium can take out, as it
+/// does as it uninstalls one loaded.
+fn storage_of(chrome: &str) -> [String; 7] {
+    let indexed = format!("chrome-extension_{chrome}_0");
+    [
+        format!("Local Extension Settings/{chrome}"),
+        format!("Sync Extension Settings/{chrome}"),
+        format!("Managed Extension Settings/{chrome}"),
+        format!("DNR Extension Rules/{chrome}"),
+        format!("IndexedDB/{indexed}.indexeddb.leveldb"),
+        format!("IndexedDB/{indexed}.indexeddb.blob"),
+        format!("IndexedDB/{indexed}"),
+    ]
+}
+
+/// Deletes what the extension `chrome` stored in its own folders (`storage_of`) in every profile under `root`, Chromium's
+/// profiles' folder: the global context keeps its data in `Default` whichever profile started Chromium.
+fn forget_storage(root: &std::path::Path, chrome: &str) {
+    if chrome.len() != 32 || !chrome.bytes().all(|byte| (b'a'..=b'p').contains(&byte)) {
+        return;
+    }
+    let Ok(profiles) = std::fs::read_dir(root) else { return };
+    for profile in profiles.flatten().filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()) && entry.file_name() != "extensions") {
+        for folder in storage_of(chrome) {
+            let at = profile.path().join(folder);
+            let _ = if at.is_dir() { std::fs::remove_dir_all(&at) } else { std::fs::remove_file(&at) };
+        }
+    }
+}
+
+/// The id Chromium gives an extension with `manifest` loaded from the folder `copy`: from its manifest's `key` when it has
+/// one, the SHA-256 of the key's bytes (`Extension::ParsePEMKeyBytes`, base64 strictly, or PEM), else of the folder's
+/// path as Chromium resolves it (`crx_file::id_util::GenerateIdForPath`), its first 16 bytes written in the letters a to
+/// p (`GenerateIdFromHash`). None for a key Chromium refuses.
+fn chromium_id(manifest: &Value, copy: &std::path::Path) -> Option<String> {
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+    let hashed = match manifest.get("key") {
+        Some(key) => {
+            let key = key.as_str().filter(|key| !key.is_empty() && key.len() <= 100 * 1024)?;
+            let body = match key.starts_with("-----BEGIN") {
+                true => {
+                    let collapsed = key.split_whitespace().collect::<Vec<_>>().join(" ");
+                    let start = collapsed.find("KEY-----")? + "KEY-----".len();
+                    let end = collapsed.rfind("-----END")?;
+                    collapsed.get(start..end)?.trim().replace(' ', "")
+                }
+                false => key.to_owned(),
+            };
+            Sha256::digest(base64::engine::general_purpose::STANDARD.decode(body).ok()?)
+        }
+        None => Sha256::digest(copy.as_os_str().as_encoded_bytes()),
+    };
+    Some(hashed.iter().take(16).flat_map(|byte| [byte >> 4, byte & 0xf]).map(|nibble| char::from(b'a' + nibble)).collect())
 }
 
 /// The buttons of `profile`'s extensions for its page at `url`, by name (`views::shown`).
@@ -842,6 +921,45 @@ mod tests {
             assert!(!GRANTED.contains(&name) && !granted(name, &shown), "{name}");
         }
         assert!(!granted("cookies", &[]), "not shown");
+    }
+
+    /// Chromium's id of an extension comes from its manifest's key, Bitwarden's from the Web Store's, or else from the
+    /// path of the folder it loads from.
+    #[test]
+    fn chromiums_id_of_an_extension_comes_from_its_key_or_its_folder() {
+        let bitwarden = json!({ "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmqKbvreshyXRuN2gikeR1idqR6KL0Di89JZcMyD4bjJRZVmQO7aznSGSALIHzSAUGYocUYBNDOP5QAhImxXyQ1qG8+goXs93v9GzrNJETdVuCEhqBggC4/DFabryJZDiKvZ2Jl0DM7MsWdoybZPwrj70V3aJ/nVNOMkf868scNTMliwitCqqjT5baTANsG0DkZWQExD4lSXzSZHH9MEO8q0iZ7RRlNuGRBAkZgNV8FwZRsPKm/rwQ9dy3VpgLcmLp5GiMt+kAEncqKAkuRYnhVXXBsKqIyYTMjHSLkLnpfFySyOPLBdS617i/PGNiP/MT6Xy6z//v5NozUgaAZ4gJQIDAQAB" });
+        assert_eq!(chromium_id(&bitwarden, std::path::Path::new("/anywhere")).as_deref(), Some("nngceckbapebfimnlniiiahkandclblb"));
+        let at = |path: &str| chromium_id(&json!({ "name": "x" }), std::path::Path::new(path)).unwrap();
+        assert_eq!(at("/a/extensions/1"), at("/a/extensions/1"));
+        assert_ne!(at("/a/extensions/1"), at("/a/extensions/2"));
+        assert!(at("/a/extensions/1").len() == 32 && at("/a/extensions/1").bytes().all(|byte| (b'a'..=b'p').contains(&byte)));
+        assert_eq!(chromium_id(&json!({ "key": "not base64!" }), std::path::Path::new("/a")), None, "a key Chromium refuses");
+    }
+
+    /// Its own folders of storage go from every profile (Chromium's global context keeps its data in `Default`); another
+    /// extension's, the databases they share, and anything named by something that isn't an id stay.
+    #[test]
+    fn an_extensions_storage_goes_from_every_profile_and_nothing_else_does() {
+        let root = tempfile::tempdir().unwrap();
+        let (bitwarden, other) = ("nngceckbapebfimnlniiiahkandclblb", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        for profile in ["Default", "browser.s"] {
+            for folder in storage_of(bitwarden).iter().chain(storage_of(other).iter()) {
+                std::fs::create_dir_all(root.path().join(profile).join(folder)).unwrap();
+            }
+            std::fs::create_dir_all(root.path().join(profile).join("Local Storage/leveldb")).unwrap();
+        }
+        forget_storage(root.path(), bitwarden);
+        for profile in ["Default", "browser.s"] {
+            for folder in storage_of(bitwarden) {
+                assert!(!root.path().join(profile).join(&folder).exists(), "{profile}/{folder}");
+            }
+            for folder in storage_of(other) {
+                assert!(root.path().join(profile).join(&folder).exists(), "{profile}/{folder}");
+            }
+            assert!(root.path().join(profile).join("Local Storage/leveldb").exists());
+        }
+        forget_storage(root.path(), "../../Default");
+        assert!(root.path().join("Default/Local Storage/leveldb").exists());
     }
 
     /// Its popup hears the page's address only on a page the extension may reach; on any other it opens without it.

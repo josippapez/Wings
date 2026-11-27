@@ -366,6 +366,11 @@ pub fn remove(profile: &Profile, id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The folder of the extension `id`, for an id that names one.
+pub fn folder(profile: &Profile, id: &str) -> Option<PathBuf> {
+    valid_id(id).then(|| installed_dir(profile, id))
+}
+
 /// The icon of `added`, in its folder.
 pub fn icon_path(profile: &Profile, added: &Added) -> Option<PathBuf> {
     let icon = added.icon.as_ref()?;
