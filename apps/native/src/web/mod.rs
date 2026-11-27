@@ -12,7 +12,12 @@
 pub mod engine;
 pub mod extensions;
 #[cfg(all(feature = "ui", target_os = "macos"))]
+pub mod diff;
+#[cfg(all(feature = "ui", target_os = "macos"))]
 pub mod guard;
+#[cfg(all(feature = "ui", target_os = "macos"))]
+pub mod record;
+pub mod policy;
 pub mod snapshot;
 #[cfg(feature = "ui")]
 mod views;
@@ -71,7 +76,7 @@ pub struct Confirm {
 /// one committed, or the dialog's own frame), and waits while a new page is on its way (`settled`), as it would act on
 /// whichever page is there when it runs. Each command is named here, so a new one has to say which it is.
 pub fn gate(go: &crate::page::tree::WebGo, scripts: bool, imported: bool, settled: bool) -> Result<(), &'static str> {
-    use crate::page::tree::WebGo;
+    use crate::page::tree::{WebGo, WebRecord};
     match go {
         WebGo::Load(_) | WebGo::Back | WebGo::Forward | WebGo::Reload | WebGo::Stop => Ok(()),
         WebGo::Eval { .. } | WebGo::Snapshot | WebGo::Logs | WebGo::Dialog { .. } => match (scripts, imported, settled) {
@@ -80,6 +85,15 @@ pub fn gate(go: &crate::page::tree::WebGo, scripts: bool, imported: bool, settle
             (true, false, false) => Err(LOADING),
             (true, false, true) => Ok(()),
         },
+        // Files in the page, a picture compared, a recording: they read or act on the page as a script does. A recording
+        // runs on through the pages it moves to, so asking after it, or ending it, needs nothing of the page it is on.
+        WebGo::Upload { .. } | WebGo::ScreenshotDiff { .. } | WebGo::Record(WebRecord::Start { .. }) => match (scripts, imported, settled) {
+            (false, _, _) => Err(NO_SCRIPTS),
+            (true, true, _) => Err(IMPORTED),
+            (true, false, false) => Err(LOADING),
+            (true, false, true) => Ok(()),
+        },
+        WebGo::Record(_) => if scripts { Ok(()) } else { Err(NO_SCRIPTS) },
         // An extension's button opens its own popup, which the plugin never sees, on any page: it needs your click
         // (`needs_click`) and nothing more.
         WebGo::Extension(_) => Ok(()),
@@ -95,6 +109,9 @@ pub fn needs_click(go: &crate::page::tree::WebGo) -> bool {
 
 /// Why an extension's button didn't open without a click.
 pub const NO_CLICK: &str = "A page can click an extension's button only right after you click or type in it";
+
+/// What WebKit says to a command only Chromium does (`upload`, `screenshotDiff`, `record`).
+pub const NEEDS_CHROMIUM: &str = "This needs the Chromium engine: turn it on in Browser settings.";
 
 /// Why one didn't run while a page loads.
 pub const LOADING: &str = "The page is still loading: wait for it, then try again";
@@ -564,6 +581,30 @@ mod tests {
         }
         for go in moves.iter().chain(&reads) {
             assert!(!needs_click(go), "{go:?}");
+        }
+    }
+
+    /// Files, a compared picture and starting a recording act on the page as a script does; asking about a recording or
+    /// ending it needs only the plugin's scripts, so it works through a page that is loading or signed in with imports.
+    #[test]
+    fn upload_diff_and_recording_are_gated_as_scripts_and_the_rest_of_a_recording_only_by_them() {
+        use crate::page::tree::{WebGo, WebRecord};
+        let acts = [
+            WebGo::Upload { reference: Some("e1".into()), selector: None, files: vec![] },
+            WebGo::ScreenshotDiff { baseline: "/tmp/a.png".into(), threshold: 0.1, clip: None, current: None, diff: None },
+            WebGo::Record(WebRecord::Start { path: "/tmp/a.mp4".into(), fps: 30, max_ms: 1000 }),
+        ];
+        for go in &acts {
+            assert_eq!(gate(go, false, false, true), Err(NO_SCRIPTS), "{go:?}");
+            assert_eq!(gate(go, true, true, true), Err(IMPORTED), "{go:?}");
+            assert_eq!(gate(go, true, false, false), Err(LOADING), "{go:?}");
+            assert_eq!(gate(go, true, false, true), Ok(()), "{go:?}");
+            assert!(!needs_click(go));
+        }
+        for record in [WebRecord::Status, WebRecord::Stop, WebRecord::Cancel] {
+            let go = WebGo::Record(record);
+            assert_eq!(gate(&go, false, false, true), Err(NO_SCRIPTS), "{go:?}");
+            assert_eq!(gate(&go, true, true, false), Ok(()), "{go:?}");
         }
     }
 

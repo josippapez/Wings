@@ -12,7 +12,7 @@ use crate::{
     tabs::{Tab, Tabs},
 };
 use serde_json::Value;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use wings_plugin::{
     host::{self, Stage},
     task::spawn,
@@ -178,8 +178,51 @@ pub(crate) fn problem(error: String) {
     with(|page| page.problem = Some(error));
 }
 
+/// How often agents' tabs are checked for being left unused.
+const IDLE_CHECK_MS: u32 = 60_000;
+
+thread_local! {
+    /// Whether the idle check's timer runs: it does only while an agent has a tab here.
+    static WATCHING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Closes the agents' tabs nobody has used for as long as `settings::idle_minutes` says, never the tab shown. Gives how many went.
+pub(crate) fn close_idle() -> usize {
+    close_idle_after(settings::idle_minutes())
+}
+
+/// `close_idle` for a limit in minutes, 0 for never.
+fn close_idle_after(minutes: u32) -> usize {
+    // Never still counts the shown tab, so a later choice of a limit starts from now and not from a long time ago.
+    let limit = if minutes == 0 { f64::INFINITY } else { f64::from(minutes) * 60_000.0 };
+    let idle = with(|page| page.tabs.idle(host::now(), limit));
+    for id in &idle {
+        close_tab(id);
+    }
+    idle.len()
+}
+
+/// Starts the once-a-minute idle check when an agent has a tab and it isn't running; it stops itself when none is left.
+fn watch_idle() {
+    if WATCHING.with(Cell::get) || !with(|page| page.tabs.has_agent_tabs()) {
+        return;
+    }
+    WATCHING.with(|watching| watching.set(true));
+    spawn(async {
+        loop {
+            host::sleep(IDLE_CHECK_MS).await;
+            close_idle();
+            if !with(|page| page.tabs.has_agent_tabs()) {
+                WATCHING.with(|watching| watching.set(false));
+                return;
+            }
+        }
+    });
+}
+
 /// The tabs changed: tell main what groups the page has, name the Wings tab after the tab shown, and keep the tabs.
 pub(crate) fn tabs_changed() {
+    watch_idle();
     agent_page::announce(false);
     if let Some(title) = with(Page::title_effect) {
         drop(host::set_tab_title(title.as_deref()));
@@ -198,7 +241,10 @@ pub(crate) fn close_tab(id: &str) {
 
 
 fn select_tab(id: &str) {
-    with(|page| page.tabs.activate(id));
+    with(|page| {
+        page.tabs.activate(id);
+        page.tabs.touch(id, host::now());
+    });
     tabs_changed();
     look_again();
 }
@@ -734,6 +780,64 @@ mod tests {
             page.send_active("reload", None);
         }
         assert_eq!(page.active().commands.len(), crate::tabs::COMMANDS_KEPT);
+    }
+
+    #[test]
+    fn an_agents_tab_nobody_uses_is_closed_after_the_limit_with_its_group_but_never_the_tab_shown_or_the_persons_own() {
+        const HALF_HOUR: f64 = 30.0 * 60_000.0;
+        let close_idle = || close_idle_after(30);
+        busy();
+        with(|page| page.tabs.activate("t2"));
+        wings_plugin::host::testing::set_now(1000.0);
+        assert_eq!(close_idle(), 0, "the first check starts the counts");
+        // t2 is shown; t3 sits unused; t1 is the person's own.
+        wings_plugin::host::testing::set_now(1000.0 + HALF_HOUR + 1.0);
+        assert_eq!(close_idle(), 1);
+        assert_eq!(with(|page| page.tabs.list.iter().map(|tab| tab.id.clone()).collect::<Vec<_>>()), ["t1", "t2", "t4"]);
+        assert!(with(|page| page.tabs.group("ses-b").is_none() && page.tabs.group("ses-a").is_some()), "a group goes with its last tab");
+        // The person looks away; the tab starts its count then, and is closed one limit later.
+        with(|page| page.tabs.activate("t4"));
+        wings_plugin::host::testing::set_now(2000.0 + HALF_HOUR);
+        assert_eq!(close_idle(), 0);
+        wings_plugin::host::testing::set_now(2000.0 + 2.0 * HALF_HOUR + 1.0);
+        assert_eq!(close_idle(), 1);
+        assert_eq!(with(|page| page.tabs.list.iter().map(|tab| tab.id.clone()).collect::<Vec<_>>()), ["t1", "t4"]);
+    }
+
+    #[test]
+    fn never_closes_nothing_and_the_default_is_ten_minutes() {
+        busy();
+        with(|page| page.tabs.activate("t2"));
+        wings_plugin::host::testing::set_now(1000.0);
+        assert_eq!(close_idle_after(0), 0);
+        wings_plugin::host::testing::set_now(1000.0 + 100.0 * 3_600_000.0);
+        assert_eq!(close_idle_after(0), 0, "never closes anything, however long");
+        assert_eq!(settings::idle_minutes(), 10);
+        assert_eq!(close_idle(), 1, "the default limit closes the one nobody used");
+    }
+
+    #[test]
+    fn the_idle_check_runs_once_a_minute_only_while_an_agent_has_a_tab() {
+        only(Some("https://a.com/"));
+        WATCHING.with(|watching| watching.set(false));
+        watch_idle();
+        assert!(!WATCHING.with(Cell::get), "no agent tab, no timer");
+        let agent = with(|page| page.tabs.open(Some(("ses-a", "A")), Some("https://b.com/")));
+        wings_plugin::host::testing::set_now(0.0);
+        watch_idle();
+        watch_idle();
+        wings_plugin::host::testing::settle();
+        assert!(WATCHING.with(Cell::get));
+        wings_plugin::host::testing::set_now(40.0 * 60_000.0);
+        wings_plugin::host::testing::fire_timers();
+        wings_plugin::host::testing::settle();
+        // The first check started its count: nothing closed yet. The next, a limit later, closes it and the timer ends with it.
+        assert!(with(|page| page.tabs.get(&agent).is_some()));
+        wings_plugin::host::testing::set_now(80.0 * 60_000.0);
+        wings_plugin::host::testing::fire_timers();
+        wings_plugin::host::testing::settle();
+        assert!(with(|page| page.tabs.get(&agent).is_none()));
+        assert!(!WATCHING.with(Cell::get));
     }
 
     #[test]

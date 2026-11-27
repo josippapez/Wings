@@ -23,10 +23,15 @@ use super::{
     devtools::{Channel, Incoming},
     page::{Shared, weak_of},
 };
-use crate::web::{
-    guard::{self, FUNCTIONS, WATCH_FUNCTION, WORLD},
-    mac::{LOGS, LOGS_KEPT, MOVED_ON},
-    views::Heard,
+use crate::{
+    page::tree::{WebFile, WebRecord},
+    web::{
+        diff, guard::{self, FUNCTIONS, WATCH_FUNCTION, WORLD},
+        mac::{LOGS, LOGS_KEPT, MOVED_ON},
+        policy::{self, Files},
+        record::Recording,
+        views::Heard,
+    },
 };
 
 /// The plugin's own world, where its helper runs: it sees the page's document and none of its scripts.
@@ -49,9 +54,18 @@ pub struct Agent {
     seen: guard::Seen,
     /// The main frame's recent console lines and requests (`mac::LOGS`), the newest last.
     logs: RefCell<VecDeque<Value>>,
+    /// The page's recording, running or ended and not yet asked about (`record`).
+    recording: RefCell<Option<Recording>>,
 }
 
 impl Agent {
+    /// The page closed: a recording of it ends, and its file is kept.
+    pub fn page_closed(&self) {
+        if let Some(recording) = self.recording.take() {
+            recording.end("the page closed");
+        }
+    }
+
     fn channel(&self) -> Option<Rc<Channel>> {
         self.channel.borrow().clone().filter(|_| self.guarded.get())
     }
@@ -354,6 +368,7 @@ pub fn heard(page: &Shared, incoming: Incoming) {
             }
             "Runtime.executionContextsCleared" => page.agent.contexts.borrow_mut().cleared(session),
             "Runtime.bindingCalled" => bound(page, session, &params),
+            "Page.screencastFrame" => screencast_frame(page, session, &params),
             // On a turn of its own: Chromium tells of a frame waiting to start before it can hear that it may, so a
             // `Runtime.runIfWaitingForDebugger` sent while it tells is lost and the frame never loads (measured in 156).
             "Target.attachedToTarget" => {
@@ -386,6 +401,10 @@ fn bound(page: &Shared, session: Option<&str>, params: &Value) {
             let (doc, in_frame) = (contexts.doc(), contexts.in_frame(session, context.as_ref()));
             drop(contexts);
             page.agent.seen.note(doc, in_frame);
+            // A recording can't paint a field over: it ends where one shows.
+            if let Some(recording) = page.agent.recording.borrow().as_ref() {
+                recording.end(RECORDING_SECRET);
+            }
         }
         // The page's own world of its main frame only, and nothing from a site signed in with imported cookies or a
         // context with no host of its own.
@@ -478,19 +497,30 @@ pub fn eval(page: &Shared, script: &str, in_page_world: bool, token: u64) {
 /// in the page said it holds one.
 pub fn screenshot(page: &Shared, token: u64) {
     let told = page.told.clone();
-    let Some(channel) = page.agent.channel() else { return told.tell(Heard::Result { token, result: Err(guard::UNCHECKED.into()) }) };
+    let shots = page.web_dir.join("screenshots");
+    shoot(page, move |shot| told.tell(Heard::Result { token, result: shot.and_then(|(png, _)| crate::web::snapshot::save(&shots, &png)) }));
+}
+
+/// What `shoot` hears: the picture, PNG as Chromium made it with the secret fields painted over, and how wide the page's
+/// viewport is in CSS pixels, or why there is none.
+type Shot = Result<(Vec<u8>, f64), String>;
+
+/// Takes the picture `screenshot` and `screenshot_diff` use. `then` hears it on a thread of its own, painted off the main
+/// thread: a big picture took the window's frames with it; an error it hears on the main thread.
+fn shoot(page: &Shared, then: impl FnOnce(Shot) + Send + 'static) {
+    let Some(channel) = page.agent.channel() else { return then(Err(guard::UNCHECKED.into())) };
     let (generation, doc) = (page.generation.get(), page.agent.contexts.borrow().doc());
     let Some(wings) = page.agent.contexts.borrow().of_main(Some(WORLD)).map(|context| context.unique.clone()) else {
-        return told.tell(Heard::Result { token, result: Err(crate::web::LOADING.into()) });
+        return then(Err(crate::web::LOADING.into()));
     };
-    let (weak, shots, asked) = (weak_of(page), page.web_dir.join("screenshots"), channel.clone());
+    let (weak, asked) = (weak_of(page), channel.clone());
     channel.ask(None, "Runtime.evaluate", evaluate(&check(), &wings), move |before| {
         let Some(page) = weak.upgrade() else { return };
         let before = value_of(before);
         let width = before.as_ref().ok().and_then(|found| found["width"].as_f64()).unwrap_or(0.0);
         let before = match guard::rects(&before, page.agent.seen.foreign(doc)) {
             Ok(before) => before,
-            Err(why) => return told.tell(Heard::Result { token, result: Err(why.into()) }),
+            Err(why) => return then(Err(why.into())),
         };
         let (weak, again) = (weak_of(&page), asked.clone());
         asked.ask(None, "Page.captureScreenshot", json!({ "format": "png" }), move |shot| {
@@ -510,17 +540,282 @@ pub fn screenshot(page: &Shared, token: u64) {
             again.ask(None, "Runtime.evaluate", evaluate(&check(), &wings), move |after| {
                 let Some(page) = weak.upgrade() else { return };
                 let rects = guard::rects(&value_of(after), page.agent.seen.foreign(doc)).map(|after| [before, after].concat()).map_err(str::to_owned);
-                // Painted, scaled and written off the main thread: a big picture took the window's frames with it.
                 std::thread::spawn(move || {
-                    let result = rects
-                        .and_then(|rects| picture.and_then(|png| guard::masked(&png, &rects, width, 1.0)))
-                        .and_then(|png| crate::web::snapshot::save(&shots, &png));
-                    told.tell(Heard::Result { token, result });
+                    let shot = rects.and_then(|rects| picture.and_then(|png| guard::masked(&png, &rects, width, 1.0))).map(|png| (png, width));
+                    then(shot);
                 });
             });
         });
     });
 }
+
+/// The error a file command answers when it can't have the page's own plugin world.
+const NO_WORLD: &str = "The page's helper isn't ready: wait for the page to load";
+
+/// What `upload` runs in the plugin's world to find the input: the element the helper's `ref` names, or the one `selector`
+/// matches, a `<label>`'s control, which has to be a file input, one that takes `count` files.
+pub fn upload_target(reference: Option<&str>, selector: Option<&str>, count: usize) -> String {
+    let find = match (reference, selector) {
+        (Some(reference), _) => format!(
+            "const helper = globalThis.__wingsAgent;\nif (!helper || typeof helper.element !== 'function') throw new Error(\"The page's helper isn't loaded: take a snapshot first\");\nlet el = helper.element({});",
+            serde_json::to_string(reference).expect("a string is JSON")
+        ),
+        (None, selector) => {
+            let selector = serde_json::to_string(selector.unwrap_or_default()).expect("a string is JSON");
+            format!(
+                "const found = document.querySelectorAll({selector});\nif (found.length === 0) throw new Error('No element matches ' + {selector});\nif (found.length > 1) throw new Error(found.length + ' elements match ' + {selector} + ': use one that matches exactly one');\nlet el = found[0];"
+            )
+        }
+    };
+    format!(
+        "(() => {{\n{find}\nif (el && el.tagName === 'LABEL' && el.control) el = el.control;\nif (!(el instanceof HTMLInputElement) || el.type !== 'file') throw new Error('That element is not a file input: ' + (el && el.tagName ? el.tagName.toLowerCase() : String(el)));\nif ({count} > 1 && !el.multiple) throw new Error('That file input takes one file, and {count} were given');\nreturn el;\n}})()"
+    )
+}
+
+/// Puts files in a file input of the page: the paths checked, inline files written to the plugin's own folder, the input
+/// found in the plugin's world, and Chromium's `DOM.setFileInputFiles` sets them (it fires `input` and `change` itself).
+pub fn upload(page: &Shared, reference: Option<&str>, selector: Option<&str>, files: &[WebFile], token: u64) {
+    let told = page.told.clone();
+    let tell = move |result| told.tell(Heard::Result { token, result });
+    let Some(channel) = page.agent.channel() else { return tell(Err(guard::UNCHECKED.into())) };
+    // Written on this thread: at most 10 MB of inline files.
+    let access = Files::of(&page.web_dir);
+    let paths = files.iter().filter_map(|file| if let WebFile::Path(path) = file { Some(path.clone()) } else { None }).collect::<Vec<_>>();
+    let inline = files.iter().filter_map(|file| if let WebFile::Inline { name, data } = file { Some((name.clone(), data.clone())) } else { None }).collect::<Vec<_>>();
+    let found = access.uploads(&paths).and_then(|mut found| access.inline(&inline).map(|more| found.extend(more)).map(|()| found));
+    let found: Vec<String> = match found {
+        Ok(found) => found.iter().map(|path| path.to_string_lossy().into_owned()).collect(),
+        Err(why) => return tell(Err(why)),
+    };
+    let (generation, weak) = (page.generation.get(), weak_of(page));
+    let (doc, world) = {
+        let contexts = page.agent.contexts.borrow();
+        (contexts.doc(), contexts.of_main(Some(PLUGIN_WORLD)).map(|context| context.unique.clone()))
+    };
+    let Some(world) = world else { return tell(Err(NO_WORLD.into())) };
+    let script = upload_target(reference, selector, found.len());
+    let params = json!({ "expression": script, "uniqueContextId": world, "awaitPromise": false, "returnByValue": false });
+    let asked = channel.clone();
+    channel.ask(None, "Runtime.evaluate", params, move |answer| {
+        let Some(page) = weak.upgrade() else { return };
+        if moved(&page, generation, doc) {
+            return tell(Err(MOVED_ON.into()));
+        }
+        let object = match answer {
+            Ok(answer) => match answer.get("exceptionDetails") {
+                Some(details) => Err(exception_text(details)),
+                None => answer["result"]["objectId"].as_str().map(str::to_owned).ok_or_else(|| "The input wasn't found".to_owned()),
+            },
+            Err(why) => Err(why),
+        };
+        let object = match object {
+            Ok(object) => object,
+            Err(why) => return tell(Err(why)),
+        };
+        let (count, release, weak) = (found.len(), asked.clone(), weak_of(&page));
+        let object_id = object.clone();
+        asked.ask(None, "DOM.setFileInputFiles", json!({ "files": found, "objectId": object }), move |set| {
+            release.ask(None, "Runtime.releaseObject", json!({ "objectId": object_id }), |_| {});
+            let gone = weak.upgrade().is_none_or(|page| moved(&page, generation, doc));
+            tell(if gone { Err(MOVED_ON.into()) } else { set.map(|_| json!({ "files": count })) });
+        });
+    });
+}
+
+/// Compares `png`, a picture of the page `css_wide` CSS pixels wide, cut to `clip` (CSS pixels) if it has one and fitted to
+/// the size a saved picture is (`snapshot::LONGEST`), with the baseline `baseline_png`.
+pub fn compare_pictures(baseline_png: &[u8], png: &[u8], css_wide: f64, clip: Option<[f64; 4]>, threshold: f64) -> Result<(diff::Diff, image::RgbaImage), String> {
+    let baseline = image::load_from_memory(baseline_png).map_err(|error| format!("The baseline isn't a picture: {error}"))?.into_rgba8();
+    let mut current = image::load_from_memory(png).map_err(|error| error.to_string())?.into_rgba8();
+    if let Some([x, y, width, height]) = clip {
+        let scale = f64::from(current.width()) / css_wide.max(1.0);
+        let (left, top) = ((x * scale).round() as u32, (y * scale).round() as u32);
+        if left >= current.width() || top >= current.height() {
+            return Err("The clip is outside the page".into());
+        }
+        let (wide, high) = (((width * scale).round() as u32).min(current.width() - left).max(1), ((height * scale).round() as u32).min(current.height() - top).max(1));
+        current = image::imageops::crop_imm(&current, left, top, wide, high).to_image();
+    }
+    let longest = crate::web::snapshot::LONGEST;
+    if current.width().max(current.height()) > longest {
+        current = image::DynamicImage::ImageRgba8(current).resize(longest, longest, image::imageops::FilterType::Triangle).into_rgba8();
+    }
+    diff::compare(&baseline, &current, threshold).map(|found| (found, current))
+}
+
+fn png_bytes(image: &image::RgbaImage) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    image.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).map_err(|error| error.to_string())?;
+    Ok(bytes)
+}
+
+/// A fresh picture of the page against the baseline's: the answer of the `screenshotDiff` command.
+pub fn screenshot_diff(page: &Shared, baseline: &str, threshold: f64, clip: Option<[f64; 4]>, current: Option<&str>, diff_to: Option<&str>, token: u64) {
+    let told = page.told.clone();
+    let access = Files::of(&page.web_dir);
+    // Every path is checked before the picture is taken.
+    let paths = (|| {
+        let baseline = access.input(baseline, policy::SCREENSHOTS)?;
+        let current = current.map(|path| access.output(path, policy::SCREENSHOTS)).transpose()?;
+        let diff_to = diff_to.map(|path| access.output(path, policy::SCREENSHOTS)).transpose()?;
+        Ok::<_, String>((baseline, current, diff_to))
+    })();
+    let (baseline, current, diff_to) = match paths {
+        Ok(paths) => paths,
+        Err(why) => return told.tell(Heard::Result { token, result: Err(why) }),
+    };
+    let (web, shots) = (page.web_dir.clone(), page.web_dir.join(policy::SCREENSHOTS));
+    shoot(page, {
+        let told = told.clone();
+        move |shot| {
+            let result = shot.and_then(|(png, wide)| {
+                let access = Files::of(&web);
+                let baseline_png = access.read(&baseline.to_string_lossy(), policy::SCREENSHOTS, policy::UPLOAD_MAX_BYTES)?;
+                let (found, now) = compare_pictures(&baseline_png, &png, wide, clip, threshold)?;
+                let saved_current = match &current {
+                    Some(path) => {
+                        access.write(path, &png_bytes(&now)?)?;
+                        Some(path.clone())
+                    }
+                    None => None,
+                };
+                let saved_diff = if found.changed == 0 {
+                    None
+                } else if let Some(path) = &diff_to {
+                    access.write(path, &png_bytes(&found.image)?)?;
+                    Some(path.clone())
+                } else {
+                    let saved = crate::web::snapshot::save(&shots, &png_bytes(&found.image)?)?;
+                    saved["path"].as_str().map(std::path::PathBuf::from)
+                };
+                Ok(json!({
+                    "matches": found.changed == 0,
+                    "changedPixels": found.changed,
+                    "totalPixels": found.total,
+                    "changedRatio": found.changed as f64 / found.total.max(1) as f64,
+                    "width": found.image.width(),
+                    "height": found.image.height(),
+                    "diff": saved_diff,
+                    "current": saved_current,
+                }))
+            });
+            told.tell(Heard::Result { token, result });
+        }
+    });
+}
+
+const RECORDING_SECRET: &str = "the page showed a password or card field";
+const NO_RECORDING: &str = "No recording is running";
+
+fn stop_screencast(page: &Shared) {
+    if let Some(channel) = page.agent.channel() {
+        channel.ask(None, "Page.stopScreencast", json!({}), |_| {});
+    }
+}
+
+/// Starts, asks about, stops or cancels the page's recording (`WebRecord`).
+pub fn record(page: &Shared, record: &WebRecord, token: u64) {
+    let told = page.told.clone();
+    let tell = move |result| told.tell(Heard::Result { token, result });
+    match record {
+        WebRecord::Status => tell(Ok(page.agent.recording.borrow().as_ref().map_or_else(|| json!({ "recording": false, "durationMs": 0, "frames": 0 }), Recording::status))),
+        WebRecord::Stop => match page.agent.recording.take() {
+            Some(recording) => {
+                stop_screencast(page);
+                recording.stop(Box::new(tell));
+            }
+            None => tell(Err(NO_RECORDING.into())),
+        },
+        WebRecord::Cancel => match page.agent.recording.take() {
+            Some(recording) => {
+                stop_screencast(page);
+                recording.cancel();
+                tell(Ok(json!({ "cancelled": true })));
+            }
+            None => tell(Err(NO_RECORDING.into())),
+        },
+        WebRecord::Start { path, fps, max_ms } => {
+            if page.agent.recording.borrow().as_ref().is_some_and(|recording| !recording.ended()) {
+                return tell(Err("The page is being recorded already: stop or cancel that first".into()));
+            }
+            let access = Files::of(&page.web_dir);
+            let path = match access.output(path, policy::RECORDINGS).and_then(|path| access.prepare(&path).map(|_| path)) {
+                Ok(path) => path,
+                Err(why) => return tell(Err(why)),
+            };
+            let Some(channel) = page.agent.channel() else { return tell(Err(guard::UNCHECKED.into())) };
+            let (generation, doc) = (page.generation.get(), page.agent.contexts.borrow().doc());
+            let Some(wings) = page.agent.contexts.borrow().of_main(Some(WORLD)).map(|context| context.unique.clone()) else { return tell(Err(crate::web::LOADING.into())) };
+            let (weak, asked, started) = (weak_of(page), channel.clone(), Instant::now());
+            let (fps, max_ms) = (*fps, *max_ms);
+            // A page that shows a password or card field isn't recorded, as no script runs on it.
+            channel.ask(None, "Runtime.evaluate", evaluate(&check(), &wings), move |found| {
+                let Some(page) = weak.upgrade() else { return };
+                let found = value_of(found);
+                if found.as_ref().is_ok_and(|found| found["secret"] == true) {
+                    page.agent.seen.note(doc, false);
+                }
+                let allowed = if moved(&page, generation, doc) { Err(MOVED_ON) } else { guard::may_run(&found, started.elapsed(), page.agent.seen.secret(doc)) };
+                if let Err(why) = allowed {
+                    return tell(Err(why.into()));
+                }
+                if page.agent.recording.borrow().as_ref().is_some_and(|recording| !recording.ended()) {
+                    return tell(Err("The page is being recorded already: stop or cancel that first".into()));
+                }
+                page.agent.recording.replace(Some(Recording::start(page.web_dir.clone(), path.clone(), fps, max_ms)));
+                let (weak, again) = (weak_of(&page), asked.clone());
+                // At the page's size in CSS pixels, as the browse MCP records an .mp4: frames at the screen's own pixels
+                // made a 3012x1858 video of a window's page.
+                asked.ask(None, "Page.getLayoutMetrics", json!({}), move |metrics| {
+                    let viewport = metrics.ok().map(|metrics| metrics["cssVisualViewport"].clone()).unwrap_or_default();
+                    let mut cast = json!({ "format": "jpeg", "quality": 90, "everyNthFrame": 1 });
+                    if let (Some(width), Some(height)) = (viewport["clientWidth"].as_f64(), viewport["clientHeight"].as_f64()) {
+                        cast["maxWidth"] = json!(width.round() as u64);
+                        cast["maxHeight"] = json!(height.round() as u64);
+                    }
+                    again.ask(None, "Page.startScreencast", cast, move |started| match started {
+                        Ok(_) => tell(Ok(json!({ "recording": true, "path": path }))),
+                        Err(why) => {
+                            if let Some(page) = weak.upgrade() {
+                                page.agent.recording.take();
+                            }
+                            tell(Err(why));
+                        }
+                    });
+                });
+            });
+        }
+    }
+}
+
+/// One frame of the page's screencast: acknowledged at once, or Chromium sends no more, and given to the recording unless
+/// that ended, or the page moved where it mustn't be recorded.
+fn screencast_frame(page: &Shared, session: Option<&str>, params: &Value) {
+    if session.is_some() {
+        return;
+    }
+    if let (Some(channel), Some(id)) = (page.agent.channel(), params["sessionId"].as_i64()) {
+        channel.ask(None, "Page.screencastFrameAck", json!({ "sessionId": id }), |_| {});
+    }
+    let recording = page.agent.recording.borrow();
+    let Some(recording) = recording.as_ref() else { return };
+    if !recording.ended() {
+        let doc = page.agent.contexts.borrow().doc();
+        if crate::web::holds_imported(&page.web_dir, &page.committed.borrow()) {
+            recording.end(RECORDING_IMPORTED);
+        } else if page.agent.seen.secret(doc) {
+            recording.end(RECORDING_SECRET);
+        } else if let Some(jpeg) = params["data"].as_str().and_then(|data| base64::engine::general_purpose::STANDARD.decode(data).ok()) {
+            let at_ms = params["metadata"]["timestamp"].as_f64().map_or_else(|| recording.now_ms(), |seconds| seconds * 1000.0);
+            recording.frame(jpeg, at_ms);
+            return;
+        }
+    }
+    drop(recording);
+    stop_screencast(page);
+}
+
+const RECORDING_IMPORTED: &str = "the page is signed in with cookies you imported";
 
 /// The main frame's recent console messages and requests, as WebKit answers `logs`.
 pub fn logs(page: &Shared) -> Result<Value, String> {
@@ -643,6 +938,38 @@ mod tests {
         assert_eq!(log_line("not json"), None);
         assert_eq!(host_of("http://127.0.0.1:8765"), "127.0.0.1");
         assert_eq!(host_of("null"), "");
+    }
+
+    #[test]
+    fn the_upload_script_finds_one_file_input_by_ref_or_selector() {
+        let by_ref = upload_target(Some("e12"), None, 1);
+        assert!(by_ref.contains(r#"helper.element("e12")"#) && by_ref.contains("el.control") && by_ref.contains("el.type !== 'file'"), "{by_ref}");
+        assert!(by_ref.contains("if (1 > 1 && !el.multiple)"));
+        let by_selector = upload_target(None, Some("input[name=\"a\"]"), 3);
+        assert!(by_selector.contains(&format!("querySelectorAll({})", serde_json::to_string("input[name=\"a\"]").unwrap())), "{by_selector}");
+        assert!(by_selector.contains("found.length > 1") && by_selector.contains("found.length === 0"));
+        assert!(by_selector.contains("if (3 > 1 && !el.multiple)"));
+    }
+
+    fn png(image: &image::RgbaImage) -> Vec<u8> {
+        png_bytes(image).unwrap()
+    }
+
+    #[test]
+    fn a_picture_is_compared_whole_or_cut_to_a_clip_in_css_pixels() {
+        let flat = |width, height| image::RgbaImage::from_pixel(width, height, image::Rgba([10, 20, 30, 255]));
+        let mut changed = flat(40, 20);
+        changed.put_pixel(30, 5, image::Rgba([250, 20, 30, 255]));
+        // A page 20 CSS pixels wide, in a picture twice as wide.
+        let (found, _) = compare_pictures(&png(&flat(40, 20)), &png(&changed), 20.0, None, 0.1).unwrap();
+        assert_eq!((found.changed, found.total), (1, 800));
+        let (found, now) = compare_pictures(&png(&flat(20, 10)), &png(&changed), 20.0, Some([0.0, 0.0, 10.0, 5.0]), 0.1).unwrap();
+        assert_eq!((found.changed, now.dimensions()), (0, (20, 10)), "the clip (10x5 CSS pixels) is 20x10 pixels and holds no change");
+        let (found, _) = compare_pictures(&png(&flat(10, 10)), &png(&changed), 20.0, Some([11.0, 0.0, 5.0, 5.0]), 0.1).unwrap();
+        assert_eq!(found.changed, 1, "a clip over the changed pixel");
+        assert!(compare_pictures(&png(&flat(40, 21)), &png(&changed), 20.0, None, 0.1).err().unwrap().contains("40x21"));
+        assert!(compare_pictures(&png(&flat(4, 4)), &png(&changed), 20.0, Some([100.0, 0.0, 5.0, 5.0]), 0.1).err().unwrap().contains("outside"));
+        assert!(compare_pictures(b"not a picture", &png(&changed), 20.0, None, 0.1).err().unwrap().contains("baseline"));
     }
 
     /// Runs `script` after a made-up document of one field of `kind`, in JavaScriptCore (`osascript`), and answers what the

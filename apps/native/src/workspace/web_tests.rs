@@ -491,8 +491,8 @@ fn swapping_which_web_view_is_hidden_shows_the_other_without_making_it_again() {
     assert_eq!(crate::ui::slots::shown(id, crate::web::LAYER).len(), 1);
 }
 
-/// A live hidden web view stays live while its page's Wings tab is in the background, where the page's shown view is put
-/// away: an agent's tab the person never looked at went on working.
+/// A live hidden web view stays live while its page's Wings tab is in the background: an agent's tab the person never
+/// looked at went on working.
 #[test]
 fn a_live_hidden_web_view_stays_live_while_its_tab_is_in_the_background() {
     let data = Data::temp();
@@ -503,13 +503,17 @@ fn a_live_hidden_web_view_stays_live_while_its_tab_is_in_the_background() {
     open_web(&app, &mut window, "browser");
     until(&app, &mut window, "the hidden view was never made", |_| made(&did.borrow()) == 2);
     settle(&app, &mut window);
+    let frame = did.borrow().iter().find_map(|did| match did {
+        Did::Placed(Some(at)) => Some(*at),
+        _ => None,
+    });
     let before = did.borrow().len();
     window.update(|w, window, cx| w.new_terminal(window, cx));
-    until(&app, &mut window, "the shown view was never put away", |_| did.borrow()[before..].contains(&Did::Placed(None)));
+    // Both are an agent's here: the shown one is kept live where it was too.
+    until(&app, &mut window, "the shown view was never kept live", |_| did.borrow()[before..].contains(&Did::Live(frame.unwrap())));
     settle(&app, &mut window);
     let did = did.borrow();
-    let put_away = did[before..].iter().filter(|did| **did == Did::Placed(None)).count();
-    assert_eq!(put_away, 1, "only the shown one: {:?}", &did[before..]);
+    assert!(!did[before..].contains(&Did::Placed(None)), "neither is put away: {:?}", &did[before..]);
 }
 
 /// A page with a shown web view "a", which adds a hidden live one, "c", once "a" tells its state: an agent's new tab.
@@ -557,4 +561,40 @@ fn a_new_hidden_tab_of_a_page_in_the_background_is_made_at_the_pages_last_size()
     until(&app, &mut window, "the new tab was never made", |_| made(&did.borrow()) == 2);
     settle(&app, &mut window);
     assert!(did.borrow().contains(&Did::Live(frame.unwrap())), "{:?}", did.borrow());
+}
+
+/// A page whose one web view is an agent's (`live`), shown.
+fn agent_page() -> String {
+    fake::script("web", move || {
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            if let Hear::Start = hear {
+                cx.render(&json!({ "id": 0, "type": "#root", "props": {}, "children": [{ "id": 1, "type": "WebView", "props": {
+                    "name": "a", "url": "https://example.com/", "fill": true, "live": true,
+                }, "children": [] }] }));
+            }
+        }
+    })
+}
+
+/// An agent's tab that is on screen goes on rendering where it was once its Wings tab goes to the background, rather than
+/// being put away: its recording got one frame and its screenshots stopped coming.
+#[test]
+fn an_agents_shown_tab_stays_live_while_its_wings_tab_is_in_the_background() {
+    let data = Data::temp();
+    let views = json!([{ "id": "web", "title": "Web", "page": "dist/web.html", "opens": ["tab"], "multiple": true }]);
+    data.install_script("browser", json!({ "permissions": { "webView": true }, "contributes": { "views": views } }), &idle("main"), &[("web", &agent_page())], "browser-scope");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let id = window.update(|_, window, _| window.window_handle().window_id());
+    let (did, _) = record(id);
+    open_web(&app, &mut window, "browser");
+    until(&app, &mut window, "the view was never shown", |_| did.borrow().iter().any(|did| matches!(did, Did::Placed(Some(_)))));
+    let frame = did.borrow().iter().find_map(|did| match did {
+        Did::Placed(Some(at)) => Some(*at),
+        _ => None,
+    });
+    let before = did.borrow().len();
+    window.update(|w, window, cx| w.new_terminal(window, cx));
+    until(&app, &mut window, "the view was never kept live", |_| did.borrow()[before..].contains(&Did::Live(frame.unwrap())));
+    settle(&app, &mut window);
+    assert!(!did.borrow()[before..].contains(&Did::Placed(None)), "not put away: {:?}", &did.borrow()[before..]);
 }

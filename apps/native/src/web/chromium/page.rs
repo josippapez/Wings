@@ -523,6 +523,7 @@ impl Shared {
             return;
         }
         self.answer(false, None);
+        self.agent.page_closed();
         if let (Some(ns), Some(parent)) = (self.ns.borrow().clone(), self.parent.borrow().clone()) {
             frameless::detach(&ns, &parent);
         }
@@ -582,6 +583,9 @@ impl Shared {
             }
             WebGo::Eval { script, page } => agent::eval(self, script, *page, token),
             WebGo::Snapshot => agent::screenshot(self, token),
+            WebGo::Upload { reference, selector, files } => agent::upload(self, reference.as_deref(), selector.as_deref(), files, token),
+            WebGo::ScreenshotDiff { baseline, threshold, clip, current, diff } => agent::screenshot_diff(self, baseline, *threshold, *clip, current.as_deref(), diff.as_deref(), token),
+            WebGo::Record(record) => agent::record(self, record, token),
         }
     }
 

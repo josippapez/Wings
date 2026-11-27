@@ -1378,3 +1378,99 @@ fn a_tab_strip_reads_its_tabs_and_groups_in_order_with_its_handlers() {
     assert!(tree(json!([{"id":9,"type":"Tab","props":{"id":"t"}}])).unwrap().children.is_empty());
 }
 
+
+/// What a `WebView`'s `command` makes of one command, or none for one it refuses.
+fn web_go(command: serde_json::Value) -> Option<WebGo> {
+    let parsed = tree(json!([{"id":1,"type":"WebView","props":{"name":"a","command":command}}])).unwrap();
+    match &parsed.children[0] {
+        Node::WebView(web) => web.commands.first().map(|command| command.go.clone()),
+        other => panic!("not a web view: {other:?}"),
+    }
+}
+
+#[test]
+fn an_upload_names_one_input_and_absolute_files() {
+    let upload = |extra: serde_json::Value| {
+        let mut command = json!({"action":"upload","token":1,"files":["/tmp/a.png","/tmp/b.png"]});
+        for (key, value) in extra.as_object().unwrap() {
+            command[key] = value.clone();
+        }
+        web_go(command)
+    };
+    assert_eq!(
+        upload(json!({"ref":"e12","selector":null})),
+        Some(WebGo::Upload { reference: Some("e12".into()), selector: None, files: vec![WebFile::Path("/tmp/a.png".into()), WebFile::Path("/tmp/b.png".into())] })
+    );
+    assert_eq!(upload(json!({"selector":"input[type=file]"})).map(|go| matches!(go, WebGo::Upload { selector: Some(_), reference: None, .. })), Some(true));
+    assert_eq!(upload(json!({})), None, "no input named");
+    assert_eq!(upload(json!({"ref":"e1","selector":"a"})), None, "two inputs named");
+    assert_eq!(upload(json!({"ref":""})), None);
+    assert_eq!(upload(json!({"ref":"e1","files":[]})), None, "no files");
+    assert_eq!(
+        upload(json!({"ref":"e1","files":["relative/a.png", {"name":"n.txt","data":"aGVsbG8="}]})),
+        Some(WebGo::Upload { reference: Some("e1".into()), selector: None, files: vec![WebFile::Path("relative/a.png".into()), WebFile::Inline { name: "n.txt".into(), data: "aGVsbG8=".into() }] }),
+        "a relative path is the web folder's, and a file may be inline"
+    );
+    assert_eq!(upload(json!({"ref":"e1","files":[{"name":"../n.txt","data":"aGVsbG8="}]})), None, "an inline name is a name, not a path");
+    assert_eq!(upload(json!({"ref":"e1","files":[{"name":"n.txt"}]})), None, "an inline file without data");
+    // The tree itself is at most 2 MB, so this is the parser's own bound, which a page can't reach through a tree.
+    let big = "A".repeat(7 * 1024 * 1024);
+    assert_eq!(web_upload(&json!({"ref":"e1","files":[{"name":"a","data":big},{"name":"b","data":big}]})), None, "more than 10 MB of inline files together");
+    assert_eq!(upload(json!({"ref":"e1","files":[""]})), None, "an empty path");
+    assert_eq!(upload(json!({"ref":"e1","files":["/tmp/a.png", 3]})), None, "a file that isn't a path");
+    assert_eq!(upload(json!({"ref":"e1","files":(0..21).map(|n| format!("/tmp/{n}")).collect::<Vec<_>>()})), None, "too many");
+    assert_eq!(upload(json!({"ref":"e1","files":["/tmp/a\u{0}b"]})), None);
+    assert_eq!(web_go(json!({"action":"upload","ref":"e1","token":1})), None, "files missing");
+}
+
+#[test]
+fn a_screenshot_diff_needs_an_absolute_baseline_and_a_sane_threshold_and_clip() {
+    let base = || json!({"action":"screenshotDiff","token":1,"baseline":"/tmp/base.png"});
+    let with = |extra: serde_json::Value| {
+        let mut command = base();
+        for (key, value) in extra.as_object().unwrap() {
+            command[key] = value.clone();
+        }
+        web_go(command)
+    };
+    assert_eq!(with(json!({})), Some(WebGo::ScreenshotDiff { baseline: "/tmp/base.png".into(), threshold: 0.1, clip: None, current: None, diff: None }));
+    assert_eq!(
+        with(json!({"threshold":0.25,"clip":{"x":1,"y":2,"width":30,"height":40},"current":"/tmp/c.png","diff":null})),
+        Some(WebGo::ScreenshotDiff { baseline: "/tmp/base.png".into(), threshold: 0.25, clip: Some([1.0, 2.0, 30.0, 40.0]), current: Some("/tmp/c.png".into()), diff: None })
+    );
+    assert_eq!(web_go(json!({"action":"screenshotDiff","token":1})), None, "no baseline");
+    assert_eq!(web_go(json!({"action":"screenshotDiff","token":1,"baseline":""})), None, "an empty baseline");
+    assert_eq!(with(json!({"baseline":"base.png"})).map(|go| matches!(go, WebGo::ScreenshotDiff { baseline, .. } if baseline == "base.png")), Some(true), "a relative baseline is the web folder's");
+    assert_eq!(with(json!({"threshold":1.5})), None);
+    assert_eq!(with(json!({"threshold":-0.1})), None);
+    assert_eq!(with(json!({"clip":{"x":0,"y":0,"width":0,"height":10}})), None, "an empty clip");
+    assert_eq!(with(json!({"clip":{"x":0,"y":0,"width":10}})), None, "a clip without a height");
+    assert_eq!(with(json!({"current":"rel.png"})).map(|go| matches!(go, WebGo::ScreenshotDiff { current: Some(path), .. } if path == "rel.png")), Some(true));
+    assert_eq!(with(json!({"diff":7})), None);
+}
+
+#[test]
+fn a_record_command_is_one_of_four_and_a_start_has_an_mp4_path_and_a_sane_rate() {
+    let start = |extra: serde_json::Value| {
+        let mut command = json!({"action":"record","do":"start","path":"/tmp/out.mp4","token":1});
+        for (key, value) in extra.as_object().unwrap() {
+            command[key] = value.clone();
+        }
+        web_go(command)
+    };
+    assert_eq!(start(json!({})), Some(WebGo::Record(WebRecord::Start { path: "/tmp/out.mp4".into(), fps: 30, max_ms: 900_000 })));
+    assert_eq!(start(json!({"fps":60,"maxMs":5000})), Some(WebGo::Record(WebRecord::Start { path: "/tmp/out.mp4".into(), fps: 60, max_ms: 5000 })));
+    assert_eq!(start(json!({"fps":0})), None);
+    assert_eq!(start(json!({"fps":61})), None);
+    assert_eq!(start(json!({"fps":"fast"})), None);
+    assert_eq!(start(json!({"maxMs":0})), None);
+    assert_eq!(start(json!({"maxMs":10_000_000})), None);
+    assert_eq!(start(json!({"path":"/tmp/out.mov"})), None, "not an mp4");
+    assert_eq!(start(json!({"path":"out.mp4"})), Some(WebGo::Record(WebRecord::Start { path: "out.mp4".into(), fps: 30, max_ms: 900_000 })), "a relative path is the web folder's");
+    assert_eq!(web_go(json!({"action":"record","do":"start","token":1})), None, "no path");
+    for (name, record) in [("status", WebRecord::Status), ("stop", WebRecord::Stop), ("cancel", WebRecord::Cancel)] {
+        assert_eq!(web_go(json!({"action":"record","do":name,"token":1})), Some(WebGo::Record(record)));
+    }
+    assert_eq!(web_go(json!({"action":"record","do":"pause","token":1})), None);
+    assert_eq!(web_go(json!({"action":"record","token":1})), None);
+}

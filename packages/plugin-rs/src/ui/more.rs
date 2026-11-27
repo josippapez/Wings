@@ -216,6 +216,69 @@ pub fn web_snapshot(token: u64) -> Value {
     json!({ "action": "snapshot", "token": token })
 }
 
+/// A file for `web_upload`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WebUploadFile<'a> {
+    /// A path: absolute, or relative to the plugin's web folder. Wings reads it only inside the temporary folders and the
+    /// ones `WINGS_BROWSER_FILE_ROOTS` names, and refuses symlinks, hard links and files others can write.
+    Path(&'a str),
+    /// A file whose bytes aren't on this computer, as base64 under a plain name: at most 10 MB together.
+    Inline { name: &'a str, data: &'a str },
+}
+
+/// The `command` prop that puts files in a file input of the page (Chromium engine only, needs `permissions.webScripts`):
+/// `reference` is a ref of the plugin's own helper (`window.__wingsAgent.element(ref)`) or `selector` a CSS selector that
+/// matches exactly one element, a `<label>` meaning its control. `onResult` gets `{ token, value: { files } }`, or `{ token,
+/// error }`: not a file input, several files for one that isn't `multiple`, a path outside the allowed folders, more than
+/// 50 MB of files by path, or a page signed in with imported cookies. WebKit answers that it needs Chromium.
+pub fn web_upload(reference: Option<&str>, selector: Option<&str>, files: &[WebUploadFile], token: u64) -> Value {
+    let files: Vec<Value> = files
+        .iter()
+        .map(|file| match file {
+            WebUploadFile::Path(path) => json!(path),
+            WebUploadFile::Inline { name, data } => json!({ "name": name, "data": data }),
+        })
+        .collect();
+    json!({ "action": "upload", "ref": reference, "selector": selector, "files": files, "token": token })
+}
+
+/// The `command` prop that takes a fresh picture of the page (secret fields painted over, as `web_snapshot`'s) and compares
+/// it with the PNG at `baseline` (Chromium engine only, needs `permissions.webScripts`): `threshold` is how far a channel may
+/// differ, 0 to 1 of 255 (0.1 when `None`), `clip` is `[x, y, width, height]` in CSS pixels. The picture taken goes to
+/// `current` and the picture of the changes (changed pixels red) to `diff` when given; a diff with changes and no `diff` is
+/// saved in the web folder. `onResult` gets `{ matches, changedPixels, totalPixels, changedRatio, width, height, diff,
+/// current }`, with an error when the pictures differ in size. Paths are as `web_upload`'s, a relative one in the web folder.
+pub fn web_screenshot_diff(baseline: &str, threshold: Option<f64>, clip: Option<[f64; 4]>, current: Option<&str>, diff: Option<&str>, token: u64) -> Value {
+    let clip = clip.map(|[x, y, width, height]| json!({ "x": x, "y": y, "width": width, "height": height }));
+    json!({ "action": "screenshotDiff", "baseline": baseline, "threshold": threshold, "clip": clip, "current": current, "diff": diff, "token": token })
+}
+
+/// What `web_record` does.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WebRecord<'a> {
+    /// Records into the .mp4 at `path` (an absolute path or one relative to the web folder, as `web_upload`'s) at most `fps`
+    /// frames a second (1 to 60, 30 when `None`) and for at most `max_ms` (900,000 when `None`). Answers `{ recording, path }`.
+    Start { path: &'a str, fps: Option<u32>, max_ms: Option<u64> },
+    /// `{ recording, durationMs, frames }`, with `endedBecause` for one that ended by itself.
+    Status,
+    /// Ends it and answers `{ path, bytes, durationMs, width, height, frames }`.
+    Stop,
+    /// Ends it and drops the file: `{ cancelled: true }`.
+    Cancel,
+}
+
+/// The `command` prop that records the page as an H.264 .mp4 (Chromium engine only, needs `permissions.webScripts`). One
+/// recording a page; it ends by itself after `max_ms`, when its page closes, or when a password or card field shows or the
+/// page moves to a site signed in with imported cookies.
+pub fn web_record(record: &WebRecord, token: u64) -> Value {
+    match record {
+        WebRecord::Start { path, fps, max_ms } => json!({ "action": "record", "do": "start", "path": path, "fps": fps, "maxMs": max_ms, "token": token }),
+        WebRecord::Status => json!({ "action": "record", "do": "status", "token": token }),
+        WebRecord::Stop => json!({ "action": "record", "do": "stop", "token": token }),
+        WebRecord::Cancel => json!({ "action": "record", "do": "cancel", "token": token }),
+    }
+}
+
 /// The `command` prop that clicks the button of the extension `id` (one of `WebState::extensions`) for the page (Wings
 /// 0.2.116): its popup opens under the button you pressed, or the extension hears the click. Send it only from a click
 /// handler: Wings runs it only right after your click or key in the page, which it uses up as `copyText` does, and
@@ -347,6 +410,27 @@ mod tests {
         assert_eq!(web_eval("return 1", false, 4), json!({ "action": "eval", "script": "return 1", "token": 4 }));
         assert_eq!(web_eval("return 1", true, 5)["world"], "page");
         assert_eq!(web_snapshot(6), json!({ "action": "snapshot", "token": 6 }));
+    }
+
+    #[test]
+    fn an_upload_a_picture_diff_and_a_recording_are_commands_with_a_token() {
+        assert_eq!(
+            web_upload(Some("e12"), None, &[WebUploadFile::Path("/tmp/a.png"), WebUploadFile::Inline { name: "b.txt", data: "aGk=" }], 7),
+            json!({ "action": "upload", "ref": "e12", "selector": null, "files": ["/tmp/a.png", { "name": "b.txt", "data": "aGk=" }], "token": 7 })
+        );
+        assert_eq!(web_upload(None, Some("input"), &[], 8)["selector"], "input");
+        assert_eq!(
+            web_screenshot_diff("/tmp/base.png", Some(0.2), Some([1.0, 2.0, 30.0, 40.0]), Some("cur.png"), None, 9),
+            json!({ "action": "screenshotDiff", "baseline": "/tmp/base.png", "threshold": 0.2, "clip": { "x": 1.0, "y": 2.0, "width": 30.0, "height": 40.0 }, "current": "cur.png", "diff": null, "token": 9 })
+        );
+        assert_eq!(web_screenshot_diff("b.png", None, None, None, None, 10)["clip"], Value::Null);
+        assert_eq!(
+            web_record(&WebRecord::Start { path: "/tmp/x/out.mp4", fps: Some(15), max_ms: None }, 11),
+            json!({ "action": "record", "do": "start", "path": "/tmp/x/out.mp4", "fps": 15, "maxMs": null, "token": 11 })
+        );
+        for (record, name) in [(WebRecord::Status, "status"), (WebRecord::Stop, "stop"), (WebRecord::Cancel, "cancel")] {
+            assert_eq!(web_record(&record, 12), json!({ "action": "record", "do": name, "token": 12 }));
+        }
     }
 
     #[test]

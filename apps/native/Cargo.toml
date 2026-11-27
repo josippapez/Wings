@@ -1,12 +1,12 @@
 [package]
 name = "wings-native"
-version = "0.2.127"
+version = "0.2.128"
 edition = "2024"
 publish = false
 
 [features]
 default = ["ui"]
-ui = ["dep:gpui", "dep:gpui_platform", "dep:image", "dep:objc2-metal", "dep:objc2-core-video", "dep:objc2-core-foundation", "dep:objc2-quartz-core", "dep:objc2-core-graphics", "dep:wings-terminal", "dep:wings-agents", "dep:async-channel", "dep:sysinfo", "dep:unicode-segmentation", "dep:chrono", "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation", "dep:objc2-web-kit", "dep:block2", "dep:dispatch2", "dep:global-hotkey", "dep:wings-chromium", "dep:cef", "dep:raw-window-handle", "dep:syntect", "dep:two-face"]
+ui = ["dep:gpui", "dep:gpui_platform", "dep:image", "dep:objc2-metal", "dep:objc2-core-video", "dep:objc2-av-foundation", "dep:objc2-core-media", "dep:objc2-core-foundation", "dep:objc2-quartz-core", "dep:objc2-core-graphics", "dep:wings-terminal", "dep:wings-agents", "dep:async-channel", "dep:sysinfo", "dep:unicode-segmentation", "dep:chrono", "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation", "dep:objc2-web-kit", "dep:block2", "dep:dispatch2", "dep:global-hotkey", "dep:wings-chromium", "dep:cef", "dep:raw-window-handle", "dep:syntect", "dep:two-face"]
 # Headless GPUI windows for tests that send keys and mouse events through the real view.
 test-support = ["ui", "gpui/test-support", "gpui_platform/test-support"]
 # The build that replaces the desktop app: `Wings.app` on the desktop's data folder (`src/data_dir.rs`), made by
@@ -120,7 +120,11 @@ objc2-metal = { version = "0.3.2", default-features = false, features = ["std", 
 # gpui-pre-apple already builds these versions, with quartz-core's `objc2-core-graphics` on.
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CALayer", "CAMetalLayer", "CATransaction", "CAShapeLayer", "CAAnimation", "CAMediaTiming", "objc2-core-foundation", "objc2-core-graphics", "objc2-metal"], optional = true }
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGColor", "CGColorSpace", "CGPath", "objc2"], optional = true }
-objc2-core-video = { version = "0.3.2", default-features = false, features = ["CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVMetalTexture", "CVMetalTextureCache", "CVReturn", "objc2", "objc2-metal"], optional = true }
+objc2-core-video = { version = "0.3.2", default-features = false, features = ["CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVMetalTexture", "CVMetalTextureCache", "CVReturn", "objc2", "objc2-metal"], optional = true }
+# Writes the Browser's screen recordings as H.264 .mp4 (`web/record.rs`): AVAssetWriter comes with macOS, where no ffmpeg
+# can be counted on.
+objc2-av-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "AVAssetWriter", "AVAssetWriterInput", "AVMediaFormat", "AVVideoSettings", "objc2-core-media", "objc2-core-video"], optional = true }
+objc2-core-media = { version = "0.3.2", default-features = false, features = ["std", "CMTime"], optional = true }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFBase", "CFDictionary", "CFNumber", "CFString", "CFCGTypes"], optional = true }
 # The window's AppKit view, for the desktop's vibrancy under the glass. gpui-pre already builds this version.
 raw-window-handle = { version = "0.6.2", optional = true }

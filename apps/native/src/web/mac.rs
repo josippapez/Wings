@@ -769,6 +769,9 @@ impl Native for WebPage {
                     let done = tab.map_or(Err(actions::NOT_ON.to_owned()), |tab| actions::perform(&tab, &self.view, id));
                     self.told.tell(Heard::Result { token, result: done.map(|()| serde_json::Value::Null) });
                 }
+                WebGo::Upload { .. } | WebGo::ScreenshotDiff { .. } | WebGo::Record(_) => {
+                    self.told.tell(Heard::Result { token, result: Err(super::NEEDS_CHROMIUM.into()) });
+                }
                 WebGo::Logs => {
                     let logs = self.observer.ivars().logs.borrow();
                     let of = |kind: &str| logs.iter().filter(|line| line["kind"] == kind).cloned().collect::<Vec<_>>();

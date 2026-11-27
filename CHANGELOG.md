@@ -2,6 +2,18 @@
 
 What changed in each Wings release, newest first.
 
+## 0.2.128 · 2026-11-27
+
+- **The Browser does what the browse MCP does for agents** (Browser 0.3.0, Chromium engine):
+  - upload sets a page's file input from files or inline content;
+  - screenshot_diff compares the page with an earlier screenshot and marks what changed in red;
+  - recording records an agent's tab to an .mp4 video;
+  - demonstrate lets you show an agent a flow, then hands it the steps;
+  - webmcp lists and runs the tools a page offers agents.
+- **Agents' tabs close themselves** once left unused for 10 minutes. The one on screen and your own tabs stay.
+- **File access is limited as in browse**: these tools only read and write files in temporary folders and the folders listed in `WINGS_BROWSER_FILE_ROOTS`. Settings for this come later.
+- **An agent's tab keeps working while the Browser isn't on screen**, so its recordings and screenshots no longer stall, even for a tab restored at launch.
+
 ## 0.2.127 · 2026-11-27
 
 - **Browser tabs, and a tab group for each agent**: the Browser page has tabs on one line, with New tab, and each agent that uses the Browser gets a group of its own, named after its session, for its tabs. An agent never takes over your tabs or another agent's, and only brings its tab forward when the Browser shows nothing else, when you're already watching its group, or when it needs you to sign in. Agents can open a new tab in their group and list, switch and close their own tabs. Tabs and groups come back after a restart (Browser 0.2.0).

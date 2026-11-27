@@ -7,7 +7,9 @@
 //! the person's own tab.
 
 use crate::{
+    agent_demo::{self, Recorder},
     agent_js::{self, SNAPSHOT_MAX},
+    agent_webmcp,
     address::resolve,
     browser_page::{self, tabs_changed, with},
     settings,
@@ -44,6 +46,8 @@ struct Agent {
     waiting: HashMap<u64, Sender<Result<Value, String>>>,
     /// The step the person was asked to do, and who waits for them to say it is done.
     handoff: Option<(String, Option<Sender<()>>)>,
+    /// What the person was asked to show, and whether they pressed Continue.
+    demo: Option<(String, bool)>,
 }
 
 thread_local! {
@@ -209,6 +213,7 @@ async fn navigate(op: &Value, key: &str, name: &str) -> Result<Value, String> {
         }
         _ => return Err("navigate takes a url, or an action of back, forward or reload, not both".into()),
     };
+    with(|page| page.tabs.touch(&tab, host::now()));
     tabs_changed();
     loaded(&tab).await;
     Ok(tab_status(&tab))
@@ -352,7 +357,10 @@ fn tabs(op: &Value, key: &str) -> Result<Value, String> {
                 return Err(format!("You have no tab {id}: browser__tabs list shows yours."));
             }
             if action == "select" {
-                with(|page| page.tabs.select(id));
+                with(|page| {
+                    page.tabs.select(id);
+                    page.tabs.touch(id, host::now());
+                });
                 tabs_changed();
             } else {
                 browser_page::close_tab(id);
@@ -376,6 +384,7 @@ pub async fn run(op: Value) -> Result<Value, String> {
         _ => {}
     }
     let tab = target(&key)?;
+    with(|page| page.tabs.touch(&tab, host::now()));
     match name_of {
         "status" => Ok(tab_status(&tab)),
         "screenshot" => {
@@ -402,6 +411,11 @@ pub async fn run(op: Value) -> Result<Value, String> {
         "pop_in" => pop_in(&tab).await,
         "resize" => resize(size_of(&op)).await,
         "handoff" => handoff(&tab, &op).await,
+        "upload" => command(&tab, |token| json!({ "action": "upload", "ref": op["ref"], "selector": op["selector"], "files": op["files"], "token": token })).await,
+        "screenshot_diff" => command(&tab, |token| json!({ "action": "screenshotDiff", "baseline": op["baseline"], "threshold": op["threshold"], "clip": op["clip"], "current": op["current"], "diff": op["diff"], "token": token })).await,
+        "recording" => command(&tab, |token| json!({ "action": "record", "do": op["do"], "path": op["path"], "fps": op["fps"], "maxMs": op["maxMs"], "token": token })).await,
+        "demonstrate" => demonstrate(&tab, &op).await,
+        "webmcp" => webmcp(&tab, &op).await,
         other => Err(format!("The page doesn't know {other}")),
     }
 }
@@ -413,10 +427,106 @@ fn done() {
     }
 }
 
-/// The banner that asks the person for a step, when an agent did.
+/// Continue pressed on the banner of a demonstration.
+fn demo_done() {
+    agent(|agent| {
+        if let Some((_, finished)) = agent.demo.as_mut() {
+            *finished = true;
+        }
+    });
+}
+
+/// The person shows the agent a flow in the tab, which comes forward with a banner and a Continue button. What they do is
+/// recorded (`agent_demo.rs`) by asking the tab's page for it twice a second, until they press Continue or the time is out.
+async fn demonstrate(tab: &str, op: &Value) -> Result<Value, String> {
+    let message = text(op, "message")?.to_owned();
+    if agent(|agent| agent.demo.is_some()) {
+        return Err("The person is already showing something in this page: try again once they have pressed Continue.".into());
+    }
+    let limit = op["timeout_ms"].as_f64().unwrap_or(600_000.0);
+    let url_of = || with(|page| page.tabs.get(tab).map(|tab| agent_url(&tab.state)));
+    let mut recorder = Recorder::new(&url_of().unwrap_or_default());
+    with(|page| page.tabs.activate(tab));
+    tabs_changed();
+    agent(|agent| agent.demo = Some((message, false)));
+    let begun = host::now();
+    let (mut ended, mut refused) = (None, None);
+    loop {
+        host::sleep(agent_demo::POLL_MS).await;
+        let Some(url) = url_of() else {
+            ended = Some("the tab was closed");
+            break;
+        };
+        let pressed = agent(|agent| agent.demo.as_ref().is_none_or(|(_, finished)| *finished));
+        let late = host::now() - begun >= limit;
+        // The last ask also ends the recorder, so it stops listening in the page.
+        let last = pressed || late;
+        let script = agent_demo::script(last);
+        match within(3000, command(tab, |token| wings_plugin::ui::web_eval(&script, false, token))).await {
+            Some(Ok(events)) => recorder.events(&events),
+            // A page with a password field runs no script, so its steps go unseen: the agent hears why.
+            Some(Err(why)) => refused = Some(why),
+            None => {}
+        }
+        recorder.navigated(&url);
+        with(|page| page.tabs.touch(tab, host::now()));
+        if last {
+            if !pressed {
+                ended = Some("the time was out");
+            }
+            break;
+        }
+    }
+    agent(|agent| agent.demo = None);
+    let mut answer = recorder.answer();
+    if let Some(why) = ended {
+        answer["endedBecause"] = json!(why);
+    }
+    if let Some(why) = refused {
+        answer["notRecorded"] = json!(format!("Some steps in the page couldn't be recorded: {why}"));
+    }
+    Ok(answer)
+}
+
+/// The tools a page offers through WebMCP, or one run by name. The tab's isolated world is asked first, which is where a
+/// browser's own WebMCP is; a page that defines `modelContext` itself (a polyfill) is only seen from its own world.
+async fn webmcp(tab: &str, op: &Value) -> Result<Value, String> {
+    let action = op["action"].as_str().unwrap_or("list");
+    let name = op["name"].as_str().unwrap_or_default();
+    let timeout = op["timeout"].as_u64().unwrap_or(agent_webmcp::TIMEOUT_MS);
+    let script = agent_webmcp::script(action, name, &op["input"], op["frame"].as_str(), timeout);
+    let ask = |page_world: bool| {
+        let script = script.clone();
+        command(tab, move |token| wings_plugin::ui::web_eval(&script, page_world, token))
+    };
+    let first = ask(false).await?;
+    if !webmcp_wants_page_world(action, &first) {
+        return Ok(first);
+    }
+    // A page that refuses the page world (a site signed in with imported cookies) leaves what the isolated world said.
+    match ask(true).await {
+        Ok(second) if !webmcp_wants_page_world(action, &second) || (action == "list" && second["available"] == true) => Ok(second),
+        _ if action == "call" => Err(format!("No WebMCP tool named {name}: webmcp with action list shows what the page offers.")),
+        _ => Ok(first),
+    }
+}
+
+/// Whether the isolated world's answer is not the whole story: no WebMCP there, or no such tool.
+fn webmcp_wants_page_world(action: &str, answer: &Value) -> bool {
+    if action == "call" { answer["found"] != true } else { answer["tools"].as_array().is_none_or(|tools| tools.is_empty()) }
+}
+
+/// The banner that asks the person for a step, when an agent did, or to show a flow.
 pub fn handoff_banner() -> Option<wings_plugin::ui::Node> {
+    // In a bar, which sets it in from the page's sides as the toolbar is: a row alone met the page's edge.
+    let banner = |key: &'static str, message: String, label: &'static str, on: fn()| {
+        wings_plugin::ui::bar("bottom", [row().prop("gap", "s").prop("align", "center").child(notice("warn", message).prop("grow", true)).child(button(label, "default", false, on))]).key(key)
+    };
+    if let Some(message) = agent(|agent| agent.demo.as_ref().map(|(message, _)| message.clone())) {
+        return Some(banner("demo", message, "Continue", demo_done));
+    }
     let message = agent(|agent| agent.handoff.as_ref().map(|(message, _)| message.clone()))?;
-    Some(row().prop("gap", "s").prop("align", "center").key("handoff").child(notice("warn", message).prop("grow", true)).child(button("Done", "default", false, done)))
+    Some(banner("handoff", message, "Done", done))
 }
 
 /// Pop out, or put back when this page is a window: its toolbar button, for the tab shown.
@@ -761,5 +871,110 @@ mod tests {
         with(|page| page.tabs.active_mut().group = None);
         assert_eq!(run_op(json!({ "op": "pop_in", "caller": caller_for("", "") })).borrow().clone(), Some(Ok(Value::Null)));
         assert_eq!(calls.borrow()[0].1["args"], json!({ "url": "https://a.com/x" }));
+    }
+
+    /// The last command sent to `tab`, answered with `value`.
+    fn answer_last(tab: &str, value: Value) -> Value {
+        let command = with(|page| page.tabs.get(tab).unwrap().commands.last().cloned()).unwrap();
+        result(&json!({ "token": command["token"], "value": value }));
+        testing::settle();
+        command
+    }
+
+    #[test]
+    fn upload_diff_and_recording_send_the_view_the_commands_the_app_takes_and_return_its_answer() {
+        record();
+        person_at("https://mine.com/");
+        navigate_as("ses-a", "A", "https://a.com/", false).unwrap();
+        let a = caller_for("ses-a", "A");
+        let files = json!(["/tmp/a.png", { "name": "b.png", "data": "AAAA" }]);
+        let out = run_op(json!({ "op": "upload", "ref": "e12", "selector": null, "files": files, "caller": a }));
+        let sent = answer_last("t2", json!({ "files": 2 }));
+        assert_eq!((sent["action"].clone(), sent["ref"].clone(), sent["selector"].clone(), sent["files"].clone()), (json!("upload"), json!("e12"), json!(null), files));
+        assert_eq!(out.borrow().clone(), Some(Ok(json!({ "files": 2 }))));
+        let out = run_op(json!({ "op": "screenshot_diff", "baseline": "/p/base.png", "threshold": 0.2, "clip": { "x": 0, "y": 0, "width": 10, "height": 10 }, "current": null, "diff": "/p/d.png", "caller": a }));
+        let sent = answer_last("t2", json!({ "matches": true }));
+        assert_eq!((sent["action"].clone(), sent["baseline"].clone(), sent["diff"].clone(), sent["threshold"].clone()), (json!("screenshotDiff"), json!("/p/base.png"), json!("/p/d.png"), json!(0.2)));
+        assert_eq!(out.borrow().clone(), Some(Ok(json!({ "matches": true }))));
+        let out = run_op(json!({ "op": "recording", "do": "start", "path": "/p/r.mp4", "fps": 30, "maxMs": 900000, "caller": a }));
+        let sent = answer_last("t2", json!({ "recording": true }));
+        assert_eq!((sent["action"].clone(), sent["do"].clone(), sent["fps"].clone(), sent["maxMs"].clone()), (json!("record"), json!("start"), json!(30), json!(900000)));
+        assert!(out.borrow().clone().unwrap().is_ok());
+        // None of them reached the person's tab or anyone else's.
+        assert!(with(|page| page.tabs.get("t1").unwrap().commands.is_empty()));
+    }
+
+    #[test]
+    fn a_demonstration_shows_a_banner_on_the_agents_tab_records_until_continue_and_answers_steps_and_a_summary() {
+        record();
+        person_at("https://mine.com/");
+        navigate_as("ses-a", "A", "https://a.com/login", false).unwrap();
+        let out = run_op(json!({ "op": "demonstrate", "message": "Show me how to sign in", "timeout_ms": 60000, "caller": caller_for("ses-a", "A") }));
+        assert_eq!(with(|page| page.tabs.active.clone()), "t2", "the tab comes forward");
+        assert!(handoff_banner().is_some());
+        // A second demonstration waits.
+        assert!(run_op(json!({ "op": "demonstrate", "message": "x", "caller": caller_for("ses-a", "A") })).borrow().clone().unwrap().is_err());
+        testing::fire_timers();
+        testing::settle();
+        let ask = answer_last("t2", json!([{ "t": "fill", "selector": "#pw", "role": "textbox", "name": "Password", "value": "hunter2", "inputType": "password" }]));
+        assert!(ask["script"].as_str().unwrap().ends_with("return d.drain(false);"), "recording goes on");
+        with(|page| page.tabs.get_mut("t2").unwrap().state.url = "https://a.com/home".into());
+        demo_done();
+        testing::fire_timers();
+        testing::settle();
+        let last = answer_last("t2", json!([{ "t": "click", "selector": "#go", "role": "button", "name": "Sign in" }]));
+        assert!(last["script"].as_str().unwrap().ends_with("return d.drain(true);"), "the last ask ends the recorder");
+        let answer = out.borrow().clone().unwrap().unwrap();
+        assert_eq!(answer["summary"], "1. fill textbox \"Password\" (#pw) with \"(hidden)\"\n2. click button \"Sign in\" (#go)\n3. go to https://a.com/home");
+        assert!(!answer.to_string().contains("hunter2") && answer.get("endedBecause").is_none());
+        assert!(handoff_banner().is_none());
+    }
+
+    #[test]
+    fn a_demonstration_ends_itself_when_the_time_is_out() {
+        record();
+        person_at("https://mine.com/");
+        navigate_as("ses-a", "A", "https://a.com/", false).unwrap();
+        let out = run_op(json!({ "op": "demonstrate", "message": "Show me", "timeout_ms": 5000, "caller": caller_for("ses-a", "A") }));
+        testing::set_now(host::now() + 6000.0);
+        testing::fire_timers();
+        testing::settle();
+        answer_last("t2", json!([]));
+        assert_eq!(out.borrow().clone().unwrap().unwrap()["endedBecause"], "the time was out");
+        assert!(handoff_banner().is_none());
+    }
+
+    #[test]
+    fn webmcp_asks_the_isolated_world_first_and_the_pages_own_world_when_it_finds_nothing() {
+        record();
+        person_at("https://mine.com/");
+        navigate_as("ses-a", "A", "https://a.com/", false).unwrap();
+        let a = caller_for("ses-a", "A");
+        let out = run_op(json!({ "op": "webmcp", "action": "list", "caller": a }));
+        let first = answer_last("t2", json!({ "available": false, "tools": [] }));
+        assert!(first.get("world").is_none() && first["script"].as_str().unwrap().contains(r#""action":"list""#));
+        let second = answer_last("t2", json!({ "available": true, "tools": [{ "name": "addTodo", "frame": "https://a.com/" }] }));
+        assert_eq!(second["world"], "page");
+        assert_eq!(out.borrow().clone().unwrap().unwrap()["tools"][0]["name"], "addTodo");
+        // A tool found in the first world is not asked for again.
+        let out = run_op(json!({ "op": "webmcp", "action": "call", "name": "addTodo", "input": { "text": "x" }, "timeout": 2000, "caller": a }));
+        let sent = answer_last("t2", json!({ "found": true, "result": "ok" }));
+        assert!(sent.get("world").is_none() && sent["script"].as_str().unwrap().contains(r#""timeout":2000"#));
+        assert_eq!(out.borrow().clone().unwrap().unwrap()["result"], "ok");
+        // No such tool in either world says so.
+        let out = run_op(json!({ "op": "webmcp", "action": "call", "name": "nope", "caller": a }));
+        answer_last("t2", json!({ "found": false }));
+        answer_last("t2", json!({ "found": false }));
+        assert!(out.borrow().clone().unwrap().unwrap_err().contains("No WebMCP tool named nope"));
+    }
+
+    #[test]
+    fn an_op_routed_to_a_tab_counts_as_using_it() {
+        record();
+        person_at("https://mine.com/");
+        navigate_as("ses-a", "A", "https://a.com/", false).unwrap();
+        testing::set_now(host::now() + 5000.0);
+        run_op(json!({ "op": "snapshot", "caller": caller_for("ses-a", "A") }));
+        assert_eq!(with(|page| page.tabs.get("t2").unwrap().used), Some(host::now()));
     }
 }

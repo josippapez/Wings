@@ -418,7 +418,48 @@ pub enum WebGo {
     /// Clicks the button of the extension of this id for the page: its popup opens next to the button, or it hears the
     /// click. Only right after your click in the page (`web::needs_click`).
     Extension(String),
+    /// Puts files in a file input of the page (Chromium only): the one a `ref` of the plugin's helper or a `selector` names.
+    /// Each file is a path, which the app checks against the folders a plugin may reach (`web::policy`), or passed inline.
+    Upload { reference: Option<String>, selector: Option<String>, files: Vec<WebFile> },
+    /// A fresh picture of the page against the PNG at `baseline` (Chromium only): how many pixels differ by more than
+    /// `threshold` (0 to 1 of a channel's 255), for all of it or the `clip` in CSS pixels (`[x, y, width, height]`). The
+    /// picture it took goes to `current` and the picture of the differences to `diff`, when they say where.
+    ScreenshotDiff { baseline: String, threshold: f64, clip: Option<[f64; 4]>, current: Option<String>, diff: Option<String> },
+    /// A recording of the page as an .mp4 (Chromium only).
+    Record(WebRecord),
 }
+
+/// A file an `upload` command gives the page.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WebFile {
+    /// By its path: absolute, or relative to the plugin's web folder.
+    Path(String),
+    /// Its bytes, as base64, under a plain name.
+    Inline { name: String, data: String },
+}
+
+/// What a `record` command does, by its `do`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WebRecord {
+    /// Starts at most `fps` frames a second into `path`, and ends by itself after `max_ms`.
+    Start { path: String, fps: u32, max_ms: u64 },
+    Status,
+    Stop,
+    Cancel,
+}
+
+/// The most files an `upload` command names.
+const WEB_UPLOAD_FILES_MAX: usize = 20;
+
+/// The most bytes of files an `upload` command passes inline, decoded, together.
+const WEB_INLINE_MAX: usize = 10 * 1024 * 1024;
+
+/// The most characters of a path in a command, a `ref` or a selector.
+const WEB_PATH_MAX: usize = 4096;
+
+/// The longest a recording may be told to run, and how long when it isn't.
+const WEB_RECORD_MAX_MS: u64 = 3_600_000;
+const WEB_RECORD_MS: u64 = 900_000;
 
 /// The most bytes of a script an `eval` command runs: a page's helper, not a library.
 const WEB_SCRIPT_MAX: usize = 256 * 1024;
@@ -436,6 +477,100 @@ pub fn web_address(url: &str) -> Option<String> {
     let lower = url.get(..8).unwrap_or(url).to_ascii_lowercase();
     let allowed = lower.starts_with("https://") || lower.starts_with("http://") || url == "about:blank";
     (allowed && url.len() <= 8192 && !url.chars().any(char::is_control)).then(|| url.to_owned())
+}
+
+/// A path a command carries, absolute or relative to the plugin's web folder, with no control character. The app checks
+/// where it leads (`web::policy`).
+fn web_path(path: &str) -> Option<String> {
+    (!path.is_empty() && path.len() <= WEB_PATH_MAX && !path.chars().any(char::is_control)).then(|| path.to_owned())
+}
+
+/// What `files` entry is: a path, or an inline `{ name, data }` file, and how many bytes the data decodes to at most.
+fn web_file(file: &Value) -> Option<(WebFile, usize)> {
+    if let Some(path) = file.as_str() {
+        return Some((WebFile::Path(web_path(path)?), 0));
+    }
+    let name = file.get("name")?.as_str()?;
+    let data = file.get("data")?.as_str()?;
+    let plain = !name.is_empty() && name.len() <= 255 && name != "." && name != ".." && !name.contains(['/', '\\']) && !name.chars().any(char::is_control);
+    plain.then(|| (WebFile::Inline { name: name.to_owned(), data: data.to_owned() }, data.len() / 4 * 3))
+}
+
+/// A key that may be missing or null, or else is a path: the outer `None` for one that is something else.
+fn web_optional_path(value: &Value, key: &str) -> Option<Option<String>> {
+    match value.get(key) {
+        None | Some(Value::Null) => Some(None),
+        Some(path) => web_path(path.as_str()?).map(Some),
+    }
+}
+
+/// A key that may be missing or null, or else is a non-empty string of up to `most` characters, without a control
+/// character: the outer `None` for one that is something else.
+fn web_optional_text(value: &Value, key: &str, most: usize) -> Option<Option<String>> {
+    match value.get(key) {
+        None | Some(Value::Null) => Some(None),
+        Some(text) => text.as_str().filter(|text| !text.is_empty() && text.len() <= most && !text.chars().any(char::is_control)).map(|text| Some(text.to_owned())),
+    }
+}
+
+fn web_upload(value: &Value) -> Option<WebGo> {
+    let reference = web_optional_text(value, "ref", 64)?;
+    let selector = web_optional_text(value, "selector", WEB_PATH_MAX)?;
+    // One of the two names the input.
+    if reference.is_some() == selector.is_some() {
+        return None;
+    }
+    let files = value.get("files")?.as_array()?;
+    if files.is_empty() || files.len() > WEB_UPLOAD_FILES_MAX {
+        return None;
+    }
+    let files = files.iter().map(web_file).collect::<Option<Vec<_>>>()?;
+    if files.iter().map(|(_, bytes)| bytes).sum::<usize>() > WEB_INLINE_MAX {
+        return None;
+    }
+    Some(WebGo::Upload { reference, selector, files: files.into_iter().map(|(file, _)| file).collect() })
+}
+
+fn web_screenshot_diff(value: &Value) -> Option<WebGo> {
+    let baseline = web_path(value.get("baseline")?.as_str()?)?;
+    let threshold = match value.get("threshold") {
+        None | Some(Value::Null) => 0.1,
+        Some(threshold) => threshold.as_f64().filter(|threshold| (0.0..=1.0).contains(threshold))?,
+    };
+    let clip = match value.get("clip") {
+        None | Some(Value::Null) => None,
+        Some(clip) => {
+            let side = |key: &str| clip.get(key)?.as_f64().filter(|side| side.is_finite());
+            let (x, y, width, height) = (side("x")?, side("y")?, side("width")?, side("height")?);
+            (x >= 0.0 && y >= 0.0 && width > 0.0 && height > 0.0 && width <= 16384.0 && height <= 16384.0).then_some([x, y, width, height])
+        }
+    };
+    if value.get("clip").is_some_and(|clip| !clip.is_null()) && clip.is_none() {
+        return None;
+    }
+    Some(WebGo::ScreenshotDiff { baseline, threshold, clip, current: web_optional_path(value, "current")?, diff: web_optional_path(value, "diff")? })
+}
+
+fn web_record(value: &Value) -> Option<WebGo> {
+    let record = match value.get("do")?.as_str()? {
+        "start" => {
+            let path = web_path(value.get("path")?.as_str()?).filter(|path| path.len() > 4 && path[path.len() - 4..].eq_ignore_ascii_case(".mp4"))?;
+            let fps = match value.get("fps") {
+                None | Some(Value::Null) => 30,
+                Some(fps) => u32::try_from(fps.as_u64()?).ok().filter(|fps| (1..=60).contains(fps))?,
+            };
+            let max_ms = match value.get("maxMs") {
+                None | Some(Value::Null) => WEB_RECORD_MS,
+                Some(max) => max.as_u64().filter(|max| (1..=WEB_RECORD_MAX_MS).contains(max))?,
+            };
+            WebRecord::Start { path, fps, max_ms }
+        }
+        "status" => WebRecord::Status,
+        "stop" => WebRecord::Stop,
+        "cancel" => WebRecord::Cancel,
+        _ => return None,
+    };
+    Some(WebGo::Record(record))
 }
 
 fn web_command(value: &Value) -> Option<WebCommand> {
@@ -460,6 +595,9 @@ fn web_command(value: &Value) -> Option<WebCommand> {
         "extension" => WebGo::Extension(
             value.get("id")?.as_str().filter(|id| (1..=64).contains(&id.len()) && id.bytes().all(|byte| byte.is_ascii_alphanumeric()))?.to_owned(),
         ),
+        "upload" => web_upload(value)?,
+        "screenshotDiff" => web_screenshot_diff(value)?,
+        "record" => web_record(value)?,
         _ => return None,
     };
     Some(WebCommand { go, token })

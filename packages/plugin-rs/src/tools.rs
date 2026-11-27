@@ -188,6 +188,14 @@ pub fn check(schema: &Value, value: &Value, path: &str, owner: &str) -> Result<(
         let names: Vec<_> = allowed.iter().map(|one| one.as_str().map_or_else(|| one.to_string(), str::to_owned)).collect();
         return Err(format!("{path} must be one of {}.", names.join(", ")));
     }
+    // Either of a few shapes (a path or a list of paths and inline files): the value fits one of them.
+    if let Some(choices) = schema["anyOf"].as_array().or_else(|| schema["oneOf"].as_array()) {
+        if choices.iter().any(|choice| check(choice, value, path, owner).is_ok()) {
+            return Ok(());
+        }
+        let kinds: Vec<_> = choices.iter().map(|choice| kind(choice["type"].as_str().unwrap_or("object"))).collect();
+        return Err(format!("{path} must be {}.", kinds.join(" or ")));
+    }
     let wanted = schema["type"].as_str().unwrap_or("object");
     let fits = match wanted {
         "string" => value.is_string(),
@@ -254,7 +262,8 @@ pub fn check(schema: &Value, value: &Value, path: &str, owner: &str) -> Result<(
             let none = serde_json::Map::new();
             let properties = schema["properties"].as_object().unwrap_or(&none);
             let stray: Vec<_> = fields.keys().filter(|name| !properties.contains_key(*name)).map(|name| at(name)).collect();
-            if !stray.is_empty() {
+            // An object of any fields, as a page's own tool takes for its input.
+            if !stray.is_empty() && schema["additionalProperties"] != true {
                 let names: Vec<_> = properties.keys().map(String::as_str).collect();
                 let takes = if names.is_empty() { "no input".to_owned() } else { names.join(", ") };
                 let fields = if stray.len() > 1 { "fields" } else { "field" };
@@ -273,6 +282,30 @@ pub fn check(schema: &Value, value: &Value, path: &str, owner: &str) -> Result<(
         _ => {}
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod shape_tests {
+    use super::*;
+
+    /// A field may take any of a few shapes, and an object may take fields of any name.
+    #[test]
+    fn a_value_fits_one_of_several_shapes_and_an_open_object_takes_any_field() {
+        let files = json!({ "anyOf": [
+            { "type": "string" },
+            { "type": "array", "items": { "anyOf": [
+                { "type": "string" },
+                { "type": "object", "properties": { "name": { "type": "string" }, "data": { "type": "string" } }, "required": ["name", "data"] },
+            ] } },
+        ] });
+        assert_eq!(check(&files, &json!("/tmp/a.png"), "files", "files"), Ok(()));
+        assert_eq!(check(&files, &json!(["/tmp/a.png", { "name": "b.txt", "data": "aGk=" }]), "files", "files"), Ok(()));
+        assert_eq!(check(&files, &json!(3), "files", "files"), Err("files must be text or a list.".into()));
+        assert!(check(&files, &json!([{ "name": "b.txt" }]), "files", "files").is_err(), "an inline file needs its data");
+        let open = json!({ "type": "object", "additionalProperties": true });
+        assert_eq!(check(&open, &json!({ "anything": [1, 2], "else": "x" }), "input", "input"), Ok(()));
+        assert!(check(&json!({ "type": "object" }), &json!({ "anything": 1 }), "input", "input").is_err(), "a closed object still refuses");
+    }
 }
 
 #[cfg(test)]

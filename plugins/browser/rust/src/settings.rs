@@ -18,3 +18,11 @@ pub fn keep_data() -> Setting<bool> {
 pub fn keep_signins() -> Setting<bool> {
     Setting::boolean("keepSignIns", false)
 }
+
+/// The minutes an agent's tab can sit unused before it is closed (0 is never). Fixed for now, and read through `idle_minutes` so
+/// a setting can take its place.
+const IDLE_MINUTES: u32 = 10;
+
+pub fn idle_minutes() -> u32 {
+    IDLE_MINUTES
+}

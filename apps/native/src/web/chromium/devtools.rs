@@ -99,13 +99,14 @@ pub enum Incoming {
 
 /// The events a page follows (`Shared::devtools`): any other is left unread, as a busy page's console sends one for each
 /// line while `Runtime` is on.
-const FOLLOWED: [&str; 6] = [
+const FOLLOWED: [&str; 7] = [
     "Runtime.executionContextCreated",
     "Runtime.executionContextDestroyed",
     "Runtime.executionContextsCleared",
     "Runtime.bindingCalled",
     "Target.attachedToTarget",
     "Target.detachedFromTarget",
+    "Page.screencastFrame",
 ];
 
 /// The name of the event `message` is, read from its first bytes, before any of it is parsed: none for an answer, or for

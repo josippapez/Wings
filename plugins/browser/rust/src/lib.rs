@@ -9,9 +9,11 @@
 #![allow(dead_code)]
 
 mod address;
+mod agent_demo;
 mod agent_js;
 #[cfg(feature = "browser")]
 mod agent_page;
+mod agent_webmcp;
 #[cfg(feature = "main")]
 mod agent_tools;
 #[cfg(feature = "browser")]

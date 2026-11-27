@@ -39,6 +39,9 @@ pub struct Tab {
     pub opening: Option<u64>,
     /// The address "Clear data for" was chosen on, while its dialog asks.
     pub clearing_site: Option<String>,
+    /// When an agent last used it or the person last chose it (the clock's milliseconds): none until the first idle check, which
+    /// starts its count, so a tab restored at launch isn't closed at once.
+    pub used: Option<f64>,
 }
 
 impl Tab {
@@ -59,6 +62,7 @@ impl Tab {
             recorded: Default::default(),
             opening: None,
             clearing_site: None,
+            used: None,
         }
     }
 
@@ -265,6 +269,36 @@ impl Tabs {
         tokens
     }
 
+    /// Notes that `id` is in use at `now`, which keeps it from the idle check.
+    pub fn touch(&mut self, id: &str, now: f64) {
+        if let Some(tab) = self.get_mut(id) {
+            tab.used = Some(now);
+        }
+    }
+
+    /// Whether an agent has a tab, which is when the idle check has anything to do.
+    pub fn has_agent_tabs(&self) -> bool {
+        self.list.iter().any(|tab| tab.group.is_some())
+    }
+
+    /// The agents' tabs nobody has used for more than `limit_ms` at `now`: the person's own tabs and the one on screen never.
+    /// The tab on screen counts as used now, so it starts its count when the person looks away. A tab with no time yet starts its
+    /// count now. Closing them is up to the caller, since a close has to tell whoever waits on the tab.
+    pub fn idle(&mut self, now: f64, limit_ms: f64) -> Vec<String> {
+        let shown = self.active.clone();
+        let mut idle = Vec::new();
+        for tab in &mut self.list {
+            if tab.id == shown {
+                tab.used = Some(now);
+            }
+            let used = *tab.used.get_or_insert(now);
+            if tab.group.is_some() && tab.id != shown && now - used > limit_ms {
+                idle.push(tab.id.clone());
+            }
+        }
+        idle
+    }
+
     /// Sends the tab's view a command made from a new token, which the view runs once, and gives the token.
     pub fn run(&mut self, id: &str, make: impl FnOnce(u64) -> Value) -> Option<u64> {
         self.get(id)?;
@@ -436,6 +470,31 @@ mod tests {
         tabs.close(&a1);
         assert!(tabs.group("ses-a").is_none() && tabs.target("ses-a").is_none());
         assert_eq!(tabs.list.len(), 1);
+    }
+
+    #[test]
+    fn idle_agent_tabs_are_found_after_the_limit_never_the_shown_tab_or_the_persons_own() {
+        const LIMIT: f64 = 30.0 * 60_000.0;
+        let mut tabs = Tabs::new(Some("https://mine.com/"), None);
+        let a = tabs.open(Some(A), Some("https://a.com/"));
+        let b = tabs.open(Some(B), Some("https://b.com/"));
+        let own = tabs.open(None, Some("https://own.com/"));
+        tabs.activate("t1");
+        assert!(tabs.has_agent_tabs());
+        // The first check starts every count, so nothing is idle yet.
+        assert!(tabs.idle(1000.0, LIMIT).is_empty());
+        // Just short of the limit, and one agent's tab used since.
+        assert!(tabs.idle(1000.0 + LIMIT, LIMIT).is_empty());
+        tabs.touch(&b, 1000.0 + LIMIT);
+        assert_eq!(tabs.idle(2000.0 + LIMIT, LIMIT), [a.clone()], "only the tab nobody used, not the person's own ones");
+        assert!(!tabs.idle(2000.0 + LIMIT, LIMIT).contains(&own));
+        // The tab shown is never closed, and counts from when the person looks away.
+        tabs.activate(&a);
+        assert!(tabs.idle(3000.0 + LIMIT, LIMIT).is_empty());
+        tabs.activate("t1");
+        assert!(tabs.idle(4000.0 + LIMIT, LIMIT).is_empty(), "it was shown a moment ago");
+        assert_eq!(tabs.idle(4000.0 + 2.0 * LIMIT, LIMIT), [a, b]);
+        assert!(!Tabs::default().has_agent_tabs());
     }
 
     #[test]

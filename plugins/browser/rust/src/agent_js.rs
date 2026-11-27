@@ -67,6 +67,8 @@ const HELPER: &str = r#"var w = window.__wingsAgent || (window.__wingsAgent = (f
   function input(e, extra) { e.dispatchEvent(new InputEvent('input', Object.assign({ bubbles: true }, extra))); e.dispatchEvent(new Event('change', { bubbles: true })); }
   return {
     snapshot: snapshot,
+    element: get,
+    describe: function (e) { return { role: role(e), name: name(e), secret: secret(e) }; },
     has: function (q) { return !!((q.text && document.body.innerText.indexOf(q.text) >= 0) || (q.selector && document.querySelector(q.selector))); },
     click: function (id) {
       var e = get(id); e.scrollIntoView({ block: 'center', inline: 'center' });
@@ -132,6 +134,11 @@ const HELPER: &str = r#"var w = window.__wingsAgent || (window.__wingsAgent = (f
 })());
 "#;
 
+/// The body of an async function for `eval` that runs `code` with the helper in `w`.
+pub fn script(code: &str) -> String {
+    format!("{HELPER}{code}")
+}
+
 /// The body of an async function for `eval` that calls `w.<func>(<args>)` and returns what it gives. The arguments are
 /// JSON, which is valid JavaScript, so nothing the agent sent can end the call early.
 pub fn body(func: &str, args: &[Value]) -> String {
@@ -151,7 +158,7 @@ mod tests {
             // Brackets in the regexes and strings are few and paired, so the counts match.
             assert_eq!(HELPER.matches(open).count(), HELPER.matches(close).count(), "{open}{close}");
         }
-        for func in ["snapshot:", "has:", "click:", "fill:", "type:", "press:", "hover:", "select:", "scroll:", "drag:"] {
+        for func in ["snapshot:", "element:", "describe:", "has:", "click:", "fill:", "type:", "press:", "hover:", "select:", "scroll:", "drag:"] {
             assert!(HELPER.contains(func), "{func}");
         }
         // It runs in an isolated world and leaves one global, and nothing in it loads or sends anything.
@@ -169,6 +176,16 @@ mod tests {
             assert!(secret.contains(kind), "{kind} is hidden");
         }
         assert_eq!(HELPER.matches("String(e.value)").count(), 1, "no other place prints a field's value");
+    }
+
+    #[test]
+    fn element_gives_the_node_of_a_ref_and_fails_as_get_does_for_a_stale_one() {
+        // The app resolves an upload's ref with `window.__wingsAgent.element(ref)`: it is the same lookup the other tools use.
+        assert!(HELPER.contains("element: get,"));
+        let get = &HELPER[HELPER.find("function get(id)").unwrap()..];
+        assert!(get[..get.find("return e;").unwrap()].contains("is stale or unknown"));
+        assert!(body("element", &[json!("e12")]).ends_with(r#"return w.element("e12");"#));
+        assert!(script("return w.describe(document.body);").starts_with("var w = window.__wingsAgent") && script("x").ends_with('x'));
     }
 
     #[test]

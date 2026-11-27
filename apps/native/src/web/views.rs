@@ -427,7 +427,14 @@ pub fn place(window: &Window, _: &App) {
             if entry.window.is_some_and(|window| window != id) {
                 continue;
             }
-            if entry.hidden {
+            let slot = places
+                .iter()
+                .find(|(slot, _)| *slot == slot_name(*page, name))
+                .map(|(_, slot)| slot.bounds.intersect(&slot.mask.bounds))
+                .filter(|at| !at.is_empty());
+            // A hidden one, or an agent's tab off screen with its Wings tab in the background: put away, an agent's
+            // recording got one frame and its screenshots stopped coming, and one never shown wasn't even made.
+            if entry.hidden || (entry.live && slot.is_none()) {
                 // Its own frame is the page's shown view's, else the last it had or is kept at (a tab the person never
                 // looked at stays live while its Wings tab is in the background), else the window's.
                 let frame = sibling.get(page).copied().or(entry.last).or(entry.kept).unwrap_or(window_frame);
@@ -457,11 +464,6 @@ pub fn place(window: &Window, _: &App) {
                 entry.shown = None;
                 continue;
             }
-            let slot = places
-                .iter()
-                .find(|(slot, _)| *slot == slot_name(*page, name))
-                .map(|(_, slot)| slot.bounds.intersect(&slot.mask.bounds))
-                .filter(|at| !at.is_empty());
             // What lies over part of it shows through it where its engine can, and else hides it, as an overlay over all
             // of it does: hiding the page for a menu left it black under the menu.
             entry.last = slot.or(entry.last);
