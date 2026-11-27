@@ -672,6 +672,12 @@ pub fn popup_open() -> bool {
     POPUP_OPEN.with_borrow(|popup| popup.as_ref().is_some_and(|popup| popup.window.is_some()))
 }
 
+/// The popup's window, while one shows, for a debug build's checks.
+#[cfg(debug_assertions)]
+pub fn popup_window() -> Option<Retained<NSWindow>> {
+    POPUP_OPEN.with_borrow(|popup| popup.as_ref().and_then(|popup| popup.ns.clone()))
+}
+
 /// Closes the popup if one shows, and gives the keyboard back to the Wings window under it.
 pub fn close_popup() {
     let Some(popup) = POPUP_OPEN.with_borrow_mut(Option::take) else { return };

@@ -3,8 +3,12 @@
 //! on stderr (Wings' log) after `[chromium-check]`. A release build has none of it.
 //!
 //! - `popup`: clicks the first extension's button on the first page, as a click of yours would.
-//! - `key <keystroke>`: sends a key press, written as GPUI writes one (`cmd-t`, `cmd-c`, `escape`), to the first page's
-//!   window, as AppKit sends a typed one.
+//! - `key <keystroke> [popup]`: sends a key press, written as GPUI writes one (`cmd-t`, `cmd-c`, `escape`), to the first
+//!   page's window (or the popup's), as AppKit sends a typed one.
+//! - `click <wings|page|popup> <x> <y>`: posts a left click at `x`, `y` points from the top left of that window's
+//!   content to the app's event queue, so AppKit handles it as a click of the mouse, a window that isn't key included.
+//! - `unload`: takes the first extension out of Chromium as turning it off does (`extensions::unload`).
+//! - `windows`: every window of the app, with its frame, level and whether it shows and has the keyboard.
 //! - `focus page` / `focus wings`: makes the first page's window, or Wings', the key window.
 //! - `state`: which window has the keyboard, whether Wings counts as active, and whether a popup shows.
 //! - `quit`: quits Wings as Cmd-Q does (`-[NSApplication terminate:]`).
@@ -16,6 +20,7 @@
 
 use std::ffi::c_void;
 
+use cef::{ImplBrowser, ImplBrowserHost};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSEvent, NSEventModifierFlags, NSEventType};
 use objc2_foundation::{NSPoint, NSString};
@@ -66,7 +71,8 @@ fn run(command: &str) -> String {
         },
         (Some("key"), Some(keystroke)) => {
             let (Some(page), Some(press)) = (&first, Press::parse(keystroke)) else { return "no page, or not a keystroke".into() };
-            let Some(ns) = page.ns.borrow().clone() else { return "the page has no window yet".into() };
+            let to_popup = words.next() == Some("popup");
+            let Some(ns) = (if to_popup { extensions::popup_window() } else { page.ns.borrow().clone() }) else { return "no such window yet".into() };
             let mut flags = NSEventModifierFlags::empty();
             for (on, flag) in [(press.cmd, NSEventModifierFlags::Command), (press.ctrl, NSEventModifierFlags::Control), (press.alt, NSEventModifierFlags::Option), (press.shift, NSEventModifierFlags::Shift)] {
                 if on {
@@ -92,6 +98,61 @@ fn run(command: &str) -> String {
             }
             format!("key window now {}", key_window(mtm, page))
         }
+        (Some("click"), Some(which)) => {
+            let Some(page) = &first else { return "no page".into() };
+            let (Some(x), Some(y)) = (words.next().and_then(|x| x.parse::<f64>().ok()), words.next().and_then(|y| y.parse::<f64>().ok())) else { return "click takes x and y".into() };
+            let window = match which {
+                "wings" => page.parent.borrow().clone(),
+                "popup" => extensions::popup_window(),
+                _ => page.ns.borrow().clone(),
+            };
+            let Some(window) = window else { return "no such window".into() };
+            let height = window.contentView().map_or(0.0, |content| content.frame().size.height);
+            let at = NSPoint::new(x, height - y);
+            let app = NSApplication::sharedApplication(mtm);
+            for kind in [NSEventType::LeftMouseDown, NSEventType::LeftMouseUp] {
+                let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+                    kind, at, NSEventModifierFlags::empty(), 0.0, window.windowNumber(), None, 0, 1, 1.0,
+                );
+                if let Some(event) = event {
+                    app.postEvent_atStart(&event, false);
+                }
+            }
+            format!("posted; key window was {}", key_window(mtm, page))
+        }
+        (Some("exitfs"), _) => match first.as_ref().and_then(|page| page.browser.borrow().clone()).and_then(|browser| browser.host()) {
+            Some(host) => {
+                let was = host.is_fullscreen();
+                host.exit_fullscreen(1);
+                format!("was fullscreen: {was}")
+            }
+            None => "no page".into(),
+        },
+        (Some("unload"), _) => match (&first, extensions::first_id()) {
+            (Some(page), Some(id)) => {
+                extensions::unload(&page.profile, &id, || eprintln!("[chromium-check] unloaded"));
+                "unloading".into()
+            }
+            _ => "no page or no extension".into(),
+        },
+        (Some("windows"), _) => NSApplication::sharedApplication(mtm)
+            .windows()
+            .iter()
+            .map(|window| {
+                let frame = window.frame();
+                format!(
+                    "#{} {} {:?} level {} {}{}{}",
+                    window.windowNumber(),
+                    window.class().name().to_string_lossy(),
+                    (frame.origin.x, frame.origin.y, frame.size.width, frame.size.height),
+                    window.level(),
+                    if window.isVisible() { "shown" } else { "hidden" },
+                    if window.isKeyWindow() { ", key" } else { "" },
+                    if window.parentWindow().is_some() { ", child" } else { "" },
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; "),
         (Some("state"), _) => match &first {
             Some(page) => {
                 let parent_counts = page.parent.borrow().as_ref().is_some_and(|parent| parent.isKeyWindow());
