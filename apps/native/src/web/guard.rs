@@ -246,6 +246,9 @@ mod tests {
         let later = "const inner = doc([]); fire(document, [{ type: 'childList', addedNodes: [el('X-PAY', { shadow: inner })] }]); \
                      fire(inner, [{ type: 'childList', addedNodes: [el('INPUT', { attrs: { autocomplete: 'cc-number' } })] }]);";
         assert_eq!(run(later), json!([true]), "a shadow root that came later");
+        // One that came with a field already in it, which no change inside it shows.
+        let filled = "fire(document, [{ type: 'childList', addedNodes: [el('X-PAY', { shadow: doc([el('INPUT', { type: 'password' })]) })] }]);";
+        assert_eq!(run(filled), json!([true]), "a shadow root that came holding one");
         // Focus in a secret field no change showed.
         assert_eq!(run("listeners.focusin({ composedPath: () => [el('INPUT', { type: 'password' }), box] });"), json!([true]), "focus");
     }

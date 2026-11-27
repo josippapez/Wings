@@ -44,5 +44,7 @@ function wingsScan(root) {
     }
   };
   scan(root, 0, 0, 0);
+  // An element's own shadow root is none of its descendants': one added with a field already in it shows only here.
+  if (root.shadowRoot) scan(root.shadowRoot, 0, 0, 1);
   return { secret: found, rects, foreign };
 }
