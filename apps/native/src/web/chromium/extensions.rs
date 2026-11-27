@@ -913,8 +913,8 @@ mod tests {
     }
 
     /// Chromium's copy asks for what the person allowed in Wings' dialog: of Bitwarden's manifest, the permissions the
-    /// dialog showed but those it doesn't explain, the sites allowed, its content scripts there, nothing optional, and
-    /// never native messaging. Its popup still gets Wings' first script.
+    /// dialog showed but those it doesn't explain, the sites allowed, its content scripts there, nothing optional, never
+    /// native messaging, no shortcuts and no update address. Its popup still gets Wings' first script.
     #[test]
     fn chromiums_copy_of_an_extension_asks_for_only_what_wings_dialog_allowed() {
         let dir = tempfile::tempdir().unwrap();
@@ -927,6 +927,8 @@ mod tests {
             "host_permissions": ["https://*/*", "http://*/*"],
             "content_scripts": [{ "matches": ["*://*/*", "file:///*"], "js": ["content.js"] }],
             "action": { "default_popup": "popup/index.html" },
+            "commands": { "_execute_action": { "suggested_key": { "default": "Ctrl+Shift+Y" } }, "autofill_login": { "suggested_key": { "default": "Ctrl+Shift+L" }, "global": true } },
+            "update_url": "https://clients2.google.com/service/update2/crx",
         });
         std::fs::write(dir.path().join("manifest.json"), manifest.to_string()).unwrap();
         let allowed: Vec<String> = ["activeTab", "alarms", "clipboardRead", "idle", "offscreen", "scripting", "storage", "tabs", "debugger", "nativeMessaging", "proxy"].map(String::from).to_vec();
@@ -937,6 +939,8 @@ mod tests {
         assert_eq!(copy["host_permissions"], json!(["https://*/*", "http://*/*"]));
         assert_eq!(copy["content_scripts"], json!([{ "matches": ["*://*/*"], "js": ["content.js"] }]), "not on this Mac's files, which weren't allowed");
         assert!(copy.get("optional_permissions").is_none() && copy.get("optional_host_permissions").is_none());
+        assert!(copy.get("commands").is_none(), "no shortcut, a global one working in every app on the Mac least of all");
+        assert!(copy.get("update_url").is_none(), "Wings decides which version runs");
         assert_eq!(reached, ["https://*/*", "http://*/*", "*://*/*"]);
         assert!(std::fs::read_to_string(dir.path().join("popup/index.html")).unwrap().contains(POPUP_SCRIPT_FILE));
     }

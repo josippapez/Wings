@@ -76,9 +76,10 @@ pub fn pattern_reaches(pattern: &str, url: &str) -> bool {
 
 /// Rewrites the manifest of the extension in `dir` so it asks for no more than the person allowed: of its `permissions`,
 /// the names `permitted` grants and the host patterns `hosts` cover; of its `host_permissions`, those `hosts` cover; its
-/// content scripts only on the pages `hosts` cover (a script left on none goes); and nothing it may ask for later
-/// (`optional_permissions`, `optional_host_permissions`). Answers the host patterns it kept, those of its content scripts
-/// too.
+/// content scripts only on the pages `hosts` cover (a script left on none goes); nothing it may ask for later
+/// (`optional_permissions`, `optional_host_permissions`); no shortcuts (`commands`, which may work in every app on the
+/// Mac, `"global": true`, or beat Wings' own in its pages); and no address to update itself from (`update_url`): Wings
+/// decides which version runs. Answers the host patterns it kept, those of its content scripts too.
 pub fn narrow_manifest(dir: &Path, permitted: &dyn Fn(&str) -> bool, hosts: &[String]) -> Result<Vec<String>, Error> {
     let file = dir.join("manifest.json");
     let raw = fs::read(&file)?;
@@ -110,6 +111,8 @@ pub fn narrow_manifest(dir: &Path, permitted: &dyn Fn(&str) -> bool, hosts: &[St
     }
     object.remove("optional_permissions");
     object.remove("optional_host_permissions");
+    object.remove("commands");
+    object.remove("update_url");
     fs::write(&file, serde_json::to_vec_pretty(&manifest).map_err(|e| Error::Manifest(e.to_string()))?)?;
     Ok(kept)
 }
