@@ -4,9 +4,12 @@ use objc2::{MainThreadMarker, rc::Retained};
 use objc2_foundation::{NSSet, NSString};
 use objc2_web_kit::{WKWebExtensionMatchPattern, WKWebExtensionPermission};
 
+use crate::web::extensions::permitted;
+
 /// Of what WebKit read that the extension asks for, what the person allowed (`allowed`: the permissions and sites Wings'
-/// dialog showed): a permission by its name (`permitted`), a site when an allowed pattern covers it (`<all_urls>` covers
-/// `https://*/*`). A manifest changed since asks for more, and gets no more.
+/// dialog showed): a permission by its name (`extensions::permitted`, which Chromium's copy of it follows too), a site
+/// when an allowed pattern covers it (`<all_urls>` covers `https://*/*`). A manifest changed since asks for more, and
+/// gets no more.
 pub(super) fn granted(
     permissions: &NSSet<WKWebExtensionPermission>,
     patterns: &NSSet<WKWebExtensionMatchPattern>,
@@ -22,12 +25,6 @@ pub(super) fn granted(
             patterns.iter().filter(|pattern| allowed.iter().any(|allowed| allowed.matchesPattern(Some(pattern)))).collect(),
         )
     }
-}
-
-/// Whether the permission `name` is granted: one the dialog showed, and never `nativeMessaging`, which reaches apps
-/// outside Wings, as the dialog says (`web::Ask::words`).
-fn permitted(name: &str, allowed: &[String]) -> bool {
-    name != "nativeMessaging" && allowed.iter().any(|allowed| allowed == name)
 }
 
 #[cfg(test)]

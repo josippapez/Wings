@@ -4,6 +4,7 @@
 
 mod detect;
 mod error;
+mod grant;
 mod limits;
 mod manifest;
 mod shim;
@@ -13,6 +14,7 @@ mod unpack;
 
 pub use detect::{detect_installed, Detected, Installed};
 pub use error::Error;
+pub use grant::{narrow_manifest, pattern_covers, pattern_reaches};
 pub use manifest::{read_manifest, Info};
 pub use shim::{shim_service_worker, unshim_service_worker, SHIM_SCRIPT, SHIM_WORKER};
 pub use store::{amo_file_url, store_package, Store, StorePackage};

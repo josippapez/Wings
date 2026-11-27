@@ -50,6 +50,9 @@ struct Loaded {
     /// Whether its manifest gives it a button at all.
     button: bool,
     icon: Option<String>,
+    /// The sites its copy may reach (`ready_copy`): only on a page one of them covers does its popup hear the page's
+    /// address.
+    hosts: Vec<String>,
 }
 
 type Answered = Box<dyn FnOnce(Result<Value, String>)>;
@@ -258,8 +261,8 @@ pub fn load(profile: &Profile, extension: &extensions::Verified, done: impl FnOn
     let manifest = manifest_of(&extension.dir);
     let icon = added.as_ref().and_then(|added| extensions::icon_path(profile, added)).and_then(|path| icon(&profile.plugin, &path));
     let (id, name, plugin) = (extension.id.clone(), added.map(|added| added.name).unwrap_or_default(), profile.plugin.clone());
-    let dir = match chromium_copy(extension) {
-        Ok(dir) => dir.to_string_lossy().into_owned(),
+    let (dir, hosts) = match chromium_copy(extension) {
+        Ok((dir, hosts)) => (dir.to_string_lossy().into_owned(), hosts),
         Err(why) => return done(Err(why)),
     };
     ask("Extensions.loadUnpacked", json!({ "path": dir }), move |answer| match answer {
@@ -267,7 +270,7 @@ pub fn load(profile: &Profile, extension: &extensions::Verified, done: impl FnOn
             let Some(chrome) = result["id"].as_str().map(str::to_owned) else { return done(Err("Chromium didn't say which extension it loaded".into())) };
             let (button, popup) = action_of(&manifest);
             follow_running(&chrome);
-            LOADED.with_borrow_mut(|loaded| loaded.push(Loaded { id, chrome, name, popup, button, icon }));
+            LOADED.with_borrow_mut(|loaded| loaded.push(Loaded { id, chrome, name, popup, button, icon, hosts }));
             refresh(&plugin);
             done(Ok(()))
         }
@@ -338,10 +341,8 @@ fn copy_of(id: &str) -> Option<std::path::PathBuf> {
 }
 
 /// Chromium's copy of `extension`'s checked folder, made right after the check, as WebKit reads that folder in place
-/// then: a clone (APFS copies no data) without Wings' WebKit shim, whose `__wings_` files Chromium refuses ("Filenames
-/// starting with "_" are reserved"), without the Web Store's `_metadata`, and without `nativeMessaging`, which Wings'
-/// consent dialog says it never allows.
-fn chromium_copy(extension: &extensions::Verified) -> Result<std::path::PathBuf, String> {
+/// then: a clone (APFS copies no data), readied for Chromium (`ready_copy`). Answers it and the sites it may reach.
+fn chromium_copy(extension: &extensions::Verified) -> Result<(std::path::PathBuf, Vec<String>), String> {
     let copy = copy_of(&extension.id).ok_or("No folder for Chromium's copy")?;
     let _ = std::fs::remove_dir_all(&copy);
     std::fs::create_dir_all(copy.parent().unwrap_or(&copy)).map_err(|error| error.to_string())?;
@@ -350,36 +351,29 @@ fn chromium_copy(extension: &extensions::Verified) -> Result<std::path::PathBuf,
         let _ = std::fs::remove_dir_all(&copy);
         return Err("Couldn't copy the extension for Chromium".into());
     }
-    let readied = wings_web_extensions::unshim_service_worker(&copy).map_err(|error| error.to_string()).and_then(|_| {
-        let _ = std::fs::remove_dir_all(copy.join("_metadata"));
-        without_native_messaging(&copy.join("manifest.json"))?;
-        match action_of(&manifest_of(&copy)).1 {
-            Some(popup) => with_popup_script(&copy, &popup),
-            None => Ok(()),
+    match ready_copy(&copy, &extension.permissions, &extension.hosts) {
+        Ok(hosts) => Ok((copy, hosts)),
+        Err(why) => {
+            let _ = std::fs::remove_dir_all(&copy);
+            Err(why)
         }
-    });
-    if let Err(why) = readied {
-        let _ = std::fs::remove_dir_all(&copy);
-        return Err(why);
     }
-    Ok(copy)
 }
 
-/// Takes `nativeMessaging` out of the manifest at `file`, from what it asks for now and what it may ask for later.
-fn without_native_messaging(file: &std::path::Path) -> Result<(), String> {
-    let mut manifest: Value = std::fs::read(file).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).ok_or("The extension's manifest can't be read")?;
-    let mut changed = false;
-    for key in ["permissions", "optional_permissions"] {
-        if let Some(list) = manifest.get_mut(key).and_then(Value::as_array_mut) {
-            let before = list.len();
-            list.retain(|permission| permission != "nativeMessaging");
-            changed |= list.len() != before;
-        }
+/// Readies the copy of an extension in `copy`, which the person allowed `permissions` and `hosts` of: without Wings'
+/// WebKit shim, whose `__wings_` files Chromium refuses ("Filenames starting with "_" are reserved"), without the Web
+/// Store's `_metadata`, and with a manifest that asks for no more than WebKit grants for the same yes
+/// (`extensions::permitted`, `narrow_manifest`): Chromium grants whatever a manifest asks for, with no prompt, names
+/// WebKit has no use of (`debugger`, `proxy`, `downloads`) and `nativeMessaging` too, and a manifest's optional ones on
+/// its `permissions.request`, which Wings' dialog never showed. Answers the sites the copy may reach.
+fn ready_copy(copy: &std::path::Path, permissions: &[String], hosts: &[String]) -> Result<Vec<String>, String> {
+    wings_web_extensions::unshim_service_worker(copy).map_err(|error| error.to_string())?;
+    let _ = std::fs::remove_dir_all(copy.join("_metadata"));
+    let reached = wings_web_extensions::narrow_manifest(copy, &|name| extensions::permitted(name, permissions), hosts).map_err(|error| error.to_string())?;
+    if let Some(popup) = action_of(&manifest_of(copy)).1 {
+        with_popup_script(copy, &popup)?;
     }
-    if changed {
-        std::fs::write(file, serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
-    }
-    Ok(())
+    Ok(reached)
 }
 
 /// What the manifest at `dir` says.
@@ -394,20 +388,29 @@ fn action_of(manifest: &Value) -> (bool, Option<String>) {
     (action.is_some(), popup)
 }
 
-/// The address of `popup` in the extension `chrome`, when the path stays inside it, for the page at `page_url`
-/// (`POPUP_SCRIPT` reads it).
-fn popup_url(chrome: &str, popup: &str, page_url: &str) -> Option<String> {
+/// The address of `popup` in the extension `chrome`, when the path stays inside it, naming the page at `page_url` when
+/// there is one (`POPUP_SCRIPT` reads it).
+fn popup_url(chrome: &str, popup: &str, page_url: Option<&str>) -> Option<String> {
     let path = std::path::Path::new(popup);
-    let page: String = page_url
-        .bytes()
-        .map(|byte| match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => (byte as char).to_string(),
-            _ => format!("%{byte:02X}"),
-        })
-        .collect();
-    path.components()
-        .all(|part| matches!(part, std::path::Component::Normal(_)))
-        .then(|| format!("chrome-extension://{chrome}/{popup}?wings-page={page}"))
+    let page: Option<String> = page_url.map(|page_url| {
+        page_url
+            .bytes()
+            .map(|byte| match byte {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => (byte as char).to_string(),
+                _ => format!("%{byte:02X}"),
+            })
+            .collect()
+    });
+    path.components().all(|part| matches!(part, std::path::Component::Normal(_))).then(|| match page {
+        Some(page) => format!("chrome-extension://{chrome}/{popup}?wings-page={page}"),
+        None => format!("chrome-extension://{chrome}/{popup}"),
+    })
+}
+
+/// The page at `url` as its popup is told of it: only when one of the sites the extension may reach (`hosts`) covers it.
+/// One it can't reach is a page Chromium wouldn't show it either.
+fn seen_page<'a>(hosts: &[String], url: &'a str) -> Option<&'a str> {
+    hosts.iter().any(|host| wings_web_extensions::pattern_reaches(host, url)).then_some(url)
 }
 
 /// Registers the icon at `path` among `plugin`'s images, under an id made of its bytes.
@@ -449,7 +452,8 @@ pub fn click(page: &Shared, id: &str) -> Result<(), String> {
         return Ok(());
     }
     let loaded = LOADED.with_borrow(|loaded| loaded.iter().find(|loaded| loaded.id == id).cloned()).ok_or(NOT_ON)?;
-    let url = loaded.popup.as_deref().and_then(|popup| popup_url(&loaded.chrome, popup, &page.url_now())).ok_or(NO_POPUP)?;
+    let page_url = page.url_now();
+    let url = loaded.popup.as_deref().and_then(|popup| popup_url(&loaded.chrome, popup, seen_page(&loaded.hosts, &page_url))).ok_or(NO_POPUP)?;
     let (Some(parent), Some(page_ns)) = (page.parent.borrow().clone(), page.ns.borrow().clone()) else { return Err("The page isn't on screen".into()) };
     let frame = anchor(page_ns.frame(), NSEvent::mouseLocation());
     POPUP_OPEN.with_borrow_mut(|popup| {
@@ -714,16 +718,43 @@ mod tests {
         assert!(!toggles_off(None, "bitwarden", now));
     }
 
-    /// Wings' consent dialog says it never lets an extension talk to an app on this Mac: Chromium's copy doesn't ask.
+    /// Chromium's copy asks for what WebKit grants for the same yes in Wings' dialog: of Bitwarden's manifest, the
+    /// permissions WebKit has, the sites allowed, its content scripts there, nothing optional, and never native
+    /// messaging, which the dialog says Wings never allows. Its popup still gets Wings' first script.
     #[test]
-    fn chromiums_copy_of_an_extension_asks_for_no_native_messaging() {
+    fn chromiums_copy_of_an_extension_asks_for_only_what_wings_dialog_allowed() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("manifest.json");
-        std::fs::write(&file, r#"{"name":"x","permissions":["storage","nativeMessaging"],"optional_permissions":["nativeMessaging","tabs"]}"#).unwrap();
-        without_native_messaging(&file).unwrap();
-        let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-        assert_eq!(manifest["permissions"], json!(["storage"]));
-        assert_eq!(manifest["optional_permissions"], json!(["tabs"]));
+        std::fs::create_dir_all(dir.path().join("popup")).unwrap();
+        std::fs::write(dir.path().join("popup/index.html"), "<head></head>").unwrap();
+        let manifest = json!({
+            "manifest_version": 3, "name": "Bitwarden", "version": "1",
+            "permissions": ["activeTab", "alarms", "clipboardRead", "idle", "offscreen", "scripting", "storage", "tabs", "debugger", "nativeMessaging"],
+            "optional_permissions": ["nativeMessaging", "privacy"], "optional_host_permissions": ["<all_urls>"],
+            "host_permissions": ["https://*/*", "http://*/*"],
+            "content_scripts": [{ "matches": ["*://*/*", "file:///*"], "js": ["content.js"] }],
+            "action": { "default_popup": "popup/index.html" },
+        });
+        std::fs::write(dir.path().join("manifest.json"), manifest.to_string()).unwrap();
+        let allowed: Vec<String> = ["activeTab", "alarms", "clipboardRead", "idle", "offscreen", "scripting", "storage", "tabs", "nativeMessaging"].map(String::from).to_vec();
+        let hosts: Vec<String> = ["https://*/*", "http://*/*", "*://*/*"].map(String::from).to_vec();
+        let reached = ready_copy(dir.path(), &allowed, &hosts).unwrap();
+        let copy: Value = serde_json::from_slice(&std::fs::read(dir.path().join("manifest.json")).unwrap()).unwrap();
+        assert_eq!(copy["permissions"], json!(["activeTab", "alarms", "scripting", "storage", "tabs"]));
+        assert_eq!(copy["host_permissions"], json!(["https://*/*", "http://*/*"]));
+        assert_eq!(copy["content_scripts"], json!([{ "matches": ["*://*/*"], "js": ["content.js"] }]), "not on this Mac's files, which weren't allowed");
+        assert!(copy.get("optional_permissions").is_none() && copy.get("optional_host_permissions").is_none());
+        assert_eq!(reached, ["https://*/*", "http://*/*", "*://*/*"]);
+        assert!(std::fs::read_to_string(dir.path().join("popup/index.html")).unwrap().contains(POPUP_SCRIPT_FILE));
+    }
+
+    /// Its popup hears the page's address only on a page the extension may reach; on any other it opens without it.
+    #[test]
+    fn a_popup_is_told_the_page_only_where_the_extension_reaches() {
+        let hosts = vec!["http://127.0.0.1/*".to_owned()];
+        assert_eq!(seen_page(&hosts, "http://127.0.0.1:8765/login"), Some("http://127.0.0.1:8765/login"));
+        assert_eq!(seen_page(&hosts, "https://bank.example/account"), None);
+        assert_eq!(seen_page(&[], "http://127.0.0.1:8765/login"), None);
+        assert_eq!(popup_url("abc", "popup/index.html", None).as_deref(), Some("chrome-extension://abc/popup/index.html"));
     }
 
     #[test]
@@ -733,10 +764,10 @@ mod tests {
         assert_eq!(action_of(&json!({ "action": {} })), (true, None));
         assert_eq!(action_of(&json!({ "name": "no button" })), (false, None));
         assert_eq!(
-            popup_url("abc", "popup/index.html", "https://a.com/x?y=1").as_deref(),
+            popup_url("abc", "popup/index.html", Some("https://a.com/x?y=1")).as_deref(),
             Some("chrome-extension://abc/popup/index.html?wings-page=https%3A%2F%2Fa.com%2Fx%3Fy%3D1")
         );
-        assert_eq!(popup_url("abc", "../../etc/x", "https://a.com/"), None);
+        assert_eq!(popup_url("abc", "../../etc/x", Some("https://a.com/")), None);
     }
 
     /// A manifest naming a popup outside the extension, by "..", an absolute path or a link, leaves that file as it was.
@@ -796,6 +827,32 @@ mod tests {
         assert_eq!(out["out"], json!(["http://127.0.0.1:8765/login", 1]), "{out}");
         assert!(out["asked"].as_array().unwrap().iter().any(|asked| asked == r#"{"active":true,"windowId":7}"#), "{out}");
         assert!(out["asked"].as_array().unwrap().iter().any(|asked| asked == r#"{"url":"https://*/*"}"#), "another query is the extension's own: {out}");
+    }
+
+    /// A popup told of no page (one the extension can't reach) leaves every query as the extension asked it, and
+    /// throws nothing: it sees what Chromium shows it, as without Wings.
+    #[test]
+    fn a_popup_told_of_no_page_queries_as_the_extension_asked() {
+        let fake = r#"
+            const asked = [];
+            const location = { search: "" };
+            globalThis.chrome = { windows: { WINDOW_ID_CURRENT: -2 }, tabs: { query(info) { asked.push(JSON.stringify(info)); return Promise.resolve([]); } } };
+            const original = chrome.tabs.query;
+        "#;
+        let run = r#"
+            chrome.tabs.query({ active: true, currentWindow: true });
+            function run() { return JSON.stringify({ asked, same: chrome.tabs.query === original }); }
+        "#;
+        let script = format!("{fake}\n{POPUP_SCRIPT}\n{run}");
+        let mut child = std::process::Command::new("osascript")
+            .args(["-l", "JavaScript", "-"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        std::io::Write::write_all(&mut child.stdin.take().unwrap(), script.as_bytes()).unwrap();
+        let out: serde_json::Value = serde_json::from_slice(&child.wait_with_output().unwrap().stdout).unwrap();
+        assert_eq!(out, json!({ "asked": [r#"{"active":true,"currentWindow":true}"#], "same": true }));
     }
 
     /// What the hook tells is the extension's badge for every page and for each page it set one on, read by the page's

@@ -130,7 +130,7 @@ fn push_unique(list: &mut Vec<String>, item: String) {
     }
 }
 
-fn is_host_pattern(p: &str) -> bool {
+pub(crate) fn is_host_pattern(p: &str) -> bool {
     p == "<all_urls>" || p.contains("://")
 }
 

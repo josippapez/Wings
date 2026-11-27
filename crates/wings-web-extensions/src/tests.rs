@@ -498,3 +498,90 @@ fn the_shim_leaves_any_other_background_alone() {
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), files.len() + 1, "{manifest}");
     }
 }
+
+/// A pattern covers another only when it reaches every address that one does: a wider host, scheme, port or path
+/// covers a narrower one, never the other way, and what can't be read covers nothing.
+#[test]
+fn a_match_pattern_covers_only_what_it_reaches_all_of() {
+    use crate::pattern_covers;
+    for (allowed, pattern) in [
+        ("<all_urls>", "https://a.example/*"),
+        ("<all_urls>", "<all_urls>"),
+        ("*://*/*", "https://a.example/*"),
+        ("https://*/*", "https://*.bank.example/*"),
+        ("*://*.example.com/*", "http://mail.example.com/x/*"),
+        ("*://*.example.com/*", "https://example.com/*"),
+        ("http://127.0.0.1/*", "http://127.0.0.1:8765/login"),
+        ("https://a.example/app/*", "https://a.example/app/x/*"),
+        ("file:///*", "file:///Users/*"),
+    ] {
+        assert!(pattern_covers(allowed, pattern), "{allowed} covers {pattern}");
+    }
+    for (allowed, pattern) in [
+        ("https://a.example/*", "<all_urls>"),
+        ("https://a.example/*", "*://a.example/*"),
+        ("https://*.example.com/*", "https://example.org/*"),
+        ("https://*.example.com/*", "https://evilexample.com/*"),
+        ("http://127.0.0.1:8765/*", "http://127.0.0.1/*"),
+        ("https://a.example/app/*", "https://a.example/*"),
+        ("*://*/*", "file:///*"),
+        ("*://*/*", "ws://a.example/*"),
+        ("https://a.*/*", "https://a.example/*"),
+        ("not a pattern", "https://a.example/*"),
+    ] {
+        assert!(!pattern_covers(allowed, pattern), "{allowed} doesn't cover {pattern}");
+    }
+}
+
+/// As a host permission a pattern reaches a page by its scheme, host and port: its path doesn't count.
+#[test]
+fn a_host_permission_reaches_a_page_by_its_scheme_host_and_port() {
+    use crate::pattern_reaches;
+    for (pattern, url) in [
+        ("<all_urls>", "http://127.0.0.1:8765/login"),
+        ("*://*/*", "https://a.example/x?y=1"),
+        ("http://*/*", "http://127.0.0.1:8765/login"),
+        ("https://*.example.com/*", "https://mail.example.com/inbox"),
+        ("https://*.example.com/*", "https://example.com/"),
+        ("https://a.example/only/*", "https://a.example/elsewhere"),
+        ("http://localhost:8765/*", "http://localhost:8765/"),
+        ("https://a.example/*", "https://A.Example/"),
+    ] {
+        assert!(pattern_reaches(pattern, url), "{pattern} reaches {url}");
+    }
+    for (pattern, url) in [
+        ("https://*/*", "http://127.0.0.1:8765/login"),
+        ("*://*/*", "file:///etc/passwd"),
+        ("https://*.example.com/*", "https://example.com.evil.dev/"),
+        ("http://localhost:8765/*", "http://localhost:9000/"),
+        ("https://a.example/*", "not a url"),
+        ("<all_urls>", "chrome-extension://abc/popup.html"),
+    ] {
+        assert!(!pattern_reaches(pattern, url), "{pattern} doesn't reach {url}");
+    }
+}
+
+/// The manifest Chromium reads asks for what the person allowed and no more: permissions by the rule given, hosts and
+/// content scripts only where the allowed hosts reach, nothing optional, and the rest of it as it was.
+#[test]
+fn a_narrowed_manifest_asks_for_only_what_was_allowed() {
+    let d = TempDir::new().unwrap();
+    write(
+        d.path(),
+        "manifest.json",
+        r#"{"manifest_version":3,"name":"P","version":"1","key":"abc",
+            "permissions":["storage","debugger","nativeMessaging","tabs","https://old.example/*",7],
+            "optional_permissions":["proxy","nativeMessaging"],"optional_host_permissions":["<all_urls>"],
+            "host_permissions":["https://a.example/*","https://*/*"],
+            "content_scripts":[{"matches":["https://a.example/*","https://b.example/*"],"js":["c.js"]},{"matches":["<all_urls>"],"js":["all.js"]},{"js":["none.js"]}]}"#,
+    );
+    let permitted = |name: &str| ["storage", "tabs"].contains(&name);
+    let kept = crate::narrow_manifest(d.path(), &permitted, &["https://a.example/*".to_owned(), "https://old.example/*".to_owned()]).unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&fs::read(d.path().join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["permissions"], serde_json::json!(["storage", "tabs", "https://old.example/*"]));
+    assert_eq!(manifest["host_permissions"], serde_json::json!(["https://a.example/*"]));
+    assert_eq!(manifest["content_scripts"], serde_json::json!([{ "matches": ["https://a.example/*"], "js": ["c.js"] }]));
+    assert!(manifest.get("optional_permissions").is_none() && manifest.get("optional_host_permissions").is_none());
+    assert_eq!((manifest["key"].as_str(), manifest["name"].as_str()), (Some("abc"), Some("P")));
+    assert_eq!(kept, ["https://old.example/*", "https://a.example/*"]);
+}
