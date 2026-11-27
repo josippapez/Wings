@@ -1095,7 +1095,7 @@ esac"##,
         ("thinking", thinking, None, None, "Thinking"),
         ("new", opened(vec![init.clone()]), None, None, "What should Claude do?"),
         // The header's account button, open: the accounts with the one in use checked.
-        ("accounts", opened(vec![init.clone()]), None, Some("menu:More"), "What should Claude do?"),
+        ("accounts", opened(vec![init.clone()]), None, Some("menu:Claude account"), "What should Claude do?"),
         // Remote Control on: the lit button in the top bar, and its menu open.
         ("remote", opened(vec![init.clone(), answer("remote-control", json!({ "session_url": "https://claude.ai/code/session_01", "bridge_session_id": "b1" }))]), None, None, "What should Claude do?"),
         ("remote-menu", opened(vec![init.clone(), answer("remote-control", json!({ "session_url": "https://claude.ai/code/session_01", "bridge_session_id": "b1" }))]), None, Some("menu:Remote Control"), "Turn off Remote Control"),

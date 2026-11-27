@@ -1014,15 +1014,20 @@ fn the_header_names_the_account_the_chat_runs_under_and_checks_it_in_its_menu() 
     chat::with(|c| {
         let choice = |name: Option<&str>, email: Option<&str>, current: bool| wings_plugin::host::AccountChoice { name: name.map(str::to_owned), email: email.map(str::to_owned), signed_in: true, current };
         c.accounts = vec![choice(None, Some("me@home.example"), false), choice(Some("work"), None, true)];
-        let items = account_items(c);
-        let rows: Vec<(String, serde_json::Value)> = items.into_iter().map(tree_json).map(|item| (item["children"][0]["text"].as_str().unwrap().to_owned(), item["props"]["pressed"].clone())).collect();
-        assert_eq!(rows, [("Account: me@home.example".to_owned(), serde_json::json!(false)), ("Account: work".to_owned(), serde_json::json!(true))]);
-        // They are in the header's "…" menu, whatever the width.
+        let menu = tree_json(account_menu(c).expect("a button with two accounts"));
+        let rows: Vec<(String, serde_json::Value)> =
+            menu["children"].as_array().unwrap()[1..].iter().map(|item| (item["children"][0]["text"].as_str().unwrap().to_owned(), item["props"]["pressed"].clone())).collect();
+        assert_eq!(rows, [("me@home.example".to_owned(), serde_json::json!(false)), ("work".to_owned(), serde_json::json!(true))]);
+        // A button of its own in the header, not a row of the "…" menu.
         let drawn = tree_json(header(c)).to_string();
-        assert!(drawn.contains("Account: work") && drawn.contains("Account: me@home.example"));
+        assert!(drawn.contains("Claude account: work") && !drawn.contains("Account: "));
+        // Two signed in with one email each say their name too.
+        c.accounts = vec![choice(None, Some("me@home.example"), false), choice(Some("personal"), Some("me@home.example"), true)];
+        let drawn = tree_json(account_menu(c).unwrap()).to_string();
+        assert!(drawn.contains("me@home.example · default") && drawn.contains("me@home.example · personal"));
         // One account, nothing to pick.
         c.accounts.truncate(1);
-        assert!(account_items(c).is_empty());
+        assert!(account_menu(c).is_none());
         c.accounts.clear();
     });
 }

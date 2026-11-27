@@ -261,6 +261,7 @@ fn header(c: &Chat) -> Node {
         .maybe((!tight).then(|| crate::search::header_button(c)))
         .maybe(remote_button(c, tight))
         .maybe(side_button(c))
+        .maybe(account_menu(c))
         .child(hairline())
         .child(icon_button("New chat", &icons::PLUS, chat::new_chat).tooltip(if chat::in_use(c) { "New chat in a new tab, this one keeps running" } else { "New chat" }).shortcut("cmd-shift-n"))
         .child(more_menu(c, tight));
@@ -287,7 +288,7 @@ pub(crate) fn menu_item(label: &str, on_click: impl Fn() + 'static) -> Node {
 /// The header's "…" menu: what the session and the page rarely need. In a narrow tab it also holds search and Remote Control,
 /// the buttons that would take the title's room.
 fn more_menu(c: &Chat, tight: bool) -> Node {
-    let trigger = Node::new("Button").prop("variant", "ghost").prop("size", "icon-sm").prop("label", "More").prop("title", "More: rename, fork, past sessions, account and settings").child(icon(24, 2.0, &ELLIPSIS).prop("size", 16));
+    let trigger = Node::new("Button").prop("variant", "ghost").prop("size", "icon-sm").prop("label", "More").prop("title", "More: rename, fork, past sessions and settings").child(icon(24, 2.0, &ELLIPSIS).prop("size", 16));
     let items: Vec<Node> = [
         tight.then(|| crate::search::menu_item(c)),
         tight.then(|| remote_item(c)).flatten(),
@@ -297,7 +298,6 @@ fn more_menu(c: &Chat, tight: bool) -> Node {
     ]
     .into_iter()
     .flatten()
-    .chain(account_items(c))
     .chain([menu_item("Chat settings", chat::open_settings)])
     .collect();
     wings_plugin::ui::menu(trigger, items, true)
@@ -1869,31 +1869,46 @@ fn remote_item(c: &Chat) -> Option<Node> {
     (c.session.remote == Remote::Off).then(|| menu_item("Remote Control", chat::toggle_remote).prop("title", "Remote Control: go on with this chat from claude.ai or the Claude app"))
 }
 
-/// An account as the menu names it: by its email, else its name.
-fn account_label(account: &wings_plugin::host::AccountChoice) -> String {
-    match (&account.email, &account.name) {
-        (Some(email), _) => email.clone(),
-        (None, Some(name)) => name.clone(),
-        (None, None) => "Default account".to_owned(),
+/// Lucide's `circle-user-round`, on the header's account button.
+const ACCOUNT: [&str; 3] = ["M18 20a6 6 0 0 0-12 0", "M8 10a4 4 0 1 0 8 0a4 4 0 1 0-8 0", "M2 12a10 10 0 1 0 20 0a10 10 0 1 0-20 0"];
+
+/// An account as the header names it: by its email, else its name. Two accounts signed in with one email (Claude Code's
+/// default config folder and another) read the same, so each of those also says its name.
+fn account_label(account: &wings_plugin::host::AccountChoice, accounts: &[wings_plugin::host::AccountChoice]) -> String {
+    let name = account.name.as_deref().unwrap_or("default");
+    match &account.email {
+        Some(email) if accounts.iter().filter(|other| other.email.as_ref() == Some(email)).count() > 1 => format!("{email} · {name}"),
+        Some(email) => email.clone(),
+        None => account.name.clone().unwrap_or_else(|| "Default account".to_owned()),
     }
 }
 
-/// The "…" menu's rows for the accounts, with 2 or more: each by its email, else its name, the one the chat runs under checked.
-/// Picking another starts a new chat under it.
-fn account_items(c: &Chat) -> Vec<Node> {
+/// The header's account button, with 2 or more accounts: the one the chat runs under by its email, and a menu of them
+/// all with that one checked. Picking another starts a new chat under it.
+fn account_menu(c: &Chat) -> Option<Node> {
     if c.accounts.len() < 2 {
-        return Vec::new();
+        return None;
     }
-    c.accounts
-        .iter()
-        .map(|account| {
-            let label = format!("Account: {}", account_label(account));
-            let value = account.name.clone().unwrap_or_else(|| chat::DEFAULT_ACCOUNT.to_owned());
-            let picked = account.current;
-            // The one in use closes the menu and changes nothing.
-            menu_item(&label, move || if !picked { chat::pick_account(&value) }).prop("pressed", picked)
-        })
-        .collect()
+    let current = c.accounts.iter().find(|account| account.current);
+    let shown = current.map_or_else(|| "Project's account".to_owned(), |account| account_label(account, &c.accounts));
+    let title = format!("Claude account: {shown}. Pick another to start a new chat under it");
+    let glyph = icon(24, 2.0, &ACCOUNT).prop("size", 16);
+    let trigger = Node::new("Button").prop("variant", "ghost").prop("label", "Claude account").prop("title", title.as_str());
+    // A pill with the account's name, which the person picks by. Only the glyph where the header has no room for it: the
+    // side panel in Wings' own side, or a tab too narrow to set the chat beside the panel (`inset`), where the chat's
+    // name was cut to a few letters. The name is in the tooltip then.
+    let trigger = match c.side_in_wings || (c.narrow == Some(true) && !c.inset) {
+        true => trigger.prop("size", "icon-sm").child(glyph),
+        false => trigger.prop("size", "sm").child(glyph).child(text(shown.as_str()).prop("truncate", true)),
+    };
+    let items = c.accounts.iter().map(|account| {
+        let label = account_label(account, &c.accounts);
+        let value = account.name.clone().unwrap_or_else(|| chat::DEFAULT_ACCOUNT.to_owned());
+        let picked = account.current;
+        // The one in use closes the menu and changes nothing.
+        Node::new("Button").key(value.clone()).prop("pressed", picked).on("onClick", move |_| if !picked { chat::pick_account(&value) }).text(label)
+    });
+    Some(Node::new("Menu").prop("align", "end").child(trigger).children(items.collect::<Vec<_>>()))
 }
 
 /// A model row's value in the menu is `model:<value>`, an effort row's `effort:<level>`, a heading's `heading:<name>`.
