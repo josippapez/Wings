@@ -12,7 +12,7 @@ use std::{cell::RefCell, collections::HashMap};
 use wings_plugin::{
     host::{self, Stage},
     task::spawn,
-    ui::{self, Entry, Node, actions, button, column_page, confirm, dialog, entry, error_state, icon_button, icons, image, muted, notice, rows_card, section, select, setting, setting_field, setting_toggle, spinner, stack, text, toolbar},
+    ui::{self, Entry, Node, actions, button, column_page, confirm, dialog, entry, error_state, icon_button, icons, image, muted, notice, rows_card, section, select, setting, setting_field, setting_toggle, spinner, stack, text, toast, toolbar},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -284,6 +284,10 @@ fn add() {
     });
 }
 
+fn dismiss() {
+    with(|page| page.problem = None);
+}
+
 fn cancel() {
     if let Some(staged) = with(|page| {
         page.problem = None;
@@ -295,6 +299,7 @@ fn cancel() {
 
 /// Runs a change to an extension and reads the list again, which shows what the host did.
 fn change_extension(call: host::Pending<Result<Value, String>>) {
+    dismiss();
     spawn(async move {
         if let Err(error) = call.await {
             with(|page| page.problem = Some(error));
@@ -491,10 +496,11 @@ fn view() -> Vec<Node> {
             Ok(()) => notice("success", "Cleared your history, cookies and site data."),
             Err(error) => notice("danger", error.as_str()),
         });
-        let problem = (page.staged.is_none()).then(|| page.problem.as_deref().map(|problem| notice("danger", problem))).flatten();
-        let column = stack().prop("gap", "l").children(engine_settings::view()).children([search, privacy]).maybe(ask).maybe(cleared).children(cookies(&page, keep, signins)).children(extensions(&page)).maybe(problem);
+        // A toast floats over the page's foot wherever it is scrolled to: below a long list of extensions a notice went unseen.
+        let problem = (page.staged.is_none()).then(|| page.problem.as_deref().map(|problem| toast("danger", problem, dismiss).key("problem"))).flatten();
+        let column = stack().prop("gap", "l").children(engine_settings::view()).children([search, privacy]).maybe(ask).maybe(cleared).children(cookies(&page, keep, signins)).children(extensions(&page));
         let dialog = page.staged.as_ref().map(|staged| dialog_for(staged, page.adding, page.problem.as_deref(), cancel, add));
-        vec![column_page(toolbar("Browser", None), std::iter::once(column).chain(dialog).chain(remove_dialog(&page)))]
+        vec![column_page(toolbar("Browser", None), std::iter::once(column).chain(dialog).chain(remove_dialog(&page))).toasts(problem)]
     })
 }
 
@@ -632,6 +638,41 @@ mod tests {
         wings_plugin::host::testing::settle();
         let now = drawn();
         assert!(now.contains("uBlock") && !now.contains("Couldn't look"), "{now}");
+    }
+
+    /// What the Toast in the page's tree sends back when it is dismissed, drawn from the page as it is now.
+    fn press_dismiss() -> bool {
+        let (tree, handlers) = wings_plugin::ui::export(view());
+        let tree = tree.to_string();
+        let Some(at) = tree.find("\"onDismiss\":\"") else { return false };
+        let name: String = tree[at + 13..].chars().take_while(|letter| *letter != '"').collect();
+        handlers.call(&name, &json!({}))
+    }
+
+    #[test]
+    fn a_failing_action_shows_a_toast_its_close_clears_and_the_next_action_clears() {
+        wings_plugin::host::testing::answer(|_, params| match params["action"].as_str() {
+            Some("list") => Ok(json!({ "supported": true, "extensions": [{ "id": "e1", "name": "Dark", "version": "1", "enabled": true }] })),
+            Some("remove") => Err("Couldn't remove Dark".into()),
+            _ => Ok(Value::Null),
+        });
+        with(|page| page.problem = None);
+        assert!(!drawn().contains("\"Toast\""), "{}", drawn());
+        remove("e1");
+        wings_plugin::host::testing::settle();
+        let now = drawn();
+        assert!(now.contains("\"Toast\"") && now.contains("Couldn't remove Dark") && now.contains("\"tone\":\"danger\""), "{now}");
+        // The close button leaves it out.
+        assert!(press_dismiss());
+        assert!(!drawn().contains("\"Toast\""), "{}", drawn());
+        // Another action leaves out the one the last had, before its own answer comes.
+        remove("e1");
+        wings_plugin::host::testing::settle();
+        assert!(drawn().contains("Couldn't remove Dark"));
+        wings_plugin::host::testing::answer(|_, _| Ok(Value::Null));
+        change_extension(host::web_extension_set_enabled("e1", false));
+        assert!(!drawn().contains("Couldn't remove Dark"), "{}", drawn());
+        wings_plugin::host::testing::settle();
     }
 
     #[test]

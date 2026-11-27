@@ -148,6 +148,30 @@ pub(super) fn browser(out: PathBuf) {
                 assert!(handle.read_with(&cx, |view, _| view.press("Remove Bitwarden Password Manager", 0)).unwrap(), "no Remove button");
                 wait(&mut cx, window, Duration::from_millis(500));
                 save(&mut cx, window, out.join(format!("browser-settings-remove-{width}.png")));
+                // Add failing, as when an extension's folder went after Look listed it: the error shows as a toast over the page's foot.
+                assert!(handle.read_with(&cx, |view, _| view.press("Cancel", 0)).unwrap(), "no Cancel button");
+                let manifests: Vec<_> = std::fs::read_dir(&extensions).unwrap().flatten().map(|folder| folder.path().join("1.0_0/manifest.json")).collect();
+                let kept: Vec<_> = manifests.iter().map(|path| (path, std::fs::read(path).unwrap())).collect();
+                manifests.iter().for_each(|path| std::fs::remove_file(path).unwrap());
+                assert!(handle.read_with(&cx, |view, _| view.press("Add", 0)).unwrap(), "no Add button");
+                wait(&mut cx, window, Duration::from_millis(1500));
+                save(&mut cx, window, out.join(format!("browser-settings-error-{width}.png")));
+                // The close button takes it away; then with the page scrolled to its end the same error shows over the lower
+                // part of the page, where a notice at the page's foot used to be the only place it showed.
+                assert!(handle.read_with(&cx, |view, _| view.press("Dismiss", 0)).unwrap(), "no Dismiss button");
+                wait(&mut cx, window, Duration::from_millis(300));
+                cx.simulate_event(window, gpui::ScrollEvent {
+                    position: point(px(width / 2.0), px(300.0)),
+                    delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-100_000.0))),
+                    modifiers: gpui::Modifiers::default(),
+                    touch_phase: gpui::TouchPhase::Moved,
+                    source: Default::default(),
+                });
+                wait(&mut cx, window, Duration::from_millis(300));
+                assert!(handle.read_with(&cx, |view, _| view.press("Add", 0)).unwrap(), "no Add button");
+                wait(&mut cx, window, Duration::from_millis(1500));
+                save(&mut cx, window, out.join(format!("browser-settings-error-scrolled-{width}.png")));
+                kept.into_iter().for_each(|(path, bytes)| std::fs::write(path, bytes).unwrap());
             }
             let _ = cx.update_window(window, |_, window, _| window.remove_window());
         }
