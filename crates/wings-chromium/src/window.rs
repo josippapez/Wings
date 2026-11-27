@@ -15,7 +15,7 @@ use objc2::{msg_send, sel, ClassType};
 use objc2_app_kit::{NSColor, NSWindow, NSWindowCollectionBehavior, NSWindowOrderingMode, NSWindowStyleMask};
 use objc2_foundation::NSRect;
 
-use crate::objc_runtime::{class_getMethodImplementation, class_replaceMethod, objc_getAssociatedObject, objc_setAssociatedObject};
+use crate::objc_runtime::{class_getMethodImplementation, class_replaceMethod, object_getClass, objc_getAssociatedObject, objc_setAssociatedObject};
 
 /// Called once the window exists and holds its browser view, while it is still hidden: it shows the window.
 pub type OnCreated = Rc<dyn Fn(&mut Window, &BrowserView)>;
@@ -282,18 +282,60 @@ pub fn detach(child: &NSWindow, parent: &NSWindow) {
     child.orderOut(None);
 }
 
+/// Gives `child`'s class a borderless frame for a style without a title bar, from its next style change on: CEF's
+/// window class answers `frameViewClassForStyleMask:` with its own themed frame (`CefThemeFrame`, a titled one) whatever
+/// the style, whose corner mask macOS rounds the window with, so a borderless page still had three rounded corners that
+/// cut off its content. Chrome's own borderless frame (`NativeWidgetMacNSWindowBorderlessFrame`) has square corners. It
+/// patches the class method once, the first time; the window's class itself stays as it is.
+pub fn square_frame(child: &NSWindow) {
+    static ORIGINAL: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+    extern "C-unwind" fn frame_class(this: &AnyClass, cmd: Sel, style: usize) -> *const AnyClass {
+        if style & NSWindowStyleMask::Titled.0 == 0 {
+            if let Some(borderless) = AnyClass::get(c"NativeWidgetMacNSWindowBorderlessFrame") {
+                return borderless;
+            }
+        }
+        let original: extern "C-unwind" fn(&AnyClass, Sel, usize) -> *const AnyClass = unsafe { std::mem::transmute(ORIGINAL.load(Ordering::Relaxed)) };
+        original(this, cmd, style)
+    }
+    if !ORIGINAL.load(Ordering::Relaxed).is_null() {
+        return;
+    }
+    unsafe {
+        let class: &AnyClass = msg_send![child, class];
+        let meta = object_getClass(class as *const AnyClass as *const AnyObject);
+        if let Some(original) = class_getMethodImplementation(meta, sel!(frameViewClassForStyleMask:)) {
+            ORIGINAL.store(original as *mut (), Ordering::Relaxed);
+            let replacement: extern "C-unwind" fn(&AnyClass, Sel, usize) -> *const AnyClass = frame_class;
+            class_replaceMethod(meta, sel!(frameViewClassForStyleMask:), std::mem::transmute(replacement), c"#@:Q".as_ptr());
+        }
+    }
+}
+
 /// A page: square corners flush with the host's content, no shadow. CEF's frameless window keeps a titled style mask,
-/// which macOS draws with rounded corners.
+/// which macOS draws with rounded corners, and Chrome rounds its content view's layer too, masking it
+/// (`NativeWidgetNSWindowBridge::CreateContentView`), which cut off a page's content at the corners.
 pub fn as_page(child: &NSWindow) {
     let frame = child.frame();
+    square_frame(child);
     child.setStyleMask(NSWindowStyleMask::Borderless);
     child.setHasShadow(false);
+    if let Some(content) = child.contentView() {
+        unsafe {
+            let layer: *mut AnyObject = msg_send![&*content, layer];
+            if !layer.is_null() {
+                let _: () = msg_send![layer, setCornerRadius: 0.0f64];
+                let _: () = msg_send![layer, setMasksToBounds: false];
+            }
+        }
+    }
     child.setFrame_display(frame, true);
 }
 
 /// A popup: rounded like the host's popovers, with a light shadow.
 pub fn as_popup(child: &NSWindow, radius: f64) {
     let frame = child.frame();
+    square_frame(child);
     child.setStyleMask(NSWindowStyleMask::Borderless);
     child.setOpaque(false);
     child.setBackgroundColor(Some(&NSColor::clearColor()));
